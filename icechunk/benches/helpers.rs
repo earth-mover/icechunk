@@ -10,7 +10,6 @@
 ///   `FlushGuard` is dropped.
 ///
 /// If unset or unrecognized, no tracing layer is installed.
-#[allow(dead_code)]
 pub(crate) fn init_tracing() -> Option<tracing_chrome::FlushGuard> {
     #[cfg(not(feature = "logs"))]
     {
@@ -22,7 +21,9 @@ pub(crate) fn init_tracing() -> Option<tracing_chrome::FlushGuard> {
 
     #[cfg(feature = "logs")]
     {
-        use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+        use tracing_subscriber::{
+            layer::SubscriberExt as _, util::SubscriberInitExt as _,
+        };
 
         let trace_var = std::env::var("ICECHUNK_TRACE").unwrap_or_default();
         match trace_var.to_lowercase().as_str() {
@@ -79,7 +80,7 @@ pub(crate) fn init_tracing() -> Option<tracing_chrome::FlushGuard> {
 
 use std::collections::HashMap;
 use std::error::Error;
-use std::io::Write;
+use std::io::Write as _;
 use std::ops::Range;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -99,9 +100,9 @@ use icechunk::session::Session;
 use icechunk::storage::new_in_memory_storage;
 use icechunk::virtual_chunks::VirtualChunkContainer;
 use icechunk::{RepositoryConfig, Storage};
+use icechunk_arrow_object_store::object_store::ObjectStoreExt as _;
 use noxious_client::{Client, StreamDirection, Toxic, ToxicKind};
-use object_store::ObjectStoreExt;
-use rand::RngExt;
+use rand::RngExt as _;
 use tempfile::TempDir;
 
 pub(crate) const RUSTFS_PORT: u16 = 9000;
@@ -127,7 +128,7 @@ impl std::fmt::Display for ChunkKind {
             ChunkKind::Native => write!(f, "native"),
             ChunkKind::Virtual => write!(f, "virtual"),
             ChunkKind::VirtualWithPrefixes => {
-                write!(f, "virtual-{}-prefixes", NUM_VCCS)
+                write!(f, "virtual-{NUM_VCCS}-prefixes")
             }
         }
     }
@@ -157,13 +158,13 @@ pub(crate) fn default_storage_kind() -> StorageKind {
 
 /// Parse `ICECHUNK_BENCH_LATENCY_MS` env var; returns `Some(ms)` if set.
 pub(crate) fn toxiproxy_latency_ms() -> Option<u64> {
-    #[allow(clippy::expect_used)]
+    #[expect(clippy::expect_used)]
     std::env::var("ICECHUNK_BENCH_LATENCY_MS")
         .ok()
         .map(|v| v.parse::<u64>().expect("ICECHUNK_BENCH_LATENCY_MS must be an integer"))
 }
 
-/// Set up toxiproxy: create a proxy on `TOXIPROXY_PORT` forwarding to RustFS at
+/// Set up toxiproxy: create a proxy on `TOXIPROXY_PORT` forwarding to `RustFS` at
 /// `rustfs:9000`. Does NOT add any toxics — those are managed separately so that
 /// latency is only injected during the timed portion of benchmarks.
 pub(crate) async fn setup_toxiproxy() -> Result<(), Box<dyn Error>> {
@@ -174,7 +175,7 @@ pub(crate) async fn setup_toxiproxy() -> Result<(), Box<dyn Error>> {
     let proxies = client.proxies().await.unwrap_or_default();
     for (name, proxy) in proxies {
         if proxy.config.listen.ends_with(&port_suffix) {
-            proxy.delete().await.ok();
+            let _ = proxy.delete().await;
             eprintln!("Deleted stale proxy on :{TOXIPROXY_PORT}: {name}");
         }
     }
@@ -227,7 +228,7 @@ pub(crate) fn rustfs_credentials() -> S3Credentials {
     })
 }
 
-/// Create S3 storage pointing at RustFS, optionally through toxiproxy.
+/// Create S3 storage pointing at `RustFS`, optionally through toxiproxy.
 pub(crate) fn make_s3_storage(
     latency_ms: Option<u64>,
 ) -> Result<Arc<dyn Storage + Send + Sync>, Box<dyn Error>> {
@@ -298,16 +299,17 @@ pub(crate) async fn setup_repo(
 
     if use_s3 {
         // Upload chunk objects to RustFS (direct, not through toxiproxy).
-        let s3_store = object_store::aws::AmazonS3Builder::new()
-            .with_endpoint(format!("http://localhost:{RUSTFS_PORT}"))
-            .with_bucket_name("testbucket")
-            .with_region("us-east-1")
-            .with_access_key_id("modify")
-            .with_secret_access_key("modifydata")
-            .with_allow_http(true)
-            .build()?;
+        let s3_store =
+            icechunk_arrow_object_store::object_store::aws::AmazonS3Builder::new()
+                .with_endpoint(format!("http://localhost:{RUSTFS_PORT}"))
+                .with_bucket_name("testbucket")
+                .with_region("us-east-1")
+                .with_access_key_id("modify")
+                .with_secret_access_key("modifydata")
+                .with_allow_http(true)
+                .build()?;
         for i in 0..NUM_VCCS {
-            let obj_path: object_store::path::Path =
+            let obj_path: icechunk_arrow_object_store::object_store::path::Path =
                 format!("bench-vcc/prefix-{i}/chunk").into();
             s3_store.put(&obj_path, chunk_data.clone().into()).await?;
         }

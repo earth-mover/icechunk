@@ -6,20 +6,20 @@ use std::{
     sync::Arc,
 };
 
-use itertools::Itertools;
+use itertools::Itertools as _;
 
 use chrono::{DateTime, Utc};
-use futures::{StreamExt, TryStreamExt};
+use futures::{StreamExt as _, TryStreamExt as _};
 use icechunk::{
     Repository,
     config::Credentials,
+    diff::Diff,
     feature_flags::FeatureFlag,
     format::{
         ManifestId, SnapshotId,
         format_constants::SpecVersionBin,
         repo_info::{RepoAvailability, RepoStatus, UpdateType},
         snapshot::{ManifestFileInfo, SnapshotInfo, SnapshotProperties},
-        transaction_log::Diff,
     },
     inspect::{manifest_json, repo_info_json, snapshot_json},
     migrations,
@@ -31,7 +31,7 @@ use icechunk::{
     repository::{RepositoryError, RepositoryErrorKind, VersionInfo},
 };
 use pyo3::{
-    Borrowed, IntoPyObjectExt,
+    Borrowed, IntoPyObjectExt as _,
     exceptions::PyValueError,
     prelude::*,
     types::{PyDict, PyNone, PySet, PyType},
@@ -55,9 +55,8 @@ fn parse_commit_method(method: &str) -> PyResult<icechunk::session::CommitMethod
     match method {
         "new_commit" => Ok(icechunk::session::CommitMethod::NewCommit),
         "amend" => Ok(icechunk::session::CommitMethod::Amend),
-        other => Err(pyo3::exceptions::PyValueError::new_err(format!(
-            "Invalid commit method: '{}'. Expected 'new_commit' or 'amend'.",
-            other
+        other => Err(PyValueError::new_err(format!(
+            "Invalid commit method: '{other}'. Expected 'new_commit' or 'amend'."
         ))),
     }
 }
@@ -330,10 +329,10 @@ impl PyDiff {
             && self.moved_nodes.is_empty()
     }
 
-    #[allow(clippy::unwrap_used)]
+    #[expect(clippy::unwrap_used)]
     pub fn __repr__(&self) -> String {
         let mut res = String::new();
-        use std::fmt::Write;
+        use std::fmt::Write as _;
 
         if !self.new_groups.is_empty() {
             res.push_str("Groups created:\n");
@@ -573,41 +572,36 @@ impl PyUpdateType {
             Self::RepoInitialized {} => "RepoInitialized()".into(),
             Self::ConfigChanged {} => "ConfigChanged()".into(),
             Self::MetadataChanged {} => "MetadataChanged()".into(),
-            Self::TagCreated { name } => format!("TagCreated(name={})", name).into(),
+            Self::TagCreated { name } => format!("TagCreated(name={name})").into(),
             Self::TagDeleted { name, previous_snap_id } => format!(
-                "TagDeleted(name={}, previous_snap_id={})",
-                name, previous_snap_id
+                "TagDeleted(name={name}, previous_snap_id={previous_snap_id})"
             )
             .into(),
             Self::BranchCreated { name } => {
-                format!("BranchCreated(name={})", name).into()
+                format!("BranchCreated(name={name})").into()
             }
             Self::BranchDeleted { name, previous_snap_id } => format!(
-                "BranchDeleted(name={}, previous_snap_id={})",
-                name, previous_snap_id
+                "BranchDeleted(name={name}, previous_snap_id={previous_snap_id})"
             )
             .into(),
             Self::BranchReset { name, previous_snap_id } => format!(
-                "BranchReset(name={}, previous_snap_id={})",
-                name, previous_snap_id
+                "BranchReset(name={name}, previous_snap_id={previous_snap_id})"
             )
             .into(),
             Self::NewCommit { branch, new_snap_id } => {
-                format!("NewCommit(branch={}, new_snap_id={})", branch, new_snap_id)
+                format!("NewCommit(branch={branch}, new_snap_id={new_snap_id})")
                     .into()
             }
             Self::CommitAmended { branch, previous_snap_id, new_snap_id } => format!(
-                "CommitAmended(branch={}, previous_snap_id={}, new_snap_id={})",
-                branch, previous_snap_id, new_snap_id,
+                "CommitAmended(branch={branch}, previous_snap_id={previous_snap_id}, new_snap_id={new_snap_id})",
             )
             .into(),
             Self::RepoMigrated { from_version, to_version } => format!(
-                "RepoMigrated(from_version={}, to_version={})",
-                from_version, to_version
+                "RepoMigrated(from_version={from_version}, to_version={to_version})"
             )
             .into(),
             Self::RepoStatusChanged { status } => {
-                format!("RepoStatusChanged(status={})", status,).into()
+                format!("RepoStatusChanged(status={status})",).into()
             }
             Self::GCRan {} => "GCRan()".into(),
             Self::FeatureFlagChanged { id, new_value } => format!(
@@ -618,7 +612,7 @@ impl PyUpdateType {
             .into(),
             Self::ExpirationRan {} => "ExpirationRan()".into(),
             Self::NewDetachedSnapshot { new_snap_id } => {
-                format!("NewDetachedSnapshot(new_snap_id={})", new_snap_id).into()
+                format!("NewDetachedSnapshot(new_snap_id={new_snap_id})").into()
             }
         }
     }
@@ -907,7 +901,7 @@ pub enum PySpecVersion {
 impl<'py> FromPyObject<'_, 'py> for PySpecVersion {
     type Error = PyErr;
 
-    /// Custom implementation that allows passing an integer or PySpecVersion
+    /// Custom implementation that allows passing an integer or `PySpecVersion`
     fn extract(ob: Borrowed<'_, 'py, PyAny>) -> Result<Self, Self::Error> {
         // cast is cheaper, try it first
         let value = if let Ok(spec) = ob.cast::<PySpecVersion>() {
@@ -977,13 +971,14 @@ impl PyRepository {
         py.detach(move || {
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
                 let repo = self.0.read().await;
-                let storage = repo.storage().clone();
+                let storage = Arc::clone(repo.storage());
                 let config = Some(repo.config().clone());
                 drop(repo);
 
-                let fresh = Repository::open(config, storage.clone(), Default::default())
-                    .await
-                    .map_err(PyIcechunkStoreError::RepositoryError)?;
+                let fresh =
+                    Repository::open(config, Arc::clone(&storage), Default::default())
+                        .await
+                        .map_err(PyIcechunkStoreError::RepositoryError)?;
                 migrations::migrate_1_to_2(
                     fresh,
                     dry_run,
@@ -1265,8 +1260,8 @@ impl PyRepository {
     /// Reopen the repository changing its config and or virtual chunk credentials
     ///
     /// If config is None, it will use the same value as self
-    /// If authorize_virtual_chunk_access is None, it will use the same value as self
-    /// If authorize_virtual_chunk_access is Some(x), it will override with x
+    /// If `authorize_virtual_chunk_access` is None, it will use the same value as self
+    /// If `authorize_virtual_chunk_access` is Some(x), it will override with x
     #[pyo3(signature = (*, config = None, authorize_virtual_chunk_access = None::<Option<HashMap<String, Option<PyCredentials>>>>))]
     pub(crate) fn reopen(
         &self,
@@ -1305,7 +1300,7 @@ impl PyRepository {
             Option<HashMap<String, Option<PyCredentials>>>,
         >,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let existing_repository = self.0.clone();
+        let existing_repository = Arc::clone(&self.0);
         let config =
             config.map(|c| c.try_into().map_err(PyValueError::new_err)).transpose()?;
         let authorize_virtual_chunk_access =
@@ -1329,7 +1324,7 @@ impl PyRepository {
     ) -> PyResult<Self> {
         // This is a compute intensive task, we need to release the Gil
         py.detach(move || {
-            let repository = Repository::from_bytes(bytes)
+            let repository = Repository::from_bytes(&bytes)
                 .map_err(PyIcechunkStoreError::RepositoryError)?;
             Ok(Self(Arc::new(RwLock::new(repository))))
         })
@@ -1396,7 +1391,7 @@ impl PyRepository {
     }
 
     fn save_config_async<'py>(&'py self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let repository = self.0.clone();
+        let repository = Arc::clone(&self.0);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let repository = repository.read().await;
             repository
@@ -1436,7 +1431,7 @@ impl PyRepository {
         py.detach(move || {
             let metadata = metadata.into();
             self.0.blocking_write().set_default_commit_metadata(metadata);
-        })
+        });
     }
 
     pub(crate) fn default_commit_metadata(&self, py: Python<'_>) -> PySnapshotProperties {
@@ -1465,7 +1460,7 @@ impl PyRepository {
         &'py self,
         py: Python<'py>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let repository = self.0.clone();
+        let repository = Arc::clone(&self.0);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let repository = repository.read().await;
             let res: PySnapshotProperties = repository
@@ -1500,7 +1495,7 @@ impl PyRepository {
         py: Python<'py>,
         metadata: PySnapshotProperties,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let repository = self.0.clone();
+        let repository = Arc::clone(&self.0);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let repository = repository.read().await;
             repository
@@ -1534,7 +1529,7 @@ impl PyRepository {
         py: Python<'py>,
         metadata: PySnapshotProperties,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let repository = self.0.clone();
+        let repository = Arc::clone(&self.0);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let repository = repository.read().await;
             let res: PySnapshotProperties = repository
@@ -1565,7 +1560,7 @@ impl PyRepository {
         &'py self,
         py: Python<'py>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let repository = self.0.clone();
+        let repository = Arc::clone(&self.0);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let repository = repository.read().await;
             let res: PyRepoStatus = repository
@@ -1600,7 +1595,7 @@ impl PyRepository {
         py: Python<'py>,
         status: PyRepoStatus,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let repository = self.0.clone();
+        let repository = Arc::clone(&self.0);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let repository = repository.read().await;
             repository
@@ -1632,7 +1627,7 @@ impl PyRepository {
         &'py self,
         py: Python<'py>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let repository = self.0.clone();
+        let repository = Arc::clone(&self.0);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let flags: Vec<PyFeatureFlag> = repository
                 .read()
@@ -1670,7 +1665,7 @@ impl PyRepository {
         &'py self,
         py: Python<'py>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let repository = self.0.clone();
+        let repository = Arc::clone(&self.0);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let flags: Vec<PyFeatureFlag> = repository
                 .read()
@@ -1708,7 +1703,7 @@ impl PyRepository {
         &'py self,
         py: Python<'py>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let repository = self.0.clone();
+        let repository = Arc::clone(&self.0);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let flags: Vec<PyFeatureFlag> = repository
                 .read()
@@ -1747,7 +1742,7 @@ impl PyRepository {
         name: String,
         setting: Option<bool>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let repository = self.0.clone();
+        let repository = Arc::clone(&self.0);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             repository
                 .read()
@@ -1819,9 +1814,9 @@ impl PyRepository {
         // This function calls block_on, so we need to allow other thread python to make progress
         py.detach(move || {
             let snapshot_id = SnapshotId::try_from(snapshot_id).map_err(|_| {
-                PyIcechunkStoreError::RepositoryError(
-                    RepositoryErrorKind::InvalidSnapshotId(snapshot_id.to_owned()).into(),
-                )
+                PyIcechunkStoreError::RepositoryError(RepositoryError::capture(
+                    RepositoryErrorKind::InvalidSnapshotId(snapshot_id.to_owned()),
+                ))
             })?;
 
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
@@ -1842,12 +1837,12 @@ impl PyRepository {
         branch_name: &str,
         snapshot_id: &str,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let repository = self.0.clone();
+        let repository = Arc::clone(&self.0);
         let branch_name = branch_name.to_owned();
         let snapshot_id = SnapshotId::try_from(snapshot_id).map_err(|_| {
-            PyIcechunkStoreError::RepositoryError(
-                RepositoryErrorKind::InvalidSnapshotId(snapshot_id.to_owned()).into(),
-            )
+            PyIcechunkStoreError::RepositoryError(RepositoryError::capture(
+                RepositoryErrorKind::InvalidSnapshotId(snapshot_id.to_owned()),
+            ))
         })?;
 
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
@@ -1880,7 +1875,7 @@ impl PyRepository {
         &'py self,
         py: Python<'py>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let repository = self.0.clone();
+        let repository = Arc::clone(&self.0);
         pyo3_async_runtimes::tokio::future_into_py::<_, BTreeSet<String>>(
             py,
             async move {
@@ -1919,7 +1914,7 @@ impl PyRepository {
         py: Python<'py>,
         branch_name: &str,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let repository = self.0.clone();
+        let repository = Arc::clone(&self.0);
         let branch_name = branch_name.to_owned();
         pyo3_async_runtimes::tokio::future_into_py::<_, String>(py, async move {
             let repository = repository.read().await;
@@ -1939,9 +1934,9 @@ impl PyRepository {
         // This function calls block_on, so we need to allow other thread python to make progress
         py.detach(move || {
             let snapshot_id = SnapshotId::try_from(snapshot_id).map_err(|_| {
-                PyIcechunkStoreError::RepositoryError(
-                    RepositoryErrorKind::InvalidSnapshotId(snapshot_id.to_owned()).into(),
-                )
+                PyIcechunkStoreError::RepositoryError(RepositoryError::capture(
+                    RepositoryErrorKind::InvalidSnapshotId(snapshot_id.to_owned()),
+                ))
             })?;
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
                 let res = self
@@ -1962,11 +1957,11 @@ impl PyRepository {
         snapshot_id: &str,
     ) -> PyResult<Bound<'py, PyAny>> {
         let snapshot_id = SnapshotId::try_from(snapshot_id).map_err(|_| {
-            PyIcechunkStoreError::RepositoryError(
-                RepositoryErrorKind::InvalidSnapshotId(snapshot_id.to_owned()).into(),
-            )
+            PyIcechunkStoreError::RepositoryError(RepositoryError::capture(
+                RepositoryErrorKind::InvalidSnapshotId(snapshot_id.to_owned()),
+            ))
         })?;
-        let repository = self.0.clone();
+        let repository = Arc::clone(&self.0);
         pyo3_async_runtimes::tokio::future_into_py::<_, PySnapshotInfo>(py, async move {
             let repository = repository.read().await;
             let res = repository
@@ -1982,9 +1977,9 @@ impl PyRepository {
         snapshot_id: &str,
     ) -> PyResult<Vec<PyManifestFileInfo>> {
         let snapshot_id = SnapshotId::try_from(snapshot_id).map_err(|_| {
-            PyIcechunkStoreError::RepositoryError(
-                RepositoryErrorKind::InvalidSnapshotId(snapshot_id.to_owned()).into(),
-            )
+            PyIcechunkStoreError::RepositoryError(RepositoryError::capture(
+                RepositoryErrorKind::InvalidSnapshotId(snapshot_id.to_owned()),
+            ))
         })?;
         pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
             let res = self
@@ -2006,11 +2001,11 @@ impl PyRepository {
         snapshot_id: &str,
     ) -> PyResult<Bound<'py, PyAny>> {
         let snapshot_id = SnapshotId::try_from(snapshot_id).map_err(|_| {
-            PyIcechunkStoreError::RepositoryError(
-                RepositoryErrorKind::InvalidSnapshotId(snapshot_id.to_owned()).into(),
-            )
+            PyIcechunkStoreError::RepositoryError(RepositoryError::capture(
+                RepositoryErrorKind::InvalidSnapshotId(snapshot_id.to_owned()),
+            ))
         })?;
-        let repository = self.0.clone();
+        let repository = Arc::clone(&self.0);
         pyo3_async_runtimes::tokio::future_into_py::<_, Vec<PyManifestFileInfo>>(
             py,
             async move {
@@ -2036,18 +2031,17 @@ impl PyRepository {
         // This function calls block_on, so we need to allow other thread python to make progress
         py.detach(move || {
             let to_snapshot_id = SnapshotId::try_from(to_snapshot_id).map_err(|_| {
-                PyIcechunkStoreError::RepositoryError(
-                    RepositoryErrorKind::InvalidSnapshotId(to_snapshot_id.to_owned())
-                        .into(),
-                )
+                PyIcechunkStoreError::RepositoryError(RepositoryError::capture(
+                    RepositoryErrorKind::InvalidSnapshotId(to_snapshot_id.to_owned()),
+                ))
             })?;
 
             let from_snapshot_id = from_snapshot_id
                 .map(|sid| {
                     SnapshotId::try_from(sid).map_err(|_| {
-                        PyIcechunkStoreError::RepositoryError(
-                            RepositoryErrorKind::InvalidSnapshotId(sid.to_owned()).into(),
-                        )
+                        PyIcechunkStoreError::RepositoryError(RepositoryError::capture(
+                            RepositoryErrorKind::InvalidSnapshotId(sid.to_owned()),
+                        ))
                     })
                 })
                 .transpose()?;
@@ -2071,20 +2065,20 @@ impl PyRepository {
         to_snapshot_id: &str,
         from_snapshot_id: Option<&str>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let repository = self.0.clone();
+        let repository = Arc::clone(&self.0);
         let branch_name = branch_name.to_owned();
         let to_snapshot_id = SnapshotId::try_from(to_snapshot_id).map_err(|_| {
-            PyIcechunkStoreError::RepositoryError(
-                RepositoryErrorKind::InvalidSnapshotId(to_snapshot_id.to_owned()).into(),
-            )
+            PyIcechunkStoreError::RepositoryError(RepositoryError::capture(
+                RepositoryErrorKind::InvalidSnapshotId(to_snapshot_id.to_owned()),
+            ))
         })?;
 
         let from_snapshot_id = from_snapshot_id
             .map(|sid| {
                 SnapshotId::try_from(sid).map_err(|_| {
-                    PyIcechunkStoreError::RepositoryError(
-                        RepositoryErrorKind::InvalidSnapshotId(sid.to_owned()).into(),
-                    )
+                    PyIcechunkStoreError::RepositoryError(RepositoryError::capture(
+                        RepositoryErrorKind::InvalidSnapshotId(sid.to_owned()),
+                    ))
                 })
             })
             .transpose()?;
@@ -2119,7 +2113,7 @@ impl PyRepository {
         py: Python<'py>,
         branch: &str,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let repository = self.0.clone();
+        let repository = Arc::clone(&self.0);
         let branch = branch.to_owned();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let repository = repository.read().await;
@@ -2151,7 +2145,7 @@ impl PyRepository {
         py: Python<'py>,
         tag: &str,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let repository = self.0.clone();
+        let repository = Arc::clone(&self.0);
         let tag = tag.to_owned();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let repository = repository.read().await;
@@ -2172,9 +2166,9 @@ impl PyRepository {
         // This function calls block_on, so we need to allow other thread python to make progress
         py.detach(move || {
             let snapshot_id = SnapshotId::try_from(snapshot_id).map_err(|_| {
-                PyIcechunkStoreError::RepositoryError(
-                    RepositoryErrorKind::InvalidSnapshotId(snapshot_id.to_owned()).into(),
-                )
+                PyIcechunkStoreError::RepositoryError(RepositoryError::capture(
+                    RepositoryErrorKind::InvalidSnapshotId(snapshot_id.to_owned()),
+                ))
             })?;
 
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
@@ -2195,12 +2189,12 @@ impl PyRepository {
         tag_name: &str,
         snapshot_id: &str,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let repository = self.0.clone();
+        let repository = Arc::clone(&self.0);
         let tag_name = tag_name.to_owned();
         let snapshot_id = SnapshotId::try_from(snapshot_id).map_err(|_| {
-            PyIcechunkStoreError::RepositoryError(
-                RepositoryErrorKind::InvalidSnapshotId(snapshot_id.to_owned()).into(),
-            )
+            PyIcechunkStoreError::RepositoryError(RepositoryError::capture(
+                RepositoryErrorKind::InvalidSnapshotId(snapshot_id.to_owned()),
+            ))
         })?;
 
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
@@ -2230,7 +2224,7 @@ impl PyRepository {
     }
 
     fn list_tags_async<'py>(&'py self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let repository = self.0.clone();
+        let repository = Arc::clone(&self.0);
         pyo3_async_runtimes::tokio::future_into_py::<_, BTreeSet<String>>(
             py,
             async move {
@@ -2265,7 +2259,7 @@ impl PyRepository {
         py: Python<'py>,
         tag: &str,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let repository = self.0.clone();
+        let repository = Arc::clone(&self.0);
         let tag_name = tag.to_owned();
         pyo3_async_runtimes::tokio::future_into_py::<_, String>(py, async move {
             let repository = repository.read().await;
@@ -2278,7 +2272,7 @@ impl PyRepository {
     }
 
     #[pyo3(signature = (*, from_branch=None, from_tag=None, from_snapshot_id=None, to_branch=None, to_tag=None, to_snapshot_id=None))]
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub(crate) fn diff(
         &self,
         py: Python<'_>,
@@ -2308,7 +2302,7 @@ impl PyRepository {
     }
 
     #[pyo3(signature = (*, from_branch=None, from_tag=None, from_snapshot_id=None, to_branch=None, to_tag=None, to_snapshot_id=None))]
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn diff_async<'py>(
         &'py self,
         py: Python<'py>,
@@ -2321,7 +2315,7 @@ impl PyRepository {
     ) -> PyResult<Bound<'py, PyAny>> {
         let from = args_to_version_info(from_branch, from_tag, from_snapshot_id, None)?;
         let to = args_to_version_info(to_branch, to_tag, to_snapshot_id, None)?;
-        let repository = self.0.clone();
+        let repository = Arc::clone(&self.0);
 
         pyo3_async_runtimes::tokio::future_into_py::<_, PyDiff>(py, async move {
             let repository = repository.read().await;
@@ -2369,7 +2363,7 @@ impl PyRepository {
         as_of: Option<DateTime<Utc>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let version = args_to_version_info(branch, tag, snapshot_id, as_of)?;
-        let repository = self.0.clone();
+        let repository = Arc::clone(&self.0);
 
         pyo3_async_runtimes::tokio::future_into_py::<_, PySession>(py, async move {
             let repository = repository.read().await;
@@ -2407,7 +2401,7 @@ impl PyRepository {
         py: Python<'py>,
         branch: &str,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let repository = self.0.clone();
+        let repository = Arc::clone(&self.0);
         let branch = branch.to_owned();
         pyo3_async_runtimes::tokio::future_into_py::<_, PySession>(py, async move {
             let repository = repository.read().await;
@@ -2445,7 +2439,7 @@ impl PyRepository {
         py: Python<'py>,
         branch: &str,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let repository = self.0.clone();
+        let repository = Arc::clone(&self.0);
         let branch = branch.to_owned();
         pyo3_async_runtimes::tokio::future_into_py::<_, PySession>(py, async move {
             let repository = repository.read().await;
@@ -2490,7 +2484,7 @@ impl PyRepository {
         metadata: Option<PySnapshotProperties>,
         commit_method: &str,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let repository = self.0.clone();
+        let repository = Arc::clone(&self.0);
         let message = message.to_owned();
         let branch = branch.to_owned();
         let metadata = metadata.map(|m| m.into());
@@ -2569,7 +2563,7 @@ impl PyRepository {
         delete_expired_branches: bool,
         delete_expired_tags: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let repository = self.0.clone();
+        let repository = Arc::clone(&self.0);
         pyo3_async_runtimes::tokio::future_into_py::<_, HashSet<String>>(py, async move {
             let (asset_manager, num_updates) = {
                 let lock = repository.read().await;
@@ -2646,7 +2640,7 @@ impl PyRepository {
         max_compressed_manifest_mem_bytes: NonZeroUsize,
         max_concurrent_manifest_fetches: NonZeroU16,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let repository = self.0.clone();
+        let repository = Arc::clone(&self.0);
         pyo3_async_runtimes::tokio::future_into_py::<_, PyGCSummary>(py, async move {
             let gc_config = GCConfig::clean_all(
                 delete_object_older_than,
@@ -2706,7 +2700,7 @@ impl PyRepository {
         max_compressed_manifest_mem_bytes: NonZeroUsize,
         max_concurrent_manifest_fetches: NonZeroU16,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let repository = self.0.clone();
+        let repository = Arc::clone(&self.0);
         pyo3_async_runtimes::tokio::future_into_py::<_, PyChunkStorageStats>(
             py,
             async move {
@@ -2732,8 +2726,9 @@ impl PyRepository {
         let result = pyo3_async_runtimes::tokio::get_runtime()
             .block_on(async move {
                 let lock = self.0.read().await;
-                let snap = SnapshotId::try_from(snapshot_id.as_str())
-                    .map_err(|e| RepositoryErrorKind::Other(e.to_string()))?;
+                let snap = SnapshotId::try_from(snapshot_id.as_str()).map_err(|e| {
+                    RepositoryError::capture(RepositoryErrorKind::Other(e.to_string()))
+                })?;
                 let res = snapshot_json(lock.asset_manager(), &snap, pretty).await?;
                 Ok(res)
             })
@@ -2748,12 +2743,12 @@ impl PyRepository {
         snapshot_id: String,
         pretty: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let repository = self.0.clone();
+        let repository = Arc::clone(&self.0);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let lock = repository.read().await;
             let snap = SnapshotId::try_from(snapshot_id.as_str())
                 .map_err(|e| {
-                    RepositoryError::from(RepositoryErrorKind::Other(e.to_string()))
+                    RepositoryError::capture(RepositoryErrorKind::Other(e.to_string()))
                 })
                 .map_err(PyIcechunkStoreError::RepositoryError)?;
             let res = snapshot_json(lock.asset_manager(), &snap, pretty)
@@ -2781,7 +2776,7 @@ impl PyRepository {
         py: Python<'py>,
         pretty: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let repository = self.0.clone();
+        let repository = Arc::clone(&self.0);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let lock = repository.read().await;
             let res = repo_info_json(lock.asset_manager(), pretty)
@@ -2796,8 +2791,9 @@ impl PyRepository {
         let result = pyo3_async_runtimes::tokio::get_runtime()
             .block_on(async move {
                 let lock = self.0.read().await;
-                let id = ManifestId::try_from(manifest_id.as_str())
-                    .map_err(|e| RepositoryErrorKind::Other(e.to_string()))?;
+                let id = ManifestId::try_from(manifest_id.as_str()).map_err(|e| {
+                    RepositoryError::capture(RepositoryErrorKind::Other(e.to_string()))
+                })?;
                 let res = manifest_json(lock.asset_manager(), &id, pretty).await?;
                 Ok(res)
             })
@@ -2812,12 +2808,12 @@ impl PyRepository {
         manifest_id: String,
         pretty: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let repository = self.0.clone();
+        let repository = Arc::clone(&self.0);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let lock = repository.read().await;
             let id = ManifestId::try_from(manifest_id.as_str())
                 .map_err(|e| {
-                    RepositoryError::from(RepositoryErrorKind::Other(e.to_string()))
+                    RepositoryError::capture(RepositoryErrorKind::Other(e.to_string()))
                 })
                 .map_err(PyIcechunkStoreError::RepositoryError)?;
             let res = manifest_json(lock.asset_manager(), &id, pretty)
@@ -2874,9 +2870,9 @@ fn args_to_version_info(
         Ok(VersionInfo::TagRef(tag_name))
     } else if let Some(snapshot_id) = snapshot {
         let snapshot_id = SnapshotId::try_from(snapshot_id.as_str()).map_err(|_| {
-            PyIcechunkStoreError::RepositoryError(
-                RepositoryErrorKind::InvalidSnapshotId(snapshot_id.to_owned()).into(),
-            )
+            PyIcechunkStoreError::RepositoryError(RepositoryError::capture(
+                RepositoryErrorKind::InvalidSnapshotId(snapshot_id.clone()),
+            ))
         })?;
 
         Ok(VersionInfo::SnapshotId(snapshot_id))

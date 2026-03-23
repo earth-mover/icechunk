@@ -1,12 +1,13 @@
-use std::{borrow::Cow, ops::Deref, sync::Arc};
+use std::{borrow::Cow, ops::Deref as _, sync::Arc};
 
 use async_stream::try_stream;
-use futures::{StreamExt, TryStreamExt};
+use futures::{StreamExt as _, TryStreamExt as _};
 use icechunk::{
     Store,
     format::{ChunkIndices, Path, manifest::ChunkPayload},
     session::{
-        ReindexMapping, ReindexOperationResult, Session, SessionErrorKind, SessionMode,
+        ReindexMapping, ReindexOperationResult, Session, SessionError, SessionErrorKind,
+        SessionMode,
     },
     store::{StoreError, StoreErrorKind},
 };
@@ -26,11 +27,11 @@ use crate::{
 };
 
 #[pyclass]
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct PySession(pub Arc<RwLock<Session>>);
 
 #[pyclass(eq, eq_int, rename_all = "snake_case")]
-#[derive(PartialEq)]
+#[derive(Debug, PartialEq)]
 pub enum ChunkType {
     Uninitialized = 0,
     Native = 1,
@@ -40,7 +41,7 @@ pub enum ChunkType {
 
 /// The mode of a session, determining what operations are allowed.
 #[pyclass(name = "SessionMode", module = "icechunk", eq, rename_all = "snake_case")]
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PySessionMode {
     Readonly,
     Writable,
@@ -69,8 +70,8 @@ impl PySession {
     ) -> PyResult<Self> {
         // This is a compute intensive task, we need to release the Gil
         py.detach(move || {
-            let session =
-                Session::from_bytes(bytes).map_err(PyIcechunkStoreError::SessionError)?;
+            let session = Session::from_bytes(&bytes)
+                .map_err(PyIcechunkStoreError::SessionError)?;
             Ok(Self(Arc::new(RwLock::new(session))))
         })
     }
@@ -165,10 +166,10 @@ impl PySession {
         to_path: String,
     ) -> PyResult<()> {
         let from = Path::new(from_path.as_str())
-            .map_err(|e| StoreError::from(StoreErrorKind::PathError(e)))
+            .map_err(|e| StoreError::capture(StoreErrorKind::PathError(e)))
             .map_err(PyIcechunkStoreError::StoreError)?;
         let to = Path::new(to_path.as_str())
-            .map_err(|e| StoreError::from(StoreErrorKind::PathError(e)))
+            .map_err(|e| StoreError::capture(StoreErrorKind::PathError(e)))
             .map_err(PyIcechunkStoreError::StoreError)?;
         py.detach(move || {
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
@@ -189,12 +190,12 @@ impl PySession {
         to_path: String,
     ) -> PyResult<Bound<'py, PyAny>> {
         let from = Path::new(from_path.as_str())
-            .map_err(|e| StoreError::from(StoreErrorKind::PathError(e)))
+            .map_err(|e| StoreError::capture(StoreErrorKind::PathError(e)))
             .map_err(PyIcechunkStoreError::StoreError)?;
         let to = Path::new(to_path.as_str())
-            .map_err(|e| StoreError::from(StoreErrorKind::PathError(e)))
+            .map_err(|e| StoreError::capture(StoreErrorKind::PathError(e)))
             .map_err(PyIcechunkStoreError::StoreError)?;
-        let session = self.0.clone();
+        let session = Arc::clone(&self.0);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let mut session = session.write().await;
             session
@@ -215,27 +216,25 @@ impl PySession {
         //TODO: add a backwards shift as an option
     ) -> PyResult<()> {
         let array_path = Path::new(array_path.as_str())
-            .map_err(|e| StoreError::from(StoreErrorKind::PathError(e)))
+            .map_err(|e| StoreError::capture(StoreErrorKind::PathError(e)))
             .map_err(PyIcechunkStoreError::StoreError)?;
         fn make_py_reindex_closure<'py>(
             py: Python<'py>,
             func: Bound<'py, PyFunction>,
         ) -> Box<dyn Fn(&ChunkIndices) -> ReindexOperationResult + 'py> {
             Box::new(move |idx: &ChunkIndices| {
-                let python_index = idx
-                    .0
-                    .clone()
-                    .into_pyobject(py)
-                    .map_err(|e| SessionErrorKind::Other(Box::new(e)))?;
-                let new_index = func
-                    .call1((python_index,))
-                    .map_err(|e| SessionErrorKind::Other(Box::new(e)))?;
+                let python_index = idx.0.clone().into_pyobject(py).map_err(|e| {
+                    SessionError::capture(SessionErrorKind::Other(Box::new(e)))
+                })?;
+                let new_index = func.call1((python_index,)).map_err(|e| {
+                    SessionError::capture(SessionErrorKind::Other(Box::new(e)))
+                })?;
                 if new_index.is_none() {
                     Ok(None)
                 } else {
-                    let new_index: Vec<u32> = new_index
-                        .extract()
-                        .map_err(|e| SessionErrorKind::Other(Box::new(e)))?;
+                    let new_index: Vec<u32> = new_index.extract().map_err(|e| {
+                        SessionError::capture(SessionErrorKind::Other(Box::new(e)))
+                    })?;
                     Ok(Some(ChunkIndices(new_index)))
                 }
             })
@@ -266,7 +265,7 @@ impl PySession {
         chunk_offset: Vec<i64>,
     ) -> PyResult<()> {
         let array_path = Path::new(array_path.as_str())
-            .map_err(|e| StoreError::from(StoreErrorKind::PathError(e)))
+            .map_err(|e| StoreError::capture(StoreErrorKind::PathError(e)))
             .map_err(PyIcechunkStoreError::StoreError)?;
 
         // TODO: detach
@@ -286,7 +285,7 @@ impl PySession {
         py.detach(move || {
             let session = self.0.blocking_read();
             let conc = session.config().get_partial_values_concurrency();
-            let store = Store::from_session_and_config(self.0.clone(), conc);
+            let store = Store::from_session_and_config(Arc::clone(&self.0), conc);
 
             let store = Arc::new(store);
             Ok(PyStore(store))
@@ -326,7 +325,7 @@ impl PySession {
         &'py self,
         py: Python<'py>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let session = self.0.clone();
+        let session = Arc::clone(&self.0);
         pyo3_async_runtimes::tokio::future_into_py::<_, Vec<String>>(py, async move {
             let session = session.read().await;
             let res = session
@@ -341,7 +340,7 @@ impl PySession {
         })
     }
 
-    /// Return vectors of coordinates, up to batch_size in length.
+    /// Return vectors of coordinates, up to `batch_size` in length.
     ///
     /// We batch the results to make it faster.
     pub fn chunk_coordinates(
@@ -350,7 +349,7 @@ impl PySession {
         batch_size: u32,
     ) -> PyResult<PyAsyncGenerator> {
         // This is blocking function, we need to release the Gil
-        let session = self.0.clone();
+        let session = Arc::clone(&self.0);
         let res = try_stream! {
             let session = session.read_owned().await;
             let array_path = array_path.try_into().map_err(|e| PyIcechunkStoreError::PyValueError(format!("Invalid path: {e}")))?;
@@ -362,8 +361,7 @@ impl PySession {
                 .map_err(PyIcechunkStoreError::SessionError)
                 .chunks(batch_size as usize);
 
-            #[allow(unused_braces, deprecated)]
-            { for await coords_vec in stream {
+            for await coords_vec in stream {
                 let vec = coords_vec
                     .into_iter()
                     .map(|maybe_coord| {
@@ -383,7 +381,7 @@ impl PySession {
                         .map_err(PyIcechunkStoreError::PyError)
                 })?;
                 yield vec
-            } }
+            }
         };
 
         let prepared_list = Arc::new(Mutex::new(res.boxed()));
@@ -395,7 +393,7 @@ impl PySession {
         array_path: String,
         coords: Vec<u32>,
     ) -> PyResult<ChunkType> {
-        let session = self.0.clone();
+        let session = Arc::clone(&self.0);
         pyo3_async_runtimes::tokio::get_runtime()
             .block_on(Self::chunk_type_inner(session, array_path, coords))
     }
@@ -406,7 +404,7 @@ impl PySession {
         array_path: String,
         coords: Vec<u32>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let session = self.0.clone();
+        let session = Arc::clone(&self.0);
         pyo3_async_runtimes::tokio::future_into_py::<_, ChunkType>(
             py,
             Self::chunk_type_inner(session, array_path, coords),
@@ -436,8 +434,8 @@ impl PySession {
         other: &PySession,
         py: Python<'py>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let session = self.0.clone();
-        let other = other.0.clone();
+        let session = Arc::clone(&self.0);
+        let other = Arc::clone(&other.0);
 
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let mut session = session.write().await;
@@ -494,7 +492,7 @@ impl PySession {
         rebase_tries: Option<u16>,
         allow_empty: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let session = self.0.clone();
+        let session = Arc::clone(&self.0);
         let message = message.to_owned();
 
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
@@ -556,7 +554,7 @@ impl PySession {
         metadata: Option<PySnapshotProperties>,
         allow_empty: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let session = self.0.clone();
+        let session = Arc::clone(&self.0);
         let message = message.to_owned();
 
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
@@ -603,7 +601,7 @@ impl PySession {
         message: &str,
         metadata: Option<PySnapshotProperties>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let session = self.0.clone();
+        let session = Arc::clone(&self.0);
         let message = message.to_owned();
 
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
@@ -640,7 +638,7 @@ impl PySession {
         py: Python<'py>,
         solver: PyConflictSolver,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let session = self.0.clone();
+        let session = Arc::clone(&self.0);
 
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let mut session = session.write().await;
@@ -659,7 +657,7 @@ impl PySession {
     ) -> PyResult<ChunkType> {
         let session = session.read().await;
         let array_path = Path::new(array_path.as_str())
-            .map_err(|e| StoreError::from(StoreErrorKind::PathError(e)))
+            .map_err(|e| StoreError::capture(StoreErrorKind::PathError(e)))
             .map_err(PyIcechunkStoreError::StoreError)?;
         let res = session
             .get_chunk_ref(&array_path, &ChunkIndices(coords))
@@ -671,9 +669,7 @@ impl PySession {
             Some(ChunkPayload::Inline(_)) => Ok(ChunkType::Inline),
             Some(ChunkPayload::Virtual(_)) => Ok(ChunkType::Virtual),
             Some(ChunkPayload::Ref(_)) => Ok(ChunkType::Native),
-            Some(_) => {
-                Err(PyIcechunkStoreError::PyValueError("Invalid Chunk Type".into()))?
-            }
+            Some(_) => Ok(ChunkType::Uninitialized),
         }
     }
 }

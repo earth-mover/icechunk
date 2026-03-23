@@ -17,7 +17,7 @@ use super::{
     DeleteObjectsResult, GetModifiedResult, ListInfo, Settings, Storage, StorageError,
     StorageResult, VersionInfo, VersionedUpdateResult,
 };
-use crate::private;
+use icechunk_storage::sealed;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct LoggingStorage {
@@ -31,12 +31,10 @@ impl LoggingStorage {
         Self { backend, fetch_log: Mutex::new(Vec::new()) }
     }
 
-    #[allow(clippy::expect_used)] // this implementation is intended for tests only
     pub fn fetch_operations(&self) -> Vec<(String, String)> {
         self.fetch_log.lock().expect("poison lock").clone()
     }
 
-    #[allow(clippy::expect_used)] // this implementation is intended for tests only
     pub fn clear(&self) {
         self.fetch_log.lock().expect("poison lock").clear();
     }
@@ -48,11 +46,10 @@ impl fmt::Display for LoggingStorage {
     }
 }
 
-impl private::Sealed for LoggingStorage {}
+impl sealed::Sealed for LoggingStorage {}
 
 #[async_trait]
 #[typetag::serde]
-#[allow(clippy::expect_used)] // this implementation is intended for tests only
 impl Storage for LoggingStorage {
     async fn default_settings(&self) -> StorageResult<Settings> {
         self.backend.default_settings().await

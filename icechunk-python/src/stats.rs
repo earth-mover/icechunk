@@ -42,14 +42,14 @@ impl PyChunkStorageStats {
     /// Virtual chunks are not included since they reference external data.
     ///
     /// Returns:
-    ///     int: The sum of native_bytes and inlined_bytes
+    ///     int: The sum of `native_bytes` and `inlined_bytes`
     pub(crate) fn non_virtual_bytes(&self) -> u64 {
         self.inner.non_virtual_bytes()
     }
 
     /// Total bytes across all chunk types.
     ///
-    /// Returns the sum of native_bytes, virtual_bytes, and inlined_bytes.
+    /// Returns the sum of `native_bytes`, `virtual_bytes`, and `inlined_bytes`.
     /// This represents the total size of all data referenced by the repository,
     /// including both data stored in icechunk and external virtual references.
     ///

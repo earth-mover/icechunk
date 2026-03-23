@@ -12,9 +12,9 @@ use icechunk::{
     },
     new_in_memory_storage, storage,
 };
-use rand::{Rng, RngExt};
+use rand::{Rng, RngExt as _};
 use std::{sync::Arc, time::Instant};
-use tokio::io::AsyncReadExt;
+use tokio::io::AsyncReadExt as _;
 
 const NUM_SNAPSHOTS: usize = 10_000;
 const S3_STANDARD_PER_GB_MONTH: f64 = 0.023;
@@ -114,8 +114,8 @@ struct SamplePoint {
 /// Estimate cumulative storage by linearly interpolating between sample points.
 ///
 /// Between consecutive samples (prev, cur), there are `step` repo info objects.
-/// Object k (1..=step) has estimated size: prev_size + (cur_size - prev_size) * k / step.
-/// Sum over k=1..=step: step * prev_size + delta * (step + 1) / 2.
+/// Object k (1..=step) has estimated size: `prev_size` + (`cur_size` - `prev_size`) * k / step.
+/// Sum over k=1..=step: step * `prev_size` + delta * (step + 1) / 2.
 fn interpolate_cumulative(samples: &[SamplePoint]) -> (f64, f64) {
     let mut total_raw: f64 = 0.0;
     let mut total_compressed: f64 = 0.0;
@@ -393,10 +393,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let first_without = samples_without.first().unwrap();
     let last_without = samples_without.last().unwrap();
 
-    println!(
-        "\n  Single object sizes ({} snaps vs {} snaps):",
-        SAMPLE_STEP, NUM_SNAPSHOTS
-    );
+    println!("\n  Single object sizes ({SAMPLE_STEP} snaps vs {NUM_SNAPSHOTS} snaps):");
     println!("  {:>25}  {:>18}  {:>18}", "", "First sample", "Last sample");
     println!(
         "  {:>25}  {:>16.2} MB  {:>16.2} MB",
@@ -412,8 +409,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     println!(
-        "\n  Fetch (decompress) time ({} snaps vs {} snaps):",
-        SAMPLE_STEP, NUM_SNAPSHOTS
+        "\n  Fetch (decompress) time ({SAMPLE_STEP} snaps vs {NUM_SNAPSHOTS} snaps):"
     );
     println!("  {:>25}  {:>18}  {:>18}", "", "First sample", "Last sample");
     println!(

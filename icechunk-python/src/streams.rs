@@ -1,6 +1,6 @@
 use std::{pin::Pin, sync::Arc};
 
-use futures::{Stream, StreamExt};
+use futures::{Stream, StreamExt as _};
 use pyo3::{
     exceptions::{PyStopAsyncIteration, PyStopIteration},
     prelude::*,
@@ -11,12 +11,18 @@ type PyObjectStream = Arc<Mutex<Pin<Box<dyn Stream<Item = PyResult<Py<PyAny>>> +
 
 /// An async generator that yields strings from a rust stream of strings
 ///
-/// Python class objects cannot be generic, so this stream takes PyObjects
+/// Python class objects cannot be generic, so this stream takes `PyObjects`
 ///
-/// Inspired by https://gist.github.com/s3rius/3bf4a0bd6b28ca1ae94376aa290f8f1c
+/// Inspired by <https://gist.github.com/s3rius/3bf4a0bd6b28ca1ae94376aa290f8f1c>
 #[pyclass]
 pub struct PyAsyncGenerator {
     stream: PyObjectStream,
+}
+
+impl std::fmt::Debug for PyAsyncGenerator {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PyAsyncGenerator").finish_non_exhaustive()
+    }
 }
 
 impl PyAsyncGenerator {
@@ -40,16 +46,16 @@ impl PyAsyncGenerator {
 
     /// This is an anext implementation.
     ///
-    /// Notable thing here is that we return PyResult<Option<PyObject>>.
-    /// We cannot return &PyAny directly here, because of pyo3 limitations.
-    /// Here's the issue about it: https://github.com/PyO3/pyo3/issues/3190
+    /// Notable thing here is that we return `PyResult`<Option<PyObject>>.
+    /// We cannot return &`PyAny` directly here, because of pyo3 limitations.
+    /// Here's the issue about it: <https://github.com/PyO3/pyo3/issues/3190>
     fn __anext__<'py>(
         slf: PyRefMut<'py, Self>,
         py: Python<'py>,
     ) -> PyResult<Bound<'py, PyAny>> {
         // Arc::clone is cheap, so we can clone the Arc here because we move into the
         // future block
-        let stream = slf.stream.clone();
+        let stream = Arc::clone(&slf.stream);
 
         let future = async move {
             let mut unlocked = stream.lock().await;
@@ -76,7 +82,7 @@ impl PyAsyncGenerator {
     ) -> PyResult<Option<Py<PyAny>>> {
         // Arc::clone is cheap, so we can clone the Arc here because we move into the
         // future block
-        let stream = slf.stream.clone();
+        let stream = Arc::clone(&slf.stream);
 
         py.detach(move || {
             let next = pyo3_async_runtimes::tokio::get_runtime().block_on(async move {

@@ -1,0 +1,54 @@
+[package]
+name = "icechunk-arrow-object-store"
+version = "2.0.0-alpha.4"
+description = "Apache Arrow object_store storage backend for icechunk"
+readme = "../README.md"
+repository = "https://github.com/earth-mover/icechunk"
+homepage = "https://icechunk.io"
+license = "Apache-2.0"
+keywords = ["zarr", "xarray", "database"]
+categories = ["database", "science", "science::geo"]
+authors = ["Earthmover PBC"]
+edition.workspace = true
+publish = true
+rust-version.workspace = true
+
+[dependencies]
+icechunk-storage = { path = "../icechunk-storage", version = "2.0.0-alpha.4" }
+icechunk-types = { path = "../icechunk-types", version = "2.0.0-alpha.4" }
+
+async-trait = "0.1.89"
+bytes = { version = "1.11.1", features = ["serde"] }
+chrono = { version = "0.4.44", features = ["serde"] }
+futures = "0.3.32"
+object_store = { version = "0.13.1", default-features = false, features = [] }
+rand = "0.10.0"
+serde = { version = "1.0.228", features = ["derive", "rc"] }
+tokio = { version = "1.50.0", features = ["sync"] }
+tokio-util = { version = "0.7.18", features = ["io-util"] }
+tracing = "0.1.44"
+typetag = "0.2.21"
+url = { version = "2.5.8", features = ["serde"] }
+
+[dev-dependencies]
+icechunk-macros = { path = "../icechunk-macros", version = "2.0.0-alpha.4" }
+
+rmp-serde = "1.3.1"
+serde_json = "1.0.149"
+tempfile = "3.27.0"
+test-log = { version = "0.2.19", default-features = false, features = [
+  "trace",
+  "color",
+  "unstable",
+] }
+
+[features]
+default = ["s3", "gcs", "azure", "http", "fs"]
+s3 = ["object_store/aws"]
+gcs = ["object_store/gcp"]
+azure = ["object_store/azure"]
+http = ["object_store/http"]
+fs = ["object_store/fs"]
+
+[lints]
+workspace = true

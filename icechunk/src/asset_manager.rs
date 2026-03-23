@@ -6,10 +6,11 @@
 //! transaction logs, and chunks.
 
 use async_stream::try_stream;
-use backon::{BackoffBuilder, ConstantBuilder, ExponentialBuilder, Retryable};
+use backon::{BackoffBuilder as _, ConstantBuilder, ExponentialBuilder, Retryable as _};
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
-use futures::{Stream, StreamExt as _, TryStreamExt, stream::BoxStream};
+use futures::{Stream, StreamExt as _, TryStreamExt as _, stream::BoxStream};
+use icechunk_types::{ICResultExt as _, error::ICResultCtxExt as _};
 use quick_cache::{Weighter, sync::Cache};
 use serde::{Deserialize, Serialize};
 use std::sync::{LazyLock, RwLock};
@@ -20,7 +21,7 @@ use std::{
     time::Duration,
 };
 
-#[allow(clippy::unwrap_used)]
+#[expect(clippy::unwrap_used)]
 static RETRYABLE_ERROR: LazyLock<regex::Regex> = LazyLock::new(|| {
     regex::Regex::new(
         "(?i)StreamingError|DispatchFailure|ConnectorError|IncompleteMessage|connection reset",
@@ -32,7 +33,7 @@ use async_compression::{
     tokio::bufread::{ZstdDecoder, ZstdEncoder},
 };
 use tokio::{
-    io::{AsyncBufRead, AsyncReadExt},
+    io::{AsyncBufRead, AsyncReadExt as _},
     sync::Semaphore,
 };
 use tracing::{debug, instrument, trace, warn};
@@ -144,7 +145,7 @@ impl From<AssetManagerSerializer> for AssetManager {
 }
 
 impl AssetManager {
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn new(
         storage: Arc<dyn Storage + Send + Sync>,
         storage_settings: storage::Settings,
@@ -277,12 +278,12 @@ impl AssetManager {
         {
             Ok((mut result, version)) => {
                 let mut data = Vec::with_capacity(1_024);
-                result.read_to_end(&mut data).await?;
-                let config = serde_yaml_ng::from_slice(data.as_slice())?;
+                result.read_to_end(&mut data).await.capture()?;
+                let config = serde_yaml_ng::from_slice(data.as_slice()).capture()?;
                 Ok(Some((config, version)))
             }
             Err(StorageError { kind: StorageErrorKind::ObjectNotFound, .. }) => Ok(None),
-            Err(e) => Err(e.into()),
+            Err(e) => Err(e.inject()),
         }
     }
 
@@ -292,7 +293,7 @@ impl AssetManager {
         previous_version: &VersionInfo,
         backup_path: Option<&str>,
     ) -> RepositoryResult<Option<VersionInfo>> {
-        let bytes = Bytes::from(serde_yaml_ng::to_string(config)?);
+        let bytes = Bytes::from(serde_yaml_ng::to_string(config).capture()?);
         let content_type = Some("application/yaml");
         if let Some(backup_path) = backup_path {
             let backup_path = format!("{OVERWRITTEN_FILES_PATH}/{backup_path}");
@@ -305,7 +306,8 @@ impl AssetManager {
                     content_type,
                     previous_version,
                 )
-                .await?
+                .await
+                .inject()?
             {
                 VersionedUpdateResult::Updated { .. } => {}
                 VersionedUpdateResult::NotOnLatestVersion => return Ok(None),
@@ -321,7 +323,8 @@ impl AssetManager {
                 Vec::new(),
                 Some(previous_version),
             )
-            .await?
+            .await
+            .inject()?
         {
             VersionedUpdateResult::Updated { new_version } => Ok(Some(new_version)),
             VersionedUpdateResult::NotOnLatestVersion => Ok(None),
@@ -495,7 +498,11 @@ impl AssetManager {
 
         let repo_cache = if self.use_repo_info_cache {
             // Cloning here so lock is immediately released
-            self.repo_cache.read().map_err(|_| RepositoryErrorKind::PoisonLock)?.clone()
+            self.repo_cache
+                .read()
+                .map_err(|_| RepositoryErrorKind::PoisonLock)
+                .capture()?
+                .clone()
         } else {
             None
         };
@@ -525,8 +532,9 @@ impl AssetManager {
                     let mut repo_cache = self
                         .repo_cache
                         .write()
-                        .map_err(|_| RepositoryErrorKind::PoisonLock)?;
-                    *repo_cache = Some((repo_info.clone(), version_info.clone()));
+                        .map_err(|_| RepositoryErrorKind::PoisonLock)
+                        .capture()?;
+                    *repo_cache = Some((Arc::clone(&repo_info), version_info.clone()));
                 }
 
                 return Ok((repo_info, version_info));
@@ -534,7 +542,7 @@ impl AssetManager {
             Ok(None) => {
                 if self.use_repo_info_cache {
                     trace!("Reusing cached repo info object since it's latest version");
-                    #[allow(clippy::expect_used)]
+                    #[expect(clippy::expect_used)]
                     return Ok(repo_cache.expect(
                         "Logic bug in fetch_repo_info, repo_cache should exist here",
                     ));
@@ -558,7 +566,9 @@ impl AssetManager {
         minimum_spec_version: SpecVersionBin,
     ) -> RepositoryResult<()> {
         if self.spec_version() < minimum_spec_version {
-            Err(RepositoryErrorKind::BadRepoVersion { minimum_spec_version }.into())
+            Err(RepositoryError::capture(RepositoryErrorKind::BadRepoVersion {
+                minimum_spec_version,
+            }))
         } else {
             Ok(())
         }
@@ -580,7 +590,7 @@ impl AssetManager {
         backup_path: Option<&str>,
     ) -> RepositoryResult<VersionInfo> {
         let new_version = write_repo_info(
-            info.clone(),
+            Arc::clone(&info),
             self.spec_version(),
             version,
             self.compression_level,
@@ -596,8 +606,8 @@ impl AssetManager {
                 *self
                     .repo_cache
                     .write()
-                    .map_err(|_| RepositoryErrorKind::PoisonLock)? =
-                    Some((info, new_version.clone()));
+                    .map_err(|_| RepositoryErrorKind::PoisonLock)
+                    .capture()? = Some((info, new_version.clone()));
             }
         }
 
@@ -609,7 +619,7 @@ impl AssetManager {
         &self,
         info: Arc<RepoInfo>,
     ) -> RepositoryResult<VersionInfo> {
-        self.write_repo_info(info, &storage::VersionInfo::for_creation(), None).await
+        self.write_repo_info(info, &VersionInfo::for_creation(), None).await
     }
 
     #[instrument(skip(self, retry_settings, update))]
@@ -629,6 +639,7 @@ impl AssetManager {
     ///
     /// This overrides any checks on the repo status, and force
     /// an update.
+    #[expect(unsafe_code)]
     #[instrument(skip(self, retry_settings, update))]
     pub async unsafe fn update_repo_info_unchecked(
         &self,
@@ -664,12 +675,10 @@ impl AssetManager {
             .with_max_times(immediate_retries)
             .build();
         let exp_backoff = ExponentialBuilder::new()
-            .with_min_delay(std::time::Duration::from_millis(
-                retry_settings.initial_backoff_ms() as u64,
+            .with_min_delay(Duration::from_millis(
+                retry_settings.initial_backoff_ms() as u64
             ))
-            .with_max_delay(std::time::Duration::from_millis(
-                retry_settings.max_backoff_ms() as u64,
-            ))
+            .with_max_delay(Duration::from_millis(retry_settings.max_backoff_ms() as u64))
             .with_max_times(max_attempts.saturating_sub(immediate_retries))
             .with_jitter()
             .build();
@@ -678,11 +687,10 @@ impl AssetManager {
         let mut attempts: u64 = 1;
         loop {
             let (repo_info, repo_version) = self.fetch_repo_info().await?;
-            let status = repo_info.status()?;
+            let status = repo_info.status().inject()?;
             if !skip_online_check && status.availability != RepoAvailability::Online {
-                return Err(
-                    RepositoryErrorKind::ReadonlyRepository(status.error_msg()).into()
-                );
+                return Err(RepositoryErrorKind::ReadonlyRepository(status.error_msg()))
+                    .capture();
             }
             let backup_path = self.backup_path_for_repo_info();
             let new_repo = update(repo_info, backup_path.as_str(), repo_version.clone())?;
@@ -705,8 +713,8 @@ impl AssetManager {
                         *self
                             .repo_cache
                             .write()
-                            .map_err(|_| RepositoryErrorKind::PoisonLock)? =
-                            Some((new_repo, new_version.clone()));
+                            .map_err(|_| RepositoryErrorKind::PoisonLock)
+                            .capture()? = Some((new_repo, new_version.clone()));
                     }
                     return Ok(new_version);
                 }
@@ -714,9 +722,12 @@ impl AssetManager {
                     kind: RepositoryErrorKind::RepoInfoUpdated,
                     ..
                 }) => {
-                    let delay = backoff.next().ok_or(
-                        RepositoryErrorKind::RepoUpdateAttemptsLimit(max_attempts as u64),
-                    )?;
+                    let delay = backoff
+                        .next()
+                        .ok_or(RepositoryErrorKind::RepoUpdateAttemptsLimit(
+                            max_attempts as u64,
+                        ))
+                        .capture()?;
                     debug!(
                         attempts,
                         ?delay,
@@ -739,15 +750,15 @@ impl AssetManager {
         bytes: Bytes,
     ) -> RepositoryResult<()> {
         trace!(%chunk_id, size_bytes=bytes.len(), "Writing chunk");
-        if !self.storage.can_write().await? {
+        if !self.storage.can_write().await.inject()? {
             return Err(RepositoryErrorKind::ReadonlyStorage(
                 "Cannot write chunk".to_string(),
-            )
-            .into());
+            ))
+            .capture();
         }
 
         let path = format!("{CHUNKS_FILE_PATH}/{chunk_id}");
-        let _permit = self.request_semaphore.acquire().await?;
+        let _permit = self.request_semaphore.acquire().await.capture()?;
         let settings = storage::Settings {
             storage_class: self.storage_settings.chunks_storage_class().cloned(),
             ..self.storage_settings.clone()
@@ -755,8 +766,10 @@ impl AssetManager {
         // we don't pre-populate the chunk cache, there are too many of them for this to be useful
         self.storage
             .put_object(&settings, path.as_str(), bytes, None, Default::default(), None)
-            .await?
-            .must_write()?;
+            .await
+            .inject()?
+            .must_write()
+            .inject()?;
         Ok(())
     }
 
@@ -773,15 +786,16 @@ impl AssetManager {
                 trace!(%chunk_id, ?range, "Downloading chunk");
                 let path = format!("{CHUNKS_FILE_PATH}/{chunk_id}");
                 let retry = (|| async {
-                    let permit = self.request_semaphore.acquire().await?;
+                    let permit = self.request_semaphore.acquire().await.capture()?;
                     let (read, _) = self
                         .storage
                         .get_object(&self.storage_settings, &path, Some(range))
-                        .await?;
+                        .await
+                        .inject()?;
                     let bytes_result =
                         async_reader_to_bytes(read, (range.end - range.start) as usize)
                             .await
-                            .map_err(RepositoryError::from);
+                            .capture();
                     drop(permit);
                     bytes_result
                 })
@@ -805,7 +819,7 @@ impl AssetManager {
                         debug!(
                             ?err,
                             "retrying on streaming/connection error after {duration:?}"
-                        )
+                        );
                     })
                     .await?;
                 let _fail_is_ok = guard.insert(chunk.clone());
@@ -821,11 +835,11 @@ impl AssetManager {
     ) -> RepositoryResult<DateTime<Utc>> {
         debug!(%snapshot_id, "Getting snapshot timestamp");
         let path = format!("{SNAPSHOTS_FILE_PATH}/{snapshot_id}");
-        let _permit = self.request_semaphore.acquire().await?;
-        Ok(self
-            .storage
+        let _permit = self.request_semaphore.acquire().await.capture()?;
+        self.storage
             .get_object_last_modified(path.as_str(), &self.storage_settings)
-            .await?)
+            .await
+            .inject()
     }
 
     #[instrument(skip(self))]
@@ -834,7 +848,7 @@ impl AssetManager {
         snapshot_id: &SnapshotId,
     ) -> RepositoryResult<SnapshotInfo> {
         let snapshot = self.fetch_snapshot(snapshot_id).await?;
-        let info = snapshot.as_ref().try_into()?;
+        let info = snapshot.as_ref().try_into().inject()?;
         Ok(info)
     }
 
@@ -845,8 +859,9 @@ impl AssetManager {
         Ok(translate_list_infos(
             self.storage
                 .list_objects(&self.storage_settings, CHUNKS_FILE_PATH)
-                .await?
-                .err_into(),
+                .await
+                .inject()?
+                .map(|r| r.inject()),
         ))
     }
 
@@ -857,8 +872,9 @@ impl AssetManager {
         Ok(translate_list_infos(
             self.storage
                 .list_objects(&self.storage_settings, MANIFESTS_FILE_PATH)
-                .await?
-                .err_into(),
+                .await
+                .inject()?
+                .map(|r| r.inject()),
         ))
     }
 
@@ -869,8 +885,9 @@ impl AssetManager {
         Ok(translate_list_infos(
             self.storage
                 .list_objects(&self.storage_settings, SNAPSHOTS_FILE_PATH)
-                .await?
-                .err_into(),
+                .await
+                .inject()?
+                .map(|r| r.inject()),
         ))
     }
 
@@ -881,8 +898,9 @@ impl AssetManager {
         Ok(translate_list_infos(
             self.storage
                 .list_objects(&self.storage_settings, TRANSACTION_LOGS_FILE_PATH)
-                .await?
-                .err_into(),
+                .await
+                .inject()?
+                .map(|r| r.inject()),
         ))
     }
 
@@ -890,60 +908,60 @@ impl AssetManager {
         &self,
         chunks: BoxStream<'_, (ChunkId, u64)>,
     ) -> RepositoryResult<DeleteObjectsResult> {
-        Ok(self
-            .storage
+        self.storage
             .delete_objects(
                 &self.storage_settings,
                 CHUNKS_FILE_PATH,
                 chunks.map(|(id, size)| (id.to_string(), size)).boxed(),
             )
-            .await?)
+            .await
+            .inject()
     }
 
     pub async fn delete_manifests(
         &self,
         manifests: BoxStream<'_, (ManifestId, u64)>,
     ) -> RepositoryResult<DeleteObjectsResult> {
-        Ok(self
-            .storage
+        self.storage
             .delete_objects(
                 &self.storage_settings,
                 MANIFESTS_FILE_PATH,
                 manifests.map(|(id, size)| (id.to_string(), size)).boxed(),
             )
-            .await?)
+            .await
+            .inject()
     }
 
     pub async fn delete_snapshots(
         &self,
         snapshots: BoxStream<'_, (SnapshotId, u64)>,
     ) -> RepositoryResult<DeleteObjectsResult> {
-        Ok(self
-            .storage
+        self.storage
             .delete_objects(
                 &self.storage_settings,
                 SNAPSHOTS_FILE_PATH,
                 snapshots.map(|(id, size)| (id.to_string(), size)).boxed(),
             )
-            .await?)
+            .await
+            .inject()
     }
 
     pub async fn delete_transaction_logs(
         &self,
         transaction_logs: BoxStream<'_, (SnapshotId, u64)>,
     ) -> RepositoryResult<DeleteObjectsResult> {
-        Ok(self
-            .storage
+        self.storage
             .delete_objects(
                 &self.storage_settings,
                 TRANSACTION_LOGS_FILE_PATH,
                 transaction_logs.map(|(id, size)| (id.to_string(), size)).boxed(),
             )
-            .await?)
+            .await
+            .inject()
     }
 
     pub async fn can_write_to_storage(&self) -> RepositoryResult<bool> {
-        Ok(self.storage.can_write().await?)
+        self.storage.can_write().await.inject()
     }
 
     pub async fn list_overwritten_objects(
@@ -952,9 +970,10 @@ impl AssetManager {
         let stream = self
             .storage
             .list_objects(&self.storage_settings, OVERWRITTEN_FILES_PATH)
-            .await?
+            .await
+            .inject()?
             .map_ok(|li| li.id)
-            .err_into()
+            .map(|r| r.inject())
             .boxed();
         Ok(stream)
     }
@@ -987,7 +1006,7 @@ impl AssetManager {
         let mut this = self.fetch_snapshot(snapshot_id).await?;
         let stream = try_stream! {
             yield Arc::clone(&this);
-            #[allow(deprecated)]
+            #[expect(deprecated)]
             while let Some(parent) = this.parent_id() {
                 let snap = self.fetch_snapshot(&parent).await?;
                 yield Arc::clone(&snap);
@@ -1024,39 +1043,46 @@ async fn check_header(
     file_type: FileTypeBin,
 ) -> RepositoryResult<(SpecVersionBin, CompressionAlgorithmBin)> {
     let mut buf = [0; 12];
-    read.read_exact(&mut buf).await?;
+    read.read_exact(&mut buf).await.capture()?;
     // Magic numbers
     if format_constants::ICECHUNK_FORMAT_MAGIC_BYTES != buf {
         return Err(RepositoryErrorKind::FormatError(
             IcechunkFormatErrorKind::InvalidMagicNumbers,
-        )
-        .into());
+        ))
+        .capture();
     }
 
     let mut buf = [0; 24];
     // ignore implementation name
-    read.read_exact(&mut buf).await?;
+    read.read_exact(&mut buf).await.capture()?;
 
     let mut spec_version = 0;
-    read.read_exact(std::slice::from_mut(&mut spec_version)).await?;
+    read.read_exact(std::slice::from_mut(&mut spec_version)).await.capture()?;
 
-    let spec_version: SpecVersionBin = spec_version.try_into().map_err(|_| {
-        RepositoryErrorKind::FormatError(IcechunkFormatErrorKind::InvalidSpecVersion {
-            found: spec_version,
-            max_supported: SpecVersionBin::current() as u8,
+    let spec_version: SpecVersionBin = spec_version
+        .try_into()
+        .map_err(|_| {
+            RepositoryErrorKind::FormatError(
+                IcechunkFormatErrorKind::InvalidSpecVersion {
+                    found: spec_version,
+                    max_supported: SpecVersionBin::current() as u8,
+                },
+            )
         })
-    })?;
+        .capture()?;
 
     let mut actual_file_type_int = 0;
-    read.read_exact(std::slice::from_mut(&mut actual_file_type_int)).await?;
+    read.read_exact(std::slice::from_mut(&mut actual_file_type_int)).await.capture()?;
 
-    let actual_file_type: FileTypeBin =
-        actual_file_type_int.try_into().map_err(|_| {
+    let actual_file_type: FileTypeBin = actual_file_type_int
+        .try_into()
+        .map_err(|_| {
             RepositoryErrorKind::FormatError(IcechunkFormatErrorKind::InvalidFileType {
                 expected: file_type,
                 got: actual_file_type_int,
             })
-        })?;
+        })
+        .capture()?;
 
     if actual_file_type != file_type {
         return Err(RepositoryErrorKind::FormatError(
@@ -1064,18 +1090,21 @@ async fn check_header(
                 expected: file_type,
                 got: actual_file_type_int,
             },
-        )
-        .into());
+        ))
+        .capture();
     }
 
     let mut compression = 0;
-    read.read_exact(std::slice::from_mut(&mut compression)).await?;
+    read.read_exact(std::slice::from_mut(&mut compression)).await.capture()?;
 
-    let compression = compression.try_into().map_err(|_| {
-        RepositoryErrorKind::FormatError(
-            IcechunkFormatErrorKind::InvalidCompressionAlgorithm,
-        )
-    })?;
+    let compression = compression
+        .try_into()
+        .map_err(|_| {
+            RepositoryErrorKind::FormatError(
+                IcechunkFormatErrorKind::InvalidCompressionAlgorithm,
+            )
+        })
+        .capture()?;
 
     Ok((spec_version, compression))
 }
@@ -1088,11 +1117,11 @@ async fn write_new_manifest(
     storage_settings: &storage::Settings,
     semaphore: &Semaphore,
 ) -> RepositoryResult<u64> {
-    if !storage.can_write().await? {
+    if !storage.can_write().await.inject()? {
         return Err(RepositoryErrorKind::ReadonlyStorage(
             "Cannot write manifest".to_string(),
-        )
-        .into());
+        ))
+        .capture();
     }
     use format_constants::*;
     let metadata = vec![
@@ -1131,11 +1160,13 @@ async fn write_new_manifest(
         ..storage_settings.clone()
     };
 
-    let _permit = semaphore.acquire().await?;
+    let _permit = semaphore.acquire().await.capture()?;
     storage
         .put_object(&settings, path.as_str(), buffer.into(), None, metadata, None)
-        .await?
-        .must_write()?;
+        .await
+        .inject()?
+        .must_write()
+        .inject()?;
     Ok(len)
 }
 
@@ -1152,14 +1183,13 @@ async fn fetch_manifest(
     let path = format!("{MANIFESTS_FILE_PATH}/{manifest_id}");
     let range = 0..manifest_size;
     let range = if manifest_size > 0 { Some(&range) } else { None };
-    let _permit = semaphore.acquire().await?;
+    let _permit = semaphore.acquire().await.capture()?;
 
-    let (read, _) = storage.get_object(storage_settings, path.as_str(), range).await?;
+    let (read, _) =
+        storage.get_object(storage_settings, path.as_str(), range).await.inject()?;
     let (spec_version, buffer) =
         check_and_decompress(read, FileTypeBin::Manifest).await?;
-    deserialize_manifest(spec_version, buffer)
-        .map(Arc::new)
-        .map_err(RepositoryError::from)
+    deserialize_manifest(spec_version, buffer).map(Arc::new).inject()
 }
 
 async fn check_and_decompress(
@@ -1170,7 +1200,7 @@ async fn check_and_decompress(
     debug_assert_eq!(compression, CompressionAlgorithmBin::Zstd);
     let mut decoder = ZstdDecoder::new(read);
     let mut buffer = Vec::new();
-    decoder.read_to_end(&mut buffer).await?;
+    decoder.read_to_end(&mut buffer).await.capture()?;
     buffer.shrink_to_fit();
     Ok((spec_version, buffer))
 }
@@ -1185,7 +1215,7 @@ async fn compress_with_header(
         binary_file_header(spec_version, file_type, CompressionAlgorithmBin::Zstd);
     let mut encoder =
         ZstdEncoder::with_quality(data, Level::Precise(compression_level as i32));
-    encoder.read_to_end(&mut buffer).await.map_err(RepositoryErrorKind::IOError)?;
+    encoder.read_to_end(&mut buffer).await.capture()?;
     Ok(buffer)
 }
 
@@ -1197,11 +1227,11 @@ async fn write_new_snapshot(
     storage_settings: &storage::Settings,
     semaphore: &Semaphore,
 ) -> RepositoryResult<SnapshotId> {
-    if !storage.can_write().await? {
+    if !storage.can_write().await.inject()? {
         return Err(RepositoryErrorKind::ReadonlyStorage(
             "Cannot write snapshot".to_string(),
-        )
-        .into());
+        ))
+        .capture();
     }
     use format_constants::*;
     let metadata = vec![
@@ -1235,11 +1265,13 @@ async fn write_new_snapshot(
         storage_class: storage_settings.metadata_storage_class().cloned(),
         ..storage_settings.clone()
     };
-    let _permit = semaphore.acquire().await?;
+    let _permit = semaphore.acquire().await.capture()?;
     storage
         .put_object(&settings, path.as_str(), buffer.into(), None, metadata, None)
-        .await?
-        .must_write()?;
+        .await
+        .inject()?
+        .must_write()
+        .inject()?;
 
     Ok(id)
 }
@@ -1252,15 +1284,14 @@ async fn fetch_snapshot(
     semaphore: &Semaphore,
 ) -> RepositoryResult<Arc<Snapshot>> {
     debug!(%snapshot_id, "Downloading snapshot");
-    let _permit = semaphore.acquire().await?;
+    let _permit = semaphore.acquire().await.capture()?;
 
     let path = format!("{SNAPSHOTS_FILE_PATH}/{snapshot_id}");
-    let (read, _) = storage.get_object(storage_settings, path.as_str(), None).await?;
+    let (read, _) =
+        storage.get_object(storage_settings, path.as_str(), None).await.inject()?;
     let (spec_version, buffer) =
         check_and_decompress(read, FileTypeBin::Snapshot).await?;
-    deserialize_snapshot(spec_version, buffer)
-        .map(Arc::new)
-        .map_err(RepositoryError::from)
+    deserialize_snapshot(spec_version, buffer).map(Arc::new).inject()
 }
 
 async fn write_new_tx_log(
@@ -1272,11 +1303,11 @@ async fn write_new_tx_log(
     storage_settings: &storage::Settings,
     semaphore: &Semaphore,
 ) -> RepositoryResult<()> {
-    if !storage.can_write().await? {
+    if !storage.can_write().await.inject()? {
         return Err(RepositoryErrorKind::ReadonlyStorage(
             "Cannot write transaction log".to_string(),
-        )
-        .into());
+        ))
+        .capture();
     }
     use format_constants::*;
     let metadata = vec![
@@ -1310,11 +1341,13 @@ async fn write_new_tx_log(
         ..storage_settings.clone()
     };
 
-    let _permit = semaphore.acquire().await?;
+    let _permit = semaphore.acquire().await.capture()?;
     storage
         .put_object(&settings, path.as_str(), buffer.into(), None, metadata, None)
-        .await?
-        .must_write()?;
+        .await
+        .inject()?
+        .must_write()
+        .inject()?;
 
     Ok(())
 }
@@ -1328,16 +1361,15 @@ async fn fetch_transaction_log(
 ) -> RepositoryResult<Arc<TransactionLog>> {
     debug!(%transaction_id, "Downloading transaction log");
     let path = format!("{TRANSACTION_LOGS_FILE_PATH}/{transaction_id}");
-    let _permit = semaphore.acquire().await?;
-    let (read, _) = storage.get_object(storage_settings, path.as_str(), None).await?;
+    let _permit = semaphore.acquire().await.capture()?;
+    let (read, _) =
+        storage.get_object(storage_settings, path.as_str(), None).await.inject()?;
     let (spec_version, buffer) =
         check_and_decompress(read, FileTypeBin::TransactionLog).await?;
-    deserialize_transaction_log(spec_version, buffer)
-        .map(Arc::new)
-        .map_err(RepositoryError::from)
+    deserialize_transaction_log(spec_version, buffer).map(Arc::new).inject()
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 pub async fn write_repo_info(
     info: Arc<RepoInfo>,
     spec_version: SpecVersionBin,
@@ -1348,11 +1380,11 @@ pub async fn write_repo_info(
     storage_settings: &storage::Settings,
     path: Option<&str>,
 ) -> RepositoryResult<VersionInfo> {
-    if !storage.can_write().await? {
+    if !storage.can_write().await.inject()? {
         return Err(RepositoryErrorKind::ReadonlyStorage(
             "Cannot write repo info".to_string(),
-        )
-        .into());
+        ))
+        .capture();
     }
     use format_constants::*;
     let metadata = vec![
@@ -1392,11 +1424,14 @@ pub async fn write_repo_info(
                 None,
                 version,
             )
-            .await?
+            .await
+            .inject()?
         {
             VersionedUpdateResult::Updated { .. } => {}
             VersionedUpdateResult::NotOnLatestVersion => {
-                return Err(RepositoryErrorKind::RepoInfoUpdated.into());
+                return Err(RepositoryError::capture(
+                    RepositoryErrorKind::RepoInfoUpdated,
+                ));
             }
         }
     }
@@ -1410,11 +1445,12 @@ pub async fn write_repo_info(
             metadata,
             Some(version),
         )
-        .await?
+        .await
+        .inject()?
     {
-        storage::VersionedUpdateResult::Updated { new_version } => Ok(new_version),
-        storage::VersionedUpdateResult::NotOnLatestVersion => {
-            Err(RepositoryErrorKind::RepoInfoUpdated.into())
+        VersionedUpdateResult::Updated { new_version } => Ok(new_version),
+        VersionedUpdateResult::NotOnLatestVersion => {
+            Err(RepositoryError::capture(RepositoryErrorKind::RepoInfoUpdated))
         }
     }
 }
@@ -1428,7 +1464,7 @@ pub async fn fetch_repo_info(
         .await
         .map(|repo| {
             // Since we didn't give a previous version, there must be a result here
-            #[allow(clippy::expect_used)]
+            #[expect(clippy::expect_used)]
             repo.expect("Logic bug, must have a repo_info here")
         })
 }
@@ -1448,7 +1484,7 @@ async fn fetch_repo_info_backup(
     .await
     .map(|repo| {
         // Since we didn't give a previous version, there must be a result here
-        #[allow(clippy::expect_used)]
+        #[expect(clippy::expect_used)]
         repo.expect("Logic bug, must have a repo_info here")
     })
 }
@@ -1467,13 +1503,13 @@ pub async fn fetch_repo_info_from_path(
                 check_and_decompress(data, FileTypeBin::RepoInfo).await?;
             deserialize_repo_info(spec_version, buffer)
                 .map(|ri| Some((Arc::new(ri), new_version)))
-                .map_err(RepositoryError::from)
+                .inject()
         }
         Ok(GetModifiedResult::OnLatestVersion) => Ok(None),
         Err(StorageError { kind: StorageErrorKind::ObjectNotFound, .. }) => {
-            Err(RepositoryError::from(RepositoryErrorKind::RepositoryDoesntExist))
+            Err(RepositoryError::capture(RepositoryErrorKind::RepositoryDoesntExist))
         }
-        Err(e) => Err(e.into()),
+        Err(e) => Err(e.inject()),
     }
 }
 
@@ -1504,7 +1540,7 @@ impl Weighter<SnapshotId, Arc<TransactionLog>> for FileWeighter {
     }
 }
 
-fn convert_list_item<Id>(item: ListInfo<String>) -> Option<ListInfo<Id>>
+fn convert_list_item<Id>(item: &ListInfo<String>) -> Option<ListInfo<Id>>
 where
     Id: for<'b> TryFrom<&'b str>,
 {
@@ -1520,7 +1556,7 @@ where
     Id: for<'b> TryFrom<&'b str> + Send + std::fmt::Debug + 'a,
 {
     s.try_filter_map(|info| async move {
-        let info = convert_list_item(info);
+        let info = convert_list_item(&info);
         if info.is_none() {
             tracing::error!(list_info=?info, "Error processing list item metadata");
         }
@@ -1548,18 +1584,17 @@ fn backup_destination(source_path: &str) -> String {
 }
 
 #[cfg(test)]
-#[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 mod test {
 
     use icechunk_macros::tokio_test;
-    use itertools::{Itertools, assert_equal};
+    use itertools::{Itertools as _, assert_equal};
 
     use super::*;
     use crate::{
         config::ManifestVirtualChunkLocationCompressionConfig,
         format::{
             ChunkIndices, NodeId,
-            manifest::{ChunkInfo, ChunkPayload},
+            manifest::{ChunkInfo, ChunkPayload, LocationCompressionConfig},
         },
         storage::{Storage, logging::LoggingStorage, new_in_memory_storage},
     };
@@ -1569,7 +1604,7 @@ mod test {
         let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
         let settings = storage::Settings::default();
         let manager = AssetManager::new_no_cache(
-            backend.clone(),
+            Arc::clone(&backend),
             settings.clone(),
             SpecVersionBin::default(),
             1,
@@ -1597,7 +1632,8 @@ mod test {
         let pre_size = manager.write_manifest(Arc::clone(&pre_existing_manifest)).await?;
 
         let logging = Arc::new(LoggingStorage::new(Arc::clone(&backend)));
-        let logging_c: Arc<dyn Storage + Send + Sync> = logging.clone();
+        let logging_c = Arc::clone(&logging);
+        let logging_c: Arc<dyn Storage + Send + Sync> = logging_c;
         let caching = AssetManager::new_with_config(
             Arc::clone(&logging_c),
             settings,
@@ -1607,11 +1643,13 @@ mod test {
             100,
         );
 
+        let compression: LocationCompressionConfig =
+            (&ManifestVirtualChunkLocationCompressionConfig::default()).into();
         let manifest = Arc::new(
             Manifest::from_iter(
                 &ManifestId::random(),
                 vec![ci2.clone()].into_iter(),
-                Some(&ManifestVirtualChunkLocationCompressionConfig::default()),
+                Some(&compression),
             )
             .await?
             .unwrap(),
@@ -1680,7 +1718,7 @@ mod test {
         let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
         let settings = storage::Settings::default();
         let manager = AssetManager::new_no_cache(
-            backend.clone(),
+            Arc::clone(&backend),
             settings.clone(),
             SpecVersionBin::default(),
             1,
@@ -1708,11 +1746,13 @@ mod test {
         );
         let id1 = manifest1.id();
         let size1 = manager.write_manifest(Arc::clone(&manifest1)).await?;
+        let compression2: LocationCompressionConfig =
+            (&ManifestVirtualChunkLocationCompressionConfig::default()).into();
         let manifest2 = Arc::new(
             Manifest::from_iter(
                 &ManifestId::random(),
                 vec![ci4, ci5, ci6],
-                Some(&ManifestVirtualChunkLocationCompressionConfig::default()),
+                Some(&compression2),
             )
             .await?
             .unwrap(),
@@ -1728,7 +1768,8 @@ mod test {
         let size3 = manager.write_manifest(Arc::clone(&manifest3)).await?;
 
         let logging = Arc::new(LoggingStorage::new(Arc::clone(&backend)));
-        let logging_c: Arc<dyn Storage + Send + Sync> = logging.clone();
+        let logging_c = Arc::clone(&logging);
+        let logging_c: Arc<dyn Storage + Send + Sync> = logging_c;
         let caching = AssetManager::new_with_config(
             logging_c,
             settings,
@@ -1764,7 +1805,7 @@ mod test {
         let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
         let settings = storage::Settings::default();
         let manager = Arc::new(AssetManager::new_no_cache(
-            storage.clone(),
+            Arc::clone(&storage),
             settings.clone(),
             SpecVersionBin::default(),
             1,
@@ -1788,9 +1829,10 @@ mod test {
         let size = manager.write_manifest(Arc::new(manifest)).await?;
 
         let logging = Arc::new(LoggingStorage::new(Arc::clone(&storage)));
-        let logging_c: Arc<dyn Storage + Send + Sync> = logging.clone();
+        let logging_c = Arc::clone(&logging);
+        let logging_c: Arc<dyn Storage + Send + Sync> = logging_c;
         let manager = Arc::new(AssetManager::new_with_config(
-            logging_c.clone(),
+            Arc::clone(&logging_c),
             settings,
             SpecVersionBin::default(),
             &CachingConfig::default(),
@@ -1820,7 +1862,7 @@ mod test {
         let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
         let settings = storage::Settings::default();
         let manager = AssetManager::new_no_cache(
-            backend.clone(),
+            Arc::clone(&backend),
             settings.clone(),
             SpecVersionBin::default(),
             1,
@@ -1831,10 +1873,10 @@ mod test {
             SpecVersionBin::current(),
             (&initial).try_into()?,
             100,
-            None,
+            None::<&()>,
             None,
         ));
-        manager.create_repo_info(repo_info.clone()).await?;
+        manager.create_repo_info(Arc::clone(&repo_info)).await?;
 
         assert!(!manager.use_repo_info_cache);
         assert_eq!(*manager.repo_cache.read().unwrap(), None);
@@ -1844,7 +1886,7 @@ mod test {
         assert!(!manager.use_repo_info_cache);
         assert_eq!(*manager.repo_cache.read().unwrap(), None);
 
-        assert_eq!(repo_info.clone(), fetched_repo_info);
+        assert_eq!(Arc::clone(&repo_info), fetched_repo_info);
 
         Ok(())
     }
@@ -1855,7 +1897,7 @@ mod test {
         let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
         let settings = storage::Settings::default();
         let manager = AssetManager::new_with_config(
-            backend.clone(),
+            Arc::clone(&backend),
             settings.clone(),
             SpecVersionBin::default(),
             &CachingConfig::default(),
@@ -1867,12 +1909,12 @@ mod test {
             SpecVersionBin::current(),
             (&initial).try_into()?,
             100,
-            None,
+            None::<&()>,
             None,
         ));
-        let new_version = manager.create_repo_info(repo_info.clone()).await?;
+        let new_version = manager.create_repo_info(Arc::clone(&repo_info)).await?;
 
-        let cached = Some((repo_info.clone(), new_version.clone()));
+        let cached = Some((Arc::clone(&repo_info), new_version.clone()));
 
         assert!(manager.use_repo_info_cache);
         assert_eq!(*manager.repo_cache.read().unwrap(), cached);
@@ -1882,7 +1924,7 @@ mod test {
         assert!(manager.use_repo_info_cache);
         assert_eq!(*manager.repo_cache.read().unwrap(), cached);
 
-        assert_eq!(repo_info.clone(), fetched_repo_info);
+        assert_eq!(Arc::clone(&repo_info), fetched_repo_info);
         assert_eq!(new_version, version);
 
         Ok(())

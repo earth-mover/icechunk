@@ -66,10 +66,10 @@ run-all-examples:
 [doc("Fast Rust pre-commit: format + lint (~3s)")]
 pre-commit-fast:
   just format
-  just lint "--workspace"
+  just lint "--workspace" "--all-targets"
 
 [doc("Medium Rust pre-commit: compile, build, format, lint, deps (~2-3min)")]
-pre-commit $RUSTFLAGS="-D warnings -W unreachable-pub -W bare-trait-objects":
+pre-commit $RUSTFLAGS="-D warnings":
   just compile-tests "--locked"
   just build
   just format
@@ -77,7 +77,7 @@ pre-commit $RUSTFLAGS="-D warnings -W unreachable-pub -W bare-trait-objects":
   just check-deps
 
 [doc("Full Rust CI pre-commit: all checks including tests and examples (~5+min)")]
-pre-commit-ci $RUSTFLAGS="-D warnings -W unreachable-pub -W bare-trait-objects":
+pre-commit-ci $RUSTFLAGS="-D warnings":
   just profile=ci compile-tests "--locked"
   just profile=ci build
   just format "--check"

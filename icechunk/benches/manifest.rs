@@ -14,7 +14,7 @@ use std::cell::OnceCell;
 use criterion::{
     BatchSize, BenchmarkId, Criterion, SamplingMode, Throughput, criterion_group,
 };
-use futures::{StreamExt, stream};
+use futures::{StreamExt as _, stream};
 use icechunk::config::{ManifestConfig, ManifestSplittingConfig, RepositoryConfig};
 use icechunk::conflicts::detector::ConflictDetector;
 use icechunk::format::snapshot::ArrayShape;
@@ -76,10 +76,10 @@ fn benchmark_set_chunks(c: &mut Criterion) {
                                     .await
                                     .unwrap();
                                 }
-                            })
+                            });
                         },
                         BatchSize::PerIteration,
-                    )
+                    );
                 },
             );
         }
@@ -227,8 +227,8 @@ fn benchmark_get_chunks(c: &mut Criterion) {
                                                 get_chunk(reader).await.unwrap().unwrap();
                                             }
                                         })
-                                        .await
-                                })
+                                        .await;
+                                });
                             },
                             BatchSize::SmallInput,
                         );
@@ -302,11 +302,11 @@ fn benchmark_commit_split_manifests(c: &mut Criterion) {
                                     .execute()
                                     .await
                                     .unwrap();
-                            })
+                            });
                         },
                         // Make sure we run the set up before every iteration
                         BatchSize::PerIteration,
-                    )
+                    );
                 },
             );
         }
@@ -387,7 +387,7 @@ fn benchmark_append_split_manifests(c: &mut Criterion) {
                                 if phase == "set" { set_elapsed } else { commit_elapsed };
                         }
                         total
-                    })
+                    });
                 },
             );
         }
@@ -469,7 +469,7 @@ fn benchmark_commit_rebase_split_manifests(c: &mut Criterion) {
                         });
                         total += start.elapsed();
                         total
-                    })
+                    });
                 },
             );
         }
