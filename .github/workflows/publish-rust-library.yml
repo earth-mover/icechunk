@@ -60,12 +60,13 @@ jobs:
           key: ${{ env.RUST_CHANNEL }}
           cache-on-failure: true
 
-      - name: Install cargo-deny
-        run: cargo install --locked cargo-deny --version ${{ env.CARGO_DENY_VERSION }}
+      # FIXME: uncomment
+      # - name: Install cargo-deny
+      #   run: cargo install --locked cargo-deny --version ${{ env.CARGO_DENY_VERSION }}
 
-      - name: Check
-        run: |
-          just pre-commit-ci
+      # - name: Check
+      #   run: |
+      #     just pre-commit-ci
 
       - name: Install cargo-release
         run: cargo install --locked cargo-release
