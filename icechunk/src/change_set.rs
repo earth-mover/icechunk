@@ -71,7 +71,7 @@ impl EditChanges {
         self == &Default::default()
     }
 
-    fn check_shared<K: Display + Hash + Eq, V: PartialEq>(
+    fn check_for_conflicts<K: Display + Hash + Eq, V: PartialEq>(
         a: &HashMap<K, V>,
         b: &HashMap<K, V>,
         reason: &str,
@@ -85,24 +85,28 @@ impl EditChanges {
             })
             .collect();
         if !shared.is_empty() {
-            return Err(SessionErrorKind::SessionMerge(format!(
+            return Err(SessionError::capture(SessionErrorKind::SessionMerge(format!(
                 "Multiple writers {reason} the same {feature}: {}",
                 shared.into_iter().join(", ")
-            ))
-            .into());
+            ))));
         }
 
         Ok(())
     }
 
     fn merge(&mut self, other: EditChanges) -> SessionResult<()> {
-        // TODO: the conflict  detection is not comprehensive
+        // TODO: the conflict detection is not comprehensive
 
         // check if both created same group with different metadata
-        Self::check_shared(&self.new_groups, &other.new_groups, "created", "groups")?;
+        Self::check_for_conflicts(
+            &self.new_groups,
+            &other.new_groups,
+            "created",
+            "groups",
+        )?;
 
         // check if both updated same group with different metadata
-        Self::check_shared(
+        Self::check_for_conflicts(
             &self.updated_groups,
             &other.updated_groups,
             "updated",
@@ -110,10 +114,15 @@ impl EditChanges {
         )?;
 
         // check if both create same array with different metadata
-        Self::check_shared(&self.new_arrays, &other.new_arrays, "created", "arrays")?;
+        Self::check_for_conflicts(
+            &self.new_arrays,
+            &other.new_arrays,
+            "created",
+            "arrays",
+        )?;
 
         // check if both updated same array with different metadata
-        Self::check_shared(
+        Self::check_for_conflicts(
             &self.updated_arrays,
             &other.updated_arrays,
             "updated",
@@ -137,10 +146,12 @@ impl EditChanges {
                 })
                 .collect();
             if !shared.is_empty() {
-                return Err(SessionError::from(SessionErrorKind::SessionMerge(format!(
-                    "Arrays were both deleted and modified: {}",
-                    shared.into_iter().join(", ")
-                ))));
+                return Err(SessionError::capture(SessionErrorKind::SessionMerge(
+                    format!(
+                        "Arrays were both deleted and modified: {}",
+                        shared.into_iter().join(", ")
+                    ),
+                )));
             }
             Ok(())
         };
@@ -160,10 +171,12 @@ impl EditChanges {
                 })
                 .collect();
             if !shared.is_empty() {
-                return Err(SessionError::from(SessionErrorKind::SessionMerge(format!(
-                    "Groups were both deleted and modified: {}",
-                    shared.into_iter().join(", ")
-                ))));
+                return Err(SessionError::capture(SessionErrorKind::SessionMerge(
+                    format!(
+                        "Groups were both deleted and modified: {}",
+                        shared.into_iter().join(", ")
+                    ),
+                )));
             }
             Ok(())
         };
