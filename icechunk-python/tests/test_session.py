@@ -267,10 +267,10 @@ def test_repository_open_no_list_bucket(any_spec_version: int | None) -> None:
         # repo_info like in a v2 repo
         with pytest.raises(IcechunkError) as e:
             assert repo.list_branches() == set(["main"])
-        assert "error listing objects" in e.value.message
+        assert "Access Denied" in e.value.message
         with pytest.raises(IcechunkError) as e:
             assert len(list(repo.list_tags())) == 1
-        assert "error listing objects" in e.value.message
+        assert "Access Denied" in e.value.message
         # skip ops log check, need repo v2
     else:
         assert repo.list_branches() == set(["main", "new_branch"])

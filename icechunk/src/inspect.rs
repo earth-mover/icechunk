@@ -22,6 +22,7 @@ use crate::{
     },
     repository::{RepositoryErrorKind, RepositoryResult},
 };
+use icechunk_types::{ICResultExt as _, error::ICResultCtxExt as _};
 
 #[derive(Debug, Serialize, Deserialize)]
 struct ManifestFileInfoInspect {
@@ -105,11 +106,11 @@ async fn inspect_snapshot(
     let snap = asset_manager.fetch_snapshot(id).await?;
     let res = SnapshotInfoInspect {
         id: snap.id().to_string(),
-        flushed_at: snap.flushed_at()?,
+        flushed_at: snap.flushed_at().inject()?,
         commit_message: snap.message(),
-        metadata: snap.metadata()?,
+        metadata: snap.metadata().inject()?,
         manifests: snap.manifest_files().map(|f| f.into()).collect(),
-        nodes: snap.iter().map_ok(|n| n.into()).try_collect()?,
+        nodes: snap.iter().map_ok(|n| n.into()).try_collect().inject()?,
     };
 
     Ok(res)
@@ -126,7 +127,8 @@ pub async fn snapshot_json(
     } else {
         serde_json::to_string(&info)
     }
-    .map_err(|e| RepositoryErrorKind::Other(e.to_string()))?;
+    .map_err(|e| RepositoryErrorKind::Other(e.to_string()))
+    .capture()?;
     Ok(res)
 }
 
@@ -268,19 +270,23 @@ async fn inspect_repo_info(
     let (info, _) = asset_manager.fetch_repo_info().await?;
 
     let branches = info
-        .branches()?
+        .branches()
+        .inject()?
         .map(|(branch, snapshot)| (branch.to_string(), snapshot.to_string()))
         .collect::<BTreeMap<_, _>>();
 
     let tags = info
-        .tags()?
+        .tags()
+        .inject()?
         .map(|(tag, snapshot)| (tag.to_string(), snapshot.to_string()))
         .collect::<BTreeMap<_, _>>();
 
-    let deleted_tags = info.deleted_tags()?.map(|s| s.to_string()).collect::<Vec<_>>();
+    let deleted_tags =
+        info.deleted_tags().inject()?.map(|s| s.to_string()).collect::<Vec<_>>();
 
     let snapshots = info
-        .all_snapshots()?
+        .all_snapshots()
+        .inject()?
         .map_ok(|snap| RepoInfoSnapshotInspect {
             id: snap.id.to_string(),
             parent_id: snap.parent_id.map(|x| x.to_string()),
@@ -288,26 +294,29 @@ async fn inspect_repo_info(
             message: snap.message,
             metadata: snap.metadata,
         })
-        .collect::<Result<Vec<RepoInfoSnapshotInspect>, _>>()?;
+        .collect::<Result<Vec<RepoInfoSnapshotInspect>, _>>()
+        .inject()?;
 
     let latest_updates = info
-        .latest_updates()?
+        .latest_updates()
+        .inject()?
         .map_ok(|(update_type, at, path)| UpdateInspect {
             update_type: update_type.into(),
             updated_at: at,
             backup_path: path.map(|x| x.to_string()),
         })
-        .collect::<Result<Vec<UpdateInspect>, _>>()?;
+        .collect::<Result<Vec<UpdateInspect>, _>>()
+        .inject()?;
 
     Ok(RepoInfoInspect {
-        spec_version: info.spec_version()?.to_string(),
+        spec_version: info.spec_version().inject()?.to_string(),
         branches,
         tags,
         deleted_tags,
         snapshots,
-        metadata: info.metadata()?,
+        metadata: info.metadata().inject()?,
         latest_updates,
-        repo_before_updates: info.repo_before_updates()?.map(|x| x.to_string()),
+        repo_before_updates: info.repo_before_updates().inject()?.map(|x| x.to_string()),
     })
 }
 
@@ -321,7 +330,8 @@ pub async fn repo_info_json(
     } else {
         serde_json::to_string(&info)
     }
-    .map_err(|e| RepositoryErrorKind::Other(e.to_string()))?;
+    .map_err(|e| RepositoryErrorKind::Other(e.to_string()))
+    .capture()?;
     Ok(res)
 }
 
@@ -365,11 +375,12 @@ async fn inspect_manifest(
     for node_id in node_ids {
         let (mut num_inline, mut num_native, mut num_virtual) = (0, 0, 0);
         let node_id_str = node_id.to_string();
-        for payload in Arc::clone(&manifest).iter(node_id)? {
-            match payload? {
+        for payload in Arc::clone(&manifest).iter(node_id).inject()? {
+            match payload.inject()? {
                 (_, ChunkPayload::Inline(_)) => num_inline += 1,
                 (_, ChunkPayload::Ref(_)) => num_native += 1,
                 (_, ChunkPayload::Virtual(_)) => num_virtual += 1,
+                (_, _) => {}
             }
         }
         arrays.push(ArrayManifestInspect {
@@ -413,7 +424,8 @@ pub async fn manifest_json(
     } else {
         serde_json::to_string(&info)
     }
-    .map_err(|e| RepositoryErrorKind::Other(e.to_string()))?;
+    .map_err(|e| RepositoryErrorKind::Other(e.to_string()))
+    .capture()?;
     Ok(res)
 }
 

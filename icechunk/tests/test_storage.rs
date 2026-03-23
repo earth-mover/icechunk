@@ -20,12 +20,12 @@ use icechunk::{
     repository::{RepositoryError, RepositoryErrorKind},
     storage::{
         self, ConcurrencySettings, ETag, Generation, StorageErrorKind, StorageResult,
-        VersionInfo, new_http_storage, new_in_memory_storage, new_redirect_storage,
-        new_s3_storage, s3::mk_client,
+        VersionInfo, mk_client, new_http_storage, new_in_memory_storage,
+        new_redirect_storage, new_s3_storage,
     },
 };
+use icechunk_arrow_object_store::object_store::azure::AzureConfigKey;
 use icechunk_macros::tokio_test;
-use object_store::azure::AzureConfigKey;
 use pretty_assertions::{assert_eq, assert_ne};
 use rstest::rstest;
 use rstest_reuse::{self, *};

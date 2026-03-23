@@ -1,10 +1,9 @@
 //! Repository state at a point in time (arrays, groups, and manifest references).
 
-use std::{collections::BTreeMap, convert::Infallible, ops::Range, sync::Arc};
+use std::{collections::BTreeMap, ops::Range, sync::Arc};
 
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
-use err_into::ErrorInto as _;
 use flatbuffers::{
     FlatBufferBuilder, ForwardsUOffset, UnionWIPOffset, Vector, VerifierOptions,
     WIPOffset,
@@ -14,15 +13,15 @@ use quick_cache::sync::{Cache, GuardResult};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::format::lookup_index_by_key;
-
-use super::{
+use crate::{
     AttributesId, ChunkIndices, IcechunkFormatError, IcechunkFormatErrorKind,
     IcechunkResult, ManifestId, NodeId, Path, SnapshotId,
     flatbuffers::generated,
     format_constants::SpecVersionBin,
+    lookup_index_by_key,
     manifest::{Manifest, ManifestExtents, ManifestRef},
 };
+use icechunk_types::{ICResultExt as _, error::ICResultCtxExt as _};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DimensionShape {
@@ -202,8 +201,8 @@ impl TryFrom<&generated::DimensionShape> for DimensionShape {
             return Err(IcechunkFormatErrorKind::InvalidArrayMetadata(format!(
                 "Array metadata has chunk_length = 0 while array_length={:?}",
                 value.array_length()
-            ))
-            .into());
+            )))
+            .capture();
         }
         let num_chunks = if value.chunk_length() == 0 {
             0
@@ -414,7 +413,8 @@ impl Snapshot {
         let _ = flatbuffers::root_with_opts::<generated::Snapshot<'_>>(
             &ROOT_OPTIONS,
             buffer.as_slice(),
-        )?;
+        )
+        .capture()?;
         Ok(Snapshot {
             buffer,
             spec_version,
@@ -428,7 +428,7 @@ impl Snapshot {
     }
 
     #[expect(clippy::too_many_arguments)]
-    pub fn from_iter<E, I>(
+    pub fn from_iter<I>(
         id: Option<SnapshotId>,
         parent_id: Option<SnapshotId>,
         spec_version: SpecVersionBin,
@@ -439,8 +439,7 @@ impl Snapshot {
         sorted_iter: I,
     ) -> IcechunkResult<Self>
     where
-        IcechunkFormatError: From<E>,
-        I: IntoIterator<Item = Result<NodeSnapshot, E>>,
+        I: IntoIterator<Item = IcechunkResult<NodeSnapshot>>,
     {
         // TODO: what's a good capacity?
         let mut builder = FlatBufferBuilder::with_capacity(4_096);
@@ -461,9 +460,9 @@ impl Snapshot {
             .map(|(k, v)| {
                 let name = builder.create_shared_string(k.as_str());
                 let serialized = if spec_version == SpecVersionBin::V1 {
-                    rmp_serde::to_vec(v).map_err(Box::new)?
+                    rmp_serde::to_vec(v).map_err(Box::new).capture()?
                 } else {
-                    flexbuffers::to_vec(v).map_err(Box::new)?
+                    flexbuffers::to_vec(v).map_err(Box::new).capture()?
                 };
 
                 let value = builder.create_vector(serialized.as_slice());
@@ -483,10 +482,7 @@ impl Snapshot {
 
         let nodes: Vec<_> = sorted_iter
             .into_iter()
-            .map(|node| {
-                node.err_into()
-                    .and_then(|node| mk_node(&mut builder, &node, spec_version))
-            })
+            .map(|node| node.and_then(|node| mk_node(&mut builder, &node, spec_version)))
             .try_collect()?;
         let nodes = builder.create_vector(&nodes);
 
@@ -519,7 +515,7 @@ impl Snapshot {
     pub fn initial(spec_version: SpecVersionBin) -> IcechunkResult<Self> {
         let mut properties = SnapshotProperties::default();
         inject_icechunk_metadata(&mut properties, "is_root", Value::from(true));
-        let nodes: Vec<Result<NodeSnapshot, Infallible>> = Vec::new();
+        let nodes = Vec::<IcechunkResult<NodeSnapshot>>::new();
         Self::from_iter(
             Some(Self::INITIAL_SNAPSHOT_ID),
             None,
@@ -559,9 +555,13 @@ impl Snapshot {
             .map(|item| {
                 let key = item.name().to_string();
                 let value = if self.spec_version == SpecVersionBin::V1 {
-                    rmp_serde::from_slice(item.value().bytes()).map_err(Box::new)?
+                    rmp_serde::from_slice(item.value().bytes())
+                        .map_err(Box::new)
+                        .capture()?
                 } else {
-                    flexbuffers::from_slice(item.value().bytes()).map_err(Box::new)?
+                    flexbuffers::from_slice(item.value().bytes())
+                        .map_err(Box::new)
+                        .capture()?
                 };
                 Ok((key, value))
             })
@@ -570,11 +570,13 @@ impl Snapshot {
 
     pub fn flushed_at(&self) -> IcechunkResult<DateTime<Utc>> {
         let ts = self.root().flushed_at();
-        let ts: i64 = ts.try_into().map_err(|_| {
-            IcechunkFormatError::from(IcechunkFormatErrorKind::InvalidTimestamp)
-        })?;
+        let ts: i64 = ts
+            .try_into()
+            .map_err(|_| IcechunkFormatErrorKind::InvalidTimestamp)
+            .capture()?;
         DateTime::from_timestamp_micros(ts)
-            .ok_or_else(|| IcechunkFormatErrorKind::InvalidTimestamp.into())
+            .ok_or(IcechunkFormatErrorKind::InvalidTimestamp)
+            .capture()
     }
 
     pub fn message(&self) -> String {
@@ -621,9 +623,8 @@ impl Snapshot {
             .root()
             .nodes()
             .lookup_by_key(path.to_string().as_str(), |node, path| node.path().cmp(path))
-            .ok_or(IcechunkFormatError::from(IcechunkFormatErrorKind::NodeNotFound {
-                path: path.clone(),
-            }))?;
+            .ok_or_else(|| IcechunkFormatErrorKind::NodeNotFound { path: path.clone() })
+            .capture()?;
         res.try_into()
     }
 
@@ -647,14 +648,13 @@ impl Snapshot {
             lookup_index_by_key(self.root().nodes(), path_str.as_str(), |node, path| {
                 node.path().cmp(path)
             })
-            .ok_or(IcechunkFormatError::from(
-                IcechunkFormatErrorKind::NodeNotFound { path: path.clone() },
-            ))?;
+            .ok_or_else(|| IcechunkFormatErrorKind::NodeNotFound { path: path.clone() })
+            .capture()?;
         Ok(res)
     }
 
     pub fn iter(&self) -> impl Iterator<Item = IcechunkResult<NodeSnapshot>> + '_ {
-        self.root().nodes().iter().map(|node| node.try_into().err_into())
+        self.root().nodes().iter().map(|node| node.try_into().inject())
     }
 
     pub fn iter_arc(
@@ -892,7 +892,7 @@ fn mk_node_data(
 #[cfg(test)]
 #[expect(unused_qualifications)] // proptest macros generate fully qualified paths
 mod tests {
-    use crate::format::{IcechunkFormatError, ObjectId};
+    use crate::{IcechunkFormatError, ObjectId};
 
     use super::*;
     use crate::{
@@ -1010,7 +1010,7 @@ mod tests {
             Default::default(),
             manifests,
             None,
-            nodes.into_iter().map(Ok::<NodeSnapshot, Infallible>),
+            nodes.into_iter().map(Ok::<NodeSnapshot, IcechunkFormatError>),
         )
         .unwrap();
 
