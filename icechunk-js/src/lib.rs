@@ -8,9 +8,9 @@ mod storage;
 mod store;
 
 #[cfg(target_family = "wasm")]
-#[napi::module_init]
+#[napi_derive::module_init]
 fn init() {
-    napi::create_custom_tokio_runtime(
+    napi::bindgen_prelude::create_custom_tokio_runtime(
         tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
