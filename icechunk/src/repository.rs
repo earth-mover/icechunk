@@ -12,31 +12,31 @@ use async_stream::try_stream;
 use std::{
     collections::{BTreeSet, HashMap, HashSet},
     future::ready,
-    ops::RangeBounds,
+    ops::RangeBounds as _,
     sync::Arc,
 };
 
 use chrono::{DateTime, Utc};
-use err_into::ErrorInto as _;
 use futures::{
-    Stream, StreamExt, TryStreamExt,
+    Stream, StreamExt as _, TryStreamExt as _,
     stream::{self, FuturesOrdered, FuturesUnordered},
 };
-use itertools::Itertools;
+use itertools::Itertools as _;
 use regex::bytes::Regex;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::{join, sync::AcquireError, task::JoinError, try_join};
-use tracing::{Instrument, debug, error, instrument, trace};
+use tracing::{Instrument as _, debug, error, instrument, trace};
 
 use crate::{
-    Storage, StorageError,
+    Storage,
     asset_manager::AssetManager,
-    change_set::ChangeSet,
+    change_set::{ChangeSet, transaction_log_from_change_set},
     config::{
         Credentials, DEFAULT_MAX_CONCURRENT_REQUESTS, ManifestPreloadCondition,
         RepositoryConfig,
     },
+    diff::{Diff, DiffBuilder},
     error::ICError,
     feature_flags::{
         CREATE_TAG_FLAG, DELETE_TAG_FLAG, FEATURE_FLAGS, FeatureFlag, MOVE_NODE_FLAG,
@@ -51,13 +51,13 @@ use crate::{
             ManifestFileInfo, NodeData, NodeType, Snapshot, SnapshotInfo,
             SnapshotProperties,
         },
-        transaction_log::{Diff, DiffBuilder, TransactionLog},
     },
     refs::{self, Ref, RefError, RefErrorKind},
-    session::{Session, SessionErrorKind, SessionResult},
+    session::{Session, SessionError, SessionErrorKind, SessionResult},
     storage::{self, StorageErrorKind},
     virtual_chunks::VirtualChunkResolver,
 };
+use icechunk_types::{ICResultExt as _, error::ICResultCtxExt as _};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
@@ -94,11 +94,11 @@ impl TryFrom<&VersionInfo> for RefVersionInfo {
 #[non_exhaustive]
 pub enum RepositoryErrorKind {
     #[error(transparent)]
-    StorageError(StorageErrorKind),
+    StorageError(#[from] StorageErrorKind),
     #[error(transparent)]
-    FormatError(IcechunkFormatErrorKind),
+    FormatError(#[from] IcechunkFormatErrorKind),
     #[error(transparent)]
-    Ref(RefErrorKind),
+    Ref(#[from] RefErrorKind),
     #[error("snapshot not found: `{id}`")]
     SnapshotNotFound { id: SnapshotId },
     #[error("branch {branch} does not have a snapshots before or at {at}")]
@@ -159,35 +159,6 @@ pub enum RepositoryErrorKind {
 
 pub type RepositoryError = ICError<RepositoryErrorKind>;
 
-// it would be great to define this impl in error.rs, but it conflicts with the blanket
-// `impl From<T> for T`
-impl<E> From<E> for RepositoryError
-where
-    E: Into<RepositoryErrorKind>,
-{
-    fn from(value: E) -> Self {
-        Self::new(value.into())
-    }
-}
-
-impl From<StorageError> for RepositoryError {
-    fn from(value: StorageError) -> Self {
-        Self::with_context(RepositoryErrorKind::StorageError(value.kind), value.context)
-    }
-}
-
-impl From<RefError> for RepositoryError {
-    fn from(value: RefError) -> Self {
-        Self::with_context(RepositoryErrorKind::Ref(value.kind), value.context)
-    }
-}
-
-impl From<IcechunkFormatError> for RepositoryError {
-    fn from(value: IcechunkFormatError) -> Self {
-        Self::with_context(RepositoryErrorKind::FormatError(value.kind), value.context)
-    }
-}
-
 pub type RepositoryResult<T> = Result<T, RepositoryError>;
 
 /// Handle to a versioned Icechunk data store.
@@ -218,12 +189,7 @@ impl Repository {
         check_clean_root: bool,
     ) -> RepositoryResult<Self> {
         debug!("Creating Repository");
-        if !storage.can_write().await? {
-            return Err(RepositoryErrorKind::ReadonlyStorage(
-                "Cannot create repository".to_string(),
-            )
-            .into());
-        }
+        raise_if_cant_write(storage.as_ref(), "Cannot create repository").await?;
 
         let has_overriden_config = match config {
             Some(ref config) => config != &RepositoryConfig::default(),
@@ -232,7 +198,7 @@ impl Repository {
         // Merge two layers of config (In order of preference):
         //   - User-provided config (passed to create())
         //   - Backend storage defaults (e.g. S3 retry/concurrency settings)
-        let storage_defaults = storage.default_settings().await?;
+        let storage_defaults = storage.default_settings().await.inject()?;
         let config = config.unwrap_or_default();
         let storage_settings = match config.storage.clone() {
             Some(user_storage) => storage_defaults.merge(user_storage),
@@ -252,8 +218,10 @@ impl Repository {
             config.max_concurrent_requests(),
         ));
 
-        if check_clean_root && !storage.root_is_clean(&storage_settings).await? {
-            return Err(RepositoryErrorKind::ParentDirectoryNotClean.into());
+        if check_clean_root && !storage.root_is_clean(&storage_settings).await.inject()? {
+            return Err(RepositoryError::capture(
+                RepositoryErrorKind::ParentDirectoryNotClean,
+            ));
         };
 
         let asset_manager_c = Arc::clone(&asset_manager);
@@ -263,15 +231,15 @@ impl Repository {
         let config_ref = &config;
         let create_repo_info = async move {
             // On create we need to create the default branch
-            let new_snapshot = Arc::new(Snapshot::initial(spec_version)?);
+            let new_snapshot = Arc::new(Snapshot::initial(spec_version).inject()?);
             let write_snap = asset_manager_c.write_snapshot(Arc::clone(&new_snapshot));
 
             if spec_version >= SpecVersionBin::V2 {
-                let empty_tx_log = TransactionLog::new(
+                let empty_tx_log = transaction_log_from_change_set(
                     &Snapshot::INITIAL_SNAPSHOT_ID,
                     &ChangeSet::for_edits(),
                 );
-                let snap_info = new_snapshot.as_ref().try_into()?;
+                let snap_info = new_snapshot.as_ref().try_into().inject()?;
                 let config_to_store =
                     if has_overriden_config { Some(config_ref) } else { None };
                 let repo_info = Arc::new(RepoInfo::initial(
@@ -304,7 +272,7 @@ impl Repository {
                     None,
                 )
                 .await
-                .map_err(RepositoryError::from)?;
+                .inject()?;
             }
 
             Ok::<_, RepositoryError>(())
@@ -363,7 +331,7 @@ impl Repository {
         // Launch spec version detection and an optimistic config.yaml fetch concurrently.
         // For IC1 repos this avoids a sequential round-trip; for V2+ repos the config.yaml
         // result is ignored (config lives in the repo info object instead).
-        let temp_settings = storage.default_settings().await?;
+        let temp_settings = storage.default_settings().await.inject()?;
         let temp_am = AssetManager::new_no_cache(
             Arc::clone(&storage),
             temp_settings,
@@ -383,10 +351,10 @@ impl Repository {
         let (spec_version_result, config_yaml_result) =
             join!(fetch_version, fetch_config_yaml);
 
-        let spec_version = match spec_version_result?? {
+        let spec_version = match spec_version_result.capture()?? {
             Some(v) => Ok(v),
             None => {
-                Err(RepositoryError::from(RepositoryErrorKind::RepositoryDoesntExist))
+                Err(RepositoryError::capture(RepositoryErrorKind::RepositoryDoesntExist))
             }
         }?;
         trace!(%spec_version, "Repository version found");
@@ -394,7 +362,7 @@ impl Repository {
         let (persisted_config, config_version) = if spec_version >= SpecVersionBin::V2 {
             // V2+ repos: config is always embedded in the repo info object.
             let (repo_info, _) = temp_am.fetch_repo_info().await?;
-            (repo_info.config()?, storage::VersionInfo::for_creation())
+            (repo_info.config().inject()?, storage::VersionInfo::for_creation())
         } else {
             // V1 repos: use the config.yaml result we already fetched
             match config_yaml_result? {
@@ -407,7 +375,7 @@ impl Repository {
         //   - User-provided config (passed to open())
         //   - Persisted repo config (saved alongside the data, if any)
         //   - Backend storage defaults (e.g. S3 retry/concurrency settings)
-        let storage_defaults = storage.default_settings().await?;
+        let storage_defaults = storage.default_settings().await.inject()?;
         let repo_config = match persisted_config {
             Some(c) => RepositoryConfig::default().merge(c),
             None => RepositoryConfig::default(),
@@ -512,7 +480,7 @@ impl Repository {
     ) -> RepositoryResult<Option<SpecVersionBin>> {
         let settings = match settings {
             Some(s) => s,
-            None => storage.default_settings().await?,
+            None => storage.default_settings().await.inject()?,
         };
 
         let storage_c = Arc::clone(&storage);
@@ -542,11 +510,11 @@ impl Repository {
             ));
 
             let res = temp_asset_manager.fetch_repo_info().await;
-            Ok(res.and_then(|(ri, _)| ri.spec_version().err_into()))
+            Ok(res.and_then(|(ri, _)| ri.spec_version().inject()))
         }
         .in_current_span();
 
-        let (is_v1, after_v1) = try_join!(is_v1, after_v1)?;
+        let (is_v1, after_v1) = try_join!(is_v1, after_v1).inject()?;
         match after_v1 {
             // if we have both configuration, this is an unfinished migration
             // but still a V2+ repo
@@ -576,7 +544,7 @@ impl Repository {
         //   - User-provided config (passed to reopen())
         //   - Persisted repo config (saved alongside the data, if any)
         //   - Backend storage defaults (e.g. S3 retry/concurrency settings)
-        let storage_defaults = self.storage.default_settings().await?;
+        let storage_defaults = self.storage.default_settings().await.inject()?;
         // merge user config on top of persisted config and library defaults
         // no storage merging happening yet
         let repo_config = self.config().clone();
@@ -603,20 +571,20 @@ impl Repository {
     }
 
     #[instrument(skip(bytes))]
-    pub fn from_bytes(bytes: Vec<u8>) -> RepositoryResult<Self> {
-        rmp_serde::from_slice(&bytes).map_err(Box::new).err_into()
+    pub fn from_bytes(bytes: &[u8]) -> RepositoryResult<Self> {
+        rmp_serde::from_slice(bytes).map_err(Box::new).capture()
     }
 
     #[instrument(skip(self))]
     pub fn as_bytes(&self) -> RepositoryResult<Vec<u8>> {
-        rmp_serde::to_vec(self).map_err(Box::new).err_into()
+        rmp_serde::to_vec(self).map_err(Box::new).capture()
     }
 
     #[instrument(skip_all)]
     pub async fn fetch_config(
         storage: Arc<dyn Storage + Send + Sync>,
     ) -> RepositoryResult<Option<(RepositoryConfig, storage::VersionInfo)>> {
-        let settings = storage.default_settings().await?;
+        let settings = storage.default_settings().await.inject()?;
         let spec_version = Self::fetch_spec_version(Arc::clone(&storage), None)
             .await?
             .unwrap_or_default();
@@ -632,7 +600,7 @@ impl Repository {
         if spec_version >= SpecVersionBin::V2 {
             // V2+ repos: config is always embedded in the repo info object.
             let (repo_info, version) = am.fetch_repo_info().await?;
-            Ok(repo_info.config()?.map(|config| (config, version)))
+            Ok(repo_info.config().inject()?.map(|config| (config, version)))
         } else {
             // V1 repos: read from config.yaml
             am.fetch_config().await
@@ -647,12 +615,11 @@ impl Repository {
             let num_updates = self.config.num_updates_per_repo_info_file();
             let spec_version = self.spec_version();
             let do_update = move |repo_info: Arc<RepoInfo>, backup_path: &str, _| {
-                Ok(Arc::new(repo_info.set_config(
-                    spec_version,
-                    &config,
-                    backup_path,
-                    num_updates,
-                )?))
+                Ok(Arc::new(
+                    repo_info
+                        .set_config(spec_version, &config, backup_path, num_updates)
+                        .inject()?,
+                ))
             };
             let version = self
                 .asset_manager
@@ -663,7 +630,7 @@ impl Repository {
         } else {
             // V1 repos: write config.yaml only (no repo info)
             Repository::store_config(
-                self.storage().clone(),
+                Arc::clone(self.storage()),
                 self.config(),
                 &self.config_version,
             )
@@ -686,7 +653,7 @@ impl Repository {
         // this feature is only available in IC2
         self.asset_manager().fail_unless_spec_at_least(SpecVersionBin::V2)?;
         let (repo, _) = self.asset_manager().fetch_repo_info().await?;
-        Ok(repo.metadata()?)
+        repo.metadata().inject()
     }
 
     #[instrument(skip(self, metadata))]
@@ -694,23 +661,22 @@ impl Repository {
         &self,
         metadata: &SnapshotProperties,
     ) -> RepositoryResult<SnapshotProperties> {
-        if !self.storage.can_write().await? {
-            return Err(RepositoryErrorKind::ReadonlyStorage(
-                "Cannot set metadata".to_string(),
-            )
-            .into());
-        }
+        self.raise_if_cant_write("Cannot set metadata").await?;
         let mut final_metadata = Default::default();
         let num_updates = self.config().num_updates_per_repo_info_file();
         let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str, _| {
-            final_metadata = repo_info.metadata()?;
+            final_metadata = repo_info.metadata().inject()?;
             final_metadata.extend(metadata.clone());
-            Ok(Arc::new(repo_info.set_metadata(
-                self.spec_version(),
-                &final_metadata,
-                backup_path,
-                num_updates,
-            )?))
+            Ok(Arc::new(
+                repo_info
+                    .set_metadata(
+                        self.spec_version(),
+                        &final_metadata,
+                        backup_path,
+                        num_updates,
+                    )
+                    .inject()?,
+            ))
         };
 
         let _ = self
@@ -725,21 +691,15 @@ impl Repository {
         &self,
         metadata: &SnapshotProperties,
     ) -> RepositoryResult<()> {
-        if !self.storage.can_write().await? {
-            return Err(RepositoryErrorKind::ReadonlyStorage(
-                "Cannot set metadata".to_string(),
-            )
-            .into());
-        }
+        self.raise_if_cant_write("Cannot set metadata").await?;
 
         let num_updates = self.config().num_updates_per_repo_info_file();
         let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str, _| {
-            Ok(Arc::new(repo_info.set_metadata(
-                self.spec_version(),
-                metadata,
-                backup_path,
-                num_updates,
-            )?))
+            Ok(Arc::new(
+                repo_info
+                    .set_metadata(self.spec_version(), metadata, backup_path, num_updates)
+                    .inject()?,
+            ))
         };
 
         let _ = self
@@ -753,32 +713,27 @@ impl Repository {
     pub async fn get_status(&self) -> RepositoryResult<RepoStatus> {
         self.asset_manager().fail_unless_spec_at_least(SpecVersionBin::V2)?;
         let (repo, _) = self.asset_manager().fetch_repo_info().await?;
-        Ok(repo.status()?)
+        repo.status().inject()
     }
 
+    #[expect(unsafe_code)]
     #[instrument(skip(self))]
     pub async fn set_status(&self, status: &RepoStatus) -> RepositoryResult<()> {
         self.asset_manager().fail_unless_spec_at_least(SpecVersionBin::V2)?;
-        if !self.storage.can_write().await? {
-            return Err(RepositoryErrorKind::ReadonlyStorage(
-                "Cannot set status".to_string(),
-            )
-            .into());
-        }
+        self.raise_if_cant_write("Cannot set status").await?;
 
         let num_updates = self.config().num_updates_per_repo_info_file();
         let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str, _| {
-            Ok(Arc::new(repo_info.set_status(
-                self.spec_version(),
-                status,
-                backup_path,
-                num_updates,
-            )?))
+            Ok(Arc::new(
+                repo_info
+                    .set_status(self.spec_version(), status, backup_path, num_updates)
+                    .inject()?,
+            ))
         };
 
-        // This is the only place where this method should be called,
-        // because otherwise we wouldn't be able to change the repo
-        // status.
+        // SAFETY: this is the only call site for update_repo_info_unchecked.
+        // We need it here to bypass the repo status check when changing the
+        // status itself — normal callers go through update_repo_info.
         unsafe {
             let _ = self
                 .asset_manager
@@ -797,13 +752,13 @@ impl Repository {
     ) -> RepositoryResult<impl Iterator<Item = FeatureFlag>> {
         let (repo_info, _) = self.get_repo_info().await?;
         let enabled_flags: HashSet<u16> =
-            if let Some(iter) = repo_info.enabled_feature_flags()? {
+            if let Some(iter) = repo_info.enabled_feature_flags().inject()? {
                 iter.collect()
             } else {
                 HashSet::new()
             };
         let disabled_flags: HashSet<u16> =
-            if let Some(iter) = repo_info.disabled_feature_flags()? {
+            if let Some(iter) = repo_info.disabled_feature_flags().inject()? {
                 iter.collect()
             } else {
                 HashSet::new()
@@ -834,9 +789,9 @@ impl Repository {
     }
 
     #[instrument(skip(self))]
-    /// set_to = Some(true) will enable it
-    /// set_to = Some(false) will disable it
-    /// set_to = None will set it to default state by deleting from repo info object
+    /// `set_to` = Some(true) will enable it
+    /// `set_to` = Some(false) will disable it
+    /// `set_to` = None will set it to default state by deleting from repo info object
     pub async fn set_feature_flag(
         &self,
         feature_flag: &str,
@@ -846,16 +801,20 @@ impl Repository {
         self.asset_manager().fail_unless_spec_at_least(SpecVersionBin::V2)?;
 
         let num_updates = self.config.num_updates_per_repo_info_file();
-        let flag_id = find_feature_flag_id(feature_flag)?;
+        let flag_id = find_feature_flag_id(feature_flag).inject()?;
 
         let do_update = move |repo_info: Arc<RepoInfo>, backup_path: &str, _| {
-            Ok(Arc::new(repo_info.update_feature_flag(
-                self.spec_version(),
-                flag_id,
-                set_to,
-                backup_path,
-                num_updates,
-            )?))
+            Ok(Arc::new(
+                repo_info
+                    .update_feature_flag(
+                        self.spec_version(),
+                        flag_id,
+                        set_to,
+                        backup_path,
+                        num_updates,
+                    )
+                    .inject()?,
+            ))
         };
         let _ = self
             .asset_manager
@@ -870,13 +829,8 @@ impl Repository {
         config: &RepositoryConfig,
         previous_version: &storage::VersionInfo,
     ) -> RepositoryResult<storage::VersionInfo> {
-        if !storage.can_write().await? {
-            return Err(RepositoryErrorKind::ReadonlyStorage(
-                "Cannot save configuration".to_string(),
-            )
-            .into());
-        }
-        let settings = storage.default_settings().await?;
+        raise_if_cant_write(storage.as_ref(), "Cannot save configuration").await?;
+        let settings = storage.default_settings().await.inject()?;
         let am = AssetManager::new_no_cache(
             storage,
             settings,
@@ -894,7 +848,7 @@ impl Repository {
             .await?
         {
             Some(new_version) => Ok(new_version),
-            None => Err(RepositoryErrorKind::ConfigWasUpdated.into()),
+            None => Err(RepositoryError::capture(RepositoryErrorKind::ConfigWasUpdated)),
         }
     }
 
@@ -923,7 +877,7 @@ impl Repository {
     }
 
     /// Returns the sequence of parents of the current session, in order of latest first.
-    /// Output stream includes snapshot_id argument
+    /// Output stream includes `snapshot_id` argument
     #[instrument(skip(self))]
     async fn snapshot_info_ancestry_v1(
         &self,
@@ -932,14 +886,14 @@ impl Repository {
     {
         let res =
             self.snapshot_ancestry_v1(snapshot_id).await?.and_then(|snap| async move {
-                let info = snap.as_ref().try_into()?;
+                let info = snap.as_ref().try_into().inject()?;
                 Ok(info)
             });
         Ok(res)
     }
 
     /// Returns the sequence of parents of the current session, in order of latest first.
-    /// Output stream includes snapshot_id argument
+    /// Output stream includes `snapshot_id` argument
     #[instrument(skip(self))]
     async fn snapshot_ancestry_v1(
         &self,
@@ -947,7 +901,7 @@ impl Repository {
     ) -> RepositoryResult<impl Stream<Item = RepositoryResult<Arc<Snapshot>>> + use<>>
     {
         let am = Arc::clone(&self.asset_manager);
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         am.snapshot_ancestry_v1(snapshot_id).await
     }
 
@@ -1025,13 +979,13 @@ impl Repository {
         let stream = try_stream! {
             while let Some(this) = repo_info {
                 // stream out the batch of updates in this repo file
-                for maybe_data in this.latest_updates()? {
-                    let (a, b, c) = maybe_data?;
+                for maybe_data in this.latest_updates().inject()? {
+                    let (a, b, c) = maybe_data.inject()?;
                     yield (b, a, c.or(this_file_path.as_deref()).map(|c| c.to_string()));
                 }
 
                 // if there are more repo files we need to stream those updates too
-                if let Some(previous) = this.repo_before_updates()? {
+                if let Some(previous) = this.repo_before_updates().inject()? {
                     this_file_path = Some(previous.to_string());
                     match asset_manager.fetch_repo_info_backup(previous).await {
                         Ok((new_one, _)) =>  {
@@ -1062,12 +1016,7 @@ impl Repository {
         branch_name: &str,
         snapshot_id: &SnapshotId,
     ) -> RepositoryResult<()> {
-        if !self.storage.can_write().await? {
-            return Err(RepositoryErrorKind::ReadonlyStorage(
-                "Cannot create branch".to_string(),
-            )
-            .into());
-        }
+        self.raise_if_cant_write("Cannot create branch").await?;
         match self.spec_version() {
             SpecVersionBin::V1 => self.create_branch_v1(branch_name, snapshot_id).await,
             SpecVersionBin::V2 => self.create_branch_v2(branch_name, snapshot_id).await,
@@ -1083,13 +1032,17 @@ impl Repository {
         let num_updates = self.config.num_updates_per_repo_info_file();
         let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str, _| {
             raise_if_invalid_snapshot_id_v2(repo_info.as_ref(), snapshot_id)?;
-            Ok(Arc::new(repo_info.add_branch(
-                self.spec_version(),
-                branch_name,
-                snapshot_id,
-                backup_path,
-                num_updates,
-            )?))
+            Ok(Arc::new(
+                repo_info
+                    .add_branch(
+                        self.spec_version(),
+                        branch_name,
+                        snapshot_id,
+                        backup_path,
+                        num_updates,
+                    )
+                    .inject()?,
+            ))
         };
 
         let _ = self
@@ -1117,12 +1070,12 @@ impl Repository {
         .map_err(|e| match e {
             RefError {
                 kind: RefErrorKind::Conflict { expected_parent, actual_parent },
-                ..
-            } => RepositoryError::from(RepositoryErrorKind::Conflict {
-                expected_parent,
-                actual_parent,
-            }),
-            err => err.into(),
+                context,
+            } => ICError {
+                kind: RepositoryErrorKind::Conflict { expected_parent, actual_parent },
+                context,
+            },
+            err => err.inject(),
         })?;
         Ok(())
     }
@@ -1130,15 +1083,16 @@ impl Repository {
     /// List all branches in the repository.
     #[instrument(skip(self))]
     async fn list_branches_v1(&self) -> RepositoryResult<BTreeSet<String>> {
-        let branches =
-            refs::list_branches(self.storage.as_ref(), &self.storage_settings).await?;
+        let branches = refs::list_branches(self.storage.as_ref(), &self.storage_settings)
+            .await
+            .inject()?;
         Ok(branches)
     }
 
     #[instrument(skip(self))]
     async fn list_branches_v2(&self) -> RepositoryResult<BTreeSet<String>> {
         let (ri, _) = self.get_repo_info().await?;
-        let it = ri.branch_names()?;
+        let it = ri.branch_names().inject()?;
         Ok(it.map(|s| s.to_string()).collect())
     }
 
@@ -1158,7 +1112,8 @@ impl Repository {
             &self.storage_settings,
             branch,
         )
-        .await?;
+        .await
+        .inject()?;
         Ok(branch_version.snapshot)
     }
 
@@ -1181,11 +1136,14 @@ impl Repository {
             Ok(snap) => Ok(snap),
             Err(IcechunkFormatError {
                 kind: IcechunkFormatErrorKind::BranchNotFound { .. },
-                ..
-            }) => Err(RepositoryError::from(RefError::from(RefErrorKind::RefNotFound(
-                branch.to_string(),
-            )))),
-            Err(err) => Err(err.into()),
+                context,
+            }) => Err(ICError {
+                kind: RepositoryErrorKind::Ref(RefErrorKind::RefNotFound(
+                    branch.to_string(),
+                )),
+                context,
+            }),
+            Err(err) => Err(err.inject()),
         }
     }
 
@@ -1211,7 +1169,7 @@ impl Repository {
         snapshot_id: &SnapshotId,
     ) -> RepositoryResult<SnapshotInfo> {
         let (ri, _) = self.get_repo_info().await?;
-        Ok(ri.find_snapshot(snapshot_id)?)
+        ri.find_snapshot(snapshot_id).inject()
     }
 
     #[instrument(skip(self))]
@@ -1241,12 +1199,7 @@ impl Repository {
         to_snapshot_id: &SnapshotId,
         from_snapshot_id: Option<&SnapshotId>,
     ) -> RepositoryResult<()> {
-        if !self.storage.can_write().await? {
-            return Err(RepositoryErrorKind::ReadonlyStorage(
-                "Cannot reset branch".to_string(),
-            )
-            .into());
-        }
+        self.raise_if_cant_write("Cannot reset branch").await?;
         match self.spec_version {
             SpecVersionBin::V1 => {
                 self.reset_branch_v1(branch, to_snapshot_id, from_snapshot_id).await
@@ -1276,7 +1229,8 @@ impl Repository {
             to_snapshot_id.clone(),
             Some(branch_tip),
         )
-        .await?;
+        .await
+        .inject()?;
         Ok(())
     }
 
@@ -1289,13 +1243,12 @@ impl Repository {
     ) -> RepositoryResult<()> {
         let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str, _| {
             if let Some(from_snapshot_id) = from_snapshot_id
-                && &repo_info.resolve_branch(branch)? != from_snapshot_id
+                && &repo_info.resolve_branch(branch).inject()? != from_snapshot_id
             {
-                return Err(RepositoryErrorKind::Conflict {
+                return Err(RepositoryError::capture(RepositoryErrorKind::Conflict {
                     expected_parent: Some(from_snapshot_id.clone()),
                     actual_parent: Some(from_snapshot_id.clone()),
-                }
-                .into());
+                }));
             }
             let num_updates = self.config.num_updates_per_repo_info_file();
 
@@ -1310,11 +1263,14 @@ impl Repository {
                 .map_err(|err| match err {
                     IcechunkFormatError {
                         kind: IcechunkFormatErrorKind::BranchNotFound { .. },
-                        ..
-                    } => RepositoryError::from(RefError::from(
-                        RefErrorKind::RefNotFound(branch.to_string()),
-                    )),
-                    err => RepositoryError::from(err),
+                        context,
+                    } => ICError {
+                        kind: RepositoryErrorKind::Ref(RefErrorKind::RefNotFound(
+                            branch.to_string(),
+                        )),
+                        context,
+                    },
+                    err => err.inject(),
                 });
             Ok(Arc::new(new_repo?))
         };
@@ -1331,14 +1287,9 @@ impl Repository {
     /// chunks or snapshots associated with the branch.
     #[instrument(skip(self))]
     pub async fn delete_branch(&self, branch: &str) -> RepositoryResult<()> {
-        if !self.storage.can_write().await? {
-            return Err(RepositoryErrorKind::ReadonlyStorage(
-                "Cannot delete branch".to_string(),
-            )
-            .into());
-        }
+        self.raise_if_cant_write("Cannot delete branch").await?;
         if branch == Ref::DEFAULT_BRANCH {
-            Err(RepositoryErrorKind::CannotDeleteMain.into())
+            Err(RepositoryError::capture(RepositoryErrorKind::CannotDeleteMain))
         } else {
             match self.spec_version {
                 SpecVersionBin::V1 => self.delete_branch_v1(branch).await,
@@ -1350,7 +1301,8 @@ impl Repository {
     #[instrument(skip(self))]
     async fn delete_branch_v1(&self, branch: &str) -> RepositoryResult<()> {
         refs::delete_branch(self.storage.as_ref(), &self.storage_settings, branch)
-            .await?;
+            .await
+            .inject()?;
         Ok(())
     }
 
@@ -1363,11 +1315,14 @@ impl Repository {
                 .map_err(|err| match err {
                     IcechunkFormatError {
                         kind: IcechunkFormatErrorKind::BranchNotFound { .. },
-                        ..
-                    } => RepositoryError::from(RefError::from(
-                        RefErrorKind::RefNotFound(branch.to_string()),
-                    )),
-                    err => RepositoryError::from(err),
+                        context,
+                    } => ICError {
+                        kind: RepositoryErrorKind::Ref(RefErrorKind::RefNotFound(
+                            branch.to_string(),
+                        )),
+                        context,
+                    },
+                    err => err.inject(),
                 });
             Ok(Arc::new(new_repo?))
         };
@@ -1384,12 +1339,7 @@ impl Repository {
     /// chunks or snapshots associated with the tag.
     #[instrument(skip(self))]
     pub async fn delete_tag(&self, tag: &str) -> RepositoryResult<()> {
-        if !self.storage.can_write().await? {
-            return Err(RepositoryErrorKind::ReadonlyStorage(
-                "Cannot delete tag".to_string(),
-            )
-            .into());
-        }
+        self.raise_if_cant_write("Cannot delete tag").await?;
         match self.spec_version {
             SpecVersionBin::V1 => self.delete_tag_v1(tag).await,
             SpecVersionBin::V2 => self.delete_tag_v2(tag).await,
@@ -1398,7 +1348,9 @@ impl Repository {
 
     #[instrument(skip(self))]
     async fn delete_tag_v1(&self, tag: &str) -> RepositoryResult<()> {
-        Ok(refs::delete_tag(self.storage.as_ref(), &self.storage_settings, tag).await?)
+        refs::delete_tag(self.storage.as_ref(), &self.storage_settings, tag)
+            .await
+            .inject()
     }
 
     #[instrument(skip(self))]
@@ -1409,17 +1361,21 @@ impl Repository {
                 repo_info.as_ref(),
                 DELETE_TAG_FLAG,
                 "tag delete",
-            )?;
+            )
+            .inject()?;
             let new_repo = repo_info
                 .delete_tag(self.spec_version(), tag, backup_path, num_updates)
                 .map_err(|err| match err {
                     IcechunkFormatError {
                         kind: IcechunkFormatErrorKind::TagNotFound { .. },
-                        ..
-                    } => RepositoryError::from(RefError::from(
-                        RefErrorKind::RefNotFound(tag.to_string()),
-                    )),
-                    err => RepositoryError::from(err),
+                        context,
+                    } => ICError {
+                        kind: RepositoryErrorKind::Ref(RefErrorKind::RefNotFound(
+                            tag.to_string(),
+                        )),
+                        context,
+                    },
+                    err => err.inject(),
                 });
             Ok(Arc::new(new_repo?))
         };
@@ -1438,12 +1394,7 @@ impl Repository {
         tag_name: &str,
         snapshot_id: &SnapshotId,
     ) -> RepositoryResult<()> {
-        if !self.storage.can_write().await? {
-            return Err(RepositoryErrorKind::ReadonlyStorage(
-                "Cannot create tag".to_string(),
-            )
-            .into());
-        }
+        self.raise_if_cant_write("Cannot create tag").await?;
 
         match self.spec_version {
             SpecVersionBin::V1 => self.create_tag_v1(tag_name, snapshot_id).await,
@@ -1464,7 +1415,8 @@ impl Repository {
             tag_name,
             snapshot_id.clone(),
         )
-        .await?;
+        .await
+        .inject()?;
         Ok(())
     }
 
@@ -1481,7 +1433,8 @@ impl Repository {
                 repo_info.as_ref(),
                 CREATE_TAG_FLAG,
                 "tag creation",
-            )?;
+            )
+            .inject()?;
             let new_repo = repo_info
                 .add_tag(
                     self.spec_version(),
@@ -1493,11 +1446,14 @@ impl Repository {
                 .map_err(|err| match err {
                     IcechunkFormatError {
                         kind: IcechunkFormatErrorKind::TagAlreadyExists { .. },
-                        ..
-                    } => RepositoryError::from(RefError::from(
-                        RefErrorKind::TagAlreadyExists(tag_name.to_string()),
-                    )),
-                    err => RepositoryError::from(err),
+                        context,
+                    } => ICError {
+                        kind: RepositoryErrorKind::Ref(RefErrorKind::TagAlreadyExists(
+                            tag_name.to_string(),
+                        )),
+                        context,
+                    },
+                    err => err.inject(),
                 });
             Ok(Arc::new(new_repo?))
         };
@@ -1512,14 +1468,16 @@ impl Repository {
     /// List all tags in the repository.
     #[instrument(skip(self))]
     async fn list_tags_v1(&self) -> RepositoryResult<BTreeSet<String>> {
-        let tags = refs::list_tags(self.storage.as_ref(), &self.storage_settings).await?;
+        let tags = refs::list_tags(self.storage.as_ref(), &self.storage_settings)
+            .await
+            .inject()?;
         Ok(tags)
     }
 
     #[instrument(skip(self))]
     async fn list_tags_v2(&self) -> RepositoryResult<BTreeSet<String>> {
         let (ri, _) = self.get_repo_info().await?;
-        let tags = ri.tag_names()?;
+        let tags = ri.tag_names().inject()?;
         Ok(tags.map(|s| s.to_string()).collect())
     }
 
@@ -1534,7 +1492,9 @@ impl Repository {
     #[instrument(skip(self))]
     async fn lookup_tag_v1(&self, tag: &str) -> RepositoryResult<SnapshotId> {
         let ref_data =
-            refs::fetch_tag(self.storage.as_ref(), &self.storage_settings, tag).await?;
+            refs::fetch_tag(self.storage.as_ref(), &self.storage_settings, tag)
+                .await
+                .inject()?;
         Ok(ref_data.snapshot)
     }
 
@@ -1556,11 +1516,14 @@ impl Repository {
             Ok(snap) => Ok(snap),
             Err(IcechunkFormatError {
                 kind: IcechunkFormatErrorKind::TagNotFound { .. },
-                ..
-            }) => Err(RepositoryError::from(RefError::from(RefErrorKind::RefNotFound(
-                tag.to_string(),
-            )))),
-            Err(err) => Err(err.into()),
+                context,
+            }) => Err(ICError {
+                kind: RepositoryErrorKind::Ref(RefErrorKind::RefNotFound(
+                    tag.to_string(),
+                )),
+                context,
+            }),
+            Err(err) => Err(err.inject()),
         }
     }
 
@@ -1586,7 +1549,8 @@ impl Repository {
             RefVersionInfo::TagRef(tag) => {
                 let ref_data =
                     refs::fetch_tag(self.storage.as_ref(), &self.storage_settings, tag)
-                        .await?;
+                        .await
+                        .inject()?;
                 Ok(ref_data.snapshot)
             }
             RefVersionInfo::BranchTipRef(branch) => {
@@ -1595,7 +1559,8 @@ impl Repository {
                     &self.storage_settings,
                     branch,
                 )
-                .await?;
+                .await
+                .inject()?;
                 Ok(ref_data.snapshot)
             }
         }
@@ -1672,11 +1637,12 @@ impl Repository {
                     .await?;
                 match snap.into_iter().next() {
                     Some(snap) => Ok(snap.id),
-                    None => Err(RepositoryErrorKind::InvalidAsOfSpec {
-                        branch: branch.clone(),
-                        at,
-                    }
-                    .into()),
+                    None => Err(RepositoryError::capture(
+                        RepositoryErrorKind::InvalidAsOfSpec {
+                            branch: branch.clone(),
+                            at,
+                        },
+                    )),
                 }
             }
         }
@@ -1693,8 +1659,8 @@ impl Repository {
                 self.resolve_ref_version_v2(repo_info, &ref_version_info).await
             }
             Err((branch, at)) => {
-                let snap_id = repo_info.resolve_branch(branch.as_str())?;
-                let ancestry = repo_info.ancestry(&snap_id)?;
+                let snap_id = repo_info.resolve_branch(branch.as_str()).inject()?;
+                let ancestry = repo_info.ancestry(&snap_id).inject()?;
                 let snap: Vec<_> = ancestry
                     .skip_while(|parent| {
                         if let Ok(parent) = parent {
@@ -1704,15 +1670,17 @@ impl Repository {
                         }
                     })
                     .take(1)
-                    .try_collect()?;
+                    .try_collect()
+                    .inject()?;
 
                 match snap.into_iter().next() {
                     Some(snap) => Ok(snap.id),
-                    None => Err(RepositoryErrorKind::InvalidAsOfSpec {
-                        branch: branch.clone(),
-                        at,
-                    }
-                    .into()),
+                    None => Err(RepositoryError::capture(
+                        RepositoryErrorKind::InvalidAsOfSpec {
+                            branch: branch.clone(),
+                            at,
+                        },
+                    )),
                 }
             }
         }
@@ -1732,20 +1700,23 @@ impl Repository {
     ) -> SessionResult<Diff> {
         let repo_info = match self.spec_version {
             SpecVersionBin::V1 => None,
-            SpecVersionBin::V2 => Some(self.get_repo_info().await?.0),
+            SpecVersionBin::V2 => Some(self.get_repo_info().await.inject()?.0),
         };
 
-        let from = self.resolve_version_using(from, repo_info.as_deref()).await?;
-        let to = self.resolve_version_using(to, repo_info.as_deref()).await?;
+        let from =
+            self.resolve_version_using(from, repo_info.as_deref()).await.inject()?;
+        let to = self.resolve_version_using(to, repo_info.as_deref()).await.inject()?;
         let all_snaps = self
             .ancestry_using(&VersionInfo::SnapshotId(to), repo_info.clone())
-            .await?
+            .await
+            .inject()?
             .try_take_while(|snap_info| ready(Ok(snap_info.id != from)))
             .try_collect::<Vec<_>>()
-            .await?;
+            .await
+            .inject()?;
 
         if all_snaps.last().and_then(|info| info.parent_id.as_ref()) != Some(&from) {
-            return Err(SessionErrorKind::BadSnapshotChainForDiff.into());
+            return Err(SessionError::capture(SessionErrorKind::BadSnapshotChainForDiff));
         }
 
         // we don't include the changes in from
@@ -1770,7 +1741,8 @@ impl Repository {
                 res.add_changes(log.as_ref());
                 ready(Ok(res))
             })
-            .await?;
+            .await
+            .inject()?;
 
         if let Some(to_snap) = all_snaps.first().as_ref().map(|snap| snap.id.clone()) {
             let from_session = self
@@ -1778,16 +1750,18 @@ impl Repository {
                     &VersionInfo::SnapshotId(from),
                     repo_info.as_deref(),
                 )
-                .await?;
+                .await
+                .inject()?;
             let to_session = self
                 .readonly_session_using(
                     &VersionInfo::SnapshotId(to_snap),
                     repo_info.as_deref(),
                 )
-                .await?;
+                .await
+                .inject()?;
             builder.to_diff(&from_session, &to_session).await
         } else {
-            Err(SessionErrorKind::BadSnapshotChainForDiff.into())
+            Err(SessionError::capture(SessionErrorKind::BadSnapshotChainForDiff))
         }
     }
 
@@ -1808,9 +1782,9 @@ impl Repository {
         let session = Session::create_readonly_session(
             self.config.clone(),
             self.storage_settings.clone(),
-            self.storage.clone(),
+            Arc::clone(&self.storage),
             Arc::clone(&self.asset_manager),
-            self.virtual_resolver.clone(),
+            Arc::clone(&self.virtual_resolver),
             snapshot_id.clone(),
         );
         self.preload_manifests(snapshot_id);
@@ -1822,11 +1796,12 @@ impl Repository {
         if self.spec_version() >= SpecVersionBin::V2 {
             let status = self.get_status().await?;
             if status.availability != RepoAvailability::Online {
-                return Err(RepositoryErrorKind::ReadonlyRepository(format!(
-                    "{error_msg}; {0}",
-                    status.error_msg()
-                ))
-                .into());
+                return Err(RepositoryError::capture(
+                    RepositoryErrorKind::ReadonlyRepository(format!(
+                        "{error_msg}; {0}",
+                        status.error_msg()
+                    )),
+                ));
             }
         }
         Ok(())
@@ -1834,12 +1809,7 @@ impl Repository {
 
     #[instrument(skip(self))]
     pub async fn writable_session(&self, branch: &str) -> RepositoryResult<Session> {
-        if !self.storage.can_write().await? {
-            return Err(RepositoryErrorKind::ReadonlyStorage(
-                "Cannot create writable session".to_string(),
-            )
-            .into());
-        }
+        self.raise_if_cant_write("Cannot create writable session").await?;
 
         self.fail_unless_online_status("Cannot create writable session").await?;
 
@@ -1848,9 +1818,9 @@ impl Repository {
         let session = Session::create_writable_session(
             self.config.clone(),
             self.storage_settings.clone(),
-            self.storage.clone(),
+            Arc::clone(&self.storage),
             Arc::clone(&self.asset_manager),
-            self.virtual_resolver.clone(),
+            Arc::clone(&self.virtual_resolver),
             Some(branch.to_string()),
             snapshot_id.clone(),
             self.default_commit_metadata.clone(),
@@ -1863,12 +1833,7 @@ impl Repository {
 
     #[instrument(skip(self))]
     pub async fn rearrange_session(&self, branch: &str) -> RepositoryResult<Session> {
-        if !self.storage.can_write().await? {
-            return Err(RepositoryErrorKind::ReadonlyStorage(
-                "Cannot create rearrange session".to_string(),
-            )
-            .into());
-        }
+        self.raise_if_cant_write("Cannot create rearrange session").await?;
 
         // this feature is only available in IC2
         self.asset_manager().fail_unless_spec_at_least(SpecVersionBin::V2)?;
@@ -1882,14 +1847,15 @@ impl Repository {
             ri.as_ref(),
             MOVE_NODE_FLAG,
             "create rearrange session",
-        )?;
+        )
+        .inject()?;
 
         let session = Session::create_rearrange_session(
             self.config.clone(),
             self.storage_settings.clone(),
-            self.storage.clone(),
+            Arc::clone(&self.storage),
             Arc::clone(&self.asset_manager),
-            self.virtual_resolver.clone(),
+            Arc::clone(&self.virtual_resolver),
             branch.to_string(),
             snapshot_id.clone(),
             self.default_commit_metadata.clone(),
@@ -1975,6 +1941,21 @@ impl Repository {
             ().in_current_span()
         });
     }
+
+    async fn raise_if_cant_write(&self, msg: impl Into<String>) -> RepositoryResult<()> {
+        raise_if_cant_write(self.storage().as_ref(), msg).await
+    }
+}
+
+async fn raise_if_cant_write(
+    storage: &dyn Storage,
+    msg: impl Into<String>,
+) -> RepositoryResult<()> {
+    if storage.can_write().await.inject()? {
+        Ok(())
+    } else {
+        Err(RepositoryError::capture(RepositoryErrorKind::ReadonlyStorage(msg.into())))
+    }
 }
 
 struct AncestryIteratorV2 {
@@ -1992,10 +1973,15 @@ impl Iterator for AncestryIteratorV2 {
 }
 
 impl AncestryIteratorV2 {
+    #[expect(unsafe_code)]
     fn new(repo_info: Arc<RepoInfo>, snapshot_id: &SnapshotId) -> RepositoryResult<Self> {
+        // SAFETY: we create a reference from the Arc's raw pointer to build an iterator
+        // that borrows from repo_info. The Arc is moved into _repo_info, keeping the
+        // data alive for the lifetime of the iterator. The struct must not be reordered
+        // (drop order is declaration order, so _repo_info outlives it).
         let it = unsafe {
             let repo_info_ref = &*Arc::as_ptr(&repo_info);
-            Box::new(repo_info_ref.ancestry(snapshot_id)?.map(|e| e.err_into()))
+            Box::new(repo_info_ref.ancestry(snapshot_id).inject()?.map(|e| e.inject()))
         };
         Ok(Self { _repo_info: repo_info, it })
     }
@@ -2039,10 +2025,9 @@ fn validate_credentials(
         if let Some(cont) = config.get_virtual_chunk_container(url_prefix)
             && let Err(error) = cont.validate_credentials(cred.as_ref())
         {
-            return Err(RepositoryErrorKind::StorageError(StorageErrorKind::Other(
-                error,
-            ))
-            .into());
+            return Err(RepositoryError::capture(RepositoryErrorKind::StorageError(
+                StorageErrorKind::Other(error),
+            )));
         }
     }
     Ok(())
@@ -2052,10 +2037,7 @@ async fn raise_if_invalid_snapshot_id_v1(
     asset_manager: &AssetManager,
     snapshot_id: &SnapshotId,
 ) -> RepositoryResult<()> {
-    asset_manager
-        .fetch_snapshot(snapshot_id)
-        .await
-        .map_err(|_| RepositoryErrorKind::SnapshotNotFound { id: snapshot_id.clone() })?;
+    asset_manager.fetch_snapshot(snapshot_id).await.inject()?;
     Ok(())
 }
 
@@ -2063,14 +2045,13 @@ fn raise_if_invalid_snapshot_id_v2(
     repo_info: &RepoInfo,
     snapshot_id: &SnapshotId,
 ) -> RepositoryResult<()> {
-    repo_info.find_snapshot(snapshot_id)?;
+    repo_info.find_snapshot(snapshot_id).inject()?;
     Ok(())
 }
 
 #[cfg(test)]
-#[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 mod tests {
-    use futures::TryStreamExt;
+    use futures::TryStreamExt as _;
     use std::{
         collections::HashMap, error::Error, iter::zip, num::NonZeroU16, path::PathBuf,
         sync::Arc,
@@ -2515,7 +2496,8 @@ mod tests {
 
         let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
         let logging = Arc::new(LoggingStorage::new(Arc::clone(&backend)));
-        let storage: Arc<dyn Storage + Send + Sync> = logging.clone();
+        let storage = Arc::clone(&logging);
+        let storage: Arc<dyn Storage + Send + Sync> = storage;
         let repository = create_repo_with_split_manifest_config(
             &array_path,
             &shape,
@@ -2555,7 +2537,7 @@ mod tests {
                     ChunkIndices(vec![i, 0, 0]),
                     Some(ChunkPayload::Inline(format!("{i}").into())),
                 )
-                .await?
+                .await?;
         }
         verify_data(&session, 0).await;
 
@@ -2578,7 +2560,7 @@ mod tests {
                     ChunkIndices(vec![i, 0, 0]),
                     Some(ChunkPayload::Inline(format!("{0}", i + 10).into())),
                 )
-                .await?
+                .await?;
         }
         verify_data(&session, 10).await;
 
@@ -2620,7 +2602,7 @@ mod tests {
                     ChunkIndices(vec![i]),
                     Some(ChunkPayload::Inline(format!("{i}").into())),
                 )
-                .await?
+                .await?;
         }
         session.commit("first split").max_concurrent_nodes(8).execute().await?;
         total_manifests += 4;
@@ -2745,7 +2727,8 @@ mod tests {
 
         let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
         let logging = Arc::new(LoggingStorage::new(Arc::clone(&backend)));
-        let storage: Arc<dyn Storage + Send + Sync> = logging.clone();
+        let storage = Arc::clone(&logging);
+        let storage: Arc<dyn Storage + Send + Sync> = storage;
         let repository = create_repo_with_split_manifest_config(
             &temp_path,
             &shape,
@@ -2772,7 +2755,7 @@ mod tests {
                     ChunkIndices(vec![i, 0, 0]),
                     Some(ChunkPayload::Inline(format!("{i}").into())),
                 )
-                .await?
+                .await?;
         }
         session.commit("first split").max_concurrent_nodes(8).execute().await?;
         total_manifests += 1;
@@ -2794,7 +2777,8 @@ mod tests {
 
         // check that reads are optimized; we should only fetch the last split for this query
         let logging2 = Arc::new(LoggingStorage::new(Arc::clone(&backend)));
-        let storage2: Arc<dyn Storage + Send + Sync> = logging2.clone();
+        let storage2 = Arc::clone(&logging2);
+        let storage2: Arc<dyn Storage + Send + Sync> = storage2;
         let config = RepositoryConfig {
             manifest: Some(ManifestConfig::empty()),
             storage: Some(storage::Settings {
@@ -2856,7 +2840,7 @@ mod tests {
                     ChunkIndices(vec![i, 0, 0]),
                     Some(ChunkPayload::Inline(format!("{i}").into())),
                 )
-                .await?
+                .await?;
         }
         session.commit("wrote all splits").max_concurrent_nodes(8).execute().await?;
         assert_manifest_count(repository.asset_manager(), total_manifests).await;
@@ -2869,7 +2853,7 @@ mod tests {
                     ChunkIndices(vec![i, 0, 0]),
                     Some(ChunkPayload::Inline(format!("{i}").into())),
                 )
-                .await?
+                .await?;
         }
         // We are counting total manifests in the `assert_manifest_count` helper function
         // So we keep a running count of the total and update that at each step.
@@ -3045,7 +3029,8 @@ mod tests {
         let split_config = ManifestSplittingConfig { split_sizes: Some(split_sizes) };
         let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
         let logging = Arc::new(LoggingStorage::new(Arc::clone(&backend)));
-        let logging_c: Arc<dyn Storage + Send + Sync> = logging.clone();
+        let logging_c = Arc::clone(&logging);
+        let logging_c: Arc<dyn Storage + Send + Sync> = logging_c;
         let repository = create_repo_with_split_manifest_config(
             &temp_path,
             &shape,
@@ -3121,7 +3106,7 @@ mod tests {
                         ChunkIndices(index),
                         Some(ChunkPayload::Inline(format!("{value}").into())),
                     )
-                    .await?
+                    .await?;
             }
 
             total_manifests +=
@@ -3662,7 +3647,8 @@ mod tests {
         session.commit("create arrays").max_concurrent_nodes(8).execute().await?;
 
         let logging = Arc::new(LoggingStorage::new(Arc::clone(&backend)));
-        let logging_c: Arc<dyn Storage + Send + Sync> = logging.clone();
+        let logging_c = Arc::clone(&logging);
+        let logging_c: Arc<dyn Storage + Send + Sync> = logging_c;
         let storage = Arc::clone(&logging_c);
 
         let man_config = ManifestConfig {
@@ -3705,7 +3691,7 @@ mod tests {
                 .any(|(_, key)| key.starts_with("manifests"))
         {
             tokio::time::sleep(std::time::Duration::from_secs_f32(0.1)).await;
-            retries += 1
+            retries += 1;
         }
         let ops =
             Vec::from_iter(logging.fetch_operations().into_iter().filter(|(_, key)| {
@@ -4113,7 +4099,7 @@ mod tests {
     #[cfg(feature = "object-store-fs")]
     #[tokio_test]
     async fn test_concurrent_distributer_writers_with_base_state()
-    -> Result<(), Box<dyn std::error::Error>> {
+    -> Result<(), Box<dyn Error>> {
         use crate::new_local_filesystem_storage;
 
         let repo_dir = TempDir::new()?;
@@ -4146,7 +4132,7 @@ mod tests {
         async fn do_distributed_writes(
             session: &mut Session,
             array_path: &Path,
-        ) -> Result<(), Box<dyn std::error::Error>> {
+        ) -> Result<(), Box<dyn Error>> {
             // create a _clean_ writable session from that snapshot
             let clean = session.fork().await?;
 
@@ -4155,8 +4141,8 @@ mod tests {
             // we could just send out a SnapshotId and call `create_writable_session`
             // on the distributed worker instead
             let clean_bytes = clean.as_bytes()?;
-            let mut s1 = Session::from_bytes(clean_bytes.clone())?;
-            let mut s2 = Session::from_bytes(clean_bytes)?;
+            let mut s1 = Session::from_bytes(&clean_bytes)?;
+            let mut s2 = Session::from_bytes(&clean_bytes)?;
 
             // now both writers make independent changes
             s1.set_chunk_ref(

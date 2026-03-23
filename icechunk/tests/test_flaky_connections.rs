@@ -1,11 +1,11 @@
-/// Integration tests for network failure retry behavior with MinIO + toxiproxy
+/// Integration tests for network failure retry behavior with `MinIO` + toxiproxy
 ///
 /// These tests verify that we retry on various network errors that occur while
 /// streaming data, not during connection establishment. The AWS SDK's built-in
 /// retry loop doesn't catch these post-connection errors, so we add our own
 /// retry in `AssetManager::fetch_chunk`.
 ///
-/// Tests require MinIO and Toxiproxy running via docker compose:
+/// Tests require `MinIO` and Toxiproxy running via docker compose:
 /// ```bash
 /// docker compose up -d
 /// cargo test --test test_bad_connections -- --nocapture
@@ -18,13 +18,13 @@ use icechunk::{
     asset_manager::AssetManager,
     config::{S3Credentials, S3Options, S3StaticCredentials},
     format::{ChunkId, format_constants::SpecVersionBin},
-    storage::{RetriesSettings, s3::S3Storage},
+    storage::{RetriesSettings, S3Storage},
 };
 use noxious_client::{Client, StreamDirection, Toxic, ToxicKind};
 
 use crate::common::Permission;
 
-/// Create S3 storage pointing to toxiproxy (which proxies to MinIO)
+/// Create S3 storage pointing to toxiproxy (which proxies to `MinIO`)
 fn create_proxied_storage(
     proxy_port: u16,
     timeout_seconds: u32,
@@ -34,7 +34,7 @@ fn create_proxied_storage(
     let storage = S3Storage::new(
         S3Options {
             region: Some("us-east-1".to_string()),
-            endpoint_url: Some(format!("http://localhost:{}", proxy_port)),
+            endpoint_url: Some(format!("http://localhost:{proxy_port}")),
             allow_http: true,
             anonymous: false,
             force_path_style: true,
@@ -57,7 +57,7 @@ fn create_proxied_storage(
     Ok(Arc::new(storage))
 }
 
-/// Set up toxiproxy: create a new proxy on the given port, return (client, proxy_name).
+/// Set up toxiproxy: create a new proxy on the given port, return (client, `proxy_name`).
 /// If another proxy already holds the port (e.g. from a crashed test), it is
 /// deleted first. Each test deletes its own proxy on cleanup.
 async fn setup_toxiproxy(
@@ -79,24 +79,24 @@ async fn setup_toxiproxy(
     let proxies = client.proxies().await.unwrap_or_default();
     for (name, proxy) in proxies {
         if proxy.config.listen.ends_with(&port_suffix) {
-            println!("Deleting stale proxy on :{}: {}", port, name);
-            proxy.delete().await.ok();
+            println!("Deleting stale proxy on :{port}: {name}");
+            let _ = proxy.delete().await;
         }
     }
 
     let listen = format!("0.0.0.0:{port}");
     let name = name.to_string();
     client.create_proxy(&name, &listen, "rustfs:9000").await?;
-    println!("Created proxy: {} ({}) -> rustfs:9000", name, listen);
+    println!("Created proxy: {name} ({listen}) -> rustfs:9000");
 
     Ok((client, name))
 }
 
-/// Create an AssetManager with fast retry settings for testing
+/// Create an `AssetManager` with fast retry settings for testing
 fn create_test_manager(storage: Arc<S3Storage>) -> AssetManager {
     let settings = icechunk::storage::Settings {
         retries: Some(RetriesSettings {
-            #[allow(clippy::unwrap_used)]
+            #[expect(clippy::unwrap_used)]
             max_tries: Some(NonZeroU16::new(3).unwrap()),
             initial_backoff_ms: Some(100),
             max_backoff_ms: Some(1000),
@@ -130,16 +130,16 @@ async fn write_and_verify_chunk(
     Ok((chunk_id, test_data))
 }
 
-/// Add a reset_peer toxic via the toxiproxy REST API.
-/// The noxious-client crate (v1.0) doesn't have a ResetPeer variant,
+/// Add a `reset_peer` toxic via the toxiproxy REST API.
+/// The noxious-client crate (v1.0) doesn't have a `ResetPeer` variant,
 /// so we use the HTTP API directly via reqwest.
-/// https://github.com/oguzbilgener/noxious/issues/1
+/// <https://github.com/oguzbilgener/noxious/issues/1>
 async fn add_reset_peer_toxic(
     proxy_name: &str,
     toxic_name: &str,
     timeout_ms: u32,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let url = format!("http://localhost:8474/proxies/{}/toxics", proxy_name);
+    let url = format!("http://localhost:8474/proxies/{proxy_name}/toxics");
     let resp = reqwest::Client::new()
         .post(&url)
         .json(&serde_json::json!({
@@ -153,36 +153,34 @@ async fn add_reset_peer_toxic(
         .await?;
     if !resp.status().is_success() {
         let text = resp.text().await?;
-        return Err(format!("Failed to add reset_peer toxic: {}", text).into());
+        return Err(format!("Failed to add reset_peer toxic: {text}").into());
     }
     Ok(())
 }
 
 /// Remove a toxic via the toxiproxy REST API.
-/// Again needed because noxious doesn't support ResetPeer
-/// https://github.com/oguzbilgener/noxious/issues/1
+/// Again needed because noxious doesn't support `ResetPeer`
+/// <https://github.com/oguzbilgener/noxious/issues/1>
 async fn remove_toxic_via_api(
     proxy_name: &str,
     toxic_name: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let url =
-        format!("http://localhost:8474/proxies/{}/toxics/{}", proxy_name, toxic_name);
+    let url = format!("http://localhost:8474/proxies/{proxy_name}/toxics/{toxic_name}");
     let resp = reqwest::Client::new().delete(&url).send().await?;
     if !resp.status().is_success() {
         let text = resp.text().await?;
-        return Err(format!("Failed to remove toxic: {}", text).into());
+        return Err(format!("Failed to remove toxic: {text}").into());
     }
     Ok(())
 }
 
 // ── Stalled stream test ─────────────────────────────────────────────────────
 /// This test verifies that we retry on "stalled stream errors"
-/// (ThroughputBelowMinimum) that occur while streaming data, not during
+/// (`ThroughputBelowMinimum`) that occur while streaming data, not during
 /// connection establishment. The AWS SDK's built-in retry loop doesn't catch
 /// these, so we add our own retry in `AssetManager::fetch_chunk`.
 
 #[icechunk_macros::tokio_test]
-#[allow(clippy::unwrap_used, clippy::expect_used)]
 async fn test_stalled_stream() -> Result<(), Box<dyn std::error::Error>> {
     let (client, name) = setup_toxiproxy("stalled_stream", 9002).await?;
 
@@ -240,7 +238,6 @@ async fn test_stalled_stream() -> Result<(), Box<dyn std::error::Error>> {
 // ── Connection reset test ───────────────────────────────────────────────────
 
 #[icechunk_macros::tokio_test]
-#[allow(clippy::unwrap_used, clippy::expect_used)]
 async fn test_connection_reset() -> Result<(), Box<dyn std::error::Error>> {
     let (client, proxy_name) = setup_toxiproxy("connection_reset", 9003).await?;
 
@@ -282,7 +279,7 @@ async fn test_connection_reset() -> Result<(), Box<dyn std::error::Error>> {
 
     match &fetch_result {
         Ok(data) => {
-            println!("Successfully read {} bytes after toxic removed!", data.len())
+            println!("Successfully read {} bytes after toxic removed!", data.len());
         }
         Err(e) => println!("Fetch failed even after toxic removed: {e:?}"),
     }

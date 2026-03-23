@@ -9,6 +9,7 @@ use std::{
 use async_stream::try_stream;
 use chrono::{DateTime, TimeDelta, Utc};
 use futures::{Stream, StreamExt as _, TryStreamExt as _, stream};
+use icechunk_types::{ICResultExt as _, error::ICResultCtxExt as _};
 use thiserror::Error;
 use tokio::io::AsyncReadExt as _;
 use tracing::{debug, error, info, warn};
@@ -17,19 +18,17 @@ use tracing::{debug, error, info, warn};
 const SYNTHETIC_EVENT_OFFSET: TimeDelta = TimeDelta::milliseconds(1);
 
 use crate::{
-    Repository, StorageError,
+    Repository,
     error::ICError,
     format::{
-        CONFIG_FILE_PATH, IcechunkFormatError, IcechunkFormatErrorKind,
-        REPO_INFO_FILE_PATH, SnapshotId, V1_REFS_FILE_PATH,
+        CONFIG_FILE_PATH, IcechunkFormatErrorKind, REPO_INFO_FILE_PATH, SnapshotId,
+        V1_REFS_FILE_PATH,
         format_constants::SpecVersionBin,
         repo_info::{RepoAvailability, RepoInfo, RepoStatus, UpdateInfo, UpdateType},
         snapshot::SnapshotInfo,
     },
-    refs::{
-        Ref, RefData, RefError, RefErrorKind, RefResult, list_deleted_tags, list_refs,
-    },
-    repository::{RepositoryError, RepositoryErrorKind, VersionInfo},
+    refs::{Ref, RefData, RefErrorKind, RefResult, list_deleted_tags, list_refs},
+    repository::{RepositoryErrorKind, VersionInfo},
     storage::StorageErrorKind,
 };
 
@@ -37,16 +36,16 @@ use crate::{
 #[non_exhaustive]
 pub enum MigrationErrorKind {
     #[error(transparent)]
-    RepositoryError(RepositoryErrorKind),
+    RepositoryError(#[from] RepositoryErrorKind),
 
     #[error(transparent)]
-    RefError(RefErrorKind),
+    RefError(#[from] RefErrorKind),
 
     #[error(transparent)]
-    FormatError(IcechunkFormatErrorKind),
+    FormatError(#[from] IcechunkFormatErrorKind),
 
     #[error(transparent)]
-    StorageError(StorageErrorKind),
+    StorageError(#[from] StorageErrorKind),
 
     #[error(
         "invalid repository version ({actual}), this function can only migrate repositories that use version {expected} of the specification, to repositories with spec version {target}"
@@ -71,41 +70,6 @@ pub enum MigrationErrorKind {
 pub type MigrationError = ICError<MigrationErrorKind>;
 pub type MigrationResult<A> = Result<A, MigrationError>;
 
-// it would be great to define this impl in error.rs, but it conflicts with the blanket
-// `impl From<T> for T`
-impl<E> From<E> for MigrationError
-where
-    E: Into<MigrationErrorKind>,
-{
-    fn from(value: E) -> Self {
-        Self::new(value.into())
-    }
-}
-
-impl From<RepositoryError> for MigrationError {
-    fn from(value: RepositoryError) -> Self {
-        Self::with_context(MigrationErrorKind::RepositoryError(value.kind), value.context)
-    }
-}
-
-impl From<RefError> for MigrationError {
-    fn from(value: RefError) -> Self {
-        Self::with_context(MigrationErrorKind::RefError(value.kind), value.context)
-    }
-}
-
-impl From<IcechunkFormatError> for MigrationError {
-    fn from(value: IcechunkFormatError) -> Self {
-        Self::with_context(MigrationErrorKind::FormatError(value.kind), value.context)
-    }
-}
-
-impl From<StorageError> for MigrationError {
-    fn from(value: StorageError) -> Self {
-        Self::with_context(MigrationErrorKind::StorageError(value.kind), value.context)
-    }
-}
-
 async fn validate_start(repo: &Repository) -> MigrationResult<()> {
     if repo.spec_version() != SpecVersionBin::V1 {
         error!("Target repository must be a 1.X Icechunk repository");
@@ -113,12 +77,12 @@ async fn validate_start(repo: &Repository) -> MigrationResult<()> {
             expected: SpecVersionBin::V1,
             target: SpecVersionBin::V2,
             actual: repo.spec_version(),
-        }
-        .into());
+        })
+        .capture();
     }
-    if !repo.storage().can_write().await? {
+    if !repo.storage().can_write().await.inject()? {
         error!("Storage instance must be writable");
-        return Err(MigrationErrorKind::ReadonlyRepo.into());
+        return Err(MigrationError::capture(MigrationErrorKind::ReadonlyRepo));
     }
     Ok(())
 }
@@ -271,25 +235,23 @@ async fn do_migrate(
     info!("Writing new repository info file");
     let new_asset_manager =
         repo.asset_manager().clone_for_spec_version(SpecVersionBin::V2);
-    let new_version_info = new_asset_manager.create_repo_info(repo_info).await?;
+    let new_version_info =
+        new_asset_manager.create_repo_info(repo_info).await.inject()?;
 
     info!(version=?new_version_info, "Written repository info file");
 
     info!("Opening migrated repo");
-    let migrated = match Repository::open(
+    let Ok(migrated) = Repository::open(
         Some(repo.config().clone()),
-        repo.storage().clone(),
+        Arc::clone(repo.storage()),
         Default::default(),
     )
     .await
-    {
-        Ok(repo) => repo,
-        Err(_) => {
-            error!("Unknown error during migration. Repository doesn't open");
-            delete_repo_info(repo).await?;
-            error!("Migration failed");
-            return Err(MigrationErrorKind::Unknown.into());
-        }
+    else {
+        error!("Unknown error during migration. Repository doesn't open");
+        delete_repo_info(repo).await?;
+        error!("Migration failed");
+        return Err(MigrationError::capture(MigrationErrorKind::Unknown));
     };
 
     let new_spec_version = migrated.spec_version();
@@ -297,7 +259,7 @@ async fn do_migrate(
         error!("Unknown error during migration. Repository doesn't open as 2.0");
         delete_repo_info(repo).await?;
         error!("Migration failed");
-        return Err(MigrationErrorKind::Unknown.into());
+        return Err(MigrationError::capture(MigrationErrorKind::Unknown));
     }
     if delete_unused_v1_files {
         if let Err(err) = delete_v1_refs(repo).await {
@@ -306,20 +268,17 @@ async fn do_migrate(
             return Err(err);
         }
         info!("Opening migrated repo");
-        let migrated = match Repository::open(
+        let Ok(migrated) = Repository::open(
             Some(repo.config().clone()),
-            repo.storage().clone(),
+            Arc::clone(repo.storage()),
             Default::default(),
         )
         .await
-        {
-            Ok(repo) => repo,
-            Err(_) => {
-                error!("Unknown error during migration. Repository doesn't open");
-                delete_repo_info(repo).await?;
-                error!("Migration failed");
-                return Err(MigrationErrorKind::Unknown.into());
-            }
+        else {
+            error!("Unknown error during migration. Repository doesn't open");
+            delete_repo_info(repo).await?;
+            error!("Migration failed");
+            return Err(MigrationError::capture(MigrationErrorKind::Unknown));
         };
 
         let new_spec_version = migrated.spec_version();
@@ -327,7 +286,7 @@ async fn do_migrate(
             error!("Unknown error during migration. Repository doesn't open as 2.0");
             delete_repo_info(repo).await?;
             error!("Migration failed");
-            return Err(MigrationErrorKind::Unknown.into());
+            return Err(MigrationError::capture(MigrationErrorKind::Unknown));
         }
 
         // Config is now embedded in the repo info, so the V1 config.yaml is no longer needed.
@@ -356,7 +315,7 @@ pub async fn migrate_1_to_2(
 
     info!("Starting migration");
     info!("Collecting refs");
-    let refs = all_roots(&repo).await?.try_collect::<Vec<_>>().await?;
+    let refs = all_roots(&repo).await.inject()?.try_collect::<Vec<_>>().await.inject()?;
     let tags = Vec::from_iter(refs.iter().filter_map(|(r, id)| {
         if r.is_tag() { Some((r.name(), id.clone())) } else { None }
     }));
@@ -365,7 +324,9 @@ pub async fn migrate_1_to_2(
     }));
 
     let deleted_tags =
-        list_deleted_tags(repo.storage().as_ref(), repo.storage_settings()).await?;
+        list_deleted_tags(repo.storage().as_ref(), repo.storage_settings())
+            .await
+            .inject()?;
 
     info!(
         "Found {} refs: {} tags, {} branches, {} deleted tags",
@@ -506,43 +467,44 @@ pub async fn migrate_1_to_2(
 
     info!("Creating repository info file");
     let config = repo.config().clone();
-    let config_bytes: Vec<u8> = flexbuffers::to_vec(&config).map_err(|e| {
-        IcechunkFormatError::from(IcechunkFormatErrorKind::SerializationErrorFlexBuffers(
-            Box::new(e),
-        ))
-    })?;
+    let config_bytes: Vec<u8> = flexbuffers::to_vec(&config)
+        .map_err(|e| IcechunkFormatErrorKind::SerializationErrorFlexBuffers(Box::new(e)))
+        .capture()?;
 
     // main_ancestry is tip-to-root, so last element is the root
     let root = &main_ancestry[main_ancestry.len() - 1];
     let root_time = root.flushed_at;
 
-    let repo_info = Arc::new(RepoInfo::new(
-        SpecVersionBin::V2,
-        tags,
-        branches,
-        deleted_tag_names.iter().copied(),
-        all_snapshots,
-        &Default::default(),
-        UpdateInfo {
-            update_type: UpdateType::RepoMigratedUpdate {
-                from_version: SpecVersionBin::V1,
-                to_version: SpecVersionBin::V2,
+    let repo_info = Arc::new(
+        RepoInfo::new(
+            SpecVersionBin::V2,
+            tags,
+            branches,
+            deleted_tag_names.iter().copied(),
+            all_snapshots,
+            &Default::default(),
+            UpdateInfo {
+                update_type: UpdateType::RepoMigratedUpdate {
+                    from_version: SpecVersionBin::V1,
+                    to_version: SpecVersionBin::V2,
+                },
+                update_time: Utc::now(),
+                previous_updates,
             },
-            update_time: Utc::now(),
-            previous_updates,
-        },
-        None,
-        migration_page_size,
-        None,
-        Some(config_bytes.as_slice()),
-        None::<std::iter::Empty<u16>>,
-        None::<std::iter::Empty<u16>>,
-        &RepoStatus {
-            availability: RepoAvailability::Online,
-            set_at: root_time,
-            limited_availability_reason: None,
-        },
-    )?);
+            None,
+            migration_page_size,
+            None,
+            Some(config_bytes.as_slice()),
+            None::<std::iter::Empty<u16>>,
+            None::<std::iter::Empty<u16>>,
+            &RepoStatus {
+                availability: RepoAvailability::Online,
+                set_at: root_time,
+                limited_availability_reason: None,
+            },
+        )
+        .inject()?,
+    );
 
     if dry_run {
         info!(
@@ -563,7 +525,8 @@ async fn delete_repo_info(repo: &Repository) -> MigrationResult<()> {
             "",
             stream::iter([(REPO_INFO_FILE_PATH.to_string(), 0)]).boxed(),
         )
-        .await?;
+        .await
+        .inject()?;
     Ok(())
 }
 
@@ -585,13 +548,18 @@ async fn delete_v1_refs(repo: &Repository) -> MigrationResult<()> {
             V1_REFS_FILE_PATH,
             stream::iter([(V1_DEFAULT_BRANCH_KEY.to_string(), 0)]).boxed(),
         )
-        .await?;
+        .await
+        .inject()?;
     info!("V1 main branch reference deleted");
 
     // Then delete remaining V1 refs, as long as main is gone the repo is broken for v1 usage
-    let all =
-        repo.storage().list_objects(repo.storage_settings(), V1_REFS_FILE_PATH).await?;
-    let delete_keys = all.map_ok(|li| (li.id, 0)).boxed().try_collect::<Vec<_>>().await?;
+    let all = repo
+        .storage()
+        .list_objects(repo.storage_settings(), V1_REFS_FILE_PATH)
+        .await
+        .inject()?;
+    let delete_keys =
+        all.map_ok(|li| (li.id, 0)).boxed().try_collect::<Vec<_>>().await.inject()?;
 
     if !delete_keys.is_empty() {
         repo.storage()
@@ -600,16 +568,19 @@ async fn delete_v1_refs(repo: &Repository) -> MigrationResult<()> {
                 V1_REFS_FILE_PATH,
                 stream::iter(delete_keys).boxed(),
             )
-            .await?;
+            .await
+            .inject()?;
     }
 
     info!("All V1 references deleted, verifying");
     let remaining = repo
         .storage()
         .list_objects(repo.storage_settings(), V1_REFS_FILE_PATH)
-        .await?
+        .await
+        .inject()?
         .try_collect::<Vec<_>>()
-        .await?;
+        .await
+        .inject()?;
     if remaining.is_empty() {
         info!("All V1 references have been deleted");
         Ok(())
@@ -618,7 +589,7 @@ async fn delete_v1_refs(repo: &Repository) -> MigrationResult<()> {
             "Found {} remaining V1 references that couldn't be deleted",
             remaining.len()
         );
-        Err(MigrationErrorKind::Unknown.into())
+        Err(MigrationError::capture(MigrationErrorKind::Unknown))
     }
 }
 
@@ -630,7 +601,8 @@ async fn delete_config_yaml(repo: &Repository) -> MigrationResult<()> {
             "",
             stream::iter([(CONFIG_FILE_PATH.to_string(), 0)]).boxed(),
         )
-        .await?;
+        .await
+        .inject()?;
     info!("V1 config.yaml deleted");
     Ok(())
 }
@@ -640,13 +612,11 @@ async fn all_roots<'a>(
     repo: &'a Repository,
 ) -> RefResult<impl Stream<Item = RefResult<(Ref, SnapshotId)>> + 'a> {
     let all_refs = list_refs(repo.storage().as_ref(), repo.storage_settings()).await?;
-    let roots = stream::iter(all_refs)
-        .then(move |r| async move {
-            r.fetch(repo.storage().as_ref(), repo.storage_settings())
-                .await
-                .map(|ref_data| (r, ref_data.snapshot))
-        })
-        .err_into();
+    let roots = stream::iter(all_refs).then(move |r| async move {
+        r.fetch(repo.storage().as_ref(), repo.storage_settings())
+            .await
+            .map(|ref_data| (r, ref_data.snapshot))
+    });
     Ok(roots)
 }
 
@@ -660,10 +630,10 @@ async fn pointed_snapshots<'a>(
 
         for pointed_snap_id in leaves {
             if ! seen.contains(pointed_snap_id) {
-                let parents = repo.ancestry(&VersionInfo::SnapshotId(pointed_snap_id.clone())).await?;
+                let parents = repo.ancestry(&VersionInfo::SnapshotId(pointed_snap_id.clone())).await.inject()?;
                 //let parents = Arc::clone(&asset_manager).snapshot_ancestry(&pointed_snap_id).await?;
                 for await parent in parents {
-                    let parent = parent?;
+                    let parent = parent.inject()?;
                     if seen.insert(parent.id.clone()) {
                         debug!("Found snapshot {}", parent.id);
                         // it's a new snapshot
@@ -683,7 +653,7 @@ async fn pointed_snapshots<'a>(
 }
 
 #[cfg(all(test, feature = "object-store-fs"))]
-#[allow(clippy::unwrap_used, clippy::expect_used)]
+#[expect(clippy::expect_used)]
 mod tests {
     use std::{collections::HashMap, path::Path};
 
@@ -704,7 +674,8 @@ mod tests {
         let storage =
             new_local_filesystem_storage(dir.path().join("test-repo-v1").as_path())
                 .await?;
-        let repo = Repository::open(None, storage.clone(), Default::default()).await?;
+        let repo =
+            Repository::open(None, Arc::clone(&storage), Default::default()).await?;
         Ok((repo, dir))
     }
 
@@ -712,7 +683,7 @@ mod tests {
     /// Copy the source tree 1.0 repository to a temp dir, then migrate it
     async fn test_1_to_2_migration() -> Result<(), Box<dyn std::error::Error>> {
         let (repo, _tmp) = prepare_v1_repo().await?;
-        let storage = repo.storage().clone();
+        let storage = Arc::clone(repo.storage());
 
         let mut tag_ancestries_before = HashMap::new();
         for tag in repo.list_tags().await? {
@@ -869,11 +840,11 @@ mod tests {
     }
 
     #[tokio_test]
-    /// Migrating an already-V2 repo should return InvalidRepositoryMigration (issue #1524)
+    /// Migrating an already-V2 repo should return `InvalidRepositoryMigration` (issue #1524)
     async fn test_1_to_2_migration_already_v2() -> Result<(), Box<dyn std::error::Error>>
     {
         let (repo, _tmp) = prepare_v1_repo().await?;
-        let storage = repo.storage().clone();
+        let storage = Arc::clone(repo.storage());
 
         migrate_1_to_2(repo, false, true, None).await.unwrap();
 
@@ -889,7 +860,7 @@ mod tests {
     /// Copy the source tree 1.0 repository to a temp dir, then migrate it in dry-run mode
     async fn test_1_to_2_migration_dry_run() -> Result<(), Box<dyn std::error::Error>> {
         let (repo, _tmp) = prepare_v1_repo().await?;
-        let storage = repo.storage().clone();
+        let storage = Arc::clone(repo.storage());
 
         migrate_1_to_2(repo, true, true, None).await.unwrap();
         let repo = Repository::open(None, storage, Default::default()).await?;
@@ -903,7 +874,7 @@ mod tests {
     async fn test_1_to_2_migration_without_delete()
     -> Result<(), Box<dyn std::error::Error>> {
         let (repo, _tmp) = prepare_v1_repo().await?;
-        let storage = repo.storage().clone();
+        let storage = Arc::clone(repo.storage());
 
         migrate_1_to_2(repo, false, false, None).await.unwrap();
         let repo = Repository::open(None, storage, Default::default()).await?;
@@ -919,11 +890,11 @@ mod tests {
 
     #[tokio_test]
     /// Verify the ops log chain isn't broken when post-migration writes overflow
-    /// synthetic (backup_path=None) entries.
+    /// synthetic (`backup_path=None`) entries.
     async fn test_ops_log_chain_after_migration() -> Result<(), Box<dyn std::error::Error>>
     {
         let (repo, _tmp) = prepare_v1_repo().await?;
-        let storage = repo.storage().clone();
+        let storage = Arc::clone(repo.storage());
 
         migrate_1_to_2(repo, false, true, None).await.unwrap();
 
@@ -934,7 +905,8 @@ mod tests {
             ..Default::default()
         };
         let repo =
-            Repository::open(Some(config), storage.clone(), Default::default()).await?;
+            Repository::open(Some(config), Arc::clone(&storage), Default::default())
+                .await?;
 
         // Record initial ops log length after migration
         let (stream, _, _) = repo.ops_log().await?;

@@ -5,7 +5,7 @@ use std::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 
-use futures::{Stream, TryStream, TryStreamExt};
+use futures::{Stream, TryStream, TryStreamExt as _};
 use tokio::sync::Notify;
 use tracing::trace;
 
@@ -34,10 +34,10 @@ where
 
 /// A component to limit the rate at which a stream produces items
 /// Call `limit_stream` on your stream and the result will block as
-/// needed to never exceed the max_usage.
+/// needed to never exceed the `max_usage`.
 /// Call `unlimit_stream` after the resources are no longer used, to return
 /// "usage" to the stream. This will wake up the original stream once its
-/// usage falls below max_usage.
+/// usage falls below `max_usage`.
 #[derive(Debug)]
 pub(crate) struct StreamLimiter {
     name: String,
@@ -47,8 +47,8 @@ pub(crate) struct StreamLimiter {
 }
 
 impl StreamLimiter {
-    /// Create a new StreamLimiter
-    /// Don't yield more than max_usage in-flight usage.
+    /// Create a new `StreamLimiter`
+    /// Don't yield more than `max_usage` in-flight usage.
     /// Use `get_usage` to calculate the usage of an element in the stream.
     /// `name` is used purely for logging
     pub(crate) fn new(name: String, max_usage: usize /*, get_usage: F*/) -> Self {
@@ -67,7 +67,7 @@ impl StreamLimiter {
     }
 
     /// Limit the input stream s according to the usage of each element
-    /// get_usage is used to calculate how much each element needs
+    /// `get_usage` is used to calculate how much each element needs
     /// The stream will block if the usage goes above the maximum declared
     /// in self.
     pub(crate) fn limit_stream<S, T, E, F>(
@@ -87,7 +87,7 @@ impl StreamLimiter {
     }
 
     /// Free the usage of elements as they pass the stream.
-    /// get_usage is used to calculate how much each element needs
+    /// `get_usage` is used to calculate how much each element needs
     /// This can wake up a stream blocked by going above usage
     pub(crate) fn unlimit_stream<S, T, E, F>(
         &self,
@@ -153,11 +153,10 @@ impl StreamLimiter {
 }
 
 #[cfg(test)]
-#[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use std::{convert::Infallible, error::Error, future::ready, sync::Arc};
 
-    use futures::{FutureExt, StreamExt, TryStreamExt, stream};
+    use futures::{FutureExt as _, StreamExt as _, TryStreamExt as _, stream};
     use icechunk_macros::tokio_test;
     use tokio::pin;
 

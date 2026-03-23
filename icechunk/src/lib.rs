@@ -32,8 +32,9 @@
 //!                                   └── Storage (S3, GCS, Azure, local, etc.)
 //! ```
 //!
-#[cfg(feature = "shuttle")]
-extern crate shuttle_tokio as tokio;
+
+// #[cfg(feature = "shuttle")]
+// extern crate shuttle_tokio as tokio;
 
 pub mod asset_manager;
 pub mod change_set;
@@ -41,9 +42,10 @@ pub mod cli;
 pub mod compat;
 pub mod config;
 pub mod conflicts;
+pub mod diff;
 pub mod error;
 pub mod feature_flags;
-pub mod format;
+pub use icechunk_format as format;
 pub mod inspect;
 pub mod migrations;
 pub mod ops;
@@ -68,20 +70,15 @@ pub use storage::new_s3_storage;
 pub use storage::{ObjectStorage, Storage, StorageError, new_in_memory_storage};
 pub use store::Store;
 
-/// Returns the user-agent string for icechunk HTTP requests.
-///
-/// Format: `icechunk-rust-<version>` (e.g., `icechunk-rust-2.0.0-alpha.3`).
-pub fn user_agent() -> &'static str {
-    concat!("icechunk-rust-", env!("CARGO_PKG_VERSION"))
-}
+pub use icechunk_types::user_agent;
 
 #[cfg(test)]
 pub(crate) mod test_utils {
-    #[allow(unused_imports)]
+    #[expect(unused_imports)]
     use rstest::rstest;
     use rstest_reuse::{self, *};
 
-    #[allow(unused_imports)]
+    #[expect(unused_imports)]
     use crate::format::format_constants::SpecVersionBin;
 
     #[template]
@@ -93,12 +90,12 @@ pub(crate) mod test_utils {
 
 mod private {
     /// Used to seal traits we don't want user code to implement, to maintain compatibility.
-    /// See https://rust-lang.github.io/api-guidelines/future-proofing.html#sealed-traits-protect-against-downstream-implementations-c-sealed
+    /// See <https://rust-lang.github.io/api-guidelines/future-proofing.html#sealed-traits-protect-against-downstream-implementations-c-sealed>
     pub trait Sealed {}
 }
 
 #[cfg(feature = "logs")]
-#[allow(clippy::type_complexity)]
+#[expect(clippy::type_complexity)]
 static LOG_FILTER: std::sync::LazyLock<
     std::sync::Mutex<
         Option<
@@ -118,7 +115,8 @@ pub fn initialize_tracing(log_filter_directive: Option<&str>) {
     use tracing::Level;
     use tracing_error::ErrorLayer;
     use tracing_subscriber::{
-        EnvFilter, Layer, Registry, layer::SubscriberExt, reload, util::SubscriberInitExt,
+        EnvFilter, Layer as _, Registry, layer::SubscriberExt as _, reload,
+        util::SubscriberInitExt as _,
     };
 
     // We have two Layers. One keeps track of the spans to feed the ICError instances.
@@ -131,7 +129,7 @@ pub fn initialize_tracing(log_filter_directive: Option<&str>) {
         Ok(mut guard) => match guard.as_ref() {
             Some(handle) => {
                 if let Err(err) = handle.reload(filter) {
-                    println!("Error reloading log settings: {err}")
+                    println!("Error reloading log settings: {err}");
                 }
             }
             None => {
@@ -152,7 +150,7 @@ pub fn initialize_tracing(log_filter_directive: Option<&str>) {
             }
         },
         Err(err) => {
-            println!("Error setting up logs: {err}")
+            println!("Error setting up logs: {err}");
         }
     }
 }

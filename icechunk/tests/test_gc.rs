@@ -6,7 +6,7 @@ use std::{
 
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
-use futures::{StreamExt, TryStreamExt};
+use futures::{StreamExt as _, TryStreamExt as _};
 use icechunk::{
     Repository, RepositoryConfig, Storage,
     asset_manager::AssetManager,
@@ -147,7 +147,7 @@ async fn do_test_gc(
         false,
     );
     let summary =
-        garbage_collect(repo.asset_manager().clone(), &gc_config, None, 100).await?;
+        garbage_collect(Arc::clone(repo.asset_manager()), &gc_config, None, 100).await?;
     assert_eq!(summary, GCSummary::default());
     assert_eq!(repo.asset_manager().list_chunks().await?.count().await, 1110);
     for idx in 0..10 {
@@ -168,7 +168,7 @@ async fn do_test_gc(
     assert_eq!(repo.asset_manager().list_manifests().await?.count().await, 111);
 
     let summary =
-        garbage_collect(repo.asset_manager().clone(), &gc_config, None, 100).await?;
+        garbage_collect(Arc::clone(repo.asset_manager()), &gc_config, None, 100).await?;
     assert_eq!(summary.chunks_deleted, 10);
     // only one manifest was re-created, so there is only one garbage manifest
     assert_eq!(summary.manifests_deleted, 1);
@@ -218,7 +218,7 @@ async fn do_test_gc(
         false,
     );
     let summary =
-        garbage_collect(repo.asset_manager().clone(), &gc_config, None, 100).await?;
+        garbage_collect(Arc::clone(repo.asset_manager()), &gc_config, None, 100).await?;
     assert_eq!(summary.snapshots_deleted, 2);
 
     // The last 3 should still be accessible
@@ -394,7 +394,7 @@ async fn do_test_expire_and_garbage_collect(
     let expire_older_than = make_design_doc_repo(&mut repo).await?;
 
     let asset_manager = Arc::new(AssetManager::new_no_cache(
-        storage.clone(),
+        Arc::clone(&storage),
         storage_settings.clone(),
         SpecVersionBin::current(),
         1,
@@ -402,7 +402,7 @@ async fn do_test_expire_and_garbage_collect(
     ));
 
     let result = expire(
-        asset_manager.clone(),
+        Arc::clone(&asset_manager),
         expire_older_than,
         ExpiredRefAction::Ignore,
         ExpiredRefAction::Ignore,
@@ -455,14 +455,15 @@ async fn do_test_expire_and_garbage_collect(
         false,
     );
     let asset_manager = Arc::new(AssetManager::new_no_cache(
-        storage.clone(),
+        Arc::clone(&storage),
         storage_settings.clone(),
         SpecVersionBin::current(),
         1,
         DEFAULT_MAX_CONCURRENT_REQUESTS,
     ));
 
-    let summary = garbage_collect(asset_manager.clone(), &gc_config, None, 100).await?;
+    let summary =
+        garbage_collect(Arc::clone(&asset_manager), &gc_config, None, 100).await?;
     // other expired snapshots are pointed by tags
     assert_eq!(summary.snapshots_deleted, 5);
 
@@ -471,7 +472,8 @@ async fn do_test_expire_and_garbage_collect(
 
     repo.delete_tag("tag1").await?;
 
-    let summary = garbage_collect(asset_manager.clone(), &gc_config, None, 100).await?;
+    let summary =
+        garbage_collect(Arc::clone(&asset_manager), &gc_config, None, 100).await?;
     // other expired snapshots are pointed by tag2
     assert_eq!(summary.snapshots_deleted, 1);
 
@@ -480,7 +482,8 @@ async fn do_test_expire_and_garbage_collect(
 
     repo.delete_tag("tag2").await?;
 
-    let summary = garbage_collect(asset_manager.clone(), &gc_config, None, 100).await?;
+    let summary =
+        garbage_collect(Arc::clone(&asset_manager), &gc_config, None, 100).await?;
     // tag2 snapshosts are not released yet because it's in the path to root from main
     // this behavior changed in IC 2.0
     assert_eq!(summary.snapshots_deleted, 0);
@@ -507,7 +510,7 @@ pub async fn test_expire_and_garbage_collect_deleting_expired_refs()
     let expire_older_than = make_design_doc_repo(&mut repo).await?;
 
     let asset_manager = Arc::new(AssetManager::new_no_cache(
-        storage.clone(),
+        Arc::clone(&storage),
         storage_settings.clone(),
         SpecVersionBin::current(),
         1,
@@ -515,7 +518,7 @@ pub async fn test_expire_and_garbage_collect_deleting_expired_refs()
     ));
 
     let result = expire(
-        asset_manager.clone(),
+        Arc::clone(&asset_manager),
         expire_older_than,
         // This is different compared to the previous test
         ExpiredRefAction::Delete,
@@ -538,7 +541,8 @@ pub async fn test_expire_and_garbage_collect_deleting_expired_refs()
         NonZeroU16::new(500).unwrap(),
         false,
     );
-    let summary = garbage_collect(asset_manager.clone(), &gc_config, None, 100).await?;
+    let summary =
+        garbage_collect(Arc::clone(&asset_manager), &gc_config, None, 100).await?;
 
     assert_eq!(summary.snapshots_deleted, 7);
     assert_eq!(summary.transaction_logs_deleted, 7);
@@ -562,7 +566,7 @@ async fn test_gc_reset_branch() -> Result<(), Box<dyn std::error::Error>> {
     let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
     let storage_settings = storage.default_settings().await?;
     let asset_manager = Arc::new(AssetManager::new_no_cache(
-        storage.clone(),
+        Arc::clone(&storage),
         storage_settings,
         SpecVersionBin::current(),
         1,
@@ -616,7 +620,8 @@ async fn test_gc_reset_branch() -> Result<(), Box<dyn std::error::Error>> {
         NonZeroU16::new(500).unwrap(),
         false,
     );
-    let summary = garbage_collect(asset_manager.clone(), &gc_config, None, 100).await?;
+    let summary =
+        garbage_collect(Arc::clone(&asset_manager), &gc_config, None, 100).await?;
     assert_eq!(summary.snapshots_deleted, 1);
 
     // make sure ancestry works

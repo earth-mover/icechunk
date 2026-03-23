@@ -260,7 +260,7 @@ prop_compose! {
             #[cfg(feature = "object-store-azure")]
             Azure(_) => VirtualChunkContainer::new("az://somebucket/".to_string(),store).unwrap(),
             Tigris(_) => VirtualChunkContainer::new("tigris://somebucket/".to_string(),store).unwrap(),
-            #[allow(unreachable_patterns)]
+            #[expect(unreachable_patterns)]
             _ => panic!("unsupported store config for this feature set"),
         }
     }
@@ -328,8 +328,8 @@ pub fn manifest_split_condition() -> BoxedStrategy<ManifestSplitCondition> {
     ];
     leaf.prop_recursive(4, 20, 5, |inner| {
         prop_oneof![
-            proptest::collection::vec(inner.clone(), 1..4).prop_map(Or),
-            proptest::collection::vec(inner.clone(), 1..4).prop_map(And),
+            vec(inner.clone(), 1..4).prop_map(Or),
+            vec(inner.clone(), 1..4).prop_map(And),
         ]
     })
     .boxed()
@@ -540,13 +540,13 @@ fn file_path_components() -> impl Strategy<Value = Vec<String>> {
 
 // Given a collection of directory names, an absolute Unix style path
 // using the directory names in order is generated
-fn to_abs_unix_path(path_components: Vec<String>) -> String {
+fn to_abs_unix_path(path_components: &[String]) -> String {
     format!("/{}", path_components.join("/"))
 }
 
 // Generates Unix style absolute file paths
 fn absolute_path() -> impl Strategy<Value = String> {
-    file_path_components().prop_map(to_abs_unix_path)
+    file_path_components().prop_map(|c| to_abs_unix_path(&c))
 }
 
 pub fn path() -> impl Strategy<Value = Path> {
@@ -622,7 +622,7 @@ prop_compose! {
     fn url_with_host_and_path()(protocol in transfer_protocol(),
         host in non_empty_alphanumeric_string(),
         path in non_empty_alphanumeric_string()) -> String {
-        format!("{}://{}/{}", protocol, host, path)
+        format!("{protocol}://{host}/{path}")
     }
 }
 

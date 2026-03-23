@@ -2,9 +2,7 @@
 
 mod helpers;
 
-#[allow(dead_code)]
 mod asset_manager;
-#[allow(dead_code)]
 mod manifest;
 
 fn main() {

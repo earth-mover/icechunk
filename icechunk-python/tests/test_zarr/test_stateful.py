@@ -44,16 +44,18 @@ class ModelStore(MemoryStore):
         """Shift chunk indices for an array.
 
         This simulates what shift_array does to the chunk store keys.
-        Out-of-bounds chunks are dropped, vacated positions retain stale data.
+        Out-of-bounds chunks are dropped, vacated positions are cleared.
         """
         prefix = f"{array_path}/c/"
 
         # Read all chunks keyed by their new indices, discarding out-of-bounds
         chunk_data: dict[tuple[int, ...], Any] = {}
+        old_indices: set[tuple[int, ...]] = set()
         async for key in self.list_prefix(prefix):
-            # Strip the prefix to get just the index parts (e.g. "0/1/2")
+            # Parse chunk index from the key by stripping the prefix
             idx_str = key[len(prefix) :]
             old_idx = tuple(int(p) for p in idx_str.split("/"))
+            old_indices.add(old_idx)
             new_idx = tuple(idx + off for idx, off in zip(old_idx, offset, strict=True))
             if any(
                 idx < 0 or idx >= nchunks
@@ -68,6 +70,11 @@ class ModelStore(MemoryStore):
         for new_idx, data in chunk_data.items():
             new_key = f"{prefix}{'/'.join(str(idx) for idx in new_idx)}"
             await self.set(new_key, data)
+
+        # Delete vacated positions: old indices that weren't overwritten
+        for old_idx in old_indices - chunk_data.keys():
+            old_key = f"{prefix}{'/'.join(str(idx) for idx in old_idx)}"
+            await self.delete(old_key)
 
     spec_version: int
 
@@ -339,13 +346,13 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
             note("discarding moves")
             self.store = self.repo.writable_session("main").store
 
-    # @rule(data=st.data())
-    # @precondition(
-    #     lambda self: (
-    #         Version(self.ic.__version__).major >= 2 and self.repo.spec_version >= 2
-    #     )
-    # )
-    # @precondition(lambda self: bool(self.all_arrays))
+    @rule(data=st.data())
+    @precondition(
+        lambda self: (
+            Version(self.ic.__version__).major >= 2 and self.repo.spec_version >= 2
+        )
+    )
+    @precondition(lambda self: bool(self.all_arrays))
     def shift_array(self, data: st.DataObject) -> None:
         """Shift an array's chunks by a random offset."""
         array_path = data.draw(st.sampled_from(sorted(self.all_arrays)))
@@ -468,6 +475,7 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         pickle.loads(pickle.dumps(self.repo))
 
 
+@pytest.mark.hypothesis
 def test_zarr_hierarchy() -> None:
     def mk_test_instance_sync() -> ModifiedZarrHierarchyStateMachine:
         return ModifiedZarrHierarchyStateMachine(in_memory_storage())

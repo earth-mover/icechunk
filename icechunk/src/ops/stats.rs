@@ -1,6 +1,6 @@
 //! Repository statistics (chunk counts, sizes, etc.).
 
-use futures::{StreamExt, TryStream, TryStreamExt, future::ready, stream};
+use futures::{StreamExt as _, TryStream, TryStreamExt as _, future::ready, stream};
 use std::{
     collections::HashSet,
     num::{NonZeroU16, NonZeroUsize},
@@ -21,6 +21,7 @@ use crate::{
     repository::{RepositoryError, RepositoryErrorKind, RepositoryResult},
     stream_utils::{StreamLimiter, try_unique_stream},
 };
+use icechunk_types::{ICResultExt as _, error::ICResultCtxExt as _};
 
 /// Statistics about chunk storage across different chunk types
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -34,7 +35,7 @@ pub struct ChunkStorageStats {
 }
 
 impl ChunkStorageStats {
-    /// Create a new ChunkStorageStats with the specified byte counts
+    /// Create a new `ChunkStorageStats` with the specified byte counts
     pub fn new(native_bytes: u64, virtual_bytes: u64, inlined_bytes: u64) -> Self {
         Self { native_bytes, virtual_bytes, inlined_bytes }
     }
@@ -64,7 +65,7 @@ impl Add for ChunkStorageStats {
     }
 }
 
-/// Helper function to deduplicate chunks by inserting into a HashSet and counting if new
+/// Helper function to deduplicate chunks by inserting into a `HashSet` and counting if new
 fn insert_and_increment_size_if_new<T: Eq + std::hash::Hash>(
     seen: &Arc<Mutex<HashSet<T>>>,
     key: T,
@@ -77,7 +78,8 @@ fn insert_and_increment_size_if_new<T: Eq + std::hash::Hash>(
             RepositoryErrorKind::Other(format!(
                 "Thread panic during manifest_chunk_storage: {e}"
             ))
-        })?
+        })
+        .capture()?
         .insert(key)
     {
         *size_counter += size_increment;
@@ -85,16 +87,17 @@ fn insert_and_increment_size_if_new<T: Eq + std::hash::Hash>(
     Ok(())
 }
 
+#[expect(clippy::type_complexity)]
 fn calculate_manifest_storage(
-    manifest: Arc<Manifest>,
+    manifest: &Arc<Manifest>,
     // Different types of chunks require using different types of ids to de-duplicate them when counting.
-    seen_native_chunks: Arc<Mutex<HashSet<ChunkId>>>,
+    seen_native_chunks: &Arc<Mutex<HashSet<ChunkId>>>,
     // Virtual chunks don't necessarily have checksums, so we instead use the (url, offset, length) tuple as an identifier.
     // This is more expensive, but should work to de-duplicate because the only way that this identifier could be the same
     // for different chunks is if the data were entirely overwritten at that exact storage location.
     // In that scenario it makes sense not to count both chunks towards the storage total,
     // as the overwritten data is no longer accessible anyway.
-    seen_virtual_chunks: Arc<
+    seen_virtual_chunks: &Arc<
         Mutex<HashSet<(VirtualChunkLocation, ChunkOffset, ChunkLength)>>,
     >,
 ) -> RepositoryResult<ChunkStorageStats> {
@@ -102,12 +105,12 @@ fn calculate_manifest_storage(
     let mut native_bytes: u64 = 0;
     let mut virtual_bytes: u64 = 0;
     let mut inlined_bytes: u64 = 0;
-    for payload in manifest.chunk_payloads()? {
+    for payload in manifest.chunk_payloads().inject()? {
         match payload {
             Ok(ChunkPayload::Ref(chunk_ref)) => {
                 // Deduplicate native chunks by ChunkId
                 insert_and_increment_size_if_new(
-                    &seen_native_chunks,
+                    seen_native_chunks,
                     chunk_ref.id,
                     chunk_ref.length,
                     &mut native_bytes,
@@ -123,7 +126,7 @@ fn calculate_manifest_storage(
                     virtual_ref.length,
                 );
                 insert_and_increment_size_if_new(
-                    &seen_virtual_chunks,
+                    seen_virtual_chunks,
                     virtual_chunk_identifier,
                     virtual_ref.length,
                     &mut virtual_bytes,
@@ -134,6 +137,7 @@ fn calculate_manifest_storage(
                 // so count each occurrence since they're actually stored repeatedly across different manifests
                 inlined_bytes += bytes.len() as u64;
             }
+            Ok(_) => {}
             // TODO: don't skip errors
             Err(err) => {
                 tracing::error!(
@@ -182,7 +186,7 @@ pub async fn repo_chunks_storage(
 ) -> RepositoryResult<ChunkStorageStats> {
     let extra_roots = Default::default();
     let manifest_infos = unique_manifest_infos(
-        asset_manager.clone(),
+        Arc::clone(&asset_manager),
         &extra_roots,
         max_snapshots_in_memory,
     )
@@ -215,14 +219,15 @@ pub async fn repo_chunks_storage(
         .and_then(|(manifest, minfo)| async move {
             let seen_native_chunks = Arc::clone(seen_native_chunks);
             let seen_virtual_chunks = Arc::clone(seen_virtual_chunks);
-            let stats = task::spawn_blocking(|| {
+            let stats = task::spawn_blocking(move || {
                 calculate_manifest_storage(
-                    manifest,
-                    seen_native_chunks,
-                    seen_virtual_chunks,
+                    &manifest,
+                    &seen_native_chunks,
+                    &seen_virtual_chunks,
                 )
             })
-            .await??;
+            .await
+            .capture()??;
             Ok((stats, minfo))
         });
     let (_, res) = limiter

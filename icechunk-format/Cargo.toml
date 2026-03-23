@@ -1,0 +1,55 @@
+[package]
+name = "icechunk-format"
+version = "2.0.0-alpha.4"
+description = "Binary format types and serialization for the Icechunk storage engine"
+readme = "../README.md"
+repository = "https://github.com/earth-mover/icechunk"
+homepage = "https://icechunk.io"
+license = "Apache-2.0"
+keywords = ["zarr", "xarray", "database"]
+categories = ["database", "science", "science::geo"]
+authors = ["Earthmover PBC"]
+edition.workspace = true
+publish = true
+rust-version.workspace = true
+
+[dependencies]
+icechunk-types = { path = "../icechunk-types", version = "2.0.0-alpha.4" }
+
+base32 = "0.5.1"
+bytes = { version = "1.11.1", features = ["serde"] }
+chrono = { version = "0.4.44", features = ["serde"] }
+flatbuffers = "25.12.19"
+flexbuffers = "25.12.19"
+futures = "0.3.32"
+itertools = "0.14.0"
+quick_cache = "0.6.21"
+rand = "0.10.0"
+rmp-serde = "1.3.1"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_bytes = "0.11.19"
+serde_json = "1.0.149"
+thiserror = "2.0.18"
+tracing = "0.1.44"
+url = { version = "2.5.8", features = ["serde"] }
+zstd = "0.13.3"
+
+[dev-dependencies]
+icechunk-macros = { path = "../icechunk-macros", version = "0.1.0" }
+
+pretty_assertions = "1.4.1"
+proptest = "1.10.0"
+test-log = { version = "0.2.19", default-features = false, features = [
+  "trace",
+  "color",
+  "unstable",
+] }
+test-strategy = "0.4.5"
+tokio = { version = "1.50.0", features = ["rt-multi-thread", "macros"] }
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+
+[lints]
+workspace = true
+
+[package.metadata.cargo-machete]
+ignored = ["serde_bytes"]
