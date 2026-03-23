@@ -4258,6 +4258,12 @@ mod tests {
             .await?;
         let initial_snap_id = session.commit("init").execute().await?;
 
+        // Check if moved nested groups still shows up properly after commit
+        let session = repo
+            .readonly_session(&VersionInfo::SnapshotId(initial_snap_id.clone()))
+            .await?;
+        assert!(session.get_group(&"/source".try_into().unwrap()).await.is_ok());
+
         // Rearrange session: move a node
         let mut session = repo.rearrange_session("main").await?;
         session
@@ -4269,6 +4275,15 @@ mod tests {
             .execute()
             .await?;
 
+        /*
+                // Check if moved nested groups still shows up properly after commit
+                let session = repo
+                    .readonly_session(&VersionInfo::SnapshotId(initial_snap_id.clone()))
+                    .await?;
+                assert!(session.get_group(&"/dest".try_into().unwrap()).await.is_ok());
+                assert!(session.get_group(&"/source".try_into().unwrap()).await.is_err());
+        */
+
         // Rearrange session: move node again, amend this time
         let mut session = repo.rearrange_session("main").await?;
         session
@@ -4276,6 +4291,15 @@ mod tests {
             .await?;
         let first_amend_snap_id =
             session.commit("moved dest to another_dest").amend().execute().await?;
+
+        /*
+                // Check if moved nested groups still shows up properly after commit
+                let session = repo
+                    .readonly_session(&VersionInfo::SnapshotId(initial_snap_id.clone()))
+                    .await?;
+                assert!(session.get_group(&"/another_dest".try_into().unwrap()).await.is_ok());
+                assert!(session.get_group(&"/dest".try_into().unwrap()).await.is_err());
+        */
 
         // Rearrange session: move node again, amend gain
         let mut session = repo.rearrange_session("main").await?;
@@ -4285,9 +4309,19 @@ mod tests {
         let second_amend_snap_id =
             session.commit("moved another_dest to src").amend().execute().await?;
 
+        // Check if moved nested groups still shows up properly after commit
+        let session = repo
+            .readonly_session(&VersionInfo::SnapshotId(second_amend_snap_id.clone()))
+            .await?;
+        assert!(session.get_group(&"/src".try_into().unwrap()).await.is_ok());
+        assert!(session.get_group(&"/dest".try_into().unwrap()).await.is_err());
+        assert!(session.get_group(&"/another_dest".try_into().unwrap()).await.is_err());
+        assert!(session.get_group(&"/source".try_into().unwrap()).await.is_err());
+
         let (stream, _, _) = repo.ops_log().await?;
         let ops: Vec<_> = stream.try_collect().await?;
         dbg!(&ops);
+
         assert_eq!(ops.len(), 5);
         assert!(matches!(ops[4].1, UpdateType::RepoInitializedUpdate));
         assert!(matches!(
@@ -4316,6 +4350,37 @@ mod tests {
                 ..
             } if *previous_snap_id == first_amend_snap_id && *new_snap_id == second_amend_snap_id
         ));
+
+        /*
+        for snap_id in &[
+            initial_snap_id,
+            first_rearr_snap_id,
+            first_amend_snap_id,
+            second_amend_snap_id,
+        ] {
+            let tx_log = repo.asset_manager.fetch_transaction_log(&snap_id).await?;
+
+            dbg!(tx_log.moves().into_iter().collect::<Vec<_>>());
+        }
+*/
+
+        for [initial, next] in [
+            initial_snap_id,
+            first_rearr_snap_id,
+            first_amend_snap_id,
+            second_amend_snap_id,
+        ]
+        .array_windows()
+        {
+            let diff = repo
+                .diff(
+                    &VersionInfo::SnapshotId(initial.clone()),
+                    &VersionInfo::SnapshotId(next.clone()),
+                )
+                .await?;
+
+            dbg!(diff);
+        }
 
         Ok(())
     }
