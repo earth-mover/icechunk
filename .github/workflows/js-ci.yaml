@@ -41,10 +41,12 @@ jobs:
             target: x86_64-unknown-linux-gnu
             build: yarn build --target x86_64-unknown-linux-gnu --use-napi-cross
             setup: |
-              # Override CC for aws-lc-sys to use system GCC (the napi-cross
-              # toolchain ships GCC 4.8 which lacks C11 <stdatomic.h>)
-              echo "AWS_LC_SYS_CC=gcc" >> $GITHUB_ENV
-              echo "AWS_LC_SYS_CXX=g++" >> $GITHUB_ENV
+              # The napi-cross toolchain ships GCC 4.8 which lacks C11
+              # <stdatomic.h>, breaking aws-lc-sys. Use cmake builder with
+              # system GCC override for that crate only.
+              echo "AWS_LC_SYS_CMAKE_BUILDER=1" >> $GITHUB_ENV
+              echo "AWS_LC_SYS_TARGET_CC=gcc" >> $GITHUB_ENV
+              echo "AWS_LC_SYS_TARGET_CXX=g++" >> $GITHUB_ENV
           - host: macos-latest
             target: aarch64-apple-darwin
             build: yarn build --target aarch64-apple-darwin
