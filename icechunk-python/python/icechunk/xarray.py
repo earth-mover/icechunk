@@ -313,11 +313,11 @@ def to_icechunk(
 
     as_dataset = _make_dataset(obj)
 
-    is_dask = is_dask_collection(obj)
-    fork: Session | ForkSession = session.fork() if is_dask else session
-
     writer = _XarrayDatasetWriter(
-        as_dataset, store=fork.store, safe_chunks=safe_chunks, align_chunks=align_chunks
+        as_dataset,
+        store=session.store,
+        safe_chunks=safe_chunks,
+        align_chunks=align_chunks,
     )
 
     writer._open_group(group=group, mode=mode, append_dim=append_dim, region=region)
@@ -326,12 +326,17 @@ def to_icechunk(
     writer.write_metadata(encoding)
     # write in-memory arrays
     writer.write_eager()
-    # eagerly write dask arrays
-    maybe_fork_session = writer.write_lazy(
-        chunkmanager_store_kwargs=chunkmanager_store_kwargs,
-        split_every=split_every,
-    )
-    if is_dask:
+
+    if is_dask_collection(obj):
+        # to offer maximum flexibility to the user; we fork here purely for distributed writes.
+        fork: ForkSession = session.fork()
+        for array in writer.writer.targets:
+            array._async_array.store_path.store = fork.store
+        # eagerly write dask arrays
+        maybe_fork_session = writer.write_lazy(
+            chunkmanager_store_kwargs=chunkmanager_store_kwargs,
+            split_every=split_every,
+        )
         if maybe_fork_session is None:
             raise RuntimeError(
                 "Logic bug! Please open at issue at https://github.com/earth-mover/icechunk"
