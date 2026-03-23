@@ -30,7 +30,8 @@ jobs:
       #pull-requests: read
     env:
       #CC: deny_c
-      RUST_CHANNEL: '1.91.1'
+      RUST_CHANNEL: '1.94.0'
+      CARGO_DENY_VERSION: '0.19.0'
 
 
     steps:

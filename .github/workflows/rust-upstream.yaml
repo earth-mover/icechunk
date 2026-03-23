@@ -24,7 +24,8 @@ env:
   CARGO_NET_RETRY: 10
   RUST_BACKTRACE: short
   RUSTFLAGS: "-D warnings"
-  RUST_CHANNEL: '1.91.1'
+  RUST_CHANNEL: '1.94.0'
+  CARGO_DENY_VERSION: '0.19.0'
 
 jobs:
   zarrs:
