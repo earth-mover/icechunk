@@ -89,6 +89,8 @@ import xarray as xr
 
 client = distributed.Client()
 
+storage = icechunk.local_filesystem_storage(tempfile.TemporaryDirectory().name)
+repo = icechunk.Repository.create(storage)
 session = repo.writable_session("main")
 dataset = xr.tutorial.open_dataset(
     "rasm",
