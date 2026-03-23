@@ -50,6 +50,7 @@ test = [
   "pooch",
   "netcdf4",
   "matplotlib",
+  "rich",
 ]
 benchmark = [
   "pytest-benchmark[histogram]",
