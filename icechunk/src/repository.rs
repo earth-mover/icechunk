@@ -4351,17 +4351,6 @@ mod tests {
             } if *previous_snap_id == first_amend_snap_id && *new_snap_id == second_amend_snap_id
         ));
 
-        for snap_id in &[
-            initial_snap_id.clone(),
-            first_rearr_snap_id.clone(),
-            first_amend_snap_id.clone(),
-            second_amend_snap_id.clone(),
-        ] {
-            let tx_log = repo.asset_manager.fetch_transaction_log(&snap_id).await?;
-
-            dbg!(tx_log.moves().into_iter().collect::<Vec<_>>());
-        }
-
         for [initial, next] in [
             initial_snap_id.clone(),
             first_rearr_snap_id,
@@ -4378,7 +4367,12 @@ mod tests {
                 .await
             {
                 Ok(d) => d,
-                Err(_) => continue,
+                Err(_) =>
+                // Continuing here because the amends generate
+                // BadSnapshotChainForDiff errors
+                {
+                    continue;
+                }
             };
 
             dbg!(diff);
