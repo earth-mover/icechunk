@@ -1,0 +1,142 @@
+name: Rust Check - Upstream (zarrs)
+
+on:
+  push:
+    branches:
+      - main
+      - "support/**"
+  pull_request:
+    types: [opened, reopened, synchronize, labeled]
+  schedule:
+    - cron: "0 1 * * *" # Daily at 01:00 UTC
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  CARGO_INCREMENTAL: 0
+  CARGO_NET_RETRY: 10
+  RUST_BACKTRACE: short
+  RUSTFLAGS: "-D warnings"
+  RUST_CHANNEL: '1.91.1'
+
+jobs:
+  zarrs:
+    name: zarrs-upstream
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    if: ${{
+      (contains(github.event.pull_request.labels.*.name, 'test-upstream') && github.event_name == 'pull_request')
+      || github.event_name == 'workflow_dispatch'
+      || github.event_name == 'schedule'
+      || github.event_name == 'push'
+      }}
+    steps:
+      - name: Checkout icechunk
+        uses: actions/checkout@v6
+        with:
+          path: "icechunk"
+
+      - name: Checkout zarrs_icechunk
+        uses: actions/checkout@v6
+        with:
+          repository: "zarrs/zarrs_icechunk"
+          path: "zarrs_icechunk"
+
+      - name: Patch zarrs_icechunk to use local icechunk
+        shell: bash
+        run: |
+          cat >> zarrs_icechunk/Cargo.toml << 'EOF'
+
+          [patch.crates-io]
+          icechunk = { path = "../icechunk/icechunk" }
+          EOF
+
+      - name: Install Rust toolchain
+        run: |
+          rustup update --no-self-update ${{ env.RUST_CHANNEL }}
+          rustup default ${{ env.RUST_CHANNEL }}
+
+      - name: Cache Dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "zarrs_icechunk -> target"
+          key: zarrs-upstream-${{ env.RUST_CHANNEL }}
+
+      - name: Build zarrs_icechunk
+        id: build
+        shell: bash
+        working-directory: zarrs_icechunk
+        run: |
+          cargo build 2>&1 | tee build-output.log
+
+      - name: Test zarrs_icechunk
+        id: test
+        if: steps.build.outcome == 'success'
+        shell: bash
+        working-directory: zarrs_icechunk
+        run: |
+          cargo test 2>&1 | tee test-output.log
+
+      - name: Create or update failure issue
+        if: |
+          always()
+          && (steps.build.outcome == 'failure' || steps.test.outcome == 'failure')
+          && github.event_name == 'schedule'
+          && github.repository_owner == 'earth-mover'
+        shell: bash
+        working-directory: .
+        run: |
+          # Read the template
+          template=$(cat icechunk/.github/zarrs-upstream-failure-template.md)
+
+          # Combine build and test output
+          test_output="=== Build Output ===
+          "
+          if [ -f "zarrs_icechunk/build-output.log" ]; then
+            test_output+=$(tail -100 zarrs_icechunk/build-output.log)
+          else
+            test_output+="No build output captured"
+          fi
+
+          test_output+="
+
+          === Test Output ===
+          "
+          if [ -f "zarrs_icechunk/test-output.log" ]; then
+            test_output+=$(tail -100 zarrs_icechunk/test-output.log)
+          else
+            test_output+="No test output captured"
+          fi
+
+          # Replace placeholders
+          issue_body="${template//\{\{WORKFLOW\}\}/${{ github.workflow }}}"
+          issue_body="${issue_body//\{\{RUN_ID\}\}/${{ github.run_id }}}"
+          issue_body="${issue_body//\{\{RUN_URL\}\}/${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}}"
+          issue_body="${issue_body//\{\{DATE\}\}/$(date -u)}"
+          issue_body="${issue_body//\{\{TEST_OUTPUT\}\}/$test_output}"
+
+          # Check for existing open issue with same title
+          issue_title="Nightly zarrs upstream test failed"
+          existing_issue=$(gh issue list --state open --label "CI" --search "\"$issue_title\" in:title" --json number --jq '.[0].number // empty')
+
+          if [ -n "$existing_issue" ]; then
+            echo "Found existing open issue #$existing_issue, updating it..."
+            echo "$issue_body" | gh issue edit "$existing_issue" --body-file -
+            echo "Updated existing issue #$existing_issue"
+          else
+            echo "No existing open issue found, creating new one..."
+            echo "$issue_body" | gh issue create \
+              --title "$issue_title" \
+              --body-file - \
+              --label "CI"
+            echo "Created new issue"
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
