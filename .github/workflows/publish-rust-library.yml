@@ -58,6 +58,7 @@ jobs:
         with:
           # workspaces: "rust -> target"
           key: ${{ env.RUST_CHANNEL }}
+          cache-on-failure: true
 
       - name: Install cargo-deny
         run: cargo install --locked cargo-deny --version ${{ env.CARGO_DENY_VERSION }}
@@ -75,6 +76,6 @@ jobs:
           git config --global user.name "Joe Hamman"
 
       - name: Publish workspace crates to crates.io
-        run: cargo release --workspace --no-confirm --no-tag --no-push --execute
+        run: cargo release --workspace --unpublished --no-confirm --no-tag --no-push --execute
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
