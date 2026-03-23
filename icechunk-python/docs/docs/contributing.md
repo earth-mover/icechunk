@@ -395,6 +395,52 @@ just lint
 just check-deps
 ```
 
+#### Error Handling
+
+All Icechunk errors use the [`ICError<E>`](https://github.com/earth-mover/icechunk/blob/main/icechunk-types/src/error.rs) wrapper, which pairs an error kind with a [`SpanTrace`](https://docs.rs/tracing-error/latest/tracing_error/struct.SpanTrace.html) captured at the point of construction. Every error type is an alias:
+
+```rust
+type SessionError = ICError<SessionErrorKind>;
+type RepositoryError = ICError<RepositoryErrorKind>;
+```
+
+There are two ways to construct or convert errors: **`inject`** and **`capture`**. Prefer `inject` whenever the source error is already an `ICError`, because it preserves the original span trace. Use `capture` only for foreign (non-ICError) errors.
+
+| Method | Input | Span trace | Use when |
+|---|---|---|---|
+| `ICError::capture(kind)` | bare error kind | **new** | constructing a fresh error |
+| `.capture()` | `Result<T, E>` where `E: Into<Kind>` | **new** | converting a foreign (non-`ICError`) result |
+| `.capture_box()` | `Result<T, E>` where `E: Error` | **new** | same, when `Kind` has `From<Box<dyn Error>>` |
+| `.inject()` | `Result<T, ICError<E>>` | **preserved** | propagating between `ICError` kinds |
+| `ICError::inject(self)` | `ICError<E>` | **preserved** | same, outside of `Result` |
+
+##### Examples
+
+Constructing a fresh error (use the type alias, not `ICError` directly):
+
+```rust
+Err(SessionError::capture(SessionErrorKind::ReadOnlySession))
+```
+
+Converting a foreign result (e.g. serde, I/O) — captures a new span trace:
+
+```rust
+serde_json::to_vec(&data).capture()?;
+builder.build().capture_box()?;
+rmp_serde::to_vec(&data).map_err(Box::new).capture()?;
+```
+
+Propagating between `ICError` kinds — preserves the original span trace:
+
+```rust
+session_fn().inject()?;  // SessionError → RepositoryError
+```
+
+!!! tip
+    The traits `ICResultExt` (for `.capture()` / `.capture_box()`) and `ICResultCtxExt` (for `.inject()`) are defined in `icechunk-types` and should be imported wherever you handle errors.
+
+    There is intentionally no `From<E> for ICError<E>` impl — this forces every conversion to go through `capture` or `inject` so the span trace decision is always explicit.
+
 #### Pre-commit Hooks
 
 We use [pre-commit](https://pre-commit.com/) to automatically run checks. Install it:
@@ -425,7 +471,7 @@ pre-commit run rust-pre-commit-ci --hook-stage manual
 
 #### Minimum supported Rust version
 
-The current MSRV is `1.91.1`.
+The current MSRV is `1.94.0`.
 
 We maintain packages for [PyPI](https://pypi.org/project/icechunk)
 and [conda-forge](https://github.com/conda-forge/icechunk-feedstock)

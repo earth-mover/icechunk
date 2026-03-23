@@ -20,81 +20,17 @@ import icechunk as ic
 import zarr
 from icechunk import Repository, Storage, in_memory_storage
 from icechunk.testing import strategies as icst
+from icechunk.testing.models import ModelStore
+from icechunk.testing.utils import assert_list_dir_equal, update_paths_after_move
 from zarr import Array
 from zarr.core.buffer import default_buffer_prototype
-from zarr.storage import MemoryStore
 from zarr.testing.stateful import ZarrHierarchyStateMachine, split_prefix_name
+
+PROTOTYPE = default_buffer_prototype()
 from zarr.testing.strategies import (
     node_names,
     np_array_and_chunks,
 )
-
-PROTOTYPE = default_buffer_prototype()
-
-
-class ModelStore(MemoryStore):
-    """MemoryStore with move, copy, and shift_array methods for testing."""
-
-    async def shift_array(
-        self,
-        array_path: str,
-        offset: tuple[int, ...],
-        num_chunks: tuple[int, ...],
-    ) -> None:
-        """Shift chunk indices for an array.
-
-        This simulates what shift_array does to the chunk store keys.
-        Out-of-bounds chunks are dropped, vacated positions retain stale data.
-        """
-        prefix = f"{array_path}/c/"
-
-        # Read all chunks keyed by their new indices, discarding out-of-bounds
-        chunk_data: dict[tuple[int, ...], Any] = {}
-        async for key in self.list_prefix(prefix):
-            # Strip the prefix to get just the index parts (e.g. "0/1/2")
-            idx_str = key[len(prefix) :]
-            old_idx = tuple(int(p) for p in idx_str.split("/"))
-            new_idx = tuple(idx + off for idx, off in zip(old_idx, offset, strict=True))
-            if any(
-                idx < 0 or idx >= nchunks
-                for idx, nchunks in zip(new_idx, num_chunks, strict=True)
-            ):
-                continue
-            data = await self.get(key, prototype=PROTOTYPE)
-            if data:
-                chunk_data[new_idx] = data
-
-        # Write chunks at new positions
-        for new_idx, data in chunk_data.items():
-            new_key = f"{prefix}{'/'.join(str(idx) for idx in new_idx)}"
-            await self.set(new_key, data)
-
-    spec_version: int
-
-    async def move(self, source: str, dest: str) -> None:
-        """Move all keys from source to dest.
-
-        Store keys always have form "node/zarr.json" or "node/c/...", never bare "node".
-        """
-        all_keys = [k async for k in self.list_prefix("")]
-        keys_to_move = [k for k in all_keys if k.startswith(source + "/")]
-        for old_key in keys_to_move:
-            new_key = dest + old_key[len(source) :]
-            data = await self.get(old_key, prototype=PROTOTYPE)
-            if data is not None:
-                await self.set(new_key, data)
-                await self.delete(old_key)
-
-    async def copy(self) -> "ModelStore":
-        """Create a copy of this store."""
-        new_store = ModelStore()
-        new_store.spec_version = self.spec_version
-        async for key in self.list_prefix(""):
-            data = await self.get(key, prototype=PROTOTYPE)
-            if data is not None:
-                await new_store.set(key, data)
-        return new_store
-
 
 Frequency = TypeVar("Frequency", bound=Callable[..., Any])
 
@@ -309,17 +245,9 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
             session.move(f"/{source}", f"/{dest}")
             self._sync(pending_model.move(source, dest))
 
-            pending_arrays, pending_groups = [
-                {
-                    dest
-                    if p == source
-                    else dest + p[len(source) :]
-                    if p.startswith(source + "/")
-                    else p
-                    for p in s
-                }
-                for s in (pending_arrays, pending_groups)
-            ]
+            pending_arrays, pending_groups = update_paths_after_move(
+                source, dest, pending_arrays, pending_groups
+            )
 
             # Verify store matches pending model after each move
             # failing due to https://github.com/earth-mover/icechunk/issues/1562#issuecomment-3755544352
@@ -339,13 +267,13 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
             note("discarding moves")
             self.store = self.repo.writable_session("main").store
 
-    # @rule(data=st.data())
-    # @precondition(
-    #     lambda self: (
-    #         Version(self.ic.__version__).major >= 2 and self.repo.spec_version >= 2
-    #     )
-    # )
-    # @precondition(lambda self: bool(self.all_arrays))
+    @rule(data=st.data())
+    @precondition(
+        lambda self: (
+            Version(self.ic.__version__).major >= 2 and self.repo.spec_version >= 2
+        )
+    )
+    @precondition(lambda self: bool(self.all_arrays))
     def shift_array(self, data: st.DataObject) -> None:
         """Shift an array's chunks by a random offset."""
         array_path = data.draw(st.sampled_from(sorted(self.all_arrays)))
@@ -401,17 +329,7 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         for path in paths:
             model_ls = sorted(self._sync_iter(model.list_dir(path)))
             store_ls = sorted(self._sync_iter(store.list_dir(path)))
-            if model_ls != store_ls and set(model_ls).symmetric_difference(
-                set(store_ls)
-            ) != {"c"}:
-                # Consider .list_dir("path/to/array") for an array with a single chunk.
-                # The MemoryStore model will return `"c", "zarr.json"` only if the chunk exists
-                # If that chunk was deleted, then `"c"` is not returned.
-                # LocalStore will not have this behaviour :/
-                # In Icechunk, we always return the `c` so ignore this inconsistency.
-                raise AssertionError(
-                    f"list_dir mismatch for {path=}: {model_ls=} != {store_ls=}"
-                )
+            assert_list_dir_equal(path, model_ls, store_ls)
 
     @invariant()
     def check_list_dir(self) -> None:
@@ -468,6 +386,7 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         pickle.loads(pickle.dumps(self.repo))
 
 
+@pytest.mark.hypothesis
 def test_zarr_hierarchy() -> None:
     def mk_test_instance_sync() -> ModifiedZarrHierarchyStateMachine:
         return ModifiedZarrHierarchyStateMachine(in_memory_storage())

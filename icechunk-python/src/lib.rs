@@ -1,3 +1,7 @@
+// PyO3 extracts Python objects into owned Rust types (String, Vec<u8>, etc.),
+// so #[pymethods] signatures inherently take arguments by value.
+#![allow(clippy::needless_pass_by_value)]
+
 mod config;
 mod conflicts;
 mod errors;
@@ -42,16 +46,17 @@ use stats::PyChunkStorageStats;
 use store::{PyStore, VirtualChunkSpec};
 
 #[cfg(feature = "cli")]
-use clap::Parser;
+use clap::Parser as _;
 #[cfg(feature = "cli")]
 use icechunk::cli::interface::{IcechunkCLI, run_cli};
 
 #[cfg(feature = "cli")]
 #[pyfunction]
-fn cli_entrypoint(py: Python) -> PyResult<()> {
+#[expect(clippy::exit)] // CLI entrypoint must exit the process on error
+fn cli_entrypoint(py: Python<'_>) -> PyResult<()> {
     let sys = py.import("sys")?;
     let args: Vec<String> = sys.getattr("argv")?.extract()?;
-    match IcechunkCLI::try_parse_from(args.to_vec()) {
+    match IcechunkCLI::try_parse_from(args.clone()) {
         Ok(cli_args) => pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
             if let Err(e) = run_cli(cli_args).await {
                 eprintln!("{e}");
@@ -73,24 +78,24 @@ fn cli_entrypoint(py: Python) -> PyResult<()> {
 
 #[cfg(not(feature = "cli"))]
 #[pyfunction]
-fn cli_entrypoint(_py: Python) -> PyResult<()> {
+fn cli_entrypoint(_py: Python<'_>) -> PyResult<()> {
     println!("Must install the optional `cli` feature to use the Icechunk CLI.");
     Ok(())
 }
 
-fn log_filters_from_env(py: Python) -> PyResult<Option<String>> {
+fn log_filters_from_env(py: Python<'_>) -> PyResult<Option<String>> {
     let os = py.import("os")?;
     let environ = os.getattr("environ")?;
-    let environ: &Bound<PyMapping> = environ.cast()?;
+    let environ: &Bound<'_, PyMapping> = environ.cast()?;
     let value = environ.get_item("ICECHUNK_LOG").ok().and_then(|v| v.extract().ok());
     Ok(value)
 }
 
 #[pyfunction]
-fn initialize_logs(py: Python) -> PyResult<()> {
+fn initialize_logs(py: Python<'_>) -> PyResult<()> {
     if env::var("ICECHUNK_NO_LOGS").is_err() {
         let log_filter_directive = log_filters_from_env(py)?;
-        initialize_tracing(log_filter_directive.as_deref())
+        initialize_tracing(log_filter_directive.as_deref());
     }
     Ok(())
 }
@@ -122,7 +127,7 @@ fn check_filter_for_misspellings(filter: &str) {
 }
 
 #[pyfunction]
-fn set_logs_filter(py: Python, log_filter_directive: Option<String>) -> PyResult<()> {
+fn set_logs_filter(py: Python<'_>, log_filter_directive: Option<String>) -> PyResult<()> {
     let log_filter_directive =
         log_filter_directive.or_else(|| log_filters_from_env(py).ok().flatten());
 
@@ -150,7 +155,7 @@ fn user_agent() -> &'static str {
 #[pyfunction]
 #[pyo3(signature = (repo, *, dry_run = true, delete_unused_v1_files = true, prefetch_concurrency = None))]
 fn _upgrade_icechunk_repository(
-    py: Python,
+    py: Python<'_>,
     repo: &PyRepository,
     dry_run: bool,
     delete_unused_v1_files: bool,

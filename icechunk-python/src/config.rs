@@ -1,11 +1,11 @@
 use async_trait::async_trait;
-use chrono::{DateTime, Datelike, TimeDelta, Timelike, Utc};
-use futures::TryStreamExt;
+use chrono::{DateTime, Datelike as _, TimeDelta, Timelike as _, Utc};
+use futures::TryStreamExt as _;
 use icechunk::storage::RetriesSettings;
-use itertools::Itertools;
+use itertools::Itertools as _;
 use pyo3::exceptions::PyValueError;
 use serde::{Deserialize, Serialize};
-use std::hash::{Hash, Hasher};
+use std::hash::{Hash, Hasher as _};
 use std::{
     collections::HashMap,
     fmt::Display,
@@ -31,7 +31,7 @@ use icechunk::{
 };
 use pyo3::{
     Bound, FromPyObject, Py, PyErr, PyResult, Python, pyclass, pymethods,
-    types::{PyAnyMethods, PyModule, PyType},
+    types::{PyAnyMethods as _, PyModule, PyType},
 };
 
 use crate::errors::PyIcechunkStoreError;
@@ -888,7 +888,7 @@ impl PartialEq for PyRepoUpdateRetryConfig {
 
 impl From<RepoUpdateRetryConfig> for PyRepoUpdateRetryConfig {
     fn from(value: RepoUpdateRetryConfig) -> Self {
-        #[allow(clippy::expect_used)]
+        #[expect(clippy::expect_used)]
         Python::attach(|py| Self {
             default: value.default.map(|r| {
                 Py::new(py, Into::<PyStorageRetriesSettings>::into(r))
@@ -1007,17 +1007,17 @@ pub struct PyStorageSettings {
 impl From<storage::Settings> for PyStorageSettings {
     fn from(value: storage::Settings) -> Self {
         Python::attach(|py| Self {
-            #[allow(clippy::expect_used)]
+            #[expect(clippy::expect_used)]
             concurrency: value.concurrency.map(|c| {
                 Py::new(py, Into::<PyStorageConcurrencySettings>::into(c))
                     .expect("Cannot create instance of StorageConcurrencySettings")
             }),
-            #[allow(clippy::expect_used)]
+            #[expect(clippy::expect_used)]
             retries: value.retries.map(|c| {
                 Py::new(py, Into::<PyStorageRetriesSettings>::into(c))
                     .expect("Cannot create instance of StorageRetriesSettings")
             }),
-            #[allow(clippy::expect_used)]
+            #[expect(clippy::expect_used)]
             timeouts: value.timeouts.map(|c| {
                 Py::new(py, Into::<PyStorageTimeoutSettings>::into(c))
                     .expect("Cannot create instance of StorageTimeoutSettings")
@@ -1064,7 +1064,7 @@ impl Eq for PyStorageSettings {}
 impl PyStorageSettings {
     #[pyo3(signature = ( concurrency=None, retries=None, unsafe_use_conditional_create=None, unsafe_use_conditional_update=None, unsafe_use_metadata=None, storage_class=None, metadata_storage_class=None, chunks_storage_class=None, minimum_size_for_multipart_upload=None, timeouts=None))]
     #[new]
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn new(
         concurrency: Option<Py<PyStorageConcurrencySettings>>,
         retries: Option<Py<PyStorageRetriesSettings>>,
@@ -1283,7 +1283,7 @@ impl From<&PyManifestPreloadConfig> for ManifestPreloadConfig {
 
 impl From<ManifestPreloadConfig> for PyManifestPreloadConfig {
     fn from(value: ManifestPreloadConfig) -> Self {
-        #[allow(clippy::expect_used)]
+        #[expect(clippy::expect_used)]
         Python::attach(|py| Self {
             max_total_refs: value.max_total_refs,
             preload_if: value.preload_if.map(|c| {
@@ -1668,7 +1668,7 @@ impl From<&PyManifestConfig> for ManifestConfig {
 
 impl From<ManifestConfig> for PyManifestConfig {
     fn from(value: ManifestConfig) -> Self {
-        #[allow(clippy::expect_used)]
+        #[expect(clippy::expect_used)]
         Python::attach(|py| {
             Self {
             preload: value.preload.map(|c| {
@@ -1766,7 +1766,7 @@ impl TryFrom<&PyRepositoryConfig> for RepositoryConfig {
 
 impl From<RepositoryConfig> for PyRepositoryConfig {
     fn from(value: RepositoryConfig) -> Self {
-        #[allow(clippy::expect_used)]
+        #[expect(clippy::expect_used)]
         Python::attach(|py| Self {
             inline_chunk_threshold_bytes: value.inline_chunk_threshold_bytes,
             get_partial_values_concurrency: value.get_partial_values_concurrency,
@@ -1811,7 +1811,7 @@ impl PyRepositoryConfig {
 
     #[new]
     #[pyo3(signature = (inline_chunk_threshold_bytes = None, get_partial_values_concurrency = None, compression = None, max_concurrent_requests = None, caching = None, storage = None, virtual_chunk_containers = None, manifest = None, repo_update_retries = None, num_updates_per_repo_info_file = None))]
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn new(
         inline_chunk_threshold_bytes: Option<u16>,
         get_partial_values_concurrency: Option<u16>,
@@ -1879,7 +1879,7 @@ impl PyRepositoryConfig {
     }
 
     pub fn __repr__(&self) -> String {
-        #[allow(clippy::expect_used)]
+        #[expect(clippy::expect_used)]
         Python::attach(|py| {
             let comp: String = format_option(self.compression.as_ref().map(|c| {
                 c.call_method0(py, "__repr__")
@@ -1956,9 +1956,9 @@ pub(crate) struct PyStorage(pub Arc<dyn Storage + Send + Sync>);
 /// ----------
 /// inner : Storage
 ///     The storage backend to wrap.
-/// write_latency_ms : int, default 0
+/// `write_latency_ms` : int, default 0
 ///     Delay in milliseconds before each write operation.
-/// read_latency_ms : int, default 0
+/// `read_latency_ms` : int, default 0
 ///     Delay in milliseconds before each read operation.
 ///
 /// Examples
@@ -1970,7 +1970,7 @@ pub(crate) struct PyStorage(pub Arc<dyn Storage + Send + Sync>);
 #[pyclass(name = "LatencyStorage", extends = PyStorage)]
 #[derive(Clone, Debug)]
 pub(crate) struct PyLatencyStorage {
-    latency: Arc<icechunk::storage::latency::LatencyStorage>,
+    latency: Arc<storage::latency::LatencyStorage>,
 }
 
 #[pymethods]
@@ -1982,12 +1982,12 @@ impl PyLatencyStorage {
         write_latency_ms: u64,
         read_latency_ms: u64,
     ) -> (Self, PyStorage) {
-        let latency = Arc::new(icechunk::storage::latency::LatencyStorage::new(
+        let latency = Arc::new(storage::latency::LatencyStorage::new(
             inner.0,
             write_latency_ms,
             read_latency_ms,
         ));
-        let base = PyStorage(latency.clone() as Arc<dyn Storage + Send + Sync>);
+        let base = PyStorage(Arc::clone(&latency) as Arc<dyn Storage + Send + Sync>);
         (Self { latency }, base)
     }
 
@@ -2031,7 +2031,7 @@ impl PyStorage {
         prefix: Option<String>,
         credentials: Option<PyS3Credentials>,
     ) -> PyResult<Self> {
-        let storage = icechunk::storage::new_s3_storage(
+        let storage = storage::new_s3_storage(
             config.into(),
             bucket,
             prefix,
@@ -2054,7 +2054,7 @@ impl PyStorage {
     ) -> PyResult<Self> {
         py.detach(move || {
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
-                let storage = icechunk::storage::new_s3_object_store_storage(
+                let storage = storage::new_s3_object_store_storage(
                     config.into(),
                     bucket,
                     prefix,
@@ -2078,7 +2078,7 @@ impl PyStorage {
         use_weak_consistency: bool,
         credentials: Option<PyS3Credentials>,
     ) -> PyResult<Self> {
-        let storage = icechunk::storage::new_tigris_storage(
+        let storage = storage::new_tigris_storage(
             config.into(),
             bucket,
             prefix,
@@ -2100,7 +2100,7 @@ impl PyStorage {
         account_id: Option<String>,
         credentials: Option<PyS3Credentials>,
     ) -> PyResult<Self> {
-        let storage = icechunk::storage::new_r2_storage(
+        let storage = storage::new_r2_storage(
             config.into(),
             bucket,
             prefix,
@@ -2119,7 +2119,7 @@ impl PyStorage {
     ) -> PyResult<Self> {
         py.detach(move || {
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
-                let storage = icechunk::storage::new_in_memory_storage()
+                let storage = storage::new_in_memory_storage()
                     .await
                     .map_err(PyIcechunkStoreError::StorageError)?;
 
@@ -2136,7 +2136,7 @@ impl PyStorage {
     ) -> PyResult<Self> {
         py.detach(move || {
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
-                let storage = icechunk::storage::new_local_filesystem_storage(&path)
+                let storage = storage::new_local_filesystem_storage(&path)
                     .await
                     .map_err(PyIcechunkStoreError::StorageError)?;
 
@@ -2156,7 +2156,7 @@ impl PyStorage {
         config: Option<HashMap<String, String>>,
     ) -> PyResult<Self> {
         py.detach(move || {
-            let storage = icechunk::storage::new_gcs_storage(
+            let storage = storage::new_gcs_storage(
                 bucket,
                 prefix,
                 credentials.map(|cred| cred.into()),
@@ -2181,7 +2181,7 @@ impl PyStorage {
     ) -> PyResult<Self> {
         py.detach(move || {
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
-                let storage = icechunk::storage::new_azure_blob_storage(
+                let storage = storage::new_azure_blob_storage(
                     account,
                     container,
                     Some(prefix),
@@ -2206,7 +2206,7 @@ impl PyStorage {
     ) -> PyResult<Self> {
         py.detach(move || {
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
-                let storage = icechunk::storage::new_http_storage(base_url, config)
+                let storage = storage::new_http_storage(base_url, config)
                     .map_err(PyIcechunkStoreError::StorageError)?;
 
                 Ok(PyStorage(storage))
@@ -2222,7 +2222,7 @@ impl PyStorage {
     ) -> PyResult<Self> {
         py.detach(move || {
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
-                let storage = icechunk::storage::new_redirect_storage(base_url)
+                let storage = storage::new_redirect_storage(base_url)
                     .map_err(PyIcechunkStoreError::StorageError)?;
 
                 Ok(PyStorage(storage))

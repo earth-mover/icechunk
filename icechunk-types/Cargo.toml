@@ -1,0 +1,24 @@
+[package]
+name = "icechunk-types"
+version = "2.0.0-alpha.4"
+description = "Shared foundational types for icechunk"
+readme = "../README.md"
+repository = "https://github.com/earth-mover/icechunk"
+homepage = "https://icechunk.io"
+license = "Apache-2.0"
+keywords = ["zarr", "xarray", "database"]
+categories = ["database", "science", "science::geo"]
+authors = ["Earthmover PBC"]
+edition.workspace = true
+publish = true
+rust-version.workspace = true
+
+[dependencies]
+serde = { version = "1.0.228", features = ["derive"] }
+serde_with = { version = "3.18.0" }
+thiserror = "2.0.18"
+tracing-error = "0.2.1"
+typed-path = "0.12.3"
+
+[lints]
+workspace = true

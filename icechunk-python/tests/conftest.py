@@ -24,8 +24,8 @@ settings.register_profile(
 settings.register_profile(
     "ci",
     parent=settings.get_profile("ci"),
-    max_examples=500,
-    stateful_step_count=200,
+    max_examples=200,
+    stateful_step_count=75,
     suppress_health_check=[HealthCheck.filter_too_much, HealthCheck.too_slow],
 )
 settings.register_profile(

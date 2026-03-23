@@ -1,0 +1,50 @@
+[package]
+name = "icechunk-s3"
+version = "2.0.0-alpha.4"
+description = "Native AWS S3 storage backend for icechunk"
+readme = "../README.md"
+repository = "https://github.com/earth-mover/icechunk"
+homepage = "https://icechunk.io"
+license = "Apache-2.0"
+keywords = ["zarr", "xarray", "database"]
+categories = ["database", "science", "science::geo"]
+authors = ["Earthmover PBC"]
+edition.workspace = true
+publish = true
+rust-version.workspace = true
+
+[dependencies]
+icechunk-storage = { path = "../icechunk-storage", version = "2.0.0-alpha.4" }
+icechunk-types = { path = "../icechunk-types", version = "2.0.0-alpha.4" }
+
+async-trait = "0.1.89"
+aws-config = "1.8.15"
+aws-credential-types = "1.2.14"
+aws-sdk-s3 = "1.127.0"
+aws-smithy-runtime = "1.10.3"
+aws-smithy-types-convert = { version = "0.60.14", features = [
+  "convert-chrono",
+  "convert-streams",
+] }
+bytes = { version = "1.11.1", features = ["serde"] }
+chrono = { version = "0.4.44", features = ["serde"] }
+futures = "0.3.32"
+serde = { version = "1.0.228", features = ["derive", "rc"] }
+tokio = { version = "1.50.0", features = ["sync"] }
+tokio-util = { version = "0.7.18", features = ["io-util"] }
+tracing = "0.1.44"
+typed-path = "0.12.3"
+typetag = "0.2.21"
+
+[dev-dependencies]
+icechunk-macros = { path = "../icechunk-macros", version = "2.0.0-alpha.4" }
+
+serde_json = "1.0.149"
+test-log = { version = "0.2.19", default-features = false, features = [
+  "trace",
+  "color",
+  "unstable",
+] }
+
+[lints]
+workspace = true

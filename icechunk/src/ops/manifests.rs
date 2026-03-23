@@ -37,7 +37,7 @@ pub async fn rewrite_manifests(
     let mut session = repository
         .writable_session(branch)
         .await
-        .map_err(|e| ManifestOpsError::ManifestRewriteError(Box::new(e.into())))?;
+        .map_err(|e| ManifestOpsError::ManifestRewriteError(Box::new(e.inject())))?;
 
     let mut builder = session
         .commit(message)

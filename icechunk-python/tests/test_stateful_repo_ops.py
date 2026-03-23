@@ -873,24 +873,33 @@ class VersionControlStateMachine(RuleBasedStateMachine):
     def _draw_older_than(self, data: st.DataObject) -> datetime.datetime:
         # Draw cutoffs from storage-level created_at (not written_at/flushed_at)
         # because that is what Rust GC compares against.
-        #
-        # The +10ms offset must be large enough to land past both the snapshot
-        # and transaction log writes for the same commit. These are written
-        # concurrently (session.rs) and get slightly different
-        # created_at timestamps. If the cutoff lands between them, GC deletes
-        # one file but not the other, breaking check_file_invariants.
-        # 10ms seems to be safely past this gap, but does not accidentally grab
-        # other commits. See: https://github.com/earth-mover/icechunk/pull/1846
         assert self.storage is not None
-        created_at_times: list[datetime.datetime] = sorted(
-            obj.created_at
+        created_at_snapshots: list[datetime.datetime] = {
+            obj.key: obj.created_at
             for obj in self.storage.list_objects_metadata(prefix="snapshots")
-        )
+        }
+        created_at_txs: list[datetime.datetime] = {
+            obj.key: obj.created_at
+            for obj in self.storage.list_objects_metadata(prefix="transactions")
+        }
+        created_at_times = sorted(
+            # These are written concurrently (session.rs) and get slightly different
+            # created_at timestamps. Take the max so we delete both.
+            max(
+                created_at_snapshots[key],
+                created_at_txs.get(
+                    key, datetime.datetime(2000, 1, 1, tzinfo=datetime.UTC)
+                ),
+            )
+            for key in created_at_snapshots
+        )[::-1]  # reverse to maximize chances of GCing more objects
+        # The order here is important; again we prioritize GCing more objects first
         result: datetime.datetime = data.draw(
             st.one_of(
-                st.just(max(created_at_times) + datetime.timedelta(seconds=1)),
+                st.just(max(created_at_times) + datetime.timedelta(days=1)),
+                # Add 1μs to ensure we delete both the tx log & snapshot
                 st.sampled_from(created_at_times).map(
-                    lambda time: time + datetime.timedelta(milliseconds=10)
+                    lambda time: time + datetime.timedelta(microseconds=1)
                 ),
                 st.just(datetime.datetime(2000, 1, 1, tzinfo=datetime.UTC)),
             )
@@ -1131,7 +1140,6 @@ class VersionControlStateMachine(RuleBasedStateMachine):
             assert set(snapshots) - set({INITIAL_SNAPSHOT}) == set(transactions)
         else:
             assert set(snapshots) == set(transactions)
-            assert len(snapshots) == len(transactions)
 
         if self.model.spec_version >= 2:
             ops = list(self.repo.ops_log())

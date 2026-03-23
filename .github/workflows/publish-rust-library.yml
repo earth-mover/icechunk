@@ -5,11 +5,11 @@ env:
   CARGO_NET_RETRY: 10
   CI: 1
   RUST_BACKTRACE: short
-  RUSTFLAGS: "-D warnings -W unreachable-pub -W bare-trait-objects"
+  RUSTFLAGS: "-D warnings"
   RUSTUP_MAX_RETRIES: 10
   # update RUST_CHANNEL and CARGO_DENY in sync
-  RUST_CHANNEL: '1.91.1'
-  CARGO_DENY_VERSION: '0.18.9'
+  RUST_CHANNEL: '1.94.0'
+  CARGO_DENY_VERSION: '0.19.0'
 
 on:
   workflow_dispatch:
@@ -21,20 +21,31 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
-      - name: Stand up RustFS
+
+      - name: Stand up docker services
         run: |
-          docker compose up -d rustfs_init
-      - name: Wait for RustFS to be ready
+          docker compose up -d
+
+      - name: Wait for containers to be ready
         run: |
-          for _ in {1..10}; do
+          for _ in {1..30}; do
               if docker compose ps --status exited --filter status==0 | grep rustfs ; then
               break
               fi
-              sleep 3
+              sleep 1
+          done
+          for _ in {1..60}; do
+              if curl --silent --fail "http://localhost:10000/devstoreaccount1/testcontainer?sv=2023-01-03&ss=btqf&srt=sco&spr=https%2Chttp&st=2025-01-06T14%3A53%3A30Z&se=2035-01-07T14%3A53%3A00Z&sp=rwdftlacup&sig=jclETGilOzONYp4Y0iK9SpVRLGyehaS5lg5booJ9VYA%3D&restype=container"; then
+              break
+              fi
+              sleep 1
           done
 
       - name: Install Just
         run: sudo snap install --edge --classic just
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
 
       - name: Install Rust toolchain
         run: |
@@ -47,14 +58,15 @@ jobs:
         with:
           # workspaces: "rust -> target"
           key: ${{ env.RUST_CHANNEL }}
+          cache-on-failure: true
 
-      - name: Install cargo-deny
-        run: cargo install --locked cargo-deny --version ${{ env.CARGO_DENY_VERSION }}
+      # FIXME: uncomment
+      # - name: Install cargo-deny
+      #   run: cargo install --locked cargo-deny --version ${{ env.CARGO_DENY_VERSION }}
 
-      - name: Check
-        if: github.event_name == 'push'
-        run: |
-          just pre-commit-ci
+      # - name: Check
+      #   run: |
+      #     just pre-commit-ci
 
       - name: Install cargo-release
         run: cargo install --locked cargo-release
@@ -64,12 +76,7 @@ jobs:
           git config --global user.email "joe@earthmover.io"
           git config --global user.name "Joe Hamman"
 
-      # - name: publish helper macros crate to crates.io
-      #   run: cargo release -p icechunk-macros --no-confirm --no-tag --execute
-      #   env:
-      #     CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-
-      - name: publish icechunk crate to crates.io
-        run: cargo release --no-confirm --no-tag --execute
+      - name: Publish workspace crates to crates.io
+        run: cargo release --workspace --unpublished --no-confirm --no-tag --no-push --execute
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}

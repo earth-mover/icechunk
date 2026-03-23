@@ -25,11 +25,11 @@ dependencies = ["zarr>=3.1.0"]
 
 [dependency-groups]
 dev = [
-    { include-group = "test" },
-    "mypy",
-    "ruff==0.15.3",
-    "maturin>=1.7,<2.0",
-    "maturin-import-hook>=0.3.0",
+  { include-group = "test" },
+  "mypy",
+  "ruff==0.15.3",
+  "maturin>=1.7,<2.0",
+  "maturin-import-hook>=0.3.0",
 ]
 test = [
   "boto3",
@@ -43,13 +43,14 @@ test = [
   "dask>=2025.2.0",
   "distributed>=2025.2.0",
   "xarray>=2025.07.1",
-  "hypothesis",
+  "hypothesis @ git+https://github.com/ianhi/hypothesis.git@flaky-feedback#subdirectory=hypothesis-python",
   "pandas-stubs",
   "boto3-stubs[s3]",
   "termcolor",
   "pooch",
   "netcdf4",
   "matplotlib",
+  "rich",
 ]
 benchmark = [
   "pytest-benchmark[histogram]",
@@ -118,7 +119,8 @@ log_cli_level = "INFO"
 xfail_strict = true
 addopts = ["-ra", "--strict-config", "--strict-markers", "-n", "auto"]
 markers = [
-  "gpu", # need this to run the zarr tests
+  "gpu",        # need this to run the zarr tests
+  "hypothesis", # auto-applied by hypothesis to @given tests
 ]
 filterwarnings = [
   "error",
@@ -198,7 +200,7 @@ cairo = ">=1.18.4,<2"
 
 [tool.pixi.feature.build.dependencies]
 python = ">=3.11,<3.14"
-rust = "~=1.92.0"
+rust = "~=1.94.0"
 just = ">=1.46.0,<2"
 compilers = ">=1.11.0,<2"
 uv = ">=0.10.4,<0.11"
@@ -210,5 +212,10 @@ netcdf4 = ">=1.7.4,<2"
 cargo-nextest = ">=0.9.106,<0.10"
 
 [tool.pixi.environments]
-default = { features = ["build", "dev", "docs", "test"], solve-group = "default" }
+default = { features = [
+  "build",
+  "dev",
+  "docs",
+  "test",
+], solve-group = "default" }
 benchmark = { features = ["benchmark"], solve-group = "default" }

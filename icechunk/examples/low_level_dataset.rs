@@ -9,7 +9,7 @@ use icechunk::{
     session::{Session, SessionError},
     storage::new_in_memory_storage,
 };
-use itertools::Itertools;
+use itertools::Itertools as _;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

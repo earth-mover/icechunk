@@ -1,6 +1,5 @@
 //! Version info, branches, and tags for a repository.
 
-use err_into::ErrorInto;
 use itertools::Itertools as _;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -9,16 +8,17 @@ use std::{
 };
 use tracing::trace;
 
-use crate::{config::RepositoryConfig, format::snapshot::SnapshotProperties, refs::Ref};
-
-use super::{
+use crate::{
     IcechunkFormatError, IcechunkFormatErrorKind, IcechunkResult, SnapshotId,
-    flatbuffers::generated, format_constants::SpecVersionBin, lookup_index_by_key,
-    snapshot::SnapshotInfo,
+    flatbuffers::generated,
+    format_constants::SpecVersionBin,
+    lookup_index_by_key,
+    snapshot::{SnapshotInfo, SnapshotProperties},
 };
 
 use chrono::{DateTime, Utc};
-use flatbuffers::{VerifierOptions, WIPOffset};
+use flatbuffers::{UnionWIPOffset, VerifierOptions, WIPOffset};
+use icechunk_types::ICResultExt as _;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RepoAvailability {
@@ -58,11 +58,14 @@ impl TryFrom<generated::RepoStatus<'_>> for RepoStatus {
     type Error = IcechunkFormatError;
 
     fn try_from(fb_status: generated::RepoStatus<'_>) -> Result<Self, Self::Error> {
-        let ts: i64 = fb_status.set_at().try_into().map_err(|_| {
-            IcechunkFormatError::from(IcechunkFormatErrorKind::InvalidTimestamp)
-        })?;
+        let ts: i64 = fb_status
+            .set_at()
+            .try_into()
+            .map_err(|_| IcechunkFormatErrorKind::InvalidTimestamp)
+            .capture()?;
         let set_at = DateTime::from_timestamp_micros(ts)
-            .ok_or_else(|| IcechunkFormatErrorKind::InvalidTimestamp)?;
+            .ok_or(IcechunkFormatErrorKind::InvalidTimestamp)
+            .capture()?;
         Ok(RepoStatus {
             availability: fb_status.availability().into(),
             set_at,
@@ -74,7 +77,7 @@ impl TryFrom<generated::RepoStatus<'_>> for RepoStatus {
 }
 
 impl RepoStatus {
-    pub(crate) fn error_msg(&self) -> String {
+    pub fn error_msg(&self) -> String {
         format!(
             "Repo status is {0:?}, set at {1}, reason: {2:?}",
             self.availability, self.set_at, self.limited_availability_reason
@@ -186,7 +189,7 @@ pub struct UpdateInfo<I> {
 type UpdateTuple<'a> = IcechunkResult<(UpdateType, DateTime<Utc>, Option<&'a str>)>;
 
 impl RepoInfo {
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn new<
         'a,
         I: IntoIterator<Item = IcechunkResult<(UpdateType, DateTime<Utc>, Option<&'a str>)>>,
@@ -232,7 +235,7 @@ impl RepoInfo {
         )
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn from_parts<
         'a,
         I: IntoIterator<Item = IcechunkResult<(UpdateType, DateTime<Utc>, Option<&'a str>)>>,
@@ -272,7 +275,7 @@ impl RepoInfo {
         let branches = sorted_branches
             .into_iter()
             .map(|(name, offset)| {
-                if name == Ref::DEFAULT_BRANCH {
+                if name == icechunk_types::DEFAULT_BRANCH {
                     main_found = true;
                 }
                 let args = generated::RefArgs {
@@ -284,9 +287,9 @@ impl RepoInfo {
             .collect::<Vec<_>>();
         if !main_found {
             return Err(IcechunkFormatErrorKind::BranchNotFound {
-                branch: Ref::DEFAULT_BRANCH.to_string(),
-            }
-            .into());
+                branch: icechunk_types::DEFAULT_BRANCH.to_string(),
+            })
+            .capture();
         }
 
         let branches = builder.create_vector(&branches);
@@ -311,13 +314,12 @@ impl RepoInfo {
                 let id = generated::ObjectId12::new(id);
                 let parent_offset = match snap.parent_id.as_ref() {
                     Some(parent_id) => {
-                        let index = snapshot_index.get(parent_id).ok_or(
-                            IcechunkFormatError::from(
-                                IcechunkFormatErrorKind::SnapshotIdNotFound {
-                                    snapshot_id: snap.id.clone(),
-                                },
-                            ),
-                        )?;
+                        let index = snapshot_index
+                            .get(parent_id)
+                            .ok_or_else(|| IcechunkFormatErrorKind::SnapshotIdNotFound {
+                                snapshot_id: snap.id.clone(),
+                            })
+                            .capture()?;
                         Ok(*index as i32)
                     }
                     None => Ok::<_, IcechunkFormatError>(-1),
@@ -328,7 +330,8 @@ impl RepoInfo {
                     .iter()
                     .map(|(k, v)| {
                         let name = builder.create_shared_string(k.as_str());
-                        let serialized = flexbuffers::to_vec(v).map_err(Box::new)?;
+                        let serialized =
+                            flexbuffers::to_vec(v).map_err(Box::new).capture()?;
                         let value = builder.create_vector(serialized.as_slice());
                         let item = generated::MetadataItem::create(
                             &mut builder,
@@ -374,7 +377,7 @@ impl RepoInfo {
             .iter()
             .map(|(k, v)| {
                 let name = builder.create_shared_string(k.as_str());
-                let serialized = flexbuffers::to_vec(v).map_err(Box::new)?;
+                let serialized = flexbuffers::to_vec(v).map_err(Box::new).capture()?;
                 let value = builder.create_vector(serialized.as_slice());
                 let item = generated::MetadataItem::create(
                     &mut builder,
@@ -425,7 +428,7 @@ impl RepoInfo {
         Ok(Self { buffer })
     }
 
-    #[allow(clippy::type_complexity)]
+    #[expect(clippy::type_complexity)]
     fn mk_latest_updates<
         'bldr,
         'a,
@@ -474,8 +477,8 @@ impl RepoInfo {
             return Err(IcechunkFormatErrorKind::InvalidUpdateTimestamp {
                 latest_time: *latest_time,
                 new_time: update.update_time,
-            }
-            .into());
+            })
+            .capture();
         }
 
         let new_updates: Box<dyn Iterator<Item = _>> =
@@ -529,18 +532,18 @@ impl RepoInfo {
         Ok((updates, repo_before_updates))
     }
 
-    pub fn initial(
+    pub fn initial<C: Serialize>(
         spec_version: SpecVersionBin,
         snapshot: SnapshotInfo,
         num_updates_per_file: u16,
-        config: Option<&RepositoryConfig>,
+        config: Option<&C>,
         update_time: Option<DateTime<Utc>>,
     ) -> Self {
-        #[allow(clippy::expect_used)]
+        #[expect(clippy::expect_used)]
         let config_bytes =
             config.map(|c| flexbuffers::to_vec(c).expect("Cannot serialize config"));
         // This method is basically constant, so it's OK to unwrap in it
-        #[allow(clippy::expect_used)]
+        #[expect(clippy::expect_used)]
         Self::from_parts(
             spec_version,
             [],
@@ -568,20 +571,21 @@ impl RepoInfo {
         .expect("Cannot generate initial snapshot")
     }
 
-    /// Read the raw config bytes from the FlatBuffer (for pass-through in mutations).
-    pub(crate) fn config_bytes_raw(&self) -> IcechunkResult<Option<Vec<u8>>> {
+    /// Read the raw config bytes from the `FlatBuffer` (for pass-through in mutations).
+    pub fn config_bytes_raw(&self) -> IcechunkResult<Option<Vec<u8>>> {
         Ok(self.root()?.config().map(|v| v.bytes().to_vec()))
     }
 
     /// Read the repository configuration from the repo info.
     /// Returns `None` for repos created before config was embedded,
     /// or for repos using the default configuration.
-    pub fn config(&self) -> IcechunkResult<Option<RepositoryConfig>> {
+    pub fn config<C: serde::de::DeserializeOwned>(&self) -> IcechunkResult<Option<C>> {
         match self.root()?.config() {
             None => Ok(None),
             Some(config_fb) => {
-                let config: RepositoryConfig =
-                    flexbuffers::from_slice(config_fb.bytes()).map_err(Box::new)?;
+                let config: C = flexbuffers::from_slice(config_fb.bytes())
+                    .map_err(Box::new)
+                    .capture()?;
                 Ok(Some(config))
             }
         }
@@ -594,8 +598,9 @@ impl RepoInfo {
             .iter()
             .map(|item| {
                 let key = item.name().to_string();
-                let value =
-                    flexbuffers::from_slice(item.value().bytes()).map_err(Box::new)?;
+                let value = flexbuffers::from_slice(item.value().bytes())
+                    .map_err(Box::new)
+                    .capture()?;
                 Ok((key, value))
             })
             .try_collect()
@@ -662,7 +667,7 @@ impl RepoInfo {
         Ok(root.snapshots().iter().map(move |snap| mk_snapshot_info(&root, &snap)))
     }
 
-    /// Doesn't check the validity of flag_id
+    /// Doesn't check the validity of `flag_id`
     pub fn update_feature_flag(
         &self,
         spec_version: SpecVersionBin,
@@ -735,7 +740,7 @@ impl RepoInfo {
         )
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn add_snapshot(
         &self,
         spec_version: SpecVersionBin,
@@ -748,11 +753,10 @@ impl RepoInfo {
     ) -> IcechunkResult<Self> {
         let mut snapshots: Vec<_> = self.all_snapshots()?.try_collect()?;
         let new_index = match snapshots.binary_search_by_key(&&snap.id, |snap| &snap.id) {
-            Ok(_) => Err(IcechunkFormatError::from(
-                IcechunkFormatErrorKind::DuplicateSnapshotId {
-                    snapshot_id: snap.id.clone(),
-                },
-            )),
+            Ok(_) => Err(IcechunkFormatErrorKind::DuplicateSnapshotId {
+                snapshot_id: snap.id.clone(),
+            })
+            .capture(),
             Err(idx) => Ok(idx),
         }?;
 
@@ -806,8 +810,8 @@ impl RepoInfo {
             return Err(IcechunkFormatErrorKind::BranchAlreadyExists {
                 branch: name.to_string(),
                 snapshot_id,
-            }
-            .into());
+            })
+            .capture();
         }
 
         match self.resolve_snapshot_index(snap)? {
@@ -841,8 +845,8 @@ impl RepoInfo {
             }
             None => Err(IcechunkFormatErrorKind::SnapshotIdNotFound {
                 snapshot_id: snap.clone(),
-            }
-            .into()),
+            })
+            .capture(),
         }
     }
 
@@ -887,8 +891,8 @@ impl RepoInfo {
                 kind: IcechunkFormatErrorKind::BranchNotFound { .. },
                 ..
             }) => {
-                Err(IcechunkFormatErrorKind::BranchNotFound { branch: name.to_string() }
-                    .into())
+                Err(IcechunkFormatErrorKind::BranchNotFound { branch: name.to_string() })
+                    .capture()
             }
             Err(err) => Err(err),
         }
@@ -935,8 +939,8 @@ impl RepoInfo {
             }
             None => Err(IcechunkFormatErrorKind::SnapshotIdNotFound {
                 snapshot_id: new_snap.clone(),
-            }
-            .into()),
+            })
+            .capture(),
         }
     }
 
@@ -951,14 +955,14 @@ impl RepoInfo {
         if self.resolve_tag(name).is_ok() {
             return Err(IcechunkFormatErrorKind::TagAlreadyExists {
                 tag: name.to_string(),
-            }
-            .into());
+            })
+            .capture();
         }
         if self.tag_was_deleted(name)? {
             return Err(IcechunkFormatErrorKind::TagPreviouslyDeleted {
                 tag: name.to_string(),
-            }
-            .into());
+            })
+            .capture();
         }
 
         match self.resolve_snapshot_index(snap)? {
@@ -992,8 +996,8 @@ impl RepoInfo {
             }
             None => Err(IcechunkFormatErrorKind::SnapshotIdNotFound {
                 snapshot_id: snap.clone(),
-            }
-            .into()),
+            })
+            .capture(),
         }
     }
 
@@ -1042,9 +1046,8 @@ impl RepoInfo {
             Err(IcechunkFormatError {
                 kind: IcechunkFormatErrorKind::TagNotFound { .. },
                 ..
-            }) => {
-                Err(IcechunkFormatErrorKind::TagNotFound { tag: name.to_string() }.into())
-            }
+            }) => Err(IcechunkFormatErrorKind::TagNotFound { tag: name.to_string() })
+                .capture(),
             Err(err) => Err(err),
         }
     }
@@ -1079,15 +1082,15 @@ impl RepoInfo {
         )
     }
 
-    /// Update the embedded configuration and record a ConfigChangedUpdate in the op log.
-    pub fn set_config(
+    /// Update the embedded configuration and record a `ConfigChangedUpdate` in the op log.
+    pub fn set_config<C: Serialize>(
         &self,
         spec_version: SpecVersionBin,
-        config: &RepositoryConfig,
+        config: &C,
         previous_file: &str,
         num_updates_per_file: u16,
     ) -> IcechunkResult<Self> {
-        let config_bytes = flexbuffers::to_vec(config).map_err(Box::new)?;
+        let config_bytes = flexbuffers::to_vec(config).map_err(Box::new).capture()?;
         let snaps: Vec<_> = self.all_snapshots()?.try_collect()?;
         Self::from_parts(
             spec_version,
@@ -1144,10 +1147,11 @@ impl RepoInfo {
     }
 
     pub fn from_buffer(buffer: Vec<u8>) -> IcechunkResult<RepoInfo> {
-        let _ = flatbuffers::root_with_opts::<generated::Repo>(
+        let _ = flatbuffers::root_with_opts::<generated::Repo<'_>>(
             &ROOT_OPTIONS,
             buffer.as_slice(),
-        )?;
+        )
+        .capture()?;
         Ok(RepoInfo { buffer })
     }
 
@@ -1156,7 +1160,7 @@ impl RepoInfo {
     }
 
     fn root(&self) -> IcechunkResult<generated::Repo<'_>> {
-        Ok(flatbuffers::root::<generated::Repo>(&self.buffer)?)
+        flatbuffers::root::<generated::Repo<'_>>(&self.buffer).capture()
     }
 
     pub fn tag_names(&self) -> IcechunkResult<impl Iterator<Item = &str>> {
@@ -1190,7 +1194,8 @@ impl RepoInfo {
                 let index = r.snapshot_index();
                 SnapshotId::new(root.snapshots().get(index as usize).id().0)
             })
-            .ok_or(IcechunkFormatErrorKind::TagNotFound { tag: name.to_string() })?;
+            .ok_or_else(|| IcechunkFormatErrorKind::TagNotFound { tag: name.to_string() })
+            .capture()?;
 
         Ok(res)
     }
@@ -1210,9 +1215,10 @@ impl RepoInfo {
                 let index = r.snapshot_index();
                 SnapshotId::new(root.snapshots().get(index as usize).id().0)
             })
-            .ok_or(IcechunkFormatErrorKind::BranchNotFound {
+            .ok_or_else(|| IcechunkFormatErrorKind::BranchNotFound {
                 branch: name.to_string(),
-            })?;
+            })
+            .capture()?;
 
         Ok(res)
     }
@@ -1224,7 +1230,7 @@ impl RepoInfo {
                 found: raw,
                 max_supported: SpecVersionBin::current() as u8,
             })
-            .err_into()
+            .capture()
     }
 
     pub fn latest_updates(
@@ -1248,7 +1254,7 @@ impl RepoInfo {
         &self,
         update: &generated::Update<'_>,
     ) -> IcechunkResult<UpdateType> {
-        #[allow(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used)]
         match update.update_type_type() {
             generated::UpdateType::RepoInitializedUpdate => {
                 Ok(UpdateType::RepoInitializedUpdate)
@@ -1258,22 +1264,20 @@ impl RepoInfo {
                 let from_raw = up.from_version();
                 let to_raw = up.to_version();
                 Ok(UpdateType::RepoMigratedUpdate {
-                    from_version: from_raw.try_into().map_err(|_| {
-                        IcechunkFormatError::from(
-                            IcechunkFormatErrorKind::InvalidSpecVersion {
-                                found: from_raw,
-                                max_supported: SpecVersionBin::current() as u8,
-                            },
-                        )
-                    })?,
-                    to_version: to_raw.try_into().map_err(|_| {
-                        IcechunkFormatError::from(
-                            IcechunkFormatErrorKind::InvalidSpecVersion {
-                                found: to_raw,
-                                max_supported: SpecVersionBin::current() as u8,
-                            },
-                        )
-                    })?,
+                    from_version: from_raw
+                        .try_into()
+                        .map_err(|_| IcechunkFormatErrorKind::InvalidSpecVersion {
+                            found: from_raw,
+                            max_supported: SpecVersionBin::current() as u8,
+                        })
+                        .capture()?,
+                    to_version: to_raw
+                        .try_into()
+                        .map_err(|_| IcechunkFormatErrorKind::InvalidSpecVersion {
+                            found: to_raw,
+                            max_supported: SpecVersionBin::current() as u8,
+                        })
+                        .capture()?,
                 })
             }
             generated::UpdateType::RepoStatusChangedUpdate => {
@@ -1361,8 +1365,8 @@ impl RepoInfo {
                     field_type: Cow::Borrowed("UpdateType"),
                     error_trace: Default::default(),
                 },
-            )
-            .into()),
+            ))
+            .capture(),
         }
     }
 
@@ -1392,14 +1396,14 @@ impl RepoInfo {
         } else {
             Err(IcechunkFormatErrorKind::SnapshotIdNotFound {
                 snapshot_id: snapshot.clone(),
-            }
-            .into())
+            })
+            .capture()
         }
     }
 
     pub fn find_snapshot(&self, id: &SnapshotId) -> IcechunkResult<SnapshotInfo> {
         let mut anc = self.ancestry(id)?;
-        #[allow(clippy::panic)]
+        #[expect(clippy::panic)]
         match anc.next() {
             Some(snap) => snap,
             // It's OK to panic here because ancestry already found the snapshot, and
@@ -1428,13 +1432,10 @@ fn resolve_ref_iter<'a>(
         .map(|(name, id)| {
             let idx = sorted_snapshots
                 .binary_search_by_key(&&id.0, |snap| &snap.id.0)
-                .map_err(|_| {
-                    IcechunkFormatError::from(
-                        IcechunkFormatErrorKind::SnapshotIdNotFound {
-                            snapshot_id: id.clone(),
-                        },
-                    )
-                })? as u32;
+                .map_err(|_| IcechunkFormatErrorKind::SnapshotIdNotFound {
+                    snapshot_id: id.clone(),
+                })
+                .capture()? as u32;
             Ok::<_, IcechunkFormatError>((name, idx))
         })
         .try_collect()?;
@@ -1443,15 +1444,15 @@ fn resolve_ref_iter<'a>(
 }
 
 fn timestamp_to_timestamp(ts: u64) -> IcechunkResult<DateTime<Utc>> {
-    let ts: i64 = ts.try_into().map_err(|_| {
-        IcechunkFormatError::from(IcechunkFormatErrorKind::InvalidTimestamp)
-    })?;
+    let ts: i64 =
+        ts.try_into().map_err(|_| IcechunkFormatErrorKind::InvalidTimestamp).capture()?;
     DateTime::from_timestamp_micros(ts)
-        .ok_or_else(|| IcechunkFormatErrorKind::InvalidTimestamp.into())
+        .ok_or(IcechunkFormatErrorKind::InvalidTimestamp)
+        .capture()
 }
 
 fn mk_snapshot_info(
-    repo: &generated::Repo,
+    repo: &generated::Repo<'_>,
     snap: &generated::SnapshotInfo<'_>,
 ) -> IcechunkResult<SnapshotInfo> {
     let flushed_at = timestamp_to_timestamp(snap.flushed_at())?;
@@ -1469,7 +1470,8 @@ fn mk_snapshot_info(
                 .map(|item| {
                     let name = item.name().to_string();
                     let value = flexbuffers::from_slice(item.value().bytes())
-                        .map_err(Box::new)?;
+                        .map_err(Box::new)
+                        .capture()?;
                     Ok::<_, IcechunkFormatError>((name, value))
                 })
                 .try_collect()?;
@@ -1490,10 +1492,7 @@ fn mk_snapshot_info(
 fn update_type_to_fb<'bldr>(
     builder: &mut flatbuffers::FlatBufferBuilder<'bldr>,
     update: &UpdateType,
-) -> IcechunkResult<(
-    generated::UpdateType,
-    flatbuffers::WIPOffset<flatbuffers::UnionWIPOffset>,
-)> {
+) -> IcechunkResult<(generated::UpdateType, WIPOffset<UnionWIPOffset>)> {
     match update {
         UpdateType::RepoInitializedUpdate => Ok((
             generated::UpdateType::RepoInitializedUpdate,
@@ -1687,7 +1686,6 @@ fn update_type_to_fb<'bldr>(
 }
 
 #[cfg(test)]
-#[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 mod tests {
 
     use super::*;
@@ -1715,8 +1713,13 @@ mod tests {
             message: "snap 1".to_string(),
             metadata: Default::default(),
         };
-        let repo =
-            RepoInfo::initial(SpecVersionBin::current(), snap1.clone(), 100, None, None);
+        let repo = RepoInfo::initial(
+            SpecVersionBin::current(),
+            snap1.clone(),
+            100,
+            None::<&()>,
+            None,
+        );
         assert_eq!(repo.all_snapshots()?.next().unwrap().unwrap(), snap1);
 
         let id2 = SnapshotId::random();
@@ -1802,8 +1805,13 @@ mod tests {
             message: "snap 1".to_string(),
             metadata: Default::default(),
         };
-        let repo =
-            RepoInfo::initial(SpecVersionBin::current(), snap1.clone(), 100, None, None);
+        let repo = RepoInfo::initial(
+            SpecVersionBin::current(),
+            snap1.clone(),
+            100,
+            None::<&()>,
+            None,
+        );
         let repo = repo.add_branch(SpecVersionBin::current(), "foo", &id1, "foo", 100)?;
         let repo = repo.add_branch(SpecVersionBin::current(), "bar", &id1, "bar", 100)?;
         assert!(matches!(
@@ -1941,7 +1949,7 @@ mod tests {
             SpecVersionBin::current(),
             snap1,
             num_updates_per_file,
-            None,
+            None::<&()>,
             None,
         );
         assert_eq!(repo.latest_updates()?.count(), 1);
@@ -1958,7 +1966,7 @@ mod tests {
                 &id1,
                 (i - 1).to_string().as_str(),
                 num_updates_per_file,
-            )?
+            )?;
         }
 
         assert_eq!(repo.latest_updates()?.count(), n);
@@ -1976,7 +1984,7 @@ mod tests {
                     UpdateType::BranchCreatedUpdate { name: (n - 1 - idx).to_string() }
                 );
                 if idx == 0 {
-                    assert!(file.is_none())
+                    assert!(file.is_none());
                 } else {
                     assert_eq!(file, Some((n - 1 - idx).to_string().as_str()));
                 }
@@ -2039,7 +2047,7 @@ mod tests {
             SpecVersionBin::current(),
             snap1,
             100,
-            None,
+            None::<&()>,
             Some(flushed_at),
         );
 
