@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - "support/**"
+      - "test/zarrs-upstream" # TEMPORARY: remove after testing
   pull_request:
     types: [opened, reopened, synchronize, labeled]
   schedule:
