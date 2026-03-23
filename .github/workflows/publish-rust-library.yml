@@ -8,8 +8,8 @@ env:
   RUSTFLAGS: "-D warnings"
   RUSTUP_MAX_RETRIES: 10
   # update RUST_CHANNEL and CARGO_DENY in sync
-  RUST_CHANNEL: '1.91.1'
-  CARGO_DENY_VERSION: '0.18.9'
+  RUST_CHANNEL: '1.94.0'
+  CARGO_DENY_VERSION: '0.19.0'
 
 on:
   workflow_dispatch:
