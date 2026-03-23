@@ -5,6 +5,8 @@ import pytest
 
 from benchmarks import helpers
 from benchmarks.datasets import (
+    GB_8MB_CHUNKS,
+    GB_128MB_CHUNKS,
     LARGE_1D,
     LARGE_MANIFEST_SHARDED,
     LARGE_MANIFEST_UNSHARDED,
@@ -75,8 +77,8 @@ def large_write_dataset(request) -> BenchmarkWriteDataset:
 
 @pytest.fixture(
     params=[
-        # pytest.param(GB_8MB_CHUNKS, id="gb-8mb"),
-        # pytest.param(GB_128MB_CHUNKS, id="gb-128mb"),
+        pytest.param(GB_8MB_CHUNKS, id="gb-8mb"),
+        pytest.param(GB_128MB_CHUNKS, id="gb-128mb"),
         # pytest.param(ERA5_SINGLE, id="era5-single"),
         # pytest.param(ERA5, id="era5-weatherbench"),
         # pytest.param(ERA5_ARCO, id="era5-arco"),
