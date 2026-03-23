@@ -32,31 +32,17 @@ that enhance performance, collaboration, and safety in a cloud-computing context
 
 The Rust workspace is organized into layered crates:
 
-```
-                  ┌──────────────────┐
-                  │  icechunk-python │
-                  └────────┬─────────┘
-                           │
-                  ┌────────▼─────────┐
-                  │     icechunk     │
-                  └──┬─────┬─────┬───┘
-                     │     │     │
-   ┌─────────────────▼┐   │  ┌──▼──────────────┐
-   │ icechunk-arrow-  │   │  │   icechunk-s3   │
-   │   object-store   │   │  │   (optional)    │
-   └────────┬─────────┘   │  └──┬──────────────┘
-            │              │     │
-   ┌────────▼──────────────▼─────▼──┐
-   │       icechunk-storage         │
-   └──────────────┬─────────────────┘
-                  │
-   ┌──────────────▼─────────────────┐
-   │        icechunk-format         │
-   └──────────────┬─────────────────┘
-                  │
-   ┌──────────────▼─────────────────┐
-   │        icechunk-types          │
-   └────────────────────────────────┘
+```mermaid
+graph TD
+    python[icechunk-python] --> core[icechunk]
+    core --> arrow[icechunk-arrow-object-store]
+    core --> s3[icechunk-s3 *optional*]
+    core --> storage[icechunk-storage]
+    core --> format[icechunk-format]
+    arrow --> storage
+    s3 --> storage
+    storage --> types[icechunk-types]
+    format --> types
 ```
 
 | Crate | Description |
