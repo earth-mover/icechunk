@@ -93,39 +93,91 @@ separators = st.sampled_from(["_", "-", "."])
 def similar_name(
     non_sibling_names: set[str], sibling_names: set[str]
 ) -> st.SearchStrategy[str]:
-    """Strategy that picks a name similar or the same as existing one.
+    """Strategy that picks a name similar to existing ones, for prefix collisions.
 
-    Either an affixed variant of any known name (e.g. "foo" → "foo-bar")
-    or an exact copy of a non-sibling name.
+    Either an affixed variant of a sibling name (e.g. ``"foo"`` → ``"foo-bar"``)
+    or an exact copy of a non-sibling (e.g. cousin) name.
+
+    Parameters
+    ----------
+    non_sibling_names : set[str]
+        Names from elsewhere in the tree (cousins, ancestors, etc.).
+        These may be reused exactly as the generated name.
+    sibling_names : set[str]
+        Names of nodes at the same level as the one being generated.
+        These are used as bases for affixed variants (prefix/suffix collisions).
+
+    Examples
+    --------
+    Given a tree like::
+
+        /
+        ├── alpha/
+        │   ├── x
+        │   └── y
+        └── beta/
+            ├── z
+            └── ?   ← generating a new name here
+
+    ``sibling_names = {"z"}``, ``non_sibling_names = {"alpha", "x", "y", "beta"}``.
+    The strategy might produce ``"z_0"`` (affixed sibling) or ``"x"`` (reused cousin).
+    or ``beta`` or a new random name entirely.
     """
-    all_names = sorted(non_sibling_names | sibling_names)
+    siblings = sorted(sibling_names)
     non_siblings = sorted(non_sibling_names - sibling_names)
 
-    affixed = st.sampled_from(all_names).flatmap(
-        lambda base: st.one_of(
-            separators.flatmap(lambda sep: affix.map(lambda afx: base + sep + afx)),
-            separators.flatmap(lambda sep: affix.map(lambda afx: afx + sep + base)),
+    strategies = []
+    if bool(siblings):
+        # if there are any named siblings we can affix a sibling name
+        # choosing to not affix all names in the tree (e.g. cousin names) because
+        # that doesn't seem likely to bring a bug, and would expand the search space.
+        strategies.append(
+            st.sampled_from(siblings).flatmap(
+                lambda base: st.one_of(
+                    separators.flatmap(
+                        lambda sep: affix.map(lambda afx: base + sep + afx)
+                    ),
+                    separators.flatmap(
+                        lambda sep: affix.map(lambda afx: afx + sep + base)
+                    ),
+                )
+            )
         )
-    )
-    if non_siblings:
-        return st.one_of(affixed, st.sampled_from(non_siblings))
-    return affixed
+    if bool(non_siblings):
+        strategies.append(st.sampled_from(non_siblings))
+    return st.one_of(*strategies)
 
 
 @st.composite
-def unique_sibling_names(draw: st.DrawFn, name_pool: set[str], n: int) -> list[str]:
-    """Draw *n* names unique among themselves, feeding each into the shared pool."""
-    names: set[str] = set()
+def unique_sibling_names(
+    draw: st.DrawFn, existing_names: set[str], num_names: int
+) -> list[str]:
+    """Draw *num_names* unique names, biased toward collisions with existing ones.
 
-    for _ in range(n):
+    Parameters
+    ----------
+    existing_names : set[str]
+        All names already present in the tree. Used to generate
+        similar-looking candidates (affixed siblings, reused cousins).
+    num_names : int
+        Number of unique names to generate.
+
+    Returns
+    -------
+    list[str]
+        The generated names, unique among themselves.
+    """
+    generated_names: set[str] = set()
+
+    from_scratch_name = node_names.filter(lambda name_: name_ not in generated_names)
+    for _ in range(num_names):
         strategy = (
-            st.one_of(node_names, similar_name(name_pool, names))
-            if name_pool
-            else node_names
-        ).filter(lambda name_: name_ not in names)
-        name = draw(strategy)
-        names.add(name)
-    return list(names)
+            st.one_of(from_scratch_name, similar_name(existing_names, generated_names))
+            if bool(existing_names) | bool(generated_names)
+            else from_scratch_name
+        )
+        generated_names.add(draw(strategy))
+    return list(generated_names)
 
 
 # ---------------------------------------------------------------------------
@@ -176,16 +228,18 @@ def trees(
     """
 
     def rebuild_with_names(
-        group: GroupNode, name_pool: set[str]
+        group: GroupNode, existing_names: set[str]
     ) -> tuple[GroupNode, set[str]]:
-        new_names = draw(unique_sibling_names(name_pool, len(group.children)))
-        name_pool = name_pool | set(new_names)
+        new_names = draw(
+            unique_sibling_names(existing_names, num_names=len(group.children))
+        )
+        existing_names = existing_names | set(new_names)
         children: dict[str, Node] = {}
         for name, child in zip(new_names, group.children.values(), strict=True):
             if isinstance(child, GroupNode):
-                child, name_pool = rebuild_with_names(child, name_pool)
+                child, existing_names = rebuild_with_names(child, existing_names)
             children[name] = child
-        return GroupNode(children=children), name_pool
+        return GroupNode(children=children), existing_names
 
     # Two-step generation: first draw the tree structure (skeletons uses
     # st.recursive which gives good structural shrinking), then assign real
