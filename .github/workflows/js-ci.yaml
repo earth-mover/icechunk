@@ -53,9 +53,6 @@ jobs:
           - host: ubuntu-latest
             target: wasm32-wasip1-threads
             build: yarn build --target wasm32-wasip1-threads
-            # Pin Rust for WASI — 1.94.0 broke std::thread::spawn on
-            # wasm32-wasip1-threads, breaking the napi-rs WASI thread polyfill
-            rust: "1.93.1"
             setup: |
               sudo apt-get update
               sudo apt-get install -y --no-install-recommends clang llvm wasi-libc libc++-dev
