@@ -2735,7 +2735,7 @@ class AzureCredentials:
         def __new__(
             cls,
             pickled_function: bytes,
-            current: _AnyAzureRefreshableCredential | None = None,
+            current: AzureRefreshableCredential | None = None,
         ) -> AzureCredentials.Refreshable: ...
 
 _AnyAzureCredential = (
