@@ -235,7 +235,7 @@ def trees(
         )
         existing_names = existing_names | set(new_names)
         children: dict[str, Node] = {}
-        for name, child in zip(new_names, group.children.values(), strict=True):
+        for name, child in zip(new_names, group.children.values(), strict=False):
             if isinstance(child, GroupNode):
                 child, existing_names = rebuild_with_names(child, existing_names)
             children[name] = child
