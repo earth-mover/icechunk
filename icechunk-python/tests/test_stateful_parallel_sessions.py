@@ -1,5 +1,5 @@
-import datetime
 import pickle
+import tempfile
 from collections.abc import Callable
 from typing import Any
 
@@ -16,8 +16,6 @@ import zarr
 import zarr.testing.strategies as zrst
 from zarr.abc.store import Store
 from zarr.testing.stateful import SyncStoreWrapper
-
-zarr.config.set({"array.write_empty_chunks": True})
 
 
 class SerialParallelStateMachine(RuleBasedStateMachine):
@@ -41,9 +39,7 @@ class SerialParallelStateMachine(RuleBasedStateMachine):
         log_filter = "warn,icechunk::storage::object_store=error"
         ic.set_logs_filter(log_filter)
 
-        self.storage = ic.local_filesystem_storage(
-            f"tmp/icechunk_parallel_stateful/{str(datetime.datetime.now()).split(' ')[-1]}"
-        )
+        self.storage = ic.local_filesystem_storage(tempfile.mkdtemp())
         self.repo = ic.Repository.create(self.storage)
         self.repo.create_branch("parallel", self.repo.lookup_branch("main"))
 
@@ -82,16 +78,17 @@ class SerialParallelStateMachine(RuleBasedStateMachine):
         array, chunks = array_and_chunks
         fill_value = data.draw(npst.from_dtype(array.dtype))
         note(f"Adding array:  path='{name}'  shape={array.shape}  chunks={chunks}")
-        for store in [self.serial.store, self.parallel.store]:
-            zarr.array(
-                array,
-                chunks=chunks,
-                path=name,
-                store=store,
-                fill_value=fill_value,
-                zarr_format=3,
-                dimension_names=None,
-            )
+        with zarr.config.set({"array.write_empty_chunks": True}):
+            for store in [self.serial.store, self.parallel.store]:
+                zarr.array(
+                    array,
+                    chunks=chunks,
+                    path=name,
+                    store=store,
+                    fill_value=fill_value,
+                    zarr_format=3,
+                    dimension_names=None,
+                )
         self.all_arrays.add(name)
 
     @precondition(lambda self: bool(self.all_arrays))
@@ -148,28 +145,29 @@ class SerialParallelStateMachine(RuleBasedStateMachine):
         modified by a single session to avoid overlapping writes that would
         cause merge conflicts.
         """
+        # Track ownership and reject conflicts via assume()
         if self.has_forks():
-            candidates = [
-                ("fork1", self.fork1),
-                ("parallel", self.parallel),
-                ("fork2", self.fork2),
-            ]
-            name, session = data.draw(st.sampled_from(candidates))
+            candidates = {
+                "fork1": self.fork1,
+                "parallel": self.parallel,
+                "fork2": self.fork2,
+            }
+            for array_and_path in chunks:
+                if name := self.chunk_owners.get(array_and_path):
+                    session = candidates[name]
+                else:
+                    name, session = data.draw(st.sampled_from(tuple(candidates.items())))
+                    self.chunk_owners[array_and_path] = name
+                note(f"executing on {name}")
+                assert session is not None
+                func(session.store)
+
         else:
             name, session = "parallel", self.parallel
 
-        note(f"executing on {name}")
-        assert session is not None
-
-        # Track ownership and reject conflicts via assume()
-        if self.has_forks():
-            for coord in chunks:
-                owner = self.chunk_owners.get(coord)
-                if owner is not None and owner != name:
-                    assume(False)
-                self.chunk_owners[coord] = name
-
-        func(session.store)
+            note(f"executing on {name}")
+            assert session is not None
+            func(session.store)
 
     @precondition(lambda self: not self.has_forks())
     @rule()
@@ -182,6 +180,7 @@ class SerialParallelStateMachine(RuleBasedStateMachine):
     @precondition(lambda self: not self.has_forks())
     @rule()
     def fork_threads(self) -> None:
+        # Models multithreading where the same session is broadcast to multiple workers
         note("forking with reference (threads)")
         self.fork1 = self.parallel
         self.fork2 = self.parallel
@@ -218,9 +217,6 @@ class SerialParallelStateMachine(RuleBasedStateMachine):
 
     @invariant()
     def verify_all_arrays(self) -> None:
-        """
-        This cannot be an invariant because we may have state on the forks.
-        """
         if self.has_forks():
             return
         note("verifying all arrays")
