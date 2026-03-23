@@ -330,8 +330,11 @@ def to_icechunk(
     if is_dask_collection(obj):
         # to offer maximum flexibility to the user; we fork here purely for distributed writes.
         fork: ForkSession = session.fork()
-        for array in writer.writer.targets:
-            array._async_array.store_path.store = fork.store
+        writer.writer.targets = [
+            zarr.open_array(fork.store, path=target.path, mode="a")
+            for target in writer.writer.targets
+        ]
+
         # eagerly write dask arrays
         maybe_fork_session = writer.write_lazy(
             chunkmanager_store_kwargs=chunkmanager_store_kwargs,
@@ -342,11 +345,6 @@ def to_icechunk(
                 "Logic bug! Please open at issue at https://github.com/earth-mover/icechunk"
             )
         session.merge(maybe_fork_session)
-    else:
-        if maybe_fork_session is not None:
-            raise RuntimeError(
-                "Unexpected write of dask arrays! Please open at issue at https://github.com/earth-mover/icechunk"
-            )
 
 
 @overload
