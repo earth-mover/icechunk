@@ -1,9 +1,15 @@
 
 [package]
-authors = ["Matt Iannucci <matt@earthmover.io>"]
-edition = "2024"
 name = "icechunk-js"
 version = "0.1.0"
+description = "JavaScript/TypeScript bindings for icechunk"
+repository = "https://github.com/earth-mover/icechunk"
+license = "Apache-2.0"
+keywords = ["zarr", "xarray", "database"]
+categories = ["database", "science", "science::geo"]
+authors = ["Earthmover PBC"]
+edition.workspace = true
+publish = false
 
 [lib]
 crate-type = ["cdylib"]
