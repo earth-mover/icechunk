@@ -146,24 +146,21 @@ class SerialParallelStateMachine(RuleBasedStateMachine):
         cause merge conflicts.
         """
         # Track ownership and reject conflicts via assume()
-        if self.has_forks():
-            candidates = {
-                "fork1": self.fork1,
-                "parallel": self.parallel,
-                "fork2": self.fork2,
-            }
-            for array_and_path in chunks:
+        for array_and_path in chunks:
+            if self.has_forks():
+                candidates = {
+                    "fork1": self.fork1,
+                    "parallel": self.parallel,
+                    "fork2": self.fork2,
+                }
                 if name := self.chunk_owners.get(array_and_path):
                     session = candidates[name]
                 else:
                     name, session = data.draw(st.sampled_from(tuple(candidates.items())))
                     self.chunk_owners[array_and_path] = name
-                note(f"executing on {name}")
-                assert session is not None
-                func(session.store)
 
-        else:
-            name, session = "parallel", self.parallel
+            else:
+                name, session = "parallel", self.parallel
 
             note(f"executing on {name}")
             assert session is not None
