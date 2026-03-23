@@ -15,7 +15,7 @@
 //! | [`ICError::capture`] | bare error kind | new | constructing a fresh error |
 //! | [`.capture()`](ICResultExt::capture) | `Result<T, E>` where `E: Into<Kind>` | new | converting a foreign (non-ICError) result |
 //! | [`.capture_box()`](ICResultExt::capture_box) | `Result<T, E>` where `E: Error` | new | same, when Kind has `From<Box<dyn Error>>` |
-//! | [`.inject()`](ICResultCtxExt::inject) | `Result<T, ICError<E>>` | **preserved** | propagating between ICError kinds |
+//! | [`.inject()`](ICResultCtxExt::inject) | `Result<T, ICError<E>>` | **preserved** | propagating between `ICError` kinds |
 //! | [`ICError::inject`] | `ICError<E>` | **preserved** | same, outside of Result |
 //!
 //! # Examples
@@ -32,7 +32,7 @@
 //! rmp_serde::to_vec(&data).map_err(Box::new).capture()?;  // Kind: From<Box<ConcreteError>>
 //! ```
 //!
-//! **Propagating between ICError kinds** — preserves span trace:
+//! **Propagating between `ICError` kinds** — preserves span trace:
 //! ```ignore
 //! session_fn().inject()?;   // SessionError → RepositoryError
 //! ```
