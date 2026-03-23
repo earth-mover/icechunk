@@ -380,6 +380,7 @@ async fn inspect_manifest(
                 (_, ChunkPayload::Inline(_)) => num_inline += 1,
                 (_, ChunkPayload::Ref(_)) => num_native += 1,
                 (_, ChunkPayload::Virtual(_)) => num_virtual += 1,
+                (_, _) => {}
             }
         }
         arrays.push(ArrayManifestInspect {

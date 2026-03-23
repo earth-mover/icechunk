@@ -31,11 +31,12 @@ use tracing::{Instrument as _, debug, error, instrument, trace};
 use crate::{
     Storage,
     asset_manager::AssetManager,
-    change_set::ChangeSet,
+    change_set::{ChangeSet, transaction_log_from_change_set},
     config::{
         Credentials, DEFAULT_MAX_CONCURRENT_REQUESTS, ManifestPreloadCondition,
         RepositoryConfig,
     },
+    diff::{Diff, DiffBuilder},
     error::ICError,
     feature_flags::{
         CREATE_TAG_FLAG, DELETE_TAG_FLAG, FEATURE_FLAGS, FeatureFlag, MOVE_NODE_FLAG,
@@ -50,7 +51,6 @@ use crate::{
             ManifestFileInfo, NodeData, NodeType, Snapshot, SnapshotInfo,
             SnapshotProperties,
         },
-        transaction_log::{Diff, DiffBuilder, TransactionLog},
     },
     refs::{self, Ref, RefError, RefErrorKind},
     session::{Session, SessionError, SessionErrorKind, SessionResult},
@@ -235,7 +235,7 @@ impl Repository {
             let write_snap = asset_manager_c.write_snapshot(Arc::clone(&new_snapshot));
 
             if spec_version >= SpecVersionBin::V2 {
-                let empty_tx_log = TransactionLog::new(
+                let empty_tx_log = transaction_log_from_change_set(
                     &Snapshot::INITIAL_SNAPSHOT_ID,
                     &ChangeSet::for_edits(),
                 );

@@ -193,7 +193,7 @@ mod tests {
             SpecVersionBin::current(),
             (&initial).try_into().unwrap(),
             100,
-            None,
+            None::<&()>,
             None,
         );
         assert!(feature_flag_enabled(&ri, MOVE_NODE_FLAG).unwrap());

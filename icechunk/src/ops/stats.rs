@@ -137,6 +137,7 @@ fn calculate_manifest_storage(
                 // so count each occurrence since they're actually stored repeatedly across different manifests
                 inlined_bytes += bytes.len() as u64;
             }
+            Ok(_) => {}
             // TODO: don't skip errors
             Err(err) => {
                 tracing::error!(

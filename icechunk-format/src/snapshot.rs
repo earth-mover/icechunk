@@ -13,13 +13,12 @@ use quick_cache::sync::{Cache, GuardResult};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::format::lookup_index_by_key;
-
-use super::{
+use crate::{
     AttributesId, ChunkIndices, IcechunkFormatError, IcechunkFormatErrorKind,
     IcechunkResult, ManifestId, NodeId, Path, SnapshotId,
     flatbuffers::generated,
     format_constants::SpecVersionBin,
+    lookup_index_by_key,
     manifest::{Manifest, ManifestExtents, ManifestRef},
 };
 use icechunk_types::{ICResultExt as _, error::ICResultCtxExt as _};
@@ -893,7 +892,7 @@ fn mk_node_data(
 #[cfg(test)]
 #[expect(unused_qualifications)] // proptest macros generate fully qualified paths
 mod tests {
-    use crate::format::{IcechunkFormatError, ObjectId};
+    use crate::{IcechunkFormatError, ObjectId};
 
     use super::*;
     use crate::{

@@ -362,6 +362,19 @@ impl ManifestVirtualChunkLocationCompressionConfig {
     }
 }
 
+impl From<&ManifestVirtualChunkLocationCompressionConfig>
+    for crate::format::manifest::LocationCompressionConfig
+{
+    fn from(c: &ManifestVirtualChunkLocationCompressionConfig) -> Self {
+        Self {
+            min_num_chunks: c.min_num_chunks(),
+            dictionary_max_training_samples: c.dictionary_max_training_samples(),
+            dictionary_max_size_bytes: c.dictionary_max_size_bytes(),
+            compression_level: c.compression_level(),
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Default)]
 pub struct ManifestConfig {
     #[serde(default)]
@@ -691,28 +704,6 @@ pub enum Credentials {
     Azure(AzureCredentials),
 }
 
-// This macro is used for creating property tests
-// which check that serializing and deserializing
-// an instance of a type T is equivalent to the
-// identity function
-// Given pairs of test names and arbitraries to be used
-// for the tests, e.g., (n1, a1), (n2, a2),... (nx, ax)
-// the tests can be created by doing
-// roundtrip_serialization_tests!(n1 - a1, n2 - a2, .... nx - ax)
-#[macro_export]
-macro_rules! roundtrip_serialization_tests {
-        ($($test_name: ident - $generator: ident), +) => {
-                            $(
-                proptest!{
-        #[icechunk_macros::test]
-                    fn $test_name(elem in $generator()) {
-           let bytes = rmp_serde::to_vec(&elem).unwrap();
-            let roundtrip = rmp_serde::from_slice(&bytes).unwrap();
-            assert_eq!(elem, roundtrip);
-        }})*
-        }
-    }
-
 #[cfg(test)]
 mod tests {
     use crate::{
@@ -721,6 +712,7 @@ mod tests {
         strategies::{repository_config, s3_static_credentials},
         virtual_chunks::VirtualChunkContainer,
     };
+    use icechunk_format::roundtrip_serialization_tests;
 
     use proptest::prelude::*;
 

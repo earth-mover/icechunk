@@ -29,12 +29,15 @@ use tracing::{Instrument as _, Span, debug, info, instrument, trace, warn};
 use crate::{
     RepositoryConfig, Storage,
     asset_manager::AssetManager,
-    change_set::{ArrayData, ChangeSet, ChunkTable, MovedFrom},
+    change_set::{
+        ArrayData, ChangeSet, ChunkTable, MovedFrom, transaction_log_from_change_set,
+    },
     config::{
         ManifestConfig, ManifestSplitDim, ManifestSplitDimCondition,
         ManifestSplittingConfig,
     },
     conflicts::{Conflict, ConflictResolution, ConflictSolver},
+    diff::{Diff, DiffBuilder},
     error::ICError,
     feature_flags::{MOVE_NODE_FLAG, raise_if_feature_flag_disabled},
     format::{
@@ -42,9 +45,9 @@ use crate::{
         IcechunkFormatErrorKind, ManifestId, NodeId, ObjectId, Path, SnapshotId,
         format_constants::SpecVersionBin,
         manifest::{
-            ChunkInfo, ChunkPayload, ChunkRef, Manifest, ManifestExtents, ManifestRef,
-            ManifestSplits, Overlap, VirtualChunkLocation, VirtualChunkRef,
-            VirtualReferenceErrorKind, uniform_manifest_split_edges,
+            ChunkInfo, ChunkPayload, ChunkRef, LocationCompressionConfig, Manifest,
+            ManifestExtents, ManifestRef, ManifestSplits, Overlap, VirtualChunkLocation,
+            VirtualChunkRef, VirtualReferenceErrorKind, uniform_manifest_split_edges,
         },
         repo_info::{RepoInfo, UpdateType},
         snapshot::{
@@ -52,7 +55,7 @@ use crate::{
             NodeType, Snapshot, SnapshotInfo, SnapshotProperties,
             inject_icechunk_metadata,
         },
-        transaction_log::{Diff, DiffBuilder, TransactionLog},
+        transaction_log::TransactionLog,
     },
     refs::{RefError, RefErrorKind, fetch_branch_tip_v1, update_branch},
     repository::{RepositoryError, RepositoryErrorKind, RepositoryResult},
@@ -217,26 +220,6 @@ where
     // Note: I don't think we can distinguish between out of bounds index for the array
     //       and an index that is part of a split that hasn't been written yet.
     enumerate(iter).find(|(_, e)| e.contains(coord.0.as_slice()))
-}
-
-impl ManifestSplits {
-    /// Binary search to locate `ManifestExtents` for a given chunk coordinate.
-    #[inline(always)]
-    pub fn find<'a>(&'a self, coord: &'a ChunkIndices) -> Option<ManifestExtents> {
-        debug_assert_eq!(coord.0.len(), self.0.len());
-        let mut ranges = Vec::with_capacity(self.0.len());
-        for (edges, loc) in self.0.iter().zip(coord.0.iter()) {
-            // Find insertion point for axis chunk index in sorted vector of split edges.
-            let bin = edges.partition_point(|&e| e <= *loc);
-            // detected bin is out of range. This _should_ never happen
-            // note that if loc == 0, then bin = 1
-            if bin == 0 || bin >= edges.len() {
-                return None;
-            }
-            ranges.push(edges[bin - 1]..edges[bin]);
-        }
-        Some(ManifestExtents::from_ranges_iter(ranges))
-    }
 }
 
 pub type RebaseHook =
@@ -630,7 +613,8 @@ impl Session {
     /// Compute an overview of the current session changes
     pub async fn status(&self) -> SessionResult<Diff> {
         // it doesn't really matter what Id we give to the tx log, it's not going to be persisted
-        let tx_log = TransactionLog::new(&SnapshotId::random(), self.change_set());
+        let tx_log =
+            transaction_log_from_change_set(&SnapshotId::random(), self.change_set());
         let from_session = Self::create_readonly_session(
             self.config().clone(),
             self.storage_settings.as_ref().clone(),
@@ -1195,6 +1179,7 @@ impl Session {
                         .inject()
                 })))
             }
+            Some(_) => Ok(None),
             None => Ok(None),
         }
     }
@@ -2346,15 +2331,16 @@ async fn write_manifest_from_stream(
     let mut to = vec![];
     let chunks = aggregate_extents(&mut from, &mut to, chunks, |ci| &ci.coord);
 
-    let compression_config = if asset_manager.spec_version() >= SpecVersionBin::V2 {
-        Some(manifest_config.virtual_chunk_location_compression())
-    } else {
-        None
-    };
+    let compression_config: Option<LocationCompressionConfig> =
+        if asset_manager.spec_version() >= SpecVersionBin::V2 {
+            Some(manifest_config.virtual_chunk_location_compression().into())
+        } else {
+            None
+        };
     let mut all: Vec<ChunkInfo> = chunks.try_collect().await?;
     all.sort_by(|a, b| (&a.node, &a.coord).cmp(&(&b.node, &b.coord)));
     if let Some(new_manifest) =
-        Manifest::from_sorted_vec(&ManifestId::random(), all, compression_config)
+        Manifest::from_sorted_vec(&ManifestId::random(), all, compression_config.as_ref())
             .inject()?
     {
         let new_manifest = Arc::new(new_manifest);
@@ -2924,7 +2910,8 @@ async fn do_flush(
     trace!(transaction_log_id = %new_snapshot.id(), "Creating transaction log");
     let new_snapshot_id = new_snapshot.id();
 
-    let this_tx_log = TransactionLog::new(&new_snapshot_id, flush_data.change_set);
+    let this_tx_log =
+        transaction_log_from_change_set(&new_snapshot_id, flush_data.change_set);
     let new_tx_log = if commit_method == CommitMethod::NewCommit {
         this_tx_log
     } else {
@@ -3827,7 +3814,7 @@ mod tests {
             SpecVersionBin::current(),
             (&initial).try_into()?,
             100,
-            None,
+            None::<&()>,
             None,
         )
         .add_snapshot(

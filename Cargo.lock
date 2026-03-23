@@ -2123,18 +2123,17 @@ dependencies = [
  "async-stream",
  "async-trait",
  "backon",
- "base32",
  "bytes",
  "chrono",
  "clap",
  "criterion",
  "dialoguer",
  "dirs",
- "flatbuffers",
  "flexbuffers",
  "fs_extra",
  "futures",
  "icechunk-arrow-object-store",
+ "icechunk-format",
  "icechunk-macros",
  "icechunk-s3",
  "icechunk-storage",
@@ -2167,7 +2166,6 @@ dependencies = [
  "tracing-error",
  "tracing-samply",
  "tracing-subscriber",
- "typed-path",
  "typetag",
  "url",
  "urlencoding",
@@ -2199,6 +2197,37 @@ dependencies = [
  "tracing",
  "typetag",
  "url",
+]
+
+[[package]]
+name = "icechunk-format"
+version = "2.0.0-alpha.4"
+dependencies = [
+ "base32",
+ "bytes",
+ "chrono",
+ "flatbuffers",
+ "flexbuffers",
+ "futures",
+ "icechunk-macros",
+ "icechunk-types",
+ "itertools 0.14.0",
+ "pretty_assertions",
+ "proptest",
+ "quick_cache",
+ "rand 0.10.0",
+ "rmp-serde",
+ "serde",
+ "serde_bytes",
+ "serde_json",
+ "test-log",
+ "test-strategy",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "zstd",
 ]
 
 [[package]]
@@ -2283,7 +2312,11 @@ dependencies = [
 name = "icechunk-types"
 version = "2.0.0-alpha.4"
 dependencies = [
+ "serde",
+ "serde_with",
+ "thiserror 2.0.18",
  "tracing-error",
+ "typed-path",
 ]
 
 [[package]]

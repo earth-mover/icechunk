@@ -46,7 +46,7 @@ use std::io::Write;
 
 use icechunk_types::ICResultExt as _;
 
-use super::{
+use crate::{
     IcechunkFormatError, IcechunkFormatErrorKind, format_constants::SpecVersionBin,
     manifest::Manifest, repo_info::RepoInfo, snapshot::Snapshot,
     transaction_log::TransactionLog,

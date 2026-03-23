@@ -13,13 +13,13 @@ use futures::{StreamExt as _, TryStreamExt as _};
 use icechunk::{
     Repository,
     config::Credentials,
+    diff::Diff,
     feature_flags::FeatureFlag,
     format::{
         ManifestId, SnapshotId,
         format_constants::SpecVersionBin,
         repo_info::{RepoAvailability, RepoStatus, UpdateType},
         snapshot::{ManifestFileInfo, SnapshotInfo, SnapshotProperties},
-        transaction_log::Diff,
     },
     inspect::{manifest_json, repo_info_json, snapshot_json},
     migrations,

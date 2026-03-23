@@ -39,30 +39,35 @@ The Rust workspace is organized into layered crates:
                            │
                   ┌────────▼─────────┐
                   │     icechunk     │
-                  └───┬──────────┬───┘
-                      │          │
-      ┌───────────────▼──┐  ┌───▼──────────────┐
-      │ icechunk-arrow-  │  │   icechunk-s3    │
-      │   object-store   │  │   (optional)     │
-      └───────────┬──────┘  └───┬──────────────┘
-                  │             │
-              ┌───▼─────────────▼───┐
-              │  icechunk-storage   │
-              └─────────┬───────────┘
-                        │
-              ┌─────────▼───────────┐
-              │   icechunk-types    │
-              └─────────────────────┘
+                  └──┬─────┬─────┬───┘
+                     │     │     │
+   ┌─────────────────▼┐ ┌─▼───────────────┐
+   │ icechunk-arrow-  │ │   icechunk-s3   │
+   │   object-store   │ │   (optional)    │
+   └────────┬─────────┘ └───┬─────────────┘
+            │                │
+   ┌────────▼────────────────▼───┐
+   │     icechunk-storage        │
+   └──────────────┬──────────────┘
+                  │
+   ┌──────────────▼──────────────┐
+   │      icechunk-format        │
+   └──────────────┬──────────────┘
+                  │
+   ┌──────────────▼──────────────┐
+   │      icechunk-types         │
+   └─────────────────────────────┘
 ```
 
 | Crate | Description |
 |-------|-------------|
 | **icechunk-macros** | Procedural macro helpers for tests and internal use |
-| **icechunk-types** | Shared foundational types used across all crates |
+| **icechunk-types** | Shared foundational types (`Path`, `ETag`, `Move`, error wrappers) used across all crates |
+| **icechunk-format** | Binary format types and serialization (snapshots, manifests, transaction logs, repo info) |
 | **icechunk-storage** | Storage trait definitions and common storage utilities |
 | **icechunk-arrow-object-store** | Storage backend using Apache Arrow's `object_store` (in-memory, local, GCS, Azure, etc.) |
 | **icechunk-s3** | Native AWS S3 storage backend (optional feature) |
-| **icechunk** | Core storage engine: format, transactions, version control, repositories |
+| **icechunk** | Core storage engine: transactions, version control, repositories |
 | **icechunk-python** | PyO3 bindings exposing the engine to Python |
 
 ## Icechunk Overview

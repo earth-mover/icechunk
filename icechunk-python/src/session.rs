@@ -669,9 +669,7 @@ impl PySession {
             Some(ChunkPayload::Inline(_)) => Ok(ChunkType::Inline),
             Some(ChunkPayload::Virtual(_)) => Ok(ChunkType::Virtual),
             Some(ChunkPayload::Ref(_)) => Ok(ChunkType::Native),
-            Some(_) => {
-                Err(PyIcechunkStoreError::PyValueError("Invalid Chunk Type".into()))?
-            }
+            Some(_) => Ok(ChunkType::Uninitialized),
         }
     }
 }

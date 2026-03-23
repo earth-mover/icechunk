@@ -948,6 +948,7 @@ async fn get_chunk_size(
             ChunkPayload::Inline(bytes) => bytes.len() as u64,
             ChunkPayload::Virtual(virtual_chunk_ref) => virtual_chunk_ref.length,
             ChunkPayload::Ref(chunk_ref) => chunk_ref.length,
+            _ => 0,
         })
         .unwrap_or(0);
     Ok(size)
@@ -1422,7 +1423,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::roundtrip_serialization_tests;
+    use icechunk_format::roundtrip_serialization_tests;
     use icechunk_macros::tokio_test;
     use pretty_assertions::assert_eq;
     use proptest::prelude::*;

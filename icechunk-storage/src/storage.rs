@@ -84,8 +84,7 @@ pub struct ListInfo<A> {
     pub size_bytes: u64,
 }
 
-#[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Hash, PartialOrd, Ord)]
-pub struct ETag(pub String);
+pub use icechunk_types::ETag;
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Default)]
 pub struct Generation(pub String);
 

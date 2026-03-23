@@ -22,11 +22,10 @@ use format_constants::FileTypeBin;
 use manifest::VirtualReferenceErrorKind;
 use rand::{RngExt as _, rng};
 use serde::{Deserialize, Serialize};
-use serde_with::{TryFromInto, serde_as};
 use thiserror::Error;
-use typed_path::Utf8UnixPathBuf;
 
-use crate::{error::ICError, private};
+use icechunk_types::error::ICError;
+use icechunk_types::sealed;
 
 /// User attributes stored on arrays and groups.
 pub mod attributes;
@@ -56,13 +55,10 @@ pub const TRANSACTION_LOGS_FILE_PATH: &str = "transactions";
 pub const OVERWRITTEN_FILES_PATH: &str = "overwritten";
 pub const V1_REFS_FILE_PATH: &str = "refs";
 
-/// A normalized Zarr path: absolute (starts with `/`) and no trailing slash.
-#[serde_as]
-#[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Serialize, Deserialize)]
-pub struct Path(#[serde_as(as = "TryFromInto<String>")] Utf8UnixPathBuf);
+pub use icechunk_types::{Path, PathError};
 
 /// Marker trait for object ID type tags (sealed).
-pub trait FileTypeTag: private::Sealed {}
+pub trait FileTypeTag: sealed::Sealed {}
 
 /// The id of a file in object store
 #[derive(Hash, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -91,11 +87,11 @@ pub struct AttributesTag;
 #[derive(Debug, Hash, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct NodeTag;
 
-impl private::Sealed for SnapshotTag {}
-impl private::Sealed for ManifestTag {}
-impl private::Sealed for ChunkTag {}
-impl private::Sealed for AttributesTag {}
-impl private::Sealed for NodeTag {}
+impl sealed::Sealed for SnapshotTag {}
+impl sealed::Sealed for ManifestTag {}
+impl sealed::Sealed for ChunkTag {}
+impl sealed::Sealed for AttributesTag {}
+impl sealed::Sealed for NodeTag {}
 impl FileTypeTag for SnapshotTag {}
 impl FileTypeTag for ManifestTag {}
 impl FileTypeTag for ChunkTag {}
@@ -489,93 +485,6 @@ pub mod format_constants {
     pub const ICECHUNK_COMPRESSION_ZSTD: &str = "zstd";
 }
 
-// The impl of Debug for Utf8UnixPathBuf is expensive and triggered often by tracing Spans
-// This implemnetation is much cheaper, and removes formatting from our samply profiles.
-impl Debug for Path {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        Display::fmt(self, f)
-    }
-}
-
-impl Display for Path {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-/// Errors when constructing a [`Path`].
-#[derive(Debug, Clone, Error, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum PathError {
-    #[error("path must start with a `/` character")]
-    NotAbsolute,
-    #[error(r#"path must be cannonic, cannot include "." or "..""#)]
-    NotCanonic,
-}
-
-impl Path {
-    pub fn root() -> Path {
-        Path(Utf8UnixPathBuf::from("/".to_string()))
-    }
-
-    // Fast-path unvalidated constructor for use when reading from Snapshots
-    pub fn from_trusted(path: &str) -> Path {
-        Path(Utf8UnixPathBuf::from(path))
-    }
-
-    pub fn new(path: &str) -> Result<Path, PathError> {
-        let buf = Utf8UnixPathBuf::from(path);
-        if !buf.is_absolute() {
-            return Err(PathError::NotAbsolute);
-        }
-
-        if buf.normalize() != buf {
-            return Err(PathError::NotCanonic);
-        }
-        Ok(Path(buf))
-    }
-
-    pub fn starts_with(&self, other: &Path) -> bool {
-        self.0.starts_with(&other.0)
-    }
-
-    pub fn ancestors(&self) -> impl Iterator<Item = Path> + '_ {
-        self.0.ancestors().map(|p| Path(p.to_owned()))
-    }
-
-    pub fn name(&self) -> Option<&str> {
-        self.0.file_name()
-    }
-
-    pub fn buf(&self) -> &Utf8UnixPathBuf {
-        &self.0
-    }
-}
-
-impl TryFrom<&str> for Path {
-    type Error = PathError;
-
-    fn try_from(value: &str) -> Result<Self, Self::Error> {
-        Self::new(value)
-    }
-}
-
-impl TryFrom<&String> for Path {
-    type Error = PathError;
-
-    fn try_from(value: &String) -> Result<Self, Self::Error> {
-        value.as_str().try_into()
-    }
-}
-
-impl TryFrom<String> for Path {
-    type Error = PathError;
-
-    fn try_from(value: String) -> Result<Self, Self::Error> {
-        value.as_str().try_into()
-    }
-}
-
 #[inline(always)]
 #[expect(clippy::needless_pass_by_value)]
 pub fn lookup_index_by_key<'a, T: ::flatbuffers::Follow<'a> + 'a, K: Ord>(
@@ -608,10 +517,36 @@ pub fn lookup_index_by_key<'a, T: ::flatbuffers::Follow<'a> + 'a, K: Ord>(
     None
 }
 
+// This macro is used for creating property tests
+// which check that serializing and deserializing
+// an instance of a type T is equivalent to the
+// identity function
+// Given pairs of test names and arbitraries to be used
+// for the tests, e.g., (n1, a1), (n2, a2),... (nx, ax)
+// the tests can be created by doing
+// roundtrip_serialization_tests!(n1 - a1, n2 - a2, .... nx - ax)
+#[macro_export]
+macro_rules! roundtrip_serialization_tests {
+    ($($test_name: ident - $generator: ident), +) => {
+        $(
+            proptest!{
+                #[icechunk_macros::test]
+                fn $test_name(elem in $generator()) {
+                    let bytes = rmp_serde::to_vec(&elem).unwrap();
+                    let roundtrip = rmp_serde::from_slice(&bytes).unwrap();
+                    assert_eq!(elem, roundtrip);
+                }
+            }
+        )*
+    }
+}
+
+#[cfg(test)]
+pub mod strategies;
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::roundtrip_serialization_tests;
     use crate::strategies::{attributes_id, spec_version};
     use pretty_assertions::assert_eq;
     use proptest::prelude::*;

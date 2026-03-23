@@ -66,7 +66,7 @@ pub enum Ref {
 }
 
 impl Ref {
-    pub const DEFAULT_BRANCH: &'static str = "main";
+    pub const DEFAULT_BRANCH: &'static str = icechunk_types::DEFAULT_BRANCH;
 
     pub fn name(&self) -> &str {
         match self {
@@ -497,7 +497,8 @@ mod tests {
 
     use super::*;
     use crate::storage::{new_in_memory_storage, new_local_filesystem_storage};
-    use crate::{roundtrip_serialization_tests, strategies::ref_data};
+    use crate::strategies::ref_data;
+    use icechunk_format::roundtrip_serialization_tests;
     use proptest::prelude::*;
 
     roundtrip_serialization_tests!(serialize_and_deserialize_ref_data - ref_data);

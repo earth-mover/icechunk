@@ -8,12 +8,12 @@ use std::{
 };
 use tracing::trace;
 
-use crate::{config::RepositoryConfig, format::snapshot::SnapshotProperties, refs::Ref};
-
-use super::{
+use crate::{
     IcechunkFormatError, IcechunkFormatErrorKind, IcechunkResult, SnapshotId,
-    flatbuffers::generated, format_constants::SpecVersionBin, lookup_index_by_key,
-    snapshot::SnapshotInfo,
+    flatbuffers::generated,
+    format_constants::SpecVersionBin,
+    lookup_index_by_key,
+    snapshot::{SnapshotInfo, SnapshotProperties},
 };
 
 use chrono::{DateTime, Utc};
@@ -77,7 +77,7 @@ impl TryFrom<generated::RepoStatus<'_>> for RepoStatus {
 }
 
 impl RepoStatus {
-    pub(crate) fn error_msg(&self) -> String {
+    pub fn error_msg(&self) -> String {
         format!(
             "Repo status is {0:?}, set at {1}, reason: {2:?}",
             self.availability, self.set_at, self.limited_availability_reason
@@ -275,7 +275,7 @@ impl RepoInfo {
         let branches = sorted_branches
             .into_iter()
             .map(|(name, offset)| {
-                if name == Ref::DEFAULT_BRANCH {
+                if name == icechunk_types::DEFAULT_BRANCH {
                     main_found = true;
                 }
                 let args = generated::RefArgs {
@@ -287,7 +287,7 @@ impl RepoInfo {
             .collect::<Vec<_>>();
         if !main_found {
             return Err(IcechunkFormatErrorKind::BranchNotFound {
-                branch: Ref::DEFAULT_BRANCH.to_string(),
+                branch: icechunk_types::DEFAULT_BRANCH.to_string(),
             })
             .capture();
         }
@@ -532,11 +532,11 @@ impl RepoInfo {
         Ok((updates, repo_before_updates))
     }
 
-    pub fn initial(
+    pub fn initial<C: Serialize>(
         spec_version: SpecVersionBin,
         snapshot: SnapshotInfo,
         num_updates_per_file: u16,
-        config: Option<&RepositoryConfig>,
+        config: Option<&C>,
         update_time: Option<DateTime<Utc>>,
     ) -> Self {
         #[expect(clippy::expect_used)]
@@ -572,18 +572,18 @@ impl RepoInfo {
     }
 
     /// Read the raw config bytes from the `FlatBuffer` (for pass-through in mutations).
-    pub(crate) fn config_bytes_raw(&self) -> IcechunkResult<Option<Vec<u8>>> {
+    pub fn config_bytes_raw(&self) -> IcechunkResult<Option<Vec<u8>>> {
         Ok(self.root()?.config().map(|v| v.bytes().to_vec()))
     }
 
     /// Read the repository configuration from the repo info.
     /// Returns `None` for repos created before config was embedded,
     /// or for repos using the default configuration.
-    pub fn config(&self) -> IcechunkResult<Option<RepositoryConfig>> {
+    pub fn config<C: serde::de::DeserializeOwned>(&self) -> IcechunkResult<Option<C>> {
         match self.root()?.config() {
             None => Ok(None),
             Some(config_fb) => {
-                let config: RepositoryConfig = flexbuffers::from_slice(config_fb.bytes())
+                let config: C = flexbuffers::from_slice(config_fb.bytes())
                     .map_err(Box::new)
                     .capture()?;
                 Ok(Some(config))
@@ -1083,10 +1083,10 @@ impl RepoInfo {
     }
 
     /// Update the embedded configuration and record a `ConfigChangedUpdate` in the op log.
-    pub fn set_config(
+    pub fn set_config<C: Serialize>(
         &self,
         spec_version: SpecVersionBin,
-        config: &RepositoryConfig,
+        config: &C,
         previous_file: &str,
         num_updates_per_file: u16,
     ) -> IcechunkResult<Self> {
@@ -1713,8 +1713,13 @@ mod tests {
             message: "snap 1".to_string(),
             metadata: Default::default(),
         };
-        let repo =
-            RepoInfo::initial(SpecVersionBin::current(), snap1.clone(), 100, None, None);
+        let repo = RepoInfo::initial(
+            SpecVersionBin::current(),
+            snap1.clone(),
+            100,
+            None::<&()>,
+            None,
+        );
         assert_eq!(repo.all_snapshots()?.next().unwrap().unwrap(), snap1);
 
         let id2 = SnapshotId::random();
@@ -1800,8 +1805,13 @@ mod tests {
             message: "snap 1".to_string(),
             metadata: Default::default(),
         };
-        let repo =
-            RepoInfo::initial(SpecVersionBin::current(), snap1.clone(), 100, None, None);
+        let repo = RepoInfo::initial(
+            SpecVersionBin::current(),
+            snap1.clone(),
+            100,
+            None::<&()>,
+            None,
+        );
         let repo = repo.add_branch(SpecVersionBin::current(), "foo", &id1, "foo", 100)?;
         let repo = repo.add_branch(SpecVersionBin::current(), "bar", &id1, "bar", 100)?;
         assert!(matches!(
@@ -1939,7 +1949,7 @@ mod tests {
             SpecVersionBin::current(),
             snap1,
             num_updates_per_file,
-            None,
+            None::<&()>,
             None,
         );
         assert_eq!(repo.latest_updates()?.count(), 1);
@@ -2037,7 +2047,7 @@ mod tests {
             SpecVersionBin::current(),
             snap1,
             100,
-            None,
+            None::<&()>,
             Some(flushed_at),
         );
 

@@ -1594,7 +1594,7 @@ mod test {
         config::ManifestVirtualChunkLocationCompressionConfig,
         format::{
             ChunkIndices, NodeId,
-            manifest::{ChunkInfo, ChunkPayload},
+            manifest::{ChunkInfo, ChunkPayload, LocationCompressionConfig},
         },
         storage::{Storage, logging::LoggingStorage, new_in_memory_storage},
     };
@@ -1643,11 +1643,13 @@ mod test {
             100,
         );
 
+        let compression: LocationCompressionConfig =
+            (&ManifestVirtualChunkLocationCompressionConfig::default()).into();
         let manifest = Arc::new(
             Manifest::from_iter(
                 &ManifestId::random(),
                 vec![ci2.clone()].into_iter(),
-                Some(&ManifestVirtualChunkLocationCompressionConfig::default()),
+                Some(&compression),
             )
             .await?
             .unwrap(),
@@ -1744,11 +1746,13 @@ mod test {
         );
         let id1 = manifest1.id();
         let size1 = manager.write_manifest(Arc::clone(&manifest1)).await?;
+        let compression2: LocationCompressionConfig =
+            (&ManifestVirtualChunkLocationCompressionConfig::default()).into();
         let manifest2 = Arc::new(
             Manifest::from_iter(
                 &ManifestId::random(),
                 vec![ci4, ci5, ci6],
-                Some(&ManifestVirtualChunkLocationCompressionConfig::default()),
+                Some(&compression2),
             )
             .await?
             .unwrap(),
@@ -1869,7 +1873,7 @@ mod test {
             SpecVersionBin::current(),
             (&initial).try_into()?,
             100,
-            None,
+            None::<&()>,
             None,
         ));
         manager.create_repo_info(Arc::clone(&repo_info)).await?;
@@ -1905,7 +1909,7 @@ mod test {
             SpecVersionBin::current(),
             (&initial).try_into()?,
             100,
-            None,
+            None::<&()>,
             None,
         ));
         let new_version = manager.create_repo_info(Arc::clone(&repo_info)).await?;

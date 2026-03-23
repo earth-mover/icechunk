@@ -486,9 +486,10 @@ impl VirtualChunkResolver {
                         }
                     }
                     None => {
-                        Err(VirtualReferenceErrorKind::UnauthorizedVirtualChunkContainer(
-                            Box::new(cont.clone()),
-                        ))
+                        Err(VirtualReferenceErrorKind::UnauthorizedVirtualChunkContainer {
+                            url_prefix: cont.url_prefix().to_string(),
+                            name: cont.name().map(str::to_string),
+                        })
                         .capture()?
                     }
                 };
@@ -512,9 +513,10 @@ impl VirtualChunkResolver {
                         }
                     }
                     None => {
-                        Err(VirtualReferenceErrorKind::UnauthorizedVirtualChunkContainer(
-                            Box::new(cont.clone()),
-                        ))
+                        Err(VirtualReferenceErrorKind::UnauthorizedVirtualChunkContainer {
+                            url_prefix: cont.url_prefix().to_string(),
+                            name: cont.name().map(str::to_string),
+                        })
                         .capture()?
                     }
                 };
@@ -548,9 +550,10 @@ impl VirtualChunkResolver {
                         }
                     }
                     None => {
-                        Err(VirtualReferenceErrorKind::UnauthorizedVirtualChunkContainer(
-                            Box::new(cont.clone()),
-                        ))
+                        Err(VirtualReferenceErrorKind::UnauthorizedVirtualChunkContainer {
+                            url_prefix: cont.url_prefix().to_string(),
+                            name: cont.name().map(str::to_string),
+                        })
                         .capture()?
                     }
                 };
@@ -597,9 +600,10 @@ impl VirtualChunkResolver {
                         .capture()?
                     }
                     None => {
-                        Err(VirtualReferenceErrorKind::UnauthorizedVirtualChunkContainer(
-                            Box::new(cont.clone()),
-                        ))
+                        Err(VirtualReferenceErrorKind::UnauthorizedVirtualChunkContainer {
+                            url_prefix: cont.url_prefix().to_string(),
+                            name: cont.name().map(str::to_string),
+                        })
                         .capture()?
                     }
                 }
@@ -617,9 +621,10 @@ impl VirtualChunkResolver {
                     // FIXME: support from env
                     Some(None) => &GcsCredentials::Anonymous,
                     None => {
-                        Err(VirtualReferenceErrorKind::UnauthorizedVirtualChunkContainer(
-                            Box::new(cont.clone()),
-                        ))
+                        Err(VirtualReferenceErrorKind::UnauthorizedVirtualChunkContainer {
+                            url_prefix: cont.url_prefix().to_string(),
+                            name: cont.name().map(str::to_string),
+                        })
                         .capture()?
                     }
                 };
@@ -654,9 +659,10 @@ impl VirtualChunkResolver {
                         .capture()?;
                     }
                     None => {
-                        Err(VirtualReferenceErrorKind::UnauthorizedVirtualChunkContainer(
-                            Box::new(cont.clone()),
-                        ))
+                        Err(VirtualReferenceErrorKind::UnauthorizedVirtualChunkContainer {
+                            url_prefix: cont.url_prefix().to_string(),
+                            name: cont.name().map(str::to_string),
+                        })
                         .capture()?;
                     }
                 };
@@ -689,9 +695,10 @@ impl VirtualChunkResolver {
                     }
                     // FIXME: support anonymous
                     Some(None) | None => {
-                        Err(VirtualReferenceErrorKind::UnauthorizedVirtualChunkContainer(
-                            Box::new(cont.clone()),
-                        ))
+                        Err(VirtualReferenceErrorKind::UnauthorizedVirtualChunkContainer {
+                            url_prefix: cont.url_prefix().to_string(),
+                            name: cont.name().map(str::to_string),
+                        })
                         .capture()?
                     }
                 };
@@ -1254,9 +1261,9 @@ mod tests {
         assert!(matches!(
             res,
             Err(VirtualReferenceError {
-                kind: VirtualReferenceErrorKind::UnauthorizedVirtualChunkContainer(cont),
+                kind: VirtualReferenceErrorKind::UnauthorizedVirtualChunkContainer { url_prefix, .. },
                 ..
-            }) if cont.url_prefix() == "file:///example/"
+            }) if url_prefix == "file:///example/"
         ));
     }
 
