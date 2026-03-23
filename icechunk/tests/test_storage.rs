@@ -35,7 +35,6 @@ use tokio::{
     sync::oneshot,
 };
 use warp::Filter as _;
-use zstd::zstd_safe::WriteBuf as _;
 
 use crate::common;
 use crate::common::Permission;
@@ -217,10 +216,10 @@ where
 
 async fn async_read_to_bytes(
     mut read: Pin<Box<dyn AsyncRead + Send>>,
-) -> Result<Bytes, std::io::Error> {
+) -> Result<Vec<u8>, std::io::Error> {
     let mut data = Vec::with_capacity(1_024);
     read.read_to_end(&mut data).await?;
-    Ok(Bytes::from_owner(data))
+    Ok(data)
 }
 
 #[tokio_test]
