@@ -874,11 +874,11 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         # Draw cutoffs from storage-level created_at (not written_at/flushed_at)
         # because that is what Rust GC compares against.
         assert self.storage is not None
-        created_at_snapshots: list[datetime.datetime] = {
+        created_at_snapshots: dict[str, datetime.datetime] = {
             obj.key: obj.created_at
             for obj in self.storage.list_objects_metadata(prefix="snapshots")
         }
-        created_at_txs: list[datetime.datetime] = {
+        created_at_txs: dict[str, datetime.datetime] = {
             obj.key: obj.created_at
             for obj in self.storage.list_objects_metadata(prefix="transactions")
         }
