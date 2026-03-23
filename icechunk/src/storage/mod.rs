@@ -4,34 +4,10 @@
 //! list) for persisting Icechunk data. Constructor functions like [`new_s3_storage`],
 //! [`new_gcs_storage`], [`new_in_memory_storage`] create configured storage instances.
 
-#[cfg(feature = "object-store-http")]
-use ::object_store::ClientConfigKey;
-#[cfg(feature = "object-store-azure")]
-use ::object_store::azure::AzureConfigKey;
-#[cfg(feature = "object-store-gcs")]
-use ::object_store::gcp::GoogleConfigKey;
-#[cfg(any(feature = "object-store-http", feature = "redirect"))]
-use icechunk_types::ICResultExt as _;
-#[cfg(any(
-    feature = "object-store-azure",
-    feature = "object-store-gcs",
-    feature = "object-store-http"
-))]
-use std::collections::HashMap;
-#[cfg(feature = "object-store-fs")]
-use std::path::Path;
-#[cfg(feature = "object-store-http")]
-use std::str::FromStr as _;
 use std::sync::Arc;
-#[cfg(any(feature = "object-store-http", feature = "redirect"))]
-use url::Url;
 
 #[cfg(feature = "redirect")]
 use crate::storage::redirect::RedirectStorage;
-#[cfg(feature = "object-store-azure")]
-use object_store::AzureCredentials;
-#[cfg(feature = "object-store-gcs")]
-use object_store::GcsCredentials;
 
 // Re-export everything from icechunk-storage
 pub use icechunk_storage::{
@@ -49,128 +25,61 @@ pub use icechunk_s3::{
     range_to_header,
 };
 
+// Re-export from icechunk-arrow-object-store
+pub use icechunk_arrow_object_store::{ObjectStorage, new_in_memory_storage};
+
+#[cfg(feature = "object-store-fs")]
+pub use icechunk_arrow_object_store::new_local_filesystem_storage;
+
+#[cfg(feature = "object-store-http")]
+pub use icechunk_arrow_object_store::new_http_storage;
+
+#[cfg(feature = "object-store-s3")]
+pub use icechunk_arrow_object_store::{
+    S3ObjectStoreBackend, new_s3_object_store_storage,
+};
+
+#[cfg(feature = "object-store-azure")]
+pub use icechunk_arrow_object_store::{
+    AzureCredentials, AzureObjectStoreBackend, AzureStaticCredentials,
+    new_azure_blob_storage,
+};
+
+#[cfg(feature = "object-store-gcs")]
+pub use icechunk_arrow_object_store::{
+    GcsBearerCredential, GcsCredentials, GcsCredentialsFetcher, GcsObjectStoreBackend,
+    GcsStaticCredentials, new_gcs_storage,
+};
+
+#[cfg(feature = "object-store-http")]
+pub use icechunk_arrow_object_store::HttpObjectStoreBackend;
+
+pub use icechunk_arrow_object_store::ObjectStoreBackend;
+
 #[cfg(test)]
 pub mod logging;
 
 /// Storage wrapper that adds artificial read/write latency (for testing).
 pub mod latency;
 
-/// Storage using the `object_store` crate (local, in-memory, Azure, GCS).
-pub mod object_store;
 /// HTTP redirect-based storage for read-only access.
 #[cfg(feature = "redirect")]
 pub mod redirect;
 /// Shared S3 configuration types (always compiled).
 pub mod s3_config;
 
-pub use object_store::ObjectStorage;
-
-pub async fn new_in_memory_storage() -> StorageResult<Arc<dyn Storage + Send + Sync>> {
-    let st = ObjectStorage::new_in_memory().await?;
-    Ok(Arc::new(st))
-}
-
-#[cfg(feature = "object-store-fs")]
-pub async fn new_local_filesystem_storage(
-    path: &Path,
-) -> StorageResult<Arc<dyn Storage + Send + Sync>> {
-    let st = ObjectStorage::new_local_filesystem(path).await?;
-    Ok(Arc::new(st))
-}
-
-#[cfg(feature = "object-store-http")]
-pub fn new_http_storage(
-    base_url: &str,
-    config: Option<HashMap<String, String>>,
-) -> StorageResult<Arc<dyn Storage + Send + Sync>> {
-    let base_url = Url::parse(base_url)
-        .map_err(|e| StorageErrorKind::CannotParseUrl {
-            cause: e,
-            url: base_url.to_string(),
-        })
-        .ic_err()?;
-    let config = config
-        .unwrap_or_default()
-        .iter()
-        .filter_map(|(k, v)| {
-            ClientConfigKey::from_str(k).ok().map(|key| (key, v.clone()))
-        })
-        .collect();
-    let st = ObjectStorage::new_http(&base_url, Some(config))?;
-    Ok(Arc::new(st))
-}
-
 #[cfg(feature = "redirect")]
 pub fn new_redirect_storage(
     base_url: &str,
 ) -> StorageResult<Arc<dyn Storage + Send + Sync>> {
-    let base_url = Url::parse(base_url)
+    use icechunk_types::ICResultExt as _;
+    let base_url = url::Url::parse(base_url)
         .map_err(|e| StorageErrorKind::CannotParseUrl {
             cause: e,
             url: base_url.to_string(),
         })
         .ic_err()?;
     Ok(Arc::new(RedirectStorage::new(base_url)))
-}
-
-#[cfg(feature = "object-store-s3")]
-pub async fn new_s3_object_store_storage(
-    config: S3Options,
-    bucket: String,
-    prefix: Option<String>,
-    credentials: Option<S3Credentials>,
-) -> StorageResult<Arc<dyn Storage + Send + Sync>> {
-    if let Some(endpoint) = &config.endpoint_url
-        && (endpoint.contains("fly.storage.tigris.dev")
-            || endpoint.contains("t3.storage.dev"))
-    {
-        use icechunk_storage::other_error;
-
-        return Err(StorageError::from(other_error(
-            "Tigris Storage is not S3 compatible, use the Tigris specific constructor instead"
-                .to_string(),
-        )));
-    }
-    let storage =
-        ObjectStorage::new_s3(bucket, prefix, credentials, Some(config)).await?;
-    Ok(Arc::new(storage))
-}
-
-#[cfg(feature = "object-store-azure")]
-pub async fn new_azure_blob_storage(
-    account: String,
-    container: String,
-    prefix: Option<String>,
-    credentials: Option<AzureCredentials>,
-    config: Option<HashMap<String, String>>,
-) -> StorageResult<Arc<dyn Storage + Send + Sync>> {
-    let config = config
-        .unwrap_or_default()
-        .into_iter()
-        .filter_map(|(key, value)| key.parse::<AzureConfigKey>().map(|k| (k, value)).ok())
-        .collect();
-    let storage =
-        ObjectStorage::new_azure(account, container, prefix, credentials, Some(config))
-            .await?;
-    Ok(Arc::new(storage))
-}
-
-#[cfg(feature = "object-store-gcs")]
-pub fn new_gcs_storage(
-    bucket: String,
-    prefix: Option<String>,
-    credentials: Option<GcsCredentials>,
-    config: Option<HashMap<String, String>>,
-) -> StorageResult<Arc<dyn Storage + Send + Sync>> {
-    let config = config
-        .unwrap_or_default()
-        .into_iter()
-        .filter_map(|(key, value)| {
-            key.parse::<GoogleConfigKey>().map(|k| (k, value)).ok()
-        })
-        .collect();
-    let storage = ObjectStorage::new_gcs(bucket, prefix, credentials, Some(config))?;
-    Ok(Arc::new(storage))
 }
 
 #[cfg(test)]

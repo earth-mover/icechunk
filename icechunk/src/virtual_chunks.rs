@@ -15,24 +15,19 @@ use std::{
 use async_trait::async_trait;
 use bytes::{Buf, Bytes};
 use futures::{TryStreamExt as _, stream::FuturesOrdered};
-#[cfg(feature = "s3")]
-use icechunk_s3::aws_sdk_s3::{
-    Client, error::SdkError, operation::get_object::GetObjectError,
-};
-use icechunk_types::ICResultExt as _;
 #[cfg(any(
     feature = "object-store-s3",
     feature = "object-store-gcs",
     feature = "object-store-azure",
     feature = "object-store-http"
 ))]
-use object_store::ClientConfigKey;
+use icechunk_arrow_object_store::object_store::ClientConfigKey;
 #[cfg(feature = "object-store-azure")]
-use object_store::azure::AzureConfigKey;
+use icechunk_arrow_object_store::object_store::azure::AzureConfigKey;
 #[cfg(feature = "object-store-gcs")]
-use object_store::gcp::GoogleConfigKey;
+use icechunk_arrow_object_store::object_store::gcp::GoogleConfigKey;
 #[cfg(feature = "object-store-fs")]
-use object_store::local::LocalFileSystem;
+use icechunk_arrow_object_store::object_store::local::LocalFileSystem;
 #[cfg(any(
     feature = "object-store-s3",
     feature = "object-store-fs",
@@ -40,7 +35,12 @@ use object_store::local::LocalFileSystem;
     feature = "object-store-azure",
     feature = "object-store-http"
 ))]
-use object_store::{GetOptions, ObjectStore, path::Path};
+use icechunk_arrow_object_store::object_store::{GetOptions, ObjectStore, path::Path};
+#[cfg(feature = "s3")]
+use icechunk_s3::aws_sdk_s3::{
+    Client, error::SdkError, operation::get_object::GetObjectError,
+};
+use icechunk_types::ICResultExt as _;
 use quick_cache::sync::Cache;
 use serde::{Deserialize, Serialize};
 use url::Url;
@@ -51,20 +51,20 @@ use crate::config::AzureCredentials;
 use crate::config::GcsCredentials;
 use crate::config::{S3Credentials, S3Options};
 #[cfg(feature = "object-store-azure")]
-use crate::storage::object_store::AzureObjectStoreBackend;
+use crate::storage::AzureObjectStoreBackend;
 #[cfg(feature = "object-store-gcs")]
-use crate::storage::object_store::GcsObjectStoreBackend;
+use crate::storage::GcsObjectStoreBackend;
 #[cfg(feature = "object-store-http")]
-use crate::storage::object_store::HttpObjectStoreBackend;
+use crate::storage::HttpObjectStoreBackend;
 #[cfg(any(
     feature = "object-store-s3",
     feature = "object-store-gcs",
     feature = "object-store-azure",
     feature = "object-store-http"
 ))]
-use crate::storage::object_store::ObjectStoreBackend as _;
+use crate::storage::ObjectStoreBackend as _;
 #[cfg(feature = "object-store-s3")]
-use crate::storage::object_store::S3ObjectStoreBackend;
+use crate::storage::S3ObjectStoreBackend;
 use crate::{
     ObjectStoreConfig,
     config::Credentials,
@@ -1076,7 +1076,9 @@ impl ChunkFetcher for ObjectStoreFetcher {
                     .ic_err()?;
                 Ok(Box::new(res))
             }
-            Err(object_store::Error::Precondition { .. }) => {
+            Err(icechunk_arrow_object_store::object_store::Error::Precondition {
+                ..
+            }) => {
                 Err(VirtualReferenceErrorKind::ObjectModified(chunk_location.to_string()))
                     .ic_err()
             }

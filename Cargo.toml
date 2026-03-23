@@ -1,5 +1,5 @@
 [workspace]
-members = ["icechunk", "icechunk-types", "icechunk-storage", "icechunk-s3", "icechunk-python", "icechunk-macros"]
+members = ["icechunk", "icechunk-types", "icechunk-storage", "icechunk-s3", "icechunk-arrow-object-store", "icechunk-python", "icechunk-macros"]
 default-members = ["icechunk"]
 resolver = "2"
 

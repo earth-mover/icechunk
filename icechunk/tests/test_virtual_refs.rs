@@ -36,7 +36,7 @@ use tempfile::TempDir;
 use tokio::sync::RwLock;
 
 use bytes::Bytes;
-use object_store::{
+use icechunk_arrow_object_store::object_store::{
     ObjectStore, PutMode, PutOptions, PutPayload, azure::AzureConfigKey,
     local::LocalFileSystem,
 };

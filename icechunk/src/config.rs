@@ -23,17 +23,17 @@ use crate::{
 
 // Re-export backend-specific types from their canonical modules so that existing
 // consumers (`crate::config::S3Options`, etc.) continue to work.
-#[cfg(feature = "object-store-azure")]
-pub use crate::storage::object_store::{AzureCredentials, AzureStaticCredentials};
-#[cfg(feature = "object-store-gcs")]
-pub use crate::storage::object_store::{
-    GcsBearerCredential, GcsCredentials, GcsCredentialsFetcher, GcsStaticCredentials,
-};
 pub use crate::storage::s3_config::{
     S3Credentials, S3CredentialsFetcher, S3Options, S3StaticCredentials,
 };
+#[cfg(feature = "object-store-azure")]
+pub use crate::storage::{AzureCredentials, AzureStaticCredentials};
 #[cfg(feature = "object-store-gcs")]
-pub use object_store::gcp::GcpCredential;
+pub use crate::storage::{
+    GcsBearerCredential, GcsCredentials, GcsCredentialsFetcher, GcsStaticCredentials,
+};
+#[cfg(feature = "object-store-gcs")]
+pub use icechunk_arrow_object_store::object_store::gcp::GcpCredential;
 
 /// Storage backend configuration.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
