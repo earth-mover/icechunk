@@ -13,10 +13,12 @@ use std::{
 };
 
 use async_trait::async_trait;
-#[cfg(feature = "s3")]
-use aws_sdk_s3::{Client, error::SdkError, operation::get_object::GetObjectError};
 use bytes::{Buf, Bytes};
 use futures::{TryStreamExt as _, stream::FuturesOrdered};
+#[cfg(feature = "s3")]
+use icechunk_s3::aws_sdk_s3::{
+    Client, error::SdkError, operation::get_object::GetObjectError,
+};
 use icechunk_types::ICResultExt as _;
 #[cfg(any(
     feature = "object-store-s3",
@@ -63,8 +65,6 @@ use crate::storage::object_store::HttpObjectStoreBackend;
 use crate::storage::object_store::ObjectStoreBackend as _;
 #[cfg(feature = "object-store-s3")]
 use crate::storage::object_store::S3ObjectStoreBackend;
-#[cfg(feature = "s3")]
-use crate::storage::s3::{mk_client, range_to_header};
 use crate::{
     ObjectStoreConfig,
     config::Credentials,
@@ -78,6 +78,8 @@ use crate::{
     private,
     storage::{self, split_in_multiple_requests, strip_quotes},
 };
+#[cfg(feature = "s3")]
+use icechunk_s3::{mk_client, range_to_header};
 
 pub type ContainerName = String;
 
@@ -820,9 +822,11 @@ impl ChunkFetcher for S3Fetcher {
 
         match checksum {
             Some(Checksum::LastModified(SecondsSinceEpoch(seconds))) => {
-                b = b.if_unmodified_since(aws_sdk_s3::primitives::DateTime::from_secs(
-                    *seconds as i64,
-                ));
+                b = b.if_unmodified_since(
+                    icechunk_s3::aws_sdk_s3::primitives::DateTime::from_secs(
+                        *seconds as i64,
+                    ),
+                );
             }
             Some(Checksum::ETag(etag)) => {
                 b = b.if_match(strip_quotes(&etag.0));

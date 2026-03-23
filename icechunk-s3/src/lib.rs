@@ -1,14 +1,13 @@
-//! Native S3 client implementation of [`Storage`](super::Storage).
+//! Native S3 client implementation of [`Storage`](icechunk_storage::Storage).
+
+// Re-export AWS SDK types needed by consumers (e.g., icechunk's virtual_chunks)
+pub use aws_sdk_s3;
 
 use std::{
     collections::HashMap, fmt, future::ready, ops::Range, path::PathBuf, pin::Pin,
     sync::Arc, time::Duration,
 };
 
-pub use super::s3_config::{
-    S3Credentials, S3CredentialsFetcher, S3Options, S3StaticCredentials,
-};
-use crate::{Storage, StorageError, format::ChunkOffset};
 use async_trait::async_trait;
 use aws_config::{
     AppName, BehaviorVersion, meta::region::RegionProviderChain, retry::RetryConfig,
@@ -37,21 +36,21 @@ use futures::{
     Stream, StreamExt as _, TryStreamExt as _,
     stream::{self, BoxStream, FuturesOrdered},
 };
-use icechunk_storage::{
-    obj_not_found_res, obj_store_error, obj_store_error_res, other_error, sealed,
+pub use icechunk_storage::s3_config::{
+    S3Credentials, S3CredentialsFetcher, S3Options, S3StaticCredentials,
 };
+use icechunk_storage::{
+    DeleteObjectsResult, GetModifiedResult, ListInfo, Settings, Storage, StorageError,
+    StorageErrorKind, StorageResult, VersionInfo, VersionedUpdateResult,
+    obj_not_found_res, obj_store_error, obj_store_error_res, other_error, sealed,
+    split_in_multiple_equal_requests, strip_quotes,
+};
+use icechunk_types::ICResultExt as _;
 use serde::{Deserialize, Serialize};
 use tokio::sync::OnceCell;
 use tokio_util::io::StreamReader;
 use tracing::{error, instrument};
 use typed_path::Utf8UnixPath;
-
-use super::{
-    DeleteObjectsResult, GetModifiedResult, ListInfo, Settings, StorageErrorKind,
-    StorageResult, VersionInfo, VersionedUpdateResult, split_in_multiple_equal_requests,
-    strip_quotes,
-};
-use icechunk_types::ICResultExt as _;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct S3Storage {
@@ -139,7 +138,7 @@ pub async fn mk_client(
     };
 
     #[expect(clippy::unwrap_used)]
-    let app_name = AppName::new(crate::user_agent()).unwrap();
+    let app_name = AppName::new(icechunk_types::user_agent()).unwrap();
     let mut aws_config = aws_config::defaults(BehaviorVersion::v2026_01_12())
         .region(region)
         .app_name(app_name);
@@ -543,7 +542,7 @@ impl S3Storage {
     }
 }
 
-pub fn range_to_header(range: &Range<ChunkOffset>) -> String {
+pub fn range_to_header(range: &Range<u64>) -> String {
     format!("bytes={}-{}", range.start, range.end - 1)
 }
 
@@ -957,6 +956,130 @@ impl ProvideRefreshableCredentials {
         );
         Ok(creds)
     }
+}
+
+// Factory functions
+
+pub fn new_s3_storage(
+    config: S3Options,
+    bucket: String,
+    prefix: Option<String>,
+    credentials: Option<S3Credentials>,
+) -> StorageResult<Arc<dyn Storage + Send + Sync>> {
+    if let Some(endpoint) = &config.endpoint_url
+        && (endpoint.contains("fly.storage.tigris.dev")
+            || endpoint.contains("t3.storage.dev"))
+    {
+        return Err(other_error(
+            "Tigris Storage is not S3 compatible, use the Tigris specific constructor instead"
+                .to_string(),
+        ));
+    }
+
+    let st = S3Storage::new(
+        config,
+        bucket,
+        prefix,
+        credentials.unwrap_or(S3Credentials::FromEnv),
+        true,
+        Vec::new(),
+        Vec::new(),
+    )?;
+    Ok(Arc::new(st))
+}
+
+pub fn new_r2_storage(
+    config: S3Options,
+    bucket: Option<String>,
+    prefix: Option<String>,
+    account_id: Option<String>,
+    credentials: Option<S3Credentials>,
+) -> StorageResult<Arc<dyn Storage + Send + Sync>> {
+    let (bucket, prefix) = match (bucket, prefix) {
+        (Some(bucket), Some(prefix)) => (bucket, Some(prefix)),
+        (None, Some(prefix)) => match prefix.split_once("/") {
+            Some((bucket, prefix)) => (bucket.to_string(), Some(prefix.to_string())),
+            None => (prefix, None),
+        },
+        (Some(bucket), None) => (bucket, None),
+        (None, None) => {
+            return Err(StorageErrorKind::R2ConfigurationError(
+                "Either bucket or prefix must be provided.".to_string(),
+            ))
+            .ic_err();
+        }
+    };
+
+    if config.endpoint_url.is_none() && account_id.is_none() {
+        return Err(StorageErrorKind::R2ConfigurationError(
+            "Either endpoint_url or account_id must be provided.".to_string(),
+        ))
+        .ic_err();
+    }
+
+    let config = S3Options {
+        region: config.region.or(Some("auto".to_string())),
+        endpoint_url: config
+            .endpoint_url
+            .or(account_id.map(|x| format!("https://{x}.r2.cloudflarestorage.com"))),
+        force_path_style: true,
+        ..config
+    };
+    let st = S3Storage::new(
+        config,
+        bucket,
+        prefix,
+        credentials.unwrap_or(S3Credentials::FromEnv),
+        true,
+        Vec::new(),
+        Vec::new(),
+    )?;
+    Ok(Arc::new(st))
+}
+
+pub fn new_tigris_storage(
+    config: S3Options,
+    bucket: String,
+    prefix: Option<String>,
+    credentials: Option<S3Credentials>,
+    use_weak_consistency: bool,
+) -> StorageResult<Arc<dyn Storage + Send + Sync>> {
+    let config = S3Options {
+        endpoint_url: Some(
+            config.endpoint_url.unwrap_or("https://t3.storage.dev".to_string()),
+        ),
+        ..config
+    };
+    let mut extra_write_headers = Vec::with_capacity(2);
+    let mut extra_read_headers = Vec::with_capacity(3);
+
+    if !use_weak_consistency {
+        // TODO: Tigris will need more than this to offer good eventually consistent behavior
+        // For example: we should use no-cache for branches and config file
+        if let Some(region) = config.region.as_ref() {
+            extra_write_headers.push(("X-Tigris-Regions".to_string(), region.clone()));
+            extra_write_headers
+                .push(("X-Tigris-Consistent".to_string(), "true".to_string()));
+
+            extra_read_headers.push(("X-Tigris-Regions".to_string(), region.clone()));
+            extra_read_headers
+                .push(("Cache-Control".to_string(), "no-cache".to_string()));
+            extra_read_headers
+                .push(("X-Tigris-Consistent".to_string(), "true".to_string()));
+        } else {
+            return Err(other_error("Tigris storage requires a region to provide full consistency. Either set the region for the bucket or use the read-only, eventually consistent storage by passing `use_weak_consistency=True` (experts only)".to_string()));
+        }
+    }
+    let st = S3Storage::new(
+        config,
+        bucket,
+        prefix,
+        credentials.unwrap_or(S3Credentials::FromEnv),
+        !use_weak_consistency, // notice eventually consistent storage can't do writes
+        extra_read_headers,
+        extra_write_headers,
+    )?;
+    Ok(Arc::new(st))
 }
 
 #[cfg(test)]

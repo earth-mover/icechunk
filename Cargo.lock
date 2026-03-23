@@ -2129,11 +2129,6 @@ dependencies = [
  "async-recursion",
  "async-stream",
  "async-trait",
- "aws-config",
- "aws-credential-types",
- "aws-sdk-s3",
- "aws-smithy-runtime",
- "aws-smithy-types-convert",
  "backon",
  "base32",
  "bytes",
@@ -2148,6 +2143,7 @@ dependencies = [
  "fs_extra",
  "futures",
  "icechunk-macros",
+ "icechunk-s3",
  "icechunk-storage",
  "icechunk-types",
  "itertools 0.14.0",
@@ -2219,6 +2215,32 @@ dependencies = [
  "strsim",
  "thiserror 2.0.18",
  "tokio",
+ "typetag",
+]
+
+[[package]]
+name = "icechunk-s3"
+version = "2.0.0-alpha.4"
+dependencies = [
+ "async-trait",
+ "aws-config",
+ "aws-credential-types",
+ "aws-sdk-s3",
+ "aws-smithy-runtime",
+ "aws-smithy-types-convert",
+ "bytes",
+ "chrono",
+ "futures",
+ "icechunk-macros",
+ "icechunk-storage",
+ "icechunk-types",
+ "serde",
+ "serde_json",
+ "test-log",
+ "tokio",
+ "tokio-util 0.7.18",
+ "tracing",
+ "typed-path",
  "typetag",
 ]
 
