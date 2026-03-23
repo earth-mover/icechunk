@@ -53,11 +53,9 @@ jobs:
       - name: Patch zarrs_icechunk to use local icechunk
         shell: bash
         run: |
-          cat >> zarrs_icechunk/Cargo.toml << 'EOF'
-
-          [patch.crates-io]
-          icechunk = { path = "../icechunk/icechunk" }
-          EOF
+          # zarrs_icechunk already has a [patch.crates-io] section (with commented entries),
+          # so we append the icechunk entry under it instead of creating a duplicate section.
+          sed -i '/^\[patch\.crates-io\]/a icechunk = { path = "../icechunk/icechunk" }' zarrs_icechunk/Cargo.toml
 
       - name: Install Rust toolchain
         run: |
