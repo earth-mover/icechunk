@@ -1443,12 +1443,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "err-into"
-version = "1.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7f003b437a8029298beb1a849ea8c5c8229f0c1225e3e854c4523dbe8d90b02d"
-
-[[package]]
 name = "errno"
 version = "0.3.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2137,7 +2131,6 @@ dependencies = [
  "criterion",
  "dialoguer",
  "dirs",
- "err-into",
  "flatbuffers",
  "flexbuffers",
  "fs_extra",
@@ -2170,7 +2163,6 @@ dependencies = [
  "test-strategy",
  "thiserror 2.0.18",
  "tokio",
- "tokio-util 0.7.18",
  "tracing",
  "tracing-chrome",
  "tracing-error",
@@ -4686,7 +4678,6 @@ checksum = "9ae9cec805b01e8fc3fd2fe289f89149a9b66dd16786abd8b19cfa7b48cb0098"
 dependencies = [
  "bytes",
  "futures-core",
- "futures-io",
  "futures-sink",
  "pin-project-lite",
  "tokio",

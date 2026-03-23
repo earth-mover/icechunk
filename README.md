@@ -28,6 +28,43 @@ that enhance performance, collaboration, and safety in a cloud-computing context
 - The [Contributor Guide](https://icechunk.io/en/latest/contributing)
 - The [Icechunk Spec](https://icechunk.io/en/latest/spec)
 
+## Crate Structure
+
+The Rust workspace is organized into layered crates:
+
+```
+                  ┌──────────────────┐
+                  │  icechunk-python │
+                  └────────┬─────────┘
+                           │
+                  ┌────────▼─────────┐
+                  │     icechunk     │
+                  └───┬──────────┬───┘
+                      │          │
+      ┌───────────────▼──┐  ┌───▼──────────────┐
+      │ icechunk-arrow-  │  │   icechunk-s3    │
+      │   object-store   │  │   (optional)     │
+      └───────────┬──────┘  └───┬──────────────┘
+                  │             │
+              ┌───▼─────────────▼───┐
+              │  icechunk-storage   │
+              └─────────┬───────────┘
+                        │
+              ┌─────────▼───────────┐
+              │   icechunk-types    │
+              └─────────────────────┘
+```
+
+| Crate | Description |
+|-------|-------------|
+| **icechunk-macros** | Procedural macro helpers for tests and internal use |
+| **icechunk-types** | Shared foundational types used across all crates |
+| **icechunk-storage** | Storage trait definitions and common storage utilities |
+| **icechunk-arrow-object-store** | Storage backend using Apache Arrow's `object_store` (in-memory, local, GCS, Azure, etc.) |
+| **icechunk-s3** | Native AWS S3 storage backend (optional feature) |
+| **icechunk** | Core storage engine: format, transactions, version control, repositories |
+| **icechunk-python** | PyO3 bindings exposing the engine to Python |
+
 ## Icechunk Overview
 
 Let's break down what "transactional storage engine for Zarr" actually means:
