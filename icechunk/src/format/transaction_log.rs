@@ -221,7 +221,7 @@ impl TransactionLog {
             &ROOT_OPTIONS,
             buffer.as_slice(),
         )
-        .ic_err()?;
+        .capture()?;
         Ok(Self { buffer })
     }
 

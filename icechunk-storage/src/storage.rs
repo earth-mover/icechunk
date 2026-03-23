@@ -66,15 +66,15 @@ pub fn obj_store_error_res<T>(
 pub fn obj_store_error(
     err: impl std::error::Error + Send + Sync + 'static,
 ) -> StorageError {
-    StorageError::no_context(StorageErrorKind::ObjectStore(Box::new(err)))
+    StorageError::capture(StorageErrorKind::ObjectStore(Box::new(err)))
 }
 
 pub fn obj_not_found_res<T>() -> StorageResult<T> {
-    Err(StorageError::no_context(StorageErrorKind::ObjectNotFound))
+    Err(StorageError::capture(StorageErrorKind::ObjectNotFound))
 }
 
 pub fn other_error(s: impl Into<String>) -> StorageError {
-    StorageError::no_context(StorageErrorKind::Other(s.into()))
+    StorageError::capture(StorageErrorKind::Other(s.into()))
 }
 
 #[derive(Debug)]
@@ -394,7 +394,7 @@ impl VersionedUpdateResult {
         match self {
             VersionedUpdateResult::Updated { new_version } => Ok(new_version),
             VersionedUpdateResult::NotOnLatestVersion => {
-                Err(StorageError::no_context(StorageErrorKind::ObjectNotFound))
+                Err(StorageError::capture(StorageErrorKind::ObjectNotFound))
             }
         }
     }

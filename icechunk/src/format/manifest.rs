@@ -278,7 +278,7 @@ impl VirtualChunkLocation {
         relative_path: &str,
     ) -> Result<VirtualChunkLocation, VirtualReferenceError> {
         if container_name.is_empty() || container_name.contains('/') {
-            return Err(ICError::no_context(
+            return Err(VirtualReferenceError::capture(
                 VirtualReferenceErrorKind::NoContainerForName(container_name.to_string()),
             ));
         }
@@ -314,23 +314,23 @@ impl VirtualChunkLocation {
                 cause: e,
                 url: path.to_string(),
             })
-            .ic_err()?;
+            .capture()?;
         let scheme = url.scheme();
         let segments = url
             .path_segments()
             .ok_or_else(|| VirtualReferenceErrorKind::NoPathSegments(path.into()))
-            .ic_err()?;
+            .capture()?;
 
         let host = if let Some(host) = url.host_str() {
             host
         } else if scheme == "file" {
             ""
         } else if scheme == "vcc" {
-            return Err(ICError::no_context(
+            return Err(VirtualReferenceError::capture(
                 VirtualReferenceErrorKind::NoContainerForName(path.into()),
             ));
         } else {
-            return Err(ICError::no_context(
+            return Err(VirtualReferenceError::capture(
                 VirtualReferenceErrorKind::CannotParseBucketName(path.into()),
             ));
         };
@@ -423,7 +423,7 @@ impl Manifest {
             &ROOT_OPTIONS,
             buffer.as_slice(),
         )
-        .ic_err()?;
+        .capture()?;
         Ok(Manifest { buffer })
     }
 
@@ -439,7 +439,7 @@ impl Manifest {
             Some(dict_bytes) => {
                 let decompressor =
                     zstd::bulk::Decompressor::with_dictionary(dict_bytes.bytes())
-                        .ic_err()?;
+                        .capture()?;
                 Ok(Some(decompressor))
             }
             None => Ok(None),
@@ -606,7 +606,7 @@ impl Manifest {
             .ok_or_else(|| IcechunkFormatErrorKind::ChunkCoordinatesNotFound {
                 coords: coord.clone(),
             })
-            .ic_err()?;
+            .capture()?;
         ref_to_payload(chunk_ref, decompressor.as_mut())
     }
 
@@ -710,10 +710,10 @@ fn ref_to_payload(
     } else if let Some(compressed) = chunk_ref.compressed_location() {
         let decompressor = decompressor
             .ok_or(IcechunkFormatErrorKind::MissingLocationCompressionDictionary)
-            .ic_err()?;
+            .capture()?;
         let decompressed = decompressor
             .decompress(compressed.bytes(), MAX_DECOMPRESSED_LOCATION_SIZE)
-            .ic_err()?;
+            .capture()?;
         let location_string = String::from_utf8(decompressed)
             .map_err(|e| {
                 IcechunkFormatErrorKind::IO(std::io::Error::new(
@@ -721,7 +721,7 @@ fn ref_to_payload(
                     e,
                 ))
             })
-            .ic_err()?;
+            .capture()?;
         let location = VirtualChunkLocation::from_trusted(location_string);
         Ok(ChunkPayload::Virtual(VirtualChunkRef {
             location,
@@ -747,7 +747,7 @@ fn ref_to_payload(
                 error_trace: Default::default(),
             },
         ))
-        .ic_err()
+        .capture()
     }
 }
 
@@ -841,7 +841,7 @@ fn train_location_dictionary(
 
     Ok(Some(
         zstd::dict::from_continuous(&sample_data, &sample_sizes, max_dict_size)
-            .ic_err()?,
+            .capture()?,
     ))
 }
 

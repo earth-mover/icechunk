@@ -128,7 +128,7 @@ pub async fn snapshot_json(
         serde_json::to_string(&info)
     }
     .map_err(|e| RepositoryErrorKind::Other(e.to_string()))
-    .ic_err()?;
+    .capture()?;
     Ok(res)
 }
 
@@ -331,7 +331,7 @@ pub async fn repo_info_json(
         serde_json::to_string(&info)
     }
     .map_err(|e| RepositoryErrorKind::Other(e.to_string()))
-    .ic_err()?;
+    .capture()?;
     Ok(res)
 }
 
@@ -424,7 +424,7 @@ pub async fn manifest_json(
         serde_json::to_string(&info)
     }
     .map_err(|e| RepositoryErrorKind::Other(e.to_string()))
-    .ic_err()?;
+    .capture()?;
     Ok(res)
 }
 

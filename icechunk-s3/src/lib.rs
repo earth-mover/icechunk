@@ -308,7 +308,7 @@ impl S3Storage {
         let path_str = path
             .into_os_string()
             .into_string()
-            .map_err(|s| StorageError::no_context(StorageErrorKind::BadPrefix(s)))?;
+            .map_err(|s| StorageError::capture(StorageErrorKind::BadPrefix(s)))?;
 
         Ok(path_str.replace("\\", "/"))
     }
@@ -434,7 +434,7 @@ impl S3Storage {
             multi = multi.storage_class(klass);
         }
 
-        let create_res = multi.send().await.ic_err_box()?;
+        let create_res = multi.send().await.capture_box()?;
         let upload_id = create_res.upload_id().ok_or(other_error(
             "No upload_id in create multipart upload result".to_string(),
         ))?;
@@ -478,7 +478,7 @@ impl S3Storage {
             })
             .try_collect::<Vec<_>>()
             .await
-            .ic_err_box()?;
+            .capture_box()?;
 
         let completed_parts =
             CompletedMultipartUpload::builder().set_parts(Some(completed_parts)).build();
@@ -730,7 +730,7 @@ impl Storage for S3Storage {
             req = req.request_payer(aws_sdk_s3::types::RequestPayer::Requester);
         }
 
-        let res = req.send().await.ic_err_box()?;
+        let res = req.send().await.capture_box()?;
 
         if let Some(err) = res.errors.as_ref().and_then(|e| e.first()) {
             tracing::error!(
@@ -770,7 +770,7 @@ impl Storage for S3Storage {
             req = req.request_payer(aws_sdk_s3::types::RequestPayer::Requester);
         }
 
-        let res = req.send().await.ic_err_box()?;
+        let res = req.send().await.capture_box()?;
 
         let res = res
             .last_modified
@@ -858,7 +858,7 @@ impl S3Storage {
             Ok(output) => match output.e_tag {
                 Some(etag) => {
                     let stream = stream2stream(output.body)
-                        .map_err(|e| StorageError::no_context(e.into()));
+                        .map_err(|e| StorageError::capture(e.into()));
                     Ok(Some((Box::pin(stream), VersionInfo::from_etag_only(etag))))
                 }
                 None => Err(other_error("Object should have an etag".to_string())),
@@ -918,9 +918,8 @@ fn object_to_list_info(prefix: &str, object: &Object) -> StorageResult<ListInfo<
         let size_bytes = object.size.unwrap_or(0) as u64;
         Some(ListInfo { id, created_at, size_bytes })
     };
-    inner().ok_or_else(|| {
-        StorageError::no_context(StorageErrorKind::BadPrefix(prefix.into()))
-    })
+    inner()
+        .ok_or_else(|| StorageError::capture(StorageErrorKind::BadPrefix(prefix.into())))
 }
 
 #[derive(Debug)]
@@ -1006,7 +1005,7 @@ pub fn new_r2_storage(
             return Err(StorageErrorKind::R2ConfigurationError(
                 "Either bucket or prefix must be provided.".to_string(),
             ))
-            .ic_err();
+            .capture();
         }
     };
 
@@ -1014,7 +1013,7 @@ pub fn new_r2_storage(
         return Err(StorageErrorKind::R2ConfigurationError(
             "Either endpoint_url or account_id must be provided.".to_string(),
         ))
-        .ic_err();
+        .capture();
     }
 
     let config = S3Options {

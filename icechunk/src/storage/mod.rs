@@ -78,7 +78,7 @@ pub fn new_redirect_storage(
             cause: e,
             url: base_url.to_string(),
         })
-        .ic_err()?;
+        .capture()?;
     Ok(Arc::new(RedirectStorage::new(base_url)))
 }
 

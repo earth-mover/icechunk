@@ -53,7 +53,7 @@ use crate::{
         transaction_log::{Diff, DiffBuilder, TransactionLog},
     },
     refs::{self, Ref, RefError, RefErrorKind},
-    session::{Session, SessionErrorKind, SessionResult},
+    session::{Session, SessionError, SessionErrorKind, SessionResult},
     storage::{self, StorageErrorKind},
     virtual_chunks::VirtualChunkResolver,
 };
@@ -219,7 +219,9 @@ impl Repository {
         ));
 
         if check_clean_root && !storage.root_is_clean(&storage_settings).await.inject()? {
-            return Err(RepositoryErrorKind::ParentDirectoryNotClean).ic_err();
+            return Err(RepositoryError::capture(
+                RepositoryErrorKind::ParentDirectoryNotClean,
+            ));
         };
 
         let asset_manager_c = Arc::clone(&asset_manager);
@@ -349,9 +351,11 @@ impl Repository {
         let (spec_version_result, config_yaml_result) =
             join!(fetch_version, fetch_config_yaml);
 
-        let spec_version = match spec_version_result.ic_err()?? {
+        let spec_version = match spec_version_result.capture()?? {
             Some(v) => Ok(v),
-            None => Err(RepositoryErrorKind::RepositoryDoesntExist).ic_err(),
+            None => {
+                Err(RepositoryError::capture(RepositoryErrorKind::RepositoryDoesntExist))
+            }
         }?;
         trace!(%spec_version, "Repository version found");
 
@@ -568,12 +572,12 @@ impl Repository {
 
     #[instrument(skip(bytes))]
     pub fn from_bytes(bytes: &[u8]) -> RepositoryResult<Self> {
-        rmp_serde::from_slice(bytes).map_err(Box::new).ic_err()
+        rmp_serde::from_slice(bytes).map_err(Box::new).capture()
     }
 
     #[instrument(skip(self))]
     pub fn as_bytes(&self) -> RepositoryResult<Vec<u8>> {
-        rmp_serde::to_vec(self).map_err(Box::new).ic_err()
+        rmp_serde::to_vec(self).map_err(Box::new).capture()
     }
 
     #[instrument(skip_all)]
@@ -844,7 +848,7 @@ impl Repository {
             .await?
         {
             Some(new_version) => Ok(new_version),
-            None => Err(RepositoryErrorKind::ConfigWasUpdated).ic_err(),
+            None => Err(RepositoryError::capture(RepositoryErrorKind::ConfigWasUpdated)),
         }
     }
 
@@ -1071,7 +1075,7 @@ impl Repository {
                 kind: RepositoryErrorKind::Conflict { expected_parent, actual_parent },
                 context,
             },
-            err => err.with_ctx(),
+            err => err.inject(),
         })?;
         Ok(())
     }
@@ -1241,11 +1245,10 @@ impl Repository {
             if let Some(from_snapshot_id) = from_snapshot_id
                 && &repo_info.resolve_branch(branch).inject()? != from_snapshot_id
             {
-                return Err(RepositoryErrorKind::Conflict {
+                return Err(RepositoryError::capture(RepositoryErrorKind::Conflict {
                     expected_parent: Some(from_snapshot_id.clone()),
                     actual_parent: Some(from_snapshot_id.clone()),
-                })
-                .ic_err();
+                }));
             }
             let num_updates = self.config.num_updates_per_repo_info_file();
 
@@ -1286,7 +1289,7 @@ impl Repository {
     pub async fn delete_branch(&self, branch: &str) -> RepositoryResult<()> {
         self.raise_if_cant_write("Cannot delete branch").await?;
         if branch == Ref::DEFAULT_BRANCH {
-            Err(RepositoryErrorKind::CannotDeleteMain).ic_err()
+            Err(RepositoryError::capture(RepositoryErrorKind::CannotDeleteMain))
         } else {
             match self.spec_version {
                 SpecVersionBin::V1 => self.delete_branch_v1(branch).await,
@@ -1634,11 +1637,12 @@ impl Repository {
                     .await?;
                 match snap.into_iter().next() {
                     Some(snap) => Ok(snap.id),
-                    None => Err(RepositoryErrorKind::InvalidAsOfSpec {
-                        branch: branch.clone(),
-                        at,
-                    })
-                    .ic_err(),
+                    None => Err(RepositoryError::capture(
+                        RepositoryErrorKind::InvalidAsOfSpec {
+                            branch: branch.clone(),
+                            at,
+                        },
+                    )),
                 }
             }
         }
@@ -1671,11 +1675,12 @@ impl Repository {
 
                 match snap.into_iter().next() {
                     Some(snap) => Ok(snap.id),
-                    None => Err(RepositoryErrorKind::InvalidAsOfSpec {
-                        branch: branch.clone(),
-                        at,
-                    })
-                    .ic_err(),
+                    None => Err(RepositoryError::capture(
+                        RepositoryErrorKind::InvalidAsOfSpec {
+                            branch: branch.clone(),
+                            at,
+                        },
+                    )),
                 }
             }
         }
@@ -1711,7 +1716,7 @@ impl Repository {
             .inject()?;
 
         if all_snaps.last().and_then(|info| info.parent_id.as_ref()) != Some(&from) {
-            return Err(SessionErrorKind::BadSnapshotChainForDiff).ic_err();
+            return Err(SessionError::capture(SessionErrorKind::BadSnapshotChainForDiff));
         }
 
         // we don't include the changes in from
@@ -1756,7 +1761,7 @@ impl Repository {
                 .inject()?;
             builder.to_diff(&from_session, &to_session).await
         } else {
-            Err(SessionErrorKind::BadSnapshotChainForDiff).ic_err()
+            Err(SessionError::capture(SessionErrorKind::BadSnapshotChainForDiff))
         }
     }
 
@@ -1791,11 +1796,12 @@ impl Repository {
         if self.spec_version() >= SpecVersionBin::V2 {
             let status = self.get_status().await?;
             if status.availability != RepoAvailability::Online {
-                return Err(RepositoryErrorKind::ReadonlyRepository(format!(
-                    "{error_msg}; {0}",
-                    status.error_msg()
-                )))
-                .ic_err();
+                return Err(RepositoryError::capture(
+                    RepositoryErrorKind::ReadonlyRepository(format!(
+                        "{error_msg}; {0}",
+                        status.error_msg()
+                    )),
+                ));
             }
         }
         Ok(())
@@ -1948,7 +1954,7 @@ async fn raise_if_cant_write(
     if storage.can_write().await.inject()? {
         Ok(())
     } else {
-        Err(RepositoryErrorKind::ReadonlyStorage(msg.into())).ic_err()
+        Err(RepositoryError::capture(RepositoryErrorKind::ReadonlyStorage(msg.into())))
     }
 }
 
@@ -2019,10 +2025,9 @@ fn validate_credentials(
         if let Some(cont) = config.get_virtual_chunk_container(url_prefix)
             && let Err(error) = cont.validate_credentials(cred.as_ref())
         {
-            return Err(RepositoryErrorKind::StorageError(StorageErrorKind::Other(
-                error,
-            )))
-            .ic_err();
+            return Err(RepositoryError::capture(RepositoryErrorKind::StorageError(
+                StorageErrorKind::Other(error),
+            )));
         }
     }
     Ok(())

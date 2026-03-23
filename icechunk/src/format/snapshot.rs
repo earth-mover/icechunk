@@ -203,7 +203,7 @@ impl TryFrom<&generated::DimensionShape> for DimensionShape {
                 "Array metadata has chunk_length = 0 while array_length={:?}",
                 value.array_length()
             )))
-            .ic_err();
+            .capture();
         }
         let num_chunks = if value.chunk_length() == 0 {
             0
@@ -415,7 +415,7 @@ impl Snapshot {
             &ROOT_OPTIONS,
             buffer.as_slice(),
         )
-        .ic_err()?;
+        .capture()?;
         Ok(Snapshot {
             buffer,
             spec_version,
@@ -461,9 +461,9 @@ impl Snapshot {
             .map(|(k, v)| {
                 let name = builder.create_shared_string(k.as_str());
                 let serialized = if spec_version == SpecVersionBin::V1 {
-                    rmp_serde::to_vec(v).map_err(Box::new).ic_err()?
+                    rmp_serde::to_vec(v).map_err(Box::new).capture()?
                 } else {
-                    flexbuffers::to_vec(v).map_err(Box::new).ic_err()?
+                    flexbuffers::to_vec(v).map_err(Box::new).capture()?
                 };
 
                 let value = builder.create_vector(serialized.as_slice());
@@ -558,11 +558,11 @@ impl Snapshot {
                 let value = if self.spec_version == SpecVersionBin::V1 {
                     rmp_serde::from_slice(item.value().bytes())
                         .map_err(Box::new)
-                        .ic_err()?
+                        .capture()?
                 } else {
                     flexbuffers::from_slice(item.value().bytes())
                         .map_err(Box::new)
-                        .ic_err()?
+                        .capture()?
                 };
                 Ok((key, value))
             })
@@ -574,10 +574,10 @@ impl Snapshot {
         let ts: i64 = ts
             .try_into()
             .map_err(|_| IcechunkFormatErrorKind::InvalidTimestamp)
-            .ic_err()?;
+            .capture()?;
         DateTime::from_timestamp_micros(ts)
             .ok_or(IcechunkFormatErrorKind::InvalidTimestamp)
-            .ic_err()
+            .capture()
     }
 
     pub fn message(&self) -> String {
@@ -625,7 +625,7 @@ impl Snapshot {
             .nodes()
             .lookup_by_key(path.to_string().as_str(), |node, path| node.path().cmp(path))
             .ok_or_else(|| IcechunkFormatErrorKind::NodeNotFound { path: path.clone() })
-            .ic_err()?;
+            .capture()?;
         res.try_into()
     }
 
@@ -650,7 +650,7 @@ impl Snapshot {
                 node.path().cmp(path)
             })
             .ok_or_else(|| IcechunkFormatErrorKind::NodeNotFound { path: path.clone() })
-            .ic_err()?;
+            .capture()?;
         Ok(res)
     }
 

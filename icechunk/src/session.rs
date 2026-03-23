@@ -344,28 +344,32 @@ impl<'a> CommitBuilder<'a> {
         let has_hooks = self.before_rebase.is_some() || self.after_rebase.is_some();
 
         if matches!(self.kind, CommitKind::Flush) && self.amend {
-            return Err(SessionErrorKind::InvalidCommitConfiguration {
-                reason: "anonymous commits cannot be amended",
-            })
-            .ic_err();
+            return Err(SessionError::capture(
+                SessionErrorKind::InvalidCommitConfiguration {
+                    reason: "anonymous commits cannot be amended",
+                },
+            ));
         }
         if matches!(self.kind, CommitKind::Flush) && has_rebase {
-            return Err(SessionErrorKind::InvalidCommitConfiguration {
-                reason: "anonymous commits cannot use rebase",
-            })
-            .ic_err();
+            return Err(SessionError::capture(
+                SessionErrorKind::InvalidCommitConfiguration {
+                    reason: "anonymous commits cannot use rebase",
+                },
+            ));
         }
         if matches!(self.kind, CommitKind::RewriteManifests) && has_rebase {
-            return Err(SessionErrorKind::InvalidCommitConfiguration {
-                reason: "rewrite_manifests cannot be combined with rebase",
-            })
-            .ic_err();
+            return Err(SessionError::capture(
+                SessionErrorKind::InvalidCommitConfiguration {
+                    reason: "rewrite_manifests cannot be combined with rebase",
+                },
+            ));
         }
         if has_hooks && !has_rebase {
-            return Err(SessionErrorKind::InvalidCommitConfiguration {
-                reason: "rebase hooks require .rebase() to be set",
-            })
-            .ic_err();
+            return Err(SessionError::capture(
+                SessionErrorKind::InvalidCommitConfiguration {
+                    reason: "rebase hooks require .rebase() to be set",
+                },
+            ));
         }
 
         if self.amend {
@@ -539,12 +543,12 @@ impl Session {
 
     #[instrument(skip(bytes))]
     pub fn from_bytes(bytes: &[u8]) -> SessionResult<Self> {
-        rmp_serde::from_slice(bytes).ic_err_box()
+        rmp_serde::from_slice(bytes).capture_box()
     }
 
     #[instrument(skip(self))]
     pub fn as_bytes(&self) -> SessionResult<Vec<u8>> {
-        rmp_serde::to_vec(self).ic_err_box()
+        rmp_serde::to_vec(self).capture_box()
     }
 
     pub fn branch(&self) -> Option<&str> {
@@ -599,7 +603,9 @@ impl Session {
     #[instrument(skip(self))]
     pub async fn fork(&self) -> SessionResult<Self> {
         if self.read_only() {
-            return Err(SessionErrorKind::CannotForkReadOnlySession).ic_err();
+            return Err(SessionError::capture(
+                SessionErrorKind::CannotForkReadOnlySession,
+            ));
         }
         // TODO: why do we allow Clone?
         let snap = self.clone().commit("fork").anonymous().execute().await?;
@@ -653,11 +659,10 @@ impl Session {
                 self.change_set_mut()?.add_group(path.clone(), id, definition)?;
                 Ok(())
             }
-            Ok(node) => Err(SessionErrorKind::AlreadyExists {
+            Ok(node) => Err(SessionError::capture(SessionErrorKind::AlreadyExists {
                 node: Box::new(node),
                 message: "trying to add group".to_string(),
-            })
-            .ic_err(),
+            })),
             Err(err) => Err(err),
         }
     }
@@ -724,11 +729,10 @@ impl Session {
                 )?;
                 Ok(())
             }
-            Ok(node) => Err(SessionErrorKind::AlreadyExists {
+            Ok(node) => Err(SessionError::capture(SessionErrorKind::AlreadyExists {
                 node: Box::new(node),
                 message: "trying to add array".to_string(),
-            })
-            .ic_err(),
+            })),
             Err(err) => Err(err),
         }
     }
@@ -804,7 +808,9 @@ impl Session {
         let _ = self.get_node(&from).await?;
         // are we overwriting the destination node?
         if (self.get_node(&to).await).is_ok() {
-            return Err(SessionErrorKind::MoveWontOverwrite(to.to_string())).ic_err();
+            return Err(SessionError::capture(SessionErrorKind::MoveWontOverwrite(
+                to.to_string(),
+            )));
         }
 
         self.change_set_mut()?.move_node(from, to)?;
@@ -862,11 +868,10 @@ impl Session {
                         new_payload,
                     )?;
                 } else {
-                    return Err(SessionErrorKind::InvalidIndex {
+                    return Err(SessionError::capture(SessionErrorKind::InvalidIndex {
                         coords: new_chunk_index,
                         path: node.path.clone(),
-                    })
-                    .ic_err();
+                    }));
                 }
             }
             if let Some(ref backwards) = backwards {
@@ -981,7 +986,7 @@ impl Session {
 
     fn change_set_mut(&mut self) -> SessionResult<&mut ChangeSet> {
         if self.read_only() {
-            Err(SessionErrorKind::ReadOnlySession).ic_err()
+            Err(SessionError::capture(SessionErrorKind::ReadOnlySession))
         } else {
             Ok(&mut self.change_set)
         }
@@ -1009,18 +1014,16 @@ impl Session {
                 self.change_set_mut()?.set_chunk_ref(node.id, coord, data)?;
                 Ok(())
             } else {
-                Err(SessionErrorKind::InvalidIndex {
+                Err(SessionError::capture(SessionErrorKind::InvalidIndex {
                     coords: coord,
                     path: node.path.clone(),
-                })
-                .ic_err()
+                }))
             }
         } else {
-            Err(SessionErrorKind::NotAnArray {
+            Err(SessionError::capture(SessionErrorKind::NotAnArray {
                 node: Box::new(node.clone()),
                 message: "getting an array".to_string(),
-            })
-            .ic_err()
+            }))
         }
     }
 
@@ -1038,7 +1041,9 @@ impl Session {
                 return node;
             }
         }
-        Err(SessionErrorKind::AncestorNodeNotFound { prefix: path.clone() }).ic_err()
+        Err(SessionError::capture(SessionErrorKind::AncestorNodeNotFound {
+            prefix: path.clone(),
+        }))
     }
 
     #[instrument(skip(self))]
@@ -1049,11 +1054,12 @@ impl Session {
     pub async fn get_array(&self, path: &Path) -> SessionResult<NodeSnapshot> {
         match self.get_node(path).await {
             res @ Ok(NodeSnapshot { node_data: NodeData::Array { .. }, .. }) => res,
-            Ok(node @ NodeSnapshot { .. }) => Err(SessionErrorKind::NotAnArray {
-                node: Box::new(node),
-                message: "getting an array".to_string(),
-            })
-            .ic_err(),
+            Ok(node @ NodeSnapshot { .. }) => {
+                Err(SessionError::capture(SessionErrorKind::NotAnArray {
+                    node: Box::new(node),
+                    message: "getting an array".to_string(),
+                }))
+            }
             other => other,
         }
     }
@@ -1061,11 +1067,12 @@ impl Session {
     pub async fn get_group(&self, path: &Path) -> SessionResult<NodeSnapshot> {
         match self.get_node(path).await {
             res @ Ok(NodeSnapshot { node_data: NodeData::Group, .. }) => res,
-            Ok(node @ NodeSnapshot { .. }) => Err(SessionErrorKind::NotAGroup {
-                node: Box::new(node),
-                message: "getting a group".to_string(),
-            })
-            .ic_err(),
+            Ok(node @ NodeSnapshot { .. }) => {
+                Err(SessionError::capture(SessionErrorKind::NotAGroup {
+                    node: Box::new(node),
+                    message: "getting a group".to_string(),
+                }))
+            }
             other => other,
         }
     }
@@ -1094,11 +1101,10 @@ impl Session {
         // TODO: it's ugly to have to do this destructuring even if we could be calling `get_array`
         // get_array should return the array data, not a node
         match node.node_data {
-            NodeData::Group => Err(SessionErrorKind::NotAnArray {
+            NodeData::Group => Err(SessionError::capture(SessionErrorKind::NotAnArray {
                 node: Box::new(node),
                 message: "getting chunk reference".to_string(),
-            })
-            .ic_err(),
+            })),
             NodeData::Array { shape, manifests, .. } => {
                 if !shape.valid_chunk_coord(coords) {
                     // this chunk ref cannot exist
@@ -1387,11 +1393,11 @@ impl Session {
     #[instrument(skip(self, other))]
     pub async fn merge(&mut self, other: Session) -> SessionResult<()> {
         if self.read_only() {
-            return Err(SessionErrorKind::ReadOnlySession).ic_err();
+            return Err(SessionError::capture(SessionErrorKind::ReadOnlySession));
         }
         // A fork session cannot absorb a base session
         if self.branch_name.is_none() && other.branch_name.is_some() {
-            return Err(SessionErrorKind::MergeNotAllowed).ic_err();
+            return Err(SessionError::capture(SessionErrorKind::MergeNotAllowed));
         }
         let Session { change_set, .. } = other;
 
@@ -1541,7 +1547,7 @@ impl Session {
         }
 
         let splitting_config_serialized =
-            serde_json::to_value(self.config.manifest().splitting()).ic_err()?;
+            serde_json::to_value(self.config.manifest().splitting()).capture()?;
         let mut properties = properties.unwrap_or_default();
         inject_icechunk_metadata(
             &mut properties,
@@ -1571,7 +1577,7 @@ impl Session {
         allow_empty: bool,
     ) -> SessionResult<SnapshotId> {
         let Some(branch_name) = &self.branch_name else {
-            return Err(SessionErrorKind::CommitNotAllowed).ic_err();
+            return Err(SessionError::capture(SessionErrorKind::CommitNotAllowed));
         };
 
         // amend is only allowed in spec v2, this should be checked at this point so we only assert
@@ -1756,7 +1762,7 @@ impl Session {
         solver: &(dyn ConflictSolver + Send + Sync),
     ) -> SessionResult<()> {
         let Some(branch_name) = &self.branch_name else {
-            return Err(SessionErrorKind::CommitNotAllowed).ic_err();
+            return Err(SessionError::capture(SessionErrorKind::CommitNotAllowed));
         };
 
         debug!("Rebase started");
@@ -1805,11 +1811,10 @@ impl Session {
                 ConflictResolution::Unsolvable { reason, unmodified } => {
                     warn!("Snapshot cannot be rebased. Aborting rebase.");
                     self.change_set = unmodified;
-                    return Err(SessionErrorKind::RebaseFailed {
+                    return Err(SessionError::capture(SessionErrorKind::RebaseFailed {
                         snapshot: snap_id,
                         conflicts: reason,
-                    })
-                    .ic_err();
+                    }));
                 }
             }
         }
@@ -2147,11 +2152,10 @@ async fn get_node(
             let node =
                 get_existing_node(asset_manager, change_set, snapshot_id, path).await?;
             if change_set.is_deleted(path, &node.id) {
-                Err(SessionErrorKind::NodeNotFound {
+                Err(SessionError::capture(SessionErrorKind::NodeNotFound {
                     path: path.clone(),
                     message: "getting node".to_string(),
-                })
-                .ic_err()
+                }))
             } else {
                 Ok(node)
             }
@@ -2170,11 +2174,10 @@ async fn get_existing_node(
 
     let moved_from = change_set.moved_from(path);
     if matches!(moved_from, MovedFrom::Deleted) {
-        return Err(SessionErrorKind::NodeNotFound {
+        return Err(SessionError::capture(SessionErrorKind::NodeNotFound {
             path: path.clone(),
             message: "existing node not found".to_string(),
-        })
-        .ic_err();
+        }));
     }
     let was_moved = matches!(moved_from, MovedFrom::From(_));
     let renamed_path = match moved_from {
@@ -2231,11 +2234,10 @@ async fn get_existing_node(
         Err(IcechunkFormatError {
             kind: IcechunkFormatErrorKind::NodeNotFound { .. },
             ..
-        }) => Err(SessionErrorKind::NodeNotFound {
+        }) => Err(SessionError::capture(SessionErrorKind::NodeNotFound {
             path: path.clone(),
             message: "existing node not found".to_string(),
-        })
-        .ic_err(),
+        })),
         Err(err) => Err(err.inject()),
     }
 }
@@ -2260,7 +2262,7 @@ pub fn construct_valid_byte_range(
     chunk_length: u64,
 ) -> SessionResult<Range<ChunkOffset>> {
     let err = || -> SessionError {
-        ICError::no_context(SessionErrorKind::InvalidByteRange {
+        SessionError::capture(SessionErrorKind::InvalidByteRange {
             request: request.clone(),
             chunk_length,
         })
@@ -2728,7 +2730,9 @@ async fn do_flush(
         if previous_log.has_moves() && commit_method == CommitMethod::Amend {
             match flush_data.change_set {
                 ChangeSet::Edit(_) => {
-                    return Err(SessionErrorKind::RearrangeSessionOnly).ic_err();
+                    return Err(SessionError::capture(
+                        SessionErrorKind::RearrangeSessionOnly,
+                    ));
                 }
                 ChangeSet::Rearrange(_) => {
                     // Fine for now
@@ -2898,11 +2902,12 @@ async fn do_flush(
             old_timestamp = %old_ts,
             "Snapshot timestamp older than parent, aborting commit"
         );
-        return Err(SessionErrorKind::InvalidSnapshotTimestampOrdering {
-            parent: old_ts,
-            child: new_ts,
-        })
-        .ic_err();
+        return Err(SessionError::capture(
+            SessionErrorKind::InvalidSnapshotTimestampOrdering {
+                parent: old_ts,
+                child: new_ts,
+            },
+        ));
     }
 
     let new_snapshot = Arc::new(new_snapshot);
@@ -2935,7 +2940,7 @@ async fn do_flush(
                     )
                 })
                 .await
-                .ic_err()?
+                .capture()?
             }
             None => this_tx_log,
         }
@@ -2947,7 +2952,7 @@ async fn do_flush(
         .await
         .inject()?;
 
-    let snapshot_timestamp = snapshot_timestamp.await.ic_err()?.inject()?;
+    let snapshot_timestamp = snapshot_timestamp.await.capture()?.inject()?;
 
     // Fail if there is too much clock difference with the object store
     // This is to prevent issues with snapshot ordering and expiration
@@ -2957,11 +2962,10 @@ async fn do_flush(
             object_store_timestamp = %snapshot_timestamp,
             "Snapshot timestamp drifted from object store clock, aborting commit"
         );
-        return Err(SessionErrorKind::InvalidSnapshotTimestamp {
+        return Err(SessionError::capture(SessionErrorKind::InvalidSnapshotTimestamp {
             object_store_time: snapshot_timestamp,
             snapshot_time: new_ts,
-        })
-        .ic_err();
+        }));
     }
 
     Ok(new_snapshot)
@@ -2987,12 +2991,12 @@ async fn do_commit(
     info!(branch_name, old_snapshot_id=%snapshot_id, "Commit started");
 
     if !allow_empty && change_set.is_empty() {
-        return Err(SessionErrorKind::NoChangesToCommit).ic_err();
+        return Err(SessionError::capture(SessionErrorKind::NoChangesToCommit));
     }
 
     // Cannot amend the initial commit
     if commit_method == CommitMethod::Amend && snapshot_id.is_initial() {
-        return Err(SessionErrorKind::NoAmendForInitialCommit).ic_err();
+        return Err(SessionError::capture(SessionErrorKind::NoAmendForInitialCommit));
     }
 
     let properties = properties.unwrap_or_default();
@@ -3120,11 +3124,10 @@ async fn do_commit_v2(
         let actual_parent = repo_info.resolve_branch(branch_name).inject()?;
         if &actual_parent != parent_snapshot_id {
             info!(branch_name, %new_snapshot_id, attempt, "Branch tip has changed, rebase needed");
-            return Err(RepositoryErrorKind::Conflict {
+            return Err(RepositoryError::capture(RepositoryErrorKind::Conflict {
                 expected_parent: Some(parent_snapshot_id.clone()),
                 actual_parent: Some(actual_parent),
-            })
-            .ic_err();
+            }));
         }
 
         let parent_snapshot = repo_info.find_snapshot(parent_snapshot_id).inject()?;
@@ -3183,7 +3186,7 @@ async fn fetch_manifest(
         .ok_or_else(|| IcechunkFormatErrorKind::ManifestInfoNotFound {
             manifest_id: manifest_id.clone(),
         })
-        .ic_err::<IcechunkFormatErrorKind>()
+        .capture::<IcechunkFormatErrorKind>()
         .inject()?;
     asset_manager.fetch_manifest(manifest_id, manifest_info.size_bytes).await.inject()
 }

@@ -62,10 +62,10 @@ impl TryFrom<generated::RepoStatus<'_>> for RepoStatus {
             .set_at()
             .try_into()
             .map_err(|_| IcechunkFormatErrorKind::InvalidTimestamp)
-            .ic_err()?;
+            .capture()?;
         let set_at = DateTime::from_timestamp_micros(ts)
             .ok_or(IcechunkFormatErrorKind::InvalidTimestamp)
-            .ic_err()?;
+            .capture()?;
         Ok(RepoStatus {
             availability: fb_status.availability().into(),
             set_at,
@@ -289,7 +289,7 @@ impl RepoInfo {
             return Err(IcechunkFormatErrorKind::BranchNotFound {
                 branch: Ref::DEFAULT_BRANCH.to_string(),
             })
-            .ic_err();
+            .capture();
         }
 
         let branches = builder.create_vector(&branches);
@@ -319,7 +319,7 @@ impl RepoInfo {
                             .ok_or_else(|| IcechunkFormatErrorKind::SnapshotIdNotFound {
                                 snapshot_id: snap.id.clone(),
                             })
-                            .ic_err()?;
+                            .capture()?;
                         Ok(*index as i32)
                     }
                     None => Ok::<_, IcechunkFormatError>(-1),
@@ -331,7 +331,7 @@ impl RepoInfo {
                     .map(|(k, v)| {
                         let name = builder.create_shared_string(k.as_str());
                         let serialized =
-                            flexbuffers::to_vec(v).map_err(Box::new).ic_err()?;
+                            flexbuffers::to_vec(v).map_err(Box::new).capture()?;
                         let value = builder.create_vector(serialized.as_slice());
                         let item = generated::MetadataItem::create(
                             &mut builder,
@@ -377,7 +377,7 @@ impl RepoInfo {
             .iter()
             .map(|(k, v)| {
                 let name = builder.create_shared_string(k.as_str());
-                let serialized = flexbuffers::to_vec(v).map_err(Box::new).ic_err()?;
+                let serialized = flexbuffers::to_vec(v).map_err(Box::new).capture()?;
                 let value = builder.create_vector(serialized.as_slice());
                 let item = generated::MetadataItem::create(
                     &mut builder,
@@ -478,7 +478,7 @@ impl RepoInfo {
                 latest_time: *latest_time,
                 new_time: update.update_time,
             })
-            .ic_err();
+            .capture();
         }
 
         let new_updates: Box<dyn Iterator<Item = _>> =
@@ -585,7 +585,7 @@ impl RepoInfo {
             Some(config_fb) => {
                 let config: RepositoryConfig = flexbuffers::from_slice(config_fb.bytes())
                     .map_err(Box::new)
-                    .ic_err()?;
+                    .capture()?;
                 Ok(Some(config))
             }
         }
@@ -600,7 +600,7 @@ impl RepoInfo {
                 let key = item.name().to_string();
                 let value = flexbuffers::from_slice(item.value().bytes())
                     .map_err(Box::new)
-                    .ic_err()?;
+                    .capture()?;
                 Ok((key, value))
             })
             .try_collect()
@@ -756,7 +756,7 @@ impl RepoInfo {
             Ok(_) => Err(IcechunkFormatErrorKind::DuplicateSnapshotId {
                 snapshot_id: snap.id.clone(),
             })
-            .ic_err(),
+            .capture(),
             Err(idx) => Ok(idx),
         }?;
 
@@ -811,7 +811,7 @@ impl RepoInfo {
                 branch: name.to_string(),
                 snapshot_id,
             })
-            .ic_err();
+            .capture();
         }
 
         match self.resolve_snapshot_index(snap)? {
@@ -846,7 +846,7 @@ impl RepoInfo {
             None => Err(IcechunkFormatErrorKind::SnapshotIdNotFound {
                 snapshot_id: snap.clone(),
             })
-            .ic_err(),
+            .capture(),
         }
     }
 
@@ -892,7 +892,7 @@ impl RepoInfo {
                 ..
             }) => {
                 Err(IcechunkFormatErrorKind::BranchNotFound { branch: name.to_string() })
-                    .ic_err()
+                    .capture()
             }
             Err(err) => Err(err),
         }
@@ -940,7 +940,7 @@ impl RepoInfo {
             None => Err(IcechunkFormatErrorKind::SnapshotIdNotFound {
                 snapshot_id: new_snap.clone(),
             })
-            .ic_err(),
+            .capture(),
         }
     }
 
@@ -956,13 +956,13 @@ impl RepoInfo {
             return Err(IcechunkFormatErrorKind::TagAlreadyExists {
                 tag: name.to_string(),
             })
-            .ic_err();
+            .capture();
         }
         if self.tag_was_deleted(name)? {
             return Err(IcechunkFormatErrorKind::TagPreviouslyDeleted {
                 tag: name.to_string(),
             })
-            .ic_err();
+            .capture();
         }
 
         match self.resolve_snapshot_index(snap)? {
@@ -997,7 +997,7 @@ impl RepoInfo {
             None => Err(IcechunkFormatErrorKind::SnapshotIdNotFound {
                 snapshot_id: snap.clone(),
             })
-            .ic_err(),
+            .capture(),
         }
     }
 
@@ -1047,7 +1047,7 @@ impl RepoInfo {
                 kind: IcechunkFormatErrorKind::TagNotFound { .. },
                 ..
             }) => Err(IcechunkFormatErrorKind::TagNotFound { tag: name.to_string() })
-                .ic_err(),
+                .capture(),
             Err(err) => Err(err),
         }
     }
@@ -1090,7 +1090,7 @@ impl RepoInfo {
         previous_file: &str,
         num_updates_per_file: u16,
     ) -> IcechunkResult<Self> {
-        let config_bytes = flexbuffers::to_vec(config).map_err(Box::new).ic_err()?;
+        let config_bytes = flexbuffers::to_vec(config).map_err(Box::new).capture()?;
         let snaps: Vec<_> = self.all_snapshots()?.try_collect()?;
         Self::from_parts(
             spec_version,
@@ -1151,7 +1151,7 @@ impl RepoInfo {
             &ROOT_OPTIONS,
             buffer.as_slice(),
         )
-        .ic_err()?;
+        .capture()?;
         Ok(RepoInfo { buffer })
     }
 
@@ -1160,7 +1160,7 @@ impl RepoInfo {
     }
 
     fn root(&self) -> IcechunkResult<generated::Repo<'_>> {
-        flatbuffers::root::<generated::Repo<'_>>(&self.buffer).ic_err()
+        flatbuffers::root::<generated::Repo<'_>>(&self.buffer).capture()
     }
 
     pub fn tag_names(&self) -> IcechunkResult<impl Iterator<Item = &str>> {
@@ -1195,7 +1195,7 @@ impl RepoInfo {
                 SnapshotId::new(root.snapshots().get(index as usize).id().0)
             })
             .ok_or_else(|| IcechunkFormatErrorKind::TagNotFound { tag: name.to_string() })
-            .ic_err()?;
+            .capture()?;
 
         Ok(res)
     }
@@ -1218,7 +1218,7 @@ impl RepoInfo {
             .ok_or_else(|| IcechunkFormatErrorKind::BranchNotFound {
                 branch: name.to_string(),
             })
-            .ic_err()?;
+            .capture()?;
 
         Ok(res)
     }
@@ -1230,7 +1230,7 @@ impl RepoInfo {
                 found: raw,
                 max_supported: SpecVersionBin::current() as u8,
             })
-            .ic_err()
+            .capture()
     }
 
     pub fn latest_updates(
@@ -1270,14 +1270,14 @@ impl RepoInfo {
                             found: from_raw,
                             max_supported: SpecVersionBin::current() as u8,
                         })
-                        .ic_err()?,
+                        .capture()?,
                     to_version: to_raw
                         .try_into()
                         .map_err(|_| IcechunkFormatErrorKind::InvalidSpecVersion {
                             found: to_raw,
                             max_supported: SpecVersionBin::current() as u8,
                         })
-                        .ic_err()?,
+                        .capture()?,
                 })
             }
             generated::UpdateType::RepoStatusChangedUpdate => {
@@ -1366,7 +1366,7 @@ impl RepoInfo {
                     error_trace: Default::default(),
                 },
             ))
-            .ic_err(),
+            .capture(),
         }
     }
 
@@ -1397,7 +1397,7 @@ impl RepoInfo {
             Err(IcechunkFormatErrorKind::SnapshotIdNotFound {
                 snapshot_id: snapshot.clone(),
             })
-            .ic_err()
+            .capture()
         }
     }
 
@@ -1435,7 +1435,7 @@ fn resolve_ref_iter<'a>(
                 .map_err(|_| IcechunkFormatErrorKind::SnapshotIdNotFound {
                     snapshot_id: id.clone(),
                 })
-                .ic_err()? as u32;
+                .capture()? as u32;
             Ok::<_, IcechunkFormatError>((name, idx))
         })
         .try_collect()?;
@@ -1445,10 +1445,10 @@ fn resolve_ref_iter<'a>(
 
 fn timestamp_to_timestamp(ts: u64) -> IcechunkResult<DateTime<Utc>> {
     let ts: i64 =
-        ts.try_into().map_err(|_| IcechunkFormatErrorKind::InvalidTimestamp).ic_err()?;
+        ts.try_into().map_err(|_| IcechunkFormatErrorKind::InvalidTimestamp).capture()?;
     DateTime::from_timestamp_micros(ts)
         .ok_or(IcechunkFormatErrorKind::InvalidTimestamp)
-        .ic_err()
+        .capture()
 }
 
 fn mk_snapshot_info(
@@ -1471,7 +1471,7 @@ fn mk_snapshot_info(
                     let name = item.name().to_string();
                     let value = flexbuffers::from_slice(item.value().bytes())
                         .map_err(Box::new)
-                        .ic_err()?;
+                        .capture()?;
                     Ok::<_, IcechunkFormatError>((name, value))
                 })
                 .try_collect()?;

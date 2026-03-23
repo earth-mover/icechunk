@@ -202,7 +202,7 @@ async fn snapshot_retained(
         .map_err(|_| {
             RepositoryErrorKind::Other("can't lock retained snapshots mutex".to_string())
         })
-        .ic_err()?
+        .capture()?
         .insert(snap.id());
     Ok(stream::iter(
         snap.manifest_files().map(Ok::<_, RepositoryError>).collect::<Vec<_>>(),
@@ -219,7 +219,7 @@ async fn manifest_retained(
         .map_err(|_| {
             RepositoryErrorKind::Other("can't lock retained manifests mutex".to_string())
         })
-        .ic_err()?
+        .capture()?
         .insert(minfo.id.clone());
     let manifest = asset_manager.fetch_manifest(&minfo.id, minfo.size_bytes).await?;
     Ok((manifest, minfo))
@@ -248,12 +248,12 @@ async fn chunks_retained(
             .map_err(|_| {
                 RepositoryErrorKind::Other("can't lock retained chunks mutex".to_string())
             })
-            .ic_err()?
+            .capture()?
             .extend(chunk_ids);
         Ok::<_, RepositoryError>(())
     })
     .await
-    .ic_err()??;
+    .capture()??;
     Ok(minfo)
 }
 
@@ -329,7 +329,7 @@ pub async fn garbage_collect(
         return Err(RepositoryErrorKind::ReadonlyStorage(
             "Cannot garbage collect".to_string(),
         ))
-        .ic_err()
+        .capture()
         .map_err(GCError::Repository)?;
     }
 
@@ -340,7 +340,7 @@ pub async fn garbage_collect(
             return Err(RepositoryErrorKind::ReadonlyRepository(
                 "Cannot garbage collect".to_string(),
             ))
-            .ic_err()
+            .capture()
             .map_err(GCError::Repository)?;
         }
     }
@@ -564,7 +564,9 @@ async fn delete_snapshots_from_repo_info(
                     {
                         // this is a new snapshot created since we started GC
                         // but we are trying to drop its parent. Case 2b
-                        return Err(RepositoryErrorKind::RepoInfoUpdated).ic_err();
+                        return Err(RepositoryError::capture(
+                            RepositoryErrorKind::RepoInfoUpdated,
+                        ));
                     } else {
                         // a new snapshot with the root as parent or with a parent we don't want to drop
                         // root is always retained
@@ -584,7 +586,9 @@ async fn delete_snapshots_from_repo_info(
             repo_info.tags().inject()?.chain(repo_info.branches().inject()?)
         {
             if !final_snap_ids.contains(&pointed_snap) {
-                return Err(RepositoryErrorKind::RepoInfoUpdated).ic_err();
+                return Err(RepositoryError::capture(
+                    RepositoryErrorKind::RepoInfoUpdated,
+                ));
             }
         }
 
@@ -796,7 +800,7 @@ pub async fn expire(
 ) -> GCResult<ExpireResult> {
     if !asset_manager.can_write_to_storage().await? {
         return Err(RepositoryErrorKind::ReadonlyStorage("Cannot expire".to_string()))
-            .ic_err()
+            .capture()
             .map_err(GCError::Repository)?;
     }
 
@@ -807,7 +811,7 @@ pub async fn expire(
             return Err(RepositoryErrorKind::ReadonlyRepository(
                 "Cannot garbage collect".to_string(),
             ))
-            .ic_err()
+            .capture()
             .map_err(GCError::Repository)?;
         }
     }
@@ -1048,7 +1052,7 @@ async fn expire_v2_one_attempt(
     let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str, version| {
         // we retry if the repo info object was modified since we started
         if version != repo_info_version_at_start {
-            return Err(RepositoryErrorKind::RepoInfoUpdated).ic_err();
+            return Err(RepositoryError::capture(RepositoryErrorKind::RepoInfoUpdated));
         }
 
         let tags = repo_info

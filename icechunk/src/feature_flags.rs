@@ -90,7 +90,7 @@ pub fn raise_if_feature_flag_disabled(
             feature_description: feature_description.to_string(),
             feature_flag: name.to_string(),
         })
-        .ic_err()
+        .capture()
     }
 }
 
@@ -101,7 +101,7 @@ pub fn find_feature_flag_id(flag: &str) -> IcechunkResult<u16> {
         .ok_or_else(|| IcechunkFormatErrorKind::InvalidFeatureFlagName {
             name: flag.to_string(),
         })
-        .ic_err()
+        .capture()
 }
 
 fn find_flag_by_id(flag_id: u16) -> IcechunkResult<(&'static str, bool)> {
@@ -110,7 +110,7 @@ fn find_flag_by_id(flag_id: u16) -> IcechunkResult<(&'static str, bool)> {
         .find(|(_, (id, _))| *id == flag_id)
         .map(|(name, (_, default))| (*name, *default))
         .ok_or(IcechunkFormatErrorKind::InvalidFeatureFlagId { id: flag_id })
-        .ic_err()
+        .capture()
 }
 
 pub(crate) static FEATURE_FLAGS: LazyLock<HashMap<&str, (u16, bool)>> =

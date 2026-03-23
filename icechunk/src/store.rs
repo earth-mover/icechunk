@@ -146,7 +146,8 @@ impl Store {
 
     #[instrument(skip_all)]
     pub fn from_bytes(bytes: &[u8]) -> StoreResult<Self> {
-        let session: Session = rmp_serde::from_slice(bytes).map_err(Box::new).ic_err()?;
+        let session: Session =
+            rmp_serde::from_slice(bytes).map_err(Box::new).capture()?;
         let conc = session.config().get_partial_values_concurrency();
         Ok(Self::from_session_and_config(Arc::new(RwLock::new(session)), conc))
     }
@@ -154,7 +155,7 @@ impl Store {
     #[instrument(skip_all)]
     pub async fn as_bytes(&self) -> StoreResult<Bytes> {
         let session = self.session.write().await;
-        let bytes = rmp_serde::to_vec(session.deref()).map_err(Box::new).ic_err()?;
+        let bytes = rmp_serde::to_vec(session.deref()).map_err(Box::new).capture()?;
         Ok(Bytes::from(bytes))
     }
 
@@ -238,14 +239,14 @@ impl Store {
 
         let results = Arc::into_inner(results)
             .ok_or(StoreErrorKind::PartialValuesPanic)
-            .ic_err()?
+            .capture()?
             .into_inner()
             .map_err(|_| StoreErrorKind::PartialValuesPanic)
-            .ic_err()?;
+            .capture()?;
 
         debug_assert!(results.len() == num_keys.into_inner());
         let res: Option<Vec<_>> = results.into_iter().collect();
-        res.ok_or(StoreErrorKind::PartialValuesPanic).ic_err()
+        res.ok_or(StoreErrorKind::PartialValuesPanic).capture()
     }
 
     #[instrument(skip(self))]
@@ -272,7 +273,7 @@ impl Store {
     #[instrument(skip(self, value))]
     pub async fn set(&self, key: &str, value: Bytes) -> StoreResult<()> {
         if self.read_only().await {
-            return Err(StoreErrorKind::ReadOnly).ic_err();
+            return Err(StoreError::capture(StoreErrorKind::ReadOnly));
         }
 
         self.set_with_optional_locking(key, value, None).await
@@ -286,20 +287,20 @@ impl Store {
     ) -> StoreResult<()> {
         if let Some(session) = locked_session.as_ref() {
             if session.read_only() {
-                return Err(StoreErrorKind::ReadOnly).ic_err();
+                return Err(StoreError::capture(StoreErrorKind::ReadOnly));
             }
         } else if self.read_only().await {
-            return Err(StoreErrorKind::ReadOnly).ic_err();
+            return Err(StoreError::capture(StoreErrorKind::ReadOnly));
         }
 
         match Key::parse(key)? {
             Key::Metadata { node_path } => {
                 let node_meta =
-                    serde_json::from_slice::<NodeMetadata>(value.as_ref()).ic_err()?;
+                    serde_json::from_slice::<NodeMetadata>(value.as_ref()).capture()?;
                 match node_meta.node_type.as_str() {
                     "array" => {
                         let array_meta =
-                            serde_json::from_slice(value.as_ref()).ic_err()?;
+                            serde_json::from_slice(value.as_ref()).capture()?;
                         self.set_array_meta(node_path, value, array_meta, locked_session)
                             .await
                     }
@@ -339,7 +340,7 @@ impl Store {
             Key::ZarrV2(_) => Err(StoreErrorKind::Unimplemented(
                 "Icechunk cannot set Zarr V2 metadata keys",
             ))
-            .ic_err(),
+            .capture(),
         }
     }
 
@@ -362,7 +363,7 @@ impl Store {
         validate_container: bool,
     ) -> StoreResult<()> {
         if self.read_only().await {
-            return Err(StoreErrorKind::ReadOnly).ic_err();
+            return Err(StoreError::capture(StoreErrorKind::ReadOnly));
         }
 
         match Key::parse(key)? {
@@ -374,7 +375,7 @@ impl Store {
                     return Err(StoreErrorKind::InvalidVirtualChunkContainer {
                         chunk_location: reference.location.url().to_string(),
                     })
-                    .ic_err();
+                    .capture();
                 }
                 session
                     .set_chunk_ref(
@@ -389,7 +390,7 @@ impl Store {
             Key::Metadata { .. } | Key::ZarrV2(_) => Err(StoreErrorKind::NotAllowed(
                 format!("use .set to modify metadata for key {key}"),
             ))
-            .ic_err(),
+            .capture(),
         }
     }
 
@@ -404,7 +405,7 @@ impl Store {
         I: IntoIterator<Item = (ChunkIndices, VirtualChunkRef)> + std::fmt::Debug,
     {
         if self.read_only().await {
-            return Err(StoreErrorKind::ReadOnly).ic_err();
+            return Err(StoreError::capture(StoreErrorKind::ReadOnly));
         }
 
         let mut session = self.session.write().await;
@@ -435,7 +436,7 @@ impl Store {
     #[instrument(skip(self))]
     pub async fn delete_dir(&self, prefix: &str) -> StoreResult<()> {
         if self.read_only().await {
-            return Err(StoreErrorKind::ReadOnly).ic_err();
+            return Err(StoreError::capture(StoreErrorKind::ReadOnly));
         }
         let prefix = prefix.trim_start_matches('/').trim_end_matches('/');
         // TODO: Handling preceding "/" is ugly!
@@ -445,7 +446,7 @@ impl Store {
                 prefix: prefix.to_owned(),
                 message: "Cannot convert to a path".to_string(),
             })
-            .ic_err()?;
+            .capture()?;
 
         let mut guard = self.session.write().await;
         let node = guard.get_node(&path).await;
@@ -538,10 +539,10 @@ impl Store {
         _key_start_values: impl IntoIterator<Item = (&str, ChunkOffset, Bytes)>,
     ) -> StoreResult<()> {
         if self.read_only().await {
-            return Err(StoreErrorKind::ReadOnly).ic_err();
+            return Err(StoreError::capture(StoreErrorKind::ReadOnly));
         }
 
-        Err(StoreErrorKind::Unimplemented("set_partial_values")).ic_err()
+        Err(StoreError::capture(StoreErrorKind::Unimplemented("set_partial_values")))
     }
 
     pub fn supports_listing(&self) -> StoreResult<bool> {
@@ -586,7 +587,7 @@ impl Store {
         let absolute_prefix =
             if !prefix.starts_with("/") { &format!("/{prefix}") } else { prefix };
 
-        let path = Path::try_from(absolute_prefix).ic_err()?;
+        let path = Path::try_from(absolute_prefix).capture()?;
         let session = Arc::clone(&self.session).read_owned().await;
         let results = match session.get_node(&path).await {
             Ok(NodeSnapshot { node_data: NodeData::Array { .. }, .. }) => {
@@ -755,7 +756,7 @@ impl Store {
                 prefix: prefix.to_owned(),
                 message: "Cannot convert to a path".to_string(),
             })
-            .ic_err()?;
+            .capture()?;
 
         let session = Arc::clone(&self.session).read_owned().await;
         if path != Path::root() {
@@ -767,7 +768,7 @@ impl Store {
                     message: "Only prefixes pointing to a group or array are allowed"
                         .to_string(),
                 })
-                .ic_err()?;
+                .capture()?;
         }
         let res = try_stream! {
             for node in session.list_nodes(&path).await.inject()? {
@@ -799,7 +800,7 @@ impl Store {
                     prefix: prefix.to_owned(),
                     message: "Cannot convert to a path".to_string(),
                 }
-            }).ic_err()?;
+            }).capture()?;
 
             let nodes = if path == Path::root() {
                 Either::Left(session.list_nodes(&Path::root()).await.inject()?)
@@ -809,7 +810,7 @@ impl Store {
                         prefix: prefix.to_owned(),
                         message: "Only prefixes pointing to a group or array are allowed".to_string(),
                     }
-                }).ic_err()?;
+                }).capture()?;
                 match node.node_type() {
                     NodeType::Group => Either::Left(session.list_nodes(&node.path).await.inject()?),
                     NodeType::Array => Either::Right(iter::once(Ok(node))),
@@ -900,7 +901,7 @@ async fn get_metadata(
             }
             e => StoreErrorKind::SessionError(e.kind),
         })
-        .ic_err()?;
+        .capture()?;
     Ok(range.slice(&node.user_data))
 }
 
@@ -923,7 +924,7 @@ async fn get_chunk_bytes(
                 coords,
             })
         })
-        .ic_err()
+        .capture()
 }
 
 async fn get_metadata_size(
@@ -966,7 +967,7 @@ async fn get_key(
         }
         Key::ZarrV2(key) => {
             Err(StoreErrorKind::NotFound(KeyNotFoundError::ZarrV2KeyNotFound { key }))
-                .ic_err()
+                .capture()
         }
     }?;
 
@@ -981,7 +982,7 @@ async fn get_key_size(key: &str, session: &Session) -> StoreResult<u64> {
         }
         Key::ZarrV2(key) => {
             Err(StoreErrorKind::NotFound(KeyNotFoundError::ZarrV2KeyNotFound { key }))
-                .ic_err()
+                .capture()
         }
     }?;
 
@@ -1008,7 +1009,7 @@ async fn exists(key: &str, session: &Session) -> StoreResult<bool> {
         }
         Key::ZarrV2(key) => {
             Err(StoreErrorKind::NotFound(KeyNotFoundError::ZarrV2KeyNotFound { key }))
-                .ic_err()
+                .capture()
         }
     }
 }
@@ -1054,20 +1055,20 @@ impl Key {
                             .map_err(|_| StoreErrorKind::InvalidKey {
                                 key: key.to_string(),
                             })
-                            .ic_err()?,
+                            .capture()?,
                         coords: ChunkIndices(vec![]),
                     })
                 } else {
                     let absolute = format!("/{path}")
                         .try_into()
                         .map_err(|_| StoreErrorKind::InvalidKey { key: key.to_string() })
-                        .ic_err()?;
+                        .capture()?;
                     coords
                         .strip_prefix('/')
                         .ok_or_else(|| StoreErrorKind::InvalidKey {
                             key: key.to_string(),
                         })
-                        .ic_err()?
+                        .capture()?
                         .split('/')
                         .map(|s| s.parse::<u32>())
                         .collect::<Result<Vec<_>, _>>()
@@ -1076,10 +1077,12 @@ impl Key {
                             coords: ChunkIndices(coords),
                         })
                         .map_err(|_| StoreErrorKind::InvalidKey { key: key.to_string() })
-                        .ic_err()
+                        .capture()
                 }
             } else {
-                Err(StoreErrorKind::InvalidKey { key: key.to_string() }).ic_err()
+                Err(StoreError::capture(StoreErrorKind::InvalidKey {
+                    key: key.to_string(),
+                }))
             }
         }
 
@@ -1091,7 +1094,7 @@ impl Key {
                 node_path: format!("/{path}")
                     .try_into()
                     .map_err(|_| StoreErrorKind::InvalidKey { key: key.to_string() })
-                    .ic_err()?,
+                    .capture()?,
             })
         } else {
             parse_chunk(key)
@@ -1146,19 +1149,19 @@ impl ArrayMetadata {
             return Err(StoreErrorKind::BadChunkGridMetadata(
                 "Unsupported chunk grid".into(),
             ))
-            .ic_err();
+            .capture();
         };
         match self.chunk_grid.name.as_str() {
             "regular" => {
                 let values = kvs.get("chunk_shape").and_then(|v| v.as_array()).ok_or_else(|| StoreErrorKind::BadChunkGridMetadata(
                         "cannot parse `chunk_shape` for regular chunk grid".into(),
                     ),
-                ).ic_err()?;
+                ).capture()?;
                 let chunks =
                     values.iter().map(|c| c.as_u64()).collect::<Option<Vec<_>>>().ok_or_else(|| StoreErrorKind::BadChunkGridMetadata(
                             "cannot parse `chunk_shape` for regular chunk grid".into(),
                         ),
-                    ).ic_err()?;
+                    ).capture()?;
                 let num_chunks = chunks
                     .iter()
                     .zip(self.shape.iter())
@@ -1170,7 +1173,7 @@ impl ArrayMetadata {
                 let values = kvs.get("chunk_shapes").and_then(|v| v.as_array()).ok_or_else(|| StoreErrorKind::BadChunkGridMetadata(
                         "cannot parse `chunk_shapes` for rectilinear chunk grid".into(),
                     ),
-                ).ic_err()?;
+                ).capture()?;
                 let num_chunks = values
                     .iter()
                     .map(|v| {
@@ -1191,13 +1194,13 @@ impl ArrayMetadata {
                     .collect::<Option<Vec<_>>>()
                     .ok_or_else(|| StoreErrorKind::BadChunkGridMetadata(
                         "cannot parse `chunk_shapes` for rectilinear chunk grid".into(),
-                    )).ic_err()?;
+                    )).capture()?;
                 Ok(num_chunks)
             }
             _other => {
                 Err(StoreErrorKind::BadChunkGridMetadata(format!(
                     "Unsupported chunk grid {_other}. Only 'regular' and 'rectilinear' chunk grids are supported.")))
-                    .ic_err()
+                    .capture()
             }
         }
     }
@@ -1211,21 +1214,21 @@ impl ArrayMetadata {
             return Err(StoreErrorKind::BadChunkGridMetadata(
                 "Unsupported chunk grid".into(),
             ))
-            .ic_err();
+            .capture();
         };
         match self.chunk_grid.name.as_str() {
             "regular" => {
                 let values = kvs.get("chunk_shape").and_then(|v| v.as_array()).ok_or_else(|| StoreErrorKind::BadChunkGridMetadata(
                         "cannot parse `chunk_shape` for regular chunk grid".into(),
                     ),
-                ).ic_err()?;
+                ).capture()?;
                 let chunks = values
                     .iter()
                     .map(|c| c.as_u64().map(|c| c as u32))
                     .collect::<Option<Vec<_>>>()
                     .ok_or_else(|| StoreErrorKind::BadChunkGridMetadata(
                         "cannot parse `chunk_shape` for regular chunk grid".into(),
-                    )).ic_err()?;
+                    )).capture()?;
                 let num_chunks = self.num_chunks()?;
 
                 let remainder: Vec<u32> = self
@@ -1249,7 +1252,7 @@ impl ArrayMetadata {
                                 coords: coord.clone(),
                                 num_chunks: *num_chunks,
                             })
-                            .ic_err()
+                            .capture()
                         } else {
                             Ok(if *rem == 0 || axcoord < &(num_chunks - 1) {
                                 *chunksize
@@ -1267,7 +1270,7 @@ impl ArrayMetadata {
                 let values = kvs.get("chunk_shapes").and_then(|v| v.as_array()).ok_or_else(|| StoreErrorKind::BadChunkGridMetadata(
                         "cannot parse `chunk_shapes` for rectilinear chunk grid".into(),
                     ),
-                ).ic_err()?;
+                ).capture()?;
                 let chunks = values
                     .iter()
                     .map(|v| {
@@ -1291,7 +1294,7 @@ impl ArrayMetadata {
                     .collect::<Option<Vec<_>>>()
                     .ok_or_else(|| StoreErrorKind::BadChunkGridMetadata(
                         "cannot parse `chunk_shapes` for rectilinear chunk grid".into(),
-                    )).ic_err()?;
+                    )).capture()?;
 
                 let iter = coords.map(move |coord: &ChunkIndices| {
                     coord
@@ -1306,7 +1309,7 @@ impl ArrayMetadata {
                                     axis,
                                     num_chunks: chunksizes.len() as u32,
                                 })
-                                .ic_err()
+                                .capture()
                             } else {
                                 Ok(chunksizes[*chunkcoord as usize])
                             }
@@ -1319,7 +1322,7 @@ impl ArrayMetadata {
             _other => {
                 Err(StoreErrorKind::BadChunkGridMetadata(format!(
                     "Unsupported chunk grid {_other}. Only 'regular' and 'rectilinear' chunk grids are supported.")))
-                    .ic_err()
+                    .capture()
             }
         }
     }
@@ -1332,13 +1335,13 @@ impl ArrayMetadata {
                 self.shape.len(),
                 num_chunks.len()
             )))
-            .ic_err()
+            .capture()
         } else {
             ArrayShape::new(
                 self.shape.iter().zip(num_chunks.iter()).map(|(a, b)| (*a, *b)),
             )
             .ok_or_else(|| StoreErrorKind::BadChunkGridMetadata("invalid shape".into()))
-            .ic_err()
+            .capture()
         }
     }
 }

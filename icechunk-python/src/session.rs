@@ -4,12 +4,12 @@ use async_stream::try_stream;
 use futures::{StreamExt as _, TryStreamExt as _};
 use icechunk::{
     Store,
-    error::ICError,
     format::{ChunkIndices, Path, manifest::ChunkPayload},
     session::{
-        ReindexMapping, ReindexOperationResult, Session, SessionErrorKind, SessionMode,
+        ReindexMapping, ReindexOperationResult, Session, SessionError, SessionErrorKind,
+        SessionMode,
     },
-    store::StoreErrorKind,
+    store::{StoreError, StoreErrorKind},
 };
 use pyo3::{
     prelude::*,
@@ -166,10 +166,10 @@ impl PySession {
         to_path: String,
     ) -> PyResult<()> {
         let from = Path::new(from_path.as_str())
-            .map_err(|e| ICError::no_context(StoreErrorKind::PathError(e)))
+            .map_err(|e| StoreError::capture(StoreErrorKind::PathError(e)))
             .map_err(PyIcechunkStoreError::StoreError)?;
         let to = Path::new(to_path.as_str())
-            .map_err(|e| ICError::no_context(StoreErrorKind::PathError(e)))
+            .map_err(|e| StoreError::capture(StoreErrorKind::PathError(e)))
             .map_err(PyIcechunkStoreError::StoreError)?;
         py.detach(move || {
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
@@ -190,10 +190,10 @@ impl PySession {
         to_path: String,
     ) -> PyResult<Bound<'py, PyAny>> {
         let from = Path::new(from_path.as_str())
-            .map_err(|e| ICError::no_context(StoreErrorKind::PathError(e)))
+            .map_err(|e| StoreError::capture(StoreErrorKind::PathError(e)))
             .map_err(PyIcechunkStoreError::StoreError)?;
         let to = Path::new(to_path.as_str())
-            .map_err(|e| ICError::no_context(StoreErrorKind::PathError(e)))
+            .map_err(|e| StoreError::capture(StoreErrorKind::PathError(e)))
             .map_err(PyIcechunkStoreError::StoreError)?;
         let session = Arc::clone(&self.0);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
@@ -216,7 +216,7 @@ impl PySession {
         //TODO: add a backwards shift as an option
     ) -> PyResult<()> {
         let array_path = Path::new(array_path.as_str())
-            .map_err(|e| ICError::no_context(StoreErrorKind::PathError(e)))
+            .map_err(|e| StoreError::capture(StoreErrorKind::PathError(e)))
             .map_err(PyIcechunkStoreError::StoreError)?;
         fn make_py_reindex_closure<'py>(
             py: Python<'py>,
@@ -224,16 +224,16 @@ impl PySession {
         ) -> Box<dyn Fn(&ChunkIndices) -> ReindexOperationResult + 'py> {
             Box::new(move |idx: &ChunkIndices| {
                 let python_index = idx.0.clone().into_pyobject(py).map_err(|e| {
-                    ICError::no_context(SessionErrorKind::Other(Box::new(e)))
+                    SessionError::capture(SessionErrorKind::Other(Box::new(e)))
                 })?;
                 let new_index = func.call1((python_index,)).map_err(|e| {
-                    ICError::no_context(SessionErrorKind::Other(Box::new(e)))
+                    SessionError::capture(SessionErrorKind::Other(Box::new(e)))
                 })?;
                 if new_index.is_none() {
                     Ok(None)
                 } else {
                     let new_index: Vec<u32> = new_index.extract().map_err(|e| {
-                        ICError::no_context(SessionErrorKind::Other(Box::new(e)))
+                        SessionError::capture(SessionErrorKind::Other(Box::new(e)))
                     })?;
                     Ok(Some(ChunkIndices(new_index)))
                 }
@@ -265,7 +265,7 @@ impl PySession {
         chunk_offset: Vec<i64>,
     ) -> PyResult<()> {
         let array_path = Path::new(array_path.as_str())
-            .map_err(|e| ICError::no_context(StoreErrorKind::PathError(e)))
+            .map_err(|e| StoreError::capture(StoreErrorKind::PathError(e)))
             .map_err(PyIcechunkStoreError::StoreError)?;
 
         // TODO: detach
@@ -657,7 +657,7 @@ impl PySession {
     ) -> PyResult<ChunkType> {
         let session = session.read().await;
         let array_path = Path::new(array_path.as_str())
-            .map_err(|e| ICError::no_context(StoreErrorKind::PathError(e)))
+            .map_err(|e| StoreError::capture(StoreErrorKind::PathError(e)))
             .map_err(PyIcechunkStoreError::StoreError)?;
         let res = session
             .get_chunk_ref(&array_path, &ChunkIndices(coords))

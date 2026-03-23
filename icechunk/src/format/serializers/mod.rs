@@ -135,7 +135,7 @@ pub fn deserialize_repo_info(
             Err(IcechunkFormatErrorKind::UnsupportedOperationForVersion {
                 version: SpecVersionBin::V1 as u8,
             })
-            .ic_err()
+            .capture()
         }
     }
 }

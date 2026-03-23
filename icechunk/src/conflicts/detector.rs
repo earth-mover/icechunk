@@ -9,8 +9,6 @@ use std::{
 use async_trait::async_trait;
 use futures::{StreamExt as _, TryStreamExt as _, stream};
 
-use icechunk_types::ICResultExt as _;
-
 use crate::{
     change_set::ChangeSet,
     format::{NodeId, Path, snapshot::NodeSnapshot, transaction_log::TransactionLog},
@@ -295,9 +293,13 @@ impl<It: Iterator<Item = SessionResult<NodeSnapshot>>> PathFinder<It> {
                 }
             }
             *iter = None;
-            Err(SessionErrorKind::ConflictingPathNotFound(node_id.clone())).ic_err()
+            Err(SessionError::capture(SessionErrorKind::ConflictingPathNotFound(
+                node_id.clone(),
+            )))
         } else {
-            Err(SessionErrorKind::ConflictingPathNotFound(node_id.clone())).ic_err()
+            Err(SessionError::capture(SessionErrorKind::ConflictingPathNotFound(
+                node_id.clone(),
+            )))
         }
     }
 }

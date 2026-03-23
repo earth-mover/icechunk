@@ -80,7 +80,9 @@ impl Ref {
             Some(name) => Ok(Ref::Tag(name.to_string())),
             None => match path.strip_prefix("branch.") {
                 Some(name) => Ok(Ref::Branch(name.to_string())),
-                None => Err(RefErrorKind::InvalidRefType(path.to_string())).ic_err(),
+                None => {
+                    Err(RefError::capture(RefErrorKind::InvalidRefType(path.to_string())))
+                }
             },
         }
     }
@@ -126,7 +128,9 @@ const TAG_DELETE_MARKER_KEY_NAME: &str = "ref.json.deleted";
 
 fn tag_key(tag_name: &str) -> RefResult<String> {
     if tag_name.contains('/') {
-        return Err(RefErrorKind::InvalidRefName(tag_name.to_string())).ic_err();
+        return Err(RefError::capture(RefErrorKind::InvalidRefName(
+            tag_name.to_string(),
+        )));
     }
 
     Ok(format!("tag.{tag_name}/{REF_KEY_NAME}"))
@@ -134,7 +138,9 @@ fn tag_key(tag_name: &str) -> RefResult<String> {
 
 fn tag_delete_marker_key(tag_name: &str) -> RefResult<String> {
     if tag_name.contains('/') {
-        return Err(RefErrorKind::InvalidRefName(tag_name.to_string())).ic_err();
+        return Err(RefError::capture(RefErrorKind::InvalidRefName(
+            tag_name.to_string(),
+        )));
     }
 
     Ok(format!("tag.{tag_name}/{TAG_DELETE_MARKER_KEY_NAME}"))
@@ -142,7 +148,9 @@ fn tag_delete_marker_key(tag_name: &str) -> RefResult<String> {
 
 fn branch_key(branch_name: &str) -> RefResult<String> {
     if branch_name.contains('/') {
-        return Err(RefErrorKind::InvalidRefName(branch_name.to_string())).ic_err();
+        return Err(RefError::capture(RefErrorKind::InvalidRefName(
+            branch_name.to_string(),
+        )));
     }
     Ok(format!("branch.{branch_name}/{REF_KEY_NAME}"))
 }
@@ -157,7 +165,7 @@ pub async fn create_tag(
     let key = tag_key(name)?;
     let path = format!("{V1_REFS_FILE_PATH}/{key}");
     let data = RefData { snapshot };
-    let content = serde_json::to_vec(&data).ic_err()?;
+    let content = serde_json::to_vec(&data).capture()?;
     match storage
         .put_object(
             storage_settings,
@@ -171,7 +179,7 @@ pub async fn create_tag(
     {
         Ok(VersionedUpdateResult::Updated { .. }) => Ok(()),
         Ok(VersionedUpdateResult::NotOnLatestVersion) => {
-            Err(RefErrorKind::TagAlreadyExists(name.to_string())).ic_err()
+            Err(RefError::capture(RefErrorKind::TagAlreadyExists(name.to_string())))
         }
         Err(err) => Err(err.inject()),
     }
@@ -201,13 +209,13 @@ pub async fn update_branch(
             expected_parent: current_snapshot.cloned(),
             actual_parent: ref_data.map(|rd| rd.snapshot),
         })
-        .ic_err();
+        .capture();
     }
 
     let key = branch_key(name)?;
     let path = format!("{V1_REFS_FILE_PATH}/{key}");
     let data = RefData { snapshot: new_snapshot };
-    let content = serde_json::to_vec(&data).ic_err()?;
+    let content = serde_json::to_vec(&data).capture()?;
     match storage
         .put_object(
             storage_settings,
@@ -381,7 +389,7 @@ pub async fn delete_tag(
     {
         Ok(VersionedUpdateResult::Updated { .. }) => Ok(()),
         Ok(VersionedUpdateResult::NotOnLatestVersion) => {
-            Err(RefErrorKind::RefNotFound(tag.to_string())).ic_err()
+            Err(RefError::capture(RefErrorKind::RefNotFound(tag.to_string())))
         }
 
         Err(err) => Err(err.inject()),
@@ -392,7 +400,7 @@ async fn async_read_to_bytes(
     mut read: Pin<Box<dyn AsyncRead + Send>>,
 ) -> RefResult<Bytes> {
     let mut data = Vec::with_capacity(1_024);
-    read.read_to_end(&mut data).await.ic_err()?;
+    read.read_to_end(&mut data).await.capture()?;
     Ok(Bytes::from_owner(data))
 }
 
@@ -410,7 +418,7 @@ pub async fn fetch_tag(
         match storage.get_object(storage_settings, path.as_str(), None).await {
             Ok((result, ..)) => Ok(async_read_to_bytes(result).await?),
             Err(StorageError { kind: StorageErrorKind::ObjectNotFound, .. }) => {
-                Err(RefErrorKind::RefNotFound(name.to_string())).ic_err()
+                Err(RefError::capture(RefErrorKind::RefNotFound(name.to_string())))
             }
             Err(err) => Err(err.inject()),
         }
@@ -421,7 +429,7 @@ pub async fn fetch_tag(
         match storage.get_object(storage_settings, path.as_str(), None).await {
             Ok(_) => Ok(Bytes::new()),
             Err(StorageError { kind: StorageErrorKind::ObjectNotFound, .. }) => {
-                Err(RefErrorKind::RefNotFound(name.to_string())).ic_err()
+                Err(RefError::capture(RefErrorKind::RefNotFound(name.to_string())))
             }
             Err(err) => Err(err.inject()),
         }
@@ -435,15 +443,15 @@ pub async fn fetch_tag(
         .next_tuple()
     {
         match is_deleted {
-            Ok(_) => Err(RefErrorKind::RefNotFound(name.to_string())).ic_err(),
+            Ok(_) => Err(RefError::capture(RefErrorKind::RefNotFound(name.to_string()))),
             Err(RefError { kind: RefErrorKind::RefNotFound(_), .. }) => {
-                let data = serde_json::from_slice(content?.as_ref()).ic_err()?;
+                let data = serde_json::from_slice(content?.as_ref()).capture()?;
                 Ok(data)
             }
             Err(err) => Err(err),
         }
     } else {
-        Err(RefErrorKind::RefNotFound(name.to_string())).ic_err()
+        Err(RefError::capture(RefErrorKind::RefNotFound(name.to_string())))
     }
 }
 
@@ -458,11 +466,11 @@ async fn fetch_branch(
     match storage.get_object(storage_settings, path.as_str(), None).await {
         Ok((result, version)) => {
             let bytes = async_read_to_bytes(result).await?;
-            let data = serde_json::from_slice(bytes.as_ref()).ic_err()?;
+            let data = serde_json::from_slice(bytes.as_ref()).capture()?;
             Ok((data, version))
         }
         Err(StorageError { kind: StorageErrorKind::ObjectNotFound, .. }) => {
-            Err(RefErrorKind::RefNotFound(name.to_string())).ic_err()
+            Err(RefError::capture(RefErrorKind::RefNotFound(name.to_string())))
         }
         Err(err) => Err(err.inject()),
     }

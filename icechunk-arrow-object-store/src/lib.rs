@@ -257,7 +257,7 @@ impl ObjectStorage {
             .map_ok(|obj| obj.location.to_string())
             .try_collect()
             .await
-            .ic_err_box()
+            .capture_box()
     }
 
     fn prefixed_path(&self, path: &str) -> ObjectPath {
@@ -368,9 +368,9 @@ impl Storage for ObjectStorage {
             | Err(object_store::Error::AlreadyExists { .. }) => {
                 Ok(VersionedUpdateResult::NotOnLatestVersion)
             }
-            Err(err) => Err(StorageError::no_context(StorageErrorKind::ObjectStore(
-                Box::new(err),
-            ))),
+            Err(err) => {
+                Err(StorageError::capture(StorageErrorKind::ObjectStore(Box::new(err))))
+            }
         }
     }
 
@@ -399,13 +399,13 @@ impl Storage for ObjectStorage {
                         .bytes()
                         .await
                         .map_err(|e| StorageErrorKind::ObjectStore(Box::new(e)))
-                        .ic_err()?;
+                        .capture()?;
                     self.get_client(settings)
                         .await
                         .put(&to, bytes.into())
                         .await
                         .map_err(|e| StorageErrorKind::ObjectStore(Box::new(e)))
-                        .ic_err()?;
+                        .capture()?;
                     Ok(VersionedUpdateResult::Updated { new_version: version.clone() })
                 }
                 Err(object_store::Error::Precondition { .. }) => {
@@ -490,7 +490,7 @@ impl Storage for ObjectStorage {
             .head(&path)
             .await
             .map_err(Box::new)
-            .ic_err_box()?;
+            .capture_box()?;
         Ok(res.last_modified)
     }
 
@@ -664,9 +664,9 @@ impl ObjectStoreBackend for LocalFileSystemObjectStoreBackend {
         &self,
         _settings: &Settings,
     ) -> Result<Arc<dyn ObjectStore>, StorageError> {
-        create_dir_all(&self.path).ic_err()?;
-        let path = std::fs::canonicalize(&self.path).ic_err()?;
-        let fs = LocalFileSystem::new_with_prefix(path).ic_err_box()?;
+        create_dir_all(&self.path).capture()?;
+        let path = std::fs::canonicalize(&self.path).capture()?;
+        let fs = LocalFileSystem::new_with_prefix(path).capture_box()?;
         Ok(Arc::new(fs))
     }
 
@@ -765,7 +765,7 @@ impl ObjectStoreBackend for HttpObjectStoreBackend {
             retry_timeout: core::time::Duration::from_secs(5 * 60),
         });
 
-        let store = builder.build().ic_err_box()?;
+        let store = builder.build().capture_box()?;
 
         Ok(Arc::new(store))
     }
@@ -874,7 +874,7 @@ impl ObjectStoreBackend for S3ObjectStoreBackend {
             retry_timeout: core::time::Duration::from_secs(5 * 60),
         });
 
-        let store = builder.build().ic_err_box()?;
+        let store = builder.build().capture_box()?;
         Ok(Arc::new(store))
     }
 
@@ -963,7 +963,7 @@ impl ObjectStoreBackend for AzureObjectStoreBackend {
             retry_timeout: core::time::Duration::from_secs(5 * 60),
         });
 
-        let store = builder.build().ic_err_box()?;
+        let store = builder.build().capture_box()?;
         Ok(Arc::new(store))
     }
 
@@ -1063,7 +1063,7 @@ impl ObjectStoreBackend for GcsObjectStoreBackend {
             max_retries: settings.retries().max_tries().get() as usize - 1,
             retry_timeout: core::time::Duration::from_secs(5 * 60),
         });
-        let store = builder.build().ic_err_box()?;
+        let store = builder.build().capture_box()?;
         Ok(Arc::new(store))
     }
 
@@ -1133,7 +1133,7 @@ fn object_to_list_info(
     let created_at = object.last_modified;
     let id =
         ObjectPath::from_iter(object.location.prefix_match(prefix).ok_or_else(|| {
-            StorageError::no_context(StorageErrorKind::BadPrefix(
+            StorageError::capture(StorageErrorKind::BadPrefix(
                 object.location.to_string().into(),
             ))
         })?)
@@ -1226,7 +1226,7 @@ pub fn new_http_storage(
             cause: e,
             url: base_url.to_string(),
         })
-        .ic_err()?;
+        .capture()?;
     let config = config
         .unwrap_or_default()
         .iter()

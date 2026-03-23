@@ -78,11 +78,11 @@ async fn validate_start(repo: &Repository) -> MigrationResult<()> {
             target: SpecVersionBin::V2,
             actual: repo.spec_version(),
         })
-        .ic_err();
+        .capture();
     }
     if !repo.storage().can_write().await.inject()? {
         error!("Storage instance must be writable");
-        return Err(MigrationErrorKind::ReadonlyRepo).ic_err();
+        return Err(MigrationError::capture(MigrationErrorKind::ReadonlyRepo));
     }
     Ok(())
 }
@@ -251,7 +251,7 @@ async fn do_migrate(
         error!("Unknown error during migration. Repository doesn't open");
         delete_repo_info(repo).await?;
         error!("Migration failed");
-        return Err(MigrationErrorKind::Unknown).ic_err();
+        return Err(MigrationError::capture(MigrationErrorKind::Unknown));
     };
 
     let new_spec_version = migrated.spec_version();
@@ -259,7 +259,7 @@ async fn do_migrate(
         error!("Unknown error during migration. Repository doesn't open as 2.0");
         delete_repo_info(repo).await?;
         error!("Migration failed");
-        return Err(MigrationErrorKind::Unknown).ic_err();
+        return Err(MigrationError::capture(MigrationErrorKind::Unknown));
     }
     if delete_unused_v1_files {
         if let Err(err) = delete_v1_refs(repo).await {
@@ -278,7 +278,7 @@ async fn do_migrate(
             error!("Unknown error during migration. Repository doesn't open");
             delete_repo_info(repo).await?;
             error!("Migration failed");
-            return Err(MigrationErrorKind::Unknown).ic_err();
+            return Err(MigrationError::capture(MigrationErrorKind::Unknown));
         };
 
         let new_spec_version = migrated.spec_version();
@@ -286,7 +286,7 @@ async fn do_migrate(
             error!("Unknown error during migration. Repository doesn't open as 2.0");
             delete_repo_info(repo).await?;
             error!("Migration failed");
-            return Err(MigrationErrorKind::Unknown).ic_err();
+            return Err(MigrationError::capture(MigrationErrorKind::Unknown));
         }
 
         // Config is now embedded in the repo info, so the V1 config.yaml is no longer needed.
@@ -469,7 +469,7 @@ pub async fn migrate_1_to_2(
     let config = repo.config().clone();
     let config_bytes: Vec<u8> = flexbuffers::to_vec(&config)
         .map_err(|e| IcechunkFormatErrorKind::SerializationErrorFlexBuffers(Box::new(e)))
-        .ic_err()?;
+        .capture()?;
 
     // main_ancestry is tip-to-root, so last element is the root
     let root = &main_ancestry[main_ancestry.len() - 1];
@@ -589,7 +589,7 @@ async fn delete_v1_refs(repo: &Repository) -> MigrationResult<()> {
             "Found {} remaining V1 references that couldn't be deleted",
             remaining.len()
         );
-        Err(MigrationErrorKind::Unknown).ic_err()
+        Err(MigrationError::capture(MigrationErrorKind::Unknown))
     }
 }
 

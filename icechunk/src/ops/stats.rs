@@ -79,7 +79,7 @@ fn insert_and_increment_size_if_new<T: Eq + std::hash::Hash>(
                 "Thread panic during manifest_chunk_storage: {e}"
             ))
         })
-        .ic_err()?
+        .capture()?
         .insert(key)
     {
         *size_counter += size_increment;
@@ -226,7 +226,7 @@ pub async fn repo_chunks_storage(
                 )
             })
             .await
-            .ic_err()??;
+            .capture()??;
             Ok((stats, minfo))
         });
     let (_, res) = limiter

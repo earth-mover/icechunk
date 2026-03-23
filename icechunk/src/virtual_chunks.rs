@@ -294,7 +294,7 @@ pub trait ChunkFetcher: std::fmt::Debug + private::Sealed + Send + Sync {
                 expected: needed_bytes,
                 available: remaining,
             })
-            .ic_err()
+            .capture()
         } else {
             Ok(buf.copy_to_bytes(needed_bytes as usize))
         }
@@ -404,7 +404,7 @@ impl VirtualChunkResolver {
             return Err(Err(VirtualReferenceErrorKind::NoContainerForName(
                 rest.to_string(),
             ))
-            .ic_err()?);
+            .capture()?);
         };
         let name = &rest[..slash];
         let relative_path = &rest[slash + 1..];
@@ -413,7 +413,7 @@ impl VirtualChunkResolver {
             .ok_or_else(|| {
                 VirtualReferenceErrorKind::NoContainerForName(name.to_string())
             })
-            .ic_err()?;
+            .capture()?;
         Ok(format!("{}{}", cont.url_prefix(), relative_path))
     }
 
@@ -422,13 +422,13 @@ impl VirtualChunkResolver {
         chunk_location: &Url,
     ) -> Result<Arc<dyn ChunkFetcher>, VirtualReferenceError> {
         let location = chunk_location.to_string();
-        let location = urlencoding::decode(location.as_str()).ic_err()?;
+        let location = urlencoding::decode(location.as_str()).capture()?;
         let cont = self
             .matching_container_by_url(location.as_ref())
             .ok_or_else(|| {
                 VirtualReferenceErrorKind::NoContainerForUrl(chunk_location.to_string())
             })
-            .ic_err()?;
+            .capture()?;
 
         let cache_key = fetcher_cache_key(cont, chunk_location)?;
         // TODO: we shouldn't need to clone the container name
@@ -456,7 +456,7 @@ impl VirtualChunkResolver {
                 cause: e,
                 url: location.clone(),
             })
-            .ic_err()?;
+            .capture()?;
         let fetcher = self.get_fetcher(&url).await?;
         fetcher.fetch_chunk(&url, range, checksum).await
     }
@@ -476,7 +476,7 @@ impl VirtualChunkResolver {
                         Err(VirtualReferenceErrorKind::InvalidCredentials(
                             "S3".to_string(),
                         ))
-                        .ic_err()?
+                        .capture()?
                     }
                     Some(None) => {
                         if opts.anonymous {
@@ -489,7 +489,7 @@ impl VirtualChunkResolver {
                         Err(VirtualReferenceErrorKind::UnauthorizedVirtualChunkContainer(
                             Box::new(cont.clone()),
                         ))
-                        .ic_err()?
+                        .capture()?
                     }
                 };
                 Ok(Arc::new(S3Fetcher::new(opts, creds, self.settings.clone()).await))
@@ -502,7 +502,7 @@ impl VirtualChunkResolver {
                         Err(VirtualReferenceErrorKind::InvalidCredentials(
                             "tigris".to_string(),
                         ))
-                        .ic_err()?
+                        .capture()?
                     }
                     Some(None) => {
                         if opts.anonymous {
@@ -515,7 +515,7 @@ impl VirtualChunkResolver {
                         Err(VirtualReferenceErrorKind::UnauthorizedVirtualChunkContainer(
                             Box::new(cont.clone()),
                         ))
-                        .ic_err()?
+                        .capture()?
                     }
                 };
                 let opts = if opts.endpoint_url.is_some() {
@@ -538,7 +538,7 @@ impl VirtualChunkResolver {
                         Err(VirtualReferenceErrorKind::InvalidCredentials(
                             "S3".to_string(),
                         ))
-                        .ic_err()?
+                        .capture()?
                     }
                     Some(None) => {
                         if opts.anonymous {
@@ -551,7 +551,7 @@ impl VirtualChunkResolver {
                         Err(VirtualReferenceErrorKind::UnauthorizedVirtualChunkContainer(
                             Box::new(cont.clone()),
                         ))
-                        .ic_err()?
+                        .capture()?
                     }
                 };
 
@@ -561,7 +561,7 @@ impl VirtualChunkResolver {
                     Err(VirtualReferenceErrorKind::CannotParseBucketName(
                         "No bucket name found".to_string(),
                     ))
-                    .ic_err()?
+                    .capture()?
                 };
 
                 Ok(Arc::new(
@@ -584,7 +584,7 @@ impl VirtualChunkResolver {
                         "S3/Tigris virtual chunk fetching requires the `s3` or `object-store-s3` feature",
                     ),
                 )))
-                .ic_err()
+                .capture()
             }
             #[cfg(feature = "object-store-fs")]
             ObjectStoreConfig::LocalFileSystem { .. } => {
@@ -594,13 +594,13 @@ impl VirtualChunkResolver {
                         Err(VirtualReferenceErrorKind::InvalidCredentials(
                             "file".to_string(),
                         ))
-                        .ic_err()?
+                        .capture()?
                     }
                     None => {
                         Err(VirtualReferenceErrorKind::UnauthorizedVirtualChunkContainer(
                             Box::new(cont.clone()),
                         ))
-                        .ic_err()?
+                        .capture()?
                     }
                 }
             }
@@ -612,7 +612,7 @@ impl VirtualChunkResolver {
                         Err(VirtualReferenceErrorKind::InvalidCredentials(
                             "GCS".to_string(),
                         ))
-                        .ic_err()?
+                        .capture()?
                     }
                     // FIXME: support from env
                     Some(None) => &GcsCredentials::Anonymous,
@@ -620,17 +620,17 @@ impl VirtualChunkResolver {
                         Err(VirtualReferenceErrorKind::UnauthorizedVirtualChunkContainer(
                             Box::new(cont.clone()),
                         ))
-                        .ic_err()?
+                        .capture()?
                     }
                 };
 
                 let bucket_name = if let Some(host) = chunk_location.host_str() {
-                    urlencoding::decode(host).ic_err()?.into_owned()
+                    urlencoding::decode(host).capture()?.into_owned()
                 } else {
                     Err(VirtualReferenceErrorKind::CannotParseBucketName(
                         "No bucket name found".to_string(),
                     ))
-                    .ic_err()?
+                    .capture()?
                 };
                 Ok(Arc::new(
                     ObjectStoreFetcher::new_gcs(
@@ -651,13 +651,13 @@ impl VirtualChunkResolver {
                         Err(VirtualReferenceErrorKind::InvalidCredentials(
                             "HTTP".to_string(),
                         ))
-                        .ic_err()?;
+                        .capture()?;
                     }
                     None => {
                         Err(VirtualReferenceErrorKind::UnauthorizedVirtualChunkContainer(
                             Box::new(cont.clone()),
                         ))
-                        .ic_err()?;
+                        .capture()?;
                     }
                 };
                 let hostname = if let Some(host) = chunk_location.host_str() {
@@ -666,7 +666,7 @@ impl VirtualChunkResolver {
                     Err(VirtualReferenceErrorKind::CannotParseBucketName(
                         "No hostname found for HTTP store".to_string(),
                     ))
-                    .ic_err()?
+                    .capture()?
                 };
 
                 let root_url = format!("{}://{}", chunk_location.scheme(), hostname);
@@ -677,7 +677,7 @@ impl VirtualChunkResolver {
                 let account = config
                     .get("account")
                     .ok_or(VirtualReferenceErrorKind::AzureConfigurationMustIncludeAccount)
-                    .ic_err()?;
+                    .capture()?;
 
                 let creds = match self.credentials.get(&cont.url_prefix) {
                     Some(Some(Credentials::Azure(creds))) => creds,
@@ -685,24 +685,24 @@ impl VirtualChunkResolver {
                         Err(VirtualReferenceErrorKind::InvalidCredentials(
                             "Azure".to_string(),
                         ))
-                        .ic_err()?
+                        .capture()?
                     }
                     // FIXME: support anonymous
                     Some(None) | None => {
                         Err(VirtualReferenceErrorKind::UnauthorizedVirtualChunkContainer(
                             Box::new(cont.clone()),
                         ))
-                        .ic_err()?
+                        .capture()?
                     }
                 };
 
                 let container = if let Some(host) = chunk_location.host_str() {
-                    urlencoding::decode(host).ic_err()?.into_owned()
+                    urlencoding::decode(host).capture()?.into_owned()
                 } else {
                     Err(VirtualReferenceErrorKind::CannotParseBucketName(
                         "No bucket name found".to_string(),
                     ))
-                    .ic_err()?
+                    .capture()?
                 };
                 Ok(Arc::new(
                     ObjectStoreFetcher::new_azure(
@@ -755,7 +755,7 @@ fn fetcher_cache_key(
             Err(VirtualReferenceErrorKind::CannotParseBucketName(
                 "No bucket name found".to_string(),
             ))
-            .ic_err()
+            .capture()
         }
     } else {
         Ok((cont.url_prefix.clone(), None))
@@ -802,15 +802,15 @@ impl ChunkFetcher for S3Fetcher {
         checksum: Option<&Checksum>,
     ) -> Result<Box<dyn Buf + Unpin + Send>, VirtualReferenceError> {
         let bucket_name = if let Some(host) = chunk_location.host_str() {
-            urlencoding::decode(host).ic_err()?.into_owned()
+            urlencoding::decode(host).capture()?.into_owned()
         } else {
             Err(VirtualReferenceErrorKind::CannotParseBucketName(
                 "No bucket name found".to_string(),
             ))
-            .ic_err()?
+            .capture()?
         };
 
-        let key = urlencoding::decode(chunk_location.path()).ic_err()?;
+        let key = urlencoding::decode(chunk_location.path()).capture()?;
         let key = key.strip_prefix('/').unwrap_or(key.as_ref());
 
         let mut b = self
@@ -870,12 +870,12 @@ impl ChunkFetcher for S3Fetcher {
                 }
                 other_err => VirtualReferenceErrorKind::FetchError(Box::new(other_err)),
             })
-            .ic_err()?
+            .capture()?
             .body
             .collect()
             .await
             .map_err(|e| VirtualReferenceErrorKind::FetchError(Box::new(e)))
-            .ic_err()?;
+            .capture()?;
         Ok(Box::new(res))
     }
 }
@@ -942,7 +942,7 @@ impl ObjectStoreFetcher {
         let client = backend
             .mk_object_store(&settings)
             .map_err(|e| VirtualReferenceErrorKind::OtherError(Box::new(e)))
-            .ic_err()?;
+            .capture()?;
         Ok(ObjectStoreFetcher { client, settings })
     }
 
@@ -963,7 +963,7 @@ impl ObjectStoreFetcher {
         let client = backend
             .mk_object_store(&settings)
             .map_err(|e| VirtualReferenceErrorKind::OtherError(Box::new(e)))
-            .ic_err()?;
+            .capture()?;
         Ok(ObjectStoreFetcher { client, settings })
     }
 
@@ -986,7 +986,7 @@ impl ObjectStoreFetcher {
         let client = backend
             .mk_object_store(&settings)
             .map_err(|e| VirtualReferenceErrorKind::OtherError(Box::new(e)))
-            .ic_err()?;
+            .capture()?;
 
         Ok(ObjectStoreFetcher { client, settings })
     }
@@ -1017,7 +1017,7 @@ impl ObjectStoreFetcher {
         let client = backend
             .mk_object_store(&settings)
             .map_err(|e| VirtualReferenceErrorKind::OtherError(Box::new(e)))
-            .ic_err()?;
+            .capture()?;
 
         Ok(ObjectStoreFetcher { client, settings })
     }
@@ -1063,9 +1063,9 @@ impl ChunkFetcher for ObjectStoreFetcher {
             None => {}
         }
 
-        let path = Path::parse(urlencoding::decode(chunk_location.path()).ic_err()?)
+        let path = Path::parse(urlencoding::decode(chunk_location.path()).capture()?)
             .map_err(|e| VirtualReferenceErrorKind::OtherError(Box::new(e)))
-            .ic_err()?;
+            .capture()?;
 
         match self.client.get_opts(&path, options).await {
             Ok(res) => {
@@ -1073,18 +1073,18 @@ impl ChunkFetcher for ObjectStoreFetcher {
                     .bytes()
                     .await
                     .map_err(|e| VirtualReferenceErrorKind::FetchError(Box::new(e)))
-                    .ic_err()?;
+                    .capture()?;
                 Ok(Box::new(res))
             }
             Err(icechunk_arrow_object_store::object_store::Error::Precondition {
                 ..
             }) => {
                 Err(VirtualReferenceErrorKind::ObjectModified(chunk_location.to_string()))
-                    .ic_err()
+                    .capture()
             }
-            Err(err) => {
-                Err(VirtualReferenceErrorKind::FetchError(Box::new(err))).ic_err()
-            }
+            Err(err) => Err(VirtualReferenceError::capture(
+                VirtualReferenceErrorKind::FetchError(Box::new(err)),
+            )),
         }
     }
 }

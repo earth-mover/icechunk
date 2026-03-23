@@ -84,7 +84,7 @@ impl RedirectStorage {
                     "Cannot build http client for redirect Storage instance: {e}"
                 ))
             })
-            .ic_err()?;
+            .capture()?;
 
         let req = client
             .get(self.url.clone())
@@ -94,22 +94,22 @@ impl RedirectStorage {
                     "Cannot build http request for redirect Storage instance: {e}"
                 ))
             })
-            .ic_err()?;
+            .capture()?;
         let res = client.execute(req).await.map_err(|e| {
             StorageErrorKind::BadRedirect(format!(
                 "Request to redirect url ({}) failed, cannot find target Storage instance: {e}",
                 &self.url
             ))
-        }).ic_err()?;
+        }).capture()?;
         let storage_url = res.headers().get("location").ok_or_else(|| {
             StorageErrorKind::BadRedirect(
                 "Redirect Storage response must be a redirect, no location header detected".to_string()
             )
-        }).ic_err()?.to_str().map_err(|e| {
+        }).capture()?.to_str().map_err(|e| {
             StorageErrorKind::BadRedirect(format!(
                 "Request to redirect url ({}) doesn't return a proper redirect to a known Storage protocol: {e}", &self.url
             ))
-        }).ic_err()?;
+        }).capture()?;
 
         self.mk_storage(storage_url).await
     }
@@ -124,7 +124,7 @@ impl RedirectStorage {
                     "Storage url cannot be parsed ({url}): {e}"
                 ))
             })
-            .ic_err()?;
+            .capture()?;
         match url.scheme() {
             #[cfg(feature = "s3")]
             "s3" => {
@@ -154,7 +154,7 @@ impl RedirectStorage {
                 "Redirect target uses `s3://` but the `s3` feature is disabled"
                     .to_string(),
             ))
-            .ic_err(),
+            .capture(),
             #[cfg(feature = "s3")]
             "r2" => {
                 let (bucket, prefix) = repo_location(&url)?;
@@ -183,7 +183,7 @@ impl RedirectStorage {
                 "Redirect target uses `r2://` but the `s3` feature is disabled"
                     .to_string(),
             ))
-            .ic_err(),
+            .capture(),
             #[cfg(feature = "s3")]
             "tigris" => {
                 let (bucket, prefix) = repo_location(&url)?;
@@ -211,7 +211,7 @@ impl RedirectStorage {
                 "Redirect target uses `tigris://` but the `s3` feature is disabled"
                     .to_string(),
             ))
-            .ic_err(),
+            .capture(),
 
             #[cfg(feature = "object-store-http")]
             "http+icechunk" | "http+ic" | "https+icechunk" | "https+ic" => {
@@ -236,7 +236,7 @@ impl RedirectStorage {
                     "Redirect target uses `http+icechunk://` or `https+icechunk://`, but the `http-store` feature is disabled".to_string(),
                 ),
             )
-            .ic_err(),
+            .capture(),
             #[cfg(feature = "object-store-gcs")]
             "gs" | "gcs" => {
                 let (bucket, prefix) = repo_location(&url)?;
@@ -252,11 +252,11 @@ impl RedirectStorage {
                 "Redirect target uses `gs://`/`gcs://` but the `gcs` feature is disabled"
                     .to_string(),
             ))
-            .ic_err(),
+            .capture(),
             _ => Err(StorageErrorKind::BadRedirect(format!(
                 "Bad URL for redirect Storage, unknown scheme: {url}"
             )))
-            .ic_err(),
+            .capture(),
         }
     }
 }
@@ -269,14 +269,14 @@ fn repo_location(url: &Url) -> StorageResult<(String, String)> {
                 "Storage url doesn't have a host to indicate the bucket ({url})"
             ))
         })
-        .ic_err()?
+        .capture()?
         .to_string();
     let path = url.path();
     if !path.starts_with('/') {
         return Err(StorageErrorKind::BadRedirect(format!(
             "Invalid Storage URL, must have a path to indicate bucket prefix: {url}"
         )))
-        .ic_err();
+        .capture();
     }
     let prefix = path[1..].to_string();
     Ok((bucket, prefix))
@@ -291,7 +291,7 @@ fn repo_region(url: &Url) -> StorageResult<String> {
                 "Invalid Storage URL, must have a region query parameter: {url}"
             ))
         })
-        .ic_err()?
+        .capture()?
         .1
         .to_string();
     Ok(res)
@@ -306,7 +306,7 @@ fn repo_account_id(url: &Url) -> StorageResult<String> {
                 "Invalid Storage URL, must have an account_id query parameter: {url}"
             ))
         })
-        .ic_err()?
+        .capture()?
         .1
         .to_string();
     Ok(res)
