@@ -10,4 +10,4 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
       - name: Machete
-        uses: bnjbvr/cargo-machete@main
+        uses: bnjbvr/cargo-machete@v0.9.1

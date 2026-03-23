@@ -40,14 +40,12 @@ icechunk-s3 = { path = "../icechunk-s3", version = "2.0.0-alpha.4", optional = t
 typed-path = "0.12.3"
 typetag = "0.2.21"
 zstd = "0.13.3"
-tokio-util = { version = "0.7.18", features = ["compat", "io-util"] }
 regex = "1.12.3"
 tracing-error = "0.2.1"
 tracing-subscriber = { version = "0.3.23", features = [
   "env-filter",
 ], optional = true }
 tracing = "0.1.44"
-err-into = "1.0.1"
 serde_yaml_ng = "0.10.0"
 clap = { version = "4.6", features = ["derive"], optional = true }
 anyhow = { version = "1.0.102", optional = true }
@@ -135,9 +133,7 @@ default = [
   "redirect",
 ]
 napi-send-contract = []
-s3 = [
-  "dep:icechunk-s3",
-]
+s3 = ["dep:icechunk-s3"]
 object-store-s3 = ["icechunk-arrow-object-store/s3"]
 object-store-gcs = ["icechunk-arrow-object-store/gcs"]
 object-store-azure = ["icechunk-arrow-object-store/azure"]
