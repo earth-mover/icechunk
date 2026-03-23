@@ -43,7 +43,7 @@ test = [
   "dask>=2025.2.0",
   "distributed>=2025.2.0",
   "xarray>=2025.07.1",
-  "hypothesis",
+  "hypothesis @ git+https://github.com/ianhi/hypothesis.git@flaky-feedback#subdirectory=hypothesis-python",
   "pandas-stubs",
   "boto3-stubs[s3]",
   "termcolor",
