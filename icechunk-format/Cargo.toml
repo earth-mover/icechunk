@@ -35,7 +35,7 @@ url = { version = "2.5.8", features = ["serde"] }
 zstd = "0.13.3"
 
 [dev-dependencies]
-icechunk-macros = { path = "../icechunk-macros", version = "0.1.0" }
+icechunk-macros = { path = "../icechunk-macros", version = "2.0.0-alpha.4" }
 
 pretty_assertions = "1.4.1"
 proptest = "1.10.0"
