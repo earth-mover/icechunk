@@ -18,7 +18,7 @@ use icechunk::{
     asset_manager::AssetManager,
     config::{S3Credentials, S3Options, S3StaticCredentials},
     format::{ChunkId, format_constants::SpecVersionBin},
-    storage::{RetriesSettings, s3::S3Storage},
+    storage::{RetriesSettings, S3Storage},
 };
 use noxious_client::{Client, StreamDirection, Toxic, ToxicKind};
 

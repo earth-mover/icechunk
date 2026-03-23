@@ -25,11 +25,11 @@ dependencies = ["zarr>=3.1.0"]
 
 [dependency-groups]
 dev = [
-    { include-group = "test" },
-    "mypy",
-    "ruff==0.15.3",
-    "maturin>=1.7,<2.0",
-    "maturin-import-hook>=0.3.0",
+  { include-group = "test" },
+  "mypy",
+  "ruff==0.15.3",
+  "maturin>=1.7,<2.0",
+  "maturin-import-hook>=0.3.0",
 ]
 test = [
   "boto3",
@@ -118,7 +118,7 @@ log_cli_level = "INFO"
 xfail_strict = true
 addopts = ["-ra", "--strict-config", "--strict-markers", "-n", "auto"]
 markers = [
-  "gpu", # need this to run the zarr tests
+  "gpu",        # need this to run the zarr tests
   "hypothesis", # auto-applied by hypothesis to @given tests
 ]
 filterwarnings = [
@@ -211,5 +211,10 @@ netcdf4 = ">=1.7.4,<2"
 cargo-nextest = ">=0.9.106,<0.10"
 
 [tool.pixi.environments]
-default = { features = ["build", "dev", "docs", "test"], solve-group = "default" }
+default = { features = [
+  "build",
+  "dev",
+  "docs",
+  "test",
+], solve-group = "default" }
 benchmark = { features = ["benchmark"], solve-group = "default" }

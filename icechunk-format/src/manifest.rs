@@ -9,7 +9,7 @@ use std::{
     sync::Arc,
 };
 
-use crate::{format::flatbuffers::generated, virtual_chunks::VirtualChunkContainer};
+use crate::flatbuffers::generated;
 use bytes::Bytes;
 use flatbuffers::VerifierOptions;
 use futures::{Stream, TryStreamExt as _};
@@ -18,16 +18,22 @@ use rand::{RngExt as _, rngs::SmallRng};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::{
-    config::ManifestVirtualChunkLocationCompressionConfig,
-    error::ICError,
-    format::{IcechunkFormatError, IcechunkFormatErrorKind},
-    storage::ETag,
-};
+use crate::{IcechunkFormatError, IcechunkFormatErrorKind};
+use icechunk_types::{ETag, error::ICError};
 
-use super::{
+/// Resolved configuration for virtual chunk location compression within a manifest.
+#[derive(Debug, Clone, Copy)]
+pub struct LocationCompressionConfig {
+    pub min_num_chunks: u16,
+    pub dictionary_max_training_samples: u16,
+    pub dictionary_max_size_bytes: u32,
+    pub compression_level: i32,
+}
+
+use crate::{
     ChunkId, ChunkIndices, ChunkLength, ChunkOffset, IcechunkResult, ManifestId, NodeId,
 };
+use icechunk_types::ICResultExt as _;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Overlap {
@@ -172,6 +178,21 @@ impl ManifestSplits {
         self.0.len()
     }
 
+    /// Binary search to locate `ManifestExtents` for a given chunk coordinate.
+    #[inline(always)]
+    pub fn find<'a>(&'a self, coord: &'a ChunkIndices) -> Option<ManifestExtents> {
+        debug_assert_eq!(coord.0.len(), self.0.len());
+        let mut ranges = Vec::with_capacity(self.0.len());
+        for (edges, loc) in self.0.iter().zip(coord.0.iter()) {
+            let bin = edges.partition_point(|&e| e <= *loc);
+            if bin == 0 || bin >= edges.len() {
+                return None;
+            }
+            ranges.push(edges[bin - 1]..edges[bin]);
+        }
+        Some(ManifestExtents::from_ranges_iter(ranges))
+    }
+
     pub fn compatible_with(&self, other: &Self) -> bool {
         // this is not a simple zip + all(equals) because
         // ordering might differ though both sets of splits
@@ -189,10 +210,7 @@ impl ManifestSplits {
 }
 
 /// Helper function for constructing uniformly spaced manifest split edges
-pub(crate) fn uniform_manifest_split_edges(
-    num_chunks: u32,
-    split_size: &u32,
-) -> Vec<u32> {
+pub fn uniform_manifest_split_edges(num_chunks: u32, split_size: &u32) -> Vec<u32> {
     (0u32..=num_chunks)
         .step_by(*split_size as usize)
         .chain((!num_chunks.is_multiple_of(*split_size)).then_some(num_chunks))
@@ -214,8 +232,8 @@ pub enum VirtualReferenceErrorKind {
     },
     #[error("invalid credentials for virtual reference of type {0}")]
     InvalidCredentials(String),
-    #[error("a virtual chunk in this repository resolves to the url prefix {url}, to be able to fetch the chunk you need to authorize the virtual chunk container when you open/create the repository, see https://icechunk.io/en/stable/virtual/", url = .0.url_prefix())]
-    UnauthorizedVirtualChunkContainer(Box<VirtualChunkContainer>),
+    #[error("{}", format_unauthorized_vcc(.url_prefix, .name))]
+    UnauthorizedVirtualChunkContainer { url_prefix: String, name: Option<String> },
     #[error("virtual reference has no path segments {0}")]
     NoPathSegments(String),
     #[error("unsupported scheme for virtual chunk refs: {0}")]
@@ -242,18 +260,19 @@ pub enum VirtualReferenceErrorKind {
     OtherError(#[from] Box<dyn std::error::Error + Send + Sync>),
 }
 
-pub type VirtualReferenceError = ICError<VirtualReferenceErrorKind>;
-
-// it would be great to define this impl in error.rs, but it conflicts with the blanket
-// `impl From<T> for T`
-impl<E> From<E> for VirtualReferenceError
-where
-    E: Into<VirtualReferenceErrorKind>,
-{
-    fn from(value: E) -> Self {
-        Self::new(value.into())
-    }
+fn format_unauthorized_vcc(url_prefix: &str, name: &Option<String>) -> String {
+    let container = match name {
+        Some(n) => format!(" (container: {n})"),
+        None => String::new(),
+    };
+    format!(
+        "a virtual chunk in this repository resolves to the url prefix {url_prefix}{container}, \
+         to be able to fetch the chunk you need to authorize the virtual chunk container \
+         when you open/create the repository, see https://icechunk.io/en/stable/virtual/"
+    )
 }
+
+pub type VirtualReferenceError = ICError<VirtualReferenceErrorKind>;
 
 pub const VCC_RELATIVE_URL_SCHEME: &str = "vcc://";
 
@@ -288,10 +307,9 @@ impl VirtualChunkLocation {
         relative_path: &str,
     ) -> Result<VirtualChunkLocation, VirtualReferenceError> {
         if container_name.is_empty() || container_name.contains('/') {
-            return Err(VirtualReferenceErrorKind::NoContainerForName(
-                container_name.to_string(),
-            )
-            .into());
+            return Err(VirtualReferenceError::capture(
+                VirtualReferenceErrorKind::NoContainerForName(container_name.to_string()),
+            ));
         }
         let mut result = String::with_capacity(
             VCC_RELATIVE_URL_SCHEME.len()
@@ -320,24 +338,30 @@ impl VirtualChunkLocation {
     ) -> Result<VirtualChunkLocation, VirtualReferenceError> {
         // make sure we can parse the provided URL before creating the enum
         // TODO: consider other validation here.
-        let url = url::Url::parse(path).map_err(|e| {
-            VirtualReferenceErrorKind::CannotParseUrl { cause: e, url: path.to_string() }
-        })?;
+        let url = url::Url::parse(path)
+            .map_err(|e| VirtualReferenceErrorKind::CannotParseUrl {
+                cause: e,
+                url: path.to_string(),
+            })
+            .capture()?;
         let scheme = url.scheme();
         let segments = url
             .path_segments()
-            .ok_or(VirtualReferenceErrorKind::NoPathSegments(path.into()))?;
+            .ok_or_else(|| VirtualReferenceErrorKind::NoPathSegments(path.into()))
+            .capture()?;
 
         let host = if let Some(host) = url.host_str() {
             host
         } else if scheme == "file" {
             ""
         } else if scheme == "vcc" {
-            return Err(VirtualReferenceErrorKind::NoContainerForName(path.into()).into());
+            return Err(VirtualReferenceError::capture(
+                VirtualReferenceErrorKind::NoContainerForName(path.into()),
+            ));
         } else {
-            return Err(
-                VirtualReferenceErrorKind::CannotParseBucketName(path.into()).into()
-            );
+            return Err(VirtualReferenceError::capture(
+                VirtualReferenceErrorKind::CannotParseBucketName(path.into()),
+            ));
         };
 
         let mut result = String::with_capacity(path.len());
@@ -427,7 +451,8 @@ impl Manifest {
         let _ = flatbuffers::root_with_opts::<generated::Manifest<'_>>(
             &ROOT_OPTIONS,
             buffer.as_slice(),
-        )?;
+        )
+        .capture()?;
         Ok(Manifest { buffer })
     }
 
@@ -443,7 +468,7 @@ impl Manifest {
             Some(dict_bytes) => {
                 let decompressor =
                     zstd::bulk::Decompressor::with_dictionary(dict_bytes.bytes())
-                        .map_err(IcechunkFormatErrorKind::IO)?;
+                        .capture()?;
                 Ok(Some(decompressor))
             }
             None => Ok(None),
@@ -453,9 +478,7 @@ impl Manifest {
     pub fn from_sorted_vec(
         manifest_id: &ManifestId,
         sorted_chunks: Vec<ChunkInfo>,
-        virtual_chunks_compression_config: Option<
-            &ManifestVirtualChunkLocationCompressionConfig,
-        >,
+        virtual_chunks_compression_config: Option<&LocationCompressionConfig>,
     ) -> IcechunkResult<Option<Self>> {
         let location_compression_dict =
             train_location_dictionary(&sorted_chunks, virtual_chunks_compression_config)?;
@@ -532,9 +555,7 @@ impl Manifest {
     pub async fn from_stream<E>(
         manifest_id: &ManifestId,
         stream: impl Stream<Item = Result<ChunkInfo, E>>,
-        virtual_chunks_compression_config: Option<
-            &ManifestVirtualChunkLocationCompressionConfig,
-        >,
+        virtual_chunks_compression_config: Option<&LocationCompressionConfig>,
     ) -> Result<Option<Self>, E>
     where
         E: From<IcechunkFormatError>,
@@ -548,9 +569,7 @@ impl Manifest {
     pub async fn from_iter<T: IntoIterator<Item = ChunkInfo>>(
         manifest_id: &ManifestId,
         iter: T,
-        virtual_chunks_compression_config: Option<
-            &ManifestVirtualChunkLocationCompressionConfig,
-        >,
+        virtual_chunks_compression_config: Option<&LocationCompressionConfig>,
     ) -> IcechunkResult<Option<Self>> {
         Self::from_stream(
             manifest_id,
@@ -607,13 +626,10 @@ impl Manifest {
         let manifest = self.root();
         let chunk_ref = lookup_node(manifest, node)
             .and_then(|array_manifest| lookup_ref(array_manifest, coord))
-            .ok_or_else(|| {
-                IcechunkFormatError::from(
-                    IcechunkFormatErrorKind::ChunkCoordinatesNotFound {
-                        coords: coord.clone(),
-                    },
-                )
-            })?;
+            .ok_or_else(|| IcechunkFormatErrorKind::ChunkCoordinatesNotFound {
+                coords: coord.clone(),
+            })
+            .capture()?;
         ref_to_payload(chunk_ref, decompressor.as_mut())
     }
 
@@ -716,16 +732,19 @@ fn ref_to_payload(
         }))
     } else if let Some(compressed) = chunk_ref.compressed_location() {
         let decompressor = decompressor
-            .ok_or(IcechunkFormatErrorKind::MissingLocationCompressionDictionary)?;
+            .ok_or(IcechunkFormatErrorKind::MissingLocationCompressionDictionary)
+            .capture()?;
         let decompressed = decompressor
             .decompress(compressed.bytes(), MAX_DECOMPRESSED_LOCATION_SIZE)
-            .map_err(IcechunkFormatErrorKind::IO)?;
-        let location_string = String::from_utf8(decompressed).map_err(|e| {
-            IcechunkFormatErrorKind::IO(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                e,
-            ))
-        })?;
+            .capture()?;
+        let location_string = String::from_utf8(decompressed)
+            .map_err(|e| {
+                IcechunkFormatErrorKind::IO(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    e,
+                ))
+            })
+            .capture()?;
         let location = VirtualChunkLocation::from_trusted(location_string);
         Ok(ChunkPayload::Virtual(VirtualChunkRef {
             location,
@@ -750,8 +769,8 @@ fn ref_to_payload(
                 field_type: Cow::Borrowed("invalid"),
                 error_trace: Default::default(),
             },
-        )
-        .into())
+        ))
+        .capture()
     }
 }
 
@@ -775,16 +794,14 @@ fn checksum(payload: &generated::ChunkRef<'_>) -> Option<Checksum> {
 /// chunks, `None` if compression is disabled or cannot be executed.
 fn train_location_dictionary(
     chunks: &[ChunkInfo],
-    virtual_chunks_compression_config: Option<
-        &ManifestVirtualChunkLocationCompressionConfig,
-    >,
+    virtual_chunks_compression_config: Option<&LocationCompressionConfig>,
 ) -> IcechunkResult<Option<Vec<u8>>> {
     let Some(config) = virtual_chunks_compression_config else {
         return Ok(None);
     };
-    let max_samples = config.dictionary_max_training_samples() as usize;
-    let min_chunks = config.min_num_chunks() as usize;
-    let max_dict_size = config.dictionary_max_size_bytes() as usize;
+    let max_samples = config.dictionary_max_training_samples as usize;
+    let min_chunks = config.min_num_chunks as usize;
+    let max_dict_size = config.dictionary_max_size_bytes as usize;
 
     let mut virtual_count: usize = 0;
     let mut reservoir: Vec<&str> = Vec::with_capacity(max_samples);
@@ -843,7 +860,10 @@ fn train_location_dictionary(
         }
     }
 
-    Ok(Some(zstd::dict::from_continuous(&sample_data, &sample_sizes, max_dict_size)?))
+    Ok(Some(
+        zstd::dict::from_continuous(&sample_data, &sample_sizes, max_dict_size)
+            .capture()?,
+    ))
 }
 
 /// Compress virtual chunk locations in parallel using a pre-trained zstd dictionary.
@@ -853,9 +873,9 @@ fn train_location_dictionary(
 fn compress_locations(
     chunks: &[ChunkInfo],
     dict: &[u8],
-    config: &ManifestVirtualChunkLocationCompressionConfig,
+    config: &LocationCompressionConfig,
 ) -> Vec<Option<Vec<u8>>> {
-    let compression_level = config.compression_level();
+    let compression_level = config.compression_level;
     let num_threads =
         std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).min(8);
     let slice_size = chunks.len().div_ceil(num_threads);
@@ -966,7 +986,6 @@ static ROOT_OPTIONS: VerifierOptions = VerifierOptions {
 #[expect(unused_qualifications)] // proptest macros generate fully qualified paths
 mod tests {
     use super::*;
-    use crate::config::ManifestVirtualChunkLocationCompressionConfig;
     use crate::roundtrip_serialization_tests;
     use crate::strategies::{
         ShapeDim, limited_width_manifest_extents, manifest_extents, manifest_ref,
@@ -1208,13 +1227,12 @@ mod tests {
         }
     }
 
-    const COMPRESS_CONFIG: ManifestVirtualChunkLocationCompressionConfig =
-        ManifestVirtualChunkLocationCompressionConfig {
-            min_num_chunks: Some(10),
-            dictionary_max_training_samples: Some(500),
-            dictionary_max_size_bytes: Some(16 * 1024),
-            compression_level: Some(3),
-        };
+    const COMPRESS_CONFIG: LocationCompressionConfig = LocationCompressionConfig {
+        min_num_chunks: 10,
+        dictionary_max_training_samples: 500,
+        dictionary_max_size_bytes: 16 * 1024,
+        compression_level: 3,
+    };
 
     fn make_virtual_chunks(n: usize) -> Vec<ChunkInfo> {
         let node = NodeId::random();
@@ -1467,11 +1485,11 @@ mod tests {
         // When most virtual chunk locations are < 8 bytes, dictionary training
         // is skipped and the manifest falls back to uncompressed storage.
         // With longer locations (>= 8 bytes), compression kicks in.
-        let config = ManifestVirtualChunkLocationCompressionConfig {
-            min_num_chunks: Some(2),
-            dictionary_max_training_samples: Some(500),
-            dictionary_max_size_bytes: Some(256),
-            compression_level: Some(3),
+        let config = LocationCompressionConfig {
+            min_num_chunks: 2,
+            dictionary_max_training_samples: 500,
+            dictionary_max_size_bytes: 256,
+            compression_level: 3,
         };
 
         let node = NodeId::random();

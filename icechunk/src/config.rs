@@ -23,17 +23,17 @@ use crate::{
 
 // Re-export backend-specific types from their canonical modules so that existing
 // consumers (`crate::config::S3Options`, etc.) continue to work.
-#[cfg(feature = "object-store-azure")]
-pub use crate::storage::object_store::{AzureCredentials, AzureStaticCredentials};
-#[cfg(feature = "object-store-gcs")]
-pub use crate::storage::object_store::{
-    GcsBearerCredential, GcsCredentials, GcsCredentialsFetcher, GcsStaticCredentials,
-};
 pub use crate::storage::s3_config::{
     S3Credentials, S3CredentialsFetcher, S3Options, S3StaticCredentials,
 };
+#[cfg(feature = "object-store-azure")]
+pub use crate::storage::{AzureCredentials, AzureStaticCredentials};
 #[cfg(feature = "object-store-gcs")]
-pub use object_store::gcp::GcpCredential;
+pub use crate::storage::{
+    GcsBearerCredential, GcsCredentials, GcsCredentialsFetcher, GcsStaticCredentials,
+};
+#[cfg(feature = "object-store-gcs")]
+pub use icechunk_arrow_object_store::object_store::gcp::GcpCredential;
 
 /// Storage backend configuration.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -358,6 +358,19 @@ impl ManifestVirtualChunkLocationCompressionConfig {
                 .dictionary_max_size_bytes
                 .or(self.dictionary_max_size_bytes),
             compression_level: other.compression_level.or(self.compression_level),
+        }
+    }
+}
+
+impl From<&ManifestVirtualChunkLocationCompressionConfig>
+    for crate::format::manifest::LocationCompressionConfig
+{
+    fn from(c: &ManifestVirtualChunkLocationCompressionConfig) -> Self {
+        Self {
+            min_num_chunks: c.min_num_chunks(),
+            dictionary_max_training_samples: c.dictionary_max_training_samples(),
+            dictionary_max_size_bytes: c.dictionary_max_size_bytes(),
+            compression_level: c.compression_level(),
         }
     }
 }
@@ -691,28 +704,6 @@ pub enum Credentials {
     Azure(AzureCredentials),
 }
 
-// This macro is used for creating property tests
-// which check that serializing and deserializing
-// an instance of a type T is equivalent to the
-// identity function
-// Given pairs of test names and arbitraries to be used
-// for the tests, e.g., (n1, a1), (n2, a2),... (nx, ax)
-// the tests can be created by doing
-// roundtrip_serialization_tests!(n1 - a1, n2 - a2, .... nx - ax)
-#[macro_export]
-macro_rules! roundtrip_serialization_tests {
-        ($($test_name: ident - $generator: ident), +) => {
-                            $(
-                proptest!{
-        #[icechunk_macros::test]
-                    fn $test_name(elem in $generator()) {
-           let bytes = rmp_serde::to_vec(&elem).unwrap();
-            let roundtrip = rmp_serde::from_slice(&bytes).unwrap();
-            assert_eq!(elem, roundtrip);
-        }})*
-        }
-    }
-
 #[cfg(test)]
 mod tests {
     use crate::{
@@ -721,6 +712,7 @@ mod tests {
         strategies::{repository_config, s3_static_credentials},
         virtual_chunks::VirtualChunkContainer,
     };
+    use icechunk_format::roundtrip_serialization_tests;
 
     use proptest::prelude::*;
 

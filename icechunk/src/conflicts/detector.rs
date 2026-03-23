@@ -293,9 +293,13 @@ impl<It: Iterator<Item = SessionResult<NodeSnapshot>>> PathFinder<It> {
                 }
             }
             *iter = None;
-            Err(SessionErrorKind::ConflictingPathNotFound(node_id.clone()).into())
+            Err(SessionError::capture(SessionErrorKind::ConflictingPathNotFound(
+                node_id.clone(),
+            )))
         } else {
-            Err(SessionErrorKind::ConflictingPathNotFound(node_id.clone()).into())
+            Err(SessionError::capture(SessionErrorKind::ConflictingPathNotFound(
+                node_id.clone(),
+            )))
         }
     }
 }

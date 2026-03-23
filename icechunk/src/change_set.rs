@@ -22,8 +22,9 @@ use crate::{
         manifest::{ChunkInfo, ChunkPayload},
         snapshot::{ArrayShape, DimensionName, NodeData, NodeSnapshot},
     },
-    session::{SessionErrorKind, SessionResult},
+    session::{SessionError, SessionErrorKind, SessionResult},
 };
+use icechunk_types::ICResultExt as _;
 
 // We have limitations on how many chunks we can save on a single commit.
 // Mostly due to flatbuffers not supporting 64-bit offsets,
@@ -94,11 +95,7 @@ impl EditChanges {
 
 pub static EMPTY_EDITS: LazyLock<EditChanges> = LazyLock::new(Default::default);
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Move {
-    pub from: Path,
-    pub to: Path,
-}
+pub use icechunk_types::Move;
 
 #[derive(Debug, PartialEq)]
 pub enum MovedTo<'a> {
@@ -205,7 +202,9 @@ impl ChangeSet {
     fn edits_mut(&mut self) -> SessionResult<&mut EditChanges> {
         match self {
             ChangeSet::Edit(edit_changes) => Ok(edit_changes),
-            ChangeSet::Rearrange(_) => Err(SessionErrorKind::RearrangeSessionOnly.into()),
+            ChangeSet::Rearrange(_) => {
+                Err(SessionError::capture(SessionErrorKind::RearrangeSessionOnly))
+            }
         }
     }
 
@@ -218,7 +217,9 @@ impl ChangeSet {
 
     fn move_tracker_mut(&mut self) -> SessionResult<&mut MoveTracker> {
         match self {
-            ChangeSet::Edit(_) => Err(SessionErrorKind::NonRearrangeSession.into()),
+            ChangeSet::Edit(_) => {
+                Err(SessionError::capture(SessionErrorKind::NonRearrangeSession))
+            }
             ChangeSet::Rearrange(move_tracker) => Ok(move_tracker),
         }
     }
@@ -555,7 +556,7 @@ impl ChangeSet {
                 my_edit_changes.merge(other_changes);
                 Ok(())
             }
-            _ => Err(SessionErrorKind::RearrangeSessionOnly.into()),
+            _ => Err(SessionError::capture(SessionErrorKind::RearrangeSessionOnly)),
         }
     }
 
@@ -563,14 +564,14 @@ impl ChangeSet {
     ///
     /// This is intended to help with marshalling distributed writers back to the coordinator
     pub fn export_to_bytes(&self) -> SessionResult<Vec<u8>> {
-        Ok(rmp_serde::to_vec(self).map_err(Box::new)?)
+        rmp_serde::to_vec(self).map_err(Box::new).capture()
     }
 
     /// Deserialize a `ChangeSet`
     ///
     /// This is intended to help with marshalling distributed writers back to the coordinator
     pub fn import_from_bytes(bytes: &[u8]) -> SessionResult<Self> {
-        Ok(rmp_serde::from_slice(bytes).map_err(Box::new)?)
+        rmp_serde::from_slice(bytes).map_err(Box::new).capture()
     }
 
     pub fn update_existing_chunks<'a, E>(
@@ -678,6 +679,48 @@ impl ChangeSet {
     }
 }
 
+pub fn transaction_log_from_change_set(
+    id: &crate::format::SnapshotId,
+    cs: &ChangeSet,
+) -> crate::format::transaction_log::TransactionLog {
+    use crate::format::transaction_log::TransactionLog;
+
+    let mut new_groups: Vec<_> = cs.new_groups().map(|(_, id)| id.clone()).collect();
+    let mut new_arrays: Vec<_> = cs.new_arrays().map(|(_, id, _)| id.clone()).collect();
+    let mut deleted_groups: Vec<_> =
+        cs.deleted_groups().map(|(_, id)| id.clone()).collect();
+    let mut deleted_arrays: Vec<_> =
+        cs.deleted_arrays().map(|(_, id)| id.clone()).collect();
+    let mut updated_arrays: Vec<_> = cs.updated_arrays().cloned().collect();
+    let mut updated_groups: Vec<_> = cs.updated_groups().cloned().collect();
+
+    new_groups.sort();
+    new_arrays.sort();
+    deleted_groups.sort();
+    deleted_arrays.sort();
+    updated_arrays.sort();
+    updated_groups.sort();
+
+    let changed_chunks: Vec<_> = cs
+        .changed_chunks()
+        .map(|(node_id, chunks)| {
+            (node_id.clone(), chunks.cloned().collect::<Vec<_>>().into_iter())
+        })
+        .collect();
+
+    TransactionLog::new_from_parts(
+        id,
+        new_groups.into_iter(),
+        new_arrays.into_iter(),
+        deleted_groups.into_iter(),
+        deleted_arrays.into_iter(),
+        updated_groups.into_iter(),
+        updated_arrays.into_iter(),
+        changed_chunks.into_iter(),
+        cs.moves().cloned(),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use bytes::Bytes;
@@ -692,8 +735,8 @@ mod tests {
             manifest::{ChunkInfo, ChunkPayload},
             snapshot::ArrayShape,
         },
-        roundtrip_serialization_tests,
     };
+    use icechunk_format::roundtrip_serialization_tests;
 
     #[icechunk_macros::test]
     fn test_new_arrays_chunk_iterator() -> Result<(), Box<dyn std::error::Error>> {

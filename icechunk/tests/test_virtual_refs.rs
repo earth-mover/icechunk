@@ -17,7 +17,7 @@ use icechunk::{
     repository::VersionInfo,
     session::{SessionErrorKind, get_chunk},
     storage::{
-        self, ConcurrencySettings, ETag, ObjectStorage, new_s3_storage, s3::mk_client,
+        self, ConcurrencySettings, ETag, ObjectStorage, mk_client, new_s3_storage,
     },
     store::{StoreError, StoreErrorKind},
     virtual_chunks::VirtualChunkContainer,
@@ -36,7 +36,7 @@ use tempfile::TempDir;
 use tokio::sync::RwLock;
 
 use bytes::Bytes;
-use object_store::{
+use icechunk_arrow_object_store::object_store::{
     ObjectStore, PutMode, PutOptions, PutPayload, azure::AzureConfigKey,
     local::LocalFileSystem,
 };

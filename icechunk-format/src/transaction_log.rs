@@ -1,22 +1,20 @@
 //! Change records for commits, enabling conflict detection during rebase.
 
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
+    collections::{BTreeMap, BTreeSet},
     iter,
 };
 
 use flatbuffers::{VerifierOptions, WIPOffset};
-use itertools::{Either, Itertools as _};
+use itertools::Either;
+
+use icechunk_types::Move;
 
 use crate::{
-    change_set::{ChangeSet, Move},
-    session::{Session, SessionResult},
-};
-
-use super::{
     ChunkIndices, IcechunkResult, NodeId, Path, SnapshotId,
     flatbuffers::generated::{self, MoveOperation, MoveOperationArgs},
 };
+use icechunk_types::ICResultExt as _;
 
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct TransactionLog {
@@ -24,98 +22,6 @@ pub struct TransactionLog {
 }
 
 impl TransactionLog {
-    pub fn new(id: &SnapshotId, cs: &ChangeSet) -> Self {
-        // TODO: what's a good capacity?
-        let mut builder = flatbuffers::FlatBufferBuilder::with_capacity(1_024 * 1_024);
-
-        let mut new_groups: Vec<_> =
-            cs.new_groups().map(|(_, id)| generated::ObjectId8::new(&id.0)).collect();
-        let mut new_arrays: Vec<_> =
-            cs.new_arrays().map(|(_, id, _)| generated::ObjectId8::new(&id.0)).collect();
-        let mut deleted_groups: Vec<_> =
-            cs.deleted_groups().map(|(_, id)| generated::ObjectId8::new(&id.0)).collect();
-        let mut deleted_arrays: Vec<_> =
-            cs.deleted_arrays().map(|(_, id)| generated::ObjectId8::new(&id.0)).collect();
-
-        let mut updated_arrays: Vec<_> =
-            cs.updated_arrays().map(|id| generated::ObjectId8::new(&id.0)).collect();
-        let mut updated_groups: Vec<_> =
-            cs.updated_groups().map(|id| generated::ObjectId8::new(&id.0)).collect();
-        let moved_nodes: Vec<_> = cs
-            .moves()
-            .map(|Move { from, to }| {
-                let from = builder.create_string(from.to_string().as_str());
-                let to = builder.create_string(to.to_string().as_str());
-                let args = MoveOperationArgs { from: Some(from), to: Some(to) };
-                MoveOperation::create(&mut builder, &args)
-            })
-            .collect();
-
-        // these come sorted from the change set
-        let updated_chunks = cs
-            .changed_chunks()
-            .map(|(node_id, chunks)| {
-                let node_id = generated::ObjectId8::new(&node_id.0);
-                let node_id = Some(&node_id);
-                let chunks = chunks
-                    .map(|indices| {
-                        let coords = Some(builder.create_vector(indices.0.as_slice()));
-                        generated::ChunkIndices::create(
-                            &mut builder,
-                            &generated::ChunkIndicesArgs { coords },
-                        )
-                    })
-                    .collect::<Vec<_>>();
-                let chunks = Some(builder.create_vector(chunks.as_slice()));
-                generated::ArrayUpdatedChunks::create(
-                    &mut builder,
-                    &generated::ArrayUpdatedChunksArgs { node_id, chunks },
-                )
-            })
-            .collect::<Vec<_>>();
-        let updated_chunks = builder.create_vector(updated_chunks.as_slice());
-        let updated_chunks = Some(updated_chunks);
-
-        new_groups.sort_by(|a, b| a.0.cmp(&b.0));
-        new_arrays.sort_by(|a, b| a.0.cmp(&b.0));
-        deleted_groups.sort_by(|a, b| a.0.cmp(&b.0));
-        deleted_arrays.sort_by(|a, b| a.0.cmp(&b.0));
-        updated_groups.sort_by(|a, b| a.0.cmp(&b.0));
-        updated_arrays.sort_by(|a, b| a.0.cmp(&b.0));
-
-        let new_groups = Some(builder.create_vector(new_groups.as_slice()));
-        let new_arrays = Some(builder.create_vector(new_arrays.as_slice()));
-        let deleted_groups = Some(builder.create_vector(deleted_groups.as_slice()));
-        let deleted_arrays = Some(builder.create_vector(deleted_arrays.as_slice()));
-        let updated_groups = Some(builder.create_vector(updated_groups.as_slice()));
-        let updated_arrays = Some(builder.create_vector(updated_arrays.as_slice()));
-
-        let id = generated::ObjectId12::new(&id.0);
-        let id = Some(&id);
-        let moved_nodes = Some(builder.create_vector(moved_nodes.as_slice()));
-        let tx = generated::TransactionLog::create(
-            &mut builder,
-            &generated::TransactionLogArgs {
-                id,
-                new_groups,
-                new_arrays,
-                deleted_groups,
-                deleted_arrays,
-                updated_groups,
-                updated_arrays,
-                updated_chunks,
-                moved_nodes,
-                ..Default::default()
-            },
-        );
-
-        builder.finish(tx, Some("Ichk"));
-        let (mut buffer, offset) = builder.collapse();
-        buffer.drain(0..offset);
-        buffer.shrink_to_fit();
-        Self { buffer }
-    }
-
     /// Low level method that creates a tx log from its parts
     /// Intended to be used only by library creators
     #[expect(clippy::too_many_arguments)]
@@ -219,7 +125,8 @@ impl TransactionLog {
         let _ = flatbuffers::root_with_opts::<generated::TransactionLog<'_>>(
             &ROOT_OPTIONS,
             buffer.as_slice(),
-        )?;
+        )
+        .capture()?;
         Ok(Self { buffer })
     }
 
@@ -503,136 +410,9 @@ static ROOT_OPTIONS: VerifierOptions = VerifierOptions {
     ignore_missing_null_terminator: true,
 };
 
-#[derive(Debug, Default)]
-pub struct DiffBuilder {
-    new_groups: HashSet<NodeId>,
-    new_arrays: HashSet<NodeId>,
-    deleted_groups: HashSet<NodeId>,
-    deleted_arrays: HashSet<NodeId>,
-    updated_groups: HashSet<NodeId>,
-    updated_arrays: HashSet<NodeId>,
-    // we use sorted set here to simply move it to a diff without having to rebuild
-    updated_chunks: HashMap<NodeId, BTreeSet<ChunkIndices>>,
-    moved_nodes: Vec<Move>,
-}
-
-impl DiffBuilder {
-    pub fn add_changes(&mut self, tx: &TransactionLog) {
-        self.new_groups.extend(tx.new_groups());
-        self.new_arrays.extend(tx.new_arrays());
-        self.deleted_groups.extend(tx.deleted_groups());
-        self.deleted_arrays.extend(tx.deleted_arrays());
-        self.updated_groups.extend(tx.updated_groups());
-        self.updated_arrays.extend(tx.updated_arrays());
-        self.moved_nodes.extend(tx.moves());
-
-        for (node, chunks) in tx.updated_chunks() {
-            match self.updated_chunks.get_mut(&node) {
-                Some(all_chunks) => {
-                    all_chunks.extend(chunks);
-                }
-                None => {
-                    self.updated_chunks.insert(node, BTreeSet::from_iter(chunks));
-                }
-            }
-        }
-    }
-
-    pub async fn to_diff(self, from: &Session, to: &Session) -> SessionResult<Diff> {
-        let nodes: HashMap<NodeId, Path> = from
-            .list_nodes(&Path::root())
-            .await?
-            .chain(to.list_nodes(&Path::root()).await?)
-            .map_ok(|n| (n.id, n.path))
-            .try_collect()?;
-        Ok(Diff::from_diff_builder(self, &nodes))
-    }
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct Diff {
-    pub new_groups: BTreeSet<Path>,
-    pub new_arrays: BTreeSet<Path>,
-    pub deleted_groups: BTreeSet<Path>,
-    pub deleted_arrays: BTreeSet<Path>,
-    pub updated_groups: BTreeSet<Path>,
-    pub updated_arrays: BTreeSet<Path>,
-    pub updated_chunks: BTreeMap<Path, BTreeSet<ChunkIndices>>,
-    pub moved_nodes: Vec<Move>,
-}
-
-impl Diff {
-    fn from_diff_builder(builder: DiffBuilder, nodes: &HashMap<NodeId, Path>) -> Self {
-        let new_groups = builder
-            .new_groups
-            .iter()
-            .flat_map(|node_id| nodes.get(node_id))
-            .cloned()
-            .collect();
-        let new_arrays = builder
-            .new_arrays
-            .iter()
-            .flat_map(|node_id| nodes.get(node_id))
-            .cloned()
-            .collect();
-        let deleted_groups = builder
-            .deleted_groups
-            .iter()
-            .flat_map(|node_id| nodes.get(node_id))
-            .cloned()
-            .collect();
-        let deleted_arrays = builder
-            .deleted_arrays
-            .iter()
-            .flat_map(|node_id| nodes.get(node_id))
-            .cloned()
-            .collect();
-        let updated_groups = builder
-            .updated_groups
-            .iter()
-            .flat_map(|node_id| nodes.get(node_id))
-            .cloned()
-            .collect();
-        let updated_arrays = builder
-            .updated_arrays
-            .iter()
-            .flat_map(|node_id| nodes.get(node_id))
-            .cloned()
-            .collect();
-        let updated_chunks = builder
-            .updated_chunks
-            .into_iter()
-            .flat_map(|(node_id, chunks)| {
-                let path = nodes.get(&node_id).cloned()?;
-                Some((path, chunks))
-            })
-            .collect();
-        Self {
-            new_groups,
-            new_arrays,
-            deleted_groups,
-            deleted_arrays,
-            updated_groups,
-            updated_arrays,
-            updated_chunks,
-            moved_nodes: builder.moved_nodes,
-        }
-    }
-
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.new_groups.is_empty()
-            && self.new_arrays.is_empty()
-            && self.deleted_groups.is_empty()
-            && self.deleted_arrays.is_empty()
-            && self.updated_groups.is_empty()
-            && self.updated_arrays.is_empty()
-            && self.updated_chunks.is_empty()
-            && self.moved_nodes.is_empty()
-    }
-}
-
-#[cfg(test)]
+// Tests for TransactionLog depend on ChangeSet which lives in the icechunk crate.
+// They are kept in icechunk's test suite instead.
+#[cfg(any())]
 mod tests {
     use std::collections::HashSet;
 
@@ -640,7 +420,7 @@ mod tests {
     use itertools::Itertools as _;
 
     use crate::{
-        change_set::{ArrayData, ChangeSet},
+        change_set::{ArrayData, ChangeSet, transaction_log_from_change_set},
         format::{
             ChunkIndices, NodeId, SnapshotId, manifest::ChunkPayload,
             snapshot::ArrayShape, transaction_log::TransactionLog,
@@ -675,8 +455,8 @@ mod tests {
             Some(ChunkPayload::Inline(Bytes::new())),
         )?;
 
-        let t1 = TransactionLog::new(&SnapshotId::random(), &cs1);
-        let t2 = TransactionLog::new(&SnapshotId::random(), &cs1);
+        let t1 = transaction_log_from_change_set(&SnapshotId::random(), &cs1);
+        let t2 = transaction_log_from_change_set(&SnapshotId::random(), &cs1);
 
         let tx = TransactionLog::merge(&SnapshotId::random(), [&t1, &t2]);
         assert!(tx.new_groups().eq([added_group.clone()]));
@@ -724,7 +504,7 @@ mod tests {
             Some(ChunkPayload::Inline(Bytes::new())),
         )?;
 
-        let t3 = TransactionLog::new(&SnapshotId::random(), &cs2);
+        let t3 = transaction_log_from_change_set(&SnapshotId::random(), &cs2);
         let tx_id = SnapshotId::random();
         let tx = TransactionLog::merge(&tx_id, [&t1, &t2, &t3]);
 

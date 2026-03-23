@@ -100,8 +100,8 @@ use icechunk::session::Session;
 use icechunk::storage::new_in_memory_storage;
 use icechunk::virtual_chunks::VirtualChunkContainer;
 use icechunk::{RepositoryConfig, Storage};
+use icechunk_arrow_object_store::object_store::ObjectStoreExt as _;
 use noxious_client::{Client, StreamDirection, Toxic, ToxicKind};
-use object_store::ObjectStoreExt as _;
 use rand::RngExt as _;
 use tempfile::TempDir;
 
@@ -299,16 +299,17 @@ pub(crate) async fn setup_repo(
 
     if use_s3 {
         // Upload chunk objects to RustFS (direct, not through toxiproxy).
-        let s3_store = object_store::aws::AmazonS3Builder::new()
-            .with_endpoint(format!("http://localhost:{RUSTFS_PORT}"))
-            .with_bucket_name("testbucket")
-            .with_region("us-east-1")
-            .with_access_key_id("modify")
-            .with_secret_access_key("modifydata")
-            .with_allow_http(true)
-            .build()?;
+        let s3_store =
+            icechunk_arrow_object_store::object_store::aws::AmazonS3Builder::new()
+                .with_endpoint(format!("http://localhost:{RUSTFS_PORT}"))
+                .with_bucket_name("testbucket")
+                .with_region("us-east-1")
+                .with_access_key_id("modify")
+                .with_secret_access_key("modifydata")
+                .with_allow_http(true)
+                .build()?;
         for i in 0..NUM_VCCS {
-            let obj_path: object_store::path::Path =
+            let obj_path: icechunk_arrow_object_store::object_store::path::Path =
                 format!("bench-vcc/prefix-{i}/chunk").into();
             s3_store.put(&obj_path, chunk_data.clone().into()).await?;
         }

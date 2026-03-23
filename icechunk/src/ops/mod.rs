@@ -3,7 +3,6 @@
 use std::{collections::HashSet, sync::Arc};
 
 use async_stream::try_stream;
-use err_into::ErrorInto as _;
 use futures::{Stream, StreamExt as _, TryStreamExt as _, stream};
 use tokio::pin;
 use tracing::instrument;
@@ -15,8 +14,9 @@ use crate::{
         snapshot::Snapshot,
     },
     refs::{RefResult, list_refs},
-    repository::{RepositoryError, RepositoryResult},
+    repository::RepositoryResult,
 };
+use icechunk_types::error::ICResultCtxExt as _;
 
 /// Expire old snapshots beyond a threshold.
 pub mod expiration_v1;
@@ -33,11 +33,12 @@ pub fn all_roots_v2<'a>(
     extra_roots: &'a HashSet<SnapshotId>,
 ) -> RepositoryResult<impl Iterator<Item = RepositoryResult<SnapshotId>> + 'a> {
     let res = repo_info
-        .tag_names()?
+        .tag_names()
+        .inject()?
         .map(|tag| repo_info.resolve_tag(tag))
-        .chain(repo_info.branch_names()?.map(|br| repo_info.resolve_branch(br)))
+        .chain(repo_info.branch_names().inject()?.map(|br| repo_info.resolve_branch(br)))
         .chain(extra_roots.iter().cloned().map(Ok))
-        .map(|r| r.err_into());
+        .map(|r| r.inject());
     Ok(res)
 }
 
@@ -55,9 +56,9 @@ pub async fn pointed_snapshots_v2<'a>(
             let pointed_snap_id = pointed_snap_id?;
             if ! seen.contains(&pointed_snap_id)
             {
-                let parents = repo_info.ancestry(&pointed_snap_id)?;
+                let parents = repo_info.ancestry(&pointed_snap_id).inject()?;
                 for snap_info in parents {
-                    let snap_id = snap_info?.id;
+                    let snap_id = snap_info.inject()?.id;
                     let snap: Arc<Snapshot> = asset_manager.fetch_snapshot(&snap_id).await?;
                     if seen.insert(snap_id) { // it's a new snapshot
                         yield snap
@@ -83,8 +84,8 @@ pub async fn pointed_snapshots_v1<'a>(
     let mut seen: HashSet<SnapshotId> = HashSet::new();
     let res = try_stream! {
         let roots = all_roots_v1(Arc::clone(&asset_manager), extra_roots)
-            .await?
-            .err_into::<RepositoryError>();
+            .await.inject()?
+            .map(|r| r.inject());
         pin!(roots);
 
         while let Some(pointed_snap_id) = roots.try_next().await? {
@@ -129,7 +130,6 @@ pub async fn all_roots_v1<'a>(
                 .map(|ref_data| ref_data.snapshot)
             }
         })
-        .err_into()
         .chain(stream::iter(extra_roots.iter().cloned()).map(Ok));
     Ok(roots)
 }

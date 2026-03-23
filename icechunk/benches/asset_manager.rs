@@ -1,4 +1,3 @@
-use std::convert::Infallible;
 use std::sync::Arc;
 
 use bytes::Bytes;
@@ -7,14 +6,15 @@ use icechunk::asset_manager::AssetManager;
 use icechunk::format::format_constants::SpecVersionBin;
 use icechunk::format::manifest::{ChunkInfo, ChunkPayload, Manifest};
 use icechunk::format::snapshot::{ArrayShape, NodeData, NodeSnapshot, Snapshot};
-use icechunk::format::{ChunkIndices, ManifestId, NodeId, Path};
+use icechunk::format::{ChunkIndices, IcechunkFormatError, ManifestId, NodeId, Path};
 use icechunk::storage::{self, new_local_filesystem_storage};
 use tempfile::TempDir;
 use tokio::runtime::Runtime;
 
 fn make_snapshot(num_nodes: usize) -> Arc<Snapshot> {
     let user_data = Bytes::from_static(br#"{"this":"node"}"#);
-    let mut nodes: Vec<Result<NodeSnapshot, Infallible>> = Vec::with_capacity(num_nodes);
+    let mut nodes: Vec<Result<NodeSnapshot, IcechunkFormatError>> =
+        Vec::with_capacity(num_nodes);
 
     // Root group at "/"
     nodes.push(Ok(NodeSnapshot {

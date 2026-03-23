@@ -32,10 +32,11 @@ use crate::{
         manifest::{ChunkPayload, VirtualChunkRef},
         snapshot::{ArrayShape, DimensionName, NodeData, NodeSnapshot, NodeType},
     },
-    refs::{RefError, RefErrorKind},
-    repository::{RepositoryError, RepositoryErrorKind},
+    refs::RefErrorKind,
+    repository::RepositoryErrorKind,
     session::{Session, SessionError, SessionErrorKind, get_chunk, is_prefix_match},
 };
+use icechunk_types::{ICResultExt as _, error::ICResultCtxExt as _};
 
 /// Result of listing a directory: either a key (leaf) or prefix (subdirectory).
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -61,11 +62,11 @@ pub enum KeyNotFoundError {
 #[non_exhaustive]
 pub enum StoreErrorKind {
     #[error(transparent)]
-    SessionError(SessionErrorKind),
+    SessionError(#[from] SessionErrorKind),
     #[error(transparent)]
-    RepositoryError(RepositoryErrorKind),
+    RepositoryError(#[from] RepositoryErrorKind),
     #[error(transparent)]
-    RefError(RefErrorKind),
+    RefError(#[from] RefErrorKind),
 
     #[error("invalid zarr key format `{key}`")]
     InvalidKey { key: String },
@@ -117,35 +118,6 @@ pub enum StoreErrorKind {
 
 pub type StoreError = ICError<StoreErrorKind>;
 
-// it would be great to define this impl in error.rs, but it conflicts with the blanket
-// `impl From<T> for T`
-impl<E> From<E> for StoreError
-where
-    E: Into<StoreErrorKind>,
-{
-    fn from(value: E) -> Self {
-        Self::new(value.into())
-    }
-}
-
-impl From<RepositoryError> for StoreError {
-    fn from(value: RepositoryError) -> Self {
-        Self::with_context(StoreErrorKind::RepositoryError(value.kind), value.context)
-    }
-}
-
-impl From<RefError> for StoreError {
-    fn from(value: RefError) -> Self {
-        Self::with_context(StoreErrorKind::RefError(value.kind), value.context)
-    }
-}
-
-impl From<SessionError> for StoreError {
-    fn from(value: SessionError) -> Self {
-        Self::with_context(StoreErrorKind::SessionError(value.kind), value.context)
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SetVirtualRefsResult {
     Done,
@@ -175,7 +147,7 @@ impl Store {
     #[instrument(skip_all)]
     pub fn from_bytes(bytes: &[u8]) -> StoreResult<Self> {
         let session: Session =
-            rmp_serde::from_slice(bytes).map_err(Box::new).map_err(StoreError::from)?;
+            rmp_serde::from_slice(bytes).map_err(Box::new).capture()?;
         let conc = session.config().get_partial_values_concurrency();
         Ok(Self::from_session_and_config(Arc::new(RwLock::new(session)), conc))
     }
@@ -183,9 +155,7 @@ impl Store {
     #[instrument(skip_all)]
     pub async fn as_bytes(&self) -> StoreResult<Bytes> {
         let session = self.session.write().await;
-        let bytes = rmp_serde::to_vec(session.deref())
-            .map_err(Box::new)
-            .map_err(StoreError::from)?;
+        let bytes = rmp_serde::to_vec(session.deref()).map_err(Box::new).capture()?;
         Ok(Bytes::from(bytes))
     }
 
@@ -206,7 +176,7 @@ impl Store {
     #[instrument(skip_all)]
     pub async fn clear(&self) -> StoreResult<()> {
         let mut repo = self.session.write().await;
-        Ok(repo.clear().await?)
+        repo.clear().await.inject()
     }
 
     #[instrument(skip(self))]
@@ -268,13 +238,15 @@ impl Store {
             .await;
 
         let results = Arc::into_inner(results)
-            .ok_or(StoreErrorKind::PartialValuesPanic)?
+            .ok_or(StoreErrorKind::PartialValuesPanic)
+            .capture()?
             .into_inner()
-            .map_err(|_| StoreErrorKind::PartialValuesPanic)?;
+            .map_err(|_| StoreErrorKind::PartialValuesPanic)
+            .capture()?;
 
         debug_assert!(results.len() == num_keys.into_inner());
         let res: Option<Vec<_>> = results.into_iter().collect();
-        res.ok_or(StoreErrorKind::PartialValuesPanic.into())
+        res.ok_or(StoreErrorKind::PartialValuesPanic).capture()
     }
 
     #[instrument(skip(self))]
@@ -301,7 +273,7 @@ impl Store {
     #[instrument(skip(self, value))]
     pub async fn set(&self, key: &str, value: Bytes) -> StoreResult<()> {
         if self.read_only().await {
-            return Err(StoreErrorKind::ReadOnly.into());
+            return Err(StoreError::capture(StoreErrorKind::ReadOnly));
         }
 
         self.set_with_optional_locking(key, value, None).await
@@ -315,20 +287,20 @@ impl Store {
     ) -> StoreResult<()> {
         if let Some(session) = locked_session.as_ref() {
             if session.read_only() {
-                return Err(StoreErrorKind::ReadOnly.into());
+                return Err(StoreError::capture(StoreErrorKind::ReadOnly));
             }
         } else if self.read_only().await {
-            return Err(StoreErrorKind::ReadOnly.into());
+            return Err(StoreError::capture(StoreErrorKind::ReadOnly));
         }
 
         match Key::parse(key)? {
             Key::Metadata { node_path } => {
-                let node_meta = serde_json::from_slice::<NodeMetadata>(value.as_ref())
-                    .map_err(StoreErrorKind::BadMetadata)?;
+                let node_meta =
+                    serde_json::from_slice::<NodeMetadata>(value.as_ref()).capture()?;
                 match node_meta.node_type.as_str() {
                     "array" => {
-                        let array_meta = serde_json::from_slice(value.as_ref())
-                            .map_err(StoreErrorKind::BadMetadata)?;
+                        let array_meta =
+                            serde_json::from_slice(value.as_ref()).capture()?;
                         self.set_array_meta(node_path, value, array_meta, locked_session)
                             .await
                     }
@@ -341,29 +313,34 @@ impl Store {
             Key::Chunk { node_path, coords } => {
                 match locked_session {
                     Some(session) => {
-                        let writer = session.get_chunk_writer()?;
-                        let payload = writer(value).await?;
-                        session.set_chunk_ref(node_path, coords, Some(payload)).await?;
+                        let writer = session.get_chunk_writer().inject()?;
+                        let payload = writer(value).await.inject()?;
+                        session
+                            .set_chunk_ref(node_path, coords, Some(payload))
+                            .await
+                            .inject()?;
                     }
                     None => {
                         // we only lock the repository to get the writer
-                        let writer = self.session.read().await.get_chunk_writer()?;
+                        let writer =
+                            self.session.read().await.get_chunk_writer().inject()?;
                         // then we can write the bytes without holding the lock
-                        let payload = writer(value).await?;
+                        let payload = writer(value).await.inject()?;
                         // and finally we lock for write and update the reference
                         self.session
                             .write()
                             .await
                             .set_chunk_ref(node_path, coords, Some(payload))
-                            .await?;
+                            .await
+                            .inject()?;
                     }
                 }
                 Ok(())
             }
             Key::ZarrV2(_) => Err(StoreErrorKind::Unimplemented(
                 "Icechunk cannot set Zarr V2 metadata keys",
-            )
-            .into()),
+            ))
+            .capture(),
         }
     }
 
@@ -386,7 +363,7 @@ impl Store {
         validate_container: bool,
     ) -> StoreResult<()> {
         if self.read_only().await {
-            return Err(StoreErrorKind::ReadOnly.into());
+            return Err(StoreError::capture(StoreErrorKind::ReadOnly));
         }
 
         match Key::parse(key)? {
@@ -397,8 +374,8 @@ impl Store {
                 {
                     return Err(StoreErrorKind::InvalidVirtualChunkContainer {
                         chunk_location: reference.location.url().to_string(),
-                    }
-                    .into());
+                    })
+                    .capture();
                 }
                 session
                     .set_chunk_ref(
@@ -406,13 +383,14 @@ impl Store {
                         coords,
                         Some(ChunkPayload::Virtual(reference)),
                     )
-                    .await?;
+                    .await
+                    .inject()?;
                 Ok(())
             }
             Key::Metadata { .. } | Key::ZarrV2(_) => Err(StoreErrorKind::NotAllowed(
                 format!("use .set to modify metadata for key {key}"),
-            )
-            .into()),
+            ))
+            .capture(),
         }
     }
 
@@ -427,7 +405,7 @@ impl Store {
         I: IntoIterator<Item = (ChunkIndices, VirtualChunkRef)> + std::fmt::Debug,
     {
         if self.read_only().await {
-            return Err(StoreErrorKind::ReadOnly.into());
+            return Err(StoreError::capture(StoreErrorKind::ReadOnly));
         }
 
         let mut session = self.session.write().await;
@@ -444,7 +422,8 @@ impl Store {
                         index,
                         Some(ChunkPayload::Virtual(reference)),
                     )
-                    .await?;
+                    .await
+                    .inject()?;
             }
         }
         if failed.is_empty() {
@@ -457,21 +436,22 @@ impl Store {
     #[instrument(skip(self))]
     pub async fn delete_dir(&self, prefix: &str) -> StoreResult<()> {
         if self.read_only().await {
-            return Err(StoreErrorKind::ReadOnly.into());
+            return Err(StoreError::capture(StoreErrorKind::ReadOnly));
         }
         let prefix = prefix.trim_start_matches('/').trim_end_matches('/');
         // TODO: Handling preceding "/" is ugly!
-        let path = format!("/{prefix}").try_into().map_err(|_| {
-            StoreErrorKind::BadKeyPrefix {
+        let path = format!("/{prefix}")
+            .try_into()
+            .map_err(|_| StoreErrorKind::BadKeyPrefix {
                 prefix: prefix.to_owned(),
                 message: "Cannot convert to a path".to_string(),
-            }
-        })?;
+            })
+            .capture()?;
 
         let mut guard = self.session.write().await;
         let node = guard.get_node(&path).await;
         match node {
-            Ok(node) => Ok(guard.deref_mut().delete_node(node).await?),
+            Ok(node) => Ok(guard.deref_mut().delete_node(node).await.inject()?),
             Err(SessionError { kind: SessionErrorKind::NodeNotFound { .. }, .. }) => {
                 // other cases are
                 // 1. delete("/path/to/array/c")
@@ -505,17 +485,19 @@ impl Store {
                             Ok(res)
                         })
                         .try_collect::<Vec<_>>()
-                        .await?;
+                        .await
+                        .inject()?;
                     Ok(guard
                         .deref_mut()
                         .delete_chunks(&node_path, to_delete.into_iter())
-                        .await?)
+                        .await
+                        .inject()?)
                 } else {
                     // for cases 3, 4 this is a no-op
                     Ok(())
                 }
             }
-            Err(err) => Err(err)?,
+            Err(err) => Err(err.inject())?,
         }
     }
 
@@ -537,11 +519,12 @@ impl Store {
                 {
                     return Ok(());
                 };
-                Ok(session.delete_node(node.map_err(StoreError::from)?).await?)
+                Ok(session.delete_node(node.inject()?).await.inject()?)
             }
-            Key::Chunk { node_path, coords } => {
-                Ok(session.delete_chunks(&node_path, vec![coords].into_iter()).await?)
-            }
+            Key::Chunk { node_path, coords } => Ok(session
+                .delete_chunks(&node_path, vec![coords].into_iter())
+                .await
+                .inject()?),
             Key::ZarrV2(_) => Ok(()),
         }
     }
@@ -556,10 +539,10 @@ impl Store {
         _key_start_values: impl IntoIterator<Item = (&str, ChunkOffset, Bytes)>,
     ) -> StoreResult<()> {
         if self.read_only().await {
-            return Err(StoreErrorKind::ReadOnly.into());
+            return Err(StoreError::capture(StoreErrorKind::ReadOnly));
         }
 
-        Err(StoreErrorKind::Unimplemented("set_partial_values").into())
+        Err(StoreError::capture(StoreErrorKind::Unimplemented("set_partial_values")))
     }
 
     pub fn supports_listing(&self) -> StoreResult<bool> {
@@ -604,7 +587,7 @@ impl Store {
         let absolute_prefix =
             if !prefix.starts_with("/") { &format!("/{prefix}") } else { prefix };
 
-        let path = Path::try_from(absolute_prefix)?;
+        let path = Path::try_from(absolute_prefix).capture()?;
         let session = Arc::clone(&self.session).read_owned().await;
         let results = match session.get_node(&path).await {
             Ok(NodeSnapshot { node_data: NodeData::Array { .. }, .. }) => {
@@ -679,7 +662,8 @@ impl Store {
                             Ok(res)
                         })
                         .try_collect::<HashSet<_>>()
-                        .await?
+                        .await
+                        .inject()?
                         .into_iter()
                         .collect::<Vec<_>>()
                 } else {
@@ -766,28 +750,30 @@ impl Store {
     ) -> StoreResult<impl Stream<Item = StoreResult<String>> + 'a + use<'a>> {
         let prefix = prefix.trim_end_matches('/');
         // TODO: Handling preceding "/" is ugly!
-        let path =
-            format!("/{}", prefix.trim_start_matches('/')).try_into().map_err(|_| {
-                StoreErrorKind::BadKeyPrefix {
-                    prefix: prefix.to_owned(),
-                    message: "Cannot convert to a path".to_string(),
-                }
-            })?;
+        let path = format!("/{}", prefix.trim_start_matches('/'))
+            .try_into()
+            .map_err(|_| StoreErrorKind::BadKeyPrefix {
+                prefix: prefix.to_owned(),
+                message: "Cannot convert to a path".to_string(),
+            })
+            .capture()?;
 
         let session = Arc::clone(&self.session).read_owned().await;
         if path != Path::root() {
-            let _ = session.get_node(&path).await.map_err(|_| {
-                StoreErrorKind::BadKeyPrefix {
+            let _ = session
+                .get_node(&path)
+                .await
+                .map_err(|_| StoreErrorKind::BadKeyPrefix {
                     prefix: prefix.to_owned(),
                     message: "Only prefixes pointing to a group or array are allowed"
                         .to_string(),
-                }
-            })?;
+                })
+                .capture()?;
         }
         let res = try_stream! {
-            for node in session.list_nodes(&path).await? {
+            for node in session.list_nodes(&path).await.inject()? {
                 // TODO: handle non-utf8?
-                let meta_key = Key::Metadata { node_path: node?.path }.to_string();
+                let meta_key = Key::Metadata { node_path: node.inject()?.path }.to_string();
                 if is_prefix_match(&meta_key, prefix) {
                     if strip_prefix {
                         yield meta_key.trim_start_matches(prefix).trim_start_matches('/').to_string();
@@ -814,26 +800,26 @@ impl Store {
                     prefix: prefix.to_owned(),
                     message: "Cannot convert to a path".to_string(),
                 }
-            })?;
+            }).capture()?;
 
             let nodes = if path == Path::root() {
-                Either::Left(session.list_nodes(&Path::root()).await?)
+                Either::Left(session.list_nodes(&Path::root()).await.inject()?)
             } else {
                 let node = session.get_node(&path).await.map_err(|_| {
                     StoreErrorKind::BadKeyPrefix {
                         prefix: prefix.to_owned(),
                         message: "Only prefixes pointing to a group or array are allowed".to_string(),
                     }
-                })?;
+                }).capture()?;
                 match node.node_type() {
-                    NodeType::Group => Either::Left(session.list_nodes(&node.path).await?),
+                    NodeType::Group => Either::Left(session.list_nodes(&node.path).await.inject()?),
                     NodeType::Array => Either::Right(iter::once(Ok(node))),
                 }
             };
 
 
             for node in nodes {
-                let node = node?;
+                let node = node.inject()?;
                 if node.node_type() == NodeType::Array &&
                     // FIXME: utf8 handling
                     // skip the initial / in the path
@@ -844,7 +830,7 @@ impl Store {
                                     let chunk_key = Key::Chunk { node_path: path, coords: chunk.coord }.to_string();
                                     yield chunk_key;
                                 }
-                                Err(err) => Err(err)?
+                                Err(err) => Err(err).inject()?
                             }
                         }
                 }
@@ -867,13 +853,15 @@ async fn set_array_meta(
         {
             session
                 .update_array(&path, shape, array_meta.dimension_names(), user_data)
-                .await?;
+                .await
+                .inject()?;
         }
         Ok(())
     } else {
         session
             .add_array(path.clone(), shape, array_meta.dimension_names(), user_data)
-            .await?;
+            .await
+            .inject()?;
         Ok(())
     }
 }
@@ -887,11 +875,11 @@ async fn set_group_meta(
         if let NodeData::Group = node.node_data
             && node.user_data != user_data
         {
-            session.update_group(&path, user_data).await?;
+            session.update_group(&path, user_data).await.inject()?;
         }
         Ok(())
     } else {
-        session.add_group(path.clone(), user_data).await?;
+        session.add_group(path.clone(), user_data).await.inject()?;
         Ok(())
     }
 }
@@ -902,14 +890,18 @@ async fn get_metadata(
     range: &ByteRange,
     session: &Session,
 ) -> StoreResult<Bytes> {
-    let node = session.get_node(path).await.map_err(|e| match e {
-        SessionError { kind: SessionErrorKind::NodeNotFound { .. }, .. } => {
-            StoreErrorKind::NotFound(KeyNotFoundError::NodeNotFound {
-                path: path.clone(),
-            })
-        }
-        e => StoreErrorKind::SessionError(e.kind),
-    })?;
+    let node = session
+        .get_node(path)
+        .await
+        .map_err(|e| match e {
+            SessionError { kind: SessionErrorKind::NodeNotFound { .. }, .. } => {
+                StoreErrorKind::NotFound(KeyNotFoundError::NodeNotFound {
+                    path: path.clone(),
+                })
+            }
+            e => StoreErrorKind::SessionError(e.kind),
+        })
+        .capture()?;
     Ok(range.slice(&node.user_data))
 }
 
@@ -920,18 +912,19 @@ async fn get_chunk_bytes(
     byte_range: &ByteRange,
     session: &Session,
 ) -> StoreResult<Bytes> {
-    let reader = session.get_chunk_reader(&path, &coords, byte_range).await?;
+    let reader = session.get_chunk_reader(&path, &coords, byte_range).await.inject()?;
 
     // then we can fetch the bytes without holding the lock
-    let chunk = get_chunk(reader).await?;
-    chunk.ok_or(
-        StoreErrorKind::NotFound(KeyNotFoundError::ChunkNotFound {
-            key: key.to_string(),
-            path,
-            coords,
+    let chunk = get_chunk(reader).await.inject()?;
+    chunk
+        .ok_or_else(|| {
+            StoreErrorKind::NotFound(KeyNotFoundError::ChunkNotFound {
+                key: key.to_string(),
+                path,
+                coords,
+            })
         })
-        .into(),
-    )
+        .capture()
 }
 
 async fn get_metadata_size(
@@ -949,12 +942,13 @@ async fn get_chunk_size(
     coords: &ChunkIndices,
     session: &Session,
 ) -> StoreResult<u64> {
-    let chunk_ref = session.get_chunk_ref(path, coords).await?;
+    let chunk_ref = session.get_chunk_ref(path, coords).await.inject()?;
     let size = chunk_ref
         .map(|payload| match payload {
             ChunkPayload::Inline(bytes) => bytes.len() as u64,
             ChunkPayload::Virtual(virtual_chunk_ref) => virtual_chunk_ref.length,
             ChunkPayload::Ref(chunk_ref) => chunk_ref.length,
+            _ => 0,
         })
         .unwrap_or(0);
     Ok(size)
@@ -973,8 +967,8 @@ async fn get_key(
             get_chunk_bytes(key, node_path, coords, byte_range, session).await
         }
         Key::ZarrV2(key) => {
-            Err(StoreErrorKind::NotFound(KeyNotFoundError::ZarrV2KeyNotFound { key })
-                .into())
+            Err(StoreErrorKind::NotFound(KeyNotFoundError::ZarrV2KeyNotFound { key }))
+                .capture()
         }
     }?;
 
@@ -988,8 +982,8 @@ async fn get_key_size(key: &str, session: &Session) -> StoreResult<u64> {
             get_chunk_size(key, &node_path, &coords, session).await
         }
         Key::ZarrV2(key) => {
-            Err(StoreErrorKind::NotFound(KeyNotFoundError::ZarrV2KeyNotFound { key })
-                .into())
+            Err(StoreErrorKind::NotFound(KeyNotFoundError::ZarrV2KeyNotFound { key }))
+                .capture()
         }
     }?;
 
@@ -1003,7 +997,7 @@ async fn exists(key: &str, session: &Session) -> StoreResult<bool> {
             Err(SessionError { kind: SessionErrorKind::NodeNotFound { .. }, .. }) => {
                 Ok(false)
             }
-            Err(err) => Err(err.into()),
+            Err(err) => Err(err.inject()),
         },
         Key::Chunk { node_path, coords } => {
             match session.get_chunk_ref(&node_path, &coords).await {
@@ -1011,12 +1005,12 @@ async fn exists(key: &str, session: &Session) -> StoreResult<bool> {
                 Err(SessionError {
                     kind: SessionErrorKind::NodeNotFound { .. }, ..
                 }) => Ok(false),
-                Err(err) => Err(err.into()),
+                Err(err) => Err(err.inject()),
             }
         }
         Key::ZarrV2(key) => {
-            Err(StoreErrorKind::NotFound(KeyNotFoundError::ZarrV2KeyNotFound { key })
-                .into())
+            Err(StoreErrorKind::NotFound(KeyNotFoundError::ZarrV2KeyNotFound { key }))
+                .capture()
         }
     }
 }
@@ -1057,18 +1051,25 @@ impl Key {
                 let path = path.strip_suffix('/').unwrap_or(path);
                 if coords.is_empty() {
                     Ok(Key::Chunk {
-                        node_path: format!("/{path}").try_into().map_err(|_| {
-                            StoreErrorKind::InvalidKey { key: key.to_string() }
-                        })?,
+                        node_path: format!("/{path}")
+                            .try_into()
+                            .map_err(|_| StoreErrorKind::InvalidKey {
+                                key: key.to_string(),
+                            })
+                            .capture()?,
                         coords: ChunkIndices(vec![]),
                     })
                 } else {
-                    let absolute = format!("/{path}").try_into().map_err(|_| {
-                        StoreErrorKind::InvalidKey { key: key.to_string() }
-                    })?;
+                    let absolute = format!("/{path}")
+                        .try_into()
+                        .map_err(|_| StoreErrorKind::InvalidKey { key: key.to_string() })
+                        .capture()?;
                     coords
                         .strip_prefix('/')
-                        .ok_or(StoreErrorKind::InvalidKey { key: key.to_string() })?
+                        .ok_or_else(|| StoreErrorKind::InvalidKey {
+                            key: key.to_string(),
+                        })
+                        .capture()?
                         .split('/')
                         .map(|s| s.parse::<u32>())
                         .collect::<Result<Vec<_>, _>>()
@@ -1076,12 +1077,13 @@ impl Key {
                             node_path: absolute,
                             coords: ChunkIndices(coords),
                         })
-                        .map_err(|_| {
-                            StoreErrorKind::InvalidKey { key: key.to_string() }.into()
-                        })
+                        .map_err(|_| StoreErrorKind::InvalidKey { key: key.to_string() })
+                        .capture()
                 }
             } else {
-                Err(StoreErrorKind::InvalidKey { key: key.to_string() }.into())
+                Err(StoreError::capture(StoreErrorKind::InvalidKey {
+                    key: key.to_string(),
+                }))
             }
         }
 
@@ -1092,7 +1094,8 @@ impl Key {
             Ok(Key::Metadata {
                 node_path: format!("/{path}")
                     .try_into()
-                    .map_err(|_| StoreErrorKind::InvalidKey { key: key.to_string() })?,
+                    .map_err(|_| StoreErrorKind::InvalidKey { key: key.to_string() })
+                    .capture()?,
             })
         } else {
             parse_chunk(key)
@@ -1146,22 +1149,20 @@ impl ArrayMetadata {
         let serde_json::Value::Object(kvs) = &self.chunk_grid.configuration else {
             return Err(StoreErrorKind::BadChunkGridMetadata(
                 "Unsupported chunk grid".into(),
-            )
-            .into());
+            ))
+            .capture();
         };
         match self.chunk_grid.name.as_str() {
             "regular" => {
-                let values = kvs.get("chunk_shape").and_then(|v| v.as_array()).ok_or(
-                    StoreErrorKind::BadChunkGridMetadata(
+                let values = kvs.get("chunk_shape").and_then(|v| v.as_array()).ok_or_else(|| StoreErrorKind::BadChunkGridMetadata(
                         "cannot parse `chunk_shape` for regular chunk grid".into(),
                     ),
-                )?;
+                ).capture()?;
                 let chunks =
-                    values.iter().map(|c| c.as_u64()).collect::<Option<Vec<_>>>().ok_or(
-                        StoreErrorKind::BadChunkGridMetadata(
+                    values.iter().map(|c| c.as_u64()).collect::<Option<Vec<_>>>().ok_or_else(|| StoreErrorKind::BadChunkGridMetadata(
                             "cannot parse `chunk_shape` for regular chunk grid".into(),
                         ),
-                    )?;
+                    ).capture()?;
                 let num_chunks = chunks
                     .iter()
                     .zip(self.shape.iter())
@@ -1170,11 +1171,10 @@ impl ArrayMetadata {
                 Ok(num_chunks)
             }
             "rectilinear" => {
-                let values = kvs.get("chunk_shapes").and_then(|v| v.as_array()).ok_or(
-                    StoreErrorKind::BadChunkGridMetadata(
+                let values = kvs.get("chunk_shapes").and_then(|v| v.as_array()).ok_or_else(|| StoreErrorKind::BadChunkGridMetadata(
                         "cannot parse `chunk_shapes` for rectilinear chunk grid".into(),
                     ),
-                )?;
+                ).capture()?;
                 let num_chunks = values
                     .iter()
                     .map(|v| {
@@ -1193,15 +1193,15 @@ impl ArrayMetadata {
                         })
                     })
                     .collect::<Option<Vec<_>>>()
-                    .ok_or(StoreErrorKind::BadChunkGridMetadata(
+                    .ok_or_else(|| StoreErrorKind::BadChunkGridMetadata(
                         "cannot parse `chunk_shapes` for rectilinear chunk grid".into(),
-                    ))?;
+                    )).capture()?;
                 Ok(num_chunks)
             }
             _other => {
                 Err(StoreErrorKind::BadChunkGridMetadata(format!(
-                    "Unsupported chunk grid {_other}. Only 'regular' and 'rectilinear' chunk grids are supported."))
-                    .into())
+                    "Unsupported chunk grid {_other}. Only 'regular' and 'rectilinear' chunk grids are supported.")))
+                    .capture()
             }
         }
     }
@@ -1214,23 +1214,22 @@ impl ArrayMetadata {
         let serde_json::Value::Object(kvs) = &self.chunk_grid.configuration else {
             return Err(StoreErrorKind::BadChunkGridMetadata(
                 "Unsupported chunk grid".into(),
-            )
-            .into());
+            ))
+            .capture();
         };
         match self.chunk_grid.name.as_str() {
             "regular" => {
-                let values = kvs.get("chunk_shape").and_then(|v| v.as_array()).ok_or(
-                    StoreErrorKind::BadChunkGridMetadata(
+                let values = kvs.get("chunk_shape").and_then(|v| v.as_array()).ok_or_else(|| StoreErrorKind::BadChunkGridMetadata(
                         "cannot parse `chunk_shape` for regular chunk grid".into(),
                     ),
-                )?;
+                ).capture()?;
                 let chunks = values
                     .iter()
                     .map(|c| c.as_u64().map(|c| c as u32))
                     .collect::<Option<Vec<_>>>()
-                    .ok_or(StoreErrorKind::BadChunkGridMetadata(
+                    .ok_or_else(|| StoreErrorKind::BadChunkGridMetadata(
                         "cannot parse `chunk_shape` for regular chunk grid".into(),
-                    ))?;
+                    )).capture()?;
                 let num_chunks = self.num_chunks()?;
 
                 let remainder: Vec<u32> = self
@@ -1253,8 +1252,8 @@ impl ArrayMetadata {
                                 axis,
                                 coords: coord.clone(),
                                 num_chunks: *num_chunks,
-                            }
-                            .into())
+                            })
+                            .capture()
                         } else {
                             Ok(if *rem == 0 || axcoord < &(num_chunks - 1) {
                                 *chunksize
@@ -1269,11 +1268,10 @@ impl ArrayMetadata {
                 Ok(Box::new(iter))
             }
             "rectilinear" => {
-                let values = kvs.get("chunk_shapes").and_then(|v| v.as_array()).ok_or(
-                    StoreErrorKind::BadChunkGridMetadata(
+                let values = kvs.get("chunk_shapes").and_then(|v| v.as_array()).ok_or_else(|| StoreErrorKind::BadChunkGridMetadata(
                         "cannot parse `chunk_shapes` for rectilinear chunk grid".into(),
                     ),
-                )?;
+                ).capture()?;
                 let chunks = values
                     .iter()
                     .map(|v| {
@@ -1295,9 +1293,9 @@ impl ArrayMetadata {
                         })
                     })
                     .collect::<Option<Vec<_>>>()
-                    .ok_or(StoreErrorKind::BadChunkGridMetadata(
+                    .ok_or_else(|| StoreErrorKind::BadChunkGridMetadata(
                         "cannot parse `chunk_shapes` for rectilinear chunk grid".into(),
-                    ))?;
+                    )).capture()?;
 
                 let iter = coords.map(move |coord: &ChunkIndices| {
                     coord
@@ -1311,8 +1309,8 @@ impl ArrayMetadata {
                                     coords: coord.clone(),
                                     axis,
                                     num_chunks: chunksizes.len() as u32,
-                                }
-                                .into())
+                                })
+                                .capture()
                             } else {
                                 Ok(chunksizes[*chunkcoord as usize])
                             }
@@ -1324,8 +1322,8 @@ impl ArrayMetadata {
             }
             _other => {
                 Err(StoreErrorKind::BadChunkGridMetadata(format!(
-                    "Unsupported chunk grid {_other}. Only 'regular' and 'rectilinear' chunk grids are supported."))
-                    .into())
+                    "Unsupported chunk grid {_other}. Only 'regular' and 'rectilinear' chunk grids are supported.")))
+                    .capture()
             }
         }
     }
@@ -1337,13 +1335,14 @@ impl ArrayMetadata {
                 "Fewer dimensions on inferred number of chunks {} than shape {}",
                 self.shape.len(),
                 num_chunks.len()
-            ))
-            .into())
+            )))
+            .capture()
         } else {
             ArrayShape::new(
                 self.shape.iter().zip(num_chunks.iter()).map(|(a, b)| (*a, *b)),
             )
-            .ok_or(StoreErrorKind::BadChunkGridMetadata("invalid shape".into()).into())
+            .ok_or_else(|| StoreErrorKind::BadChunkGridMetadata("invalid shape".into()))
+            .capture()
         }
     }
 }
@@ -1424,7 +1423,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::roundtrip_serialization_tests;
+    use icechunk_format::roundtrip_serialization_tests;
     use icechunk_macros::tokio_test;
     use pretty_assertions::assert_eq;
     use proptest::prelude::*;
