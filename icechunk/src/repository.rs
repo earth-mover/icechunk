@@ -4257,6 +4257,9 @@ mod tests {
             .add_group("/source".try_into().unwrap(), Bytes::copy_from_slice(b""))
             .await?;
         let initial_snap_id = session.commit("init").execute().await?;
+        // Check if transaction log has no moves
+        let tx_log = repo.asset_manager.fetch_transaction_log(&initial_snap_id).await?;
+        assert!(tx_log.moves().count() == 0);
 
         // Check if moved nested groups still shows up properly after commit
         let session = repo
@@ -4281,6 +4284,10 @@ mod tests {
             .await?;
         assert!(session.get_group(&"/dest".try_into().unwrap()).await.is_ok());
         assert!(session.get_group(&"/source".try_into().unwrap()).await.is_err());
+        // Check if transaction log has one move
+        let tx_log =
+            repo.asset_manager.fetch_transaction_log(&first_rearr_snap_id).await?;
+        assert!(tx_log.moves().count() == 1);
 
         // Rearrange session: move node again, amend this time
         let mut session = repo.rearrange_session("main").await?;
@@ -4296,10 +4303,10 @@ mod tests {
             .await?;
         assert!(session.get_group(&"/another_dest".try_into().unwrap()).await.is_ok());
         assert!(session.get_group(&"/dest".try_into().unwrap()).await.is_err());
-        // Check if transaction log includes moves
+        // Check if transaction log includes two moves
         let tx_log =
             repo.asset_manager.fetch_transaction_log(&first_amend_snap_id).await?;
-        assert!(!dbg!(tx_log.moves().into_iter().collect::<Vec<_>>()).is_empty());
+        assert!(tx_log.moves().count() == 2);
 
         // Rearrange session: move node again, amend gain
         let mut session = repo.rearrange_session("main").await?;
@@ -4317,6 +4324,10 @@ mod tests {
         assert!(session.get_group(&"/dest".try_into().unwrap()).await.is_err());
         assert!(session.get_group(&"/another_dest".try_into().unwrap()).await.is_err());
         assert!(session.get_group(&"/source".try_into().unwrap()).await.is_err());
+        // Check if transaction log includes three moves
+        let tx_log =
+            repo.asset_manager.fetch_transaction_log(&second_amend_snap_id).await?;
+        assert!(tx_log.moves().count() == 3);
 
         let (stream, _, _) = repo.ops_log().await?;
         let ops: Vec<_> = stream.try_collect().await?;
@@ -4351,33 +4362,6 @@ mod tests {
             } if *previous_snap_id == first_amend_snap_id && *new_snap_id == second_amend_snap_id
         ));
 
-        for [initial, next] in [
-            initial_snap_id.clone(),
-            first_rearr_snap_id,
-            first_amend_snap_id,
-            second_amend_snap_id.clone(),
-        ]
-        .array_windows()
-        {
-            let diff = match repo
-                .diff(
-                    &VersionInfo::SnapshotId(initial.clone()),
-                    &VersionInfo::SnapshotId(next.clone()),
-                )
-                .await
-            {
-                Ok(d) => d,
-                Err(_) =>
-                // Continuing here because the amends generate
-                // BadSnapshotChainForDiff errors
-                {
-                    continue;
-                }
-            };
-
-            dbg!(diff);
-        }
-
         let diff = repo
             .diff(
                 &VersionInfo::SnapshotId(initial_snap_id.clone()),
@@ -4386,6 +4370,31 @@ mod tests {
             .await?;
 
         assert_eq!(diff.moved_nodes.len(), 3);
+
+        /*
+                for [initial, next] in [
+                    initial_snap_id,
+                    first_rearr_snap_id,
+                    first_amend_snap_id,
+                    second_amend_snap_id,
+                ]
+                .array_windows()
+                {
+                    let Ok(diff) = repo
+                        .diff(
+                            &VersionInfo::SnapshotId(initial.clone()),
+                            &VersionInfo::SnapshotId(next.clone()),
+                        )
+                        .await
+                    else {
+                        // Continuing here because the amends generate
+                        // BadSnapshotChainForDiff errors
+                        continue;
+                    };
+
+                    dbg!(diff);
+                }
+        */
 
         Ok(())
     }
