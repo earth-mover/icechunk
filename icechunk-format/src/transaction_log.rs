@@ -5,7 +5,7 @@ use std::{
     iter,
 };
 
-use flatbuffers::{VerifierOptions, WIPOffset};
+use flatbuffers::VerifierOptions;
 use itertools::Either;
 
 use crate::{
@@ -407,9 +407,21 @@ impl TransactionLog {
 
         let id = generated::ObjectId12::new(&id.0);
         let id = Some(&id);
-        // FIXME: verify no moves in origins
-        let moved_nodes: &[WIPOffset<_>] = &[];
-        let moved_nodes = Some(builder.create_vector(moved_nodes)); // FIXME:
+
+        let moved_nodes = {
+            let moved_nodes = Vec::from_iter(txs.iter().flat_map(|tx| tx.moves()));
+            let moved_nodes: Vec<_> = moved_nodes
+                .into_iter()
+                .map(|Move { from, to }| {
+                    let from = builder.create_string(from.to_string().as_str());
+                    let to = builder.create_string(to.to_string().as_str());
+                    let args = MoveOperationArgs { from: Some(from), to: Some(to) };
+                    MoveOperation::create(&mut builder, &args)
+                })
+                .collect();
+            Some(builder.create_vector(moved_nodes.as_slice()))
+        };
+
         let tx = generated::TransactionLog::create(
             &mut builder,
             &generated::TransactionLogArgs {

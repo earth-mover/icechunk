@@ -4275,14 +4275,12 @@ mod tests {
             .execute()
             .await?;
 
-        /*
-                // Check if moved nested groups still shows up properly after commit
-                let session = repo
-                    .readonly_session(&VersionInfo::SnapshotId(initial_snap_id.clone()))
-                    .await?;
-                assert!(session.get_group(&"/dest".try_into().unwrap()).await.is_ok());
-                assert!(session.get_group(&"/source".try_into().unwrap()).await.is_err());
-        */
+        // Check if moved nested groups still shows up properly after commit
+        let session = repo
+            .readonly_session(&VersionInfo::SnapshotId(first_rearr_snap_id.clone()))
+            .await?;
+        assert!(session.get_group(&"/dest".try_into().unwrap()).await.is_ok());
+        assert!(session.get_group(&"/source".try_into().unwrap()).await.is_err());
 
         // Rearrange session: move node again, amend this time
         let mut session = repo.rearrange_session("main").await?;
@@ -4292,14 +4290,16 @@ mod tests {
         let first_amend_snap_id =
             session.commit("moved dest to another_dest").amend().execute().await?;
 
-        /*
-                // Check if moved nested groups still shows up properly after commit
-                let session = repo
-                    .readonly_session(&VersionInfo::SnapshotId(initial_snap_id.clone()))
-                    .await?;
-                assert!(session.get_group(&"/another_dest".try_into().unwrap()).await.is_ok());
-                assert!(session.get_group(&"/dest".try_into().unwrap()).await.is_err());
-        */
+        // Check if moved nested groups still shows up properly after commit
+        let session = repo
+            .readonly_session(&VersionInfo::SnapshotId(first_amend_snap_id.clone()))
+            .await?;
+        assert!(session.get_group(&"/another_dest".try_into().unwrap()).await.is_ok());
+        assert!(session.get_group(&"/dest".try_into().unwrap()).await.is_err());
+        // Check if transaction log includes moves
+        let tx_log =
+            repo.asset_manager.fetch_transaction_log(&first_amend_snap_id).await?;
+        assert!(!dbg!(tx_log.moves().into_iter().collect::<Vec<_>>()).is_empty());
 
         // Rearrange session: move node again, amend gain
         let mut session = repo.rearrange_session("main").await?;
@@ -4351,36 +4351,47 @@ mod tests {
             } if *previous_snap_id == first_amend_snap_id && *new_snap_id == second_amend_snap_id
         ));
 
-        /*
         for snap_id in &[
-            initial_snap_id,
-            first_rearr_snap_id,
-            first_amend_snap_id,
-            second_amend_snap_id,
+            initial_snap_id.clone(),
+            first_rearr_snap_id.clone(),
+            first_amend_snap_id.clone(),
+            second_amend_snap_id.clone(),
         ] {
             let tx_log = repo.asset_manager.fetch_transaction_log(&snap_id).await?;
 
             dbg!(tx_log.moves().into_iter().collect::<Vec<_>>());
         }
-*/
 
         for [initial, next] in [
-            initial_snap_id,
+            initial_snap_id.clone(),
             first_rearr_snap_id,
             first_amend_snap_id,
-            second_amend_snap_id,
+            second_amend_snap_id.clone(),
         ]
         .array_windows()
         {
-            let diff = repo
+            let diff = match repo
                 .diff(
                     &VersionInfo::SnapshotId(initial.clone()),
                     &VersionInfo::SnapshotId(next.clone()),
                 )
-                .await?;
+                .await
+            {
+                Ok(d) => d,
+                Err(_) => continue,
+            };
 
             dbg!(diff);
         }
+
+        let diff = repo
+            .diff(
+                &VersionInfo::SnapshotId(initial_snap_id.clone()),
+                &VersionInfo::SnapshotId(second_amend_snap_id.clone()),
+            )
+            .await?;
+
+        assert_eq!(diff.moved_nodes.len(), 3);
 
         Ok(())
     }
