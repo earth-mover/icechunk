@@ -6,7 +6,7 @@ from typing import Any
 import hypothesis.extra.numpy as npst
 import numpy as np
 import numpy.testing as npt
-from hypothesis import assume, note, settings
+from hypothesis import assume, note
 from hypothesis import strategies as st
 from hypothesis.stateful import RuleBasedStateMachine, invariant, precondition, rule
 
@@ -229,7 +229,4 @@ class SerialParallelStateMachine(RuleBasedStateMachine):
         ic.set_logs_filter(None)
 
 
-SerialParallelStateMachine.TestCase.settings = settings(
-    deadline=None, report_multiple_bugs=False
-)
 VersionControlTest = SerialParallelStateMachine.TestCase
