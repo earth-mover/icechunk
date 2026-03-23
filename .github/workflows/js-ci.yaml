@@ -40,6 +40,10 @@ jobs:
           - host: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             build: yarn build --target x86_64-unknown-linux-gnu --use-napi-cross
+            setup: |
+              sudo apt-get update
+              sudo apt-get install -y cmake
+              echo "AWS_LC_SYS_CMAKE_BUILDER=1" >> $GITHUB_ENV
           - host: macos-latest
             target: aarch64-apple-darwin
             build: yarn build --target aarch64-apple-darwin
