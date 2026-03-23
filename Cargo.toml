@@ -1,10 +1,20 @@
 [workspace]
-members = ["icechunk", "icechunk-types", "icechunk-format", "icechunk-storage", "icechunk-s3", "icechunk-arrow-object-store", "icechunk-python", "icechunk-macros", "icechunk-js"]
+members = [
+  "icechunk",
+  "icechunk-types",
+  "icechunk-format",
+  "icechunk-storage",
+  "icechunk-s3",
+  "icechunk-arrow-object-store",
+  "icechunk-python",
+  "icechunk-macros",
+  "icechunk-js",
+]
 default-members = ["icechunk"]
 resolver = "2"
 
 [workspace.package]
-rust-version = "1.91.1"
+rust-version = "1.94.0"
 edition = "2024"
 
 [workspace.lints.rust]
