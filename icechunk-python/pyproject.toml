@@ -116,7 +116,7 @@ minversion = "7"
 testpaths = ["tests", "integration_tests"]
 log_cli_level = "INFO"
 xfail_strict = true
-addopts = ["-ra", "--strict-config", "--strict-markers", "-n", "auto", "--benchmark-disable"]
+addopts = ["-ra", "--strict-config", "--strict-markers", "-n", "auto"]
 markers = [
   "gpu",        # need this to run the zarr tests
   "hypothesis", # auto-applied by hypothesis to @given tests
