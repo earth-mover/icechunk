@@ -114,43 +114,33 @@ pub enum MovedFrom<'a> {
 #[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct MoveTracker {
     moves: Vec<Move>,
-    /// original_path -> final_path for every node affected by a move.
-    /// Used for O(1) `is_remapped` checks during snapshot iteration.
-    #[serde(skip)]
-    node_map: HashMap<Path, Path>,
-    /// final_path -> original_path, sorted for efficient range queries.
-    /// Used by `moved_into` to find moved nodes under a given parent.
-    #[serde(skip)]
-    by_final_path: BTreeMap<Path, Path>,
+    nodes_by_original: HashMap<Path, Path>,
+    nodes_by_final: BTreeMap<Path, Path>,
 }
 
 pub static EMPTY_MOVE_TRACKER: LazyLock<MoveTracker> = LazyLock::new(Default::default);
 
 impl MoveTracker {
-    /// Record a move without updating the node map.
-    /// Used by deserialization and tests that don't have snapshot access.
-    pub fn record_move_only(&mut self, from: Path, to: Path) {
-        self.moves.push(Move { from, to })
-    }
-
-    /// Record a move and update the node map with all affected nodes.
+    /// Record a move without updating the node maps.
+    /// Only populates the `moves` vec (used by `moved_to`/`moved_from`).
+    /// Record a move and update the node maps with all affected nodes.
     ///
-    /// `snapshot_subtree` contains original snapshot paths of all nodes
-    /// under the source. These are used to populate the node map.
+    /// `subtree_nodes` contains the original paths of all nodes under
+    /// the source. These are used to populate the node maps.
     ///
-    /// Example: tree /a/b/c, move /a -> /x
-    ///   snapshot_subtree = [/a, /a/b, /a/b/c]
-    ///   After: node_map = {/a: /x, /a/b: /x/b, /a/b/c: /x/b/c}
+    /// Example: tree `/a/b/c`, move `/a` -> `/x`
+    ///   `subtree_nodes` = `[/a, /a/b, /a/b/c]`
+    ///   After: `nodes_by_original` = `{/a: /x, /a/b: /x/b, /a/b/c: /x/b/c}`
     ///
-    /// If /a was previously renamed from /d (by an earlier move),
-    /// `from` = /a but the snapshot_subtree paths are under /d.
-    /// `original_from` = /d tells us the snapshot prefix.
+    /// If `/a` was previously renamed from `/d` (by an earlier move),
+    /// `from` = `/a` but the `subtree_nodes` paths are under `/d`.
+    /// `original_from` = `/d` tells us the original prefix.
     pub fn record(
         &mut self,
         from: Path,
         to: Path,
-        original_from: Path,
-        snapshot_subtree: impl IntoIterator<Item = Path>,
+        original_from: &Path,
+        subtree_nodes: impl IntoIterator<Item = Path>,
     ) {
         // Step 1: Update existing map entries whose current path is
         // under `from` — they get remapped to `to`.
@@ -159,37 +149,37 @@ impl MoveTracker {
         //
         // Collect updates first since we can't mutate BTreeMap keys
         // while iterating.
-        let mut updates: Vec<(Path, Path, Path)> = Vec::new();
-        for (orig, current) in self.node_map.iter_mut() {
+        let mut updates: Vec<(Path, Path, Path)> = Vec::new(); // (original, old_final, new_final)
+        for (orig, current) in self.nodes_by_original.iter_mut() {
             if let Some(remapped) = Self::remap_path(current, &from, &to) {
                 updates.push((orig.clone(), current.clone(), remapped.clone()));
                 *current = remapped;
             }
         }
         for (orig, old_final, new_final) in updates {
-            self.by_final_path.remove(&old_final);
-            self.by_final_path.insert(new_final, orig);
+            self.nodes_by_final.remove(&old_final);
+            self.nodes_by_final.insert(new_final, orig);
         }
 
-        // Step 2: Add entries for snapshot nodes not yet in the map.
+        // Step 2: Add entries for nodes not yet in the map.
         // These are nodes that haven't been touched by any prior move.
-        for orig in snapshot_subtree {
-            if !self.node_map.contains_key(&orig)
-                && let Some(new_path) = Self::remap_path(&orig, &original_from, &to)
+        for orig in subtree_nodes {
+            if !self.nodes_by_original.contains_key(&orig)
+                && let Some(new_path) = Self::remap_path(&orig, original_from, &to)
             {
-                self.by_final_path.insert(new_path.clone(), orig.clone());
-                self.node_map.insert(orig, new_path);
+                self.nodes_by_final.insert(new_path.clone(), orig.clone());
+                self.nodes_by_original.insert(orig, new_path);
             }
         }
 
         self.moves.push(Move { from, to });
     }
 
-    /// Return (original_path, final_path) pairs for all nodes whose
-    /// final path is under `parent_group`. Uses a BTreeMap range scan
+    /// Return `(original_path, final_path)` pairs for all nodes whose
+    /// final path is under `parent_group`. Uses a `BTreeMap` range scan
     /// for efficient prefix queries on large node sets.
     pub fn moved_into(&self, parent_group: &Path) -> Vec<(Path, Path)> {
-        self.by_final_path
+        self.nodes_by_final
             .range(parent_group.clone()..)
             .take_while(|(final_path, _)| final_path.starts_with(parent_group))
             .map(|(final_path, orig)| (orig.clone(), final_path.clone()))
@@ -198,7 +188,7 @@ impl MoveTracker {
 
     /// Check if a node's original path has been remapped by a move.
     pub fn is_remapped(&self, original_path: &Path) -> bool {
-        self.node_map.contains_key(original_path)
+        self.nodes_by_original.contains_key(original_path)
     }
 
     pub fn is_empty(&self) -> bool {
@@ -389,14 +379,14 @@ impl ChangeSet {
         &mut self,
         from: Path,
         to: Path,
-        original_from: Path,
-        snapshot_subtree: impl IntoIterator<Item = Path>,
+        original_from: &Path,
+        subtree_nodes: impl IntoIterator<Item = Path>,
     ) -> SessionResult<()> {
-        self.move_tracker_mut()?.record(from, to, original_from, snapshot_subtree);
+        self.move_tracker_mut()?.record(from, to, original_from, subtree_nodes);
         Ok(())
     }
 
-    /// Return (original_path, final_path) pairs for all nodes whose
+    /// Return `(original_path, final_path)` pairs for all nodes whose
     /// final path is under `parent_group`.
     pub fn moved_into(&self, parent_group: &Path) -> Vec<(Path, Path)> {
         self.move_tracker().moved_into(parent_group)
@@ -827,6 +817,13 @@ mod tests {
     use bytes::Bytes;
     use itertools::Itertools as _;
 
+    /// Test helper: record a move without subtree nodes.
+    fn rec(mt: &mut MoveTracker, from: &str, to: &str) {
+        let from = Path::new(from).unwrap();
+        let to = Path::new(to).unwrap();
+        mt.record(from.clone(), to, &from, std::iter::empty());
+    }
+
     use super::ChangeSet;
 
     use crate::{
@@ -941,18 +938,9 @@ mod tests {
         use super::MovedTo::*;
 
         let mut mt = MoveTracker::default();
-        mt.record_move_only(
-            Path::new("/foo/bar/old").unwrap(),
-            Path::new("/foo/bar/new").unwrap(),
-        );
-        mt.record_move_only(
-            Path::new("/foo/bar/new/inner-old1").unwrap(),
-            Path::new("/foo/bar/new/inner-new").unwrap(),
-        );
-        mt.record_move_only(
-            Path::new("/foo/bar/new/inner-old2").unwrap(),
-            Path::new("/inner-new2").unwrap(),
-        );
+        rec(&mut mt, "/foo/bar/old", "/foo/bar/new");
+        rec(&mut mt, "/foo/bar/new/inner-old1", "/foo/bar/new/inner-new");
+        rec(&mut mt, "/foo/bar/new/inner-old2", "/inner-new2");
 
         assert!(matches!(
             mt.moved_to(&Path::new("/foo").unwrap()),
@@ -984,18 +972,9 @@ mod tests {
     fn test_moved_from_simple() {
         use super::MovedFrom::*;
         let mut mt = MoveTracker::default();
-        mt.record_move_only(
-            Path::new("/foo/bar/old").unwrap(),
-            Path::new("/foo/bar/new").unwrap(),
-        );
-        mt.record_move_only(
-            Path::new("/foo/bar/new/inner-old1").unwrap(),
-            Path::new("/foo/bar/new/inner-new").unwrap(),
-        );
-        mt.record_move_only(
-            Path::new("/foo/bar/new/inner-old2").unwrap(),
-            Path::new("/inner-new2").unwrap(),
-        );
+        rec(&mut mt, "/foo/bar/old", "/foo/bar/new");
+        rec(&mut mt, "/foo/bar/new/inner-old1", "/foo/bar/new/inner-new");
+        rec(&mut mt, "/foo/bar/new/inner-old2", "/inner-new2");
 
         assert!(matches!(
             mt.moved_from(&Path::new("/foo").unwrap()),
@@ -1041,14 +1020,8 @@ mod tests {
     fn test_moved_to_back_and_forth() {
         use super::MovedTo::*;
         let mut mt = MoveTracker::default();
-        mt.record_move_only(
-            Path::new("/foo/bar/old").unwrap(),
-            Path::new("/foo/bar/new").unwrap(),
-        );
-        mt.record_move_only(
-            Path::new("/foo/bar/new").unwrap(),
-            Path::new("/foo/bar/old").unwrap(),
-        );
+        rec(&mut mt, "/foo/bar/old", "/foo/bar/new");
+        rec(&mut mt, "/foo/bar/new", "/foo/bar/old");
         assert!(matches!(
             mt.moved_to(&Path::new("/foo/bar/old/inner").unwrap()),
             To(p) if p.as_ref() == &Path::new("/foo/bar/old/inner").unwrap()
@@ -1071,14 +1044,8 @@ mod tests {
     fn test_moved_from_back_and_forth() {
         use super::MovedFrom::*;
         let mut mt = MoveTracker::default();
-        mt.record_move_only(
-            Path::new("/foo/bar/old").unwrap(),
-            Path::new("/foo/bar/new").unwrap(),
-        );
-        mt.record_move_only(
-            Path::new("/foo/bar/new").unwrap(),
-            Path::new("/foo/bar/old").unwrap(),
-        );
+        rec(&mut mt, "/foo/bar/old", "/foo/bar/new");
+        rec(&mut mt, "/foo/bar/new", "/foo/bar/old");
         assert!(matches!(
             mt.moved_from(&Path::new("/foo/bar/old/inner").unwrap()),
             From(p) if p.as_ref() == &Path::new("/foo/bar/old/inner").unwrap()
@@ -1118,8 +1085,8 @@ mod tests {
         vec(gen_move(), 1..5)
             .prop_map(|moves| MoveTracker {
                 moves,
-                node_map: HashMap::new(),
-                by_final_path: BTreeMap::new(),
+                nodes_by_original: HashMap::new(),
+                nodes_by_final: BTreeMap::new(),
             })
             .boxed()
     }

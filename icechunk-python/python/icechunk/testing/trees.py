@@ -378,3 +378,21 @@ def valid_moves(
         all_nodes = all_arrays | (all_groups - {""})
 
     return moves
+
+
+@st.composite
+def tree_and_moves(
+    draw: st.DrawFn,
+    max_leaves: st.SearchStrategy[int] | None = None,
+    max_children: st.SearchStrategy[int] | None = None,
+    n_moves: st.SearchStrategy[int] = st.integers(min_value=1, max_value=10),  # noqa: B008
+) -> tuple[GroupNode, list[tuple[str, str]]]:
+    """Generate a tree paired with a sequence of valid moves."""
+    kwargs = {}
+    if max_leaves is not None:
+        kwargs["max_leaves"] = max_leaves
+    if max_children is not None:
+        kwargs["max_children"] = max_children
+    tree = draw(trees(**kwargs))
+    moves = draw(valid_moves(tree, n_moves=n_moves))
+    return tree, moves
