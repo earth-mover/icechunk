@@ -114,9 +114,7 @@ pub enum MovedFrom<'a> {
 #[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct MoveTracker {
     moves: Vec<Move>,
-    #[serde(default)]
     nodes_by_original: HashMap<Path, Path>,
-    #[serde(default)]
     nodes_by_final: BTreeMap<Path, Path>,
 }
 
@@ -152,8 +150,8 @@ impl MoveTracker {
         let mut updates: Vec<(Path, Path, Path)> = Vec::new(); // (original, old_final, new_final)
         for (orig, current) in self.nodes_by_original.iter_mut() {
             if let Some(remapped) = Self::remap_path(current, &from, &to) {
-                updates.push((orig.clone(), current.clone(), remapped.clone()));
-                *current = remapped;
+                let old_final = std::mem::replace(current, remapped);
+                updates.push((orig.clone(), old_final, current.clone()));
             }
         }
         for (orig, old_final, new_final) in updates {
