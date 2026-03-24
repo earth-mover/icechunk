@@ -26,7 +26,9 @@ use object_store::ClientConfigKey;
 #[cfg(feature = "s3")]
 use object_store::aws::AmazonS3Builder;
 #[cfg(feature = "azure")]
-use object_store::azure::{AzureConfigKey, MicrosoftAzureBuilder};
+use object_store::azure::{
+    AzureAccessKey, AzureConfigKey, AzureCredential, MicrosoftAzureBuilder,
+};
 #[cfg(feature = "gcs")]
 use object_store::gcp::{GcpCredential, GoogleCloudStorageBuilder, GoogleConfigKey};
 #[cfg(feature = "http")]
@@ -121,14 +123,47 @@ pub enum AzureStaticCredentials {
     BearerToken(String),
 }
 
-/// Azure Blob Storage authentication credentials.
+/// A refreshable Azure credential with optional expiration.
+///
+/// Mirrors [`AzureStaticCredentials`] but includes an expiration time so the
+/// credential provider knows when to call the fetcher again.
 #[cfg(feature = "azure")]
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(tag = "az_refreshable_credential_type", content = "__field0")]
+#[serde(rename_all = "snake_case")]
+pub enum AzureRefreshableCredential {
+    AccessKey { key: String, expires_after: Option<DateTime<Utc>> },
+    SASToken { token: String, expires_after: Option<DateTime<Utc>> },
+    BearerToken { bearer: String, expires_after: Option<DateTime<Utc>> },
+}
+
+#[cfg(feature = "azure")]
+impl AzureRefreshableCredential {
+    pub fn expires_after(&self) -> Option<DateTime<Utc>> {
+        match self {
+            Self::AccessKey { expires_after, .. }
+            | Self::SASToken { expires_after, .. }
+            | Self::BearerToken { expires_after, .. } => *expires_after,
+        }
+    }
+}
+
+#[cfg(feature = "azure")]
+#[async_trait]
+#[typetag::serde(tag = "az_credentials_fetcher_type")]
+pub trait AzureCredentialsFetcher: Debug + Sync + Send {
+    async fn get(&self) -> Result<AzureRefreshableCredential, String>;
+}
+
+/// Azure Blob Storage authentication credentials.
+#[cfg(feature = "azure")]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(tag = "az_credential_type")]
 #[serde(rename_all = "snake_case")]
 pub enum AzureCredentials {
     FromEnv,
     Static(AzureStaticCredentials),
+    Refreshable(Arc<dyn AzureCredentialsFetcher>),
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -929,6 +964,11 @@ impl ObjectStoreBackend for AzureObjectStoreBackend {
             Some(AzureCredentials::Static(AzureStaticCredentials::BearerToken(
                 token,
             ))) => builder.with_bearer_token_authorization(token),
+            Some(AzureCredentials::Refreshable(fetcher)) => {
+                let credential_provider =
+                    AzureRefreshableCredentialProvider::new(Arc::clone(fetcher));
+                builder.with_credentials(Arc::new(credential_provider))
+            }
             None | Some(AzureCredentials::FromEnv) => MicrosoftAzureBuilder::from_env(),
         };
 
@@ -1123,6 +1163,75 @@ impl CredentialProvider for GcsRefreshableCredentialProvider {
             object_store::Error::Generic { store: "gcp", source: Box::new(e) }
         })?;
         Ok(Arc::new(GcpCredential::from(&creds)))
+    }
+}
+
+#[cfg(feature = "azure")]
+#[derive(Debug)]
+pub struct AzureRefreshableCredentialProvider {
+    last_credential: Arc<RwLock<Option<AzureRefreshableCredential>>>,
+    refresher: Arc<dyn AzureCredentialsFetcher>,
+}
+
+#[cfg(feature = "azure")]
+impl AzureRefreshableCredentialProvider {
+    pub fn new(refresher: Arc<dyn AzureCredentialsFetcher>) -> Self {
+        Self { last_credential: Arc::new(RwLock::new(None)), refresher }
+    }
+
+    pub async fn get_or_update_credentials(
+        &self,
+    ) -> Result<AzureRefreshableCredential, StorageError> {
+        let last_credential = self.last_credential.read().await;
+
+        // If we have a credential and it hasn't expired, return it
+        if let Some(creds) = last_credential.as_ref()
+            && let Some(expires_after) = creds.expires_after()
+            && expires_after
+                > Utc::now() + TimeDelta::seconds(rand::random_range(120..=180))
+        {
+            return Ok(creds.clone());
+        }
+
+        drop(last_credential);
+        let mut last_credential = self.last_credential.write().await;
+
+        // Otherwise, refresh the credential and cache it
+        let creds = self.refresher.get().await.map_err(other_error)?;
+        *last_credential = Some(creds.clone());
+        Ok(creds)
+    }
+}
+
+#[cfg(feature = "azure")]
+fn to_azure_credential(
+    cred: &AzureRefreshableCredential,
+) -> object_store::Result<AzureCredential> {
+    match cred {
+        AzureRefreshableCredential::BearerToken { bearer, .. } => {
+            Ok(AzureCredential::BearerToken(bearer.clone()))
+        }
+        AzureRefreshableCredential::SASToken { token, .. } => {
+            Ok(AzureCredential::SASToken(
+                url::form_urlencoded::parse(token.as_bytes()).into_owned().collect(),
+            ))
+        }
+        AzureRefreshableCredential::AccessKey { key, .. } => {
+            Ok(AzureCredential::AccessKey(AzureAccessKey::try_new(key)?))
+        }
+    }
+}
+
+#[async_trait]
+#[cfg(feature = "azure")]
+impl CredentialProvider for AzureRefreshableCredentialProvider {
+    type Credential = AzureCredential;
+
+    async fn get_credential(&self) -> object_store::Result<Arc<Self::Credential>> {
+        let creds = self.get_or_update_credentials().await.map_err(|e| {
+            object_store::Error::Generic { store: "azure", source: Box::new(e) }
+        })?;
+        Ok(Arc::new(to_azure_credential(&creds)?))
     }
 }
 

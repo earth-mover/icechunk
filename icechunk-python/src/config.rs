@@ -18,11 +18,12 @@ use std::{
 use icechunk::{
     ObjectStoreConfig, RepositoryConfig, Storage,
     config::{
-        AzureCredentials, AzureStaticCredentials, CachingConfig, CompressionAlgorithm,
-        CompressionConfig, Credentials, GcsBearerCredential, GcsCredentials,
-        GcsCredentialsFetcher, GcsStaticCredentials, ManifestConfig,
-        ManifestPreloadCondition, ManifestPreloadConfig, ManifestSplitCondition,
-        ManifestSplitDim, ManifestSplitDimCondition, ManifestSplittingConfig,
+        AzureCredentials, AzureCredentialsFetcher, AzureRefreshableCredential,
+        AzureStaticCredentials, CachingConfig, CompressionAlgorithm, CompressionConfig,
+        Credentials, GcsBearerCredential, GcsCredentials, GcsCredentialsFetcher,
+        GcsStaticCredentials, ManifestConfig, ManifestPreloadCondition,
+        ManifestPreloadConfig, ManifestSplitCondition, ManifestSplitDim,
+        ManifestSplitDimCondition, ManifestSplittingConfig,
         ManifestVirtualChunkLocationCompressionConfig, RepoUpdateRetryConfig,
         S3Credentials, S3CredentialsFetcher, S3Options, S3StaticCredentials,
     },
@@ -202,6 +203,36 @@ impl S3CredentialsFetcher for PythonCredentialsFetcher<S3StaticCredentials> {
 
 #[async_trait]
 #[typetag::serde]
+impl AzureCredentialsFetcher for PythonCredentialsFetcher<AzureRefreshableCredential> {
+    async fn get(&self) -> Result<AzureRefreshableCredential, String> {
+        if let Some(creds) = self.initial.as_ref() {
+            match creds.expires_after() {
+                None => {
+                    return Ok(creds.clone());
+                }
+                Some(expiration)
+                    if expiration
+                        > Utc::now()
+                            + TimeDelta::seconds(rand::random_range(120..=180)) =>
+                {
+                    return Ok(creds.clone());
+                }
+                _ => {}
+            }
+        }
+        Python::attach(|py| {
+            call_pickled::<PyAzureRefreshableCredential>(
+                py,
+                self.pickled_function.clone(),
+            )
+            .map(|c| c.into())
+        })
+        .map_err(|e: PyErr| e.to_string())
+    }
+}
+
+#[async_trait]
+#[typetag::serde]
 impl GcsCredentialsFetcher for PythonCredentialsFetcher<GcsBearerCredential> {
     async fn get(&self) -> Result<GcsBearerCredential, String> {
         if let Some(static_creds) = self.initial.as_ref() {
@@ -344,6 +375,46 @@ impl From<PyGcsCredentials> for GcsCredentials {
     }
 }
 
+#[pyclass(name = "AzureRefreshableCredential")]
+#[derive(Clone, Debug)]
+pub enum PyAzureRefreshableCredential {
+    AccessKey { key: String, expires_after: Option<DateTime<Utc>> },
+    SasToken { token: String, expires_after: Option<DateTime<Utc>> },
+    BearerToken { bearer: String, expires_after: Option<DateTime<Utc>> },
+}
+
+impl From<PyAzureRefreshableCredential> for AzureRefreshableCredential {
+    fn from(value: PyAzureRefreshableCredential) -> Self {
+        match value {
+            PyAzureRefreshableCredential::AccessKey { key, expires_after } => {
+                AzureRefreshableCredential::AccessKey { key, expires_after }
+            }
+            PyAzureRefreshableCredential::SasToken { token, expires_after } => {
+                AzureRefreshableCredential::SASToken { token, expires_after }
+            }
+            PyAzureRefreshableCredential::BearerToken { bearer, expires_after } => {
+                AzureRefreshableCredential::BearerToken { bearer, expires_after }
+            }
+        }
+    }
+}
+
+impl From<AzureRefreshableCredential> for PyAzureRefreshableCredential {
+    fn from(value: AzureRefreshableCredential) -> Self {
+        match value {
+            AzureRefreshableCredential::AccessKey { key, expires_after } => {
+                PyAzureRefreshableCredential::AccessKey { key, expires_after }
+            }
+            AzureRefreshableCredential::SASToken { token, expires_after } => {
+                PyAzureRefreshableCredential::SasToken { token, expires_after }
+            }
+            AzureRefreshableCredential::BearerToken { bearer, expires_after } => {
+                PyAzureRefreshableCredential::BearerToken { bearer, expires_after }
+            }
+        }
+    }
+}
+
 #[pyclass(name = "AzureStaticCredentials")]
 #[derive(Clone, Debug)]
 pub enum PyAzureStaticCredentials {
@@ -373,6 +444,10 @@ impl From<PyAzureStaticCredentials> for AzureStaticCredentials {
 pub enum PyAzureCredentials {
     FromEnv(),
     Static(PyAzureStaticCredentials),
+    Refreshable {
+        pickled_function: Vec<u8>,
+        current: Option<PyAzureRefreshableCredential>,
+    },
 }
 
 #[pyclass(name = "Credentials")]
@@ -388,6 +463,15 @@ impl From<PyAzureCredentials> for AzureCredentials {
         match value {
             PyAzureCredentials::FromEnv() => AzureCredentials::FromEnv,
             PyAzureCredentials::Static(creds) => AzureCredentials::Static(creds.into()),
+            PyAzureCredentials::Refreshable { pickled_function, current } => {
+                let fetcher = if let Some(current) = current {
+                    PythonCredentialsFetcher::new_with_initial(pickled_function, current)
+                } else {
+                    PythonCredentialsFetcher::new(pickled_function)
+                };
+
+                AzureCredentials::Refreshable(Arc::new(fetcher))
+            }
         }
     }
 }
