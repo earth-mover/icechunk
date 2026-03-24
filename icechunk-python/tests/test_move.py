@@ -1,8 +1,16 @@
 import numpy.testing
 import pytest
+from hypothesis import example, given, note
+from hypothesis import strategies as st
 
 import icechunk as ic
 import zarr
+from icechunk.testing.trees import GroupNode, tree_from_str, trees, valid_moves
+from icechunk.testing.utils import (
+    precommit_postcommit_readonly,
+    tree_to_model_and_icechunk,
+)
+from zarr.core.sync import sync
 
 
 async def test_basic_move() -> None:
@@ -78,6 +86,56 @@ def test_move_errors() -> None:
         session.move("/my/old/path", "/my/old/path")
     with pytest.raises(ic.IcechunkError, match="node not found"):
         session.move("/not-found", "/my/new/path")
+
+    # TODO: moving root should error but doesn't yet, see #1562
+    # with pytest.raises(ic.IcechunkError):
+    #     session.move("/", "/new")
+
+
+@st.composite
+def tree_and_moves(draw: st.DrawFn) -> tuple[GroupNode, list[tuple[str, str]]]:
+    """Generate a tree paired with a sequence of valid moves."""
+    tree = draw(trees(max_leaves=st.just(5), max_children=st.just(3)))
+    moves = draw(valid_moves(tree, n_moves=st.integers(min_value=1, max_value=5)))
+    return tree, moves
+
+
+@example(tree_moves=(tree_from_str("g: /foo/bar\ng: /baz"), [("foo/bar", "baz/bar")]))
+@example(tree_moves=(tree_from_str("a: /0/0/0"), [("0", "0_0")]))
+@example(tree_moves=(tree_from_str("a: /0/1"), [("0/1", "0/0"), ("0", "1")]))
+@given(tree_moves=tree_and_moves())
+def test_moves(
+    tree_moves: tuple[GroupNode, list[tuple[str, str]]],
+) -> None:
+    """A sequence of moves should produce the correct tree after commit.
+
+    See https://github.com/earth-mover/icechunk/issues/1562
+    """
+    tree, moves = tree_moves
+
+    model, session, repo = tree_to_model_and_icechunk(tree)
+    session.commit("init")
+    original_tree = repr(zarr.open_group(model).tree())
+
+    session = repo.rearrange_session("main")
+    for source, dest in moves:
+        note(f"moving: /{source} -> /{dest}")
+        sync(model.move(source, dest))
+        session.move(f"/{source}", f"/{dest}")
+
+    expected = repr(zarr.open_group(model).tree())
+    # NOTE: skipping pre-commit check — rearrange session store doesn't
+    # reflect moves before commit (known bug, see #1562)
+    for label, store in precommit_postcommit_readonly(session, repo):
+        actual = repr(zarr.open_group(store, mode="r").tree())
+        assert expected == actual, (
+            f"\ntree mismatch [{label}]:"
+            f"\n\noriginal tree:\n{original_tree}"
+            f"\n\nmoves:\n"
+            + "\n".join(f"  /{s} -> /{d}" for s, d in moves)
+            + f"\n\nexpected:\n{expected}"
+            f"\n\nactual:\n{actual}"
+        )
 
 
 def test_doesnt_rebase() -> None:
