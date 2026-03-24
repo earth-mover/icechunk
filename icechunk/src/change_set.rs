@@ -114,7 +114,9 @@ pub enum MovedFrom<'a> {
 #[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct MoveTracker {
     moves: Vec<Move>,
+    #[serde(default)]
     nodes_by_original: HashMap<Path, Path>,
+    #[serde(default)]
     nodes_by_final: BTreeMap<Path, Path>,
 }
 
@@ -137,6 +139,7 @@ impl MoveTracker {
     ) {
         // Resolve `from` to its original snapshot path — it may have
         // been renamed by an earlier move. O(log N) BTreeMap lookup.
+        // QUESTION: should we just do moved_from here? maybe faster?
         let original_from =
             self.nodes_by_final.get(&from).cloned().unwrap_or_else(|| from.clone());
         // Step 1: Update existing map entries whose current path is
@@ -1094,4 +1097,83 @@ mod tests {
     }
 
     roundtrip_serialization_tests!(serialize_and_deserialize_change_sets - change_set);
+
+    fn p(s: &str) -> Path {
+        Path::new(s).unwrap()
+    }
+
+    /// Helper: record a move with explicit subtree nodes.
+    fn rec_with(mt: &mut MoveTracker, from: &str, to: &str, subtree: &[&str]) {
+        mt.record(p(from), p(to), subtree.iter().map(|s| p(s)));
+    }
+
+    #[icechunk_macros::test]
+    fn test_node_map_simple_rename() {
+        // Tree: /a (group), /a/x (array)
+        // Move: /a -> /b
+        let mut mt = MoveTracker::default();
+        rec_with(&mut mt, "/a", "/b", &["/a", "/a/x"]);
+
+        assert!(mt.is_remapped(&p("/a")));
+        assert!(mt.is_remapped(&p("/a/x")));
+        assert!(!mt.is_remapped(&p("/b")));
+
+        let result = mt.moved_into(&p("/b"));
+        assert_eq!(result.len(), 2);
+        assert!(result.contains(&(p("/a"), p("/b"))));
+        assert!(result.contains(&(p("/a/x"), p("/b/x"))));
+    }
+
+    #[icechunk_macros::test]
+    fn test_node_map_deposit_then_rename() {
+        // Tree: /a (group), /a/x (array), /b (group), /b/y (array)
+        // Move 1: /a -> /b/a (deposit into /b)
+        // Move 2: /b -> /c (rename /b to /c)
+        // After: /c, /c/a, /c/a/x, /c/y
+        let mut mt = MoveTracker::default();
+        rec_with(&mut mt, "/a", "/b/a", &["/a", "/a/x"]);
+        rec_with(&mut mt, "/b", "/c", &["/b", "/b/y"]);
+
+        let result = mt.moved_into(&p("/c"));
+        assert!(result.contains(&(p("/a"), p("/c/a"))));
+        assert!(result.contains(&(p("/a/x"), p("/c/a/x"))));
+        assert!(result.contains(&(p("/b"), p("/c"))));
+        assert!(result.contains(&(p("/b/y"), p("/c/y"))));
+    }
+
+    #[icechunk_macros::test]
+    fn test_node_map_child_moved_out() {
+        // Tree: /a (group), /a/x (array), /a/y (array)
+        // Move 1: /a/x -> /b (move x out)
+        // Move 2: /a -> /c (rename a)
+        // /a/x should NOT end up under /c
+        let mut mt = MoveTracker::default();
+        rec_with(&mut mt, "/a/x", "/b", &["/a/x"]);
+        rec_with(&mut mt, "/a", "/c", &["/a", "/a/x", "/a/y"]);
+
+        // /a/x was moved out before /a was renamed, so is_remapped
+        // should be true (it was touched by move 1)
+        assert!(mt.is_remapped(&p("/a/x")));
+
+        // /c should contain /a (renamed) and /a/y, but NOT /a/x
+        let under_c = mt.moved_into(&p("/c"));
+        assert!(under_c.contains(&(p("/a"), p("/c"))));
+        assert!(under_c.contains(&(p("/a/y"), p("/c/y"))));
+        // /a/x should be at /b, not under /c
+        assert!(!under_c.iter().any(|(_, final_path)| *final_path == p("/c/x")));
+
+        let under_b = mt.moved_into(&p("/b"));
+        assert!(under_b.contains(&(p("/a/x"), p("/b"))));
+    }
+
+    #[icechunk_macros::test]
+    fn test_node_map_root_listing() {
+        // Move: /a -> /b. Listing / returns everything.
+        let mut mt = MoveTracker::default();
+        rec_with(&mut mt, "/a", "/b", &["/a", "/a/x"]);
+
+        let result = mt.moved_into(&Path::root());
+        assert!(result.contains(&(p("/a"), p("/b"))));
+        assert!(result.contains(&(p("/a/x"), p("/b/x"))));
+    }
 }
