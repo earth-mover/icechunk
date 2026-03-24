@@ -2739,9 +2739,7 @@ class AzureCredentials:
         ) -> AzureCredentials.Refreshable: ...
 
 _AnyAzureCredential = (
-    AzureCredentials.FromEnv
-    | AzureCredentials.Static
-    | AzureCredentials.Refreshable
+    AzureCredentials.FromEnv | AzureCredentials.Static | AzureCredentials.Refreshable
 )
 
 class Credentials:

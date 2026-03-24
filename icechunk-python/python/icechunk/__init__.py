@@ -3,8 +3,8 @@
 from typing import TypeAlias
 
 from icechunk._icechunk_python import (
-    AzureRefreshableCredential,
     AzureCredentials,
+    AzureRefreshableCredential,
     AzureStaticCredentials,
     BasicConflictSolver,
     CachingConfig,
@@ -111,8 +111,8 @@ __all__ = [
     "AnyGcsStaticCredential",
     "AnyObjectStoreConfig",
     "AnyS3Credential",
-    "AzureRefreshableCredential",
     "AzureCredentials",
+    "AzureRefreshableCredential",
     "AzureStaticCredentials",
     "BasicConflictSolver",
     "CachingConfig",
