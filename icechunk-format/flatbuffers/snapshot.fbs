@@ -123,6 +123,7 @@ table Snapshot {
   id: ObjectId12 (required);
 
   // the id of the parent snapshot, can be null for a root snapshot
+  // This is left empty on V2 spec snapshots
   parent_id: ObjectId12;
 
   // sorted by ascending order of NodeSnapshot.path
@@ -141,14 +142,15 @@ table Snapshot {
 
   // the list of all manifest files this snapshot points to
   // sorted in ascending order of ManifestFileInfo.id
+  // This is left empty on V2 spec snapshots
   manifest_files: [ManifestFileInfo] (required);
+
+  // Introduced in spec version 2
+  manifest_files_v2: [ManifestFileInfoV2];
 
   // Reserved for future use. Opaque byte vector for extensibility.
   // Introduced in spec version 2
   extra: [uint8];
-
-  // Introduced in spec version 2
-  manifest_files_v2: [ManifestFileInfoV2];
 }
 
 root_type Snapshot;

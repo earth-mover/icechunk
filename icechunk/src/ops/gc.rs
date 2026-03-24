@@ -204,9 +204,8 @@ async fn snapshot_retained(
         })
         .capture()?
         .insert(snap.id());
-    Ok(stream::iter(
-        snap.manifest_files().map(Ok::<_, RepositoryError>).collect::<Vec<_>>(),
-    ))
+    let files: Vec<ManifestFileInfo> = snap.manifest_files().try_collect().inject()?;
+    Ok(stream::iter(files.into_iter().map(Ok)))
 }
 
 async fn manifest_retained(
