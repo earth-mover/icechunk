@@ -2641,6 +2641,33 @@ _AnyGcsCredential = (
     | GcsCredentials.Refreshable
 )
 
+class AzureRefreshableCredential:
+    """A refreshable credential for Azure storage with optional expiration."""
+
+    class AccessKey:
+        """Refreshable access key credential."""
+        def __new__(
+            cls, key: str, *, expires_after: datetime.datetime | None = None
+        ) -> AzureRefreshableCredential.AccessKey: ...
+
+    class SasToken:
+        """Refreshable SAS token credential."""
+        def __new__(
+            cls, token: str, *, expires_after: datetime.datetime | None = None
+        ) -> AzureRefreshableCredential.SasToken: ...
+
+    class BearerToken:
+        """Refreshable bearer token credential."""
+        def __new__(
+            cls, bearer: str, *, expires_after: datetime.datetime | None = None
+        ) -> AzureRefreshableCredential.BearerToken: ...
+
+_AnyAzureRefreshableCredential = (
+    AzureRefreshableCredential.AccessKey
+    | AzureRefreshableCredential.SasToken
+    | AzureRefreshableCredential.BearerToken
+)
+
 class AzureStaticCredentials:
     """Credentials for an azure storage backend"""
     class AccessKey:
@@ -2700,7 +2727,20 @@ class AzureCredentials:
             cls, credentials: _AnyAzureStaticCredential
         ) -> AzureCredentials.Static: ...
 
-_AnyAzureCredential = AzureCredentials.FromEnv | AzureCredentials.Static
+    class Refreshable:
+        """Allows for an outside authority to pass in a function that can be used to provide credentials.
+
+        This is useful for credentials that have an expiration time, or are otherwise not known ahead of time.
+        """
+        def __new__(
+            cls,
+            pickled_function: bytes,
+            current: AzureRefreshableCredential | None = None,
+        ) -> AzureCredentials.Refreshable: ...
+
+_AnyAzureCredential = (
+    AzureCredentials.FromEnv | AzureCredentials.Static | AzureCredentials.Refreshable
+)
 
 class Credentials:
     class S3:
