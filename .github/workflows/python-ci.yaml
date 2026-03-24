@@ -172,6 +172,7 @@ jobs:
           working-directory: icechunk-python
           target: ${{ matrix.platform.target }}
           args: --release --out dist --find-interpreter
+          rust-toolchain: stable
           manylinux: ${{ matrix.platform.manylinux }} # https://github.com/PyO3/maturin-action/issues/245
       - name: Upload wheels
         uses: actions/upload-artifact@v7
@@ -214,6 +215,7 @@ jobs:
           working-directory: icechunk-python
           target: ${{ matrix.platform.target }}
           args: --release --out dist --find-interpreter
+          rust-toolchain: stable
           manylinux: musllinux_1_2
       - name: Upload wheels
         uses: actions/upload-artifact@v7
@@ -252,6 +254,7 @@ jobs:
           working-directory: icechunk-python
           target: ${{ matrix.platform.target }}
           args: --release --out dist --find-interpreter
+          rust-toolchain: stable
       - name: Upload wheels
         uses: actions/upload-artifact@v7
         with:
@@ -289,6 +292,7 @@ jobs:
           working-directory: icechunk-python
           target: ${{ matrix.platform.target }}
           args: --release --out dist --find-interpreter
+          rust-toolchain: stable
       - name: Upload wheels
         uses: actions/upload-artifact@v7
         with:
@@ -318,6 +322,7 @@ jobs:
           working-directory: icechunk-python
           command: sdist
           args: --out dist
+          rust-toolchain: stable
       - name: Upload sdist
         uses: actions/upload-artifact@v7
         with:
