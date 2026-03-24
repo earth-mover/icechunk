@@ -125,12 +125,11 @@ pub static EMPTY_MOVE_TRACKER: LazyLock<MoveTracker> = LazyLock::new(Default::de
 impl MoveTracker {
     /// Record a move and update the node maps with all affected nodes.
     ///
-    /// `subtree_nodes` contains the original paths of all nodes under
-    /// the source. These are used to populate the node maps.
-    ///
-    /// Example: tree `/a/b/c`, move `/a` -> `/x`
-    ///   `subtree_nodes` = `[/a, /a/b, /a/b/c]`
-    ///   After: `nodes_by_original` = `{/a: /x, /a/b: /x/b, /a/b/c: /x/b/c}`
+    /// Example: tree with `/a`, `/a/b`, `/a/b/c`; move `/a` -> `/x`:
+    /// ```ignore
+    /// tracker.record(path("/a"), path("/x"), vec![path("/a"), path("/a/b"), path("/a/b/c")]);
+    /// // moved_into("/x") now returns [(/a, /x), (/a/b, /x/b), (/a/b/c, /x/b/c)]
+    /// ```
     pub fn record(
         &mut self,
         from: Path,
@@ -138,11 +137,12 @@ impl MoveTracker {
         subtree_nodes: impl IntoIterator<Item = Path>,
     ) {
         // Resolve `from` to its original snapshot path — it may have
-        // been renamed by an earlier move. O(log N) BTreeMap lookup.
+        // been renamed by an earlier move.
         // QUESTION: should we just do moved_from here? maybe faster?
         let original_from =
             self.nodes_by_final.get(&from).cloned().unwrap_or_else(|| from.clone());
-        // Step 1: Update existing map entries whose current path is
+
+        // Step 1: Update existing map entries whose current final location is
         // under `from` — they get remapped to `to`.
         // e.g. earlier move deposited /x at /a/x, now /a -> /c:
         //   /x's current path /a/x starts_with /a -> becomes /c/x
@@ -161,8 +161,7 @@ impl MoveTracker {
             self.nodes_by_final.insert(new_final, orig);
         }
 
-        // Step 2: Add entries for nodes not yet in the map.
-        // These are nodes that haven't been touched by any prior move.
+        // Step 2: Add entries for nodes not already in the map.
         for orig in subtree_nodes {
             if !self.nodes_by_original.contains_key(&orig)
                 && let Some(new_path) = Self::remap_path(&orig, &original_from, &to)
@@ -176,8 +175,7 @@ impl MoveTracker {
     }
 
     /// Return `(original_path, final_path)` pairs for all nodes whose
-    /// final path is under `parent_group`. Uses a `BTreeMap` range scan
-    /// for efficient prefix queries on large node sets.
+    /// final path is under `parent_group`.
     pub fn moved_into(&self, parent_group: &Path) -> Vec<(Path, Path)> {
         self.nodes_by_final
             .range(parent_group.clone()..)

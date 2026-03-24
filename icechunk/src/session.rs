@@ -2114,8 +2114,6 @@ async fn updated_existing_nodes<'a>(
     let parent_group = parent_group.clone();
     let snapshot = asset_manager.fetch_snapshot(parent_id).await.inject()?;
 
-    // Moved nodes whose final path is under parent_group.
-    // Look up each node's metadata in the snapshot by its original path.
     let mut moved_nodes: Vec<SessionResult<NodeSnapshot>> = Vec::new();
     for (orig, final_path) in change_set.moved_into(&parent_group) {
         match snapshot.get_node(&orig) {
@@ -2127,9 +2125,7 @@ async fn updated_existing_nodes<'a>(
         }
     }
 
-    // Unmoved nodes: iterate parent_group in the snapshot directly.
-    // Skip any node whose original path is in the node map (already
-    // handled above with its remapped path).
+    // Skip remapped nodes — they're already in moved_nodes above.
     let unmoved = snapshot
         .iter_arc(&parent_group)
         .filter_map_ok(move |node| {
