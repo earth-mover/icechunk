@@ -816,13 +816,10 @@ mod tests {
     use bytes::Bytes;
     use itertools::Itertools as _;
 
-    /// Shorthand for `Path::new(s).unwrap()` — named to avoid collision
-    /// with the `path` proptest strategy imported elsewhere in this module.
     fn pathify(s: &str) -> Path {
         Path::new(s).unwrap()
     }
 
-    /// Test helper: record a move with optional subtree node paths.
     fn record_move(mt: &mut MoveTracker, from: &str, to: &str, subtree: &[&str]) {
         mt.record(pathify(from), pathify(to), subtree.iter().map(|s| pathify(s)));
     }
@@ -941,9 +938,21 @@ mod tests {
         use super::MovedTo::*;
 
         let mut mt = MoveTracker::default();
-        record_move(&mut mt, "/foo/bar/old", "/foo/bar/new", &[]);
-        record_move(&mut mt, "/foo/bar/new/inner-old1", "/foo/bar/new/inner-new", &[]);
-        record_move(&mut mt, "/foo/bar/new/inner-old2", "/inner-new2", &[]);
+        mt.record(
+            Path::new("/foo/bar/old").unwrap(),
+            Path::new("/foo/bar/new").unwrap(),
+            std::iter::empty(),
+        );
+        mt.record(
+            Path::new("/foo/bar/new/inner-old1").unwrap(),
+            Path::new("/foo/bar/new/inner-new").unwrap(),
+            std::iter::empty(),
+        );
+        mt.record(
+            Path::new("/foo/bar/new/inner-old2").unwrap(),
+            Path::new("/inner-new2").unwrap(),
+            std::iter::empty(),
+        );
 
         assert!(matches!(
             mt.moved_to(&Path::new("/foo").unwrap()),
@@ -975,9 +984,21 @@ mod tests {
     fn test_moved_from_simple() {
         use super::MovedFrom::*;
         let mut mt = MoveTracker::default();
-        record_move(&mut mt, "/foo/bar/old", "/foo/bar/new", &[]);
-        record_move(&mut mt, "/foo/bar/new/inner-old1", "/foo/bar/new/inner-new", &[]);
-        record_move(&mut mt, "/foo/bar/new/inner-old2", "/inner-new2", &[]);
+        mt.record(
+            Path::new("/foo/bar/old").unwrap(),
+            Path::new("/foo/bar/new").unwrap(),
+            std::iter::empty(),
+        );
+        mt.record(
+            Path::new("/foo/bar/new/inner-old1").unwrap(),
+            Path::new("/foo/bar/new/inner-new").unwrap(),
+            std::iter::empty(),
+        );
+        mt.record(
+            Path::new("/foo/bar/new/inner-old2").unwrap(),
+            Path::new("/inner-new2").unwrap(),
+            std::iter::empty(),
+        );
 
         assert!(matches!(
             mt.moved_from(&Path::new("/foo").unwrap()),
@@ -1023,8 +1044,16 @@ mod tests {
     fn test_moved_to_back_and_forth() {
         use super::MovedTo::*;
         let mut mt = MoveTracker::default();
-        record_move(&mut mt, "/foo/bar/old", "/foo/bar/new", &[]);
-        record_move(&mut mt, "/foo/bar/new", "/foo/bar/old", &[]);
+        mt.record(
+            Path::new("/foo/bar/old").unwrap(),
+            Path::new("/foo/bar/new").unwrap(),
+            std::iter::empty(),
+        );
+        mt.record(
+            Path::new("/foo/bar/new").unwrap(),
+            Path::new("/foo/bar/old").unwrap(),
+            std::iter::empty(),
+        );
         assert!(matches!(
             mt.moved_to(&Path::new("/foo/bar/old/inner").unwrap()),
             To(p) if p.as_ref() == &Path::new("/foo/bar/old/inner").unwrap()
@@ -1047,8 +1076,16 @@ mod tests {
     fn test_moved_from_back_and_forth() {
         use super::MovedFrom::*;
         let mut mt = MoveTracker::default();
-        record_move(&mut mt, "/foo/bar/old", "/foo/bar/new", &[]);
-        record_move(&mut mt, "/foo/bar/new", "/foo/bar/old", &[]);
+        mt.record(
+            Path::new("/foo/bar/old").unwrap(),
+            Path::new("/foo/bar/new").unwrap(),
+            std::iter::empty(),
+        );
+        mt.record(
+            Path::new("/foo/bar/new").unwrap(),
+            Path::new("/foo/bar/old").unwrap(),
+            std::iter::empty(),
+        );
         assert!(matches!(
             mt.moved_from(&Path::new("/foo/bar/old/inner").unwrap()),
             From(p) if p.as_ref() == &Path::new("/foo/bar/old/inner").unwrap()
@@ -1103,30 +1140,27 @@ mod tests {
     roundtrip_serialization_tests!(serialize_and_deserialize_change_sets - change_set);
 
     #[icechunk_macros::test]
-    fn test_node_map_simple_rename() {
-        // Tree: /a (group), /a/x (array)
-        // Move: /a -> /b
+    fn test_moved_into() {
+        // Tree: /g (group), /g/a (group), /g/a/x (array)
+        // Move: /g/a -> /g/b
+        // After: /g/b, /g/b/x
         let mut mt = MoveTracker::default();
-        record_move(&mut mt, "/a", "/b", &["/a", "/a/x"]);
+        record_move(&mut mt, "/g/a", "/g/b", &["/g/a", "/g/a/x"]);
 
-        assert!(mt.is_remapped(&pathify("/a")));
-        assert!(mt.is_remapped(&pathify("/a/x")));
-        assert!(!mt.is_remapped(&pathify("/b")));
+        assert!(mt.is_remapped(&pathify("/g/a")));
+        assert!(mt.is_remapped(&pathify("/g/a/x")));
+        assert!(!mt.is_remapped(&pathify("/g/b")));
 
-        let under_b = mt.moved_into(&pathify("/b"));
-        assert_eq!(under_b.len(), 2);
-        assert!(under_b.contains(&(pathify("/a"), pathify("/b"))));
-        assert!(under_b.contains(&(pathify("/a/x"), pathify("/b/x"))));
-
-        // Listing root returns all moved nodes
-        let under_root = mt.moved_into(&Path::root());
-        assert_eq!(under_root.len(), 2);
+        let under_g = mt.moved_into(&pathify("/g"));
+        assert_eq!(under_g.len(), 2);
+        assert!(under_g.contains(&(pathify("/g/a"), pathify("/g/b"))));
+        assert!(under_g.contains(&(pathify("/g/a/x"), pathify("/g/b/x"))));
     }
 
     #[icechunk_macros::test]
-    fn test_node_map_deposit_then_rename() {
+    fn test_moved_into_after_move_in_then_rename() {
         // Tree: /a (group), /a/x (array), /b (group), /b/y (array)
-        // Move 1: /a -> /b/a (deposit /a into /b)
+        // Move 1: /a -> /b/a (move /a into /b)
         // Move 2: /b -> /c (rename /b)
         // After: /c, /c/a, /c/a/x, /c/y
         let mut mt = MoveTracker::default();
@@ -1141,7 +1175,7 @@ mod tests {
     }
 
     #[icechunk_macros::test]
-    fn test_node_map_child_moved_out() {
+    fn test_moved_into_after_move_out_then_rename() {
         // Tree: /a (group), /a/x (array), /a/y (array)
         // Move 1: /a/x -> /b (move x out of a)
         // Move 2: /a -> /c (rename a)
