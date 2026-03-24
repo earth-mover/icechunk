@@ -797,7 +797,21 @@ impl Session {
             )));
         }
 
-        self.change_set_mut()?.move_node(from, to)?;
+        // Find the original snapshot path of `from` (it may have been
+        // renamed by earlier moves). Iterate its subtree so the move
+        // tracker can eagerly compute final paths for all affected nodes.
+        let original_from = match self.change_set().moved_from(&from) {
+            MovedFrom::From(p) => p.into_owned(),
+            _ => from.clone(),
+        };
+        let snapshot =
+            self.asset_manager.fetch_snapshot(&self.snapshot_id).await.inject()?;
+        let subtree_paths: Vec<Path> = snapshot
+            .iter_arc(&original_from)
+            .filter_map(|r| r.ok().map(|n| n.path))
+            .collect();
+
+        self.change_set_mut()?.move_node(from, to, original_from, subtree_paths)?;
         Ok(())
     }
 
@@ -2098,18 +2112,37 @@ async fn updated_existing_nodes<'a>(
     change_set: &'a ChangeSet,
     parent_id: &SnapshotId,
 ) -> SessionResult<impl Iterator<Item = SessionResult<NodeSnapshot>> + use<'a>> {
-    let updated_nodes = asset_manager
-        .fetch_snapshot(parent_id)
-        .await
-        .inject()?
-        .iter_arc(parent_group)
-        .filter_map_ok(move |node| change_set.update_existing_node(node))
-        .map(|n| match n {
-            Ok(n) => Ok(n),
-            Err(err) => Err(err.inject()),
-        });
+    let parent_group = parent_group.clone();
+    let snapshot = asset_manager.fetch_snapshot(parent_id).await.inject()?;
 
-    Ok(updated_nodes)
+    // Moved nodes whose final path is under parent_group.
+    // Look up each node's metadata in the snapshot by its original path.
+    let mut moved_nodes: Vec<SessionResult<NodeSnapshot>> = Vec::new();
+    for (orig, final_path) in change_set.moved_into(&parent_group) {
+        match snapshot.get_node(&orig) {
+            Ok(node) => {
+                moved_nodes
+                    .push(Ok(NodeSnapshot { path: final_path, ..(*node).clone() }));
+            }
+            Err(err) => moved_nodes.push(Err(err.inject())),
+        }
+    }
+
+    // Unmoved nodes: iterate parent_group in the snapshot directly.
+    // Skip any node whose original path is in the node map (already
+    // handled above with its remapped path).
+    let unmoved = snapshot
+        .iter_arc(&parent_group)
+        .filter_map_ok(move |node| {
+            if change_set.is_remapped(&node.path) {
+                None
+            } else {
+                change_set.update_existing_node(node)
+            }
+        })
+        .map(|n| n.map_err(|err| err.inject()));
+
+    Ok(moved_nodes.into_iter().chain(unmoved))
 }
 
 /// Yields nodes with the snapshot, applying any relevant updates in the changeset,
