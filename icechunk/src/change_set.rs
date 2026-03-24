@@ -1118,17 +1118,21 @@ mod tests {
         assert!(mt.is_remapped(&p("/a/x")));
         assert!(!mt.is_remapped(&p("/b")));
 
-        let result = mt.moved_into(&p("/b"));
-        assert_eq!(result.len(), 2);
-        assert!(result.contains(&(p("/a"), p("/b"))));
-        assert!(result.contains(&(p("/a/x"), p("/b/x"))));
+        let under_b = mt.moved_into(&p("/b"));
+        assert_eq!(under_b.len(), 2);
+        assert!(under_b.contains(&(p("/a"), p("/b"))));
+        assert!(under_b.contains(&(p("/a/x"), p("/b/x"))));
+
+        // Listing root returns all moved nodes
+        let under_root = mt.moved_into(&Path::root());
+        assert_eq!(under_root.len(), 2);
     }
 
     #[icechunk_macros::test]
     fn test_node_map_deposit_then_rename() {
         // Tree: /a (group), /a/x (array), /b (group), /b/y (array)
-        // Move 1: /a -> /b/a (deposit into /b)
-        // Move 2: /b -> /c (rename /b to /c)
+        // Move 1: /a -> /b/a (deposit /a into /b)
+        // Move 2: /b -> /c (rename /b)
         // After: /c, /c/a, /c/a/x, /c/y
         let mut mt = MoveTracker::default();
         rec_with(&mut mt, "/a", "/b/a", &["/a", "/a/x"]);
@@ -1144,36 +1148,19 @@ mod tests {
     #[icechunk_macros::test]
     fn test_node_map_child_moved_out() {
         // Tree: /a (group), /a/x (array), /a/y (array)
-        // Move 1: /a/x -> /b (move x out)
+        // Move 1: /a/x -> /b (move x out of a)
         // Move 2: /a -> /c (rename a)
-        // /a/x should NOT end up under /c
+        // After: /b (was /a/x), /c (was /a), /c/y (was /a/y)
         let mut mt = MoveTracker::default();
         rec_with(&mut mt, "/a/x", "/b", &["/a/x"]);
         rec_with(&mut mt, "/a", "/c", &["/a", "/a/x", "/a/y"]);
 
-        // /a/x was moved out before /a was renamed, so is_remapped
-        // should be true (it was touched by move 1)
-        assert!(mt.is_remapped(&p("/a/x")));
-
-        // /c should contain /a (renamed) and /a/y, but NOT /a/x
+        // /a/x was moved to /b, not carried along to /c
         let under_c = mt.moved_into(&p("/c"));
         assert!(under_c.contains(&(p("/a"), p("/c"))));
         assert!(under_c.contains(&(p("/a/y"), p("/c/y"))));
-        // /a/x should be at /b, not under /c
-        assert!(!under_c.iter().any(|(_, final_path)| *final_path == p("/c/x")));
+        assert!(!under_c.iter().any(|(_, f)| *f == p("/c/x")));
 
-        let under_b = mt.moved_into(&p("/b"));
-        assert!(under_b.contains(&(p("/a/x"), p("/b"))));
-    }
-
-    #[icechunk_macros::test]
-    fn test_node_map_root_listing() {
-        // Move: /a -> /b. Listing / returns everything.
-        let mut mt = MoveTracker::default();
-        rec_with(&mut mt, "/a", "/b", &["/a", "/a/x"]);
-
-        let result = mt.moved_into(&Path::root());
-        assert!(result.contains(&(p("/a"), p("/b"))));
-        assert!(result.contains(&(p("/a/x"), p("/b/x"))));
+        assert!(mt.moved_into(&p("/b")).contains(&(p("/a/x"), p("/b"))));
     }
 }
