@@ -145,7 +145,6 @@ class SerialParallelStateMachine(RuleBasedStateMachine):
         modified by a single session to avoid overlapping writes that would
         cause merge conflicts.
         """
-        # Track ownership and reject conflicts via assume()
         for array_and_path in chunks:
             if self.has_forks():
                 candidates = {
