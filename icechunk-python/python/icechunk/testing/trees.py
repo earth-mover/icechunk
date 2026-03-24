@@ -145,7 +145,7 @@ def similar_name(
         )
     if bool(non_siblings):
         strategies.append(st.sampled_from(non_siblings))
-    return st.one_of(*strategies)
+    return st.one_of(*strategies).filter(lambda name: name not in sibling_names)
 
 
 @st.composite
