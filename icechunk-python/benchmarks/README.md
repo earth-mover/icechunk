@@ -112,8 +112,9 @@ test_time_getsize_prefix[era5-single] (NOW)               2.2133 (1.0)
 ### Notes
 ### Where to run the benchmarks?
 
-- Pass the `--where` flag to control where benchmarks are run: `local`, `s3`, `s3_ob`, `gcs`, `tigris`, `r2`.
+- Pass the `--where` flag to control where benchmarks are run: `local`, `s3`, `s3_ob`, `gcs`.
 - `s3_ob` uses the `s3_object_store_storage` constructor.
+- `tigris` and `r2` are defined but **non-functional** at the moment.
 - Comma-separate for multiple stores: `--where s3,gcs`
 
 ```sh
@@ -127,7 +128,7 @@ By default all benchmarks are run locally:
 It is possible to run the benchmarks in the cloud using Coiled. You will need to be a member of the Coiled workspaces: `earthmover-devs` (AWS), `earthmover-devs-gcp` (GCS) and `earthmover-devs-azure` (Azure).
 1. We create a new "coiled software environment" with a specific name.
 2. We use `coiled run` targeting a specific machine type, with a specific software env.
-3. Two special refs install icechunk from PyPI instead of building from source:
+3. Only benchmarking against nightly wheels is currently supported. Building from source (arbitrary git refs) is not functional at the moment. The two supported refs are:
    - `pypi-nightly` — installs the latest pre-release from the [scientific-python-nightly-wheels](https://pypi.anaconda.org/scientific-python-nightly-wheels/simple) index
    - `pypi-v1` — installs the latest stable v1 release (`icechunk<2`)
 4. The VM stays alive for 10 minutes to allow for quick iteration.
@@ -155,14 +156,15 @@ Datasets are written to `{bucket}/benchmarks/{REF}_{SHORTCOMMIT}/` where the buc
 
 Usage:
 ``` sh
-python benchmarks/runner.py v0.1.2 main
+python benchmarks/runner.py --where s3,gcs pypi-nightly pypi-v1
 ```
 This will
-1. setup a virtual env with the icechunk version
-2. compile it,
-3. run `setup_benchmarks`. This will recreate datasets if the version in the bucket cannot be opened by this icechunk version. Pass `--setup=force` to always recreate, or `--setup=skip` to skip setup entirely.
-4. Runs the benchmarks.
-5. Compares the benchmarks.
+1. setup a virtual env with the icechunk version (from PyPI wheels)
+2. run `setup_benchmarks`. This will recreate datasets if the version in the bucket cannot be opened by this icechunk version. Pass `--setup=force` to always recreate, or `--setup=skip` to skip setup entirely.
+3. Runs the benchmarks.
+4. Compares the benchmarks.
+
+> **Note:** Only `pypi-nightly` and `pypi-v1` are supported as refs. Building from arbitrary git refs/tags is not functional at the moment.
 
 ### Just recipes
 
