@@ -55,6 +55,9 @@ try:
     _endpoint = _client.meta.endpoint_url
     if _endpoint and _endpoint != "https://s3.amazonaws.com":
         _AWS_CREDENTIALS["AWS_ENDPOINT_URL"] = _endpoint
+    _region = _session.region_name
+    if _region:
+        _AWS_CREDENTIALS["AWS_REGION"] = _region
 except Exception:
     pass
 

@@ -252,6 +252,18 @@ test_write_simple_1d[simple-1d] (g/s3_ob_main_9)     1.6909 (1.02)
 ---------------------------------------------------------------------
 ```
 
+### Generating an HTML comparison report
+
+Collect the benchmark JSON files you want to compare into a subdirectory under `.benchmarks/`, then use the `/bench-report` Claude Code skill:
+
+```sh
+# Example: compare nightly vs v1 across stores
+mkdir -p .benchmarks/march-comparison
+cp .benchmarks/s3_pypi-nightly*.json .benchmarks/gcs_pypi-v1*.json .benchmarks/march-comparison/
+```
+
+Then in Claude Code run `/bench-report .benchmarks/march-comparison`. This generates a self-contained `report.html` with interactive tables, geometric mean summaries, and filterable comparisons.
+
 ## Design decisions / future choices
 
 1. We chose `pytest-benchmark` instead of `asv` because it seemed easier to learn --- all our pytest knowledge and idioms carry over (e.g. fixtures, `-k` to subselect benchmarks to run, `-s` to print stdout/sterr etc.). For example `pytest -nauto -m setup_benchmarks benchmarks` gives easy selection and parallelization of setup steps!
