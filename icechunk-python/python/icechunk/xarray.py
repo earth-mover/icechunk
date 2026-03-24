@@ -180,7 +180,7 @@ class _XarrayDatasetWriter:
         self,
         chunkmanager_store_kwargs: MutableMapping[Any, Any] | None = None,
         split_every: int | None = None,
-    ) -> ForkSession | None:
+    ) -> ForkSession:
         """
         Write lazy arrays (e.g. dask) to store.
         """
@@ -190,7 +190,9 @@ class _XarrayDatasetWriter:
             raise ValueError("Please call `write_metadata` first.")
 
         if not self.writer.sources:
-            return None
+            raise TypeError(
+                "Attempting to execute a write with dask but no dask arrays were detected."
+            )
 
         chunkmanager_store_kwargs = chunkmanager_store_kwargs or {}
         chunkmanager_store_kwargs["load_stored"] = False
@@ -329,22 +331,23 @@ def to_icechunk(
 
     if is_dask_collection(obj):
         # to offer maximum flexibility to the user; we fork here purely for distributed writes.
+        # For example, this allows multiple resizes and distributed writes in the same session
+        # where we previously forced a user to commit.
+        # See test_distributed_append.py for an example.
         fork: ForkSession = session.fork()
         writer.writer.targets = [
+            # Any new arrays have already been created in the `write_metadata` step above
+            # so now we just use `mode="a"`.
             zarr.open_array(fork.store, path=target.path, mode="a")
             for target in writer.writer.targets
         ]
 
         # eagerly write dask arrays
-        maybe_fork_session = writer.write_lazy(
+        forked_session = writer.write_lazy(
             chunkmanager_store_kwargs=chunkmanager_store_kwargs,
             split_every=split_every,
         )
-        if maybe_fork_session is None:
-            raise RuntimeError(
-                "Logic bug! Please open at issue at https://github.com/earth-mover/icechunk"
-            )
-        session.merge(maybe_fork_session)
+        session.merge(forked_session)
 
 
 @overload

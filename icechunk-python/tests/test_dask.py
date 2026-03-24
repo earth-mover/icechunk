@@ -76,6 +76,8 @@ def test_xarray_to_icechunk_nested_pickling(
             session = repo.writable_session("main")
 
             to_icechunk(ds, session=session, mode="w")
+            with xr.open_zarr(session.store, consolidated=False, chunks=None) as actual:
+                assert_identical(actual, ds)
             to_icechunk(ds, session=session, mode="w")
             with xr.open_zarr(session.store, consolidated=False, chunks=None) as actual:
                 assert_identical(actual, ds)
