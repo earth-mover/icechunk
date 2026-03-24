@@ -95,11 +95,23 @@ def chunk_coordinates(draw: st.DrawFn, numblocks: tuple[int, ...]) -> tuple[int,
 def chunk_slicers(
     draw: st.DrawFn, numblocks: tuple[int, ...], chunk_shape: tuple[int, ...]
 ) -> tuple[slice, ...]:
+    """
+    Strategy to generate a tuple of slices that indexes a single chunk.
+
+    Parameters
+    ----------
+
+    draw: st.DrawFn
+    numblocks: tuple of int
+        Number of chunks along each axis.
+    chunk_shape:
+        Shape of each chunk (assumes regular chunk grid)
+    """
     return tuple(
         (
             slice(coord * size, (coord + 1) * size)
             for coord, size in zip(
-                draw(chunk_coordinates(numblocks)), chunk_shape, strict=False
+                draw(chunk_coordinates(numblocks)), chunk_shape, strict=True
             )
         )
     )
