@@ -4303,10 +4303,10 @@ mod tests {
             .await?;
         assert!(session.get_group(&"/another_dest".try_into().unwrap()).await.is_ok());
         assert!(session.get_group(&"/dest".try_into().unwrap()).await.is_err());
-        // Check if transaction log includes two moves
+        // Check if transaction log includes one move
         let tx_log =
             repo.asset_manager.fetch_transaction_log(&first_amend_snap_id).await?;
-        assert!(tx_log.moves().count() == 2);
+        assert!(tx_log.moves().count() == 1);
 
         // Rearrange session: move node again, amend gain
         let mut session = repo.rearrange_session("main").await?;
@@ -4324,10 +4324,10 @@ mod tests {
         assert!(session.get_group(&"/dest".try_into().unwrap()).await.is_err());
         assert!(session.get_group(&"/another_dest".try_into().unwrap()).await.is_err());
         assert!(session.get_group(&"/source".try_into().unwrap()).await.is_err());
-        // Check if transaction log includes three moves
+        // Check if transaction log include one move
         let tx_log =
             repo.asset_manager.fetch_transaction_log(&second_amend_snap_id).await?;
-        assert!(tx_log.moves().count() == 3);
+        assert!(tx_log.moves().count() == 1);
 
         let (stream, _, _) = repo.ops_log().await?;
         let ops: Vec<_> = stream.try_collect().await?;
@@ -4369,21 +4369,28 @@ mod tests {
             )
             .await?;
 
-        assert_eq!(diff.moved_nodes.len(), 3);
+        assert_eq!(diff.moved_nodes.len(), 1);
 
         /*
-                for [initial, next] in [
-                    initial_snap_id,
+        for [initial, next] in [
+            initial_snap_id,
+            first_rearr_snap_id,
+            first_amend_snap_id,
+            second_amend_snap_id,
+        ]
+        .array_windows()
+        */
+        /*
+                for snap in [
+                    initial_snap_id.clone(),
                     first_rearr_snap_id,
                     first_amend_snap_id,
                     second_amend_snap_id,
-                ]
-                .array_windows()
-                {
+                ] {
                     let Ok(diff) = repo
                         .diff(
-                            &VersionInfo::SnapshotId(initial.clone()),
-                            &VersionInfo::SnapshotId(next.clone()),
+                            &VersionInfo::SnapshotId(initial_snap_id.clone()),
+                            &VersionInfo::SnapshotId(snap.clone()),
                         )
                         .await
                     else {

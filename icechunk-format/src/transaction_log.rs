@@ -1,7 +1,7 @@
 //! Change records for commits, enabling conflict detection during rebase.
 
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     iter,
 };
 
@@ -408,11 +408,36 @@ impl TransactionLog {
         let id = generated::ObjectId12::new(&id.0);
         let id = Some(&id);
 
+        // Map moved nodes. Key: to, Value: from
+        let mut moved_map: HashMap<Path, Path> = Default::default();
         let moved_nodes = {
-            let moved_nodes = Vec::from_iter(txs.iter().flat_map(|tx| tx.moves()));
-            let moved_nodes: Vec<_> = moved_nodes
+            for Move { from, to } in txs.iter().flat_map(|tx| tx.moves()) {
+                // - first move: just insert
+                // - if "from" already in move_map keys: replace it with new (to, old_from) pair
+                if let Some(old_from) = moved_map.remove(&from) {
+                    moved_map.insert(to, old_from);
+                } else {
+                    moved_map.insert(to, from);
+                }
+            }
+
+            // check from and to are disjoint (we should't have any in common)
+            // except for identity move (from == to)
+            // only run this in debug mode because it can be expensive
+            debug_assert!({
+                use itertools::MultiUnzip as _;
+                let (from, to): (HashSet<&Path>, HashSet<&Path>) = moved_map
+                    .iter()
+                    .filter_map(
+                        |(to, from)| if to != from { Some((from, to)) } else { None },
+                    )
+                    .multiunzip();
+                from.is_disjoint(&to)
+            });
+
+            let moved_nodes: Vec<_> = moved_map
                 .into_iter()
-                .map(|Move { from, to }| {
+                .map(|(to, from)| {
                     let from = builder.create_string(from.to_string().as_str());
                     let to = builder.create_string(to.to_string().as_str());
                     let args = MoveOperationArgs { from: Some(from), to: Some(to) };
