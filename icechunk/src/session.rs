@@ -5387,8 +5387,11 @@ mod tests {
         );
         assert!(session.get_node(&Path::new("/foo/old/array").unwrap()).await.is_err());
 
+        let mut nodes: Vec<_> =
+            session.list_nodes(&Path::root()).await?.map(|n| n.unwrap().path).collect();
+        nodes.sort();
         assert_equal(
-            session.list_nodes(&Path::root()).await?.map(|n| n.unwrap().path),
+            nodes.into_iter(),
             [
                 Path::new("/").unwrap(),
                 Path::new("/foo/new").unwrap(),
