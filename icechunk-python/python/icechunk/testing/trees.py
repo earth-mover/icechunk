@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from dataclasses import dataclass, field
+from typing import Any
 
 import hypothesis.strategies as st
 import numpy as np
@@ -95,7 +96,8 @@ def tree_from_str(spec: str) -> GroupNode:
             g: /qux
         ''')
     """
-    tree: dict = {}
+    # Nested dict built incrementally; values are ArrayNode or sub-dicts.
+    tree: dict[str, Any] = {}
 
     for line in spec.strip().splitlines():
         line = line.strip()
@@ -118,8 +120,8 @@ def tree_from_str(spec: str) -> GroupNode:
         else:
             raise ValueError(f"unknown node kind '{kind}', expected 'a' or 'g'")
 
-    def _to_group(d: dict) -> GroupNode:
-        children = {}
+    def _to_group(d: dict[str, Any]) -> GroupNode:
+        children: dict[str, Node] = {}
         for name, value in d.items():
             if isinstance(value, ArrayNode):
                 children[name] = value
@@ -234,7 +236,7 @@ def unique_sibling_names(
                     st.one_of(node_names, similar_name(existing_names, excluded))
                     if bool(existing_names) | bool(generated_names)
                     else node_names
-                ).filter(lambda name_, ex=excluded: name_ not in ex)
+                ).filter(lambda name_, ex=excluded: name_ not in ex)  # type: ignore[misc]
             )
         )
     return list(generated_names)
