@@ -816,11 +816,15 @@ mod tests {
     use bytes::Bytes;
     use itertools::Itertools as _;
 
-    /// Test helper: record a move without subtree nodes.
-    fn rec(mt: &mut MoveTracker, from: &str, to: &str) {
-        let from = Path::new(from).unwrap();
-        let to = Path::new(to).unwrap();
-        mt.record(from, to, std::iter::empty());
+    /// Shorthand for `Path::new(s).unwrap()` — named to avoid collision
+    /// with the `path` proptest strategy imported elsewhere in this module.
+    fn pathify(s: &str) -> Path {
+        Path::new(s).unwrap()
+    }
+
+    /// Test helper: record a move with optional subtree node paths.
+    fn record_move(mt: &mut MoveTracker, from: &str, to: &str, subtree: &[&str]) {
+        mt.record(pathify(from), pathify(to), subtree.iter().map(|s| pathify(s)));
     }
 
     use super::ChangeSet;
@@ -937,9 +941,9 @@ mod tests {
         use super::MovedTo::*;
 
         let mut mt = MoveTracker::default();
-        rec(&mut mt, "/foo/bar/old", "/foo/bar/new");
-        rec(&mut mt, "/foo/bar/new/inner-old1", "/foo/bar/new/inner-new");
-        rec(&mut mt, "/foo/bar/new/inner-old2", "/inner-new2");
+        record_move(&mut mt, "/foo/bar/old", "/foo/bar/new", &[]);
+        record_move(&mut mt, "/foo/bar/new/inner-old1", "/foo/bar/new/inner-new", &[]);
+        record_move(&mut mt, "/foo/bar/new/inner-old2", "/inner-new2", &[]);
 
         assert!(matches!(
             mt.moved_to(&Path::new("/foo").unwrap()),
@@ -971,9 +975,9 @@ mod tests {
     fn test_moved_from_simple() {
         use super::MovedFrom::*;
         let mut mt = MoveTracker::default();
-        rec(&mut mt, "/foo/bar/old", "/foo/bar/new");
-        rec(&mut mt, "/foo/bar/new/inner-old1", "/foo/bar/new/inner-new");
-        rec(&mut mt, "/foo/bar/new/inner-old2", "/inner-new2");
+        record_move(&mut mt, "/foo/bar/old", "/foo/bar/new", &[]);
+        record_move(&mut mt, "/foo/bar/new/inner-old1", "/foo/bar/new/inner-new", &[]);
+        record_move(&mut mt, "/foo/bar/new/inner-old2", "/inner-new2", &[]);
 
         assert!(matches!(
             mt.moved_from(&Path::new("/foo").unwrap()),
@@ -1019,8 +1023,8 @@ mod tests {
     fn test_moved_to_back_and_forth() {
         use super::MovedTo::*;
         let mut mt = MoveTracker::default();
-        rec(&mut mt, "/foo/bar/old", "/foo/bar/new");
-        rec(&mut mt, "/foo/bar/new", "/foo/bar/old");
+        record_move(&mut mt, "/foo/bar/old", "/foo/bar/new", &[]);
+        record_move(&mut mt, "/foo/bar/new", "/foo/bar/old", &[]);
         assert!(matches!(
             mt.moved_to(&Path::new("/foo/bar/old/inner").unwrap()),
             To(p) if p.as_ref() == &Path::new("/foo/bar/old/inner").unwrap()
@@ -1043,8 +1047,8 @@ mod tests {
     fn test_moved_from_back_and_forth() {
         use super::MovedFrom::*;
         let mut mt = MoveTracker::default();
-        rec(&mut mt, "/foo/bar/old", "/foo/bar/new");
-        rec(&mut mt, "/foo/bar/new", "/foo/bar/old");
+        record_move(&mut mt, "/foo/bar/old", "/foo/bar/new", &[]);
+        record_move(&mut mt, "/foo/bar/new", "/foo/bar/old", &[]);
         assert!(matches!(
             mt.moved_from(&Path::new("/foo/bar/old/inner").unwrap()),
             From(p) if p.as_ref() == &Path::new("/foo/bar/old/inner").unwrap()
@@ -1098,30 +1102,21 @@ mod tests {
 
     roundtrip_serialization_tests!(serialize_and_deserialize_change_sets - change_set);
 
-    fn p(s: &str) -> Path {
-        Path::new(s).unwrap()
-    }
-
-    /// Helper: record a move with explicit subtree nodes.
-    fn rec_with(mt: &mut MoveTracker, from: &str, to: &str, subtree: &[&str]) {
-        mt.record(p(from), p(to), subtree.iter().map(|s| p(s)));
-    }
-
     #[icechunk_macros::test]
     fn test_node_map_simple_rename() {
         // Tree: /a (group), /a/x (array)
         // Move: /a -> /b
         let mut mt = MoveTracker::default();
-        rec_with(&mut mt, "/a", "/b", &["/a", "/a/x"]);
+        record_move(&mut mt, "/a", "/b", &["/a", "/a/x"]);
 
-        assert!(mt.is_remapped(&p("/a")));
-        assert!(mt.is_remapped(&p("/a/x")));
-        assert!(!mt.is_remapped(&p("/b")));
+        assert!(mt.is_remapped(&pathify("/a")));
+        assert!(mt.is_remapped(&pathify("/a/x")));
+        assert!(!mt.is_remapped(&pathify("/b")));
 
-        let under_b = mt.moved_into(&p("/b"));
+        let under_b = mt.moved_into(&pathify("/b"));
         assert_eq!(under_b.len(), 2);
-        assert!(under_b.contains(&(p("/a"), p("/b"))));
-        assert!(under_b.contains(&(p("/a/x"), p("/b/x"))));
+        assert!(under_b.contains(&(pathify("/a"), pathify("/b"))));
+        assert!(under_b.contains(&(pathify("/a/x"), pathify("/b/x"))));
 
         // Listing root returns all moved nodes
         let under_root = mt.moved_into(&Path::root());
@@ -1135,14 +1130,14 @@ mod tests {
         // Move 2: /b -> /c (rename /b)
         // After: /c, /c/a, /c/a/x, /c/y
         let mut mt = MoveTracker::default();
-        rec_with(&mut mt, "/a", "/b/a", &["/a", "/a/x"]);
-        rec_with(&mut mt, "/b", "/c", &["/b", "/b/y"]);
+        record_move(&mut mt, "/a", "/b/a", &["/a", "/a/x"]);
+        record_move(&mut mt, "/b", "/c", &["/b", "/b/y"]);
 
-        let result = mt.moved_into(&p("/c"));
-        assert!(result.contains(&(p("/a"), p("/c/a"))));
-        assert!(result.contains(&(p("/a/x"), p("/c/a/x"))));
-        assert!(result.contains(&(p("/b"), p("/c"))));
-        assert!(result.contains(&(p("/b/y"), p("/c/y"))));
+        let result = mt.moved_into(&pathify("/c"));
+        assert!(result.contains(&(pathify("/a"), pathify("/c/a"))));
+        assert!(result.contains(&(pathify("/a/x"), pathify("/c/a/x"))));
+        assert!(result.contains(&(pathify("/b"), pathify("/c"))));
+        assert!(result.contains(&(pathify("/b/y"), pathify("/c/y"))));
     }
 
     #[icechunk_macros::test]
@@ -1152,15 +1147,17 @@ mod tests {
         // Move 2: /a -> /c (rename a)
         // After: /b (was /a/x), /c (was /a), /c/y (was /a/y)
         let mut mt = MoveTracker::default();
-        rec_with(&mut mt, "/a/x", "/b", &["/a/x"]);
-        rec_with(&mut mt, "/a", "/c", &["/a", "/a/x", "/a/y"]);
+        record_move(&mut mt, "/a/x", "/b", &["/a/x"]);
+        record_move(&mut mt, "/a", "/c", &["/a", "/a/x", "/a/y"]);
 
         // /a/x was moved to /b, not carried along to /c
-        let under_c = mt.moved_into(&p("/c"));
-        assert!(under_c.contains(&(p("/a"), p("/c"))));
-        assert!(under_c.contains(&(p("/a/y"), p("/c/y"))));
-        assert!(!under_c.iter().any(|(_, f)| *f == p("/c/x")));
+        let under_c = mt.moved_into(&pathify("/c"));
+        assert!(under_c.contains(&(pathify("/a"), pathify("/c"))));
+        assert!(under_c.contains(&(pathify("/a/y"), pathify("/c/y"))));
+        assert!(!under_c.iter().any(|(_, f)| *f == pathify("/c/x")));
 
-        assert!(mt.moved_into(&p("/b")).contains(&(p("/a/x"), p("/b"))));
+        assert!(
+            mt.moved_into(&pathify("/b")).contains(&(pathify("/a/x"), pathify("/b")))
+        );
     }
 }
