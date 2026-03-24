@@ -448,7 +448,8 @@ impl TransactionLog {
                 }
             }
 
-            // check from and to are disjoint (we should't have any in common)
+            // check to and from (keys and values in moved_map) are disjoint
+            // (we shouldn't have any in common)
             // except for identity move (from == to)
             // only run this in debug mode because it can be expensive
             debug_assert!({
