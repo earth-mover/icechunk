@@ -121,8 +121,6 @@ pub struct MoveTracker {
 pub static EMPTY_MOVE_TRACKER: LazyLock<MoveTracker> = LazyLock::new(Default::default);
 
 impl MoveTracker {
-    /// Record a move without updating the node maps.
-    /// Only populates the `moves` vec (used by `moved_to`/`moved_from`).
     /// Record a move and update the node maps with all affected nodes.
     ///
     /// `subtree_nodes` contains the original paths of all nodes under
@@ -131,17 +129,16 @@ impl MoveTracker {
     /// Example: tree `/a/b/c`, move `/a` -> `/x`
     ///   `subtree_nodes` = `[/a, /a/b, /a/b/c]`
     ///   After: `nodes_by_original` = `{/a: /x, /a/b: /x/b, /a/b/c: /x/b/c}`
-    ///
-    /// If `/a` was previously renamed from `/d` (by an earlier move),
-    /// `from` = `/a` but the `subtree_nodes` paths are under `/d`.
-    /// `original_from` = `/d` tells us the original prefix.
     pub fn record(
         &mut self,
         from: Path,
         to: Path,
-        original_from: &Path,
         subtree_nodes: impl IntoIterator<Item = Path>,
     ) {
+        // Resolve `from` to its original snapshot path — it may have
+        // been renamed by an earlier move. O(log N) BTreeMap lookup.
+        let original_from =
+            self.nodes_by_final.get(&from).cloned().unwrap_or_else(|| from.clone());
         // Step 1: Update existing map entries whose current path is
         // under `from` — they get remapped to `to`.
         // e.g. earlier move deposited /x at /a/x, now /a -> /c:
@@ -165,7 +162,7 @@ impl MoveTracker {
         // These are nodes that haven't been touched by any prior move.
         for orig in subtree_nodes {
             if !self.nodes_by_original.contains_key(&orig)
-                && let Some(new_path) = Self::remap_path(&orig, original_from, &to)
+                && let Some(new_path) = Self::remap_path(&orig, &original_from, &to)
             {
                 self.nodes_by_final.insert(new_path.clone(), orig.clone());
                 self.nodes_by_original.insert(orig, new_path);
@@ -379,10 +376,9 @@ impl ChangeSet {
         &mut self,
         from: Path,
         to: Path,
-        original_from: &Path,
         subtree_nodes: impl IntoIterator<Item = Path>,
     ) -> SessionResult<()> {
-        self.move_tracker_mut()?.record(from, to, original_from, subtree_nodes);
+        self.move_tracker_mut()?.record(from, to, subtree_nodes);
         Ok(())
     }
 
@@ -821,7 +817,7 @@ mod tests {
     fn rec(mt: &mut MoveTracker, from: &str, to: &str) {
         let from = Path::new(from).unwrap();
         let to = Path::new(to).unwrap();
-        mt.record(from.clone(), to, &from, std::iter::empty());
+        mt.record(from, to, std::iter::empty());
     }
 
     use super::ChangeSet;

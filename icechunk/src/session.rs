@@ -797,9 +797,8 @@ impl Session {
             )));
         }
 
-        // Find the original snapshot path of `from` (it may have been
-        // renamed by earlier moves). Iterate its subtree so the move
-        // tracker can eagerly compute final paths for all affected nodes.
+        // Iterate the subtree at `from` so the move tracker can eagerly
+        // compute final paths for all affected nodes.
         let original_from = match self.change_set().moved_from(&from) {
             MovedFrom::From(p) => p.into_owned(),
             _ => from.clone(),
@@ -811,7 +810,7 @@ impl Session {
             .filter_map(|r| r.ok().map(|n| n.path))
             .collect();
 
-        self.change_set_mut()?.move_node(from, to, &original_from, subtree_paths)?;
+        self.change_set_mut()?.move_node(from, to, subtree_paths)?;
         Ok(())
     }
 
