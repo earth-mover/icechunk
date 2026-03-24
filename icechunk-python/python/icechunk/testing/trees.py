@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 
 import hypothesis.strategies as st
 import numpy as np
+from hypothesis import assume
 
 import zarr
 import zarr.abc.store
@@ -235,7 +236,9 @@ def trees(
         )
         existing_names = existing_names | set(new_names)
         children: dict[str, Node] = {}
-        for name, child in zip(new_names, group.children.values(), strict=False):
+        assume(len(new_names) == len(group.children))
+
+        for name, child in zip(new_names, group.children.values(), strict=True):
             if isinstance(child, GroupNode):
                 child, existing_names = rebuild_with_names(child, existing_names)
             children[name] = child
