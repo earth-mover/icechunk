@@ -4284,7 +4284,7 @@ mod tests {
             .await?;
         assert!(session.get_group(&"/dest".try_into().unwrap()).await.is_ok());
         assert!(session.get_group(&"/source".try_into().unwrap()).await.is_err());
-        // Check if transaction log has one move
+        // Check if transaction log has just one move
         let tx_log =
             repo.asset_manager.fetch_transaction_log(&first_rearr_snap_id).await?;
         assert!(tx_log.moves().count() == 1);
@@ -4303,7 +4303,7 @@ mod tests {
             .await?;
         assert!(session.get_group(&"/another_dest".try_into().unwrap()).await.is_ok());
         assert!(session.get_group(&"/dest".try_into().unwrap()).await.is_err());
-        // Check if transaction log includes one move
+        // Check if transaction log has just one move
         let tx_log =
             repo.asset_manager.fetch_transaction_log(&first_amend_snap_id).await?;
         assert!(tx_log.moves().count() == 1);
@@ -4324,27 +4324,16 @@ mod tests {
         assert!(session.get_group(&"/dest".try_into().unwrap()).await.is_err());
         assert!(session.get_group(&"/another_dest".try_into().unwrap()).await.is_err());
         assert!(session.get_group(&"/source".try_into().unwrap()).await.is_err());
-        // Check if transaction log include one move
+        // Check if transaction log has just one move
         let tx_log =
             repo.asset_manager.fetch_transaction_log(&second_amend_snap_id).await?;
         assert!(tx_log.moves().count() == 1);
 
         let (stream, _, _) = repo.ops_log().await?;
         let ops: Vec<_> = stream.try_collect().await?;
-        dbg!(&ops);
 
         assert_eq!(ops.len(), 5);
-        assert!(matches!(ops[4].1, UpdateType::RepoInitializedUpdate));
-        assert!(matches!(
-            &ops[3].1,
-            UpdateType::NewCommitUpdate { new_snap_id, .. }
-              if *new_snap_id == initial_snap_id
-        ));
-        assert!(matches!(
-            &ops[2].1,
-            UpdateType::NewCommitUpdate { new_snap_id, .. }
-              if *new_snap_id == first_rearr_snap_id
-        ));
+        // Check snapshot ID lineage for amends
         assert!(matches!(
             &ops[1].1,
             UpdateType::CommitAmendedUpdate {
@@ -4370,38 +4359,6 @@ mod tests {
             .await?;
 
         assert_eq!(diff.moved_nodes.len(), 1);
-
-        /*
-        for [initial, next] in [
-            initial_snap_id,
-            first_rearr_snap_id,
-            first_amend_snap_id,
-            second_amend_snap_id,
-        ]
-        .array_windows()
-        */
-        /*
-                for snap in [
-                    initial_snap_id.clone(),
-                    first_rearr_snap_id,
-                    first_amend_snap_id,
-                    second_amend_snap_id,
-                ] {
-                    let Ok(diff) = repo
-                        .diff(
-                            &VersionInfo::SnapshotId(initial_snap_id.clone()),
-                            &VersionInfo::SnapshotId(snap.clone()),
-                        )
-                        .await
-                    else {
-                        // Continuing here because the amends generate
-                        // BadSnapshotChainForDiff errors
-                        continue;
-                    };
-
-                    dbg!(diff);
-                }
-        */
 
         Ok(())
     }

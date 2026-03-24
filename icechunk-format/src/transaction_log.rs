@@ -1,7 +1,7 @@
 //! Change records for commits, enabling conflict detection during rebase.
 
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
+    collections::{BTreeMap, BTreeSet},
     iter,
 };
 
@@ -408,12 +408,39 @@ impl TransactionLog {
         let id = generated::ObjectId12::new(&id.0);
         let id = Some(&id);
 
-        // Map moved nodes. Key: to, Value: from
-        let mut moved_map: HashMap<Path, Path> = Default::default();
+        // Merge overlapping moves from previous and current transaction logs.
+        // For example:
+        // ```
+        // Move {
+        //   from: /source,
+        //   to: /dest,
+        // },
+        // Move {
+        //   from: /dest,
+        //   to: /another_dest,
+        // },
+        // Move {
+        //   from: /another_dest,
+        //   to: /src,
+        // }
+        // ```
+        // is merged into
+        // ```
+        // Move {
+        //   from: /source,
+        //   to: /src,
+        // },
+        // ```
+
+        // Save moves into an inverted map (to -> from) to make it easy
+        // to check if we have overlapping moves.
+        let mut moved_map: BTreeMap<Path, Path> = Default::default();
         let moved_nodes = {
             for Move { from, to } in txs.iter().flat_map(|tx| tx.moves()) {
-                // - first move: just insert
-                // - if "from" already in move_map keys: replace it with new (to, old_from) pair
+                // if this is the first move we see, just insert.
+                // Otherwise we check to see if the current "from" is already in the moved_map
+                // (meaning this "from" is a "to" from another move)
+                // and if so remove it and replace with a new (to, old_from) pair,
                 if let Some(old_from) = moved_map.remove(&from) {
                     moved_map.insert(to, old_from);
                 } else {
@@ -426,7 +453,8 @@ impl TransactionLog {
             // only run this in debug mode because it can be expensive
             debug_assert!({
                 use itertools::MultiUnzip as _;
-                let (from, to): (HashSet<&Path>, HashSet<&Path>) = moved_map
+
+                let (from, to): (BTreeSet<&Path>, BTreeSet<&Path>) = moved_map
                     .iter()
                     .filter_map(
                         |(to, from)| if to != from { Some((from, to)) } else { None },
