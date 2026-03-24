@@ -48,7 +48,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           ref: ${{ github.event.pull_request.head.sha }}
 
@@ -85,7 +85,7 @@ jobs:
         run: sudo snap install --edge --classic just
 
       - name: Install cargo nextest
-        uses: taiki-e/install-action@nextest
+        uses: taiki-e/install-action@98ec31d284eb962f41c14065e9391a955aa810cf # nextest
 
       - name: Install Rust toolchain
         run: |
@@ -94,7 +94,7 @@ jobs:
           rustup default ${{ env.RUST_CHANNEL }}
 
       - name: Cache Dependencies
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
         with:
           # workspaces: "rust -> target"
           key: ${{ env.RUST_CHANNEL }}
@@ -164,7 +164,7 @@ jobs:
   #   runs-on: ubuntu-latest
   #   steps:
   #     - name: Checkout repository
-  #       uses: actions/checkout@v6
+  #       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
   #       with:
   #         ref: ${{ github.event.pull_request.head.sha }}
 
@@ -174,7 +174,7 @@ jobs:
   #         rustup default ${{ env.RUST_CHANNEL }}
 
   #     - name: Cache Dependencies
-  #       uses: Swatinem/rust-cache@v2
+  #       uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
   #       with:
   #         key: shuttle-${{ env.RUST_CHANNEL }}
 
@@ -198,7 +198,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           ref: ${{ github.event.pull_request.head.sha }}
 
@@ -222,7 +222,7 @@ jobs:
           test -f /usr/include/wasm32-wasi/limits.h && echo "found /usr/include/wasm32-wasi/limits.h"
 
       - name: Cache Dependencies
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
         with:
           key: wasm-${{ env.RUST_CHANNEL }}
 
