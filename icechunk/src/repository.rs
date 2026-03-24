@@ -1189,7 +1189,8 @@ impl Repository {
         snapshot_id: &SnapshotId,
     ) -> RepositoryResult<impl Iterator<Item = ManifestFileInfo>> {
         let snap = self.asset_manager.fetch_snapshot(snapshot_id).await?;
-        Ok(snap.manifest_files().collect::<Vec<_>>().into_iter())
+        let files: Vec<_> = snap.manifest_files().try_collect().inject()?;
+        Ok(files.into_iter())
     }
 
     #[instrument(skip(self))]
@@ -1899,8 +1900,10 @@ impl Repository {
                                 for manifest in manifests {
                                     if !loaded_manifests.contains(&manifest.object_id) {
                                         let manifest_id = manifest.object_id;
-                                        if let Some(manifest_info) =
-                                            snap_c.manifest_info(&manifest_id)
+                                        if let Some(manifest_info) = snap_c
+                                            .manifest_info(&manifest_id)
+                                            .ok()
+                                            .flatten()
                                             && loaded_refs + manifest_info.num_chunk_refs
                                                 <= preload_config.max_total_refs()
                                             && preload_config
@@ -3986,6 +3989,7 @@ mod tests {
             repo.resolve_version(&VersionInfo::BranchTipRef("main".to_string())).await?;
         let snapshot = repo.asset_manager().fetch_snapshot(&snap_id).await?;
         for mf in snapshot.manifest_files() {
+            let mf = mf?;
             let manifest =
                 repo.asset_manager().fetch_manifest_unknown_size(&mf.id).await?;
             assert!(
@@ -4022,6 +4026,7 @@ mod tests {
             repo.resolve_version(&VersionInfo::BranchTipRef("main".to_string())).await?;
         let snapshot = repo.asset_manager().fetch_snapshot(&snap_id).await?;
         for mf in snapshot.manifest_files() {
+            let mf = mf?;
             let manifest =
                 repo.asset_manager().fetch_manifest_unknown_size(&mf.id).await?;
             assert!(

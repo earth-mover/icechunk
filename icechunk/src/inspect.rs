@@ -109,7 +109,7 @@ async fn inspect_snapshot(
         flushed_at: snap.flushed_at().inject()?,
         commit_message: snap.message(),
         metadata: snap.metadata().inject()?,
-        manifests: snap.manifest_files().map(|f| f.into()).collect(),
+        manifests: snap.manifest_files().map_ok(|f| f.into()).try_collect().inject()?,
         nodes: snap.iter().map_ok(|n| n.into()).try_collect().inject()?,
     };
 
