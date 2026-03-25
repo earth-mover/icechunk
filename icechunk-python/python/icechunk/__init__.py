@@ -4,6 +4,7 @@ from typing import TypeAlias
 
 from icechunk._icechunk_python import (
     AzureCredentials,
+    AzureRefreshableCredential,
     AzureStaticCredentials,
     BasicConflictSolver,
     CachingConfig,
@@ -68,6 +69,7 @@ from icechunk.credentials import (
     AnyS3Credential,
     azure_credentials,
     azure_from_env_credentials,
+    azure_refreshable_credentials,
     azure_static_credentials,
     containers_credentials,
     gcs_credentials,
@@ -110,6 +112,7 @@ __all__ = [
     "AnyObjectStoreConfig",
     "AnyS3Credential",
     "AzureCredentials",
+    "AzureRefreshableCredential",
     "AzureStaticCredentials",
     "BasicConflictSolver",
     "CachingConfig",
@@ -167,6 +170,7 @@ __all__ = [
     "_upgrade_icechunk_repository",
     "azure_credentials",
     "azure_from_env_credentials",
+    "azure_refreshable_credentials",
     "azure_static_credentials",
     "azure_storage",
     "containers_credentials",

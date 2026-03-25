@@ -14,11 +14,11 @@ publish = true
 rust-version.workspace = true
 
 [dependencies]
-serde = { version = "1.0.228", features = ["derive"] }
-serde_with = { version = "3.18.0" }
-thiserror = "2.0.18"
-tracing-error = "0.2.1"
-typed-path = "0.12.3"
+serde.workspace = true
+serde_with.workspace = true
+thiserror.workspace = true
+tracing-error.workspace = true
+typed-path.workspace = true
 
 [lints]
 workspace = true

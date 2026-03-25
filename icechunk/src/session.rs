@@ -2508,7 +2508,7 @@ async fn flush_existing_node(
                             result.manifest_refs.push(mref.clone());
                             #[expect(clippy::expect_used)]
                             result.manifest_files.push(
-                                old_snapshot.manifest_info(&mref.object_id).expect("logic bug. creating manifest file info for an existing manifest failed."),
+                                old_snapshot.manifest_info(&mref.object_id).inject()?.expect("logic bug. creating manifest file info for an existing manifest failed."),
                             );
                         } else if let Some((new_ref, file_info)) =
                             write_manifest_with_changes(
@@ -2542,12 +2542,13 @@ async fn flush_existing_node(
                     manifest_refs: Vec::new(),
                     manifest_files: Vec::new(),
                 };
-                result.manifest_files.extend(array_refs.iter().map(|mr| {
+                for mr in &array_refs {
                     #[expect(clippy::expect_used)]
-                    old_snapshot.get_manifest_file(&mr.object_id).expect(
+                    let mf = old_snapshot.manifest_info(&mr.object_id).inject()?.expect(
                         "Bug in flush function, no manifest file found in snapshot",
-                    )
-                }));
+                    );
+                    result.manifest_files.push(mf);
+                }
                 result.manifest_refs.extend(array_refs.into_iter());
                 Ok(Some(result))
             }
@@ -3170,6 +3171,7 @@ async fn fetch_manifest(
     let snapshot = asset_manager.fetch_snapshot(snapshot_id).await.inject()?;
     let manifest_info = snapshot
         .manifest_info(manifest_id)
+        .inject()?
         .ok_or_else(|| IcechunkFormatErrorKind::ManifestInfoNotFound {
             manifest_id: manifest_id.clone(),
         })

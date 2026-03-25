@@ -1,6 +1,7 @@
 //! Repository statistics (chunk counts, sizes, etc.).
 
 use futures::{StreamExt as _, TryStream, TryStreamExt as _, future::ready, stream};
+use itertools::Itertools as _;
 use std::{
     collections::HashSet,
     num::{NonZeroU16, NonZeroUsize},
@@ -166,10 +167,9 @@ async fn unique_manifest_infos<'a>(
     let all_manifest_infos = all_snaps
         // this could be slightly optimized by not collecting all manifest info records into a vec
         // but we don't expect too many, and they are small anyway
-        .map_ok(|snap| {
-            stream::iter(
-                snap.manifest_files().map(Ok::<_, RepositoryError>).collect::<Vec<_>>(),
-            )
+        .map(|snap| {
+            let files: Vec<_> = snap?.manifest_files().try_collect().inject()?;
+            Ok(stream::iter(files.into_iter().map(Ok)))
         })
         .try_flatten();
     let res = try_unique_stream(|mi| mi.id.clone(), all_manifest_infos);
