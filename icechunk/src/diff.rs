@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
-use icechunk_types::Move;
+use icechunk_format::Move;
 use itertools::Itertools as _;
 
 use crate::{

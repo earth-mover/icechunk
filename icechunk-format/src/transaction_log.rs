@@ -191,7 +191,10 @@ impl TransactionLog {
                 m.to().expect("from is optional in flatbuffers, but required by spec"),
             )
             .ok()?;
-            let id: NodeId = m.node_id().into();
+            let node_id: NodeId = m
+                .node_id()
+                .expect("from is optional in flatbuffers, but required by spec")
+                .into();
             Some(Move { from, to, node_id })
         })
     }

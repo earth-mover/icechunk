@@ -214,7 +214,7 @@ impl EditChanges {
 
 pub static EMPTY_EDITS: LazyLock<EditChanges> = LazyLock::new(Default::default);
 
-pub use icechunk_types::Move;
+pub use icechunk_format::Move;
 
 #[derive(Debug, PartialEq)]
 pub enum MovedTo<'a> {
@@ -252,6 +252,7 @@ impl MoveTracker {
         from: Path,
         to: Path,
         subtree_nodes: impl IntoIterator<Item = Path>,
+        node_id: &NodeId,
     ) {
         // Resolve `from` to its original snapshot path — it may have
         // been renamed by an earlier move.
@@ -288,7 +289,7 @@ impl MoveTracker {
             }
         }
 
-        self.moves.push(Move { from, to });
+        self.moves.push(Move { from, to, node_id: node_id.clone().into() });
     }
 
     /// Return `(original_path, final_path)` pairs for all nodes whose
@@ -327,7 +328,7 @@ impl MoveTracker {
     pub fn moved_to<'a>(&self, path: &'a Path) -> MovedTo<'a> {
         let mut res = Cow::Borrowed(path);
         let mut was_moved = false;
-        for Move { from, to } in self.moves.iter() {
+        for Move { from, to, node_id } in self.moves.iter() {
             if let Some(new_path) = Self::remap_path(res.as_ref(), from, to) {
                 res = Cow::Owned(new_path);
                 was_moved = true;
@@ -343,7 +344,7 @@ impl MoveTracker {
     pub fn moved_from<'a>(&self, path: &'a Path) -> MovedFrom<'a> {
         let mut res = Cow::Borrowed(path);
         let mut was_moved = false;
-        for Move { from, to } in self.moves.iter().rev() {
+        for Move { from, to, node_id } in self.moves.iter().rev() {
             if let Some(old_path) = Self::remap_path(res.as_ref(), to, from) {
                 res = Cow::Owned(old_path);
                 was_moved = true;
@@ -495,8 +496,9 @@ impl ChangeSet {
         from: Path,
         to: Path,
         subtree_nodes: impl IntoIterator<Item = Path>,
+        node_id: &NodeId,
     ) -> SessionResult<()> {
-        self.move_tracker_mut()?.record(from, to, subtree_nodes);
+        self.move_tracker_mut()?.record(from, to, subtree_nodes, node_id);
         Ok(())
     }
 

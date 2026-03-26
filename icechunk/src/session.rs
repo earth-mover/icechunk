@@ -791,7 +791,7 @@ impl Session {
         // Icechunk 1 has no way to represent move in its on-disk format
         self.asset_manager.fail_unless_spec_at_least(SpecVersionBin::V2).inject()?;
         // does the source node exist?
-        let _ = self.get_node(&from).await?;
+        let node = self.get_node(&from).await?;
         // are we overwriting the destination node?
         if (self.get_node(&to).await).is_ok() {
             return Err(SessionError::capture(SessionErrorKind::MoveWontOverwrite(
@@ -801,6 +801,8 @@ impl Session {
 
         // Iterate the subtree at `from` so the move tracker can eagerly
         // compute final paths for all affected nodes.
+
+        // TODO(li-em): should we pass node.id in moved_from too?
         let original_from = match self.change_set().moved_from(&from) {
             MovedFrom::From(p) => p.into_owned(),
             _ => from.clone(),
@@ -812,7 +814,7 @@ impl Session {
             .filter_map(|r| r.ok().map(|n| n.path))
             .collect();
 
-        self.change_set_mut()?.move_node(from, to, subtree_paths)?;
+        self.change_set_mut()?.move_node(from, to, subtree_paths, &node.id)?;
         Ok(())
     }
 
