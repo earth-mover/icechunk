@@ -8,10 +8,8 @@ use std::{
 use flatbuffers::{VerifierOptions, WIPOffset};
 use itertools::Either;
 
-use icechunk_types::Move;
-
 use crate::{
-    ChunkIndices, IcechunkResult, NodeId, Path, SnapshotId,
+    ChunkIndices, IcechunkResult, Move, NodeId, Path, SnapshotId,
     flatbuffers::generated::{self, MoveOperation, MoveOperationArgs},
 };
 use icechunk_types::ICResultExt as _;
@@ -88,10 +86,12 @@ impl TransactionLog {
         let updated_chunks = Some(updated_chunks);
 
         let moved_nodes: Vec<_> = sorted_moves
-            .map(|Move { from, to }| {
+            .map(|Move { from, to, node_id }| {
                 let from = builder.create_string(from.to_string().as_str());
                 let to = builder.create_string(to.to_string().as_str());
-                let args = MoveOperationArgs { from: Some(from), to: Some(to) };
+                let node_id = generated::ObjectId8::new(&node_id.0);
+                let node_id = Some(&node_id);
+                let args = MoveOperationArgs { from: Some(from), to: Some(to), node_id };
                 MoveOperation::create(&mut builder, &args)
             })
             .collect();
@@ -183,9 +183,16 @@ impl TransactionLog {
             None => Either::Right(iter::empty()),
         };
         it.filter_map(|m| {
-            let from = Path::new(m.from()).ok()?;
-            let to = Path::new(m.to()).ok()?;
-            Some(Move { from, to })
+            let from = Path::new(
+                m.from().expect("from is optional in flatbuffers, but required by spec"),
+            )
+            .ok()?;
+            let to = Path::new(
+                m.to().expect("from is optional in flatbuffers, but required by spec"),
+            )
+            .ok()?;
+            let id: NodeId = m.node_id().into();
+            Some(Move { from, to, node_id })
         })
     }
 

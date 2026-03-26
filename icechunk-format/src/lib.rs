@@ -114,6 +114,13 @@ pub type AttributesId = ObjectId<12, AttributesTag>;
 /// The internal id of an array or group, unique only to a single store version
 pub type NodeId = ObjectId<8, NodeTag>;
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Move {
+    pub from: Path,
+    pub to: Path,
+    pub node_id: NodeId,
+}
+
 impl<const SIZE: usize, T: FileTypeTag> ObjectId<SIZE, T> {
     pub fn random() -> Self {
         let mut buf = [0u8; SIZE];

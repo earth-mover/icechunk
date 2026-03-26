@@ -15,9 +15,12 @@ table ArrayUpdatedChunks {
   chunks: [ChunkIndices] (required);
 }
 
+// moves are fully collapsed
+// every moved node gets an entry - no implicit moving of children
 table MoveOperation {
-  from: string (required);
-  to: string (required);
+  from: string;
+  to: string;
+  node_id: ObjectId8;
 }
 
 table TransactionLog {

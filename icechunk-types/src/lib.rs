@@ -112,12 +112,6 @@ impl TryFrom<String> for Path {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Move {
-    pub from: Path,
-    pub to: Path,
-}
-
 /// Returns the user-agent string for icechunk HTTP requests.
 ///
 /// Format: `icechunk-rust-<version>` (e.g., `icechunk-rust-2.0.0-alpha.4`).
