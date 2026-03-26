@@ -4,15 +4,19 @@ import datetime
 import itertools
 import json
 import operator
+import sys
 import textwrap
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from functools import partial
-from typing import Any, Self, cast
+from typing import Any, Literal, Self, cast
 
 import numpy as np
 import pytest
+from packaging.version import Version
 
+import icechunk
+import icechunk as ic
 from zarr.core.buffer import Buffer, default_buffer_prototype
 
 pytest.importorskip("hypothesis")
@@ -23,19 +27,28 @@ import copy
 import hypothesis.extra.numpy as npst
 import hypothesis.strategies as st
 import pytest
-from hypothesis import assume, note, settings
+from hypothesis import assume, event, note
 from hypothesis.stateful import (
     Bundle,
     RuleBasedStateMachine,
     consumes,
     initialize,
     invariant,
+    multiple,
     precondition,
     rule,
 )
 
 import zarr.testing.strategies as zrst
-from icechunk import IcechunkError, Repository, SnapshotInfo, in_memory_storage
+from icechunk import (
+    IcechunkError,
+    Repository,
+    RepositoryConfig,
+    SnapshotInfo,
+    Storage,
+)
+from icechunk.testing import LatencyStorage
+from icechunk.testing.strategies import repository_configs
 from zarr.testing.stateful import SyncStoreWrapper
 
 # JSON file contents, keep it simple
@@ -45,6 +58,10 @@ simple_attrs = st.dictionaries(
     st.integers(min_value=-10_000, max_value=10_000),
     max_size=5,
 )
+
+# Branches/tags are stored as files at ``refs/<name>``.  On case-insensitive
+# file systems (macOS APFS default), 'T' and 't' collide.
+ref_name_text = simple_text.map(lambda x: x.lower() if sys.platform == "darwin" else x)
 
 DEFAULT_BRANCH = "main"
 INITIAL_SNAPSHOT = "1CECHNKREP0F1RSTCMT0"
@@ -72,6 +89,103 @@ v3_array_metadata = zrst.array_metadata(
     ),  # set min_side to one
     attributes=simple_attrs,
 ).map(lambda x: x.to_buffer_dict(prototype=default_buffer_prototype())["zarr.json"])
+
+
+# The ic.UpdateType cass has `updated_at` and `backup_path`, which we do not care about
+# from the perspective of the model. So we define some simpler classes for the purposes of checking
+@dataclass
+class UpdateModel:
+    ictype = ic.UpdateType
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, ic.Update) or not isinstance(other.kind, self.ictype):
+            return NotImplemented
+        return all(
+            getattr(self, f.name) == getattr(other.kind, f.name)
+            for f in fields(self)
+            # we check ictype with isinstance above
+            if f.name != "ictype"
+        )
+
+
+@dataclass(eq=False)
+class RepoInitializedUpdateModel(UpdateModel):
+    ictype = ic.UpdateType.RepoInitialized
+
+
+@dataclass(eq=False)
+class ConfigChangedUpdateModel(UpdateModel):
+    ictype = ic.UpdateType.ConfigChanged
+
+
+@dataclass(eq=False)
+class MetadataChangedUpdateModel(UpdateModel):
+    ictype = ic.UpdateType.MetadataChanged
+
+
+@dataclass(eq=False)
+class GCRanUpdateModel(UpdateModel):
+    ictype = ic.UpdateType.GCRan
+
+
+@dataclass(eq=False)
+class ExpirationRanUpdateModel(UpdateModel):
+    ictype = ic.UpdateType.ExpirationRan
+
+
+@dataclass(eq=False)
+class RepoMigratedUpdateModel(UpdateModel):
+    ictype = ic.UpdateType.RepoMigrated
+    from_version: int
+    to_version: int
+
+
+@dataclass(eq=False)
+class TagCreatedUpdateModel(UpdateModel):
+    ictype = ic.UpdateType.TagCreated
+    name: str
+
+
+@dataclass(eq=False)
+class TagDeletedUpdateModel(UpdateModel):
+    ictype = ic.UpdateType.TagDeleted
+    name: str
+    previous_snap_id: str
+
+
+@dataclass(eq=False)
+class BranchCreatedUpdateModel(UpdateModel):
+    ictype = ic.UpdateType.BranchCreated
+    name: str
+
+
+@dataclass(eq=False)
+class BranchDeletedUpdateModel(UpdateModel):
+    ictype = ic.UpdateType.BranchDeleted
+    name: str
+    previous_snap_id: str
+
+
+@dataclass(eq=False)
+class BranchResetUpdateModel(UpdateModel):
+    ictype = ic.UpdateType.BranchReset
+    name: str
+    previous_snap_id: str
+
+
+@dataclass(eq=False)
+class NewCommitUpdateModel(UpdateModel):
+    ictype = ic.UpdateType.NewCommit
+    branch: str
+    new_snap_id: str
+
+
+@dataclass(eq=False)
+class CommitAmendedUpdateModel(UpdateModel):
+    ictype = ic.UpdateType.CommitAmended
+    branch: str
+    previous_snap_id: str
+    new_snap_id: str
 
 
 @dataclass
@@ -103,7 +217,12 @@ class TagModel:
 
 class Model:
     def __init__(self, **kwargs: Any) -> None:
-        self.store: dict[str, Any] = {}  #
+        self.store: dict[str, Any] = {}
+
+        self.spec_version = 1  # will be overwritten on `@initialize`
+        self.initial_spec_version = 1  # will be overwritten on `@initialize`
+
+        self.metadata: dict[str, Any] = {}
 
         self.initial_snapshot_id: str | None = None
         self.changes_made: bool = False
@@ -111,20 +230,34 @@ class Model:
         self.HEAD: None | str = None
         self.branch: None | str = None
 
+        # we maintain a list of `commits` == snapshots in repo object file
+        # and `ondisk_snaps` = commits + expired_snaphsots
+        # expired snapshots are removed from the repo object file and can be garbage collected
         self.commits: dict[str, CommitModel] = {}
         self.ondisk_snaps: dict[str, CommitModel] = {}
         self.tags: dict[str, TagModel] = {}
-        # TODO: This is only tracking the HEAD,
-        # Should we model the branch as an ordered list of commits?
-        self.branches: dict[str, str] = {}
+        self.branch_heads: dict[str, str] = {}
+        self.deleted_tags: set[str] = set()
+
+        self.ops_log: list[UpdateModel] = []
+        self.migrated: bool = False
 
         # a tag once created, can never be recreated even after expiration
         self.created_tags: set[str] = set()
 
+    def initialize(self, *, snap: ic.SnapshotInfo) -> None:
+        HEAD = snap.id
+        self.initial_snapshot_id = HEAD
+        self.commits[HEAD] = CommitModel.from_snapshot_and_store(snap, {})
+        self.HEAD = HEAD
+        self.create_branch(DEFAULT_BRANCH, HEAD)
+        self.checkout_branch(DEFAULT_BRANCH)
+        self.ops_log = [RepoInitializedUpdateModel()]
+
     def __repr__(self) -> str:
         return textwrap.dedent(f"""
         <Model branch: {self.branch!r}, HEAD: {self.HEAD!r}, changes_made: {self.changes_made!r}>
-        Branches: {tuple(self.branches.keys())!r}
+        Branches: {tuple(self.branch_heads.keys())!r}
         Tags: {tuple(self.tags.keys())!r}""").strip("\n")
 
     def __setitem__(self, key: str, value: Buffer) -> None:
@@ -143,11 +276,36 @@ class Model:
     def __getitem__(self, key: str) -> Buffer:
         return cast(Buffer, self.store[key])
 
+    def get(self, key: str) -> Buffer | None:
+        return self.store.get(key)
+
+    def delete_doc(self, key: str) -> None:
+        if key in self.store:
+            del self.store[key]
+            self.changes_made = True
+
+    def upgrade(self, dry_run: bool) -> None:
+        if not dry_run:
+            # only reachable snapshots are migrated over
+            self.commits = {
+                k: v for k, v in self.commits.items() if k in self.reachable_snapshots()
+            }
+            # The ops log now contains synthetic entries with synthetic ordering
+            # reconstructed from the snapshot graph, so we skip exact comparison after migration.
+            self.ops_log = [RepoMigratedUpdateModel(self.spec_version, 2)]
+            self.migrated = True
+            self.spec_version = 2
+
     @property
     def has_commits(self) -> bool:
         return bool(self.commits)
 
-    def commit(self, snap: SnapshotInfo) -> None:
+    @property
+    def commit_times(self) -> list[datetime.datetime]:
+        """Return sorted list of all commit times."""
+        return sorted(c.written_at for c in self.commits.values())
+
+    def _commit(self, snap: SnapshotInfo) -> None:
         ref = snap.id
         self.commits[ref] = CommitModel.from_snapshot_and_store(
             snap, copy.deepcopy(self.store)
@@ -157,7 +315,24 @@ class Model:
         self.HEAD = ref
 
         assert self.branch is not None
-        self.branches[self.branch] = ref
+        self.branch_heads[self.branch] = ref
+
+    def commit(self, snap: SnapshotInfo) -> None:
+        assert self.branch is not None
+        self._commit(snap)
+        self.ops_log.append(NewCommitUpdateModel(self.branch, snap.id))
+
+    def amend(self, snap: SnapshotInfo) -> None:
+        """Amend the HEAD commit."""
+        # this is simple because we aren't modeling the branch as a list of commits
+        assert self.branch is not None
+        prev_snap_id = self.branch_heads[self.branch]
+        self._commit(snap)
+        self.ops_log.append(CommitAmendedUpdateModel(self.branch, prev_snap_id, snap.id))
+
+    def set_metadata(self, meta: dict[str, Any]) -> None:
+        self.metadata = meta
+        self.ops_log.append(MetadataChangedUpdateModel())
 
     def checkout_commit(self, ref: str) -> None:
         assert str(ref) in self.commits
@@ -170,26 +345,42 @@ class Model:
 
     def create_branch(self, name: str, commit: str) -> None:
         assert commit in self.commits
-        self.branches[name] = commit
+        self.branch_heads[name] = commit
+        self.ops_log.append(BranchCreatedUpdateModel(name))
 
     def checkout_branch(self, ref: str) -> None:
-        self.checkout_commit(self.branches[ref])
+        self.checkout_commit(self.branch_heads[ref])
         self.branch = ref
 
+    # TODO: add `from_snapshot_id` to this
     def reset_branch(self, branch: str, commit: str) -> None:
         assert commit in self.commits
-        self.branches[branch] = commit
+        prev_snap_id = self.branch_heads[branch]
+        self.branch_heads[branch] = commit
+        self.ops_log.append(BranchResetUpdateModel(branch, prev_snap_id))
 
     def delete_branch(self, branch_name: str) -> None:
-        del self.branches[branch_name]
+        self.ops_log.append(
+            BranchDeletedUpdateModel(branch_name, self.branch_heads[branch_name])
+        )
+        self._delete_branch(branch_name)
+
+    def _delete_branch(self, branch_name: str) -> None:
+        del self.branch_heads[branch_name]
 
     def delete_tag(self, tag: str) -> None:
+        self.ops_log.append(TagDeletedUpdateModel(tag, self.tags[tag].commit_id))
+        self._delete_tag(tag)
+
+    def _delete_tag(self, tag: str) -> None:
+        self.deleted_tags.add(tag)
         del self.tags[tag]
 
     def create_tag(self, tag_name: str, commit_id: str) -> None:
         assert commit_id in self.commits
         self.tags[tag_name] = TagModel(commit_id=str(commit_id))
         self.created_tags.add(tag_name)
+        self.ops_log.append(TagCreatedUpdateModel(tag_name))
 
     def checkout_tag(self, ref: str) -> None:
         self.checkout_commit(self.tags[str(ref)].commit_id)
@@ -200,40 +391,40 @@ class Model:
 
     def refs_iter(self) -> Iterator[str]:
         tag_iter = map(operator.attrgetter("commit_id"), self.tags.values())
-        return itertools.chain(self.branches.values(), tag_iter)
+        return itertools.chain(self.branch_heads.values(), tag_iter)
 
     def expire_snapshots(
         self,
-        older_than: datetime.datetime,
+        expired_snaps: set[str],
         *,
+        older_than: datetime.datetime,
         delete_expired_branches: bool,
         delete_expired_tags: bool,
     ) -> ExpireInfo:
-        # model this exactly like icechunk does.
-        expired_snaps = set()
-        branch_pointees = set(self.branches.values())
+        # modeling expiration like icechunk does is complicated because of re-parenting logic.
+        # Instead we assume that icechunk expired the right commits, and then we check that
+        # the repo invariants hold.
+        branch_pointees = set(self.branch_heads.values())
         tag_pointees = set(map(operator.attrgetter("commit_id"), self.tags.values()))
-        for snap in self.commits.values():
-            if (
-                snap.written_at < older_than
-                and snap.parent_id is not None
-                and (delete_expired_tags or snap.id not in tag_pointees)
-                and (
-                    (delete_expired_branches and self.branches["main"] != snap.id)
-                    or snap.id not in branch_pointees
-                )
-            ):
-                expired_snaps.add(snap.id)
-
-        note(f"model {expired_snaps=!r}")
+        for snapid in expired_snaps:
+            snap = self.commits[snapid]
+            assert snap.written_at < older_than
+            assert snap.parent_id is not None
+            if not delete_expired_tags:
+                assert snap.id not in tag_pointees
+            if not delete_expired_branches:
+                assert snap.id not in branch_pointees
 
         for id in expired_snaps:
             # notice we don't delete from self.ondisk_snaps, those can still be deleted by GC
+            # however we do pop from `commits` since that is a list of unexpired snaps
             self.commits.pop(id, None)
 
+        # we reparent to the initial snapshot for simplicity. This should be good enough to make
+        # self.reachable_snapshots() accurate.
         for c in self.commits.values():
             if c.parent_id in expired_snaps:
-                c.parent_id = INITIAL_SNAPSHOT
+                c.parent_id = self.initial_snapshot_id
 
         if delete_expired_tags:
             tags_to_delete = {
@@ -241,46 +432,65 @@ class Model:
             }
             note(f"deleting tags {tags_to_delete=!r}")
             for tag in tags_to_delete:
-                self.delete_tag(tag)
+                self._delete_tag(tag)
         else:
             tags_to_delete = set()
 
         if delete_expired_branches:
             branches_to_delete = {
                 k
-                for k, v in self.branches.items()
+                for k, v in self.branch_heads.items()
                 if k != DEFAULT_BRANCH and v in expired_snaps
             }
             note(f"deleting branches {branches_to_delete=!r}")
             for branch in branches_to_delete:
-                note(f"deleting {branch=!r}, {self.branches[branch]=!r}")
-                self.delete_branch(branch)
+                self._delete_branch(branch)
         else:
             branches_to_delete = set()
 
+        self.ops_log.append(ExpirationRanUpdateModel())
         return ExpireInfo(
             expired_snapshots=expired_snaps,
             deleted_branches=branches_to_delete,
             deleted_tags=tags_to_delete,
         )
 
-    def garbage_collect(self, older_than: datetime.datetime) -> set[str]:
-        reachable_snaps = set((self.initial_snapshot_id,))
+    def reachable_snapshots(self) -> set[str]:
+        assert self.initial_snapshot_id is not None
+        reachable_snaps: set[str] = set((self.initial_snapshot_id,))
         for commit_id in self.refs_iter():
-            while commit_id != self.initial_snapshot_id:
+            while commit_id is not None:
                 reachable_snaps.add(commit_id)
-                parent_id = self.commits[commit_id].parent_id
-                assert (
-                    parent_id is not None
-                ), f"Commit {commit_id} has no parent but is not the initial snapshot"
-                commit_id = parent_id
+                commit_id = self.commits[commit_id].parent_id  # type: ignore[assignment]
+        return reachable_snaps
+
+    def garbage_collect(
+        self,
+        older_than: datetime.datetime,
+        created_at_by_id: dict[str, datetime.datetime],
+    ) -> set[str]:
+        """Predict which snapshots Rust GC will delete.
+
+        Uses storage-level created_at (not written_at/flushed_at) to match
+        Rust's gc_snapshots which checks ``snapshot.created_at < cutoff``.
+        The created_at_by_id dict must be captured *before* calling Rust GC,
+        since GC deletes the files from storage.
+        """
+        reachable_snaps = self.reachable_snapshots()
         deleted = set()
         for k in set(self.ondisk_snaps) - reachable_snaps:
-            if self.ondisk_snaps[k].written_at < older_than:
+            if created_at_by_id[k] < older_than:
                 self.commits.pop(k, None)
                 self.ondisk_snaps.pop(k, None)
                 deleted.add(k)
+
+        # Match Rust's delete_snapshots_from_repo_info: rewrite parent_id for
+        # kept snapshots whose parent was GC'd to INITIAL_SNAPSHOT_ID.
+        for c in self.commits.values():
+            if c.parent_id is not None and c.parent_id in deleted:
+                c.parent_id = self.initial_snapshot_id
         note(f"Deleted snapshots in model: {deleted!r}")
+        self.ops_log.append(GCRanUpdateModel())
         return deleted
 
 
@@ -295,32 +505,23 @@ class VersionControlStateMachine(RuleBasedStateMachine):
     tags = Bundle("tags")
     branches = Bundle("branches")
 
-    def __init__(self) -> None:
+    def __init__(self, actor: Any = None, ic_module: Any = None) -> None:
         super().__init__()
 
         note("----------")
         self.model = Model()
-        self.commit_times: list[datetime.datetime] = []
+        self.storage: Storage | None = None
+        self.actor = actor or Repository
+        self.ic = ic_module or icechunk
 
-    @initialize(data=st.data(), target=branches)
-    def initialize(self, data: st.DataObject) -> str:
-        # FIXME: currently this test is IC2 only
-        spec_version = data.draw(
-            st.one_of(st.integers(min_value=2, max_value=2), st.none())
-        )
-        self.repo = Repository.create(in_memory_storage(), spec_version=spec_version)
+    def _initialize_model_and_data(self, data: st.DataObject) -> None:
+        """Set up model state and initial data after repo is created/opened."""
         self.session = self.repo.writable_session(DEFAULT_BRANCH)
 
         snap = next(iter(self.repo.ancestry(branch=DEFAULT_BRANCH)))
-        note(f"Initial commit is {snap!r}")
         self.initial_snapshot = snap
-        self.model.initial_snapshot_id = snap.id
 
-        HEAD = self.repo.lookup_branch(DEFAULT_BRANCH)
-        self.model.commits[HEAD] = CommitModel.from_snapshot_and_store(snap, {})
-        self.model.HEAD = HEAD
-        self.model.create_branch(DEFAULT_BRANCH, HEAD)
-        self.model.checkout_branch(DEFAULT_BRANCH)
+        self.model.initialize(snap=snap)
 
         # initialize with some data always
         # TODO: always setting array metadata, since we cannot overwrite an existing group's zarr.json
@@ -328,6 +529,55 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         # TODO: consider adding a deeper understanding of the zarr model rather than just setting docs?
         self.set_doc(path="zarr.json", value=data.draw(v3_array_metadata))
 
+    def _make_storage(self) -> Storage:
+        return self.ic.in_memory_storage()  # type: ignore[no-any-return]
+
+    @initialize(
+        data=st.data(),
+        target=branches,
+        spec_version=st.sampled_from([1, 2]),
+        # Both latencies are zero (~75%) or both non-zero (~25%)
+        # to exercise the flushed_at vs created_at timing gap in GC.
+        latency=st.one_of(
+            st.just((0, 0)),
+            st.just((0, 0)),
+            st.just((0, 0)),
+            st.tuples(st.integers(5, 10), st.just(0)),
+        ),
+    )
+    def initialize(
+        self,
+        data: st.DataObject,
+        spec_version: Literal[1, 2],
+        latency: tuple[int, int] = (0, 0),
+    ) -> str:
+        write_latency_ms, read_latency_ms = latency
+        inner = self._make_storage()
+        if write_latency_ms or read_latency_ms:
+            self.storage = LatencyStorage(
+                inner,
+                write_latency_ms=write_latency_ms,
+                read_latency_ms=read_latency_ms,
+            )
+        else:
+            self.storage = inner
+        config = data.draw(repository_configs(ic_module=self.ic))
+        self.model.initial_spec_version = spec_version
+        self.model.spec_version = spec_version
+
+        if Version(self.ic.__version__).major >= 2:
+            self.repo = self.actor.create(
+                self.storage,
+                spec_version=spec_version,
+                config=config,
+            )
+        else:
+            self.repo = self.actor.create(
+                self.storage,
+                config=config,
+            )
+
+        self._initialize_model_and_data(data)
         return DEFAULT_BRANCH
 
     def new_store(self) -> None:
@@ -336,6 +586,32 @@ class VersionControlStateMachine(RuleBasedStateMachine):
     @property
     def sync_store(self) -> NewSyncStoreWrapper:
         return NewSyncStoreWrapper(self.session.store)
+
+    @precondition(lambda self: self.model.branch is not None)
+    @rule(data=st.data(), ncommits=st.integers(3, 10), target=commits)
+    def set_and_commit(self, data: st.DataObject, ncommits: int) -> Any:
+        amend_or_commit = data.draw(
+            st.lists(st.booleans(), min_size=ncommits, max_size=ncommits)
+        )
+        # We have so many rules now it is hard to build up long history
+        # instead we explicitly add a rule to make a lot of commits
+        commit_ids = []
+        for should_amend in amend_or_commit:
+            # We need to ensure we overwrite with different data, otherwise icechunk doesn't register a change.
+            # Delete first then set, to avoid slow hypothesis filter rejection.
+            path, meta = data.draw(st.tuples(metadata_paths, v3_array_metadata))
+            self.delete_doc(path)
+            self.set_doc(path, meta)
+            msg = data.draw(st.text(max_size=MAX_TEXT_SIZE))
+            if (
+                should_amend
+                and len(self.model.commits) > 1
+                and self.model.spec_version >= 2
+            ):
+                self.amend(msg)
+            else:
+                commit_ids.append(self.commit(msg))
+        return multiple(*commit_ids)
 
     @rule(path=metadata_paths, value=v3_array_metadata)
     def set_doc(self, path: str, value: Buffer) -> None:
@@ -348,6 +624,63 @@ class VersionControlStateMachine(RuleBasedStateMachine):
             with pytest.raises(IcechunkError, match="read-only store"):
                 self.sync_store.set(path, value)
 
+    def delete_doc(self, path: str) -> None:
+        note(f"deleting path {path!r}")
+        if self.model.branch is not None:
+            self.sync_store.delete(path)
+            self.model.delete_doc(path)
+
+    @precondition(lambda self: self.model.spec_version >= 2)
+    @rule(meta=simple_attrs)
+    def set_metadata(self, meta: dict[str, Any]) -> None:
+        note(f"setting metadata {meta!r}")
+        self.repo.set_metadata(meta)
+        self.model.set_metadata(meta)
+
+    @rule(dry_run=st.booleans(), delete_unused_v1_files=st.booleans())
+    @precondition(lambda self: self.model.spec_version == 1)
+    def upgrade_spec_version(self, dry_run: bool, delete_unused_v1_files: bool) -> None:
+        # don't test simple cases of catching error upgradging a v2 spec
+        # that should be covered in unit tests
+        self.repo = icechunk.upgrade_icechunk_repository(
+            self.repo, dry_run=dry_run, delete_unused_v1_files=delete_unused_v1_files
+        )
+        # Reopening discards uncommitted changes - reset session and model
+        branch = (
+            self.model.branch
+            if self.model.branch in self.model.branch_heads
+            else DEFAULT_BRANCH
+        )
+        self.session = self.repo.writable_session(branch)
+        self.model.checkout_branch(branch)
+
+        self.model.upgrade(dry_run)
+        if not dry_run:
+            assert self.repo.spec_version == 2
+
+    @rule(data=st.data())
+    def reopen_repository(self, data: st.DataObject) -> None:
+        config = data.draw(repository_configs(ic_module=self.ic))
+        self._reopen_repository(config)
+
+    def _reopen_repository(self, config: RepositoryConfig | None = None) -> None:
+        """Reopen the repository from storage to get fresh state.
+
+        This discards any uncommitted changes.
+        """
+        assert self.storage is not None, "storage must be initialized"
+        self.repo = self.actor.open(self.storage, config=config)
+        note(f"Reopened repository (spec_version={self.model.spec_version})")
+
+        # Reopening discards uncommitted changes - reset model to last committed state
+        branch = (
+            self.model.branch
+            if self.model.branch in self.model.branch_heads
+            else DEFAULT_BRANCH
+        )
+        self.session = self.repo.writable_session(branch)
+        self.model.checkout_branch(branch)
+
     @rule(message=st.text(max_size=MAX_TEXT_SIZE), target=commits)
     @precondition(lambda self: self.model.changes_made)
     def commit(self, message: str) -> str:
@@ -359,7 +692,31 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         self.session = self.repo.writable_session(branch)
         note(f"Created commit: {snapinfo!r}")
         self.model.commit(snapinfo)
-        self.commit_times.append(snapinfo.written_at)
+        return commit_id
+
+    @rule(message=st.text(max_size=MAX_TEXT_SIZE), target=commits)
+    # TODO: update changes made rule depending on result of
+    # https://github.com/earth-mover/icechunk/issues/1532
+    @precondition(
+        lambda self: (
+            (self.model.changes_made)
+            and (self.model.spec_version >= 2)
+            and len(self.model.commits) > 1
+        )
+    )
+    def amend(self, message: str) -> str:
+        branch = self.session.branch
+        assert branch is not None
+        old_head = next(iter(self.repo.ancestry(branch=branch)))
+        note(f"Amending commit on branch {branch!r} with id {old_head!r}")
+
+        commit_id = self.session.amend(message)
+        snapinfo = next(iter(self.repo.ancestry(branch=branch)))
+        assert snapinfo.id == commit_id
+        self.session = self.repo.writable_session(branch)
+
+        # Update model
+        self.model.amend(snapinfo)
         return commit_id
 
     @rule(ref=commits)
@@ -395,7 +752,8 @@ class VersionControlStateMachine(RuleBasedStateMachine):
     @rule(ref=branches)
     def checkout_branch(self, ref: str) -> None:
         # TODO: sometimes readonly?
-        if self.model.branches.get(ref) in self.model.commits:
+        branch_head = self.model.branch_heads.get(ref)
+        if branch_head is not None and branch_head in self.model.commits:
             note(f"Checking out branch {ref!r}")
             self.session = self.repo.writable_session(ref)
             assert not self.session.read_only
@@ -405,12 +763,12 @@ class VersionControlStateMachine(RuleBasedStateMachine):
                 note(f"Expecting error when checking out branch {ref!r}")
                 self.repo.writable_session(ref)
 
-    @rule(name=simple_text, commit=commits, target=branches)
+    @rule(name=ref_name_text, commit=commits, target=branches)
     def create_branch(self, name: str, commit: str) -> str:
-        note(f"Creating branch {name!r}")
+        note(f"Creating branch {name!r} for commit {commit!r}")
 
         # we can create a tag and branch with the same name
-        if name not in self.model.branches and commit in self.model.commits:
+        if name not in self.model.branch_heads and commit in self.model.commits:
             self.repo.create_branch(name, commit)
             self.model.create_branch(name, commit)
         else:
@@ -422,10 +780,9 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         return name
 
     @precondition(lambda self: self.model.has_commits)
-    @rule(name=simple_text, commit_id=commits, target=tags)
+    @rule(name=ref_name_text, commit_id=commits, target=tags)
     def create_tag(self, name: str, commit_id: str) -> str:
         note(f"Creating tag {name!r} for commit {commit_id!r}")
-
         if (
             name in self.model.created_tags
             or name in self.model.tags
@@ -462,13 +819,13 @@ class VersionControlStateMachine(RuleBasedStateMachine):
     @precondition(lambda self: not self.model.changes_made)
     @rule(branch=branches, commit=commits)
     def reset_branch(self, branch: str, commit: str) -> None:
-        if branch not in self.model.branches or commit not in self.model.commits:
+        if branch not in self.model.branch_heads or commit not in self.model.commits:
             note(f"resetting branch {branch}, expecting error.")
             with pytest.raises(IcechunkError):
                 self.repo.reset_branch(branch, commit)
         else:
             note(
-                f"resetting branch {branch} from {self.model.branches[branch]} to {commit}"
+                f"resetting branch {branch} from {self.model.branch_heads[branch]} to {commit}"
             )
             self.repo.reset_branch(branch, commit)
             self.model.reset_branch(branch, commit)
@@ -486,7 +843,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
     @rule(branch=consumes(branches))
     def delete_branch(self, branch: str) -> None:
         note(f"Deleting branch {branch!r}")
-        if branch in self.model.branches:
+        if branch in self.model.branch_heads:
             if branch == DEFAULT_BRANCH:
                 note("Expecting error.")
                 with pytest.raises(
@@ -503,67 +860,156 @@ class VersionControlStateMachine(RuleBasedStateMachine):
             with pytest.raises(IcechunkError):
                 self.repo.delete_branch(branch)
 
-    @precondition(lambda self: bool(self.commit_times))
+    @rule(tag=consumes(tags))
+    def delete_tag(self, tag: str) -> None:
+        note(f"Deleting tag {tag!r}")
+        if tag not in self.model.tags:
+            with pytest.raises(IcechunkError):
+                self.repo.delete_tag(tag)
+        else:
+            self.repo.delete_tag(tag)
+            self.model.delete_tag(tag)
+
+    def _draw_older_than(self, data: st.DataObject) -> datetime.datetime:
+        # Draw cutoffs from storage-level created_at (not written_at/flushed_at)
+        # because that is what Rust GC compares against.
+        assert self.storage is not None
+        created_at_snapshots: dict[str, datetime.datetime] = {
+            obj.key: obj.created_at
+            for obj in self.storage.list_objects_metadata(prefix="snapshots")
+        }
+        created_at_txs: dict[str, datetime.datetime] = {
+            obj.key: obj.created_at
+            for obj in self.storage.list_objects_metadata(prefix="transactions")
+        }
+        created_at_times = sorted(
+            # These are written concurrently (session.rs) and get slightly different
+            # created_at timestamps. Take the max so we delete both.
+            max(
+                created_at_snapshots[key],
+                created_at_txs.get(
+                    key, datetime.datetime(2000, 1, 1, tzinfo=datetime.UTC)
+                ),
+            )
+            for key in created_at_snapshots
+        )[::-1]  # reverse to maximize chances of GCing more objects
+        # The order here is important; again we prioritize GCing more objects first
+        result: datetime.datetime = data.draw(
+            st.one_of(
+                st.just(max(created_at_times) + datetime.timedelta(days=1)),
+                # Add 1μs to ensure we delete both the tx log & snapshot
+                st.sampled_from(created_at_times).map(
+                    lambda time: time + datetime.timedelta(microseconds=1)
+                ),
+                st.just(datetime.datetime(2000, 1, 1, tzinfo=datetime.UTC)),
+            )
+        )
+        return result
+
+    # TODO: v1 has bugs in expire_snapshots, only test for v2
+    # https://github.com/earth-mover/icechunk/issues/1520
+    # https://github.com/earth-mover/icechunk/issues/1534
+    @precondition(lambda self: bool(self.model.commits) and self.model.spec_version >= 2)
     @rule(
         data=st.data(),
-        delta=st.timedeltas(
-            min_value=datetime.timedelta(days=-1), max_value=datetime.timedelta(days=1)
-        ),
-        delete_expired_branches=st.booleans(),
-        delete_expired_tags=st.booleans(),
+        delete_expired_branches=st.sampled_from([True, True, True, False]),
+        delete_expired_tags=st.sampled_from([True, True, True, False]),
     )
     def expire_snapshots(
         self,
         data: st.DataObject,
-        delta: datetime.timedelta,
         delete_expired_branches: bool,
         delete_expired_tags: bool,
     ) -> None:
-        commit_time = data.draw(st.sampled_from(self.commit_times))
-        older_than = commit_time + delta
+        older_than = self._draw_older_than(data)
         note(
-            f"Expiring snapshots {older_than=!r}, ({commit_time=!r}, {delta=!r}), {delete_expired_branches=!r}, {delete_expired_tags=!r}"
+            f"Expiring snapshots {older_than=!r}, {delete_expired_branches=!r}, {delete_expired_tags=!r}"
         )
+
+        # Track branches and tags before expiration
+        branches_before = set(self.repo.list_branches())
+        tags_before = set(self.repo.list_tags())
+
         actual = self.repo.expire_snapshots(
             older_than,
             delete_expired_branches=delete_expired_branches,
             delete_expired_tags=delete_expired_tags,
         )
-        note(f"repo  expired snaps={actual!r}")
+        # note(f"repo  expired snaps={actual!r}")
+
+        # we never delete the HEAD of main
+        assert self.model.branch_heads["main"] not in actual
+        # we never expire the initial snapshot
+        assert self.initial_snapshot.id not in actual
+        # edited parents should not be expired
+        for snap in set(self.model.commits) - actual:
+            actualsnap = self.repo.lookup_snapshot(snap)
+            assert actualsnap.parent_id not in actual
+
+        # Track branches and tags after expiration
+        branches_after = set(self.repo.list_branches())
+        tags_after = set(self.repo.list_tags())
+        actual_deleted_branches = branches_before - branches_after
+        actual_deleted_tags = tags_before - tags_after
+
         expected = self.model.expire_snapshots(
-            older_than,
+            actual,
+            older_than=older_than,
             delete_expired_branches=delete_expired_branches,
             delete_expired_tags=delete_expired_tags,
         )
-        note(f"from model: {expected}")
-        note(f"actual: {actual}")
-        assert self.initial_snapshot.id not in actual
-        assert actual == expected.expired_snapshots, (actual, expected)
+        # note(f"from model: {expected}")
+        # note(f"actual: {actual}")
+        # note(f"{actual_deleted_branches=!r}, {actual_deleted_tags=!r}")
 
-        for branch in expected.deleted_branches:
+        event(f"commits expired: {len(actual)}")
+        event(f"tags expired: {len(actual_deleted_tags)}")
+        event(f"branches expired: {len(actual_deleted_branches)}")
+
+        # Check that expired snapshots are actually removed from ancestry
+        remaining_snapshot_ids = set()
+        for branch in branches_after:
+            remaining_snapshot_ids.add(
+                snapshot.id for snapshot in self.repo.ancestry(branch=branch)
+            )
+
+        expired_but_remaining = actual & remaining_snapshot_ids
+        assert not expired_but_remaining, (
+            f"Snapshots marked as expired but still in ancestry: {expired_but_remaining}"
+        )
+
+        assert actual_deleted_branches == expected.deleted_branches, (
+            f"deleted branches mismatch: actual={actual_deleted_branches}, expected={expected.deleted_branches}"
+        )
+        assert actual_deleted_tags == expected.deleted_tags, (
+            f"deleted tags mismatch: actual={actual_deleted_tags}, expected={expected.deleted_tags}"
+        )
+
+        for branch in actual_deleted_branches:
             self.maybe_checkout_branch(branch)
 
-    @precondition(lambda self: bool(self.commit_times))
-    @rule(
-        data=st.data(),
-        # we delete based on snapshot created_at time, not flushed_at time
-        # so for delta we just past an integer number of seconds to handle the
-        # (small) difference in tests
-        delta=st.integers(min_value=-86400, max_value=86400).filter(lambda x: x != 0),
+    @precondition(
+        lambda self: bool(self.model.commit_times) and self.model.spec_version >= 2
     )
-    def garbage_collect(self, data: st.DataObject, delta: int) -> None:
-        commit_time = data.draw(st.sampled_from(self.commit_times))
-        older_than = commit_time + datetime.timedelta(seconds=delta)
-        note(
-            f"running garbage_collect for {older_than=!r}, ({commit_time=!r}, {delta=!r})"
-        )
+    @rule(data=st.data())
+    def garbage_collect(self, data: st.DataObject) -> None:
+        older_than = self._draw_older_than(data)
+        note(f"running garbage_collect for {older_than=!r}")
+        # Snapshot created_at before Rust GC deletes files from storage
+        assert self.storage is not None
+        created_at_by_id = {
+            obj.key.removeprefix("snapshots/"): obj.created_at
+            for obj in self.storage.list_objects_metadata(prefix="snapshots")
+        }
         summary = self.repo.garbage_collect(older_than)
         note(f"actual GC result {summary=!r}")
-        expected = self.model.garbage_collect(older_than)
+        expected = self.model.garbage_collect(older_than, created_at_by_id)
         assert summary.snapshots_deleted == len(expected), (
             summary.snapshots_deleted,
             expected,
         )
+
+        event(f"snapshots garbage collected: {len(expected)}")
 
         # deleted a checked out snapshot :?
         for snapshot in expected:
@@ -573,8 +1019,8 @@ class VersionControlStateMachine(RuleBasedStateMachine):
                 self.model.checkout_branch(DEFAULT_BRANCH)
 
     def check_commit(self, commit: str) -> None:
+        # utility function, not an invariant
         assume(commit in self.model.commits)
-        note(f"Checking {commit=!r}")
         expected = self.model.commits[commit]
         actual = self.repo.lookup_snapshot(commit)
         assert actual.id == expected.id
@@ -583,6 +1029,28 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         assert actual.written_at == expected.written_at
 
     @invariant()
+    def checks(self) -> None:
+        # this method only exists to reduce verbosity of hypothesis output
+        # It cannot be called `check_invariants` because that clashes
+        # with an existing method on the superclass
+
+        # Temporarily disable read latency during invariant checks for speed
+        if isinstance(self.storage, LatencyStorage):
+            saved = self.storage.read_latency_ms
+            self.storage.read_latency_ms = 0
+
+        assert self.model.spec_version == getattr(self.repo, "spec_version", 1)
+        self.check_list_prefix_from_root()
+        self.check_tags()
+        self.check_branches()
+        self.check_ancestry()
+        self.check_ops_log()
+        self.check_repo_info()
+        self.check_file_invariants()
+
+        if isinstance(self.storage, LatencyStorage):
+            self.storage.read_latency_ms = saved
+
     def check_list_prefix_from_root(self) -> None:
         model_list = self.model.list_prefix("")
         ice_list = self.sync_store.list_prefix("")
@@ -602,7 +1070,6 @@ class VersionControlStateMachine(RuleBasedStateMachine):
                 np.testing.assert_allclose(actual_fv, expected_fv)
             assert actual == expected
 
-    @invariant()
     def check_tags(self) -> None:
         expected_tags = self.model.tags
         actual_tags = {
@@ -611,30 +1078,108 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         }
         assert actual_tags == expected_tags
 
-    @invariant()
     def check_branches(self) -> None:
         repo_branches = {k: self.repo.lookup_branch(k) for k in self.repo.list_branches()}
-        assert self.model.branches == repo_branches
+        assert self.model.branch_heads == repo_branches
 
-    @invariant()
+    def _assert_ancestry_invariants(self, ancestry: list[SnapshotInfo]) -> None:
+        ancestry_set = set([snap.id for snap in ancestry])
+        assert ancestry_set.issubset(set(self.model.commits))
+        # snapshot timestamps are monotonically decreasing in ancestry
+        assert all(a.written_at > b.written_at for a, b in itertools.pairwise(ancestry))
+        # ancestry must be unique
+        assert len(ancestry_set) == len(ancestry)
+        n = len(ancestry)
+        bucket = f"{n // 10 * 10}-{n // 10 * 10 + 9}"
+        event(f"ancestry length: {bucket}")
+
     def check_ancestry(self) -> None:
-        for branch in self.repo.list_branches():
+        for branch in self.model.branch_heads:
             ancestry = list(self.repo.ancestry(branch=branch))
-            ancestry_set = set([snap.id for snap in ancestry])
-            # snapshot timestamps are monotonically decreasing in ancestry
-            assert all(
-                a.written_at > b.written_at for a, b in itertools.pairwise(ancestry)
+            self._assert_ancestry_invariants(ancestry)
+            assert ancestry[-1].parent_id is None
+
+        for tag in self.model.tags:
+            ancestry = list(self.repo.ancestry(tag=tag))
+            self._assert_ancestry_invariants(ancestry)
+
+    def check_repo_info(self) -> None:
+        ver = self.model.spec_version
+        if ver == 1:
+            return
+        elif ver == 2:
+            expected = "2.0"
+        else:
+            raise NotImplementedError()
+
+        info = self.repo.inspect_repo_info()
+
+        assert info["spec_version"] == expected
+        assert set(info["deleted_tags"]) == self.model.deleted_tags
+        assert info["metadata"] == self.model.metadata
+
+        # the remaining fields (snapshots, branches, tags, ops_log) are checked by the other invariants
+
+    def check_file_invariants(self) -> None:
+        if Version(self.ic.__version__).major == 1:
+            return
+
+        assert self.storage is not None
+        paths = set(path_and_bytes[0] for path_and_bytes in self.storage.list_objects())
+
+        # This is complicated with repo upgrades
+        snapshots = [
+            p.removeprefix("snapshots/") for p in paths if p.startswith("snapshots/")
+        ]
+        transactions = [
+            p.removeprefix("transactions/")
+            for p in paths
+            if p.startswith("transactions/")
+        ]
+        if self.model.initial_spec_version == 1:
+            assert set(snapshots) - set({INITIAL_SNAPSHOT}) == set(transactions)
+        else:
+            assert set(snapshots) == set(transactions)
+
+        if self.model.spec_version >= 2:
+            ops = list(self.repo.ops_log())
+            backups = set(
+                f"overwritten/{update.backup_path}"
+                for update in ops
+                if update.backup_path is not None
             )
-            # ancestry must be unique
-            assert len(ancestry_set) == len(ancestry)
-            # the initial snapshot is in every possible branch
-            # this is a python-only invariant
-            assert ancestry[-1] == self.initial_snapshot
+            if len(backups) > 0:
+                event("backups exist")
+            assert backups.issubset(paths)
+
+    def check_ops_log(self) -> None:
+        if self.model.spec_version == 1:
+            return
+        actual_ops = list(self.repo.ops_log())
+
+        # ops should be strictly decreasing in both normal and migrated repos
+        assert all(
+            first.updated_at > second.updated_at
+            for (first, second) in itertools.pairwise(actual_ops)
+        )
+
+        if self.model.migrated:
+            # The model tracks RepoMigratedUpdate + all post-migration ops.
+            # This is because the synthetically reconstructed ops log upon migration
+            # will not match what the model has recorded.
+            # Compare only the post-migration entries the model knows about.
+            n = len(self.model.ops_log)
+            actual_ops = actual_ops[:n]
+
+        # non-None backup paths must be unique
+        all_backups = [op.backup_path for op in actual_ops if op.backup_path is not None]
+        assert len(all_backups) == len(set(all_backups))
+
+        assert self.model.ops_log[::-1] == actual_ops
+        assert isinstance(
+            actual_ops[-1].kind,
+            ic.UpdateType.RepoInitialized | ic.UpdateType.RepoMigrated,
+        )
 
 
-VersionControlStateMachine.TestCase.settings = settings(
-    deadline=None,
-    # stateful_step_count=100,
-    # report_multiple_bugs=False,
-)
 VersionControlTest = VersionControlStateMachine.TestCase

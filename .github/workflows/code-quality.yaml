@@ -3,6 +3,7 @@ name: Code Quality Checks
 on:
   pull_request:
     types: [opened, reopened, synchronize]
+  merge_group:
   push:
     branches:
       - main
@@ -17,9 +18,9 @@ env:
   CARGO_NET_RETRY: 10
   CI: 1
   RUST_BACKTRACE: short
-  RUSTFLAGS: "-D warnings -W unreachable-pub -W bare-trait-objects"
+  RUSTFLAGS: "-D warnings"
   RUSTUP_MAX_RETRIES: 10
-  RUST_CHANNEL: '1.91.0'
+  PIXI_VERSION: "v0.63.2"
 
 jobs:
   code-quality:
@@ -29,23 +30,25 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           ref: ${{ github.event.pull_request.head.sha }}
 
-      - name: Install Just
-        run: sudo snap install --edge --classic just
-
-      - name: Install Rust toolchain
-        run: |
-          rustup update --no-self-update ${{ env.RUST_CHANNEL }}
-          rustup component add --toolchain ${{ env.RUST_CHANNEL }} rustfmt rust-src clippy
-          rustup default ${{ env.RUST_CHANNEL }}
-
       - name: Cache Dependencies
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
         with:
-          key: ${{ env.RUST_CHANNEL }}
+          add-job-id-key: "false"
+
+      - uses: prefix-dev/setup-pixi@a0af7a228712d6121d37aba47adf55c1332c9c2e # v0.9.4
+        with:
+          pixi-version: ${{ env.PIXI_VERSION }}
+          cache: true
+          activate-environment: true
+          manifest-path: icechunk-python/pyproject.toml
+
+      - name: Prepare pixi for development
+        run: |
+          just profile=ci develop
 
       - name: Run formatting checks
         run: |
@@ -53,26 +56,16 @@ jobs:
 
       - name: Run clippy linting
         run: |
-          just lint --workspace
+          just profile=ci lint --workspace --all-targets
 
       - name: Run doc tests
         run: |
-          just doctest
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v7
-        with:
-          enable-cache: true
+          just profile=ci doctest
 
       - name: Python mypy type checking
-        shell: bash
-        working-directory: icechunk-python
         run: |
-          uv run --all-groups mypy python tests
+          just mypy
 
       - name: Run pre-commit checks (skip Rust)
-        uses: pre-commit/action@v3.0.1
-        with:
-          extra_args: --all-files
-        env:
-          SKIP: rust-pre-commit-fast,rust-pre-commit,rust-pre-commit-ci
+        run: |
+          just py-pre-commit

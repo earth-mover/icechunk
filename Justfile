@@ -1,83 +1,147 @@
+# Cargo profile: override with `just profile=ci test` (default: dev)
+profile := "dev"
+
+set positional-arguments
+
 alias fmt := format
 alias pre := pre-commit
 
-# run all tests
-test *args='':
-  cargo test --all --all-targets {{args}}
+[doc("Run all Rust tests via cargo-nextest")]
+test *args:
+  export DYLD_LIBRARY_PATH="${CONDA_PREFIX:-}/lib" && cargo nextest run --no-fail-fast --cargo-profile {{profile}} --workspace --lib --bins --tests --examples "$@"
 
-doctest *args='':
-  cargo test --doc {{args}}
+[doc("Run all Rust lib tests via cargo-nextest")]
+unit-test *args:
+  export DYLD_LIBRARY_PATH="${CONDA_PREFIX:-}/lib" && cargo nextest run --no-fail-fast --cargo-profile {{profile}} --lib "$@"
 
-# run all tests with logs enabled
-test-logs level *args='':
-  RUST_LOG=icechunk={{level}} cargo test --all --all-targets {{args}} -- --nocapture
+[doc("Run Rust doc tests only")]
+doctest *args:
+  cargo test --workspace --profile {{profile}} --doc "$@"
 
-# compile but don't run all tests
-compile-tests *args='':
-  cargo test --no-run {{args}}
+[doc("Run all Rust tests with RUST_LOG enabled (e.g. `just test-logs debug`)")]
+test-logs level *args:
+  shift && export DYLD_LIBRARY_PATH="${CONDA_PREFIX:-}/lib" && RUST_LOG=icechunk={{level}} cargo nextest run --no-fail-fast --cargo-profile {{profile}} --workspace --lib --bins --tests --examples --nocapture "$@"
 
-# build debug version
-build *args='':
-  cargo build {{args}}
+[doc("Compile tests without running them")]
+compile-tests *args:
+  export DYLD_LIBRARY_PATH="${CONDA_PREFIX:-}/lib" && cargo nextest run --no-run --cargo-profile {{profile}} --workspace --all-targets "$@"
 
-# build release version
-build-release *args='':
-  cargo build --release {{args}}
+[doc("Build the Rust workspace (debug by default, override with `just profile=ci build`)")]
+build *args:
+  cargo build --profile {{profile}} "$@"
 
-# run clippy
-lint *args='':
-  cargo clippy --all-features {{args}}
+[doc("Build the Rust workspace in release mode")]
+build-release *args:
+  cargo build --release "$@"
 
-# reformat all rust files
-format *args='':
-  cargo fmt --all {{args}}
+[doc("Prepare environment for development")]
+develop *args:
+  cd icechunk-python && uv run -m maturin_import_hook site install && maturin develop --uv --profile {{profile}} "$@"
 
-# reformat all nix files
-format-nix *args='':
+# Use --all-features for the workspace but skip icechunk's `shuttle` feature,
+# which swaps tokio for shuttle-tokio and is incompatible with other crates.
+icechunk_features := "s3,object-store-s3,object-store-gcs,object-store-azure,object-store-http,object-store-fs,redirect,logs,cli,napi-send-contract"
+
+[doc("Run clippy lints on all features")]
+lint *args:
+  cargo clippy --profile {{profile}} --all-features --exclude icechunk "$@"
+  cargo clippy --profile {{profile}} -p icechunk --features {{icechunk_features}} "$@"
+
+[doc("Format all Rust files (pass `--check` to verify only)")]
+format *args:
+  cargo fmt --all "$@"
+
+[doc("Format all Nix files with alejandra")]
+format-nix *args:
   alejandra .
 
-# run cargo deny to check dependencies
-check-deps *args='':
-  cargo deny --all-features check {{args}}
+[doc("Check dependencies for security/license issues via cargo-deny")]
+check-deps *args:
+  cargo deny --all-features check "$@"
 
+[doc("Run all Rust examples (skips limits_chunk_refs, large_manifests)")]
 run-all-examples:
-  for example in icechunk/examples/*.rs; do cargo run --example "$(basename "${example%.rs}")"; done
+  for example in icechunk/examples/*.rs; do case "$example" in *limits_chunk_refs*|*large_manifests*) continue;; esac; cargo run --profile {{profile}} --example "$(basename "${example%.rs}")"; done
 
-# fast pre-commit - format and lint only
+[doc("Fast Rust pre-commit: format + lint (~3s)")]
 pre-commit-fast:
   just format
-  just lint "--workspace"
+  just lint "--workspace" "--all-targets"
 
-# medium pre-commit - includes compilation checks (~2-3 minutes)
-pre-commit $RUSTFLAGS="-D warnings -W unreachable-pub -W bare-trait-objects":
+[doc("Medium Rust pre-commit: compile, build, format, lint, deps (~2-3min)")]
+pre-commit $RUSTFLAGS="-D warnings":
   just compile-tests "--locked"
   just build
   just format
   just lint "--workspace"
   just check-deps
 
-# full pre-commit for CI - runs all checks including tests
-pre-commit-ci $RUSTFLAGS="-D warnings -W unreachable-pub -W bare-trait-objects":
-  just compile-tests "--locked"
-  just build
+[doc("Full Rust CI pre-commit: all checks including tests and examples (~5+min)")]
+pre-commit-ci $RUSTFLAGS="-D warnings":
+  just profile=ci compile-tests "--locked"
+  just profile=ci build
   just format "--check"
-  just lint "--workspace"
-  just doctest
-  just test
-  just run-all-examples
+  just profile=ci lint "--workspace"
+  just profile=ci doctest
+  just profile=ci test
+  just profile=ci run-all-examples
   just check-deps
 
+[doc("Rust format + lint for the icechunk-python crate only")]
 pre-commit-python:
   just format "-p icechunk-python"
   just lint "-p icechunk-python"
 
+[doc("Profile benchmarks with cargo-samply (tracing spans become profiler markers)")]
+samply *args:
+  ICECHUNK_TRACE=samply cargo samply --features logs --bench main -- {{args}} --test
+
+[doc("Run benchmarks and emit a Chrome trace JSON file (open in Perfetto UI)")]
+chrome-trace *args:
+  ICECHUNK_TRACE=chrome cargo bench --features logs --bench main -- {{args}} --test
+
+[doc("Compare pytest-benchmark results")]
 bench-compare *args:
-  pytest-benchmark compare --group=group,func,param --sort=fullname --columns=median --name=short {{args}}
+  pytest-benchmark compare --group=group,func,param --sort=fullname --columns=median --name=short "$@"
 
-create-deepak-env name:
-  mamba create -y -n icechunk-{{name}} python=3.12 ipykernel ipdb
-  mamba activate icechunk-{{name}}
-  just coiled-ice-create {{name}}
+[doc("Run ruff formatter on Python code")]
+ruff-format *args:
+  ruff format "$@"
 
-coiled-ice-create version:
-  pip install coiled arraylake icechunk=='{{version}}' watermark xarray bokeh
+[doc("Run ruff linter on Python code (pass `--fix` for auto-fix)")]
+ruff *args:
+  ruff check --show-fixes icechunk-python/ "$@"
+
+[doc("Run mypy type checking on Python code")]
+mypy *args:
+  cd icechunk-python && mypy python tests "$@"
+
+[doc("Run mypy stub checking on type stubs")]
+stubtest *args:
+  cd icechunk-python && python -m mypy.stubtest --ignore-disjoint-bases icechunk._icechunk_python --allowlist stubtest_allowlist.txt "$@"
+
+[doc("Run all Python pre-commit hooks (ruff, formatting, codespell, etc.)")]
+py-pre-commit $SKIP="rust-pre-commit-fast,rust-pre-commit,rust-pre-commit-ci" *args:
+  prek run --all-files
+
+[doc("Run Python tests via pytest")]
+pytest *args:
+  cd icechunk-python && pytest "$@"
+
+[doc("Start MkDocs dev server with live reload")]
+docs-serve *args:
+  mkdocs serve -f icechunk-python/docs/mkdocs.yml --livereload "$@"
+
+[doc("Build MkDocs static site")]
+docs-build *args:
+  mkdocs build -f icechunk-python/docs/mkdocs.yml "$@"
+
+[doc("Run all Python and Rust checks")]
+all-checks:
+  just pytest
+  just py-pre-commit
+  just mypy
+  just ruff
+  just ruff-format
+  just pre-commit-python
+  just pre-commit-ci

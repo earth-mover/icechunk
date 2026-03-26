@@ -2,6 +2,7 @@ name: Windows tests
 on:
   pull_request:
     types: [opened, reopened, synchronize, labeled]
+  merge_group:
   push:
     branches:
       - main
@@ -12,7 +13,7 @@ env:
   CARGO_NET_RETRY: 10
   CI: 1
   RUST_BACKTRACE: short
-  RUSTFLAGS: "-D warnings -W unreachable-pub -W bare-trait-objects"
+  RUSTFLAGS: "-D warnings"
   RUSTUP_MAX_RETRIES: 10
 
 jobs:
@@ -29,12 +30,13 @@ jobs:
       #pull-requests: read
     env:
       #CC: deny_c
-      RUST_CHANNEL: '1.91.0'
+      RUST_CHANNEL: '1.94.0'
+      CARGO_DENY_VERSION: '0.19.0'
 
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           ref: ${{ github.event.pull_request.head.sha }}
 
@@ -45,11 +47,11 @@ jobs:
           rustup default ${{ env.RUST_CHANNEL }}
 
       - name: Cache Dependencies
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
         with:
           # workspaces: "rust -> target"
           key: windows-${{ env.RUST_CHANNEL }}
 
       - name: Check
         run: |
-          cargo test --lib
+          cargo test --lib --profile ci

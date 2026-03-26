@@ -1,10 +1,26 @@
 [graph]
 all-features = true
+# shuttle crates are only used for concurrency testing and lack license metadata.
+exclude = [
+  "shuttle",
+  "shuttle-tokio",
+  "shuttle-tokio-impl",
+  "shuttle-tokio-impl-inner",
+  "shuttle-tokio-macros-impl",
+]
 
 [advisories]
 version = 2
 # only fail for direct unmaintained dependencies, this can only be used with rustc 1.85
 unmaintained = "workspace"
+ignore = [
+  # generator crate: transitive dev-dependency via noxious-client, only used in tests
+  "RUSTSEC-2020-0151",
+  # rustls-webpki CRL matching bug: transitive dep via aws-smithy-http-client -> rustls 0.21.
+  # No newer aws-smithy-http-client available that uses rustls 0.23+. Low impact per advisory:
+  # requires compromised CA, and default UnknownStatusPolicy::Deny fails safe.
+  "RUSTSEC-2026-0049",
+]
 
 [licenses]
 # List of explicitly allowed licenses

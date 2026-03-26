@@ -74,8 +74,7 @@ impl PyConflictType {
             10 => Ok(PyConflictType::DeleteOfUpdatedGroup),
             11 => Ok(PyConflictType::MoveOperationCannotBeRebased),
             _ => Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                "Invalid ConflictType value: {}",
-                value
+                "Invalid ConflictType value: {value}"
             ))),
         }
     }
@@ -89,7 +88,7 @@ impl PyConflictType {
     }
 
     fn __reduce__(&self, py: Python<'_>) -> PyResult<(Py<PyAny>, Py<PyAny>)> {
-        use pyo3::IntoPyObjectExt;
+        use pyo3::IntoPyObjectExt as _;
         let cls = py.get_type::<PyConflictType>().into_py_any(py)?;
         let value: i32 = match self {
             PyConflictType::NewNodeConflictsWithExistingNode => 1,
@@ -143,7 +142,7 @@ impl PyConflict {
     }
 
     fn __reduce__(&self, py: Python<'_>) -> PyResult<(Py<PyAny>, Py<PyAny>)> {
-        use pyo3::IntoPyObjectExt;
+        use pyo3::IntoPyObjectExt as _;
         let cls = py.get_type::<PyConflict>().into_py_any(py)?;
         let args = (
             self.conflict_type.clone(),
@@ -248,6 +247,12 @@ impl_pickle!(PyVersionSelection);
 #[pyclass(subclass, name = "ConflictSolver")]
 #[derive(Clone)]
 pub struct PyConflictSolver(Arc<dyn ConflictSolver + Send + Sync>);
+
+impl std::fmt::Debug for PyConflictSolver {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PyConflictSolver").finish_non_exhaustive()
+    }
+}
 
 impl<'a> AsRef<dyn ConflictSolver + 'a + Send + Sync> for PyConflictSolver {
     fn as_ref(&self) -> &(dyn ConflictSolver + 'a + Send + Sync) {

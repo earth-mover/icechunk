@@ -1,0 +1,43 @@
+[package]
+name = "icechunk-s3"
+version = "2.0.0-alpha.5"
+description = "Native AWS S3 storage backend for icechunk"
+readme = "../README.md"
+repository = "https://github.com/earth-mover/icechunk"
+homepage = "https://icechunk.io"
+license = "Apache-2.0"
+keywords = ["zarr", "xarray", "database"]
+categories = ["database", "science", "science::geo"]
+authors = ["Earthmover PBC"]
+edition.workspace = true
+publish = true
+rust-version.workspace = true
+
+[dependencies]
+icechunk-storage.workspace = true
+icechunk-types.workspace = true
+
+async-trait.workspace = true
+aws-config.workspace = true
+aws-credential-types.workspace = true
+aws-sdk-s3.workspace = true
+aws-smithy-runtime.workspace = true
+aws-smithy-types-convert.workspace = true
+bytes.workspace = true
+chrono.workspace = true
+futures.workspace = true
+serde.workspace = true
+tokio = { workspace = true, features = ["sync"] }
+tokio-util.workspace = true
+tracing.workspace = true
+typed-path.workspace = true
+typetag.workspace = true
+
+[dev-dependencies]
+icechunk-macros.workspace = true
+
+serde_json.workspace = true
+test-log.workspace = true
+
+[lints]
+workspace = true

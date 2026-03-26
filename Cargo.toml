@@ -1,15 +1,141 @@
 [workspace]
-members = ["icechunk", "icechunk-python", "icechunk-macros"]
+members = [
+  "icechunk",
+  "icechunk-types",
+  "icechunk-format",
+  "icechunk-storage",
+  "icechunk-s3",
+  "icechunk-arrow-object-store",
+  "icechunk-python",
+  "icechunk-macros",
+]
 default-members = ["icechunk"]
 resolver = "2"
 
+[workspace.package]
+rust-version = "1.94.0"
+edition = "2024"
+
+[workspace.dependencies]
+# Internal crates
+icechunk = { path = "icechunk", version = "2.0.0-alpha.5" }
+icechunk-arrow-object-store = { path = "icechunk-arrow-object-store", version = "2.0.0-alpha.5", default-features = false }
+icechunk-format = { path = "icechunk-format", version = "2.0.0-alpha.5" }
+icechunk-macros = { path = "icechunk-macros", version = "2.0.0-alpha.5" }
+icechunk-s3 = { path = "icechunk-s3", version = "2.0.0-alpha.5" }
+icechunk-storage = { path = "icechunk-storage", version = "2.0.0-alpha.5" }
+icechunk-types = { path = "icechunk-types", version = "2.0.0-alpha.5" }
+
+# External dependencies
+anyhow = "1.0.102"
+assert_fs = "1.1.3"
+async-compression = { version = "0.4.41", features = ["tokio", "zstd"] }
+async-recursion = "1.1.1"
+async-stream = "0.3.6"
+async-trait = "0.1.89"
+aws-config = "1.8.15"
+aws-credential-types = "1.2.14"
+aws-sdk-s3 = "1.127.0"
+aws-smithy-runtime = "1.10.3"
+aws-smithy-types-convert = { version = "0.60.14", features = ["convert-chrono", "convert-streams"] }
+backon = "1.6.0"
+base32 = "0.5.1"
+bytes = { version = "1.11.1", features = ["serde"] }
+chrono = { version = "0.4.44", features = ["serde"] }
+clap = { version = "4.6", features = ["derive"] }
+criterion = { version = "0.8.2", features = ["async_tokio"] }
+dialoguer = "0.12.0"
+dirs = "6.0.0"
+flatbuffers = "25.12.19"
+flexbuffers = "25.12.19"
+fs_extra = "1.3.0"
+futures = "0.3.32"
+itertools = "0.14.0"
+miette = { version = "7.6.0", features = ["fancy"] }
+noxious-client = "1.0"
+object_store = { version = "0.13.1", default-features = false }
+port_check = "0.3.0"
+pretty_assertions = "1.4.1"
+proptest = "1.10.0"
+proptest-state-machine = "0.7.0"
+pyo3 = { version = "0.27.2", features = ["chrono", "experimental-async", "multiple-pymethods"] }
+pyo3-async-runtimes = { version = "0.27", features = ["tokio-runtime"] }
+pyo3-bytes = "0.5.0"
+quick_cache = "0.6.21"
+quote = "1.0"
+rand = "0.10.0"
+regex = "1.12.3"
+reqwest = "0.13"
+rmp-serde = "1.3.1"
+rstest = "0.26.1"
+rstest_reuse = "0.7.0"
+serde = { version = "1.0.228", features = ["derive", "rc"] }
+serde_bytes = "0.11.19"
+serde_json = "1.0.149"
+serde_with = "3.18.0"
+serde_yaml_ng = "0.10.0"
+strsim = "0.11"
+syn = { version = "2.0", features = ["full"] }
+tempfile = "3.27.0"
+test-log = { version = "0.2.19", default-features = false, features = ["trace", "color", "unstable"] }
+test-strategy = "0.4.5"
+thiserror = "2.0.18"
+tokio = "1.50.0"
+tokio-util = { version = "0.7.18", features = ["io-util"] }
+tracing = "0.1.44"
+tracing-chrome = "0.7"
+tracing-error = "0.2.1"
+tracing-samply = "0.1.5"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+typed-path = "0.12.3"
+typetag = "0.2.21"
+url = { version = "2.5.8", features = ["serde"] }
+urlencoding = "2.1.3"
+uuid = { version = "1.22", features = ["v4"] }
+warp = { version = "0.4.2", features = ["server"] }
+zstd = "0.13.3"
+
+[workspace.lints.rust]
+# Safety
+unsafe_code = "warn"
+# Correctness
+bare_trait_objects = "warn"
+unreachable_pub = "warn"
+# Clarity
+elided_lifetimes_in_paths = "warn"
+missing_debug_implementations = "warn"
+trivial_numeric_casts = "warn"
+unused_qualifications = "warn"
+
 [workspace.lints.clippy]
+# Safety & correctness
+exit = "warn"
 expect_used = "warn"
-unwrap_used = "warn"
 panic = "warn"
 todo = "warn"
+undocumented_unsafe_blocks = "warn"
 unimplemented = "warn"
+unwrap_used = "warn"
+# Clarity & style
+allow_attributes = "warn"
+clone_on_ref_ptr = "warn"
 dbg_macro = "warn"
+doc_markdown = "warn"
+implicit_clone = "warn"
+manual_let_else = "warn"
+semicolon_if_nothing_returned = "warn"
+uninlined_format_args = "warn"
+unused_result_ok = "warn"
+unused_trait_names = "warn"
+# Performance
+inefficient_to_string = "warn"
+large_types_passed_by_value = "warn"
+needless_pass_by_value = "warn"
+# Cargo
+cargo_common_metadata = "warn"
+create_dir = "warn"
+wildcard_dependencies = "warn"
+
 
 [workspace.metadata.release]
 allow-branch = ["main", "release-*", "support/v*"]
@@ -17,7 +143,67 @@ sign-commit = true
 sign-tag = true
 push = false
 
+# Recommended configs for maximizing runtime speed
+# https://nnethercote.github.io/perf-book/build-configuration.html#maximizing-runtime-speed
+# This impacts compile time (since it becomes serial instead of parallel)
+# but can lead to 20-30% faster runtime
+[profile.release]
+lto = "thin"
+codegen-units = 1
 
+# Some settings for faster compiles when benchmarking
+# inherits from "release" by default
+# keep this in sync with `perf` below
+[profile.bench]
+opt-level = 2
+lto = "off"
+codegen-units = 8
+debug = 1
+
+# Optimized profile for benchmarking with maturin/PyO3 compatibility
+# maturin doesn't work well with --profile bench for ... reasons.
+# keep this in sync with `bench` above.
 [profile.perf]
 inherits = "release"
+opt-level = 2
+lto = "off"
+codegen-units = 8
 debug = 1
+
+# Enable a small amount of optimization in debug mode
+[profile.dev]
+opt-level = 1
+debug = "line-tables-only" # allow file:line info in backtraces
+
+# Enable higher optimizations for dependencies, but not our code
+# Setting it to "2" because gets most optimizations, without
+# the compile time impact of "3"
+[profile.dev.package."*"]
+opt-level = 2
+
+# Full debug profile for use with lldb/gdb
+[profile.dbg]
+inherits = "dev"
+opt-level = 0
+debug = true
+
+[profile.dbg.package."*"]
+opt-level = 0
+debug = true
+
+# The CI profile optimizes for reduced compile times, since they
+# dominate runtime in github actions, and cache between runs
+# doesn't always work well.
+[profile.ci]
+inherits = "dev"
+opt-level = 0
+debug = 0
+
+# Dependencies tend to cache better between runs,
+# enable a small bit of optimization in this case.
+[profile.ci.package."*"]
+opt-level = 1
+
+# For convenience with cargo-samply
+[profile.samply]
+inherits = "bench"

@@ -1,32 +1,53 @@
+#![cfg(not(feature = "shuttle"))]
 #![allow(clippy::unwrap_used)]
 use chrono::Utc;
 use icechunk_macros::tokio_test;
 use pretty_assertions::assert_eq;
+use rstest::rstest;
+use rstest_reuse::{self, *};
 use std::{collections::HashMap, ops::Range, sync::Arc};
 
 use bytes::Bytes;
 use icechunk::{
     Repository, RepositoryConfig, Storage,
-    format::{ByteRange, ChunkIndices, Path, snapshot::ArrayShape},
+    format::{
+        ByteRange, ChunkIndices, Path, format_constants::SpecVersionBin,
+        snapshot::ArrayShape,
+    },
     repository::VersionInfo,
     session::{Session, get_chunk},
 };
 use tokio::task::JoinSet;
 
-mod common;
+use crate::common;
+use crate::common::Permission;
+
+#[template]
+#[rstest]
+#[case::v1(SpecVersionBin::V1)]
+#[case::v2(SpecVersionBin::V2)]
+fn spec_version_cases(#[case] spec_version: SpecVersionBin) {}
 
 const SIZE: usize = 10;
 
 async fn mk_repo(
     storage: Arc<dyn Storage + Send + Sync>,
     init: bool,
+    spec_version: SpecVersionBin,
 ) -> Result<Repository, Box<dyn std::error::Error>> {
     if init {
         let config = RepositoryConfig {
             inline_chunk_threshold_bytes: Some(0),
             ..RepositoryConfig::default()
         };
-        Ok(Repository::create(Some(config), storage, HashMap::new(), None).await?)
+        Ok(Repository::create(
+            Some(config),
+            storage,
+            HashMap::new(),
+            Some(spec_version),
+            true,
+        )
+        .await?)
     } else {
         Ok(Repository::open(None, storage, HashMap::new()).await?)
     }
@@ -84,35 +105,47 @@ async fn verify(ds: Session) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[tokio_test]
-async fn test_distributed_writes_in_minio() -> Result<(), Box<dyn std::error::Error>> {
-    do_test_distributed_writes(|prefix| async {
-        common::make_minio_integration_storage(prefix)
+#[apply(spec_version_cases)]
+async fn test_distributed_writes_in_minio(
+    #[case] spec_version: SpecVersionBin,
+) -> Result<(), Box<dyn std::error::Error>> {
+    do_test_distributed_writes(spec_version, |prefix| async {
+        common::make_minio_integration_storage(prefix, &Permission::Modify)
     })
     .await
 }
 
 #[tokio_test]
+#[apply(spec_version_cases)]
 #[ignore = "needs credentials from env"]
-async fn test_distributed_writes_in_aws() -> Result<(), Box<dyn std::error::Error>> {
-    do_test_distributed_writes(|prefix| async {
+async fn test_distributed_writes_in_aws(
+    #[case] spec_version: SpecVersionBin,
+) -> Result<(), Box<dyn std::error::Error>> {
+    do_test_distributed_writes(spec_version, |prefix| async {
         common::make_aws_integration_storage(prefix)
     })
     .await
 }
 
 #[tokio_test]
+#[apply(spec_version_cases)]
 #[ignore = "needs credentials from env"]
-async fn test_distributed_writes_in_r2() -> Result<(), Box<dyn std::error::Error>> {
-    do_test_distributed_writes(|prefix| async {
+async fn test_distributed_writes_in_r2(
+    #[case] spec_version: SpecVersionBin,
+) -> Result<(), Box<dyn std::error::Error>> {
+    do_test_distributed_writes(spec_version, |prefix| async {
         common::make_r2_integration_storage(prefix)
     })
     .await
 }
 
 #[tokio_test]
+#[apply(spec_version_cases)]
 #[ignore = "needs credentials from env"]
-async fn test_distributed_writes_in_tigris() -> Result<(), Box<dyn std::error::Error>> {
-    do_test_distributed_writes(|prefix| async {
+async fn test_distributed_writes_in_tigris(
+    #[case] spec_version: SpecVersionBin,
+) -> Result<(), Box<dyn std::error::Error>> {
+    do_test_distributed_writes(spec_version, |prefix| async {
         common::make_tigris_integration_storage(prefix)
     })
     .await
@@ -127,6 +160,7 @@ async fn test_distributed_writes_in_tigris() -> Result<(), Box<dyn std::error::E
 /// - When done, we do a distributed commit using a random repo
 /// - The changes from the other repos are serialized via [`ChangeSet::export_to_bytes`]
 async fn do_test_distributed_writes<F, Fut>(
+    spec_version: SpecVersionBin,
     mk_storage: F,
 ) -> Result<(), Box<dyn std::error::Error>>
 where
@@ -135,28 +169,34 @@ where
         Output = Result<Arc<dyn Storage + Send + Sync>, Box<dyn std::error::Error>>,
     >,
 {
-    let prefix = format!("test_distributed_writes_{}", Utc::now().timestamp_millis());
+    let prefix = format!(
+        "test_distributed_writes_{:?}_{}",
+        spec_version,
+        Utc::now().timestamp_millis()
+    );
     let storage1 = mk_storage(prefix.clone()).await?;
     let storage2 = mk_storage(prefix.clone()).await?;
     let storage3 = mk_storage(prefix.clone()).await?;
     let storage4 = mk_storage(prefix.clone()).await?;
-    let repo1 = mk_repo(storage1, true).await?;
+    let repo1 = mk_repo(storage1, true, spec_version).await?;
 
     let mut ds1 = repo1.writable_session("main").await?;
 
-    let shape = ArrayShape::new(vec![(SIZE as u64, 1), (SIZE as u64, 1)]).unwrap();
+    let shape =
+        ArrayShape::new(vec![(SIZE as u64, SIZE as u32), (SIZE as u64, SIZE as u32)])
+            .unwrap();
     let user_data = Bytes::new();
 
     let new_array_path: Path = "/array".try_into().unwrap();
     ds1.add_array(new_array_path.clone(), shape, None, user_data).await?;
-    ds1.commit("create array", None).await?;
+    ds1.commit("create array").max_concurrent_nodes(8).execute().await?;
 
-    let repo2 = mk_repo(storage2, false).await?;
-    let repo3 = mk_repo(storage3, false).await?;
-    let repo4 = mk_repo(storage4, false).await?;
+    let repo2 = mk_repo(storage2, false, spec_version).await?;
+    let repo3 = mk_repo(storage3, false, spec_version).await?;
+    let repo4 = mk_repo(storage4, false, spec_version).await?;
 
     let mut set = JoinSet::new();
-    #[allow(clippy::erasing_op, clippy::identity_op)]
+    #[expect(clippy::erasing_op, clippy::identity_op)]
     {
         let size2 = SIZE as u32;
         let size24 = size2 / 4;
@@ -177,7 +217,7 @@ where
     assert!(write_results.iter().all(|r| {
         r.as_ref()
             .inspect_err(
-                #[allow(clippy::dbg_macro)]
+                #[expect(clippy::dbg_macro)]
                 |e| {
                     dbg!(e);
                 },
@@ -196,7 +236,7 @@ where
     let raw_sessions: Vec<Vec<u8>> =
         vec![ds2.as_bytes().unwrap(), ds3.as_bytes().unwrap(), ds4.as_bytes().unwrap()];
     let sessions =
-        raw_sessions.into_iter().map(|bytes| Session::from_bytes(bytes).unwrap());
+        raw_sessions.into_iter().map(|bytes| Session::from_bytes(&bytes).unwrap());
 
     // Merge the changesets into the first repo
     for session in sessions {
@@ -205,14 +245,15 @@ where
 
     // Distributed commit now, using arbitrarily one of the repos as base and the others as extra
     // changesets
-    let _new_snapshot = ds1.commit("distributed commit", None).await?;
+    let _new_snapshot =
+        ds1.commit("distributed commit").max_concurrent_nodes(8).execute().await?;
 
     // We check we can read all chunks correctly
     verify(ds1).await?;
 
     // To be safe, we create a new instance of the storage and repo, and verify again
     let storage = mk_storage(prefix).await?;
-    let repo = mk_repo(storage, false).await?;
+    let repo = mk_repo(storage, false, spec_version).await?;
     let ds =
         repo.readonly_session(&VersionInfo::BranchTipRef("main".to_string())).await?;
     verify(ds).await?;

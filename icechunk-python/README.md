@@ -9,8 +9,17 @@ Python library for Icechunk Zarr Stores
 The recommended way to set up for development is with [uv](https://docs.astral.sh/uv/):
 
 ```bash
-# Install all development dependencies (test, mypy, ruff, maturin)
+# Bring up local dev object stores used by certain tests, otherwise you will get some failures
+docker compose up -d
+
+# Install all development dependencies (includes test dependencies, mypy, ruff, maturin)
 uv sync
+
+# Configure maturin-import-hook for fast incremental Rust compilation
+uv run -m maturin_import_hook site install
+
+# Build the Rust extension
+uv run maturin develop --uv
 
 # Activate the virtual environment
 source .venv/bin/activate
@@ -25,7 +34,7 @@ uv run mypy python tests
 uv run ruff check python
 ```
 
-uv automatically rebuilds the Rust extension as needed when you run commands with `uv run`.
+The `maturin-import-hook` automatically rebuilds the Rust extension when changes are detected during import, so you don't need to manually re-run `maturin develop` after Rust code changes.
 
 ### Alternative: Manual Setup with pip
 

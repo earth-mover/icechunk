@@ -1,7 +1,7 @@
 use std::{collections::HashMap, ops::Range, sync::Arc, time::Duration};
 
 use bytes::Bytes;
-use futures::StreamExt;
+use futures::StreamExt as _;
 use icechunk::{
     Repository, RepositoryConfig, Store, format::ByteRange,
     storage::new_in_memory_storage,
@@ -15,7 +15,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         inline_chunk_threshold_bytes: Some(128),
         ..Default::default()
     };
-    let repo = Repository::create(Some(config), storage, HashMap::new(), None).await?;
+    let repo =
+        Repository::create(Some(config), storage, HashMap::new(), None, true).await?;
     let ds = Arc::new(RwLock::new(repo.writable_session("main").await?));
     let store = Store::from_session(Arc::clone(&ds)).await;
 
@@ -54,7 +55,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     async fn writer(name: &str, range: Range<u64>, store: &Store) {
         println!("Starting writer {name}.");
         for i in range {
-            #[allow(clippy::dbg_macro)]
+            #[expect(clippy::dbg_macro)]
             if let Err(err) = store
                 .set(
                     format!("array/c/{i}").as_str(),

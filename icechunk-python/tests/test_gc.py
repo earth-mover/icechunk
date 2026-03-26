@@ -6,11 +6,12 @@ import pytest
 
 import icechunk as ic
 import zarr
-from tests.conftest import get_minio_client
+from tests.conftest import Permission, get_minio_client
 
 
 def mk_repo(spec_version: int | None) -> tuple[str, ic.Repository]:
     prefix = "test-repo__" + str(time.time())
+    access_key_id, secret_access_key = Permission.MODIFY.keys()
     repo = ic.Repository.create(
         storage=ic.s3_storage(
             endpoint_url="http://localhost:9000",
@@ -19,8 +20,8 @@ def mk_repo(spec_version: int | None) -> tuple[str, ic.Repository]:
             region="us-east-1",
             bucket="testbucket",
             prefix=prefix,
-            access_key_id="minio123",
-            secret_access_key="minio123",
+            access_key_id=access_key_id,
+            secret_access_key=secret_access_key,
         ),
         config=ic.RepositoryConfig(inline_chunk_threshold_bytes=0),
         spec_version=spec_version,
@@ -92,14 +93,15 @@ async def test_expire_and_gc(use_async: bool, any_spec_version: int | None) -> N
         )
         == 21
     )
-    # 22 commits total
+    # V2 repos have a transaction log for the initial snapshot
+    expected_tx_logs = 23 if any_spec_version != 1 else 22
     assert (
         len(
             client.list_objects(Bucket="testbucket", Prefix=f"{prefix}/transactions")[
                 "Contents"
             ]
         )
-        == 22
+        == expected_tx_logs
     )
 
     if use_async:
@@ -194,13 +196,15 @@ async def test_expire_and_gc(use_async: bool, any_spec_version: int | None) -> N
         )
         == 1
     )
+    # V2 repos keep the initial snapshot's transaction log
+    expected_remaining_tx_logs = 2 if any_spec_version != 1 else 1
     assert (
         len(
             client.list_objects(Bucket="testbucket", Prefix=f"{prefix}/transactions")[
                 "Contents"
             ]
         )
-        == 1
+        == expected_remaining_tx_logs
     )
 
     # we can still read the array

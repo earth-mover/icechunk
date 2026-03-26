@@ -1,48 +1,63 @@
+//! The entry point for Icechunk operations.
+//!
+//! A [`Repository`] is a handle to a versioned data store. It holds shared resources
+//! (storage, configuration) and provides methods to create [`Session`]s and
+//! manage branches, tags, and snapshot history.
+//!
+//! Key types:
+//! - [`Repository`] - Handle to a versioned data store
+//! - [`VersionInfo`] - Specifies which version to access (snapshot ID, branch, tag, or timestamp)
+
 use async_stream::try_stream;
 use std::{
     collections::{BTreeSet, HashMap, HashSet},
     future::ready,
-    ops::RangeBounds,
+    ops::RangeBounds as _,
     sync::Arc,
 };
 
 use chrono::{DateTime, Utc};
-use err_into::ErrorInto as _;
 use futures::{
-    Stream, StreamExt, TryStreamExt,
+    Stream, StreamExt as _, TryStreamExt as _,
     stream::{self, FuturesOrdered, FuturesUnordered},
 };
-use itertools::Itertools;
+use itertools::Itertools as _;
 use regex::bytes::Regex;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tokio::{sync::AcquireError, task::JoinError, try_join};
-use tracing::{Instrument, debug, error, instrument, trace};
+use tokio::{join, sync::AcquireError, task::JoinError, try_join};
+use tracing::{Instrument as _, debug, error, instrument, trace};
 
 use crate::{
-    Storage, StorageError,
+    Storage,
     asset_manager::AssetManager,
+    change_set::{ChangeSet, transaction_log_from_change_set},
     config::{
         Credentials, DEFAULT_MAX_CONCURRENT_REQUESTS, ManifestPreloadCondition,
         RepositoryConfig,
     },
+    diff::{Diff, DiffBuilder},
     error::ICError,
+    feature_flags::{
+        CREATE_TAG_FLAG, DELETE_TAG_FLAG, FEATURE_FLAGS, FeatureFlag, MOVE_NODE_FLAG,
+        find_feature_flag_id, raise_if_feature_flag_disabled,
+    },
     format::{
         IcechunkFormatError, IcechunkFormatErrorKind, ManifestId, NodeId, Path,
         SnapshotId,
         format_constants::SpecVersionBin,
-        repo_info::{RepoInfo, UpdateType},
+        repo_info::{RepoAvailability, RepoInfo, RepoStatus, UpdateType},
         snapshot::{
             ManifestFileInfo, NodeData, NodeType, Snapshot, SnapshotInfo,
             SnapshotProperties,
         },
-        transaction_log::{Diff, DiffBuilder},
     },
     refs::{self, Ref, RefError, RefErrorKind},
-    session::{Session, SessionErrorKind, SessionResult},
+    session::{Session, SessionError, SessionErrorKind, SessionResult},
     storage::{self, StorageErrorKind},
     virtual_chunks::VirtualChunkResolver,
 };
+use icechunk_types::{ICResultExt as _, error::ICResultCtxExt as _};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
@@ -79,11 +94,11 @@ impl TryFrom<&VersionInfo> for RefVersionInfo {
 #[non_exhaustive]
 pub enum RepositoryErrorKind {
     #[error(transparent)]
-    StorageError(StorageErrorKind),
+    StorageError(#[from] StorageErrorKind),
     #[error(transparent)]
-    FormatError(IcechunkFormatErrorKind),
+    FormatError(#[from] IcechunkFormatErrorKind),
     #[error(transparent)]
-    Ref(RefErrorKind),
+    Ref(#[from] RefErrorKind),
     #[error("snapshot not found: `{id}`")]
     SnapshotNotFound { id: SnapshotId },
     #[error("branch {branch} does not have a snapshots before or at {at}")]
@@ -122,6 +137,8 @@ pub enum RepositoryErrorKind {
     CannotDeleteMain,
     #[error("the storage used by this Icechunk repository is read-only: {0}")]
     ReadonlyStorage(String),
+    #[error("the repository status is read-only: {0}")]
+    ReadonlyRepository(String),
     #[error(
         "the first commit in the repository cannot be an amend, create a new commit instead"
     )]
@@ -134,43 +151,21 @@ pub enum RepositoryErrorKind {
         "repository version error, this operation requires a repository that is at least version {minimum_spec_version}, please upgrade your on-disk format before executing this operation"
     )]
     BadRepoVersion { minimum_spec_version: SpecVersionBin },
+    #[error("concurrency error, lock could not be acquired")]
+    PoisonLock,
     #[error("unexpected error: {0}")]
     Other(String),
 }
 
 pub type RepositoryError = ICError<RepositoryErrorKind>;
 
-// it would be great to define this impl in error.rs, but it conflicts with the blanket
-// `impl From<T> for T`
-impl<E> From<E> for RepositoryError
-where
-    E: Into<RepositoryErrorKind>,
-{
-    fn from(value: E) -> Self {
-        Self::new(value.into())
-    }
-}
-
-impl From<StorageError> for RepositoryError {
-    fn from(value: StorageError) -> Self {
-        Self::with_context(RepositoryErrorKind::StorageError(value.kind), value.context)
-    }
-}
-
-impl From<RefError> for RepositoryError {
-    fn from(value: RefError) -> Self {
-        Self::with_context(RepositoryErrorKind::Ref(value.kind), value.context)
-    }
-}
-
-impl From<IcechunkFormatError> for RepositoryError {
-    fn from(value: IcechunkFormatError) -> Self {
-        Self::with_context(RepositoryErrorKind::FormatError(value.kind), value.context)
-    }
-}
-
 pub type RepositoryResult<T> = Result<T, RepositoryError>;
 
+/// Handle to a versioned Icechunk data store.
+///
+/// Provides methods to create [`Session`]s and manage branches, tags, and history.
+///
+/// [`Session`]: crate::session::Session
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Repository {
     spec_version: SpecVersionBin,
@@ -191,26 +186,26 @@ impl Repository {
         storage: Arc<dyn Storage + Send + Sync>,
         authorize_virtual_chunk_access: HashMap<String, Option<Credentials>>,
         spec_version: Option<SpecVersionBin>,
+        check_clean_root: bool,
     ) -> RepositoryResult<Self> {
         debug!("Creating Repository");
-        if !storage.can_write().await? {
-            return Err(RepositoryErrorKind::ReadonlyStorage(
-                "Cannot create repository".to_string(),
-            )
-            .into());
-        }
+        raise_if_cant_write(storage.as_ref(), "Cannot create repository").await?;
 
         let has_overriden_config = match config {
             Some(ref config) => config != &RepositoryConfig::default(),
             None => false,
         };
-        // Merge the given config with the defaults
-        let config =
-            config.map(|c| RepositoryConfig::default().merge(c)).unwrap_or_default();
-        let storage_settings = match config.storage() {
-            Some(s) => s.clone(),
-            None => storage.default_settings().await?,
+        // Merge two layers of config (In order of preference):
+        //   - User-provided config (passed to create())
+        //   - Backend storage defaults (e.g. S3 retry/concurrency settings)
+        let storage_defaults = storage.default_settings().await.inject()?;
+        let config = config.unwrap_or_default();
+        let storage_settings = match config.storage.clone() {
+            Some(user_storage) => storage_defaults.merge(user_storage),
+            None => storage_defaults,
         };
+        let config =
+            RepositoryConfig { storage: Some(storage_settings.clone()), ..config };
 
         let spec_version = spec_version.unwrap_or_default();
 
@@ -223,23 +218,52 @@ impl Repository {
             config.max_concurrent_requests(),
         ));
 
-        if !storage.root_is_clean().await? {
-            return Err(RepositoryErrorKind::ParentDirectoryNotClean.into());
-        }
+        if check_clean_root && !storage.root_is_clean(&storage_settings).await.inject()? {
+            return Err(RepositoryError::capture(
+                RepositoryErrorKind::ParentDirectoryNotClean,
+            ));
+        };
 
         let asset_manager_c = Arc::clone(&asset_manager);
         let storage_c = Arc::clone(&storage);
         let settings_ref = &storage_settings;
+        let num_updates = config.num_updates_per_repo_info_file();
+        let config_ref = &config;
         let create_repo_info = async move {
             // On create we need to create the default branch
-            let new_snapshot = Arc::new(Snapshot::initial(spec_version)?);
-            asset_manager_c.write_snapshot(Arc::clone(&new_snapshot)).await?;
+            let new_snapshot = Arc::new(Snapshot::initial(spec_version).inject()?);
+            let write_snap = asset_manager_c.write_snapshot(Arc::clone(&new_snapshot));
 
-            if spec_version >= SpecVersionBin::V2dot0 {
-                let snap_info = new_snapshot.as_ref().try_into()?;
-                let repo_info = Arc::new(RepoInfo::initial(spec_version, snap_info));
-                let _ = asset_manager_c.create_repo_info(Arc::clone(&repo_info)).await?;
+            if spec_version >= SpecVersionBin::V2 {
+                let empty_tx_log = transaction_log_from_change_set(
+                    &Snapshot::INITIAL_SNAPSHOT_ID,
+                    &ChangeSet::for_edits(),
+                );
+                let snap_info = new_snapshot.as_ref().try_into().inject()?;
+                let config_to_store =
+                    if has_overriden_config { Some(config_ref) } else { None };
+                let repo_info = Arc::new(RepoInfo::initial(
+                    spec_version,
+                    snap_info,
+                    num_updates,
+                    config_to_store,
+                    None,
+                ));
+
+                // Write snapshot and transaction log concurrently first
+                let write_tx = asset_manager_c.write_transaction_log(
+                    Snapshot::INITIAL_SNAPSHOT_ID,
+                    Arc::new(empty_tx_log),
+                );
+                try_join!(write_snap, write_tx)?;
+
+                // Only write the repo info after both succeed, since the repo
+                // object is the entry point that makes the repository valid.
+                // Writing it last ensures we never create a repo pointing to
+                // missing snapshot/tx data.
+                asset_manager_c.create_repo_info(Arc::clone(&repo_info)).await?;
             } else {
+                write_snap.await?;
                 refs::update_branch(
                     storage_c.as_ref(),
                     settings_ref,
@@ -247,33 +271,44 @@ impl Repository {
                     new_snapshot.id().clone(),
                     None,
                 )
-                .await?;
+                .await
+                .inject()?;
             }
 
             Ok::<_, RepositoryError>(())
         }
         .in_current_span();
 
-        let storage_c = Arc::clone(&storage);
-        let config_c = config.clone();
-        let update_config = async move {
-            if has_overriden_config {
-                let version = Repository::store_config(
-                    storage_c,
-                    &config_c,
-                    &storage::VersionInfo::for_creation(),
-                )
-                .await?;
-                Ok::<_, RepositoryError>(version)
-            } else {
-                Ok(storage::VersionInfo::for_creation())
+        let config_version = if spec_version >= SpecVersionBin::V2 {
+            // V2+ repos: config is already embedded in repo info, no config.yaml needed
+            create_repo_info.await?;
+            storage::VersionInfo::for_creation()
+        } else {
+            // V1 repos: write config.yaml separately
+            let storage_c = Arc::clone(&storage);
+            let config_c = config.clone();
+            let update_config = async move {
+                if has_overriden_config {
+                    let version = Repository::store_config(
+                        storage_c,
+                        &config_c,
+                        &storage::VersionInfo::for_creation(),
+                    )
+                    .await?;
+                    Ok::<_, RepositoryError>(version)
+                } else {
+                    Ok(storage::VersionInfo::for_creation())
+                }
             }
-        }
-        .in_current_span();
+            .in_current_span();
 
-        let (_, config_version) = try_join!(create_repo_info, update_config)?;
+            // Note that for V1 repos we don't actually create a repo info file despite the name here.
+            // We are (writing the snap; then updating the branch pointer) & writing config.yaml concurrently.
+            let (_, config_version) = try_join!(create_repo_info, update_config)?;
+            config_version
+        };
 
-        debug_assert!(Self::exists(Arc::clone(&storage)).await.unwrap_or(false));
+        debug_assert!(Self::exists(Arc::clone(&storage), None).await.unwrap_or(false));
         Self::new(
             spec_version,
             config,
@@ -292,81 +327,90 @@ impl Repository {
         authorize_virtual_chunk_access: HashMap<String, Option<Credentials>>,
     ) -> RepositoryResult<Self> {
         debug!("Opening Repository");
-        let storage_c = Arc::clone(&storage);
-        let fetch_config = tokio::spawn(
-            async move { Self::fetch_config(storage_c).await }.in_current_span(),
+
+        // Launch spec version detection and an optimistic config.yaml fetch concurrently.
+        // For IC1 repos this avoids a sequential round-trip; for V2+ repos the config.yaml
+        // result is ignored (config lives in the repo info object instead).
+        let temp_settings = storage.default_settings().await.inject()?;
+        let temp_am = AssetManager::new_no_cache(
+            Arc::clone(&storage),
+            temp_settings,
+            SpecVersionBin::current(),
+            1,
+            DEFAULT_MAX_CONCURRENT_REQUESTS,
         );
 
         let storage_c = Arc::clone(&storage);
-        let find_spec_version = tokio::spawn(Self::repo_spec_version(storage_c));
+        let user_settings = config.as_ref().and_then(|c| c.storage().cloned());
+        let fetch_version =
+            tokio::spawn(Self::fetch_spec_version(storage_c, user_settings));
+        let fetch_config_yaml = temp_am.fetch_config();
 
-        let (config_res, spec_version_res) = try_join!(fetch_config, find_spec_version)?;
+        // Use join! (not try_join!) so that a config.yaml error doesn't fail the
+        // open for V2+ repos that never had a config.yaml file.
+        let (spec_version_result, config_yaml_result) =
+            join!(fetch_version, fetch_config_yaml);
 
-        // fail if repo doesn't exist
-        let spec_version = match spec_version_res {
-            Ok(Some(v)) => Ok(v),
-            Ok(None) => {
-                Err(RepositoryError::from(RepositoryErrorKind::RepositoryDoesntExist))
+        let spec_version = match spec_version_result.capture()?? {
+            Some(v) => Ok(v),
+            None => {
+                Err(RepositoryError::capture(RepositoryErrorKind::RepositoryDoesntExist))
             }
-            Err(err) => Err(err),
         }?;
         trace!(%spec_version, "Repository version found");
 
-        if let Some((default_config, config_version)) = config_res? {
-            trace!("Repository configuration found");
-            // Merge the given config with the defaults
-            let config =
-                config.map(|c| default_config.merge(c)).unwrap_or(default_config);
-
-            let storage_settings = match config.storage() {
-                Some(s) => s.clone(),
-                None => storage.default_settings().await?,
-            };
-
-            let asset_manager = Arc::new(AssetManager::new_with_config(
-                Arc::clone(&storage),
-                storage_settings.clone(),
-                spec_version,
-                config.caching(),
-                config.compression().level(),
-                config.max_concurrent_requests(),
-            ));
-
-            Self::new(
-                spec_version,
-                config,
-                config_version,
-                storage,
-                storage_settings,
-                asset_manager,
-                authorize_virtual_chunk_access,
-            )
+        let (persisted_config, config_version) = if spec_version >= SpecVersionBin::V2 {
+            // V2+ repos: config is always embedded in the repo info object.
+            let (repo_info, _) = temp_am.fetch_repo_info().await?;
+            (repo_info.config().inject()?, storage::VersionInfo::for_creation())
         } else {
-            trace!("Repository configuration not found, using default as base");
-            let config = config.unwrap_or_default();
-            let storage_settings = match config.storage() {
-                Some(s) => s.clone(),
-                None => storage.default_settings().await?,
-            };
+            // V1 repos: use the config.yaml result we already fetched
+            match config_yaml_result? {
+                Some((c, v)) => (Some(c), v),
+                None => (None, storage::VersionInfo::for_creation()),
+            }
+        };
 
-            let asset_manager = Arc::new(AssetManager::new_with_config(
-                Arc::clone(&storage),
-                storage_settings.clone(),
-                spec_version,
-                config.caching(),
-                config.compression().level(),
-                config.max_concurrent_requests(),
-            ));
-            Self::new(
-                spec_version,
-                config,
-                storage::VersionInfo::for_creation(),
-                storage,
-                storage_settings,
-                asset_manager,
-                authorize_virtual_chunk_access,
-            )
-        }
+        // Merge three layers of config (In order of preference):
+        //   - User-provided config (passed to open())
+        //   - Persisted repo config (saved alongside the data, if any)
+        //   - Backend storage defaults (e.g. S3 retry/concurrency settings)
+        let storage_defaults = storage.default_settings().await.inject()?;
+        let repo_config = match persisted_config {
+            Some(c) => RepositoryConfig::default().merge(c),
+            None => RepositoryConfig::default(),
+        };
+        // merge user config on top of persisted config and library defaults
+        // no storage merging happening yet.
+        let merged_config = config.map(|c| repo_config.merge(c)).unwrap_or(repo_config);
+
+        // construct the merged storage settings
+        let storage_settings = match merged_config.storage.clone() {
+            Some(s) => storage_defaults.merge(s),
+            None => storage_defaults,
+        };
+        // combine merged config settings + merged storage settings
+        let final_config =
+            RepositoryConfig { storage: Some(storage_settings.clone()), ..merged_config };
+
+        let asset_manager = Arc::new(AssetManager::new_with_config(
+            Arc::clone(&storage),
+            storage_settings.clone(),
+            spec_version,
+            final_config.caching(),
+            final_config.compression().level(),
+            final_config.max_concurrent_requests(),
+        ));
+
+        Self::new(
+            spec_version,
+            final_config,
+            config_version,
+            storage,
+            storage_settings,
+            asset_manager,
+            authorize_virtual_chunk_access,
+        )
     }
 
     pub async fn open_or_create(
@@ -374,12 +418,21 @@ impl Repository {
         storage: Arc<dyn Storage + Send + Sync>,
         authorize_virtual_chunk_access: HashMap<String, Option<Credentials>>,
         create_version: Option<SpecVersionBin>,
+        check_clean_root: bool,
     ) -> RepositoryResult<Self> {
-        if Self::exists(Arc::clone(&storage)).await? {
+        let user_settings = config.as_ref().and_then(|c| c.storage().cloned());
+        if Self::fetch_spec_version(Arc::clone(&storage), user_settings).await?.is_some()
+        {
             Self::open(config, storage, authorize_virtual_chunk_access).await
         } else {
-            Self::create(config, storage, authorize_virtual_chunk_access, create_version)
-                .await
+            Self::create(
+                config,
+                storage,
+                authorize_virtual_chunk_access,
+                create_version,
+                check_clean_root,
+            )
+            .await
         }
     }
 
@@ -415,19 +468,27 @@ impl Repository {
     #[instrument(skip_all)]
     pub async fn exists(
         storage: Arc<dyn Storage + Send + Sync>,
+        settings: Option<storage::Settings>,
     ) -> RepositoryResult<bool> {
-        Ok(Self::repo_spec_version(storage).await?.is_some())
+        Ok(Self::fetch_spec_version(storage, settings).await?.is_some())
     }
 
     #[instrument(skip_all)]
-    async fn repo_spec_version(
+    pub async fn fetch_spec_version(
         storage: Arc<dyn Storage + Send + Sync>,
+        settings: Option<storage::Settings>,
     ) -> RepositoryResult<Option<SpecVersionBin>> {
+        let settings = match settings {
+            Some(s) => s,
+            None => storage.default_settings().await.inject()?,
+        };
+
         let storage_c = Arc::clone(&storage);
+        let settings_c = settings.clone();
         let is_v1 = async move {
-            match refs::fetch_branch_tip(
+            match refs::fetch_branch_tip_v1(
                 storage_c.as_ref(),
-                &storage_c.default_settings().await?,
+                &settings_c,
                 Ref::DEFAULT_BRANCH,
             )
             .await
@@ -442,18 +503,18 @@ impl Repository {
         let after_v1 = async move {
             let temp_asset_manager = Arc::new(AssetManager::new_no_cache(
                 Arc::clone(&storage),
-                storage.default_settings().await?,
+                settings,
                 SpecVersionBin::current(),
                 1, // we are only reading, compression doesn't matter
                 DEFAULT_MAX_CONCURRENT_REQUESTS,
             ));
 
             let res = temp_asset_manager.fetch_repo_info().await;
-            Ok(res.and_then(|(ri, _)| ri.spec_version().err_into()))
+            Ok(res.and_then(|(ri, _)| ri.spec_version().inject()))
         }
         .in_current_span();
 
-        let (is_v1, after_v1) = try_join!(is_v1, after_v1)?;
+        let (is_v1, after_v1) = try_join!(is_v1, after_v1).inject()?;
         match after_v1 {
             // if we have both configuration, this is an unfinished migration
             // but still a V2+ repo
@@ -463,7 +524,7 @@ impl Repository {
                 ..
             }) => {
                 if is_v1 {
-                    Ok(Some(SpecVersionBin::V1dot0))
+                    Ok(Some(SpecVersionBin::V1))
                 } else {
                     Ok(None)
                 }
@@ -479,15 +540,23 @@ impl Repository {
         config: Option<RepositoryConfig>,
         authorize_virtual_chunk_access: Option<HashMap<String, Option<Credentials>>>,
     ) -> RepositoryResult<Self> {
-        // Merge the given config with the current config
-        let config = config
-            .map(|c| self.config().merge(c))
-            .unwrap_or_else(|| self.config().clone());
-
-        let storage_settings = match config.storage() {
-            Some(s) => s.clone(),
-            None => self.storage.default_settings().await?,
+        // Merge three layers of config (In order of preference):
+        //   - User-provided config (passed to reopen())
+        //   - Persisted repo config (saved alongside the data, if any)
+        //   - Backend storage defaults (e.g. S3 retry/concurrency settings)
+        let storage_defaults = self.storage.default_settings().await.inject()?;
+        // merge user config on top of persisted config and library defaults
+        // no storage merging happening yet
+        let repo_config = self.config().clone();
+        let config = config.map(|c| repo_config.merge(c)).unwrap_or(repo_config);
+        // construct the merged storage settings
+        let storage_settings = match config.storage.clone() {
+            Some(s) => storage_defaults.merge(s),
+            None => storage_defaults,
         };
+        // combine merged config settings + merged storage settings
+        let config =
+            RepositoryConfig { storage: Some(storage_settings.clone()), ..config };
 
         Self::new(
             self.spec_version,
@@ -502,38 +571,71 @@ impl Repository {
     }
 
     #[instrument(skip(bytes))]
-    pub fn from_bytes(bytes: Vec<u8>) -> RepositoryResult<Self> {
-        rmp_serde::from_slice(&bytes).map_err(Box::new).err_into()
+    pub fn from_bytes(bytes: &[u8]) -> RepositoryResult<Self> {
+        rmp_serde::from_slice(bytes).map_err(Box::new).capture()
     }
 
     #[instrument(skip(self))]
     pub fn as_bytes(&self) -> RepositoryResult<Vec<u8>> {
-        rmp_serde::to_vec(self).map_err(Box::new).err_into()
+        rmp_serde::to_vec(self).map_err(Box::new).capture()
     }
 
     #[instrument(skip_all)]
     pub async fn fetch_config(
         storage: Arc<dyn Storage + Send + Sync>,
     ) -> RepositoryResult<Option<(RepositoryConfig, storage::VersionInfo)>> {
-        let settings = storage.default_settings().await?;
+        let settings = storage.default_settings().await.inject()?;
+        let spec_version = Self::fetch_spec_version(Arc::clone(&storage), None)
+            .await?
+            .unwrap_or_default();
+
         let am = AssetManager::new_no_cache(
-            storage,
+            Arc::clone(&storage),
             settings,
-            SpecVersionBin::current(),
+            spec_version,
             1, // we are only reading, compression doesn't matter
             DEFAULT_MAX_CONCURRENT_REQUESTS,
         );
-        am.fetch_config().await
+
+        if spec_version >= SpecVersionBin::V2 {
+            // V2+ repos: config is always embedded in the repo info object.
+            let (repo_info, version) = am.fetch_repo_info().await?;
+            Ok(repo_info.config().inject()?.map(|config| (config, version)))
+        } else {
+            // V1 repos: read from config.yaml
+            am.fetch_config().await
+        }
     }
 
     #[instrument(skip_all)]
     pub async fn save_config(&self) -> RepositoryResult<storage::VersionInfo> {
-        Repository::store_config(
-            self.storage().clone(),
-            self.config(),
-            &self.config_version,
-        )
-        .await
+        // For V2+ repos, write config into the repo info object atomically
+        if self.spec_version >= SpecVersionBin::V2 {
+            let config = self.config().clone();
+            let num_updates = self.config.num_updates_per_repo_info_file();
+            let spec_version = self.spec_version();
+            let do_update = move |repo_info: Arc<RepoInfo>, backup_path: &str, _| {
+                Ok(Arc::new(
+                    repo_info
+                        .set_config(spec_version, &config, backup_path, num_updates)
+                        .inject()?,
+                ))
+            };
+            let version = self
+                .asset_manager
+                .update_repo_info(self.config.repo_update_retries().retries(), do_update)
+                .await?;
+
+            Ok(version)
+        } else {
+            // V1 repos: write config.yaml only (no repo info)
+            Repository::store_config(
+                Arc::clone(self.storage()),
+                self.config(),
+                &self.config_version,
+            )
+            .await
+        }
     }
 
     #[instrument(skip_all)]
@@ -549,65 +651,174 @@ impl Repository {
     #[instrument(skip_all)]
     pub async fn get_metadata(&self) -> RepositoryResult<SnapshotProperties> {
         // this feature is only available in IC2
-        self.asset_manager().fail_unless_spec_at_least(SpecVersionBin::V2dot0)?;
+        self.asset_manager().fail_unless_spec_at_least(SpecVersionBin::V2)?;
         let (repo, _) = self.asset_manager().fetch_repo_info().await?;
-        Ok(repo.metadata()?)
+        repo.metadata().inject()
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip(self, metadata))]
     pub async fn update_metadata(
         &self,
         metadata: &SnapshotProperties,
     ) -> RepositoryResult<SnapshotProperties> {
-        if !self.storage.can_write().await? {
-            return Err(RepositoryErrorKind::ReadonlyStorage(
-                "Cannot set metadata".to_string(),
-            )
-            .into());
-        }
+        self.raise_if_cant_write("Cannot set metadata").await?;
         let mut final_metadata = Default::default();
-        let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str| {
-            final_metadata = repo_info.metadata()?;
+        let num_updates = self.config().num_updates_per_repo_info_file();
+        let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str, _| {
+            final_metadata = repo_info.metadata().inject()?;
             final_metadata.extend(metadata.clone());
-            Ok(Arc::new(repo_info.set_metadata(
-                self.spec_version(),
-                &final_metadata,
-                backup_path,
-            )?))
+            Ok(Arc::new(
+                repo_info
+                    .set_metadata(
+                        self.spec_version(),
+                        &final_metadata,
+                        backup_path,
+                        num_updates,
+                    )
+                    .inject()?,
+            ))
         };
 
         let _ = self
             .asset_manager
-            // FIXME: hardcoded retries
-            .update_repo_info(AssetManager::limit_retries_repo_update(100, do_update))
+            .update_repo_info(self.config.repo_update_retries().retries(), do_update)
             .await?;
         Ok(final_metadata)
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip(self, metadata))]
     pub async fn set_metadata(
         &self,
         metadata: &SnapshotProperties,
     ) -> RepositoryResult<()> {
-        if !self.storage.can_write().await? {
-            return Err(RepositoryErrorKind::ReadonlyStorage(
-                "Cannot set metadata".to_string(),
-            )
-            .into());
-        }
+        self.raise_if_cant_write("Cannot set metadata").await?;
 
-        let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str| {
-            Ok(Arc::new(repo_info.set_metadata(
-                self.spec_version(),
-                metadata,
-                backup_path,
-            )?))
+        let num_updates = self.config().num_updates_per_repo_info_file();
+        let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str, _| {
+            Ok(Arc::new(
+                repo_info
+                    .set_metadata(self.spec_version(), metadata, backup_path, num_updates)
+                    .inject()?,
+            ))
         };
 
         let _ = self
             .asset_manager
-            // FIXME: hardcoded retries
-            .update_repo_info(AssetManager::limit_retries_repo_update(100, do_update))
+            .update_repo_info(self.config.repo_update_retries().retries(), do_update)
+            .await?;
+        Ok(())
+    }
+
+    #[instrument(skip_all)]
+    pub async fn get_status(&self) -> RepositoryResult<RepoStatus> {
+        self.asset_manager().fail_unless_spec_at_least(SpecVersionBin::V2)?;
+        let (repo, _) = self.asset_manager().fetch_repo_info().await?;
+        repo.status().inject()
+    }
+
+    #[expect(unsafe_code)]
+    #[instrument(skip(self))]
+    pub async fn set_status(&self, status: &RepoStatus) -> RepositoryResult<()> {
+        self.asset_manager().fail_unless_spec_at_least(SpecVersionBin::V2)?;
+        self.raise_if_cant_write("Cannot set status").await?;
+
+        let num_updates = self.config().num_updates_per_repo_info_file();
+        let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str, _| {
+            Ok(Arc::new(
+                repo_info
+                    .set_status(self.spec_version(), status, backup_path, num_updates)
+                    .inject()?,
+            ))
+        };
+
+        // SAFETY: this is the only call site for update_repo_info_unchecked.
+        // We need it here to bypass the repo status check when changing the
+        // status itself — normal callers go through update_repo_info.
+        unsafe {
+            let _ = self
+                .asset_manager
+                .update_repo_info_unchecked(
+                    self.config.repo_update_retries().retries(),
+                    do_update,
+                )
+                .await?;
+        }
+        Ok(())
+    }
+
+    #[instrument(skip(self))]
+    pub async fn feature_flags(
+        &self,
+    ) -> RepositoryResult<impl Iterator<Item = FeatureFlag>> {
+        let (repo_info, _) = self.get_repo_info().await?;
+        let enabled_flags: HashSet<u16> =
+            if let Some(iter) = repo_info.enabled_feature_flags().inject()? {
+                iter.collect()
+            } else {
+                HashSet::new()
+            };
+        let disabled_flags: HashSet<u16> =
+            if let Some(iter) = repo_info.disabled_feature_flags().inject()? {
+                iter.collect()
+            } else {
+                HashSet::new()
+            };
+        let res = FEATURE_FLAGS.iter().map(move |(name, (id, default_enabled))| {
+            let setting = enabled_flags
+                .get(id)
+                .map(|_| true)
+                .or_else(|| disabled_flags.get(id).map(|_| false));
+            FeatureFlag::new(*id, name, *default_enabled, setting)
+        });
+
+        Ok(res)
+    }
+
+    #[instrument(skip(self))]
+    pub async fn enabled_feature_flags(
+        &self,
+    ) -> RepositoryResult<impl Iterator<Item = FeatureFlag>> {
+        Ok(self.feature_flags().await?.filter(|ff| ff.enabled()))
+    }
+
+    #[instrument(skip(self))]
+    pub async fn disabled_feature_flags(
+        &self,
+    ) -> RepositoryResult<impl Iterator<Item = FeatureFlag>> {
+        Ok(self.feature_flags().await?.filter(|ff| !ff.enabled()))
+    }
+
+    #[instrument(skip(self))]
+    /// `set_to` = Some(true) will enable it
+    /// `set_to` = Some(false) will disable it
+    /// `set_to` = None will set it to default state by deleting from repo info object
+    pub async fn set_feature_flag(
+        &self,
+        feature_flag: &str,
+        set_to: Option<bool>,
+    ) -> RepositoryResult<()> {
+        // this feature is only available in IC2
+        self.asset_manager().fail_unless_spec_at_least(SpecVersionBin::V2)?;
+
+        let num_updates = self.config.num_updates_per_repo_info_file();
+        let flag_id = find_feature_flag_id(feature_flag).inject()?;
+
+        let do_update = move |repo_info: Arc<RepoInfo>, backup_path: &str, _| {
+            Ok(Arc::new(
+                repo_info
+                    .update_feature_flag(
+                        self.spec_version(),
+                        flag_id,
+                        set_to,
+                        backup_path,
+                        num_updates,
+                    )
+                    .inject()?,
+            ))
+        };
+        let _ = self
+            .asset_manager
+            .update_repo_info(self.config.repo_update_retries().retries(), do_update)
             .await?;
         Ok(())
     }
@@ -618,13 +829,8 @@ impl Repository {
         config: &RepositoryConfig,
         previous_version: &storage::VersionInfo,
     ) -> RepositoryResult<storage::VersionInfo> {
-        if !storage.can_write().await? {
-            return Err(RepositoryErrorKind::ReadonlyStorage(
-                "Cannot save configuration".to_string(),
-            )
-            .into());
-        }
-        let settings = storage.default_settings().await?;
+        raise_if_cant_write(storage.as_ref(), "Cannot save configuration").await?;
+        let settings = storage.default_settings().await.inject()?;
         let am = AssetManager::new_no_cache(
             storage,
             settings,
@@ -642,7 +848,7 @@ impl Repository {
             .await?
         {
             Some(new_version) => Ok(new_version),
-            None => Err(RepositoryErrorKind::ConfigWasUpdated.into()),
+            None => Err(RepositoryError::capture(RepositoryErrorKind::ConfigWasUpdated)),
         }
     }
 
@@ -671,7 +877,7 @@ impl Repository {
     }
 
     /// Returns the sequence of parents of the current session, in order of latest first.
-    /// Output stream includes snapshot_id argument
+    /// Output stream includes `snapshot_id` argument
     #[instrument(skip(self))]
     async fn snapshot_info_ancestry_v1(
         &self,
@@ -680,14 +886,14 @@ impl Repository {
     {
         let res =
             self.snapshot_ancestry_v1(snapshot_id).await?.and_then(|snap| async move {
-                let info = snap.as_ref().try_into()?;
+                let info = snap.as_ref().try_into().inject()?;
                 Ok(info)
             });
         Ok(res)
     }
 
     /// Returns the sequence of parents of the current session, in order of latest first.
-    /// Output stream includes snapshot_id argument
+    /// Output stream includes `snapshot_id` argument
     #[instrument(skip(self))]
     async fn snapshot_ancestry_v1(
         &self,
@@ -695,7 +901,7 @@ impl Repository {
     ) -> RepositoryResult<impl Stream<Item = RepositoryResult<Arc<Snapshot>>> + use<>>
     {
         let am = Arc::clone(&self.asset_manager);
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         am.snapshot_ancestry_v1(snapshot_id).await
     }
 
@@ -705,10 +911,24 @@ impl Repository {
         version: &VersionInfo,
     ) -> RepositoryResult<impl Stream<Item = RepositoryResult<SnapshotInfo>> + Send + use<>>
     {
+        self.ancestry_using(version, None).await
+    }
+
+    async fn ancestry_using(
+        &self,
+        version: &VersionInfo,
+        repo_info: Option<Arc<RepoInfo>>,
+    ) -> RepositoryResult<impl Stream<Item = RepositoryResult<SnapshotInfo>> + Send + use<>>
+    {
         match self.spec_version {
-            SpecVersionBin::V1dot0 => Ok(self.ancestry_v1(version).await?.left_stream()),
-            SpecVersionBin::V2dot0 => {
-                let iter = self.ancestry_v2(version).await?;
+            SpecVersionBin::V1 => Ok(self.ancestry_v1(version).await?.left_stream()),
+            SpecVersionBin::V2 => {
+                let ri = match repo_info {
+                    Some(ri) => ri,
+                    None => self.get_repo_info().await?.0,
+                };
+                let snapshot_id = self.resolve_version_v2(&ri, version).await?;
+                let iter = AncestryIteratorV2::new(ri, &snapshot_id)?;
                 Ok(stream::iter(iter).right_stream())
             }
         }
@@ -726,18 +946,6 @@ impl Repository {
     }
 
     #[instrument(skip(self))]
-    async fn ancestry_v2(
-        &self,
-        version: &VersionInfo,
-    ) -> RepositoryResult<
-        impl Iterator<Item = RepositoryResult<SnapshotInfo>> + Send + use<>,
-    > {
-        let (repo_info, _) = self.get_repo_info().await?;
-        let snapshot_id = self.resolve_version_v2(&repo_info, version).await?;
-        AncestryIteratorV2::new(repo_info, &snapshot_id)
-    }
-
-    #[instrument(skip(self))]
     async fn ancestry_ref_v1(
         &self,
         version: &RefVersionInfo,
@@ -747,15 +955,21 @@ impl Repository {
         self.snapshot_info_ancestry_v1(&snapshot_id).await
     }
 
+    /// This method uses the repo info object to obtain the ops log.
+    /// The repo info object is mutable, so it may change while this operation happens.
+    /// For reproducibility, this method returns the repo object used to calculate the log.
     #[instrument(skip(self))]
     pub async fn ops_log(
         &self,
-    ) -> RepositoryResult<
+    ) -> RepositoryResult<(
         impl Stream<Item = RepositoryResult<(DateTime<Utc>, UpdateType, Option<String>)>>
         + Send
         + use<>,
-    > {
-        let (repo_info, _) = self.get_repo_info().await?;
+        Arc<RepoInfo>,
+        storage::VersionInfo,
+    )> {
+        let (repo_info, version_root) = self.get_repo_info().await?;
+        let repo_info_root = Arc::clone(&repo_info);
         let mut repo_info = Some(repo_info);
         // When we change to a new repo file, it will have the first backup_file = None, because
         // all files have this. We need to use the previous element in the sequence to know the
@@ -765,13 +979,13 @@ impl Repository {
         let stream = try_stream! {
             while let Some(this) = repo_info {
                 // stream out the batch of updates in this repo file
-                for maybe_data in this.latest_updates()? {
-                    let (a, b, c) = maybe_data?;
+                for maybe_data in this.latest_updates().inject()? {
+                    let (a, b, c) = maybe_data.inject()?;
                     yield (b, a, c.or(this_file_path.as_deref()).map(|c| c.to_string()));
                 }
 
                 // if there are more repo files we need to stream those updates too
-                if let Some(previous) = this.repo_before_updates()? {
+                if let Some(previous) = this.repo_before_updates().inject()? {
                     this_file_path = Some(previous.to_string());
                     match asset_manager.fetch_repo_info_backup(previous).await {
                         Ok((new_one, _)) =>  {
@@ -792,7 +1006,7 @@ impl Repository {
 
         };
 
-        Ok(stream)
+        Ok((stream, repo_info_root, version_root))
     }
 
     /// Create a new branch in the repository at the given snapshot id
@@ -802,19 +1016,10 @@ impl Repository {
         branch_name: &str,
         snapshot_id: &SnapshotId,
     ) -> RepositoryResult<()> {
-        if !self.storage.can_write().await? {
-            return Err(RepositoryErrorKind::ReadonlyStorage(
-                "Cannot create branch".to_string(),
-            )
-            .into());
-        }
+        self.raise_if_cant_write("Cannot create branch").await?;
         match self.spec_version() {
-            SpecVersionBin::V1dot0 => {
-                self.create_branch_v1(branch_name, snapshot_id).await
-            }
-            SpecVersionBin::V2dot0 => {
-                self.create_branch_v2(branch_name, snapshot_id).await
-            }
+            SpecVersionBin::V1 => self.create_branch_v1(branch_name, snapshot_id).await,
+            SpecVersionBin::V2 => self.create_branch_v2(branch_name, snapshot_id).await,
         }
     }
 
@@ -824,20 +1029,25 @@ impl Repository {
         branch_name: &str,
         snapshot_id: &SnapshotId,
     ) -> RepositoryResult<()> {
-        let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str| {
+        let num_updates = self.config.num_updates_per_repo_info_file();
+        let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str, _| {
             raise_if_invalid_snapshot_id_v2(repo_info.as_ref(), snapshot_id)?;
-            Ok(Arc::new(repo_info.add_branch(
-                self.spec_version(),
-                branch_name,
-                snapshot_id,
-                backup_path,
-            )?))
+            Ok(Arc::new(
+                repo_info
+                    .add_branch(
+                        self.spec_version(),
+                        branch_name,
+                        snapshot_id,
+                        backup_path,
+                        num_updates,
+                    )
+                    .inject()?,
+            ))
         };
 
         let _ = self
             .asset_manager
-            // FIXME: hardcoded retries
-            .update_repo_info(AssetManager::limit_retries_repo_update(100, do_update))
+            .update_repo_info(self.config.repo_update_retries().retries(), do_update)
             .await?;
         Ok(())
     }
@@ -860,12 +1070,12 @@ impl Repository {
         .map_err(|e| match e {
             RefError {
                 kind: RefErrorKind::Conflict { expected_parent, actual_parent },
-                ..
-            } => RepositoryError::from(RepositoryErrorKind::Conflict {
-                expected_parent,
-                actual_parent,
-            }),
-            err => err.into(),
+                context,
+            } => ICError {
+                kind: RepositoryErrorKind::Conflict { expected_parent, actual_parent },
+                context,
+            },
+            err => err.inject(),
         })?;
         Ok(())
     }
@@ -873,55 +1083,75 @@ impl Repository {
     /// List all branches in the repository.
     #[instrument(skip(self))]
     async fn list_branches_v1(&self) -> RepositoryResult<BTreeSet<String>> {
-        let branches =
-            refs::list_branches(self.storage.as_ref(), &self.storage_settings).await?;
+        let branches = refs::list_branches(self.storage.as_ref(), &self.storage_settings)
+            .await
+            .inject()?;
         Ok(branches)
     }
 
     #[instrument(skip(self))]
     async fn list_branches_v2(&self) -> RepositoryResult<BTreeSet<String>> {
         let (ri, _) = self.get_repo_info().await?;
-        let it = ri.branch_names()?;
+        let it = ri.branch_names().inject()?;
         Ok(it.map(|s| s.to_string()).collect())
     }
 
     #[instrument(skip(self))]
     pub async fn list_branches(&self) -> RepositoryResult<BTreeSet<String>> {
         match self.spec_version {
-            SpecVersionBin::V1dot0 => self.list_branches_v1().await,
-            SpecVersionBin::V2dot0 => self.list_branches_v2().await,
+            SpecVersionBin::V1 => self.list_branches_v1().await,
+            SpecVersionBin::V2 => self.list_branches_v2().await,
         }
     }
 
     /// Get the snapshot id of the tip of a branch
     #[instrument(skip(self))]
     async fn lookup_branch_v1(&self, branch: &str) -> RepositoryResult<SnapshotId> {
-        let branch_version =
-            refs::fetch_branch_tip(self.storage.as_ref(), &self.storage_settings, branch)
-                .await?;
+        let branch_version = refs::fetch_branch_tip_v1(
+            self.storage.as_ref(),
+            &self.storage_settings,
+            branch,
+        )
+        .await
+        .inject()?;
         Ok(branch_version.snapshot)
     }
 
     #[instrument(skip(self))]
-    async fn lookup_branch_v2(&self, branch: &str) -> RepositoryResult<SnapshotId> {
-        let (ri, _) = self.get_repo_info().await?;
+    async fn lookup_branch_v2(
+        &self,
+        branch: &str,
+        repo_info: Option<&RepoInfo>,
+    ) -> RepositoryResult<SnapshotId> {
+        let fetched; // used to hold the temp ref
+        let ri = match repo_info {
+            Some(ri) => ri,
+            None => {
+                fetched = self.get_repo_info().await?.0;
+                &fetched
+            }
+        };
+
         match ri.resolve_branch(branch) {
             Ok(snap) => Ok(snap),
             Err(IcechunkFormatError {
                 kind: IcechunkFormatErrorKind::BranchNotFound { .. },
-                ..
-            }) => Err(RepositoryError::from(RefError::from(RefErrorKind::RefNotFound(
-                branch.to_string(),
-            )))),
-            Err(err) => Err(err.into()),
+                context,
+            }) => Err(ICError {
+                kind: RepositoryErrorKind::Ref(RefErrorKind::RefNotFound(
+                    branch.to_string(),
+                )),
+                context,
+            }),
+            Err(err) => Err(err.inject()),
         }
     }
 
     #[instrument(skip(self))]
     pub async fn lookup_branch(&self, branch: &str) -> RepositoryResult<SnapshotId> {
         match self.spec_version {
-            SpecVersionBin::V1dot0 => self.lookup_branch_v1(branch).await,
-            SpecVersionBin::V2dot0 => self.lookup_branch_v2(branch).await,
+            SpecVersionBin::V1 => self.lookup_branch_v1(branch).await,
+            SpecVersionBin::V2 => self.lookup_branch_v2(branch, None).await,
         }
     }
 
@@ -939,7 +1169,7 @@ impl Repository {
         snapshot_id: &SnapshotId,
     ) -> RepositoryResult<SnapshotInfo> {
         let (ri, _) = self.get_repo_info().await?;
-        Ok(ri.find_snapshot(snapshot_id)?)
+        ri.find_snapshot(snapshot_id).inject()
     }
 
     #[instrument(skip(self))]
@@ -948,8 +1178,8 @@ impl Repository {
         snapshot_id: &SnapshotId,
     ) -> RepositoryResult<SnapshotInfo> {
         match self.spec_version {
-            SpecVersionBin::V1dot0 => self.lookup_snapshot_v1(snapshot_id).await,
-            SpecVersionBin::V2dot0 => self.lookup_snapshot_v2(snapshot_id).await,
+            SpecVersionBin::V1 => self.lookup_snapshot_v1(snapshot_id).await,
+            SpecVersionBin::V2 => self.lookup_snapshot_v2(snapshot_id).await,
         }
     }
 
@@ -959,7 +1189,8 @@ impl Repository {
         snapshot_id: &SnapshotId,
     ) -> RepositoryResult<impl Iterator<Item = ManifestFileInfo>> {
         let snap = self.asset_manager.fetch_snapshot(snapshot_id).await?;
-        Ok(snap.manifest_files().collect::<Vec<_>>().into_iter())
+        let files: Vec<_> = snap.manifest_files().try_collect().inject()?;
+        Ok(files.into_iter())
     }
 
     #[instrument(skip(self))]
@@ -969,17 +1200,12 @@ impl Repository {
         to_snapshot_id: &SnapshotId,
         from_snapshot_id: Option<&SnapshotId>,
     ) -> RepositoryResult<()> {
-        if !self.storage.can_write().await? {
-            return Err(RepositoryErrorKind::ReadonlyStorage(
-                "Cannot reset branch".to_string(),
-            )
-            .into());
-        }
+        self.raise_if_cant_write("Cannot reset branch").await?;
         match self.spec_version {
-            SpecVersionBin::V1dot0 => {
+            SpecVersionBin::V1 => {
                 self.reset_branch_v1(branch, to_snapshot_id, from_snapshot_id).await
             }
-            SpecVersionBin::V2dot0 => {
+            SpecVersionBin::V2 => {
                 self.reset_branch_v2(branch, to_snapshot_id, from_snapshot_id).await
             }
         }
@@ -1004,7 +1230,8 @@ impl Repository {
             to_snapshot_id.clone(),
             Some(branch_tip),
         )
-        .await?;
+        .await
+        .inject()?;
         Ok(())
     }
 
@@ -1015,35 +1242,43 @@ impl Repository {
         to_snapshot_id: &SnapshotId,
         from_snapshot_id: Option<&SnapshotId>,
     ) -> RepositoryResult<()> {
-        let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str| {
+        let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str, _| {
             if let Some(from_snapshot_id) = from_snapshot_id
-                && &repo_info.resolve_branch(branch)? != from_snapshot_id
+                && &repo_info.resolve_branch(branch).inject()? != from_snapshot_id
             {
-                return Err(RepositoryErrorKind::Conflict {
+                return Err(RepositoryError::capture(RepositoryErrorKind::Conflict {
                     expected_parent: Some(from_snapshot_id.clone()),
                     actual_parent: Some(from_snapshot_id.clone()),
-                }
-                .into());
+                }));
             }
+            let num_updates = self.config.num_updates_per_repo_info_file();
 
             let new_repo = repo_info
-                .update_branch(self.spec_version(), branch, to_snapshot_id, backup_path)
+                .update_branch(
+                    self.spec_version(),
+                    branch,
+                    to_snapshot_id,
+                    backup_path,
+                    num_updates,
+                )
                 .map_err(|err| match err {
                     IcechunkFormatError {
                         kind: IcechunkFormatErrorKind::BranchNotFound { .. },
-                        ..
-                    } => RepositoryError::from(RefError::from(
-                        RefErrorKind::RefNotFound(branch.to_string()),
-                    )),
-                    err => RepositoryError::from(err),
+                        context,
+                    } => ICError {
+                        kind: RepositoryErrorKind::Ref(RefErrorKind::RefNotFound(
+                            branch.to_string(),
+                        )),
+                        context,
+                    },
+                    err => err.inject(),
                 });
             Ok(Arc::new(new_repo?))
         };
 
         let _ = self
             .asset_manager
-            // FIXME: hardcoded retries
-            .update_repo_info(AssetManager::limit_retries_repo_update(100, do_update))
+            .update_repo_info(self.config.repo_update_retries().retries(), do_update)
             .await?;
         Ok(())
     }
@@ -1053,18 +1288,13 @@ impl Repository {
     /// chunks or snapshots associated with the branch.
     #[instrument(skip(self))]
     pub async fn delete_branch(&self, branch: &str) -> RepositoryResult<()> {
-        if !self.storage.can_write().await? {
-            return Err(RepositoryErrorKind::ReadonlyStorage(
-                "Cannot delete branch".to_string(),
-            )
-            .into());
-        }
+        self.raise_if_cant_write("Cannot delete branch").await?;
         if branch == Ref::DEFAULT_BRANCH {
-            Err(RepositoryErrorKind::CannotDeleteMain.into())
+            Err(RepositoryError::capture(RepositoryErrorKind::CannotDeleteMain))
         } else {
             match self.spec_version {
-                SpecVersionBin::V1dot0 => self.delete_branch_v1(branch).await,
-                SpecVersionBin::V2dot0 => self.delete_branch_v2(branch).await,
+                SpecVersionBin::V1 => self.delete_branch_v1(branch).await,
+                SpecVersionBin::V2 => self.delete_branch_v2(branch).await,
             }
         }
     }
@@ -1072,31 +1302,35 @@ impl Repository {
     #[instrument(skip(self))]
     async fn delete_branch_v1(&self, branch: &str) -> RepositoryResult<()> {
         refs::delete_branch(self.storage.as_ref(), &self.storage_settings, branch)
-            .await?;
+            .await
+            .inject()?;
         Ok(())
     }
 
     #[instrument(skip(self))]
     async fn delete_branch_v2(&self, branch: &str) -> RepositoryResult<()> {
-        let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str| {
+        let num_updates = self.config.num_updates_per_repo_info_file();
+        let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str, _| {
             let new_repo = repo_info
-                .delete_branch(self.spec_version(), branch, backup_path)
+                .delete_branch(self.spec_version(), branch, backup_path, num_updates)
                 .map_err(|err| match err {
                     IcechunkFormatError {
                         kind: IcechunkFormatErrorKind::BranchNotFound { .. },
-                        ..
-                    } => RepositoryError::from(RefError::from(
-                        RefErrorKind::RefNotFound(branch.to_string()),
-                    )),
-                    err => RepositoryError::from(err),
+                        context,
+                    } => ICError {
+                        kind: RepositoryErrorKind::Ref(RefErrorKind::RefNotFound(
+                            branch.to_string(),
+                        )),
+                        context,
+                    },
+                    err => err.inject(),
                 });
             Ok(Arc::new(new_repo?))
         };
 
         let _ = self
             .asset_manager
-            // FIXME: hardcoded retries
-            .update_repo_info(AssetManager::limit_retries_repo_update(100, do_update))
+            .update_repo_info(self.config.repo_update_retries().retries(), do_update)
             .await?;
         Ok(())
     }
@@ -1106,44 +1340,50 @@ impl Repository {
     /// chunks or snapshots associated with the tag.
     #[instrument(skip(self))]
     pub async fn delete_tag(&self, tag: &str) -> RepositoryResult<()> {
-        if !self.storage.can_write().await? {
-            return Err(RepositoryErrorKind::ReadonlyStorage(
-                "Cannot delete tag".to_string(),
-            )
-            .into());
-        }
+        self.raise_if_cant_write("Cannot delete tag").await?;
         match self.spec_version {
-            SpecVersionBin::V1dot0 => self.delete_tag_v1(tag).await,
-            SpecVersionBin::V2dot0 => self.delete_tag_v2(tag).await,
+            SpecVersionBin::V1 => self.delete_tag_v1(tag).await,
+            SpecVersionBin::V2 => self.delete_tag_v2(tag).await,
         }
     }
 
     #[instrument(skip(self))]
     async fn delete_tag_v1(&self, tag: &str) -> RepositoryResult<()> {
-        Ok(refs::delete_tag(self.storage.as_ref(), &self.storage_settings, tag).await?)
+        refs::delete_tag(self.storage.as_ref(), &self.storage_settings, tag)
+            .await
+            .inject()
     }
 
     #[instrument(skip(self))]
     async fn delete_tag_v2(&self, tag: &str) -> RepositoryResult<()> {
-        let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str| {
+        let num_updates = self.config.num_updates_per_repo_info_file();
+        let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str, _| {
+            raise_if_feature_flag_disabled(
+                repo_info.as_ref(),
+                DELETE_TAG_FLAG,
+                "tag delete",
+            )
+            .inject()?;
             let new_repo = repo_info
-                .delete_tag(self.spec_version(), tag, backup_path)
+                .delete_tag(self.spec_version(), tag, backup_path, num_updates)
                 .map_err(|err| match err {
                     IcechunkFormatError {
                         kind: IcechunkFormatErrorKind::TagNotFound { .. },
-                        ..
-                    } => RepositoryError::from(RefError::from(
-                        RefErrorKind::RefNotFound(tag.to_string()),
-                    )),
-                    err => RepositoryError::from(err),
+                        context,
+                    } => ICError {
+                        kind: RepositoryErrorKind::Ref(RefErrorKind::RefNotFound(
+                            tag.to_string(),
+                        )),
+                        context,
+                    },
+                    err => err.inject(),
                 });
             Ok(Arc::new(new_repo?))
         };
 
         let _ = self
             .asset_manager
-            // FIXME: hardcoded retries
-            .update_repo_info(AssetManager::limit_retries_repo_update(100, do_update))
+            .update_repo_info(self.config.repo_update_retries().retries(), do_update)
             .await?;
         Ok(())
     }
@@ -1155,16 +1395,11 @@ impl Repository {
         tag_name: &str,
         snapshot_id: &SnapshotId,
     ) -> RepositoryResult<()> {
-        if !self.storage.can_write().await? {
-            return Err(RepositoryErrorKind::ReadonlyStorage(
-                "Cannot create tag".to_string(),
-            )
-            .into());
-        }
+        self.raise_if_cant_write("Cannot create tag").await?;
 
         match self.spec_version {
-            SpecVersionBin::V1dot0 => self.create_tag_v1(tag_name, snapshot_id).await,
-            SpecVersionBin::V2dot0 => self.create_tag_v2(tag_name, snapshot_id).await,
+            SpecVersionBin::V1 => self.create_tag_v1(tag_name, snapshot_id).await,
+            SpecVersionBin::V2 => self.create_tag_v2(tag_name, snapshot_id).await,
         }
     }
 
@@ -1181,7 +1416,8 @@ impl Repository {
             tag_name,
             snapshot_id.clone(),
         )
-        .await?;
+        .await
+        .inject()?;
         Ok(())
     }
 
@@ -1191,26 +1427,41 @@ impl Repository {
         tag_name: &str,
         snapshot_id: &SnapshotId,
     ) -> RepositoryResult<()> {
-        let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str| {
+        let num_updates = self.config.num_updates_per_repo_info_file();
+        let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str, _| {
             raise_if_invalid_snapshot_id_v2(repo_info.as_ref(), snapshot_id)?;
+            raise_if_feature_flag_disabled(
+                repo_info.as_ref(),
+                CREATE_TAG_FLAG,
+                "tag creation",
+            )
+            .inject()?;
             let new_repo = repo_info
-                .add_tag(self.spec_version(), tag_name, snapshot_id, backup_path)
+                .add_tag(
+                    self.spec_version(),
+                    tag_name,
+                    snapshot_id,
+                    backup_path,
+                    num_updates,
+                )
                 .map_err(|err| match err {
                     IcechunkFormatError {
                         kind: IcechunkFormatErrorKind::TagAlreadyExists { .. },
-                        ..
-                    } => RepositoryError::from(RefError::from(
-                        RefErrorKind::TagAlreadyExists(tag_name.to_string()),
-                    )),
-                    err => RepositoryError::from(err),
+                        context,
+                    } => ICError {
+                        kind: RepositoryErrorKind::Ref(RefErrorKind::TagAlreadyExists(
+                            tag_name.to_string(),
+                        )),
+                        context,
+                    },
+                    err => err.inject(),
                 });
             Ok(Arc::new(new_repo?))
         };
 
         let _ = self
             .asset_manager
-            // FIXME: hardcoded retries
-            .update_repo_info(AssetManager::limit_retries_repo_update(100, do_update))
+            .update_repo_info(self.config.repo_update_retries().retries(), do_update)
             .await?;
         Ok(())
     }
@@ -1218,52 +1469,70 @@ impl Repository {
     /// List all tags in the repository.
     #[instrument(skip(self))]
     async fn list_tags_v1(&self) -> RepositoryResult<BTreeSet<String>> {
-        let tags = refs::list_tags(self.storage.as_ref(), &self.storage_settings).await?;
+        let tags = refs::list_tags(self.storage.as_ref(), &self.storage_settings)
+            .await
+            .inject()?;
         Ok(tags)
     }
 
     #[instrument(skip(self))]
     async fn list_tags_v2(&self) -> RepositoryResult<BTreeSet<String>> {
         let (ri, _) = self.get_repo_info().await?;
-        let tags = ri.tag_names()?;
+        let tags = ri.tag_names().inject()?;
         Ok(tags.map(|s| s.to_string()).collect())
     }
 
     #[instrument(skip(self))]
     pub async fn list_tags(&self) -> RepositoryResult<BTreeSet<String>> {
         match self.spec_version {
-            SpecVersionBin::V1dot0 => self.list_tags_v1().await,
-            SpecVersionBin::V2dot0 => self.list_tags_v2().await,
+            SpecVersionBin::V1 => self.list_tags_v1().await,
+            SpecVersionBin::V2 => self.list_tags_v2().await,
         }
     }
 
     #[instrument(skip(self))]
     async fn lookup_tag_v1(&self, tag: &str) -> RepositoryResult<SnapshotId> {
         let ref_data =
-            refs::fetch_tag(self.storage.as_ref(), &self.storage_settings, tag).await?;
+            refs::fetch_tag(self.storage.as_ref(), &self.storage_settings, tag)
+                .await
+                .inject()?;
         Ok(ref_data.snapshot)
     }
 
     #[instrument(skip(self))]
-    async fn lookup_tag_v2(&self, tag: &str) -> RepositoryResult<SnapshotId> {
-        let (ri, _) = self.get_repo_info().await?;
+    async fn lookup_tag_v2(
+        &self,
+        tag: &str,
+        repo_info: Option<&RepoInfo>,
+    ) -> RepositoryResult<SnapshotId> {
+        let fetched; // used to hold the temp ref
+        let ri = match repo_info {
+            Some(ri) => ri,
+            None => {
+                fetched = self.get_repo_info().await?.0;
+                &fetched
+            }
+        };
         match ri.resolve_tag(tag) {
             Ok(snap) => Ok(snap),
             Err(IcechunkFormatError {
                 kind: IcechunkFormatErrorKind::TagNotFound { .. },
-                ..
-            }) => Err(RepositoryError::from(RefError::from(RefErrorKind::RefNotFound(
-                tag.to_string(),
-            )))),
-            Err(err) => Err(err.into()),
+                context,
+            }) => Err(ICError {
+                kind: RepositoryErrorKind::Ref(RefErrorKind::RefNotFound(
+                    tag.to_string(),
+                )),
+                context,
+            }),
+            Err(err) => Err(err.inject()),
         }
     }
 
     #[instrument(skip(self))]
     pub async fn lookup_tag(&self, tag: &str) -> RepositoryResult<SnapshotId> {
         match self.spec_version {
-            SpecVersionBin::V1dot0 => self.lookup_tag_v1(tag).await,
-            SpecVersionBin::V2dot0 => self.lookup_tag_v2(tag).await,
+            SpecVersionBin::V1 => self.lookup_tag_v1(tag).await,
+            SpecVersionBin::V2 => self.lookup_tag_v2(tag, None).await,
         }
     }
 
@@ -1281,16 +1550,18 @@ impl Repository {
             RefVersionInfo::TagRef(tag) => {
                 let ref_data =
                     refs::fetch_tag(self.storage.as_ref(), &self.storage_settings, tag)
-                        .await?;
+                        .await
+                        .inject()?;
                 Ok(ref_data.snapshot)
             }
             RefVersionInfo::BranchTipRef(branch) => {
-                let ref_data = refs::fetch_branch_tip(
+                let ref_data = refs::fetch_branch_tip_v1(
                     self.storage.as_ref(),
                     &self.storage_settings,
                     branch,
                 )
-                .await?;
+                .await
+                .inject()?;
                 Ok(ref_data.snapshot)
             }
         }
@@ -1307,8 +1578,10 @@ impl Repository {
                 raise_if_invalid_snapshot_id_v2(repo_info, sid)?;
                 Ok(sid.clone())
             }
-            RefVersionInfo::TagRef(tag) => self.lookup_tag(tag).await,
-            RefVersionInfo::BranchTipRef(branch) => self.lookup_branch(branch).await,
+            RefVersionInfo::TagRef(tag) => self.lookup_tag_v2(tag, Some(repo_info)).await,
+            RefVersionInfo::BranchTipRef(branch) => {
+                self.lookup_branch_v2(branch, Some(repo_info)).await
+            }
         }
     }
 
@@ -1317,11 +1590,26 @@ impl Repository {
         &self,
         version: &VersionInfo,
     ) -> RepositoryResult<SnapshotId> {
+        self.resolve_version_using(version, None).await
+    }
+
+    async fn resolve_version_using(
+        &self,
+        version: &VersionInfo,
+        repo_info: Option<&RepoInfo>,
+    ) -> RepositoryResult<SnapshotId> {
         match self.spec_version {
-            SpecVersionBin::V1dot0 => self.resolve_version_v1(version).await,
-            SpecVersionBin::V2dot0 => {
-                self.resolve_version_v2(self.get_repo_info().await?.0.as_ref(), version)
-                    .await
+            SpecVersionBin::V1 => self.resolve_version_v1(version).await,
+            SpecVersionBin::V2 => {
+                let fetched;
+                let ri = match repo_info {
+                    Some(ri) => ri,
+                    None => {
+                        fetched = self.get_repo_info().await?.0;
+                        &fetched
+                    }
+                };
+                self.resolve_version_v2(ri, version).await
             }
         }
     }
@@ -1350,11 +1638,12 @@ impl Repository {
                     .await?;
                 match snap.into_iter().next() {
                     Some(snap) => Ok(snap.id),
-                    None => Err(RepositoryErrorKind::InvalidAsOfSpec {
-                        branch: branch.clone(),
-                        at,
-                    }
-                    .into()),
+                    None => Err(RepositoryError::capture(
+                        RepositoryErrorKind::InvalidAsOfSpec {
+                            branch: branch.clone(),
+                            at,
+                        },
+                    )),
                 }
             }
         }
@@ -1371,8 +1660,8 @@ impl Repository {
                 self.resolve_ref_version_v2(repo_info, &ref_version_info).await
             }
             Err((branch, at)) => {
-                let snap_id = repo_info.resolve_branch(branch.as_str())?;
-                let ancestry = repo_info.ancestry(&snap_id)?;
+                let snap_id = repo_info.resolve_branch(branch.as_str()).inject()?;
+                let ancestry = repo_info.ancestry(&snap_id).inject()?;
                 let snap: Vec<_> = ancestry
                     .skip_while(|parent| {
                         if let Ok(parent) = parent {
@@ -1382,15 +1671,17 @@ impl Repository {
                         }
                     })
                     .take(1)
-                    .try_collect()?;
+                    .try_collect()
+                    .inject()?;
 
                 match snap.into_iter().next() {
                     Some(snap) => Ok(snap.id),
-                    None => Err(RepositoryErrorKind::InvalidAsOfSpec {
-                        branch: branch.clone(),
-                        at,
-                    }
-                    .into()),
+                    None => Err(RepositoryError::capture(
+                        RepositoryErrorKind::InvalidAsOfSpec {
+                            branch: branch.clone(),
+                            at,
+                        },
+                    )),
                 }
             }
         }
@@ -1408,24 +1699,33 @@ impl Repository {
         from: &VersionInfo,
         to: &VersionInfo,
     ) -> SessionResult<Diff> {
-        let from = self.resolve_version(from).await?;
-        let to = self.resolve_version(to).await?;
+        let repo_info = match self.spec_version {
+            SpecVersionBin::V1 => None,
+            SpecVersionBin::V2 => Some(self.get_repo_info().await.inject()?.0),
+        };
+
+        let from =
+            self.resolve_version_using(from, repo_info.as_deref()).await.inject()?;
+        let to = self.resolve_version_using(to, repo_info.as_deref()).await.inject()?;
         let all_snaps = self
-            .ancestry(&VersionInfo::SnapshotId(to))
-            .await?
+            .ancestry_using(&VersionInfo::SnapshotId(to), repo_info.clone())
+            .await
+            .inject()?
             .try_take_while(|snap_info| ready(Ok(snap_info.id != from)))
             .try_collect::<Vec<_>>()
-            .await?;
+            .await
+            .inject()?;
 
         if all_snaps.last().and_then(|info| info.parent_id.as_ref()) != Some(&from) {
-            return Err(SessionErrorKind::BadSnapshotChainForDiff.into());
+            return Err(SessionError::capture(SessionErrorKind::BadSnapshotChainForDiff));
         }
 
         // we don't include the changes in from
         let fut: FuturesOrdered<_> = all_snaps
             .iter()
             .filter_map(|snap_info| {
-                if snap_info.is_initial() {
+                // v1 repos don't have transaction logs for initial snapshots
+                if self.spec_version == SpecVersionBin::V1 && snap_info.is_initial() {
                     None
                 } else {
                     Some(
@@ -1442,16 +1742,27 @@ impl Repository {
                 res.add_changes(log.as_ref());
                 ready(Ok(res))
             })
-            .await?;
+            .await
+            .inject()?;
 
         if let Some(to_snap) = all_snaps.first().as_ref().map(|snap| snap.id.clone()) {
-            let from_session =
-                self.readonly_session(&VersionInfo::SnapshotId(from)).await?;
-            let to_session =
-                self.readonly_session(&VersionInfo::SnapshotId(to_snap)).await?;
+            let from_session = self
+                .readonly_session_using(
+                    &VersionInfo::SnapshotId(from),
+                    repo_info.as_deref(),
+                )
+                .await
+                .inject()?;
+            let to_session = self
+                .readonly_session_using(
+                    &VersionInfo::SnapshotId(to_snap),
+                    repo_info.as_deref(),
+                )
+                .await
+                .inject()?;
             builder.to_diff(&from_session, &to_session).await
         } else {
-            Err(SessionErrorKind::BadSnapshotChainForDiff.into())
+            Err(SessionError::capture(SessionErrorKind::BadSnapshotChainForDiff))
         }
     }
 
@@ -1460,13 +1771,21 @@ impl Repository {
         &self,
         version: &VersionInfo,
     ) -> RepositoryResult<Session> {
-        let snapshot_id = self.resolve_version(version).await?;
+        self.readonly_session_using(version, None).await
+    }
+
+    async fn readonly_session_using(
+        &self,
+        version: &VersionInfo,
+        repo_info: Option<&RepoInfo>,
+    ) -> RepositoryResult<Session> {
+        let snapshot_id = self.resolve_version_using(version, repo_info).await?;
         let session = Session::create_readonly_session(
             self.config.clone(),
             self.storage_settings.clone(),
-            self.storage.clone(),
+            Arc::clone(&self.storage),
             Arc::clone(&self.asset_manager),
-            self.virtual_resolver.clone(),
+            Arc::clone(&self.virtual_resolver),
             snapshot_id.clone(),
         );
         self.preload_manifests(snapshot_id);
@@ -1474,23 +1793,36 @@ impl Repository {
         Ok(session)
     }
 
+    async fn fail_unless_online_status(&self, error_msg: &str) -> RepositoryResult<()> {
+        if self.spec_version() >= SpecVersionBin::V2 {
+            let status = self.get_status().await?;
+            if status.availability != RepoAvailability::Online {
+                return Err(RepositoryError::capture(
+                    RepositoryErrorKind::ReadonlyRepository(format!(
+                        "{error_msg}; {0}",
+                        status.error_msg()
+                    )),
+                ));
+            }
+        }
+        Ok(())
+    }
+
     #[instrument(skip(self))]
     pub async fn writable_session(&self, branch: &str) -> RepositoryResult<Session> {
-        if !self.storage.can_write().await? {
-            return Err(RepositoryErrorKind::ReadonlyStorage(
-                "Cannot create writable session".to_string(),
-            )
-            .into());
-        }
+        self.raise_if_cant_write("Cannot create writable session").await?;
+
+        self.fail_unless_online_status("Cannot create writable session").await?;
+
         let snapshot_id = self.lookup_branch(branch).await?;
 
         let session = Session::create_writable_session(
             self.config.clone(),
             self.storage_settings.clone(),
-            self.storage.clone(),
+            Arc::clone(&self.storage),
             Arc::clone(&self.asset_manager),
-            self.virtual_resolver.clone(),
-            branch.to_string(),
+            Arc::clone(&self.virtual_resolver),
+            Some(branch.to_string()),
             snapshot_id.clone(),
             self.default_commit_metadata.clone(),
         );
@@ -1502,23 +1834,29 @@ impl Repository {
 
     #[instrument(skip(self))]
     pub async fn rearrange_session(&self, branch: &str) -> RepositoryResult<Session> {
-        if !self.storage.can_write().await? {
-            return Err(RepositoryErrorKind::ReadonlyStorage(
-                "Cannot create rearrange session".to_string(),
-            )
-            .into());
-        }
-        // this feature is only available in IC2
-        self.asset_manager().fail_unless_spec_at_least(SpecVersionBin::V2dot0)?;
+        self.raise_if_cant_write("Cannot create rearrange session").await?;
 
-        let snapshot_id = self.lookup_branch(branch).await?;
+        // this feature is only available in IC2
+        self.asset_manager().fail_unless_spec_at_least(SpecVersionBin::V2)?;
+
+        self.fail_unless_online_status("Cannot create rearrange session").await?;
+
+        let (ri, _) = self.asset_manager().fetch_repo_info().await?;
+        let snapshot_id = self.lookup_branch_v2(branch, Some(&ri)).await?;
+
+        raise_if_feature_flag_disabled(
+            ri.as_ref(),
+            MOVE_NODE_FLAG,
+            "create rearrange session",
+        )
+        .inject()?;
 
         let session = Session::create_rearrange_session(
             self.config.clone(),
             self.storage_settings.clone(),
-            self.storage.clone(),
+            Arc::clone(&self.storage),
             Arc::clone(&self.asset_manager),
-            self.virtual_resolver.clone(),
+            Arc::clone(&self.virtual_resolver),
             branch.to_string(),
             snapshot_id.clone(),
             self.default_commit_metadata.clone(),
@@ -1562,8 +1900,10 @@ impl Repository {
                                 for manifest in manifests {
                                     if !loaded_manifests.contains(&manifest.object_id) {
                                         let manifest_id = manifest.object_id;
-                                        if let Some(manifest_info) =
-                                            snap_c.manifest_info(&manifest_id)
+                                        if let Some(manifest_info) = snap_c
+                                            .manifest_info(&manifest_id)
+                                            .ok()
+                                            .flatten()
                                             && loaded_refs + manifest_info.num_chunk_refs
                                                 <= preload_config.max_total_refs()
                                             && preload_config
@@ -1576,20 +1916,20 @@ impl Repository {
                                             let manifest_id_c = manifest_id.clone();
                                             let path = node.path.clone();
                                             futures.push(async move {
-                                                    trace!("Preloading manifest {} for array {}", &manifest_id_c, path);
-                                                    if let Err(err) = asset_manager
-                                                        .fetch_manifest(
-                                                            &manifest_id_c,
-                                                            size_bytes,
-                                                        )
-                                                        .await
-                                                    {
-                                                        error!(
-                                                            "Failure pre-loading manifest {}: {}",
-                                                            &manifest_id_c, err
-                                                        );
-                                                    }
-                                                });
+                                                trace!(
+                                                    "Preloading manifest {} for array {}",
+                                                    &manifest_id_c, path
+                                                );
+                                                if let Err(err) = asset_manager
+                                                    .fetch_manifest(&manifest_id_c, size_bytes)
+                                                    .await
+                                                {
+                                                    error!(
+                                                        "Failure pre-loading manifest {}: {}",
+                                                        &manifest_id_c, err
+                                                    );
+                                                }
+                                            });
                                             loaded_manifests.insert(manifest_id);
                                             loaded_refs += manifest_info.num_chunk_refs;
                                         }
@@ -1603,6 +1943,21 @@ impl Repository {
             };
             ().in_current_span()
         });
+    }
+
+    async fn raise_if_cant_write(&self, msg: impl Into<String>) -> RepositoryResult<()> {
+        raise_if_cant_write(self.storage().as_ref(), msg).await
+    }
+}
+
+async fn raise_if_cant_write(
+    storage: &dyn Storage,
+    msg: impl Into<String>,
+) -> RepositoryResult<()> {
+    if storage.can_write().await.inject()? {
+        Ok(())
+    } else {
+        Err(RepositoryError::capture(RepositoryErrorKind::ReadonlyStorage(msg.into())))
     }
 }
 
@@ -1621,10 +1976,15 @@ impl Iterator for AncestryIteratorV2 {
 }
 
 impl AncestryIteratorV2 {
+    #[expect(unsafe_code)]
     fn new(repo_info: Arc<RepoInfo>, snapshot_id: &SnapshotId) -> RepositoryResult<Self> {
+        // SAFETY: we create a reference from the Arc's raw pointer to build an iterator
+        // that borrows from repo_info. The Arc is moved into _repo_info, keeping the
+        // data alive for the lifetime of the iterator. The struct must not be reordered
+        // (drop order is declaration order, so _repo_info outlives it).
         let it = unsafe {
             let repo_info_ref = &*Arc::as_ptr(&repo_info);
-            Box::new(repo_info_ref.ancestry(snapshot_id)?.map(|e| e.err_into()))
+            Box::new(repo_info_ref.ancestry(snapshot_id).inject()?.map(|e| e.inject()))
         };
         Ok(Self { _repo_info: repo_info, it })
     }
@@ -1668,10 +2028,9 @@ fn validate_credentials(
         if let Some(cont) = config.get_virtual_chunk_container(url_prefix)
             && let Err(error) = cont.validate_credentials(cred.as_ref())
         {
-            return Err(RepositoryErrorKind::StorageError(StorageErrorKind::Other(
-                error,
-            ))
-            .into());
+            return Err(RepositoryError::capture(RepositoryErrorKind::StorageError(
+                StorageErrorKind::Other(error),
+            )));
         }
     }
     Ok(())
@@ -1681,10 +2040,7 @@ async fn raise_if_invalid_snapshot_id_v1(
     asset_manager: &AssetManager,
     snapshot_id: &SnapshotId,
 ) -> RepositoryResult<()> {
-    asset_manager
-        .fetch_snapshot(snapshot_id)
-        .await
-        .map_err(|_| RepositoryErrorKind::SnapshotNotFound { id: snapshot_id.clone() })?;
+    asset_manager.fetch_snapshot(snapshot_id).await.inject()?;
     Ok(())
 }
 
@@ -1692,18 +2048,23 @@ fn raise_if_invalid_snapshot_id_v2(
     repo_info: &RepoInfo,
     snapshot_id: &SnapshotId,
 ) -> RepositoryResult<()> {
-    repo_info.find_snapshot(snapshot_id)?;
+    repo_info.find_snapshot(snapshot_id).inject()?;
     Ok(())
 }
 
 #[cfg(test)]
-#[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 mod tests {
-    use std::{collections::HashMap, error::Error, iter::zip, path::PathBuf, sync::Arc};
+    use futures::TryStreamExt as _;
+    use std::{
+        collections::HashMap, error::Error, iter::zip, num::NonZeroU16, path::PathBuf,
+        sync::Arc,
+    };
 
     use bytes::Bytes;
     use icechunk_macros::tokio_test;
     use itertools::enumerate;
+    use rstest::rstest;
+    use rstest_reuse::{self, *};
     use storage::logging::LoggingStorage;
     use tempfile::TempDir;
 
@@ -1712,18 +2073,21 @@ mod tests {
         config::{
             CachingConfig, ManifestConfig, ManifestPreloadConfig, ManifestSplitCondition,
             ManifestSplitDim, ManifestSplitDimCondition, ManifestSplittingConfig,
-            RepositoryConfig,
+            ManifestVirtualChunkLocationCompressionConfig, RepositoryConfig,
         },
         conflicts::basic_solver::BasicConflictSolver,
         format::{
             ByteRange, ChunkIndices, MANIFESTS_FILE_PATH,
-            manifest::{ChunkPayload, ManifestSplits},
+            manifest::{
+                ChunkPayload, ManifestSplits, VirtualChunkLocation, VirtualChunkRef,
+            },
             snapshot::{ArrayShape, DimensionName},
         },
-        new_local_filesystem_storage,
+        migrations::migrate_1_to_2,
         ops::manifests::rewrite_manifests,
         session::{CommitMethod, SessionError, get_chunk},
         storage::new_in_memory_storage,
+        test_utils::spec_version_cases,
     };
 
     use super::*;
@@ -1743,33 +2107,42 @@ mod tests {
         asset_manager: &Arc<AssetManager>,
         total_manifests: usize,
     ) {
-        let expected = asset_manager.list_manifests().await.unwrap().count().await;
+        let actual = asset_manager.list_manifests().await.unwrap().count().await;
         assert_eq!(
-            total_manifests, expected,
-            "Mismatch in manifest count: expected {expected}, but got {total_manifests}",
+            total_manifests, actual,
+            "Mismatch in manifest count: expected {total_manifests}, but got {actual}",
         );
     }
 
-    #[tokio::test]
-    async fn test_repository_persistent_config() -> Result<(), Box<dyn Error>> {
+    #[tokio_test]
+    #[apply(spec_version_cases)]
+    async fn test_repository_persistent_config(
+        spec_version: SpecVersionBin,
+    ) -> Result<(), Box<dyn Error>> {
         let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
 
-        let repo =
-            Repository::create(None, Arc::clone(&storage), HashMap::new(), None).await?;
+        let repo = Repository::create(
+            None,
+            Arc::clone(&storage),
+            HashMap::new(),
+            Some(spec_version),
+            true,
+        )
+        .await?;
 
-        // initializing a repo does not create the config file
+        // default config is not stored in repo info
+        let expected_default = RepositoryConfig {
+            storage: Some(storage.default_settings().await?),
+            ..Default::default()
+        };
+        assert_eq!(repo.config(), &expected_default);
         assert!(Repository::fetch_config(Arc::clone(&storage)).await?.is_none());
-        // it inits with the default config
-        assert_eq!(repo.config(), &RepositoryConfig::default());
-        // updating the persistent config create a new file with default values
-        let version = repo.save_config().await?;
-        assert_ne!(version, storage::VersionInfo::for_creation());
-        assert_eq!(
-            Repository::fetch_config(Arc::clone(&storage)).await?.unwrap().0,
-            RepositoryConfig::default()
-        );
 
-        // reload the repo changing config
+        // reopening with default config still works
+        let repo = Repository::open(None, Arc::clone(&storage), HashMap::new()).await?;
+        assert_eq!(repo.config(), &expected_default);
+
+        // reload the repo changing config via client override
         let repo = Repository::open(
             Some(RepositoryConfig {
                 inline_chunk_threshold_bytes: Some(42),
@@ -1782,9 +2155,11 @@ mod tests {
 
         assert_eq!(repo.config().inline_chunk_threshold_bytes(), 42);
 
-        // update the persistent config
+        // save the config — persists into repo info
         let version = repo.save_config().await?;
         assert_ne!(version, storage::VersionInfo::for_creation());
+
+        // fetch_config reads from repo info
         assert_eq!(
             Repository::fetch_config(Arc::clone(&storage))
                 .await?
@@ -1794,8 +2169,8 @@ mod tests {
             42
         );
 
-        // verify loading again gets the value from persistent config
-        let repo = Repository::open(None, storage, HashMap::new()).await?;
+        // verify loading again gets the value from persistent config in repo info
+        let repo = Repository::open(None, Arc::clone(&storage), HashMap::new()).await?;
         assert_eq!(repo.config().inline_chunk_threshold_bytes(), 42);
 
         // creating a repo we can override certain config atts:
@@ -1808,9 +2183,14 @@ mod tests {
             }),
             ..RepositoryConfig::default()
         };
-        let repo =
-            Repository::create(Some(config), Arc::clone(&storage), HashMap::new(), None)
-                .await?;
+        let repo = Repository::create(
+            Some(config),
+            Arc::clone(&storage),
+            HashMap::new(),
+            Some(spec_version),
+            true,
+        )
+        .await?;
         assert_eq!(repo.config().inline_chunk_threshold_bytes(), 20);
         assert_eq!(repo.config().caching().num_chunk_refs(), 21);
 
@@ -1826,7 +2206,7 @@ mod tests {
         assert_eq!(repo.config().inline_chunk_threshold_bytes(), 20);
         assert_eq!(repo.config().caching().num_chunk_refs(), 100);
 
-        // and we can save the merge
+        // and we can save the merge — persists into repo info
         let version = repo.save_config().await?;
         assert_ne!(version, storage::VersionInfo::for_creation());
         assert_eq!(&Repository::fetch_config(storage).await?.unwrap().0, repo.config());
@@ -1834,12 +2214,21 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
-    async fn test_manage_refs() -> Result<(), Box<dyn Error>> {
+    #[tokio_test]
+    #[apply(spec_version_cases)]
+    async fn test_manage_refs(
+        #[case] spec_version: SpecVersionBin,
+    ) -> Result<(), Box<dyn Error>> {
         let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
 
-        let repo =
-            Repository::create(None, Arc::clone(&storage), HashMap::new(), None).await?;
+        let repo = Repository::create(
+            None,
+            Arc::clone(&storage),
+            HashMap::new(),
+            Some(spec_version),
+            true,
+        )
+        .await?;
 
         let initial_branches = repo.list_branches().await?;
         assert_eq!(initial_branches, BTreeSet::from(["main".into()]));
@@ -1940,6 +2329,7 @@ mod tests {
                 max_arrays_to_scan: None,
             }),
             splitting: Some(split_config.clone()),
+            virtual_chunk_location_compression: None,
         };
         let config = RepositoryConfig {
             manifest: Some(man_config),
@@ -1954,6 +2344,7 @@ mod tests {
         dimension_names: &Option<Vec<DimensionName>>,
         split_config: &ManifestSplittingConfig,
         storage: Option<Arc<dyn Storage + Send + Sync>>,
+        spec_version: SpecVersionBin,
     ) -> Result<Repository, Box<dyn Error>> {
         let backend: Arc<dyn Storage + Send + Sync> =
             storage.unwrap_or(new_in_memory_storage().await?);
@@ -1966,13 +2357,20 @@ mod tests {
                 max_arrays_to_scan: None,
             }),
             splitting: Some(split_config.clone()),
+            virtual_chunk_location_compression: None,
         };
         let config = RepositoryConfig {
             manifest: Some(man_config),
             ..RepositoryConfig::default()
         };
-        let repository =
-            Repository::create(Some(config), storage, HashMap::new(), None).await?;
+        let repository = Repository::create(
+            Some(config),
+            storage,
+            HashMap::new(),
+            Some(spec_version),
+            true,
+        )
+        .await?;
 
         let mut session = repository.writable_session("main").await?;
 
@@ -1981,13 +2379,16 @@ mod tests {
         session
             .add_array(path.clone(), shape.clone(), dimension_names.clone(), def.clone())
             .await?;
-        session.commit("initialized", None).await?;
+        session.commit("initialized").max_concurrent_nodes(8).execute().await?;
 
         Ok(repository)
     }
 
     #[tokio_test]
-    async fn test_resize_rewrites_manifests() -> Result<(), Box<dyn Error>> {
+    #[apply(spec_version_cases)]
+    async fn test_resize_rewrites_manifests(
+        #[case] spec_version: SpecVersionBin,
+    ) -> Result<(), Box<dyn Error>> {
         let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
         let repo = Repository::create(
             Some(RepositoryConfig {
@@ -1996,14 +2397,15 @@ mod tests {
             }),
             Arc::clone(&storage),
             HashMap::new(),
-            None,
+            Some(spec_version),
+            true,
         )
         .await?;
         let mut session = repo.writable_session("main").await?;
         session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
 
         let array_path: Path = "/array".to_string().try_into().unwrap();
-        let shape = ArrayShape::new(vec![(4, 1)]).unwrap();
+        let shape = ArrayShape::new(vec![(4, 4)]).unwrap();
         let dimension_names = Some(vec!["t".into()]);
         let array_def = Bytes::from_static(br#"{"this":"other array"}"#);
 
@@ -2023,14 +2425,14 @@ mod tests {
                 .set_chunk_ref(array_path.clone(), ChunkIndices(vec![idx]), Some(payload))
                 .await?;
         }
-        session.commit("first commit", None).await?;
+        session.commit("first commit").max_concurrent_nodes(8).execute().await?;
         assert_manifest_count(repo.asset_manager(), 1).await;
 
         // Important we are not issuing any chunk deletes here (which is what Zarr does)
         // Note we are still rewriting the manifest even without chunk changes
         // GH604
         let mut session = repo.writable_session("main").await?;
-        let shape2 = ArrayShape::new(vec![(2, 1)]).unwrap();
+        let shape2 = ArrayShape::new(vec![(2, 2)]).unwrap();
         session
             .update_array(
                 &array_path,
@@ -2039,13 +2441,13 @@ mod tests {
                 array_def.clone(),
             )
             .await?;
-        session.commit("second commit", None).await?;
+        session.commit("second commit").max_concurrent_nodes(8).execute().await?;
         assert_manifest_count(repo.asset_manager(), 2).await;
 
         // Now we expand the size, but don't write chunks.
         // No new manifests need to be written
         let mut session = repo.writable_session("main").await?;
-        let shape3 = ArrayShape::new(vec![(6, 1)]).unwrap();
+        let shape3 = ArrayShape::new(vec![(6, 6)]).unwrap();
         session
             .update_array(
                 &array_path,
@@ -2054,15 +2456,18 @@ mod tests {
                 array_def.clone(),
             )
             .await?;
-        session.commit("second commit", None).await?;
+        session.commit("second commit").max_concurrent_nodes(8).execute().await?;
         assert_manifest_count(repo.asset_manager(), 2).await;
 
         Ok(())
     }
 
     #[tokio_test]
-    async fn test_splits_change_in_session() -> Result<(), Box<dyn Error>> {
-        let shape = ArrayShape::new(vec![(13, 1), (2, 1), (1, 1)]).unwrap();
+    #[apply(spec_version_cases)]
+    async fn test_splits_change_in_session(
+        #[case] spec_version: SpecVersionBin,
+    ) -> Result<(), Box<dyn Error>> {
+        let shape = ArrayShape::new(vec![(13, 13), (2, 2), (1, 1)]).unwrap();
         let dimension_names = Some(vec!["t".into(), "y".into(), "x".into()]);
         let new_dimension_names = Some(vec!["time".into(), "y".into(), "x".into()]);
         let array_path: Path = "/temperature".try_into().unwrap();
@@ -2094,13 +2499,15 @@ mod tests {
 
         let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
         let logging = Arc::new(LoggingStorage::new(Arc::clone(&backend)));
-        let storage: Arc<dyn Storage + Send + Sync> = logging.clone();
+        let storage = Arc::clone(&logging);
+        let storage: Arc<dyn Storage + Send + Sync> = storage;
         let repository = create_repo_with_split_manifest_config(
             &array_path,
             &shape,
             &dimension_names,
             &split_config,
             Some(Arc::clone(&storage)),
+            spec_version,
         )
         .await?;
 
@@ -2133,20 +2540,9 @@ mod tests {
                     ChunkIndices(vec![i, 0, 0]),
                     Some(ChunkPayload::Inline(format!("{i}").into())),
                 )
-                .await?
+                .await?;
         }
         verify_data(&session, 0).await;
-
-        let node = session.get_node(&array_path).await?;
-        let orig_splits = session.lookup_splits(&node.id).cloned();
-        assert_eq!(
-            orig_splits,
-            Some(ManifestSplits::from_edges(vec![
-                vec![0, 3, 6, 9, 12, 13],
-                vec![0, 2],
-                vec![0, 1]
-            ]))
-        );
 
         // this should update the splits
         session
@@ -2158,15 +2554,6 @@ mod tests {
             )
             .await?;
         verify_data(&session, 0).await;
-        let new_splits = session.lookup_splits(&node.id).cloned();
-        assert_eq!(
-            new_splits,
-            Some(ManifestSplits::from_edges(vec![
-                vec![0, 4, 8, 12, 13],
-                vec![0, 2],
-                vec![0, 1]
-            ]))
-        );
 
         // update data
         for i in 0..12 {
@@ -2176,7 +2563,7 @@ mod tests {
                     ChunkIndices(vec![i, 0, 0]),
                     Some(ChunkPayload::Inline(format!("{0}", i + 10).into())),
                 )
-                .await?
+                .await?;
         }
         verify_data(&session, 10).await;
 
@@ -2184,11 +2571,14 @@ mod tests {
     }
 
     #[tokio_test]
-    async fn tests_manifest_rewriting_simple() -> Result<(), Box<dyn Error>> {
+    #[apply(spec_version_cases)]
+    async fn tests_manifest_rewriting_simple(
+        #[case] spec_version: SpecVersionBin,
+    ) -> Result<(), Box<dyn Error>> {
         let split_size = 3u32;
         let dim_size = 10u32;
 
-        let shape = ArrayShape::new(vec![(dim_size as u64, 1)]).unwrap();
+        let shape = ArrayShape::new(vec![(dim_size as u64, dim_size)]).unwrap();
         let dimension_names = Some(vec!["t".into()]);
         let temp_path: Path = "/temperature".try_into().unwrap();
         let split_config = ManifestSplittingConfig::with_size(split_size);
@@ -2200,6 +2590,7 @@ mod tests {
             &dimension_names,
             &split_config,
             Some(Arc::clone(&storage)),
+            spec_version,
         )
         .await?;
 
@@ -2214,11 +2605,16 @@ mod tests {
                     ChunkIndices(vec![i]),
                     Some(ChunkPayload::Inline(format!("{i}").into())),
                 )
-                .await?
+                .await?;
         }
-        session.commit("first split", None).await?;
+        session.commit("first split").max_concurrent_nodes(8).execute().await?;
         total_manifests += 4;
         assert_manifest_count(repository.asset_manager(), total_manifests).await;
+
+        let commit_method = match spec_version {
+            SpecVersionBin::V1 => CommitMethod::NewCommit,
+            SpecVersionBin::V2 => CommitMethod::Amend,
+        };
 
         // make sure data is correct
         let validate_data = async || {
@@ -2263,8 +2659,9 @@ mod tests {
             &new_repo,
             "main",
             "rewrite_manifests with split-size=12",
+            8,
             None,
-            CommitMethod::Amend,
+            commit_method,
         )
         .await?;
         total_manifests += 1;
@@ -2275,7 +2672,9 @@ mod tests {
                 .lookup_snapshot(&snap)
                 .await?
                 .metadata
-                .contains_key("splitting_config")
+                .get("__icechunk")
+                .and_then(|v| v.get("splitting_config"))
+                .is_some()
         );
 
         // split manifests to smaller sizes
@@ -2294,8 +2693,9 @@ mod tests {
             &new_repo,
             "main",
             "rewrite_manifests with split-size=4",
+            8,
             None,
-            CommitMethod::Amend,
+            commit_method,
         )
         .await?;
         total_manifests += 3;
@@ -2306,34 +2706,39 @@ mod tests {
                 .lookup_snapshot(&snap)
                 .await?
                 .metadata
-                .contains_key("splitting_config")
+                .get("__icechunk")
+                .and_then(|v| v.get("splitting_config"))
+                .is_some()
         );
 
         Ok(())
     }
 
     #[tokio_test]
-    async fn tests_manifest_splitting_simple() -> Result<(), Box<dyn Error>> {
+    #[apply(spec_version_cases)]
+    async fn tests_manifest_splitting_simple(
+        #[case] spec_version: SpecVersionBin,
+    ) -> Result<(), Box<dyn Error>> {
         let dim_size = 25u32;
-        let chunk_size = 1u32;
         let split_size = 3u32;
 
         let shape =
-            ArrayShape::new(vec![(dim_size.into(), chunk_size.into()), (2, 1), (1, 1)])
-                .unwrap();
+            ArrayShape::new(vec![(dim_size.into(), dim_size), (2, 2), (1, 1)]).unwrap();
         let dimension_names = Some(vec!["t".into()]);
         let temp_path: Path = "/temperature".try_into().unwrap();
         let split_config = ManifestSplittingConfig::with_size(split_size);
 
         let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
         let logging = Arc::new(LoggingStorage::new(Arc::clone(&backend)));
-        let storage: Arc<dyn Storage + Send + Sync> = logging.clone();
+        let storage = Arc::clone(&logging);
+        let storage: Arc<dyn Storage + Send + Sync> = storage;
         let repository = create_repo_with_split_manifest_config(
             &temp_path,
             &shape,
             &dimension_names,
             &split_config,
             Some(Arc::clone(&storage)),
+            spec_version,
         )
         .await?;
 
@@ -2353,9 +2758,9 @@ mod tests {
                     ChunkIndices(vec![i, 0, 0]),
                     Some(ChunkPayload::Inline(format!("{i}").into())),
                 )
-                .await?
+                .await?;
         }
-        session.commit("first split", None).await?;
+        session.commit("first split").max_concurrent_nodes(8).execute().await?;
         total_manifests += 1;
         assert_manifest_count(repository.asset_manager(), total_manifests).await;
 
@@ -2369,16 +2774,23 @@ mod tests {
                 Some(ChunkPayload::Inline(format!("{last_chunk}").into())),
             )
             .await?;
-        session.commit("last split", None).await?;
+        session.commit("last split").max_concurrent_nodes(8).execute().await?;
         total_manifests += 1;
         assert_manifest_count(repository.asset_manager(), total_manifests).await;
 
         // check that reads are optimized; we should only fetch the last split for this query
         let logging2 = Arc::new(LoggingStorage::new(Arc::clone(&backend)));
-        let storage2: Arc<dyn Storage + Send + Sync> = logging2.clone();
+        let storage2 = Arc::clone(&logging2);
+        let storage2: Arc<dyn Storage + Send + Sync> = storage2;
         let config = RepositoryConfig {
             manifest: Some(ManifestConfig::empty()),
-            storage: Some(Default::default()),
+            storage: Some(storage::Settings {
+                concurrency: Some(storage::ConcurrencySettings {
+                    max_concurrent_requests_for_object: NonZeroU16::new(1),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
             ..RepositoryConfig::default()
         };
         let read_repo = Repository::open(Some(config), storage2, HashMap::new()).await?;
@@ -2431,9 +2843,9 @@ mod tests {
                     ChunkIndices(vec![i, 0, 0]),
                     Some(ChunkPayload::Inline(format!("{i}").into())),
                 )
-                .await?
+                .await?;
         }
-        session.commit("wrote all splits", None).await?;
+        session.commit("wrote all splits").max_concurrent_nodes(8).execute().await?;
         assert_manifest_count(repository.asset_manager(), total_manifests).await;
 
         let mut session = repository.writable_session("main").await?;
@@ -2444,12 +2856,12 @@ mod tests {
                     ChunkIndices(vec![i, 0, 0]),
                     Some(ChunkPayload::Inline(format!("{i}").into())),
                 )
-                .await?
+                .await?;
         }
         // We are counting total manifests in the `assert_manifest_count` helper function
         // So we keep a running count of the total and update that at each step.
         total_manifests += dim_size.div_ceil(split_size) as usize;
-        session.commit("full overwrite", None).await?;
+        session.commit("full overwrite").max_concurrent_nodes(8).execute().await?;
         assert_manifest_count(repository.asset_manager(), total_manifests).await;
 
         // test reads
@@ -2478,7 +2890,7 @@ mod tests {
                 .await?;
         }
         total_manifests += 0;
-        session.commit("clear existing array", None).await?;
+        session.commit("clear existing array").max_concurrent_nodes(8).execute().await?;
         assert_manifest_count(repository.asset_manager(), total_manifests).await;
 
         // add a new array
@@ -2507,7 +2919,7 @@ mod tests {
             .set_chunk_ref(array_path.clone(), ChunkIndices(vec![1, 0, 0]), None)
             .await?;
         total_manifests += 0;
-        session.commit("clear new array", None).await?;
+        session.commit("clear new array").max_concurrent_nodes(8).execute().await?;
         assert_manifest_count(repository.asset_manager(), total_manifests).await;
 
         Ok(())
@@ -2515,7 +2927,7 @@ mod tests {
 
     #[tokio_test]
     async fn test_manifest_splitting_complex_config() -> Result<(), Box<dyn Error>> {
-        let shape = ArrayShape::new(vec![(25, 1), (10, 1), (3, 1), (4, 1)]).unwrap();
+        let shape = ArrayShape::new(vec![(25, 25), (10, 10), (3, 3), (4, 4)]).unwrap();
         let dimension_names = Some(vec!["t".into(), "z".into(), "y".into(), "x".into()]);
         let temp_path: Path = "/temperature".try_into().unwrap();
 
@@ -2579,12 +2991,15 @@ mod tests {
     }
 
     #[tokio_test]
-    async fn test_manifest_splitting_complex_writes() -> Result<(), Box<dyn Error>> {
+    #[apply(spec_version_cases)]
+    async fn test_manifest_splitting_complex_writes(
+        #[case] spec_version: SpecVersionBin,
+    ) -> Result<(), Box<dyn Error>> {
         let t_split_size = 12u32;
         let other_split_size = 9u32;
         let y_split_size = 2u32;
 
-        let shape = ArrayShape::new(vec![(25, 1), (10, 1), (3, 1), (4, 1)]).unwrap();
+        let shape = ArrayShape::new(vec![(25, 25), (10, 10), (3, 3), (4, 4)]).unwrap();
         let dimension_names = Some(vec!["t".into(), "z".into(), "y".into(), "x".into()]);
         let temp_path: Path = "/temperature".try_into().unwrap();
 
@@ -2617,13 +3032,15 @@ mod tests {
         let split_config = ManifestSplittingConfig { split_sizes: Some(split_sizes) };
         let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
         let logging = Arc::new(LoggingStorage::new(Arc::clone(&backend)));
-        let logging_c: Arc<dyn Storage + Send + Sync> = logging.clone();
+        let logging_c = Arc::clone(&logging);
+        let logging_c: Arc<dyn Storage + Send + Sync> = logging_c;
         let repository = create_repo_with_split_manifest_config(
             &temp_path,
             &shape,
             &dimension_names,
             &split_config,
             Some(logging_c),
+            spec_version,
         )
         .await?;
         let repo_clone = repository.reopen(None, None).await?;
@@ -2692,12 +3109,16 @@ mod tests {
                         ChunkIndices(index),
                         Some(ChunkPayload::Inline(format!("{value}").into())),
                     )
-                    .await?
+                    .await?;
             }
 
             total_manifests +=
                 (axis_size as u32).div_ceil(expected_split_sizes[ax]) as usize;
-            session.commit(format!("finished axis {ax}").as_ref(), None).await?;
+            session
+                .commit(format!("finished axis {ax}"))
+                .max_concurrent_nodes(8)
+                .execute()
+                .await?;
             assert_manifest_count(repository.asset_manager(), total_manifests).await;
 
             verify_data(ax, &session).await;
@@ -2731,7 +3152,7 @@ mod tests {
         // the first split in the `t`-axis. Since the other splits
         // are not modified we preserve all the old manifests
         total_manifests += 1;
-        session.commit("finished time again".to_string().as_ref(), None).await?;
+        session.commit("finished time again").max_concurrent_nodes(8).execute().await?;
         assert_manifest_count(repository.asset_manager(), total_manifests).await;
         verify_all_data(&repository).await;
 
@@ -2750,7 +3171,7 @@ mod tests {
         }
         total_manifests +=
             (shape.get(0).unwrap().array_length() as u32).div_ceil(t_split_size) as usize;
-        session.commit("finished time again".to_string().as_ref(), None).await?;
+        session.commit("finished time again").max_concurrent_nodes(8).execute().await?;
         assert_manifest_count(repository.asset_manager(), total_manifests).await;
         verify_all_data(&repository).await;
 
@@ -2767,7 +3188,7 @@ mod tests {
             .await?;
         // Important: now we rewrite one split per dimension
         total_manifests += 3;
-        session.commit("finished time again".to_string().as_ref(), None).await?;
+        session.commit("finished time again").max_concurrent_nodes(8).execute().await?;
         assert_manifest_count(repository.asset_manager(), total_manifests).await;
         verify_all_data(&repo_clone).await;
         verify_all_data(&repository).await;
@@ -2786,7 +3207,7 @@ mod tests {
         }
         total_manifests +=
             (shape.get(0).unwrap().array_length() as u32).div_ceil(t_split_size) as usize;
-        session.commit("finished time again".to_string().as_ref(), None).await?;
+        session.commit("finished time again").max_concurrent_nodes(8).execute().await?;
         assert_manifest_count(repo_clone.asset_manager(), total_manifests).await;
         verify_all_data(&repo_clone).await;
 
@@ -2804,7 +3225,7 @@ mod tests {
         }
         total_manifests +=
             (shape.get(0).unwrap().array_length() as u32).div_ceil(t_split_size) as usize;
-        session.commit("finished time again".to_string().as_ref(), None).await?;
+        session.commit("finished time again").max_concurrent_nodes(8).execute().await?;
         assert_manifest_count(repo_clone.asset_manager(), total_manifests).await;
         for idx in [0, 12, 24] {
             let actual = get_chunk(
@@ -2827,8 +3248,11 @@ mod tests {
     }
 
     #[tokio_test]
-    async fn test_manifest_splits_merge_sessions() -> Result<(), Box<dyn Error>> {
-        let shape = ArrayShape::new(vec![(25, 1), (10, 1), (3, 1), (4, 1)]).unwrap();
+    #[apply(spec_version_cases)]
+    async fn test_manifest_splits_merge_sessions(
+        #[case] spec_version: SpecVersionBin,
+    ) -> Result<(), Box<dyn Error>> {
+        let shape = ArrayShape::new(vec![(25, 25), (10, 10), (3, 3), (4, 4)]).unwrap();
         let dimension_names = Some(vec!["t".into(), "z".into(), "y".into(), "x".into()]);
         let temp_path: Path = "/temperature".try_into().unwrap();
 
@@ -2848,6 +3272,7 @@ mod tests {
             &dimension_names,
             &split_config,
             Some(backend),
+            spec_version,
         )
         .await?;
 
@@ -2855,7 +3280,6 @@ mod tests {
             [vec![0, 0, 1, 0], vec![0, 0, 0, 0], vec![0, 2, 0, 0], vec![0, 2, 0, 1]];
 
         let mut session1 = repository.writable_session("main").await?;
-        let node_id = session1.get_node(&temp_path).await?.id;
         session1
             .set_chunk_ref(
                 temp_path.clone(),
@@ -2903,7 +3327,7 @@ mod tests {
                 )
                 .await?;
 
-            assert!(session1.merge(session2).await.is_err());
+            assert!(session1.merge(session2).await.is_ok());
         }
 
         // now with the same split sizes
@@ -2926,12 +3350,6 @@ mod tests {
             )
             .await?;
 
-        // Session.splits should be _complete_ so it should be identical for the same node
-        // on any two sessions with compatible splits
-        let splits = session1.lookup_splits(&node_id).unwrap().clone();
-        assert_eq!(session1.lookup_splits(&node_id), session2.lookup_splits(&node_id));
-        session1.merge(session2).await?;
-        assert_eq!(session1.lookup_splits(&node_id), Some(&splits));
         for (val, idx) in enumerate(indices.iter()) {
             let actual = get_chunk(
                 session1
@@ -2998,9 +3416,11 @@ mod tests {
     }
 
     #[tokio_test]
-    async fn test_commits_with_conflicting_manifest_splits() -> Result<(), Box<dyn Error>>
-    {
-        let shape = ArrayShape::new(vec![(25, 1), (10, 1), (3, 1), (4, 1)]).unwrap();
+    #[apply(spec_version_cases)]
+    async fn test_commits_with_conflicting_manifest_splits(
+        #[case] spec_version: SpecVersionBin,
+    ) -> Result<(), Box<dyn Error>> {
+        let shape = ArrayShape::new(vec![(25, 25), (10, 10), (3, 3), (4, 4)]).unwrap();
         let dimension_names = Some(vec!["t".into(), "z".into(), "y".into(), "x".into()]);
         let temp_path: Path = "/temperature".try_into().unwrap();
 
@@ -3020,6 +3440,7 @@ mod tests {
             &dimension_names,
             &split_config,
             Some(backend),
+            spec_version,
         )
         .await?;
 
@@ -3074,14 +3495,18 @@ mod tests {
             )
             .await?;
 
-        session1.commit("first commit", None).await?;
+        session1.commit("first commit").max_concurrent_nodes(8).execute().await?;
         if let Err(SessionError { kind: SessionErrorKind::Conflict { .. }, .. }) =
-            session2.commit("second commit", None).await
+            session2.commit("second commit").max_concurrent_nodes(8).execute().await
         {
             let solver = BasicConflictSolver::default();
             // different chunks were written so this should fast forward
             assert!(session2.rebase(&solver).await.is_ok());
-            session2.commit("second commit after rebase", None).await?;
+            session2
+                .commit("second commit after rebase")
+                .max_concurrent_nodes(8)
+                .execute()
+                .await?;
         } else {
             panic!("this should have conflicted!");
         }
@@ -3110,28 +3535,33 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[tokio_test]
+    #[apply(spec_version_cases)]
     /// Writes four arrays to a repo, checks preloading of the manifests
     ///
     /// Three of the arrays have a preload name. But on of them (time) is larger
     /// than what we allow for preload (via config).
     ///
     /// We verify only the correct two arrays are preloaded
-    async fn test_manifest_preload_known_manifests() -> Result<(), Box<dyn Error>> {
+    async fn test_manifest_preload_known_manifests(
+        #[case] spec_version: SpecVersionBin,
+    ) -> Result<(), Box<dyn Error>> {
         //let backend: Arc<dyn Storage + Send + Sync> =
         //    new_local_filesystem_storage(&(std::path::Path::new("/tmp/testrepo2")))
         //        .await?;
         let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
         let storage = Arc::clone(&backend);
 
-        let repository = Repository::create(None, storage, HashMap::new(), None).await?;
+        let repository =
+            Repository::create(None, storage, HashMap::new(), Some(spec_version), true)
+                .await?;
 
         let mut session = repository.writable_session("main").await?;
 
         let def = Bytes::from_static(br#"{"this":"array"}"#);
         session.add_group(Path::root(), def.clone()).await?;
 
-        let shape = ArrayShape::new(vec![(1_000, 1), (1, 1), (1, 1)]).unwrap();
+        let shape = ArrayShape::new(vec![(1_000, 1_000), (1, 1), (1, 1)]).unwrap();
         let dimension_names = Some(vec!["t".into()]);
 
         let time_path: Path = "/time".try_into().unwrap();
@@ -3217,10 +3647,11 @@ mod tests {
             )
             .await?;
 
-        session.commit("create arrays", None).await?;
+        session.commit("create arrays").max_concurrent_nodes(8).execute().await?;
 
         let logging = Arc::new(LoggingStorage::new(Arc::clone(&backend)));
-        let logging_c: Arc<dyn Storage + Send + Sync> = logging.clone();
+        let logging_c = Arc::clone(&logging);
+        let logging_c: Arc<dyn Storage + Send + Sync> = logging_c;
         let storage = Arc::clone(&logging_c);
 
         let man_config = ManifestConfig {
@@ -3233,7 +3664,13 @@ mod tests {
         };
         let config = RepositoryConfig {
             manifest: Some(man_config),
-            storage: Some(Default::default()),
+            storage: Some(storage::Settings {
+                concurrency: Some(storage::ConcurrencySettings {
+                    max_concurrent_requests_for_object: NonZeroU16::new(1),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
             ..RepositoryConfig::default()
         };
         let repository = Repository::open(Some(config), storage, HashMap::new()).await?;
@@ -3257,7 +3694,7 @@ mod tests {
                 .any(|(_, key)| key.starts_with("manifests"))
         {
             tokio::time::sleep(std::time::Duration::from_secs_f32(0.1)).await;
-            retries += 1
+            retries += 1;
         }
         let ops =
             Vec::from_iter(logging.fetch_operations().into_iter().filter(|(_, key)| {
@@ -3292,8 +3729,11 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(feature = "object-store-fs")]
     #[tokio::test]
     async fn creation_in_non_empty_directory_fails() -> Result<(), Box<dyn Error>> {
+        use crate::new_local_filesystem_storage;
+
         let repo_dir = TempDir::new()?;
 
         let storage: Arc<dyn Storage + Send + Sync> =
@@ -3301,9 +3741,10 @@ mod tests {
                 .await
                 .expect("Creating local storage failed");
 
-        Repository::create(None, Arc::clone(&storage), HashMap::new(), None).await?;
+        Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
+            .await?;
         assert!(
-            Repository::create(None, Arc::clone(&storage), HashMap::new(), None)
+            Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
                 .await
                 .is_err()
         );
@@ -3318,7 +3759,7 @@ mod tests {
                 .expect("Creating local storage failed");
 
         assert!(
-            Repository::create(None, Arc::clone(&storage), HashMap::new(), None)
+            Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
                 .await
                 .is_err()
         );
@@ -3333,11 +3774,12 @@ mod tests {
             None,
             Arc::clone(&storage),
             HashMap::new(),
-            Some(SpecVersionBin::V2dot0),
+            Some(SpecVersionBin::V2),
+            true,
         )
         .await?;
         let repo = Repository::open(None, storage, Default::default()).await?;
-        assert_eq!(repo.spec_version(), SpecVersionBin::V2dot0);
+        assert_eq!(repo.spec_version(), SpecVersionBin::V2);
         Ok(())
     }
 
@@ -3348,11 +3790,12 @@ mod tests {
             None,
             Arc::clone(&storage),
             HashMap::new(),
-            Some(SpecVersionBin::V1dot0),
+            Some(SpecVersionBin::V1),
+            true,
         )
         .await?;
         let repo = Repository::open(None, storage, Default::default()).await?;
-        assert_eq!(repo.spec_version(), SpecVersionBin::V1dot0);
+        assert_eq!(repo.spec_version(), SpecVersionBin::V1);
         Ok(())
     }
 
@@ -3360,7 +3803,8 @@ mod tests {
     async fn set_metadata() -> Result<(), Box<dyn Error>> {
         let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
         let repo =
-            Repository::create(None, Arc::clone(&storage), HashMap::new(), None).await?;
+            Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
+                .await?;
         assert_eq!(repo.get_metadata().await?, Default::default());
 
         let meta =
@@ -3374,7 +3818,8 @@ mod tests {
     async fn update_metadata() -> Result<(), Box<dyn Error>> {
         let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
         let repo =
-            Repository::create(None, Arc::clone(&storage), HashMap::new(), None).await?;
+            Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
+                .await?;
 
         let meta =
             [("foo".to_string(), "bar".into()), ("number".to_string(), 42.into())].into();
@@ -3399,6 +3844,391 @@ mod tests {
         .into();
         assert_eq!(res, expected);
         assert_eq!(repo.get_metadata().await?, expected,);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_ops_log_chain_with_changing_num_updates_per_file()
+    -> Result<(), Box<dyn Error>> {
+        let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+
+        let config = RepositoryConfig {
+            num_updates_per_repo_info_file: Some(1),
+            ..Default::default()
+        };
+
+        let repo = Repository::create(
+            Some(config.clone()),
+            Arc::clone(&storage),
+            HashMap::new(),
+            None,
+            true,
+        )
+        .await?;
+
+        let (stream, _, _) = repo.ops_log().await?;
+        let ops: Vec<_> = stream.try_collect().await?;
+        assert_eq!(ops.len(), 1);
+        assert!(matches!(ops[0].1, UpdateType::RepoInitializedUpdate));
+
+        let snap_id = repo.lookup_branch("main").await?;
+        repo.create_branch("test-branch", &snap_id).await?;
+        let (stream, _, _) = repo.ops_log().await?;
+        let ops: Vec<_> = stream.try_collect().await?;
+        assert_eq!(ops.len(), 2);
+
+        repo.create_tag("test-tag", &snap_id).await?;
+        let (stream, _, _) = repo.ops_log().await?;
+        let ops: Vec<_> = stream.try_collect().await?;
+        assert_eq!(ops.len(), 3);
+
+        assert!(matches!(ops[0].1, UpdateType::TagCreatedUpdate { .. }));
+        assert!(matches!(ops.last().unwrap().1, UpdateType::RepoInitializedUpdate));
+
+        // Reopen with a larger num_updates_per_file
+        let config2 = RepositoryConfig {
+            num_updates_per_repo_info_file: Some(10),
+            ..Default::default()
+        };
+        let repo =
+            Repository::open(Some(config2), Arc::clone(&storage), HashMap::new()).await?;
+
+        repo.create_tag("test-tag-1", &snap_id).await?;
+        let (stream, _, _) = repo.ops_log().await?;
+        let ops: Vec<_> = stream.try_collect().await?;
+        assert_eq!(ops.len(), 4);
+        assert!(matches!(ops.last().unwrap().1, UpdateType::RepoInitializedUpdate));
+
+        // Reopen with a smaller num_updates_per_file
+        let config2 = RepositoryConfig {
+            num_updates_per_repo_info_file: Some(1),
+            ..Default::default()
+        };
+        let repo =
+            Repository::open(Some(config2), Arc::clone(&storage), HashMap::new()).await?;
+
+        repo.create_tag("test-tag-2", &snap_id).await?;
+        let (stream, _, _) = repo.ops_log().await?;
+        let ops: Vec<_> = stream.try_collect().await?;
+        assert_eq!(ops.len(), 5);
+        assert!(matches!(ops.last().unwrap().1, UpdateType::RepoInitializedUpdate));
+
+        repo.create_tag("test-tag-3", &snap_id).await?;
+        let (stream, _, _) = repo.ops_log().await?;
+        let ops: Vec<_> = stream.try_collect().await?;
+        assert_eq!(ops.len(), 6);
+        assert!(matches!(ops.last().unwrap().1, UpdateType::RepoInitializedUpdate));
+
+        Ok(())
+    }
+
+    #[tokio_test]
+    async fn test_virtual_chunk_location_compression_after_migration()
+    -> Result<(), Box<dyn Error>> {
+        let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+
+        // Create a V1 repo with low compression threshold (would compress if IC2)
+        let config = RepositoryConfig {
+            manifest: Some(ManifestConfig {
+                virtual_chunk_location_compression: Some(
+                    ManifestVirtualChunkLocationCompressionConfig {
+                        min_num_chunks: Some(1),
+                        ..Default::default()
+                    },
+                ),
+                ..ManifestConfig::empty()
+            }),
+            inline_chunk_threshold_bytes: Some(0),
+            ..Default::default()
+        };
+        let repo = Repository::create(
+            Some(config.clone()),
+            Arc::clone(&storage),
+            HashMap::new(),
+            Some(SpecVersionBin::V1),
+            true,
+        )
+        .await?;
+
+        // Write virtual chunks
+        let mut session = repo.writable_session("main").await?;
+        session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
+
+        let array_path: Path = "/array".to_string().try_into().unwrap();
+        let shape = ArrayShape::new(vec![(10, 10)]).unwrap();
+        session
+            .add_array(
+                array_path.clone(),
+                shape,
+                Some(vec!["x".into()]),
+                Bytes::from_static(b"{}"),
+            )
+            .await?;
+
+        for idx in 0..5u32 {
+            let location =
+                VirtualChunkLocation::from_url(&format!("s3://bucket/file_{idx}.dat"))
+                    .unwrap();
+            session
+                .set_chunk_ref(
+                    array_path.clone(),
+                    ChunkIndices(vec![idx]),
+                    Some(ChunkPayload::Virtual(VirtualChunkRef {
+                        location,
+                        offset: idx as u64 * 1000,
+                        length: 1000,
+                        checksum: None,
+                    })),
+                )
+                .await?;
+        }
+        session.commit("add virtual chunks").max_concurrent_nodes(8).execute().await?;
+
+        // Verify manifests are NOT compressed (V1 never compresses)
+        let snap_id =
+            repo.resolve_version(&VersionInfo::BranchTipRef("main".to_string())).await?;
+        let snapshot = repo.asset_manager().fetch_snapshot(&snap_id).await?;
+        for mf in snapshot.manifest_files() {
+            let mf = mf?;
+            let manifest =
+                repo.asset_manager().fetch_manifest_unknown_size(&mf.id).await?;
+            assert!(
+                !manifest.uses_location_compression(),
+                "V1 manifests should not use location compression"
+            );
+            assert_eq!(
+                manifest.num_compressed_refs(),
+                0,
+                "V1 manifests should have no compressed refs"
+            );
+        }
+
+        // Migrate to IC2
+        migrate_1_to_2(repo, false, true, None).await.unwrap();
+        let repo =
+            Repository::open(Some(config), Arc::clone(&storage), HashMap::new()).await?;
+        assert_eq!(repo.spec_version(), SpecVersionBin::V2);
+
+        // Rewrite manifests (now with IC2 compression enabled)
+        rewrite_manifests(
+            &repo,
+            "main",
+            "rewrite manifests",
+            8,
+            None,
+            CommitMethod::NewCommit,
+        )
+        .await
+        .unwrap();
+
+        // Verify manifests ARE now compressed
+        let snap_id =
+            repo.resolve_version(&VersionInfo::BranchTipRef("main".to_string())).await?;
+        let snapshot = repo.asset_manager().fetch_snapshot(&snap_id).await?;
+        for mf in snapshot.manifest_files() {
+            let mf = mf?;
+            let manifest =
+                repo.asset_manager().fetch_manifest_unknown_size(&mf.id).await?;
+            assert!(
+                manifest.uses_location_compression(),
+                "IC2 manifests should use location compression after rewrite"
+            );
+            assert!(
+                manifest.num_compressed_refs() > 0,
+                "IC2 manifests should have compressed refs after rewrite"
+            );
+        }
+
+        Ok(())
+    }
+
+    // Regression test for https://github.com/earth-mover/icechunk/issues/1744
+    // rewrite_manifests after a rearrange_session commit should succeed with NewCommit
+    #[tokio_test]
+    async fn test_rewrite_manifests_after_rearrange() -> Result<(), Box<dyn Error>> {
+        let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+        let repo = Repository::create(
+            None,
+            Arc::clone(&storage),
+            HashMap::new(),
+            Some(SpecVersionBin::current()),
+            true,
+        )
+        .await?;
+
+        // Create initial structure
+        let mut session = repo.writable_session("main").await?;
+        session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
+        session
+            .add_group("/source".try_into().unwrap(), Bytes::copy_from_slice(b""))
+            .await?;
+        session.commit("init").max_concurrent_nodes(8).execute().await?;
+
+        // Rearrange session: move a node
+        let mut session = repo.rearrange_session("main").await?;
+        session
+            .move_node("/source".try_into().unwrap(), "/dest".try_into().unwrap())
+            .await?;
+        session.commit("moved source to dest").max_concurrent_nodes(8).execute().await?;
+
+        // Open a fresh repo from the same storage (as the issue reproducer does)
+        let repo2 = Repository::open(None, Arc::clone(&storage), HashMap::new()).await?;
+
+        // Amend should fail because the previous commit was a rearrange
+        let result = rewrite_manifests(
+            &repo2,
+            "main",
+            "rewriting manifests",
+            8,
+            None,
+            CommitMethod::Amend,
+        )
+        .await;
+        assert!(result.is_err());
+
+        // NewCommit (the new default) should succeed
+        let result = rewrite_manifests(
+            &repo2,
+            "main",
+            "rewriting manifests",
+            8,
+            None,
+            CommitMethod::NewCommit,
+        )
+        .await;
+        assert!(result.is_ok());
+
+        Ok(())
+    }
+
+    #[cfg(feature = "object-store-fs")]
+    #[tokio_test]
+    async fn test_concurrent_distributer_writers_with_base_state()
+    -> Result<(), Box<dyn Error>> {
+        use crate::new_local_filesystem_storage;
+
+        let repo_dir = TempDir::new()?;
+        let storage: Arc<dyn Storage + Send + Sync> =
+            new_local_filesystem_storage(repo_dir.path()).await?;
+        let repo = Repository::create(
+            None,
+            Arc::clone(&storage),
+            HashMap::new(),
+            Some(SpecVersionBin::current()),
+            true,
+        )
+        .await?;
+
+        // Create initial structure
+        let mut session = repo.writable_session("main").await?;
+        session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
+        let array_path: Path = "/array".to_string().try_into().unwrap();
+        let shape = ArrayShape::new(vec![(10, 10)]).unwrap();
+        session
+            .add_array(
+                array_path.clone(),
+                shape.clone(),
+                Some(vec!["x".into()]),
+                Bytes::from_static(b"{}"),
+            )
+            .await?;
+        session.commit("init").execute().await?;
+
+        async fn do_distributed_writes(
+            session: &mut Session,
+            array_path: &Path,
+        ) -> Result<(), Box<dyn Error>> {
+            // create a _clean_ writable session from that snapshot
+            let clean = session.fork().await?;
+
+            // distribute these clean sessions to two writers
+            // NOTE: this is explicitly modeling a python pickle/unpickle workflow;
+            // we could just send out a SnapshotId and call `create_writable_session`
+            // on the distributed worker instead
+            let clean_bytes = clean.as_bytes()?;
+            let mut s1 = Session::from_bytes(&clean_bytes)?;
+            let mut s2 = Session::from_bytes(&clean_bytes)?;
+
+            // now both writers make independent changes
+            s1.set_chunk_ref(
+                array_path.clone(),
+                ChunkIndices(vec![0]),
+                Some(ChunkPayload::Inline("0".to_string().into())),
+            )
+            .await?;
+            s2.set_chunk_ref(
+                array_path.clone(),
+                ChunkIndices(vec![1]),
+                Some(ChunkPayload::Inline("1".to_string().into())),
+            )
+            .await?;
+
+            // forked sessions cannot be committed.
+            assert!(s1.commit("foo").execute().await.is_err());
+            assert!(s2.commit("foo").execute().await.is_err());
+
+            // merge the distributed writers' sessions
+            s1.merge(s2).await?;
+
+            assert!(s1.commit("foo").execute().await.is_err());
+
+            // merging a base session into a fork session is not allowed
+            let base_clone = session.clone();
+            assert!(matches!(
+                s1.merge(base_clone).await.unwrap_err().kind,
+                SessionErrorKind::MergeNotAllowed
+            ));
+
+            // flushing a fork session succeeds (anonymous snapshot)
+            let flush_result =
+                s1.clone().commit("fork-flush").anonymous().execute().await;
+            assert!(flush_result.is_ok());
+
+            // merge that in to the base
+            session.merge(s1).await?;
+
+            for i in 0..2 {
+                let reader = session
+                    .get_chunk_reader(array_path, &ChunkIndices(vec![i]), &ByteRange::ALL)
+                    .await?;
+                assert_eq!(get_chunk(reader).await?, Some(format!("{i}").into()));
+            }
+
+            // base session can be committed
+            session.commit("foo").execute().await?;
+
+            for i in 0..2 {
+                let reader = session
+                    .get_chunk_reader(array_path, &ChunkIndices(vec![i]), &ByteRange::ALL)
+                    .await?;
+                assert_eq!(get_chunk(reader).await?, Some(format!("{i}").into()));
+            }
+
+            Ok(())
+        }
+
+        // zarr-python's mode="w" will delete and array, then re-create it
+        let mut session = repo.writable_session("main").await?;
+        session.delete_array(array_path.clone()).await?;
+        session
+            .add_array(
+                array_path.clone(),
+                shape.clone(),
+                Some(vec!["x".into()]),
+                Bytes::from_static(b"{}"),
+            )
+            .await?;
+        do_distributed_writes(&mut session, &array_path).await?;
+
+        // delete all chunks then do distributed writes
+        let mut session = repo.writable_session("main").await?;
+        for i in 0..10 {
+            session
+                .set_chunk_ref(array_path.clone(), ChunkIndices(vec![i]), None)
+                .await?;
+        }
+        do_distributed_writes(&mut session, &array_path).await?;
+
         Ok(())
     }
 }

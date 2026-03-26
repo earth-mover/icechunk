@@ -1,14 +1,60 @@
+from enum import Enum
 from typing import Literal, cast
 
 import boto3
 import pytest
+from hypothesis import HealthCheck, settings
 from mypy_boto3_s3.client import S3Client
 
-from icechunk import Repository, in_memory_storage, local_filesystem_storage
+from icechunk import Repository, SpecVersion, in_memory_storage, local_filesystem_storage
+
+# ---------------------------------------------------------------------------
+# Hypothesis profiles
+#
+# Inherits from hypothesis's built-in "default" and "ci" profiles.
+# hypothesis auto-selects "ci" when the CI env var is set.
+# Select with: pytest --hypothesis-profile=nightly
+# ---------------------------------------------------------------------------
+settings.register_profile(
+    "default",
+    parent=settings.get_profile("default"),
+    deadline=None,
+    suppress_health_check=[HealthCheck.filter_too_much, HealthCheck.too_slow],
+)
+settings.register_profile(
+    "ci",
+    parent=settings.get_profile("ci"),
+    max_examples=200,
+    stateful_step_count=75,
+    suppress_health_check=[HealthCheck.filter_too_much, HealthCheck.too_slow],
+)
+settings.register_profile(
+    "nightly",
+    parent=settings.get_profile("ci"),
+    max_examples=1000,
+    stateful_step_count=500,
+    derandomize=False,
+    suppress_health_check=[HealthCheck.filter_too_much, HealthCheck.too_slow],
+)
+
+
+class Permission(Enum):
+    READONLY = 1
+    MODIFY = 2
+    SUPERUSER = 3  # temporary, while figuring out right permissions
+
+    def keys(self) -> tuple[str, str]:
+        match self:
+            case Permission.READONLY:
+                return ("readonly", "basicuser")
+            case Permission.MODIFY:
+                return ("modify", "modifydata")
+            case Permission.SUPERUSER:
+                return ("minio123", "minio123")
 
 
 def parse_repo(
-    store: Literal["local", "memory"], path: str, spec_version: int | None
+    store: Literal["local", "memory"], path: str, spec_version: SpecVersion | int | None
 ) -> Repository:
     if store == "local":
         return Repository.create(
@@ -20,11 +66,14 @@ def parse_repo(
             storage=in_memory_storage(),
             spec_version=spec_version,
         )
+    raise ValueError(f"Unknown store type: {store}")
 
 
 @pytest.fixture(scope="function")
 def repo(
-    request: pytest.FixtureRequest, tmpdir: str, any_spec_version: int | None
+    request: pytest.FixtureRequest,
+    tmpdir: str,
+    any_spec_version: SpecVersion | int | None,
 ) -> tuple[Repository, str]:
     param = request.param
     repo = parse_repo(param, tmpdir, spec_version=any_spec_version)
@@ -37,12 +86,13 @@ minio_client = None
 def get_minio_client() -> S3Client:
     global minio_client
     if minio_client is None:
+        (aws_access_key_id, aws_secret_access_key) = Permission.MODIFY.keys()
         minio_client = boto3.client(
             "s3",
             endpoint_url="http://localhost:9000",
             use_ssl=False,
-            aws_access_key_id="minio123",
-            aws_secret_access_key="minio123",
+            aws_access_key_id=aws_access_key_id,
+            aws_secret_access_key=aws_secret_access_key,
         )
     return minio_client
 
@@ -61,7 +111,9 @@ def write_chunks_to_minio(
 
 
 @pytest.fixture(
-    scope="function", params=[1, 2, None], ids=["spec-v1", "spec-v2", "no-spec-version"]
+    scope="function",
+    params=[1, SpecVersion.v2, None],
+    ids=["spec-v1", "spec-v2", "no-spec-version"],
 )
-def any_spec_version(request: pytest.FixtureRequest) -> int | None:
-    return cast(int | None, request.param)
+def any_spec_version(request: pytest.FixtureRequest) -> SpecVersion | int | None:
+    return cast(SpecVersion | int | None, request.param)

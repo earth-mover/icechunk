@@ -49,7 +49,7 @@ def test_era5_with_redirect() -> None:
     try:
         port = find_free_port()
         (server, thread) = run_server(port)
-        storage = ic.redirect_storage(f"http://localhost:{port}")
+        storage = ic.redirect_storage(f"http://127.0.0.1:{port}")
         repo = ic.Repository.open(storage=storage)
 
         # redirect server is no longer needed at this point

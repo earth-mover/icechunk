@@ -1,6 +1,6 @@
 # Icechunk
 
-![Icechunk logo](https://raw.githubusercontent.com/earth-mover/icechunk/refs/heads/main/docs/docs/assets/logo.svg)
+![Icechunk logo](https://raw.githubusercontent.com/earth-mover/icechunk/refs/heads/main/icechunk-python/docs/docs/assets/logo.svg)
 
 <a href="https://pypi.org/project/icechunk" target="_blank"><img alt="PyPI" src="https://img.shields.io/pypi/v/icechunk?logo=pypi&logoColor=ffde57&label=pypi&style=for-the-badge"></a>
 <a href="https://anaconda.org/conda-forge/icechunk" target="_blank"><img alt="Conda Forge" src="https://img.shields.io/conda/vn/conda-forge/icechunk.svg?logo=conda-forge&style=for-the-badge"></a>
@@ -22,11 +22,39 @@ that enhance performance, collaboration, and safety in a cloud-computing context
 - This page: a general overview of the project's goals and components.
 - [Icechunk Launch Blog Post](https://earthmover.io/blog/icechunk)
 - [Frequently Asked Questions](https://icechunk.io/en/latest/faq/)
-- Documentation for [Icechunk Python](https://icechunk.io/en/latest/icechunk-python), the main user-facing
+- Documentation for [Icechunk Python](https://icechunk.io/en/latest/), the main user-facing
   library
 - Documentation for the [Icechunk Rust Crate](https://icechunk.io/en/latest/icechunk-rust)
 - The [Contributor Guide](https://icechunk.io/en/latest/contributing)
 - The [Icechunk Spec](https://icechunk.io/en/latest/spec)
+
+## Crate Structure
+
+The Rust workspace is organized into layered crates:
+
+```mermaid
+graph TD
+    python[icechunk-python] --> core[icechunk]
+    core --> arrow[icechunk-arrow-object-store]
+    core --> s3[icechunk-s3 *optional*]
+    core --> storage[icechunk-storage]
+    core --> format[icechunk-format]
+    arrow --> storage
+    s3 --> storage
+    storage --> types[icechunk-types]
+    format --> types
+```
+
+| Crate | Description |
+|-------|-------------|
+| **icechunk-macros** | Procedural macro helpers for tests and internal use |
+| **icechunk-types** | Shared foundational types (`Path`, `ETag`, `Move`, error wrappers) used across all crates |
+| **icechunk-format** | Binary format types and serialization (snapshots, manifests, transaction logs, repo info) |
+| **icechunk-storage** | Storage trait definitions and common storage utilities |
+| **icechunk-arrow-object-store** | Storage backend using Apache Arrow's `object_store` (in-memory, local, GCS, Azure, etc.) |
+| **icechunk-s3** | Native AWS S3 storage backend (optional feature) |
+| **icechunk** | Core storage engine: transactions, version control, repositories |
+| **icechunk-python** | PyO3 bindings exposing the engine to Python |
 
 ## Icechunk Overview
 

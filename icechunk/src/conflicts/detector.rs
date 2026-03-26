@@ -1,11 +1,13 @@
+//! Detects conflicts between concurrent changes during rebase.
+
 use std::{
     collections::{HashMap, HashSet},
-    ops::DerefMut,
+    ops::DerefMut as _,
     sync::Mutex,
 };
 
 use async_trait::async_trait;
-use futures::{StreamExt, TryStreamExt, stream};
+use futures::{StreamExt as _, TryStreamExt as _, stream};
 
 use crate::{
     change_set::ChangeSet,
@@ -34,8 +36,19 @@ impl ConflictSolver for ConflictDetector {
             });
         }
 
+        let deleted_paths: HashSet<&Path> = current_changes
+            .deleted_groups()
+            .map(|(p, _)| p)
+            .chain(current_changes.deleted_arrays().map(|(p, _)| p))
+            .collect();
+
         let new_nodes_explicit_conflicts = stream::iter(
-            current_changes.new_nodes().map(Ok),
+            current_changes
+                .new_nodes()
+                // Filter out new nodes that are delete+recreate (not a conflict).
+                // Content conflicts for these are detected lower down in this function.
+                .filter(|(path, _)| !deleted_paths.contains(path))
+                .map(Ok),
         )
         .try_filter_map(|(path, _)| async {
             match previous_repo.get_node(path).await {
@@ -280,9 +293,13 @@ impl<It: Iterator<Item = SessionResult<NodeSnapshot>>> PathFinder<It> {
                 }
             }
             *iter = None;
-            Err(SessionErrorKind::ConflictingPathNotFound(node_id.clone()).into())
+            Err(SessionError::capture(SessionErrorKind::ConflictingPathNotFound(
+                node_id.clone(),
+            )))
         } else {
-            Err(SessionErrorKind::ConflictingPathNotFound(node_id.clone()).into())
+            Err(SessionError::capture(SessionErrorKind::ConflictingPathNotFound(
+                node_id.clone(),
+            )))
         }
     }
 }
