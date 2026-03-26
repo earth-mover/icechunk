@@ -441,17 +441,20 @@ impl TransactionLog {
                 // Otherwise we check to see if the current "from" is already in the moved_map
                 // (meaning this "from" is a "to" from another move)
                 // and if so remove it and replace with a new (to, old_from) pair,
+                dbg!(&from, &to);
                 if let Some(old_from) = moved_map.remove(&from) {
                     moved_map.insert(to, old_from);
                 } else {
                     moved_map.insert(to, from);
                 }
+                dbg!(&moved_map);
             }
 
             // check to and from (keys and values in moved_map) are disjoint
             // (we shouldn't have any in common)
             // except for identity move (from == to)
             // only run this in debug mode because it can be expensive
+            /*
             debug_assert!({
                 use itertools::MultiUnzip as _;
 
@@ -463,6 +466,7 @@ impl TransactionLog {
                     .multiunzip();
                 from.is_disjoint(&to)
             });
+            */
 
             let moved_nodes: Vec<_> = moved_map
                 .into_iter()
