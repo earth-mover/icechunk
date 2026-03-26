@@ -289,7 +289,7 @@ impl MoveTracker {
             }
         }
 
-        self.moves.push(Move { from, to, node_id: node_id.clone().into() });
+        self.moves.push(Move { from, to, node_id: node_id.clone() });
     }
 
     /// Return `(original_path, final_path)` pairs for all nodes whose
@@ -937,8 +937,19 @@ mod tests {
         Path::new(s).unwrap()
     }
 
-    fn record_move(mt: &mut MoveTracker, from: &str, to: &str, subtree: &[&str]) {
-        mt.record(pathify(from), pathify(to), subtree.iter().map(|s| pathify(s)));
+    fn record_move(
+        mt: &mut MoveTracker,
+        from: &str,
+        to: &str,
+        subtree: &[&str],
+        node_id: &NodeId,
+    ) {
+        mt.record(
+            pathify(from),
+            pathify(to),
+            subtree.iter().map(|s| pathify(s)),
+            &node_id,
+        );
     }
 
     use super::ChangeSet;
@@ -1255,16 +1266,19 @@ mod tests {
             Path::new("/foo/bar/old").unwrap(),
             Path::new("/foo/bar/new").unwrap(),
             std::iter::empty(),
+            &NodeId::random(),
         );
         mt.record(
             Path::new("/foo/bar/new/inner-old1").unwrap(),
             Path::new("/foo/bar/new/inner-new").unwrap(),
             std::iter::empty(),
+            &NodeId::random(),
         );
         mt.record(
             Path::new("/foo/bar/new/inner-old2").unwrap(),
             Path::new("/inner-new2").unwrap(),
             std::iter::empty(),
+            &NodeId::random(),
         );
 
         assert!(matches!(
@@ -1301,16 +1315,19 @@ mod tests {
             Path::new("/foo/bar/old").unwrap(),
             Path::new("/foo/bar/new").unwrap(),
             std::iter::empty(),
+            &NodeId::random(),
         );
         mt.record(
             Path::new("/foo/bar/new/inner-old1").unwrap(),
             Path::new("/foo/bar/new/inner-new").unwrap(),
             std::iter::empty(),
+            &NodeId::random(),
         );
         mt.record(
             Path::new("/foo/bar/new/inner-old2").unwrap(),
             Path::new("/inner-new2").unwrap(),
             std::iter::empty(),
+            &NodeId::random(),
         );
 
         assert!(matches!(
@@ -1357,15 +1374,18 @@ mod tests {
     fn test_moved_to_back_and_forth() {
         use super::MovedTo::*;
         let mut mt = MoveTracker::default();
+        let node_id = NodeId::random();
         mt.record(
             Path::new("/foo/bar/old").unwrap(),
             Path::new("/foo/bar/new").unwrap(),
             std::iter::empty(),
+            &node_id,
         );
         mt.record(
             Path::new("/foo/bar/new").unwrap(),
             Path::new("/foo/bar/old").unwrap(),
             std::iter::empty(),
+            &node_id,
         );
         assert!(matches!(
             mt.moved_to(&Path::new("/foo/bar/old/inner").unwrap()),
@@ -1389,15 +1409,18 @@ mod tests {
     fn test_moved_from_back_and_forth() {
         use super::MovedFrom::*;
         let mut mt = MoveTracker::default();
+        let node_id = NodeId::random();
         mt.record(
             Path::new("/foo/bar/old").unwrap(),
             Path::new("/foo/bar/new").unwrap(),
             std::iter::empty(),
+            &node_id,
         );
         mt.record(
             Path::new("/foo/bar/new").unwrap(),
             Path::new("/foo/bar/old").unwrap(),
             std::iter::empty(),
+            &node_id,
         );
         assert!(matches!(
             mt.moved_from(&Path::new("/foo/bar/old/inner").unwrap()),
@@ -1458,7 +1481,7 @@ mod tests {
         // Move: /g/a -> /g/b
         // After: /g/b, /g/b/x
         let mut mt = MoveTracker::default();
-        record_move(&mut mt, "/g/a", "/g/b", &["/g/a", "/g/a/x"]);
+        record_move(&mut mt, "/g/a", "/g/b", &["/g/a", "/g/a/x"], &NodeId::random());
 
         assert!(mt.is_remapped(&pathify("/g/a")));
         assert!(mt.is_remapped(&pathify("/g/a/x")));
@@ -1477,8 +1500,8 @@ mod tests {
         // Move 2: /b -> /c (rename /b)
         // After: /c, /c/a, /c/a/x, /c/y
         let mut mt = MoveTracker::default();
-        record_move(&mut mt, "/a", "/b/a", &["/a", "/a/x"]);
-        record_move(&mut mt, "/b", "/c", &["/b", "/b/y"]);
+        record_move(&mut mt, "/a", "/b/a", &["/a", "/a/x"], &NodeId::random());
+        record_move(&mut mt, "/b", "/c", &["/b", "/b/y"], &NodeId::random());
 
         let result = mt.moved_into(&pathify("/c"));
         assert!(result.contains(&(pathify("/a"), pathify("/c/a"))));
@@ -1494,8 +1517,8 @@ mod tests {
         // Move 2: /a -> /c (rename a)
         // After: /b (was /a/x), /c (was /a), /c/y (was /a/y)
         let mut mt = MoveTracker::default();
-        record_move(&mut mt, "/a/x", "/b", &["/a/x"]);
-        record_move(&mut mt, "/a", "/c", &["/a", "/a/x", "/a/y"]);
+        record_move(&mut mt, "/a/x", "/b", &["/a/x"], &NodeId::random());
+        record_move(&mut mt, "/a", "/c", &["/a", "/a/x", "/a/y"], &NodeId::random());
 
         // /a/x was moved to /b, not carried along to /c
         let under_c = mt.moved_into(&pathify("/c"));

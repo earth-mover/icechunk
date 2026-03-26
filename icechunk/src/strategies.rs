@@ -663,8 +663,8 @@ pub fn split_manifest()
 }
 
 prop_compose! {
-    pub fn gen_move()(to in path(), from in path()) -> Move {
-        Move{to, from}
+    pub fn gen_move()(to in path(), from in path(), node_id in node_id() ) -> Move {
+        Move{to, from, node_id}
     }
 }
 
