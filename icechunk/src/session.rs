@@ -814,7 +814,13 @@ impl Session {
             .filter_map(|r| r.ok().map(|n| n.path))
             .collect();
 
-        self.change_set_mut()?.move_node(from, to, subtree_paths, &node.id)?;
+        self.change_set_mut()?.move_node(
+            from,
+            to,
+            subtree_paths,
+            &node.id,
+            node.node_type(),
+        )?;
         Ok(())
     }
 

@@ -115,10 +115,36 @@ pub type AttributesId = ObjectId<12, AttributesTag>;
 pub type NodeId = ObjectId<8, NodeTag>;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum NodeType {
+    Group,
+    Array,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Move {
     pub from: Path,
     pub to: Path,
     pub node_id: NodeId,
+    pub node_type: NodeType,
+}
+
+impl From<NodeType> for generated::NodeType {
+    fn from(value: NodeType) -> Self {
+        match value {
+            NodeType::Group => generated::NodeType::Group,
+            NodeType::Array => generated::NodeType::Array,
+        }
+    }
+}
+
+impl From<generated::NodeType> for NodeType {
+    fn from(value: generated::NodeType) -> Self {
+        match value {
+            generated::NodeType::Group => NodeType::Group,
+            generated::NodeType::Array => NodeType::Array,
+            generated::NodeType(v) => panic!("{v} is not a valid node type"),
+        }
+    }
 }
 
 impl<const SIZE: usize, T: FileTypeTag> ObjectId<SIZE, T> {

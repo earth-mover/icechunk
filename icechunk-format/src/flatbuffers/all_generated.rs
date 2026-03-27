@@ -102,6 +102,94 @@ pub mod generated {
         since = "2.0.0",
         note = "Use associated constants instead. This will no longer be generated in 2021."
     )]
+    pub const ENUM_MIN_NODE_TYPE: u8 = 0;
+    #[deprecated(
+        since = "2.0.0",
+        note = "Use associated constants instead. This will no longer be generated in 2021."
+    )]
+    pub const ENUM_MAX_NODE_TYPE: u8 = 1;
+    #[deprecated(
+        since = "2.0.0",
+        note = "Use associated constants instead. This will no longer be generated in 2021."
+    )]
+    #[allow(non_camel_case_types)]
+    pub const ENUM_VALUES_NODE_TYPE: [NodeType; 2] = [NodeType::Group, NodeType::Array];
+
+    #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+    #[repr(transparent)]
+    pub struct NodeType(pub u8);
+    #[allow(non_upper_case_globals)]
+    impl NodeType {
+        pub const Group: Self = Self(0);
+        pub const Array: Self = Self(1);
+
+        pub const ENUM_MIN: u8 = 0;
+        pub const ENUM_MAX: u8 = 1;
+        pub const ENUM_VALUES: &'static [Self] = &[Self::Group, Self::Array];
+        /// Returns the variant's name or "" if unknown.
+        pub fn variant_name(self) -> Option<&'static str> {
+            match self {
+                Self::Group => Some("Group"),
+                Self::Array => Some("Array"),
+                _ => None,
+            }
+        }
+    }
+    impl ::core::fmt::Debug for NodeType {
+        fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
+            if let Some(name) = self.variant_name() {
+                f.write_str(name)
+            } else {
+                f.write_fmt(format_args!("<UNKNOWN {:?}>", self.0))
+            }
+        }
+    }
+    impl<'a> ::flatbuffers::Follow<'a> for NodeType {
+        type Inner = Self;
+        #[inline]
+        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+            let b = unsafe { ::flatbuffers::read_scalar_at::<u8>(buf, loc) };
+            Self(b)
+        }
+    }
+
+    impl ::flatbuffers::Push for NodeType {
+        type Output = NodeType;
+        #[inline]
+        unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
+            unsafe { ::flatbuffers::emplace_scalar::<u8>(dst, self.0) };
+        }
+    }
+
+    impl ::flatbuffers::EndianScalar for NodeType {
+        type Scalar = u8;
+        #[inline]
+        fn to_little_endian(self) -> u8 {
+            self.0.to_le()
+        }
+        #[inline]
+        #[allow(clippy::wrong_self_convention)]
+        fn from_little_endian(v: u8) -> Self {
+            let b = u8::from_le(v);
+            Self(b)
+        }
+    }
+
+    impl<'a> ::flatbuffers::Verifiable for NodeType {
+        #[inline]
+        fn run_verifier(
+            v: &mut ::flatbuffers::Verifier,
+            pos: usize,
+        ) -> Result<(), ::flatbuffers::InvalidFlatbuffer> {
+            u8::run_verifier(v, pos)
+        }
+    }
+
+    impl ::flatbuffers::SimpleToVerifyInSlice for NodeType {}
+    #[deprecated(
+        since = "2.0.0",
+        note = "Use associated constants instead. This will no longer be generated in 2021."
+    )]
     pub const ENUM_MIN_REPO_AVAILABILITY: u8 = 0;
     #[deprecated(
         since = "2.0.0",
@@ -3721,6 +3809,7 @@ pub mod generated {
         pub const VT_FROM: ::flatbuffers::VOffsetT = 4;
         pub const VT_TO: ::flatbuffers::VOffsetT = 6;
         pub const VT_NODE_ID: ::flatbuffers::VOffsetT = 8;
+        pub const VT_NODE_TYPE: ::flatbuffers::VOffsetT = 10;
 
         #[inline]
         pub unsafe fn init_from_table(table: ::flatbuffers::Table<'a>) -> Self {
@@ -3746,6 +3835,7 @@ pub mod generated {
             if let Some(x) = args.from {
                 builder.add_from(x);
             }
+            builder.add_node_type(args.node_type);
             builder.finish()
         }
 
@@ -3780,6 +3870,17 @@ pub mod generated {
             // which contains a valid value in this slot
             unsafe { self._tab.get::<ObjectId8>(MoveOperation::VT_NODE_ID, None) }
         }
+        #[inline]
+        pub fn node_type(&self) -> NodeType {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab
+                    .get::<NodeType>(MoveOperation::VT_NODE_TYPE, Some(NodeType::Group))
+                    .unwrap()
+            }
+        }
     }
 
     impl ::flatbuffers::Verifiable for MoveOperation<'_> {
@@ -3800,6 +3901,7 @@ pub mod generated {
                     false,
                 )?
                 .visit_field::<ObjectId8>("node_id", Self::VT_NODE_ID, false)?
+                .visit_field::<NodeType>("node_type", Self::VT_NODE_TYPE, false)?
                 .finish();
             Ok(())
         }
@@ -3808,11 +3910,17 @@ pub mod generated {
         pub from: Option<::flatbuffers::WIPOffset<&'a str>>,
         pub to: Option<::flatbuffers::WIPOffset<&'a str>>,
         pub node_id: Option<&'a ObjectId8>,
+        pub node_type: NodeType,
     }
     impl<'a> Default for MoveOperationArgs<'a> {
         #[inline]
         fn default() -> Self {
-            MoveOperationArgs { from: None, to: None, node_id: None }
+            MoveOperationArgs {
+                from: None,
+                to: None,
+                node_id: None,
+                node_type: NodeType::Group,
+            }
         }
     }
 
@@ -3840,6 +3948,14 @@ pub mod generated {
             self.fbb_.push_slot_always::<&ObjectId8>(MoveOperation::VT_NODE_ID, node_id);
         }
         #[inline]
+        pub fn add_node_type(&mut self, node_type: NodeType) {
+            self.fbb_.push_slot::<NodeType>(
+                MoveOperation::VT_NODE_TYPE,
+                node_type,
+                NodeType::Group,
+            );
+        }
+        #[inline]
         pub fn new(
             _fbb: &'b mut ::flatbuffers::FlatBufferBuilder<'a, A>,
         ) -> MoveOperationBuilder<'a, 'b, A> {
@@ -3859,6 +3975,7 @@ pub mod generated {
             ds.field("from", &self.from());
             ds.field("to", &self.to());
             ds.field("node_id", &self.node_id());
+            ds.field("node_type", &self.node_type());
             ds.finish()
         }
     }

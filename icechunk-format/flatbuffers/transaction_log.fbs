@@ -15,12 +15,15 @@ table ArrayUpdatedChunks {
   chunks: [ChunkIndices] (required);
 }
 
+enum NodeType: ubyte { Group = 0, Array }
+
 // moves are fully collapsed
 // every moved node gets an entry - no implicit moving of children
 table MoveOperation {
   from: string;
   to: string;
   node_id: ObjectId8;
+  node_type: NodeType;
 }
 
 table TransactionLog {

@@ -86,12 +86,18 @@ impl TransactionLog {
         let updated_chunks = Some(updated_chunks);
 
         let moved_nodes: Vec<_> = sorted_moves
-            .map(|Move { from, to, node_id }| {
+            .map(|Move { from, to, node_id, node_type }| {
                 let from = builder.create_string(from.to_string().as_str());
                 let to = builder.create_string(to.to_string().as_str());
                 let node_id = generated::ObjectId8::new(&node_id.0);
                 let node_id = Some(&node_id);
-                let args = MoveOperationArgs { from: Some(from), to: Some(to), node_id };
+                let node_type: generated::NodeType = node_type.into();
+                let args = MoveOperationArgs {
+                    from: Some(from),
+                    to: Some(to),
+                    node_id,
+                    node_type,
+                };
                 MoveOperation::create(&mut builder, &args)
             })
             .collect();
@@ -195,7 +201,8 @@ impl TransactionLog {
                 .node_id()
                 .expect("from is optional in flatbuffers, but required by spec")
                 .into();
-            Some(Move { from, to, node_id })
+            let node_type = m.node_type().into();
+            Some(Move { from, to, node_id, node_type })
         })
     }
 
