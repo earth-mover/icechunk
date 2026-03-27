@@ -809,15 +809,15 @@ impl Session {
         };
         let snapshot =
             self.asset_manager.fetch_snapshot(&self.snapshot_id).await.inject()?;
-        let subtree_paths: Vec<Path> = snapshot
+        let subtree_data: Vec<(Path, NodeId, NodeType)> = snapshot
             .iter_arc(&original_from)
-            .filter_map(|r| r.ok().map(|n| n.path))
+            .filter_map(|r| r.ok().map(|n| (n.path.clone(), n.id.clone(), n.node_type())))
             .collect();
 
         self.change_set_mut()?.move_node(
             from,
             to,
-            subtree_paths,
+            subtree_data,
             &node.id,
             node.node_type(),
         )?;

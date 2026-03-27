@@ -251,7 +251,7 @@ impl MoveTracker {
         &mut self,
         from: Path,
         to: Path,
-        subtree_nodes: impl IntoIterator<Item = Path>,
+        subtree_nodes: impl IntoIterator<Item = (Path, NodeId, NodeType)>,
         node_id: &NodeId,
         node_type: NodeType,
     ) {
@@ -282,14 +282,15 @@ impl MoveTracker {
 
         // Step 2: Add entries for nodes not already in the map.
         for orig in subtree_nodes {
-            if !self.nodes_by_original.contains_key(&orig)
-                && let Some(new_path) = Self::remap_path(&orig, &original_from, &to)
+            if !self.nodes_by_original.contains_key(&orig.0)
+                && let Some(new_path) = Self::remap_path(&orig.0, &original_from, &to)
             {
-                self.nodes_by_final.insert(new_path.clone(), orig.clone());
-                self.nodes_by_original.insert(orig, new_path);
+                self.nodes_by_final.insert(new_path.clone(), orig.0.clone());
+                self.nodes_by_original.insert(orig.0, new_path);
             }
         }
 
+        // FIXME(li-em): need to push all moves for subtree too!
         self.moves.push(Move { from, to, node_id: node_id.clone(), node_type });
     }
 
@@ -496,7 +497,7 @@ impl ChangeSet {
         &mut self,
         from: Path,
         to: Path,
-        subtree_nodes: impl IntoIterator<Item = Path>,
+        subtree_nodes: impl IntoIterator<Item = (Path, NodeId, NodeType)>,
         node_id: &NodeId,
         node_type: NodeType,
     ) -> SessionResult<()> {
