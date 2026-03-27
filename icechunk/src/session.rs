@@ -797,7 +797,20 @@ impl Session {
             )));
         }
 
-        self.change_set_mut()?.move_node(from, to)?;
+        // Iterate the subtree at `from` so the move tracker can eagerly
+        // compute final paths for all affected nodes.
+        let original_from = match self.change_set().moved_from(&from) {
+            MovedFrom::From(p) => p.into_owned(),
+            _ => from.clone(),
+        };
+        let snapshot =
+            self.asset_manager.fetch_snapshot(&self.snapshot_id).await.inject()?;
+        let subtree_paths: Vec<Path> = snapshot
+            .iter_arc(&original_from)
+            .filter_map(|r| r.ok().map(|n| n.path))
+            .collect();
+
+        self.change_set_mut()?.move_node(from, to, subtree_paths)?;
         Ok(())
     }
 
@@ -2098,18 +2111,33 @@ async fn updated_existing_nodes<'a>(
     change_set: &'a ChangeSet,
     parent_id: &SnapshotId,
 ) -> SessionResult<impl Iterator<Item = SessionResult<NodeSnapshot>> + use<'a>> {
-    let updated_nodes = asset_manager
-        .fetch_snapshot(parent_id)
-        .await
-        .inject()?
-        .iter_arc(parent_group)
-        .filter_map_ok(move |node| change_set.update_existing_node(node))
-        .map(|n| match n {
-            Ok(n) => Ok(n),
-            Err(err) => Err(err.inject()),
-        });
+    let parent_group = parent_group.clone();
+    let snapshot = asset_manager.fetch_snapshot(parent_id).await.inject()?;
 
-    Ok(updated_nodes)
+    let mut moved_nodes: Vec<SessionResult<NodeSnapshot>> = Vec::new();
+    for (orig, final_path) in change_set.moved_into(&parent_group) {
+        match snapshot.get_node(&orig) {
+            Ok(node) => {
+                moved_nodes
+                    .push(Ok(NodeSnapshot { path: final_path, ..(*node).clone() }));
+            }
+            Err(err) => moved_nodes.push(Err(err.inject())),
+        }
+    }
+
+    // Skip remapped nodes — they're already in moved_nodes above.
+    let unmoved = snapshot
+        .iter_arc(&parent_group)
+        .filter_map_ok(move |node| {
+            if change_set.is_remapped(&node.path) {
+                None
+            } else {
+                change_set.update_existing_node(node)
+            }
+        })
+        .map(|n| n.map_err(|err| err.inject()));
+
+    Ok(moved_nodes.into_iter().chain(unmoved))
 }
 
 /// Yields nodes with the snapshot, applying any relevant updates in the changeset,
@@ -2508,7 +2536,7 @@ async fn flush_existing_node(
                             result.manifest_refs.push(mref.clone());
                             #[expect(clippy::expect_used)]
                             result.manifest_files.push(
-                                old_snapshot.manifest_info(&mref.object_id).expect("logic bug. creating manifest file info for an existing manifest failed."),
+                                old_snapshot.manifest_info(&mref.object_id).inject()?.expect("logic bug. creating manifest file info for an existing manifest failed."),
                             );
                         } else if let Some((new_ref, file_info)) =
                             write_manifest_with_changes(
@@ -2542,12 +2570,13 @@ async fn flush_existing_node(
                     manifest_refs: Vec::new(),
                     manifest_files: Vec::new(),
                 };
-                result.manifest_files.extend(array_refs.iter().map(|mr| {
+                for mr in &array_refs {
                     #[expect(clippy::expect_used)]
-                    old_snapshot.get_manifest_file(&mr.object_id).expect(
+                    let mf = old_snapshot.manifest_info(&mr.object_id).inject()?.expect(
                         "Bug in flush function, no manifest file found in snapshot",
-                    )
-                }));
+                    );
+                    result.manifest_files.push(mf);
+                }
                 result.manifest_refs.extend(array_refs.into_iter());
                 Ok(Some(result))
             }
@@ -3170,6 +3199,7 @@ async fn fetch_manifest(
     let snapshot = asset_manager.fetch_snapshot(snapshot_id).await.inject()?;
     let manifest_info = snapshot
         .manifest_info(manifest_id)
+        .inject()?
         .ok_or_else(|| IcechunkFormatErrorKind::ManifestInfoNotFound {
             manifest_id: manifest_id.clone(),
         })
@@ -5354,8 +5384,11 @@ mod tests {
         );
         assert!(session.get_node(&Path::new("/foo/old/array").unwrap()).await.is_err());
 
+        let mut nodes: Vec<_> =
+            session.list_nodes(&Path::root()).await?.map(|n| n.unwrap().path).collect();
+        nodes.sort();
         assert_equal(
-            session.list_nodes(&Path::root()).await?.map(|n| n.unwrap().path),
+            nodes.into_iter(),
             [
                 Path::new("/").unwrap(),
                 Path::new("/foo/new").unwrap(),

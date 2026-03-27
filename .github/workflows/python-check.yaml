@@ -28,13 +28,13 @@ jobs:
   build-wheels:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Build wheels
-        uses: PyO3/maturin-action@v1
+        uses: PyO3/maturin-action@db323e2cf5679b7feb8bcb561a36b27a0bc19e79 # v1
         with:
           working-directory: icechunk-python
           args: --release --out dist -i python${{ env.PYTHON_VERSION }}
@@ -42,7 +42,7 @@ jobs:
           manylinux: auto
 
       - name: Upload wheels
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
         with:
           name: test-wheels
           path: icechunk-python/dist
@@ -64,20 +64,20 @@ jobs:
             distributed: "latest-release"
             zarr: "latest-release"
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
       - name: Stand up RustFS
         run: |
           docker compose up -d rustfs_init
 
       - name: Download wheels
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: test-wheels
           path: icechunk-python/dist
 
       - name: Restore cached hypothesis directory
         id: restore-hypothesis-cache
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
         with:
           path: icechunk-python/.hypothesis/
           key: cache-hypothesis-${{ runner.os }}-${{ github.run_id }}
@@ -85,7 +85,7 @@ jobs:
             cache-hypothesis-
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
         with:
           enable-cache: true
           python-version: ${{ env.PYTHON_VERSION }}
@@ -134,17 +134,17 @@ jobs:
     runs-on: ubuntu-latest
     needs: [build-wheels]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: Download wheels
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: test-wheels
           path: icechunk-python/dist
 
       - name: Restore cached hypothesis directory
         id: restore-hypothesis-cache
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
         with:
           path: icechunk-python/.hypothesis/
           key: cache-hypothesis-${{ runner.os }}-${{ github.run_id }}
@@ -152,7 +152,7 @@ jobs:
             cache-hypothesis-
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
         with:
           enable-cache: true
           python-version: ${{ env.PYTHON_VERSION }}
@@ -184,7 +184,7 @@ jobs:
       - name: Save cached hypothesis directory
         id: save-hypothesis-cache
         if: always()
-        uses: actions/cache/save@v5
+        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
         with:
           path: icechunk-python/.hypothesis/
           key: cache-hypothesis-${{ runner.os }}-${{ github.run_id }}
@@ -193,16 +193,16 @@ jobs:
     runs-on: ubuntu-latest
     needs: [build-wheels]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: Download wheels
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: test-wheels
           path: icechunk-python/dist
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
         with:
           enable-cache: true
           python-version: ${{ env.PYTHON_VERSION }}
@@ -245,7 +245,7 @@ jobs:
             version: "latest-release"
             zarr: "latest-release"
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           path: "icechunk"
 
@@ -255,13 +255,13 @@ jobs:
           docker compose up -d rustfs_init
 
       - name: Download wheels
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: test-wheels
           path: icechunk/icechunk-python/dist
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
         with:
           enable-cache: true
           python-version: ${{ env.PYTHON_VERSION }}
@@ -337,16 +337,16 @@ jobs:
     runs-on: ubuntu-latest
     needs: [build-wheels]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: Download wheels
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: test-wheels
           path: icechunk-python/dist
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
         with:
           enable-cache: true
           python-version: ${{ env.PYTHON_VERSION }}
@@ -366,18 +366,18 @@ jobs:
   check-xarray-docs:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           path: "icechunk"
 
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           repository: "pydata/xarray"
           path: "xarray"
           fetch-depth: 0
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
         with:
           enable-cache: true
           python-version: ${{ env.PYTHON_VERSION }}

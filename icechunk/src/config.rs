@@ -27,7 +27,10 @@ pub use crate::storage::s3_config::{
     S3Credentials, S3CredentialsFetcher, S3Options, S3StaticCredentials,
 };
 #[cfg(feature = "object-store-azure")]
-pub use crate::storage::{AzureCredentials, AzureStaticCredentials};
+pub use crate::storage::{
+    AzureCredentials, AzureCredentialsFetcher, AzureRefreshableCredential,
+    AzureStaticCredentials,
+};
 #[cfg(feature = "object-store-gcs")]
 pub use crate::storage::{
     GcsBearerCredential, GcsCredentials, GcsCredentialsFetcher, GcsStaticCredentials,
@@ -730,10 +733,12 @@ mod tests {
     use crate::strategies::gcs_static_credentials;
 
     #[cfg(feature = "object-store-azure")]
-    roundtrip_serialization_tests!(test_azure_credentials_roundtrip - azure_credentials);
+    roundtrip_serialization_tests!(
+        test_azure_static_credentials_roundtrip - azure_static_credentials
+    );
 
     #[cfg(feature = "object-store-azure")]
-    use crate::strategies::azure_credentials;
+    use crate::strategies::azure_static_credentials;
 
     #[icechunk_macros::test]
     fn test_merge_replaces_virtual_chunk_containers() {

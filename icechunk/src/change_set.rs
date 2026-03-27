@@ -112,32 +112,104 @@ pub enum MovedFrom<'a> {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
-pub struct MoveTracker(Vec<Move>);
+pub struct MoveTracker {
+    moves: Vec<Move>,
+    nodes_by_original: HashMap<Path, Path>,
+    nodes_by_final: BTreeMap<Path, Path>,
+}
 
 pub static EMPTY_MOVE_TRACKER: LazyLock<MoveTracker> = LazyLock::new(Default::default);
 
 impl MoveTracker {
-    pub fn record(&mut self, from: Path, to: Path) {
-        self.0.push(Move { from, to });
+    /// Record a move and update the node maps with all affected nodes.
+    ///
+    /// Example: tree with `/a`, `/a/b`, `/a/b/c`; move `/a` -> `/x`:
+    /// ```ignore
+    /// tracker.record(path("/a"), path("/x"), vec![path("/a"), path("/a/b"), path("/a/b/c")]);
+    /// // moved_into("/x") now returns [(/a, /x), (/a/b, /x/b), (/a/b/c, /x/b/c)]
+    /// ```
+    pub fn record(
+        &mut self,
+        from: Path,
+        to: Path,
+        subtree_nodes: impl IntoIterator<Item = Path>,
+    ) {
+        // Resolve `from` to its original snapshot path — it may have
+        // been renamed by an earlier move.
+        // QUESTION: should we just do moved_from here? maybe faster?
+        let original_from =
+            self.nodes_by_final.get(&from).cloned().unwrap_or_else(|| from.clone());
+
+        // Step 1: Update existing map entries whose current final location is
+        // under `from` — they get remapped to `to`.
+        // e.g. earlier move deposited /x at /a/x, now /a -> /c:
+        //   /x's current path /a/x starts_with /a -> becomes /c/x
+        //
+        // Collect updates first since we can't mutate BTreeMap keys
+        // while iterating.
+        let mut updates: Vec<(Path, Path, Path)> = Vec::new(); // (original, old_final, new_final)
+        for (orig, current) in self.nodes_by_original.iter_mut() {
+            if let Some(remapped) = Self::remap_path(current, &from, &to) {
+                let old_final = std::mem::replace(current, remapped);
+                updates.push((orig.clone(), old_final, current.clone()));
+            }
+        }
+        for (orig, old_final, new_final) in updates {
+            self.nodes_by_final.remove(&old_final);
+            self.nodes_by_final.insert(new_final, orig);
+        }
+
+        // Step 2: Add entries for nodes not already in the map.
+        for orig in subtree_nodes {
+            if !self.nodes_by_original.contains_key(&orig)
+                && let Some(new_path) = Self::remap_path(&orig, &original_from, &to)
+            {
+                self.nodes_by_final.insert(new_path.clone(), orig.clone());
+                self.nodes_by_original.insert(orig, new_path);
+            }
+        }
+
+        self.moves.push(Move { from, to });
+    }
+
+    /// Return `(original_path, final_path)` pairs for all nodes whose
+    /// final path is under `parent_group`.
+    pub fn moved_into(&self, parent_group: &Path) -> Vec<(Path, Path)> {
+        self.nodes_by_final
+            .range(parent_group.clone()..)
+            .take_while(|(final_path, _)| final_path.starts_with(parent_group))
+            .map(|(final_path, orig)| (orig.clone(), final_path.clone()))
+            .collect()
+    }
+
+    /// Check if a node's original path has been remapped by a move.
+    pub fn is_remapped(&self, original_path: &Path) -> bool {
+        self.nodes_by_original.contains_key(original_path)
     }
 
     pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
+        self.moves.is_empty()
     }
 
     pub fn all_moves(&self) -> impl Iterator<Item = &Move> {
-        self.0.iter()
+        self.moves.iter()
+    }
+
+    /// Remap `path` by replacing `old_prefix` with `new_prefix`.
+    /// Returns None if `path` is not under `old_prefix`.
+    fn remap_path(path: &Path, old_prefix: &Path, new_prefix: &Path) -> Option<Path> {
+        path.buf().strip_prefix(old_prefix.buf()).ok().map(|rest| {
+            #[expect(clippy::expect_used)]
+            Path::new(new_prefix.buf().join(rest).to_string().as_str())
+                .expect("Bug in remap_path, cannot create path")
+        })
     }
 
     pub fn moved_to<'a>(&self, path: &'a Path) -> MovedTo<'a> {
         let mut res = Cow::Borrowed(path);
         let mut was_moved = false;
-        for Move { from, to } in self.0.iter() {
-            if let Ok(rest) = res.as_ref().buf().strip_prefix(from.buf()) {
-                // it's safe to join segments that already belonged to a Path
-                #[expect(clippy::expect_used)]
-                let new_path = Path::new(to.buf().join(rest).to_string().as_str())
-                    .expect("Bug in moved_to, cannot create path");
+        for Move { from, to } in self.moves.iter() {
+            if let Some(new_path) = Self::remap_path(res.as_ref(), from, to) {
                 res = Cow::Owned(new_path);
                 was_moved = true;
             } else if res.buf().starts_with(to.buf()) {
@@ -152,12 +224,8 @@ impl MoveTracker {
     pub fn moved_from<'a>(&self, path: &'a Path) -> MovedFrom<'a> {
         let mut res = Cow::Borrowed(path);
         let mut was_moved = false;
-        for Move { from, to } in self.0.iter().rev() {
-            if let Ok(rest) = res.as_ref().buf().strip_prefix(to.buf()) {
-                // it's safe to join segments that already belonged to a Path
-                #[expect(clippy::expect_used)]
-                let old_path = Path::new(from.buf().join(rest).to_string().as_str())
-                    .expect("Bug in moved_from, cannot create path");
+        for Move { from, to } in self.moves.iter().rev() {
+            if let Some(old_path) = Self::remap_path(res.as_ref(), to, from) {
                 res = Cow::Owned(old_path);
                 was_moved = true;
             } else if res.buf().starts_with(from.buf()) {
@@ -303,9 +371,25 @@ impl ChangeSet {
         }
     }
 
-    pub fn move_node(&mut self, from: Path, to: Path) -> SessionResult<()> {
-        self.move_tracker_mut()?.record(from, to);
+    pub fn move_node(
+        &mut self,
+        from: Path,
+        to: Path,
+        subtree_nodes: impl IntoIterator<Item = Path>,
+    ) -> SessionResult<()> {
+        self.move_tracker_mut()?.record(from, to, subtree_nodes);
         Ok(())
+    }
+
+    /// Return `(original_path, final_path)` pairs for all nodes whose
+    /// final path is under `parent_group`.
+    pub fn moved_into(&self, parent_group: &Path) -> Vec<(Path, Path)> {
+        self.move_tracker().moved_into(parent_group)
+    }
+
+    /// Check if a node's original path has been remapped by a move.
+    pub fn is_remapped(&self, original_path: &Path) -> bool {
+        self.move_tracker().is_remapped(original_path)
     }
 
     pub fn moved_to<'a>(&self, path: &'a Path) -> MovedTo<'a> {
@@ -723,8 +807,18 @@ pub fn transaction_log_from_change_set(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::{BTreeMap, HashMap};
+
     use bytes::Bytes;
     use itertools::Itertools as _;
+
+    fn pathify(s: &str) -> Path {
+        Path::new(s).unwrap()
+    }
+
+    fn record_move(mt: &mut MoveTracker, from: &str, to: &str, subtree: &[&str]) {
+        mt.record(pathify(from), pathify(to), subtree.iter().map(|s| pathify(s)));
+    }
 
     use super::ChangeSet;
 
@@ -840,14 +934,20 @@ mod tests {
         use super::MovedTo::*;
 
         let mut mt = MoveTracker::default();
-        mt.record(Path::new("/foo/bar/old").unwrap(), Path::new("/foo/bar/new").unwrap());
+        mt.record(
+            Path::new("/foo/bar/old").unwrap(),
+            Path::new("/foo/bar/new").unwrap(),
+            std::iter::empty(),
+        );
         mt.record(
             Path::new("/foo/bar/new/inner-old1").unwrap(),
             Path::new("/foo/bar/new/inner-new").unwrap(),
+            std::iter::empty(),
         );
         mt.record(
             Path::new("/foo/bar/new/inner-old2").unwrap(),
             Path::new("/inner-new2").unwrap(),
+            std::iter::empty(),
         );
 
         assert!(matches!(
@@ -880,14 +980,20 @@ mod tests {
     fn test_moved_from_simple() {
         use super::MovedFrom::*;
         let mut mt = MoveTracker::default();
-        mt.record(Path::new("/foo/bar/old").unwrap(), Path::new("/foo/bar/new").unwrap());
+        mt.record(
+            Path::new("/foo/bar/old").unwrap(),
+            Path::new("/foo/bar/new").unwrap(),
+            std::iter::empty(),
+        );
         mt.record(
             Path::new("/foo/bar/new/inner-old1").unwrap(),
             Path::new("/foo/bar/new/inner-new").unwrap(),
+            std::iter::empty(),
         );
         mt.record(
             Path::new("/foo/bar/new/inner-old2").unwrap(),
             Path::new("/inner-new2").unwrap(),
+            std::iter::empty(),
         );
 
         assert!(matches!(
@@ -934,8 +1040,16 @@ mod tests {
     fn test_moved_to_back_and_forth() {
         use super::MovedTo::*;
         let mut mt = MoveTracker::default();
-        mt.record(Path::new("/foo/bar/old").unwrap(), Path::new("/foo/bar/new").unwrap());
-        mt.record(Path::new("/foo/bar/new").unwrap(), Path::new("/foo/bar/old").unwrap());
+        mt.record(
+            Path::new("/foo/bar/old").unwrap(),
+            Path::new("/foo/bar/new").unwrap(),
+            std::iter::empty(),
+        );
+        mt.record(
+            Path::new("/foo/bar/new").unwrap(),
+            Path::new("/foo/bar/old").unwrap(),
+            std::iter::empty(),
+        );
         assert!(matches!(
             mt.moved_to(&Path::new("/foo/bar/old/inner").unwrap()),
             To(p) if p.as_ref() == &Path::new("/foo/bar/old/inner").unwrap()
@@ -958,8 +1072,16 @@ mod tests {
     fn test_moved_from_back_and_forth() {
         use super::MovedFrom::*;
         let mut mt = MoveTracker::default();
-        mt.record(Path::new("/foo/bar/old").unwrap(), Path::new("/foo/bar/new").unwrap());
-        mt.record(Path::new("/foo/bar/new").unwrap(), Path::new("/foo/bar/old").unwrap());
+        mt.record(
+            Path::new("/foo/bar/old").unwrap(),
+            Path::new("/foo/bar/new").unwrap(),
+            std::iter::empty(),
+        );
+        mt.record(
+            Path::new("/foo/bar/new").unwrap(),
+            Path::new("/foo/bar/old").unwrap(),
+            std::iter::empty(),
+        );
         assert!(matches!(
             mt.moved_from(&Path::new("/foo/bar/old/inner").unwrap()),
             From(p) if p.as_ref() == &Path::new("/foo/bar/old/inner").unwrap()
@@ -996,7 +1118,13 @@ mod tests {
     }
 
     fn move_tracker() -> impl Strategy<Value = MoveTracker> {
-        vec(gen_move(), 1..5).prop_map(MoveTracker).boxed()
+        vec(gen_move(), 1..5)
+            .prop_map(|moves| MoveTracker {
+                moves,
+                nodes_by_original: HashMap::new(),
+                nodes_by_final: BTreeMap::new(),
+            })
+            .boxed()
     }
 
     fn change_set() -> impl Strategy<Value = ChangeSet> {
@@ -1006,4 +1134,60 @@ mod tests {
     }
 
     roundtrip_serialization_tests!(serialize_and_deserialize_change_sets - change_set);
+
+    #[icechunk_macros::test]
+    fn test_moved_into() {
+        // Tree: /g (group), /g/a (group), /g/a/x (array)
+        // Move: /g/a -> /g/b
+        // After: /g/b, /g/b/x
+        let mut mt = MoveTracker::default();
+        record_move(&mut mt, "/g/a", "/g/b", &["/g/a", "/g/a/x"]);
+
+        assert!(mt.is_remapped(&pathify("/g/a")));
+        assert!(mt.is_remapped(&pathify("/g/a/x")));
+        assert!(!mt.is_remapped(&pathify("/g/b")));
+
+        let under_g = mt.moved_into(&pathify("/g"));
+        assert_eq!(under_g.len(), 2);
+        assert!(under_g.contains(&(pathify("/g/a"), pathify("/g/b"))));
+        assert!(under_g.contains(&(pathify("/g/a/x"), pathify("/g/b/x"))));
+    }
+
+    #[icechunk_macros::test]
+    fn test_moved_into_after_move_in_then_rename() {
+        // Tree: /a (group), /a/x (array), /b (group), /b/y (array)
+        // Move 1: /a -> /b/a (move /a into /b)
+        // Move 2: /b -> /c (rename /b)
+        // After: /c, /c/a, /c/a/x, /c/y
+        let mut mt = MoveTracker::default();
+        record_move(&mut mt, "/a", "/b/a", &["/a", "/a/x"]);
+        record_move(&mut mt, "/b", "/c", &["/b", "/b/y"]);
+
+        let result = mt.moved_into(&pathify("/c"));
+        assert!(result.contains(&(pathify("/a"), pathify("/c/a"))));
+        assert!(result.contains(&(pathify("/a/x"), pathify("/c/a/x"))));
+        assert!(result.contains(&(pathify("/b"), pathify("/c"))));
+        assert!(result.contains(&(pathify("/b/y"), pathify("/c/y"))));
+    }
+
+    #[icechunk_macros::test]
+    fn test_moved_into_after_move_out_then_rename() {
+        // Tree: /a (group), /a/x (array), /a/y (array)
+        // Move 1: /a/x -> /b (move x out of a)
+        // Move 2: /a -> /c (rename a)
+        // After: /b (was /a/x), /c (was /a), /c/y (was /a/y)
+        let mut mt = MoveTracker::default();
+        record_move(&mut mt, "/a/x", "/b", &["/a/x"]);
+        record_move(&mut mt, "/a", "/c", &["/a", "/a/x", "/a/y"]);
+
+        // /a/x was moved to /b, not carried along to /c
+        let under_c = mt.moved_into(&pathify("/c"));
+        assert!(under_c.contains(&(pathify("/a"), pathify("/c"))));
+        assert!(under_c.contains(&(pathify("/a/y"), pathify("/c/y"))));
+        assert!(!under_c.iter().any(|(_, f)| *f == pathify("/c/x")));
+
+        assert!(
+            mt.moved_into(&pathify("/b")).contains(&(pathify("/a/x"), pathify("/b")))
+        );
+    }
 }
