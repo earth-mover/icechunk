@@ -41,8 +41,8 @@ pub use icechunk_arrow_object_store::{
 
 #[cfg(feature = "object-store-azure")]
 pub use icechunk_arrow_object_store::{
-    AzureCredentials, AzureObjectStoreBackend, AzureStaticCredentials,
-    new_azure_blob_storage,
+    AzureCredentials, AzureCredentialsFetcher, AzureObjectStoreBackend,
+    AzureRefreshableCredential, AzureStaticCredentials, new_azure_blob_storage,
 };
 
 #[cfg(feature = "object-store-gcs")]

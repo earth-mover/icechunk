@@ -36,7 +36,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           ref: ${{ github.event.pull_request.head.sha }}
 
@@ -47,7 +47,7 @@ jobs:
           rustup default ${{ env.RUST_CHANNEL }}
 
       - name: Cache Dependencies
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
         with:
           # workspaces: "rust -> target"
           key: windows-${{ env.RUST_CHANNEL }}

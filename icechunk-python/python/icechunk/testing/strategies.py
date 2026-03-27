@@ -82,3 +82,42 @@ def repository_configs(
     if Version(ice.__version__).major >= 2:
         kwargs["num_updates_per_repo_info_file"] = draw(num_updates_per_repo_info_file)
     return ice.RepositoryConfig(**kwargs)  # type: ignore[no-any-return]
+
+
+@st.composite
+def chunk_coordinates(draw: st.DrawFn, numblocks: tuple[int, ...]) -> tuple[int, ...]:
+    return draw(
+        st.tuples(*tuple(st.integers(min_value=0, max_value=b - 1) for b in numblocks))
+    )
+
+
+@st.composite
+def chunk_slicers(
+    draw: st.DrawFn, numblocks: tuple[int, ...], chunk_shape: tuple[int, ...]
+) -> tuple[slice, ...]:
+    """
+    Strategy to generate a tuple of slices that indexes a single chunk.
+
+    Parameters
+    ----------
+
+    draw: st.DrawFn
+    numblocks: tuple of int
+        Number of chunks along each axis.
+    chunk_shape:
+        Shape of each chunk (assumes regular chunk grid)
+    """
+    return tuple(
+        (
+            slice(coord * size, (coord + 1) * size)
+            for coord, size in zip(
+                draw(chunk_coordinates(numblocks)), chunk_shape, strict=True
+            )
+        )
+    )
+
+
+@st.composite
+def chunk_paths(draw: st.DrawFn, numblocks: tuple[int, ...]) -> str:
+    blockidx = draw(chunk_coordinates(numblocks))
+    return "/".join(map(str, blockidx))

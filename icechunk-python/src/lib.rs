@@ -15,10 +15,10 @@ mod streams;
 use std::env;
 
 use config::{
-    PyAzureCredentials, PyAzureStaticCredentials, PyCachingConfig,
-    PyCompressionAlgorithm, PyCompressionConfig, PyCredentials, PyGcsBearerCredential,
-    PyGcsCredentials, PyGcsStaticCredentials, PyLatencyStorage, PyManifestConfig,
-    PyManifestPreloadCondition, PyManifestPreloadConfig,
+    PyAzureCredentials, PyAzureRefreshableCredential, PyAzureStaticCredentials,
+    PyCachingConfig, PyCompressionAlgorithm, PyCompressionConfig, PyCredentials,
+    PyGcsBearerCredential, PyGcsCredentials, PyGcsStaticCredentials, PyLatencyStorage,
+    PyManifestConfig, PyManifestPreloadCondition, PyManifestPreloadConfig,
     PyManifestVirtualChunkLocationCompressionConfig, PyObjectStoreConfig,
     PyRepoUpdateRetryConfig, PyRepositoryConfig, PyS3Credentials, PyS3Options,
     PyS3StaticCredentials, PyStorage, PyStorageConcurrencySettings, PyStorageObjectInfo,
@@ -191,6 +191,7 @@ fn _icechunk_python(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyGcsCredentials>()?;
     m.add_class::<PyGcsBearerCredential>()?;
     m.add_class::<PyGcsStaticCredentials>()?;
+    m.add_class::<PyAzureRefreshableCredential>()?;
     m.add_class::<PyAzureCredentials>()?;
     m.add_class::<PyAzureStaticCredentials>()?;
     m.add_class::<PyCredentials>()?;
