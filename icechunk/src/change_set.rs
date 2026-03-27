@@ -944,14 +944,14 @@ mod tests {
         mt: &mut MoveTracker,
         from: &str,
         to: &str,
-        subtree: &[&str],
+        subtree: &[(&str, NodeId, NodeType)],
         node_id: &NodeId,
         node_type: NodeType,
     ) {
         mt.record(
             pathify(from),
             pathify(to),
-            subtree.iter().map(|s| pathify(s)),
+            subtree.iter().map(|(path, id, ty)| (pathify(path), id.clone(), ty.clone())),
             &node_id,
             node_type,
         );
@@ -1500,7 +1500,10 @@ mod tests {
             &mut mt,
             "/g/a",
             "/g/b",
-            &["/g/a", "/g/a/x"],
+            &[
+                ("/g/a", NodeId::random(), NodeType::Group),
+                ("/g/a/x", NodeId::random(), NodeType::Array),
+            ],
             &NodeId::random(),
             NodeType::Group,
         );
@@ -1526,7 +1529,10 @@ mod tests {
             &mut mt,
             "/a",
             "/b/a",
-            &["/a", "/a/x"],
+            &[
+                ("/a", NodeId::random(), NodeType::Group),
+                ("/a/x", NodeId::random(), NodeType::Array),
+            ],
             &NodeId::random(),
             NodeType::Group,
         );
@@ -1534,7 +1540,10 @@ mod tests {
             &mut mt,
             "/b",
             "/c",
-            &["/b", "/b/y"],
+            &[
+                ("/b", NodeId::random(), NodeType::Group),
+                ("/b/y", NodeId::random(), NodeType::Array),
+            ],
             &NodeId::random(),
             NodeType::Group,
         );
@@ -1553,12 +1562,23 @@ mod tests {
         // Move 2: /a -> /c (rename a)
         // After: /b (was /a/x), /c (was /a), /c/y (was /a/y)
         let mut mt = MoveTracker::default();
-        record_move(&mut mt, "/a/x", "/b", &["/a/x"], &NodeId::random(), NodeType::Array);
+        record_move(
+            &mut mt,
+            "/a/x",
+            "/b",
+            &[("/a/x", NodeId::random(), NodeType::Array)],
+            &NodeId::random(),
+            NodeType::Array,
+        );
         record_move(
             &mut mt,
             "/a",
             "/c",
-            &["/a", "/a/x", "/a/y"],
+            &[
+                ("/a", NodeId::random(), NodeType::Group),
+                ("/a/x", NodeId::random(), NodeType::Array),
+                ("/a/y", NodeId::random(), NodeType::Array),
+            ],
             &NodeId::random(),
             NodeType::Group,
         );
