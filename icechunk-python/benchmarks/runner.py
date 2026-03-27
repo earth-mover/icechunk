@@ -276,6 +276,9 @@ class CoiledRunner(Runner):
                 # The pip_github_url approach below doesn't work because Coiled
                 # ignores git+ URLs with "Local path requirement ... is not supported".
                 # pip_deps = [self.pip_github_url, "coiled", *deps]
+                # One approach is to use a conda env with all deps under pip.
+                # See this code in VirtualiZarr for example.
+                # https://github.com/jbusecke/virtualizarr-benchmark/blob/1bd0ffd59a17cff728fbf2b3ba5cb57e7cd3e2fe/run_matrix.py#L115-L121
                 raise NotImplementedError(
                     f"Coiled runner only supports PYPI_REFS ({list(self.PYPI_REFS)}). "
                     f"Got ref={self.ref!r}. Use LocalRunner (--where local) for git refs."
