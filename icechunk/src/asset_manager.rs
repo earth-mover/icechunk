@@ -1369,17 +1369,12 @@ async fn fetch_transaction_log(
     deserialize_transaction_log(spec_version, buffer).map(Arc::new).inject()
 }
 
-#[expect(clippy::too_many_arguments)]
-pub async fn write_repo_info(
+async fn prepare_repo_info(
     info: Arc<RepoInfo>,
     spec_version: SpecVersionBin,
-    version: &VersionInfo,
     compression_level: u8,
-    backup_path: Option<&str>,
     storage: &(dyn Storage + Send + Sync),
-    storage_settings: &storage::Settings,
-    path: Option<&str>,
-) -> RepositoryResult<VersionInfo> {
+) -> RepositoryResult<(Vec<u8>, Vec<(String, String)>)> {
     if !storage.can_write().await.inject()? {
         return Err(RepositoryErrorKind::ReadonlyStorage(
             "Cannot write repo info".to_string(),
@@ -1410,6 +1405,23 @@ pub async fn write_repo_info(
         compression_level,
     )
     .await?;
+
+    Ok((buffer, metadata))
+}
+
+#[expect(clippy::too_many_arguments)]
+pub async fn write_repo_info(
+    info: Arc<RepoInfo>,
+    spec_version: SpecVersionBin,
+    version: &VersionInfo,
+    compression_level: u8,
+    backup_path: Option<&str>,
+    storage: &(dyn Storage + Send + Sync),
+    storage_settings: &storage::Settings,
+    path: Option<&str>,
+) -> RepositoryResult<VersionInfo> {
+    let (buffer, metadata) =
+        prepare_repo_info(info, spec_version, compression_level, storage).await?;
 
     debug!(size_bytes = buffer.len(), "Writing repo info");
 
@@ -1445,6 +1457,40 @@ pub async fn write_repo_info(
             metadata,
             Some(version),
         )
+        .await
+        .inject()?
+    {
+        VersionedUpdateResult::Updated { new_version } => Ok(new_version),
+        VersionedUpdateResult::NotOnLatestVersion => {
+            Err(RepositoryError::capture(RepositoryErrorKind::RepoInfoUpdated))
+        }
+    }
+}
+
+/// Unconditionally overwrite repo info, bypassing version checks and backups.
+///
+/// # Safety
+/// This is not memory-unsafe, but it bypasses the optimistic concurrency
+/// control that `write_repo_info` provides. Concurrent writers can silently
+/// clobber each other.
+#[expect(unsafe_code)]
+pub async unsafe fn force_write_repo_info(
+    info: Arc<RepoInfo>,
+    spec_version: SpecVersionBin,
+    compression_level: u8,
+    storage: &(dyn Storage + Send + Sync),
+    storage_settings: &storage::Settings,
+    path: Option<&str>,
+) -> RepositoryResult<VersionInfo> {
+    let (buffer, metadata) =
+        prepare_repo_info(info, spec_version, compression_level, storage).await?;
+
+    debug!(size_bytes = buffer.len(), "Force-writing repo info");
+
+    let repo_file_path = path.unwrap_or(REPO_INFO_FILE_PATH);
+
+    match storage
+        .put_object(storage_settings, repo_file_path, buffer.into(), None, metadata, None)
         .await
         .inject()?
     {
