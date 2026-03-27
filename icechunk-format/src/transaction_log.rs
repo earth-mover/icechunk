@@ -188,6 +188,7 @@ impl TransactionLog {
             Some(it) => Either::Left(it.iter()),
             None => Either::Right(iter::empty()),
         };
+        #[expect(clippy::expect_used)]
         it.filter_map(|m| {
             let from = Path::new(
                 m.from().expect("from is optional in flatbuffers, but required by spec"),

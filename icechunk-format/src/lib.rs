@@ -142,6 +142,7 @@ impl From<generated::NodeType> for NodeType {
         match value {
             generated::NodeType::Group => NodeType::Group,
             generated::NodeType::Array => NodeType::Array,
+            #[expect(clippy::panic)]
             generated::NodeType(v) => panic!("{v} is not a valid node type"),
         }
     }
