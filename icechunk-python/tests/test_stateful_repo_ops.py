@@ -523,11 +523,26 @@ class Model:
                 self.ondisk_snaps.pop(k, None)
                 deleted.add(k)
 
-        # Match Rust's delete_snapshots_from_repo_info: rewrite parent_id for
-        # kept snapshots whose parent was GC'd to INITIAL_SNAPSHOT_ID.
-        for c in self.commits.values():
-            if c.parent_id is not None and c.parent_id in deleted:
-                c.parent_id = self.initial_snapshot_id
+        if self.spec_version >= 2:
+            # V2's delete_snapshots_from_repo_info rewrites parent pointers
+            # for kept snapshots whose parent was GC'd.
+            for c in self.commits.values():
+                if c.parent_id is not None and c.parent_id in deleted:
+                    c.parent_id = self.initial_snapshot_id
+        else:
+            # V1 doesn't rewrite parent pointers, so commits whose parents
+            # were GC'd have broken ancestry and are effectively unusable.
+            # Remove them from commits so we don't try to use them
+            orphaned = True
+            while orphaned:
+                orphaned = {
+                    k
+                    for k, c in self.commits.items()
+                    if c.parent_id is not None
+                    and (c.parent_id in deleted or c.parent_id not in self.ondisk_snaps)
+                }
+                for k in orphaned:
+                    self.commits.pop(k, None)
         note(f"Deleted snapshots in model: {deleted!r}")
         self.ops_log.append(GCRanUpdateModel())
         return deleted
