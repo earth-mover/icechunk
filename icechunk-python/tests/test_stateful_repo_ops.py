@@ -249,6 +249,7 @@ class Model:
         HEAD = snap.id
         self.initial_snapshot_id = HEAD
         self.commits[HEAD] = CommitModel.from_snapshot_and_store(snap, {})
+        self.ondisk_snaps[HEAD] = self.commits[HEAD]
         self.HEAD = HEAD
         self.create_branch(DEFAULT_BRANCH, HEAD)
         self.checkout_branch(DEFAULT_BRANCH)
@@ -1157,7 +1158,8 @@ class VersionControlStateMachine(RuleBasedStateMachine):
 
     def _assert_ancestry_invariants(self, ancestry: list[SnapshotInfo]) -> None:
         ancestry_set = set([snap.id for snap in ancestry])
-        assert ancestry_set.issubset(set(self.model.commits))
+        diff = ancestry_set - set(self.model.commits)
+        assert not diff, ("ancestry is not a subset of commits", diff)
         # snapshot timestamps are monotonically decreasing in ancestry
         assert all(a.written_at > b.written_at for a, b in itertools.pairwise(ancestry))
         # ancestry must be unique
