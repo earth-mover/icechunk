@@ -32,7 +32,6 @@ dev = [
 test = [
   "boto3",
   "coverage",
-  "object-store-python",
   "pytest",
   "pytest-cov",
   "pytest-asyncio",
