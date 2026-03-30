@@ -74,62 +74,76 @@ class GroupNode:
         _write(root, self)
         return root
 
-
-Node = ArrayNode | GroupNode
-
-# Fixed dtype/shape — we're testing path handling, not dtype serialization.
-DTYPE = np.dtype("i4")
-SHAPE = (1,)
-
-
-def tree_from_str(spec: str) -> GroupNode:
-    """Build a GroupNode tree from a compact string specification.
-
-    Each line is ``"a: /path"`` for an array or ``"g: /path"`` for a group.
-    Intermediate groups are created implicitly.
-
-    Example::
-
-        tree_from_str('''
-            a: /foo/bar/array
-            g: /foo/baz
-            g: /qux
-        ''')
-    """
-    # Nested dict built incrementally; values are ArrayNode or sub-dicts.
-    tree: dict[str, Any] = {}
-
-    for line in spec.strip().splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        kind, _, path = line.partition(":")
-        kind = kind.strip().lower()
-        path = path.strip().strip("/")
-        parts = path.split("/")
-
-        current = tree
-        for part in parts[:-1]:
-            current = current.setdefault(part, {})
-
-        leaf_name = parts[-1]
-        if kind == "a":
-            current[leaf_name] = ArrayNode(shape=SHAPE, dtype=DTYPE)
-        elif kind == "g":
-            current.setdefault(leaf_name, {})
-        else:
-            raise ValueError(f"unknown node kind '{kind}', expected 'a' or 'g'")
-
-    def _to_group(d: dict[str, Any]) -> GroupNode:
-        children: dict[str, Node] = {}
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> GroupNode:
+        """Convert a nested dict (with ArrayNode leaves) to a GroupNode tree."""
+        children: dict[str, ArrayNode | GroupNode] = {}
         for name, value in d.items():
             if isinstance(value, ArrayNode):
                 children[name] = value
             else:
-                children[name] = _to_group(value)
-        return GroupNode(children=children)
+                children[name] = cls.from_dict(value)
+        return cls(children=children)
 
-    return _to_group(tree)
+    @classmethod
+    def from_paths(cls, arrays: set[str], groups: set[str]) -> GroupNode:
+        """Build a GroupNode from flat sets of array and group paths.
+
+        Example::
+
+            GroupNode.from_paths(
+                arrays={"a/x", "b"},
+                groups={"a"},
+            )
+        """
+        tree: dict[str, Any] = {}
+        for path in sorted(groups - {""}):
+            current = tree
+            for part in path.split("/"):
+                current = current.setdefault(part, {})
+        for path in sorted(arrays):
+            parts = path.split("/")
+            current = tree
+            for part in parts[:-1]:
+                current = current.setdefault(part, {})
+            current[parts[-1]] = ArrayNode(shape=(1,), dtype=np.dtype("i4"))
+        return cls.from_dict(tree)
+
+    @classmethod
+    def from_store(cls, store: zarr.abc.store.Store) -> GroupNode:
+        """Build a GroupNode by reading a zarr store's structure.
+
+        Example::
+
+            GroupNode.from_store(some_memory_store)
+        """
+        import json
+
+        from zarr.core.sync import sync
+
+        async def _collect() -> tuple[set[str], set[str]]:
+            arrays: set[str] = set()
+            groups: set[str] = set()
+            proto = zarr.core.buffer.default_buffer_prototype()
+            async for key in store.list_prefix(""):
+                if not key.endswith("/zarr.json") and key != "zarr.json":
+                    continue
+                path = key.removesuffix("/zarr.json").removesuffix("zarr.json").strip("/")
+                if not path:
+                    continue  # root group
+                raw = await store.get(key, prototype=proto)
+                meta = json.loads(raw.to_bytes())  # type: ignore[union-attr]
+                if meta.get("node_type") == "array":
+                    arrays.add(path)
+                else:
+                    groups.add(path)
+            return arrays, groups
+
+        arrays, groups = sync(_collect())
+        return cls.from_paths(arrays, groups)
+
+
+Node = ArrayNode | GroupNode
 
 
 # ---------------------------------------------------------------------------
@@ -255,7 +269,7 @@ def skeletons(
     Always returns a GroupNode (the root group). Child names are placeholder
     indices ("0", "1", ...); real names are assigned later by ``trees``.
     """
-    leaves = st.just(ArrayNode(shape=SHAPE, dtype=DTYPE))
+    leaves = st.just(ArrayNode(shape=(1,), dtype=np.dtype("i4")))
 
     def extend(children: st.SearchStrategy[Node]) -> st.SearchStrategy[GroupNode]:
         return st.lists(children, min_size=1, max_size=max_children).map(

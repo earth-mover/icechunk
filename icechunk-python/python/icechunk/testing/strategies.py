@@ -1,6 +1,16 @@
+import datetime
 from collections.abc import Iterable
 from types import ModuleType
 from typing import TYPE_CHECKING, Any
+
+__all__ = [
+    "chunk_coordinates",
+    "chunk_paths",
+    "chunk_slicers",
+    "draw_older_than",
+    "repository_configs",
+    "splitting_configs",
+]
 
 import hypothesis.strategies as st
 from packaging.version import Version
@@ -121,3 +131,41 @@ def chunk_slicers(
 def chunk_paths(draw: st.DrawFn, numblocks: tuple[int, ...]) -> str:
     blockidx = draw(chunk_coordinates(numblocks))
     return "/".join(map(str, blockidx))
+
+
+def draw_older_than(data: st.DataObject, storage: ic.Storage) -> datetime.datetime:
+    """Draw an ``older_than`` cutoff from storage-level ``created_at`` timestamps.
+
+    Uses the same timestamps that the Rust GC compares against, taking the max
+    of the snapshot and transaction ``created_at`` for each key so both are
+    reliably expired together.
+    """
+    created_at_snapshots: dict[str, datetime.datetime] = {
+        obj.key: obj.created_at
+        for obj in storage.list_objects_metadata(prefix="snapshots")
+    }
+    created_at_txs: dict[str, datetime.datetime] = {
+        obj.key: obj.created_at
+        for obj in storage.list_objects_metadata(prefix="transactions")
+    }
+    created_at_times = sorted(
+        # These are written concurrently (session.rs) and get slightly different
+        # created_at timestamps. Take the max so we delete both.
+        max(
+            created_at_snapshots[key],
+            created_at_txs.get(key, datetime.datetime(2000, 1, 1, tzinfo=datetime.UTC)),
+        )
+        for key in created_at_snapshots
+    )[::-1]  # reverse to maximize chances of GCing more objects
+    # The order here is important; again we prioritize GCing more objects first
+    result: datetime.datetime = data.draw(
+        st.one_of(
+            st.just(max(created_at_times) + datetime.timedelta(days=1)),
+            # Add 1μs to ensure we delete both the tx log & snapshot
+            st.sampled_from(created_at_times).map(
+                lambda time: time + datetime.timedelta(microseconds=1)
+            ),
+            st.just(datetime.datetime(2000, 1, 1, tzinfo=datetime.UTC)),
+        )
+    )
+    return result
