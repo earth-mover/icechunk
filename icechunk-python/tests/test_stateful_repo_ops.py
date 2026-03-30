@@ -1137,3 +1137,27 @@ class VersionControlStateMachine(RuleBasedStateMachine):
 
 
 VersionControlTest = VersionControlStateMachine.TestCase
+
+# ---- Focused GC subset ----
+
+GC_RULES = {
+    "set_and_commit",
+    "create_branch",
+    "create_tag",
+    "reset_branch",
+    "expire_snapshots",
+    "garbage_collect",
+}
+
+
+@pytest.mark.xfail(
+    reason="expire_v2 orphan parent bug not yet fixed",
+    strict=False,
+)
+def test_gc_with_rules():
+    from icechunk.testing.stateful_subsets import test_subsets
+
+    test_subsets(
+        VersionControlStateMachine,
+        with_rules=[(GC_RULES, 50)],
+    )
