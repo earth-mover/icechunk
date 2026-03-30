@@ -45,7 +45,6 @@ test = [
   "pandas-stubs",
   "boto3-stubs[s3]",
   "termcolor",
-  "matplotlib",
   "rich",
 ]
 benchmark = [
