@@ -18,7 +18,7 @@ permissions:
   contents: read
 
 env:
-  PYTHON_VERSION: "3.11"
+  PYTHON_VERSION: "3.12"
 
 defaults:
   run:
@@ -113,6 +113,77 @@ jobs:
 
       # this is here instead of earlier to give RustFS more time to get up and running
       # checking and waiting only right before we need it
+      - name: Wait for RustFS to be ready
+        run: |
+          for _ in {1..30}; do
+              if docker compose ps --status exited --filter status==0 | grep rustfs ; then
+              break
+              fi
+              sleep 1
+          done
+
+      - name: Run pytest (non-hypothesis)
+        shell: bash
+        working-directory: icechunk-python
+        run: |
+          set -e
+          source .venv/bin/activate
+          python -m pytest -n 4 -m "not hypothesis"
+
+  build-wheels-free-threaded:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13t"
+
+      - name: Build wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          working-directory: icechunk-python
+          args: --release --out dist -i python3.13t
+          sccache: true
+          manylinux: auto
+
+      - name: Upload wheels
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-wheels-free-threaded
+          path: icechunk-python/dist
+
+  test-free-threaded:
+    runs-on: ubuntu-latest
+    needs: [build-wheels-free-threaded]
+    steps:
+      - uses: actions/checkout@v6
+      - name: Stand up RustFS
+        run: |
+          docker compose up -d rustfs_init
+
+      - name: Download wheels
+        uses: actions/download-artifact@v8
+        with:
+          name: test-wheels-free-threaded
+          path: icechunk-python/dist
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          python-version: "3.13t"
+
+      - name: Install dependencies
+        shell: bash
+        working-directory: icechunk-python
+        run: |
+          set -e
+          uv venv
+          source .venv/bin/activate
+          python --version
+          WHEEL=$(ls dist/*-cp313t-*.whl)
+          uv pip install "$WHEEL" --group test
+
       - name: Wait for RustFS to be ready
         run: |
           for _ in {1..30}; do

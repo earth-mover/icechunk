@@ -48,7 +48,8 @@ from icechunk import (
     Storage,
 )
 from icechunk.testing import LatencyStorage
-from icechunk.testing.strategies import repository_configs
+from icechunk.testing.invariants import assert_ancestry_invariants
+from icechunk.testing.strategies import draw_older_than, repository_configs
 from zarr.testing.stateful import SyncStoreWrapper
 
 # JSON file contents, keep it simple
@@ -942,42 +943,6 @@ class VersionControlStateMachine(RuleBasedStateMachine):
             self.repo.delete_tag(tag)
             self.model.delete_tag(tag)
 
-    def _draw_older_than(self, data: st.DataObject) -> datetime.datetime:
-        # Draw cutoffs from storage-level created_at (not written_at/flushed_at)
-        # because that is what Rust GC compares against.
-        assert self.storage is not None
-        created_at_snapshots: dict[str, datetime.datetime] = {
-            obj.key: obj.created_at
-            for obj in self.storage.list_objects_metadata(prefix="snapshots")
-        }
-        created_at_txs: dict[str, datetime.datetime] = {
-            obj.key: obj.created_at
-            for obj in self.storage.list_objects_metadata(prefix="transactions")
-        }
-        created_at_times = sorted(
-            # These are written concurrently (session.rs) and get slightly different
-            # created_at timestamps. Take the max so we delete both.
-            max(
-                created_at_snapshots[key],
-                created_at_txs.get(
-                    key, datetime.datetime(2000, 1, 1, tzinfo=datetime.UTC)
-                ),
-            )
-            for key in created_at_snapshots
-        )[::-1]  # reverse to maximize chances of GCing more objects
-        # The order here is important; again we prioritize GCing more objects first
-        result: datetime.datetime = data.draw(
-            st.one_of(
-                st.just(max(created_at_times) + datetime.timedelta(days=1)),
-                # Add 1μs to ensure we delete both the tx log & snapshot
-                st.sampled_from(created_at_times).map(
-                    lambda time: time + datetime.timedelta(microseconds=1)
-                ),
-                st.just(datetime.datetime(2000, 1, 1, tzinfo=datetime.UTC)),
-            )
-        )
-        return result
-
     @precondition(lambda self: bool(self.model.commits))
     @rule(
         data=st.data(),
@@ -990,7 +955,8 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         delete_expired_branches: bool,
         delete_expired_tags: bool,
     ) -> None:
-        older_than = self._draw_older_than(data)
+        assert self.storage is not None
+        older_than = draw_older_than(data, self.storage)
         note(
             f"Expiring snapshots {older_than=!r}, {delete_expired_branches=!r}, {delete_expired_tags=!r}"
         )
@@ -1067,10 +1033,10 @@ class VersionControlStateMachine(RuleBasedStateMachine):
     @precondition(lambda self: bool(self.model.commit_times))
     @rule(data=st.data())
     def garbage_collect(self, data: st.DataObject) -> None:
-        older_than = self._draw_older_than(data)
+        assert self.storage is not None
+        older_than = draw_older_than(data, self.storage)
         note(f"running garbage_collect for {older_than=!r}")
         # Snapshot created_at before Rust GC deletes files from storage
-        assert self.storage is not None
         created_at_by_id = {
             obj.key.removeprefix("snapshots/"): obj.created_at
             for obj in self.storage.list_objects_metadata(prefix="snapshots")
@@ -1156,27 +1122,14 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         repo_branches = {k: self.repo.lookup_branch(k) for k in self.repo.list_branches()}
         assert self.model.branch_heads == repo_branches
 
-    def _assert_ancestry_invariants(self, ancestry: list[SnapshotInfo]) -> None:
-        ancestry_set = set([snap.id for snap in ancestry])
-        diff = ancestry_set - set(self.model.commits)
-        assert not diff, ("ancestry is not a subset of commits", diff)
-        # snapshot timestamps are monotonically decreasing in ancestry
-        assert all(a.written_at > b.written_at for a, b in itertools.pairwise(ancestry))
-        # ancestry must be unique
-        assert len(ancestry_set) == len(ancestry)
-        n = len(ancestry)
-        bucket = f"{n // 10 * 10}-{n // 10 * 10 + 9}"
-        event(f"ancestry length: {bucket}")
-
     def check_ancestry(self) -> None:
         for branch in self.model.branch_heads:
             ancestry = list(self.repo.ancestry(branch=branch))
-            self._assert_ancestry_invariants(ancestry)
-            assert ancestry[-1].parent_id is None
+            assert_ancestry_invariants(ancestry, known_commits=set(self.model.commits))
 
         for tag in self.model.tags:
             ancestry = list(self.repo.ancestry(tag=tag))
-            self._assert_ancestry_invariants(ancestry)
+            assert_ancestry_invariants(ancestry, known_commits=set(self.model.commits))
 
     def check_repo_info(self) -> None:
         ver = self.model.spec_version

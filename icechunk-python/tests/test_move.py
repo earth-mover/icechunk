@@ -1,10 +1,13 @@
+import itertools
+
 import numpy.testing
 import pytest
 from hypothesis import example, given, note
+from hypothesis import strategies as st
 
 import icechunk as ic
 import zarr
-from icechunk.testing.trees import GroupNode, tree_and_moves, tree_from_str
+from icechunk.testing.trees import GroupNode, tree_and_moves
 from icechunk.testing.utils import (
     precommit_postcommit_readonly,
     tree_to_model_and_icechunk,
@@ -33,6 +36,12 @@ async def test_basic_move() -> None:
     )
     session.commit("create array")
 
+    # Capture node IDs before the move
+    session = repo.readonly_session(branch="main")
+    id_old = session.get_node_id("/my/old")
+    id_path = session.get_node_id("/my/old/path")
+    id_array = session.get_node_id("/my/old/path/array")
+
     session = repo.rearrange_session("main")
     store = session.store
     session.move("/my/old", "/my/new")
@@ -53,6 +62,11 @@ async def test_basic_move() -> None:
     group = zarr.open_group(store=store, mode="r")
     array = group["my/new/path/array"]
     numpy.testing.assert_array_equal(array, 42)
+
+    # Node IDs must be stable across the move
+    assert session.get_node_id("/my/new") == id_old
+    assert session.get_node_id("/my/new/path") == id_path
+    assert session.get_node_id("/my/new/path/array") == id_array
 
     a, b, *_ = repo.ancestry(branch="main")
     diff = repo.diff(from_snapshot_id=b.id, to_snapshot_id=a.id)
@@ -91,9 +105,21 @@ def test_move_errors() -> None:
     #     session.move("/", "/new")
 
 
-@example(tree_moves=(tree_from_str("g: /foo/bar\ng: /baz"), [("foo/bar", "baz/bar")]))
-@example(tree_moves=(tree_from_str("a: /0/0/0"), [("0", "0_0")]))
-@example(tree_moves=(tree_from_str("a: /0/1"), [("0/1", "0/0"), ("0", "1")]))
+@example(
+    tree_moves=(
+        GroupNode.from_paths(arrays=set(), groups={"foo/bar", "baz"}),
+        [("foo/bar", "baz/bar")],
+    )
+)
+@example(
+    tree_moves=(GroupNode.from_paths(arrays={"0/0/0"}, groups=set()), [("0", "0_0")])
+)
+@example(
+    tree_moves=(
+        GroupNode.from_paths(arrays={"0/1"}, groups=set()),
+        [("0/1", "0/0"), ("0", "1")],
+    )
+)
 @given(tree_moves=tree_and_moves())
 def test_moves(
     tree_moves: tuple[GroupNode, list[tuple[str, str]]],
@@ -113,6 +139,18 @@ def test_moves(
         sync(model.move(source, dest))
         session.move(f"/{source}", f"/{dest}")
 
+    # All model paths should be reachable as group members in the store
+    model_paths = {path for path, _ in zarr.open_group(model).members(max_depth=None)}
+    store_paths = {
+        path
+        for path, _ in zarr.open_group(session.store, mode="r").members(max_depth=None)
+    }
+    assert model_paths == store_paths, (
+        f"members mismatch after moves:\n"
+        f"  model only: {model_paths - store_paths}\n"
+        f"  store only: {store_paths - model_paths}"
+    )
+
     expected = repr(zarr.open_group(model).tree())
     for label, store in precommit_postcommit_readonly(session, repo):
         actual = repr(zarr.open_group(store, mode="r").tree())
@@ -124,6 +162,86 @@ def test_moves(
             + f"\n\nexpected:\n{expected}"
             f"\n\nactual:\n{actual}"
         )
+
+
+@pytest.mark.xfail(
+    reason="move collapsing in transaction log not yet implemented", strict=False
+)
+@given(
+    tree_moves=tree_and_moves(n_moves=st.integers(min_value=2, max_value=10)),
+    data=st.data(),
+)
+def test_moves_amend(
+    tree_moves: tuple[GroupNode, list[tuple[str, str]]],
+    data: st.DataObject,
+) -> None:
+    """Moves split across commit + amend should produce the same tree
+    and transaction log as doing all moves in one commit.
+
+    Splits moves into multiple batches with amends between them.
+    Verifies that the transaction log properly collapses chained moves
+    during amend (e.g., a->b + b->c becomes a->c).
+
+    See https://github.com/earth-mover/icechunk/pull/1896
+    """
+    tree, moves = tree_moves
+
+    # Split moves into 2-4 batches: commit the first, amend the rest.
+    split_points = sorted(
+        {
+            0,
+            *data.draw(st.sets(st.integers(1, len(moves) - 1), min_size=1, max_size=3)),
+            len(moves),
+        }
+    )
+    batches = [moves[a:b] for a, b in itertools.pairwise(split_points)]
+
+    note(f"tree: {tree!r}")
+    note(f"batches: {[len(b) for b in batches]} ({len(moves)} moves)")
+    for i, (s, d) in enumerate(moves):
+        note(f"  move {i}: /{s} -> /{d}")
+
+    # Repo A: all moves in one commit
+    _, session_a, repo_a = tree_to_model_and_icechunk(tree)
+    session_a.commit("init")
+    session_a = repo_a.rearrange_session("main")
+    for source, dest in moves:
+        session_a.move(f"/{source}", f"/{dest}")
+    session_a.commit("all moves")
+
+    # Repo B: same moves split across multiple amends
+    _, session_b, repo_b = tree_to_model_and_icechunk(tree)
+    session_b.commit("init")
+
+    for batch in batches:
+        session_b = repo_b.rearrange_session("main")
+        for source, dest in batch:
+            session_b.move(f"/{source}", f"/{dest}")
+        session_b.amend("amend")
+
+    # Trees must match
+    tree_a = repr(zarr.open_group(repo_a.readonly_session("main").store, mode="r").tree())
+    tree_b = repr(zarr.open_group(repo_b.readonly_session("main").store, mode="r").tree())
+    assert tree_a == tree_b, (
+        f"\nmoves: {moves}"
+        f"\nbatches: {[len(b) for b in batches]}"
+        f"\ntree (one commit):\n{tree_a}"
+        f"\ntree (amended):\n{tree_b}"
+    )
+
+    # Transaction logs must match — amend should collapse chained moves
+    snap_a = repo_a.lookup_branch("main")
+    snap_b = repo_b.lookup_branch("main")
+    tx_a = repo_a.inspect_transaction_log(snap_a)
+    tx_b = repo_b.inspect_transaction_log(snap_b)
+    moved_a = sorted(tx_a["moved_nodes"], key=lambda m: (m["from"], m["to"]))
+    moved_b = sorted(tx_b["moved_nodes"], key=lambda m: (m["from"], m["to"]))
+    assert moved_a == moved_b, (
+        f"\nmoves: {moves}"
+        f"\nbatches: {[len(b) for b in batches]}"
+        f"\nsingle commit tx log moves:  {moved_a}"
+        f"\namended commit tx log moves: {moved_b}"
+    )
 
 
 def test_doesnt_rebase() -> None:
