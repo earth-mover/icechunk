@@ -647,7 +647,7 @@ async fn test_gc_reset_branch() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// Regression test for https://github.com/earth-mover/icechunk/issues/1520
+/// Regression test for <https://github.com/earth-mover/icechunk/issues/1520>
 ///
 /// When two branches point to the same old commit, expire with
 /// `delete_expired_branches` should still delete the non-main branch.
