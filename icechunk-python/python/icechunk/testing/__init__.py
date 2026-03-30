@@ -11,4 +11,6 @@ that are hard to reproduce with real storage backends, such as high latency.
 
 from icechunk._icechunk_python import LatencyStorage
 
-__all__ = ["LatencyStorage"]
+__all__ = [
+    "LatencyStorage",
+]

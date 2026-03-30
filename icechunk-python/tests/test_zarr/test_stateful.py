@@ -20,8 +20,10 @@ import icechunk as ic
 import zarr
 from icechunk import Repository, Storage, in_memory_storage
 from icechunk.testing import strategies as icst
+from icechunk.testing.invariants import assert_list_dir_equal
 from icechunk.testing.models import ModelStore
-from icechunk.testing.utils import assert_list_dir_equal, update_paths_after_move
+from icechunk.testing.trees import GroupNode, valid_moves
+from icechunk.testing.utils import update_paths_after_move
 from zarr import Array
 from zarr.core.buffer import default_buffer_prototype
 from zarr.testing.stateful import ZarrHierarchyStateMachine, split_prefix_name
@@ -211,50 +213,18 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         pending_arrays = self.all_arrays.copy()
         pending_groups = self.all_groups.copy()
 
-        for _ in range(num_moves):
-            existing_nodes = pending_arrays | pending_groups
-            possible_parents = sorted(pending_groups | {""})
-
-            # Draw source, dest_parent, then name (filtered to avoid conflicts)
-            source = data.draw(st.sampled_from(sorted(existing_nodes)))
-            source_name = source.split("/")[-1]
-
-            # Filter out invalid parents (root "" is always valid):
-            # - Can't move into itself: foo -> foo/bar
-            # - Can't move into a descendant: foo -> foo/bar/baz/foo
-            def valid_parent(p: str, src: str = source) -> bool:
-                return p != src and not p.startswith(src + "/")
-
-            dest_parent = data.draw(
-                st.sampled_from(possible_parents).filter(valid_parent)
-            )
-
-            # Filter name to avoid destination conflicts
-            # Destination must not already exist: foo -> bar (when bar exists)
-            def valid_name(
-                n: str, dp: str = dest_parent, nodes: set[str] = existing_nodes
-            ) -> bool:
-                return f"{dp}/{n}".lstrip("/") not in nodes
-
-            new_name = data.draw(
-                st.one_of(st.just(source_name), node_names).filter(valid_name)
-            )
-            dest = f"{dest_parent}/{new_name}".lstrip("/")
-
+        tree = GroupNode.from_paths(pending_arrays, pending_groups | {""})
+        moves = data.draw(valid_moves(tree, n_moves=st.just(num_moves)))
+        for source, dest in moves:
             note(f"moving {source!r} to {dest!r}")
             session.move(f"/{source}", f"/{dest}")
             self._sync(pending_model.move(source, dest))
-
             pending_arrays, pending_groups = update_paths_after_move(
                 source, dest, pending_arrays, pending_groups
             )
-
-            # Verify store matches pending model after each move
-            # failing due to https://github.com/earth-mover/icechunk/issues/1562#issuecomment-3755544352
-            # TODO: uncomment when that is fixed
-            # self._compare_list_dir(
-            #     pending_model, session.store, pending_arrays | pending_groups
-            # )
+            self._compare_list_dir(
+                pending_model, session.store, pending_arrays | pending_groups
+            )
 
         if data.draw(st.sampled_from([True, True, True, False])):
             note(f"committing {num_moves} moves")

@@ -185,6 +185,58 @@ class Session:
         """Async version of :meth:`move`."""
         return await self._session.move_node_async(from_path, to_path)
 
+    def get_node_id(self, path: str) -> str:
+        """
+        Return the node ID for the array or group at the given path.
+
+        Each node is assigned an opaque ID when it is created. This ID is
+        stable across moves and renames — a node keeps the same ID for its
+        entire lifetime. See the `icechunk spec <https://icechunk.io/en/stable/spec/>`_
+        for details on node identity.
+
+        Parameters
+        ----------
+        path : str
+            Absolute path to the node (e.g., "/data/temperature").
+
+        Returns
+        -------
+        str
+            The node ID as an opaque string.
+
+        Raises
+        ------
+        IcechunkError
+            If no node exists at the given path.
+        """
+        return self._session.get_node_id(path)
+
+    async def get_node_id_async(self, path: str) -> str:
+        """
+        Return the node ID for the array or group at the given path.
+
+        Each node is assigned an opaque ID when it is created. This ID is
+        stable across moves and renames — a node keeps the same ID for its
+        entire lifetime. See the `icechunk spec <https://icechunk.io/en/stable/spec/>`_
+        for details on node identity.
+
+        Parameters
+        ----------
+        path : str
+            Absolute path to the node (e.g., "/data/temperature").
+
+        Returns
+        -------
+        str
+            The node ID as an opaque string.
+
+        Raises
+        ------
+        IcechunkError
+            If no node exists at the given path.
+        """
+        return await self._session.get_node_id_async(path)
+
     def all_virtual_chunk_locations(self) -> list[str]:
         """
         Return the location URLs of all virtual chunks.
