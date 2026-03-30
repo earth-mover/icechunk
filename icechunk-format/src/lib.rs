@@ -114,13 +114,13 @@ pub type AttributesId = ObjectId<12, AttributesTag>;
 /// The internal id of an array or group, unique only to a single store version
 pub type NodeId = ObjectId<8, NodeTag>;
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Hash)]
 pub enum NodeType {
     Group,
     Array,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Hash)]
 pub struct Move {
     pub from: Path,
     pub to: Path,

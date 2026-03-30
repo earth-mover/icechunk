@@ -811,6 +811,8 @@ impl Session {
             self.asset_manager.fetch_snapshot(&self.snapshot_id).await.inject()?;
         let subtree_data: Vec<(Path, NodeId, NodeType)> = snapshot
             .iter_arc(&original_from)
+            // FIXME(li-em): should we skip parent node (first) here?
+            //.skip(1)
             .filter_map(|r| r.ok().map(|n| (n.path.clone(), n.id.clone(), n.node_type())))
             .collect();
 

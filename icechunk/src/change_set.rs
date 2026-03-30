@@ -278,20 +278,38 @@ impl MoveTracker {
         for (orig, old_final, new_final) in updates {
             self.nodes_by_final.remove(&old_final);
             self.nodes_by_final.insert(new_final, orig);
+            // TODO(li-em): remove from self.moves here?
         }
 
+        let mut subtree_moves = vec![];
         // Step 2: Add entries for nodes not already in the map.
         for orig in subtree_nodes {
             if !self.nodes_by_original.contains_key(&orig.0)
                 && let Some(new_path) = Self::remap_path(&orig.0, &original_from, &to)
             {
                 self.nodes_by_final.insert(new_path.clone(), orig.0.clone());
-                self.nodes_by_original.insert(orig.0, new_path);
+                self.nodes_by_original.insert(orig.0.clone(), new_path.clone());
+                subtree_moves.push(Move {
+                    from: orig.0,
+                    to: new_path,
+                    node_id: orig.1,
+                    node_type: orig.2,
+                });
             }
         }
 
-        // FIXME(li-em): need to push all moves for subtree too!
         self.moves.push(Move { from, to, node_id: node_id.clone(), node_type });
+
+        // add all moves for subtree too
+        // TODO(li-em): check if any node in subtree was previously moved,
+        //              and remove from existing position to add to the end?
+        self.moves.extend(
+            subtree_moves
+                .into_iter()
+                // Skipping first one here because it is the same as the top-level move
+                .skip(1)
+                .unique(),
+        );
     }
 
     /// Return `(original_path, final_path)` pairs for all nodes whose
@@ -350,7 +368,7 @@ impl MoveTracker {
             if let Some(old_path) = Self::remap_path(res.as_ref(), to, from) {
                 res = Cow::Owned(old_path);
                 was_moved = true;
-            } else if res.buf().starts_with(from.buf()) {
+            } else if res.buf().starts_with(from.buf()) && !was_moved {
                 // the moves have deleted this path
                 // calling code should check for overwrites before moving
                 return MovedFrom::Deleted;
@@ -952,7 +970,7 @@ mod tests {
             pathify(from),
             pathify(to),
             subtree.iter().map(|(path, id, ty)| (pathify(path), id.clone(), ty.clone())),
-            &node_id,
+            node_id,
             node_type,
         );
     }
