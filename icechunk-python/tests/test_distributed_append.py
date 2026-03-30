@@ -44,7 +44,7 @@ def do_test(scheduler: str, spec_version: int | None = None) -> None:
     def plot() -> None:
         if not PLOT:
             return
-        import matplotlib.pyplot as plt
+        import matplotlib.pyplot as plt  # type: ignore[import-not-found]
 
         # kwargs = dict(ylim=(X - CHUNKX, X + dX + 1), xlim=(Y - CHUNKY // 10, Y + dY + 1))
         plt.pcolor(
