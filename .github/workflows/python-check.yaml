@@ -279,7 +279,7 @@ jobs:
           PYTHON_TAG="cp$(echo ${{ env.PYTHON_VERSION }} | tr -d '.')"
           WHEEL=$(ls dist/*-${PYTHON_TAG}-*.whl)
           uv pip install "$WHEEL" --group test
-          uv pip install "pytest-mypy-plugins<4"
+          uv pip install pytest-mypy-plugins
           # Install specific xarray version based on matrix
           if [ "${{ matrix.xarray-version.version }}" != "latest-release" ]; then
             echo "Installing xarray ${{ matrix.xarray-version.version }}"
