@@ -21,7 +21,7 @@ use icechunk::{
         repo_info::{RepoAvailability, RepoStatus, UpdateType},
         snapshot::{ManifestFileInfo, SnapshotInfo, SnapshotProperties},
     },
-    inspect::{manifest_json, repo_info_json, snapshot_json},
+    inspect::{manifest_json, repo_info_json, snapshot_json, transaction_log_json},
     migrations,
     ops::{
         gc::{ExpiredRefAction, GCConfig, GCSummary, expire, garbage_collect},
@@ -2817,6 +2817,48 @@ impl PyRepository {
                 })
                 .map_err(PyIcechunkStoreError::RepositoryError)?;
             let res = manifest_json(lock.asset_manager(), &id, pretty)
+                .await
+                .map_err(PyIcechunkStoreError::RepositoryError)?;
+            Ok(res)
+        })
+    }
+
+    #[pyo3(signature = (snapshot_id, *, pretty = true))]
+    fn inspect_transaction_log(
+        &self,
+        snapshot_id: String,
+        pretty: bool,
+    ) -> PyResult<String> {
+        let result = pyo3_async_runtimes::tokio::get_runtime()
+            .block_on(async move {
+                let lock = self.0.read().await;
+                let snap = SnapshotId::try_from(snapshot_id.as_str()).map_err(|e| {
+                    RepositoryError::capture(RepositoryErrorKind::Other(e.to_string()))
+                })?;
+                let res =
+                    transaction_log_json(lock.asset_manager(), &snap, pretty).await?;
+                Ok(res)
+            })
+            .map_err(PyIcechunkStoreError::RepositoryError)?;
+        Ok(result)
+    }
+
+    #[pyo3(signature = (snapshot_id, *, pretty = true))]
+    fn inspect_transaction_log_async<'py>(
+        &self,
+        py: Python<'py>,
+        snapshot_id: String,
+        pretty: bool,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let repository = Arc::clone(&self.0);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let lock = repository.read().await;
+            let snap = SnapshotId::try_from(snapshot_id.as_str())
+                .map_err(|e| {
+                    RepositoryError::capture(RepositoryErrorKind::Other(e.to_string()))
+                })
+                .map_err(PyIcechunkStoreError::RepositoryError)?;
+            let res = transaction_log_json(lock.asset_manager(), &snap, pretty)
                 .await
                 .map_err(PyIcechunkStoreError::RepositoryError)?;
             Ok(res)
