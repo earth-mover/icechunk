@@ -7,15 +7,14 @@ from dataclasses import dataclass, field
 from functools import partial
 from typing import Any, Literal, Self, TypeAlias
 
-import fsspec
 import numpy as np
-import platformdirs
-import pytest
+from object_store import ObjectStore
 
 import icechunk as ic
 import icechunk.xarray
 import xarray as xr
 import zarr
+from benchmarks.buckets import BUCKETS, TEST_BUCKETS
 from benchmarks.helpers import (
     get_coiled_kwargs,
     get_splitting_config,
@@ -25,9 +24,7 @@ from benchmarks.helpers import (
 )
 
 rng = np.random.default_rng(seed=123)
-
 Store: TypeAlias = Literal["s3", "gcs", "az", "tigris"]
-PUBLIC_DATA_BUCKET = "icechunk-public-data"
 ZARR_KWARGS = dict(zarr_format=3, consolidated=False)
 
 CONSTRUCTORS = {
@@ -38,30 +35,11 @@ CONSTRUCTORS = {
     "local": ic.local_filesystem_storage,
     "r2": ic.s3_storage,
 }
-TEST_BUCKETS = {
-    "s3": dict(store="s3", bucket="icechunk-test", region="us-east-1"),
-    "gcs": dict(store="gcs", bucket="icechunk-test-gcp", region="us-east1"),
-    # "gcs": dict(store="gcs", bucket="arraylake-scratch", region="us-east1"),
-    # not using region="auto", because for now we pass this directly to coiled.
-    "r2": dict(store="r2", bucket="icechunk-test-r2", region="us-east-1"),
-    # "tigris": dict(
-    #     store="tigris", bucket="deepak-private-bucket" + "-test", region="iad"
-    # ),
-    "tigris": dict(store="tigris", bucket="icechunk-test", region="iad"),
-    "local": dict(store="local", bucket=platformdirs.site_cache_dir()),
-}
-TEST_BUCKETS["s3_ob"] = TEST_BUCKETS["s3"]
-BUCKETS = {
-    "s3": dict(store="s3", bucket=PUBLIC_DATA_BUCKET, region="us-east-1"),
-    "gcs": dict(store="gcs", bucket=PUBLIC_DATA_BUCKET + "-gcs", region="us-east1"),
-    "tigris": dict(store="tigris", bucket=PUBLIC_DATA_BUCKET + "-tigris", region="iad"),
-    "r2": dict(store="r2", bucket=PUBLIC_DATA_BUCKET + "-r2", region="us-east-1"),
-}
 
 logger = setup_logger()
 
 
-def set_env_credentials() -> tuple[str, str]:
+def set_env_credentials() -> dict[str, str]:
     import boto3
 
     session = boto3.Session()
@@ -130,7 +108,7 @@ class StorageConfig:
         force_idempotent: bool = False,
     ) -> Self:
         if self.prefix is not None:
-            if force_idempotent and self.prefix.startswith(prefix):
+            if force_idempotent and prefix is not None and self.prefix.startswith(prefix):
                 return self
             new_prefix = (prefix or "") + self.prefix
         else:
@@ -151,24 +129,35 @@ class StorageConfig:
         #     return {"AWS_ENDPOINT_URL_IAM": "https://fly.iam.storage.tigris.dev"}
         return {}
 
-    @property
-    def protocol(self) -> str:
-        if self.store in ("s3", "tigris"):
-            protocol = "s3"
-        elif self.store == "gcs":
-            protocol = "gcs"
-        else:
-            protocol = "file"
-        return protocol
+    _SCHEMES = {"s3": "s3", "s3_ob": "s3", "gcs": "gs", "tigris": "s3", "r2": "s3"}
 
-    def clear_uri(self) -> str:
-        """URI to clear when re-creating data from scratch."""
+    def clear_prefix(self) -> None:
+        """Delete all objects under this prefix using object_store."""
+        import shutil
+
         if self.store == "local":
-            return f"{self.protocol}://{self.path}"
-        else:
-            return f"{self.protocol}://{self.bucket}/{self.prefix}"
+            shutil.rmtree(self.path, ignore_errors=True)
+            return
 
-    def get_coiled_kwargs(self) -> str:
+        scheme = self._SCHEMES.get(self.store)
+        if scheme is None:
+            warnings.warn(
+                f"Clearing not supported for store {self.store!r}",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            return
+
+        store_url = f"{scheme}://{self.bucket}"
+        store = ObjectStore(store_url)
+        objects = store.list(prefix=self.prefix)
+        for obj in objects:
+            store.delete(obj["path"])
+
+    def get_coiled_kwargs(self) -> dict[str, str]:
+        assert self.store is not None, (
+            "store must be set before calling get_coiled_kwargs"
+        )
         return get_coiled_kwargs(store=self.store, region=self.region)
 
 
@@ -193,22 +182,7 @@ class Dataset:
         self, clear: bool = False, config: ic.RepositoryConfig | None = None
     ) -> ic.Repository:
         if clear:
-            clear_uri = self.storage_config.clear_uri()
-            if clear_uri is None:
-                raise NotImplementedError
-            if self.storage_config.protocol not in ["file", "s3", "gcs"]:
-                warnings.warn(
-                    f"Only clearing of GCS, S3-compatible URIs supported at the moment. Received {clear_uri!r}",
-                    RuntimeWarning,
-                    stacklevel=2,
-                )
-            else:
-                fs = fsspec.filesystem(self.storage_config.protocol)
-                try:
-                    logger.info(f"Clearing prefix: {clear_uri!r}")
-                    fs.rm(clear_uri, recursive=True)
-                except FileNotFoundError:
-                    pass
+            self.storage_config.clear_prefix()
         logger.info(repr(self.storage))
         return ic.Repository.create(self.storage, config=config)
 
@@ -386,7 +360,7 @@ def setup_ingest_for_benchmarks(dataset: Dataset, *, ingest: IngestDataset) -> N
 
 
 def setup_era5(*args, **kwargs):
-    from benchmarks.create_era5 import setup_for_benchmarks
+    from benchmarks.create_era5 import setup_for_benchmarks  # type: ignore[attr-defined]
 
     return setup_for_benchmarks(*args, **kwargs, arrays_to_write=[])
 
@@ -395,14 +369,9 @@ def setup_split_manifest_refs(dataset: Dataset, *, split_size: int | None):
     shape = (500_000 * 1000,)
     chunks = (1000,)
 
+    splitting = None
     if split_size is not None:
-        try:
-            splitting = get_splitting_config(split_size=split_size)
-        except ImportError:
-            logger.info("splitting not supported")
-            pytest.skip("splitting not supported on this version")
-    else:
-        splitting = None
+        splitting = get_splitting_config(split_size=split_size)
     config = repo_config_with(splitting=splitting)
     assert config is not None
     if hasattr(config.manifest, "splitting"):
@@ -538,6 +507,6 @@ SIMPLE_1D = BenchmarkWriteDataset(
 LARGE_1D = BenchmarkWriteDataset(
     storage_config=StorageConfig(prefix="large_1d_writes"),
     num_arrays=1,
-    shape=(500_000 * 1000,),
+    shape=(1_000_000 * 1000,),
     chunks=(1000,),
 )

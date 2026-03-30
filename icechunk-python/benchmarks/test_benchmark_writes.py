@@ -8,15 +8,18 @@ from benchmarks import lib
 from benchmarks.helpers import get_splitting_config, repo_config_with
 from benchmarks.tasks import Executor, write
 from icechunk import (
+    ManifestPreloadConfig,
     Repository,
     RepositoryConfig,
     Session,
+    VirtualChunkContainer,
     VirtualChunkSpec,
     local_filesystem_storage,
+    s3_store,
 )
 
 NUM_CHUNK_REFS = 10_000
-NUM_VIRTUAL_CHUNK_REFS = 100_000
+NUM_VIRTUAL_CHUNK_REFS = 1_000_000
 
 
 pytestmark = pytest.mark.write_benchmark
@@ -185,7 +188,12 @@ def test_write_split_manifest_refs_full_rewrite(
     benchmark, splitting, large_write_dataset
 ) -> None:
     dataset = large_write_dataset
-    config = repo_config_with(splitting=splitting)
+    config = repo_config_with(
+        splitting=splitting,
+        virtual_chunk_containers=[
+            VirtualChunkContainer("s3://foo/", s3_store(region="us-east-1"))
+        ],
+    )
     assert config is not None
     if hasattr(config.manifest, "splitting"):
         assert config.manifest.splitting == splitting
@@ -228,7 +236,13 @@ def test_write_split_manifest_refs_append(
     benchmark, splitting, large_write_dataset
 ) -> None:
     dataset = large_write_dataset
-    config = repo_config_with(splitting=splitting)
+    config = repo_config_with(
+        preload=ManifestPreloadConfig(max_total_refs=0),
+        splitting=splitting,
+        virtual_chunk_containers=[
+            VirtualChunkContainer("s3://foo/", s3_store(region="us-east-1"))
+        ],
+    )
     assert config is not None
     if hasattr(config.manifest, "splitting"):
         assert config.manifest.splitting == splitting
@@ -253,6 +267,8 @@ def test_write_split_manifest_refs_append(
     num_chunks = dataset.shape[0] // dataset.chunks[0]
     batch_size = num_chunks // rounds
 
+    print(batch_size, num_chunks, splitting)
+
     def write_refs() -> Session:
         global counter
         session = repo.writable_session(branch="main")
@@ -264,6 +280,7 @@ def test_write_split_manifest_refs_append(
         ]
         counter += 1
         session.store.set_virtual_refs("array", chunks)
+        del chunks
         # (args, kwargs)
         return ((session,), {})
 
