@@ -65,7 +65,7 @@ jobs:
       # Checkout main branch (skip if only building support/v1.x)
       - name: Checkout main
         if: ${{ github.event_name == 'schedule' || inputs.branch != 'support/v1.x' }}
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           ref: main
           fetch-depth: 0
@@ -95,7 +95,7 @@ jobs:
       # Checkout support/v1.x branch (skip if only building main)
       - name: Checkout support/v1.x
         if: ${{ github.event_name == 'schedule' || inputs.branch == 'support/v1.x' }}
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           ref: support/v1.x
           fetch-depth: 0
@@ -145,7 +145,7 @@ jobs:
             target: armv7
             manylinux: 2_28
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           ref: ${{ matrix.branch }}
           fetch-depth: 0
@@ -160,7 +160,7 @@ jobs:
               fi
               sleep 3
           done
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
         with:
           python-version: '3.11'
       - name: Update version in Cargo.toml
@@ -170,14 +170,15 @@ jobs:
           echo "Using version: $VERSION for branch ${{ matrix.branch }}"
           sed -i 's/^version = ".*"/version = "'$VERSION'"/' Cargo.toml
       - name: Build wheels
-        uses: PyO3/maturin-action@v1
+        uses: PyO3/maturin-action@db323e2cf5679b7feb8bcb561a36b27a0bc19e79 # v1
         with:
           working-directory: icechunk-python
           target: ${{ matrix.platform.target }}
           args: --release --out dist -i ${{ env.PYTHON_INTERPRETERS }}
+          rust-toolchain: stable
           manylinux: ${{ matrix.platform.manylinux }} # https://github.com/PyO3/maturin-action/issues/245
       - name: Upload wheels
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
         with:
           name: wheels-linux-${{ matrix.branch == 'main' && 'main' || 'support-v1.x' }}-${{ matrix.platform.target }}
           path: icechunk-python/dist
@@ -198,11 +199,11 @@ jobs:
           - runner: ubuntu-latest
             target: armv7
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           ref: ${{ matrix.branch }}
           fetch-depth: 0
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
         with:
           python-version: 3.x
       - name: Update version in Cargo.toml
@@ -212,14 +213,15 @@ jobs:
           echo "Using version: $VERSION for branch ${{ matrix.branch }}"
           sed -i 's/^version = ".*"/version = "'$VERSION'"/' Cargo.toml
       - name: Build wheels
-        uses: PyO3/maturin-action@v1
+        uses: PyO3/maturin-action@db323e2cf5679b7feb8bcb561a36b27a0bc19e79 # v1
         with:
           working-directory: icechunk-python
           target: ${{ matrix.platform.target }}
           args: --release --out dist -i ${{ env.PYTHON_INTERPRETERS }}
+          rust-toolchain: stable
           manylinux: musllinux_1_2
       - name: Upload wheels
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
         with:
           name: wheels-musllinux-${{ matrix.branch == 'main' && 'main' || 'support-v1.x' }}-${{ matrix.platform.target }}
           path: icechunk-python/dist
@@ -234,11 +236,11 @@ jobs:
           - runner: windows-latest
             target: x64
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           ref: ${{ matrix.branch }}
           fetch-depth: 0
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
         with:
           python-version: 3.x
           architecture: ${{ matrix.platform.target }}
@@ -250,13 +252,14 @@ jobs:
           (Get-Content Cargo.toml) -replace '^version = ".*"', "version = `"$VERSION`"" | Set-Content Cargo.toml
         shell: powershell
       - name: Build wheels
-        uses: PyO3/maturin-action@v1
+        uses: PyO3/maturin-action@db323e2cf5679b7feb8bcb561a36b27a0bc19e79 # v1
         with:
           working-directory: icechunk-python
           target: ${{ matrix.platform.target }}
           args: --release --out dist -i ${{ env.PYTHON_INTERPRETERS }}
+          rust-toolchain: stable
       - name: Upload wheels
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
         with:
           name: wheels-windows-${{ matrix.branch == 'main' && 'main' || 'support-v1.x' }}-${{ matrix.platform.target }}
           path: icechunk-python/dist
@@ -273,11 +276,11 @@ jobs:
           - runner: macos-14
             target: aarch64
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           ref: ${{ matrix.branch }}
           fetch-depth: 0
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
         with:
           python-version: 3.x
       - name: Update version in Cargo.toml
@@ -287,13 +290,14 @@ jobs:
           echo "Using version: $VERSION for branch ${{ matrix.branch }}"
           sed -i '' 's/^version = ".*"/version = "'$VERSION'"/' Cargo.toml
       - name: Build wheels
-        uses: PyO3/maturin-action@v1
+        uses: PyO3/maturin-action@db323e2cf5679b7feb8bcb561a36b27a0bc19e79 # v1
         with:
           working-directory: icechunk-python
           target: ${{ matrix.platform.target }}
           args: --release --out dist -i ${{ env.PYTHON_INTERPRETERS }}
+          rust-toolchain: stable
       - name: Upload wheels
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
         with:
           name: wheels-macos-${{ matrix.branch == 'main' && 'main' || 'support-v1.x' }}-${{ matrix.platform.target }}
           path: icechunk-python/dist
@@ -305,7 +309,7 @@ jobs:
       matrix:
         branch: ${{ github.event_name == 'schedule' && fromJSON('["main", "support/v1.x"]') || fromJSON(format('["{0}"]', inputs.branch)) }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           ref: ${{ matrix.branch }}
           fetch-depth: 0
@@ -316,13 +320,14 @@ jobs:
           echo "Using version: $VERSION for branch ${{ matrix.branch }}"
           sed -i 's/^version = ".*"/version = "'$VERSION'"/' Cargo.toml
       - name: Build sdist
-        uses: PyO3/maturin-action@v1
+        uses: PyO3/maturin-action@db323e2cf5679b7feb8bcb561a36b27a0bc19e79 # v1
         with:
           working-directory: icechunk-python
           command: sdist
           args: --out dist
+          rust-toolchain: stable
       - name: Upload sdist
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
         with:
           name: wheels-sdist-${{ matrix.branch == 'main' && 'main' || 'support-v1.x' }}
           path: icechunk-python/dist
@@ -335,9 +340,9 @@ jobs:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.pypi_release }}
     needs: [linux, musllinux, windows, macos, sdist]
     steps:
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
       - name: Publish to PyPI
-        uses: PyO3/maturin-action@v1
+        uses: PyO3/maturin-action@db323e2cf5679b7feb8bcb561a36b27a0bc19e79 # v1
         with:
           command: upload
           args: --non-interactive --skip-existing wheels-*/*
@@ -348,7 +353,7 @@ jobs:
     if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
     needs: [linux, musllinux, windows, macos, sdist]
     steps:
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           path: dist
           merge-multiple: true

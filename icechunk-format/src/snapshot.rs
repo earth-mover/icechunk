@@ -1,6 +1,6 @@
 //! Repository state at a point in time (arrays, groups, and manifest references).
 
-use std::{collections::BTreeMap, ops::Range, sync::Arc};
+use std::{borrow::Cow, collections::BTreeMap, ops::Range, sync::Arc};
 
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
@@ -8,7 +8,7 @@ use flatbuffers::{
     FlatBufferBuilder, ForwardsUOffset, UnionWIPOffset, Vector, VerifierOptions,
     WIPOffset,
 };
-use itertools::Itertools as _;
+use itertools::{Either, Itertools as _};
 use quick_cache::sync::{Cache, GuardResult};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -286,6 +286,26 @@ impl From<&generated::ManifestFileInfo> for ManifestFileInfo {
     }
 }
 
+impl TryFrom<&generated::ManifestFileInfoV2<'_>> for ManifestFileInfo {
+    type Error = IcechunkFormatError;
+
+    fn try_from(value: &generated::ManifestFileInfoV2<'_>) -> Result<Self, Self::Error> {
+        let id = value.id().map(|id| id.into()).ok_or_else(|| {
+            IcechunkFormatError::capture(IcechunkFormatErrorKind::InvalidFlatBuffer(
+                flatbuffers::InvalidFlatbuffer::MissingRequiredField {
+                    required: Cow::Borrowed("id"),
+                    error_trace: Default::default(),
+                },
+            ))
+        })?;
+        Ok(Self {
+            id,
+            size_bytes: value.size_bytes(),
+            num_chunk_refs: value.num_chunk_refs(),
+        })
+    }
+}
+
 pub type SnapshotProperties = BTreeMap<String, Value>;
 
 /// Insert a key-value pair into the `__icechunk` namespace object within snapshot properties.
@@ -349,7 +369,10 @@ impl std::fmt::Debug for Snapshot {
             .field("parent_id", &self.parent_id())
             .field("flushed_at", &self.flushed_at())
             .field("nodes", &nodes)
-            .field("manifests", &self.manifest_files().collect::<Vec<_>>())
+            .field(
+                "manifests",
+                &self.manifest_files().collect::<IcechunkResult<Vec<_>>>(),
+            )
             .field("message", &self.message())
             .field("metadata", &self.metadata())
             .finish_non_exhaustive()
@@ -445,14 +468,43 @@ impl Snapshot {
         let mut builder = FlatBufferBuilder::with_capacity(4_096);
 
         manifest_files.sort_by(|a, b| a.id.cmp(&b.id));
-        let manifest_files = manifest_files
-            .iter()
-            .map(|mfi| {
-                let id = generated::ObjectId12::new(&mfi.id.0);
-                generated::ManifestFileInfo::new(&id, mfi.size_bytes, mfi.num_chunk_refs)
-            })
-            .collect::<Vec<_>>();
-        let manifest_files = builder.create_vector(&manifest_files);
+        let (manifest_files_v1, manifest_files_v2) = match spec_version {
+            SpecVersionBin::V1 => {
+                let ms1 = manifest_files
+                    .iter()
+                    .map(|mfi| {
+                        let id = generated::ObjectId12::new(&mfi.id.0);
+                        generated::ManifestFileInfo::new(
+                            &id,
+                            mfi.size_bytes,
+                            mfi.num_chunk_refs,
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                let ms1 = builder.create_vector(&ms1);
+                let ms2 = None;
+                (ms1, ms2)
+            }
+            SpecVersionBin::V2 => {
+                let ms2 = manifest_files
+                    .iter()
+                    .map(|mfi| {
+                        let id = generated::ObjectId12::new(&mfi.id.0);
+
+                        let args = generated::ManifestFileInfoV2Args {
+                            id: Some(&id),
+                            size_bytes: mfi.size_bytes,
+                            num_chunk_refs: mfi.num_chunk_refs,
+                            extra: None,
+                        };
+                        generated::ManifestFileInfoV2::create(&mut builder, &args)
+                    })
+                    .collect::<Vec<_>>();
+                let ms2 = builder.create_vector(&ms2);
+                let ms1 = builder.create_vector::<generated::ManifestFileInfo>(&[]);
+                (ms1, Some(ms2))
+            }
+        };
 
         let metadata_items: Vec<_> = properties
             .unwrap_or_default()
@@ -495,7 +547,8 @@ impl Snapshot {
                 flushed_at,
                 message: Some(message),
                 metadata: Some(metadata_items),
-                manifest_files: Some(manifest_files),
+                manifest_files: Some(manifest_files_v1),
+                manifest_files_v2,
                 ..Default::default()
             },
         );
@@ -583,18 +636,15 @@ impl Snapshot {
         self.root().message().to_string()
     }
 
-    pub fn get_manifest_file(&self, id: &ManifestId) -> Option<ManifestFileInfo> {
-        self.root().manifest_files().iter().find(|mf| mf.id().0 == id.0.as_slice()).map(
-            |mf| ManifestFileInfo {
-                id: ManifestId::new(mf.id().0),
-                size_bytes: mf.size_bytes(),
-                num_chunk_refs: mf.num_chunk_refs(),
-            },
-        )
-    }
-
-    pub fn manifest_files(&self) -> impl Iterator<Item = ManifestFileInfo> + '_ {
-        self.root().manifest_files().iter().map(|mf| mf.into())
+    pub fn manifest_files(
+        &self,
+    ) -> impl Iterator<Item = IcechunkResult<ManifestFileInfo>> + '_ {
+        let root = self.root();
+        if let Some(mf2) = root.manifest_files_v2() {
+            Either::Left(mf2.iter().map(|mf| (&mf).try_into()))
+        } else {
+            Either::Right(root.manifest_files().iter().map(|mf| Ok(mf.into())))
+        }
     }
 
     /// Cretase a new `Snapshot` with all the same data as `new_child` but `self` as parent
@@ -612,7 +662,7 @@ impl Snapshot {
             SpecVersionBin::V1, // 2.0 doesn't use adopt
             &new_child.message(),
             Some(new_child.metadata()?.clone()),
-            new_child.manifest_files().collect(),
+            new_child.manifest_files().try_collect()?,
             Some(new_child.flushed_at()?),
             new_child.iter(),
         )
@@ -673,12 +723,23 @@ impl Snapshot {
         self.len() == 0
     }
 
-    pub fn manifest_info(&self, id: &ManifestId) -> Option<ManifestFileInfo> {
-        self.root()
-            .manifest_files()
-            .iter()
-            .find(|mi| mi.id().0 == id.0)
-            .map(|man| man.into())
+    pub fn manifest_info(
+        &self,
+        id: &ManifestId,
+    ) -> IcechunkResult<Option<ManifestFileInfo>> {
+        let root = self.root();
+        if let Some(mf2) = root.manifest_files_v2() {
+            mf2.iter()
+                .find(|mf| mf.id().is_some_and(|mid| mid.0 == id.0))
+                .map(|mf| (&mf).try_into())
+                .transpose()
+        } else {
+            Ok(root
+                .manifest_files()
+                .iter()
+                .find(|mi| mi.id().0 == id.0)
+                .map(|man| man.into()))
+        }
     }
 }
 

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from dataclasses import dataclass, field
+from typing import Any
 
 import hypothesis.strategies as st
 import numpy as np
@@ -76,14 +77,64 @@ class GroupNode:
 
 Node = ArrayNode | GroupNode
 
+# Fixed dtype/shape — we're testing path handling, not dtype serialization.
+DTYPE = np.dtype("i4")
+SHAPE = (1,)
+
+
+def tree_from_str(spec: str) -> GroupNode:
+    """Build a GroupNode tree from a compact string specification.
+
+    Each line is ``"a: /path"`` for an array or ``"g: /path"`` for a group.
+    Intermediate groups are created implicitly.
+
+    Example::
+
+        tree_from_str('''
+            a: /foo/bar/array
+            g: /foo/baz
+            g: /qux
+        ''')
+    """
+    # Nested dict built incrementally; values are ArrayNode or sub-dicts.
+    tree: dict[str, Any] = {}
+
+    for line in spec.strip().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        kind, _, path = line.partition(":")
+        kind = kind.strip().lower()
+        path = path.strip().strip("/")
+        parts = path.split("/")
+
+        current = tree
+        for part in parts[:-1]:
+            current = current.setdefault(part, {})
+
+        leaf_name = parts[-1]
+        if kind == "a":
+            current[leaf_name] = ArrayNode(shape=SHAPE, dtype=DTYPE)
+        elif kind == "g":
+            current.setdefault(leaf_name, {})
+        else:
+            raise ValueError(f"unknown node kind '{kind}', expected 'a' or 'g'")
+
+    def _to_group(d: dict[str, Any]) -> GroupNode:
+        children: dict[str, Node] = {}
+        for name, value in d.items():
+            if isinstance(value, ArrayNode):
+                children[name] = value
+            else:
+                children[name] = _to_group(value)
+        return GroupNode(children=children)
+
+    return _to_group(tree)
+
 
 # ---------------------------------------------------------------------------
 # Name strategies — pool-based derivation for prefix collisions
 # ---------------------------------------------------------------------------
-
-# Fixed dtype/shape — we're testing path handling, not dtype serialization.
-DTYPE = np.dtype("i4")
-SHAPE = (1,)
 
 # Short affix drawn from the zarr key alphabet for prefix/suffix collisions.
 affix = st.text(zrst.zarr_key_chars, min_size=1, max_size=3)
@@ -145,12 +196,15 @@ def similar_name(
         )
     if bool(non_siblings):
         strategies.append(st.sampled_from(non_siblings))
-    return st.one_of(*strategies)
+    return st.one_of(*strategies).filter(lambda name: name not in sibling_names)
 
 
 @st.composite
 def unique_sibling_names(
-    draw: st.DrawFn, existing_names: set[str], num_names: int
+    draw: st.DrawFn,
+    existing_names: set[str],
+    num_names: int,
+    existing_siblings: set[str] | None = None,
 ) -> list[str]:
     """Draw *num_names* unique names, biased toward collisions with existing ones.
 
@@ -161,22 +215,30 @@ def unique_sibling_names(
         similar-looking candidates (affixed siblings, reused cousins).
     num_names : int
         Number of unique names to generate.
+    existing_siblings : set[str] | None
+        Names already present at the destination that must not be reused.
+        Used by valid_moves to avoid collisions with existing children.
 
     Returns
     -------
     list[str]
-        The generated names, unique among themselves.
+        The generated names, unique among themselves and not in existing_siblings.
     """
     generated_names: set[str] = set()
+    already_taken = existing_siblings or set()
 
-    from_scratch_name = node_names.filter(lambda name_: name_ not in generated_names)
     for _ in range(num_names):
-        strategy = (
-            st.one_of(from_scratch_name, similar_name(existing_names, generated_names))
-            if bool(existing_names) | bool(generated_names)
-            else from_scratch_name
+        excluded = generated_names | already_taken
+        # Filter the whole strategy — similar_name can produce collisions.
+        generated_names.add(
+            draw(
+                (
+                    st.one_of(node_names, similar_name(existing_names, excluded))
+                    if bool(existing_names) | bool(generated_names)
+                    else node_names
+                ).filter(lambda name_, ex=excluded: name_ not in ex)  # type: ignore[misc]
+            )
         )
-        generated_names.add(draw(strategy))
     return list(generated_names)
 
 
@@ -251,3 +313,88 @@ def trees(
     )
     result, _ = rebuild_with_names(skeleton, set())
     return result
+
+
+# ---------------------------------------------------------------------------
+# Move strategies
+# ---------------------------------------------------------------------------
+
+
+def child_names_at(parent: str, all_paths: set[str]) -> set[str]:
+    """Names of direct children of *parent* in a flat path set.
+
+    >>> sorted(child_names_at("foo", {"foo/a", "foo/b/c", "bar"}))
+    ['a', 'b']
+    >>> sorted(child_names_at("", {"foo", "bar/baz"}))
+    ['bar', 'foo']
+    """
+    results: set[str] = set()
+    prefix = parent + "/" if parent else ""
+    for path in all_paths:
+        if path.startswith(prefix):
+            results.add(path[len(prefix) :].split("/")[0])
+    return results
+
+
+@st.composite
+def valid_moves(
+    draw: st.DrawFn,
+    tree: GroupNode,
+    n_moves: st.SearchStrategy[int] = st.just(1),  # noqa: B008
+) -> list[tuple[str, str]]:
+    """Generate a sequence of valid moves for a tree.
+
+    Each move updates the tracked paths so subsequent moves see the new state
+    (e.g. moving into an already-moved group, or moving the same node again).
+    """
+    from icechunk.testing.utils import update_paths_after_move
+
+    all_nodes = set(tree.nodes())
+    all_groups = set(tree.groups(include_root=True))
+    all_arrays = all_nodes - all_groups
+    name_pool = {path.split("/")[-1] for path in all_nodes}
+
+    num_moves = draw(n_moves)
+    moves: list[tuple[str, str]] = []
+    for _ in range(num_moves):
+        if not all_nodes:
+            break
+
+        source = draw(st.sampled_from(sorted(all_nodes)))
+
+        source_and_descendants = {source} | {
+            g for g in all_groups if g.startswith(source + "/")
+        }
+        dest_parent = draw(st.sampled_from(sorted(all_groups - source_and_descendants)))
+
+        existing_siblings = child_names_at(dest_parent, all_nodes)
+        (dest_name,) = draw(
+            unique_sibling_names(name_pool, 1, existing_siblings=existing_siblings)
+        )
+
+        dest = f"{dest_parent}/{dest_name}" if dest_parent else dest_name
+        moves.append((source, dest))
+        all_arrays, all_groups = update_paths_after_move(
+            source, dest, all_arrays, all_groups
+        )
+        all_nodes = all_arrays | (all_groups - {""})
+
+    return moves
+
+
+@st.composite
+def tree_and_moves(
+    draw: st.DrawFn,
+    max_leaves: st.SearchStrategy[int] | None = None,
+    max_children: st.SearchStrategy[int] | None = None,
+    n_moves: st.SearchStrategy[int] = st.integers(min_value=1, max_value=10),  # noqa: B008
+) -> tuple[GroupNode, list[tuple[str, str]]]:
+    """Generate a tree paired with a sequence of valid moves."""
+    kwargs = {}
+    if max_leaves is not None:
+        kwargs["max_leaves"] = max_leaves
+    if max_children is not None:
+        kwargs["max_children"] = max_children
+    tree = draw(trees(**kwargs))
+    moves = draw(valid_moves(tree, n_moves=n_moves))
+    return tree, moves
