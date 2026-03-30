@@ -45,8 +45,6 @@ test = [
   "pandas-stubs",
   "boto3-stubs[s3]",
   "termcolor",
-  "pooch",
-  "netcdf4",
   "matplotlib",
   "rich",
 ]
