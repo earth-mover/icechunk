@@ -802,7 +802,6 @@ impl Session {
         // Iterate the subtree at `from` so the move tracker can eagerly
         // compute final paths for all affected nodes.
 
-        // TODO(li-em): should we pass node.id in moved_from too?
         let original_from = match self.change_set().moved_from(&from) {
             MovedFrom::From(p) => p.into_owned(),
             _ => from.clone(),
@@ -811,8 +810,6 @@ impl Session {
             self.asset_manager.fetch_snapshot(&self.snapshot_id).await.inject()?;
         let subtree_data: Vec<(Path, NodeId, NodeType)> = snapshot
             .iter_arc(&original_from)
-            // FIXME(li-em): should we skip parent node (first) here?
-            //.skip(1)
             .filter_map(|r| r.ok().map(|n| (n.path.clone(), n.id.clone(), n.node_type())))
             .collect();
 
