@@ -118,7 +118,7 @@ class GroupNode:
             GroupNode.from_store(some_memory_store)
         """
         root = zarr.open_group(store, mode="r")
-        tree: dict = {}
+        tree: dict[str, Any] = {}
         for path, obj in root.members(max_depth=None):
             parts = path.split("/")
             current = tree
