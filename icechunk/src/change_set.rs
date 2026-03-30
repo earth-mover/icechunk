@@ -292,7 +292,6 @@ impl MoveTracker {
 
         self.moves.push(Move { from, to, node_id: node_id.clone(), node_type });
         // FIXME(li-em): push children too
-
     }
 
     /// Return `(original_path, final_path)` pairs for all nodes whose

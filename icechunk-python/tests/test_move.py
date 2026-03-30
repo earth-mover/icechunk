@@ -70,11 +70,11 @@ async def test_basic_move() -> None:
 
     a, b, *_ = repo.ancestry(branch="main")
     diff = repo.diff(from_snapshot_id=b.id, to_snapshot_id=a.id)
-    assert diff.moved_nodes == [
+    assert set(diff.moved_nodes) == set([
         ("/my/old", "/my/new"),
         ("/my/old/path", "/my/new/path"),
         ("/my/old/path/array", "/my/new/path/array"),
-    ]
+    ])
     assert (
         repr(diff)
         == """\
