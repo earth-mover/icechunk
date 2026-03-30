@@ -3,9 +3,11 @@ title: Sample Datasets
 ---
 # Sample Datasets
 
+This page contains links to various example Icechunk datasets, all of which are open-access and hosted in anonymous-access buckets, so you can try reading them!
+
 ## Native Datasets
 
-### Weatherbench2 ERA5
+### Weatherbench2 ERA5 (native)
 
 A subset of the Weatherbench2 copy of the ERA5 reanalysis dataset.
 
@@ -86,9 +88,7 @@ A subset of the Weatherbench2 copy of the ERA5 reanalysis dataset.
 <!-- ) -->
 <!-- ``` -->
 
-<!-- ## Virtual Datasets -->
-
-<!-- ### NOAA [OISST](https://www.ncei.noaa.gov/products/optimum-interpolation-sst) Data -->
+<!-- ### NOAA [OISST](https://www.ncei.noaa.gov/products/optimum-interpolation-sst) Data (virtual) -->
 
 <!-- > The NOAA 1/4° Daily Optimum Interpolation Sea Surface Temperature (OISST) is a long term Climate Data Record that incorporates observations from different platforms (satellites, ships, buoys and Argo floats) into a regular global grid -->
 
@@ -113,7 +113,7 @@ A subset of the Weatherbench2 copy of the ERA5 reanalysis dataset.
 
 <!-- ![oisst](./assets/datasets/oisst.png) -->
 
-### GLAD Land Cover Land Use
+### GLAD Land Cover Land Use (native)
 
 A copy of the GLAD Land Cover Land Use dataset distributed under a [Creative Commons Attribution 4.0 International License](http://creativecommons.org/licenses/by/4.0/).
 
