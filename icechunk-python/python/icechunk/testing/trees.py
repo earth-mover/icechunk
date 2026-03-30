@@ -117,30 +117,19 @@ class GroupNode:
 
             GroupNode.from_store(some_memory_store)
         """
-        import json
-
-        from zarr.core.sync import sync
-
-        async def _collect() -> tuple[set[str], set[str]]:
-            arrays: set[str] = set()
-            groups: set[str] = set()
-            proto = zarr.core.buffer.default_buffer_prototype()
-            async for key in store.list_prefix(""):
-                if not key.endswith("/zarr.json") and key != "zarr.json":
-                    continue
-                path = key.removesuffix("/zarr.json").removesuffix("zarr.json").strip("/")
-                if not path:
-                    continue  # root group
-                raw = await store.get(key, prototype=proto)
-                meta = json.loads(raw.to_bytes())  # type: ignore[union-attr]
-                if meta.get("node_type") == "array":
-                    arrays.add(path)
-                else:
-                    groups.add(path)
-            return arrays, groups
-
-        arrays, groups = sync(_collect())
-        return cls.from_paths(arrays, groups)
+        root = zarr.open_group(store, mode="r")
+        tree: dict = {}
+        for path, obj in root.members(max_depth=None):
+            parts = path.split("/")
+            current = tree
+            if isinstance(obj, zarr.Array):
+                for part in parts[:-1]:
+                    current = current.setdefault(part, {})
+                current[parts[-1]] = ArrayNode(shape=obj.shape, dtype=obj.dtype)
+            else:
+                for part in parts:
+                    current = current.setdefault(part, {})
+        return cls.from_dict(tree)
 
 
 Node = ArrayNode | GroupNode
