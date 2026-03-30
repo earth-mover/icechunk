@@ -19,6 +19,7 @@ use crate::{
         snapshot::{
             ManifestFileInfo, NodeData, NodeSnapshot, NodeType, SnapshotProperties,
         },
+        transaction_log::TransactionLog,
     },
     repository::{RepositoryErrorKind, RepositoryResult},
 };
@@ -419,6 +420,69 @@ pub async fn manifest_json(
     pretty: bool,
 ) -> RepositoryResult<String> {
     let info = inspect_manifest(asset_manager, manifest_id).await?;
+    let res = if pretty {
+        serde_json::to_string_pretty(&info)
+    } else {
+        serde_json::to_string(&info)
+    }
+    .map_err(|e| RepositoryErrorKind::Other(e.to_string()))
+    .capture()?;
+    Ok(res)
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct MoveInspect {
+    from: String,
+    to: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct UpdatedChunksInspect {
+    node_id: String,
+    chunks: Vec<Vec<u32>>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct TransactionLogInspect {
+    new_groups: Vec<String>,
+    new_arrays: Vec<String>,
+    deleted_groups: Vec<String>,
+    deleted_arrays: Vec<String>,
+    updated_groups: Vec<String>,
+    updated_arrays: Vec<String>,
+    updated_chunks: Vec<UpdatedChunksInspect>,
+    moved_nodes: Vec<MoveInspect>,
+}
+
+fn inspect_transaction_log(tx: &TransactionLog) -> TransactionLogInspect {
+    TransactionLogInspect {
+        new_groups: tx.new_groups().map(|id| id.to_string()).collect(),
+        new_arrays: tx.new_arrays().map(|id| id.to_string()).collect(),
+        deleted_groups: tx.deleted_groups().map(|id| id.to_string()).collect(),
+        deleted_arrays: tx.deleted_arrays().map(|id| id.to_string()).collect(),
+        updated_groups: tx.updated_groups().map(|id| id.to_string()).collect(),
+        updated_arrays: tx.updated_arrays().map(|id| id.to_string()).collect(),
+        updated_chunks: tx
+            .updated_chunks()
+            .map(|(node_id, chunks)| UpdatedChunksInspect {
+                node_id: node_id.to_string(),
+                chunks: chunks.map(|c| c.0.clone()).collect(),
+            })
+            .collect(),
+        moved_nodes: tx
+            .moves()
+            .map(|m| MoveInspect { from: m.from.to_string(), to: m.to.to_string() })
+            .collect(),
+    }
+}
+
+pub async fn transaction_log_json(
+    asset_manager: &AssetManager,
+    id: &SnapshotId,
+    pretty: bool,
+) -> RepositoryResult<String> {
+    let tx = asset_manager.fetch_transaction_log(id).await?;
+    let info = inspect_transaction_log(&tx);
     let res = if pretty {
         serde_json::to_string_pretty(&info)
     } else {
