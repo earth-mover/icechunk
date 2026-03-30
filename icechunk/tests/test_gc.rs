@@ -647,11 +647,11 @@ async fn test_gc_reset_branch() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-#[tokio_test]
 /// Regression test for https://github.com/earth-mover/icechunk/issues/1520
 ///
 /// When two branches point to the same old commit, expire with
 /// `delete_expired_branches` should still delete the non-main branch.
+#[tokio_test]
 pub async fn test_expire_deletes_branch_sharing_tip_with_main()
 -> Result<(), Box<dyn std::error::Error>> {
     let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
@@ -659,27 +659,22 @@ pub async fn test_expire_deletes_branch_sharing_tip_with_main()
     let repo = Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
         .await?;
 
-    // Create an initial commit on main
     let mut session = repo.writable_session("main").await?;
     let user_data = Bytes::new();
     session.add_group(Path::root(), user_data.clone()).await?;
     let commit_1 = session.commit("first").max_concurrent_nodes(8).execute().await?;
 
-    // Create a feature branch pointing to the same commit as main
     repo.create_branch("feature", &commit_1).await?;
 
     let branches = repo.list_branches().await?;
     assert!(branches.contains("main"));
     assert!(branches.contains("feature"));
 
-    // Both branches now point to the same old commit.
-    // Wait a moment and then set the expiry threshold to now.
     let expire_older_than = Utc::now();
 
-    // Create a new commit on main so main's tip is fresh
     let mut session = repo.writable_session("main").await?;
     session.add_group(Path::try_from("/new").unwrap(), user_data.clone()).await?;
-    session.commit("second").max_concurrent_nodes(8).execute().await?;
+    session.commit("second").execute().await?;
 
     let asset_manager = Arc::new(AssetManager::new_no_cache(
         Arc::clone(&storage),
@@ -689,7 +684,6 @@ pub async fn test_expire_deletes_branch_sharing_tip_with_main()
         DEFAULT_MAX_CONCURRENT_REQUESTS,
     ));
 
-    // Expire with delete_expired_branches
     let result = expire(
         Arc::clone(&asset_manager),
         expire_older_than,
@@ -700,18 +694,12 @@ pub async fn test_expire_deletes_branch_sharing_tip_with_main()
     )
     .await?;
 
-    // The feature branch should have been deleted
-    assert!(
-        result.deleted_refs.contains(&Ref::Branch("feature".to_string())),
-        "feature branch should be deleted when its tip is expired, \
-         even if main also pointed to the same commit"
-    );
+    assert!(result.deleted_refs.contains(&Ref::Branch("feature".to_string())));
 
-    // Re-open repo to verify branch is gone
     let repo = Repository::open(None, Arc::clone(&storage), HashMap::new()).await?;
     let branches = repo.list_branches().await?;
-    assert!(branches.contains("main"), "main branch should still exist");
-    assert!(!branches.contains("feature"), "feature branch should have been deleted");
+    assert!(branches.contains("main"));
+    assert!(!branches.contains("feature"));
 
     Ok(())
 }
