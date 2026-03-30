@@ -233,7 +233,7 @@ pub enum MovedFrom<'a> {
 #[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct MoveTracker {
     moves: Vec<Move>,
-    nodes_by_original: HashMap<Path, Path>,
+    nodes_by_original: HashMap<Path, (Path, NodeId, NodeType)>,
     nodes_by_final: BTreeMap<Path, Path>,
 }
 
@@ -269,7 +269,7 @@ impl MoveTracker {
         // Collect updates first since we can't mutate BTreeMap keys
         // while iterating.
         let mut updates: Vec<(Path, Path, Path)> = Vec::new(); // (original, old_final, new_final)
-        for (orig, current) in self.nodes_by_original.iter_mut() {
+        for (orig, (current, _node_id, _node_type)) in self.nodes_by_original.iter_mut() {
             if let Some(remapped) = Self::remap_path(current, &from, &to) {
                 let old_final = std::mem::replace(current, remapped);
                 updates.push((orig.clone(), old_final, current.clone()));
@@ -278,38 +278,19 @@ impl MoveTracker {
         for (orig, old_final, new_final) in updates {
             self.nodes_by_final.remove(&old_final);
             self.nodes_by_final.insert(new_final, orig);
-            // TODO(li-em): remove from self.moves here?
         }
 
-        let mut subtree_moves = vec![];
         // Step 2: Add entries for nodes not already in the map.
-        for orig in subtree_nodes {
-            if !self.nodes_by_original.contains_key(&orig.0)
-                && let Some(new_path) = Self::remap_path(&orig.0, &original_from, &to)
+        for (original, node_id, node_type) in subtree_nodes {
+            if !self.nodes_by_original.contains_key(&original)
+                && let Some(new_path) = Self::remap_path(&original, &original_from, &to)
             {
-                self.nodes_by_final.insert(new_path.clone(), orig.0.clone());
-                self.nodes_by_original.insert(orig.0.clone(), new_path.clone());
-                subtree_moves.push(Move {
-                    from: orig.0,
-                    to: new_path,
-                    node_id: orig.1,
-                    node_type: orig.2,
-                });
+                self.nodes_by_final.insert(new_path.clone(), original.clone());
+                self.nodes_by_original.insert(original, (new_path, node_id, node_type));
             }
         }
 
         self.moves.push(Move { from, to, node_id: node_id.clone(), node_type });
-
-        // add all moves for subtree too
-        // TODO(li-em): check if any node in subtree was previously moved,
-        //              and remove from existing position to add to the end?
-        self.moves.extend(
-            subtree_moves
-                .into_iter()
-                // Skipping first one here because it is the same as the top-level move
-                .skip(1)
-                .unique(),
-        );
     }
 
     /// Return `(original_path, final_path)` pairs for all nodes whose
@@ -368,7 +349,7 @@ impl MoveTracker {
             if let Some(old_path) = Self::remap_path(res.as_ref(), to, from) {
                 res = Cow::Owned(old_path);
                 was_moved = true;
-            } else if res.buf().starts_with(from.buf()) && !was_moved {
+            } else if res.buf().starts_with(from.buf()) {
                 // the moves have deleted this path
                 // calling code should check for overwrites before moving
                 return MovedFrom::Deleted;
@@ -934,6 +915,21 @@ pub fn transaction_log_from_change_set(
         })
         .collect();
 
+    //FIXME(li-em): need to convert top-level moves to top-level + children
+    let mut full_moves: Vec<Move> = vec![];
+    let move_tracker = cs.move_tracker();
+    //    for Move {from, to, node_id, node_type} in cs.moves() {
+    //        full_moves.push(parent_move.clone());
+
+    for (from, (to, node_id, node_type)) in move_tracker.nodes_by_original.iter() {
+        full_moves.push(Move {
+            from: from.clone(),
+            to: to.clone(),
+            node_id: node_id.clone(),
+            node_type: node_type.clone(),
+        });
+    }
+
     TransactionLog::new_from_parts(
         id,
         new_groups.into_iter(),
@@ -943,7 +939,7 @@ pub fn transaction_log_from_change_set(
         updated_groups.into_iter(),
         updated_arrays.into_iter(),
         changed_chunks.into_iter(),
-        cs.moves().cloned(),
+        full_moves.into_iter(),
     )
 }
 
