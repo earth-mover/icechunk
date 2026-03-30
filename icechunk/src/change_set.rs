@@ -14,6 +14,7 @@ use std::{
 };
 
 use bytes::Bytes;
+use indexmap::IndexMap;
 use itertools::{Either, Itertools as _};
 use serde::{Deserialize, Serialize};
 use tracing::warn;
@@ -233,7 +234,7 @@ pub enum MovedFrom<'a> {
 #[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct MoveTracker {
     moves: Vec<Move>,
-    nodes_by_original: HashMap<Path, (Path, NodeId, NodeType)>,
+    nodes_by_original: IndexMap<Path, (Path, NodeId, NodeType)>,
     nodes_by_final: BTreeMap<Path, Path>,
 }
 
@@ -916,23 +917,6 @@ pub fn transaction_log_from_change_set(
         })
         .collect();
 
-    //FIXME(li-em): need to convert top-level moves to top-level + children
-    let mut full_moves: Vec<Move> = vec![];
-    let move_tracker = cs.move_tracker();
-    //    for Move {from, to, node_id, node_type} in cs.moves() {
-    //        full_moves.push(parent_move.clone());
-
-    for (from, (to, node_id, node_type)) in move_tracker.nodes_by_original.iter() {
-        full_moves.push(Move {
-            from: from.clone(),
-            to: to.clone(),
-            node_id: node_id.clone(),
-            node_type: node_type.clone(),
-        });
-    }
-
-    //debug_assert_eq!(cs.moves().count(), full_moves.len());
-
     TransactionLog::new_from_parts(
         id,
         new_groups.into_iter(),
@@ -942,14 +926,20 @@ pub fn transaction_log_from_change_set(
         updated_groups.into_iter(),
         updated_arrays.into_iter(),
         changed_chunks.into_iter(),
-        full_moves.into_iter(),
-        //cs.moves().cloned(),
+        cs.move_tracker().nodes_by_original.iter().map(
+            |(from, (to, node_id, node_type))| Move {
+                from: from.clone(),
+                to: to.clone(),
+                node_id: node_id.clone(),
+                node_type: node_type.clone(),
+            },
+        ),
     )
 }
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{BTreeMap, HashMap};
+    use std::collections::BTreeMap;
 
     use bytes::Bytes;
     use itertools::Itertools as _;
@@ -1494,7 +1484,7 @@ mod tests {
         vec(gen_move(), 1..5)
             .prop_map(|moves| MoveTracker {
                 moves,
-                nodes_by_original: HashMap::new(),
+                nodes_by_original: Default::default(),
                 nodes_by_final: BTreeMap::new(),
             })
             .boxed()
