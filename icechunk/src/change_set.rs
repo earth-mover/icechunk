@@ -7,6 +7,8 @@
 use std::{
     borrow::Cow,
     collections::{BTreeMap, HashMap, HashSet},
+    fmt::Display,
+    hash::Hash,
     iter,
     sync::LazyLock,
 };
@@ -69,9 +71,124 @@ impl EditChanges {
         self == &Default::default()
     }
 
-    fn merge(&mut self, other: EditChanges) {
-        // FIXME: this should detect conflict, for example, if different writers added on the same
-        // path, different objects, or if the same path is added and deleted, etc.
+    fn check_for_conflicts<K: Display + Hash + Eq, V: PartialEq>(
+        a: &HashMap<K, V>,
+        b: &HashMap<K, V>,
+        reason: &str,
+        feature: &str,
+    ) -> SessionResult<()> {
+        let shared: Vec<_> = a
+            .iter()
+            .filter_map(|(k, v)| {
+                let theirs = b.get(k);
+                if theirs.is_none() || Some(v) == theirs { None } else { Some(k) }
+            })
+            .collect();
+        if !shared.is_empty() {
+            return Err(SessionError::capture(SessionErrorKind::SessionMerge(format!(
+                "Multiple writers {reason} the same {feature}: {}",
+                shared.into_iter().join(", ")
+            ))));
+        }
+
+        Ok(())
+    }
+
+    fn merge(&mut self, other: EditChanges) -> SessionResult<()> {
+        // TODO: the conflict detection is not comprehensive
+
+        // check if both created same group with different metadata
+        Self::check_for_conflicts(
+            &self.new_groups,
+            &other.new_groups,
+            "created",
+            "groups",
+        )?;
+
+        // check if both updated same group with different metadata
+        Self::check_for_conflicts(
+            &self.updated_groups,
+            &other.updated_groups,
+            "updated",
+            "groups",
+        )?;
+
+        // check if both create same array with different metadata
+        Self::check_for_conflicts(
+            &self.new_arrays,
+            &other.new_arrays,
+            "created",
+            "arrays",
+        )?;
+
+        // check if both updated same array with different metadata
+        Self::check_for_conflicts(
+            &self.updated_arrays,
+            &other.updated_arrays,
+            "updated",
+            "arrays",
+        )?;
+
+        let check_deleted_and_updated_arrays = |a: &Self, b: &Self| {
+            let shared: Vec<_> = a
+                .deleted_arrays
+                .iter()
+                .filter_map(|(path, node_id)| {
+                    if b.new_arrays.contains_key(path)
+                        || b.updated_arrays.contains_key(node_id)
+                        || b.set_chunks.contains_key(node_id)
+                        || b.deleted_chunks_outside_bounds.contains_key(node_id)
+                    {
+                        Some(path)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            if !shared.is_empty() {
+                return Err(SessionError::capture(SessionErrorKind::SessionMerge(
+                    format!(
+                        "Arrays were both deleted and modified: {}",
+                        shared.into_iter().join(", ")
+                    ),
+                )));
+            }
+            Ok(())
+        };
+
+        let check_deleted_and_updated_groups = |a: &Self, b: &Self| {
+            let shared: Vec<_> = a
+                .deleted_groups
+                .iter()
+                .filter_map(|(path, node_id)| {
+                    if b.new_groups.contains_key(path)
+                        || b.updated_groups.contains_key(node_id)
+                    {
+                        Some(path)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            if !shared.is_empty() {
+                return Err(SessionError::capture(SessionErrorKind::SessionMerge(
+                    format!(
+                        "Groups were both deleted and modified: {}",
+                        shared.into_iter().join(", ")
+                    ),
+                )));
+            }
+            Ok(())
+        };
+
+        // check if a deleted array was modified
+        check_deleted_and_updated_arrays(self, &other)?;
+        check_deleted_and_updated_arrays(&other, self)?;
+
+        // check if a deleted group was modified
+        check_deleted_and_updated_groups(self, &other)?;
+        check_deleted_and_updated_groups(&other, self)?;
+
         // TODO: optimize
         self.new_groups.extend(other.new_groups);
         self.new_arrays.extend(other.new_arrays);
@@ -82,6 +199,7 @@ impl EditChanges {
         // FIXME: do we even test this?
         self.deleted_chunks_outside_bounds.extend(other.deleted_chunks_outside_bounds);
 
+        // TODO: check conflicts on nodes, for now it is last one wins semantics
         other.set_chunks.into_iter().for_each(|(node, other_manifest)| {
             match self.set_chunks.get_mut(&node) {
                 Some(manifest) => manifest.extend(other_manifest),
@@ -90,6 +208,7 @@ impl EditChanges {
                 }
             }
         });
+        Ok(())
     }
 }
 
@@ -637,7 +756,7 @@ impl ChangeSet {
     pub fn merge(&mut self, other: ChangeSet) -> SessionResult<()> {
         match (self, other) {
             (ChangeSet::Edit(my_edit_changes), ChangeSet::Edit(other_changes)) => {
-                my_edit_changes.merge(other_changes);
+                my_edit_changes.merge(other_changes)?;
                 Ok(())
             }
             _ => Err(SessionError::capture(SessionErrorKind::RearrangeSessionOnly)),
@@ -829,8 +948,204 @@ mod tests {
             manifest::{ChunkInfo, ChunkPayload},
             snapshot::ArrayShape,
         },
+        session::{SessionError, SessionErrorKind},
     };
     use icechunk_format::roundtrip_serialization_tests;
+
+    fn sample_array_data() -> ArrayData {
+        ArrayData {
+            shape: ArrayShape::new(vec![(2, 2)]).unwrap(),
+            dimension_names: None,
+            user_data: Bytes::from_static(b"test"),
+        }
+    }
+
+    fn sample_array_data_alt() -> ArrayData {
+        ArrayData {
+            shape: ArrayShape::new(vec![(4, 4)]).unwrap(),
+            dimension_names: None,
+            user_data: Bytes::from_static(b"other"),
+        }
+    }
+
+    fn assert_merge_error(result: &Result<(), SessionError>, needle: &str) {
+        let err = result.as_ref().unwrap_err();
+        match err.kind() {
+            SessionErrorKind::SessionMerge(msg) => {
+                assert!(msg.contains(needle), "expected '{needle}' in error: {msg}");
+            }
+            other => panic!("expected SessionMerge, got: {other:?}"),
+        }
+    }
+
+    #[icechunk_macros::test]
+    fn test_merge_conflict_both_created_same_group() {
+        let mut a = EditChanges::default();
+        let mut b = EditChanges::default();
+        let node_id = NodeId::random();
+        let p: Path = "/grp".try_into().unwrap();
+
+        a.new_groups.insert(p.clone(), (node_id.clone(), Bytes::from_static(b"v1")));
+        b.new_groups.insert(p.clone(), (node_id.clone(), Bytes::from_static(b"v2")));
+
+        let result = a.merge(b.clone());
+        assert_merge_error(&result, "Multiple writers created the same groups");
+
+        b.new_groups.insert(p, (node_id, Bytes::from_static(b"v1")));
+        assert!(a.merge(b).is_ok());
+    }
+
+    #[icechunk_macros::test]
+    fn test_merge_conflict_both_updated_same_group() {
+        let mut a = EditChanges::default();
+        let mut b = EditChanges::default();
+        let node_id = NodeId::random();
+
+        a.updated_groups.insert(node_id.clone(), Bytes::from_static(b"v1"));
+        b.updated_groups.insert(node_id.clone(), Bytes::from_static(b"v2"));
+
+        let result = a.merge(b.clone());
+        assert_merge_error(&result, "Multiple writers updated the same groups");
+
+        b.updated_groups.insert(node_id, Bytes::from_static(b"v1"));
+        assert!(a.merge(b).is_ok());
+    }
+
+    #[icechunk_macros::test]
+    fn test_merge_conflict_both_created_same_array() {
+        let mut a = EditChanges::default();
+        let mut b = EditChanges::default();
+        let node_id = NodeId::random();
+        let p: Path = "/arr".try_into().unwrap();
+
+        a.new_arrays.insert(p.clone(), (node_id.clone(), sample_array_data()));
+        b.new_arrays.insert(p.clone(), (node_id.clone(), sample_array_data_alt()));
+
+        let result = a.merge(b.clone());
+        assert_merge_error(&result, "Multiple writers created the same arrays");
+
+        b.new_arrays.insert(p, (node_id, sample_array_data()));
+        assert!(a.merge(b).is_ok());
+    }
+
+    #[icechunk_macros::test]
+    fn test_merge_conflict_both_updated_same_array() {
+        let mut a = EditChanges::default();
+        let mut b = EditChanges::default();
+        let node_id = NodeId::random();
+
+        a.updated_arrays.insert(node_id.clone(), sample_array_data());
+        b.updated_arrays.insert(node_id.clone(), sample_array_data_alt());
+
+        let result = a.merge(b.clone());
+        assert_merge_error(&result, "Multiple writers updated the same arrays");
+
+        b.updated_arrays.insert(node_id.clone(), sample_array_data());
+        assert!(a.merge(b).is_ok());
+    }
+
+    #[icechunk_macros::test]
+    fn test_merge_conflict_array_deleted_and_updated() {
+        let mut a = EditChanges::default();
+        let mut b = EditChanges::default();
+        let node_id = NodeId::random();
+        let p: Path = "/arr".try_into().unwrap();
+
+        // a deletes the array, b updates it
+        a.deleted_arrays.insert((p, node_id.clone()));
+        b.updated_arrays.insert(node_id, sample_array_data());
+
+        let result = a.merge(b.clone());
+        assert_merge_error(&result, "Arrays were both deleted and modified");
+
+        let result = b.merge(a);
+        assert_merge_error(&result, "Arrays were both deleted and modified");
+    }
+
+    #[icechunk_macros::test]
+    fn test_merge_conflict_array_deleted_and_chunks_set() {
+        let mut a = EditChanges::default();
+        let mut b = EditChanges::default();
+        let node_id = NodeId::random();
+        let p: Path = "/arr".try_into().unwrap();
+
+        a.deleted_arrays.insert((p, node_id.clone()));
+        b.set_chunks.insert(node_id, Default::default());
+
+        let result = a.merge(b.clone());
+        assert_merge_error(&result, "Arrays were both deleted and modified");
+
+        let result = b.merge(a);
+        assert_merge_error(&result, "Arrays were both deleted and modified");
+    }
+
+    #[icechunk_macros::test]
+    fn test_merge_conflict_array_deleted_and_recreated() {
+        let mut a = EditChanges::default();
+        let mut b = EditChanges::default();
+        let node_id = NodeId::random();
+        let p: Path = "/arr".try_into().unwrap();
+
+        a.deleted_arrays.insert((p.clone(), node_id));
+        b.new_arrays.insert(p, (NodeId::random(), sample_array_data()));
+
+        let result = a.merge(b.clone());
+        assert_merge_error(&result, "Arrays were both deleted and modified");
+
+        let result = b.merge(a);
+        assert_merge_error(&result, "Arrays were both deleted and modified");
+    }
+
+    #[icechunk_macros::test]
+    fn test_merge_conflict_array_deleted_and_chunks_outside_bounds() {
+        let mut a = EditChanges::default();
+        let mut b = EditChanges::default();
+        let node_id = NodeId::random();
+        let p: Path = "/arr".try_into().unwrap();
+
+        a.deleted_arrays.insert((p, node_id.clone()));
+        b.deleted_chunks_outside_bounds.insert(node_id, Default::default());
+
+        let result = a.merge(b.clone());
+        assert_merge_error(&result, "Arrays were both deleted and modified");
+
+        let result = b.merge(a);
+        assert_merge_error(&result, "Arrays were both deleted and modified");
+    }
+
+    #[icechunk_macros::test]
+    fn test_merge_conflict_group_deleted_and_updated() {
+        let mut a = EditChanges::default();
+        let mut b = EditChanges::default();
+        let node_id = NodeId::random();
+        let p: Path = "/grp".try_into().unwrap();
+
+        a.deleted_groups.insert((p, node_id.clone()));
+        b.updated_groups.insert(node_id, Bytes::from_static(b"new"));
+
+        let result = a.merge(b.clone());
+        assert_merge_error(&result, "Groups were both deleted and modified");
+
+        let result = b.merge(a);
+        assert_merge_error(&result, "Groups were both deleted and modified");
+    }
+
+    #[icechunk_macros::test]
+    fn test_merge_conflict_group_deleted_and_recreated() {
+        let mut a = EditChanges::default();
+        let mut b = EditChanges::default();
+        let node_id = NodeId::random();
+        let p: Path = "/grp".try_into().unwrap();
+
+        a.deleted_groups.insert((p.clone(), node_id));
+        b.new_groups.insert(p, (NodeId::random(), Bytes::from_static(b"new")));
+
+        let result = a.merge(b.clone());
+        assert_merge_error(&result, "Groups were both deleted and modified");
+
+        let result = b.merge(a);
+        assert_merge_error(&result, "Groups were both deleted and modified");
+    }
 
     #[icechunk_macros::test]
     fn test_new_arrays_chunk_iterator() -> Result<(), Box<dyn std::error::Error>> {

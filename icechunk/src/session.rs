@@ -170,6 +170,8 @@ pub enum SessionErrorKind {
     NoAmendForInitialCommit,
     #[error("failed to create manifest from chunk stream")]
     ManifestCreationError(#[from] Box<SessionError>),
+    #[error("failed to merge sessions: {0}")]
+    SessionMerge(String),
     #[error("byte range {request:?} is out of bounds for chunk of length {chunk_length}")]
     InvalidByteRange { request: ByteRange, chunk_length: u64 },
     #[error("invalid commit configuration: {reason}")]
@@ -3303,7 +3305,7 @@ mod tests {
     use proptest::prelude::{prop_assert, prop_assert_eq};
     use storage::logging::LoggingStorage;
     use test_strategy::proptest;
-    #[cfg(not(feature = "shuttle"))]
+    // #[cfg(not(feature = "shuttle"))]
     use tokio::sync::Barrier;
 
     use crate::test_utils::spec_version_cases;
