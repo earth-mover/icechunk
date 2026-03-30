@@ -418,10 +418,46 @@ class Model:
                 if not delete_expired_branches:
                     assert snap.id not in branch_pointees
 
+        # Ref deletion (tags/branches) is based on `expired_snapshot_ids`, NOT
+        # `expired_snaps` (= released_snapshots in Rust).
+        #  - released_snapshots: snapshots actually removed from the repo. Excludes
+        #       root snapshots and snapshots protected by preserved refs (e.g. main).
+        #  - expired_snapshot_ids: all non-root snapshots old enough to expire,
+        #       regardless of ref protection. Used only for deciding which
+        #       tag/branch *references* to delete. The snapshots are still preserved.
+        # This means a feature branch sharing main's tip can deleted even though
+        # the snapshot is preserved by main (#1520).
+        #
+        # In V2, root snapshots (no parent) are excluded so refs pointing
+        # to the initial commit are never deleted.
+        # V1 does not exclude root snapshots, so refs pointing to the initial commit
+        # can be deleted.
+        if self.spec_version >= 2:
+            expired_snapshot_ids = {
+                snap_id
+                for snap_id, snap in self.commits.items()
+                if snap.written_at < older_than and snap.parent_id is not None
+            }
+        else:
+            # V1 checks only flushed_at (not parent_id) when deciding ref
+            # deletion, so root-pointing refs can be deleted (#1534).
+            expired_snapshot_ids = {
+                snap_id
+                for snap_id, snap in self.commits.items()
+                if snap.written_at < older_than
+            }
+
+        # V1's released_snapshots can include branch/tag tips that are merely
+        # rewritten (parent pointer changed), not truly removed. Don't remove
+        # those from commits — they're still valid snapshots pointed to by refs.
+        # V2's released_snapshots only contains snapshots truly removed from
+        # the repo info, so all can be popped.
+        ref_pointees = set(self.refs_iter()) if self.spec_version < 2 else set()
         for id in expired_snaps:
             # notice we don't delete from self.ondisk_snaps, those can still be deleted by GC
             # however we do pop from `commits` since that is a list of unexpired snaps
-            self.commits.pop(id, None)
+            if id not in ref_pointees:
+                self.commits.pop(id, None)
 
         # we reparent to the initial snapshot for simplicity. This should be good enough to make
         # self.reachable_snapshots() accurate.
@@ -431,7 +467,7 @@ class Model:
 
         if delete_expired_tags:
             tags_to_delete = {
-                k for k, v in self.tags.items() if v.commit_id in expired_snaps
+                k for k, v in self.tags.items() if v.commit_id in expired_snapshot_ids
             }
             note(f"deleting tags {tags_to_delete=!r}")
             for tag in tags_to_delete:
@@ -443,7 +479,7 @@ class Model:
             branches_to_delete = {
                 k
                 for k, v in self.branch_heads.items()
-                if k != DEFAULT_BRANCH and v in expired_snaps
+                if k != DEFAULT_BRANCH and v in expired_snapshot_ids
             }
             note(f"deleting branches {branches_to_delete=!r}")
             for branch in branches_to_delete:
@@ -729,14 +765,12 @@ class VersionControlStateMachine(RuleBasedStateMachine):
     @rule(ref=commits)
     def checkout_commit(self, ref: str) -> None:
         if ref not in self.model.commits:
-            if self.model.spec_version >= 2:
-                note(f"Checking out commit {ref}, expecting error")
-                with pytest.raises(IcechunkError):
-                    self.repo.readonly_session(snapshot_id=ref)
-            else:
-                # V1 expired snapshots stay on disk so checkout would succeed,
-                # but the model no longer tracks their store contents — skip.
-                note(f"Skipping checkout of V1 expired commit {ref}")
+            # V1 expired snapshots stay on disk so checkout succeeds, but
+            # the model no longer tracks their store contents.
+            assume(self.model.spec_version >= 2)
+            note(f"Checking out commit {ref}, expecting error")
+            with pytest.raises(IcechunkError):
+                self.repo.readonly_session(snapshot_id=ref)
         else:
             note(f"Checking out commit {ref}")
             self.session = self.repo.readonly_session(snapshot_id=ref)
@@ -838,6 +872,9 @@ class VersionControlStateMachine(RuleBasedStateMachine):
     @precondition(lambda self: not self.model.changes_made)
     @rule(branch=branches, commit=commits)
     def reset_branch(self, branch: str, commit: str) -> None:
+        # V1 expired snapshots stay on disk so reset_branch would succeed,
+        # but modelling that divergence isn't worthwhile — just skip.
+        assume(self.model.spec_version >= 2 or commit in self.model.commits)
         if branch not in self.model.branch_heads or commit not in self.model.commits:
             note(f"resetting branch {branch}, expecting error.")
             with pytest.raises(IcechunkError):
