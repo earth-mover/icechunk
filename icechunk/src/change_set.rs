@@ -291,6 +291,8 @@ impl MoveTracker {
         }
 
         self.moves.push(Move { from, to, node_id: node_id.clone(), node_type });
+        // FIXME(li-em): push children too
+
     }
 
     /// Return `(original_path, final_path)` pairs for all nodes whose
@@ -930,6 +932,8 @@ pub fn transaction_log_from_change_set(
         });
     }
 
+    //debug_assert_eq!(cs.moves().count(), full_moves.len());
+
     TransactionLog::new_from_parts(
         id,
         new_groups.into_iter(),
@@ -940,6 +944,7 @@ pub fn transaction_log_from_change_set(
         updated_arrays.into_iter(),
         changed_chunks.into_iter(),
         full_moves.into_iter(),
+        //cs.moves().cloned(),
     )
 }
 
