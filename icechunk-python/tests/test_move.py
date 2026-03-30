@@ -1,3 +1,5 @@
+import itertools
+
 import numpy.testing
 import pytest
 from hypothesis import example, given, note
@@ -172,20 +174,18 @@ def test_moves_amend(
     """
     tree, moves = tree_moves
 
-    # Draw 1-3 split points to create multiple amend batches.
-    n_splits = data.draw(st.integers(min_value=1, max_value=3))
-    splits = sorted(
-        data.draw(
-            st.lists(
-                st.integers(min_value=1, max_value=len(moves) - 1),
-                min_size=n_splits,
-                max_size=n_splits,
-            )
-        )
+    # Split moves into 2-4 batches: commit the first, amend the rest.
+    split_points = sorted(
+        {
+            0,
+            *data.draw(st.sets(st.integers(1, len(moves) - 1), min_size=1, max_size=3)),
+            len(moves),
+        }
     )
+    batches = [moves[a:b] for a, b in itertools.pairwise(split_points)]
 
     note(f"tree: {tree!r}")
-    note(f"splits at {splits}/{len(moves)}")
+    note(f"batches: {[len(b) for b in batches]} ({len(moves)} moves)")
     for i, (s, d) in enumerate(moves):
         note(f"  move {i}: /{s} -> /{d}")
 
@@ -197,31 +197,22 @@ def test_moves_amend(
         session_a.move(f"/{source}", f"/{dest}")
     session_a.commit("all moves")
 
-    # Repo B: same moves split across initial commit + multiple amends
+    # Repo B: same moves split across multiple amends
     _, session_b, repo_b = tree_to_model_and_icechunk(tree)
     session_b.commit("init")
-    session_b = repo_b.rearrange_session("main")
-    committed = False
-    for i, (source, dest) in enumerate(moves):
-        session_b.move(f"/{source}", f"/{dest}")
-        if i + 1 in splits and not committed:
-            session_b.commit("first batch")
-            committed = True
-            session_b = repo_b.rearrange_session("main")
-        elif i + 1 in splits and committed:
-            session_b.amend(f"amend at {i + 1}")
-            session_b = repo_b.rearrange_session("main")
-    if not committed:
-        session_b.commit("only batch")
-    else:
-        session_b.amend("final amend")
+
+    for batch in batches:
+        session_b = repo_b.rearrange_session("main")
+        for source, dest in batch:
+            session_b.move(f"/{source}", f"/{dest}")
+        session_b.amend("amend")
 
     # Trees must match
     tree_a = repr(zarr.open_group(repo_a.readonly_session("main").store, mode="r").tree())
     tree_b = repr(zarr.open_group(repo_b.readonly_session("main").store, mode="r").tree())
     assert tree_a == tree_b, (
         f"\nmoves: {moves}"
-        f"\nsplits at: {splits}"
+        f"\nbatches: {[len(b) for b in batches]}"
         f"\ntree (one commit):\n{tree_a}"
         f"\ntree (amended):\n{tree_b}"
     )
@@ -235,7 +226,7 @@ def test_moves_amend(
     moved_b = sorted(tx_b["moved_nodes"], key=lambda m: (m["from"], m["to"]))
     assert moved_a == moved_b, (
         f"\nmoves: {moves}"
-        f"\nsplits at: {splits}"
+        f"\nbatches: {[len(b) for b in batches]}"
         f"\nsingle commit tx log moves:  {moved_a}"
         f"\namended commit tx log moves: {moved_b}"
     )
