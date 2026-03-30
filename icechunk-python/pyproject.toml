@@ -133,12 +133,13 @@ filterwarnings = [
 ]
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.12"
 strict = true
 warn_unreachable = true
 enable_error_code = ["ignore-without-code", "redundant-expr", "truthy-bool"]
 
 [tool.ruff]
+target-version = "py312"
 line-length = 90
 extend-exclude = ["*.ipynb", "doc", "_typed_ops.pyi"]
 
