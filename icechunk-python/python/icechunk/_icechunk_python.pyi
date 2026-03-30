@@ -10,7 +10,7 @@ from collections.abc import (
 )
 from enum import Enum, IntEnum
 from functools import total_ordering
-from typing import Any, TypeAlias, final
+from typing import Any, final
 
 from icechunk.types import CommitMethod
 
@@ -752,8 +752,8 @@ class ManifestSplitDimCondition:
         """Split along any other unspecified dimension."""
         def __new__(cls) -> ManifestSplitDimCondition.Any: ...
 
-_DimSplitSize: TypeAlias = int
-_SplitSizes: TypeAlias = tuple[
+type _DimSplitSize = int
+type _SplitSizes = tuple[
     tuple[
         ManifestSplitCondition,
         tuple[
