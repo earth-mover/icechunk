@@ -21,6 +21,7 @@ from hypothesis.stateful import (
 
 # Private Hypothesis constant — stable, needed to discover which methods are rules.
 RULE_MARKER = "hypothesis_stateful_rule"
+PRECONDITIONS_MARKER = "hypothesis_stateful_preconditions"
 
 
 def test_subsets(
@@ -97,10 +98,19 @@ def _run_subset(
     if not remove:
         raise ValueError("remove is empty — this would run the full machine unchanged")
 
-    # Strip @rule by grabbing the unwrapped original that @rule stored via __wrapped__.
-    # Placing it on the subclass shadows the decorated version.
-    # NOTE: assumes @rule is the outermost decorator on each method.
-    overrides = {name: getattr(machine_cls, name).__wrapped__ for name in remove}
+    def strip_rule(name: str):
+        """Walk the __wrapped__ chain until we find a function without the rule marker."""
+        func = getattr(machine_cls, name)
+        while hasattr(func, RULE_MARKER) or hasattr(func, PRECONDITIONS_MARKER):
+            if not hasattr(func, "__wrapped__"):
+                raise ValueError(
+                    f"{name} has {RULE_MARKER} or {PRECONDITIONS_MARKER} "
+                    f"but no __wrapped__ — cannot strip rule"
+                )
+            func = func.__wrapped__
+        return func
+
+    overrides = {name: strip_rule(name) for name in remove}
     kept = sorted(all_names - remove)
     subset_name = f"{machine_cls.__name__}[{'+'.join(kept)}]"
     subset_cls = type(subset_name, (machine_cls,), overrides)

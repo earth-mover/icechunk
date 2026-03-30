@@ -6,6 +6,7 @@ import json
 import operator
 import sys
 import textwrap
+import time
 from collections.abc import Iterator
 from dataclasses import dataclass, fields
 from functools import partial
@@ -27,7 +28,7 @@ import copy
 import hypothesis.extra.numpy as npst
 import hypothesis.strategies as st
 import pytest
-from hypothesis import assume, event, note
+from hypothesis import assume, event, note, settings
 from hypothesis.stateful import (
     Bundle,
     RuleBasedStateMachine,
@@ -589,6 +590,22 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         return NewSyncStoreWrapper(self.session.store)
 
     @precondition(lambda self: self.model.branch is not None)
+    @rule(target=commits)
+    def empty_commit(self) -> str:
+        """Make a single empty commit with a small sleep for timestamp spread.
+
+        Useful for GC/expire testing where we need commits with distinct
+        timestamps but don't care about zarr data.
+        """
+        time.sleep(0.005)
+        branch = self.session.branch
+        assert branch is not None
+        snap_id = self.session.commit("empty", allow_empty=True)
+        snapinfo = next(iter(self.repo.ancestry(branch=branch)))
+        self.session = self.repo.writable_session(branch)
+        self.model.commit(snapinfo)
+        return snap_id
+
     @rule(data=st.data(), ncommits=st.integers(3, 10), target=commits)
     def set_and_commit(self, data: st.DataObject, ncommits: int) -> Any:
         amend_or_commit = data.draw(
@@ -935,7 +952,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         # Check that expired snapshots are actually removed from ancestry
         remaining_snapshot_ids = set()
         for branch in branches_after:
-            remaining_snapshot_ids.add(
+            remaining_snapshot_ids.update(
                 snapshot.id for snapshot in self.repo.ancestry(branch=branch)
             )
 
@@ -1138,26 +1155,94 @@ class VersionControlStateMachine(RuleBasedStateMachine):
 
 VersionControlTest = VersionControlStateMachine.TestCase
 
-# ---- Focused GC subset ----
+# ---- Focused expire tests ----
+# Two approaches to catch the expire_v2 orphan parent bug:
+# 1. Subset of VersionControlStateMachine with empty_commit
+# 2. Standalone minimal machine
 
 GC_RULES = {
-    "set_and_commit",
-    "create_branch",
-    "create_tag",
+    "empty_commit",
     "reset_branch",
     "expire_snapshots",
-    "garbage_collect",
 }
 
 
-@pytest.mark.xfail(
-    reason="expire_v2 orphan parent bug not yet fixed",
-    strict=False,
-)
-def test_gc_with_rules():
+def test_expire_subset():
+    """Catch expire orphan bug via VersionControlStateMachine subset."""
     from icechunk.testing.stateful_subsets import test_subsets
 
     test_subsets(
         VersionControlStateMachine,
-        with_rules=[(GC_RULES, 50)],
+        with_rules=[(GC_RULES, settings(max_examples=200, stateful_step_count=30))],
     )
+
+
+class ExpireOrphanMachine(RuleBasedStateMachine):
+    """Standalone minimal machine targeting the expire_v2 orphan parent bug.
+
+    The bug: when expire removes a snapshot whose child is unreachable
+    from any ref, the child's parent_id is set to None instead of
+    INITIAL_SNAPSHOT_ID.
+    """
+
+    commits = Bundle("commits")
+
+    def __init__(self):
+        super().__init__()
+        self.repo = None
+        self.storage = None
+
+    @initialize(target=commits)
+    def init(self):
+        self.storage = ic.in_memory_storage()
+        self.repo = ic.Repository.create(storage=self.storage, spec_version=2)
+        return INITIAL_SNAPSHOT
+
+    @rule(target=commits)
+    def make_commit(self):
+        time.sleep(0.005)
+        s = self.repo.writable_session(DEFAULT_BRANCH)
+        return s.commit("commit", allow_empty=True)
+
+    @rule(commit=commits)
+    def reset_to(self, commit):
+        try:
+            self.repo.reset_branch(DEFAULT_BRANCH, commit)
+        except ic.IcechunkError:
+            pass
+
+    @rule(data=st.data())
+    def expire(self, data):
+        objects = list(self.storage.list_objects_metadata(prefix="snapshots"))
+        if len(objects) < 3:
+            return
+        times = sorted(set(obj.created_at for obj in objects))
+        if len(times) < 2:
+            return
+        idx = data.draw(st.integers(0, len(times) - 2))
+        older_than = times[idx] + datetime.timedelta(microseconds=1)
+        self.repo.expire_snapshots(older_than)
+
+    @invariant()
+    def check_ancestry(self):
+        if self.repo is None:
+            return
+        for branch in self.repo.list_branches():
+            ancestry = list(self.repo.ancestry(branch=branch))
+            assert ancestry[-1].id == INITIAL_SNAPSHOT, (
+                f"ancestry from {branch} terminates at {ancestry[-1].id}, "
+                f"expected {INITIAL_SNAPSHOT}"
+            )
+            assert ancestry[-1].parent_id is None
+            for snap in ancestry[:-1]:
+                assert snap.parent_id is not None, (
+                    f"Snapshot {snap.id} has parent_id=None but is not root"
+                )
+
+
+ExpireOrphanTest = ExpireOrphanMachine.TestCase
+ExpireOrphanTest.settings = settings(
+    max_examples=200,
+    stateful_step_count=30,
+    deadline=None,
+)
