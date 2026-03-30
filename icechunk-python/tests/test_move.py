@@ -139,6 +139,18 @@ def test_moves(
         sync(model.move(source, dest))
         session.move(f"/{source}", f"/{dest}")
 
+    # All model paths should be reachable as group members in the store
+    model_paths = {path for path, _ in zarr.open_group(model).members(max_depth=None)}
+    store_paths = {
+        path
+        for path, _ in zarr.open_group(session.store, mode="r").members(max_depth=None)
+    }
+    assert model_paths == store_paths, (
+        f"members mismatch after moves:\n"
+        f"  model only: {model_paths - store_paths}\n"
+        f"  store only: {store_paths - model_paths}"
+    )
+
     expected = repr(zarr.open_group(model).tree())
     for label, store in precommit_postcommit_readonly(session, repo):
         actual = repr(zarr.open_group(store, mode="r").tree())
