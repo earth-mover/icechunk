@@ -229,7 +229,7 @@ impl From<SnapshotInfo> for PySnapshotInfo {
 impl PyManifestFileInfo {
     pub(crate) fn __repr__(&self) -> String {
         dataclass_repr(
-            "ManifestFileInfo",
+            "icechunk.ManifestFileInfo",
             &[
                 ("id", format!("\"{}\"", self.id)),
                 ("size_bytes", self.size_bytes.to_string()),
@@ -1007,17 +1007,17 @@ impl PyRepository {
 impl PyRepository {
     pub(crate) fn __repr__(&self) -> String {
         let storage_repr = format!("{}", self.0.blocking_read().storage());
-        dataclass_repr("Repository", &[("storage", storage_repr)])
+        dataclass_repr("icechunk.Repository", &[("storage", storage_repr)])
     }
 
     pub(crate) fn __str__(&self) -> String {
         let storage_str = format!("{}", self.0.blocking_read().storage());
-        dataclass_str("Repository", &[("storage", storage_str)])
+        dataclass_str("icechunk.Repository", &[("storage", storage_str)])
     }
 
     pub(crate) fn _repr_html_(&self) -> String {
         let storage_str = format!("{}", self.0.blocking_read().storage());
-        dataclass_html_repr("Repository", &[("storage", storage_str)])
+        dataclass_html_repr("icechunk.Repository", &[("storage", storage_str)])
     }
 
     #[classmethod]

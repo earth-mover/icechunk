@@ -130,11 +130,11 @@ impl PyStore {
         let session = self.0.session();
         let session_guard = session.blocking_read();
         let branch_repr = match session_guard.branch() {
-            Some(b) => format!("\"{}\"", b),
+            Some(b) => format!("\"{b}\""),
             None => "None".to_string(),
         };
         dataclass_repr(
-            "IcechunkStore",
+            "icechunk.IcechunkStore",
             &[
                 ("read_only", py_bool(session_guard.read_only())),
                 ("snapshot_id", format!("\"{}\"", session_guard.snapshot_id())),
@@ -151,7 +151,7 @@ impl PyStore {
             None => "None".to_string(),
         };
         dataclass_str(
-            "IcechunkStore",
+            "icechunk.IcechunkStore",
             &[
                 ("read_only", py_bool(session_guard.read_only())),
                 ("snapshot_id", session_guard.snapshot_id().to_string()),
@@ -168,7 +168,7 @@ impl PyStore {
             None => "None".to_string(),
         };
         dataclass_html_repr(
-            "IcechunkStore",
+            "icechunk.IcechunkStore",
             &[
                 ("read_only", py_bool(session_guard.read_only())),
                 ("snapshot_id", session_guard.snapshot_id().to_string()),

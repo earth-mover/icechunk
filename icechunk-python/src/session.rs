@@ -66,19 +66,16 @@ impl PySession {
     pub(crate) fn __repr__(&self) -> String {
         let session = self.0.blocking_read();
         let branch_repr = match session.branch() {
-            Some(b) => format!("\"{}\"", b),
+            Some(b) => format!("\"{b}\""),
             None => "None".to_string(),
         };
         dataclass_repr(
-            "Session",
+            "icechunk.Session",
             &[
                 ("read_only", py_bool(session.read_only())),
                 ("snapshot_id", format!("\"{}\"", session.snapshot_id())),
                 ("branch", branch_repr),
-                (
-                    "has_uncommitted_changes",
-                    py_bool(session.has_uncommitted_changes()),
-                ),
+                ("has_uncommitted_changes", py_bool(session.has_uncommitted_changes())),
             ],
         )
     }
@@ -90,15 +87,12 @@ impl PySession {
             None => "None".to_string(),
         };
         dataclass_str(
-            "Session",
+            "icechunk.Session",
             &[
                 ("read_only", py_bool(session.read_only())),
                 ("snapshot_id", session.snapshot_id().to_string()),
                 ("branch", branch_str),
-                (
-                    "has_uncommitted_changes",
-                    py_bool(session.has_uncommitted_changes()),
-                ),
+                ("has_uncommitted_changes", py_bool(session.has_uncommitted_changes())),
             ],
         )
     }
@@ -110,15 +104,12 @@ impl PySession {
             None => "None".to_string(),
         };
         dataclass_html_repr(
-            "Session",
+            "icechunk.Session",
             &[
                 ("read_only", py_bool(session.read_only())),
                 ("snapshot_id", session.snapshot_id().to_string()),
                 ("branch", branch_str),
-                (
-                    "has_uncommitted_changes",
-                    py_bool(session.has_uncommitted_changes()),
-                ),
+                ("has_uncommitted_changes", py_bool(session.has_uncommitted_changes())),
             ],
         )
     }
