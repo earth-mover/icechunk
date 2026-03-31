@@ -20,7 +20,10 @@ import icechunk as ic
 import zarr
 from icechunk import Repository, Storage, in_memory_storage
 from icechunk.testing import strategies as icst
-from icechunk.testing.invariants import assert_list_dir_equal
+from icechunk.testing.invariants import (
+    assert_list_dir_equal,
+    assert_moves_sorted_by_final_path,
+)
 from icechunk.testing.models import ModelStore
 from icechunk.testing.trees import GroupNode, valid_moves
 from icechunk.testing.utils import update_paths_after_move
@@ -228,11 +231,17 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
 
         if data.draw(st.sampled_from([True, True, True, False])):
             note(f"committing {num_moves} moves")
+            snap_before = session.snapshot_id
             self.model = pending_model
             self.all_arrays = pending_arrays
             self.all_groups = pending_groups
             self.store = session.store
             self.commit_with_check(data)
+            snap_after = self.repo.lookup_branch("main")
+
+            # Moves in the tx log must be sorted by final path
+            diff = self.repo.diff(from_snapshot_id=snap_before, to_snapshot_id=snap_after)
+            assert_moves_sorted_by_final_path(diff.moved_nodes)
         else:
             note("discarding moves")
             self.store = self.repo.writable_session("main").store
