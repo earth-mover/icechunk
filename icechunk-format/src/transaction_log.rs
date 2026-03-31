@@ -215,7 +215,7 @@ impl TransactionLog {
                 .capture();
             };
 
-            let node_type = m.node_type().into();
+            let node_type = m.node_type().try_into().capture()?;
             Ok(Move { from, to, node_id: node_id.into(), node_type })
         })
     }

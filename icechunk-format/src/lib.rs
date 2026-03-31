@@ -137,13 +137,23 @@ impl From<NodeType> for generated::NodeType {
     }
 }
 
-impl From<generated::NodeType> for NodeType {
-    fn from(value: generated::NodeType) -> Self {
+impl NodeType {
+    fn max_supported() -> u8 {
+        generated::NodeType::ENUM_MAX
+    }
+}
+
+impl TryFrom<generated::NodeType> for NodeType {
+    type Error = IcechunkFormatErrorKind;
+
+    fn try_from(value: generated::NodeType) -> Result<Self, Self::Error> {
         match value {
-            generated::NodeType::Group => NodeType::Group,
-            generated::NodeType::Array => NodeType::Array,
-            #[expect(clippy::panic)]
-            generated::NodeType(v) => panic!("{v} is not a valid node type"),
+            generated::NodeType::Group => Ok(NodeType::Group),
+            generated::NodeType::Array => Ok(NodeType::Array),
+            generated::NodeType(v) => Err(IcechunkFormatErrorKind::InvalidNodeType {
+                found: v,
+                max_supported: Self::max_supported(),
+            }),
         }
     }
 }
@@ -330,6 +340,8 @@ pub enum IcechunkFormatErrorKind {
     ManifestInfoNotFound { manifest_id: ManifestId },
     #[error("invalid magic numbers in file")]
     InvalidMagicNumbers, // TODO: add more info
+    #[error("invalid node type {found}, max supported value is {max_supported}")]
+    InvalidNodeType { found: u8, max_supported: u8 },
     #[error(
         "this repository uses Icechunk format version {found}, but this library only supports up to version {max_supported}. Please upgrade the icechunk library"
     )]
