@@ -255,51 +255,32 @@ impl MoveTracker {
         node_id: &NodeId,
         node_type: NodeType,
     ) {
-        // Resolve `from` to its original snapshot path — it may have
-        // been renamed by an earlier move.
-        // QUESTION: should we just do moved_from here? maybe faster?
-        let original_from =
-            self.nodes_by_final.get(&from).cloned().unwrap_or_else(|| from.clone());
-
         // Step 1: Update existing map entries whose current final location is
         // under `from` — they get remapped to `to`.
         // e.g. earlier move deposited /x at /a/x, now /a -> /c:
         //   /x's current path /a/x starts_with /a -> becomes /c/x
-        //
-        // Collect updates first since we can't mutate BTreeMap keys
-        // while iterating.
-        let mut updates: Vec<(Path, Path, Path)> = Vec::new(); // (original, prev_path, new_path)
         for (original, (current, _node_id, _node_type)) in
             self.nodes_by_original.iter_mut()
         {
             if let Some(remapped) = Self::remap_path(current, &from, &to) {
-                let prev_path = mem::replace(current, remapped);
-                updates.push((original.clone(), prev_path, current.clone()));
+                // update the nodes_by_original inplace
+                let prev_path = mem::replace(current, remapped.clone());
+
+                self.nodes_by_final.remove(&prev_path);
+                self.nodes_by_final.insert(remapped, original.clone());
             }
         }
 
         // Step 2: Add entries for nodes not already in the map.
-        // subtree_nodes can contain paths in different forms — original
-        // (snapshot) paths or current paths after earlier moves. We check
-        // both maps to avoid adding duplicates.
         for (path, node_id, node_type) in subtree_nodes {
-            if self.nodes_by_original.contains_key(&path)
-                || self.nodes_by_final.contains_key(&path)
-            {
-                continue;
-            }
-            if let Some(new_path) = Self::remap_path(&path, &original_from, &to) {
+            if let Some(new_path) = Self::remap_path(&path, &from, &to) {
+                if self.nodes_by_final.contains_key(&new_path) {
+                    // skip any subtree nodes thhat we already track
+                    continue;
+                }
                 self.nodes_by_final.insert(new_path.clone(), path.clone());
                 self.nodes_by_original.insert(path, (new_path, node_id, node_type));
             }
-        }
-
-        // Now update nodes_by_final for carried nodes. No contention with
-        // step 2's inserts — step 2 skips anything already in nodes_by_final,
-        // and carried nodes operate on disjoint keys.
-        for (original, prev_path, new_path) in updates {
-            self.nodes_by_final.remove(&prev_path);
-            self.nodes_by_final.insert(new_path, original);
         }
 
         self.moves.push(Move { from, to, node_id: node_id.clone(), node_type });
@@ -1599,6 +1580,9 @@ mod tests {
             &[
                 ("/b", grp_b.clone(), NodeType::Group),
                 ("/b/y", arr_by.clone(), NodeType::Array),
+                ("/b/a", grp_a.clone(), NodeType::Group),
+                ("/b/a/x", grp_ax.clone(), NodeType::Group),
+                ("/b/a/x/z", arr_axz.clone(), NodeType::Array),
             ],
             &grp_b,
             NodeType::Group,
@@ -1638,8 +1622,8 @@ mod tests {
             "/d",
             "/e",
             &[
-                ("/a/x", grp_ax.clone(), NodeType::Group),
-                ("/a/x/z", arr_axz.clone(), NodeType::Array),
+                ("/d", grp_ax.clone(), NodeType::Group),
+                ("/d/z", arr_axz.clone(), NodeType::Array),
             ],
             &grp_ax,
             NodeType::Group,
@@ -1743,10 +1727,23 @@ mod tests {
 
     #[icechunk_macros::test]
     fn test_moved_into_after_move_out_then_rename() {
-        // Tree: /a (group), /a/x (array), /a/y (array)
+        // Start:
+        // /
+        // └── a         (G)
+        //     ├── x     [A]
+        //     └── y     [A]
+        //
         // Move 1: /a/x -> /b (move x out of a)
+        // /
+        // ├── a         (G)
+        // │   └── y     [A]
+        // └── b         [A]   # was /a/x
+        //
         // Move 2: /a -> /c (rename a)
-        // After: /b (was /a/x), /c (was /a), /c/y (was /a/y)
+        // /
+        // ├── b         [A]   # was /a/x
+        // └── c         (G)   # was /a
+        //     └── y     [A]   # was /a/y
         let mut mt = MoveTracker::default();
         record_move(
             &mut mt,
@@ -1762,7 +1759,6 @@ mod tests {
             "/c",
             &[
                 ("/a", NodeId::random(), NodeType::Group),
-                ("/a/x", NodeId::random(), NodeType::Array),
                 ("/a/y", NodeId::random(), NodeType::Array),
             ],
             &NodeId::random(),
@@ -1773,7 +1769,7 @@ mod tests {
         let under_c = mt.moved_into(&pathify("/c"));
         assert!(under_c.contains(&(pathify("/a"), pathify("/c"))));
         assert!(under_c.contains(&(pathify("/a/y"), pathify("/c/y"))));
-        assert!(!under_c.iter().any(|(_, f)| *f == pathify("/c/x")));
+        assert!(!under_c.contains(&(pathify("/a/x"), pathify("/c/x"))));
 
         assert!(
             mt.moved_into(&pathify("/b")).contains(&(pathify("/a/x"), pathify("/b")))

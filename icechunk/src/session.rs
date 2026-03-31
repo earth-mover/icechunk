@@ -799,23 +799,16 @@ impl Session {
             )));
         }
 
-        // Collect the snapshot's subtree at the original path.
-        // - Nodes moved INTO this subtree by earlier moves won't appear here,
-        //   but they're already tracked by the move tracker and will be
-        //   carried along.
-        // - Nodes moved OUT of this subtree by earlier moves will still
-        //   appear here, but they're already tracked and will be skipped
-        //   as duplicates.
-        let original_from = match self.change_set().moved_from(&from) {
-            MovedFrom::From(p) => p.into_owned(),
-            _ => from.clone(),
-        };
-        let snapshot =
-            self.asset_manager.fetch_snapshot(&self.snapshot_id).await.inject()?;
-        let subtree_data: Vec<(Path, NodeId, NodeType)> = snapshot
-            .iter_arc(&original_from)
-            .filter_map(|r| r.ok().map(|n| (n.path.clone(), n.id.clone(), n.node_type())))
-            .collect();
+        // Get updated subtree
+        let subtree_data: Vec<(Path, NodeId, NodeType)> = updated_nodes(
+            &from,
+            &self.asset_manager,
+            &self.change_set,
+            self.snapshot_id(),
+        )
+        .await?
+        .filter_map(|r| r.ok().map(|n| (n.path.clone(), n.id.clone(), n.node_type())))
+        .collect();
 
         self.change_set_mut()?.move_node(
             from,
