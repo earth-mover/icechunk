@@ -267,21 +267,31 @@ impl MoveTracker {
         // e.g. earlier move deposited /x at /a/x, now /a -> /c:
         //   /x's current path /a/x starts_with /a -> becomes /c/x
         //
-        // Collect updates first since we can't mutate BTreeMap keys
-        // while iterating.
-        let mut updates: Vec<(Path, Path, Path)> = Vec::new(); // (original, old_final, new_final)
-        for (orig, (current, _node_id, _node_type)) in self.nodes_by_original.iter_mut() {
+        // Collect first since we can't mutate the IndexMap while iterating,
+        // then shift_remove + re-insert so re-moved nodes appear at the end
+        // of the IndexMap (preserving "last moved comes last" ordering for
+        // the tx log).
+        let mut to_reinsert: Vec<(Path, Path, Path, NodeId, NodeType)> = Vec::new();
+        for (orig, (current, node_id, node_type)) in self.nodes_by_original.iter() {
             if let Some(remapped) = Self::remap_path(current, &from, &to) {
-                let old_final = std::mem::replace(current, remapped);
-                updates.push((orig.clone(), old_final, current.clone()));
+                to_reinsert.push((
+                    orig.clone(),
+                    current.clone(),
+                    remapped,
+                    node_id.clone(),
+                    node_type.clone(),
+                ));
             }
         }
-        for (orig, old_final, new_final) in updates {
+        for (orig, old_final, new_final, node_id, node_type) in to_reinsert {
+            self.nodes_by_original.shift_remove(&orig);
             self.nodes_by_final.remove(&old_final);
-            self.nodes_by_final.insert(new_final, orig);
+            self.nodes_by_final.insert(new_final.clone(), orig.clone());
+            self.nodes_by_original.insert(orig, (new_final, node_id, node_type));
         }
 
         // Step 2: Add entries for nodes not already in the map.
+        // subtree nodes already in the map will be caught by remap_path above.
         for (original, node_id, node_type) in subtree_nodes {
             if !self.nodes_by_original.contains_key(&original)
                 && let Some(new_path) = Self::remap_path(&original, &original_from, &to)
@@ -1527,20 +1537,28 @@ mod tests {
 
     #[icechunk_macros::test]
     fn test_moved_into_after_move_in_then_rename() {
-        // Tree: /a (group), /a/x (array), /b (group), /b/y (array)
+        // Tree: /a (group), /a/x (group), /a/x/z (array), /b (group), /b/y (array)
         // Move 1: /a -> /b/a (move /a into /b)
-        // Move 2: /b -> /c (rename /b)
-        // After: /c, /c/a, /c/a/x, /c/y
+        // Move 2: /b -> /c (rename /b — carries along /a, /a/x, /a/x/z)
+        // Move 3: /c/a/x -> /d (individual re-move of subtree child + its child)
+        // After: /c, /c/a, /c/y, /d, /d/z
+        let id_a = NodeId::random();
+        let id_ax = NodeId::random();
+        let id_axz = NodeId::random();
+        let id_b = NodeId::random();
+        let id_by = NodeId::random();
+
         let mut mt = MoveTracker::default();
         record_move(
             &mut mt,
             "/a",
             "/b/a",
             &[
-                ("/a", NodeId::random(), NodeType::Group),
-                ("/a/x", NodeId::random(), NodeType::Array),
+                ("/a", id_a.clone(), NodeType::Group),
+                ("/a/x", id_ax.clone(), NodeType::Group),
+                ("/a/x/z", id_axz.clone(), NodeType::Array),
             ],
-            &NodeId::random(),
+            &id_a,
             NodeType::Group,
         );
         record_move(
@@ -1548,18 +1566,53 @@ mod tests {
             "/b",
             "/c",
             &[
-                ("/b", NodeId::random(), NodeType::Group),
-                ("/b/y", NodeId::random(), NodeType::Array),
+                ("/b", id_b.clone(), NodeType::Group),
+                ("/b/y", id_by.clone(), NodeType::Array),
             ],
-            &NodeId::random(),
+            &id_b,
+            NodeType::Group,
+        );
+        record_move(
+            &mut mt,
+            "/c/a/x",
+            "/d",
+            &[
+                ("/a/x", id_ax.clone(), NodeType::Group),
+                ("/a/x/z", id_axz.clone(), NodeType::Array),
+            ],
+            &id_ax,
             NodeType::Group,
         );
 
+        // Original moved_into assertions still hold
         let result = mt.moved_into(&pathify("/c"));
         assert!(result.contains(&(pathify("/a"), pathify("/c/a"))));
-        assert!(result.contains(&(pathify("/a/x"), pathify("/c/a/x"))));
         assert!(result.contains(&(pathify("/b"), pathify("/c"))));
         assert!(result.contains(&(pathify("/b/y"), pathify("/c/y"))));
+        // /a/x and /a/x/z are no longer under /c — re-moved to /d
+        assert!(!result.iter().any(|(_, f)| *f == pathify("/c/a/x")));
+        assert!(!result.iter().any(|(_, f)| *f == pathify("/c/a/x/z")));
+        assert_eq!(
+            mt.moved_into(&pathify("/d")),
+            vec![(pathify("/a/x"), pathify("/d")), (pathify("/a/x/z"), pathify("/d/z"))],
+        );
+
+        // Ordering: nodes_by_original iteration order should reflect
+        // "last moved comes last, parent before children within a group".
+        // Move 2 carried /a along, so /a stays with the move-2 group.
+        // Move 3 re-moved /a/x and its child /a/x/z — both should come last,
+        // with parent /a/x before child /a/x/z.
+        let ordered: Vec<_> = mt.nodes_by_original.keys().collect();
+        assert_eq!(
+            ordered,
+            vec![
+                &pathify("/a"),     // carried by move 2
+                &pathify("/b"),     // added by move 2
+                &pathify("/b/y"),   // added by move 2
+                &pathify("/a/x"),   // re-moved by move 3 → last
+                &pathify("/a/x/z"), // child carried by move 3 → last
+            ],
+        );
     }
 
     #[icechunk_macros::test]
