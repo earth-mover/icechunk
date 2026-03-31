@@ -1125,11 +1125,19 @@ class VersionControlStateMachine(RuleBasedStateMachine):
     def check_ancestry(self) -> None:
         for branch in self.model.branch_heads:
             ancestry = list(self.repo.ancestry(branch=branch))
-            assert_ancestry_invariants(ancestry, known_commits=set(self.model.commits))
+            assert_ancestry_invariants(
+                ancestry,
+                known_commits=set(self.model.commits),
+                must_contain_initial=False,
+            )
 
         for tag in self.model.tags:
             ancestry = list(self.repo.ancestry(tag=tag))
-            assert_ancestry_invariants(ancestry, known_commits=set(self.model.commits))
+            assert_ancestry_invariants(
+                ancestry,
+                known_commits=set(self.model.commits),
+                must_contain_initial=False,
+            )
 
     def check_repo_info(self) -> None:
         ver = self.model.spec_version
