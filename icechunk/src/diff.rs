@@ -5,6 +5,7 @@ use itertools::Itertools as _;
 
 use crate::{
     format::{ChunkIndices, NodeId, Path, transaction_log::TransactionLog},
+    repository::RepositoryResult,
     session::{Session, SessionResult},
 };
 
@@ -22,7 +23,7 @@ pub struct DiffBuilder {
 }
 
 impl DiffBuilder {
-    pub fn add_changes(&mut self, tx: &TransactionLog) -> SessionResult<()> {
+    pub fn add_changes(&mut self, tx: &TransactionLog) -> RepositoryResult<()> {
         self.new_groups.extend(tx.new_groups());
         self.new_arrays.extend(tx.new_arrays());
         self.deleted_groups.extend(tx.deleted_groups());

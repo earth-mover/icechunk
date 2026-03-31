@@ -161,18 +161,6 @@ pub type RepositoryError = ICError<RepositoryErrorKind>;
 
 pub type RepositoryResult<T> = Result<T, RepositoryError>;
 
-impl From<SessionErrorKind> for RepositoryErrorKind {
-    fn from(e: SessionErrorKind) -> Self {
-        match e {
-            SessionErrorKind::RepositoryError(e) => e,
-            SessionErrorKind::StorageError(e) => e.into(),
-            SessionErrorKind::FormatError(e) => e.into(),
-            SessionErrorKind::RefError(e) => e.into(),
-            other => RepositoryErrorKind::Other(other.to_string()),
-        }
-    }
-}
-
 /// Handle to a versioned Icechunk data store.
 ///
 /// Provides methods to create [`Session`]s and manage branches, tags, and history.
@@ -1753,7 +1741,7 @@ impl Repository {
             .try_fold(DiffBuilder::default(), |mut res, log| {
                 ready(match res.add_changes(log.as_ref()) {
                     Ok(_) => Ok(res),
-                    Err(e) => Err(RepositoryError::capture(e.kind.into())),
+                    Err(e) => Err(RepositoryError::capture(e.kind)),
                 })
             })
             .await
