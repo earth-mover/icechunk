@@ -9,7 +9,7 @@ All examples only require `icechunk` and `xarray` as dependencies.
 
 ## Earthmover-hosted examples
 
-### Weatherbench2 ERA5 (native)
+### Weatherbench2 ERA5 (native, Icechunk v1)
 
 A subset of the Weatherbench2 copy of the ERA5 reanalysis dataset.
 
@@ -115,7 +115,7 @@ A subset of the Weatherbench2 copy of the ERA5 reanalysis dataset.
 
 <!-- ![oisst](./assets/datasets/oisst.png) -->
 
-### GLAD Land Cover Land Use (native)
+### GLAD Land Cover Land Use (native, Icechunk v1)
 
 A copy of the GLAD Land Cover Land Use dataset distributed under a [Creative Commons Attribution 4.0 International License](http://creativecommons.org/licenses/by/4.0/).
 
@@ -142,7 +142,7 @@ See [source](https://storage.googleapis.com/earthenginepartners-hansen/GLCLU2000
 
 ## 3rd-party examples
 
-### NOAA GFS archive (native)
+### NOAA GFS archive (native, Icechunk v1)
 
 A copy of the [NOAA GFS](https://www.ncei.noaa.gov/products/weather-climate-models/global-forecast) analysis dataset distributed under a [Creative Commons Attribution 4.0 International License](http://creativecommons.org/licenses/by/4.0/).
 
@@ -165,7 +165,7 @@ Provided by [dynamical.org](https://dynamical.org/), see [source](https://dynami
     ds = xr.open_zarr(session.store, chunks=None)
     ```
 
-### NASA RASI (virtual)
+### NASA RASI (virtual, Icechunk v1)
 
 A copy of the [NASA RASI](https://www.nasa.gov/rasi/) dataset distributed under a [Creative Commons Attribution 4.0 International License](http://creativecommons.org/licenses/by/4.0/).
 
