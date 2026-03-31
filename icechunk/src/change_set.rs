@@ -268,16 +268,18 @@ impl MoveTracker {
         //
         // Collect updates first since we can't mutate BTreeMap keys
         // while iterating.
-        let mut updates: Vec<(Path, Path, Path)> = Vec::new(); // (original, old_final, new_final)
-        for (orig, (current, _node_id, _node_type)) in self.nodes_by_original.iter_mut() {
+        let mut updates: Vec<(Path, Path, Path)> = Vec::new(); // (original, prev_path, new_path)
+        for (original, (current, _node_id, _node_type)) in
+            self.nodes_by_original.iter_mut()
+        {
             if let Some(remapped) = Self::remap_path(current, &from, &to) {
-                let old_final = mem::replace(current, remapped);
-                updates.push((orig.clone(), old_final, current.clone()));
+                let prev_path = mem::replace(current, remapped);
+                updates.push((original.clone(), prev_path, current.clone()));
             }
         }
-        for (orig, old_final, new_final) in updates {
-            self.nodes_by_final.remove(&old_final);
-            self.nodes_by_final.insert(new_final, orig);
+        for (original, prev_path, new_path) in updates {
+            self.nodes_by_final.remove(&prev_path);
+            self.nodes_by_final.insert(new_path, original);
         }
 
         // Step 2: Add entries for nodes not already in the map.
@@ -1541,11 +1543,11 @@ mod tests {
         // Move 2: /b -> /c (rename /b — carries along /a, /a/x, /a/x/z)
         // Move 3: /c/a/x -> /d (individual re-move of subtree child + its child)
         // After: /c, /c/a, /c/y, /d, /d/z
-        let id_a = NodeId::random();
-        let id_ax = NodeId::random();
-        let id_axz = NodeId::random();
-        let id_b = NodeId::random();
-        let id_by = NodeId::random();
+        let grp_a = NodeId::random();
+        let grp_ax = NodeId::random();
+        let arr_axz = NodeId::random();
+        let grp_b = NodeId::random();
+        let arr_by = NodeId::random();
 
         let mut mt = MoveTracker::default();
         record_move(
@@ -1553,11 +1555,11 @@ mod tests {
             "/a",
             "/b/a",
             &[
-                ("/a", id_a.clone(), NodeType::Group),
-                ("/a/x", id_ax.clone(), NodeType::Group),
-                ("/a/x/z", id_axz.clone(), NodeType::Array),
+                ("/a", grp_a.clone(), NodeType::Group),
+                ("/a/x", grp_ax.clone(), NodeType::Group),
+                ("/a/x/z", arr_axz.clone(), NodeType::Array),
             ],
-            &id_a,
+            &grp_a,
             NodeType::Group,
         );
         record_move(
@@ -1565,10 +1567,10 @@ mod tests {
             "/b",
             "/c",
             &[
-                ("/b", id_b.clone(), NodeType::Group),
-                ("/b/y", id_by.clone(), NodeType::Array),
+                ("/b", grp_b.clone(), NodeType::Group),
+                ("/b/y", arr_by.clone(), NodeType::Array),
             ],
-            &id_b,
+            &grp_b,
             NodeType::Group,
         );
         record_move(
@@ -1576,14 +1578,30 @@ mod tests {
             "/c/a/x",
             "/d",
             &[
-                ("/a/x", id_ax.clone(), NodeType::Group),
-                ("/a/x/z", id_axz.clone(), NodeType::Array),
+                ("/a/x", grp_ax.clone(), NodeType::Group),
+                ("/a/x/z", arr_axz.clone(), NodeType::Array),
             ],
-            &id_ax,
+            &grp_ax,
             NodeType::Group,
         );
 
-        // Original moved_into assertions still hold
+        // Start:
+        // /
+        // ├── a (G)
+        // │   └── x (G)
+        // │       └── z [A]
+        // └── b (G)
+        //     └── y [A]
+        //
+        // After all moves:
+        // /
+        // ├── b (G)
+        // │   └── y [A]
+        // ├── c (G)          # was /b
+        // │   └── a (G)      # was /a
+        // └── d (G)          # was /a/x
+        //     └── z [A]      # was /a/x/z
+
         let result = mt.moved_into(&pathify("/c"));
         assert!(result.contains(&(pathify("/a"), pathify("/c/a"))));
         assert!(result.contains(&(pathify("/b"), pathify("/c"))));
