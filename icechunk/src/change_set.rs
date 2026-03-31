@@ -1536,11 +1536,14 @@ mod tests {
 
     #[icechunk_macros::test]
     fn test_moved_into_after_move_in_then_rename() {
-        // Tree: /a (group), /a/x (group), /a/x/z (array), /b (group), /b/y (array)
-        // Move 1: /a -> /b/a (move /a into /b)
-        // Move 2: /b -> /c (rename /b — carries along /a, /a/x, /a/x/z)
-        // Move 3: /c/a/x -> /d (individual re-move of subtree child + its child)
-        // After: /c, /c/a, /c/y, /d, /d/z
+        // Start:
+        // /
+        // ├── a         (G)
+        // │   └── x     (G)
+        // │       └── z [A]
+        // └── b         (G)
+        //     └── y     [A]
+        //
         let grp_a = NodeId::random();
         let grp_ax = NodeId::random();
         let arr_axz = NodeId::random();
@@ -1548,6 +1551,14 @@ mod tests {
         let arr_by = NodeId::random();
 
         let mut mt = MoveTracker::default();
+        // Move 1: /a -> /b/a (move /a into /b)
+        // /
+        // └── b             (G)
+        //     ├── a         (G)
+        //     │   └── x     (G)
+        //     │       └── z [A]
+        //     └── y         [A]
+        //
         record_move(
             &mut mt,
             "/a",
@@ -1560,6 +1571,14 @@ mod tests {
             &grp_a,
             NodeType::Group,
         );
+        // Move 2: /b -> /c (rename /b — carries along /a, /a/x, /a/x/z)
+        // /
+        // └── c             (G)
+        //     ├── a         (G)
+        //     │   └── x     (G)
+        //     │       └── z [A]
+        //     └── y         [A]
+        //
         record_move(
             &mut mt,
             "/b",
@@ -1571,6 +1590,14 @@ mod tests {
             &grp_b,
             NodeType::Group,
         );
+        // Move 3: /c/a/x -> /d (individual re-move of subtree child + its child)
+        // /
+        // └── c     (G)   # was /b
+        //     ├── a (G)   # was /a
+        //     └── y [A]   # was /b/y
+        // └── d     (G)   # was /a/x
+        //     └── z [A]   # was /a/x/z
+        //
         record_move(
             &mut mt,
             "/c/a/x",
@@ -1582,23 +1609,6 @@ mod tests {
             &grp_ax,
             NodeType::Group,
         );
-
-        // Start:
-        // /
-        // ├── a         (G)
-        // │   └── x     (G)
-        // │       └── z [A]
-        // └── b         (G)
-        //     └── y     [A]
-        //
-        // After all moves:
-        // /
-        // ├── b         (G)
-        // │   └── y     [A]
-        // ├── c         (G)   # was /b
-        // │   └── a     (G)   # was /a
-        // └── d         (G)   # was /a/x
-        //     └── z     [A]   # was /a/x/z
 
         assert_eq!(
             mt.moved_into(&pathify("/c")),
