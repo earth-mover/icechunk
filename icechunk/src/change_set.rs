@@ -1587,31 +1587,32 @@ mod tests {
 
         // Start:
         // /
-        // ├── a (G)
-        // │   └── x (G)
+        // ├── a         (G)
+        // │   └── x     (G)
         // │       └── z [A]
-        // └── b (G)
-        //     └── y [A]
+        // └── b         (G)
+        //     └── y     [A]
         //
         // After all moves:
         // /
-        // ├── b (G)
-        // │   └── y [A]
-        // ├── c (G)          # was /b
-        // │   └── a (G)      # was /a
-        // └── d (G)          # was /a/x
-        //     └── z [A]      # was /a/x/z
+        // ├── b         (G)
+        // │   └── y     [A]
+        // ├── c         (G)   # was /b
+        // │   └── a     (G)   # was /a
+        // └── d         (G)   # was /a/x
+        //     └── z     [A]   # was /a/x/z
 
-        let result = mt.moved_into(&pathify("/c"));
-        assert!(result.contains(&(pathify("/a"), pathify("/c/a"))));
-        assert!(result.contains(&(pathify("/b"), pathify("/c"))));
-        assert!(result.contains(&(pathify("/b/y"), pathify("/c/y"))));
-        // /a/x and /a/x/z are no longer under /c — re-moved to /d
-        assert!(!result.iter().any(|(_, f)| *f == pathify("/c/a/x")));
-        assert!(!result.iter().any(|(_, f)| *f == pathify("/c/a/x/z")));
+        assert_eq!(
+            mt.moved_into(&pathify("/c")),
+            vec![
+                (pathify("/b"), pathify("/c")),
+                (pathify("/a"), pathify("/c/a")),
+                (pathify("/b/y"), pathify("/c/y")),
+            ],
+        );
         assert_eq!(
             mt.moved_into(&pathify("/d")),
-            vec![(pathify("/a/x"), pathify("/d")), (pathify("/a/x/z"), pathify("/d/z"))],
+            vec![(pathify("/a/x"), pathify("/d")), (pathify("/a/x/z"), pathify("/d/z")),],
         );
 
         // The tx log should contain all moves sorted by final path
