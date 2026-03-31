@@ -309,6 +309,7 @@ def test_all_manifests_and_virtual_locations(
     total_inline = 0
     total_native = 0
     total_virtual = 0
+    total_virtual_compressed = 0
 
     for manifest_file in manifest_files:
         data = manifest_file.read_bytes()
@@ -356,7 +357,7 @@ def test_all_manifests_and_virtual_locations(
 
                 elif has_compressed:
                     # Virtual chunk with dictionary-compressed location
-                    total_virtual += 1
+                    total_virtual_compressed += 1
                     assert loc_decompressor is not None, (
                         "Compressed location without dictionary"
                     )
@@ -388,7 +389,10 @@ def test_all_manifests_and_virtual_locations(
 
     assert total_inline > 0, "Expected at least one inline chunk ref"
     assert total_native > 0, "Expected at least one native/materialized chunk ref"
-    assert total_virtual > 0, "Expected at least one virtual chunk ref"
+    assert total_virtual == 0, "Expected all compressed virtual chunks"
+    assert total_virtual_compressed > 0, (
+        "Expected at least one compressed virtual chunk ref"
+    )
 
 
 def test_all_transaction_logs(repo_path: str, flatbuf_mod: ModuleType) -> None:
