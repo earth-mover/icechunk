@@ -197,6 +197,10 @@ jobs:
               sleep 1
           done
 
+      - name: Install flatc
+        run: |
+          sudo apt-get update && sudo apt-get install -y flatbuffers-compiler
+
       - name: Run pytest (non-hypothesis)
         shell: bash
         working-directory: icechunk-python
