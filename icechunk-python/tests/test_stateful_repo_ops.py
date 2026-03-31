@@ -602,6 +602,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         self.model.commit(snapinfo)
         return snap_id
 
+    @precondition(lambda self: self.model.branch is not None)
     @rule(data=st.data(), ncommits=st.integers(3, 10), target=commits)
     def set_and_commit(self, data: st.DataObject, ncommits: int) -> Any:
         amend_or_commit = data.draw(
