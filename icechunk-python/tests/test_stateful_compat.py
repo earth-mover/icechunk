@@ -121,6 +121,27 @@ class CrossVersionTwoActorZarrHierarchyStateMachine(ModifiedZarrHierarchyStateMa
     def upgrade_spec_version(self) -> None:
         pass
 
+    # icechunk V1 does not support the list_objects_metadata needed to grab create_at timestamps
+    @precondition(lambda self: False)
+    @rule(data=st.data())
+    def garbage_collect(self, data: st.DataObject) -> None:
+        pass
+
+    # icechunk V1 does not support the list_objects_metadata needed to grab create_at timestamps
+    @precondition(lambda self: False)
+    @rule(
+        data=st.data(),
+        delete_expired_branches=st.sampled_from([True, True, True, False]),
+        delete_expired_tags=st.sampled_from([True, True, True, False]),
+    )
+    def expire_snapshots(
+        self,
+        data: st.DataObject,
+        delete_expired_branches: bool,
+        delete_expired_tags: bool,
+    ) -> None:
+        pass
+
     @initialize(spec_version=st.just(1), data=st.data())
     def init_store(self, spec_version: int, data: st.DataObject) -> None:
         """Override to draw actor and create with v1 compatibility."""
