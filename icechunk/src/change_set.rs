@@ -277,19 +277,29 @@ impl MoveTracker {
                 updates.push((original.clone(), prev_path, current.clone()));
             }
         }
+
+        // Step 2: Add entries for nodes not already in the map.
+        // subtree_nodes can contain paths in different forms — original
+        // (snapshot) paths or current paths after earlier moves. We check
+        // both maps to avoid adding duplicates.
+        for (path, node_id, node_type) in subtree_nodes {
+            if self.nodes_by_original.contains_key(&path)
+                || self.nodes_by_final.contains_key(&path)
+            {
+                continue;
+            }
+            if let Some(new_path) = Self::remap_path(&path, &original_from, &to) {
+                self.nodes_by_final.insert(new_path.clone(), path.clone());
+                self.nodes_by_original.insert(path, (new_path, node_id, node_type));
+            }
+        }
+
+        // Now update nodes_by_final for carried nodes. No contention with
+        // step 2's inserts — step 2 skips anything already in nodes_by_final,
+        // and carried nodes operate on disjoint keys.
         for (original, prev_path, new_path) in updates {
             self.nodes_by_final.remove(&prev_path);
             self.nodes_by_final.insert(new_path, original);
-        }
-
-        // Step 2: Add entries for nodes not already in the map.
-        for (original, node_id, node_type) in subtree_nodes {
-            if !self.nodes_by_original.contains_key(&original)
-                && let Some(new_path) = Self::remap_path(&original, &original_from, &to)
-            {
-                self.nodes_by_final.insert(new_path.clone(), original.clone());
-                self.nodes_by_original.insert(original, (new_path, node_id, node_type));
-            }
         }
 
         self.moves.push(Move { from, to, node_id: node_id.clone(), node_type });
@@ -1579,6 +1589,9 @@ mod tests {
         //     │       └── z [A]
         //     └── y         [A]
         //
+        // subtree_nodes here is missing the nodes moved into /b by move 1.
+        // This is not the intended usage, but we protect against it —
+        // step 1 of record() handles carried nodes regardless.
         record_move(
             &mut mt,
             "/b",
@@ -1590,18 +1603,40 @@ mod tests {
             &grp_b,
             NodeType::Group,
         );
-        // Move 3: /c/a/x -> /d (individual re-move of subtree child + its child)
+        // Move 3: /c/a/x -> /d — subtree_nodes passes current paths,
+        // testing that already-tracked nodes are skipped by current path.
         // /
-        // └── c     (G)   # was /b
-        //     ├── a (G)   # was /a
-        //     └── y [A]   # was /b/y
-        // └── d     (G)   # was /a/x
-        //     └── z [A]   # was /a/x/z
+        // ├── c         (G)   # was /b
+        // │   ├── a     (G)   # was /a
+        // │   └── y     [A]   # was /b/y
+        // └── d         (G)   # was /a/x
+        //     └── z     [A]   # was /a/x/z
         //
         record_move(
             &mut mt,
             "/c/a/x",
             "/d",
+            &[
+                ("/c/a/x", grp_ax.clone(), NodeType::Group),
+                ("/c/a/x/z", arr_axz.clone(), NodeType::Array),
+            ],
+            &grp_ax,
+            NodeType::Group,
+        );
+        // Move 4: /d -> /e — subtree_nodes passes original (snapshot) paths.
+        // This is not the intended usage, but we protect against it —
+        // already-tracked nodes are skipped by original path.
+        // /
+        // ├── c         (G)   # was /b
+        // │   ├── a     (G)   # was /a
+        // │   └── y     [A]   # was /b/y
+        // └── e         (G)   # was /a/x
+        //     └── z     [A]   # was /a/x/z
+        //
+        record_move(
+            &mut mt,
+            "/d",
+            "/e",
             &[
                 ("/a/x", grp_ax.clone(), NodeType::Group),
                 ("/a/x/z", arr_axz.clone(), NodeType::Array),
@@ -1619,8 +1654,8 @@ mod tests {
             ],
         );
         assert_eq!(
-            mt.moved_into(&pathify("/d")),
-            vec![(pathify("/a/x"), pathify("/d")), (pathify("/a/x/z"), pathify("/d/z")),],
+            mt.moved_into(&pathify("/e")),
+            vec![(pathify("/a/x"), pathify("/e")), (pathify("/a/x/z"), pathify("/e/z")),],
         );
 
         // The tx log should contain all moves sorted by final path
@@ -1641,8 +1676,8 @@ mod tests {
                 (pathify("/b"), pathify("/c")),
                 (pathify("/a"), pathify("/c/a")),
                 (pathify("/b/y"), pathify("/c/y")),
-                (pathify("/a/x"), pathify("/d")),
-                (pathify("/a/x/z"), pathify("/d/z")),
+                (pathify("/a/x"), pathify("/e")),
+                (pathify("/a/x/z"), pathify("/e/z")),
             ],
         );
     }
