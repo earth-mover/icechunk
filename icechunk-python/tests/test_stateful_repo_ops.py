@@ -592,11 +592,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
     @precondition(lambda self: self.model.branch is not None)
     @rule(target=commits)
     def empty_commit(self) -> str:
-        """Make a single empty commit with a small sleep for timestamp spread.
-
-        Useful for GC/expire testing where we need commits with distinct
-        timestamps but don't care about zarr data.
-        """
+        """Make a single empty commit with a small sleep for timestamp spread."""
         time.sleep(0.005)
         branch = self.session.branch
         assert branch is not None
@@ -1156,9 +1152,6 @@ class VersionControlStateMachine(RuleBasedStateMachine):
 VersionControlTest = VersionControlStateMachine.TestCase
 
 # ---- Focused expire tests ----
-# Two approaches to catch the expire_v2 orphan parent bug:
-# 1. Subset of VersionControlStateMachine with empty_commit
-# 2. Standalone minimal machine
 
 GC_RULES = {
     "empty_commit",
@@ -1168,7 +1161,7 @@ GC_RULES = {
 
 
 def test_expire_subset():
-    """Catch expire orphan bug via VersionControlStateMachine subset."""
+    """Run GC-related rules in isolation via VersionControlStateMachine subset."""
     from icechunk.testing.stateful_subsets import test_subsets
 
     test_subsets(
@@ -1178,12 +1171,7 @@ def test_expire_subset():
 
 
 class ExpireOrphanMachine(RuleBasedStateMachine):
-    """Standalone minimal machine targeting the expire_v2 orphan parent bug.
-
-    The bug: when expire removes a snapshot whose child is unreachable
-    from any ref, the child's parent_id is set to None instead of
-    INITIAL_SNAPSHOT_ID.
-    """
+    """Minimal machine exploring GC expire + branch reset interactions."""
 
     commits = Bundle("commits")
 
