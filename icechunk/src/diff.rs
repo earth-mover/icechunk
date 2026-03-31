@@ -23,7 +23,7 @@ pub struct DiffBuilder {
 }
 
 impl DiffBuilder {
-    # TODO: Make this SessionResult instead?
+    // TODO: Make this SessionResult instead?
     pub fn add_changes(&mut self, tx: &TransactionLog) -> RepositoryResult<()> {
         self.new_groups.extend(tx.new_groups());
         self.new_arrays.extend(tx.new_arrays());
