@@ -119,7 +119,7 @@ A subset of the Weatherbench2 copy of the ERA5 reanalysis dataset.
 
 A copy of the GLAD Land Cover Land Use dataset distributed under a [Creative Commons Attribution 4.0 International License](http://creativecommons.org/licenses/by/4.0/).
 
-Source: https://storage.googleapis.com/earthenginepartners-hansen/GLCLU2000-2020/v2/download.html
+See [source](https://storage.googleapis.com/earthenginepartners-hansen/GLCLU2000-2020/v2/download.html).
 
 === "AWS"
 
@@ -146,7 +146,7 @@ Source: https://storage.googleapis.com/earthenginepartners-hansen/GLCLU2000-2020
 
 A copy of the [NOAA GFS](https://www.ncei.noaa.gov/products/weather-climate-models/global-forecast) analysis dataset distributed under a [Creative Commons Attribution 4.0 International License](http://creativecommons.org/licenses/by/4.0/).
 
-Provided by [dynamical.org](https://dynamical.org/), see https://dynamical.org/catalog/noaa-gfs-analysis/.
+Provided by [dynamical.org](https://dynamical.org/), see [source](https://dynamical.org/catalog/noaa-gfs-analysis/).
 
 === "AWS"
 
