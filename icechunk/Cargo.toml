@@ -31,7 +31,6 @@ bytes.workspace = true
 chrono.workspace = true
 flexbuffers.workspace = true
 futures.workspace = true
-indexmap.workspace = true
 itertools.workspace = true
 quick_cache.workspace = true
 rand.workspace = true

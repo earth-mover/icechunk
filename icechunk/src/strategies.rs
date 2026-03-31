@@ -652,7 +652,7 @@ fn chunk_payload() -> impl Strategy<Value = ChunkPayload> {
     ]
 }
 
-fn node_type() -> impl Strategy<Value = NodeType> {
+fn node_types() -> impl Strategy<Value = NodeType> {
     prop_oneof![Just(NodeType::Group), Just(NodeType::Array)]
 }
 
@@ -668,7 +668,7 @@ pub fn split_manifest()
 }
 
 prop_compose! {
-    pub fn gen_move()(to in path(), from in path(), node_id in node_id(), node_type in node_type() ) -> Move {
+    pub fn gen_move()(to in path(), from in path(), node_id in node_id(), node_type in node_types() ) -> Move {
         Move{to, from, node_id, node_type}
     }
 }
