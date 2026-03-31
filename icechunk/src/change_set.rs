@@ -9,12 +9,11 @@ use std::{
     collections::{BTreeMap, HashMap, HashSet},
     fmt::Display,
     hash::Hash,
-    iter,
+    iter, mem,
     sync::LazyLock,
 };
 
 use bytes::Bytes;
-use indexmap::IndexMap;
 use itertools::{Either, Itertools as _};
 use serde::{Deserialize, Serialize};
 use tracing::warn;
@@ -234,7 +233,7 @@ pub enum MovedFrom<'a> {
 #[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct MoveTracker {
     moves: Vec<Move>,
-    nodes_by_original: IndexMap<Path, (Path, NodeId, NodeType)>,
+    nodes_by_original: HashMap<Path, (Path, NodeId, NodeType)>,
     nodes_by_final: BTreeMap<Path, Path>,
 }
 
@@ -267,31 +266,21 @@ impl MoveTracker {
         // e.g. earlier move deposited /x at /a/x, now /a -> /c:
         //   /x's current path /a/x starts_with /a -> becomes /c/x
         //
-        // Collect first since we can't mutate the IndexMap while iterating,
-        // then shift_remove + re-insert so re-moved nodes appear at the end
-        // of the IndexMap (preserving "last moved comes last" ordering for
-        // the tx log).
-        let mut to_reinsert: Vec<(Path, Path, Path, NodeId, NodeType)> = Vec::new();
-        for (orig, (current, node_id, node_type)) in self.nodes_by_original.iter() {
+        // Collect updates first since we can't mutate BTreeMap keys
+        // while iterating.
+        let mut updates: Vec<(Path, Path, Path)> = Vec::new(); // (original, old_final, new_final)
+        for (orig, (current, _node_id, _node_type)) in self.nodes_by_original.iter_mut() {
             if let Some(remapped) = Self::remap_path(current, &from, &to) {
-                to_reinsert.push((
-                    orig.clone(),
-                    current.clone(),
-                    remapped,
-                    node_id.clone(),
-                    node_type.clone(),
-                ));
+                let old_final = mem::replace(current, remapped);
+                updates.push((orig.clone(), old_final, current.clone()));
             }
         }
-        for (orig, old_final, new_final, node_id, node_type) in to_reinsert {
-            self.nodes_by_original.shift_remove(&orig);
+        for (orig, old_final, new_final) in updates {
             self.nodes_by_final.remove(&old_final);
-            self.nodes_by_final.insert(new_final.clone(), orig.clone());
-            self.nodes_by_original.insert(orig, (new_final, node_id, node_type));
+            self.nodes_by_final.insert(new_final, orig);
         }
 
         // Step 2: Add entries for nodes not already in the map.
-        // subtree nodes already in the map will be caught by remap_path above.
         for (original, node_id, node_type) in subtree_nodes {
             if !self.nodes_by_original.contains_key(&original)
                 && let Some(new_path) = Self::remap_path(&original, &original_from, &to)
@@ -926,6 +915,23 @@ pub fn transaction_log_from_change_set(
         })
         .collect();
 
+    // Sort moves by final path (parent before child, deterministic order).
+    let mut moves: Vec<_> = cs
+        .move_tracker()
+        .nodes_by_original
+        .iter()
+        .map(|(from, (to, node_id, node_type))| Move {
+            from: from.clone(),
+            to: to.clone(),
+            node_id: node_id.clone(),
+            node_type: node_type.clone(),
+        })
+        .collect();
+    // Path's Ord is path-aware: '/' (0x2F) sorts before all alphanumeric
+    // characters, so children sort between parent and prefix-siblings
+    // (e.g. /c < /c/a < /ca).
+    moves.sort_by(|a, b| a.to.cmp(&b.to));
+
     TransactionLog::new_from_parts(
         id,
         new_groups.into_iter(),
@@ -935,14 +941,7 @@ pub fn transaction_log_from_change_set(
         updated_groups.into_iter(),
         updated_arrays.into_iter(),
         changed_chunks.into_iter(),
-        cs.move_tracker().nodes_by_original.iter().map(
-            |(from, (to, node_id, node_type))| Move {
-                from: from.clone(),
-                to: to.clone(),
-                node_id: node_id.clone(),
-                node_type: node_type.clone(),
-            },
-        ),
+        moves.into_iter(),
     )
 }
 
@@ -974,7 +973,7 @@ mod tests {
         );
     }
 
-    use super::ChangeSet;
+    use super::{ChangeSet, transaction_log_from_change_set};
 
     use crate::{
         change_set::{ArrayData, EditChanges, MoveTracker},
@@ -1597,20 +1596,75 @@ mod tests {
             vec![(pathify("/a/x"), pathify("/d")), (pathify("/a/x/z"), pathify("/d/z"))],
         );
 
-        // Ordering: nodes_by_original iteration order should reflect
-        // "last moved comes last, parent before children within a group".
-        // Move 2 carried /a along, so /a stays with the move-2 group.
-        // Move 3 re-moved /a/x and its child /a/x/z — both should come last,
-        // with parent /a/x before child /a/x/z.
-        let ordered: Vec<_> = mt.nodes_by_original.keys().collect();
+        // The tx log should contain all moves sorted by final path
+        // (parent before child). Build a ChangeSet to test the full path.
+        let cs = ChangeSet::Rearrange(mt);
+        let snap_id = crate::format::SnapshotId::random();
+        let tx = transaction_log_from_change_set(&snap_id, &cs);
+        let move_pairs: Vec<_> =
+            tx.moves().map(|m| (m.from.clone(), m.to.clone())).collect();
         assert_eq!(
-            ordered,
+            move_pairs,
             vec![
-                &pathify("/a"),     // carried by move 2
-                &pathify("/b"),     // added by move 2
-                &pathify("/b/y"),   // added by move 2
-                &pathify("/a/x"),   // re-moved by move 3 → last
-                &pathify("/a/x/z"), // child carried by move 3 → last
+                (pathify("/b"), pathify("/c")),
+                (pathify("/a"), pathify("/c/a")),
+                (pathify("/b/y"), pathify("/c/y")),
+                (pathify("/a/x"), pathify("/d")),
+                (pathify("/a/x/z"), pathify("/d/z")),
+            ],
+        );
+    }
+
+    #[icechunk_macros::test]
+    fn test_tx_log_moves_sorted_path_aware() {
+        // Path sorting must be path-aware: children before non-child siblings.
+        // Lexicographic on bytes gives this because '/' (0x2F) < 'a' (0x61),
+        // so /c < /c/a < /ca. This test verifies the tx log sort is correct
+        // when node names share a prefix.
+        //
+        // Tree: /ca (group), /ca/x (array), /c (group), /c/a (array)
+        // Move: /c -> /d, /ca -> /da
+        let mut mt = MoveTracker::default();
+        let id_c = NodeId::random();
+        let id_ca_arr = NodeId::random();
+        let id_ca_grp = NodeId::random();
+        let id_cax = NodeId::random();
+        record_move(
+            &mut mt,
+            "/c",
+            "/d",
+            &[
+                ("/c", id_c.clone(), NodeType::Group),
+                ("/c/a", id_ca_arr.clone(), NodeType::Array),
+            ],
+            &id_c,
+            NodeType::Group,
+        );
+        record_move(
+            &mut mt,
+            "/ca",
+            "/da",
+            &[
+                ("/ca", id_ca_grp.clone(), NodeType::Group),
+                ("/ca/x", id_cax.clone(), NodeType::Array),
+            ],
+            &id_ca_grp,
+            NodeType::Group,
+        );
+
+        let cs = ChangeSet::Rearrange(mt);
+        let snap_id = crate::format::SnapshotId::random();
+        let tx = transaction_log_from_change_set(&snap_id, &cs);
+        let move_pairs: Vec<_> =
+            tx.moves().map(|m| (m.from.clone(), m.to.clone())).collect();
+        // /d before /d/a before /da (children before prefix-siblings)
+        assert_eq!(
+            move_pairs,
+            vec![
+                (pathify("/c"), pathify("/d")),
+                (pathify("/c/a"), pathify("/d/a")),
+                (pathify("/ca"), pathify("/da")),
+                (pathify("/ca/x"), pathify("/da/x")),
             ],
         );
     }
