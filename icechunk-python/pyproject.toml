@@ -45,6 +45,8 @@ test = [
   "boto3-stubs[s3]",
   "termcolor",
   "rich",
+  "flatbuffers",
+  "zstandard",
 ]
 benchmark = [
   "pytest-benchmark[histogram]",
