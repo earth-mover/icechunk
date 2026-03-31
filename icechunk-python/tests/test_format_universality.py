@@ -13,6 +13,7 @@ import importlib
 import subprocess
 import sys
 import tempfile
+from collections.abc import Generator
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -112,7 +113,7 @@ def assert_valid_header(
 
 
 @pytest.fixture(scope="session")
-def flatbuf_mod():  # type: ignore[misc]
+def flatbuf_mod() -> Generator[ModuleType]:
     """Compile .fbs schemas with flatc and import the generated Python module.
 
     Uses --gen-onefile to produce a single Python file with all types,
@@ -148,7 +149,7 @@ def flatbuf_mod():  # type: ignore[misc]
 
 
 @pytest.fixture(scope="session")
-def repo_path() -> str:
+def repo_path() -> Generator[str]:
     """Create a fresh icechunk repo in a temp directory.
 
     The repo has materialized, inline, and virtual chunks across multiple commits,
