@@ -535,14 +535,15 @@ class Model:
             # V1 doesn't rewrite parent pointers, so commits whose parents
             # were GC'd have broken ancestry and are effectively unusable.
             # Remove them from commits so we don't try to use them
-            orphaned = True
-            while orphaned:
+            while True:
                 orphaned = {
                     k
                     for k, c in self.commits.items()
                     if c.parent_id is not None
                     and (c.parent_id in deleted or c.parent_id not in self.ondisk_snaps)
                 }
+                if not orphaned:
+                    break
                 for k in orphaned:
                     self.commits.pop(k, None)
         note(f"Deleted snapshots in model: {deleted!r}")
