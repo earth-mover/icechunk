@@ -4,7 +4,7 @@ use async_stream::try_stream;
 use futures::{StreamExt as _, TryStreamExt as _};
 use icechunk::{
     Store,
-    display::{dataclass_html_repr, dataclass_repr, dataclass_str},
+    display::{dataclass_html_repr, dataclass_repr, dataclass_str, py_bool},
     format::{ChunkIndices, Path, manifest::ChunkPayload},
     session::{
         ReindexMapping, ReindexOperationResult, Session, SessionError, SessionErrorKind,
@@ -72,12 +72,12 @@ impl PySession {
         dataclass_repr(
             "Session",
             &[
-                ("read_only", session.read_only().to_string()),
+                ("read_only", py_bool(session.read_only())),
                 ("snapshot_id", format!("\"{}\"", session.snapshot_id())),
                 ("branch", branch_repr),
                 (
                     "has_uncommitted_changes",
-                    session.has_uncommitted_changes().to_string(),
+                    py_bool(session.has_uncommitted_changes()),
                 ),
             ],
         )
@@ -92,12 +92,12 @@ impl PySession {
         dataclass_str(
             "Session",
             &[
-                ("read_only", session.read_only().to_string()),
+                ("read_only", py_bool(session.read_only())),
                 ("snapshot_id", session.snapshot_id().to_string()),
                 ("branch", branch_str),
                 (
                     "has_uncommitted_changes",
-                    session.has_uncommitted_changes().to_string(),
+                    py_bool(session.has_uncommitted_changes()),
                 ),
             ],
         )
@@ -112,12 +112,12 @@ impl PySession {
         dataclass_html_repr(
             "Session",
             &[
-                ("read_only", session.read_only().to_string()),
+                ("read_only", py_bool(session.read_only())),
                 ("snapshot_id", session.snapshot_id().to_string()),
                 ("branch", branch_str),
                 (
                     "has_uncommitted_changes",
-                    session.has_uncommitted_changes().to_string(),
+                    py_bool(session.has_uncommitted_changes()),
                 ),
             ],
         )

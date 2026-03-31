@@ -1,5 +1,10 @@
 use std::fmt::Write as _;
 
+/// Format a bool as a Python literal (`True` / `False`).
+pub fn py_bool(b: bool) -> String {
+    if b { "True" } else { "False" }.to_string()
+}
+
 /// Render a non-executable, human-readable string for a dataclass-like struct.
 ///
 /// `type_name` is the public Python/Rust-facing type name.

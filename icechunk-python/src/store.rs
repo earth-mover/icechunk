@@ -4,7 +4,7 @@ use chrono::Utc;
 use futures::{StreamExt as _, TryStreamExt as _};
 use icechunk::{
     Store,
-    display::{dataclass_html_repr, dataclass_repr, dataclass_str},
+    display::{dataclass_html_repr, dataclass_repr, dataclass_str, py_bool},
     format::{
         ChunkIndices, ChunkLength, ChunkOffset, Path,
         manifest::{Checksum, SecondsSinceEpoch, VirtualChunkLocation, VirtualChunkRef},
@@ -136,7 +136,7 @@ impl PyStore {
         dataclass_repr(
             "IcechunkStore",
             &[
-                ("read_only", session_guard.read_only().to_string()),
+                ("read_only", py_bool(session_guard.read_only())),
                 ("snapshot_id", format!("\"{}\"", session_guard.snapshot_id())),
                 ("branch", branch_repr),
             ],
@@ -153,7 +153,7 @@ impl PyStore {
         dataclass_str(
             "IcechunkStore",
             &[
-                ("read_only", session_guard.read_only().to_string()),
+                ("read_only", py_bool(session_guard.read_only())),
                 ("snapshot_id", session_guard.snapshot_id().to_string()),
                 ("branch", branch_str),
             ],
@@ -170,7 +170,7 @@ impl PyStore {
         dataclass_html_repr(
             "IcechunkStore",
             &[
-                ("read_only", session_guard.read_only().to_string()),
+                ("read_only", py_bool(session_guard.read_only())),
                 ("snapshot_id", session_guard.snapshot_id().to_string()),
                 ("branch", branch_str),
             ],

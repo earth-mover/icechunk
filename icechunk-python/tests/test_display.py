@@ -57,7 +57,7 @@ def test_session_repr(repo: Repository) -> None:
     match = SNAPSHOT_ID_PATTERN.search(repr_str)
     assert match is not None, f"snapshot_id not found in: {repr_str}"
     snapshot_id = match.group(0)
-    expected = f'Session(read_only=false, snapshot_id={snapshot_id}, branch="main", has_uncommitted_changes=false)'
+    expected = f'Session(read_only=False, snapshot_id={snapshot_id}, branch="main", has_uncommitted_changes=False)'
     assert repr_str == expected
 
 
@@ -66,9 +66,9 @@ def test_session_str(repo: Repository) -> None:
     session = repo.writable_session("main")
     str_str = str(session)
     assert "<Session>" in str_str
-    assert "read_only: false" in str_str
+    assert "read_only: False" in str_str
     assert "branch: main" in str_str
-    assert "has_uncommitted_changes: false" in str_str
+    assert "has_uncommitted_changes: False" in str_str
 
 
 def test_session_repr_html(repo: Repository) -> None:
@@ -77,7 +77,7 @@ def test_session_repr_html(repo: Repository) -> None:
     html = session._repr_html_()
     assert '<div class="icechunk-repr">' in html
     assert "<code>&lt;Session&gt;</code>" in html
-    assert "<strong>read_only</strong>: <code>false</code>" in html
+    assert "<strong>read_only</strong>: <code>False</code>" in html
     assert "<strong>branch</strong>: <code>main</code>" in html
 
 
@@ -93,13 +93,13 @@ def test_session_repr_shows_correct_state(repo: Repository) -> None:
     # Test readonly session
     readonly_session = repo.readonly_session("main")
     readonly_repr = repr(readonly_session)
-    assert "read_only=true" in readonly_repr
+    assert "read_only=True" in readonly_repr
     assert "branch=None" in readonly_repr
 
     # Test writable session
     writable_session = repo.writable_session("main")
     writable_repr = repr(writable_session)
-    assert "read_only=false" in writable_repr
+    assert "read_only=False" in writable_repr
     assert 'branch="main"' in writable_repr
 
 
@@ -115,7 +115,7 @@ def test_store_repr(repo: Repository) -> None:
     match = SNAPSHOT_ID_PATTERN.search(repr_str)
     assert match is not None, f"snapshot_id not found in: {repr_str}"
     snapshot_id = match.group(0)
-    expected = f'IcechunkStore(read_only=false, snapshot_id={snapshot_id}, branch="main")'
+    expected = f'IcechunkStore(read_only=False, snapshot_id={snapshot_id}, branch="main")'
     assert repr_str == expected
 
 
@@ -125,7 +125,7 @@ def test_store_str(repo: Repository) -> None:
     store = session.store
     str_str = str(store)
     assert "<IcechunkStore>" in str_str
-    assert "read_only: false" in str_str
+    assert "read_only: False" in str_str
     assert "branch: main" in str_str
 
 
@@ -136,5 +136,5 @@ def test_store_repr_html(repo: Repository) -> None:
     html = store._repr_html_()
     assert '<div class="icechunk-repr">' in html
     assert "<code>&lt;IcechunkStore&gt;</code>" in html
-    assert "<strong>read_only</strong>: <code>false</code>" in html
+    assert "<strong>read_only</strong>: <code>False</code>" in html
     assert "<strong>branch</strong>: <code>main</code>" in html
