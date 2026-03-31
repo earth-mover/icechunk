@@ -1989,31 +1989,214 @@ class Repository:
         )
         return stats.native_bytes
 
-    def inspect_snapshot(self, snapshot_id: str, *, pretty: bool = True) -> str:
-        return self._repository.inspect_snapshot(snapshot_id, pretty=pretty)
+    def inspect_snapshot(self, snapshot_id: str) -> dict[str, Any]:
+        """
+        Return the node tree stored in a snapshot.
 
-    async def inspect_snapshot_async(
-        self, snapshot_id: str, *, pretty: bool = True
-    ) -> str:
-        return await self._repository.inspect_snapshot_async(snapshot_id, pretty=pretty)
+        The result contains every node's path, node ID, type (array or group),
+        and manifest references. Useful for verifying node identity across
+        commits or inspecting what a snapshot contains.
 
-    def inspect_repo_info(self) -> dict[str, Any]:
-        result: dict[str, Any] = json.loads(self._repository.inspect_repo_info())
-        return result
+        This is a testing/debugging utility. The return type and structure
+        may change in future versions.
 
-    async def inspect_repo_info_async(self) -> dict[str, Any]:
+        Parameters
+        ----------
+        snapshot_id : str
+            The snapshot to inspect.
+
+        Returns
+        -------
+        dict[str, Any]
+            Keys: ``id``, ``flushed_at``, ``commit_message``, ``metadata``,
+            ``manifests``, ``nodes``.
+        """
         result: dict[str, Any] = json.loads(
-            await self._repository.inspect_repo_info_async()
+            self._repository.inspect_snapshot(snapshot_id, pretty=False)
         )
         return result
 
-    def inspect_manifest(self, manifest_id: str, *, pretty: bool = True) -> str:
-        return self._repository.inspect_manifest(manifest_id, pretty=pretty)
+    async def inspect_snapshot_async(self, snapshot_id: str) -> dict[str, Any]:
+        """
+        Return the node tree stored in a snapshot.
 
-    async def inspect_manifest_async(
-        self, manifest_id: str, *, pretty: bool = True
-    ) -> str:
-        return await self._repository.inspect_manifest_async(manifest_id, pretty=pretty)
+        The result contains every node's path, node ID, type (array or group),
+        and manifest references. Useful for verifying node identity across
+        commits or inspecting what a snapshot contains.
+
+        This is a testing/debugging utility. The return type and structure
+        may change in future versions.
+
+        Parameters
+        ----------
+        snapshot_id : str
+            The snapshot to inspect.
+
+        Returns
+        -------
+        dict[str, Any]
+            Keys: ``id``, ``flushed_at``, ``commit_message``, ``metadata``,
+            ``manifests``, ``nodes``.
+        """
+        result: dict[str, Any] = json.loads(
+            await self._repository.inspect_snapshot_async(snapshot_id, pretty=False)
+        )
+        return result
+
+    def inspect_repo_info(self) -> dict[str, Any]:
+        """
+        Return the top-level repository metadata.
+
+        Includes the branch-to-snapshot mapping, tags, snapshot ancestry,
+        and the recent update log.
+
+        This is a testing/debugging utility. The return type and structure
+        may change in future versions.
+
+        Returns
+        -------
+        dict[str, Any]
+            Keys: ``spec_version``, ``branches``, ``tags``, ``deleted_tags``,
+            ``snapshots``, ``metadata``, ``latest_updates``.
+        """
+        result: dict[str, Any] = json.loads(
+            self._repository.inspect_repo_info(pretty=False)
+        )
+        return result
+
+    async def inspect_repo_info_async(self) -> dict[str, Any]:
+        """
+        Return the top-level repository metadata.
+
+        Includes the branch-to-snapshot mapping, tags, snapshot ancestry,
+        and the recent update log.
+
+        This is a testing/debugging utility. The return type and structure
+        may change in future versions.
+
+        Returns
+        -------
+        dict[str, Any]
+            Keys: ``spec_version``, ``branches``, ``tags``, ``deleted_tags``,
+            ``snapshots``, ``metadata``, ``latest_updates``.
+        """
+        result: dict[str, Any] = json.loads(
+            await self._repository.inspect_repo_info_async(pretty=False)
+        )
+        return result
+
+    def inspect_manifest(self, manifest_id: str) -> dict[str, Any]:
+        """
+        Return chunk storage statistics for a manifest.
+
+        Shows per-array chunk counts broken down by storage type
+        (inline, native, virtual) and compression details.
+
+        This is a testing/debugging utility. The return type and structure
+        may change in future versions.
+
+        Parameters
+        ----------
+        manifest_id : str
+            The manifest to inspect. Manifest IDs can be found in the
+            ``manifest_refs`` of array nodes returned by
+            :meth:`inspect_snapshot`.
+
+        Returns
+        -------
+        dict[str, Any]
+            Keys: ``id``, ``size_bytes``, ``num_arrays``,
+            ``total_chunk_refs``, ``total_inline``, ``total_native``,
+            ``total_virtual``, ``arrays``, ``compression``.
+        """
+        result: dict[str, Any] = json.loads(
+            self._repository.inspect_manifest(manifest_id, pretty=False)
+        )
+        return result
+
+    async def inspect_manifest_async(self, manifest_id: str) -> dict[str, Any]:
+        """
+        Return chunk storage statistics for a manifest.
+
+        Shows per-array chunk counts broken down by storage type
+        (inline, native, virtual) and compression details.
+
+        This is a testing/debugging utility. The return type and structure
+        may change in future versions.
+
+        Parameters
+        ----------
+        manifest_id : str
+            The manifest to inspect. Manifest IDs can be found in the
+            ``manifest_refs`` of array nodes returned by
+            :meth:`inspect_snapshot_async`.
+
+        Returns
+        -------
+        dict[str, Any]
+            Keys: ``id``, ``size_bytes``, ``num_arrays``,
+            ``total_chunk_refs``, ``total_inline``, ``total_native``,
+            ``total_virtual``, ``arrays``, ``compression``.
+        """
+        result: dict[str, Any] = json.loads(
+            await self._repository.inspect_manifest_async(manifest_id, pretty=False)
+        )
+        return result
+
+    def inspect_transaction_log(self, snapshot_id: str) -> dict[str, Any]:
+        """
+        Return the record of what changed in a single commit.
+
+        Lists the node IDs of every created, deleted, and updated node,
+        the chunk coordinates that were written, and any move operations.
+
+        This is a testing/debugging utility. The return type and structure
+        may change in future versions.
+
+        Parameters
+        ----------
+        snapshot_id : str
+            The snapshot whose transaction log to inspect.
+
+        Returns
+        -------
+        dict[str, Any]
+            Keys: ``new_groups``, ``new_arrays``, ``deleted_groups``,
+            ``deleted_arrays``, ``updated_groups``, ``updated_arrays``,
+            ``updated_chunks``, ``moved_nodes``.
+        """
+        result: dict[str, Any] = json.loads(
+            self._repository.inspect_transaction_log(snapshot_id, pretty=False)
+        )
+        return result
+
+    async def inspect_transaction_log_async(self, snapshot_id: str) -> dict[str, Any]:
+        """
+        Return the record of what changed in a single commit.
+
+        Lists the node IDs of every created, deleted, and updated node,
+        the chunk coordinates that were written, and any move operations.
+
+        This is a testing/debugging utility. The return type and structure
+        may change in future versions.
+
+        Parameters
+        ----------
+        snapshot_id : str
+            The snapshot whose transaction log to inspect.
+
+        Returns
+        -------
+        dict[str, Any]
+            Keys: ``new_groups``, ``new_arrays``, ``deleted_groups``,
+            ``deleted_arrays``, ``updated_groups``, ``updated_arrays``,
+            ``updated_chunks``, ``moved_nodes``.
+        """
+        raw = await self._repository.inspect_transaction_log_async(
+            snapshot_id, pretty=False
+        )
+        result: dict[str, Any] = json.loads(raw)
+        return result
 
     @property
     def spec_version(self) -> SpecVersion:

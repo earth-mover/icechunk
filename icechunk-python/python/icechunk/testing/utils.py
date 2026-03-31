@@ -1,8 +1,8 @@
-"""Testing utility functions for icechunk store comparison."""
+"""Testing utility functions for icechunk store setup and transforms."""
 
 from __future__ import annotations
 
-from collections.abc import Generator, Iterable
+from collections.abc import Generator
 
 from icechunk import Repository, in_memory_storage
 from icechunk.session import Session
@@ -44,21 +44,6 @@ def precommit_postcommit_readonly(
     yield "readonly", repo.readonly_session(branch="main").store
 
 
-def assert_list_dir_equal(path: str, expected: list[str], actual: list[str]) -> None:
-    """Assert two list_dir results match, ignoring the "c" chunk directory.
-
-    Consider .list_dir("path/to/array") for an array with a single chunk.
-    The MemoryStore model will return ``"c", "zarr.json"`` only if the chunk exists.
-    If that chunk was deleted, then ``"c"`` is not returned.
-    LocalStore will not have this behaviour.
-    In Icechunk, we always return the ``c`` so ignore this inconsistency.
-    """
-    if expected != actual and set(expected).symmetric_difference(set(actual)) != {"c"}:
-        assert expected == actual, (
-            f"list_dir({path!r}):\n  model:    {expected}\n  icechunk: {actual}"
-        )
-
-
 def update_paths_after_move(
     source: str, dest: str, arrays: set[str], groups: set[str]
 ) -> list[set[str]]:
@@ -72,13 +57,3 @@ def update_paths_after_move(
         return p
 
     return [{rename(p) for p in s} for s in (arrays, groups)]
-
-
-async def compare_list_dir(
-    model: ModelStore, store: IcechunkStore, paths: Iterable[str]
-) -> None:
-    """Compare list_dir results between model and store for given paths."""
-    for path in sorted(paths):
-        expected = sorted([k async for k in model.list_dir(path)])
-        actual = sorted([k async for k in store.list_dir(path)])
-        assert_list_dir_equal(path, expected, actual)

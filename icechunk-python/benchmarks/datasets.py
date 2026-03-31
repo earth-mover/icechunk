@@ -5,7 +5,7 @@ import warnings
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from functools import partial
-from typing import Any, Literal, Self, TypeAlias
+from typing import Any, Literal, Self
 
 import fsspec
 import numpy as np
@@ -26,7 +26,7 @@ from benchmarks.helpers import (
 
 rng = np.random.default_rng(seed=123)
 
-Store: TypeAlias = Literal["s3", "gcs", "az", "tigris"]
+type Store = Literal["s3", "gcs", "az", "tigris"]
 PUBLIC_DATA_BUCKET = "icechunk-public-data"
 ZARR_KWARGS = dict(zarr_format=3, consolidated=False)
 

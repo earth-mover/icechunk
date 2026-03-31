@@ -267,6 +267,43 @@ impl PySession {
         })
     }
 
+    /// Return the node ID for the node at the given path.
+    pub fn get_node_id(&self, py: Python<'_>, path: String) -> PyResult<String> {
+        let path = Path::new(path.as_str())
+            .map_err(|e| StoreError::capture(StoreErrorKind::PathError(e)))
+            .map_err(PyIcechunkStoreError::StoreError)?;
+        py.detach(move || {
+            pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+                let session = self.0.read().await;
+                let node = session
+                    .get_node(&path)
+                    .await
+                    .map_err(PyIcechunkStoreError::SessionError)?;
+                Ok(node.id.to_string())
+            })
+        })
+    }
+
+    /// Return the node ID for the node at the given path.
+    pub fn get_node_id_async<'py>(
+        &'py self,
+        py: Python<'py>,
+        path: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let path = Path::new(path.as_str())
+            .map_err(|e| StoreError::capture(StoreErrorKind::PathError(e)))
+            .map_err(PyIcechunkStoreError::StoreError)?;
+        let session = Arc::clone(&self.0);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let session = session.read().await;
+            let node = session
+                .get_node(&path)
+                .await
+                .map_err(PyIcechunkStoreError::SessionError)?;
+            Ok(node.id.to_string())
+        })
+    }
+
     #[pyo3(signature = (array_path, forward, backward=None))]
     pub fn reindex_array<'py>(
         &mut self,

@@ -10,7 +10,7 @@ from collections.abc import (
 )
 from enum import Enum, IntEnum
 from functools import total_ordering
-from typing import Any, TypeAlias, final
+from typing import Any, final
 
 from icechunk.types import CommitMethod
 
@@ -752,8 +752,8 @@ class ManifestSplitDimCondition:
         """Split along any other unspecified dimension."""
         def __new__(cls) -> ManifestSplitDimCondition.Any: ...
 
-_DimSplitSize: TypeAlias = int
-_SplitSizes: TypeAlias = tuple[
+type _DimSplitSize = int
+type _SplitSizes = tuple[
     tuple[
         ManifestSplitCondition,
         tuple[
@@ -2176,6 +2176,12 @@ class PyRepository:
     async def inspect_manifest_async(
         self, manifest_id: str, *, pretty: bool = True
     ) -> str: ...
+    def inspect_transaction_log(
+        self, snapshot_id: str, *, pretty: bool = True
+    ) -> str: ...
+    async def inspect_transaction_log_async(
+        self, snapshot_id: str, *, pretty: bool = True
+    ) -> str: ...
     @property
     def spec_version(self) -> SpecVersion: ...
 
@@ -2238,6 +2244,8 @@ class PySession:
     def status(self) -> Diff: ...
     def discard_changes(self) -> None: ...
     def move_node(self, from_path: str, to_path: str) -> None: ...
+    def get_node_id(self, path: str) -> str: ...
+    async def get_node_id_async(self, path: str) -> str: ...
     def reindex_array(
         self,
         array_path: str,
