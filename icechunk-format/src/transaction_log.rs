@@ -9,7 +9,8 @@ use flatbuffers::{VerifierOptions, WIPOffset};
 use itertools::Either;
 
 use crate::{
-    ChunkIndices, IcechunkResult, Move, NodeId, Path, SnapshotId,
+    ChunkIndices, IcechunkFormatErrorKind, IcechunkResult, Move, NodeId, Path,
+    SnapshotId,
     flatbuffers::generated::{self, MoveOperation, MoveOperationArgs},
 };
 use icechunk_types::ICResultExt as _;
@@ -183,27 +184,39 @@ impl TransactionLog {
         })
     }
 
-    pub fn moves(&self) -> impl Iterator<Item = Move> + '_ {
+    pub fn moves(&self) -> impl Iterator<Item = IcechunkResult<Move>> + '_ {
         let it = match self.root().moved_nodes() {
             Some(it) => Either::Left(it.iter()),
             None => Either::Right(iter::empty()),
         };
-        #[expect(clippy::expect_used)]
-        it.filter_map(|m| {
-            let from = Path::new(
-                m.from().expect("from is optional in flatbuffers, but required by spec"),
-            )
-            .ok()?;
-            let to = Path::new(
-                m.to().expect("from is optional in flatbuffers, but required by spec"),
-            )
-            .ok()?;
-            let node_id: NodeId = m
-                .node_id()
-                .expect("from is optional in flatbuffers, but required by spec")
-                .into();
+        it.map(|m| {
+            let Some(from) = m.from() else {
+                return Err(IcechunkFormatErrorKind::MissingRequiredField("from".into()))
+                    .capture();
+            };
+            let from = match Path::new(from) {
+                Ok(from) => from,
+                Err(e) => return Err(IcechunkFormatErrorKind::Path(e)).capture(),
+            };
+
+            let Some(to) = m.to() else {
+                return Err(IcechunkFormatErrorKind::MissingRequiredField("to".into()))
+                    .capture();
+            };
+            let to = match Path::new(to) {
+                Ok(to) => to,
+                Err(e) => return Err(IcechunkFormatErrorKind::Path(e)).capture(),
+            };
+
+            let Some(node_id) = m.node_id() else {
+                return Err(IcechunkFormatErrorKind::MissingRequiredField(
+                    "node_id".into(),
+                ))
+                .capture();
+            };
+
             let node_type = m.node_type().into();
-            Some(Move { from, to, node_id, node_type })
+            Ok(Move { from, to, node_id: node_id.into(), node_type })
         })
     }
 

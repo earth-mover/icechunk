@@ -372,6 +372,8 @@ pub enum IcechunkFormatErrorKind {
     MissingLocationCompressionDictionary,
     #[error("Invalid array metadata: {0}")]
     InvalidArrayMetadata(String),
+    #[error("Move operation missing required field '{0}'")]
+    MissingRequiredField(String),
 }
 
 pub type IcechunkFormatError = ICError<IcechunkFormatErrorKind>;

@@ -1628,8 +1628,13 @@ mod tests {
         let cs = ChangeSet::Rearrange(mt);
         let snap_id = crate::format::SnapshotId::random();
         let tx = transaction_log_from_change_set(&snap_id, &cs);
-        let move_pairs: Vec<_> =
-            tx.moves().map(|m| (m.from.clone(), m.to.clone())).collect();
+        let move_pairs: Vec<_> = tx
+            .moves()
+            .map(|m| {
+                let m = m.expect("invalid move");
+                (m.from.clone(), m.to.clone())
+            })
+            .collect();
         assert_eq!(
             move_pairs,
             vec![
@@ -1682,8 +1687,13 @@ mod tests {
         let cs = ChangeSet::Rearrange(mt);
         let snap_id = crate::format::SnapshotId::random();
         let tx = transaction_log_from_change_set(&snap_id, &cs);
-        let move_pairs: Vec<_> =
-            tx.moves().map(|m| (m.from.clone(), m.to.clone())).collect();
+        let move_pairs: Vec<_> = tx
+            .moves()
+            .map(|m| {
+                let m = m.expect("invalid move");
+                (m.from.clone(), m.to.clone())
+            })
+            .collect();
         // /d before /d/a before /da (children before prefix-siblings)
         assert_eq!(
             move_pairs,

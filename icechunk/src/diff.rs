@@ -22,14 +22,17 @@ pub struct DiffBuilder {
 }
 
 impl DiffBuilder {
-    pub fn add_changes(&mut self, tx: &TransactionLog) {
+    pub fn add_changes(&mut self, tx: &TransactionLog) -> SessionResult<()> {
         self.new_groups.extend(tx.new_groups());
         self.new_arrays.extend(tx.new_arrays());
         self.deleted_groups.extend(tx.deleted_groups());
         self.deleted_arrays.extend(tx.deleted_arrays());
         self.updated_groups.extend(tx.updated_groups());
         self.updated_arrays.extend(tx.updated_arrays());
-        self.moved_nodes.extend(tx.moves());
+        for mv in tx.moves() {
+            let mv = mv.map_err(|e| e.inject())?;
+            self.moved_nodes.push(mv);
+        }
 
         for (node, chunks) in tx.updated_chunks() {
             match self.updated_chunks.get_mut(&node) {
@@ -41,6 +44,8 @@ impl DiffBuilder {
                 }
             }
         }
+
+        Ok(())
     }
 
     pub async fn to_diff(self, from: &Session, to: &Session) -> SessionResult<Diff> {

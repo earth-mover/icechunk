@@ -626,7 +626,7 @@ impl Session {
             self.snapshot_id.clone(),
         );
         let mut builder = DiffBuilder::default();
-        builder.add_changes(&tx_log);
+        builder.add_changes(&tx_log)?;
         builder.to_diff(&from_session, self).await
     }
 
