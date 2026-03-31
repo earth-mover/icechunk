@@ -4,6 +4,7 @@ use async_stream::try_stream;
 use futures::{StreamExt as _, TryStreamExt as _};
 use icechunk::{
     Store,
+    display::{dataclass_html_repr, dataclass_repr, dataclass_str, py_bool},
     format::{ChunkIndices, Path, manifest::ChunkPayload},
     session::{
         ReindexMapping, ReindexOperationResult, Session, SessionError, SessionErrorKind,
@@ -62,6 +63,57 @@ impl From<SessionMode> for PySessionMode {
 /// Most functions in this class block, so they need to `detach` so other
 /// python threads can make progress
 impl PySession {
+    pub(crate) fn __repr__(&self) -> String {
+        let session = self.0.blocking_read();
+        let branch_repr = match session.branch() {
+            Some(b) => format!("\"{b}\""),
+            None => "None".to_string(),
+        };
+        dataclass_repr(
+            "icechunk.Session",
+            &[
+                ("read_only", py_bool(session.read_only())),
+                ("snapshot_id", format!("\"{}\"", session.snapshot_id())),
+                ("branch", branch_repr),
+                ("has_uncommitted_changes", py_bool(session.has_uncommitted_changes())),
+            ],
+        )
+    }
+
+    pub(crate) fn __str__(&self) -> String {
+        let session = self.0.blocking_read();
+        let branch_str = match session.branch() {
+            Some(b) => b.to_string(),
+            None => "None".to_string(),
+        };
+        dataclass_str(
+            "icechunk.Session",
+            &[
+                ("read_only", py_bool(session.read_only())),
+                ("snapshot_id", session.snapshot_id().to_string()),
+                ("branch", branch_str),
+                ("has_uncommitted_changes", py_bool(session.has_uncommitted_changes())),
+            ],
+        )
+    }
+
+    pub(crate) fn _repr_html_(&self) -> String {
+        let session = self.0.blocking_read();
+        let branch_str = match session.branch() {
+            Some(b) => b.to_string(),
+            None => "None".to_string(),
+        };
+        dataclass_html_repr(
+            "icechunk.Session",
+            &[
+                ("read_only", py_bool(session.read_only())),
+                ("snapshot_id", session.snapshot_id().to_string()),
+                ("branch", branch_str),
+                ("has_uncommitted_changes", py_bool(session.has_uncommitted_changes())),
+            ],
+        )
+    }
+
     #[classmethod]
     fn from_bytes(
         _cls: Bound<'_, PyType>,
