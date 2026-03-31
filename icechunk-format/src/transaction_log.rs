@@ -8,10 +8,9 @@ use std::{
 use flatbuffers::{VerifierOptions, WIPOffset};
 use itertools::Either;
 
-use icechunk_types::Move;
-
 use crate::{
-    ChunkIndices, IcechunkResult, NodeId, Path, SnapshotId,
+    ChunkIndices, IcechunkFormatErrorKind, IcechunkResult, Move, NodeId, Path,
+    SnapshotId,
     flatbuffers::generated::{self, MoveOperation, MoveOperationArgs},
 };
 use icechunk_types::ICResultExt as _;
@@ -88,10 +87,18 @@ impl TransactionLog {
         let updated_chunks = Some(updated_chunks);
 
         let moved_nodes: Vec<_> = sorted_moves
-            .map(|Move { from, to }| {
+            .map(|Move { from, to, node_id, node_type }| {
                 let from = builder.create_string(from.to_string().as_str());
                 let to = builder.create_string(to.to_string().as_str());
-                let args = MoveOperationArgs { from: Some(from), to: Some(to) };
+                let node_id = generated::ObjectId8::new(&node_id.0);
+                let node_id = Some(&node_id);
+                let node_type: generated::NodeType = node_type.into();
+                let args = MoveOperationArgs {
+                    from: Some(from),
+                    to: Some(to),
+                    node_id,
+                    node_type,
+                };
                 MoveOperation::create(&mut builder, &args)
             })
             .collect();
@@ -177,15 +184,39 @@ impl TransactionLog {
         })
     }
 
-    pub fn moves(&self) -> impl Iterator<Item = Move> + '_ {
+    pub fn moves(&self) -> impl Iterator<Item = IcechunkResult<Move>> + '_ {
         let it = match self.root().moved_nodes() {
             Some(it) => Either::Left(it.iter()),
             None => Either::Right(iter::empty()),
         };
-        it.filter_map(|m| {
-            let from = Path::new(m.from()).ok()?;
-            let to = Path::new(m.to()).ok()?;
-            Some(Move { from, to })
+        it.map(|m| {
+            let Some(from) = m.from() else {
+                return Err(IcechunkFormatErrorKind::MissingRequiredField("from".into()))
+                    .capture();
+            };
+            let from = match Path::new(from) {
+                Ok(from) => from,
+                Err(e) => return Err(IcechunkFormatErrorKind::Path(e)).capture(),
+            };
+
+            let Some(to) = m.to() else {
+                return Err(IcechunkFormatErrorKind::MissingRequiredField("to".into()))
+                    .capture();
+            };
+            let to = match Path::new(to) {
+                Ok(to) => to,
+                Err(e) => return Err(IcechunkFormatErrorKind::Path(e)).capture(),
+            };
+
+            let Some(node_id) = m.node_id() else {
+                return Err(IcechunkFormatErrorKind::MissingRequiredField(
+                    "node_id".into(),
+                ))
+                .capture();
+            };
+
+            let node_type = m.node_type().try_into().capture()?;
+            Ok(Move { from, to, node_id: node_id.into(), node_type })
         })
     }
 

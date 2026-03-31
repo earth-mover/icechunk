@@ -15,9 +15,18 @@ table ArrayUpdatedChunks {
   chunks: [ChunkIndices] (required);
 }
 
+enum NodeType: ubyte { Group = 0, Array }
+
+// moves are fully collapsed: there is only one from/to pair,
+// and overlapping moves (from -> to, to -> new_to) get merged
+// (from -> new_to in this example).
+//
+// every moved node gets an entry - no implicit moving of children
 table MoveOperation {
-  from: string (required);
-  to: string (required);
+  from: string;
+  to: string;
+  node_id: ObjectId8;
+  node_type: NodeType;
 }
 
 table TransactionLog {
@@ -53,7 +62,7 @@ table TransactionLog {
   // sorted in ascending order of the node_id of the ArrayUpdatedChunks
   updated_chunks: [ArrayUpdatedChunks] (required);
 
-  // sorted in application order, oldest first
+  // nodes moved in this session, sorted by final path
   // Added in spec version: 2.0
   moved_nodes: [MoveOperation];
 
