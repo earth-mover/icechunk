@@ -917,8 +917,9 @@ pub fn transaction_log_from_change_set(
         })
         .collect();
 
-    // Sort moves by final path (parent before child, deterministic order).
-    let mut moves: Vec<_> = cs
+    // Sort moves by final path. Path::cmp compares by path components,
+    // so children sort between parent and prefix-siblings (e.g. /c < /c/a < /ca).
+    let moves: Vec<_> = cs
         .move_tracker()
         .nodes_by_original
         .iter()
@@ -928,11 +929,8 @@ pub fn transaction_log_from_change_set(
             node_id: node_id.clone(),
             node_type: node_type.clone(),
         })
+        .sorted_by(|a, b| a.to.cmp(&b.to))
         .collect();
-    // Path's Ord is path-aware: '/' (0x2F) sorts before all alphanumeric
-    // characters, so children sort between parent and prefix-siblings
-    // (e.g. /c < /c/a < /ca).
-    moves.sort_by(|a, b| a.to.cmp(&b.to));
 
     TransactionLog::new_from_parts(
         id,
