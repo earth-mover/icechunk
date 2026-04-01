@@ -156,26 +156,47 @@ fn dataclass_repr(cls_name: &str, fields: &[(&str, &str)]) -> String {
     out
 }
 
-/// Inline CSS for icechunk HTML reprs.
+/// CSS for icechunk HTML reprs.
 ///
-/// Uses Jupyter CSS custom properties (`--jp-*`) with sensible fallbacks,
-/// following the same pattern as xarray. This ensures the repr inherits the
-/// notebook's actual theme (light or dark) rather than guessing from OS settings.
+/// Follows xarray's pattern: define custom properties (`--ic-*`) on `:root`
+/// that inherit from Jupyter's `--jp-*` variables with sensible fallbacks.
+/// Using `:root` ensures the variables cascade into output areas where
+/// class-scoped `<style>` blocks may not inherit theme variables directly.
 const ICECHUNK_CSS: &str = r#"<style>
+:root {
+    --ic-font-color: var(--jp-content-font-color0, rgba(0, 0, 0, 1));
+    --ic-font-color-muted: var(--jp-content-font-color2, rgba(0, 0, 0, 0.54));
+    --ic-background: var(--jp-layout-color1, #f7f7f7);
+    --ic-background-nested: var(--jp-layout-color0, white);
+    --ic-border-color: var(--jp-border-color2, #ddd);
+    --ic-font-family: var(--jp-ui-font-family, -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif);
+    --ic-font-size: var(--jp-ui-font-size1, 13px);
+    --ic-font-size-header: var(--jp-ui-font-size2, 14px);
+}
+html[theme="dark"],
+html[data-theme="dark"],
+body[data-theme="dark"],
+body.vscode-dark {
+    --ic-font-color: var(--jp-content-font-color0, rgba(255, 255, 255, 1));
+    --ic-font-color-muted: var(--jp-content-font-color2, rgba(255, 255, 255, 0.54));
+    --ic-background: var(--jp-layout-color1, #333);
+    --ic-background-nested: var(--jp-layout-color0, #111);
+    --ic-border-color: var(--jp-border-color2, #555);
+}
 .icechunk-repr {
-    font-family: var(--jp-ui-font-family, -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif);
-    font-size: var(--jp-ui-font-size1, 13px);
+    font-family: var(--ic-font-family);
+    font-size: var(--ic-font-size);
     line-height: 1.6;
-    border: 1px solid var(--jp-border-color2, #ddd);
+    border: 1px solid var(--ic-border-color);
     border-radius: 4px;
     padding: 10px 14px;
-    background: var(--jp-layout-color1, #f7f7f7);
-    color: var(--jp-content-font-color0, rgba(0, 0, 0, 1));
+    background: var(--ic-background);
+    color: var(--ic-font-color);
     max-width: 600px;
 }
 .icechunk-repr .icechunk-header {
     font-weight: 600;
-    font-size: var(--jp-ui-font-size2, 14px);
+    font-size: var(--ic-font-size-header);
     margin-bottom: 6px;
 }
 .icechunk-repr .icechunk-field {
@@ -185,11 +206,11 @@ const ICECHUNK_CSS: &str = r#"<style>
 }
 .icechunk-repr .icechunk-field-name {
     font-weight: 600;
-    color: var(--jp-content-font-color2, rgba(0, 0, 0, 0.54));
+    color: var(--ic-font-color-muted);
     min-width: fit-content;
 }
 .icechunk-repr .icechunk-field-value {
-    color: var(--jp-content-font-color0, rgba(0, 0, 0, 1));
+    color: var(--ic-font-color);
 }
 .icechunk-repr details {
     margin: 2px 0;
@@ -197,25 +218,25 @@ const ICECHUNK_CSS: &str = r#"<style>
 .icechunk-repr summary {
     cursor: pointer;
     font-weight: 600;
-    color: var(--jp-content-font-color2, rgba(0, 0, 0, 0.54));
+    color: var(--ic-font-color-muted);
 }
 .icechunk-repr details > .icechunk-repr {
     margin-top: 4px;
     margin-left: 12px;
-    background: var(--jp-layout-color0, white);
+    background: var(--ic-background-nested);
 }
 </style>"#;
 
 /// Render a static HTML representation suitable for Jupyter `_repr_html_`.
 ///
 /// Uses a `<details>` pattern for nested values that contain HTML (detected by
-/// checking for `<div`). Plain values are rendered inline. Includes scoped CSS
-/// for styling in notebooks.
+/// checking for `<div`). Plain values are rendered inline. Includes CSS with
+/// `:root` custom properties for theme-aware styling in notebooks.
 fn dataclass_html_repr(cls_name: &str, fields: &[(&str, &str)]) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "{ICECHUNK_CSS}");
     let _ = writeln!(out, "<div class=\"icechunk-repr\">");
-    let _ = writeln!(out, "  <div class=\"icechunk-header\">{cls_name}</div>",);
+    let _ = writeln!(out, "  <div class=\"icechunk-header\">{cls_name}</div>");
     for (key, value) in fields {
         // If the value contains HTML (from a nested _repr_html_ call), render
         // it inside a collapsible <details> element.
