@@ -34,7 +34,7 @@ use pyo3::{
     types::{PyAnyMethods as _, PyModule, PyType},
 };
 
-use crate::display::{PyRepr, ReprMode, py_option, py_option_nested_repr};
+use crate::display::{PyRepr, ReprMode, py_bool, py_option, py_option_nested_repr};
 use crate::errors::PyIcechunkStoreError;
 
 #[pyclass(name = "S3StaticCredentials")]
@@ -72,6 +72,39 @@ impl From<PyS3StaticCredentials> for S3StaticCredentials {
     }
 }
 
+// Non-executable: contains secrets that should not be printed in full
+#[expect(unused_variables)]
+impl PyRepr for PyS3StaticCredentials {
+    const EXECUTABLE: bool = false;
+    fn cls_name() -> &'static str {
+        "icechunk.S3StaticCredentials"
+    }
+    fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
+        vec![
+            (
+                "access_key_id",
+                format!("{}****", &self.access_key_id[..4.min(self.access_key_id.len())]),
+            ),
+            ("secret_access_key", "****".to_string()),
+            (
+                "session_token",
+                if self.session_token.is_some() {
+                    "****".to_string()
+                } else {
+                    "None".to_string()
+                },
+            ),
+            (
+                "expires_after",
+                self.expires_after
+                    .as_ref()
+                    .map(datetime_repr)
+                    .unwrap_or_else(|| "None".to_string()),
+            ),
+        ]
+    }
+}
+
 #[pymethods]
 impl PyS3StaticCredentials {
     #[new]
@@ -91,14 +124,13 @@ impl PyS3StaticCredentials {
     }
 
     pub fn __repr__(&self) -> String {
-        // TODO: escape
-        format!(
-            r#"S3StaticCredentials(access_key_id="{ak}", secret_access_key="{sk}", session_token={st}, expires_after={ea})"#,
-            ak = self.access_key_id.as_str(),
-            sk = self.secret_access_key.as_str(),
-            st = format_option(self.session_token.as_ref()),
-            ea = format_option(self.expires_after.as_ref().map(datetime_repr))
-        )
+        <Self as PyRepr>::__repr__(self)
+    }
+    pub fn __str__(&self) -> String {
+        <Self as PyRepr>::__str__(self)
+    }
+    pub fn _repr_html_(&self) -> String {
+        <Self as PyRepr>::_repr_html_(self)
     }
 }
 
@@ -114,10 +146,6 @@ pub(crate) fn format_bool(b: bool) -> &'static str {
         true => "True",
         false => "False",
     }
-}
-
-fn format_str(s: &str) -> String {
-    format!(r#""{s}""#)
 }
 
 pub(crate) fn datetime_repr(d: &DateTime<Utc>) -> String {
@@ -498,6 +526,29 @@ pub struct PyS3Options {
     pub requester_pays: bool,
 }
 
+// TODO: pass `mode` through once nested fields implement PyRepr
+#[expect(unused_variables)]
+impl PyRepr for PyS3Options {
+    const EXECUTABLE: bool = true;
+    fn cls_name() -> &'static str {
+        "icechunk.S3Options"
+    }
+    fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
+        vec![
+            ("region", py_option(&self.region)),
+            ("endpoint_url", py_option(&self.endpoint_url)),
+            ("allow_http", py_bool(self.allow_http)),
+            ("anonymous", py_bool(self.anonymous)),
+            ("force_path_style", py_bool(self.force_path_style)),
+            (
+                "network_stream_timeout_seconds",
+                py_option(&self.network_stream_timeout_seconds),
+            ),
+            ("requester_pays", py_bool(self.requester_pays)),
+        ]
+    }
+}
+
 #[pymethods]
 impl PyS3Options {
     #[new]
@@ -523,18 +574,13 @@ impl PyS3Options {
     }
 
     pub fn __repr__(&self) -> String {
-        // TODO: escape
-        format!(
-            r#"S3Options(region={region}, endpoint_url={url}, allow_http={http}, anonymous={anon}, force_path_style={force_path_style}, network_stream_timeout_seconds={net_timeout}, requester_pays={requester_pays})"#,
-            region = format_option(self.region.as_ref()),
-            url = format_option(self.endpoint_url.as_ref()),
-            http = format_bool(self.allow_http),
-            anon = format_bool(self.anonymous),
-            force_path_style = format_bool(self.force_path_style),
-            net_timeout =
-                format_option(self.network_stream_timeout_seconds.map(|n| n.to_string())),
-            requester_pays = self.requester_pays,
-        )
+        <Self as PyRepr>::__repr__(self)
+    }
+    pub fn __str__(&self) -> String {
+        <Self as PyRepr>::__str__(self)
+    }
+    pub fn _repr_html_(&self) -> String {
+        <Self as PyRepr>::_repr_html_(self)
     }
 }
 
@@ -713,6 +759,27 @@ pub struct PyCompressionConfig {
     pub level: Option<u8>,
 }
 
+// TODO: pass `mode` through once nested fields implement PyRepr
+#[expect(unused_variables)]
+impl PyRepr for PyCompressionConfig {
+    const EXECUTABLE: bool = true;
+    fn cls_name() -> &'static str {
+        "icechunk.CompressionConfig"
+    }
+    fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
+        vec![
+            (
+                "algorithm",
+                self.algorithm
+                    .as_ref()
+                    .map(|a| format!("{a:?}"))
+                    .unwrap_or_else(|| "None".to_string()),
+            ),
+            ("level", py_option(&self.level)),
+        ]
+    }
+}
+
 #[pymethods]
 impl PyCompressionConfig {
     #[staticmethod]
@@ -728,10 +795,13 @@ impl PyCompressionConfig {
     }
 
     pub fn __repr__(&self) -> String {
-        format!(
-            r#"CompressionConfig(algorithm=None, level={level})"#,
-            level = py_option(&self.level.map(|l| l.to_string())),
-        )
+        <Self as PyRepr>::__repr__(self)
+    }
+    pub fn __str__(&self) -> String {
+        <Self as PyRepr>::__str__(self)
+    }
+    pub fn _repr_html_(&self) -> String {
+        <Self as PyRepr>::_repr_html_(self)
     }
 }
 
@@ -879,6 +949,22 @@ impl From<&PyStorageRetriesSettings> for RetriesSettings {
     }
 }
 
+// TODO: pass `mode` through once nested fields implement PyRepr
+#[expect(unused_variables)]
+impl PyRepr for PyStorageRetriesSettings {
+    const EXECUTABLE: bool = true;
+    fn cls_name() -> &'static str {
+        "icechunk.StorageRetriesSettings"
+    }
+    fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
+        vec![
+            ("max_tries", py_option(&self.max_tries)),
+            ("initial_backoff_ms", py_option(&self.initial_backoff_ms)),
+            ("max_backoff_ms", py_option(&self.max_backoff_ms)),
+        ]
+    }
+}
+
 #[pymethods]
 impl PyStorageRetriesSettings {
     #[pyo3(signature = (max_tries=None, initial_backoff_ms=None, max_backoff_ms=None))]
@@ -892,17 +978,14 @@ impl PyStorageRetriesSettings {
     }
 
     pub fn __repr__(&self) -> String {
-        storage_retries_settings_repr(self)
+        <Self as PyRepr>::__repr__(self)
     }
-}
-
-fn storage_retries_settings_repr(s: &PyStorageRetriesSettings) -> String {
-    format!(
-        r#"StorageRetriesSettings(max_tries={max}, initial_backoff_ms={init}, max_backoff_ms={max_back})"#,
-        max = py_option(&s.max_tries),
-        init = py_option(&s.initial_backoff_ms),
-        max_back = py_option(&s.max_backoff_ms),
-    )
+    pub fn __str__(&self) -> String {
+        <Self as PyRepr>::__str__(self)
+    }
+    pub fn _repr_html_(&self) -> String {
+        <Self as PyRepr>::_repr_html_(self)
+    }
 }
 
 #[pyclass(name = "StorageTimeoutSettings", eq)]
@@ -940,6 +1023,26 @@ impl From<&PyStorageTimeoutSettings> for storage::TimeoutSettings {
     }
 }
 
+// TODO: pass `mode` through once nested fields implement PyRepr
+#[expect(unused_variables)]
+impl PyRepr for PyStorageTimeoutSettings {
+    const EXECUTABLE: bool = true;
+    fn cls_name() -> &'static str {
+        "icechunk.StorageTimeoutSettings"
+    }
+    fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
+        vec![
+            ("connect_timeout_ms", py_option(&self.connect_timeout_ms)),
+            ("read_timeout_ms", py_option(&self.read_timeout_ms)),
+            ("operation_timeout_ms", py_option(&self.operation_timeout_ms)),
+            (
+                "operation_attempt_timeout_ms",
+                py_option(&self.operation_attempt_timeout_ms),
+            ),
+        ]
+    }
+}
+
 #[pymethods]
 impl PyStorageTimeoutSettings {
     #[pyo3(signature = (connect_timeout_ms=None, read_timeout_ms=None, operation_timeout_ms=None, operation_attempt_timeout_ms=None))]
@@ -959,13 +1062,13 @@ impl PyStorageTimeoutSettings {
     }
 
     pub fn __repr__(&self) -> String {
-        format!(
-            r#"StorageTimeoutSettings(connect_timeout_ms={c}, read_timeout_ms={r}, operation_timeout_ms={o}, operation_attempt_timeout_ms={oa})"#,
-            c = py_option(&self.connect_timeout_ms),
-            r = py_option(&self.read_timeout_ms),
-            o = py_option(&self.operation_timeout_ms),
-            oa = py_option(&self.operation_attempt_timeout_ms),
-        )
+        <Self as PyRepr>::__repr__(self)
+    }
+    pub fn __str__(&self) -> String {
+        <Self as PyRepr>::__str__(self)
+    }
+    pub fn _repr_html_(&self) -> String {
+        <Self as PyRepr>::_repr_html_(self)
     }
 }
 
@@ -1004,6 +1107,16 @@ impl From<&PyRepoUpdateRetryConfig> for RepoUpdateRetryConfig {
     }
 }
 
+impl PyRepr for PyRepoUpdateRetryConfig {
+    const EXECUTABLE: bool = true;
+    fn cls_name() -> &'static str {
+        "icechunk.RepoUpdateRetryConfig"
+    }
+    fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
+        vec![("default", py_option_nested_repr(&self.default, mode))]
+    }
+}
+
 #[pymethods]
 impl PyRepoUpdateRetryConfig {
     #[pyo3(signature = (default=None))]
@@ -1013,16 +1126,13 @@ impl PyRepoUpdateRetryConfig {
     }
 
     pub fn __repr__(&self) -> String {
-        Python::attach(|py| {
-            format!(
-                r#"RepoUpdateRetryConfig(default={default})"#,
-                default = self
-                    .default
-                    .as_ref()
-                    .map(|r| storage_retries_settings_repr(&r.borrow(py)))
-                    .unwrap_or_else(|| "None".to_string()),
-            )
-        })
+        <Self as PyRepr>::__repr__(self)
+    }
+    pub fn __str__(&self) -> String {
+        <Self as PyRepr>::__str__(self)
+    }
+    pub fn _repr_html_(&self) -> String {
+        <Self as PyRepr>::_repr_html_(self)
     }
 }
 
@@ -1053,6 +1163,27 @@ impl From<&PyStorageConcurrencySettings> for ConcurrencySettings {
     }
 }
 
+// TODO: pass `mode` through once nested fields implement PyRepr
+#[expect(unused_variables)]
+impl PyRepr for PyStorageConcurrencySettings {
+    const EXECUTABLE: bool = true;
+    fn cls_name() -> &'static str {
+        "icechunk.StorageConcurrencySettings"
+    }
+    fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
+        vec![
+            (
+                "max_concurrent_requests_for_object",
+                py_option(&self.max_concurrent_requests_for_object),
+            ),
+            (
+                "ideal_concurrent_request_size",
+                py_option(&self.ideal_concurrent_request_size),
+            ),
+        ]
+    }
+}
+
 #[pymethods]
 impl PyStorageConcurrencySettings {
     #[pyo3(signature = (max_concurrent_requests_for_object=None, ideal_concurrent_request_size=None))]
@@ -1065,16 +1196,14 @@ impl PyStorageConcurrencySettings {
     }
 
     pub fn __repr__(&self) -> String {
-        storage_concurrency_settings_repr(self)
+        <Self as PyRepr>::__repr__(self)
     }
-}
-
-fn storage_concurrency_settings_repr(s: &PyStorageConcurrencySettings) -> String {
-    format!(
-        r#"StorageConcurrencySettings(max_concurrent_requests_for_object={max}, ideal_concurrent_request_size={ideal})"#,
-        max = py_option(&s.max_concurrent_requests_for_object),
-        ideal = py_option(&s.ideal_concurrent_request_size),
-    )
+    pub fn __str__(&self) -> String {
+        <Self as PyRepr>::__str__(self)
+    }
+    pub fn _repr_html_(&self) -> String {
+        <Self as PyRepr>::_repr_html_(self)
+    }
 }
 
 #[pyclass(name = "StorageSettings", eq)]
@@ -1158,6 +1287,45 @@ impl PartialEq for PyStorageSettings {
 
 impl Eq for PyStorageSettings {}
 
+impl PyRepr for PyStorageSettings {
+    const EXECUTABLE: bool = true;
+    fn cls_name() -> &'static str {
+        "icechunk.StorageSettings"
+    }
+    fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
+        vec![
+            ("concurrency", py_option_nested_repr(&self.concurrency, mode)),
+            ("retries", py_option_nested_repr(&self.retries, mode)),
+            ("timeouts", py_option_nested_repr(&self.timeouts, mode)),
+            (
+                "unsafe_use_conditional_create",
+                self.unsafe_use_conditional_create
+                    .map(py_bool)
+                    .unwrap_or_else(|| "None".to_string()),
+            ),
+            (
+                "unsafe_use_conditional_update",
+                self.unsafe_use_conditional_update
+                    .map(py_bool)
+                    .unwrap_or_else(|| "None".to_string()),
+            ),
+            (
+                "unsafe_use_metadata",
+                self.unsafe_use_metadata
+                    .map(py_bool)
+                    .unwrap_or_else(|| "None".to_string()),
+            ),
+            ("storage_class", py_option(&self.storage_class)),
+            ("metadata_storage_class", py_option(&self.metadata_storage_class)),
+            ("chunks_storage_class", py_option(&self.chunks_storage_class)),
+            (
+                "minimum_size_for_multipart_upload",
+                py_option(&self.minimum_size_for_multipart_upload),
+            ),
+        ]
+    }
+}
+
 #[pymethods]
 impl PyStorageSettings {
     #[pyo3(signature = ( concurrency=None, retries=None, unsafe_use_conditional_create=None, unsafe_use_conditional_update=None, unsafe_use_metadata=None, storage_class=None, metadata_storage_class=None, chunks_storage_class=None, minimum_size_for_multipart_upload=None, timeouts=None))]
@@ -1190,43 +1358,13 @@ impl PyStorageSettings {
     }
 
     pub fn __repr__(&self) -> String {
-        let inner_conc = match &self.concurrency {
-            None => "None".to_string(),
-            Some(conc) => Python::attach(|py| {
-                let conc = &*conc.borrow(py);
-                storage_concurrency_settings_repr(conc)
-            }),
-        };
-
-        let inner_retries = match &self.retries {
-            None => "None".to_string(),
-            Some(retries) => Python::attach(|py| {
-                let conc = &*retries.borrow(py);
-                storage_retries_settings_repr(conc)
-            }),
-        };
-        let inner_timeouts = match &self.timeouts {
-            None => "None".to_string(),
-            Some(timeouts) => Python::attach(|py| timeouts.borrow(py).__repr__()),
-        };
-        format!(
-            r#"StorageSettings(concurrency={conc}, retries={retr}, timeouts={tout}, unsafe_use_conditional_create={cr}, unsafe_use_conditional_update={up}, unsafe_use_metadata={me}, storage_class={sc}, metadata_storage_class={msc}, chunks_storage_class={csc})"#,
-            conc = inner_conc,
-            retr = inner_retries,
-            tout = inner_timeouts,
-            cr = format_option(self.unsafe_use_conditional_create.map(format_bool)),
-            up = format_option(self.unsafe_use_conditional_update.map(format_bool)),
-            me = format_option(self.unsafe_use_metadata.map(format_bool)),
-            sc = format_option(
-                self.storage_class.as_ref().map(|s| format_str(s.as_str()))
-            ),
-            msc = format_option(
-                self.metadata_storage_class.as_ref().map(|s| format_str(s.as_str()))
-            ),
-            csc = format_option(
-                self.chunks_storage_class.as_ref().map(|s| format_str(s.as_str()))
-            ),
-        )
+        <Self as PyRepr>::__repr__(self)
+    }
+    pub fn __str__(&self) -> String {
+        <Self as PyRepr>::__str__(self)
+    }
+    pub fn _repr_html_(&self) -> String {
+        <Self as PyRepr>::_repr_html_(self)
     }
 }
 
@@ -1642,6 +1780,26 @@ pub struct PyManifestVirtualChunkLocationCompressionConfig {
     pub compression_level: Option<i32>,
 }
 
+// TODO: pass `mode` through once nested fields implement PyRepr
+#[expect(unused_variables)]
+impl PyRepr for PyManifestVirtualChunkLocationCompressionConfig {
+    const EXECUTABLE: bool = true;
+    fn cls_name() -> &'static str {
+        "icechunk.ManifestVirtualChunkLocationCompressionConfig"
+    }
+    fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
+        vec![
+            ("min_num_chunks", py_option(&self.min_num_chunks)),
+            (
+                "dictionary_max_training_samples",
+                py_option(&self.dictionary_max_training_samples),
+            ),
+            ("dictionary_max_size_bytes", py_option(&self.dictionary_max_size_bytes)),
+            ("compression_level", py_option(&self.compression_level)),
+        ]
+    }
+}
+
 #[pymethods]
 impl PyManifestVirtualChunkLocationCompressionConfig {
     #[new]
@@ -1661,13 +1819,13 @@ impl PyManifestVirtualChunkLocationCompressionConfig {
     }
 
     pub fn __repr__(&self) -> String {
-        format!(
-            "ManifestVirtualChunkLocationCompressionConfig(min_num_chunks={}, dictionary_max_training_samples={}, dictionary_max_size_bytes={}, compression_level={})",
-            py_option(&self.min_num_chunks),
-            py_option(&self.dictionary_max_training_samples),
-            py_option(&self.dictionary_max_size_bytes),
-            py_option(&self.compression_level),
-        )
+        <Self as PyRepr>::__repr__(self)
+    }
+    pub fn __str__(&self) -> String {
+        <Self as PyRepr>::__str__(self)
+    }
+    pub fn _repr_html_(&self) -> String {
+        <Self as PyRepr>::_repr_html_(self)
     }
 }
 
@@ -2024,13 +2182,32 @@ pub(crate) struct PyStorageObjectInfo {
     pub created_at: DateTime<Utc>,
 }
 
+// TODO: pass `mode` through once nested fields implement PyRepr
+#[expect(unused_variables)]
+impl PyRepr for PyStorageObjectInfo {
+    const EXECUTABLE: bool = false;
+    fn cls_name() -> &'static str {
+        "icechunk.StorageObjectInfo"
+    }
+    fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
+        vec![
+            ("key", self.key.clone()),
+            ("size_bytes", self.size_bytes.to_string()),
+            ("created_at", datetime_repr(&self.created_at)),
+        ]
+    }
+}
+
 #[pymethods]
 impl PyStorageObjectInfo {
     fn __repr__(&self) -> String {
-        format!(
-            "StorageObjectInfo(key='{}', size_bytes={}, created_at={})",
-            self.key, self.size_bytes, self.created_at,
-        )
+        <Self as PyRepr>::__repr__(self)
+    }
+    fn __str__(&self) -> String {
+        <Self as PyRepr>::__str__(self)
+    }
+    fn _repr_html_(&self) -> String {
+        <Self as PyRepr>::_repr_html_(self)
     }
 }
 
