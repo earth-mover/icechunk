@@ -56,11 +56,9 @@ class TestRepr:
         assert "read_only: False" in repr_str
         assert "branch: main" in repr_str
 
-    @pytest.mark.xfail(reason="CachingConfig not yet converted to PyRepr")
     def test_caching_config_roundtrip(self) -> None:
         assert_repr_roundtrips(CachingConfig())
 
-    @pytest.mark.xfail(reason="CachingConfig not yet converted to PyRepr")
     def test_caching_config_roundtrip_with_values(self) -> None:
         assert_repr_roundtrips(CachingConfig(num_snapshot_nodes=100, num_chunk_refs=200))
 
@@ -86,7 +84,6 @@ class TestStr:
         assert "<icechunk.IcechunkStore>" in str_str
         assert "read_only: False" in str_str
 
-    @pytest.mark.xfail(reason="CachingConfig not yet converted to PyRepr")
     def test_caching_config(self) -> None:
         config = CachingConfig(num_snapshot_nodes=100)
         str_str = str(config)
@@ -116,7 +113,6 @@ class TestReprHtml:
         assert "<code>&lt;icechunk.IcechunkStore&gt;</code>" in html
         assert "<strong>read_only</strong>: <code>False</code>" in html
 
-    @pytest.mark.xfail(reason="CachingConfig not yet converted to PyRepr")
     def test_caching_config(self) -> None:
         html = CachingConfig(num_snapshot_nodes=100)._repr_html_()
         assert '<div class="icechunk-repr">' in html

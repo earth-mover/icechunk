@@ -27,6 +27,7 @@ use icechunk::{
         ManifestVirtualChunkLocationCompressionConfig, RepoUpdateRetryConfig,
         S3Credentials, S3CredentialsFetcher, S3Options, S3StaticCredentials,
     },
+    display::PyRepr,
     storage::{self, ConcurrencySettings},
     virtual_chunks::VirtualChunkContainer,
 };
@@ -772,6 +773,27 @@ pub struct PyCachingConfig {
     pub num_bytes_chunks: Option<u64>,
 }
 
+impl PyRepr for PyCachingConfig {
+    const EXECUTABLE: bool = true;
+
+    fn cls_name() -> &'static str {
+        "icechunk.CachingConfig"
+    }
+
+    fn fields(&self) -> Vec<(&str, String)> {
+        vec![
+            ("num_snapshot_nodes", format_option_to_string(self.num_snapshot_nodes)),
+            ("num_chunk_refs", format_option_to_string(self.num_chunk_refs)),
+            (
+                "num_transaction_changes",
+                format_option_to_string(self.num_transaction_changes),
+            ),
+            ("num_bytes_attributes", format_option_to_string(self.num_bytes_attributes)),
+            ("num_bytes_chunks", format_option_to_string(self.num_bytes_chunks)),
+        ]
+    }
+}
+
 #[pymethods]
 impl PyCachingConfig {
     #[staticmethod]
@@ -799,14 +821,15 @@ impl PyCachingConfig {
     }
 
     pub fn __repr__(&self) -> String {
-        format!(
-            r#"CachingConfig(num_snapshot_nodes={snap}, num_chunk_refs={man}, num_transaction_changes={tx}, num_bytes_attributes={att}, num_bytes_chunks={chunks})"#,
-            snap = format_option_to_string(self.num_snapshot_nodes),
-            man = format_option_to_string(self.num_chunk_refs),
-            tx = format_option_to_string(self.num_transaction_changes),
-            att = format_option_to_string(self.num_bytes_attributes),
-            chunks = format_option_to_string(self.num_bytes_chunks),
-        )
+        <Self as PyRepr>::__repr__(self)
+    }
+
+    pub fn __str__(&self) -> String {
+        <Self as PyRepr>::__str__(self)
+    }
+
+    pub fn _repr_html_(&self) -> String {
+        <Self as PyRepr>::_repr_html_(self)
     }
 }
 
