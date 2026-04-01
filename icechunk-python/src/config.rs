@@ -1412,6 +1412,45 @@ impl PyManifestPreloadCondition {
         Self::False()
     }
 
+    pub fn __repr__(&self) -> String {
+        use PyManifestPreloadCondition::*;
+        match self {
+            Or(conditions) => {
+                let inner: Vec<_> = conditions.iter().map(|c| c.__repr__()).collect();
+                format!(
+                    "icechunk.ManifestPreloadCondition.or_conditions([{}])",
+                    inner.join(", ")
+                )
+            }
+            And(conditions) => {
+                let inner: Vec<_> = conditions.iter().map(|c| c.__repr__()).collect();
+                format!(
+                    "icechunk.ManifestPreloadCondition.and_conditions([{}])",
+                    inner.join(", ")
+                )
+            }
+            PathMatches { regex } => {
+                format!("icechunk.ManifestPreloadCondition.path_matches(\"{regex}\")")
+            }
+            NameMatches { regex } => {
+                format!("icechunk.ManifestPreloadCondition.name_matches(\"{regex}\")")
+            }
+            NumRefs { from, to } => {
+                format!(
+                    "icechunk.ManifestPreloadCondition.num_refs({}, {})",
+                    py_option(from),
+                    py_option(to),
+                )
+            }
+            True() => "icechunk.ManifestPreloadCondition.true()".to_string(),
+            False() => "icechunk.ManifestPreloadCondition.false()".to_string(),
+        }
+    }
+
+    pub fn __str__(&self) -> String {
+        self.__repr__()
+    }
+
     pub fn __and__(&self, other: &Self) -> Self {
         Self::And(vec![self.clone(), other.clone()])
     }
@@ -1486,6 +1525,24 @@ pub struct PyManifestPreloadConfig {
     pub max_arrays_to_scan: Option<u32>,
 }
 
+impl PyRepr for PyManifestPreloadConfig {
+    const EXECUTABLE: bool = true;
+    fn cls_name() -> &'static str {
+        "icechunk.ManifestPreloadConfig"
+    }
+    fn fields(&self, _mode: ReprMode) -> Vec<(&str, String)> {
+        let preload_if = match &self.preload_if {
+            None => "None".to_string(),
+            Some(py_obj) => Python::attach(|py| py_obj.borrow(py).__repr__()),
+        };
+        vec![
+            ("max_total_refs", py_option(&self.max_total_refs)),
+            ("preload_if", preload_if),
+            ("max_arrays_to_scan", py_option(&self.max_arrays_to_scan)),
+        ]
+    }
+}
+
 #[pymethods]
 impl PyManifestPreloadConfig {
     #[new]
@@ -1496,6 +1553,16 @@ impl PyManifestPreloadConfig {
         max_arrays_to_scan: Option<u32>,
     ) -> Self {
         Self { max_total_refs, preload_if, max_arrays_to_scan }
+    }
+
+    pub fn __repr__(&self) -> String {
+        <Self as PyRepr>::__repr__(self)
+    }
+    pub fn __str__(&self) -> String {
+        <Self as PyRepr>::__str__(self)
+    }
+    pub fn _repr_html_(&self) -> String {
+        <Self as PyRepr>::_repr_html_(self)
     }
 }
 
@@ -1564,27 +1631,31 @@ impl PyManifestSplitCondition {
         use PyManifestSplitCondition::*;
         match self {
             Or(conditions) => {
-                let mut res =
-                    conditions.iter().fold("Or(".to_string(), |mut state, condition| {
-                        state.push_str(&condition.__repr__());
-                        state
-                    });
-                res.push(')');
-                res
+                let inner: Vec<_> = conditions.iter().map(|c| c.__repr__()).collect();
+                format!(
+                    "icechunk.ManifestSplitCondition.or_conditions([{}])",
+                    inner.join(", ")
+                )
             }
             And(conditions) => {
-                let mut res =
-                    conditions.iter().fold("And(".to_string(), |mut state, condition| {
-                        state.push_str(&condition.__repr__());
-                        state
-                    });
-                res.push(')');
-                res
+                let inner: Vec<_> = conditions.iter().map(|c| c.__repr__()).collect();
+                format!(
+                    "icechunk.ManifestSplitCondition.and_conditions([{}])",
+                    inner.join(", ")
+                )
             }
-            PathMatches { regex } => format!("PathMatches('{regex}')"),
-            NameMatches { regex } => format!("NameMatches('{regex}')"),
-            AnyArray() => "AnyArray".to_string(),
+            PathMatches { regex } => {
+                format!("icechunk.ManifestSplitCondition.path_matches(\"{regex}\")")
+            }
+            NameMatches { regex } => {
+                format!("icechunk.ManifestSplitCondition.name_matches(\"{regex}\")")
+            }
+            AnyArray() => "icechunk.ManifestSplitCondition.any_array()".to_string(),
         }
+    }
+
+    pub fn __str__(&self) -> String {
+        self.__repr__()
     }
 
     fn __hash__(&self) -> usize {
@@ -1641,10 +1712,16 @@ impl PyManifestSplitDimCondition {
     pub fn __repr__(&self) -> String {
         use PyManifestSplitDimCondition::*;
         match self {
-            Axis(axis) => format!("Axis({axis})"),
-            DimensionName(name) => format!(r#"DimensionName("{name}")"#),
-            Any() => "Any".to_string(),
+            Axis(axis) => format!("icechunk.ManifestSplitDimCondition.axis({axis})"),
+            DimensionName(name) => {
+                format!("icechunk.ManifestSplitDimCondition.dimension_name(\"{name}\")")
+            }
+            Any() => "icechunk.ManifestSplitDimCondition.any()".to_string(),
         }
+    }
+
+    pub fn __str__(&self) -> String {
+        self.__repr__()
     }
 
     fn __hash__(&self) -> usize {
@@ -1684,6 +1761,36 @@ pub struct PyManifestSplittingConfig {
     pub split_sizes: Option<Vec<(PyManifestSplitCondition, DimConditions)>>,
 }
 
+// TODO: pass `mode` through once nested fields implement PyRepr
+#[expect(unused_variables)]
+impl PyRepr for PyManifestSplittingConfig {
+    const EXECUTABLE: bool = true;
+    fn cls_name() -> &'static str {
+        "icechunk.ManifestSplittingConfig"
+    }
+    fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
+        let split_sizes = match &self.split_sizes {
+            None => "None".to_string(),
+            Some(sizes) => {
+                let reprs: Vec<String> = sizes
+                    .iter()
+                    .map(|(condition, dims)| {
+                        let dims_repr: Vec<String> = dims
+                            .iter()
+                            .map(|(dim_condition, num)| {
+                                format!("({}, {num})", dim_condition.__repr__())
+                            })
+                            .collect();
+                        format!("({}, [{}])", condition.__repr__(), dims_repr.join(", "))
+                    })
+                    .collect();
+                format!("[{}]", reprs.join(", "))
+            }
+        };
+        vec![("split_sizes", split_sizes)]
+    }
+}
+
 #[pymethods]
 impl PyManifestSplittingConfig {
     #[new]
@@ -1693,26 +1800,13 @@ impl PyManifestSplittingConfig {
     }
 
     pub fn __repr__(&self) -> String {
-        match &self.split_sizes {
-            Some(split_sizes) => {
-                let reprs: Vec<String> = split_sizes
-                    .iter()
-                    .map(|(condition, dims)| {
-                        let condition_repr = format!("{condition:?}"); // Using Debug for PyManifestSplitCondition
-                        let dims_repr: Vec<String> = dims
-                            .iter()
-                            .map(|(dim_condition, num)| {
-                                format!("({dim_condition:?}, {num})")
-                            })
-                            .collect();
-                        format!("({}, [{}])", condition_repr, dims_repr.join(", "))
-                    })
-                    .collect();
-
-                format!("ManifestSplittingConfig({})", reprs.join(", "))
-            }
-            None => "ManifestSplittingConfig(None)".to_string(),
-        }
+        <Self as PyRepr>::__repr__(self)
+    }
+    pub fn __str__(&self) -> String {
+        <Self as PyRepr>::__str__(self)
+    }
+    pub fn _repr_html_(&self) -> String {
+        <Self as PyRepr>::_repr_html_(self)
     }
 }
 
@@ -1875,6 +1969,23 @@ pub struct PyManifestConfig {
         Option<Py<PyManifestVirtualChunkLocationCompressionConfig>>,
 }
 
+impl PyRepr for PyManifestConfig {
+    const EXECUTABLE: bool = true;
+    fn cls_name() -> &'static str {
+        "icechunk.ManifestConfig"
+    }
+    fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
+        vec![
+            ("preload", py_option_nested_repr(&self.preload, mode)),
+            ("splitting", py_option_nested_repr(&self.splitting, mode)),
+            (
+                "virtual_chunk_location_compression",
+                py_option_nested_repr(&self.virtual_chunk_location_compression, mode),
+            ),
+        ]
+    }
+}
+
 #[pymethods]
 impl PyManifestConfig {
     #[new]
@@ -1890,14 +2001,13 @@ impl PyManifestConfig {
     }
 
     pub fn __repr__(&self) -> String {
-        format!(
-            r#"ManifestConfig(preload={pre}, splitting={spl}, virtual_chunk_location_compression={comp})"#,
-            pre = py_option(&self.preload.as_ref().map(|l| l.to_string())),
-            spl = py_option(&self.splitting.as_ref().map(|l| l.to_string())),
-            comp = py_option(
-                &self.virtual_chunk_location_compression.as_ref().map(|l| l.to_string())
-            ),
-        )
+        <Self as PyRepr>::__repr__(self)
+    }
+    pub fn __str__(&self) -> String {
+        <Self as PyRepr>::__str__(self)
+    }
+    pub fn _repr_html_(&self) -> String {
+        <Self as PyRepr>::_repr_html_(self)
     }
 }
 
@@ -2065,7 +2175,6 @@ impl PyRepr for PyRepositoryConfig {
     }
 
     fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
-        // TODO: add compression, storage, manifest fields once they implement PyRepr
         vec![
             (
                 "inline_chunk_threshold_bytes",
@@ -2075,7 +2184,20 @@ impl PyRepr for PyRepositoryConfig {
                 "get_partial_values_concurrency",
                 py_option(&self.get_partial_values_concurrency),
             ),
+            ("compression", py_option_nested_repr(&self.compression, mode)),
+            ("max_concurrent_requests", py_option(&self.max_concurrent_requests)),
             ("caching", py_option_nested_repr(&self.caching, mode)),
+            ("storage", py_option_nested_repr(&self.storage, mode)),
+            ("manifest", py_option_nested_repr(&self.manifest, mode)),
+            ("previous_file", py_option(&self.previous_file)),
+            (
+                "repo_update_retries",
+                py_option_nested_repr(&self.repo_update_retries, mode),
+            ),
+            (
+                "num_updates_per_repo_info_file",
+                py_option(&self.num_updates_per_repo_info_file),
+            ),
         ]
     }
 }
