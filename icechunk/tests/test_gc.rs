@@ -20,6 +20,7 @@ use icechunk::{
     },
     new_in_memory_storage,
     ops::gc::{ExpiredRefAction, GCConfig, GCSummary, expire, garbage_collect},
+    refs::Ref,
     repository::VersionInfo,
     session::get_chunk,
 };
@@ -642,6 +643,59 @@ async fn test_gc_reset_branch() -> Result<(), Box<dyn std::error::Error>> {
     repo.readonly_session(&VersionInfo::SnapshotId(snaps[3].clone())).await?;
     repo.readonly_session(&VersionInfo::SnapshotId(snaps[4].clone())).await?;
     repo.readonly_session(&VersionInfo::SnapshotId(snaps[5].clone())).await?;
+
+    Ok(())
+}
+
+/// Regression test for <https://github.com/earth-mover/icechunk/issues/1520>
+///
+/// When two branches point to the same old commit, expire with
+/// `delete_expired_branches` should still delete the non-main branch.
+#[tokio_test]
+pub async fn test_expire_deletes_branch_sharing_tip_with_main()
+-> Result<(), Box<dyn std::error::Error>> {
+    let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+    let storage_settings = storage.default_settings().await?;
+    let repo = Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
+        .await?;
+
+    let mut session = repo.writable_session("main").await?;
+    let user_data = Bytes::new();
+    session.add_group(Path::root(), user_data.clone()).await?;
+    let commit_1 = session.commit("first").execute().await?;
+
+    repo.create_branch("feature", &commit_1).await?;
+
+    let branches = repo.list_branches().await?;
+    assert!(branches.contains("main"));
+    assert!(branches.contains("feature"));
+
+    let expire_older_than = Utc::now();
+
+    let asset_manager = Arc::new(AssetManager::new_no_cache(
+        Arc::clone(&storage),
+        storage_settings.clone(),
+        SpecVersionBin::current(),
+        1,
+        DEFAULT_MAX_CONCURRENT_REQUESTS,
+    ));
+
+    let result = expire(
+        Arc::clone(&asset_manager),
+        expire_older_than,
+        ExpiredRefAction::Delete,
+        ExpiredRefAction::Ignore,
+        None,
+        100,
+    )
+    .await?;
+
+    assert!(result.deleted_refs.contains(&Ref::Branch("feature".to_string())));
+
+    let repo = Repository::open(None, Arc::clone(&storage), HashMap::new()).await?;
+    let branches = repo.list_branches().await?;
+    assert!(branches.contains("main"));
+    assert!(!branches.contains("feature"));
 
     Ok(())
 }
