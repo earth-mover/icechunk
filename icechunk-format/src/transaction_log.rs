@@ -428,16 +428,17 @@ impl TransactionLog {
         // },
         // ```
 
-        // Save moves into an inverted map (to -> from) to make it easy
+        // Save moves into a map (NodeId -> Move) to make it easy
         // to check if we have overlapping moves.
         let mut moved_map: BTreeMap<NodeId, Move> = Default::default();
         let moved_nodes = {
             for mv in txs.iter().flat_map(|tx| tx.moves()) {
                 let Move { from, to, node_id, node_type } = mv?;
                 // if this is the first move we see, just insert.
-                // Otherwise we check to see if the current "from" is already in the moved_map
-                // (meaning this "from" is a "to" from another move)
-                // and if so remove it and replace with a new (to, old_from) pair,
+                // Otherwise we check to see if the current NodeId is already in the moved_map,
+                // and if so we need to merge the old and new move,
+                // reusing the info from the old move but replacing the "to" field
+                // from the new move.
                 if let Some(old_from) = moved_map.remove(&node_id) {
                     moved_map.insert(node_id, Move { to, ..old_from });
                 } else {
@@ -446,26 +447,23 @@ impl TransactionLog {
                 }
             }
 
-            // check to and from (keys and values in moved_map) are disjoint
-            // (we shouldn't have any in common)
-            // except for identity move (from == to)
+            // check the set of "to" and the set of "from" from all moves are unique.
             // only run this in debug mode because it can be expensive
-            /*
             debug_assert!({
-                use itertools::MultiUnzip as _;
+                let node_id_len = moved_map.len();
 
                 let (from, to): (BTreeSet<&Path>, BTreeSet<&Path>) = moved_map
-                    .iter()
-                    .filter_map(
-                        |(to, from)| if to != from { Some((from, to)) } else { None },
-                    )
+                    .values()
+                    .map(|Move { to, from, .. }| (from, to))
                     .multiunzip();
-                from.is_disjoint(&to)
+
+                (from.len() == to.len()) && (to.len() == node_id_len)
             });
-            */
 
             let moved_nodes: Vec<_> = moved_map
                 .into_values()
+                // sort by final path ("to"), to maintain consistency with how each
+                // individual tx_log was before
                 .sorted_by(|a, b| a.to.cmp(&b.to))
                 .map(|Move { to, from, node_id, node_type }| {
                     let from = builder.create_string(from.to_string().as_str());
