@@ -216,3 +216,8 @@ default = { features = [
   "test",
 ], solve-group = "default" }
 benchmark = { features = ["benchmark"], solve-group = "default" }
+
+[tool.third-wheel]
+renames = [
+    {original = "icechunk", new-name = "icechunk_v1", version = ">=1,<2"},
+]

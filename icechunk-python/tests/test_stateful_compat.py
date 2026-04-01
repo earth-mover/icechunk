@@ -56,6 +56,9 @@ class CrossVersionVersionControlStateMachine(VersionControlStateMachine):
         self.actors = {"v2": ic.Repository, "v1": ic_v1.Repository}
         self.actor_modules = {"v2": ic, "v1": ic_v1}
         self._storage_path = tempfile.mkdtemp()
+        # v2 storage used to mock list_objects_metadata for v1 actors.
+        # Both point at the same filesystem path so timestamps are identical.
+        self._metadata_storage = ic.local_filesystem_storage(self._storage_path)
         super().__init__(actor=None)
 
     # Disabled: v1 actor doesn't support spec version upgrade.

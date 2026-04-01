@@ -634,6 +634,18 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         self._initialize_model_and_data(data)
         return DEFAULT_BRANCH
 
+    @property
+    def _metadata_storage(self) -> Storage:
+        """Storage used for ``list_objects_metadata`` calls. Override to provide
+        an alternative (e.g. a v2 storage in cross-version tests)."""
+        assert self.storage is not None
+        return self.storage
+
+    def draw_older_than(self, data: st.DataObject) -> datetime.datetime:
+        """Draw an ``older_than`` cutoff.  Override to change which storage
+        supplies the ``created_at`` timestamps."""
+        return draw_older_than(data, self._metadata_storage)
+
     def new_store(self) -> None:
         self.session = self.repo.writable_session(DEFAULT_BRANCH)
 
@@ -953,8 +965,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         delete_expired_branches: bool,
         delete_expired_tags: bool,
     ) -> None:
-        assert self.storage is not None
-        older_than = draw_older_than(data, self.storage)
+        older_than = self.draw_older_than(data)
         note(
             f"Expiring snapshots {older_than=!r}, {delete_expired_branches=!r}, {delete_expired_tags=!r}"
         )
@@ -1031,13 +1042,13 @@ class VersionControlStateMachine(RuleBasedStateMachine):
     @precondition(lambda self: bool(self.model.commit_times))
     @rule(data=st.data())
     def garbage_collect(self, data: st.DataObject) -> None:
-        assert self.storage is not None
-        older_than = draw_older_than(data, self.storage)
+        older_than = self.draw_older_than(data)
         note(f"running garbage_collect for {older_than=!r}")
         # Snapshot created_at before Rust GC deletes files from storage
+        metadata_storage = self._metadata_storage
         created_at_by_id = {
             obj.key.removeprefix("snapshots/"): obj.created_at
-            for obj in self.storage.list_objects_metadata(prefix="snapshots")
+            for obj in metadata_storage.list_objects_metadata(prefix="snapshots")
         }
         summary = self.repo.garbage_collect(older_than)
         note(f"actual GC result {summary=!r}")
