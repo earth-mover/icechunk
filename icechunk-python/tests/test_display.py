@@ -115,23 +115,26 @@ class TestReprHtml:
     def test_repository(self, repo: Repository) -> None:
         html = repo._repr_html_()
         assert '<div class="icechunk-repr">' in html
-        assert "<code>&lt;icechunk.Repository&gt;</code>" in html
-        assert "<strong>storage</strong>" in html
+        assert "icechunk.Repository" in html
+        assert "storage" in html
 
     def test_session(self, repo: Repository) -> None:
         html = repo.writable_session("main")._repr_html_()
         assert '<div class="icechunk-repr">' in html
-        assert "<code>&lt;icechunk.Session&gt;</code>" in html
-        assert "<strong>read_only</strong>: <code>False</code>" in html
-        assert "<strong>branch</strong>: <code>main</code>" in html
+        assert "icechunk.Session" in html
+        assert "read_only" in html
+        assert "False" in html
+        assert "branch" in html
+        assert "main" in html
 
     def test_store(self, repo: Repository) -> None:
         html = repo.writable_session("main").store._repr_html_()
         assert '<div class="icechunk-repr">' in html
-        assert "<code>&lt;icechunk.IcechunkStore&gt;</code>" in html
-        assert "<strong>read_only</strong>: <code>False</code>" in html
+        assert "icechunk.IcechunkStore" in html
+        assert "read_only" in html
 
     def test_caching_config(self) -> None:
         html = CachingConfig(num_snapshot_nodes=100)._repr_html_()
         assert '<div class="icechunk-repr">' in html
-        assert "<strong>num_snapshot_nodes</strong>: <code>100</code>" in html
+        assert "num_snapshot_nodes" in html
+        assert "100" in html

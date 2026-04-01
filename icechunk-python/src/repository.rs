@@ -6,7 +6,7 @@ use std::{
     sync::Arc,
 };
 
-use crate::display::{PyRepr, py_option};
+use crate::display::{PyRepr, ReprMode, py_option};
 use itertools::Itertools as _;
 
 use chrono::{DateTime, Utc};
@@ -225,7 +225,7 @@ impl From<SnapshotInfo> for PySnapshotInfo {
     }
 }
 
-// TODO: use `executable` once nested fields implement PyRepr
+// TODO: pass `mode` through once nested fields implement PyRepr
 #[expect(unused_variables)]
 impl PyRepr for PyManifestFileInfo {
     const EXECUTABLE: bool = false;
@@ -234,7 +234,7 @@ impl PyRepr for PyManifestFileInfo {
         "icechunk.ManifestFileInfo"
     }
 
-    fn fields(&self, executable: bool) -> Vec<(&str, String)> {
+    fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
         vec![
             ("id", self.id.clone()),
             ("size_bytes", self.size_bytes.to_string()),
@@ -1020,7 +1020,7 @@ impl PyRepository {
     }
 }
 
-// TODO: use `executable` once nested fields implement PyRepr
+// TODO: pass `mode` through once nested fields implement PyRepr
 #[expect(unused_variables)]
 impl PyRepr for PyRepository {
     const EXECUTABLE: bool = false;
@@ -1029,7 +1029,7 @@ impl PyRepr for PyRepository {
         "icechunk.Repository"
     }
 
-    fn fields(&self, executable: bool) -> Vec<(&str, String)> {
+    fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
         let storage = format!("{}", self.0.blocking_read().storage());
         vec![("storage", storage)]
     }

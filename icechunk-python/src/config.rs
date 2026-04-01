@@ -34,7 +34,7 @@ use pyo3::{
     types::{PyAnyMethods as _, PyModule, PyType},
 };
 
-use crate::display::{PyRepr, py_option, py_option_nested_repr};
+use crate::display::{PyRepr, ReprMode, py_option, py_option_nested_repr};
 use crate::errors::PyIcechunkStoreError;
 
 #[pyclass(name = "S3StaticCredentials")]
@@ -765,7 +765,7 @@ pub struct PyCachingConfig {
     pub num_bytes_chunks: Option<u64>,
 }
 
-// TODO: use `executable` once nested fields implement PyRepr
+// TODO: pass `mode` through once nested fields implement PyRepr
 #[expect(unused_variables)]
 impl PyRepr for PyCachingConfig {
     const EXECUTABLE: bool = true;
@@ -774,7 +774,7 @@ impl PyRepr for PyCachingConfig {
         "icechunk.CachingConfig"
     }
 
-    fn fields(&self, executable: bool) -> Vec<(&str, String)> {
+    fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
         vec![
             ("num_snapshot_nodes", py_option(&self.num_snapshot_nodes)),
             ("num_chunk_refs", py_option(&self.num_chunk_refs)),
@@ -1906,7 +1906,7 @@ impl PyRepr for PyRepositoryConfig {
         "icechunk.RepositoryConfig"
     }
 
-    fn fields(&self, executable: bool) -> Vec<(&str, String)> {
+    fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
         // TODO: add compression, storage, manifest fields once they implement PyRepr
         vec![
             (
@@ -1917,7 +1917,7 @@ impl PyRepr for PyRepositoryConfig {
                 "get_partial_values_concurrency",
                 py_option(&self.get_partial_values_concurrency),
             ),
-            ("caching", py_option_nested_repr(&self.caching, executable)),
+            ("caching", py_option_nested_repr(&self.caching, mode)),
         ]
     }
 }

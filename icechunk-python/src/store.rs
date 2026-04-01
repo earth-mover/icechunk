@@ -23,7 +23,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
 use crate::{
-    display::{PyRepr, py_bool},
+    display::{PyRepr, ReprMode, py_bool},
     errors::{PyIcechunkStoreError, PyIcechunkStoreResult},
     impl_pickle,
     session::PySession,
@@ -101,7 +101,7 @@ impl_pickle!(VirtualChunkSpec);
 #[derive(Clone, Debug)]
 pub struct PyStore(pub Arc<Store>);
 
-// TODO: use `executable` once nested fields implement PyRepr
+// TODO: pass `mode` through once nested fields implement PyRepr
 #[expect(unused_variables)]
 impl PyRepr for PyStore {
     const EXECUTABLE: bool = false;
@@ -110,7 +110,7 @@ impl PyRepr for PyStore {
         "icechunk.IcechunkStore"
     }
 
-    fn fields(&self, executable: bool) -> Vec<(&str, String)> {
+    fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
         let session = self.0.session();
         let session_guard = session.blocking_read();
         let branch = session_guard

@@ -20,7 +20,7 @@ use tokio::sync::{Mutex, RwLock};
 use crate::{
     config::PyRepositoryConfig,
     conflicts::PyConflictSolver,
-    display::{PyRepr, py_bool},
+    display::{PyRepr, ReprMode, py_bool},
     errors::{PyIcechunkStoreError, PyIcechunkStoreResult},
     repository::{PyDiff, PySnapshotProperties},
     store::PyStore,
@@ -59,7 +59,7 @@ impl From<SessionMode> for PySessionMode {
     }
 }
 
-// TODO: use `executable` once nested fields implement PyRepr
+// TODO: pass `mode` through once nested fields implement PyRepr
 #[expect(unused_variables)]
 impl PyRepr for PySession {
     const EXECUTABLE: bool = false;
@@ -68,7 +68,7 @@ impl PyRepr for PySession {
         "icechunk.Session"
     }
 
-    fn fields(&self, executable: bool) -> Vec<(&str, String)> {
+    fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
         let session = self.0.blocking_read();
         let mut fields = vec![
             ("read_only", py_bool(session.read_only())),
