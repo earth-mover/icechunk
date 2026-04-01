@@ -1,9 +1,9 @@
 """Tests for __str__, __repr__, and _repr_html_ display methods."""
 
-import icechunk
 import pytest
-import zarr
 
+import icechunk
+import zarr
 from icechunk import CachingConfig, Repository, RepositoryConfig, in_memory_storage
 
 
