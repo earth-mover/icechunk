@@ -58,7 +58,7 @@ class CrossVersionVersionControlStateMachine(VersionControlStateMachine):
         self._storage_path = tempfile.mkdtemp()
         # v2 storage used to mock list_objects_metadata for v1 actors.
         # Both point at the same filesystem path so timestamps are identical.
-        self._metadata_storage = ic.local_filesystem_storage(self._storage_path)
+        self._v2_storage = ic.local_filesystem_storage(self._storage_path)
         super().__init__(actor=None)
 
     # Disabled: v1 actor doesn't support spec version upgrade.
@@ -67,26 +67,9 @@ class CrossVersionVersionControlStateMachine(VersionControlStateMachine):
     def upgrade_spec_version(self) -> None:
         pass
 
-    # icechunk V1 does not support the list_objects_metadata needed to grab create_at timestamps
-    @precondition(lambda self: False)
-    @rule(data=st.data())
-    def garbage_collect(self, data: st.DataObject) -> None:
-        pass
-
-    # icechunk V1 does not support the list_objects_metadata needed to grab create_at timestamps
-    @precondition(lambda self: False)
-    @rule(
-        data=st.data(),
-        delete_expired_branches=st.sampled_from([True, True, True, False]),
-        delete_expired_tags=st.sampled_from([True, True, True, False]),
-    )
-    def expire_snapshots(
-        self,
-        data: st.DataObject,
-        delete_expired_branches: bool,
-        delete_expired_tags: bool,
-    ) -> None:
-        pass
+    @property
+    def _metadata_storage(self) -> ic.Storage:
+        return self._v2_storage
 
     def _make_storage(self) -> ic.Storage:
         return self.ic.local_filesystem_storage(self._storage_path)  # type: ignore[no-any-return]

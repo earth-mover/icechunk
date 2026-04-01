@@ -641,11 +641,6 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         assert self.storage is not None
         return self.storage
 
-    def draw_older_than(self, data: st.DataObject) -> datetime.datetime:
-        """Draw an ``older_than`` cutoff.  Override to change which storage
-        supplies the ``created_at`` timestamps."""
-        return draw_older_than(data, self._metadata_storage)
-
     def new_store(self) -> None:
         self.session = self.repo.writable_session(DEFAULT_BRANCH)
 
@@ -965,7 +960,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         delete_expired_branches: bool,
         delete_expired_tags: bool,
     ) -> None:
-        older_than = self.draw_older_than(data)
+        older_than = draw_older_than(data, self._metadata_storage)
         note(
             f"Expiring snapshots {older_than=!r}, {delete_expired_branches=!r}, {delete_expired_tags=!r}"
         )
@@ -1042,7 +1037,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
     @precondition(lambda self: bool(self.model.commit_times))
     @rule(data=st.data())
     def garbage_collect(self, data: st.DataObject) -> None:
-        older_than = self.draw_older_than(data)
+        older_than = draw_older_than(data, self._metadata_storage)
         note(f"running garbage_collect for {older_than=!r}")
         # Snapshot created_at before Rust GC deletes files from storage
         metadata_storage = self._metadata_storage
