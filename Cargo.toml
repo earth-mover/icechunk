@@ -18,13 +18,13 @@ edition = "2024"
 
 [workspace.dependencies]
 # Internal crates
-icechunk = { path = "icechunk", version = "2.0.0-alpha.5" }
+icechunk = { path = "icechunk", version = "2.0.0-alpha.6" }
 icechunk-arrow-object-store = { path = "icechunk-arrow-object-store", version = "2.0.0-alpha.5", default-features = false }
-icechunk-format = { path = "icechunk-format", version = "2.0.0-alpha.5" }
+icechunk-format = { path = "icechunk-format", version = "2.0.0-alpha.6" }
 icechunk-macros = { path = "icechunk-macros", version = "2.0.0-alpha.5" }
 icechunk-s3 = { path = "icechunk-s3", version = "2.0.0-alpha.5" }
 icechunk-storage = { path = "icechunk-storage", version = "2.0.0-alpha.5" }
-icechunk-types = { path = "icechunk-types", version = "2.0.0-alpha.5" }
+icechunk-types = { path = "icechunk-types", version = "2.0.0-alpha.6" }
 
 # External dependencies
 anyhow = "1.0.102"
