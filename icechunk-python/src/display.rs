@@ -166,12 +166,8 @@ const ICECHUNK_CSS: &str = r#"<style>
 :root {
     --ic-font-color: var(--jp-content-font-color0, rgba(0, 0, 0, 1));
     --ic-font-color-muted: var(--jp-content-font-color2, rgba(0, 0, 0, 0.54));
-    --ic-background: var(--jp-layout-color1, #f7f7f7);
-    --ic-background-nested: var(--jp-layout-color0, white);
     --ic-border-color: var(--jp-border-color2, #ddd);
-    --ic-font-family: var(--jp-ui-font-family, -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif);
-    --ic-font-size: var(--jp-ui-font-size1, 13px);
-    --ic-font-size-header: var(--jp-ui-font-size2, 14px);
+    --ic-background-nested: var(--jp-layout-color1, #f7f7f7);
 }
 html[theme="dark"],
 html[data-theme="dark"],
@@ -179,51 +175,45 @@ body[data-theme="dark"],
 body.vscode-dark {
     --ic-font-color: var(--jp-content-font-color0, rgba(255, 255, 255, 1));
     --ic-font-color-muted: var(--jp-content-font-color2, rgba(255, 255, 255, 0.54));
-    --ic-background: var(--jp-layout-color1, #333);
-    --ic-background-nested: var(--jp-layout-color0, #111);
     --ic-border-color: var(--jp-border-color2, #555);
+    --ic-background-nested: var(--jp-layout-color1, #333);
 }
 .icechunk-repr {
-    font-family: var(--ic-font-family);
-    font-size: var(--ic-font-size);
     line-height: 1.6;
-    border: 1px solid var(--ic-border-color);
-    border-radius: 4px;
-    padding: 10px 14px;
-    background: var(--ic-background);
+    max-width: 700px;
     color: var(--ic-font-color);
-    max-width: 600px;
 }
 .icechunk-repr .icechunk-header {
-    font-weight: 600;
-    font-size: var(--ic-font-size-header);
-    margin-bottom: 6px;
+    font-weight: 500;
+    padding-bottom: 6px;
+    margin-bottom: 4px;
+    border-bottom: solid 1px var(--ic-border-color);
 }
 .icechunk-repr .icechunk-field {
     padding: 2px 0;
-    display: flex;
-    gap: 6px;
 }
 .icechunk-repr .icechunk-field-name {
-    font-weight: 600;
+    font-weight: 500;
     color: var(--ic-font-color-muted);
-    min-width: fit-content;
 }
 .icechunk-repr .icechunk-field-value {
     color: var(--ic-font-color);
+    padding-left: 0.3em;
 }
 .icechunk-repr details {
     margin: 2px 0;
 }
 .icechunk-repr summary {
     cursor: pointer;
-    font-weight: 600;
+    font-weight: 500;
     color: var(--ic-font-color-muted);
 }
 .icechunk-repr details > .icechunk-repr {
     margin-top: 4px;
     margin-left: 12px;
+    padding: 6px 10px;
     background: var(--ic-background-nested);
+    border-radius: 4px;
 }
 </style>"#;
 
