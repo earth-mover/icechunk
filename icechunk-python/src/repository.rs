@@ -6,7 +6,7 @@ use std::{
     sync::Arc,
 };
 
-use icechunk::display::{dataclass_html_repr, dataclass_repr, dataclass_str};
+use icechunk::display::PyRepr;
 use itertools::Itertools as _;
 
 use chrono::{DateTime, Utc};
@@ -225,17 +225,34 @@ impl From<SnapshotInfo> for PySnapshotInfo {
     }
 }
 
+impl PyRepr for PyManifestFileInfo {
+    const EXECUTABLE: bool = false;
+
+    fn cls_name() -> &'static str {
+        "icechunk.ManifestFileInfo"
+    }
+
+    fn fields(&self) -> Vec<(&str, String)> {
+        vec![
+            ("id", self.id.clone()),
+            ("size_bytes", self.size_bytes.to_string()),
+            ("num_chunk_refs", self.num_chunk_refs.to_string()),
+        ]
+    }
+}
+
 #[pymethods]
 impl PyManifestFileInfo {
     pub(crate) fn __repr__(&self) -> String {
-        dataclass_repr(
-            "icechunk.ManifestFileInfo",
-            &[
-                ("id", format!("\"{}\"", self.id)),
-                ("size_bytes", self.size_bytes.to_string()),
-                ("num_chunk_refs", self.num_chunk_refs.to_string()),
-            ],
-        )
+        <Self as PyRepr>::__repr__(self)
+    }
+
+    pub(crate) fn __str__(&self) -> String {
+        <Self as PyRepr>::__str__(self)
+    }
+
+    pub(crate) fn _repr_html_(&self) -> String {
+        <Self as PyRepr>::_repr_html_(self)
     }
 }
 
@@ -1001,23 +1018,33 @@ impl PyRepository {
     }
 }
 
+impl PyRepr for PyRepository {
+    const EXECUTABLE: bool = false;
+
+    fn cls_name() -> &'static str {
+        "icechunk.Repository"
+    }
+
+    fn fields(&self) -> Vec<(&str, String)> {
+        let storage = format!("{}", self.0.blocking_read().storage());
+        vec![("storage", storage)]
+    }
+}
+
 #[pymethods]
 /// Most functions in this class call `Runtime.block_on` so they need to `detach` so other
 /// python threads can make progress in the case of an actual block
 impl PyRepository {
     pub(crate) fn __repr__(&self) -> String {
-        let storage_repr = format!("{}", self.0.blocking_read().storage());
-        dataclass_repr("icechunk.Repository", &[("storage", storage_repr)])
+        <Self as PyRepr>::__repr__(self)
     }
 
     pub(crate) fn __str__(&self) -> String {
-        let storage_str = format!("{}", self.0.blocking_read().storage());
-        dataclass_str("icechunk.Repository", &[("storage", storage_str)])
+        <Self as PyRepr>::__str__(self)
     }
 
     pub(crate) fn _repr_html_(&self) -> String {
-        let storage_str = format!("{}", self.0.blocking_read().storage());
-        dataclass_html_repr("icechunk.Repository", &[("storage", storage_str)])
+        <Self as PyRepr>::_repr_html_(self)
     }
 
     #[classmethod]

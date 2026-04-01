@@ -4,7 +4,7 @@ use async_stream::try_stream;
 use futures::{StreamExt as _, TryStreamExt as _};
 use icechunk::{
     Store,
-    display::{dataclass_html_repr, dataclass_repr, dataclass_str, py_bool},
+    display::{PyRepr, py_bool},
     format::{ChunkIndices, Path, manifest::ChunkPayload},
     session::{
         ReindexMapping, ReindexOperationResult, Session, SessionError, SessionErrorKind,
@@ -59,59 +59,49 @@ impl From<SessionMode> for PySessionMode {
     }
 }
 
+impl PyRepr for PySession {
+    const EXECUTABLE: bool = false;
+
+    fn cls_name() -> &'static str {
+        "icechunk.Session"
+    }
+
+    fn fields(&self) -> Vec<(&str, String)> {
+        let session = self.0.blocking_read();
+        let mut fields = vec![
+            ("read_only", py_bool(session.read_only())),
+            ("snapshot_id", session.snapshot_id().to_string()),
+        ];
+        // Only show branch and uncommitted changes for writable sessions
+        if !session.read_only() {
+            let branch = session
+                .branch()
+                .map(|b| b.to_string())
+                .unwrap_or_else(|| "None".to_string());
+            fields.push(("branch", branch));
+            fields.push((
+                "has_uncommitted_changes",
+                py_bool(session.has_uncommitted_changes()),
+            ));
+        }
+        fields
+    }
+}
+
 #[pymethods]
 /// Most functions in this class block, so they need to `detach` so other
 /// python threads can make progress
 impl PySession {
     pub(crate) fn __repr__(&self) -> String {
-        let session = self.0.blocking_read();
-        let branch_repr = match session.branch() {
-            Some(b) => format!("\"{b}\""),
-            None => "None".to_string(),
-        };
-        dataclass_repr(
-            "icechunk.Session",
-            &[
-                ("read_only", py_bool(session.read_only())),
-                ("snapshot_id", format!("\"{}\"", session.snapshot_id())),
-                ("branch", branch_repr),
-                ("has_uncommitted_changes", py_bool(session.has_uncommitted_changes())),
-            ],
-        )
+        <Self as PyRepr>::__repr__(self)
     }
 
     pub(crate) fn __str__(&self) -> String {
-        let session = self.0.blocking_read();
-        let branch_str = match session.branch() {
-            Some(b) => b.to_string(),
-            None => "None".to_string(),
-        };
-        dataclass_str(
-            "icechunk.Session",
-            &[
-                ("read_only", py_bool(session.read_only())),
-                ("snapshot_id", session.snapshot_id().to_string()),
-                ("branch", branch_str),
-                ("has_uncommitted_changes", py_bool(session.has_uncommitted_changes())),
-            ],
-        )
+        <Self as PyRepr>::__str__(self)
     }
 
     pub(crate) fn _repr_html_(&self) -> String {
-        let session = self.0.blocking_read();
-        let branch_str = match session.branch() {
-            Some(b) => b.to_string(),
-            None => "None".to_string(),
-        };
-        dataclass_html_repr(
-            "icechunk.Session",
-            &[
-                ("read_only", py_bool(session.read_only())),
-                ("snapshot_id", session.snapshot_id().to_string()),
-                ("branch", branch_str),
-                ("has_uncommitted_changes", py_bool(session.has_uncommitted_changes())),
-            ],
-        )
+        <Self as PyRepr>::_repr_html_(self)
     }
 
     #[classmethod]

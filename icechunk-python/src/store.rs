@@ -4,7 +4,7 @@ use chrono::Utc;
 use futures::{StreamExt as _, TryStreamExt as _};
 use icechunk::{
     Store,
-    display::{dataclass_html_repr, dataclass_repr, dataclass_str, py_bool},
+    display::{PyRepr, py_bool},
     format::{
         ChunkIndices, ChunkLength, ChunkOffset, Path,
         manifest::{Checksum, SecondsSinceEpoch, VirtualChunkLocation, VirtualChunkRef},
@@ -101,6 +101,28 @@ impl_pickle!(VirtualChunkSpec);
 #[derive(Clone, Debug)]
 pub struct PyStore(pub Arc<Store>);
 
+impl PyRepr for PyStore {
+    const EXECUTABLE: bool = false;
+
+    fn cls_name() -> &'static str {
+        "icechunk.IcechunkStore"
+    }
+
+    fn fields(&self) -> Vec<(&str, String)> {
+        let session = self.0.session();
+        let session_guard = session.blocking_read();
+        let branch = session_guard
+            .branch()
+            .map(|b| b.to_string())
+            .unwrap_or_else(|| "None".to_string());
+        vec![
+            ("read_only", py_bool(session_guard.read_only())),
+            ("snapshot_id", session_guard.snapshot_id().to_string()),
+            ("branch", branch),
+        ]
+    }
+}
+
 #[pymethods]
 impl PyStore {
     #[classmethod]
@@ -127,54 +149,15 @@ impl PyStore {
     }
 
     pub(crate) fn __repr__(&self) -> String {
-        let session = self.0.session();
-        let session_guard = session.blocking_read();
-        let branch_repr = match session_guard.branch() {
-            Some(b) => format!("\"{b}\""),
-            None => "None".to_string(),
-        };
-        dataclass_repr(
-            "icechunk.IcechunkStore",
-            &[
-                ("read_only", py_bool(session_guard.read_only())),
-                ("snapshot_id", format!("\"{}\"", session_guard.snapshot_id())),
-                ("branch", branch_repr),
-            ],
-        )
+        <Self as PyRepr>::__repr__(self)
     }
 
     pub(crate) fn __str__(&self) -> String {
-        let session = self.0.session();
-        let session_guard = session.blocking_read();
-        let branch_str = match session_guard.branch() {
-            Some(b) => b.to_string(),
-            None => "None".to_string(),
-        };
-        dataclass_str(
-            "icechunk.IcechunkStore",
-            &[
-                ("read_only", py_bool(session_guard.read_only())),
-                ("snapshot_id", session_guard.snapshot_id().to_string()),
-                ("branch", branch_str),
-            ],
-        )
+        <Self as PyRepr>::__str__(self)
     }
 
     pub(crate) fn _repr_html_(&self) -> String {
-        let session = self.0.session();
-        let session_guard = session.blocking_read();
-        let branch_str = match session_guard.branch() {
-            Some(b) => b.to_string(),
-            None => "None".to_string(),
-        };
-        dataclass_html_repr(
-            "icechunk.IcechunkStore",
-            &[
-                ("read_only", py_bool(session_guard.read_only())),
-                ("snapshot_id", session_guard.snapshot_id().to_string()),
-                ("branch", branch_str),
-            ],
-        )
+        <Self as PyRepr>::_repr_html_(self)
     }
 
     #[getter]
