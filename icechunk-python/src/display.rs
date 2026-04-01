@@ -157,23 +157,26 @@ fn dataclass_repr(cls_name: &str, fields: &[(&str, &str)]) -> String {
 }
 
 /// Inline CSS for icechunk HTML reprs.
-/// Scoped to `.icechunk-repr` to avoid leaking into the rest of the notebook.
+///
+/// Uses Jupyter CSS custom properties (`--jp-*`) with sensible fallbacks,
+/// following the same pattern as xarray. This ensures the repr inherits the
+/// notebook's actual theme (light or dark) rather than guessing from OS settings.
 const ICECHUNK_CSS: &str = r#"<style>
 .icechunk-repr {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
-    font-size: 13px;
+    font-family: var(--jp-ui-font-family, -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif);
+    font-size: var(--jp-ui-font-size1, 13px);
     line-height: 1.6;
-    border: 1px solid #ddd;
-    border-radius: 6px;
+    border: 1px solid var(--jp-border-color2, #ddd);
+    border-radius: 4px;
     padding: 10px 14px;
-    background: #fafafa;
+    background: var(--jp-layout-color1, #f7f7f7);
+    color: var(--jp-content-font-color0, rgba(0, 0, 0, 1));
     max-width: 600px;
 }
 .icechunk-repr .icechunk-header {
     font-weight: 600;
-    font-size: 14px;
+    font-size: var(--jp-ui-font-size2, 14px);
     margin-bottom: 6px;
-    color: #333;
 }
 .icechunk-repr .icechunk-field {
     padding: 2px 0;
@@ -182,11 +185,11 @@ const ICECHUNK_CSS: &str = r#"<style>
 }
 .icechunk-repr .icechunk-field-name {
     font-weight: 600;
-    color: #555;
+    color: var(--jp-content-font-color2, rgba(0, 0, 0, 0.54));
     min-width: fit-content;
 }
 .icechunk-repr .icechunk-field-value {
-    color: #333;
+    color: var(--jp-content-font-color0, rgba(0, 0, 0, 1));
 }
 .icechunk-repr details {
     margin: 2px 0;
@@ -194,27 +197,12 @@ const ICECHUNK_CSS: &str = r#"<style>
 .icechunk-repr summary {
     cursor: pointer;
     font-weight: 600;
-    color: #555;
+    color: var(--jp-content-font-color2, rgba(0, 0, 0, 0.54));
 }
 .icechunk-repr details > .icechunk-repr {
     margin-top: 4px;
     margin-left: 12px;
-    border-color: #e0e0e0;
-    background: #fff;
-}
-@media (prefers-color-scheme: dark) {
-    .icechunk-repr {
-        background: #1e1e1e;
-        border-color: #444;
-    }
-    .icechunk-repr .icechunk-header { color: #ddd; }
-    .icechunk-repr .icechunk-field-name { color: #aaa; }
-    .icechunk-repr .icechunk-field-value { color: #ddd; }
-    .icechunk-repr summary { color: #aaa; }
-    .icechunk-repr details > .icechunk-repr {
-        background: #252525;
-        border-color: #555;
-    }
+    background: var(--jp-layout-color0, white);
 }
 </style>"#;
 
