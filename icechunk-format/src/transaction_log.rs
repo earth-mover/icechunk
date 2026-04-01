@@ -434,17 +434,14 @@ impl TransactionLog {
         let moved_nodes = {
             for mv in txs.iter().flat_map(|tx| tx.moves()) {
                 let Move { from, to, node_id, node_type } = mv?;
-                // if this is the first move we see, just insert.
-                // Otherwise we check to see if the current NodeId is already in the moved_map,
-                // and if so we need to merge the old and new move,
+                // if this is the first time we see this node_id, just insert.
+                // Otherwise we need to merge the old and new move for the same node_id,
                 // reusing the info from the old move but replacing the "to" field
                 // from the new move.
-                if let Some(old_from) = moved_map.remove(&node_id) {
-                    moved_map.insert(node_id, Move { to, ..old_from });
-                } else {
-                    moved_map
-                        .insert(node_id.clone(), Move { to, from, node_id, node_type });
-                }
+                moved_map
+                    .entry(node_id.clone())
+                    .and_modify(|m| m.to = to.clone())
+                    .or_insert_with(|| Move { to, from, node_id, node_type });
             }
 
             // check the set of "to" and the set of "from" from all moves are unique.
