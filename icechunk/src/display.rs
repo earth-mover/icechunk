@@ -1,4 +1,12 @@
-use std::fmt::Write as _;
+use std::fmt::{Display, Write as _};
+
+/// Format an `Option<T>` as a Python repr: `"None"` or the Display string of the value.
+pub fn py_option<T: Display>(o: &Option<T>) -> String {
+    match o {
+        None => "None".to_string(),
+        Some(s) => s.to_string(),
+    }
+}
 
 /// Format a bool as a Python literal (`True` / `False`).
 pub fn py_bool(b: bool) -> String {

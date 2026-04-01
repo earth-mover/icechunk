@@ -6,7 +6,7 @@ use std::{
     sync::Arc,
 };
 
-use icechunk::display::PyRepr;
+use icechunk::display::{PyRepr, py_option};
 use itertools::Itertools as _;
 
 use chrono::{DateTime, Utc};
@@ -43,7 +43,7 @@ use tokio::sync::{Mutex, RwLock};
 use crate::{
     config::{
         PyCredentials, PyRepositoryConfig, PyStorage, PyStorageSettings, datetime_repr,
-        format_bool, format_option, format_option_to_string,
+        format_bool, format_option,
     },
     errors::PyIcechunkStoreError,
     impl_pickle,
@@ -263,7 +263,7 @@ impl PySnapshotInfo {
         format!(
             r#"SnapshotInfo(id="{id}", parent_id={parent}, written_at={at}, message="{message}")"#,
             id = self.id,
-            parent = format_option_to_string(self.parent_id.as_ref()),
+            parent = py_option(&self.parent_id),
             at = datetime_repr(&self.written_at),
             // TODO: what would be a better default here?
             message = self.message.chars().take(10).collect::<String>() + "...",
@@ -559,7 +559,7 @@ impl PyRepoStatus {
             "RepoStatus(availability={:?}, set_at={}, limited_availability_reason={})",
             self.availability,
             self.set_at,
-            format_option_to_string(self.limited_availability_reason.as_ref()),
+            py_option(&self.limited_availability_reason),
         )
     }
 }
