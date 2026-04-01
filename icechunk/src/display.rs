@@ -15,7 +15,7 @@ pub fn py_bool(b: bool) -> String {
 
 /// Trait for Python repr/str/html methods on icechunk classes.
 ///
-/// Implementors provide `cls_name`, `fields`, and `EXECUTABLE`.
+/// Implementers provide `cls_name`, `fields`, and `EXECUTABLE`.
 /// Default implementations of `__str__`, `__repr__`, and `_repr_html_` are provided.
 ///
 /// The `fields(executable)` parameter controls how nested objects render themselves:

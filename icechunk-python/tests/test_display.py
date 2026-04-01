@@ -1,8 +1,8 @@
 """Tests for __str__, __repr__, and _repr_html_ display methods."""
 
 import icechunk
-import zarr
 import pytest
+import zarr
 
 from icechunk import CachingConfig, Repository, RepositoryConfig, in_memory_storage
 
@@ -16,7 +16,7 @@ def repo() -> Repository:
 def assert_repr_roundtrips(obj: object) -> None:
     """Assert that eval(repr(obj)) produces an equal object (for executable reprs)."""
     repr_str = repr(obj)
-    reconstructed = eval(repr_str, {"icechunk": icechunk})  # noqa: S307
+    reconstructed = eval(repr_str, {"icechunk": icechunk})
     assert reconstructed == obj, (
         f"Round-trip failed:\n  repr: {repr_str}\n  original: {obj}\n  reconstructed: {reconstructed}"
     )
