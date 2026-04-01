@@ -26,7 +26,6 @@ use icechunk::{
         ManifestVirtualChunkLocationCompressionConfig, RepoUpdateRetryConfig,
         S3Credentials, S3CredentialsFetcher, S3Options, S3StaticCredentials,
     },
-    display::{PyRepr, py_option},
     storage::{self, ConcurrencySettings},
     virtual_chunks::VirtualChunkContainer,
 };
@@ -35,7 +34,7 @@ use pyo3::{
     types::{PyAnyMethods as _, PyModule, PyType},
 };
 
-use crate::display::py_option_nested_repr;
+use crate::display::{PyRepr, py_option, py_option_nested_repr};
 use crate::errors::PyIcechunkStoreError;
 
 #[pyclass(name = "S3StaticCredentials")]

@@ -6,7 +6,7 @@ use std::{
     sync::Arc,
 };
 
-use icechunk::display::{PyRepr, py_option};
+use crate::display::{PyRepr, py_option};
 use itertools::Itertools as _;
 
 use chrono::{DateTime, Utc};

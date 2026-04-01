@@ -4,7 +4,6 @@ use chrono::Utc;
 use futures::{StreamExt as _, TryStreamExt as _};
 use icechunk::{
     Store,
-    display::{PyRepr, py_bool},
     format::{
         ChunkIndices, ChunkLength, ChunkOffset, Path,
         manifest::{Checksum, SecondsSinceEpoch, VirtualChunkLocation, VirtualChunkRef},
@@ -24,6 +23,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
 use crate::{
+    display::{PyRepr, py_bool},
     errors::{PyIcechunkStoreError, PyIcechunkStoreResult},
     impl_pickle,
     session::PySession,

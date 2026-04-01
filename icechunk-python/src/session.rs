@@ -4,7 +4,6 @@ use async_stream::try_stream;
 use futures::{StreamExt as _, TryStreamExt as _};
 use icechunk::{
     Store,
-    display::{PyRepr, py_bool},
     format::{ChunkIndices, Path, manifest::ChunkPayload},
     session::{
         ReindexMapping, ReindexOperationResult, Session, SessionError, SessionErrorKind,
@@ -21,6 +20,7 @@ use tokio::sync::{Mutex, RwLock};
 use crate::{
     config::PyRepositoryConfig,
     conflicts::PyConflictSolver,
+    display::{PyRepr, py_bool},
     errors::{PyIcechunkStoreError, PyIcechunkStoreResult},
     repository::{PyDiff, PySnapshotProperties},
     store::PyStore,

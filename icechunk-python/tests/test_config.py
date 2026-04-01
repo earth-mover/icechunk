@@ -1,5 +1,4 @@
 import os
-import re
 from collections.abc import Generator
 from pathlib import Path
 
