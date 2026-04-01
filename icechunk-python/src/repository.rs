@@ -6,7 +6,7 @@ use std::{
     sync::Arc,
 };
 
-use crate::display::{PyRepr, ReprMode, py_option};
+use crate::display::{PyRepr, ReprMode, py_bool, py_option};
 use itertools::Itertools as _;
 
 use chrono::{DateTime, Utc};
@@ -43,7 +43,6 @@ use tokio::sync::{Mutex, RwLock};
 use crate::{
     config::{
         PyCredentials, PyRepositoryConfig, PyStorage, PyStorageSettings, datetime_repr,
-        format_bool, format_option,
     },
     errors::PyIcechunkStoreError,
     impl_pickle,
@@ -258,18 +257,36 @@ impl PyManifestFileInfo {
     }
 }
 
+// TODO: pass `mode` through once nested fields implement PyRepr
+#[expect(unused_variables)]
+impl PyRepr for PySnapshotInfo {
+    const EXECUTABLE: bool = false;
+    fn cls_name() -> &'static str {
+        "icechunk.SnapshotInfo"
+    }
+    fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
+        vec![
+            ("id", self.id.clone()),
+            ("parent_id", py_option(&self.parent_id)),
+            ("written_at", datetime_repr(&self.written_at)),
+            ("message", self.message.clone()),
+            ("metadata", format!("{:?}", self.metadata)),
+        ]
+    }
+}
+
 #[pymethods]
 impl PySnapshotInfo {
     pub(crate) fn __repr__(&self) -> String {
-        // TODO: escape
-        format!(
-            r#"SnapshotInfo(id="{id}", parent_id={parent}, written_at={at}, message="{message}")"#,
-            id = self.id,
-            parent = py_option(&self.parent_id),
-            at = datetime_repr(&self.written_at),
-            // TODO: what would be a better default here?
-            message = self.message.chars().take(10).collect::<String>() + "...",
-        )
+        <Self as PyRepr>::__repr__(self)
+    }
+
+    pub(crate) fn __str__(&self) -> String {
+        <Self as PyRepr>::__str__(self)
+    }
+
+    pub(crate) fn _repr_html_(&self) -> String {
+        <Self as PyRepr>::_repr_html_(self)
     }
 }
 
@@ -337,6 +354,27 @@ impl From<Diff> for PyDiff {
     }
 }
 
+// TODO: pass `mode` through once nested fields implement PyRepr
+#[expect(unused_variables)]
+impl PyRepr for PyDiff {
+    const EXECUTABLE: bool = false;
+    fn cls_name() -> &'static str {
+        "icechunk.Diff"
+    }
+    fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
+        vec![
+            ("new_groups", format!("{:?}", self.new_groups)),
+            ("new_arrays", format!("{:?}", self.new_arrays)),
+            ("deleted_groups", format!("{:?}", self.deleted_groups)),
+            ("deleted_arrays", format!("{:?}", self.deleted_arrays)),
+            ("updated_groups", format!("{:?}", self.updated_groups)),
+            ("updated_arrays", format!("{:?}", self.updated_arrays)),
+            ("updated_chunks", format!("{:?}", self.updated_chunks)),
+            ("moved_nodes", format!("{:?}", self.moved_nodes)),
+        ]
+    }
+}
+
 #[pymethods]
 impl PyDiff {
     /// Returns true if the diff contains no changes.
@@ -351,83 +389,16 @@ impl PyDiff {
             && self.moved_nodes.is_empty()
     }
 
-    #[expect(clippy::unwrap_used)]
     pub fn __repr__(&self) -> String {
-        let mut res = String::new();
-        use std::fmt::Write as _;
+        <Self as PyRepr>::__repr__(self)
+    }
 
-        if !self.new_groups.is_empty() {
-            res.push_str("Groups created:\n");
-            for g in self.new_groups.iter() {
-                writeln!(res, "    {g}").unwrap();
-            }
-            res.push('\n');
-        }
-        if !self.new_arrays.is_empty() {
-            res.push_str("Arrays created:\n");
-            for g in self.new_arrays.iter() {
-                writeln!(res, "    {g}").unwrap();
-            }
-            res.push('\n');
-        }
+    pub fn __str__(&self) -> String {
+        <Self as PyRepr>::__str__(self)
+    }
 
-        if !self.updated_groups.is_empty() {
-            res.push_str("Group definitions updated:\n");
-            for g in self.updated_groups.iter() {
-                writeln!(res, "    {g}").unwrap();
-            }
-            res.push('\n');
-        }
-
-        if !self.updated_arrays.is_empty() {
-            res.push_str("Array definitions updated:\n");
-            for g in self.updated_arrays.iter() {
-                writeln!(res, "    {g}").unwrap();
-            }
-            res.push('\n');
-        }
-
-        if !self.deleted_groups.is_empty() {
-            res.push_str("Groups deleted:\n");
-            for g in self.deleted_groups.iter() {
-                writeln!(res, "    {g}").unwrap();
-            }
-            res.push('\n');
-        }
-
-        if !self.deleted_arrays.is_empty() {
-            res.push_str("Arrays deleted:\n");
-            for g in self.deleted_arrays.iter() {
-                writeln!(res, "    {g}").unwrap();
-            }
-            res.push('\n');
-        }
-
-        if !self.moved_nodes.is_empty() {
-            res.push_str("Nodes moved/renamed:\n");
-            for (from, to) in self.moved_nodes.iter() {
-                writeln!(res, "    {from} -> {to}").unwrap();
-            }
-            res.push('\n');
-        }
-
-        if !self.updated_chunks.is_empty() {
-            res.push_str("Chunks updated:\n");
-            for (path, chunks) in self.updated_chunks.iter() {
-                writeln!(res, "    {path}:").unwrap();
-                let coords = chunks
-                    .iter()
-                    .map(|idx| format!("        [{}]", idx.iter().join(", ")))
-                    .take(10)
-                    .join("\n");
-                res.push_str(coords.as_str());
-                res.push('\n');
-                if chunks.len() > 10 {
-                    writeln!(res, "        ... {} more", chunks.len() - 10).unwrap();
-                }
-            }
-        }
-        res
+    pub fn _repr_html_(&self) -> String {
+        <Self as PyRepr>::_repr_html_(self)
     }
 }
 
@@ -463,18 +434,37 @@ impl From<GCSummary> for PyGCSummary {
     }
 }
 
+// TODO: pass `mode` through once nested fields implement PyRepr
+#[expect(unused_variables)]
+impl PyRepr for PyGCSummary {
+    const EXECUTABLE: bool = false;
+    fn cls_name() -> &'static str {
+        "icechunk.GCSummary"
+    }
+    fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
+        vec![
+            ("bytes_deleted", self.bytes_deleted.to_string()),
+            ("chunks_deleted", self.chunks_deleted.to_string()),
+            ("manifests_deleted", self.manifests_deleted.to_string()),
+            ("snapshots_deleted", self.snapshots_deleted.to_string()),
+            ("attributes_deleted", self.attributes_deleted.to_string()),
+            ("transaction_logs_deleted", self.transaction_logs_deleted.to_string()),
+        ]
+    }
+}
+
 #[pymethods]
 impl PyGCSummary {
     pub(crate) fn __repr__(&self) -> String {
-        format!(
-            r#"GCSummary(bytes_deleted={bytes}, chunks_deleted={chunks}, manifests_deleted={manifests}, snapshots_deleted={snapshots}, attributes_deleted={atts}, transaction_logs_deleted={txs})"#,
-            bytes = self.bytes_deleted,
-            chunks = self.chunks_deleted,
-            manifests = self.manifests_deleted,
-            snapshots = self.snapshots_deleted,
-            atts = self.attributes_deleted,
-            txs = self.transaction_logs_deleted,
-        )
+        <Self as PyRepr>::__repr__(self)
+    }
+
+    pub(crate) fn __str__(&self) -> String {
+        <Self as PyRepr>::__str__(self)
+    }
+
+    pub(crate) fn _repr_html_(&self) -> String {
+        <Self as PyRepr>::_repr_html_(self)
     }
 }
 
@@ -543,6 +533,22 @@ impl Display for PyRepoStatus {
     }
 }
 
+// TODO: pass `mode` through once nested fields implement PyRepr
+#[expect(unused_variables)]
+impl PyRepr for PyRepoStatus {
+    const EXECUTABLE: bool = false;
+    fn cls_name() -> &'static str {
+        "icechunk.RepoStatus"
+    }
+    fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
+        vec![
+            ("availability", format!("{:?}", self.availability)),
+            ("set_at", datetime_repr(&self.set_at)),
+            ("limited_availability_reason", py_option(&self.limited_availability_reason)),
+        ]
+    }
+}
+
 #[pymethods]
 impl PyRepoStatus {
     #[new]
@@ -557,12 +563,15 @@ impl PyRepoStatus {
     }
 
     fn __repr__(&self) -> String {
-        format!(
-            "RepoStatus(availability={:?}, set_at={}, limited_availability_reason={})",
-            self.availability,
-            self.set_at,
-            py_option(&self.limited_availability_reason),
-        )
+        <Self as PyRepr>::__repr__(self)
+    }
+
+    fn __str__(&self) -> String {
+        <Self as PyRepr>::__str__(self)
+    }
+
+    fn _repr_html_(&self) -> String {
+        <Self as PyRepr>::_repr_html_(self)
     }
 }
 
@@ -589,54 +598,56 @@ pub(crate) enum PyUpdateType {
 
 #[pymethods]
 impl PyUpdateType {
-    fn __repr__(&self) -> Cow<'static, str> {
+    fn __repr__(&self) -> String {
         match self {
-            Self::RepoInitialized {} => "RepoInitialized()".into(),
-            Self::ConfigChanged {} => "ConfigChanged()".into(),
-            Self::MetadataChanged {} => "MetadataChanged()".into(),
-            Self::TagCreated { name } => format!("TagCreated(name={name})").into(),
+            Self::RepoInitialized {} => "icechunk.UpdateType.RepoInitialized()".into(),
+            Self::ConfigChanged {} => "icechunk.UpdateType.ConfigChanged()".into(),
+            Self::MetadataChanged {} => "icechunk.UpdateType.MetadataChanged()".into(),
+            Self::TagCreated { name } => {
+                format!("icechunk.UpdateType.TagCreated(name=\"{name}\")")
+            }
             Self::TagDeleted { name, previous_snap_id } => format!(
-                "TagDeleted(name={name}, previous_snap_id={previous_snap_id})"
-            )
-            .into(),
+                "icechunk.UpdateType.TagDeleted(name=\"{name}\", previous_snap_id=\"{previous_snap_id}\")"
+            ),
             Self::BranchCreated { name } => {
-                format!("BranchCreated(name={name})").into()
+                format!("icechunk.UpdateType.BranchCreated(name=\"{name}\")")
             }
             Self::BranchDeleted { name, previous_snap_id } => format!(
-                "BranchDeleted(name={name}, previous_snap_id={previous_snap_id})"
-            )
-            .into(),
+                "icechunk.UpdateType.BranchDeleted(name=\"{name}\", previous_snap_id=\"{previous_snap_id}\")"
+            ),
             Self::BranchReset { name, previous_snap_id } => format!(
-                "BranchReset(name={name}, previous_snap_id={previous_snap_id})"
-            )
-            .into(),
+                "icechunk.UpdateType.BranchReset(name=\"{name}\", previous_snap_id=\"{previous_snap_id}\")"
+            ),
             Self::NewCommit { branch, new_snap_id } => {
-                format!("NewCommit(branch={branch}, new_snap_id={new_snap_id})")
-                    .into()
+                format!(
+                    "icechunk.UpdateType.NewCommit(branch=\"{branch}\", new_snap_id=\"{new_snap_id}\")"
+                )
             }
             Self::CommitAmended { branch, previous_snap_id, new_snap_id } => format!(
-                "CommitAmended(branch={branch}, previous_snap_id={previous_snap_id}, new_snap_id={new_snap_id})",
-            )
-            .into(),
+                "icechunk.UpdateType.CommitAmended(branch=\"{branch}\", previous_snap_id=\"{previous_snap_id}\", new_snap_id=\"{new_snap_id}\")",
+            ),
             Self::RepoMigrated { from_version, to_version } => format!(
-                "RepoMigrated(from_version={from_version}, to_version={to_version})"
-            )
-            .into(),
+                "icechunk.UpdateType.RepoMigrated(from_version={from_version}, to_version={to_version})"
+            ),
             Self::RepoStatusChanged { status } => {
-                format!("RepoStatusChanged(status={status})",).into()
+                format!("icechunk.UpdateType.RepoStatusChanged(status={status})")
             }
-            Self::GCRan {} => "GCRan()".into(),
+            Self::GCRan {} => "icechunk.UpdateType.GCRan()".into(),
             Self::FeatureFlagChanged { id, new_value } => format!(
-                "FeatureFlagChanged(id={}, new_value={})",
-                id,
-                format_option(new_value.map(format_bool))
-            )
-            .into(),
-            Self::ExpirationRan {} => "ExpirationRan()".into(),
+                "icechunk.UpdateType.FeatureFlagChanged(id={id}, new_value={})",
+                new_value.map(py_bool).unwrap_or_else(|| "None".to_string()),
+            ),
+            Self::ExpirationRan {} => "icechunk.UpdateType.ExpirationRan()".into(),
             Self::NewDetachedSnapshot { new_snap_id } => {
-                format!("NewDetachedSnapshot(new_snap_id={new_snap_id})").into()
+                format!(
+                    "icechunk.UpdateType.NewDetachedSnapshot(new_snap_id=\"{new_snap_id}\")"
+                )
             }
         }
+    }
+
+    fn __str__(&self) -> String {
+        self.__repr__()
     }
 }
 
@@ -653,16 +664,32 @@ pub(crate) struct PyUpdate {
     backup_path: Option<String>,
 }
 
+// TODO: pass `mode` through once nested fields implement PyRepr
+#[expect(unused_variables)]
+impl PyRepr for PyUpdate {
+    const EXECUTABLE: bool = false;
+    fn cls_name() -> &'static str {
+        "icechunk.Update"
+    }
+    fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
+        vec![
+            ("kind", self.kind.__repr__()),
+            ("updated_at", datetime_repr(&self.updated_at)),
+            ("backup_path", py_option(&self.backup_path)),
+        ]
+    }
+}
+
 #[pymethods]
 impl PyUpdate {
-    fn __repr__(&self) -> Cow<'static, str> {
-        format!(
-            "Update(kind={}, updated_at='{}', backup_path={:?})",
-            self.kind.__repr__(),
-            self.updated_at,
-            self.backup_path
-        )
-        .into()
+    fn __repr__(&self) -> String {
+        <Self as PyRepr>::__repr__(self)
+    }
+    fn __str__(&self) -> String {
+        <Self as PyRepr>::__str__(self)
+    }
+    fn _repr_html_(&self) -> String {
+        <Self as PyRepr>::_repr_html_(self)
     }
 }
 
@@ -681,17 +708,34 @@ pub(crate) struct PyFeatureFlag {
     enabled: bool,
 }
 
+// TODO: pass `mode` through once nested fields implement PyRepr
+#[expect(unused_variables)]
+impl PyRepr for PyFeatureFlag {
+    const EXECUTABLE: bool = false;
+    fn cls_name() -> &'static str {
+        "icechunk.FeatureFlag"
+    }
+    fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
+        vec![
+            ("id", self.id.to_string()),
+            ("name", self.name.clone()),
+            ("default_enabled", py_bool(self.default_enabled)),
+            ("setting", self.setting.map(py_bool).unwrap_or_else(|| "None".to_string())),
+            ("enabled", py_bool(self.enabled)),
+        ]
+    }
+}
+
 #[pymethods]
 impl PyFeatureFlag {
-    fn __repr__(&self) -> PyResult<String> {
-        Ok(format!(
-            "FeatureFlag(id={}, name={}, default_enabled={}, setting={}, enabled={})",
-            self.id,
-            self.name,
-            format_bool(self.default_enabled),
-            format_option(self.setting.map(format_bool)),
-            format_bool(self.enabled),
-        ))
+    fn __repr__(&self) -> String {
+        <Self as PyRepr>::__repr__(self)
+    }
+    fn __str__(&self) -> String {
+        <Self as PyRepr>::__str__(self)
+    }
+    fn _repr_html_(&self) -> String {
+        <Self as PyRepr>::_repr_html_(self)
     }
 }
 

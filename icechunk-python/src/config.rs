@@ -134,20 +134,6 @@ impl PyS3StaticCredentials {
     }
 }
 
-pub(crate) fn format_option<'a, T: AsRef<str> + 'a>(o: Option<T>) -> String {
-    match o.as_ref() {
-        None => "None".to_string(),
-        Some(s) => s.as_ref().to_string(),
-    }
-}
-
-pub(crate) fn format_bool(b: bool) -> &'static str {
-    match b {
-        true => "True",
-        false => "False",
-    }
-}
-
 pub(crate) fn datetime_repr(d: &DateTime<Utc>) -> String {
     format!(
         "datetime.datetime({y},{month},{d},{h},{min},{sec},{micro}, tzinfo=datetime.timezone.utc)",
