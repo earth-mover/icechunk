@@ -309,7 +309,7 @@ jobs:
         run: |
           set -e
           source .venv/bin/activate
-          python -m pytest tests/test_stateful_compat.py -v --hypothesis-show-statistics
+          HYPOTHESIS_EXPERIMENTAL_OBSERVABILITY=1 python -m pytest tests/test_stateful_compat.py -v --hypothesis-show-statistics
 
   xarray-backends:
     runs-on: ubuntu-latest
