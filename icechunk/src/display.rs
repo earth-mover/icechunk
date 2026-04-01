@@ -17,6 +17,13 @@ pub fn py_bool(b: bool) -> String {
 ///
 /// Implementors provide `cls_name`, `fields`, and `EXECUTABLE`.
 /// Default implementations of `__str__`, `__repr__`, and `_repr_html_` are provided.
+///
+/// The `fields(executable)` parameter controls how nested objects render themselves:
+/// - `__repr__` passes `Self::EXECUTABLE`, so an executable class gets executable
+///   nested reprs, producing output that `eval()` can reconstruct.
+/// - `__str__` and `_repr_html_` always pass `false`, because these are meant to be
+///   human-readable — embedding constructor syntax inside a human-readable display
+///   would be confusing, and a half-executable repr is useless for round-tripping.
 pub trait PyRepr {
     /// Whether this class has an executable `__repr__` (constructor-style).
     /// If false, `__repr__` uses the same non-executable format as `__str__`.
@@ -27,17 +34,21 @@ pub trait PyRepr {
 
     /// Field name/value pairs. Values should be in Python repr form
     /// (quoted strings, `True`/`False`, `None`).
-    fn fields(&self) -> Vec<(&str, String)>;
+    ///
+    /// `executable` is true when building an executable repr, false for str/html.
+    /// Pass this through to nested repr calls (e.g. `py_option_nested_repr`) so
+    /// the recursion pattern is consistent.
+    fn fields(&self, executable: bool) -> Vec<(&str, String)>;
 
     fn __str__(&self) -> String {
-        let fields = self.fields();
+        let fields = self.fields(false);
         let refs: Vec<(&str, &str)> =
             fields.iter().map(|(k, v)| (*k, v.as_str())).collect();
         dataclass_str(Self::cls_name(), &refs)
     }
 
     fn __repr__(&self) -> String {
-        let fields = self.fields();
+        let fields = self.fields(Self::EXECUTABLE);
         let refs: Vec<(&str, &str)> =
             fields.iter().map(|(k, v)| (*k, v.as_str())).collect();
         if Self::EXECUTABLE {
@@ -48,7 +59,7 @@ pub trait PyRepr {
     }
 
     fn _repr_html_(&self) -> String {
-        let fields = self.fields();
+        let fields = self.fields(false);
         let refs: Vec<(&str, &str)> =
             fields.iter().map(|(k, v)| (*k, v.as_str())).collect();
         dataclass_html_repr(Self::cls_name(), &refs)

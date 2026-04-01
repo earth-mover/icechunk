@@ -225,6 +225,8 @@ impl From<SnapshotInfo> for PySnapshotInfo {
     }
 }
 
+// TODO: use `executable` once nested fields implement PyRepr
+#[expect(unused_variables)]
 impl PyRepr for PyManifestFileInfo {
     const EXECUTABLE: bool = false;
 
@@ -232,7 +234,7 @@ impl PyRepr for PyManifestFileInfo {
         "icechunk.ManifestFileInfo"
     }
 
-    fn fields(&self) -> Vec<(&str, String)> {
+    fn fields(&self, executable: bool) -> Vec<(&str, String)> {
         vec![
             ("id", self.id.clone()),
             ("size_bytes", self.size_bytes.to_string()),
@@ -1018,6 +1020,8 @@ impl PyRepository {
     }
 }
 
+// TODO: use `executable` once nested fields implement PyRepr
+#[expect(unused_variables)]
 impl PyRepr for PyRepository {
     const EXECUTABLE: bool = false;
 
@@ -1025,7 +1029,7 @@ impl PyRepr for PyRepository {
         "icechunk.Repository"
     }
 
-    fn fields(&self) -> Vec<(&str, String)> {
+    fn fields(&self, executable: bool) -> Vec<(&str, String)> {
         let storage = format!("{}", self.0.blocking_read().storage());
         vec![("storage", storage)]
     }

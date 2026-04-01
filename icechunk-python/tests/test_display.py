@@ -4,7 +4,7 @@ import icechunk
 import zarr
 import pytest
 
-from icechunk import CachingConfig, Repository, in_memory_storage
+from icechunk import CachingConfig, Repository, RepositoryConfig, in_memory_storage
 
 
 @pytest.fixture
@@ -61,6 +61,24 @@ class TestRepr:
 
     def test_caching_config_roundtrip_with_values(self) -> None:
         assert_repr_roundtrips(CachingConfig(num_snapshot_nodes=100, num_chunk_refs=200))
+
+    def test_nested_repr_is_executable(self) -> None:
+        """An executable parent's __repr__ should contain executable nested reprs."""
+        config = RepositoryConfig(caching=CachingConfig(num_snapshot_nodes=42))
+        repr_str = repr(config)
+        # The nested CachingConfig should appear in constructor form
+        assert "icechunk.CachingConfig(" in repr_str
+        assert "num_snapshot_nodes=42" in repr_str
+
+    def test_nested_str_is_not_executable(self) -> None:
+        """An executable parent's __str__ should contain non-executable nested reprs."""
+        config = RepositoryConfig(caching=CachingConfig(num_snapshot_nodes=42))
+        str_str = str(config)
+        # The nested CachingConfig should appear in non-executable <ClassName> form
+        assert "<icechunk.CachingConfig>" in str_str
+        assert "num_snapshot_nodes: 42" in str_str
+        # It should NOT contain constructor syntax
+        assert "icechunk.CachingConfig(" not in str_str
 
 
 class TestStr:
