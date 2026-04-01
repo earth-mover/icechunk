@@ -454,8 +454,10 @@ struct TransactionLogInspect {
     moved_nodes: Vec<MoveInspect>,
 }
 
-fn inspect_transaction_log(tx: &TransactionLog) -> TransactionLogInspect {
-    TransactionLogInspect {
+fn inspect_transaction_log(
+    tx: &TransactionLog,
+) -> RepositoryResult<TransactionLogInspect> {
+    Ok(TransactionLogInspect {
         new_groups: tx.new_groups().map(|id| id.to_string()).collect(),
         new_arrays: tx.new_arrays().map(|id| id.to_string()).collect(),
         deleted_groups: tx.deleted_groups().map(|id| id.to_string()).collect(),
@@ -471,9 +473,12 @@ fn inspect_transaction_log(tx: &TransactionLog) -> TransactionLogInspect {
             .collect(),
         moved_nodes: tx
             .moves()
-            .map(|m| MoveInspect { from: m.from.to_string(), to: m.to.to_string() })
-            .collect(),
-    }
+            .map(|m| {
+                let m = m.inject()?;
+                Ok(MoveInspect { from: m.from.to_string(), to: m.to.to_string() })
+            })
+            .try_collect()?,
+    })
 }
 
 pub async fn transaction_log_json(
@@ -482,7 +487,7 @@ pub async fn transaction_log_json(
     pretty: bool,
 ) -> RepositoryResult<String> {
     let tx = asset_manager.fetch_transaction_log(id).await?;
-    let info = inspect_transaction_log(&tx);
+    let info = inspect_transaction_log(&tx)?;
     let res = if pretty {
         serde_json::to_string_pretty(&info)
     } else {

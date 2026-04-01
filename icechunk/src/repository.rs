@@ -1739,8 +1739,10 @@ impl Repository {
 
         let builder = fut
             .try_fold(DiffBuilder::default(), |mut res, log| {
-                res.add_changes(log.as_ref());
-                ready(Ok(res))
+                ready(match res.add_changes(log.as_ref()) {
+                    Ok(_) => Ok(res),
+                    Err(e) => Err(RepositoryError::capture(e.kind)),
+                })
             })
             .await
             .inject()?;

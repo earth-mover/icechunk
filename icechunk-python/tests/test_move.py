@@ -7,6 +7,7 @@ from hypothesis import strategies as st
 
 import icechunk as ic
 import zarr
+from icechunk.testing.invariants import assert_moves_sorted_by_final_path
 from icechunk.testing.trees import GroupNode, tree_and_moves
 from icechunk.testing.utils import (
     precommit_postcommit_readonly,
@@ -70,12 +71,20 @@ async def test_basic_move() -> None:
 
     a, b, *_ = repo.ancestry(branch="main")
     diff = repo.diff(from_snapshot_id=b.id, to_snapshot_id=a.id)
-    assert diff.moved_nodes == [("/my/old", "/my/new")]
+    assert set(diff.moved_nodes) == set(
+        [
+            ("/my/old", "/my/new"),
+            ("/my/old/path", "/my/new/path"),
+            ("/my/old/path/array", "/my/new/path/array"),
+        ]
+    )
     assert (
         repr(diff)
         == """\
 Nodes moved/renamed:
     /my/old -> /my/new
+    /my/old/path -> /my/new/path
+    /my/old/path/array -> /my/new/path/array
 
 """
     )
@@ -152,6 +161,7 @@ def test_moves(
     )
 
     expected = repr(zarr.open_group(model).tree())
+    snap_before = session.snapshot_id
     for label, store in precommit_postcommit_readonly(session, repo):
         actual = repr(zarr.open_group(store, mode="r").tree())
         assert expected == actual, (
@@ -162,6 +172,11 @@ def test_moves(
             + f"\n\nexpected:\n{expected}"
             f"\n\nactual:\n{actual}"
         )
+
+    # Moves in the tx log must be sorted by final path
+    snap_after = repo.lookup_branch("main")
+    diff = repo.diff(from_snapshot_id=snap_before, to_snapshot_id=snap_after)
+    assert_moves_sorted_by_final_path(diff.moved_nodes)
 
 
 @pytest.mark.xfail(

@@ -14,6 +14,7 @@ from icechunk.testing.models import ModelStore
 __all__ = [
     "assert_ancestry_invariants",
     "assert_list_dir_equal",
+    "assert_moves_sorted_by_final_path",
     "compare_list_dir",
 ]
 
@@ -53,6 +54,21 @@ def assert_ancestry_invariants(
     n = len(ancestry)
     bucket = f"{n // 10 * 10}-{n // 10 * 10 + 9}"
     event(f"ancestry length: {bucket}")
+
+
+def assert_moves_sorted_by_final_path(
+    moved_nodes: list[tuple[str, str]],
+) -> None:
+    """Assert that moved_nodes are sorted by final path (component-based).
+
+    Rust's Path::cmp compares by path components, not raw bytes, so we
+    split on '/' to match (e.g. /a < /a/b < /a-b).
+    """
+    assert moved_nodes, "Expected non-empty moved_nodes"
+    final_paths = [to for _, to in moved_nodes]
+    assert final_paths == sorted(final_paths, key=lambda p: p.split("/")), (
+        f"Moves not sorted by final path: {moved_nodes}"
+    )
 
 
 def assert_list_dir_equal(path: str, expected: list[str], actual: list[str]) -> None:
