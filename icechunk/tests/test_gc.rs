@@ -662,7 +662,7 @@ pub async fn test_expire_deletes_branch_sharing_tip_with_main()
     let mut session = repo.writable_session("main").await?;
     let user_data = Bytes::new();
     session.add_group(Path::root(), user_data.clone()).await?;
-    let commit_1 = session.commit("first").max_concurrent_nodes(8).execute().await?;
+    let commit_1 = session.commit("first").execute().await?;
 
     repo.create_branch("feature", &commit_1).await?;
 
@@ -671,10 +671,6 @@ pub async fn test_expire_deletes_branch_sharing_tip_with_main()
     assert!(branches.contains("feature"));
 
     let expire_older_than = Utc::now();
-
-    let mut session = repo.writable_session("main").await?;
-    session.add_group(Path::try_from("/new").unwrap(), user_data.clone()).await?;
-    session.commit("second").execute().await?;
 
     let asset_manager = Arc::new(AssetManager::new_no_cache(
         Arc::clone(&storage),
