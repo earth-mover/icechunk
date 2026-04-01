@@ -35,6 +35,8 @@
 
 **Inspect/Debugging Tools**: `inspect_snapshot()`, `inspect_repo_info()`, `inspect_manifest()` return detailed JSON introspection of internal structures.
 
+**Pretty Reprs**: All python classes now define complete string, executable, and HTML reprs.
+
 **IC1 → IC2 Migration**: `migrate_1_to_2()` with dry-run support.
 
 ---
