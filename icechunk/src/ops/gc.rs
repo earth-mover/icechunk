@@ -779,7 +779,7 @@ pub struct ExpireResult {
 /// in every ancestry, changing its parent to be the root of the repo.
 ///
 /// For this reasons, it's recommended to invalidate any snapshot
-/// caches before traversing history againg. The cache in the
+/// caches before traversing history again. The cache in the
 /// passed `asset_manager` is invalidated here, but other caches
 /// may exist, for example, in [`crate::Repository`] instances.
 ///

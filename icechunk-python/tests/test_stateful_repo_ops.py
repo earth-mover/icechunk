@@ -1152,24 +1152,6 @@ class VersionControlStateMachine(RuleBasedStateMachine):
 
 VersionControlTest = VersionControlStateMachine.TestCase
 
-# ---- Focused expire tests ----
-
-GC_RULES = {
-    "empty_commit",
-    "reset_branch",
-    "expire_snapshots",
-}
-
-
-def test_expire_subset():
-    """Run GC-related rules in isolation via VersionControlStateMachine subset."""
-    from icechunk.testing.stateful_subsets import test_subsets
-
-    test_subsets(
-        VersionControlStateMachine,
-        with_rules=[(GC_RULES, settings(max_examples=200, stateful_step_count=30))],
-    )
-
 
 class ExpireOrphanMachine(RuleBasedStateMachine):
     """Minimal machine exploring GC expire + branch reset interactions."""

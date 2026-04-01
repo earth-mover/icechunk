@@ -144,6 +144,10 @@ pub enum RepositoryErrorKind {
     )]
     NoAmendForInitialCommit,
     #[error(
+        "cannot amend an anonymous snapshot (a snapshot with no parent, typically created by GC or expiration)"
+    )]
+    NoAmendForAnonymousCommit,
+    #[error(
         "repository cannot be updated after {0} attempts, too many concurrent changes"
     )]
     RepoUpdateAttemptsLimit(u64),

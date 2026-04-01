@@ -407,6 +407,10 @@ impl SnapshotInfo {
     pub fn is_initial(&self) -> bool {
         self.id == Snapshot::INITIAL_SNAPSHOT_ID
     }
+
+    pub fn is_anonymous(&self) -> bool {
+        self.parent_id.is_none() && !self.is_initial()
+    }
 }
 
 impl SnapshotId {

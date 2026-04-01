@@ -168,6 +168,10 @@ pub enum SessionErrorKind {
         "the first commit in the repository cannot be an amend, create a new commit instead"
     )]
     NoAmendForInitialCommit,
+    #[error(
+        "cannot amend an anonymous snapshot (a snapshot with no parent, typically created by GC or expiration)"
+    )]
+    NoAmendForAnonymousCommit,
     #[error("failed to create manifest from chunk stream")]
     ManifestCreationError(#[from] Box<SessionError>),
     #[error("failed to merge sessions: {0}")]
@@ -3012,9 +3016,18 @@ async fn do_commit(
         return Err(SessionError::capture(SessionErrorKind::NoChangesToCommit));
     }
 
-    // Cannot amend the initial commit
-    if commit_method == CommitMethod::Amend && snapshot_id.is_initial() {
-        return Err(SessionError::capture(SessionErrorKind::NoAmendForInitialCommit));
+    // Cannot amend the initial commit or anonymous snapshots (parent_id=None).
+    // Anonymous snapshots can be created by GC/expiration rewriting parent pointers.
+    if commit_method == CommitMethod::Amend {
+        if snapshot_id.is_initial() {
+            return Err(SessionError::capture(SessionErrorKind::NoAmendForInitialCommit));
+        }
+        let snap_info = asset_manager.fetch_snapshot_info(snapshot_id).await.inject()?;
+        if snap_info.is_anonymous() {
+            return Err(SessionError::capture(
+                SessionErrorKind::NoAmendForAnonymousCommit,
+            ));
+        }
     }
 
     let properties = properties.unwrap_or_default();
@@ -3083,6 +3096,10 @@ async fn do_commit(
             kind: RepositoryErrorKind::NoAmendForInitialCommit,
             context,
         }) => Err(ICError { kind: SessionErrorKind::NoAmendForInitialCommit, context }),
+        Err(RepositoryError {
+            kind: RepositoryErrorKind::NoAmendForAnonymousCommit,
+            context,
+        }) => Err(ICError { kind: SessionErrorKind::NoAmendForAnonymousCommit, context }),
         Err(err) => Err(err.inject()),
     }
 }
