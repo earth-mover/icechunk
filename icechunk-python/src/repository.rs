@@ -1020,8 +1020,6 @@ impl PyRepository {
     }
 }
 
-// TODO: pass `mode` through once nested fields implement PyRepr
-#[expect(unused_variables)]
 impl PyRepr for PyRepository {
     const EXECUTABLE: bool = false;
 
@@ -1030,8 +1028,15 @@ impl PyRepr for PyRepository {
     }
 
     fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
-        let storage = format!("{}", self.0.blocking_read().storage());
-        vec![("storage", storage)]
+        let repo = self.0.blocking_read();
+        let storage = format!("{}", repo.storage());
+        let py_config: PyRepositoryConfig = repo.config().clone().into();
+        let config = match mode {
+            ReprMode::Str => PyRepr::__str__(&py_config),
+            ReprMode::Repr => PyRepr::__repr__(&py_config),
+            ReprMode::Html => PyRepr::_repr_html_(&py_config),
+        };
+        vec![("storage", storage), ("config", config)]
     }
 }
 
