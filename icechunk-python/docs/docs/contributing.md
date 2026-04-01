@@ -165,6 +165,43 @@ Profiles are registered in `tests/conftest.py`. Individual tests should **not** 
 `max_examples` or `stateful_step_count` — let the profile control these so that nightly
 runs automatically explore more.
 
+#### Cross-Version Stateful Tests
+
+The cross-version stateful tests (`tests/test_stateful_compat.py`) verify that repositories created by different major versions of icechunk are compatible. They require a renamed copy of icechunk v1 installed alongside the current dev version using [third-wheel](https://github.com/earth-mover/third-wheel).
+
+`third-wheel` is included in the dev dependencies, and the rename is pre-configured in `pyproject.toml` under `[tool.third-wheel]`. To install the renamed `icechunk_v1` package:
+
+=== "pixi (Recommended)"
+
+    ```bash
+    pixi run third-wheel sync -v
+    ```
+
+=== "uv"
+
+    ```bash
+    cd icechunk-python
+    uv run third-wheel sync -v
+    ```
+
+This downloads icechunk v1 from PyPI, renames it to `icechunk_v1`, and installs it into your environment. Then run the tests:
+
+=== "pixi (Recommended)"
+
+    ```bash
+    just pytest tests/test_stateful_compat.py -v
+    ```
+
+=== "uv"
+
+    ```bash
+    cd icechunk-python
+    uv run pytest tests/test_stateful_compat.py -v
+    ```
+
+!!! note
+    If `icechunk_v1` is not installed, these tests are automatically skipped.
+
 !!! important
 
     The full Python test suite depends on S3 and Azure compatible object stores. See [here](#docker-setup-for-local-storage-testing) for detailed instructions. If this is not set up some tests will fail
