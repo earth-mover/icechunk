@@ -28,6 +28,7 @@ dev = [
   "ruff==0.15.3",
   "maturin>=1.7,<2.0",
   "maturin-import-hook>=0.3.0",
+  "third-wheel",
 ]
 test = [
   "boto3",
@@ -105,6 +106,11 @@ cargo-extra-args = ["--workspace"]
 [tool.uv]
 # Disable automatic package building - we use maturin-import-hook for faster dev cycles
 package = false
+
+[tool.third-wheel]
+renames = [
+  { original = "icechunk", new-name = "icechunk_v1", version = ">=1,<2" },
+]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
