@@ -535,15 +535,12 @@ class Model:
             # V1 doesn't rewrite parent pointers, so commits whose parents
             # were GC'd have broken ancestry and are effectively unusable.
             # Remove them from commits so we don't try to use them
-            while True:
-                orphaned = {
-                    k
-                    for k, c in self.commits.items()
-                    if c.parent_id is not None
-                    and (c.parent_id in deleted or c.parent_id not in self.ondisk_snaps)
-                }
-                if not orphaned:
-                    break
+            while orphaned := {
+                k
+                for k, c in self.commits.items()
+                if c.parent_id is not None
+                and (c.parent_id in deleted or c.parent_id not in self.ondisk_snaps)
+            }:
                 for k in orphaned:
                     self.commits.pop(k, None)
         note(f"Deleted snapshots in model: {deleted!r}")
@@ -833,7 +830,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
 
         # V1 expired snapshots stay on disk so create_branch succeeds, but
         # the model no longer tracks their store contents.
-        assume(self.model.spec_version >= 2 or commit in self.model.commits)
+        assume(not (self.model.spec_version == 1 and commit not in self.model.commits))
 
         # we can create a tag and branch with the same name
         if name not in self.model.branch_heads and commit in self.model.commits:
@@ -853,7 +850,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         note(f"Creating tag {name!r} for commit {commit_id!r}")
         # V1 expired snapshots stay on disk so create_tag succeeds, but
         # the model no longer tracks their store contents.
-        assume(self.model.spec_version >= 2 or commit_id in self.model.commits)
+        assume(not (self.model.spec_version == 1 and commit_id not in self.model.commits))
         if (
             name in self.model.created_tags
             or name in self.model.tags
@@ -892,7 +889,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
     def reset_branch(self, branch: str, commit: str) -> None:
         # V1 expired snapshots stay on disk so reset_branch would succeed,
         # but modelling that divergence isn't worthwhile — just skip.
-        assume(self.model.spec_version >= 2 or commit in self.model.commits)
+        assume(not (self.model.spec_version == 1 and commit not in self.model.commits))
         if branch not in self.model.branch_heads or commit not in self.model.commits:
             note(f"resetting branch {branch}, expecting error.")
             with pytest.raises(IcechunkError):
