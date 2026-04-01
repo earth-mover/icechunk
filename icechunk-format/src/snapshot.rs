@@ -13,6 +13,7 @@ use quick_cache::sync::{Cache, GuardResult};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+pub use crate::NodeType;
 use crate::{
     AttributesId, ChunkIndices, IcechunkFormatError, IcechunkFormatErrorKind,
     IcechunkResult, ManifestId, NodeId, Path, SnapshotId,
@@ -138,12 +139,6 @@ pub enum NodeData {
         manifests: Vec<ManifestRef>,
     },
     Group,
-}
-
-#[derive(Clone, Debug, Hash, PartialEq, Eq)]
-pub enum NodeType {
-    Group,
-    Array,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
