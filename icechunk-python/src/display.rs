@@ -58,6 +58,15 @@ pub(crate) trait PyRepr {
     /// so the recursion pattern is consistent.
     fn fields(&self, mode: ReprMode) -> Vec<(&str, String)>;
 
+    /// Dispatch to the appropriate repr method for the given mode.
+    fn render(&self, mode: ReprMode) -> String {
+        match mode {
+            ReprMode::Str => self.__str__(),
+            ReprMode::Repr => self.__repr__(),
+            ReprMode::Html => self._repr_html_(),
+        }
+    }
+
     fn __str__(&self) -> String {
         let fields = self.fields(ReprMode::Str);
         let refs: Vec<(&str, &str)> =
@@ -99,14 +108,7 @@ pub(crate) fn py_option_nested_repr<T: PyRepr + PyClass>(
 ) -> String {
     match opt {
         None => "None".to_string(),
-        Some(py_obj) => Python::attach(|py| {
-            let inner = &*py_obj.borrow(py);
-            match mode {
-                ReprMode::Str => <T as PyRepr>::__str__(inner),
-                ReprMode::Repr => <T as PyRepr>::__repr__(inner),
-                ReprMode::Html => <T as PyRepr>::_repr_html_(inner),
-            }
-        }),
+        Some(py_obj) => Python::attach(|py| py_obj.borrow(py).render(mode)),
     }
 }
 

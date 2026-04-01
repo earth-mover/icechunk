@@ -1031,12 +1031,7 @@ impl PyRepr for PyRepository {
         let repo = self.0.blocking_read();
         let storage = format!("{}", repo.storage());
         let py_config: PyRepositoryConfig = repo.config().clone().into();
-        let config = match mode {
-            ReprMode::Str => PyRepr::__str__(&py_config),
-            ReprMode::Repr => PyRepr::__repr__(&py_config),
-            ReprMode::Html => PyRepr::_repr_html_(&py_config),
-        };
-        vec![("storage", storage), ("config", config)]
+        vec![("storage", storage), ("config", py_config.render(mode))]
     }
 }
 
