@@ -4415,7 +4415,7 @@ mod tests {
         // Check if transaction log has just one move
         let tx_log =
             repo.asset_manager.fetch_transaction_log(&first_rearr_snap_id).await?;
-        assert!(tx_log.moves().count() == 1);
+        assert!(tx_log.moves().count() == 2);
 
         // Rearrange session: move node again, amend this time
         let mut session = repo.rearrange_session("main").await?;
@@ -4481,9 +4481,12 @@ mod tests {
         let mut session = repo.writable_session("main").await?;
         session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
         session.add_group("/a".try_into().unwrap(), Bytes::copy_from_slice(b"")).await?;
+        session.add_group("/b".try_into().unwrap(), Bytes::copy_from_slice(b"")).await?;
+        session.add_group("/c".try_into().unwrap(), Bytes::copy_from_slice(b"")).await?;
         let initial_snap_id = session.commit("init").execute().await?;
         // Check if transaction log has no moves
         let tx_log = repo.asset_manager.fetch_transaction_log(&initial_snap_id).await?;
+        dbg!(tx_log.moves().collect::<Vec<_>>());
         assert!(tx_log.moves().count() == 0);
 
         // Check if moved nested groups still shows up properly after commit
@@ -4512,6 +4515,7 @@ mod tests {
         // Check if transaction log has just one move
         let tx_log =
             repo.asset_manager.fetch_transaction_log(&first_rearr_snap_id).await?;
+        dbg!(tx_log.moves().collect::<Vec<_>>());
         assert!(tx_log.moves().count() == 1);
 
         debug!("second rearrange session");
@@ -4533,6 +4537,7 @@ mod tests {
         // Check if transaction log has just one move
         let tx_log =
             repo.asset_manager.fetch_transaction_log(&second_amend_snap_id).await?;
+        dbg!(tx_log.moves().collect::<Vec<_>>());
         assert!(tx_log.moves().count() == 2);
 
         debug!("third rearrange session");
@@ -4556,11 +4561,12 @@ mod tests {
         // Check if transaction log has just one move
         let tx_log =
             repo.asset_manager.fetch_transaction_log(&third_amend_snap_id).await?;
+        dbg!(tx_log.moves().collect::<Vec<_>>());
         assert!(tx_log.moves().count() == 2);
         let (stream, _, _) = repo.ops_log().await?;
         let ops: Vec<_> = stream.try_collect().await?;
 
-        assert_eq!(ops.len(), 4);
+        assert_eq!(ops.len(), 5);
         // Check snapshot ID lineage for amends
         /*
         assert!(matches!(
@@ -4575,7 +4581,7 @@ mod tests {
 
         let diff = repo
             .diff(
-                &VersionInfo::SnapshotId(initial_snap_id.clone()),
+                &VersionInfo::SnapshotId(Snapshot::INITIAL_SNAPSHOT_ID),
                 &VersionInfo::SnapshotId(third_amend_snap_id.clone()),
             )
             .await?;

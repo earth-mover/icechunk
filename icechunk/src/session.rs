@@ -2963,6 +2963,7 @@ async fn do_flush(
                 })
                 .await
                 .capture()?
+                .inject()?
             }
             None => this_tx_log,
         }

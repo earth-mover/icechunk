@@ -6,7 +6,7 @@ use std::{
 };
 
 use flatbuffers::VerifierOptions;
-use itertools::Either;
+use itertools::{Either, Itertools as _};
 
 use crate::{
     ChunkIndices, IcechunkFormatErrorKind, IcechunkResult, Move, NodeId, Path,
@@ -314,7 +314,7 @@ impl TransactionLog {
     pub fn merge<'a, T: IntoIterator<Item = &'a TransactionLog>>(
         id: &SnapshotId,
         iter: T,
-    ) -> Self {
+    ) -> IcechunkResult<Self> {
         let txs = Vec::from_iter(iter);
 
         // TODO: what's a good capacity?
@@ -417,10 +417,6 @@ impl TransactionLog {
         // },
         // Move {
         //   from: /dest,
-        //   to: /another_dest,
-        // },
-        // Move {
-        //   from: /another_dest,
         //   to: /src,
         // }
         // ```
@@ -434,20 +430,20 @@ impl TransactionLog {
 
         // Save moves into an inverted map (to -> from) to make it easy
         // to check if we have overlapping moves.
-        let mut moved_map: BTreeMap<Path, Path> = Default::default();
+        let mut moved_map: BTreeMap<NodeId, Move> = Default::default();
         let moved_nodes = {
-            for Move { from, to } in txs.iter().flat_map(|tx| tx.moves()) {
+            for mv in txs.iter().flat_map(|tx| tx.moves()) {
+                let Move { from, to, node_id, node_type } = mv?;
                 // if this is the first move we see, just insert.
                 // Otherwise we check to see if the current "from" is already in the moved_map
                 // (meaning this "from" is a "to" from another move)
                 // and if so remove it and replace with a new (to, old_from) pair,
-                dbg!(&from, &to);
-                if let Some(old_from) = moved_map.remove(&from) {
-                    moved_map.insert(to, old_from);
+                if let Some(old_from) = moved_map.remove(&node_id) {
+                    moved_map.insert(node_id, Move { to, ..old_from });
                 } else {
-                    moved_map.insert(to, from);
+                    moved_map
+                        .insert(node_id.clone(), Move { to, from, node_id, node_type });
                 }
-                dbg!(&moved_map);
             }
 
             // check to and from (keys and values in moved_map) are disjoint
@@ -469,11 +465,20 @@ impl TransactionLog {
             */
 
             let moved_nodes: Vec<_> = moved_map
-                .into_iter()
-                .map(|(to, from)| {
+                .into_values()
+                .sorted_by(|a, b| a.to.cmp(&b.to))
+                .map(|Move { to, from, node_id, node_type }| {
                     let from = builder.create_string(from.to_string().as_str());
                     let to = builder.create_string(to.to_string().as_str());
-                    let args = MoveOperationArgs { from: Some(from), to: Some(to) };
+                    let node_id = generated::ObjectId8::new(&node_id.0);
+                    let node_id = Some(&node_id);
+                    let node_type: generated::NodeType = node_type.into();
+                    let args = MoveOperationArgs {
+                        from: Some(from),
+                        to: Some(to),
+                        node_id,
+                        node_type,
+                    };
                     MoveOperation::create(&mut builder, &args)
                 })
                 .collect();
@@ -500,7 +505,7 @@ impl TransactionLog {
         let (mut buffer, offset) = builder.collapse();
         buffer.drain(0..offset);
         buffer.shrink_to_fit();
-        Self { buffer }
+        Ok(Self { buffer })
     }
 }
 
