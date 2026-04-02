@@ -638,6 +638,39 @@ impl From<&PyObjectStoreConfig> for ObjectStoreConfig {
     }
 }
 
+#[pymethods]
+impl PyObjectStoreConfig {
+    fn __repr__(&self) -> String {
+        match self {
+            Self::InMemory() => "icechunk.ObjectStoreConfig.InMemory()".into(),
+            Self::LocalFileSystem(path) => {
+                format!(
+                    "icechunk.ObjectStoreConfig.LocalFileSystem(\"{}\")",
+                    path.display()
+                )
+            }
+            Self::S3Compatible(opts) => {
+                format!("icechunk.ObjectStoreConfig.S3Compatible({})", opts.__repr__())
+            }
+            Self::S3(opts) => {
+                format!("icechunk.ObjectStoreConfig.S3({})", opts.__repr__())
+            }
+            Self::Gcs(opts) => format!("icechunk.ObjectStoreConfig.Gcs({opts:?})"),
+            Self::Azure(config) => {
+                format!("icechunk.ObjectStoreConfig.Azure({config:?})")
+            }
+            Self::Tigris(opts) => {
+                format!("icechunk.ObjectStoreConfig.Tigris({})", opts.__repr__())
+            }
+            Self::Http(opts) => format!("icechunk.ObjectStoreConfig.Http({opts:?})"),
+        }
+    }
+
+    fn __str__(&self) -> String {
+        self.__repr__()
+    }
+}
+
 impl From<ObjectStoreConfig> for PyObjectStoreConfig {
     fn from(value: ObjectStoreConfig) -> Self {
         match value {
@@ -668,6 +701,20 @@ pub struct PyVirtualChunkContainer {
     pub store: PyObjectStoreConfig,
 }
 
+impl PyRepr for PyVirtualChunkContainer {
+    const EXECUTABLE: bool = true;
+    fn cls_name() -> &'static str {
+        "icechunk.VirtualChunkContainer"
+    }
+    fn fields(&self, _mode: ReprMode) -> Vec<(&str, String)> {
+        vec![
+            ("url_prefix", format!("\"{}\"", self.url_prefix)),
+            ("store", self.store.__repr__()),
+            ("name", py_option_str(&self.name)),
+        ]
+    }
+}
+
 #[pymethods]
 impl PyVirtualChunkContainer {
     #[new]
@@ -678,6 +725,16 @@ impl PyVirtualChunkContainer {
         name: Option<String>,
     ) -> Self {
         Self { name, url_prefix, store }
+    }
+
+    pub fn __repr__(&self) -> String {
+        <Self as PyRepr>::__repr__(self)
+    }
+    pub fn __str__(&self) -> String {
+        <Self as PyRepr>::__str__(self)
+    }
+    pub fn _repr_html_(&self) -> String {
+        <Self as PyRepr>::_repr_html_(self)
     }
 }
 
@@ -2610,6 +2667,10 @@ impl PyStorage {
 
     pub(crate) fn __repr__(&self) -> String {
         format!("{}", self.0)
+    }
+
+    pub(crate) fn __str__(&self) -> String {
+        self.__repr__()
     }
 
     pub(crate) fn default_settings(&self) -> PyResult<PyStorageSettings> {
