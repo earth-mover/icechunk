@@ -280,7 +280,7 @@ impl MoveTracker {
         for (path, node_id, node_type) in subtree_nodes {
             if let Some(new_path) = Self::remap_path(&path, &from, &to) {
                 if self.nodes_by_final.contains_key(&new_path) {
-                    // skip any subtree nodes thhat we already track
+                    // skip any subtree nodes that we already track
                     continue;
                 }
                 self.nodes_by_final.insert(new_path.clone(), path.clone());
@@ -288,6 +288,7 @@ impl MoveTracker {
             }
         }
 
+        // Remove identity moves (where from == to)
         self.nodes_by_final.retain(|to, from| from != to);
         self.nodes_by_original.retain(|from, (to, _, _)| from != to);
 
