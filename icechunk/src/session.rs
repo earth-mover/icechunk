@@ -641,6 +641,9 @@ impl Session {
     ) -> SessionResult<()> {
         match self.get_node(&path).await {
             Err(SessionError { kind: SessionErrorKind::NodeNotFound { .. }, .. }) => {
+                // verify all parent nodes in path exist
+                self.check_all_ancestors_exist(&path).await?;
+
                 let id = NodeId::random();
                 self.change_set_mut()?.add_group(path.clone(), id, definition)?;
                 Ok(())
@@ -798,6 +801,9 @@ impl Session {
                 to.to_string(),
             )));
         }
+
+        // verify all parent nodes in "to" path exist
+        self.check_all_ancestors_exist(&to).await?;
 
         // Get updated subtree
         let subtree_data: Vec<(Path, NodeId, NodeType)> = updated_nodes(
@@ -1047,6 +1053,23 @@ impl Session {
         Err(SessionError::capture(SessionErrorKind::AncestorNodeNotFound {
             prefix: path.clone(),
         }))
+    }
+
+    #[instrument(skip(self))]
+    async fn check_all_ancestors_exist(&self, path: &Path) -> SessionResult<()> {
+        let mut ancestors = path.ancestors();
+        // the first element is the `path` itself, which we might be
+        // trying to create now; skip it.
+        ancestors.next();
+        for parent in ancestors {
+            let node = self.get_node(&parent).await;
+            if node.is_err() {
+                return Err(SessionError::capture(
+                    SessionErrorKind::AncestorNodeNotFound { prefix: path.clone() },
+                ));
+            }
+        }
+        Ok(())
     }
 
     #[instrument(skip(self))]
@@ -5023,6 +5046,53 @@ mod tests {
                 RepoInitializedUpdate,
             ]
         );
+
+        Ok(())
+    }
+
+    #[tokio_test]
+    async fn implicit_group_creation_in_move() -> Result<(), Box<dyn Error>> {
+        let repo = create_memory_store_repository(SpecVersionBin::current()).await;
+
+        let mut session = repo.writable_session("main").await?;
+        session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
+        session.add_group("/a".try_into().unwrap(), Bytes::copy_from_slice(b"")).await?;
+        session.commit("setup").max_concurrent_nodes(8).execute().await?;
+
+        // Try to move a node into a group that doesn't exist
+        // (and we don't do implicit group creation)
+        let mut session = repo.rearrange_session("main").await?;
+        let dest_path: Path = "/b/a".try_into().unwrap();
+        let res = session.move_node("/a".try_into().unwrap(), dest_path.clone()).await;
+
+        assert!(res.is_err());
+        let res = res.unwrap_err();
+        assert!(matches!(res,
+                ICError { kind, ..} if matches!(&kind,
+                                                SessionErrorKind::AncestorNodeNotFound {prefix, ..}
+                                                if *prefix == dest_path)));
+
+        Ok(())
+    }
+
+    #[tokio_test]
+    async fn implicit_group_creation_in_add() -> Result<(), Box<dyn Error>>
+    {
+        let repo = create_memory_store_repository(SpecVersionBin::current()).await;
+
+        let mut session = repo.writable_session("main").await?;
+        session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
+        // Try to create a node into a group that doesn't exist
+        // (and we don't do implicit group creation)
+        let dest_path: Path = "/b/a".try_into().unwrap();
+        let res = session.add_group(dest_path.clone(), Bytes::copy_from_slice(b"")).await;
+
+        assert!(res.is_err());
+        let res = res.unwrap_err();
+        assert!(matches!(res,
+                ICError { kind, ..} if matches!(&kind,
+                                                SessionErrorKind::AncestorNodeNotFound {prefix, ..}
+                                                if *prefix == dest_path)));
 
         Ok(())
     }
