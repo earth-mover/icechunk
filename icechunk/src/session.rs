@@ -1077,6 +1077,22 @@ impl Session {
     }
 
     #[instrument(skip(self))]
+    pub(crate) async fn create_ancestors(&mut self, path: &Path) -> SessionResult<()> {
+        let mut ancestors = path.ancestors();
+        // the first element is the `path` itself, which we might be
+        // trying to create now; skip it.
+        ancestors.next();
+        let ancestors: Vec<_> = ancestors.collect();
+        for parent in ancestors.iter().rev() {
+            let node = self.get_node(parent).await;
+            if node.is_err() {
+                self.add_group(parent.clone(), Bytes::new()).await?;
+            }
+        }
+        Ok(())
+    }
+
+    #[instrument(skip(self))]
     pub async fn get_node(&self, path: &Path) -> SessionResult<NodeSnapshot> {
         get_node(&self.asset_manager, self.change_set(), self.snapshot_id(), path).await
     }
