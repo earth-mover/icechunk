@@ -1349,10 +1349,8 @@ impl PyRepr for PyStorageSettings {
         "icechunk.StorageSettings"
     }
     fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
+        // Scalar fields first, then nested objects
         vec![
-            ("concurrency", py_option_nested_repr(&self.concurrency, mode)),
-            ("retries", py_option_nested_repr(&self.retries, mode)),
-            ("timeouts", py_option_nested_repr(&self.timeouts, mode)),
             (
                 "unsafe_use_conditional_create",
                 self.unsafe_use_conditional_create
@@ -1378,6 +1376,9 @@ impl PyRepr for PyStorageSettings {
                 "minimum_size_for_multipart_upload",
                 py_option(&self.minimum_size_for_multipart_upload),
             ),
+            ("concurrency", py_option_nested_repr(&self.concurrency, mode)),
+            ("retries", py_option_nested_repr(&self.retries, mode)),
+            ("timeouts", py_option_nested_repr(&self.timeouts, mode)),
         ]
     }
 }
@@ -2258,6 +2259,8 @@ impl PyRepr for PyRepositoryConfig {
     }
 
     fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
+        // Scalar fields first, then nested objects, so simple values
+        // aren't broken up by large nested blocks in str/html output.
         vec![
             (
                 "inline_chunk_threshold_bytes",
@@ -2267,18 +2270,18 @@ impl PyRepr for PyRepositoryConfig {
                 "get_partial_values_concurrency",
                 py_option(&self.get_partial_values_concurrency),
             ),
-            ("compression", py_option_nested_repr(&self.compression, mode)),
             ("max_concurrent_requests", py_option(&self.max_concurrent_requests)),
+            (
+                "num_updates_per_repo_info_file",
+                py_option(&self.num_updates_per_repo_info_file),
+            ),
+            ("compression", py_option_nested_repr(&self.compression, mode)),
             ("caching", py_option_nested_repr(&self.caching, mode)),
             ("storage", py_option_nested_repr(&self.storage, mode)),
             ("manifest", py_option_nested_repr(&self.manifest, mode)),
             (
                 "repo_update_retries",
                 py_option_nested_repr(&self.repo_update_retries, mode),
-            ),
-            (
-                "num_updates_per_repo_info_file",
-                py_option(&self.num_updates_per_repo_info_file),
             ),
         ]
     }
