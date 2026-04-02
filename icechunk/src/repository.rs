@@ -726,7 +726,11 @@ impl Repository {
         let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str, _| {
             Ok(Arc::new(
                 repo_info
-                    .set_status(self.spec_version(), status, backup_path, num_updates)
+                    .set_status(
+                        self.spec_version(),
+                        status,
+                        Some((backup_path, num_updates)),
+                    )
                     .inject()?,
             ))
         };
