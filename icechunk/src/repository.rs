@@ -4443,7 +4443,6 @@ mod tests {
         // Check if transaction log has no moves, since everything was moved
         // back to their initial location.
         let tx_log = repo.asset_manager.fetch_transaction_log(&amend_snap_id).await?;
-        dbg!(tx_log.moves().collect::<Vec<_>>());
         assert!(tx_log.moves().count() == 0);
 
         let diff = repo
