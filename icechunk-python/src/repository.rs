@@ -6,7 +6,7 @@ use std::{
     sync::Arc,
 };
 
-use icechunk::display::{dataclass_html_repr, dataclass_repr, dataclass_str};
+use crate::display::{PyRepr, ReprMode, py_option};
 use itertools::Itertools as _;
 
 use chrono::{DateTime, Utc};
@@ -43,7 +43,7 @@ use tokio::sync::{Mutex, RwLock};
 use crate::{
     config::{
         PyCredentials, PyRepositoryConfig, PyStorage, PyStorageSettings, datetime_repr,
-        format_bool, format_option, format_option_to_string,
+        format_bool, format_option,
     },
     errors::PyIcechunkStoreError,
     impl_pickle,
@@ -225,17 +225,36 @@ impl From<SnapshotInfo> for PySnapshotInfo {
     }
 }
 
+// TODO: pass `mode` through once nested fields implement PyRepr
+#[expect(unused_variables)]
+impl PyRepr for PyManifestFileInfo {
+    const EXECUTABLE: bool = false;
+
+    fn cls_name() -> &'static str {
+        "icechunk.ManifestFileInfo"
+    }
+
+    fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
+        vec![
+            ("id", self.id.clone()),
+            ("size_bytes", self.size_bytes.to_string()),
+            ("num_chunk_refs", self.num_chunk_refs.to_string()),
+        ]
+    }
+}
+
 #[pymethods]
 impl PyManifestFileInfo {
     pub(crate) fn __repr__(&self) -> String {
-        dataclass_repr(
-            "icechunk.ManifestFileInfo",
-            &[
-                ("id", format!("\"{}\"", self.id)),
-                ("size_bytes", self.size_bytes.to_string()),
-                ("num_chunk_refs", self.num_chunk_refs.to_string()),
-            ],
-        )
+        <Self as PyRepr>::__repr__(self)
+    }
+
+    pub(crate) fn __str__(&self) -> String {
+        <Self as PyRepr>::__str__(self)
+    }
+
+    pub(crate) fn _repr_html_(&self) -> String {
+        <Self as PyRepr>::_repr_html_(self)
     }
 }
 
@@ -246,7 +265,7 @@ impl PySnapshotInfo {
         format!(
             r#"SnapshotInfo(id="{id}", parent_id={parent}, written_at={at}, message="{message}")"#,
             id = self.id,
-            parent = format_option_to_string(self.parent_id.as_ref()),
+            parent = py_option(&self.parent_id),
             at = datetime_repr(&self.written_at),
             // TODO: what would be a better default here?
             message = self.message.chars().take(10).collect::<String>() + "...",
@@ -542,7 +561,7 @@ impl PyRepoStatus {
             "RepoStatus(availability={:?}, set_at={}, limited_availability_reason={})",
             self.availability,
             self.set_at,
-            format_option_to_string(self.limited_availability_reason.as_ref()),
+            py_option(&self.limited_availability_reason),
         )
     }
 }
@@ -1001,23 +1020,35 @@ impl PyRepository {
     }
 }
 
+impl PyRepr for PyRepository {
+    const EXECUTABLE: bool = false;
+
+    fn cls_name() -> &'static str {
+        "icechunk.Repository"
+    }
+
+    fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
+        let repo = self.0.blocking_read();
+        let storage = format!("{}", repo.storage());
+        let py_config: PyRepositoryConfig = repo.config().clone().into();
+        vec![("storage", storage), ("config", py_config.render(mode))]
+    }
+}
+
 #[pymethods]
 /// Most functions in this class call `Runtime.block_on` so they need to `detach` so other
 /// python threads can make progress in the case of an actual block
 impl PyRepository {
     pub(crate) fn __repr__(&self) -> String {
-        let storage_repr = format!("{}", self.0.blocking_read().storage());
-        dataclass_repr("icechunk.Repository", &[("storage", storage_repr)])
+        <Self as PyRepr>::__repr__(self)
     }
 
     pub(crate) fn __str__(&self) -> String {
-        let storage_str = format!("{}", self.0.blocking_read().storage());
-        dataclass_str("icechunk.Repository", &[("storage", storage_str)])
+        <Self as PyRepr>::__str__(self)
     }
 
     pub(crate) fn _repr_html_(&self) -> String {
-        let storage_str = format!("{}", self.0.blocking_read().storage());
-        dataclass_html_repr("icechunk.Repository", &[("storage", storage_str)])
+        <Self as PyRepr>::_repr_html_(self)
     }
 
     #[classmethod]

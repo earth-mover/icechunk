@@ -43,7 +43,6 @@ pub mod compat;
 pub mod config;
 pub mod conflicts;
 pub mod diff;
-pub mod display;
 pub mod error;
 pub mod feature_flags;
 pub use icechunk_format as format;
