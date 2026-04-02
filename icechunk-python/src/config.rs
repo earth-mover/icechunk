@@ -34,7 +34,9 @@ use pyo3::{
     types::{PyAnyMethods as _, PyModule, PyType},
 };
 
-use crate::display::{PyRepr, ReprMode, py_bool, py_option, py_option_nested_repr};
+use crate::display::{
+    PyRepr, ReprMode, py_bool, py_option, py_option_nested_repr, py_option_str,
+};
 use crate::errors::PyIcechunkStoreError;
 
 #[pyclass(name = "S3StaticCredentials")]
@@ -521,8 +523,8 @@ impl PyRepr for PyS3Options {
     }
     fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
         vec![
-            ("region", py_option(&self.region)),
-            ("endpoint_url", py_option(&self.endpoint_url)),
+            ("region", py_option_str(&self.region)),
+            ("endpoint_url", py_option_str(&self.endpoint_url)),
             ("allow_http", py_bool(self.allow_http)),
             ("anonymous", py_bool(self.anonymous)),
             ("force_path_style", py_bool(self.force_path_style)),
@@ -1301,9 +1303,9 @@ impl PyRepr for PyStorageSettings {
                     .map(py_bool)
                     .unwrap_or_else(|| "None".to_string()),
             ),
-            ("storage_class", py_option(&self.storage_class)),
-            ("metadata_storage_class", py_option(&self.metadata_storage_class)),
-            ("chunks_storage_class", py_option(&self.chunks_storage_class)),
+            ("storage_class", py_option_str(&self.storage_class)),
+            ("metadata_storage_class", py_option_str(&self.metadata_storage_class)),
+            ("chunks_storage_class", py_option_str(&self.chunks_storage_class)),
             (
                 "minimum_size_for_multipart_upload",
                 py_option(&self.minimum_size_for_multipart_upload),
@@ -2175,7 +2177,6 @@ impl PyRepr for PyRepositoryConfig {
             ("caching", py_option_nested_repr(&self.caching, mode)),
             ("storage", py_option_nested_repr(&self.storage, mode)),
             ("manifest", py_option_nested_repr(&self.manifest, mode)),
-            ("previous_file", py_option(&self.previous_file)),
             (
                 "repo_update_retries",
                 py_option_nested_repr(&self.repo_update_retries, mode),

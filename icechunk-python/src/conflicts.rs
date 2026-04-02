@@ -165,6 +165,10 @@ impl PyConflict {
         <Self as PyRepr>::__str__(self)
     }
 
+    fn _repr_html_(&self) -> String {
+        <Self as PyRepr>::_repr_html_(self)
+    }
+
     fn __reduce__(&self, py: Python<'_>) -> PyResult<(Py<PyAny>, Py<PyAny>)> {
         use pyo3::IntoPyObjectExt as _;
         let cls = py.get_type::<PyConflict>().into_py_any(py)?;

@@ -27,6 +27,14 @@ pub(crate) fn py_option<T: Display>(o: &Option<T>) -> String {
     }
 }
 
+/// Format an `Option<String>` as a quoted Python string repr: `None` or `"value"`.
+pub(crate) fn py_option_str(o: &Option<String>) -> String {
+    match o {
+        None => "None".to_string(),
+        Some(s) => format!("\"{s}\""),
+    }
+}
+
 /// Format a bool as a Python literal (`True` / `False`).
 pub(crate) fn py_bool(b: bool) -> String {
     if b { "True" } else { "False" }.to_string()
@@ -143,9 +151,13 @@ fn dataclass_repr(cls_name: &str, fields: &[(&str, &str)]) -> String {
         if value.contains('\n') {
             // Indent all lines of a multi-line value
             let _ = write!(out, "    {key}=");
-            for (i, line) in value.lines().enumerate() {
+            let lines: Vec<&str> = value.lines().collect();
+            for (i, line) in lines.iter().enumerate() {
                 if i == 0 {
                     let _ = writeln!(out, "{line}");
+                } else if i == lines.len() - 1 {
+                    // Add trailing comma after the closing line
+                    let _ = writeln!(out, "    {line},");
                 } else {
                     let _ = writeln!(out, "    {line}");
                 }
