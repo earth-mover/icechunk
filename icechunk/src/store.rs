@@ -858,6 +858,8 @@ async fn set_array_meta(
         }
         Ok(())
     } else {
+        // create parents, following zarr behavior
+        session.create_ancestors(&path).await.inject()?;
         session
             .add_array(path.clone(), shape, array_meta.dimension_names(), user_data)
             .await
@@ -879,6 +881,8 @@ async fn set_group_meta(
         }
         Ok(())
     } else {
+        // create parents, following zarr behavior
+        session.create_ancestors(&path).await.inject()?;
         session.add_group(path.clone(), user_data).await.inject()?;
         Ok(())
     }
