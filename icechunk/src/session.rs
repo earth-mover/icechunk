@@ -5076,8 +5076,7 @@ mod tests {
     }
 
     #[tokio_test]
-    async fn implicit_group_creation_in_add() -> Result<(), Box<dyn Error>>
-    {
+    async fn implicit_group_creation_in_add() -> Result<(), Box<dyn Error>> {
         let repo = create_memory_store_repository(SpecVersionBin::current()).await;
 
         let mut session = repo.writable_session("main").await?;
