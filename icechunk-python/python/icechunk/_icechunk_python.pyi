@@ -798,7 +798,7 @@ class ManifestSplittingConfig:
             int,
         ],
     ]: ...
-    def __new__(cls, split_sizes: _SplitSizes) -> ManifestSplittingConfig:
+    def __new__(cls, split_sizes: _SplitSizes = None) -> ManifestSplittingConfig:
         """Configuration for how Icechunk manifests will be split.
 
         Parameters
@@ -1252,6 +1252,9 @@ class StorageSettings:
             The configuration for AWS SDK timeout settings.
         """
         ...
+    def __repr__(self, /) -> str: ...
+    def __str__(self, /) -> str: ...
+    def _repr_html_(self, /) -> str: ...
     @property
     def concurrency(self) -> StorageConcurrencySettings | None:
         """
