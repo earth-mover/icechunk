@@ -132,7 +132,7 @@ impl PyRepr for PyConflict {
     }
     fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
         vec![
-            ("conflict_type", format!("{}", self.conflict_type)),
+            ("conflict_type", format!("{:?}", self.conflict_type)),
             ("path", self.path.clone()),
             (
                 "conflicted_chunks",

@@ -459,7 +459,7 @@ impl PyDiff {
             }
         }
         if !self.moved_nodes.is_empty() {
-            res.push_str("Nodes moved:\n");
+            res.push_str("Nodes moved/renamed:\n");
             for (from, to) in self.moved_nodes.iter() {
                 writeln!(res, "    {from} -> {to}").unwrap();
             }
