@@ -346,6 +346,17 @@ class TestAllClassesHaveReprs:
     def test_repo_status(self) -> None:
         assert_has_all_three_reprs(RepoStatus(icechunk.RepoAvailability.online))
 
+    def test_virtual_chunk_container(self) -> None:
+        store_config = icechunk.s3_store(
+            region="us-east-1",
+            endpoint_url="http://localhost:9000",
+            allow_http=True,
+            s3_compatible=True,
+        )
+        assert_has_all_three_reprs(
+            icechunk.VirtualChunkContainer("s3://bucket/", store_config)
+        )
+
     def test_repository(self, repo: Repository) -> None:
         assert_has_all_three_reprs(repo)
 
