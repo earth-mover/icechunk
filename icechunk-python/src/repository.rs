@@ -712,6 +712,15 @@ impl PyUpdateType {
     }
 }
 
+impl PyUpdateType {
+    pub(crate) fn render(&self, mode: ReprMode) -> String {
+        match mode {
+            ReprMode::Str => self.__str__(),
+            ReprMode::Repr | ReprMode::Html => self.__repr__(),
+        }
+    }
+}
+
 #[pyclass(name = "Update")]
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct PyUpdate {
@@ -730,9 +739,9 @@ impl PyRepr for PyUpdate {
     fn cls_name() -> &'static str {
         "icechunk.Update"
     }
-    fn fields(&self, _mode: ReprMode) -> Vec<(&str, String)> {
+    fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
         vec![
-            ("kind", self.kind.__repr__()),
+            ("kind", self.kind.render(mode)),
             ("updated_at", datetime_repr(&self.updated_at)),
             ("backup_path", py_option(&self.backup_path)),
         ]

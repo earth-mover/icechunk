@@ -35,7 +35,8 @@ use pyo3::{
 };
 
 use crate::display::{
-    PyRepr, ReprMode, py_bool, py_option, py_option_nested_repr, py_option_str,
+    PyRepr, ReprMode, dataclass_html_repr, dataclass_repr, dataclass_str, py_bool,
+    py_option, py_option_nested_repr, py_option_str,
 };
 use crate::errors::PyIcechunkStoreError;
 
@@ -635,36 +636,59 @@ impl From<&PyObjectStoreConfig> for ObjectStoreConfig {
     }
 }
 
-#[pymethods]
 impl PyObjectStoreConfig {
-    fn __repr__(&self) -> String {
+    fn cls_name(&self) -> &'static str {
         match self {
-            Self::InMemory() => "icechunk.ObjectStoreConfig.InMemory()".into(),
-            Self::LocalFileSystem(path) => {
-                format!(
-                    "icechunk.ObjectStoreConfig.LocalFileSystem(\"{}\")",
-                    path.display()
-                )
-            }
-            Self::S3Compatible(opts) => {
-                format!("icechunk.ObjectStoreConfig.S3Compatible({})", opts.__repr__())
-            }
-            Self::S3(opts) => {
-                format!("icechunk.ObjectStoreConfig.S3({})", opts.__repr__())
-            }
-            Self::Gcs(opts) => format!("icechunk.ObjectStoreConfig.Gcs({opts:?})"),
-            Self::Azure(config) => {
-                format!("icechunk.ObjectStoreConfig.Azure({config:?})")
-            }
-            Self::Tigris(opts) => {
-                format!("icechunk.ObjectStoreConfig.Tigris({})", opts.__repr__())
-            }
-            Self::Http(opts) => format!("icechunk.ObjectStoreConfig.Http({opts:?})"),
+            Self::InMemory() => "icechunk.ObjectStoreConfig.InMemory",
+            Self::LocalFileSystem(_) => "icechunk.ObjectStoreConfig.LocalFileSystem",
+            Self::S3Compatible(_) => "icechunk.ObjectStoreConfig.S3Compatible",
+            Self::S3(_) => "icechunk.ObjectStoreConfig.S3",
+            Self::Gcs(_) => "icechunk.ObjectStoreConfig.Gcs",
+            Self::Azure(_) => "icechunk.ObjectStoreConfig.Azure",
+            Self::Tigris(_) => "icechunk.ObjectStoreConfig.Tigris",
+            Self::Http(_) => "icechunk.ObjectStoreConfig.Http",
         }
     }
 
+    fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
+        match self {
+            Self::InMemory() => vec![],
+            Self::LocalFileSystem(path) => {
+                vec![("path", format!("\"{}\"", path.display()))]
+            }
+            Self::S3Compatible(opts) | Self::S3(opts) | Self::Tigris(opts) => {
+                opts.fields(mode)
+            }
+            Self::Gcs(opts) => vec![("config", format!("{opts:?}"))],
+            Self::Azure(config) => vec![("config", format!("{config:?}"))],
+            Self::Http(opts) => vec![("config", format!("{opts:?}"))],
+        }
+    }
+
+    pub(crate) fn render(&self, mode: ReprMode) -> String {
+        let fields = self.fields(mode);
+        let refs: Vec<(&str, &str)> =
+            fields.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        match mode {
+            ReprMode::Str => dataclass_str(self.cls_name(), &refs),
+            ReprMode::Repr => dataclass_repr(self.cls_name(), &refs),
+            ReprMode::Html => dataclass_html_repr(self.cls_name(), &refs),
+        }
+    }
+}
+
+#[pymethods]
+impl PyObjectStoreConfig {
+    fn __repr__(&self) -> String {
+        self.render(ReprMode::Repr)
+    }
+
     fn __str__(&self) -> String {
-        self.__repr__()
+        self.render(ReprMode::Str)
+    }
+
+    fn _repr_html_(&self) -> String {
+        self.render(ReprMode::Html)
     }
 }
 
@@ -703,10 +727,10 @@ impl PyRepr for PyVirtualChunkContainer {
     fn cls_name() -> &'static str {
         "icechunk.VirtualChunkContainer"
     }
-    fn fields(&self, _mode: ReprMode) -> Vec<(&str, String)> {
+    fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
         vec![
             ("url_prefix", format!("\"{}\"", self.url_prefix)),
-            ("store", self.store.__repr__()),
+            ("store", self.store.render(mode)),
             ("name", py_option_str(&self.name)),
         ]
     }
@@ -1491,6 +1515,15 @@ impl PyManifestPreloadCondition {
     }
 }
 
+impl PyManifestPreloadCondition {
+    pub(crate) fn render(&self, mode: ReprMode) -> String {
+        match mode {
+            ReprMode::Str => self.__str__(),
+            ReprMode::Repr | ReprMode::Html => self.__repr__(),
+        }
+    }
+}
+
 impl From<&PyManifestPreloadCondition> for ManifestPreloadCondition {
     fn from(value: &PyManifestPreloadCondition) -> Self {
         use PyManifestPreloadCondition::*;
@@ -1562,10 +1595,10 @@ impl PyRepr for PyManifestPreloadConfig {
     fn cls_name() -> &'static str {
         "icechunk.ManifestPreloadConfig"
     }
-    fn fields(&self, _mode: ReprMode) -> Vec<(&str, String)> {
+    fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
         let preload_if = match &self.preload_if {
             None => "None".to_string(),
-            Some(py_obj) => Python::attach(|py| py_obj.borrow(py).__repr__()),
+            Some(py_obj) => Python::attach(|py| py_obj.borrow(py).render(mode)),
         };
         vec![
             ("max_total_refs", py_option(&self.max_total_refs)),
@@ -1705,6 +1738,15 @@ impl PyManifestSplitCondition {
     }
 }
 
+impl PyManifestSplitCondition {
+    pub(crate) fn render(&self, mode: ReprMode) -> String {
+        match mode {
+            ReprMode::Str => self.__str__(),
+            ReprMode::Repr | ReprMode::Html => self.__repr__(),
+        }
+    }
+}
+
 impl From<&PyManifestSplitCondition> for ManifestSplitCondition {
     fn from(value: &PyManifestSplitCondition) -> Self {
         use PyManifestSplitCondition::*;
@@ -1763,6 +1805,15 @@ impl PyManifestSplitDimCondition {
     }
 }
 
+impl PyManifestSplitDimCondition {
+    pub(crate) fn render(&self, mode: ReprMode) -> String {
+        match mode {
+            ReprMode::Str => self.__str__(),
+            ReprMode::Repr | ReprMode::Html => self.__repr__(),
+        }
+    }
+}
+
 impl From<&PyManifestSplitDimCondition> for ManifestSplitDimCondition {
     fn from(value: &PyManifestSplitDimCondition) -> Self {
         use PyManifestSplitDimCondition::*;
@@ -1798,7 +1849,7 @@ impl PyRepr for PyManifestSplittingConfig {
     fn cls_name() -> &'static str {
         "icechunk.ManifestSplittingConfig"
     }
-    fn fields(&self, _mode: ReprMode) -> Vec<(&str, String)> {
+    fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
         let split_sizes = match &self.split_sizes {
             None => "None".to_string(),
             Some(sizes) => {
@@ -1808,10 +1859,14 @@ impl PyRepr for PyManifestSplittingConfig {
                         let dims_repr: Vec<String> = dims
                             .iter()
                             .map(|(dim_condition, num)| {
-                                format!("({}, {num})", dim_condition.__repr__())
+                                format!("({}, {num})", dim_condition.render(mode))
                             })
                             .collect();
-                        format!("({}, [{}])", condition.__repr__(), dims_repr.join(", "))
+                        format!(
+                            "({}, [{}])",
+                            condition.render(mode),
+                            dims_repr.join(", ")
+                        )
                     })
                     .collect();
                 format!("[{}]", reprs.join(", "))

@@ -124,7 +124,7 @@ pub(crate) fn py_option_nested_repr<T: PyRepr + PyClass>(
 ///
 /// `cls_name` is the public Python class name.
 /// `fields` are `(field_name, rendered_value)` pairs.
-fn dataclass_str(cls_name: &str, fields: &[(&str, &str)]) -> String {
+pub(crate) fn dataclass_str(cls_name: &str, fields: &[(&str, &str)]) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "<{cls_name}>");
     for (key, value) in fields {
@@ -144,7 +144,7 @@ fn dataclass_str(cls_name: &str, fields: &[(&str, &str)]) -> String {
 /// Render an executable-style Python repr for a dataclass-like struct.
 ///
 /// Produces multi-line output with indentation for readability.
-fn dataclass_repr(cls_name: &str, fields: &[(&str, &str)]) -> String {
+pub(crate) fn dataclass_repr(cls_name: &str, fields: &[(&str, &str)]) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "{cls_name}(");
     for (key, value) in fields {
@@ -236,7 +236,7 @@ body.vscode-dark {
 /// Uses a `<details>` pattern for nested values that contain HTML (detected by
 /// checking for `<div`). Plain values are rendered inline. Includes CSS with
 /// `:root` custom properties for theme-aware styling in notebooks.
-fn dataclass_html_repr(cls_name: &str, fields: &[(&str, &str)]) -> String {
+pub(crate) fn dataclass_html_repr(cls_name: &str, fields: &[(&str, &str)]) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "{ICECHUNK_CSS}");
     let _ = writeln!(out, "<div class=\"icechunk-repr\">");
