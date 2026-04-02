@@ -798,7 +798,7 @@ class ManifestSplittingConfig:
             int,
         ],
     ]: ...
-    def __new__(cls, split_sizes: _SplitSizes = None) -> ManifestSplittingConfig:
+    def __new__(cls, split_sizes: _SplitSizes | None = None) -> ManifestSplittingConfig:
         """Configuration for how Icechunk manifests will be split.
 
         Parameters
