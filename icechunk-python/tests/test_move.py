@@ -176,7 +176,8 @@ def test_moves(
     # Moves in the tx log must be sorted by final path
     snap_after = repo.lookup_branch("main")
     diff = repo.diff(from_snapshot_id=snap_before, to_snapshot_id=snap_after)
-    assert_moves_sorted_by_final_path(diff.moved_nodes)
+    if diff.moved_nodes:
+        assert_moves_sorted_by_final_path(diff.moved_nodes)
 
 
 @given(

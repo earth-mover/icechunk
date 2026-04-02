@@ -1,7 +1,7 @@
 //! Change records for commits, enabling conflict detection during rebase.
 
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, HashMap},
     iter,
 };
 
@@ -430,7 +430,7 @@ impl TransactionLog {
 
         // Save moves into a map (NodeId -> Move) to make it easy
         // to check if we have overlapping moves.
-        let mut moved_map: BTreeMap<NodeId, Move> = Default::default();
+        let mut moved_map: HashMap<NodeId, Move> = Default::default();
         let moved_nodes = {
             for mv in txs.iter().flat_map(|tx| tx.moves()) {
                 let Move { from, to, node_id, node_type } = mv?;
@@ -444,7 +444,11 @@ impl TransactionLog {
                     .or_insert_with(|| Move { to, from, node_id, node_type });
             }
 
-            // check the set of "to" and the set of "from" from all moves are unique.
+            // Remove identity moves (where from == to) from the map.
+            // These are not saved in the transaction log.
+            moved_map.retain(|_, mv| mv.from != mv.to);
+
+            // check all "to" and all "from" for all moves are unique.
             // only run this in debug mode because it can be expensive
             debug_assert!({
                 let node_id_len = moved_map.len();

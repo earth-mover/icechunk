@@ -4369,6 +4369,102 @@ mod tests {
         Ok(())
     }
 
+    /// What happens when we move a node around, but it ends up in the same place?
+    #[tokio_test]
+    async fn rearrange_session_amend_identity_moves() -> Result<(), Box<dyn Error>> {
+        let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+        let repo = Repository::create(
+            None,
+            Arc::clone(&storage),
+            HashMap::new(),
+            Some(SpecVersionBin::current()),
+            true,
+        )
+        .await?;
+
+        // Create initial structure
+        let mut session = repo.writable_session("main").await?;
+        session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
+        session
+            .add_group("/foo".try_into().unwrap(), Bytes::copy_from_slice(b""))
+            .await?;
+        session
+            .add_group("/foo/bar".try_into().unwrap(), Bytes::copy_from_slice(b""))
+            .await?;
+        let initial_snap_id = session.commit("init").execute().await?;
+        // Check if transaction log has no moves
+        let tx_log = repo.asset_manager.fetch_transaction_log(&initial_snap_id).await?;
+        assert!(tx_log.moves().count() == 0);
+
+        // Check initial group creation worked
+        let session = repo
+            .readonly_session(&VersionInfo::SnapshotId(initial_snap_id.clone()))
+            .await?;
+        assert!(session.get_group(&"/foo".try_into().unwrap()).await.is_ok());
+        assert!(session.get_group(&"/foo/bar".try_into().unwrap()).await.is_ok());
+
+        // Rearrange session: move a node
+        let mut session = repo.rearrange_session("main").await?;
+        session.move_node("/foo".try_into().unwrap(), "/f".try_into().unwrap()).await?;
+        let first_rearr_snap_id = session
+            .commit("moved source to dest")
+            .max_concurrent_nodes(8)
+            .execute()
+            .await?;
+
+        // Check if moved (and nested) groups still show up properly after commit
+        let session = repo
+            .readonly_session(&VersionInfo::SnapshotId(first_rearr_snap_id.clone()))
+            .await?;
+        assert!(session.get_group(&"/f".try_into().unwrap()).await.is_ok());
+        assert!(session.get_group(&"/f/bar".try_into().unwrap()).await.is_ok());
+        assert!(session.get_group(&"/foo".try_into().unwrap()).await.is_err());
+        assert!(session.get_group(&"/foo/bar".try_into().unwrap()).await.is_err());
+
+        // Check if transaction log has two moves,
+        // one for parent /foo -> /f
+        // another for child /foo/bar -> /f/bar
+        let tx_log =
+            repo.asset_manager.fetch_transaction_log(&first_rearr_snap_id).await?;
+        assert!(tx_log.moves().count() == 2);
+
+        // Rearrange session: move a node
+        let mut session = repo.rearrange_session("main").await?;
+        session.move_node("/f".try_into().unwrap(), "/foo".try_into().unwrap()).await?;
+        let amend_snap_id = session
+            .commit("moved source to dest")
+            .max_concurrent_nodes(8)
+            .amend()
+            .execute()
+            .await?;
+
+        // Check if moved (and nested) groups still show up properly after commit
+        let session = repo
+            .readonly_session(&VersionInfo::SnapshotId(amend_snap_id.clone()))
+            .await?;
+        assert!(session.get_group(&"/foo".try_into().unwrap()).await.is_ok());
+        assert!(session.get_group(&"/foo/bar".try_into().unwrap()).await.is_ok());
+        assert!(session.get_group(&"/f".try_into().unwrap()).await.is_err());
+        assert!(session.get_group(&"/f/bar".try_into().unwrap()).await.is_err());
+
+        // Check if transaction log has no moves, since everything was moved
+        // back to their initial location.
+        let tx_log = repo.asset_manager.fetch_transaction_log(&amend_snap_id).await?;
+        dbg!(tx_log.moves().collect::<Vec<_>>());
+        assert!(tx_log.moves().count() == 0);
+
+        let diff = repo
+            .diff(
+                &VersionInfo::SnapshotId(initial_snap_id.clone()),
+                &VersionInfo::SnapshotId(amend_snap_id.clone()),
+            )
+            .await?;
+
+        assert_eq!(diff.moved_nodes.len(), 0);
+
+        Ok(())
+    }
+
     #[tokio_test]
     async fn rearrange_session_amend_reuse_path() -> Result<(), Box<dyn Error>> {
         let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
@@ -4471,8 +4567,6 @@ mod tests {
 
         assert_eq!(diff.moved_nodes.len(), 2);
 
-        dbg!(diff);
-
         Ok(())
     }
 
@@ -4499,7 +4593,6 @@ mod tests {
         let initial_snap_id = session.commit("init").execute().await?;
         // Check if transaction log has no moves
         let tx_log = repo.asset_manager.fetch_transaction_log(&initial_snap_id).await?;
-        dbg!(tx_log.moves().collect::<Vec<_>>());
         assert!(tx_log.moves().count() == 0);
 
         // Check initial group creation worked
@@ -4530,7 +4623,6 @@ mod tests {
         // Check if transaction log has just one move
         let tx_log =
             repo.asset_manager.fetch_transaction_log(&first_rearr_snap_id).await?;
-        dbg!(tx_log.moves().collect::<Vec<_>>());
         assert!(tx_log.moves().count() == 1);
 
         debug!("second rearrange session");
@@ -4554,7 +4646,6 @@ mod tests {
         // another for child /a -> /d/a
         let tx_log =
             repo.asset_manager.fetch_transaction_log(&second_amend_snap_id).await?;
-        dbg!(tx_log.moves().collect::<Vec<_>>());
         assert!(tx_log.moves().count() == 2);
 
         debug!("third rearrange session");
@@ -4581,7 +4672,6 @@ mod tests {
         //   /a -> /d/a -> /c/e is a collapsed move
         let tx_log =
             repo.asset_manager.fetch_transaction_log(&third_amend_snap_id).await?;
-        dbg!(tx_log.moves().collect::<Vec<_>>());
         assert!(tx_log.moves().count() == 2);
 
         let (stream, _, _) = repo.ops_log().await?;
@@ -4596,8 +4686,6 @@ mod tests {
             .await?;
 
         assert_eq!(diff.moved_nodes.len(), 2);
-
-        dbg!(diff);
 
         Ok(())
     }

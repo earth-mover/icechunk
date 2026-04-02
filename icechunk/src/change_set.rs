@@ -255,6 +255,11 @@ impl MoveTracker {
         node_id: &NodeId,
         node_type: NodeType,
     ) {
+        if from == to {
+            // Don't record identity moves
+            return;
+        }
+
         // Step 1: Update existing map entries whose current final location is
         // under `from` — they get remapped to `to`.
         // e.g. earlier move deposited /x at /a/x, now /a -> /c:
@@ -282,6 +287,9 @@ impl MoveTracker {
                 self.nodes_by_original.insert(path, (new_path, node_id, node_type));
             }
         }
+
+        self.nodes_by_final.retain(|to, from| from != to);
+        self.nodes_by_original.retain(|from, (to, _, _)| from != to);
 
         self.moves.push(Move { from, to, node_id: node_id.clone(), node_type });
     }
