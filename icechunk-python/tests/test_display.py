@@ -43,13 +43,6 @@ def assert_repr_roundtrips(obj: object) -> None:
     )
 
 
-def assert_has_all_three_reprs(obj: object) -> None:
-    """Assert that __repr__, __str__, and _repr_html_ all return non-empty strings."""
-    assert len(repr(obj)) > 0
-    assert len(str(obj)) > 0
-    assert len(obj._repr_html_()) > 0
-
-
 # =============================================================================
 # Executable repr roundtrip tests
 # =============================================================================
@@ -296,72 +289,101 @@ class TestReprHtml:
 
 
 # =============================================================================
-# assert_has_all_three_reprs for every class
+# Structural tests for classes not covered by roundtrip or other sections
 # =============================================================================
-class TestAllClassesHaveReprs:
-    """Smoke test that every class produces non-empty repr/str/html."""
+class TestReprStructural:
+    """Check repr content for classes that aren't tested elsewhere."""
 
-    def test_caching_config(self) -> None:
-        assert_has_all_three_reprs(CachingConfig())
+    def test_compression_config_shows_algorithm(self) -> None:
+        """CompressionConfig should show the actual algorithm, not hardcoded None."""
+        config = CompressionConfig(algorithm=icechunk.CompressionAlgorithm(), level=3)
+        repr_str = repr(config)
+        assert "icechunk.CompressionConfig(" in repr_str
+        assert "Zstd" in repr_str
+        assert "level=3" in repr_str
 
-    def test_compression_config(self) -> None:
-        assert_has_all_three_reprs(CompressionConfig())
+    def test_s3_options_shows_all_fields(self) -> None:
+        opts = S3Options(region="us-east-1", allow_http=True, requester_pays=True)
+        repr_str = repr(opts)
+        assert "icechunk.S3Options(" in repr_str
+        assert 'region="us-east-1"' in repr_str
+        assert "allow_http=True" in repr_str
+        assert "requester_pays=True" in repr_str
+        assert "anonymous=False" in repr_str
 
-    def test_s3_options(self) -> None:
-        assert_has_all_three_reprs(S3Options())
+    def test_storage_retries_settings_shows_fields(self) -> None:
+        s = StorageRetriesSettings(max_tries=5, initial_backoff_ms=100)
+        repr_str = repr(s)
+        assert "max_tries=5" in repr_str
+        assert "initial_backoff_ms=100" in repr_str
 
-    def test_s3_static_credentials(self) -> None:
-        assert_has_all_three_reprs(S3StaticCredentials("ak", "sk"))
+    def test_storage_timeout_settings_shows_fields(self) -> None:
+        s = StorageTimeoutSettings(connect_timeout_ms=5000, read_timeout_ms=10000)
+        repr_str = repr(s)
+        assert "connect_timeout_ms=5000" in repr_str
+        assert "read_timeout_ms=10000" in repr_str
 
-    def test_storage_retries_settings(self) -> None:
-        assert_has_all_three_reprs(StorageRetriesSettings())
+    def test_storage_concurrency_settings_shows_fields(self) -> None:
+        s = StorageConcurrencySettings()
+        repr_str = repr(s)
+        assert "icechunk.StorageConcurrencySettings(" in repr_str
+        assert "max_concurrent_requests_for_object" in repr_str
 
-    def test_storage_timeout_settings(self) -> None:
-        assert_has_all_three_reprs(StorageTimeoutSettings())
+    def test_storage_settings_shows_all_fields(self) -> None:
+        s = StorageSettings(storage_class="STANDARD_IA")
+        repr_str = repr(s)
+        assert "icechunk.StorageSettings(" in repr_str
+        assert 'storage_class="STANDARD_IA"' in repr_str
+        assert "minimum_size_for_multipart_upload" in repr_str
 
-    def test_storage_concurrency_settings(self) -> None:
-        assert_has_all_three_reprs(StorageConcurrencySettings())
+    def test_manifest_virtual_chunk_location_compression(self) -> None:
+        c = ManifestVirtualChunkLocationCompressionConfig(min_num_chunks=500)
+        repr_str = repr(c)
+        assert "icechunk.ManifestVirtualChunkLocationCompressionConfig(" in repr_str
+        assert "min_num_chunks=500" in repr_str
 
-    def test_storage_settings(self) -> None:
-        assert_has_all_three_reprs(StorageSettings())
+    def test_manifest_preload_config_shows_fields(self) -> None:
+        c = ManifestPreloadConfig(max_total_refs=42, max_arrays_to_scan=10)
+        repr_str = repr(c)
+        assert "icechunk.ManifestPreloadConfig(" in repr_str
+        assert "max_total_refs=42" in repr_str
+        assert "max_arrays_to_scan=10" in repr_str
 
-    def test_manifest_virtual_chunk_location_compression_config(self) -> None:
-        assert_has_all_three_reprs(ManifestVirtualChunkLocationCompressionConfig())
+    def test_manifest_splitting_config_shows_fields(self) -> None:
+        c = ManifestSplittingConfig()
+        repr_str = repr(c)
+        assert "icechunk.ManifestSplittingConfig(" in repr_str
+        assert "split_sizes" in repr_str
 
-    def test_manifest_preload_config(self) -> None:
-        assert_has_all_three_reprs(ManifestPreloadConfig())
+    def test_manifest_config_shows_fields(self) -> None:
+        c = ManifestConfig()
+        repr_str = repr(c)
+        assert "icechunk.ManifestConfig(" in repr_str
+        assert "preload" in repr_str
+        assert "splitting" in repr_str
+        assert "virtual_chunk_location_compression" in repr_str
 
-    def test_manifest_splitting_config(self) -> None:
-        assert_has_all_three_reprs(ManifestSplittingConfig())
-
-    def test_manifest_config(self) -> None:
-        assert_has_all_three_reprs(ManifestConfig())
-
-    def test_repository_config(self) -> None:
-        assert_has_all_three_reprs(RepositoryConfig())
-
-    def test_conflict(self) -> None:
-        assert_has_all_three_reprs(Conflict(ConflictType(6), "/path"))
-
-    def test_repo_status(self) -> None:
-        assert_has_all_three_reprs(RepoStatus(icechunk.RepoAvailability.online))
-
-    def test_virtual_chunk_container(self) -> None:
+    def test_virtual_chunk_container_shows_fields(self) -> None:
         store_config = icechunk.s3_store(
             region="us-east-1",
             endpoint_url="http://localhost:9000",
             allow_http=True,
             s3_compatible=True,
         )
-        assert_has_all_three_reprs(
-            icechunk.VirtualChunkContainer("s3://bucket/", store_config)
-        )
+        vcc = icechunk.VirtualChunkContainer("s3://bucket/", store_config)
+        repr_str = repr(vcc)
+        assert "icechunk.VirtualChunkContainer(" in repr_str
+        assert 'url_prefix="s3://bucket/"' in repr_str
+        assert "store=" in repr_str
 
-    def test_repository(self, repo: Repository) -> None:
-        assert_has_all_three_reprs(repo)
-
-    def test_session(self, repo: Repository) -> None:
-        assert_has_all_three_reprs(repo.writable_session("main"))
-
-    def test_store(self, repo: Repository) -> None:
-        assert_has_all_three_reprs(repo.writable_session("main").store)
+    def test_repository_config_shows_all_fields(self) -> None:
+        config = RepositoryConfig()
+        repr_str = repr(config)
+        assert "icechunk.RepositoryConfig(" in repr_str
+        assert "inline_chunk_threshold_bytes" in repr_str
+        assert "compression" in repr_str
+        assert "caching" in repr_str
+        assert "storage" in repr_str
+        assert "manifest" in repr_str
+        assert "repo_update_retries" in repr_str
+        assert "num_updates_per_repo_info_file" in repr_str
