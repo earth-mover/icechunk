@@ -29,7 +29,7 @@ virtual_chunk_containers:
     url_prefix: s3://testbucket
     store: !s3_compatible
       region: us-east-1
-      endpoint_url: http://localhost:9000
+      endpoint_url: http://localhost:4200
       anonymous: false
       allow_http: true
       force_path_style: true

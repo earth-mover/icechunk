@@ -51,7 +51,7 @@ fn spec_version_cases(#[case] spec_version: SpecVersionBin) {}
 fn minio_s3_config() -> (S3Options, S3Credentials) {
     let config = S3Options {
         region: Some("us-east-1".to_string()),
-        endpoint_url: Some("http://localhost:9000".to_string()),
+        endpoint_url: Some("http://localhost:4200".to_string()),
         allow_http: true,
         anonymous: false,
         force_path_style: true,
@@ -59,8 +59,8 @@ fn minio_s3_config() -> (S3Options, S3Credentials) {
         requester_pays: false,
     };
     let credentials = S3Credentials::Static(S3StaticCredentials {
-        access_key_id: "minio123".into(),
-        secret_access_key: "minio123".into(),
+        access_key_id: "test123".into(),
+        secret_access_key: "test123".into(),
         session_token: None,
         expires_after: None,
     });
@@ -216,7 +216,7 @@ async fn create_minio_repository(spec_version: SpecVersionBin) -> Repository {
             "s3://testbucket/".to_string(),
             ObjectStoreConfig::S3Compatible(S3Options {
                 region: Some(String::from("us-east-1")),
-                endpoint_url: Some("http://localhost:9000".to_string()),
+                endpoint_url: Some("http://localhost:4200".to_string()),
                 anonymous: false,
                 allow_http: true,
                 force_path_style: true,
@@ -229,7 +229,7 @@ async fn create_minio_repository(spec_version: SpecVersionBin) -> Repository {
             "s3://testbucket/path with spaces/".to_string(),
             ObjectStoreConfig::S3Compatible(S3Options {
                 region: Some(String::from("us-east-1")),
-                endpoint_url: Some("http://localhost:9000".to_string()),
+                endpoint_url: Some("http://localhost:4200".to_string()),
                 anonymous: false,
                 allow_http: true,
                 force_path_style: true,
@@ -252,8 +252,8 @@ async fn create_minio_repository(spec_version: SpecVersionBin) -> Repository {
         (
             "s3://testbucket/".to_string(),
             Some(Credentials::S3(S3Credentials::Static(S3StaticCredentials {
-                access_key_id: "minio123".to_string(),
-                secret_access_key: "minio123".to_string(),
+                access_key_id: "test123".to_string(),
+                secret_access_key: "test123".to_string(),
                 session_token: None,
                 expires_after: None,
             }))),
@@ -261,8 +261,8 @@ async fn create_minio_repository(spec_version: SpecVersionBin) -> Repository {
         (
             "s3://testbucket/path with spaces/".to_string(),
             Some(Credentials::S3(S3Credentials::Static(S3StaticCredentials {
-                access_key_id: "minio123".to_string(),
-                secret_access_key: "minio123".to_string(),
+                access_key_id: "test123".to_string(),
+                secret_access_key: "test123".to_string(),
                 session_token: None,
                 expires_after: None,
             }))),
@@ -855,7 +855,7 @@ async fn test_zarr_store_with_multiple_virtual_chunk_containers(
             "s3://testbucket/".to_string(),
             ObjectStoreConfig::S3Compatible(S3Options {
                 region: Some(String::from("us-east-1")),
-                endpoint_url: Some("http://localhost:9000".to_string()),
+                endpoint_url: Some("http://localhost:4200".to_string()),
                 anonymous: false,
                 allow_http: true,
                 force_path_style: true,
@@ -888,8 +888,8 @@ async fn test_zarr_store_with_multiple_virtual_chunk_containers(
         (
             "s3://testbucket".to_string(),
             Some(Credentials::S3(S3Credentials::Static(S3StaticCredentials {
-                access_key_id: "minio123".to_string(),
-                secret_access_key: "minio123".to_string(),
+                access_key_id: "test123".to_string(),
+                secret_access_key: "test123".to_string(),
                 session_token: None,
                 expires_after: None,
             }))),
