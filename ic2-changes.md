@@ -2,6 +2,7 @@
 
 ## New Features
 
+### Array Operations
 **Rectilinear Chunk Grids**: Support for Zarr 3 rectilinear (variable-sized) chunk grids, where each chunk along a dimension can have a different size. Chunk shapes can be specified inline (fully listed) or run-length encoded.
 
 **Move**: `move_node(from, to)` moves or renames arrays and groups. Unlike vanilla Zarr, this is a cheap metadata-only operation that doesn't require copying any chunks. Requires a dedicated `rearrange_session` (cannot be mixed with data writes).
@@ -11,11 +12,20 @@
 - `shift_array(path, offset)`: shift all chunks by a chunk offset
 - `reindex_array(path, fn)`: arbitrary chunk coordinate transformation via a user-provided function
 
-**HTTP Storage backend**: Read-only access to repositories served over HTTP/HTTPS, enabling public or CDN-hosted repos.
+**More ergonomic distributed writes**: Icechunk doesn't enforce committing chnages before executing distributed writes. `ForkSession` is now based off of an anonymous snapshot that captures uncommitted state, and allows writes but disallows commits. Fork sessions are serializable (picklable) for distribution to workers, and are merged back via `session.merge(fork_session)` as previously.
+
+### Version Control
 
 **Amend**: `amend()` replaces the previous commit on a branch instead of creating a new one.
 
-**Experimental WASM Build**: Icechunk core compiles to WASM (single-threaded tokio runtime), enabling browser/Node.js usage.
+**Anonymous Snapshots**: `session.flush(message)` creates a detached snapshot without advancing the branch. In IC2 these are first-class citizens tracked in the repo info and ops log.
+
+**Empty Commits**: `allow_empty(true)` on `CommitBuilder` permits commits with no data changes.
+
+**Rebase attempt tracking**: Rebase attempts are recorded in snapshot metadata, giving visibility into conflict resolution history.
+
+
+### Repository-level features
 
 **Repository Status**: Repos can be marked `Online`, `ReadOnly` with a reason. Status is checked before operations proceed.
 
@@ -23,17 +33,13 @@
 
 **Repository-Level Metadata**: Key-value metadata on the repo itself (not just on snapshots).
 
+### Storage Backends
+
+**HTTP Storage backend**: Read-only access to repositories served over HTTP/HTTPS, enabling public or CDN-hosted repos.
+
 **Redirect Storage**: `RedirectStorage` follows HTTP 302 redirects to resolve the actual storage backend (S3, R2, Tigris, GCS). Useful for CDN/load-balancing scenarios.
 
-**Anonymous Snapshots**: `session.flush(message)` creates a detached snapshot without advancing the branch. In IC2 these are first-class citizens tracked in the repo info and ops log.
-
-**Better session fork**: `session.fork()` now creates an anonymous snapshot capturing the base session's state and returns a `ForkSession` that allows writes but disallows commits. Fork sessions are serializable (picklable) for distribution to workers, and are merged back via `session.merge(fork_session)`.
-
-**Empty Commits**: `allow_empty(true)` on `CommitBuilder` permits commits with no data changes.
-
-**Rebase attempt tracking**: Rebase attempts are recorded in snapshot metadata, giving visibility into conflict resolution history.
-
-**Inspect/Debugging Tools**: `inspect_snapshot()`, `inspect_repo_info()`, `inspect_manifest()` return detailed JSON introspection of internal structures.
+**Experimental WASM Build**: Icechunk core compiles to WASM (single-threaded tokio runtime), enabling browser/Node.js usage.
 
 **IC1 → IC2 Migration**: `migrate_1_to_2()` with dry-run support.
 
@@ -65,6 +71,8 @@ In V2, all repository state is referenced from the unified repo info object. Eve
 **`ManifestFileInfoV2`**: V2 uses a flatbuffers `table` with an optional `extra` field, allowing future extensibility without format bumps.
 
 **Transaction logs now track move operations**:  A new `moved_nodes: [MoveOperation]` field records path renames.
+
+**Inspect/Debugging Tools**: `inspect_snapshot()`, `inspect_repo_info()`, `inspect_manifest()` return detailed JSON introspection of internal structures.
 
 ---
 
@@ -115,6 +123,10 @@ In V2, all repository state is referenced from the unified repo info object. Eve
 **Toxiproxy network fault testing**: Simulates connection resets, stalls, and other network failures to validate retry logic.
 
 ---
+
+## Python-Specific Changes
+
+- Initial support for free-threading. This feature is lightly tested and we welcome contributions to make it work well.
 
 ## Python API Changes
 
