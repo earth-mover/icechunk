@@ -4310,7 +4310,7 @@ mod tests {
             repo.asset_manager.fetch_transaction_log(&first_amend_snap_id).await?;
         assert!(tx_log.moves().count() == 1);
 
-        // Another rearrange session: move node again, amend gain
+        // Another rearrange session: move node again, amend again
         let mut session = repo.rearrange_session("main").await?;
         session
             .move_node("/another_dest".try_into().unwrap(), "/src".try_into().unwrap())
@@ -4406,11 +4406,8 @@ mod tests {
         // Rearrange session: move a node
         let mut session = repo.rearrange_session("main").await?;
         session.move_node("/foo".try_into().unwrap(), "/f".try_into().unwrap()).await?;
-        let first_rearr_snap_id = session
-            .commit("moved source to dest")
-            .max_concurrent_nodes(8)
-            .execute()
-            .await?;
+        let first_rearr_snap_id =
+            session.commit("foo to f").max_concurrent_nodes(8).execute().await?;
 
         // Check if moved (and nested) groups still show up properly after commit
         let session = repo
@@ -4431,12 +4428,8 @@ mod tests {
         // Rearrange session: move a node
         let mut session = repo.rearrange_session("main").await?;
         session.move_node("/f".try_into().unwrap(), "/foo".try_into().unwrap()).await?;
-        let amend_snap_id = session
-            .commit("moved source to dest")
-            .max_concurrent_nodes(8)
-            .amend()
-            .execute()
-            .await?;
+        let amend_snap_id =
+            session.commit("f to foo").max_concurrent_nodes(8).amend().execute().await?;
 
         // Check if moved (and nested) groups still show up properly after commit
         let session = repo
@@ -4501,11 +4494,8 @@ mod tests {
         // Rearrange session: move a node
         let mut session = repo.rearrange_session("main").await?;
         session.move_node("/foo".try_into().unwrap(), "/f".try_into().unwrap()).await?;
-        let first_rearr_snap_id = session
-            .commit("moved source to dest")
-            .max_concurrent_nodes(8)
-            .execute()
-            .await?;
+        let first_rearr_snap_id =
+            session.commit("foo to f").max_concurrent_nodes(8).execute().await?;
 
         // Check if moved (and nested) groups still show up properly after commit
         let session = repo
@@ -4528,7 +4518,7 @@ mod tests {
             .move_node("/f/bar".try_into().unwrap(), "/foo".try_into().unwrap())
             .await?;
         let first_amend_snap_id =
-            session.commit("moved dest to another_dest").amend().execute().await?;
+            session.commit("f/bar to foo").amend().execute().await?;
 
         // Check if moved (and nested) groups still show up properly after commit
         let session = repo
@@ -4607,11 +4597,8 @@ mod tests {
         // Rearrange session: move `/a` node into `/b/a`
         let mut session = repo.rearrange_session("main").await?;
         session.move_node("/a".try_into().unwrap(), "/b/a".try_into().unwrap()).await?;
-        let first_rearr_snap_id = session
-            .commit("moved source to dest")
-            .max_concurrent_nodes(8)
-            .execute()
-            .await?;
+        let first_rearr_snap_id =
+            session.commit("a to b/a").max_concurrent_nodes(8).execute().await?;
 
         // Check if moved (and nested) groups still show up properly after commit
         let session = repo
@@ -4629,8 +4616,7 @@ mod tests {
         // Rearrange session: move another node, amend this time
         let mut session = repo.rearrange_session("main").await?;
         session.move_node("/b".try_into().unwrap(), "/d".try_into().unwrap()).await?;
-        let second_amend_snap_id =
-            session.commit("moved dest to another_dest").amend().execute().await?;
+        let second_amend_snap_id = session.commit("b to d").amend().execute().await?;
 
         // Check if moved (and nested) groups still show up properly after commit
         let session = repo
@@ -4652,8 +4638,7 @@ mod tests {
         // Rearrange session: move child from one top-level node to another
         let mut session = repo.rearrange_session("main").await?;
         session.move_node("/d/a".try_into().unwrap(), "/c/e".try_into().unwrap()).await?;
-        let third_amend_snap_id =
-            session.commit("moved dest to another_dest").amend().execute().await?;
+        let third_amend_snap_id = session.commit("d/a to c/e").amend().execute().await?;
 
         // Check if moved (and nested) groups still show up properly after commit
         let session = repo

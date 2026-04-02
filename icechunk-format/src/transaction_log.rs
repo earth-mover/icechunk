@@ -436,7 +436,7 @@ impl TransactionLog {
                 let Move { from, to, node_id, node_type } = mv?;
                 // if this is the first time we see this node_id, just insert.
                 // Otherwise we need to merge the old and new move for the same node_id,
-                // reusing the info from the old move but replacing the "to" field
+                // reusing the info from the old move but replacing with the "to" field
                 // from the new move.
                 moved_map
                     .entry(node_id.clone())
