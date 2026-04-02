@@ -123,14 +123,12 @@ pub(crate) struct PyConflict {
     conflicted_chunks: Option<Vec<Vec<u32>>>,
 }
 
-// TODO: pass `mode` through once nested fields implement PyRepr
-#[expect(unused_variables)]
 impl PyRepr for PyConflict {
     const EXECUTABLE: bool = false;
     fn cls_name() -> &'static str {
         "icechunk.Conflict"
     }
-    fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
+    fn fields(&self, _mode: ReprMode) -> Vec<(&str, String)> {
         vec![
             ("conflict_type", format!("{:?}", self.conflict_type)),
             ("path", self.path.clone()),

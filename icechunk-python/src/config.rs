@@ -75,13 +75,12 @@ impl From<PyS3StaticCredentials> for S3StaticCredentials {
 }
 
 // Non-executable: contains secrets that should not be printed in full
-#[expect(unused_variables)]
 impl PyRepr for PyS3StaticCredentials {
     const EXECUTABLE: bool = false;
     fn cls_name() -> &'static str {
         "icechunk.S3StaticCredentials"
     }
-    fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
+    fn fields(&self, _mode: ReprMode) -> Vec<(&str, String)> {
         vec![
             (
                 "access_key_id",
@@ -514,14 +513,12 @@ pub struct PyS3Options {
     pub requester_pays: bool,
 }
 
-// TODO: pass `mode` through once nested fields implement PyRepr
-#[expect(unused_variables)]
 impl PyRepr for PyS3Options {
     const EXECUTABLE: bool = true;
     fn cls_name() -> &'static str {
         "icechunk.S3Options"
     }
-    fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
+    fn fields(&self, _mode: ReprMode) -> Vec<(&str, String)> {
         vec![
             ("region", py_option_str(&self.region)),
             ("endpoint_url", py_option_str(&self.endpoint_url)),
@@ -804,14 +801,12 @@ pub struct PyCompressionConfig {
     pub level: Option<u8>,
 }
 
-// TODO: pass `mode` through once nested fields implement PyRepr
-#[expect(unused_variables)]
 impl PyRepr for PyCompressionConfig {
     const EXECUTABLE: bool = true;
     fn cls_name() -> &'static str {
         "icechunk.CompressionConfig"
     }
-    fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
+    fn fields(&self, _mode: ReprMode) -> Vec<(&str, String)> {
         vec![
             (
                 "algorithm",
@@ -880,8 +875,6 @@ pub struct PyCachingConfig {
     pub num_bytes_chunks: Option<u64>,
 }
 
-// TODO: pass `mode` through once nested fields implement PyRepr
-#[expect(unused_variables)]
 impl PyRepr for PyCachingConfig {
     const EXECUTABLE: bool = true;
 
@@ -889,7 +882,7 @@ impl PyRepr for PyCachingConfig {
         "icechunk.CachingConfig"
     }
 
-    fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
+    fn fields(&self, _mode: ReprMode) -> Vec<(&str, String)> {
         vec![
             ("num_snapshot_nodes", py_option(&self.num_snapshot_nodes)),
             ("num_chunk_refs", py_option(&self.num_chunk_refs)),
@@ -994,14 +987,12 @@ impl From<&PyStorageRetriesSettings> for RetriesSettings {
     }
 }
 
-// TODO: pass `mode` through once nested fields implement PyRepr
-#[expect(unused_variables)]
 impl PyRepr for PyStorageRetriesSettings {
     const EXECUTABLE: bool = true;
     fn cls_name() -> &'static str {
         "icechunk.StorageRetriesSettings"
     }
-    fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
+    fn fields(&self, _mode: ReprMode) -> Vec<(&str, String)> {
         vec![
             ("max_tries", py_option(&self.max_tries)),
             ("initial_backoff_ms", py_option(&self.initial_backoff_ms)),
@@ -1068,14 +1059,12 @@ impl From<&PyStorageTimeoutSettings> for storage::TimeoutSettings {
     }
 }
 
-// TODO: pass `mode` through once nested fields implement PyRepr
-#[expect(unused_variables)]
 impl PyRepr for PyStorageTimeoutSettings {
     const EXECUTABLE: bool = true;
     fn cls_name() -> &'static str {
         "icechunk.StorageTimeoutSettings"
     }
-    fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
+    fn fields(&self, _mode: ReprMode) -> Vec<(&str, String)> {
         vec![
             ("connect_timeout_ms", py_option(&self.connect_timeout_ms)),
             ("read_timeout_ms", py_option(&self.read_timeout_ms)),
@@ -1208,14 +1197,12 @@ impl From<&PyStorageConcurrencySettings> for ConcurrencySettings {
     }
 }
 
-// TODO: pass `mode` through once nested fields implement PyRepr
-#[expect(unused_variables)]
 impl PyRepr for PyStorageConcurrencySettings {
     const EXECUTABLE: bool = true;
     fn cls_name() -> &'static str {
         "icechunk.StorageConcurrencySettings"
     }
-    fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
+    fn fields(&self, _mode: ReprMode) -> Vec<(&str, String)> {
         vec![
             (
                 "max_concurrent_requests_for_object",
@@ -1806,14 +1793,12 @@ pub struct PyManifestSplittingConfig {
     pub split_sizes: Option<Vec<(PyManifestSplitCondition, DimConditions)>>,
 }
 
-// TODO: pass `mode` through once nested fields implement PyRepr
-#[expect(unused_variables)]
 impl PyRepr for PyManifestSplittingConfig {
     const EXECUTABLE: bool = true;
     fn cls_name() -> &'static str {
         "icechunk.ManifestSplittingConfig"
     }
-    fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
+    fn fields(&self, _mode: ReprMode) -> Vec<(&str, String)> {
         let split_sizes = match &self.split_sizes {
             None => "None".to_string(),
             Some(sizes) => {
@@ -1919,14 +1904,12 @@ pub struct PyManifestVirtualChunkLocationCompressionConfig {
     pub compression_level: Option<i32>,
 }
 
-// TODO: pass `mode` through once nested fields implement PyRepr
-#[expect(unused_variables)]
 impl PyRepr for PyManifestVirtualChunkLocationCompressionConfig {
     const EXECUTABLE: bool = true;
     fn cls_name() -> &'static str {
         "icechunk.ManifestVirtualChunkLocationCompressionConfig"
     }
-    fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
+    fn fields(&self, _mode: ReprMode) -> Vec<(&str, String)> {
         vec![
             ("min_num_chunks", py_option(&self.min_num_chunks)),
             (
@@ -2348,14 +2331,12 @@ pub(crate) struct PyStorageObjectInfo {
     pub created_at: DateTime<Utc>,
 }
 
-// TODO: pass `mode` through once nested fields implement PyRepr
-#[expect(unused_variables)]
 impl PyRepr for PyStorageObjectInfo {
     const EXECUTABLE: bool = false;
     fn cls_name() -> &'static str {
         "icechunk.StorageObjectInfo"
     }
-    fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
+    fn fields(&self, _mode: ReprMode) -> Vec<(&str, String)> {
         vec![
             ("key", self.key.clone()),
             ("size_bytes", self.size_bytes.to_string()),

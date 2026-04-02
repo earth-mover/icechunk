@@ -101,8 +101,6 @@ impl_pickle!(VirtualChunkSpec);
 #[derive(Clone, Debug)]
 pub struct PyStore(pub Arc<Store>);
 
-// TODO: pass `mode` through once nested fields implement PyRepr
-#[expect(unused_variables)]
 impl PyRepr for PyStore {
     const EXECUTABLE: bool = false;
 
@@ -110,7 +108,7 @@ impl PyRepr for PyStore {
         "icechunk.IcechunkStore"
     }
 
-    fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
+    fn fields(&self, _mode: ReprMode) -> Vec<(&str, String)> {
         let session = self.0.session();
         let session_guard = session.blocking_read();
         let branch = session_guard

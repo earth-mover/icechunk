@@ -224,8 +224,6 @@ impl From<SnapshotInfo> for PySnapshotInfo {
     }
 }
 
-// TODO: pass `mode` through once nested fields implement PyRepr
-#[expect(unused_variables)]
 impl PyRepr for PyManifestFileInfo {
     const EXECUTABLE: bool = false;
 
@@ -233,7 +231,7 @@ impl PyRepr for PyManifestFileInfo {
         "icechunk.ManifestFileInfo"
     }
 
-    fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
+    fn fields(&self, _mode: ReprMode) -> Vec<(&str, String)> {
         vec![
             ("id", self.id.clone()),
             ("size_bytes", self.size_bytes.to_string()),
@@ -257,14 +255,12 @@ impl PyManifestFileInfo {
     }
 }
 
-// TODO: pass `mode` through once nested fields implement PyRepr
-#[expect(unused_variables)]
 impl PyRepr for PySnapshotInfo {
     const EXECUTABLE: bool = false;
     fn cls_name() -> &'static str {
         "icechunk.SnapshotInfo"
     }
-    fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
+    fn fields(&self, _mode: ReprMode) -> Vec<(&str, String)> {
         vec![
             ("id", self.id.clone()),
             ("parent_id", py_option(&self.parent_id)),
@@ -354,14 +350,12 @@ impl From<Diff> for PyDiff {
     }
 }
 
-// TODO: pass `mode` through once nested fields implement PyRepr
-#[expect(unused_variables)]
 impl PyRepr for PyDiff {
     const EXECUTABLE: bool = false;
     fn cls_name() -> &'static str {
         "icechunk.Diff"
     }
-    fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
+    fn fields(&self, _mode: ReprMode) -> Vec<(&str, String)> {
         vec![
             ("new_groups", format!("{:?}", self.new_groups)),
             ("new_arrays", format!("{:?}", self.new_arrays)),
@@ -505,14 +499,12 @@ impl From<GCSummary> for PyGCSummary {
     }
 }
 
-// TODO: pass `mode` through once nested fields implement PyRepr
-#[expect(unused_variables)]
 impl PyRepr for PyGCSummary {
     const EXECUTABLE: bool = false;
     fn cls_name() -> &'static str {
         "icechunk.GCSummary"
     }
-    fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
+    fn fields(&self, _mode: ReprMode) -> Vec<(&str, String)> {
         vec![
             ("bytes_deleted", self.bytes_deleted.to_string()),
             ("chunks_deleted", self.chunks_deleted.to_string()),
@@ -604,14 +596,12 @@ impl Display for PyRepoStatus {
     }
 }
 
-// TODO: pass `mode` through once nested fields implement PyRepr
-#[expect(unused_variables)]
 impl PyRepr for PyRepoStatus {
     const EXECUTABLE: bool = false;
     fn cls_name() -> &'static str {
         "icechunk.RepoStatus"
     }
-    fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
+    fn fields(&self, _mode: ReprMode) -> Vec<(&str, String)> {
         vec![
             ("availability", format!("{:?}", self.availability)),
             ("set_at", datetime_repr(&self.set_at)),
@@ -735,14 +725,12 @@ pub(crate) struct PyUpdate {
     backup_path: Option<String>,
 }
 
-// TODO: pass `mode` through once nested fields implement PyRepr
-#[expect(unused_variables)]
 impl PyRepr for PyUpdate {
     const EXECUTABLE: bool = false;
     fn cls_name() -> &'static str {
         "icechunk.Update"
     }
-    fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
+    fn fields(&self, _mode: ReprMode) -> Vec<(&str, String)> {
         vec![
             ("kind", self.kind.__repr__()),
             ("updated_at", datetime_repr(&self.updated_at)),
@@ -779,14 +767,12 @@ pub(crate) struct PyFeatureFlag {
     enabled: bool,
 }
 
-// TODO: pass `mode` through once nested fields implement PyRepr
-#[expect(unused_variables)]
 impl PyRepr for PyFeatureFlag {
     const EXECUTABLE: bool = false;
     fn cls_name() -> &'static str {
         "icechunk.FeatureFlag"
     }
-    fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
+    fn fields(&self, _mode: ReprMode) -> Vec<(&str, String)> {
         vec![
             ("id", self.id.to_string()),
             ("name", self.name.clone()),
