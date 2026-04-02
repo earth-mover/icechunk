@@ -1,5 +1,7 @@
 """Tests for __str__, __repr__, and _repr_html_ display methods."""
 
+from datetime import datetime, timedelta, timezone
+
 import pytest
 
 import icechunk
@@ -15,6 +17,7 @@ from icechunk import (
     ManifestSplitCondition,
     ManifestSplittingConfig,
     ManifestVirtualChunkLocationCompressionConfig,
+    ObjectStoreConfig,
     Repository,
     RepositoryConfig,
     RepoStatus,
@@ -24,6 +27,7 @@ from icechunk import (
     StorageRetriesSettings,
     StorageSettings,
     StorageTimeoutSettings,
+    VirtualChunkContainer,
     in_memory_storage,
 )
 
@@ -105,6 +109,25 @@ class TestReprRoundtrip:
             RepositoryConfig(
                 caching=CachingConfig(num_snapshot_nodes=100),
                 compression=CompressionConfig(level=3),
+            )
+        )
+
+    def test_object_store_config(self) -> None:
+        assert_repr_roundtrips(ObjectStoreConfig.InMemory())
+        assert_repr_roundtrips(
+            ObjectStoreConfig.S3(S3Options(region="us-east-1", allow_http=True))
+        )
+        assert_repr_roundtrips(ObjectStoreConfig.LocalFileSystem("/tmp/test"))
+
+    def test_virtual_chunk_container(self) -> None:
+        assert_repr_roundtrips(
+            VirtualChunkContainer("s3://bucket/", ObjectStoreConfig.InMemory())
+        )
+        assert_repr_roundtrips(
+            VirtualChunkContainer(
+                "s3://data/",
+                ObjectStoreConfig.S3(S3Options(region="eu-west-1")),
+                name="my-store",
             )
         )
 
@@ -387,3 +410,122 @@ class TestReprStructural:
         assert "manifest" in repr_str
         assert "repo_update_retries" in repr_str
         assert "num_updates_per_repo_info_file" in repr_str
+
+    def test_object_store_config_inmemory(self) -> None:
+        osc = ObjectStoreConfig.InMemory()
+        assert "icechunk.ObjectStoreConfig.InMemory(" in repr(osc)
+        assert "<icechunk.ObjectStoreConfig.InMemory>" in str(osc)
+        html = osc._repr_html_()
+        assert "icechunk.ObjectStoreConfig.InMemory" in html
+        assert '<div class="icechunk-repr">' in html
+
+    def test_object_store_config_s3(self) -> None:
+        osc = ObjectStoreConfig.S3(S3Options(region="us-east-1"))
+        repr_str = repr(osc)
+        assert "icechunk.ObjectStoreConfig.S3(" in repr_str
+        assert "us-east-1" in repr_str
+        str_str = str(osc)
+        assert "<icechunk.ObjectStoreConfig.S3>" in str_str
+        assert "us-east-1" in str_str
+
+    def test_object_store_config_local_filesystem(self) -> None:
+        osc = ObjectStoreConfig.LocalFileSystem("/tmp/test")
+        repr_str = repr(osc)
+        assert "icechunk.ObjectStoreConfig.LocalFileSystem(" in repr_str
+        assert "/tmp/test" in repr_str
+
+    def test_snapshot_info(self, repo: Repository) -> None:
+        session = repo.writable_session("main")
+        zarr.group(session.store)
+        session.commit("init")
+        infos = list(repo.ancestry(branch="main"))
+        assert len(infos) >= 1
+        info = infos[0]
+        repr_str = repr(info)
+        assert "<icechunk.SnapshotInfo>" in repr_str
+        assert "id:" in repr_str
+        assert "message:" in repr_str
+        assert "written_at:" in repr_str
+        assert "metadata:" in repr_str
+        html = info._repr_html_()
+        assert "icechunk.SnapshotInfo" in html
+
+    def test_diff(self, repo: Repository) -> None:
+        session = repo.writable_session("main")
+        zarr.open_array(session.store, path="arr", mode="w", shape=(10,), dtype="f8")
+        snap1 = session.commit("add array")
+        session2 = repo.writable_session("main")
+        zarr.open_array(session2.store, path="arr2", mode="w", shape=(5,), dtype="i4")
+        snap2 = session2.commit("add array2")
+        diff = repo.diff(from_snapshot_id=snap1, to_snapshot_id=snap2)
+        repr_str = repr(diff)
+        assert "Arrays created" in repr_str
+        assert "arr2" in repr_str
+        html = diff._repr_html_()
+        assert "icechunk.Diff" in html
+
+    def test_gc_summary(self, repo: Repository) -> None:
+        session = repo.writable_session("main")
+        zarr.group(session.store)
+        session.commit("init")
+        gc = repo.garbage_collect(datetime.now(tz=timezone.utc) - timedelta(hours=1))
+        repr_str = repr(gc)
+        assert "<icechunk.GCSummary>" in repr_str
+        assert "bytes_deleted:" in repr_str
+        assert "chunks_deleted:" in repr_str
+        html = gc._repr_html_()
+        assert "icechunk.GCSummary" in html
+
+    def test_feature_flag(self, repo: Repository) -> None:
+        flags = repo.feature_flags()
+        assert len(flags) > 0
+        flag = flags[0]
+        repr_str = repr(flag)
+        assert "<icechunk.FeatureFlag>" in repr_str
+        assert "name:" in repr_str
+        assert "default_enabled:" in repr_str
+        assert "enabled:" in repr_str
+        html = flag._repr_html_()
+        assert "icechunk.FeatureFlag" in html
+
+    def test_update(self, repo: Repository) -> None:
+        session = repo.writable_session("main")
+        zarr.group(session.store)
+        session.commit("init")
+        updates = list(repo.ops_log())
+        assert len(updates) > 0
+        update = updates[0]
+        repr_str = repr(update)
+        assert "<icechunk.Update>" in repr_str
+        assert "kind:" in repr_str
+        assert "updated_at:" in repr_str
+        html = update._repr_html_()
+        assert "icechunk.Update" in html
+
+    def test_chunk_storage_stats(self, repo: Repository) -> None:
+        stats = repo.chunk_storage_stats()
+        repr_str = repr(stats)
+        assert "<icechunk.ChunkStorageStats>" in repr_str
+        assert "native_bytes:" in repr_str
+        assert "virtual_bytes:" in repr_str
+        assert "inlined_bytes:" in repr_str
+        html = stats._repr_html_()
+        assert "icechunk.ChunkStorageStats" in html
+
+    def test_virtual_chunk_container_all_modes(self) -> None:
+        vcc = VirtualChunkContainer(
+            "s3://bucket/", ObjectStoreConfig.InMemory()
+        )
+        # Executable repr
+        repr_str = repr(vcc)
+        assert "icechunk.VirtualChunkContainer(" in repr_str
+        assert 'url_prefix="s3://bucket/"' in repr_str
+        # Str
+        str_str = str(vcc)
+        assert "<icechunk.VirtualChunkContainer>" in str_str
+        assert "url_prefix:" in str_str
+        assert "store:" in str_str
+        # HTML
+        html = vcc._repr_html_()
+        assert "icechunk.VirtualChunkContainer" in html
+        assert '<div class="icechunk-repr">' in html

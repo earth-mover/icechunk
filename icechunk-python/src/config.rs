@@ -35,7 +35,7 @@ use pyo3::{
 };
 
 use crate::display::{
-    PyRepr, ReprMode, dataclass_html_repr, dataclass_repr, dataclass_str, py_bool,
+    PyRepr, ReprMode, dataclass_html_repr, dataclass_str, py_bool,
     py_option, py_option_nested_repr, py_option_str,
 };
 use crate::errors::PyIcechunkStoreError;
@@ -650,6 +650,7 @@ impl PyObjectStoreConfig {
         }
     }
 
+    /// Fields for str/html modes (named key: value pairs).
     fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
         match self {
             Self::InMemory() => vec![],
@@ -666,13 +667,35 @@ impl PyObjectStoreConfig {
     }
 
     pub(crate) fn render(&self, mode: ReprMode) -> String {
-        let fields = self.fields(mode);
-        let refs: Vec<(&str, &str)> =
-            fields.iter().map(|(k, v)| (*k, v.as_str())).collect();
         match mode {
-            ReprMode::Str => dataclass_str(self.cls_name(), &refs),
-            ReprMode::Repr => dataclass_repr(self.cls_name(), &refs),
-            ReprMode::Html => dataclass_html_repr(self.cls_name(), &refs),
+            ReprMode::Repr => {
+                // Executable repr: variants take positional args, so we
+                // can't use dataclass_repr's key=value format. Instead
+                // produce e.g. `icechunk.ObjectStoreConfig.S3(icechunk.S3Options(...))`
+                let cls = self.cls_name();
+                match self {
+                    Self::InMemory() => format!("{cls}()"),
+                    Self::LocalFileSystem(path) => {
+                        format!("{cls}(\"{}\")", path.display())
+                    }
+                    Self::S3Compatible(opts) | Self::S3(opts) | Self::Tigris(opts) => {
+                        format!("{cls}({})", <PyS3Options as PyRepr>::__repr__(opts))
+                    }
+                    Self::Gcs(opts) => format!("{cls}({opts:?})"),
+                    Self::Azure(config) => format!("{cls}({config:?})"),
+                    Self::Http(opts) => format!("{cls}({opts:?})"),
+                }
+            }
+            ReprMode::Str | ReprMode::Html => {
+                let fields = self.fields(mode);
+                let refs: Vec<(&str, &str)> =
+                    fields.iter().map(|(k, v)| (*k, v.as_str())).collect();
+                match mode {
+                    ReprMode::Str => dataclass_str(self.cls_name(), &refs),
+                    ReprMode::Html => dataclass_html_repr(self.cls_name(), &refs),
+                    ReprMode::Repr => unreachable!(),
+                }
+            }
         }
     }
 }
