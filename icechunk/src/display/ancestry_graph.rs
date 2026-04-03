@@ -33,8 +33,8 @@ pub struct AncestryGraph {
     pub num_columns: usize,
     /// All branch names in the repo (sorted), used for consistent color assignment.
     pub all_branches: Vec<String>,
-    /// Whether the output was truncated (more nodes exist than are displayed).
-    pub truncated: bool,
+    /// Total number of snapshots before truncation (0 if not truncated).
+    pub total_snapshots: usize,
 }
 
 /// Look up labels for a snapshot from a reverse map, returning an empty vec if absent.
@@ -87,7 +87,7 @@ impl AncestryGraph {
                 nodes: Vec::new(),
                 num_columns: 0,
                 all_branches,
-                truncated: false,
+                total_snapshots: 0,
             };
         }
 
@@ -125,12 +125,12 @@ impl AncestryGraph {
         let mut nodes: Vec<AncestryNode> = node_map.into_values().collect();
         nodes.sort_by(|a, b| b.info.flushed_at.cmp(&a.info.flushed_at));
 
-        let truncated = nodes.len() > MAX_DISPLAY_NODES;
-        if truncated {
+        let total_snapshots = nodes.len();
+        if total_snapshots > MAX_DISPLAY_NODES {
             nodes.truncate(MAX_DISPLAY_NODES);
         }
 
-        Self { nodes, num_columns, all_branches, truncated }
+        Self { nodes, num_columns, all_branches, total_snapshots }
     }
 
     /// Get a stable color index for a branch name based on its position in the
@@ -408,10 +408,12 @@ impl fmt::Display for AncestryGraph {
         } else {
             self.fmt_tree(f)?;
         }
-        if self.truncated {
+        if self.total_snapshots > self.nodes.len() {
             writeln!(
                 f,
-                "{DIM}  ... ({MAX_DISPLAY_NODES} of more snapshots shown){RESET}"
+                "{DIM}  ... (showing {} of {} snapshots){RESET}",
+                self.nodes.len(),
+                self.total_snapshots
             )?;
         }
         Ok(())
