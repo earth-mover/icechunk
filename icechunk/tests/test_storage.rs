@@ -55,7 +55,7 @@ async fn mk_s3_storage(
     let storage: Arc<dyn Storage + Send + Sync> = new_s3_storage(
         S3Options {
             region: Some("us-east-1".to_string()),
-            endpoint_url: Some("http://localhost:9000".to_string()),
+            endpoint_url: Some("http://localhost:4200".to_string()),
             allow_http: true,
             anonymous: false,
             force_path_style: true,
@@ -94,7 +94,7 @@ async fn mk_s3_object_store_storage(
             })),
             Some(S3Options {
                 region: Some("us-east-1".to_string()),
-                endpoint_url: Some("http://localhost:9000".to_string()),
+                endpoint_url: Some("http://localhost:4200".to_string()),
                 allow_http: true,
                 anonymous: false,
                 force_path_style: true,

@@ -19,13 +19,13 @@ services:
           mkdir -p /data/"$$bucket"
         done;
 
-        rustfs --access-key minio123 --secret-key minio123 --console-enable /data
+        rustfs --access-key test123 --secret-key test123 --console-enable /data
         '
     volumes:
       - rustfs_data:/data
     ports:
-      - '9000:9000'
-      - '9001:9001'
+      - '4200:9000'
+      - '4201:9001'
 
   rustfs_init:
     container_name: icechunk_rustfs_init
@@ -41,7 +41,7 @@ services:
       - |
         set -ex
 
-        rc alias set local http://rustfs:9000 minio123 minio123
+        rc alias set local http://rustfs:9000 test123 test123
         rc admin user add local readonly basicuser
 
         echo '{

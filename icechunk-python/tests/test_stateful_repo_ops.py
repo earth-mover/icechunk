@@ -250,6 +250,7 @@ class Model:
         HEAD = snap.id
         self.initial_snapshot_id = HEAD
         self.commits[HEAD] = CommitModel.from_snapshot_and_store(snap, {})
+        self.ondisk_snaps[HEAD] = self.commits[HEAD]
         self.HEAD = HEAD
         self.create_branch(DEFAULT_BRANCH, HEAD)
         self.checkout_branch(DEFAULT_BRANCH)
@@ -411,15 +412,54 @@ class Model:
             snap = self.commits[snapid]
             assert snap.written_at < older_than
             assert snap.parent_id is not None
-            if not delete_expired_tags:
-                assert snap.id not in tag_pointees
-            if not delete_expired_branches:
-                assert snap.id not in branch_pointees
+            # V1's released_snapshots can include ref tips that are merely
+            # rewritten (not deleted), so we skip these checks for V1.
+            if self.spec_version >= 2:
+                if not delete_expired_tags:
+                    assert snap.id not in tag_pointees
+                if not delete_expired_branches:
+                    assert snap.id not in branch_pointees
 
+        # Ref deletion (tags/branches) is based on `expired_snapshot_ids`, NOT
+        # `expired_snaps` (= released_snapshots in Rust).
+        #  - released_snapshots: snapshots actually removed from the repo. Excludes
+        #       root snapshots and snapshots protected by preserved refs (e.g. main).
+        #  - expired_snapshot_ids: all non-root snapshots old enough to expire,
+        #       regardless of ref protection. Used only for deciding which
+        #       tag/branch *references* to delete. The snapshots are still preserved.
+        # This means a feature branch sharing main's tip can deleted even though
+        # the snapshot is preserved by main (#1520).
+        #
+        # In V2, root snapshots (no parent) are excluded so refs pointing
+        # to the initial commit are never deleted.
+        # V1 does not exclude root snapshots, so refs pointing to the initial commit
+        # can be deleted.
+        if self.spec_version >= 2:
+            expired_snapshot_ids = {
+                snap_id
+                for snap_id, snap in self.commits.items()
+                if snap.written_at < older_than and snap.parent_id is not None
+            }
+        else:
+            # V1 checks only flushed_at (not parent_id) when deciding ref
+            # deletion, so root-pointing refs can be deleted (#1534).
+            expired_snapshot_ids = {
+                snap_id
+                for snap_id, snap in self.commits.items()
+                if snap.written_at < older_than
+            }
+
+        # V1's released_snapshots can include branch/tag tips that are merely
+        # rewritten (parent pointer changed), not truly removed. Don't remove
+        # those from commits — they're still valid snapshots pointed to by refs.
+        # V2's released_snapshots only contains snapshots truly removed from
+        # the repo info, so all can be popped.
+        ref_pointees = set(self.refs_iter()) if self.spec_version < 2 else set()
         for id in expired_snaps:
             # notice we don't delete from self.ondisk_snaps, those can still be deleted by GC
             # however we do pop from `commits` since that is a list of unexpired snaps
-            self.commits.pop(id, None)
+            if id not in ref_pointees:
+                self.commits.pop(id, None)
 
         # we reparent to the initial snapshot for simplicity. This should be good enough to make
         # self.reachable_snapshots() accurate.
@@ -429,7 +469,7 @@ class Model:
 
         if delete_expired_tags:
             tags_to_delete = {
-                k for k, v in self.tags.items() if v.commit_id in expired_snaps
+                k for k, v in self.tags.items() if v.commit_id in expired_snapshot_ids
             }
             note(f"deleting tags {tags_to_delete=!r}")
             for tag in tags_to_delete:
@@ -441,7 +481,7 @@ class Model:
             branches_to_delete = {
                 k
                 for k, v in self.branch_heads.items()
-                if k != DEFAULT_BRANCH and v in expired_snaps
+                if k != DEFAULT_BRANCH and v in expired_snapshot_ids
             }
             note(f"deleting branches {branches_to_delete=!r}")
             for branch in branches_to_delete:
@@ -485,11 +525,24 @@ class Model:
                 self.ondisk_snaps.pop(k, None)
                 deleted.add(k)
 
-        # Match Rust's delete_snapshots_from_repo_info: rewrite parent_id for
-        # kept snapshots whose parent was GC'd to INITIAL_SNAPSHOT_ID.
-        for c in self.commits.values():
-            if c.parent_id is not None and c.parent_id in deleted:
-                c.parent_id = self.initial_snapshot_id
+        if self.spec_version >= 2:
+            # V2's delete_snapshots_from_repo_info rewrites parent pointers
+            # for kept snapshots whose parent was GC'd.
+            for c in self.commits.values():
+                if c.parent_id is not None and c.parent_id in deleted:
+                    c.parent_id = self.initial_snapshot_id
+        else:
+            # V1 doesn't rewrite parent pointers, so commits whose parents
+            # were GC'd have broken ancestry and are effectively unusable.
+            # Remove them from commits so we don't try to use them
+            while orphaned := {
+                k
+                for k, c in self.commits.items()
+                if c.parent_id is not None
+                and (c.parent_id in deleted or c.parent_id not in self.ondisk_snaps)
+            }:
+                for k in orphaned:
+                    self.commits.pop(k, None)
         note(f"Deleted snapshots in model: {deleted!r}")
         self.ops_log.append(GCRanUpdateModel())
         return deleted
@@ -710,6 +763,10 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         assert branch is not None
         old_head = next(iter(self.repo.ancestry(branch=branch)))
         note(f"Amending commit on branch {branch!r} with id {old_head!r}")
+        # After expiration, HEAD can be reparented to parent_id=None even
+        # though the model thinks it has a parent. Amending a root panics
+        # in Rust (unreachable!), so skip when the repo state disagrees.
+        assume(old_head.parent_id is not None)
 
         commit_id = self.session.amend(message)
         snapinfo = next(iter(self.repo.ancestry(branch=branch)))
@@ -723,6 +780,9 @@ class VersionControlStateMachine(RuleBasedStateMachine):
     @rule(ref=commits)
     def checkout_commit(self, ref: str) -> None:
         if ref not in self.model.commits:
+            # V1 expired snapshots stay on disk so checkout succeeds, but
+            # the model no longer tracks their store contents.
+            assume(self.model.spec_version >= 2)
             note(f"Checking out commit {ref}, expecting error")
             with pytest.raises(IcechunkError):
                 self.repo.readonly_session(snapshot_id=ref)
@@ -768,6 +828,10 @@ class VersionControlStateMachine(RuleBasedStateMachine):
     def create_branch(self, name: str, commit: str) -> str:
         note(f"Creating branch {name!r} for commit {commit!r}")
 
+        # V1 expired snapshots stay on disk so create_branch succeeds, but
+        # the model no longer tracks their store contents.
+        assume(not (self.model.spec_version == 1 and commit not in self.model.commits))
+
         # we can create a tag and branch with the same name
         if name not in self.model.branch_heads and commit in self.model.commits:
             self.repo.create_branch(name, commit)
@@ -784,6 +848,9 @@ class VersionControlStateMachine(RuleBasedStateMachine):
     @rule(name=ref_name_text, commit_id=commits, target=tags)
     def create_tag(self, name: str, commit_id: str) -> str:
         note(f"Creating tag {name!r} for commit {commit_id!r}")
+        # V1 expired snapshots stay on disk so create_tag succeeds, but
+        # the model no longer tracks their store contents.
+        assume(not (self.model.spec_version == 1 and commit_id not in self.model.commits))
         if (
             name in self.model.created_tags
             or name in self.model.tags
@@ -820,6 +887,9 @@ class VersionControlStateMachine(RuleBasedStateMachine):
     @precondition(lambda self: not self.model.changes_made)
     @rule(branch=branches, commit=commits)
     def reset_branch(self, branch: str, commit: str) -> None:
+        # V1 expired snapshots stay on disk so reset_branch would succeed,
+        # but modelling that divergence isn't worthwhile — just skip.
+        assume(not (self.model.spec_version == 1 and commit not in self.model.commits))
         if branch not in self.model.branch_heads or commit not in self.model.commits:
             note(f"resetting branch {branch}, expecting error.")
             with pytest.raises(IcechunkError):
@@ -871,10 +941,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
             self.repo.delete_tag(tag)
             self.model.delete_tag(tag)
 
-    # TODO: v1 has bugs in expire_snapshots, only test for v2
-    # https://github.com/earth-mover/icechunk/issues/1520
-    # https://github.com/earth-mover/icechunk/issues/1534
-    @precondition(lambda self: bool(self.model.commits) and self.model.spec_version >= 2)
+    @precondition(lambda self: bool(self.model.commits))
     @rule(
         data=st.data(),
         delete_expired_branches=st.sampled_from([True, True, True, False]),
@@ -903,14 +970,21 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         )
         # note(f"repo  expired snaps={actual!r}")
 
-        # we never delete the HEAD of main
-        assert self.model.branch_heads["main"] not in actual
+        # We _never_ delete main's HEAD or the initial snapshot.
+        # However, V1's released_snapshots has different semantics: it can include
+        # branch tips that are merely rewritten (parent pointer changed),
+        # not truly deleted. So only assert this for V2.
+        if self.model.spec_version >= 2:
+            assert self.model.branch_heads["main"] not in actual
         # we never expire the initial snapshot
         assert self.initial_snapshot.id not in actual
-        # edited parents should not be expired
-        for snap in set(self.model.commits) - actual:
-            actualsnap = self.repo.lookup_snapshot(snap)
-            assert actualsnap.parent_id not in actual
+        # V2 reparents correctly so no retained snapshot has an expired parent.
+        # V1's released_snapshots can include the tip itself (which is
+        # rewritten, not deleted), so this invariant doesn't hold for V1.
+        if self.model.spec_version >= 2:
+            for snap in set(self.model.commits) - actual:
+                actualsnap = self.repo.lookup_snapshot(snap)
+                assert actualsnap.parent_id not in actual
 
         # Track branches and tags after expiration
         branches_after = set(self.repo.list_branches())
@@ -954,9 +1028,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         for branch in actual_deleted_branches:
             self.maybe_checkout_branch(branch)
 
-    @precondition(
-        lambda self: bool(self.model.commit_times) and self.model.spec_version >= 2
-    )
+    @precondition(lambda self: bool(self.model.commit_times))
     @rule(data=st.data())
     def garbage_collect(self, data: st.DataObject) -> None:
         assert self.storage is not None
@@ -1051,11 +1123,19 @@ class VersionControlStateMachine(RuleBasedStateMachine):
     def check_ancestry(self) -> None:
         for branch in self.model.branch_heads:
             ancestry = list(self.repo.ancestry(branch=branch))
-            assert_ancestry_invariants(ancestry, known_commits=set(self.model.commits))
+            assert_ancestry_invariants(
+                ancestry,
+                known_commits=set(self.model.commits),
+                must_contain_initial=False,
+            )
 
         for tag in self.model.tags:
             ancestry = list(self.repo.ancestry(tag=tag))
-            assert_ancestry_invariants(ancestry, known_commits=set(self.model.commits))
+            assert_ancestry_invariants(
+                ancestry,
+                known_commits=set(self.model.commits),
+                must_contain_initial=False,
+            )
 
     def check_repo_info(self) -> None:
         ver = self.model.spec_version
@@ -1091,7 +1171,15 @@ class VersionControlStateMachine(RuleBasedStateMachine):
             if p.startswith("transactions/")
         ]
         if self.model.initial_spec_version == 1:
-            assert set(snapshots) - set({INITIAL_SNAPSHOT}) == set(transactions)
+            expired = any(
+                isinstance(op, ExpirationRanUpdateModel) for op in self.model.ops_log
+            )
+            if expired:
+                # V1 expire rewrites snapshot files without creating matching
+                # transaction logs, so we can only assert the weaker invariant.
+                assert set(transactions) <= set(snapshots) - {INITIAL_SNAPSHOT}
+            else:
+                assert set(snapshots) - {INITIAL_SNAPSHOT} == set(transactions)
         else:
             assert set(snapshots) == set(transactions)
 

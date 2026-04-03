@@ -118,8 +118,8 @@ icechunk.r2_storage(
 
 [Minio](https://min.io/) is available as a storage backend for Icechunk. Functionally this storage backend is the same as S3 storage, but with a different endpoint.
 
-For example, if we have a Minio server running at `http://localhost:9000` with access key `minio` and
-secret key `minio123` we can create a storage configuration as follows:
+For example, if we have a Minio server running at `http://localhost:4200` with access key `minio` and
+secret key `test123` we can create a storage configuration as follows:
 
 ```python
 icechunk.s3_storage(
@@ -127,8 +127,8 @@ icechunk.s3_storage(
     prefix="quickstart-demo-1",
     region='us-east-1',
     access_key_id='minio',
-    secret_access_key='minio123',
-    endpoint_url='http://localhost:9000',
+    secret_access_key='test123',
+    endpoint_url='http://localhost:4200',
     allow_http=True,
     force_path_style=True,
 ```

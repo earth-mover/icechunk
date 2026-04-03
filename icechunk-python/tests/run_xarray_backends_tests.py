@@ -136,7 +136,7 @@ class TestIcechunkStoreMinio(IcechunkStoreBase):
         (access_key_id, secret_access_key) = Permission.MODIFY.keys()
         yield Repository.create(
             s3_storage(
-                endpoint_url="http://localhost:9000",
+                endpoint_url="http://localhost:4200",
                 allow_http=True,
                 force_path_style=True,
                 region="us-east-1",

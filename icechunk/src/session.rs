@@ -626,7 +626,7 @@ impl Session {
             self.snapshot_id.clone(),
         );
         let mut builder = DiffBuilder::default();
-        builder.add_changes(&tx_log);
+        builder.add_changes(&tx_log).inject()?;
         builder.to_diff(&from_session, self).await
     }
 
@@ -791,7 +791,7 @@ impl Session {
         // Icechunk 1 has no way to represent move in its on-disk format
         self.asset_manager.fail_unless_spec_at_least(SpecVersionBin::V2).inject()?;
         // does the source node exist?
-        let _ = self.get_node(&from).await?;
+        let node = self.get_node(&from).await?;
         // are we overwriting the destination node?
         if (self.get_node(&to).await).is_ok() {
             return Err(SessionError::capture(SessionErrorKind::MoveWontOverwrite(
@@ -799,20 +799,24 @@ impl Session {
             )));
         }
 
-        // Iterate the subtree at `from` so the move tracker can eagerly
-        // compute final paths for all affected nodes.
-        let original_from = match self.change_set().moved_from(&from) {
-            MovedFrom::From(p) => p.into_owned(),
-            _ => from.clone(),
-        };
-        let snapshot =
-            self.asset_manager.fetch_snapshot(&self.snapshot_id).await.inject()?;
-        let subtree_paths: Vec<Path> = snapshot
-            .iter_arc(&original_from)
-            .filter_map(|r| r.ok().map(|n| n.path))
-            .collect();
+        // Get updated subtree
+        let subtree_data: Vec<(Path, NodeId, NodeType)> = updated_nodes(
+            &from,
+            &self.asset_manager,
+            &self.change_set,
+            self.snapshot_id(),
+        )
+        .await?
+        .filter_map(|r| r.ok().map(|n| (n.path.clone(), n.id.clone(), n.node_type())))
+        .collect();
 
-        self.change_set_mut()?.move_node(from, to, subtree_paths)?;
+        self.change_set_mut()?.move_node(
+            from,
+            to,
+            subtree_data,
+            &node.id,
+            node.node_type(),
+        )?;
         Ok(())
     }
 
@@ -2959,6 +2963,7 @@ async fn do_flush(
                 })
                 .await
                 .capture()?
+                .inject()?
             }
             None => this_tx_log,
         }
@@ -5411,6 +5416,58 @@ mod tests {
                 .to_string(),
             "/foo/new/array"
         );
+        Ok(())
+    }
+
+    #[tokio_test]
+    async fn test_move_into_then_move_parent() -> Result<(), Box<dyn Error>> {
+        // When a node is moved INTO a subtree and then that subtree is moved,
+        // the moved-in node must follow along.
+        //
+        // Start:
+        // /
+        // ├── a        (G)
+        // │   └── 0    [A]
+        // └── c        (G)
+        //     └── 0    [A]
+        //
+        // Move 1: /a -> /b
+        // Move 2: /c -> /a
+        // Move 3: /b/0 -> /a/1
+        // Move 4: /a -> /d
+        //
+        // After:
+        // /
+        // ├── b        (G)   # was /a
+        // └── d        (G)   # was /c
+        //     ├── 0    [A]   # was /c/0
+        //     └── 1    [A]   # was /a/0
+        fn p(s: &str) -> Path {
+            Path::new(s).unwrap()
+        }
+
+        let repo = create_memory_store_repository(SpecVersionBin::current()).await;
+        let mut session = repo.writable_session("main").await?;
+        let shape = ArrayShape::new(vec![(2, 2)]).unwrap();
+        session.add_group(Path::root(), Bytes::new()).await?;
+        session.add_group(p("/a"), Bytes::new()).await?;
+        session.add_array(p("/a/0"), shape.clone(), None, Bytes::new()).await?;
+        session.add_group(p("/c"), Bytes::new()).await?;
+        session.add_array(p("/c/0"), shape, None, Bytes::new()).await?;
+        session.commit("init").max_concurrent_nodes(8).execute().await?;
+
+        let mut session = repo.rearrange_session("main").await?;
+        session.move_node(p("/a"), p("/b")).await?;
+        session.move_node(p("/c"), p("/a")).await?;
+        session.move_node(p("/b/0"), p("/a/1")).await?;
+        session.move_node(p("/a"), p("/d")).await?;
+
+        // Verify the tree matches the ASCII art above
+        let mut nodes: Vec<_> =
+            session.list_nodes(&Path::root()).await?.map(|n| n.unwrap().path).collect();
+        nodes.sort();
+        assert_equal(nodes.into_iter(), [p("/"), p("/b"), p("/d"), p("/d/0"), p("/d/1")]);
+
         Ok(())
     }
 

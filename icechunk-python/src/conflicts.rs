@@ -1,5 +1,7 @@
 use std::{fmt::Display, sync::Arc};
 
+use crate::display::{PyRepr, ReprMode};
+
 use icechunk::conflicts::{
     Conflict, ConflictSolver,
     basic_solver::{BasicConflictSolver, VersionSelection},
@@ -121,6 +123,26 @@ pub(crate) struct PyConflict {
     conflicted_chunks: Option<Vec<Vec<u32>>>,
 }
 
+impl PyRepr for PyConflict {
+    const EXECUTABLE: bool = false;
+    fn cls_name() -> &'static str {
+        "icechunk.Conflict"
+    }
+    fn fields(&self, _mode: ReprMode) -> Vec<(&str, String)> {
+        vec![
+            ("conflict_type", format!("{:?}", self.conflict_type)),
+            ("path", self.path.clone()),
+            (
+                "conflicted_chunks",
+                self.conflicted_chunks
+                    .as_ref()
+                    .map(|c| format!("{c:?}"))
+                    .unwrap_or_else(|| "None".to_string()),
+            ),
+        ]
+    }
+}
+
 #[pymethods]
 impl PyConflict {
     #[new]
@@ -134,11 +156,15 @@ impl PyConflict {
     }
 
     fn __repr__(&self) -> String {
-        format!("Conflict({:?}, path={})", self.conflict_type, self.path)
+        <Self as PyRepr>::__repr__(self)
     }
 
     fn __str__(&self) -> String {
-        format!("{}: {}", self.path, self.conflict_type)
+        <Self as PyRepr>::__str__(self)
+    }
+
+    fn _repr_html_(&self) -> String {
+        <Self as PyRepr>::_repr_html_(self)
     }
 
     fn __reduce__(&self, py: Python<'_>) -> PyResult<(Py<PyAny>, Py<PyAny>)> {

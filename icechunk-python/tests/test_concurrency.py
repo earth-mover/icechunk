@@ -122,7 +122,7 @@ async def test_thread_concurrency(any_spec_version: int | None) -> None:
     config = icechunk.RepositoryConfig.default()
     store_config = icechunk.s3_store(
         region="us-east-1",
-        endpoint_url="http://localhost:9000",
+        endpoint_url="http://localhost:4200",
         allow_http=True,
         force_path_style=True,
         s3_compatible=True,
@@ -142,7 +142,7 @@ async def test_thread_concurrency(any_spec_version: int | None) -> None:
 
     storage = icechunk.s3_storage(
         region="us-east-1",
-        endpoint_url="http://localhost:9000",
+        endpoint_url="http://localhost:4200",
         allow_http=True,
         force_path_style=True,
         bucket="testbucket",
