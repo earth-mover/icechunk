@@ -547,6 +547,41 @@ class Model:
         self.ops_log.append(GCRanUpdateModel())
         return deleted
 
+    def sync_from_repo(self, repo: Any, storage: Any) -> None:
+        """Sync model state from an actual repo after expire/GC.
+
+        The repo is the source of truth. We retain only branches, tags,
+        and commits that still exist in the repo / on disk.
+        """
+        # Retain only branches/tags that still exist
+        repo_branches = set(repo.list_branches())
+        self.branch_heads = {
+            k: v for k, v in self.branch_heads.items() if k in repo_branches
+        }
+        repo_tags = set(repo.list_tags())
+        self.tags = {k: v for k, v in self.tags.items() if k in repo_tags}
+
+        # Drop commits/ondisk_snaps whose snapshot files are gone
+        on_disk = {
+            obj.key.removeprefix("snapshots/")
+            for obj in storage.list_objects_metadata(prefix="snapshots")
+        }
+        self.commits = {k: v for k, v in self.commits.items() if k in on_disk}
+        self.ondisk_snaps = {k: v for k, v in self.ondisk_snaps.items() if k in on_disk}
+
+        # Reparent commits whose parent was deleted
+        for c in self.commits.values():
+            if c.parent_id is not None and c.parent_id not in on_disk:
+                c.parent_id = self.initial_snapshot_id
+
+        # Fix up HEAD / branch if current checkout was invalidated
+        branch = (
+            self.branch
+            if self.branch and self.branch in self.branch_heads
+            else DEFAULT_BRANCH
+        )
+        self.checkout_branch(branch)
+
 
 class VersionControlStateMachine(RuleBasedStateMachine):
     """
