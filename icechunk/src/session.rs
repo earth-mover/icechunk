@@ -645,9 +645,6 @@ impl Session {
     ) -> SessionResult<()> {
         match self.get_node(&path).await {
             Err(SessionError { kind: SessionErrorKind::NodeNotFound { .. }, .. }) => {
-                // verify all parent nodes in path exist
-                self.check_all_ancestors_exist(&path).await?;
-
                 let id = NodeId::random();
                 self.change_set_mut()?.add_group(path.clone(), id, definition)?;
                 Ok(())
@@ -1071,22 +1068,6 @@ impl Session {
                 return Err(SessionError::capture(
                     SessionErrorKind::AncestorNodeNotFound { prefix: path.clone() },
                 ));
-            }
-        }
-        Ok(())
-    }
-
-    #[instrument(skip(self))]
-    pub(crate) async fn create_ancestors(&mut self, path: &Path) -> SessionResult<()> {
-        let mut ancestors = path.ancestors();
-        // the first element is the `path` itself, which we might be
-        // trying to create now; skip it.
-        ancestors.next();
-        let ancestors: Vec<_> = ancestors.collect();
-        for parent in ancestors.iter().rev() {
-            let node = self.get_node(parent).await;
-            if node.is_err() {
-                self.add_group(parent.clone(), Bytes::new()).await?;
             }
         }
         Ok(())

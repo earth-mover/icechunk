@@ -264,6 +264,7 @@ def test_doesnt_rebase() -> None:
     session = repo.writable_session("main")
     root = zarr.group(store=session.store, overwrite=True)
     root.create_group("my/old/path", overwrite=True)
+    root.create_group("my/new", overwrite=True)
     session.commit("create group")
 
     session1 = repo.rearrange_session("main")
