@@ -23,6 +23,8 @@ async def test_basic_move() -> None:
     session = repo.writable_session("main")
     store = session.store
     root = zarr.group(store=store, overwrite=True)
+    root.create_group("my", overwrite=True)
+    root.create_group("my/old", overwrite=True)
     group = root.create_group("my/old/path", overwrite=True)
     group.create_array("array", shape=(10, 10), chunks=(2, 2), dtype="i4", fill_value=42)
     all_keys = sorted([k async for k in store.list()])
@@ -264,8 +266,9 @@ async def test_doesnt_rebase() -> None:
     session = repo.writable_session("main")
     store = session.store
     root = zarr.group(store=store, overwrite=True)
-    root.create_group("my/old/path", overwrite=True)
+    root.create_group("my", overwrite=True)
     root.create_group("my/new", overwrite=True)
+    root.create_group("my/old/path", overwrite=True)
     all_keys = sorted([k async for k in store.list()])
     assert all_keys == sorted(
         [
