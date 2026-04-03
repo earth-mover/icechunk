@@ -26,6 +26,11 @@ pub struct AncestryGraph {
     pub num_columns: usize,
 }
 
+/// Look up labels for a snapshot from a reverse map, returning an empty vec if absent.
+fn lookup_labels(map: &HashMap<SnapshotId, Vec<String>>, id: &SnapshotId) -> Vec<String> {
+    map.get(id).cloned().unwrap_or_default()
+}
+
 impl AncestryGraph {
     /// Build a linear (single-branch) graph from an ordered list of snapshots.
     ///
@@ -39,34 +44,20 @@ impl AncestryGraph {
         let nodes = snapshots
             .into_iter()
             .map(|info| {
-                let branches = branch_map
-                    .get(&info.id)
-                    .cloned()
-                    .unwrap_or_default();
-                let tags = tag_map
-                    .get(&info.id)
-                    .cloned()
-                    .unwrap_or_default();
-                AncestryNode {
-                    info,
-                    branches,
-                    tags,
-                    column: 0,
-                }
+                let branches = lookup_labels(branch_map, &info.id);
+                let tags = lookup_labels(tag_map, &info.id);
+                AncestryNode { info, branches, tags, column: 0 }
             })
             .collect();
 
-        Self {
-            nodes,
-            num_columns: 1,
-        }
+        Self { nodes, num_columns: 1 }
     }
 
     /// Build a tree graph from multiple branches.
     ///
     /// `branch_ancestries` is a list of `(branch_name, snapshots)` where each snapshot
-    /// list is in ancestry order (newest first). Snapshots shared across branches are
-    /// deduplicated — the first branch to claim a snapshot wins.
+    /// list is in ancestry order (newest first). The first entry is the "trunk" (column 0)
+    /// — its commits and shared ancestors stay in that column.
     ///
     /// `tag_map` provides tag label decorations keyed by snapshot ID.
     pub fn from_tree(
@@ -74,85 +65,52 @@ impl AncestryGraph {
         tag_map: &HashMap<SnapshotId, Vec<String>>,
     ) -> Self {
         if branch_ancestries.is_empty() {
-            return Self {
-                nodes: Vec::new(),
-                num_columns: 0,
-            };
+            return Self { nodes: Vec::new(), num_columns: 0 };
         }
 
-        // Track which snapshots we've already seen and their assigned column
-        let mut seen: HashMap<SnapshotId, usize> = HashMap::new();
-        // Branch label map: snapshot_id → list of branch names pointing at it
-        let mut branch_map: HashMap<SnapshotId, Vec<String>> = HashMap::new();
-        // All nodes collected, keyed by snapshot_id for dedup
-        let mut node_map: HashMap<SnapshotId, AncestryNode> = HashMap::new();
-        // Track fork points: snapshot where a branch joins an already-seen column
-        let mut fork_points: HashMap<SnapshotId, Vec<usize>> = HashMap::new();
+        // Register all branch tip labels up front so they're available regardless
+        // of which branch "claims" the snapshot during deduplication.
+        let mut branch_labels: HashMap<SnapshotId, Vec<String>> = HashMap::new();
+        for (name, snapshots) in &branch_ancestries {
+            if let Some(tip) = snapshots.first() {
+                branch_labels.entry(tip.id.clone()).or_default().push(name.clone());
+            }
+        }
 
+        let mut seen: HashMap<SnapshotId, usize> = HashMap::new();
+        let mut node_map: HashMap<SnapshotId, AncestryNode> = HashMap::new();
         let num_columns = branch_ancestries.len();
 
-        for (col, (branch_name, snapshots)) in branch_ancestries.iter().enumerate() {
-            // The tip of each branch gets a branch label
-            if let Some(tip) = snapshots.first() {
-                branch_map
-                    .entry(tip.id.clone())
-                    .or_default()
-                    .push(branch_name.clone());
-            }
-
+        for (col, (_name, snapshots)) in branch_ancestries.iter().enumerate() {
             for info in snapshots {
-                if let Some(&existing_col) = seen.get(&info.id) {
-                    // This snapshot already belongs to another branch — it's a fork point
-                    fork_points
-                        .entry(info.id.clone())
-                        .or_default()
-                        .push(col);
-                    // Don't re-insert, but we already recorded the branch label above
-                    let _ = existing_col;
-                    break; // All further ancestors are shared, stop walking this branch
+                if seen.contains_key(&info.id) {
+                    break; // Hit a shared ancestor — stop walking this branch
                 }
-
                 seen.insert(info.id.clone(), col);
-                let tags = tag_map
-                    .get(&info.id)
-                    .cloned()
-                    .unwrap_or_default();
-                let branches = branch_map
-                    .get(&info.id)
-                    .cloned()
-                    .unwrap_or_default();
-
-                node_map.insert(
-                    info.id.clone(),
-                    AncestryNode {
-                        info: info.clone(),
-                        branches,
-                        tags,
-                        column: col,
-                    },
-                );
+                node_map.insert(info.id.clone(), AncestryNode {
+                    branches: lookup_labels(&branch_labels, &info.id),
+                    tags: lookup_labels(tag_map, &info.id),
+                    column: col,
+                    info: info.clone(),
+                });
             }
         }
 
-        // Sort nodes by timestamp descending (newest first)
         let mut nodes: Vec<AncestryNode> = node_map.into_values().collect();
         nodes.sort_by(|a, b| b.info.flushed_at.cmp(&a.info.flushed_at));
 
-        Self {
-            nodes,
-            num_columns,
-        }
+        Self { nodes, num_columns }
     }
 }
 
-// ANSI color codes
+// -- ANSI rendering ----------------------------------------------------------
+
 const RESET: &str = "\x1b[0m";
 const BOLD: &str = "\x1b[1m";
 const DIM: &str = "\x1b[2m";
 const GREEN: &str = "\x1b[32m";
 const YELLOW: &str = "\x1b[33m";
 
-/// Rotating palette for branch graph lines and nodes.
 const BRANCH_COLORS: &[&str] = &[
     "\x1b[31m", // red
     "\x1b[32m", // green
@@ -166,7 +124,6 @@ fn branch_color(column: usize) -> &'static str {
     BRANCH_COLORS[column % BRANCH_COLORS.len()]
 }
 
-/// Truncate a string to at most `max_len` characters, appending "..." if truncated.
 fn truncate_message(msg: &str, max_len: usize) -> String {
     let first_line = msg.lines().next().unwrap_or("");
     if first_line.len() <= max_len {
@@ -176,8 +133,35 @@ fn truncate_message(msg: &str, max_len: usize) -> String {
     }
 }
 
+/// What glyph to draw in a given column position.
+enum Glyph {
+    /// The active node: `*`
+    Node,
+    /// A continuing branch line: `|`
+    Pipe,
+    /// A merge connector: `/`
+    Merge,
+    /// Empty space
+    Blank,
+}
+
+/// Build a line of column glyphs with ANSI colors, 2 chars per column.
+fn render_columns(num_columns: usize, glyph_for: impl Fn(usize) -> (Glyph, usize)) -> String {
+    let mut out = String::with_capacity(num_columns * 8);
+    for c in 0..num_columns {
+        let (glyph, color_col) = glyph_for(c);
+        let color = branch_color(color_col);
+        match glyph {
+            Glyph::Node => out.push_str(&format!("{color}*{RESET} ")),
+            Glyph::Pipe => out.push_str(&format!("{color}|{RESET} ")),
+            Glyph::Merge => out.push_str(&format!("{color}/{RESET} ")),
+            Glyph::Blank => out.push_str("  "),
+        }
+    }
+    out
+}
+
 impl AncestryGraph {
-    /// Format the labels (branches + tags) for a node with ANSI colors.
     fn format_labels(node: &AncestryNode) -> String {
         let mut parts = Vec::new();
         for b in &node.branches {
@@ -193,20 +177,13 @@ impl AncestryGraph {
         }
     }
 
-    /// Render a single-column linear graph.
     fn fmt_linear(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let color = branch_color(0);
         for (i, node) in self.nodes.iter().enumerate() {
-            let color = branch_color(0);
             let short_id = &node.info.id.to_string()[..8];
             let labels = Self::format_labels(node);
             let msg = truncate_message(&node.info.message, 60);
-
-            writeln!(
-                f,
-                "{color}*{RESET} {DIM}{short_id}{RESET}{labels} {msg}"
-            )?;
-
-            // Draw connector line between nodes (except after last)
+            writeln!(f, "{color}*{RESET} {DIM}{short_id}{RESET}{labels} {msg}")?;
             if i < self.nodes.len() - 1 {
                 writeln!(f, "{color}|{RESET}")?;
             }
@@ -214,121 +191,78 @@ impl AncestryGraph {
         Ok(())
     }
 
-    /// Render a multi-column tree graph.
     fn fmt_tree(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // Track which columns are currently active (have rendered their first * node)
-        let mut active_columns: Vec<bool> = vec![false; self.num_columns];
+        let mut active: Vec<bool> = vec![false; self.num_columns];
 
-        // Pre-compute: for each side-branch column, which node is its fork point?
+        // Pre-compute: for each side-branch, find its fork point (parent of its oldest node).
         let mut fork_targets: HashMap<usize, SnapshotId> = HashMap::new();
         for col in 1..self.num_columns {
-            if let Some(last_in_col) = self.nodes.iter().rev().find(|n| n.column == col) {
-                if let Some(parent_id) = &last_in_col.info.parent_id {
-                    fork_targets.insert(col, parent_id.clone());
+            if let Some(last) = self.nodes.iter().rev().find(|n| n.column == col) {
+                if let Some(pid) = &last.info.parent_id {
+                    fork_targets.insert(col, pid.clone());
                 }
             }
         }
 
         for (i, node) in self.nodes.iter().enumerate() {
             let col = node.column;
+            active[col] = true;
 
-            // Activate this column now that we've hit its first node
-            active_columns[col] = true;
-
-            // Build the graph prefix: show `|` for active columns, `*` for current node
-            let mut prefix = String::new();
-            for c in 0..self.num_columns {
-                if c == col {
-                    let color = branch_color(c);
-                    prefix.push_str(&format!("{color}*{RESET} "));
-                } else if active_columns[c] {
-                    let color = branch_color(c);
-                    prefix.push_str(&format!("{color}|{RESET} "));
-                } else {
-                    prefix.push_str("  ");
-                }
-            }
-
+            // Node line: * for this column, | for other active columns
+            let prefix = render_columns(self.num_columns, |c| {
+                if c == col { (Glyph::Node, c) }
+                else if active[c] { (Glyph::Pipe, c) }
+                else { (Glyph::Blank, c) }
+            });
             let short_id = &node.info.id.to_string()[..8];
             let labels = Self::format_labels(node);
             let msg = truncate_message(&node.info.message, 60);
-
             writeln!(f, "{prefix}{DIM}{short_id}{RESET}{labels} {msg}")?;
 
-            if i < self.nodes.len() - 1 {
-                // Check if this is the last node in its column
-                let more_in_column = self.nodes[i + 1..]
-                    .iter()
-                    .any(|n| n.column == col);
+            if i >= self.nodes.len() - 1 {
+                continue;
+            }
 
-                // Check if any side branches fork into this node
-                // (i.e., this node is the fork point target for some column)
-                let mut merging_columns: Vec<usize> = Vec::new();
-                for (&side_col, target_id) in &fork_targets {
-                    if *target_id == node.info.id && active_columns[side_col] {
-                        merging_columns.push(side_col);
-                    }
-                }
-                merging_columns.sort();
+            let has_more = self.nodes[i + 1..].iter().any(|n| n.column == col);
 
-                if !merging_columns.is_empty() {
-                    // Draw merge lines: side branches merge into this node's column
-                    for &merge_col in &merging_columns {
-                        let mut merge_line = String::new();
-                        for c in 0..self.num_columns {
-                            if c == col {
-                                let color = branch_color(c);
-                                merge_line.push_str(&format!("{color}|{RESET}"));
-                            } else if c == merge_col {
-                                let color = branch_color(merge_col);
-                                merge_line.push_str(&format!("{color}/{RESET}"));
-                            } else if active_columns[c] {
-                                let color = branch_color(c);
-                                merge_line.push_str(&format!("{color}|{RESET}"));
-                            } else {
-                                merge_line.push(' ');
-                            }
-                            merge_line.push(' ');
-                        }
-                        writeln!(f, "{merge_line}")?;
-                        active_columns[merge_col] = false;
-                    }
-                } else if !more_in_column && col != 0 {
-                    // Side branch ends — draw a / merge line toward the trunk
-                    let mut merge_line = String::new();
-                    for c in 0..self.num_columns {
-                        if c == 0 && active_columns[0] {
-                            let color = branch_color(0);
-                            merge_line.push_str(&format!("{color}|{RESET}"));
-                        } else if c == col {
-                            let color = branch_color(col);
-                            merge_line.push_str(&format!("{color}/{RESET}"));
-                        } else if active_columns[c] {
-                            let color = branch_color(c);
-                            merge_line.push_str(&format!("{color}|{RESET}"));
-                        } else {
-                            merge_line.push(' ');
-                        }
-                        merge_line.push(' ');
-                    }
-                    writeln!(f, "{merge_line}")?;
-                    active_columns[col] = false;
-                } else {
-                    // Normal connector line
-                    if !more_in_column {
-                        active_columns[col] = false;
-                    }
-                    let mut line = String::new();
-                    for c in 0..self.num_columns {
-                        if active_columns[c] {
-                            let color = branch_color(c);
-                            line.push_str(&format!("{color}|{RESET} "));
-                        } else {
-                            line.push_str("  ");
-                        }
-                    }
+            // Columns merging into this node (their fork target is this node's id)
+            let mut merging: Vec<usize> = fork_targets
+                .iter()
+                .filter(|(c, id)| **id == node.info.id && active[**c])
+                .map(|(c, _)| *c)
+                .collect();
+            merging.sort();
+
+            if !merging.is_empty() {
+                // Draw a / merge line for each merging column
+                for &mc in &merging {
+                    let line = render_columns(self.num_columns, |c| {
+                        if c == mc { (Glyph::Merge, mc) }
+                        else if c == col { (Glyph::Pipe, c) }
+                        else if active[c] { (Glyph::Pipe, c) }
+                        else { (Glyph::Blank, c) }
+                    });
                     writeln!(f, "{line}")?;
+                    active[mc] = false;
                 }
+            } else if !has_more && col != 0 {
+                // Side branch's last node — draw / toward trunk
+                let line = render_columns(self.num_columns, |c| {
+                    if c == col { (Glyph::Merge, col) }
+                    else if active[c] { (Glyph::Pipe, c) }
+                    else { (Glyph::Blank, c) }
+                });
+                writeln!(f, "{line}")?;
+                active[col] = false;
+            } else {
+                // Normal connector line
+                if !has_more {
+                    active[col] = false;
+                }
+                let line = render_columns(self.num_columns, |c| {
+                    if active[c] { (Glyph::Pipe, c) } else { (Glyph::Blank, c) }
+                });
+                writeln!(f, "{line}")?;
             }
         }
         Ok(())
@@ -340,7 +274,6 @@ impl fmt::Display for AncestryGraph {
         if self.nodes.is_empty() {
             return writeln!(f, "(empty history)");
         }
-
         if self.num_columns <= 1 {
             self.fmt_linear(f)
         } else {
