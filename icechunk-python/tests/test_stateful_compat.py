@@ -190,48 +190,11 @@ class CrossVersionExpireGCStateMachine(VersionControlStateMachine):
             yield ic_v1.Repository.open(v1_storage), v1_path
 
     def _sync_model_from_repo(self) -> None:
-        """Sync the dict model's commit/branch/tag state from the actual repo.
-
-        After expire or GC the repo is the source of truth. We sync the
-        model by intersecting with what's actually on disk / in the repo.
-        """
+        """Reopen repo and sync model state after expire/GC."""
         assert self.storage is not None
-        # Reopen to pick up any changes from expire/GC
         self.repo = self.actor.open(self.storage)
-        repo = self.repo
-
-        # Retain only branches/tags that still exist in the repo
-        self.model.branch_heads = {
-            k: v
-            for k, v in self.model.branch_heads.items()
-            if k in set(self.repo.list_branches())
-        }
-        self.model.tags = {
-            k: v for k, v in self.model.tags.items() if k in set(self.repo.list_tags())
-        }
-
-        on_disk = {
-            obj.key.removeprefix("snapshots/")
-            for obj in self.storage.list_objects_metadata(prefix="snapshots")
-        }
-        self.model.commits = {k: v for k, v in self.model.commits.items() if k in on_disk}
-        self.model.ondisk_snaps = {
-            k: v for k, v in self.model.ondisk_snaps.items() if k in on_disk
-        }
-
-        # Reparent commits whose parent was deleted
-        for c in self.model.commits.values():
-            if c.parent_id is not None and c.parent_id not in on_disk:
-                c.parent_id = self.model.initial_snapshot_id
-
-        # Fix up HEAD / branch if our current checkout was invalidated
-        branch = (
-            self.model.branch
-            if self.model.branch and self.model.branch in self.model.branch_heads
-            else DEFAULT_BRANCH
-        )
-        self.session = repo.writable_session(branch)
-        self.model.checkout_branch(branch)
+        self.model.sync_from_repo(self.repo, self.storage)
+        self.session = self.repo.writable_session(self.model.branch or DEFAULT_BRANCH)
 
     @staticmethod
     def _list_object_keys(storage_path: str) -> dict[str, set[str]]:
