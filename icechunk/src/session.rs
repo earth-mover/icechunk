@@ -6704,12 +6704,9 @@ mod tests {
         .await;
 
         // verify it returns the right error
-        assert!(res.is_err());
-        let res = res.unwrap_err();
-        eprintln!("{res}");
         assert!(matches!(
             res,
-            SessionError { kind: SessionErrorKind::ManifestsInconsistencyError(_), .. }
+            Err(SessionError { kind: SessionErrorKind::ManifestsInconsistencyError(_), .. })
         ));
 
         Ok(())
