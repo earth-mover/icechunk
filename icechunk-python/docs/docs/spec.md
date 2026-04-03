@@ -58,12 +58,11 @@ The storage system is not required to support random-access writes. Once written
 
 Icechunk uses a series of linked metadata files to describe the state of the repository.
 
+- **Repository info file**, also called repo info or repo object, is the entry point linking to other files, particularly snapshot files. Every change to the repository modifies this file in some way, doing conditional updates.
 - The **Snapshot file** records all of the different arrays and groups in a specific snapshot of the repository, plus their metadata. Every new commit creates a new snapshot file. The snapshot file contains pointers to one or more chunk manifest files.
-- **Chunk manifests** store references to individual chunks. A single manifest may store references for multiple arrays or a subset of all the references for a single array.
-- **Chunk files** store the actual compressed chunk data, potentially containing data for multiple chunks in a single file.
+- **Chunk manifests** store references to individual chunks. A single manifest may store references for multiple arrays or a subset of all the references for a single array. Anytime a commit is made which writes new chunks, a new manifest file is also written.
+- **Chunk files** store the actual compressed chunk data, potentially containing data for multiple chunks in a single file (i.e. a shard).
 - **Transaction log files**, an overview of the operations executed during a session, used for rebase and diffs.
-- **Repository info file**, also called repo info or repo object, is the entry point linking to other files. Every change to the repository modifies this file in some way, doing conditional updates.
-same tag name cannot be reused later.
 
 When reading from object store, the client opens the repo info file to obtain a pointer to the relevant snapshot file.
 The client then reads the snapshot file to determine the structure and hierarchy of the repository.
