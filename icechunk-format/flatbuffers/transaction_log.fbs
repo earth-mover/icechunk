@@ -6,79 +6,82 @@ namespace generated;
 table ChunkIndices {
   coords: [uint32] (required);
 }
+
 // --8<-- [end:chunk_indices]
 
 // --8<-- [start:array_updated_chunks]
 table ArrayUpdatedChunks {
-  // the node id of the array to which the chunks belong to
+  // The node id of the array.
   node_id: ObjectId8 (required);
 
-  // the coordinates of all the chunks modified in this transaction for this array
-  // sorted in ascending lexicographical order
+  // The coordinates of all chunks modified in this transaction for this array.
+  // MUST be sorted in ascending lexicographic order.
   chunks: [ChunkIndices] (required);
 }
+
 // --8<-- [end:array_updated_chunks]
 
-// --8<-- [start:node_type]
-enum NodeType: ubyte { Group = 0, Array }
-// --8<-- [end:node_type]
-
 // --8<-- [start:move_operation]
-// moves are fully collapsed: there is only one from/to pair,
-// and overlapping moves (from -> to, to -> new_to) get merged
-// (from -> new_to in this example).
-//
-// every moved node gets an entry - no implicit moving of children
+enum NodeType: ubyte { Group = 0, Array }
+
+// A single move operation, recording that a node changed path.
+// All four fields MUST be present. They are not marked `required`
+// in the flatbuffers schema to allow future schema evolution.
 table MoveOperation {
   from: string;
   to: string;
   node_id: ObjectId8;
   node_type: NodeType;
 }
+
 // --8<-- [end:move_operation]
 
-// --8<-- [start:transaction_log_table]
+// --8<-- [start:transaction_log]
 table TransactionLog {
-  // id of the transaction log file,
-  // it will be the same as the corresponding snapshot
+  // MUST be identical to the id of the corresponding snapshot.
   id: ObjectId12 (required);
 
-  // node ids of the groups created in this transaction
-  // sorted in ascending order
+  // Node ids of groups created in this transaction.
+  // MUST be sorted in ascending order.
   new_groups: [ObjectId8] (required);
 
-  // node ids of the arrays created in this transaction
-  // sorted in ascending order
+  // Node ids of arrays created in this transaction.
+  // MUST be sorted in ascending order.
   new_arrays: [ObjectId8] (required);
 
-  // node ids of the groups deleted in this transaction
-  // sorted in ascending order
+  // Node ids of groups deleted in this transaction.
+  // MUST be sorted in ascending order.
   deleted_groups: [ObjectId8] (required);
 
-  // node ids of the arrays deleted in this transaction
-  // sorted in ascending order
+  // Node ids of arrays deleted in this transaction.
+  // MUST be sorted in ascending order.
   deleted_arrays: [ObjectId8] (required);
 
-  // node ids of the arrays that had user definitions modified in this transaction
-  // sorted in ascending order
+  // Node ids of arrays whose user metadata was modified in this transaction.
+  // MUST be sorted in ascending order.
   updated_arrays: [ObjectId8] (required);
 
-  // node ids of the groups that had user definitions modified in this transaction
-  // sorted in ascending order
+  // Node ids of groups whose user metadata was modified in this transaction.
+  // MUST be sorted in ascending order.
   updated_groups: [ObjectId8] (required);
 
-  // chunk ref changes made in this transaction
-  // sorted in ascending order of the node_id of the ArrayUpdatedChunks
+  // Chunk ref changes made in this transaction.
+  // MUST be sorted in ascending order of node_id.
   updated_chunks: [ArrayUpdatedChunks] (required);
 
-  // nodes moved in this session, sorted by final path
-  // Added in spec version: 2.0
+  // Nodes moved in this transaction.
+  // MUST be sorted by final path.
+  // MUST be fully collapsed: if a node was moved multiple times
+  // (e.g. A -> B, then B -> C), only the net result (A -> C) is recorded.
+  // Every moved node MUST have its own entry — moving a group does
+  // not implicitly move its children.
+  // Introduced in spec version 2.
   moved_nodes: [MoveOperation];
 
-  // Reserved for future use. Opaque byte vector for extensibility.
-  // Introduced in spec version 2
+  // Reserved for future use.
+  // Introduced in spec version 2.
   extra: [uint8];
 }
-// --8<-- [end:transaction_log_table]
+// --8<-- [end:transaction_log]
 
 root_type TransactionLog;
