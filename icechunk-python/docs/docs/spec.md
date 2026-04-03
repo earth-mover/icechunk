@@ -118,19 +118,20 @@ All data and metadata files are stored within a root directory (typically a pref
 
 ### File Formats
 
-Unless otherwise noted, each type of file is encoded using [flatbuffers](https://github.com/google/flatbuffers). 
-The IDL for the on-disk format can be found in [the fbs files](https://github.com/earth-mover/icechunk/blob/404100b584fb7ac70de860bd430aa8291df98c4d/icechunk-format/flatbuffers/).
+With the exception of chunk files, each type of file is encoded using [flatbuffers](https://github.com/google/flatbuffers). 
+The IDL for the on-disk format can be found in [the fbs files directory in this repo](https://github.com/earth-mover/icechunk/blob/404100b584fb7ac70de860bd430aa8291df98c4d/icechunk-format/flatbuffers/).
 
-The full set of file types and their flatbuffers definitions are:
+The full set of file types and their definitions are:
 
-- Repo info file ([definition](https://github.com/earth-mover/icechunk/blob/404100b584fb7ac70de860bd430aa8291df98c4d/icechunk-format/flatbuffers/repo.fbs))
-- Snapshot file ([definition](https://github.com/earth-mover/icechunk/blob/404100b584fb7ac70de860bd430aa8291df98c4d/icechunk-format/flatbuffers/snapshot.fbs))
-- Manifest file ([definition](https://github.com/earth-mover/icechunk/blob/404100b584fb7ac70de860bd430aa8291df98c4d/icechunk-format/flatbuffers/manifest.fbs))
-- Transaction Log file ([definition](https://github.com/earth-mover/icechunk/blob/404100b584fb7ac70de860bd430aa8291df98c4d/icechunk-format/flatbuffers/transaction_log.fbs))
+- **Repo info files** ([flatbuffers definition](https://github.com/earth-mover/icechunk/blob/404100b584fb7ac70de860bd430aa8291df98c4d/icechunk-format/flatbuffers/repo.fbs))
+- **Snapshot files** ([flatbuffers definition](https://github.com/earth-mover/icechunk/blob/404100b584fb7ac70de860bd430aa8291df98c4d/icechunk-format/flatbuffers/snapshot.fbs))
+- **Manifest files** ([flatbuffers definition](https://github.com/earth-mover/icechunk/blob/404100b584fb7ac70de860bd430aa8291df98c4d/icechunk-format/flatbuffers/manifest.fbs))
+- **Transaction Log files** ([flatbuffers definition](https://github.com/earth-mover/icechunk/blob/404100b584fb7ac70de860bd430aa8291df98c4d/icechunk-format/flatbuffers/transaction_log.fbs))
+- **Chunk files** instead have their encoding defined by the Chunk Encoding section of the [Zarr specification](https://zarr-specs.readthedocs.io/en/latest/v3/core/index.html#chunk-encoding).
 
-Chunk files instead have their encoding defined by the Chunk Encoding section of the [Zarr specification](https://zarr-specs.readthedocs.io/en/latest/v3/core/index.html#chunk-encoding).
+(Note that the flatbuffers also share some common utility definitions, defined in [`common.fbs`](https://github.com/earth-mover/icechunk/blob/404100b584fb7ac70de860bd430aa8291df98c4d/icechunk-format/flatbuffers/common.fbs).)
 
-The rest of this section describes the meaning of the fields in each flatbuffers file, and any other concerns implementations should be aware of.
+The rest of this section describes the meaning of the fields in each flatbuffers file, and any other concerns that implementations should be aware of.
 
 #### Repo info file
 
