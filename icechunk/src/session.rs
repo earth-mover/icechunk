@@ -170,8 +170,10 @@ pub enum SessionErrorKind {
     NoAmendForInitialCommit,
     #[error("failed to create manifest from chunk stream")]
     ManifestCreationError(#[from] Box<SessionError>),
-    #[error("inconsistent manifests detected: {0}")]
-    ManifestsInconsistencyError(String),
+    #[error(
+        "inconsistent manifests detected: Snapshot will reference {snapshot} manifest, while array nodes will reference {nodes} manifests"
+    )]
+    ManifestsInconsistencyError { snapshot: usize, nodes: usize },
     #[error("failed to merge sessions: {0}")]
     SessionMerge(String),
     #[error("byte range {request:?} is out of bounds for chunk of length {chunk_length}")]
@@ -2863,9 +2865,10 @@ async fn do_flush(
         .collect::<HashSet<_>>();
     if mfiles != mrefs {
         return Err(SessionError::capture(
-            SessionErrorKind::ManifestsInconsistencyError(format!(
-                "files contains {mfiles:?}, refs contains {mrefs:?}",
-            )),
+            SessionErrorKind::ManifestsInconsistencyError {
+                snapshot: mfiles.len(),
+                nodes: mrefs.len(),
+            },
         ));
     }
 
@@ -6706,7 +6709,10 @@ mod tests {
         // verify it returns the right error
         assert!(matches!(
             res,
-            Err(SessionError { kind: SessionErrorKind::ManifestsInconsistencyError(_), .. })
+            Err(SessionError {
+                kind: SessionErrorKind::ManifestsInconsistencyError { snapshot, nodes },
+                ..
+            }) if snapshot == 1 && nodes == 0
         ));
 
         Ok(())
