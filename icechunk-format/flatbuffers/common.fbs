@@ -9,6 +9,7 @@ namespace generated;
 //   - MUST use `/` as the path separator.
 //   - MUST NOT have a trailing `/` (except the root path `/`).
 //   - MUST be in canonical form (no `.`, `..`, or empty segments).
+//   - Path segments MAY contain any valid UTF-8 characters except `/`.
 //
 // The root path is `/`. Example paths: `/`, `/foo`, `/foo/bar`.
 //
