@@ -1,5 +1,6 @@
 //! SVG rendering for [`AncestryGraph`], used by `_repr_html_()` in Jupyter notebooks.
 
+use std::collections::HashMap;
 use std::fmt::Write as _;
 
 use super::ancestry_graph::{AncestryGraph, AncestryNode, LayoutElement, palette_hex};
@@ -83,35 +84,65 @@ impl AncestryGraph {
              style=\"font-family: monospace; font-size: {FONT_SIZE}px;\">"
         );
 
-        // Render lines and forks first (behind nodes)
+        // Merge consecutive Line segments in the same column into single lines,
+        // so the SVG draws one continuous line between actual nodes rather than
+        // many short segments with potential subpixel gaps.
+        let mut col_line_spans: HashMap<usize, (usize, usize)> = HashMap::new();
+        let mut merged_lines: Vec<(usize, usize, usize)> = Vec::new(); // (col, from_row, to_row)
+
         for elem in &elements {
-            match elem {
-                LayoutElement::Line { from_row, to_row, col } => {
-                    let color = palette_hex(col_colors[*col]);
-                    let x = col_x(*col);
-                    let y1 = row_y(*from_row) + NODE_RADIUS;
-                    let y2 = row_y(*to_row) - NODE_RADIUS;
-                    let _ = writeln!(
-                        svg,
-                        "  <line x1=\"{x}\" y1=\"{y1}\" x2=\"{x}\" y2=\"{y2}\" \
-                         stroke=\"{color}\" stroke-width=\"{LINE_WIDTH}\" />"
-                    );
+            if let LayoutElement::Line { from_row, to_row, col } = elem {
+                let entry = col_line_spans.entry(*col);
+                match entry {
+                    std::collections::hash_map::Entry::Occupied(mut e) => {
+                        let span = e.get_mut();
+                        if *from_row <= span.1 {
+                            // Extend the current span
+                            span.1 = span.1.max(*to_row);
+                        } else {
+                            // Gap — flush and start new span
+                            merged_lines.push((*col, span.0, span.1));
+                            *span = (*from_row, *to_row);
+                        }
+                    }
+                    std::collections::hash_map::Entry::Vacant(e) => {
+                        e.insert((*from_row, *to_row));
+                    }
                 }
-                LayoutElement::Fork { from_row, from_col, to_row, to_col } => {
-                    let color = palette_hex(col_colors[*from_col]);
-                    let x1 = col_x(*from_col);
-                    let y1 = row_y(*from_row) + NODE_RADIUS;
-                    let x2 = col_x(*to_col);
-                    let y2 = row_y(*to_row) - NODE_RADIUS;
-                    // Cubic bezier for a smooth curve
-                    let mid_y = (y1 + y2) / 2.0;
-                    let _ = writeln!(
-                        svg,
-                        "  <path d=\"M {x1} {y1} C {x1} {mid_y}, {x2} {mid_y}, {x2} {y2}\" \
-                         fill=\"none\" stroke=\"{color}\" stroke-width=\"{LINE_WIDTH}\" />"
-                    );
-                }
-                LayoutElement::Node { .. } => {}
+            }
+        }
+        // Flush remaining spans
+        for (col, (from_row, to_row)) in &col_line_spans {
+            merged_lines.push((*col, *from_row, *to_row));
+        }
+
+        // Render merged lines (behind nodes)
+        for (col, from_row, to_row) in &merged_lines {
+            let color = palette_hex(col_colors[*col]);
+            let x = col_x(*col);
+            let y1 = row_y(*from_row);
+            let y2 = row_y(*to_row);
+            let _ = writeln!(
+                svg,
+                "  <line x1=\"{x}\" y1=\"{y1}\" x2=\"{x}\" y2=\"{y2}\" \
+                 stroke=\"{color}\" stroke-width=\"{LINE_WIDTH}\" />"
+            );
+        }
+
+        // Render fork/merge curves
+        for elem in &elements {
+            if let LayoutElement::Fork { from_row, from_col, to_row, to_col } = elem {
+                let color = palette_hex(col_colors[*from_col]);
+                let x1 = col_x(*from_col);
+                let y1 = row_y(*from_row);
+                let x2 = col_x(*to_col);
+                let y2 = row_y(*to_row);
+                let mid_y = (y1 + y2) / 2.0;
+                let _ = writeln!(
+                    svg,
+                    "  <path d=\"M {x1} {y1} C {x1} {mid_y}, {x2} {mid_y}, {x2} {y2}\" \
+                     fill=\"none\" stroke=\"{color}\" stroke-width=\"{LINE_WIDTH}\" />"
+                );
             }
         }
 
