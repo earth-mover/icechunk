@@ -145,26 +145,179 @@ impl AncestryGraph {
     }
 }
 
-impl fmt::Display for AncestryGraph {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // Placeholder — will be replaced with colored ASCII rendering in Step 3
-        for node in &self.nodes {
+// ANSI color codes
+const RESET: &str = "\x1b[0m";
+const BOLD: &str = "\x1b[1m";
+const DIM: &str = "\x1b[2m";
+const GREEN: &str = "\x1b[32m";
+const YELLOW: &str = "\x1b[33m";
+
+/// Rotating palette for branch graph lines and nodes.
+const BRANCH_COLORS: &[&str] = &[
+    "\x1b[31m", // red
+    "\x1b[32m", // green
+    "\x1b[33m", // yellow
+    "\x1b[34m", // blue
+    "\x1b[35m", // magenta
+    "\x1b[36m", // cyan
+];
+
+fn branch_color(column: usize) -> &'static str {
+    BRANCH_COLORS[column % BRANCH_COLORS.len()]
+}
+
+/// Truncate a string to at most `max_len` characters, appending "..." if truncated.
+fn truncate_message(msg: &str, max_len: usize) -> String {
+    let first_line = msg.lines().next().unwrap_or("");
+    if first_line.len() <= max_len {
+        first_line.to_string()
+    } else {
+        format!("{}...", &first_line[..max_len - 3])
+    }
+}
+
+impl AncestryGraph {
+    /// Format the labels (branches + tags) for a node with ANSI colors.
+    fn format_labels(node: &AncestryNode) -> String {
+        let mut parts = Vec::new();
+        for b in &node.branches {
+            parts.push(format!("{BOLD}{GREEN}{b}{RESET}"));
+        }
+        for t in &node.tags {
+            parts.push(format!("{BOLD}{YELLOW}{t}{RESET}"));
+        }
+        if parts.is_empty() {
+            String::new()
+        } else {
+            format!(" ({})", parts.join(", "))
+        }
+    }
+
+    /// Render a single-column linear graph.
+    fn fmt_linear(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for (i, node) in self.nodes.iter().enumerate() {
+            let color = branch_color(0);
             let short_id = &node.info.id.to_string()[..8];
-            let mut labels = Vec::new();
-            for b in &node.branches {
-                labels.push(b.clone());
+            let labels = Self::format_labels(node);
+            let msg = truncate_message(&node.info.message, 60);
+
+            writeln!(
+                f,
+                "{color}*{RESET} {DIM}{short_id}{RESET}{labels} {msg}"
+            )?;
+
+            // Draw connector line between nodes (except after last)
+            if i < self.nodes.len() - 1 {
+                writeln!(f, "{color}|{RESET}")?;
             }
-            for t in &node.tags {
-                labels.push(t.clone());
-            }
-            let label_str = if labels.is_empty() {
-                String::new()
-            } else {
-                format!(" ({})", labels.join(", "))
-            };
-            writeln!(f, "* {}{} {}", short_id, label_str, node.info.message)?;
         }
         Ok(())
+    }
+
+    /// Render a multi-column tree graph.
+    fn fmt_tree(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Track which columns are currently active (have a branch line running through)
+        let mut active_columns: Vec<bool> = vec![false; self.num_columns];
+
+        for (i, node) in self.nodes.iter().enumerate() {
+            let col = node.column;
+
+            // Activate this column if not already active
+            active_columns[col] = true;
+
+            // Build the graph prefix: show `|` for active columns, `*` for current node
+            let mut prefix = String::new();
+            for c in 0..self.num_columns {
+                if c == col {
+                    let color = branch_color(c);
+                    prefix.push_str(&format!("{color}*{RESET} "));
+                } else if active_columns[c] {
+                    let color = branch_color(c);
+                    prefix.push_str(&format!("{color}|{RESET} "));
+                } else {
+                    prefix.push_str("  ");
+                }
+            }
+
+            let short_id = &node.info.id.to_string()[..8];
+            let labels = Self::format_labels(node);
+            let msg = truncate_message(&node.info.message, 60);
+
+            writeln!(f, "{prefix}{DIM}{short_id}{RESET}{labels} {msg}")?;
+
+            // Check if this node is a fork point — the next node on this column's
+            // parent is in a different column. If so, draw merge lines.
+            // For now, draw connector lines for all active columns.
+            if i < self.nodes.len() - 1 {
+                // Check if this column should deactivate (no more nodes in this column after this one)
+                let more_in_column = self.nodes[i + 1..]
+                    .iter()
+                    .any(|n| n.column == col);
+
+                // Check if next node is a fork point (it's in a different column and
+                // this column merges into it)
+                let next = &self.nodes[i + 1];
+                let is_fork_point = !more_in_column
+                    && node.info.parent_id.as_ref() == Some(&next.info.id)
+                    && next.column != col;
+
+                if is_fork_point {
+                    // Draw a merge line: this column merges into the next node's column
+                    let mut merge_line = String::new();
+                    for c in 0..self.num_columns {
+                        if c == next.column {
+                            let color = branch_color(c);
+                            merge_line.push_str(&format!("{color}|{RESET}"));
+                        } else if c == col {
+                            let color = branch_color(col);
+                            if col > next.column {
+                                merge_line.push_str(&format!("{color}/{RESET}"));
+                            } else {
+                                merge_line.push_str(&format!("{color}\\{RESET}"));
+                            }
+                        } else if active_columns[c] {
+                            let color = branch_color(c);
+                            merge_line.push_str(&format!("{color}|{RESET}"));
+                        } else {
+                            merge_line.push(' ');
+                        }
+                        merge_line.push(' ');
+                    }
+                    writeln!(f, "{merge_line}")?;
+                    active_columns[col] = false;
+                } else {
+                    // Normal connector line
+                    if !more_in_column {
+                        active_columns[col] = false;
+                    }
+                    let mut line = String::new();
+                    for c in 0..self.num_columns {
+                        if active_columns[c] {
+                            let color = branch_color(c);
+                            line.push_str(&format!("{color}|{RESET} "));
+                        } else {
+                            line.push_str("  ");
+                        }
+                    }
+                    writeln!(f, "{line}")?;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+impl fmt::Display for AncestryGraph {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.nodes.is_empty() {
+            return writeln!(f, "(empty history)");
+        }
+
+        if self.num_columns <= 1 {
+            self.fmt_linear(f)
+        } else {
+            self.fmt_tree(f)
+        }
     }
 }
 
