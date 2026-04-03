@@ -3,9 +3,13 @@ title: Sample Datasets
 ---
 # Sample Datasets
 
-## Native Datasets
+This page contains links to various example Icechunk datasets, all of which are open-access and hosted in anonymous-access buckets, so you can try reading them immediately!
 
-### Weatherbench2 ERA5
+All examples only require `icechunk` and `xarray` as dependencies.
+
+## Earthmover-hosted examples
+
+### Weatherbench2 ERA5 (native, Icechunk v1)
 
 A subset of the Weatherbench2 copy of the ERA5 reanalysis dataset.
 
@@ -86,9 +90,7 @@ A subset of the Weatherbench2 copy of the ERA5 reanalysis dataset.
 <!-- ) -->
 <!-- ``` -->
 
-<!-- ## Virtual Datasets -->
-
-<!-- ### NOAA [OISST](https://www.ncei.noaa.gov/products/optimum-interpolation-sst) Data -->
+<!-- ### NOAA [OISST](https://www.ncei.noaa.gov/products/optimum-interpolation-sst) Data (virtual) -->
 
 <!-- > The NOAA 1/4° Daily Optimum Interpolation Sea Surface Temperature (OISST) is a long term Climate Data Record that incorporates observations from different platforms (satellites, ships, buoys and Argo floats) into a regular global grid -->
 
@@ -113,11 +115,11 @@ A subset of the Weatherbench2 copy of the ERA5 reanalysis dataset.
 
 <!-- ![oisst](./assets/datasets/oisst.png) -->
 
-### GLAD Land Cover Land Use
+### GLAD Land Cover Land Use (native, Icechunk v1)
 
 A copy of the GLAD Land Cover Land Use dataset distributed under a [Creative Commons Attribution 4.0 International License](http://creativecommons.org/licenses/by/4.0/).
 
-Source: https://storage.googleapis.com/earthenginepartners-hansen/GLCLU2000-2020/v2/download.html
+See [source](https://storage.googleapis.com/earthenginepartners-hansen/GLCLU2000-2020/v2/download.html).
 
 === "AWS"
 
@@ -136,4 +138,62 @@ Source: https://storage.googleapis.com/earthenginepartners-hansen/GLCLU2000-2020
     ds = xr.open_dataset(
         session.store, chunks=None, consolidated=False, engine="zarr"
     )
+    ```
+
+## 3rd-party examples
+
+### NOAA GFS archive (native, Icechunk v1)
+
+A copy of the [NOAA GFS](https://www.ncei.noaa.gov/products/weather-climate-models/global-forecast) analysis dataset distributed under a [Creative Commons Attribution 4.0 International License](http://creativecommons.org/licenses/by/4.0/).
+
+Provided by [dynamical.org](https://dynamical.org/), see [source](https://dynamical.org/catalog/noaa-gfs-analysis/).
+
+=== "AWS"
+
+    ```python
+    import icechunk as ic
+    import xarray as xr
+
+    storage = ic.s3_storage(
+        bucket="dynamical-noaa-gfs",
+        prefix="noaa-gfs-analysis/v0.1.0.icechunk",
+        region="us-west-2",
+        anonymous=True,
+    )
+    repo = ic.Repository.open(storage=storage)
+    session = repo.readonly_session("main")
+    ds = xr.open_zarr(session.store, chunks=None)
+    ```
+
+### NASA RASI (virtual, Icechunk v1)
+
+A copy of the [NASA RASI](https://www.nasa.gov/rasi/) dataset distributed under a [Creative Commons Attribution 4.0 International License](http://creativecommons.org/licenses/by/4.0/).
+
+Provided by [Development Seed](https://developmentseed.org/), see https://github.com/virtual-zarr/rasi-icechunk.
+
+=== "AWS"
+
+    ```python
+    import icechunk
+    import xarray as xr
+
+    storage = icechunk.s3_storage(
+        bucket='nasa-waterinsight',
+        prefix="virtual-zarr-store/icechunk/RASI/HISTORICAL", #replace HISTORICAL with SSP245/SSP585 for future scenarios
+        anonymous=True,
+        region="us-west-2",
+    )
+
+    chunk_url = "s3://nasa-waterinsight/RASI/"
+    virtual_credentials = icechunk.containers_credentials({
+        chunk_url: icechunk.s3_anonymous_credentials()
+    })
+
+    repo = icechunk.Repository.open(
+        storage=storage,
+        authorize_virtual_chunk_access=virtual_credentials,
+    )
+
+    session = repo.readonly_session('main')
+    ds = xr.open_zarr(session.store, chunks=None)
     ```
