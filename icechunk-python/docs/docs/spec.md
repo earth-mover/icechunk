@@ -45,103 +45,19 @@ Icechunk requires that the storage system support the following operations:
 - **In-place write** - Strong read-after-write and list-after-write consistency is expected. Files are not moved or altered once they are written.
 - **Write-if-not-exists** - For creating new references.
 - **Conditional update** - For the commit process to be safe and consistent, the storage system must be able to atomically update a file only if the current version is known to the writer.
-- **Seekable reads** - Chunk file formats may require seek support (e.g. shards).
+- **Seekable reads** - Chunk file formats may require seek support, or at least range-requests (e.g. for reading a chunk within a shard).
 - **Deletes** - Delete files that are no longer used (via a garbage-collection operation).
 
 These requirements are compatible with object stores, like S3, as well as with filesystems.
 
-The storage system is not required to support random-access writes. Once written, most files are immutable until they are deleted. The exceptions to this rule is:
+The storage system is not required to support random-access writes. Once written, most files are immutable until they are deleted. The only exception to this rule is the `RepoInfo` object, which is main entry point to a repository, stored an object with path `repo` under the repository prefix.
 
-- the main entry point to a repository, an object with path `repo` under the repository prefix.
+### Consistency and Optimistic Concurrency
 
-## Specification
+Icechunk achieves transactional consistency using only the limited consistency guarantees offered by object storage.
+Icechunk V2 does this entirely via careful management of creation and conditional updating of the `RepoInfo` object.
+(The exact contents of the `RepoInfo` object are defined in the format specification section below.)
 
-### Overview
-
-Icechunk uses a series of linked metadata files to describe the state of the repository.
-
-- The **Snapshot file** records all of the different arrays and groups in a specific snapshot of the repository, plus their metadata. Every new commit creates a new snapshot file. The snapshot file contains pointers to one or more chunk manifest files.
-- **Chunk manifests** store references to individual chunks. A single manifest may store references for multiple arrays or a subset of all the references for a single array.
-- **Chunk files** store the actual compressed chunk data, potentially containing data for multiple chunks in a single file.
-- **Transaction log files**, an overview of the operations executed during a session, used for rebase and diffs.
-- **Repository info file**, also called repo info or repo object, is the entry point linking to other files. Every change to the repository modifies this file in some way, doing conditional updates.
-same tag name cannot be reused later.
-
-When reading from object store, the client opens the repo info file to obtain a pointer to the relevant snapshot file.
-The client then reads the snapshot file to determine the structure and hierarchy of the repository.
-When fetching data from an array, the client first examines the chunk manifest file[s] for that array and finally fetches the chunks referenced therein.
-
-When writing a new repository snapshot, the client first writes a new set of chunks and chunk manifests, and then generates a new snapshot file.
-Finally, to commit the transaction, it updates the repo info file using an atomic conditional update operation.
-This operation may fail if a different client has already committed the next snapshot.
-In this case, the client may attempt to resolve the conflicts and retry the commit.
-
-```mermaid
-flowchart TD
-    subgraph metadata[Metadata]
-    subgraph repo_info[Entry Point]
-    repo_info[Repo Info File]
-    end
-    subgraph snapshots[Snapshots]
-    snapshot1[Snapshot File 1]
-    snapshot2[Snapshot File 2]
-    end
-    subgraph manifests[Manifests]
-    manifestA[Chunk Manifest A]
-    manifestB[Chunk Manifest B]
-    end
-    end
-
-    subgraph data
-    chunk1[Chunk File 1]
-    chunk2[Chunk File 2]
-    chunk3[Chunk File 3]
-    chunk4[Chunk File 4]
-    end
-
-    repo_info -- snapshot ID --> snapshot2
-    snapshot1 --> manifestA
-    snapshot2 -->manifestA
-    snapshot2 -->manifestB
-    manifestA --> chunk1
-    manifestA --> chunk2
-    manifestB --> chunk3
-    manifestB --> chunk4
-
-```
-
-### File Layout
-
-All data and metadata files are stored within a root directory (typically a prefix within an object store) using the following directory structure.
-
-- `$ROOT` base URI (s3, gcs, local directory, etc.)
-- `$ROOT/repo` repo info file, entry point for all operations
-- `$ROOT/snapshots/` snapshot files
-- `$ROOT/manifests/` chunk manifests
-- `$ROOT/transactions/` transaction log files
-- `$ROOT/chunks/` chunks
-- `$ROOT/overwritten/` old versions of the repo info object, used as backup and to maintain the ops log
-
-### File Formats
-
-#### Repo info file
-
-The repo info file is encoded using [flatbuffers](https://github.com/google/flatbuffers). The IDL for the
-on-disk format can be found in [the fbs file](https://github.com/earth-mover/icechunk/blob/404100b584fb7ac70de860bd430aa8291df98c4d/icechunk-format/flatbuffers/repo.fbs).
-
-This object is the main entry point for an Icechunk repository, and the only mutable object in an Icechunk V2 repo. Every read operation starts by fetching the repo info object. Every Icechunk update, from making a commit to deleting a tag, makes a conditional write on this object.
-
-This object stores:
-
-- The repository configuration.
-- All branches, tags and deleted tag names.
-- All valid snapshots with their ids, parent, timestamp and metadata.
-- The repository ops log, with information about every operation done on the repo.
-- The repository status (read-only, online, etc.).
-- The repository level metadata (user attributes set at the repository level).
-- The feature flags settings.
-
-The process of creating and updating the repo info object is designed to use the limited consistency guarantees offered by object storage to ensure transactional consistency.
 When a client attempts to make a change to the repository, it fetches the latest version of the repo info object and applies its changes in memory first.
 However, when updating the object in storage, the client must detect whether a _different session_ has updated the repo info in the interim, possibly retrying or failing the update if so.
 This is an "optimistic concurrency" strategy; the resolution mechanism can be expensive, but conflicts are expected to be infrequent.
@@ -159,6 +75,115 @@ Some examples of incompatible changes are:
 
 - A commit is attempted to a branch that was deleted by other session
 - A branch is reset but it was deleted by other session
+
+### References
+
+Similar to Git, Icechunk supports the concept of _branches_ and _tags_.
+These references point to a specific snapshot of the repository.
+
+- **Branches** are _mutable_ references to a snapshot.
+  Repositories may have one or more branches.
+  The default branch name is `main`.
+  Repositories must always have a `main` branch, which is used to detect the existence of a valid repository in a given path.
+  After creation, branches may be updated to point to a different snapshot.
+- **Tags** are _immutable_ references to a snapshot.
+  A repository may contain zero or more tags.
+  After creation, tags may never be updated, unlike in Git. Tag delete is allowed, but a new tag with the name of a deleted one cannot be added.
+
+## Specification
+
+### Overview
+
+Icechunk uses a series of linked metadata files to describe the state of the repository.
+
+- **Repository info file**, also called repo info or repo object, is the entry point linking to other files, particularly to snapshot files. Every change to the repository modifies this file in some way, doing conditional updates.
+- **Snapshot files** record all of the different arrays and groups in a specific snapshot of the repository, plus their metadata. A single snapshot file describes a specific version of the repo, and every new commit creates a new snapshot file. The snapshot file contains pointers to one or more chunk manifest files.
+- **Chunk manifests** store references to individual chunks. A single manifest may store references for multiple arrays or a subset of all the references for a single array. Anytime a commit is made which writes new chunks, a new manifest file is also written.
+- **Chunk files** store the actual compressed chunk data, potentially containing data for multiple chunks in a single file (i.e. a shard).
+- **Transaction log files**, an overview of the operations executed during a session, used for rebase and diffs.
+
+When reading from object store, the client opens the repo info file to obtain a pointer to the relevant snapshot file.
+The client then reads the snapshot file to determine the structure and hierarchy of the repository.
+When fetching data from an array, the client first examines the chunk manifest file(s) for that array and finally fetches the chunks referenced therein.
+
+When writing a new repository snapshot, the client first writes a new set of chunks and chunk manifests, and then generates a new snapshot file.
+Finally, to commit the transaction, it updates the repo info file using an atomic conditional update operation.
+This operation may fail if a different client has already committed the next snapshot.
+In this case, the client may attempt to resolve the conflicts and retry the commit.
+
+```mermaid
+flowchart TD
+    subgraph metadata[Metadata]
+        subgraph entry_point[Entry Point]
+            repo_info[Repo Info File]
+        end
+        subgraph snapshots[Snapshots]
+            snapshot1[Snapshot File 1]
+            snapshot2[Snapshot File 2]
+        end
+        subgraph manifests[Manifests]
+            manifestA[Chunk Manifest A]
+            manifestB[Chunk Manifest B]
+        end
+    end
+    subgraph data[Data]
+        chunk1[Chunk File 1]
+        chunk2[Chunk File 2]
+        chunk3[Chunk File 3]
+        chunk4[Chunk File 4]
+    end
+    repo_info -- snapshot ID --> snapshot2
+    snapshot1 --> manifestA
+    snapshot2 --> manifestA
+    snapshot2 --> manifestB
+    manifestA --> chunk1
+    manifestA --> chunk2
+    manifestB --> chunk3
+    manifestB --> chunk4
+```
+
+### File Layout
+
+All data and metadata files are stored within a root directory (typically a prefix within an object store) using the following directory structure.
+
+- `$ROOT` base URI (s3, gcs, local directory, etc.)
+- `$ROOT/repo` repo info file, entry point for all operations
+- `$ROOT/snapshots/` snapshot files
+- `$ROOT/manifests/` chunk manifests
+- `$ROOT/transactions/` transaction log files
+- `$ROOT/chunks/` chunks
+- `$ROOT/overwritten/` old versions of the repo info object, used as backup and to maintain the ops log
+
+### File Formats
+
+With the exception of chunk files, each type of file is encoded using [flatbuffers](https://github.com/google/flatbuffers).
+The IDL for the on-disk format can be found in [the fbs files directory in this repo](https://github.com/earth-mover/icechunk/blob/404100b584fb7ac70de860bd430aa8291df98c4d/icechunk-format/flatbuffers/).
+
+The full set of file types and their definitions are:
+
+- **Repo info files** ([flatbuffers definition](https://github.com/earth-mover/icechunk/blob/404100b584fb7ac70de860bd430aa8291df98c4d/icechunk-format/flatbuffers/repo.fbs))
+- **Snapshot files** ([flatbuffers definition](https://github.com/earth-mover/icechunk/blob/404100b584fb7ac70de860bd430aa8291df98c4d/icechunk-format/flatbuffers/snapshot.fbs))
+- **Manifest files** ([flatbuffers definition](https://github.com/earth-mover/icechunk/blob/404100b584fb7ac70de860bd430aa8291df98c4d/icechunk-format/flatbuffers/manifest.fbs))
+- **Transaction Log files** ([flatbuffers definition](https://github.com/earth-mover/icechunk/blob/404100b584fb7ac70de860bd430aa8291df98c4d/icechunk-format/flatbuffers/transaction_log.fbs))
+- **Chunk files** instead have their encoding defined by the Chunk Encoding section of the [Zarr specification](https://zarr-specs.readthedocs.io/en/latest/v3/core/index.html#chunk-encoding).
+
+(Note that the flatbuffers also share some common utility definitions, defined in [`common.fbs`](https://github.com/earth-mover/icechunk/blob/404100b584fb7ac70de860bd430aa8291df98c4d/icechunk-format/flatbuffers/common.fbs).)
+
+The rest of this section describes the meaning of the fields in each flatbuffers file, and any other concerns that implementations should be aware of.
+
+#### Repo info file
+
+This object is the main entry point for an Icechunk repository, and the only mutable object in an Icechunk V2 repo. Every read operation starts by fetching the repo info object. Every Icechunk update, from making a commit to deleting a tag, makes a conditional write on this object.
+
+This object stores:
+
+- The repository configuration.
+- All branches, tags and deleted tag names.
+- All valid snapshots with their ids, parent, timestamp and metadata.
+- The repository ops log, with information about every operation done on the repo.
+- The repository status (read-only, online, etc.).
+- The repository level metadata (user attributes set at the repository level).
+- The feature flags settings.
 
 ##### Updates to the repo info file
 
@@ -179,20 +204,6 @@ listing the prefix, but Icechunk itself doesn't depend on this property.
 
 These backups of the repo info file are only used by Icechunk for its `ops_log` functionality. These files are linked in
 the repo info object itself, and they form a single linked list for ops logs that go beyond the 1,000 operations limit.
-
-##### References
-
-Similar to Git, Icechunk supports the concept of _branches_ and _tags_.
-These references point to a specific snapshot of the repository.
-
-- **Branches** are _mutable_ references to a snapshot.
-  Repositories may have one or more branches.
-  The default branch name is `main`.
-  Repositories must always have a `main` branch, which is used to detect the existence of a valid repository in a given path.
-  After creation, branches may be updated to point to a different snapshot.
-- **Tags** are _immutable_ references to a snapshot.
-  A repository may contain zero or more tags.
-  After creation, tags may never be updated, unlike in Git. Tag delete is allowed, but a new tag with the name of a deleted one cannot be added.
 
 #### Snapshot Files
 

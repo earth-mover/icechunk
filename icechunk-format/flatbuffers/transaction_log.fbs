@@ -2,10 +2,13 @@ include "common.fbs";
 
 namespace generated;
 
+// --8<-- [start:chunk_indices]
 table ChunkIndices {
   coords: [uint32] (required);
 }
+// --8<-- [end:chunk_indices]
 
+// --8<-- [start:array_updated_chunks]
 table ArrayUpdatedChunks {
   // the node id of the array to which the chunks belong to
   node_id: ObjectId8 (required);
@@ -14,9 +17,13 @@ table ArrayUpdatedChunks {
   // sorted in ascending lexicographical order
   chunks: [ChunkIndices] (required);
 }
+// --8<-- [end:array_updated_chunks]
 
+// --8<-- [start:node_type]
 enum NodeType: ubyte { Group = 0, Array }
+// --8<-- [end:node_type]
 
+// --8<-- [start:move_operation]
 // moves are fully collapsed: there is only one from/to pair,
 // and overlapping moves (from -> to, to -> new_to) get merged
 // (from -> new_to in this example).
@@ -28,7 +35,9 @@ table MoveOperation {
   node_id: ObjectId8;
   node_type: NodeType;
 }
+// --8<-- [end:move_operation]
 
+// --8<-- [start:transaction_log_table]
 table TransactionLog {
   // id of the transaction log file,
   // it will be the same as the corresponding snapshot
@@ -70,5 +79,6 @@ table TransactionLog {
   // Introduced in spec version 2
   extra: [uint8];
 }
+// --8<-- [end:transaction_log_table]
 
 root_type TransactionLog;
