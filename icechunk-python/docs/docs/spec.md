@@ -343,7 +343,7 @@ The `TransactionLog` table is the root type:
 
 All node ids in this table refer to `NodeSnapshot.id` values from the corresponding snapshot.
 
-The `extra` field is an opaque byte vector reserved for future extensions. Implementations SHOULD preserve it when reading and writing transaction logs.
+The `extra` field is an opaque byte vector reserved for future extensions. It allows small, optional features (e.g. precomputed storage statistics) to be added without requiring a new spec version. The contents of `extra` will be defined by future spec extensions. Implementations MUST preserve it when reading and writing transaction logs.
 
 ##### `ArrayUpdatedChunks`
 

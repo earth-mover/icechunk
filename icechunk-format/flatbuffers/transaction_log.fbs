@@ -75,7 +75,9 @@ table TransactionLog {
   updated_chunks: [ArrayUpdatedChunks] (required);
 
   // Nodes moved in this transaction.
-  // MUST be sorted by final path.
+  // MUST be sorted by final path in component-wise lexicographic order
+  // (i.e. split on `/`, then compare segments left to right).
+  // For example: /a, /a/b, /ab, /b.
   // MUST be fully collapsed: if a node was moved multiple times
   // (e.g. A -> B, then B -> C), only the net result (A -> C) is recorded.
   // Every moved node MUST have its own entry — moving a group does
