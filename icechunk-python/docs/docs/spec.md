@@ -171,19 +171,21 @@ The full set of file types and their definitions are:
 
 All object identifiers in the format are fixed-size byte arrays:
 
-```protobuf
---8<-- "icechunk-format/flatbuffers/common.fbs:object_id_12"
-```
+??? note "Flatbuffers definition: `ObjectId12`, `ObjectId8`"
+    ```protobuf
+    --8<-- "icechunk-format/flatbuffers/common.fbs:object_id_12"
+    ```
 
-```protobuf
---8<-- "icechunk-format/flatbuffers/common.fbs:object_id_8"
-```
+    ```protobuf
+    --8<-- "icechunk-format/flatbuffers/common.fbs:object_id_8"
+    ```
 
 Snapshot-level metadata is stored as a list of key-value pairs:
 
-```protobuf
---8<-- "icechunk-format/flatbuffers/common.fbs:metadata_item"
-```
+??? note "Flatbuffers definition: `MetadataItem`"
+    ```protobuf
+    --8<-- "icechunk-format/flatbuffers/common.fbs:metadata_item"
+    ```
 
 The rest of this section describes the meaning of the fields in each flatbuffers file, and any other concerns that implementations should be aware of.
 

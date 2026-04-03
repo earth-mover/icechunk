@@ -170,6 +170,7 @@ plugins:
 
 markdown_extensions:
   - admonition
+  - pymdownx.details
   - tables
   - toc:
       toc_depth: 2
