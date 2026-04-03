@@ -34,36 +34,15 @@ fn lookup_labels(map: &HashMap<SnapshotId, Vec<String>>, id: &SnapshotId) -> Vec
 }
 
 impl AncestryGraph {
-    /// Build a linear (single-branch) graph from an ordered list of snapshots.
+    /// Build an ancestry graph from branch ancestry data.
     ///
-    /// `snapshots` should be in ancestry order (newest first).
-    /// `branch_map` and `tag_map` provide label decorations keyed by snapshot ID.
-    pub fn from_linear(
-        snapshots: Vec<SnapshotInfo>,
-        branch_map: &HashMap<SnapshotId, Vec<String>>,
-        tag_map: &HashMap<SnapshotId, Vec<String>>,
-        all_branches: Vec<String>,
-    ) -> Self {
-        let nodes = snapshots
-            .into_iter()
-            .map(|info| {
-                let branches = lookup_labels(branch_map, &info.id);
-                let tags = lookup_labels(tag_map, &info.id);
-                AncestryNode { info, branches, tags, column: 0 }
-            })
-            .collect();
-
-        Self { nodes, num_columns: 1, all_branches }
-    }
-
-    /// Build a tree graph from multiple branches.
-    ///
-    /// `branch_ancestries` is a list of `(branch_name, snapshots)` where each snapshot
-    /// list is in ancestry order (newest first). The first entry is the "trunk" (column 0)
-    /// — its commits and shared ancestors stay in that column.
-    ///
-    /// `tag_map` provides tag label decorations keyed by snapshot ID.
-    pub fn from_tree(
+    /// - `branch_ancestries`: each entry is `(branch_name, snapshots)` where snapshots
+    ///   are in ancestry order (newest first). The first entry is the "trunk" (column 0).
+    ///   Pass a single entry for linear (single-branch) view.
+    /// - `tag_map`: snapshot_id → tag names for label decoration.
+    /// - `all_branches`: sorted list of all branch names in the repo (main first),
+    ///   used for consistent color assignment across views.
+    pub fn new(
         branch_ancestries: Vec<(String, Vec<SnapshotInfo>)>,
         tag_map: &HashMap<SnapshotId, Vec<String>>,
         all_branches: Vec<String>,
@@ -346,26 +325,26 @@ mod tests {
     }
 
     #[test]
-    fn test_from_linear_empty() {
-        let graph = AncestryGraph::from_linear(vec![], &HashMap::new(), &HashMap::new(), vec![]);
+    fn test_empty() {
+        let graph = AncestryGraph::new(vec![], &HashMap::new(), vec![]);
         assert_eq!(graph.nodes.len(), 0);
-        assert_eq!(graph.num_columns, 1);
+        assert_eq!(graph.num_columns, 0);
     }
 
     #[test]
-    fn test_from_linear_with_labels() {
+    fn test_single_branch_with_labels() {
         let s1 = make_snapshot(1, None);
         let s2 = make_snapshot(2, Some(1));
         let s3 = make_snapshot(3, Some(2));
 
-        let mut branch_map = HashMap::new();
-        branch_map.insert(s3.id.clone(), vec!["main".to_string()]);
-
         let mut tag_map = HashMap::new();
         tag_map.insert(s1.id.clone(), vec!["v1.0".to_string()]);
 
-        let graph =
-            AncestryGraph::from_linear(vec![s3.clone(), s2.clone(), s1.clone()], &branch_map, &tag_map, vec!["main".to_string()]);
+        let graph = AncestryGraph::new(
+            vec![("main".to_string(), vec![s3.clone(), s2.clone(), s1.clone()])],
+            &tag_map,
+            vec!["main".to_string()],
+        );
 
         assert_eq!(graph.nodes.len(), 3);
         assert_eq!(graph.num_columns, 1);
@@ -376,12 +355,6 @@ mod tests {
         assert!(graph.nodes.iter().all(|n| n.column == 0));
     }
 
-    #[test]
-    fn test_from_tree_empty() {
-        let graph = AncestryGraph::from_tree(vec![], &HashMap::new(), vec![]);
-        assert_eq!(graph.nodes.len(), 0);
-        assert_eq!(graph.num_columns, 0);
-    }
 
     #[test]
     fn test_from_tree_deduplicates() {
@@ -398,7 +371,7 @@ mod tests {
         ];
 
         let all = vec!["feat".to_string(), "main".to_string()];
-        let graph = AncestryGraph::from_tree(branch_ancestries, &HashMap::new(), all);
+        let graph = AncestryGraph::new(branch_ancestries, &HashMap::new(), all);
 
         // s1, s2, s3 from main + s4 from feat = 4 unique nodes
         assert_eq!(graph.nodes.len(), 4);
@@ -437,7 +410,7 @@ mod tests {
         ];
 
         let all = vec!["feat".to_string(), "main".to_string()];
-        let graph = AncestryGraph::from_tree(branch_ancestries, &HashMap::new(), all);
+        let graph = AncestryGraph::new(branch_ancestries, &HashMap::new(), all);
         let output = graph.to_string();
         let plain = strip_ansi(&output);
         let lines: Vec<&str> = plain.lines().collect();
@@ -521,7 +494,7 @@ mod tests {
         tag_map.insert(s2.id.clone(), vec!["v1.0".to_string()]);
 
         let all = vec!["experiment".to_string(), "hotfix".to_string(), "main".to_string()];
-        let graph = AncestryGraph::from_tree(branch_ancestries, &tag_map, all);
+        let graph = AncestryGraph::new(branch_ancestries, &tag_map, all);
 
         // 6 unique snapshots
         assert_eq!(graph.nodes.len(), 6);
