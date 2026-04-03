@@ -1057,7 +1057,7 @@ impl Session {
         let mut ancestors = path.ancestors();
         // the first element is the `path` itself, which we might be
         // trying to create now; skip it.
-        ancestors.next();
+        debug_assert_eq!(ancestors.next(), path);
         for parent in ancestors {
             let node = self.get_node(&parent).await;
             if node.is_err() {
