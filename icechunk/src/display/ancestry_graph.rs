@@ -70,12 +70,15 @@ impl AncestryGraph {
                     break; // Hit a shared ancestor — stop walking this branch
                 }
                 seen.insert(info.id.clone(), col);
-                node_map.insert(info.id.clone(), AncestryNode {
-                    branches: lookup_labels(&branch_labels, &info.id),
-                    tags: lookup_labels(tag_map, &info.id),
-                    column: col,
-                    info: info.clone(),
-                });
+                node_map.insert(
+                    info.id.clone(),
+                    AncestryNode {
+                        branches: lookup_labels(&branch_labels, &info.id),
+                        tags: lookup_labels(tag_map, &info.id),
+                        column: col,
+                        info: info.clone(),
+                    },
+                );
             }
         }
 
@@ -88,10 +91,7 @@ impl AncestryGraph {
     /// Get a stable color index for a branch name based on its position in the
     /// sorted list of all branches in the repo.
     fn color_index_for_branch(&self, name: &str) -> usize {
-        self.all_branches
-            .iter()
-            .position(|b| b == name)
-            .unwrap_or(0)
+        self.all_branches.iter().position(|b| b == name).unwrap_or(0)
     }
 }
 
@@ -138,7 +138,10 @@ enum Glyph {
 }
 
 /// Build a line of column glyphs with ANSI colors, 2 chars per column.
-fn render_columns(num_columns: usize, glyph_for: impl Fn(usize) -> (Glyph, usize)) -> String {
+fn render_columns(
+    num_columns: usize,
+    glyph_for: impl Fn(usize) -> (Glyph, usize),
+) -> String {
     let mut out = String::with_capacity(num_columns * 8);
     for c in 0..num_columns {
         let (glyph, color_col) = glyph_for(c);
@@ -162,11 +165,7 @@ impl AncestryGraph {
         for t in &node.tags {
             parts.push(format!("{BOLD}{YELLOW}{t}{RESET}"));
         }
-        if parts.is_empty() {
-            String::new()
-        } else {
-            format!(" ({})", parts.join(", "))
-        }
+        if parts.is_empty() { String::new() } else { format!(" ({})", parts.join(", ")) }
     }
 
     /// Get a stable color for a column by looking up which branch owns it.
@@ -187,7 +186,9 @@ impl AncestryGraph {
 
     fn fmt_linear(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         // Use the tip node's branch label for consistent color
-        let color_idx = self.nodes.first()
+        let color_idx = self
+            .nodes
+            .first()
             .and_then(|n| n.branches.first())
             .map(|name| self.color_index_for_branch(name))
             .unwrap_or(0);
@@ -225,9 +226,13 @@ impl AncestryGraph {
 
             // Node line: * for this column, | for other active columns
             let prefix = render_columns(self.num_columns, |c| {
-                if c == col { (Glyph::Node, col_colors[c]) }
-                else if active[c] { (Glyph::Pipe, col_colors[c]) }
-                else { (Glyph::Blank, 0) }
+                if c == col {
+                    (Glyph::Node, col_colors[c])
+                } else if active[c] {
+                    (Glyph::Pipe, col_colors[c])
+                } else {
+                    (Glyph::Blank, 0)
+                }
             });
             let short_id = &node.info.id.to_string()[..8];
             let labels = Self::format_labels(node);
@@ -252,10 +257,15 @@ impl AncestryGraph {
                 // Draw a / merge line for each merging column
                 for &mc in &merging {
                     let line = render_columns(self.num_columns, |c| {
-                        if c == mc { (Glyph::Merge, col_colors[mc]) }
-                        else if c == col { (Glyph::Pipe, col_colors[c]) }
-                        else if active[c] { (Glyph::Pipe, col_colors[c]) }
-                        else { (Glyph::Blank, 0) }
+                        if c == mc {
+                            (Glyph::Merge, col_colors[mc])
+                        } else if c == col {
+                            (Glyph::Pipe, col_colors[c])
+                        } else if active[c] {
+                            (Glyph::Pipe, col_colors[c])
+                        } else {
+                            (Glyph::Blank, 0)
+                        }
                     });
                     writeln!(f, "{line}")?;
                     active[mc] = false;
@@ -263,9 +273,13 @@ impl AncestryGraph {
             } else if !has_more && col != 0 {
                 // Side branch's last node — draw / toward trunk
                 let line = render_columns(self.num_columns, |c| {
-                    if c == col { (Glyph::Merge, col_colors[col]) }
-                    else if active[c] { (Glyph::Pipe, col_colors[c]) }
-                    else { (Glyph::Blank, 0) }
+                    if c == col {
+                        (Glyph::Merge, col_colors[col])
+                    } else if active[c] {
+                        (Glyph::Pipe, col_colors[c])
+                    } else {
+                        (Glyph::Blank, 0)
+                    }
                 });
                 writeln!(f, "{line}")?;
                 active[col] = false;
@@ -275,7 +289,11 @@ impl AncestryGraph {
                     active[col] = false;
                 }
                 let line = render_columns(self.num_columns, |c| {
-                    if active[c] { (Glyph::Pipe, col_colors[c]) } else { (Glyph::Blank, 0) }
+                    if active[c] {
+                        (Glyph::Pipe, col_colors[c])
+                    } else {
+                        (Glyph::Blank, 0)
+                    }
                 });
                 writeln!(f, "{line}")?;
             }
@@ -289,11 +307,7 @@ impl fmt::Display for AncestryGraph {
         if self.nodes.is_empty() {
             return writeln!(f, "(empty history)");
         }
-        if self.num_columns <= 1 {
-            self.fmt_linear(f)
-        } else {
-            self.fmt_tree(f)
-        }
+        if self.num_columns <= 1 { self.fmt_linear(f) } else { self.fmt_tree(f) }
     }
 }
 
@@ -354,7 +368,6 @@ mod tests {
         // All in column 0
         assert!(graph.nodes.iter().all(|n| n.column == 0));
     }
-
 
     #[test]
     fn test_from_tree_deduplicates() {
@@ -467,33 +480,28 @@ mod tests {
         //
         // "main" should be trunk (column 0) — its commits + shared ancestors
         // stay in column 0 even though other branches share them.
-        let s1 = make_snapshot(1, None);       // repo init
-        let s2 = make_snapshot(2, Some(1));    // shared ancestor
-        let s3 = make_snapshot(3, Some(2));    // main tip
-        let s4 = make_snapshot(4, Some(2));    // experiment commit
-        let s5 = make_snapshot(5, Some(4));    // experiment tip
-        let s6 = make_snapshot(6, Some(3));    // hotfix tip
+        let s1 = make_snapshot(1, None); // repo init
+        let s2 = make_snapshot(2, Some(1)); // shared ancestor
+        let s3 = make_snapshot(3, Some(2)); // main tip
+        let s4 = make_snapshot(4, Some(2)); // experiment commit
+        let s5 = make_snapshot(5, Some(4)); // experiment tip
+        let s6 = make_snapshot(6, Some(3)); // hotfix tip
 
         // main is listed FIRST (trunk), then others
         let branch_ancestries = vec![
-            (
-                "main".to_string(),
-                vec![s3.clone(), s2.clone(), s1.clone()],
-            ),
+            ("main".to_string(), vec![s3.clone(), s2.clone(), s1.clone()]),
             (
                 "experiment".to_string(),
                 vec![s5.clone(), s4.clone(), s2.clone(), s1.clone()],
             ),
-            (
-                "hotfix".to_string(),
-                vec![s6.clone(), s3.clone(), s2.clone(), s1.clone()],
-            ),
+            ("hotfix".to_string(), vec![s6.clone(), s3.clone(), s2.clone(), s1.clone()]),
         ];
 
         let mut tag_map = HashMap::new();
         tag_map.insert(s2.id.clone(), vec!["v1.0".to_string()]);
 
-        let all = vec!["experiment".to_string(), "hotfix".to_string(), "main".to_string()];
+        let all =
+            vec!["experiment".to_string(), "hotfix".to_string(), "main".to_string()];
         let graph = AncestryGraph::new(branch_ancestries, &tag_map, all);
 
         // 6 unique snapshots
