@@ -174,7 +174,8 @@ markdown_extensions:
   - toc:
       toc_depth: 2
   - pymdownx.inlinehilite
-  - pymdownx.snippets
+  - pymdownx.snippets:
+      base_path: ["docs/docs", ".."]
   - pymdownx.superfences:
       # make exceptions to highlighting of code:
       custom_fences:
@@ -220,6 +221,7 @@ nav:
     - Icechunk for Git Users: icechunk-for-git-users.md
     - Creating Icechunk Datasets:
       - Global Raster Data cube: ingestion/glad-ingest.ipynb
+  - Sample Datasets: sample-datasets.md
   - Reference:
     - Spec: spec.md
     - Version Policy: version-policy.md

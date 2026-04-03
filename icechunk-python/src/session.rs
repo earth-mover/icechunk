@@ -59,8 +59,6 @@ impl From<SessionMode> for PySessionMode {
     }
 }
 
-// TODO: pass `mode` through once nested fields implement PyRepr
-#[expect(unused_variables)]
 impl PyRepr for PySession {
     const EXECUTABLE: bool = false;
 
@@ -68,7 +66,7 @@ impl PyRepr for PySession {
         "icechunk.Session"
     }
 
-    fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
+    fn fields(&self, _mode: ReprMode) -> Vec<(&str, String)> {
         let session = self.0.blocking_read();
         let mut fields = vec![
             ("read_only", py_bool(session.read_only())),
