@@ -265,6 +265,16 @@ def test_doesnt_rebase() -> None:
     root = zarr.group(store=session.store, overwrite=True)
     root.create_group("my/old/path", overwrite=True)
     root.create_group("my/new", overwrite=True)
+    all_keys = sorted([k for k in session.store.list()])
+    assert all_keys == sorted(
+        [
+            "zarr.json",
+            "my/zarr.json",
+            "my/old/zarr.json",
+            "my/old/path/zarr.json",
+            "my/new/zarr.json",
+        ]
+    )
     session.commit("create group")
 
     session1 = repo.rearrange_session("main")
