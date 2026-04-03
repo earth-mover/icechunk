@@ -33,20 +33,49 @@ fn lookup_labels(map: &HashMap<SnapshotId, Vec<String>>, id: &SnapshotId) -> Vec
     map.get(id).cloned().unwrap_or_default()
 }
 
+/// Sort branch names with "main" first, then alphabetically.
+/// This determines both the trunk (column 0) and the color assignment order.
+fn sort_branches_main_first(branches: &mut Vec<String>) {
+    branches.sort_by(|a, b| {
+        let a_is_main = a == "main";
+        let b_is_main = b == "main";
+        b_is_main.cmp(&a_is_main).then(a.cmp(b))
+    });
+}
+
 impl AncestryGraph {
     /// Build an ancestry graph from branch ancestry data.
     ///
+    /// # Arguments
+    ///
     /// - `branch_ancestries`: each entry is `(branch_name, snapshots)` where snapshots
-    ///   are in ancestry order (newest first). The first entry is the "trunk" (column 0).
-    ///   Pass a single entry for linear (single-branch) view.
-    /// - `tag_map`: snapshot_id → tag names for label decoration.
-    /// - `all_branches`: sorted list of all branch names in the repo (main first),
-    ///   used for consistent color assignment across views.
+    ///   are in ancestry order (newest first). Pass a single entry for linear
+    ///   (single-branch) view. The entries are sorted internally so that "main" becomes
+    ///   the trunk (column 0) — callers don't need to pre-sort.
+    /// - `tag_map`: snapshot_id → tag names. Used to decorate nodes with tag labels
+    ///   (e.g. "v1.0") so they appear in the rendered output.
+    /// - `all_branches`: the full set of branch names in the repo (not just the ones
+    ///   being displayed). Used to assign each branch a stable color index so that
+    ///   e.g. "main" gets the same color whether viewing one branch or all branches.
     pub fn new(
-        branch_ancestries: Vec<(String, Vec<SnapshotInfo>)>,
+        mut branch_ancestries: Vec<(String, Vec<SnapshotInfo>)>,
         tag_map: &HashMap<SnapshotId, Vec<String>>,
         all_branches: Vec<String>,
     ) -> Self {
+        // Sort so "main" is the trunk (column 0), then alphabetically.
+        sort_branches_main_first(
+            &mut branch_ancestries.iter().map(|(n, _)| n.clone()).collect(),
+        );
+        branch_ancestries.sort_by(|a, b| {
+            let a_is_main = a.0 == "main";
+            let b_is_main = b.0 == "main";
+            b_is_main.cmp(&a_is_main).then(a.0.cmp(&b.0))
+        });
+
+        // Sort the full branch list too for consistent color indexing.
+        let mut all_branches = all_branches;
+        sort_branches_main_first(&mut all_branches);
+
         if branch_ancestries.is_empty() {
             return Self { nodes: Vec::new(), num_columns: 0, all_branches };
         }
