@@ -945,8 +945,7 @@ impl Repository {
         &self,
         version: Option<&VersionInfo>,
     ) -> RepositoryResult<AncestryGraph> {
-        let all_branches: Vec<String> =
-            self.list_branches().await?.into_iter().collect();
+        let all_branches: Vec<String> = self.list_branches().await?.into_iter().collect();
 
         let mut tag_map: HashMap<SnapshotId, Vec<String>> = HashMap::new();
         for tag in &self.list_tags().await? {
