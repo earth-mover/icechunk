@@ -66,8 +66,6 @@ table MoveOperation {
 // Likewise for arrays across new_arrays, deleted_arrays, or updated_arrays.
 // For example, a group that is created and then has its metadata
 // modified within the same commit MUST appear only in new_groups.
-// A node id MAY appear in both moved_nodes and in one of updated_*, updated_chunks, or new_*.
-// A node id MUST NOT appear in both moved_nodes and deleted_*.
 table TransactionLog {
   // MUST be identical to the id of the corresponding snapshot.
   id: ObjectId12 (required);
