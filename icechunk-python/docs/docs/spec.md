@@ -52,7 +52,7 @@ These requirements are compatible with object stores, like S3, as well as with f
 
 The storage system is not required to support random-access writes. Once written, most files are immutable until they are deleted. The only exception to this rule is the `RepoInfo` object, which is main entry point to a repository, stored an object with path `repo` under the repository prefix.
 
-### Consistency and Optimistic Concurrency 
+### Consistency and Optimistic Concurrency
 
 Icechunk achieves transactional consistency using only the limited consistency guarantees offered by object storage.
 Icechunk V2 does this entirely via careful management of creation and conditional updating of the `RepoInfo` object.
@@ -156,7 +156,7 @@ All data and metadata files are stored within a root directory (typically a pref
 
 ### File Formats
 
-With the exception of chunk files, each type of file is encoded using [flatbuffers](https://github.com/google/flatbuffers). 
+With the exception of chunk files, each type of file is encoded using [flatbuffers](https://github.com/google/flatbuffers).
 The IDL for the on-disk format can be found in [the fbs files directory in this repo](https://github.com/earth-mover/icechunk/blob/404100b584fb7ac70de860bd430aa8291df98c4d/icechunk-format/flatbuffers/).
 
 The full set of file types and their definitions are:
