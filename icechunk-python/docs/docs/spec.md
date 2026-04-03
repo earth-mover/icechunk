@@ -351,13 +351,16 @@ The `TransactionLog` table is the root type:
 --8<-- "icechunk-format/flatbuffers/transaction_log.fbs:transaction_log"
 ```
 
-All node ids in this table refer to `NodeSnapshot.id` values from the corresponding snapshot.
+All node ids (`ObjectId8`) in this table correspond to the `id` field of nodes in the snapshot.
 
-The `extra` field is an opaque byte vector reserved for future extensions. It allows small, optional features (e.g. precomputed storage statistics) to be added without requiring a new spec version. The contents of `extra` will be defined by future spec extensions. Transaction log files are immutable once written, but implementations that merge transaction logs (e.g. during amend) MUST preserve the `extra` bytes from the source logs. Implementations creating new transaction logs with no extensions SHOULD write an empty `extra` field.
+The `extra` field is an opaque byte vector reserved for future spec extensions. Transaction log files are immutable once written, but implementations that merge transaction logs (e.g. during amend) MUST preserve the `extra` bytes from the source logs. Implementations creating new transaction logs with no extensions SHOULD write an empty `extra` field.
+
+!!! tip "For implementers"
+    The `extra` field allows small, optional features (e.g. precomputed storage statistics) to be added without requiring a new spec version.
 
 ##### `ArrayUpdatedChunks`
 
-Each entry in `updated_chunks` identifies which chunk coordinates changed for a given array:
+Each entry in `updated_chunks` pairs an array's node id with the chunk coordinates that changed in that array during this commit. The `node_id` identifies the array — the same `ObjectId8` that appears as the `id` field of the array's `NodeSnapshot` in the snapshot. The `chunks` list records every coordinate in the array's chunk grid where a chunk reference was added, overwritten, or deleted.
 
 ```protobuf
 --8<-- "icechunk-format/flatbuffers/transaction_log.fbs:chunk_indices"
