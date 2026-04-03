@@ -54,6 +54,10 @@ table MoveOperation {
 // --8<-- [end:move_operation]
 
 // --8<-- [start:transaction_log]
+// The initial snapshot's transaction log MUST have all lists empty.
+// The root group created during repository initialization is not
+// recorded in the transaction log.
+//
 // All ObjectId8 lists below MUST be sorted in ascending byte order
 // (i.e. lexicographic comparison of the 8 raw bytes).
 //
@@ -96,8 +100,9 @@ table TransactionLog {
   // MUST be sorted by the `to` field (see node path sort order in common.fbs).
   // MUST be fully collapsed: if a node was moved multiple times
   // (e.g. A -> B, then B -> C), only the net result (A -> C) is recorded.
-  // Every moved node MUST have its own entry — moving a group does
-  // not implicitly move its children.
+  // Every moved node MUST have its own entry. When a group is moved,
+  // all of its children MUST also appear as separate entries.
+  // A move MUST NOT result in a node whose parent path no longer exists.
   // Identity moves (from == to) MUST be omitted.
   // If a `to` path was occupied in the parent snapshot, that path
   // MUST also appear as a `from` in another move — moves MUST NOT

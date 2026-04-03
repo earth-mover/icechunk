@@ -174,7 +174,7 @@ The header contains the following fields, in order:
 
 | Field | Size | Description |
 |-------|------|-------------|
-| Magic bytes | 12 bytes | The UTF-8 encoding of `ICE🧊CHUNK`. |
+| Magic bytes | 12 bytes | The UTF-8 encoding of `ICE🧊CHUNK` (`49 43 45 F0 9F A7 8A 43 48 55 4E 4B`). |
 | Implementation name | 24 bytes | A left-aligned, right-space-padded UTF-8 string identifying the writing client. |
 | Spec version | 1 byte | `1` for spec version 1, `2` for spec version 2. |
 | File type | 1 byte | `1` = Snapshot, `2` = Manifest, `3` = Attributes, `4` = RepoInfo, `5` = TransactionLog, `6` = Chunk. |
@@ -336,8 +336,6 @@ Each snapshot MUST have a corresponding transaction log file stored at `transact
 
 The transaction log file MUST use the standard [binary file format](#binary-file-format) with file type `TransactionLog`.
 
-The initial snapshot's transaction log MUST have all lists empty — the root group created during repository initialization is not recorded in the transaction log.
-
 !!! tip "For implementers"
     Transaction logs are not needed to read data from a repository — they exist to support
     conflict detection during rebase and to compute diffs between commits.
@@ -351,12 +349,10 @@ The `TransactionLog` table is the root type:
 --8<-- "icechunk-format/flatbuffers/transaction_log.fbs:transaction_log"
 ```
 
-All node ids (`ObjectId8`) in this table correspond to the `id` field of nodes in the snapshot.
-
-The `extra` field is an opaque byte vector reserved for future spec extensions. Transaction log files are immutable once written, but implementations that merge transaction logs (e.g. during amend) MUST preserve the `extra` bytes from the source logs. Implementations creating new transaction logs with no extensions SHOULD write an empty `extra` field.
-
 !!! tip "For implementers"
-    The `extra` field allows small, optional features (e.g. precomputed storage statistics) to be added without requiring a new spec version.
+    The `extra` field is an opaque byte vector reserved for future spec extensions.
+    It allows small, optional features (e.g. precomputed storage statistics) to be
+    added without requiring a new spec version.
 
 ##### `ArrayUpdatedChunks`
 
