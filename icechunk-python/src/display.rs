@@ -294,8 +294,8 @@ impl PyAncestryGraph {
         self.inner.to_plain_string()
     }
 
-    /// Return an SVG representation for Jupyter notebooks.
-    pub(crate) fn _repr_html_(&self) -> String {
+    /// Return a raw SVG string for Jupyter notebooks.
+    pub(crate) fn _repr_svg_(&self) -> String {
         self.inner.to_svg()
     }
 }

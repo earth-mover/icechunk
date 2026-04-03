@@ -62,7 +62,9 @@ impl AncestryGraph {
     /// Uses the same layout pass as the ANSI renderer for consistent structure.
     pub fn to_svg(&self) -> String {
         if self.nodes.is_empty() {
-            return "<div class=\"icechunk-repr\"><em>(empty history)</em></div>"
+            return "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"200\" height=\"30\" \
+                    style=\"font-family: monospace; font-size: 13px;\">\
+                    <text x=\"10\" y=\"20\" fill=\"#888\">(empty history)</text></svg>"
                 .to_string();
         }
 
@@ -152,7 +154,6 @@ impl AncestryGraph {
 
         let _ = writeln!(svg, "</svg>");
 
-        // Wrap in icechunk-repr div for consistent styling
-        format!("<div class=\"icechunk-repr\">{svg}</div>")
+        svg
     }
 }
