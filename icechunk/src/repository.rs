@@ -954,10 +954,8 @@ impl Repository {
                     _ => {
                         // Tag or snapshot_id — walk as anonymous single branch
                         let stream = self.ancestry(v).await?;
-                        let snapshots: Vec<SnapshotInfo> =
-                            stream.try_collect().await?;
-                        let branch_ancestries =
-                            vec![("".to_string(), snapshots)];
+                        let snapshots: Vec<SnapshotInfo> = stream.try_collect().await?;
+                        let branch_ancestries = vec![("".to_string(), snapshots)];
                         return Ok(AncestryGraph::new(
                             branch_ancestries,
                             &tag_map,
@@ -969,8 +967,7 @@ impl Repository {
             None => all_branches.clone(),
         };
 
-        let mut branch_ancestries =
-            Vec::with_capacity(branches_to_walk.len());
+        let mut branch_ancestries = Vec::with_capacity(branches_to_walk.len());
         for branch in &branches_to_walk {
             let v = VersionInfo::BranchTipRef(branch.clone());
             let stream = self.ancestry(&v).await?;
