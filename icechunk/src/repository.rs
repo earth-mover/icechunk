@@ -939,11 +939,18 @@ impl Repository {
                 Ok(AncestryGraph::from_linear(snapshots, &branch_map, &tag_map))
             }
             None => {
-                // Walk all branches to build a tree
+                // Walk all branches to build a tree.
+                // Put "main" first so it becomes the trunk (column 0).
                 let branches = self.list_branches().await?;
-                let mut branch_ancestries = Vec::with_capacity(branches.len());
+                let mut sorted_branches: Vec<String> = branches.into_iter().collect();
+                sorted_branches.sort_by(|a, b| {
+                    let a_is_main = a == "main";
+                    let b_is_main = b == "main";
+                    b_is_main.cmp(&a_is_main).then(a.cmp(b))
+                });
 
-                for branch in &branches {
+                let mut branch_ancestries = Vec::with_capacity(sorted_branches.len());
+                for branch in &sorted_branches {
                     let version = VersionInfo::BranchTipRef(branch.clone());
                     let stream = self.ancestry(&version).await?;
                     let snapshots: Vec<SnapshotInfo> =
