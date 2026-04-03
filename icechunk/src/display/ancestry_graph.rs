@@ -345,9 +345,9 @@ mod tests {
     use chrono::{Duration, Utc};
     use std::collections::BTreeMap;
 
-    /// Create a snapshot with a distinct timestamp based on id_byte
-    /// (higher id_byte = newer, so sorting by timestamp desc gives
-    /// highest id_byte first).
+    /// Create a snapshot with a distinct timestamp based on `id_byte`
+    /// (higher `id_byte` = newer, so sorting by timestamp desc gives
+    /// highest `id_byte` first).
     fn make_snapshot(id_byte: u8, parent_id_byte: Option<u8>) -> SnapshotInfo {
         let mut id_bytes = [0u8; 12];
         id_bytes[0] = id_byte;
@@ -458,7 +458,7 @@ mod tests {
 
         eprintln!("=== minimal fork display ===");
         for line in &lines {
-            eprintln!("  {:?}", line);
+            eprintln!("  {line:?}");
         }
 
         // First line: feat tip — should NOT have a | for trunk before it
