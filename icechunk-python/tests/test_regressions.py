@@ -39,7 +39,7 @@ async def test_issue_418(any_spec_version: int | None) -> None:
     config = RepositoryConfig.default()
     store_config = s3_store(
         region="us-east-1",
-        endpoint_url="http://localhost:9000",
+        endpoint_url="http://localhost:4200",
         allow_http=True,
         s3_compatible=True,
         force_path_style=True,

@@ -84,7 +84,7 @@ def test_pickle(any_spec_version: int | None) -> None:
         prefix = "test-repo__" + str(time.time())
         repo = Repository.create(
             storage=s3_storage(
-                endpoint_url="http://localhost:9000",
+                endpoint_url="http://localhost:4200",
                 allow_http=True,
                 force_path_style=True,
                 region="us-east-1",

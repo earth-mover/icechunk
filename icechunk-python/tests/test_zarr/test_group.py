@@ -221,7 +221,7 @@ def test_group_create(
 
     assert group.attrs == attributes
 
-    if not overwrite:
+    if not overwrite:  # type: ignore[unreachable]
         with pytest.raises(ContainsGroupError):
             _ = Group.from_store(store, overwrite=overwrite, zarr_format=zarr_format)
 
@@ -243,7 +243,7 @@ def test_group_open(
         store, attributes=attrs, zarr_format=zarr_format, overwrite=overwrite
     )
     assert group_created.attrs == attrs
-    assert group_created.metadata.zarr_format == zarr_format
+    assert group_created.metadata.zarr_format == zarr_format  # type: ignore[unreachable]
     assert group_created.store_path == spath
 
     # attempt to create a new group in place, to test overwrite
@@ -384,7 +384,7 @@ def test_group_update_attributes(store: IcechunkStore, zarr_format: ZarrFormat) 
     attrs = {"foo": 100}
     group = Group.from_store(store, zarr_format=zarr_format, attributes=attrs)
     assert group.attrs == attrs
-    new_attrs = {"bar": 100}
+    new_attrs = {"bar": 100}  # type: ignore[unreachable]
     new_group = group.update_attributes(new_attrs)
     updated_attrs = attrs.copy()
     updated_attrs.update(new_attrs)
@@ -400,7 +400,7 @@ async def test_group_update_attributes_async(
     attrs = {"foo": 100}
     group = Group.from_store(store, zarr_format=zarr_format, attributes=attrs)
     assert group.attrs == attrs
-    new_attrs = {"bar": 100}
+    new_attrs = {"bar": 100}  # type: ignore[unreachable]
     new_group = await group.update_attributes_async(new_attrs)
     assert new_group.attrs == new_attrs
 

@@ -20,7 +20,8 @@ use crate::format::snapshot::{
     ArrayShape, DimensionName, ManifestFileInfo, NodeData, NodeSnapshot,
 };
 use crate::format::{
-    AttributesId, ChunkId, ChunkIndices, ManifestId, NodeId, Path, SnapshotId, manifest,
+    AttributesId, ChunkId, ChunkIndices, ManifestId, NodeId, NodeType, Path, SnapshotId,
+    manifest,
 };
 use crate::session::Session;
 use crate::storage::{
@@ -651,6 +652,10 @@ fn chunk_payload() -> impl Strategy<Value = ChunkPayload> {
     ]
 }
 
+fn node_types() -> impl Strategy<Value = NodeType> {
+    prop_oneof![Just(NodeType::Group), Just(NodeType::Array)]
+}
+
 pub fn large_chunk_indices(dim: usize) -> impl Strategy<Value = ChunkIndices> {
     any::<Range<u32>>().prop_flat_map(move |data| chunk_indices(dim, data))
 }
@@ -663,8 +668,8 @@ pub fn split_manifest()
 }
 
 prop_compose! {
-    pub fn gen_move()(to in path(), from in path()) -> Move {
-        Move{to, from}
+    pub fn gen_move()(to in path(), from in path(), node_id in node_id(), node_type in node_types() ) -> Move {
+        Move{to, from, node_id, node_type}
     }
 }
 

@@ -554,9 +554,9 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
         data = DEFAULT_GROUP_METADATA
         key = "zarr.json"
         await self.set(store, key, self.buffer_cls.from_bytes(data))
-        assert await store._get_bytes(key, prototype=default_buffer_prototype()) == data  # type: ignore[attr-defined]
+        assert await store._get_bytes(key, prototype=default_buffer_prototype()) == data
         with pytest.raises((FileNotFoundError, ValueError, IcechunkError)):
-            await store._get_bytes(  # type: ignore[attr-defined]
+            await store._get_bytes(
                 "nonexistent_key", prototype=default_buffer_prototype()
             )
 
@@ -568,7 +568,7 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
         data = DEFAULT_GROUP_METADATA
         key = "zarr.json"
         sync(self.set(store, key, self.buffer_cls.from_bytes(data)))
-        assert store._get_bytes_sync(key, prototype=default_buffer_prototype()) == data  # type: ignore[attr-defined]
+        assert store._get_bytes_sync(key, prototype=default_buffer_prototype()) == data
 
     @pytest.mark.skipif(
         zarr.__version__ < "3.1.6", reason="Store._get_json added in zarr 3.1.6"
@@ -580,7 +580,7 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
         data_bytes = DEFAULT_GROUP_METADATA
         key = "zarr.json"
         await self.set(store, key, self.buffer_cls.from_bytes(data_bytes))
-        assert await store._get_json(key, prototype=default_buffer_prototype()) == data  # type: ignore[attr-defined]
+        assert await store._get_json(key, prototype=default_buffer_prototype()) == data
 
     @pytest.mark.skipif(
         zarr.__version__ < "3.1.6", reason="Store._get_json_sync added in zarr 3.1.6"
@@ -591,4 +591,4 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
         data_bytes = DEFAULT_GROUP_METADATA
         key = "zarr.json"
         sync(self.set(store, key, self.buffer_cls.from_bytes(data_bytes)))
-        assert store._get_json_sync(key, prototype=default_buffer_prototype()) == data  # type: ignore[attr-defined]
+        assert store._get_json_sync(key, prototype=default_buffer_prototype()) == data

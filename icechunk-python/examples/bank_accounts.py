@@ -27,13 +27,13 @@ class WireResult(Enum):
 def create_repo(num_accounts: int) -> icechunk.Repository:
     storage = icechunk.s3_storage(
         region="us-east-1",
-        endpoint_url="http://localhost:9000",
+        endpoint_url="http://localhost:4200",
         allow_http=True,
         force_path_style=True,
         bucket="testbucket",
         prefix="bank_accounts_example_" + str(int(time.time() * 1000)),
-        access_key_id="minio123",
-        secret_access_key="minio123",
+        access_key_id="test123",
+        secret_access_key="test123",
     )
     repo = icechunk.Repository.create(storage=storage)
 

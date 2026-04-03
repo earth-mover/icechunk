@@ -4,6 +4,7 @@
 
 mod config;
 mod conflicts;
+mod display;
 mod errors;
 mod pickle;
 mod repository;

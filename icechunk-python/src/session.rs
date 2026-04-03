@@ -20,6 +20,7 @@ use tokio::sync::{Mutex, RwLock};
 use crate::{
     config::PyRepositoryConfig,
     conflicts::PyConflictSolver,
+    display::{PyRepr, ReprMode, py_bool},
     errors::{PyIcechunkStoreError, PyIcechunkStoreResult},
     repository::{PyDiff, PySnapshotProperties},
     store::PyStore,
@@ -58,10 +59,51 @@ impl From<SessionMode> for PySessionMode {
     }
 }
 
+impl PyRepr for PySession {
+    const EXECUTABLE: bool = false;
+
+    fn cls_name() -> &'static str {
+        "icechunk.Session"
+    }
+
+    fn fields(&self, _mode: ReprMode) -> Vec<(&str, String)> {
+        let session = self.0.blocking_read();
+        let mut fields = vec![
+            ("read_only", py_bool(session.read_only())),
+            ("snapshot_id", session.snapshot_id().to_string()),
+        ];
+        // Only show branch and uncommitted changes for writable sessions
+        if !session.read_only() {
+            let branch = session
+                .branch()
+                .map(|b| b.to_string())
+                .unwrap_or_else(|| "None".to_string());
+            fields.push(("branch", branch));
+            fields.push((
+                "has_uncommitted_changes",
+                py_bool(session.has_uncommitted_changes()),
+            ));
+        }
+        fields
+    }
+}
+
 #[pymethods]
 /// Most functions in this class block, so they need to `detach` so other
 /// python threads can make progress
 impl PySession {
+    pub(crate) fn __repr__(&self) -> String {
+        <Self as PyRepr>::__repr__(self)
+    }
+
+    pub(crate) fn __str__(&self) -> String {
+        <Self as PyRepr>::__str__(self)
+    }
+
+    pub(crate) fn _repr_html_(&self) -> String {
+        <Self as PyRepr>::_repr_html_(self)
+    }
+
     #[classmethod]
     fn from_bytes(
         _cls: Bound<'_, PyType>,
@@ -203,6 +245,43 @@ impl PySession {
                 .await
                 .map_err(PyIcechunkStoreError::SessionError)?;
             Ok(())
+        })
+    }
+
+    /// Return the node ID for the node at the given path.
+    pub fn get_node_id(&self, py: Python<'_>, path: String) -> PyResult<String> {
+        let path = Path::new(path.as_str())
+            .map_err(|e| StoreError::capture(StoreErrorKind::PathError(e)))
+            .map_err(PyIcechunkStoreError::StoreError)?;
+        py.detach(move || {
+            pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+                let session = self.0.read().await;
+                let node = session
+                    .get_node(&path)
+                    .await
+                    .map_err(PyIcechunkStoreError::SessionError)?;
+                Ok(node.id.to_string())
+            })
+        })
+    }
+
+    /// Return the node ID for the node at the given path.
+    pub fn get_node_id_async<'py>(
+        &'py self,
+        py: Python<'py>,
+        path: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let path = Path::new(path.as_str())
+            .map_err(|e| StoreError::capture(StoreErrorKind::PathError(e)))
+            .map_err(PyIcechunkStoreError::StoreError)?;
+        let session = Arc::clone(&self.0);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let session = session.read().await;
+            let node = session
+                .get_node(&path)
+                .await
+                .map_err(PyIcechunkStoreError::SessionError)?;
+            Ok(node.id.to_string())
         })
     }
 

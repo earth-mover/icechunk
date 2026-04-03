@@ -1,6 +1,6 @@
 [package]
 name = "icechunk-format"
-version = "2.0.0-alpha.4"
+version = "2.0.0-alpha.6"
 description = "Binary format types and serialization for the Icechunk storage engine"
 readme = "../README.md"
 repository = "https://github.com/earth-mover/icechunk"

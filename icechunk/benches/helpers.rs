@@ -105,7 +105,7 @@ use noxious_client::{Client, StreamDirection, Toxic, ToxicKind};
 use rand::RngExt as _;
 use tempfile::TempDir;
 
-pub(crate) const RUSTFS_PORT: u16 = 9000;
+pub(crate) const RUSTFS_PORT: u16 = 4200;
 pub(crate) const TOXIPROXY_PORT: u16 = 9002;
 pub(crate) const TOXIPROXY_PROXY_NAME: &str = "bench-latency";
 pub(crate) const NUM_VCCS: usize = 20;
