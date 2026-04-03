@@ -50,9 +50,7 @@ Icechunk requires that the storage system support the following operations:
 
 These requirements are compatible with object stores, like S3, as well as with filesystems.
 
-The storage system is not required to support random-access writes. Once written, most files are immutable until they are deleted. The exceptions to this rule is:
-
-- the main entry point to a repository, an object with path `repo` under the repository prefix.
+The storage system is not required to support random-access writes. Once written, most files are immutable until they are deleted. The only exception to this rule is the `RepoInfo` object, which is main entry point to a repository, stored an object with path `repo` under the repository prefix.
 
 ## Specification
 
@@ -69,7 +67,7 @@ same tag name cannot be reused later.
 
 When reading from object store, the client opens the repo info file to obtain a pointer to the relevant snapshot file.
 The client then reads the snapshot file to determine the structure and hierarchy of the repository.
-When fetching data from an array, the client first examines the chunk manifest file[s] for that array and finally fetches the chunks referenced therein.
+When fetching data from an array, the client first examines the chunk manifest file(s) for that array and finally fetches the chunks referenced therein.
 
 When writing a new repository snapshot, the client first writes a new set of chunks and chunk manifests, and then generates a new snapshot file.
 Finally, to commit the transaction, it updates the repo info file using an atomic conditional update operation.
