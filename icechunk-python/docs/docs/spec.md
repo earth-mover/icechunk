@@ -118,10 +118,21 @@ All data and metadata files are stored within a root directory (typically a pref
 
 ### File Formats
 
-#### Repo info file
+Unless otherwise noted, each type of file is encoded using [flatbuffers](https://github.com/google/flatbuffers). 
+The IDL for the on-disk format can be found in [the fbs files](https://github.com/earth-mover/icechunk/blob/404100b584fb7ac70de860bd430aa8291df98c4d/icechunk-format/flatbuffers/).
 
-The repo info file is encoded using [flatbuffers](https://github.com/google/flatbuffers). The IDL for the
-on-disk format can be found in [the fbs file](https://github.com/earth-mover/icechunk/blob/404100b584fb7ac70de860bd430aa8291df98c4d/icechunk-format/flatbuffers/repo.fbs).
+The full set of file types and their flatbuffers definitions are:
+
+- Repo info file ([definition](https://github.com/earth-mover/icechunk/blob/404100b584fb7ac70de860bd430aa8291df98c4d/icechunk-format/flatbuffers/repo.fbs))
+- Snapshot file ([definition](https://github.com/earth-mover/icechunk/blob/404100b584fb7ac70de860bd430aa8291df98c4d/icechunk-format/flatbuffers/snapshot.fbs))
+- Manifest file ([definition](https://github.com/earth-mover/icechunk/blob/404100b584fb7ac70de860bd430aa8291df98c4d/icechunk-format/flatbuffers/manifest.fbs))
+- Transaction Log file ([definition](https://github.com/earth-mover/icechunk/blob/404100b584fb7ac70de860bd430aa8291df98c4d/icechunk-format/flatbuffers/transaction_log.fbs))
+
+Chunk files instead have their encoding defined by the Chunk Encoding section of the [Zarr specification](https://zarr-specs.readthedocs.io/en/latest/v3/core/index.html#chunk-encoding).
+
+The rest of this section describes the meaning of the fields in each flatbuffers file, and any other concerns implementations should be aware of.
+
+#### Repo info file
 
 This object is the main entry point for an Icechunk repository, and the only mutable object in an Icechunk V2 repo. Every read operation starts by fetching the repo info object. Every Icechunk update, from making a commit to deleting a tag, makes a conditional write on this object.
 
