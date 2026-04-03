@@ -148,7 +148,7 @@ flowchart TD
 
 ### File Layout
 
-All data and metadata files MUST be stored within a root directory (typically a prefix within an object store) using the following directory structure.
+All data and metadata files MUST be stored within a root directory using the following directory structure.
 
 - `$ROOT` base URI (s3, gcs, local directory, etc.)
 - `$ROOT/repo` repo info file, entry point for all operations
@@ -341,7 +341,7 @@ The `TransactionLog` table is the root type:
 --8<-- "icechunk-format/flatbuffers/transaction_log.fbs:transaction_log"
 ```
 
-A node id MUST NOT appear in more than one of `new_*`, `deleted_*`, or `updated_*` for its type. For example, a group that is created and then has its metadata modified within the same commit SHOULD appear only in `new_groups`.
+All node ids in this table refer to `NodeSnapshot.id` values from the corresponding snapshot. A node id MUST NOT appear in more than one of `new_*`, `deleted_*`, or `updated_*` for its type. For example, a group that is created and then has its metadata modified within the same commit SHOULD appear only in `new_groups`.
 
 The `extra` field is an opaque byte vector reserved for future extensions. Implementations SHOULD preserve it when reading and writing transaction logs.
 
