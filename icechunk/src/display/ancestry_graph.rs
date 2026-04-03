@@ -153,15 +153,40 @@ fn truncate_message(msg: &str, max_len: usize) -> String {
 
 /// What glyph to draw in a given column position.
 enum Glyph {
-    /// The active node: `*`
+    /// A commit node: `●`
     Node,
-    /// A continuing branch line: `|`
+    /// A continuing branch line: `│`
     Pipe,
-    /// A merge connector: `/`
+    /// A merge connector: `╱`
     Merge,
     /// Empty space
     Blank,
 }
+
+// TODO: Merge commit support and Sugiyama layout algorithm
+//
+// Currently icechunk snapshots are single-parent only, so the commit graph is a
+// tree (branches diverge but never reconverge). The layout is trivial: each branch
+// gets its own column, and fork points are where a side branch's oldest commit's
+// parent lives in the trunk column.
+//
+// If icechunk adds merge commits (multi-parent snapshots), the graph becomes a DAG
+// and the layout problem gets harder:
+// - Edges can cross: two branches merging into different targets may produce
+//   crossing lines that need to be minimized for readability.
+// - Column assignment is no longer one-branch-per-column: a merge commit has
+//   parents in multiple columns, requiring connector lines between them.
+//
+// The standard solution is the Sugiyama algorithm (layered graph drawing):
+//   1. Layer assignment — assign each node to a row based on depth
+//   2. Crossing reduction — reorder nodes within each row to minimize edge crossings
+//   3. Coordinate assignment — compute x positions to keep edges short and straight
+//
+// At that point, consider using a layout crate (e.g. `ascii-dag` for text output)
+// rather than hand-rolling the algorithm. The current `render_columns` approach
+// would need to be replaced with a proper layout pass that outputs positioned
+// elements (node coordinates + edge segments), consumed by both the ANSI text
+// renderer and the SVG renderer.
 
 /// Build a line of column glyphs with ANSI colors, 2 chars per column.
 fn render_columns(
@@ -173,9 +198,9 @@ fn render_columns(
         let (glyph, color_col) = glyph_for(c);
         let color = branch_color(color_col);
         match glyph {
-            Glyph::Node => out.push_str(&format!("{color}*{RESET} ")),
-            Glyph::Pipe => out.push_str(&format!("{color}|{RESET} ")),
-            Glyph::Merge => out.push_str(&format!("{color}/{RESET} ")),
+            Glyph::Node => out.push_str(&format!("{color}●{RESET} ")),
+            Glyph::Pipe => out.push_str(&format!("{color}│{RESET} ")),
+            Glyph::Merge => out.push_str(&format!("{color}╱{RESET} ")),
             Glyph::Blank => out.push_str("  "),
         }
     }
@@ -224,9 +249,9 @@ impl AncestryGraph {
             let short_id = &node.info.id.to_string()[..8];
             let labels = Self::format_labels(node);
             let msg = truncate_message(&node.info.message, 60);
-            writeln!(f, "{color}*{RESET} {DIM}{short_id}{RESET}{labels} {msg}")?;
+            writeln!(f, "{color}●{RESET} {DIM}{short_id}{RESET}{labels} {msg}")?;
             if i < self.nodes.len() - 1 {
-                writeln!(f, "{color}|{RESET}")?;
+                writeln!(f, "{color}│{RESET}")?;
             }
         }
         Ok(())
@@ -465,13 +490,13 @@ mod tests {
         assert!(lines[0].contains("feat"), "first line should have feat label");
         assert!(lines[0].contains("Commit 3"), "first line should be s3");
         assert!(
-            !lines[0].starts_with('|'),
+            !lines[0].starts_with('│'),
             "trunk | should not appear above trunk's first node: {:?}",
             lines[0]
         );
 
         // There should be a / fork connector
-        let has_fork = lines.iter().any(|l| l.contains('/'));
+        let has_fork = lines.iter().any(|l| l.contains('╱'));
         assert!(has_fork, "should have a / fork connector: {plain}");
 
         // main tip should appear
@@ -571,7 +596,7 @@ mod tests {
         // Side branch nodes should appear with * in their column
         // There should be fork connector lines (/ characters)
         assert!(
-            output.contains('/') || output.contains('\\'),
+            output.contains('╱'),
             "tree output should contain fork connectors: {output}"
         );
     }
