@@ -37,6 +37,11 @@ table MoveOperation {
 // --8<-- [end:move_operation]
 
 // --8<-- [start:transaction_log]
+// A node id MUST NOT appear in more than one of new_*, deleted_*,
+// or updated_* for its type. For example, a group that is created
+// and then has its metadata modified within the same commit
+// SHOULD appear only in new_groups.
+// A node id MAY appear in both moved_nodes and in one of updated_*, updated_chunks, or new_*.
 table TransactionLog {
   // MUST be identical to the id of the corresponding snapshot.
   id: ObjectId12 (required);
