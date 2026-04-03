@@ -231,6 +231,75 @@ pub struct JsRepositoryConfig {
     pub manifest: Option<serde_json::Value>,
 }
 
+impl From<RepositoryConfig> for JsRepositoryConfig {
+    fn from(value: RepositoryConfig) -> Self {
+        Self {
+            inline_chunk_threshold_bytes: value
+                .inline_chunk_threshold_bytes
+                .map(|v| v as u32),
+            get_partial_values_concurrency: value
+                .get_partial_values_concurrency
+                .map(|v| v as u32),
+            compression: value.compression.map(|c| {
+                JsCompressionConfig {
+                    algorithm: match c.algorithm {
+                        Some(CompressionAlgorithm::Zstd) => {
+                            Some(JsCompressionAlgorithm::Zstd)
+                        }
+                        None => None,
+                    },
+                    level: c.level.map(|l| l as u32),
+                }
+            }),
+            max_concurrent_requests: value.max_concurrent_requests.map(|v| v as u32),
+            caching: value.caching.map(|c| JsCachingConfig {
+                num_snapshot_nodes: c.num_snapshot_nodes.map(|v| v as i64),
+                num_chunk_refs: c.num_chunk_refs.map(|v| v as i64),
+                num_transaction_changes: c.num_transaction_changes.map(|v| v as i64),
+                num_bytes_attributes: c.num_bytes_attributes.map(|v| v as i64),
+                num_bytes_chunks: c.num_bytes_chunks.map(|v| v as i64),
+            }),
+            storage: value.storage.map(|s| JsStorageSettings {
+                concurrency: s.concurrency.map(|c| {
+                    JsStorageConcurrencySettings {
+                        max_concurrent_requests_for_object: c
+                            .max_concurrent_requests_for_object
+                            .map(|v| v.get() as u32),
+                        ideal_concurrent_request_size: c
+                            .ideal_concurrent_request_size
+                            .map(|v| v.get() as i64),
+                    }
+                }),
+                retries: s.retries.map(|r| JsStorageRetriesSettings {
+                    max_tries: r.max_tries.map(|v| v.get() as u32),
+                    initial_backoff_ms: r.initial_backoff_ms,
+                    max_backoff_ms: r.max_backoff_ms,
+                }),
+                timeouts: s.timeouts.map(|t| JsStorageTimeoutSettings {
+                    connect_timeout_ms: t.connect_timeout_ms,
+                    read_timeout_ms: t.read_timeout_ms,
+                    operation_timeout_ms: t.operation_timeout_ms,
+                    operation_attempt_timeout_ms: t.operation_attempt_timeout_ms,
+                }),
+                unsafe_use_conditional_update: s.unsafe_use_conditional_update,
+                unsafe_use_conditional_create: s.unsafe_use_conditional_create,
+                unsafe_use_metadata: s.unsafe_use_metadata,
+                storage_class: s.storage_class,
+                metadata_storage_class: s.metadata_storage_class,
+                chunks_storage_class: s.chunks_storage_class,
+                minimum_size_for_multipart_upload: s
+                    .minimum_size_for_multipart_upload
+                    .map(|v| v as i64),
+            }),
+            manifest: value
+                .manifest
+                .and_then(|m| serde_json::to_value(m).ok()),
+            #[cfg(not(target_family = "wasm"))]
+            virtual_chunk_containers: None, // Cannot easily round-trip VirtualChunkContainer
+        }
+    }
+}
+
 impl TryFrom<JsRepositoryConfig> for RepositoryConfig {
     type Error = String;
 

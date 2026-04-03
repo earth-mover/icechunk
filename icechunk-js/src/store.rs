@@ -8,6 +8,7 @@ use napi::bindgen_prelude::Buffer;
 use napi_derive::napi;
 
 use crate::errors::IntoNapiResult;
+use crate::session::JsSession;
 
 /// On WASM, some icechunk futures (e.g. from `get_chunk_reader`, `get_chunk_writer`)
 /// are not `Send` because WASM is single-threaded. However, napi's async runtime
@@ -147,6 +148,49 @@ impl JsStore {
     #[napi(getter)]
     pub fn supports_listing(&self) -> bool {
         true
+    }
+
+    #[napi(getter)]
+    pub async fn read_only(&self) -> bool {
+        self.0.read_only().await
+    }
+
+    #[napi(getter)]
+    pub fn session(&self) -> JsSession {
+        JsSession::new_from_arc(self.0.session())
+    }
+
+    #[napi]
+    pub async fn is_empty(&self, prefix: String) -> napi::Result<bool> {
+        self.0.is_empty(&prefix).await.map_napi_err()
+    }
+
+    #[napi]
+    pub async fn clear(&self) -> napi::Result<()> {
+        self.0.clear().await.map_napi_err()
+    }
+
+    #[napi]
+    pub async fn set_if_not_exists(&self, key: String, value: Buffer) -> napi::Result<()> {
+        let bytes = Bytes::from(value.to_vec());
+        self.0.set_if_not_exists(&key, bytes).await.map_napi_err()
+    }
+
+    #[napi]
+    pub async fn delete_dir(&self, prefix: String) -> napi::Result<()> {
+        self.0.delete_dir(&prefix).await.map_napi_err()
+    }
+
+    #[napi]
+    pub async fn getsize(&self, key: String) -> napi::Result<i64> {
+        let size = self.0.getsize(&key).await.map_napi_err()?;
+        Ok(size as i64)
+    }
+
+    #[napi]
+    pub async fn getsize_prefix(&self, prefix: String) -> napi::Result<i64> {
+        let size = self.0.getsize_prefix(&prefix).await.map_napi_err()?;
+        Ok(size as i64)
     }
 }
 
