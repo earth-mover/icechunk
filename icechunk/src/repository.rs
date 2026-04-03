@@ -946,8 +946,14 @@ impl Repository {
         let (branch_map, tag_map) = self.build_ref_maps().await?;
 
         // Sorted list of all branch names for consistent color assignment.
+        // "main" comes first so it always gets the first color (green).
         let branches = self.list_branches().await?;
-        let all_branches: Vec<String> = branches.iter().cloned().collect();
+        let mut all_branches: Vec<String> = branches.into_iter().collect();
+        all_branches.sort_by(|a, b| {
+            let a_is_main = a == "main";
+            let b_is_main = b == "main";
+            b_is_main.cmp(&a_is_main).then(a.cmp(b))
+        });
 
         match version {
             Some(v) => {
@@ -957,14 +963,8 @@ impl Repository {
                 Ok(AncestryGraph::from_linear(snapshots, &branch_map, &tag_map, all_branches))
             }
             None => {
-                // Walk all branches to build a tree.
-                // Put "main" first so it becomes the trunk (column 0).
-                let mut sorted_branches = all_branches.clone();
-                sorted_branches.sort_by(|a, b| {
-                    let a_is_main = a == "main";
-                    let b_is_main = b == "main";
-                    b_is_main.cmp(&a_is_main).then(a.cmp(b))
-                });
+                // Walk all branches — same order as all_branches (main first).
+                let sorted_branches = all_branches.clone();
 
                 let mut branch_ancestries = Vec::with_capacity(sorted_branches.len());
                 for branch in &sorted_branches {
