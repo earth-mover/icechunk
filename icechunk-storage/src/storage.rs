@@ -455,7 +455,7 @@ pub struct StorageInfo {
 #[async_trait]
 #[typetag::serde(tag = "type")]
 pub trait Storage: fmt::Debug + Display + sealed::Sealed + Sync + Send {
-    /// Return structured metadata about this storage backend.
+    /// Return structured metadata about this storage backend for display/repr.
     fn storage_info(&self) -> StorageInfo;
 
     async fn default_settings(&self) -> StorageResult<Settings> {

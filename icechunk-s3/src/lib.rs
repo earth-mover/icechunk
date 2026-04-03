@@ -556,12 +556,7 @@ impl Storage for S3Storage {
         if !self.prefix.is_empty() {
             fields.push(("prefix", self.prefix.clone()));
         }
-        if let Some(region) = &self.config.region {
-            fields.push(("region", region.clone()));
-        }
-        if let Some(endpoint) = &self.config.endpoint_url {
-            fields.push(("endpoint_url", endpoint.clone()));
-        }
+        fields.extend(self.config.info_fields());
         StorageInfo { backend_type: "S3 (native)", fields }
     }
 

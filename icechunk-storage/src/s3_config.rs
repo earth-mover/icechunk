@@ -30,6 +30,32 @@ fn default_force_path_style() -> bool {
     false
 }
 
+impl S3Options {
+    /// Return key-value pairs of non-default configuration for display purposes.
+    pub fn info_fields(&self) -> Vec<(&'static str, String)> {
+        let mut fields = Vec::new();
+        if let Some(region) = &self.region {
+            fields.push(("region", region.clone()));
+        }
+        if let Some(endpoint) = &self.endpoint_url {
+            fields.push(("endpoint_url", endpoint.clone()));
+        }
+        if self.anonymous {
+            fields.push(("anonymous", "True".to_string()));
+        }
+        if self.allow_http {
+            fields.push(("allow_http", "True".to_string()));
+        }
+        if self.force_path_style {
+            fields.push(("force_path_style", "True".to_string()));
+        }
+        if self.requester_pays {
+            fields.push(("requester_pays", "True".to_string()));
+        }
+        fields
+    }
+}
+
 impl fmt::Display for S3Options {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(

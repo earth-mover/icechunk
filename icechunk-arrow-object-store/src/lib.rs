@@ -871,12 +871,7 @@ impl ObjectStoreBackend for S3ObjectStoreBackend {
             fields.push(("prefix", prefix.clone()));
         }
         if let Some(config) = &self.config {
-            if let Some(region) = &config.region {
-                fields.push(("region", region.clone()));
-            }
-            if let Some(endpoint) = &config.endpoint_url {
-                fields.push(("endpoint_url", endpoint.clone()));
-            }
+            fields.extend(config.info_fields());
         }
         StorageInfo { backend_type: "S3", fields }
     }
