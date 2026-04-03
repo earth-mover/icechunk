@@ -928,67 +928,57 @@ impl Repository {
         &self,
         version: Option<&VersionInfo>,
     ) -> RepositoryResult<AncestryGraph> {
-        // Build reverse maps: snapshot_id → branch names / tag names
-        let (branch_map, tag_map) = self.build_ref_maps().await?;
-
-        // Sorted list of all branch names for consistent color assignment.
-        // "main" comes first so it always gets the first color (green).
-        let branches = self.list_branches().await?;
-        let mut all_branches: Vec<String> = branches.into_iter().collect();
-        all_branches.sort_by(|a, b| {
-            let a_is_main = a == "main";
-            let b_is_main = b == "main";
-            b_is_main.cmp(&a_is_main).then(a.cmp(b))
-        });
-
-        match version {
-            Some(v) => {
-                let stream = self.ancestry(v).await?;
-                let snapshots: Vec<SnapshotInfo> =
-                    stream.try_collect().await?;
-                Ok(AncestryGraph::from_linear(snapshots, &branch_map, &tag_map, all_branches))
-            }
-            None => {
-                // Walk all branches — same order as all_branches (main first).
-                let sorted_branches = all_branches.clone();
-
-                let mut branch_ancestries = Vec::with_capacity(sorted_branches.len());
-                for branch in &sorted_branches {
-                    let version = VersionInfo::BranchTipRef(branch.clone());
-                    let stream = self.ancestry(&version).await?;
-                    let snapshots: Vec<SnapshotInfo> =
-                        stream.try_collect().await?;
-                    branch_ancestries.push((branch.clone(), snapshots));
-                }
-
-                Ok(AncestryGraph::from_tree(branch_ancestries, &tag_map, all_branches))
-            }
-        }
-    }
-
-    /// Build reverse maps from snapshot IDs to branch/tag names.
-    async fn build_ref_maps(
-        &self,
-    ) -> RepositoryResult<(
-        HashMap<SnapshotId, Vec<String>>,
-        HashMap<SnapshotId, Vec<String>>,
-    )> {
-        let mut branch_map: HashMap<SnapshotId, Vec<String>> = HashMap::new();
+        // Collect tag labels: snapshot_id → tag names
         let mut tag_map: HashMap<SnapshotId, Vec<String>> = HashMap::new();
-
-        let branches = self.list_branches().await?;
-        for branch in &branches {
-            let snap_id = self.lookup_branch(branch).await?;
-            branch_map.entry(snap_id).or_default().push(branch.clone());
-        }
-
         let tags = self.list_tags().await?;
         for tag in &tags {
             let snap_id = self.lookup_tag(tag).await?;
             tag_map.entry(snap_id).or_default().push(tag.clone());
         }
 
-        Ok((branch_map, tag_map))
+        // All branch names, sorted with "main" first for consistent coloring.
+        let mut all_branches: Vec<String> =
+            self.list_branches().await?.into_iter().collect();
+        all_branches.sort_by(|a, b| {
+            let a_is_main = a == "main";
+            let b_is_main = b == "main";
+            b_is_main.cmp(&a_is_main).then(a.cmp(b))
+        });
+
+        // Decide which branches to walk.
+        let branches_to_walk: Vec<String> = match version {
+            Some(v) => {
+                // Single ref — find its branch name (if any) for labeling.
+                match v {
+                    VersionInfo::BranchTipRef(name) => vec![name.clone()],
+                    _ => {
+                        // Tag or snapshot_id — walk as anonymous single branch
+                        let stream = self.ancestry(v).await?;
+                        let snapshots: Vec<SnapshotInfo> =
+                            stream.try_collect().await?;
+                        let branch_ancestries =
+                            vec![("".to_string(), snapshots)];
+                        return Ok(AncestryGraph::new(
+                            branch_ancestries,
+                            &tag_map,
+                            all_branches,
+                        ));
+                    }
+                }
+            }
+            None => all_branches.clone(),
+        };
+
+        let mut branch_ancestries =
+            Vec::with_capacity(branches_to_walk.len());
+        for branch in &branches_to_walk {
+            let v = VersionInfo::BranchTipRef(branch.clone());
+            let stream = self.ancestry(&v).await?;
+            let snapshots: Vec<SnapshotInfo> = stream.try_collect().await?;
+            branch_ancestries.push((branch.clone(), snapshots));
+        }
+
+        Ok(AncestryGraph::new(branch_ancestries, &tag_map, all_branches))
     }
 
     async fn ancestry_using(
