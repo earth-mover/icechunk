@@ -2300,14 +2300,38 @@ impl PyRepr for PyRepositoryConfig {
                             );
                         }
                     }
-                    _ => {
-                        let entries: Vec<String> = map
-                            .iter()
-                            .map(|(prefix, vcc)| {
-                                format!("\"{}\": {}", prefix, vcc.render(mode))
-                            })
-                            .collect();
-                        let _ = write!(out, "{{{}}}", entries.join(", "));
+                    ReprMode::Repr => {
+                        // Black/ruff-style dict formatting:
+                        // {
+                        //     "key": VirtualChunkContainer(
+                        //         ...
+                        //     ),
+                        // }
+                        let _ = writeln!(out, "{{");
+                        for (prefix, vcc) in map {
+                            let rendered = vcc.render(ReprMode::Repr);
+                            let mut lines = rendered.lines();
+                            if let Some(first) = lines.next() {
+                                let _ = write!(out, "    \"{prefix}\": {first}");
+                            }
+                            for line in lines {
+                                let _ = write!(out, "\n    {line}");
+                            }
+                            let _ = writeln!(out, ",");
+                        }
+                        let _ = write!(out, "}}");
+                    }
+                    ReprMode::Str => {
+                        // Readable dict:
+                        // s3://my-data/:
+                        //     <icechunk.VirtualChunkContainer>
+                        //     url_prefix: ...
+                        for (prefix, vcc) in map {
+                            let _ = writeln!(out, "{prefix}:");
+                            for line in vcc.render(ReprMode::Str).lines() {
+                                let _ = writeln!(out, "    {line}");
+                            }
+                        }
                     }
                 }
                 out
