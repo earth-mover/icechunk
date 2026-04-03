@@ -11,10 +11,13 @@ table ChunkIndices {
 
 // --8<-- [start:array_updated_chunks]
 table ArrayUpdatedChunks {
-  // The node id of the array.
+  // The node id of the array, referencing a NodeSnapshot.id in the
+  // corresponding snapshot.
   node_id: ObjectId8 (required);
 
-  // The coordinates of all chunks modified in this transaction for this array.
+  // The coordinates of all chunk references modified in this transaction
+  // for this array. Each ChunkIndices contains a coords vector of uint32
+  // representing the chunk's position in the array's chunk grid.
   // MUST be sorted in ascending lexicographic order.
   chunks: [ChunkIndices] (required);
 }
@@ -37,41 +40,39 @@ table MoveOperation {
 // --8<-- [end:move_operation]
 
 // --8<-- [start:transaction_log]
-// A node id MUST NOT appear in more than one of new_*, deleted_*,
-// or updated_* for its type. For example, a group that is created
-// and then has its metadata modified within the same commit
-// SHOULD appear only in new_groups.
+// All ObjectId8 lists below MUST be sorted in ascending byte order
+// (i.e. lexicographic comparison of the 8 raw bytes).
+//
+// A group's node id MUST NOT appear in more than one of
+// new_groups, deleted_groups, or updated_groups.
+// Likewise for arrays across new_arrays, deleted_arrays, or updated_arrays.
+// For example, a group that is created and then has its metadata
+// modified within the same commit SHOULD appear only in new_groups.
 // A node id MAY appear in both moved_nodes and in one of updated_*, updated_chunks, or new_*.
 table TransactionLog {
   // MUST be identical to the id of the corresponding snapshot.
   id: ObjectId12 (required);
 
   // Node ids of groups created in this transaction.
-  // MUST be sorted in ascending order.
   new_groups: [ObjectId8] (required);
 
   // Node ids of arrays created in this transaction.
-  // MUST be sorted in ascending order.
   new_arrays: [ObjectId8] (required);
 
   // Node ids of groups deleted in this transaction.
-  // MUST be sorted in ascending order.
   deleted_groups: [ObjectId8] (required);
 
   // Node ids of arrays deleted in this transaction.
-  // MUST be sorted in ascending order.
   deleted_arrays: [ObjectId8] (required);
 
   // Node ids of arrays whose user metadata was modified in this transaction.
-  // MUST be sorted in ascending order.
   updated_arrays: [ObjectId8] (required);
 
   // Node ids of groups whose user metadata was modified in this transaction.
-  // MUST be sorted in ascending order.
   updated_groups: [ObjectId8] (required);
 
   // Chunk ref changes made in this transaction.
-  // MUST be sorted in ascending order of node_id.
+  // MUST be sorted in ascending byte order of node_id.
   updated_chunks: [ArrayUpdatedChunks] (required);
 
   // Nodes moved in this transaction.
