@@ -241,7 +241,8 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
 
             # Moves in the tx log must be sorted by final path
             diff = self.repo.diff(from_snapshot_id=snap_before, to_snapshot_id=snap_after)
-            assert_moves_sorted_by_final_path(diff.moved_nodes)
+            if diff.moved_nodes:
+                assert_moves_sorted_by_final_path(diff.moved_nodes)
         else:
             note("discarding moves")
             self.store = self.repo.writable_session("main").store

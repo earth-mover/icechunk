@@ -188,6 +188,16 @@ pub struct UpdateInfo<I> {
 
 type UpdateTuple<'a> = IcechunkResult<(UpdateType, DateTime<Utc>, Option<&'a str>)>;
 
+type LatestUpdatesResult<'bldr> = IcechunkResult<(
+    WIPOffset<
+        flatbuffers::Vector<
+            'bldr,
+            flatbuffers::ForwardsUOffset<generated::Update<'bldr>>,
+        >,
+    >,
+    Option<WIPOffset<&'bldr str>>,
+)>;
+
 impl RepoInfo {
     #[expect(clippy::too_many_arguments)]
     pub fn new<
@@ -224,10 +234,15 @@ impl RepoInfo {
             deleted_tags,
             snapshots,
             metadata,
-            update,
-            backup_path,
-            num_updates_per_file,
-            previous_info,
+            |builder| {
+                Self::mk_latest_updates(
+                    builder,
+                    update,
+                    backup_path,
+                    num_updates_per_file,
+                    previous_info,
+                )
+            },
             config_bytes,
             sorted_enabled_feature_flags,
             sorted_disabled_feature_flags,
@@ -238,7 +253,9 @@ impl RepoInfo {
     #[expect(clippy::too_many_arguments)]
     fn from_parts<
         'a,
-        I: IntoIterator<Item = IcechunkResult<(UpdateType, DateTime<Utc>, Option<&'a str>)>>,
+        F: for<'bldr> FnOnce(
+            &mut flatbuffers::FlatBufferBuilder<'bldr>,
+        ) -> LatestUpdatesResult<'bldr>,
         EFFIt: DoubleEndedIterator<Item = u16> + ExactSizeIterator,
         DFFIt: DoubleEndedIterator<Item = u16> + ExactSizeIterator,
     >(
@@ -248,10 +265,7 @@ impl RepoInfo {
         sorted_deleted_tags: impl IntoIterator<Item = &'a str>,
         sorted_snapshots: impl IntoIterator<Item = SnapshotInfo>,
         metadata: &SnapshotProperties,
-        update: UpdateInfo<I>,
-        backup_path: Option<&'a str>,
-        num_updates_per_file: u16,
-        previous_info: Option<&'a str>,
+        build_updates: F,
         config_bytes: Option<&[u8]>,
         sorted_enabled_feature_flags: Option<EFFIt>,
         sorted_disabled_feature_flags: Option<DFFIt>,
@@ -394,13 +408,7 @@ impl RepoInfo {
         let disabled_feature_flags =
             sorted_disabled_feature_flags.map(|it| builder.create_vector_from_iter(it));
 
-        let (latest_updates, repo_before_updates) = Self::mk_latest_updates(
-            &mut builder,
-            update,
-            backup_path,
-            num_updates_per_file,
-            previous_info,
-        )?;
+        let (latest_updates, repo_before_updates) = build_updates(&mut builder)?;
 
         let config = config_bytes.map(|bytes| builder.create_vector(bytes));
 
@@ -428,7 +436,6 @@ impl RepoInfo {
         Ok(Self { buffer })
     }
 
-    #[expect(clippy::type_complexity)]
     fn mk_latest_updates<
         'bldr,
         'a,
@@ -439,15 +446,7 @@ impl RepoInfo {
         backup_path: Option<&'a str>,
         num_updates_per_file: u16,
         previous_info: Option<&'a str>,
-    ) -> IcechunkResult<(
-        WIPOffset<
-            flatbuffers::Vector<
-                'bldr,
-                flatbuffers::ForwardsUOffset<generated::Update<'bldr>>,
-            >,
-        >,
-        Option<WIPOffset<&'bldr str>>,
-    )> {
+    ) -> LatestUpdatesResult<'bldr> {
         // replace the backup path in the last update, that must be None, by the new backup path
         let mut previous_updates = update.previous_updates.into_iter();
         let last_update = previous_updates.next().map(|maybe_data| {
@@ -532,6 +531,35 @@ impl RepoInfo {
         Ok((updates, repo_before_updates))
     }
 
+    fn mk_latest_updates_passthrough<'bldr, 'a>(
+        builder: &mut flatbuffers::FlatBufferBuilder<'bldr>,
+        updates: impl IntoIterator<Item = UpdateTuple<'a>>,
+        repo_before_updates: Option<&'a str>,
+    ) -> LatestUpdatesResult<'bldr> {
+        let mut fb_updates = Vec::new();
+        for maybe_data in updates {
+            let (u_type, u_time, file) = maybe_data?;
+            let (update_type_type, update_type) = update_type_to_fb(builder, &u_type)?;
+            let file = file.map(|file| builder.create_string(file));
+            fb_updates.push(generated::Update::create(
+                builder,
+                &generated::UpdateArgs {
+                    update_type_type,
+                    update_type: Some(update_type),
+                    updated_at: u_time.timestamp_micros() as u64,
+                    backup_path: file,
+                },
+            ));
+        }
+        debug_assert!(
+            !fb_updates.is_empty(),
+            "Must have at least one update in repo file"
+        );
+        let updates = builder.create_vector(&fb_updates);
+        let repo_before_updates = repo_before_updates.map(|s| builder.create_string(s));
+        Ok((updates, repo_before_updates))
+    }
+
     pub fn initial<C: Serialize>(
         spec_version: SpecVersionBin,
         snapshot: SnapshotInfo,
@@ -551,14 +579,19 @@ impl RepoInfo {
             [],
             [snapshot],
             &Default::default(),
-            UpdateInfo {
-                update_type: UpdateType::RepoInitializedUpdate,
-                update_time: update_time.unwrap_or_else(Utc::now),
-                previous_updates: [],
+            |builder| {
+                Self::mk_latest_updates(
+                    builder,
+                    UpdateInfo {
+                        update_type: UpdateType::RepoInitializedUpdate,
+                        update_time: update_time.unwrap_or_else(Utc::now),
+                        previous_updates: [],
+                    },
+                    None,
+                    num_updates_per_file,
+                    None,
+                )
             },
-            None,
-            num_updates_per_file,
-            None,
             config_bytes.as_deref(),
             None::<std::iter::Empty<u16>>,
             None::<std::iter::Empty<u16>>,
@@ -715,6 +748,8 @@ impl RepoInfo {
             }
         };
 
+        let latest_updates = self.latest_updates()?;
+        let rbu = self.repo_before_updates()?;
         Self::from_parts(
             spec_version,
             self.all_tags()?,
@@ -722,17 +757,22 @@ impl RepoInfo {
             self.deleted_tags()?,
             snaps,
             &self.metadata()?,
-            UpdateInfo {
-                update_type: UpdateType::FeatureFlagChanged {
-                    id: flag_id,
-                    new_value: enabled,
-                },
-                update_time: Utc::now(),
-                previous_updates: self.latest_updates()?,
+            |builder| {
+                Self::mk_latest_updates(
+                    builder,
+                    UpdateInfo {
+                        update_type: UpdateType::FeatureFlagChanged {
+                            id: flag_id,
+                            new_value: enabled,
+                        },
+                        update_time: Utc::now(),
+                        previous_updates: latest_updates,
+                    },
+                    Some(previous_file),
+                    num_updates_per_file,
+                    rbu,
+                )
             },
-            Some(previous_file),
-            num_updates_per_file,
-            self.repo_before_updates()?,
             self.config_bytes_raw()?.as_deref(),
             eff.map(|it| it.into_iter()),
             dff.map(|it| it.into_iter()),
@@ -775,6 +815,8 @@ impl RepoInfo {
             }
         });
 
+        let latest_updates = self.latest_updates()?;
+        let rbu = self.repo_before_updates()?;
         let res = Self::from_parts(
             spec_version,
             tags,
@@ -782,14 +824,19 @@ impl RepoInfo {
             self.deleted_tags()?,
             snapshots,
             &self.metadata()?,
-            UpdateInfo {
-                update_type,
-                update_time: update_time.unwrap_or_else(Utc::now),
-                previous_updates: self.latest_updates()?,
+            |builder| {
+                Self::mk_latest_updates(
+                    builder,
+                    UpdateInfo {
+                        update_type,
+                        update_time: update_time.unwrap_or_else(Utc::now),
+                        previous_updates: latest_updates,
+                    },
+                    Some(previous_file),
+                    num_updates_per_file,
+                    rbu,
+                )
             },
-            Some(previous_file),
-            num_updates_per_file,
-            self.repo_before_updates()?,
             self.config_bytes_raw()?.as_deref(),
             self.enabled_feature_flags()?,
             self.disabled_feature_flags()?,
@@ -820,6 +867,8 @@ impl RepoInfo {
                 branches.push((name, snap_idx as u32));
                 branches.sort_by(|(name1, _), (name2, _)| name1.cmp(name2));
                 let snaps: Vec<_> = self.all_snapshots()?.try_collect()?;
+                let latest_updates = self.latest_updates()?;
+                let rbu = self.repo_before_updates()?;
                 Ok(Self::from_parts(
                     spec_version,
                     self.all_tags()?,
@@ -827,16 +876,21 @@ impl RepoInfo {
                     self.deleted_tags()?,
                     snaps,
                     &self.metadata()?,
-                    UpdateInfo {
-                        update_type: UpdateType::BranchCreatedUpdate {
-                            name: name.to_string(),
-                        },
-                        update_time: Utc::now(),
-                        previous_updates: self.latest_updates()?,
+                    |builder| {
+                        Self::mk_latest_updates(
+                            builder,
+                            UpdateInfo {
+                                update_type: UpdateType::BranchCreatedUpdate {
+                                    name: name.to_string(),
+                                },
+                                update_time: Utc::now(),
+                                previous_updates: latest_updates,
+                            },
+                            Some(previous_file),
+                            num_updates_per_file,
+                            rbu,
+                        )
                     },
-                    Some(previous_file),
-                    num_updates_per_file,
-                    self.repo_before_updates()?,
                     self.config_bytes_raw()?.as_deref(),
                     self.enabled_feature_flags()?,
                     self.disabled_feature_flags()?,
@@ -863,6 +917,8 @@ impl RepoInfo {
                 // retain preserves order
                 branches.retain(|(n, _)| n != &name);
                 let snaps: Vec<_> = self.all_snapshots()?.try_collect()?;
+                let latest_updates = self.latest_updates()?;
+                let rbu = self.repo_before_updates()?;
                 Self::from_parts(
                     spec_version,
                     self.all_tags()?,
@@ -870,17 +926,22 @@ impl RepoInfo {
                     self.deleted_tags()?,
                     snaps,
                     &self.metadata()?,
-                    UpdateInfo {
-                        update_type: UpdateType::BranchDeletedUpdate {
-                            name: name.to_string(),
-                            previous_snap_id,
-                        },
-                        update_time: Utc::now(),
-                        previous_updates: self.latest_updates()?,
+                    |builder| {
+                        Self::mk_latest_updates(
+                            builder,
+                            UpdateInfo {
+                                update_type: UpdateType::BranchDeletedUpdate {
+                                    name: name.to_string(),
+                                    previous_snap_id,
+                                },
+                                update_time: Utc::now(),
+                                previous_updates: latest_updates,
+                            },
+                            Some(previous_file),
+                            num_updates_per_file,
+                            rbu,
+                        )
                     },
-                    Some(previous_file),
-                    num_updates_per_file,
-                    self.repo_before_updates()?,
                     self.config_bytes_raw()?.as_deref(),
                     self.enabled_feature_flags()?,
                     self.disabled_feature_flags()?,
@@ -913,6 +974,8 @@ impl RepoInfo {
                     if br == name { (br, snap_idx as u32) } else { (br, idx) }
                 });
                 let snaps: Vec<_> = self.all_snapshots()?.try_collect()?;
+                let latest_updates = self.latest_updates()?;
+                let rbu = self.repo_before_updates()?;
                 Ok(Self::from_parts(
                     spec_version,
                     self.all_tags()?,
@@ -920,17 +983,22 @@ impl RepoInfo {
                     self.deleted_tags()?,
                     snaps,
                     &self.metadata()?,
-                    UpdateInfo {
-                        update_type: UpdateType::BranchResetUpdate {
-                            name: name.to_string(),
-                            previous_snap_id,
-                        },
-                        update_time: Utc::now(),
-                        previous_updates: self.latest_updates()?,
+                    |builder| {
+                        Self::mk_latest_updates(
+                            builder,
+                            UpdateInfo {
+                                update_type: UpdateType::BranchResetUpdate {
+                                    name: name.to_string(),
+                                    previous_snap_id,
+                                },
+                                update_time: Utc::now(),
+                                previous_updates: latest_updates,
+                            },
+                            Some(previous_file),
+                            num_updates_per_file,
+                            rbu,
+                        )
                     },
-                    Some(previous_file),
-                    num_updates_per_file,
-                    self.repo_before_updates()?,
                     self.config_bytes_raw()?.as_deref(),
                     self.enabled_feature_flags()?,
                     self.disabled_feature_flags()?,
@@ -971,6 +1039,8 @@ impl RepoInfo {
                 tags.push((name, snap_idx as u32));
                 tags.sort_by(|(name1, _), (name2, _)| name1.cmp(name2));
                 let snaps: Vec<_> = self.all_snapshots()?.try_collect()?;
+                let latest_updates = self.latest_updates()?;
+                let rbu = self.repo_before_updates()?;
                 Ok(Self::from_parts(
                     spec_version,
                     tags,
@@ -978,16 +1048,21 @@ impl RepoInfo {
                     self.deleted_tags()?,
                     snaps,
                     &self.metadata()?,
-                    UpdateInfo {
-                        update_type: UpdateType::TagCreatedUpdate {
-                            name: name.to_string(),
-                        },
-                        update_time: Utc::now(),
-                        previous_updates: self.latest_updates()?,
+                    |builder| {
+                        Self::mk_latest_updates(
+                            builder,
+                            UpdateInfo {
+                                update_type: UpdateType::TagCreatedUpdate {
+                                    name: name.to_string(),
+                                },
+                                update_time: Utc::now(),
+                                previous_updates: latest_updates,
+                            },
+                            Some(previous_file),
+                            num_updates_per_file,
+                            rbu,
+                        )
                     },
-                    Some(previous_file),
-                    num_updates_per_file,
-                    self.repo_before_updates()?,
                     self.config_bytes_raw()?.as_deref(),
                     self.enabled_feature_flags()?,
                     self.disabled_feature_flags()?,
@@ -1019,6 +1094,8 @@ impl RepoInfo {
                 deleted_tags.insert(name);
 
                 let snaps: Vec<_> = self.all_snapshots()?.try_collect()?;
+                let latest_updates = self.latest_updates()?;
+                let rbu = self.repo_before_updates()?;
                 Self::from_parts(
                     spec_version,
                     tags,
@@ -1026,17 +1103,22 @@ impl RepoInfo {
                     deleted_tags,
                     snaps,
                     &self.metadata()?,
-                    UpdateInfo {
-                        update_type: UpdateType::TagDeletedUpdate {
-                            name: name.to_string(),
-                            previous_snap_id,
-                        },
-                        update_time: Utc::now(),
-                        previous_updates: self.latest_updates()?,
+                    |builder| {
+                        Self::mk_latest_updates(
+                            builder,
+                            UpdateInfo {
+                                update_type: UpdateType::TagDeletedUpdate {
+                                    name: name.to_string(),
+                                    previous_snap_id,
+                                },
+                                update_time: Utc::now(),
+                                previous_updates: latest_updates,
+                            },
+                            Some(previous_file),
+                            num_updates_per_file,
+                            rbu,
+                        )
                     },
-                    Some(previous_file),
-                    num_updates_per_file,
-                    self.repo_before_updates()?,
                     self.config_bytes_raw()?.as_deref(),
                     self.enabled_feature_flags()?,
                     self.disabled_feature_flags()?,
@@ -1060,6 +1142,8 @@ impl RepoInfo {
         num_updates_per_file: u16,
     ) -> IcechunkResult<Self> {
         let snaps: Vec<_> = self.all_snapshots()?.try_collect()?;
+        let latest_updates = self.latest_updates()?;
+        let rbu = self.repo_before_updates()?;
         Self::from_parts(
             spec_version,
             self.all_tags()?,
@@ -1067,14 +1151,19 @@ impl RepoInfo {
             self.deleted_tags()?,
             snaps,
             metadata,
-            UpdateInfo {
-                update_type: UpdateType::MetadataChangedUpdate,
-                update_time: Utc::now(),
-                previous_updates: self.latest_updates()?,
+            |builder| {
+                Self::mk_latest_updates(
+                    builder,
+                    UpdateInfo {
+                        update_type: UpdateType::MetadataChangedUpdate,
+                        update_time: Utc::now(),
+                        previous_updates: latest_updates,
+                    },
+                    Some(previous_file),
+                    num_updates_per_file,
+                    rbu,
+                )
             },
-            Some(previous_file),
-            num_updates_per_file,
-            self.repo_before_updates()?,
             self.config_bytes_raw()?.as_deref(),
             self.enabled_feature_flags()?,
             self.disabled_feature_flags()?,
@@ -1092,6 +1181,8 @@ impl RepoInfo {
     ) -> IcechunkResult<Self> {
         let config_bytes = flexbuffers::to_vec(config).map_err(Box::new).capture()?;
         let snaps: Vec<_> = self.all_snapshots()?.try_collect()?;
+        let latest_updates = self.latest_updates()?;
+        let rbu = self.repo_before_updates()?;
         Self::from_parts(
             spec_version,
             self.all_tags()?,
@@ -1099,14 +1190,19 @@ impl RepoInfo {
             self.deleted_tags()?,
             snaps,
             &self.metadata()?,
-            UpdateInfo {
-                update_type: UpdateType::ConfigChangedUpdate,
-                update_time: Utc::now(),
-                previous_updates: self.latest_updates()?,
+            |builder| {
+                Self::mk_latest_updates(
+                    builder,
+                    UpdateInfo {
+                        update_type: UpdateType::ConfigChangedUpdate,
+                        update_time: Utc::now(),
+                        previous_updates: latest_updates,
+                    },
+                    Some(previous_file),
+                    num_updates_per_file,
+                    rbu,
+                )
             },
-            Some(previous_file),
-            num_updates_per_file,
-            self.repo_before_updates()?,
             Some(config_bytes.as_slice()),
             self.enabled_feature_flags()?,
             self.disabled_feature_flags()?,
@@ -1114,36 +1210,68 @@ impl RepoInfo {
         )
     }
 
+    /// Set the repository status.
+    ///
+    /// When `update_config` is `Some((previous_file, num_updates_per_file))`, a
+    /// `RepoStatusChangedUpdate` entry is appended to the ops log (normal behavior).
+    ///
+    /// When `update_config` is `None`, the status is changed silently: the existing
+    /// ops log entries are preserved as-is with no new entry added.
     pub fn set_status(
         &self,
         spec_version: SpecVersionBin,
         status: &RepoStatus,
-        previous_file: &str,
-        num_updates_per_file: u16,
+        update_config: Option<(&str, u16)>,
     ) -> IcechunkResult<Self> {
         let snaps: Vec<_> = self.all_snapshots()?.try_collect()?;
-        Self::from_parts(
-            spec_version,
-            self.all_tags()?,
-            self.all_branches()?,
-            self.deleted_tags()?,
-            snaps,
-            &self.metadata()?,
-            UpdateInfo {
-                update_type: UpdateType::RepoStatusChangedUpdate {
-                    status: status.clone(),
+        let latest_updates = self.latest_updates()?;
+        let rbu = self.repo_before_updates()?;
+        if let Some((previous_file, num_updates_per_file)) = update_config {
+            let status_update = status.clone();
+            Self::from_parts(
+                spec_version,
+                self.all_tags()?,
+                self.all_branches()?,
+                self.deleted_tags()?,
+                snaps,
+                &self.metadata()?,
+                |builder| {
+                    Self::mk_latest_updates(
+                        builder,
+                        UpdateInfo {
+                            update_type: UpdateType::RepoStatusChangedUpdate {
+                                status: status_update,
+                            },
+                            update_time: Utc::now(),
+                            previous_updates: latest_updates,
+                        },
+                        Some(previous_file),
+                        num_updates_per_file,
+                        rbu,
+                    )
                 },
-                update_time: Utc::now(),
-                previous_updates: self.latest_updates()?,
-            },
-            Some(previous_file),
-            num_updates_per_file,
-            self.repo_before_updates()?,
-            self.config_bytes_raw()?.as_deref(),
-            self.enabled_feature_flags()?,
-            self.disabled_feature_flags()?,
-            status,
-        )
+                self.config_bytes_raw()?.as_deref(),
+                self.enabled_feature_flags()?,
+                self.disabled_feature_flags()?,
+                status,
+            )
+        } else {
+            Self::from_parts(
+                spec_version,
+                self.all_tags()?,
+                self.all_branches()?,
+                self.deleted_tags()?,
+                snaps,
+                &self.metadata()?,
+                |builder| {
+                    Self::mk_latest_updates_passthrough(builder, latest_updates, rbu)
+                },
+                self.config_bytes_raw()?.as_deref(),
+                self.enabled_feature_flags()?,
+                self.disabled_feature_flags()?,
+                status,
+            )
+        }
     }
 
     pub fn from_buffer(buffer: Vec<u8>) -> IcechunkResult<RepoInfo> {
@@ -2135,6 +2263,84 @@ mod tests {
             100,
         );
         assert!(result.is_ok());
+
+        Ok(())
+    }
+
+    /// Verify that `set_status` with `update_config = None` (silent mode)
+    /// changes the repo status without appending an entry to the ops log.
+    #[test]
+    fn test_set_status_silent() -> Result<(), Box<dyn std::error::Error>> {
+        let id1 = SnapshotId::random();
+        let snap1 = SnapshotInfo {
+            id: id1.clone(),
+            parent_id: None,
+            flushed_at: DateTime::from_timestamp_micros(1_000_000).unwrap(),
+            message: "snap 1".to_string(),
+            metadata: Default::default(),
+        };
+
+        let repo =
+            RepoInfo::initial(SpecVersionBin::current(), snap1, 100, None::<&()>, None);
+
+        // Add a branch to have more than one ops log entry
+        let repo =
+            repo.add_branch(SpecVersionBin::current(), "dev", &id1, "backup0", 100)?;
+
+        let updates_before: Vec<_> =
+            repo.latest_updates()?.collect::<Result<Vec<_>, _>>()?;
+        let rbu_before = repo.repo_before_updates()?;
+        let num_updates_before = updates_before.len();
+
+        // Normal set_status: should add a RepoStatusChangedUpdate entry
+        let new_status = RepoStatus {
+            availability: RepoAvailability::ReadOnly,
+            set_at: Utc::now(),
+            limited_availability_reason: Some("maintenance".to_string()),
+        };
+        let repo_normal = repo.set_status(
+            SpecVersionBin::current(),
+            &new_status,
+            Some(("backup1", 100)),
+        )?;
+        let updates_after_normal: Vec<_> =
+            repo_normal.latest_updates()?.collect::<Result<Vec<_>, _>>()?;
+        assert_eq!(updates_after_normal.len(), num_updates_before + 1);
+        assert!(matches!(
+            &updates_after_normal[0].0,
+            UpdateType::RepoStatusChangedUpdate { .. }
+        ));
+        let normal_status = repo_normal.status()?;
+        assert_eq!(normal_status.availability, RepoAvailability::ReadOnly);
+        assert_eq!(
+            normal_status.limited_availability_reason.as_deref(),
+            Some("maintenance")
+        );
+
+        // Silent set_status: should NOT add an ops log entry
+        let silent_status = RepoStatus {
+            availability: RepoAvailability::ReadOnly,
+            set_at: Utc::now(),
+            limited_availability_reason: None,
+        };
+        let repo_silent =
+            repo.set_status(SpecVersionBin::current(), &silent_status, None)?;
+
+        let updates_after_silent: Vec<_> =
+            repo_silent.latest_updates()?.collect::<Result<Vec<_>, _>>()?;
+        // Ops log unchanged: same number of entries, same content
+        assert_eq!(updates_after_silent.len(), num_updates_before);
+        for (before, after) in updates_before.iter().zip(updates_after_silent.iter()) {
+            assert_eq!(before.0, after.0);
+            assert_eq!(before.1, after.1);
+            assert_eq!(before.2, after.2);
+        }
+        assert_eq!(repo_silent.repo_before_updates()?, rbu_before);
+
+        // But the status itself IS changed
+        let silent_result_status = repo_silent.status()?;
+        assert_eq!(silent_result_status.availability, RepoAvailability::ReadOnly);
+        assert!(silent_result_status.limited_availability_reason.is_none());
 
         Ok(())
     }

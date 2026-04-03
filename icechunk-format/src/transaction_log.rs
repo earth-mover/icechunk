@@ -1,12 +1,12 @@
 //! Change records for commits, enabling conflict detection during rebase.
 
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, HashMap},
     iter,
 };
 
-use flatbuffers::{VerifierOptions, WIPOffset};
-use itertools::Either;
+use flatbuffers::VerifierOptions;
+use itertools::{Either, Itertools as _};
 
 use crate::{
     ChunkIndices, IcechunkFormatErrorKind, IcechunkResult, Move, NodeId, Path,
@@ -314,7 +314,7 @@ impl TransactionLog {
     pub fn merge<'a, T: IntoIterator<Item = &'a TransactionLog>>(
         id: &SnapshotId,
         iter: T,
-    ) -> Self {
+    ) -> IcechunkResult<Self> {
         let txs = Vec::from_iter(iter);
 
         // TODO: what's a good capacity?
@@ -407,9 +407,83 @@ impl TransactionLog {
 
         let id = generated::ObjectId12::new(&id.0);
         let id = Some(&id);
-        // FIXME: verify no moves in origins
-        let moved_nodes: &[WIPOffset<_>] = &[];
-        let moved_nodes = Some(builder.create_vector(moved_nodes)); // FIXME:
+
+        // Merge overlapping moves from previous and current transaction logs.
+        // For example:
+        // ```
+        // Move {
+        //   from: /source,
+        //   to: /dest,
+        // },
+        // Move {
+        //   from: /dest,
+        //   to: /src,
+        // }
+        // ```
+        // is merged into
+        // ```
+        // Move {
+        //   from: /source,
+        //   to: /src,
+        // },
+        // ```
+
+        // Save moves into a map (NodeId -> Move) to make it easy
+        // to check if we have overlapping moves.
+        let mut moved_map: HashMap<NodeId, Move> = Default::default();
+        let moved_nodes = {
+            for mv in txs.iter().flat_map(|tx| tx.moves()) {
+                let Move { from, to, node_id, node_type } = mv?;
+                // if this is the first time we see this node_id, just insert.
+                // Otherwise we need to merge the old and new move for the same node_id,
+                // reusing the info from the old move but replacing with the "to" field
+                // from the new move.
+                moved_map
+                    .entry(node_id.clone())
+                    .and_modify(|m| m.to = to.clone())
+                    .or_insert_with(|| Move { to, from, node_id, node_type });
+            }
+
+            // Remove identity moves (where from == to) from the map.
+            // These are not saved in the transaction log.
+            moved_map.retain(|_, mv| mv.from != mv.to);
+
+            // check all "to" and all "from" for all moves are unique.
+            // only run this in debug mode because it can be expensive
+            debug_assert!({
+                let node_id_len = moved_map.len();
+
+                let (from, to): (BTreeSet<&Path>, BTreeSet<&Path>) = moved_map
+                    .values()
+                    .map(|Move { to, from, .. }| (from, to))
+                    .multiunzip();
+
+                (from.len() == to.len()) && (to.len() == node_id_len)
+            });
+
+            let moved_nodes: Vec<_> = moved_map
+                .into_values()
+                // sort by final path ("to"), to maintain consistency with how each
+                // individual tx_log was before
+                .sorted_by(|a, b| a.to.cmp(&b.to))
+                .map(|Move { to, from, node_id, node_type }| {
+                    let from = builder.create_string(from.to_string().as_str());
+                    let to = builder.create_string(to.to_string().as_str());
+                    let node_id = generated::ObjectId8::new(&node_id.0);
+                    let node_id = Some(&node_id);
+                    let node_type: generated::NodeType = node_type.into();
+                    let args = MoveOperationArgs {
+                        from: Some(from),
+                        to: Some(to),
+                        node_id,
+                        node_type,
+                    };
+                    MoveOperation::create(&mut builder, &args)
+                })
+                .collect();
+            Some(builder.create_vector(moved_nodes.as_slice()))
+        };
+
         let tx = generated::TransactionLog::create(
             &mut builder,
             &generated::TransactionLogArgs {
@@ -430,7 +504,7 @@ impl TransactionLog {
         let (mut buffer, offset) = builder.collapse();
         buffer.drain(0..offset);
         buffer.shrink_to_fit();
-        Self { buffer }
+        Ok(Self { buffer })
     }
 }
 
