@@ -1,7 +1,20 @@
+use std::fmt;
+use std::ops::Range;
+use std::pin::Pin;
 use std::sync::Arc;
 
-use icechunk::Storage;
+use async_trait::async_trait;
+use bytes::Bytes;
+use futures::stream::BoxStream;
+use futures::{Stream, StreamExt};
+use icechunk::storage::{
+    DeleteObjectsResult, ETag, Generation, GetModifiedResult, ListInfo, Settings,
+    Storage, StorageError, StorageResult, VersionInfo, VersionedUpdateResult,
+};
+use napi::bindgen_prelude::Buffer;
+use napi::threadsafe_function::ThreadsafeFunction;
 use napi_derive::napi;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::errors::IntoNapiResult;
 
@@ -10,6 +23,394 @@ use std::collections::HashMap;
 
 #[napi(js_name = "Storage")]
 pub struct JsStorage(pub(crate) Arc<dyn Storage + Send + Sync>);
+
+// --- Custom JS-provided storage backend ---
+
+fn other_storage_error(s: impl Into<String>) -> StorageError {
+    icechunk_storage::other_error(s)
+}
+
+/// Version information returned from JS storage callbacks
+#[napi(object, js_name = "StorageVersionInfo")]
+#[derive(Clone, Debug)]
+pub struct JsStorageVersionInfo {
+    pub etag: Option<String>,
+    pub generation: Option<String>,
+}
+
+impl From<JsStorageVersionInfo> for VersionInfo {
+    fn from(v: JsStorageVersionInfo) -> Self {
+        VersionInfo { etag: v.etag.map(ETag), generation: v.generation.map(Generation) }
+    }
+}
+
+impl From<&VersionInfo> for JsStorageVersionInfo {
+    fn from(v: &VersionInfo) -> Self {
+        JsStorageVersionInfo {
+            etag: v.etag.as_ref().map(|e| e.0.clone()),
+            generation: v.generation.as_ref().map(|g| g.0.clone()),
+        }
+    }
+}
+
+/// Result of a get_object_range call from JS
+#[napi(object, js_name = "StorageGetObjectResponse")]
+pub struct JsStorageGetObjectResponse {
+    pub data: Buffer,
+    pub version: JsStorageVersionInfo,
+}
+
+/// Result of a put_object or copy_object call from JS
+#[napi(object, js_name = "StorageVersionedUpdateResult")]
+#[derive(Clone, Debug)]
+pub struct JsStorageVersionedUpdateResult {
+    /// "updated" or "not_on_latest_version"
+    pub kind: String,
+    pub new_version: Option<JsStorageVersionInfo>,
+}
+
+impl JsStorageVersionedUpdateResult {
+    fn into_rust(self) -> StorageResult<VersionedUpdateResult> {
+        match self.kind.as_str() {
+            "updated" => {
+                let new_version = self
+                    .new_version
+                    .ok_or_else(|| {
+                        other_storage_error(
+                            "VersionedUpdateResult 'updated' missing new_version",
+                        )
+                    })?
+                    .into();
+                Ok(VersionedUpdateResult::Updated { new_version })
+            }
+            "not_on_latest_version" => Ok(VersionedUpdateResult::NotOnLatestVersion),
+            other => Err(other_storage_error(format!(
+                "Unknown VersionedUpdateResult kind: {other}"
+            ))),
+        }
+    }
+}
+
+/// Result of a delete_batch call from JS
+#[napi(object, js_name = "StorageDeleteObjectsResult")]
+#[derive(Clone, Debug)]
+pub struct JsStorageDeleteObjectsResult {
+    pub deleted_objects: f64,
+    pub deleted_bytes: f64,
+}
+
+/// Entry in a list_objects result from JS
+#[napi(object, js_name = "StorageListInfo")]
+#[derive(Clone, Debug)]
+pub struct JsStorageListInfo {
+    pub id: String,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub size_bytes: f64,
+}
+
+/// Arguments for get_object_range callback
+#[napi(object, js_name = "StorageGetObjectRangeArgs")]
+#[derive(Clone, Debug)]
+pub struct JsStorageGetObjectRangeArgs {
+    pub path: String,
+    pub range_start: Option<f64>,
+    pub range_end: Option<f64>,
+}
+
+/// A key-value pair for object metadata
+#[napi(object, js_name = "StorageKeyValue")]
+#[derive(Clone, Debug)]
+pub struct JsStorageKeyValue {
+    pub key: String,
+    pub value: String,
+}
+
+/// Arguments for put_object callback
+#[napi(object, js_name = "StoragePutObjectArgs")]
+pub struct JsStoragePutObjectArgs {
+    pub path: String,
+    pub data: Buffer,
+    pub content_type: Option<String>,
+    pub metadata: Vec<JsStorageKeyValue>,
+    pub previous_version: Option<JsStorageVersionInfo>,
+}
+
+/// Arguments for copy_object callback
+#[napi(object, js_name = "StorageCopyObjectArgs")]
+#[derive(Clone, Debug)]
+pub struct JsStorageCopyObjectArgs {
+    pub from: String,
+    pub to: String,
+    pub content_type: Option<String>,
+    pub version: JsStorageVersionInfo,
+}
+
+/// An item in a delete_batch call
+#[napi(object, js_name = "StorageDeleteItem")]
+#[derive(Clone, Debug)]
+pub struct JsStorageDeleteItem {
+    pub id: String,
+    pub size: f64,
+}
+
+/// Arguments for delete_batch callback
+#[napi(object, js_name = "StorageDeleteBatchArgs")]
+#[derive(Clone, Debug)]
+pub struct JsStorageDeleteBatchArgs {
+    pub prefix: String,
+    pub batch: Vec<JsStorageDeleteItem>,
+}
+
+/// Arguments for get_object_conditional callback
+#[napi(object, js_name = "StorageGetObjectConditionalArgs")]
+#[derive(Clone, Debug)]
+pub struct JsStorageGetObjectConditionalArgs {
+    pub path: String,
+    pub previous_version: Option<JsStorageVersionInfo>,
+}
+
+/// Result of a get_object_conditional call from JS
+#[napi(object, js_name = "StorageGetModifiedResult")]
+pub struct JsStorageGetModifiedResult {
+    /// "modified" or "on_latest_version"
+    pub kind: String,
+    pub data: Option<Buffer>,
+    pub new_version: Option<JsStorageVersionInfo>,
+}
+
+/// Storage backend that delegates all operations to JS callbacks.
+///
+/// This enables JS users to provide custom storage implementations using
+/// JS libraries (fetch, @aws-sdk/client-s3, etc.), which is especially
+/// useful for WASM builds where native Rust networking is unavailable.
+pub(crate) struct JsCallbackStorage {
+    can_write_fn: ThreadsafeFunction<(), bool>,
+    get_object_range_fn:
+        ThreadsafeFunction<JsStorageGetObjectRangeArgs, JsStorageGetObjectResponse>,
+    put_object_fn:
+        ThreadsafeFunction<JsStoragePutObjectArgs, JsStorageVersionedUpdateResult>,
+    copy_object_fn:
+        ThreadsafeFunction<JsStorageCopyObjectArgs, JsStorageVersionedUpdateResult>,
+    list_objects_fn: ThreadsafeFunction<String, Vec<JsStorageListInfo>>,
+    delete_batch_fn:
+        ThreadsafeFunction<JsStorageDeleteBatchArgs, JsStorageDeleteObjectsResult>,
+    get_object_last_modified_fn:
+        ThreadsafeFunction<String, chrono::DateTime<chrono::Utc>>,
+    get_object_conditional_fn:
+        ThreadsafeFunction<JsStorageGetObjectConditionalArgs, JsStorageGetModifiedResult>,
+}
+
+impl fmt::Debug for JsCallbackStorage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("JsCallbackStorage").finish()
+    }
+}
+
+impl fmt::Display for JsCallbackStorage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "JsCallbackStorage")
+    }
+}
+
+impl Serialize for JsCallbackStorage {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        #[derive(Serialize)]
+        struct Helper {}
+        Helper {}.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for JsCallbackStorage {
+    fn deserialize<D: Deserializer<'de>>(_deserializer: D) -> Result<Self, D::Error> {
+        Err(serde::de::Error::custom(
+            "JsCallbackStorage cannot be deserialized: JS callbacks are not serializable",
+        ))
+    }
+}
+
+impl icechunk_storage::sealed::Sealed for JsCallbackStorage {}
+
+#[async_trait]
+#[typetag::serde(name = "js_callback_storage")]
+impl Storage for JsCallbackStorage {
+    async fn can_write(&self) -> StorageResult<bool> {
+        self.can_write_fn
+            .call_async(Ok(()))
+            .await
+            .map_err(|e| other_storage_error(format!("JS canWrite failed: {e}")))
+    }
+
+    async fn get_object_range(
+        &self,
+        _settings: &Settings,
+        path: &str,
+        range: Option<&Range<u64>>,
+    ) -> StorageResult<(
+        Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>,
+        VersionInfo,
+    )> {
+        let args = JsStorageGetObjectRangeArgs {
+            path: path.to_string(),
+            range_start: range.map(|r| r.start as f64),
+            range_end: range.map(|r| r.end as f64),
+        };
+        let response =
+            self.get_object_range_fn.call_async(Ok(args)).await.map_err(|e| {
+                other_storage_error(format!("JS getObjectRange failed: {e}"))
+            })?;
+
+        let bytes = Bytes::from(response.data.to_vec());
+        let version = response.version.into();
+        let stream = futures::stream::once(async move { Ok(bytes) });
+        Ok((Box::pin(stream), version))
+    }
+
+    async fn put_object(
+        &self,
+        _settings: &Settings,
+        path: &str,
+        bytes: Bytes,
+        content_type: Option<&str>,
+        metadata: Vec<(String, String)>,
+        previous_version: Option<&VersionInfo>,
+    ) -> StorageResult<VersionedUpdateResult> {
+        let args = JsStoragePutObjectArgs {
+            path: path.to_string(),
+            data: bytes.to_vec().into(),
+            content_type: content_type.map(|s| s.to_string()),
+            metadata: metadata
+                .into_iter()
+                .map(|(k, v)| JsStorageKeyValue { key: k, value: v })
+                .collect(),
+            previous_version: previous_version.map(|v| v.into()),
+        };
+        let result = self
+            .put_object_fn
+            .call_async(Ok(args))
+            .await
+            .map_err(|e| other_storage_error(format!("JS putObject failed: {e}")))?;
+        result.into_rust()
+    }
+
+    async fn copy_object(
+        &self,
+        _settings: &Settings,
+        from: &str,
+        to: &str,
+        content_type: Option<&str>,
+        version: &VersionInfo,
+    ) -> StorageResult<VersionedUpdateResult> {
+        let args = JsStorageCopyObjectArgs {
+            from: from.to_string(),
+            to: to.to_string(),
+            content_type: content_type.map(|s| s.to_string()),
+            version: version.into(),
+        };
+        let result = self
+            .copy_object_fn
+            .call_async(Ok(args))
+            .await
+            .map_err(|e| other_storage_error(format!("JS copyObject failed: {e}")))?;
+        result.into_rust()
+    }
+
+    async fn list_objects<'a>(
+        &'a self,
+        _settings: &Settings,
+        prefix: &str,
+    ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
+        let items =
+            self.list_objects_fn.call_async(Ok(prefix.to_string())).await.map_err(
+                |e| other_storage_error(format!("JS listObjects failed: {e}")),
+            )?;
+
+        let rust_items: Vec<StorageResult<ListInfo<String>>> = items
+            .into_iter()
+            .map(|item| {
+                Ok(ListInfo {
+                    id: item.id,
+                    created_at: item.created_at,
+                    size_bytes: item.size_bytes as u64,
+                })
+            })
+            .collect();
+
+        Ok(futures::stream::iter(rust_items).boxed())
+    }
+
+    async fn delete_batch(
+        &self,
+        _settings: &Settings,
+        prefix: &str,
+        batch: Vec<(String, u64)>,
+    ) -> StorageResult<DeleteObjectsResult> {
+        let args = JsStorageDeleteBatchArgs {
+            prefix: prefix.to_string(),
+            batch: batch
+                .into_iter()
+                .map(|(id, size)| JsStorageDeleteItem { id, size: size as f64 })
+                .collect(),
+        };
+        let result =
+            self.delete_batch_fn.call_async(Ok(args)).await.map_err(|e| {
+                other_storage_error(format!("JS deleteBatch failed: {e}"))
+            })?;
+
+        Ok(DeleteObjectsResult {
+            deleted_objects: result.deleted_objects as u64,
+            deleted_bytes: result.deleted_bytes as u64,
+        })
+    }
+
+    async fn get_object_last_modified(
+        &self,
+        path: &str,
+        _settings: &Settings,
+    ) -> StorageResult<chrono::DateTime<chrono::Utc>> {
+        self.get_object_last_modified_fn.call_async(Ok(path.to_string())).await.map_err(
+            |e| other_storage_error(format!("JS getObjectLastModified failed: {e}")),
+        )
+    }
+
+    async fn get_object_conditional(
+        &self,
+        _settings: &Settings,
+        path: &str,
+        previous_version: Option<&VersionInfo>,
+    ) -> StorageResult<GetModifiedResult> {
+        let args = JsStorageGetObjectConditionalArgs {
+            path: path.to_string(),
+            previous_version: previous_version.map(|v| v.into()),
+        };
+        let result =
+            self.get_object_conditional_fn.call_async(Ok(args)).await.map_err(|e| {
+                other_storage_error(format!("JS getObjectConditional failed: {e}"))
+            })?;
+
+        match result.kind.as_str() {
+            "modified" => {
+                let data = result.data.ok_or_else(|| {
+                    other_storage_error("GetModifiedResult 'modified' missing data field")
+                })?;
+                let new_version: VersionInfo = result
+                    .new_version
+                    .ok_or_else(|| {
+                        other_storage_error(
+                            "GetModifiedResult 'modified' missing new_version field",
+                        )
+                    })?
+                    .into();
+                let bytes = Bytes::from(data.to_vec());
+                let cursor = std::io::Cursor::new(bytes);
+                Ok(GetModifiedResult::Modified { data: Box::pin(cursor), new_version })
+            }
+            "on_latest_version" => Ok(GetModifiedResult::OnLatestVersion),
+            other => Err(other_storage_error(format!(
+                "Unknown GetModifiedResult kind: {other}"
+            ))),
+        }
+    }
+}
 
 #[cfg(not(target_family = "wasm"))]
 mod native {
@@ -440,6 +841,42 @@ impl JsStorage {
     pub async fn new_in_memory() -> napi::Result<JsStorage> {
         let storage = icechunk::storage::new_in_memory_storage().await.map_napi_err()?;
         Ok(JsStorage(storage))
+    }
+
+    /// Create a Storage backed by a JS object implementing the StorageBackend interface.
+    ///
+    /// This allows providing a custom storage implementation using JS libraries
+    /// (fetch, @aws-sdk/client-s3, @google-cloud/storage, etc.), which is
+    /// especially useful for WASM builds where native Rust networking is unavailable.
+    #[napi(
+        factory,
+        ts_args_type = "backend: { canWrite: () => Promise<boolean>; getObjectRange: (args: StorageGetObjectRangeArgs) => Promise<StorageGetObjectResponse>; putObject: (args: StoragePutObjectArgs) => Promise<StorageVersionedUpdateResult>; copyObject: (args: StorageCopyObjectArgs) => Promise<StorageVersionedUpdateResult>; listObjects: (prefix: string) => Promise<Array<StorageListInfo>>; deleteBatch: (args: StorageDeleteBatchArgs) => Promise<StorageDeleteObjectsResult>; getObjectLastModified: (path: string) => Promise<Date>; getObjectConditional: (args: StorageGetObjectConditionalArgs) => Promise<StorageGetModifiedResult> }",
+        ts_return_type = "Storage"
+    )]
+    pub fn new_custom(backend: napi::bindgen_prelude::Object) -> napi::Result<JsStorage> {
+        use napi::bindgen_prelude::JsObjectValue;
+        let can_write_fn = backend.get_named_property("canWrite")?;
+        let get_object_range_fn = backend.get_named_property("getObjectRange")?;
+        let put_object_fn = backend.get_named_property("putObject")?;
+        let copy_object_fn = backend.get_named_property("copyObject")?;
+        let list_objects_fn = backend.get_named_property("listObjects")?;
+        let delete_batch_fn = backend.get_named_property("deleteBatch")?;
+        let get_object_last_modified_fn =
+            backend.get_named_property("getObjectLastModified")?;
+        let get_object_conditional_fn =
+            backend.get_named_property("getObjectConditional")?;
+
+        let storage = JsCallbackStorage {
+            can_write_fn,
+            get_object_range_fn,
+            put_object_fn,
+            copy_object_fn,
+            list_objects_fn,
+            delete_batch_fn,
+            get_object_last_modified_fn,
+            get_object_conditional_fn,
+        };
+        Ok(JsStorage(Arc::new(storage)))
     }
 }
 

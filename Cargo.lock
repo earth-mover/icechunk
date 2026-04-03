@@ -2279,6 +2279,7 @@ dependencies = [
  "chrono",
  "futures",
  "icechunk",
+ "icechunk-storage",
  "napi",
  "napi-build",
  "napi-derive",

@@ -26,6 +26,7 @@ chrono = "0.4"
 async-trait = "0.1.89"
 typetag = "0.2.21"
 rand = "0.10.0"
+icechunk-storage = { path = "../icechunk-storage" }
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 icechunk = { path = "../icechunk" }

@@ -46,6 +46,32 @@ In-memory storage works on all platforms. The following backends are available o
 - **HTTP** — `Storage.newHttp(baseUrl, config?)`
 - **Local Filesystem** — `Storage.newLocalFilesystem(path)`
 
+### Custom Storage Backends
+
+For WASM builds (or any environment where the built-in backends aren't suitable), you can provide your own storage implementation in JavaScript using `Storage.newCustom()`:
+
+```typescript
+const storage = Storage.newCustom({
+  canWrite: async () => true,
+  getObjectRange: async ({ path, rangeStart, rangeEnd }) => {
+    const headers: Record<string, string> = {}
+    if (rangeStart != null && rangeEnd != null) {
+      headers['Range'] = `bytes=${rangeStart}-${rangeEnd - 1}`
+    }
+    const resp = await fetch(`https://my-bucket.example.com/${path}`, { headers })
+    return { data: new Uint8Array(await resp.arrayBuffer()), version: { etag: resp.headers.get('etag') ?? undefined } }
+  },
+  putObject: async ({ path, data, contentType }) => { /* ... */ },
+  copyObject: async ({ from, to }) => { /* ... */ },
+  listObjects: async (prefix) => { /* return [{ id, createdAt, sizeBytes }] */ },
+  deleteBatch: async ({ prefix, batch }) => { /* return { deletedObjects, deletedBytes } */ },
+  getObjectLastModified: async (path) => { /* return Date */ },
+  getObjectConditional: async ({ path, previousVersion }) => { /* ... */ },
+})
+```
+
+This is the primary way to use cloud storage in the browser, where native Rust networking is unavailable. Each callback method maps to an operation on the underlying `Storage` trait. See the exported `Storage*` TypeScript interfaces for the full type signatures.
+
 ### Virtual Chunks
 
 Virtual chunks are supported in node but not in WASM builds.
