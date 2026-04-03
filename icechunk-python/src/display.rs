@@ -27,6 +27,14 @@ pub(crate) fn py_option<T: Display>(o: &Option<T>) -> String {
     }
 }
 
+/// Format an `Option<String>` as a quoted Python string repr: `None` or `"value"`.
+pub(crate) fn py_option_str(o: &Option<String>) -> String {
+    match o {
+        None => "None".to_string(),
+        Some(s) => format!("\"{s}\""),
+    }
+}
+
 /// Format a bool as a Python literal (`True` / `False`).
 pub(crate) fn py_bool(b: bool) -> String {
     if b { "True" } else { "False" }.to_string()
@@ -116,7 +124,7 @@ pub(crate) fn py_option_nested_repr<T: PyRepr + PyClass>(
 ///
 /// `cls_name` is the public Python class name.
 /// `fields` are `(field_name, rendered_value)` pairs.
-fn dataclass_str(cls_name: &str, fields: &[(&str, &str)]) -> String {
+pub(crate) fn dataclass_str(cls_name: &str, fields: &[(&str, &str)]) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "<{cls_name}>");
     for (key, value) in fields {
@@ -136,16 +144,20 @@ fn dataclass_str(cls_name: &str, fields: &[(&str, &str)]) -> String {
 /// Render an executable-style Python repr for a dataclass-like struct.
 ///
 /// Produces multi-line output with indentation for readability.
-fn dataclass_repr(cls_name: &str, fields: &[(&str, &str)]) -> String {
+pub(crate) fn dataclass_repr(cls_name: &str, fields: &[(&str, &str)]) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "{cls_name}(");
     for (key, value) in fields {
         if value.contains('\n') {
             // Indent all lines of a multi-line value
             let _ = write!(out, "    {key}=");
-            for (i, line) in value.lines().enumerate() {
+            let lines: Vec<&str> = value.lines().collect();
+            for (i, line) in lines.iter().enumerate() {
                 if i == 0 {
                     let _ = writeln!(out, "{line}");
+                } else if i == lines.len() - 1 {
+                    // Add trailing comma after the closing line
+                    let _ = writeln!(out, "    {line},");
                 } else {
                     let _ = writeln!(out, "    {line}");
                 }
@@ -224,7 +236,7 @@ body.vscode-dark {
 /// Uses a `<details>` pattern for nested values that contain HTML (detected by
 /// checking for `<div`). Plain values are rendered inline. Includes CSS with
 /// `:root` custom properties for theme-aware styling in notebooks.
-fn dataclass_html_repr(cls_name: &str, fields: &[(&str, &str)]) -> String {
+pub(crate) fn dataclass_html_repr(cls_name: &str, fields: &[(&str, &str)]) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "{ICECHUNK_CSS}");
     let _ = writeln!(out, "<div class=\"icechunk-repr\">");

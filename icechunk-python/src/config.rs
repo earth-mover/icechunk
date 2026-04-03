@@ -34,7 +34,10 @@ use pyo3::{
     types::{PyAnyMethods as _, PyModule, PyType},
 };
 
-use crate::display::{PyRepr, ReprMode, py_option, py_option_nested_repr};
+use crate::display::{
+    PyRepr, ReprMode, dataclass_html_repr, dataclass_str, py_bool, py_option,
+    py_option_nested_repr, py_option_str,
+};
 use crate::errors::PyIcechunkStoreError;
 
 #[pyclass(name = "S3StaticCredentials")]
@@ -72,6 +75,38 @@ impl From<PyS3StaticCredentials> for S3StaticCredentials {
     }
 }
 
+// Non-executable: contains secrets that should not be printed in full
+impl PyRepr for PyS3StaticCredentials {
+    const EXECUTABLE: bool = false;
+    fn cls_name() -> &'static str {
+        "icechunk.S3StaticCredentials"
+    }
+    fn fields(&self, _mode: ReprMode) -> Vec<(&str, String)> {
+        vec![
+            (
+                "access_key_id",
+                format!("{}****", &self.access_key_id[..4.min(self.access_key_id.len())]),
+            ),
+            ("secret_access_key", "****".to_string()),
+            (
+                "session_token",
+                if self.session_token.is_some() {
+                    "****".to_string()
+                } else {
+                    "None".to_string()
+                },
+            ),
+            (
+                "expires_after",
+                self.expires_after
+                    .as_ref()
+                    .map(datetime_repr)
+                    .unwrap_or_else(|| "None".to_string()),
+            ),
+        ]
+    }
+}
+
 #[pymethods]
 impl PyS3StaticCredentials {
     #[new]
@@ -91,33 +126,14 @@ impl PyS3StaticCredentials {
     }
 
     pub fn __repr__(&self) -> String {
-        // TODO: escape
-        format!(
-            r#"S3StaticCredentials(access_key_id="{ak}", secret_access_key="{sk}", session_token={st}, expires_after={ea})"#,
-            ak = self.access_key_id.as_str(),
-            sk = self.secret_access_key.as_str(),
-            st = format_option(self.session_token.as_ref()),
-            ea = format_option(self.expires_after.as_ref().map(datetime_repr))
-        )
+        <Self as PyRepr>::__repr__(self)
     }
-}
-
-pub(crate) fn format_option<'a, T: AsRef<str> + 'a>(o: Option<T>) -> String {
-    match o.as_ref() {
-        None => "None".to_string(),
-        Some(s) => s.as_ref().to_string(),
+    pub fn __str__(&self) -> String {
+        <Self as PyRepr>::__str__(self)
     }
-}
-
-pub(crate) fn format_bool(b: bool) -> &'static str {
-    match b {
-        true => "True",
-        false => "False",
+    pub fn _repr_html_(&self) -> String {
+        <Self as PyRepr>::_repr_html_(self)
     }
-}
-
-fn format_str(s: &str) -> String {
-    format!(r#""{s}""#)
 }
 
 pub(crate) fn datetime_repr(d: &DateTime<Utc>) -> String {
@@ -498,6 +514,27 @@ pub struct PyS3Options {
     pub requester_pays: bool,
 }
 
+impl PyRepr for PyS3Options {
+    const EXECUTABLE: bool = true;
+    fn cls_name() -> &'static str {
+        "icechunk.S3Options"
+    }
+    fn fields(&self, _mode: ReprMode) -> Vec<(&str, String)> {
+        vec![
+            ("region", py_option_str(&self.region)),
+            ("endpoint_url", py_option_str(&self.endpoint_url)),
+            ("allow_http", py_bool(self.allow_http)),
+            ("anonymous", py_bool(self.anonymous)),
+            ("force_path_style", py_bool(self.force_path_style)),
+            (
+                "network_stream_timeout_seconds",
+                py_option(&self.network_stream_timeout_seconds),
+            ),
+            ("requester_pays", py_bool(self.requester_pays)),
+        ]
+    }
+}
+
 #[pymethods]
 impl PyS3Options {
     #[new]
@@ -523,18 +560,13 @@ impl PyS3Options {
     }
 
     pub fn __repr__(&self) -> String {
-        // TODO: escape
-        format!(
-            r#"S3Options(region={region}, endpoint_url={url}, allow_http={http}, anonymous={anon}, force_path_style={force_path_style}, network_stream_timeout_seconds={net_timeout}, requester_pays={requester_pays})"#,
-            region = format_option(self.region.as_ref()),
-            url = format_option(self.endpoint_url.as_ref()),
-            http = format_bool(self.allow_http),
-            anon = format_bool(self.anonymous),
-            force_path_style = format_bool(self.force_path_style),
-            net_timeout =
-                format_option(self.network_stream_timeout_seconds.map(|n| n.to_string())),
-            requester_pays = self.requester_pays,
-        )
+        <Self as PyRepr>::__repr__(self)
+    }
+    pub fn __str__(&self) -> String {
+        <Self as PyRepr>::__str__(self)
+    }
+    pub fn _repr_html_(&self) -> String {
+        <Self as PyRepr>::_repr_html_(self)
     }
 }
 
@@ -604,6 +636,85 @@ impl From<&PyObjectStoreConfig> for ObjectStoreConfig {
     }
 }
 
+impl PyObjectStoreConfig {
+    fn cls_name(&self) -> &'static str {
+        match self {
+            Self::InMemory() => "icechunk.ObjectStoreConfig.InMemory",
+            Self::LocalFileSystem(_) => "icechunk.ObjectStoreConfig.LocalFileSystem",
+            Self::S3Compatible(_) => "icechunk.ObjectStoreConfig.S3Compatible",
+            Self::S3(_) => "icechunk.ObjectStoreConfig.S3",
+            Self::Gcs(_) => "icechunk.ObjectStoreConfig.Gcs",
+            Self::Azure(_) => "icechunk.ObjectStoreConfig.Azure",
+            Self::Tigris(_) => "icechunk.ObjectStoreConfig.Tigris",
+            Self::Http(_) => "icechunk.ObjectStoreConfig.Http",
+        }
+    }
+
+    /// Fields for str/html modes (named key: value pairs).
+    fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
+        match self {
+            Self::InMemory() => vec![],
+            Self::LocalFileSystem(path) => {
+                vec![("path", format!("\"{}\"", path.display()))]
+            }
+            Self::S3Compatible(opts) | Self::S3(opts) | Self::Tigris(opts) => {
+                opts.fields(mode)
+            }
+            Self::Gcs(opts) => vec![("config", format!("{opts:?}"))],
+            Self::Azure(config) => vec![("config", format!("{config:?}"))],
+            Self::Http(opts) => vec![("config", format!("{opts:?}"))],
+        }
+    }
+
+    pub(crate) fn render(&self, mode: ReprMode) -> String {
+        match mode {
+            ReprMode::Repr => {
+                // Executable repr: variants take positional args, so we
+                // can't use dataclass_repr's key=value format. Instead
+                // produce e.g. `icechunk.ObjectStoreConfig.S3(icechunk.S3Options(...))`
+                let cls = self.cls_name();
+                match self {
+                    Self::InMemory() => format!("{cls}()"),
+                    Self::LocalFileSystem(path) => {
+                        format!("{cls}(\"{}\")", path.display())
+                    }
+                    Self::S3Compatible(opts) | Self::S3(opts) | Self::Tigris(opts) => {
+                        format!("{cls}({})", <PyS3Options as PyRepr>::__repr__(opts))
+                    }
+                    Self::Gcs(opts) => format!("{cls}({opts:?})"),
+                    Self::Azure(config) => format!("{cls}({config:?})"),
+                    Self::Http(opts) => format!("{cls}({opts:?})"),
+                }
+            }
+            ReprMode::Str | ReprMode::Html => {
+                let fields = self.fields(mode);
+                let refs: Vec<(&str, &str)> =
+                    fields.iter().map(|(k, v)| (*k, v.as_str())).collect();
+                match mode {
+                    ReprMode::Str => dataclass_str(self.cls_name(), &refs),
+                    ReprMode::Html => dataclass_html_repr(self.cls_name(), &refs),
+                    ReprMode::Repr => unreachable!(),
+                }
+            }
+        }
+    }
+}
+
+#[pymethods]
+impl PyObjectStoreConfig {
+    fn __repr__(&self) -> String {
+        self.render(ReprMode::Repr)
+    }
+
+    fn __str__(&self) -> String {
+        self.render(ReprMode::Str)
+    }
+
+    fn _repr_html_(&self) -> String {
+        self.render(ReprMode::Html)
+    }
+}
+
 impl From<ObjectStoreConfig> for PyObjectStoreConfig {
     fn from(value: ObjectStoreConfig) -> Self {
         match value {
@@ -634,6 +745,20 @@ pub struct PyVirtualChunkContainer {
     pub store: PyObjectStoreConfig,
 }
 
+impl PyRepr for PyVirtualChunkContainer {
+    const EXECUTABLE: bool = true;
+    fn cls_name() -> &'static str {
+        "icechunk.VirtualChunkContainer"
+    }
+    fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
+        vec![
+            ("name", py_option_str(&self.name)),
+            ("url_prefix", format!("\"{}\"", self.url_prefix)),
+            ("store", self.store.render(mode)),
+        ]
+    }
+}
+
 #[pymethods]
 impl PyVirtualChunkContainer {
     #[new]
@@ -644,6 +769,16 @@ impl PyVirtualChunkContainer {
         name: Option<String>,
     ) -> Self {
         Self { name, url_prefix, store }
+    }
+
+    pub fn __repr__(&self) -> String {
+        <Self as PyRepr>::__repr__(self)
+    }
+    pub fn __str__(&self) -> String {
+        <Self as PyRepr>::__str__(self)
+    }
+    pub fn _repr_html_(&self) -> String {
+        <Self as PyRepr>::_repr_html_(self)
     }
 }
 
@@ -713,6 +848,25 @@ pub struct PyCompressionConfig {
     pub level: Option<u8>,
 }
 
+impl PyRepr for PyCompressionConfig {
+    const EXECUTABLE: bool = true;
+    fn cls_name() -> &'static str {
+        "icechunk.CompressionConfig"
+    }
+    fn fields(&self, _mode: ReprMode) -> Vec<(&str, String)> {
+        vec![
+            (
+                "algorithm",
+                self.algorithm
+                    .as_ref()
+                    .map(|a| format!("{a:?}"))
+                    .unwrap_or_else(|| "None".to_string()),
+            ),
+            ("level", py_option(&self.level)),
+        ]
+    }
+}
+
 #[pymethods]
 impl PyCompressionConfig {
     #[staticmethod]
@@ -728,10 +882,13 @@ impl PyCompressionConfig {
     }
 
     pub fn __repr__(&self) -> String {
-        format!(
-            r#"CompressionConfig(algorithm=None, level={level})"#,
-            level = py_option(&self.level.map(|l| l.to_string())),
-        )
+        <Self as PyRepr>::__repr__(self)
+    }
+    pub fn __str__(&self) -> String {
+        <Self as PyRepr>::__str__(self)
+    }
+    pub fn _repr_html_(&self) -> String {
+        <Self as PyRepr>::_repr_html_(self)
     }
 }
 
@@ -765,8 +922,6 @@ pub struct PyCachingConfig {
     pub num_bytes_chunks: Option<u64>,
 }
 
-// TODO: pass `mode` through once nested fields implement PyRepr
-#[expect(unused_variables)]
 impl PyRepr for PyCachingConfig {
     const EXECUTABLE: bool = true;
 
@@ -774,7 +929,7 @@ impl PyRepr for PyCachingConfig {
         "icechunk.CachingConfig"
     }
 
-    fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
+    fn fields(&self, _mode: ReprMode) -> Vec<(&str, String)> {
         vec![
             ("num_snapshot_nodes", py_option(&self.num_snapshot_nodes)),
             ("num_chunk_refs", py_option(&self.num_chunk_refs)),
@@ -879,6 +1034,20 @@ impl From<&PyStorageRetriesSettings> for RetriesSettings {
     }
 }
 
+impl PyRepr for PyStorageRetriesSettings {
+    const EXECUTABLE: bool = true;
+    fn cls_name() -> &'static str {
+        "icechunk.StorageRetriesSettings"
+    }
+    fn fields(&self, _mode: ReprMode) -> Vec<(&str, String)> {
+        vec![
+            ("max_tries", py_option(&self.max_tries)),
+            ("initial_backoff_ms", py_option(&self.initial_backoff_ms)),
+            ("max_backoff_ms", py_option(&self.max_backoff_ms)),
+        ]
+    }
+}
+
 #[pymethods]
 impl PyStorageRetriesSettings {
     #[pyo3(signature = (max_tries=None, initial_backoff_ms=None, max_backoff_ms=None))]
@@ -892,17 +1061,14 @@ impl PyStorageRetriesSettings {
     }
 
     pub fn __repr__(&self) -> String {
-        storage_retries_settings_repr(self)
+        <Self as PyRepr>::__repr__(self)
     }
-}
-
-fn storage_retries_settings_repr(s: &PyStorageRetriesSettings) -> String {
-    format!(
-        r#"StorageRetriesSettings(max_tries={max}, initial_backoff_ms={init}, max_backoff_ms={max_back})"#,
-        max = py_option(&s.max_tries),
-        init = py_option(&s.initial_backoff_ms),
-        max_back = py_option(&s.max_backoff_ms),
-    )
+    pub fn __str__(&self) -> String {
+        <Self as PyRepr>::__str__(self)
+    }
+    pub fn _repr_html_(&self) -> String {
+        <Self as PyRepr>::_repr_html_(self)
+    }
 }
 
 #[pyclass(name = "StorageTimeoutSettings", eq)]
@@ -940,6 +1106,24 @@ impl From<&PyStorageTimeoutSettings> for storage::TimeoutSettings {
     }
 }
 
+impl PyRepr for PyStorageTimeoutSettings {
+    const EXECUTABLE: bool = true;
+    fn cls_name() -> &'static str {
+        "icechunk.StorageTimeoutSettings"
+    }
+    fn fields(&self, _mode: ReprMode) -> Vec<(&str, String)> {
+        vec![
+            ("connect_timeout_ms", py_option(&self.connect_timeout_ms)),
+            ("read_timeout_ms", py_option(&self.read_timeout_ms)),
+            ("operation_timeout_ms", py_option(&self.operation_timeout_ms)),
+            (
+                "operation_attempt_timeout_ms",
+                py_option(&self.operation_attempt_timeout_ms),
+            ),
+        ]
+    }
+}
+
 #[pymethods]
 impl PyStorageTimeoutSettings {
     #[pyo3(signature = (connect_timeout_ms=None, read_timeout_ms=None, operation_timeout_ms=None, operation_attempt_timeout_ms=None))]
@@ -959,13 +1143,13 @@ impl PyStorageTimeoutSettings {
     }
 
     pub fn __repr__(&self) -> String {
-        format!(
-            r#"StorageTimeoutSettings(connect_timeout_ms={c}, read_timeout_ms={r}, operation_timeout_ms={o}, operation_attempt_timeout_ms={oa})"#,
-            c = py_option(&self.connect_timeout_ms),
-            r = py_option(&self.read_timeout_ms),
-            o = py_option(&self.operation_timeout_ms),
-            oa = py_option(&self.operation_attempt_timeout_ms),
-        )
+        <Self as PyRepr>::__repr__(self)
+    }
+    pub fn __str__(&self) -> String {
+        <Self as PyRepr>::__str__(self)
+    }
+    pub fn _repr_html_(&self) -> String {
+        <Self as PyRepr>::_repr_html_(self)
     }
 }
 
@@ -1004,6 +1188,16 @@ impl From<&PyRepoUpdateRetryConfig> for RepoUpdateRetryConfig {
     }
 }
 
+impl PyRepr for PyRepoUpdateRetryConfig {
+    const EXECUTABLE: bool = true;
+    fn cls_name() -> &'static str {
+        "icechunk.RepoUpdateRetryConfig"
+    }
+    fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
+        vec![("default", py_option_nested_repr(&self.default, mode))]
+    }
+}
+
 #[pymethods]
 impl PyRepoUpdateRetryConfig {
     #[pyo3(signature = (default=None))]
@@ -1013,16 +1207,13 @@ impl PyRepoUpdateRetryConfig {
     }
 
     pub fn __repr__(&self) -> String {
-        Python::attach(|py| {
-            format!(
-                r#"RepoUpdateRetryConfig(default={default})"#,
-                default = self
-                    .default
-                    .as_ref()
-                    .map(|r| storage_retries_settings_repr(&r.borrow(py)))
-                    .unwrap_or_else(|| "None".to_string()),
-            )
-        })
+        <Self as PyRepr>::__repr__(self)
+    }
+    pub fn __str__(&self) -> String {
+        <Self as PyRepr>::__str__(self)
+    }
+    pub fn _repr_html_(&self) -> String {
+        <Self as PyRepr>::_repr_html_(self)
     }
 }
 
@@ -1053,6 +1244,25 @@ impl From<&PyStorageConcurrencySettings> for ConcurrencySettings {
     }
 }
 
+impl PyRepr for PyStorageConcurrencySettings {
+    const EXECUTABLE: bool = true;
+    fn cls_name() -> &'static str {
+        "icechunk.StorageConcurrencySettings"
+    }
+    fn fields(&self, _mode: ReprMode) -> Vec<(&str, String)> {
+        vec![
+            (
+                "max_concurrent_requests_for_object",
+                py_option(&self.max_concurrent_requests_for_object),
+            ),
+            (
+                "ideal_concurrent_request_size",
+                py_option(&self.ideal_concurrent_request_size),
+            ),
+        ]
+    }
+}
+
 #[pymethods]
 impl PyStorageConcurrencySettings {
     #[pyo3(signature = (max_concurrent_requests_for_object=None, ideal_concurrent_request_size=None))]
@@ -1065,16 +1275,14 @@ impl PyStorageConcurrencySettings {
     }
 
     pub fn __repr__(&self) -> String {
-        storage_concurrency_settings_repr(self)
+        <Self as PyRepr>::__repr__(self)
     }
-}
-
-fn storage_concurrency_settings_repr(s: &PyStorageConcurrencySettings) -> String {
-    format!(
-        r#"StorageConcurrencySettings(max_concurrent_requests_for_object={max}, ideal_concurrent_request_size={ideal})"#,
-        max = py_option(&s.max_concurrent_requests_for_object),
-        ideal = py_option(&s.ideal_concurrent_request_size),
-    )
+    pub fn __str__(&self) -> String {
+        <Self as PyRepr>::__str__(self)
+    }
+    pub fn _repr_html_(&self) -> String {
+        <Self as PyRepr>::_repr_html_(self)
+    }
 }
 
 #[pyclass(name = "StorageSettings", eq)]
@@ -1158,6 +1366,46 @@ impl PartialEq for PyStorageSettings {
 
 impl Eq for PyStorageSettings {}
 
+impl PyRepr for PyStorageSettings {
+    const EXECUTABLE: bool = true;
+    fn cls_name() -> &'static str {
+        "icechunk.StorageSettings"
+    }
+    fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
+        // Scalar fields first, then nested objects
+        vec![
+            (
+                "unsafe_use_conditional_create",
+                self.unsafe_use_conditional_create
+                    .map(py_bool)
+                    .unwrap_or_else(|| "None".to_string()),
+            ),
+            (
+                "unsafe_use_conditional_update",
+                self.unsafe_use_conditional_update
+                    .map(py_bool)
+                    .unwrap_or_else(|| "None".to_string()),
+            ),
+            (
+                "unsafe_use_metadata",
+                self.unsafe_use_metadata
+                    .map(py_bool)
+                    .unwrap_or_else(|| "None".to_string()),
+            ),
+            ("storage_class", py_option_str(&self.storage_class)),
+            ("metadata_storage_class", py_option_str(&self.metadata_storage_class)),
+            ("chunks_storage_class", py_option_str(&self.chunks_storage_class)),
+            (
+                "minimum_size_for_multipart_upload",
+                py_option(&self.minimum_size_for_multipart_upload),
+            ),
+            ("concurrency", py_option_nested_repr(&self.concurrency, mode)),
+            ("retries", py_option_nested_repr(&self.retries, mode)),
+            ("timeouts", py_option_nested_repr(&self.timeouts, mode)),
+        ]
+    }
+}
+
 #[pymethods]
 impl PyStorageSettings {
     #[pyo3(signature = ( concurrency=None, retries=None, unsafe_use_conditional_create=None, unsafe_use_conditional_update=None, unsafe_use_metadata=None, storage_class=None, metadata_storage_class=None, chunks_storage_class=None, minimum_size_for_multipart_upload=None, timeouts=None))]
@@ -1190,43 +1438,13 @@ impl PyStorageSettings {
     }
 
     pub fn __repr__(&self) -> String {
-        let inner_conc = match &self.concurrency {
-            None => "None".to_string(),
-            Some(conc) => Python::attach(|py| {
-                let conc = &*conc.borrow(py);
-                storage_concurrency_settings_repr(conc)
-            }),
-        };
-
-        let inner_retries = match &self.retries {
-            None => "None".to_string(),
-            Some(retries) => Python::attach(|py| {
-                let conc = &*retries.borrow(py);
-                storage_retries_settings_repr(conc)
-            }),
-        };
-        let inner_timeouts = match &self.timeouts {
-            None => "None".to_string(),
-            Some(timeouts) => Python::attach(|py| timeouts.borrow(py).__repr__()),
-        };
-        format!(
-            r#"StorageSettings(concurrency={conc}, retries={retr}, timeouts={tout}, unsafe_use_conditional_create={cr}, unsafe_use_conditional_update={up}, unsafe_use_metadata={me}, storage_class={sc}, metadata_storage_class={msc}, chunks_storage_class={csc})"#,
-            conc = inner_conc,
-            retr = inner_retries,
-            tout = inner_timeouts,
-            cr = format_option(self.unsafe_use_conditional_create.map(format_bool)),
-            up = format_option(self.unsafe_use_conditional_update.map(format_bool)),
-            me = format_option(self.unsafe_use_metadata.map(format_bool)),
-            sc = format_option(
-                self.storage_class.as_ref().map(|s| format_str(s.as_str()))
-            ),
-            msc = format_option(
-                self.metadata_storage_class.as_ref().map(|s| format_str(s.as_str()))
-            ),
-            csc = format_option(
-                self.chunks_storage_class.as_ref().map(|s| format_str(s.as_str()))
-            ),
-        )
+        <Self as PyRepr>::__repr__(self)
+    }
+    pub fn __str__(&self) -> String {
+        <Self as PyRepr>::__str__(self)
+    }
+    pub fn _repr_html_(&self) -> String {
+        <Self as PyRepr>::_repr_html_(self)
     }
 }
 
@@ -1274,11 +1492,59 @@ impl PyManifestPreloadCondition {
         Self::False()
     }
 
+    pub fn __repr__(&self) -> String {
+        use PyManifestPreloadCondition::*;
+        match self {
+            Or(conditions) => {
+                let inner: Vec<_> = conditions.iter().map(|c| c.__repr__()).collect();
+                format!(
+                    "icechunk.ManifestPreloadCondition.or_conditions([{}])",
+                    inner.join(", ")
+                )
+            }
+            And(conditions) => {
+                let inner: Vec<_> = conditions.iter().map(|c| c.__repr__()).collect();
+                format!(
+                    "icechunk.ManifestPreloadCondition.and_conditions([{}])",
+                    inner.join(", ")
+                )
+            }
+            PathMatches { regex } => {
+                format!("icechunk.ManifestPreloadCondition.path_matches(\"{regex}\")")
+            }
+            NameMatches { regex } => {
+                format!("icechunk.ManifestPreloadCondition.name_matches(\"{regex}\")")
+            }
+            NumRefs { from, to } => {
+                format!(
+                    "icechunk.ManifestPreloadCondition.num_refs({}, {})",
+                    py_option(from),
+                    py_option(to),
+                )
+            }
+            True() => "icechunk.ManifestPreloadCondition.true()".to_string(),
+            False() => "icechunk.ManifestPreloadCondition.false()".to_string(),
+        }
+    }
+
+    pub fn __str__(&self) -> String {
+        self.__repr__()
+    }
+
     pub fn __and__(&self, other: &Self) -> Self {
         Self::And(vec![self.clone(), other.clone()])
     }
     pub fn __or__(&self, other: &Self) -> Self {
         Self::Or(vec![self.clone(), other.clone()])
+    }
+}
+
+impl PyManifestPreloadCondition {
+    pub(crate) fn render(&self, mode: ReprMode) -> String {
+        match mode {
+            ReprMode::Str => self.__str__(),
+            ReprMode::Repr | ReprMode::Html => self.__repr__(),
+        }
     }
 }
 
@@ -1348,6 +1614,24 @@ pub struct PyManifestPreloadConfig {
     pub max_arrays_to_scan: Option<u32>,
 }
 
+impl PyRepr for PyManifestPreloadConfig {
+    const EXECUTABLE: bool = true;
+    fn cls_name() -> &'static str {
+        "icechunk.ManifestPreloadConfig"
+    }
+    fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
+        let preload_if = match &self.preload_if {
+            None => "None".to_string(),
+            Some(py_obj) => Python::attach(|py| py_obj.borrow(py).render(mode)),
+        };
+        vec![
+            ("max_total_refs", py_option(&self.max_total_refs)),
+            ("preload_if", preload_if),
+            ("max_arrays_to_scan", py_option(&self.max_arrays_to_scan)),
+        ]
+    }
+}
+
 #[pymethods]
 impl PyManifestPreloadConfig {
     #[new]
@@ -1358,6 +1642,16 @@ impl PyManifestPreloadConfig {
         max_arrays_to_scan: Option<u32>,
     ) -> Self {
         Self { max_total_refs, preload_if, max_arrays_to_scan }
+    }
+
+    pub fn __repr__(&self) -> String {
+        <Self as PyRepr>::__repr__(self)
+    }
+    pub fn __str__(&self) -> String {
+        <Self as PyRepr>::__str__(self)
+    }
+    pub fn _repr_html_(&self) -> String {
+        <Self as PyRepr>::_repr_html_(self)
     }
 }
 
@@ -1426,27 +1720,31 @@ impl PyManifestSplitCondition {
         use PyManifestSplitCondition::*;
         match self {
             Or(conditions) => {
-                let mut res =
-                    conditions.iter().fold("Or(".to_string(), |mut state, condition| {
-                        state.push_str(&condition.__repr__());
-                        state
-                    });
-                res.push(')');
-                res
+                let inner: Vec<_> = conditions.iter().map(|c| c.__repr__()).collect();
+                format!(
+                    "icechunk.ManifestSplitCondition.or_conditions([{}])",
+                    inner.join(", ")
+                )
             }
             And(conditions) => {
-                let mut res =
-                    conditions.iter().fold("And(".to_string(), |mut state, condition| {
-                        state.push_str(&condition.__repr__());
-                        state
-                    });
-                res.push(')');
-                res
+                let inner: Vec<_> = conditions.iter().map(|c| c.__repr__()).collect();
+                format!(
+                    "icechunk.ManifestSplitCondition.and_conditions([{}])",
+                    inner.join(", ")
+                )
             }
-            PathMatches { regex } => format!("PathMatches('{regex}')"),
-            NameMatches { regex } => format!("NameMatches('{regex}')"),
-            AnyArray() => "AnyArray".to_string(),
+            PathMatches { regex } => {
+                format!("icechunk.ManifestSplitCondition.path_matches(\"{regex}\")")
+            }
+            NameMatches { regex } => {
+                format!("icechunk.ManifestSplitCondition.name_matches(\"{regex}\")")
+            }
+            AnyArray() => "icechunk.ManifestSplitCondition.any_array()".to_string(),
         }
+    }
+
+    pub fn __str__(&self) -> String {
+        self.__repr__()
     }
 
     fn __hash__(&self) -> usize {
@@ -1461,6 +1759,15 @@ impl PyManifestSplitCondition {
 
     fn __and__(&self, other: &Self) -> Self {
         Self::And(vec![self.clone(), other.clone()])
+    }
+}
+
+impl PyManifestSplitCondition {
+    pub(crate) fn render(&self, mode: ReprMode) -> String {
+        match mode {
+            ReprMode::Str => self.__str__(),
+            ReprMode::Repr | ReprMode::Html => self.__repr__(),
+        }
     }
 }
 
@@ -1503,16 +1810,31 @@ impl PyManifestSplitDimCondition {
     pub fn __repr__(&self) -> String {
         use PyManifestSplitDimCondition::*;
         match self {
-            Axis(axis) => format!("Axis({axis})"),
-            DimensionName(name) => format!(r#"DimensionName("{name}")"#),
-            Any() => "Any".to_string(),
+            Axis(axis) => format!("icechunk.ManifestSplitDimCondition.axis({axis})"),
+            DimensionName(name) => {
+                format!("icechunk.ManifestSplitDimCondition.dimension_name(\"{name}\")")
+            }
+            Any() => "icechunk.ManifestSplitDimCondition.any()".to_string(),
         }
+    }
+
+    pub fn __str__(&self) -> String {
+        self.__repr__()
     }
 
     fn __hash__(&self) -> usize {
         let mut hasher = DefaultHasher::new();
         self.hash(&mut hasher);
         hasher.finish() as usize
+    }
+}
+
+impl PyManifestSplitDimCondition {
+    pub(crate) fn render(&self, mode: ReprMode) -> String {
+        match mode {
+            ReprMode::Str => self.__str__(),
+            ReprMode::Repr | ReprMode::Html => self.__repr__(),
+        }
     }
 }
 
@@ -1546,6 +1868,38 @@ pub struct PyManifestSplittingConfig {
     pub split_sizes: Option<Vec<(PyManifestSplitCondition, DimConditions)>>,
 }
 
+impl PyRepr for PyManifestSplittingConfig {
+    const EXECUTABLE: bool = true;
+    fn cls_name() -> &'static str {
+        "icechunk.ManifestSplittingConfig"
+    }
+    fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
+        let split_sizes = match &self.split_sizes {
+            None => "None".to_string(),
+            Some(sizes) => {
+                let reprs: Vec<String> = sizes
+                    .iter()
+                    .map(|(condition, dims)| {
+                        let dims_repr: Vec<String> = dims
+                            .iter()
+                            .map(|(dim_condition, num)| {
+                                format!("({}, {num})", dim_condition.render(mode))
+                            })
+                            .collect();
+                        format!(
+                            "({}, [{}])",
+                            condition.render(mode),
+                            dims_repr.join(", ")
+                        )
+                    })
+                    .collect();
+                format!("[{}]", reprs.join(", "))
+            }
+        };
+        vec![("split_sizes", split_sizes)]
+    }
+}
+
 #[pymethods]
 impl PyManifestSplittingConfig {
     #[new]
@@ -1555,26 +1909,13 @@ impl PyManifestSplittingConfig {
     }
 
     pub fn __repr__(&self) -> String {
-        match &self.split_sizes {
-            Some(split_sizes) => {
-                let reprs: Vec<String> = split_sizes
-                    .iter()
-                    .map(|(condition, dims)| {
-                        let condition_repr = format!("{condition:?}"); // Using Debug for PyManifestSplitCondition
-                        let dims_repr: Vec<String> = dims
-                            .iter()
-                            .map(|(dim_condition, num)| {
-                                format!("({dim_condition:?}, {num})")
-                            })
-                            .collect();
-                        format!("({}, [{}])", condition_repr, dims_repr.join(", "))
-                    })
-                    .collect();
-
-                format!("ManifestSplittingConfig({})", reprs.join(", "))
-            }
-            None => "ManifestSplittingConfig(None)".to_string(),
-        }
+        <Self as PyRepr>::__repr__(self)
+    }
+    pub fn __str__(&self) -> String {
+        <Self as PyRepr>::__str__(self)
+    }
+    pub fn _repr_html_(&self) -> String {
+        <Self as PyRepr>::_repr_html_(self)
     }
 }
 
@@ -1642,6 +1983,24 @@ pub struct PyManifestVirtualChunkLocationCompressionConfig {
     pub compression_level: Option<i32>,
 }
 
+impl PyRepr for PyManifestVirtualChunkLocationCompressionConfig {
+    const EXECUTABLE: bool = true;
+    fn cls_name() -> &'static str {
+        "icechunk.ManifestVirtualChunkLocationCompressionConfig"
+    }
+    fn fields(&self, _mode: ReprMode) -> Vec<(&str, String)> {
+        vec![
+            ("min_num_chunks", py_option(&self.min_num_chunks)),
+            (
+                "dictionary_max_training_samples",
+                py_option(&self.dictionary_max_training_samples),
+            ),
+            ("dictionary_max_size_bytes", py_option(&self.dictionary_max_size_bytes)),
+            ("compression_level", py_option(&self.compression_level)),
+        ]
+    }
+}
+
 #[pymethods]
 impl PyManifestVirtualChunkLocationCompressionConfig {
     #[new]
@@ -1661,13 +2020,13 @@ impl PyManifestVirtualChunkLocationCompressionConfig {
     }
 
     pub fn __repr__(&self) -> String {
-        format!(
-            "ManifestVirtualChunkLocationCompressionConfig(min_num_chunks={}, dictionary_max_training_samples={}, dictionary_max_size_bytes={}, compression_level={})",
-            py_option(&self.min_num_chunks),
-            py_option(&self.dictionary_max_training_samples),
-            py_option(&self.dictionary_max_size_bytes),
-            py_option(&self.compression_level),
-        )
+        <Self as PyRepr>::__repr__(self)
+    }
+    pub fn __str__(&self) -> String {
+        <Self as PyRepr>::__str__(self)
+    }
+    pub fn _repr_html_(&self) -> String {
+        <Self as PyRepr>::_repr_html_(self)
     }
 }
 
@@ -1717,6 +2076,23 @@ pub struct PyManifestConfig {
         Option<Py<PyManifestVirtualChunkLocationCompressionConfig>>,
 }
 
+impl PyRepr for PyManifestConfig {
+    const EXECUTABLE: bool = true;
+    fn cls_name() -> &'static str {
+        "icechunk.ManifestConfig"
+    }
+    fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
+        vec![
+            ("preload", py_option_nested_repr(&self.preload, mode)),
+            ("splitting", py_option_nested_repr(&self.splitting, mode)),
+            (
+                "virtual_chunk_location_compression",
+                py_option_nested_repr(&self.virtual_chunk_location_compression, mode),
+            ),
+        ]
+    }
+}
+
 #[pymethods]
 impl PyManifestConfig {
     #[new]
@@ -1732,14 +2108,13 @@ impl PyManifestConfig {
     }
 
     pub fn __repr__(&self) -> String {
-        format!(
-            r#"ManifestConfig(preload={pre}, splitting={spl}, virtual_chunk_location_compression={comp})"#,
-            pre = py_option(&self.preload.as_ref().map(|l| l.to_string())),
-            spl = py_option(&self.splitting.as_ref().map(|l| l.to_string())),
-            comp = py_option(
-                &self.virtual_chunk_location_compression.as_ref().map(|l| l.to_string())
-            ),
-        )
+        <Self as PyRepr>::__repr__(self)
+    }
+    pub fn __str__(&self) -> String {
+        <Self as PyRepr>::__str__(self)
+    }
+    pub fn _repr_html_(&self) -> String {
+        <Self as PyRepr>::_repr_html_(self)
     }
 }
 
@@ -1907,7 +2282,63 @@ impl PyRepr for PyRepositoryConfig {
     }
 
     fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
-        // TODO: add compression, storage, manifest fields once they implement PyRepr
+        // Scalar fields first, then nested objects, so simple values
+        // aren't broken up by large nested blocks in str/html output.
+        let vccs = match &self.virtual_chunk_containers {
+            None => "None".to_string(),
+            Some(map) if map.is_empty() => "{}".to_string(),
+            Some(map) => {
+                use std::fmt::Write as _;
+                let mut out = String::new();
+                match mode {
+                    ReprMode::Html => {
+                        let _ = write!(out, "<div class=\"icechunk-repr\">");
+                        for (prefix, vcc) in map {
+                            let _ = write!(
+                                out,
+                                "<details><summary class=\"icechunk-field-name\">{prefix}</summary>{}</details>",
+                                vcc.render(ReprMode::Html),
+                            );
+                        }
+                        let _ = write!(out, "</div>");
+                    }
+                    ReprMode::Repr => {
+                        // Black/ruff-style dict formatting:
+                        // {
+                        //     "key": VirtualChunkContainer(
+                        //         ...
+                        //     ),
+                        // }
+                        let _ = writeln!(out, "{{");
+                        for (prefix, vcc) in map {
+                            let rendered = vcc.render(ReprMode::Repr);
+                            let mut lines = rendered.lines();
+                            if let Some(first) = lines.next() {
+                                let _ = write!(out, "    \"{prefix}\": {first}");
+                            }
+                            for line in lines {
+                                let _ = write!(out, "\n    {line}");
+                            }
+                            let _ = writeln!(out, ",");
+                        }
+                        let _ = write!(out, "}}");
+                    }
+                    ReprMode::Str => {
+                        // Readable dict:
+                        // s3://my-data/:
+                        //     <icechunk.VirtualChunkContainer>
+                        //     url_prefix: ...
+                        for (prefix, vcc) in map {
+                            let _ = writeln!(out, "{prefix}:");
+                            for line in vcc.render(ReprMode::Str).lines() {
+                                let _ = writeln!(out, "    {line}");
+                            }
+                        }
+                    }
+                }
+                out
+            }
+        };
         vec![
             (
                 "inline_chunk_threshold_bytes",
@@ -1917,7 +2348,20 @@ impl PyRepr for PyRepositoryConfig {
                 "get_partial_values_concurrency",
                 py_option(&self.get_partial_values_concurrency),
             ),
+            ("max_concurrent_requests", py_option(&self.max_concurrent_requests)),
+            (
+                "num_updates_per_repo_info_file",
+                py_option(&self.num_updates_per_repo_info_file),
+            ),
+            ("compression", py_option_nested_repr(&self.compression, mode)),
             ("caching", py_option_nested_repr(&self.caching, mode)),
+            ("storage", py_option_nested_repr(&self.storage, mode)),
+            ("manifest", py_option_nested_repr(&self.manifest, mode)),
+            (
+                "repo_update_retries",
+                py_option_nested_repr(&self.repo_update_retries, mode),
+            ),
+            ("virtual_chunk_containers", vccs),
         ]
     }
 }
@@ -2024,13 +2468,30 @@ pub(crate) struct PyStorageObjectInfo {
     pub created_at: DateTime<Utc>,
 }
 
+impl PyRepr for PyStorageObjectInfo {
+    const EXECUTABLE: bool = false;
+    fn cls_name() -> &'static str {
+        "icechunk.StorageObjectInfo"
+    }
+    fn fields(&self, _mode: ReprMode) -> Vec<(&str, String)> {
+        vec![
+            ("key", self.key.clone()),
+            ("size_bytes", self.size_bytes.to_string()),
+            ("created_at", datetime_repr(&self.created_at)),
+        ]
+    }
+}
+
 #[pymethods]
 impl PyStorageObjectInfo {
     fn __repr__(&self) -> String {
-        format!(
-            "StorageObjectInfo(key='{}', size_bytes={}, created_at={})",
-            self.key, self.size_bytes, self.created_at,
-        )
+        <Self as PyRepr>::__repr__(self)
+    }
+    fn __str__(&self) -> String {
+        <Self as PyRepr>::__str__(self)
+    }
+    fn _repr_html_(&self) -> String {
+        <Self as PyRepr>::_repr_html_(self)
     }
 }
 
@@ -2324,6 +2785,10 @@ impl PyStorage {
 
     pub(crate) fn __repr__(&self) -> String {
         format!("{}", self.0)
+    }
+
+    pub(crate) fn __str__(&self) -> String {
+        self.__repr__()
     }
 
     pub(crate) fn default_settings(&self) -> PyResult<PyStorageSettings> {
