@@ -204,7 +204,7 @@ def test_repository_open_no_list_bucket(any_spec_version: int | None) -> None:
     prefix = "test-repo__" + str(time.time())
     (access_key_id, secret_access_key) = Permission.MODIFY.keys()
     write_storage = s3_storage(
-        endpoint_url="http://localhost:9000",
+        endpoint_url="http://localhost:4200",
         allow_http=True,
         force_path_style=True,
         region="us-east-1",
@@ -215,7 +215,7 @@ def test_repository_open_no_list_bucket(any_spec_version: int | None) -> None:
     )
     (access_key_id, secret_access_key) = Permission.READONLY.keys()
     readonly_storage = s3_storage(
-        endpoint_url="http://localhost:9000",
+        endpoint_url="http://localhost:4200",
         allow_http=True,
         force_path_style=True,
         region="us-east-1",

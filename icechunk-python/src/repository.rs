@@ -6,6 +6,7 @@ use std::{
     sync::Arc,
 };
 
+use crate::display::{PyRepr, ReprMode, py_option};
 use itertools::Itertools as _;
 
 use chrono::{DateTime, Utc};
@@ -21,7 +22,7 @@ use icechunk::{
         repo_info::{RepoAvailability, RepoStatus, UpdateType},
         snapshot::{ManifestFileInfo, SnapshotInfo, SnapshotProperties},
     },
-    inspect::{manifest_json, repo_info_json, snapshot_json},
+    inspect::{manifest_json, repo_info_json, snapshot_json, transaction_log_json},
     migrations,
     ops::{
         gc::{ExpiredRefAction, GCConfig, GCSummary, expire, garbage_collect},
@@ -42,7 +43,7 @@ use tokio::sync::{Mutex, RwLock};
 use crate::{
     config::{
         PyCredentials, PyRepositoryConfig, PyStorage, PyStorageSettings, datetime_repr,
-        format_bool, format_option, format_option_to_string,
+        format_bool, format_option,
     },
     errors::PyIcechunkStoreError,
     impl_pickle,
@@ -224,15 +225,36 @@ impl From<SnapshotInfo> for PySnapshotInfo {
     }
 }
 
+// TODO: pass `mode` through once nested fields implement PyRepr
+#[expect(unused_variables)]
+impl PyRepr for PyManifestFileInfo {
+    const EXECUTABLE: bool = false;
+
+    fn cls_name() -> &'static str {
+        "icechunk.ManifestFileInfo"
+    }
+
+    fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
+        vec![
+            ("id", self.id.clone()),
+            ("size_bytes", self.size_bytes.to_string()),
+            ("num_chunk_refs", self.num_chunk_refs.to_string()),
+        ]
+    }
+}
+
 #[pymethods]
 impl PyManifestFileInfo {
     pub(crate) fn __repr__(&self) -> String {
-        format!(
-            r#"ManifestFileInfo(id="{id}", size_bytes={size}, num_chunk_refs={chunks})"#,
-            id = self.id,
-            size = self.size_bytes,
-            chunks = self.num_chunk_refs,
-        )
+        <Self as PyRepr>::__repr__(self)
+    }
+
+    pub(crate) fn __str__(&self) -> String {
+        <Self as PyRepr>::__str__(self)
+    }
+
+    pub(crate) fn _repr_html_(&self) -> String {
+        <Self as PyRepr>::_repr_html_(self)
     }
 }
 
@@ -243,7 +265,7 @@ impl PySnapshotInfo {
         format!(
             r#"SnapshotInfo(id="{id}", parent_id={parent}, written_at={at}, message="{message}")"#,
             id = self.id,
-            parent = format_option_to_string(self.parent_id.as_ref()),
+            parent = py_option(&self.parent_id),
             at = datetime_repr(&self.written_at),
             // TODO: what would be a better default here?
             message = self.message.chars().take(10).collect::<String>() + "...",
@@ -539,7 +561,7 @@ impl PyRepoStatus {
             "RepoStatus(availability={:?}, set_at={}, limited_availability_reason={})",
             self.availability,
             self.set_at,
-            format_option_to_string(self.limited_availability_reason.as_ref()),
+            py_option(&self.limited_availability_reason),
         )
     }
 }
@@ -998,10 +1020,37 @@ impl PyRepository {
     }
 }
 
+impl PyRepr for PyRepository {
+    const EXECUTABLE: bool = false;
+
+    fn cls_name() -> &'static str {
+        "icechunk.Repository"
+    }
+
+    fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
+        let repo = self.0.blocking_read();
+        let storage = format!("{}", repo.storage());
+        let py_config: PyRepositoryConfig = repo.config().clone().into();
+        vec![("storage", storage), ("config", py_config.render(mode))]
+    }
+}
+
 #[pymethods]
 /// Most functions in this class call `Runtime.block_on` so they need to `detach` so other
 /// python threads can make progress in the case of an actual block
 impl PyRepository {
+    pub(crate) fn __repr__(&self) -> String {
+        <Self as PyRepr>::__repr__(self)
+    }
+
+    pub(crate) fn __str__(&self) -> String {
+        <Self as PyRepr>::__str__(self)
+    }
+
+    pub(crate) fn _repr_html_(&self) -> String {
+        <Self as PyRepr>::_repr_html_(self)
+    }
+
     #[classmethod]
     #[pyo3(signature = (storage, *, config = None, authorize_virtual_chunk_access = None, spec_version = None, check_clean_root = true))]
     fn create(
@@ -2817,6 +2866,48 @@ impl PyRepository {
                 })
                 .map_err(PyIcechunkStoreError::RepositoryError)?;
             let res = manifest_json(lock.asset_manager(), &id, pretty)
+                .await
+                .map_err(PyIcechunkStoreError::RepositoryError)?;
+            Ok(res)
+        })
+    }
+
+    #[pyo3(signature = (snapshot_id, *, pretty = true))]
+    fn inspect_transaction_log(
+        &self,
+        snapshot_id: String,
+        pretty: bool,
+    ) -> PyResult<String> {
+        let result = pyo3_async_runtimes::tokio::get_runtime()
+            .block_on(async move {
+                let lock = self.0.read().await;
+                let snap = SnapshotId::try_from(snapshot_id.as_str()).map_err(|e| {
+                    RepositoryError::capture(RepositoryErrorKind::Other(e.to_string()))
+                })?;
+                let res =
+                    transaction_log_json(lock.asset_manager(), &snap, pretty).await?;
+                Ok(res)
+            })
+            .map_err(PyIcechunkStoreError::RepositoryError)?;
+        Ok(result)
+    }
+
+    #[pyo3(signature = (snapshot_id, *, pretty = true))]
+    fn inspect_transaction_log_async<'py>(
+        &self,
+        py: Python<'py>,
+        snapshot_id: String,
+        pretty: bool,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let repository = Arc::clone(&self.0);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let lock = repository.read().await;
+            let snap = SnapshotId::try_from(snapshot_id.as_str())
+                .map_err(|e| {
+                    RepositoryError::capture(RepositoryErrorKind::Other(e.to_string()))
+                })
+                .map_err(PyIcechunkStoreError::RepositoryError)?;
+            let res = transaction_log_json(lock.asset_manager(), &snap, pretty)
                 .await
                 .map_err(PyIcechunkStoreError::RepositoryError)?;
             Ok(res)

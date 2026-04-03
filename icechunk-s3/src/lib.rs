@@ -1091,7 +1091,7 @@ mod tests {
     async fn test_serialize_s3_storage() {
         let config = S3Options {
             region: Some("us-west-2".to_string()),
-            endpoint_url: Some("http://localhost:9000".to_string()),
+            endpoint_url: Some("http://localhost:4200".to_string()),
             allow_http: true,
             anonymous: false,
             force_path_style: false,
@@ -1119,7 +1119,7 @@ mod tests {
 
         assert_eq!(
             serialized,
-            r#"{"config":{"region":"us-west-2","endpoint_url":"http://localhost:9000","anonymous":false,"allow_http":true,"force_path_style":false,"network_stream_timeout_seconds":null,"requester_pays":false},"credentials":{"s3_credential_type":"static","access_key_id":"access_key_id","secret_access_key":"secret_access_key","session_token":"session_token","expires_after":null},"bucket":"bucket","prefix":"prefix","can_write":true,"extra_read_headers":[],"extra_write_headers":[]}"#
+            r#"{"config":{"region":"us-west-2","endpoint_url":"http://localhost:4200","anonymous":false,"allow_http":true,"force_path_style":false,"network_stream_timeout_seconds":null,"requester_pays":false},"credentials":{"s3_credential_type":"static","access_key_id":"access_key_id","secret_access_key":"secret_access_key","session_token":"session_token","expires_after":null},"bucket":"bucket","prefix":"prefix","can_write":true,"extra_read_headers":[],"extra_write_headers":[]}"#
         );
 
         let deserialized: S3Storage = serde_json::from_str(&serialized).unwrap();

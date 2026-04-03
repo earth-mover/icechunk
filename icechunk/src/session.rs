@@ -170,6 +170,8 @@ pub enum SessionErrorKind {
     NoAmendForInitialCommit,
     #[error("failed to create manifest from chunk stream")]
     ManifestCreationError(#[from] Box<SessionError>),
+    #[error("failed to merge sessions: {0}")]
+    SessionMerge(String),
     #[error("byte range {request:?} is out of bounds for chunk of length {chunk_length}")]
     InvalidByteRange { request: ByteRange, chunk_length: u64 },
     #[error("invalid commit configuration: {reason}")]
@@ -624,7 +626,7 @@ impl Session {
             self.snapshot_id.clone(),
         );
         let mut builder = DiffBuilder::default();
-        builder.add_changes(&tx_log);
+        builder.add_changes(&tx_log).inject()?;
         builder.to_diff(&from_session, self).await
     }
 
@@ -789,7 +791,7 @@ impl Session {
         // Icechunk 1 has no way to represent move in its on-disk format
         self.asset_manager.fail_unless_spec_at_least(SpecVersionBin::V2).inject()?;
         // does the source node exist?
-        let _ = self.get_node(&from).await?;
+        let node = self.get_node(&from).await?;
         // are we overwriting the destination node?
         if (self.get_node(&to).await).is_ok() {
             return Err(SessionError::capture(SessionErrorKind::MoveWontOverwrite(
@@ -797,7 +799,24 @@ impl Session {
             )));
         }
 
-        self.change_set_mut()?.move_node(from, to)?;
+        // Get updated subtree
+        let subtree_data: Vec<(Path, NodeId, NodeType)> = updated_nodes(
+            &from,
+            &self.asset_manager,
+            &self.change_set,
+            self.snapshot_id(),
+        )
+        .await?
+        .filter_map(|r| r.ok().map(|n| (n.path.clone(), n.id.clone(), n.node_type())))
+        .collect();
+
+        self.change_set_mut()?.move_node(
+            from,
+            to,
+            subtree_data,
+            &node.id,
+            node.node_type(),
+        )?;
         Ok(())
     }
 
@@ -2098,18 +2117,33 @@ async fn updated_existing_nodes<'a>(
     change_set: &'a ChangeSet,
     parent_id: &SnapshotId,
 ) -> SessionResult<impl Iterator<Item = SessionResult<NodeSnapshot>> + use<'a>> {
-    let updated_nodes = asset_manager
-        .fetch_snapshot(parent_id)
-        .await
-        .inject()?
-        .iter_arc(parent_group)
-        .filter_map_ok(move |node| change_set.update_existing_node(node))
-        .map(|n| match n {
-            Ok(n) => Ok(n),
-            Err(err) => Err(err.inject()),
-        });
+    let parent_group = parent_group.clone();
+    let snapshot = asset_manager.fetch_snapshot(parent_id).await.inject()?;
 
-    Ok(updated_nodes)
+    let mut moved_nodes: Vec<SessionResult<NodeSnapshot>> = Vec::new();
+    for (orig, final_path) in change_set.moved_into(&parent_group) {
+        match snapshot.get_node(&orig) {
+            Ok(node) => {
+                moved_nodes
+                    .push(Ok(NodeSnapshot { path: final_path, ..(*node).clone() }));
+            }
+            Err(err) => moved_nodes.push(Err(err.inject())),
+        }
+    }
+
+    // Skip remapped nodes — they're already in moved_nodes above.
+    let unmoved = snapshot
+        .iter_arc(&parent_group)
+        .filter_map_ok(move |node| {
+            if change_set.is_remapped(&node.path) {
+                None
+            } else {
+                change_set.update_existing_node(node)
+            }
+        })
+        .map(|n| n.map_err(|err| err.inject()));
+
+    Ok(moved_nodes.into_iter().chain(unmoved))
 }
 
 /// Yields nodes with the snapshot, applying any relevant updates in the changeset,
@@ -2929,6 +2963,7 @@ async fn do_flush(
                 })
                 .await
                 .capture()?
+                .inject()?
             }
             None => this_tx_log,
         }
@@ -3275,7 +3310,7 @@ mod tests {
     use proptest::prelude::{prop_assert, prop_assert_eq};
     use storage::logging::LoggingStorage;
     use test_strategy::proptest;
-    #[cfg(not(feature = "shuttle"))]
+    // #[cfg(not(feature = "shuttle"))]
     use tokio::sync::Barrier;
 
     use crate::test_utils::spec_version_cases;
@@ -5356,8 +5391,11 @@ mod tests {
         );
         assert!(session.get_node(&Path::new("/foo/old/array").unwrap()).await.is_err());
 
+        let mut nodes: Vec<_> =
+            session.list_nodes(&Path::root()).await?.map(|n| n.unwrap().path).collect();
+        nodes.sort();
         assert_equal(
-            session.list_nodes(&Path::root()).await?.map(|n| n.unwrap().path),
+            nodes.into_iter(),
             [
                 Path::new("/").unwrap(),
                 Path::new("/foo/new").unwrap(),
@@ -5378,6 +5416,58 @@ mod tests {
                 .to_string(),
             "/foo/new/array"
         );
+        Ok(())
+    }
+
+    #[tokio_test]
+    async fn test_move_into_then_move_parent() -> Result<(), Box<dyn Error>> {
+        // When a node is moved INTO a subtree and then that subtree is moved,
+        // the moved-in node must follow along.
+        //
+        // Start:
+        // /
+        // ├── a        (G)
+        // │   └── 0    [A]
+        // └── c        (G)
+        //     └── 0    [A]
+        //
+        // Move 1: /a -> /b
+        // Move 2: /c -> /a
+        // Move 3: /b/0 -> /a/1
+        // Move 4: /a -> /d
+        //
+        // After:
+        // /
+        // ├── b        (G)   # was /a
+        // └── d        (G)   # was /c
+        //     ├── 0    [A]   # was /c/0
+        //     └── 1    [A]   # was /a/0
+        fn p(s: &str) -> Path {
+            Path::new(s).unwrap()
+        }
+
+        let repo = create_memory_store_repository(SpecVersionBin::current()).await;
+        let mut session = repo.writable_session("main").await?;
+        let shape = ArrayShape::new(vec![(2, 2)]).unwrap();
+        session.add_group(Path::root(), Bytes::new()).await?;
+        session.add_group(p("/a"), Bytes::new()).await?;
+        session.add_array(p("/a/0"), shape.clone(), None, Bytes::new()).await?;
+        session.add_group(p("/c"), Bytes::new()).await?;
+        session.add_array(p("/c/0"), shape, None, Bytes::new()).await?;
+        session.commit("init").max_concurrent_nodes(8).execute().await?;
+
+        let mut session = repo.rearrange_session("main").await?;
+        session.move_node(p("/a"), p("/b")).await?;
+        session.move_node(p("/c"), p("/a")).await?;
+        session.move_node(p("/b/0"), p("/a/1")).await?;
+        session.move_node(p("/a"), p("/d")).await?;
+
+        // Verify the tree matches the ASCII art above
+        let mut nodes: Vec<_> =
+            session.list_nodes(&Path::root()).await?.map(|n| n.unwrap().path).collect();
+        nodes.sort();
+        assert_equal(nodes.into_iter(), [p("/"), p("/b"), p("/d"), p("/d/0"), p("/d/1")]);
+
         Ok(())
     }
 

@@ -1,6 +1,6 @@
 import functools
 from collections.abc import Callable, Mapping
-from typing import TYPE_CHECKING, Any, ParamSpec, TypeAlias, TypeVar
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 from packaging.version import Version
@@ -19,16 +19,13 @@ if TYPE_CHECKING:
     except ImportError:
         ArrayV3Metadata = Any  # type: ignore[misc,assignment]
 
-SimpleGraph: TypeAlias = Mapping[tuple[str, int], tuple[Any, ...]]
+type SimpleGraph = Mapping[tuple[str, int], tuple[Any, ...]]
 
 
 # We wrap `extract_session` and `merge_sessions` to explicitly handle the `meta` computation.
 
-P = ParamSpec("P")
-R = TypeVar("R")
 
-
-def computing_meta(func: Callable[P, R]) -> Callable[P, Any]:
+def computing_meta[**P, R](func: Callable[P, R]) -> Callable[P, Any]:
     """
     A decorator to handle the dask-specific `computing_meta` flag.
 

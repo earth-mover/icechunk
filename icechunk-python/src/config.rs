@@ -8,7 +8,6 @@ use serde::{Deserialize, Serialize};
 use std::hash::{Hash, Hasher as _};
 use std::{
     collections::HashMap,
-    fmt::Display,
     hash::DefaultHasher,
     num::{NonZeroU16, NonZeroU64},
     path::PathBuf,
@@ -35,6 +34,7 @@ use pyo3::{
     types::{PyAnyMethods as _, PyModule, PyType},
 };
 
+use crate::display::{PyRepr, ReprMode, py_option, py_option_nested_repr};
 use crate::errors::PyIcechunkStoreError;
 
 #[pyclass(name = "S3StaticCredentials")]
@@ -99,13 +99,6 @@ impl PyS3StaticCredentials {
             st = format_option(self.session_token.as_ref()),
             ea = format_option(self.expires_after.as_ref().map(datetime_repr))
         )
-    }
-}
-
-pub(crate) fn format_option_to_string<T: Display>(o: Option<T>) -> String {
-    match o.as_ref() {
-        None => "None".to_string(),
-        Some(s) => s.to_string(),
     }
 }
 
@@ -737,7 +730,7 @@ impl PyCompressionConfig {
     pub fn __repr__(&self) -> String {
         format!(
             r#"CompressionConfig(algorithm=None, level={level})"#,
-            level = format_option_to_string(self.level.map(|l| l.to_string())),
+            level = py_option(&self.level.map(|l| l.to_string())),
         )
     }
 }
@@ -772,6 +765,26 @@ pub struct PyCachingConfig {
     pub num_bytes_chunks: Option<u64>,
 }
 
+// TODO: pass `mode` through once nested fields implement PyRepr
+#[expect(unused_variables)]
+impl PyRepr for PyCachingConfig {
+    const EXECUTABLE: bool = true;
+
+    fn cls_name() -> &'static str {
+        "icechunk.CachingConfig"
+    }
+
+    fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
+        vec![
+            ("num_snapshot_nodes", py_option(&self.num_snapshot_nodes)),
+            ("num_chunk_refs", py_option(&self.num_chunk_refs)),
+            ("num_transaction_changes", py_option(&self.num_transaction_changes)),
+            ("num_bytes_attributes", py_option(&self.num_bytes_attributes)),
+            ("num_bytes_chunks", py_option(&self.num_bytes_chunks)),
+        ]
+    }
+}
+
 #[pymethods]
 impl PyCachingConfig {
     #[staticmethod]
@@ -799,14 +812,15 @@ impl PyCachingConfig {
     }
 
     pub fn __repr__(&self) -> String {
-        format!(
-            r#"CachingConfig(num_snapshot_nodes={snap}, num_chunk_refs={man}, num_transaction_changes={tx}, num_bytes_attributes={att}, num_bytes_chunks={chunks})"#,
-            snap = format_option_to_string(self.num_snapshot_nodes),
-            man = format_option_to_string(self.num_chunk_refs),
-            tx = format_option_to_string(self.num_transaction_changes),
-            att = format_option_to_string(self.num_bytes_attributes),
-            chunks = format_option_to_string(self.num_bytes_chunks),
-        )
+        <Self as PyRepr>::__repr__(self)
+    }
+
+    pub fn __str__(&self) -> String {
+        <Self as PyRepr>::__str__(self)
+    }
+
+    pub fn _repr_html_(&self) -> String {
+        <Self as PyRepr>::_repr_html_(self)
     }
 }
 
@@ -885,9 +899,9 @@ impl PyStorageRetriesSettings {
 fn storage_retries_settings_repr(s: &PyStorageRetriesSettings) -> String {
     format!(
         r#"StorageRetriesSettings(max_tries={max}, initial_backoff_ms={init}, max_backoff_ms={max_back})"#,
-        max = format_option_to_string(s.max_tries),
-        init = format_option_to_string(s.initial_backoff_ms),
-        max_back = format_option_to_string(s.max_backoff_ms),
+        max = py_option(&s.max_tries),
+        init = py_option(&s.initial_backoff_ms),
+        max_back = py_option(&s.max_backoff_ms),
     )
 }
 
@@ -947,10 +961,10 @@ impl PyStorageTimeoutSettings {
     pub fn __repr__(&self) -> String {
         format!(
             r#"StorageTimeoutSettings(connect_timeout_ms={c}, read_timeout_ms={r}, operation_timeout_ms={o}, operation_attempt_timeout_ms={oa})"#,
-            c = format_option_to_string(self.connect_timeout_ms),
-            r = format_option_to_string(self.read_timeout_ms),
-            o = format_option_to_string(self.operation_timeout_ms),
-            oa = format_option_to_string(self.operation_attempt_timeout_ms),
+            c = py_option(&self.connect_timeout_ms),
+            r = py_option(&self.read_timeout_ms),
+            o = py_option(&self.operation_timeout_ms),
+            oa = py_option(&self.operation_attempt_timeout_ms),
         )
     }
 }
@@ -1058,8 +1072,8 @@ impl PyStorageConcurrencySettings {
 fn storage_concurrency_settings_repr(s: &PyStorageConcurrencySettings) -> String {
     format!(
         r#"StorageConcurrencySettings(max_concurrent_requests_for_object={max}, ideal_concurrent_request_size={ideal})"#,
-        max = format_option_to_string(s.max_concurrent_requests_for_object),
-        ideal = format_option_to_string(s.ideal_concurrent_request_size),
+        max = py_option(&s.max_concurrent_requests_for_object),
+        ideal = py_option(&s.ideal_concurrent_request_size),
     )
 }
 
@@ -1649,10 +1663,10 @@ impl PyManifestVirtualChunkLocationCompressionConfig {
     pub fn __repr__(&self) -> String {
         format!(
             "ManifestVirtualChunkLocationCompressionConfig(min_num_chunks={}, dictionary_max_training_samples={}, dictionary_max_size_bytes={}, compression_level={})",
-            format_option_to_string(self.min_num_chunks),
-            format_option_to_string(self.dictionary_max_training_samples),
-            format_option_to_string(self.dictionary_max_size_bytes),
-            format_option_to_string(self.compression_level),
+            py_option(&self.min_num_chunks),
+            py_option(&self.dictionary_max_training_samples),
+            py_option(&self.dictionary_max_size_bytes),
+            py_option(&self.compression_level),
         )
     }
 }
@@ -1720,10 +1734,10 @@ impl PyManifestConfig {
     pub fn __repr__(&self) -> String {
         format!(
             r#"ManifestConfig(preload={pre}, splitting={spl}, virtual_chunk_location_compression={comp})"#,
-            pre = format_option_to_string(self.preload.as_ref().map(|l| l.to_string())),
-            spl = format_option_to_string(self.splitting.as_ref().map(|l| l.to_string())),
-            comp = format_option_to_string(
-                self.virtual_chunk_location_compression.as_ref().map(|l| l.to_string())
+            pre = py_option(&self.preload.as_ref().map(|l| l.to_string())),
+            spl = py_option(&self.splitting.as_ref().map(|l| l.to_string())),
+            comp = py_option(
+                &self.virtual_chunk_location_compression.as_ref().map(|l| l.to_string())
             ),
         )
     }
@@ -1885,6 +1899,29 @@ impl From<RepositoryConfig> for PyRepositoryConfig {
     }
 }
 
+impl PyRepr for PyRepositoryConfig {
+    const EXECUTABLE: bool = true;
+
+    fn cls_name() -> &'static str {
+        "icechunk.RepositoryConfig"
+    }
+
+    fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
+        // TODO: add compression, storage, manifest fields once they implement PyRepr
+        vec![
+            (
+                "inline_chunk_threshold_bytes",
+                py_option(&self.inline_chunk_threshold_bytes),
+            ),
+            (
+                "get_partial_values_concurrency",
+                py_option(&self.get_partial_values_concurrency),
+            ),
+            ("caching", py_option_nested_repr(&self.caching, mode)),
+        ]
+    }
+}
+
 #[pymethods]
 impl PyRepositoryConfig {
     #[staticmethod]
@@ -1963,44 +2000,15 @@ impl PyRepositoryConfig {
     }
 
     pub fn __repr__(&self) -> String {
-        #[expect(clippy::expect_used)]
-        Python::attach(|py| {
-            let comp: String = format_option(self.compression.as_ref().map(|c| {
-                c.call_method0(py, "__repr__")
-                    .expect("Cannot call __repr__")
-                    .extract::<String>(py)
-                    .expect("Cannot call __repr__")
-            }));
-            let caching: String = format_option(self.caching.as_ref().map(|c| {
-                c.call_method0(py, "__repr__")
-                    .expect("Cannot call __repr__")
-                    .extract::<String>(py)
-                    .expect("Cannot call __repr__")
-            }));
-            let storage: String = format_option(self.storage.as_ref().map(|st| {
-                st.call_method0(py, "__repr__")
-                    .expect("Cannot call __repr__")
-                    .extract::<String>(py)
-                    .expect("Cannot call __repr__")
-            }));
-            let manifest: String = format_option(self.manifest.as_ref().map(|c| {
-                c.call_method0(py, "__repr__")
-                    .expect("Cannot call __repr__")
-                    .extract::<String>(py)
-                    .expect("Cannot call __repr__")
-            }));
-            // TODO: virtual chunk containers
-            format!(
-                r#"RepositoryConfig(inline_chunk_threshold_bytes={inl}, get_partial_values_concurrency={partial}, compression={comp}, caching={caching}, storage={storage}, manifest={manifest}, previous_file={previous_file})"#,
-                inl = format_option_to_string(self.inline_chunk_threshold_bytes),
-                partial = format_option_to_string(self.get_partial_values_concurrency),
-                comp = comp,
-                caching = caching,
-                storage = storage,
-                manifest = manifest,
-                previous_file = format_option_to_string(self.previous_file.clone()),
-            )
-        })
+        <Self as PyRepr>::__repr__(self)
+    }
+
+    pub fn __str__(&self) -> String {
+        <Self as PyRepr>::__str__(self)
+    }
+
+    pub fn _repr_html_(&self) -> String {
+        <Self as PyRepr>::_repr_html_(self)
     }
 }
 

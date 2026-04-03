@@ -1,6 +1,6 @@
 [package]
 name = "icechunk-types"
-version = "2.0.0-alpha.5"
+version = "2.0.0-alpha.6"
 description = "Shared foundational types for icechunk"
 readme = "../README.md"
 repository = "https://github.com/earth-mover/icechunk"

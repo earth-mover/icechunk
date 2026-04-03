@@ -5,13 +5,11 @@ build-backend = "maturin"
 [project]
 name = "icechunk"
 description = "Icechunk Python"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 classifiers = [
   "Programming Language :: Rust",
   "Programming Language :: Python :: Implementation :: CPython",
-  "Programming Language :: Python :: Implementation :: PyPy",
   "Programming Language :: Python :: 3",
-  "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
   "Programming Language :: Python :: 3.14",
@@ -30,11 +28,11 @@ dev = [
   "ruff==0.15.3",
   "maturin>=1.7,<2.0",
   "maturin-import-hook>=0.3.0",
+  "third-wheel",
 ]
 test = [
   "boto3",
   "coverage",
-  "object-store-python",
   "pytest",
   "pytest-cov",
   "pytest-asyncio",
@@ -47,10 +45,9 @@ test = [
   "pandas-stubs",
   "boto3-stubs[s3]",
   "termcolor",
-  "pooch",
-  "netcdf4",
-  "matplotlib",
   "rich",
+  "flatbuffers",
+  "zstandard",
 ]
 benchmark = [
   "pytest-benchmark[histogram]",
@@ -110,6 +107,11 @@ cargo-extra-args = ["--workspace"]
 # Disable automatic package building - we use maturin-import-hook for faster dev cycles
 package = false
 
+[tool.third-wheel]
+renames = [
+  { original = "icechunk", new-name = "icechunk_v1", version = ">=1,<2" },
+]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
@@ -138,12 +140,13 @@ filterwarnings = [
 ]
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.12"
 strict = true
 warn_unreachable = true
 enable_error_code = ["ignore-without-code", "redundant-expr", "truthy-bool"]
 
 [tool.ruff]
+target-version = "py312"
 line-length = 90
 extend-exclude = ["*.ipynb", "doc", "_typed_ops.pyi"]
 
