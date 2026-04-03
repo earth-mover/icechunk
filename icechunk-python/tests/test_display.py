@@ -140,8 +140,7 @@ class TestRepr:
 
     def test_repository(self, repo: Repository) -> None:
         repr_str = repr(repo)
-        assert repr_str.startswith("<icechunk.Repository>")
-        assert "format_version:" in repr_str
+        assert "<icechunk.Repository (v" in repr_str
         assert "storage:" in repr_str
         assert "in-memory" in repr_str
         assert "config: <RepositoryConfig ...>" in repr_str
@@ -232,7 +231,7 @@ class TestStr:
 
     def test_repository(self, repo: Repository) -> None:
         str_str = str(repo)
-        assert "<icechunk.Repository>" in str_str
+        assert "<icechunk.Repository (v" in str_str
         assert "storage:" in str_str
 
     def test_session(self, repo: Repository) -> None:

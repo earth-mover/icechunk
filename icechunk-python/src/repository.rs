@@ -1139,7 +1139,6 @@ impl PyRepr for PyRepository {
 
     fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
         let repo = self.0.blocking_read();
-        let spec_version = format!("{}", repo.spec_version() as u8);
         let info = repo.storage().storage_info();
         let mut storage_fields = vec![("type", info.backend_type.to_string())];
         storage_fields.extend(info.fields);
@@ -1152,22 +1151,22 @@ impl PyRepr for PyRepository {
             _ => crate::display::dataclass_str("icechunk.Storage", &storage_refs),
         };
         match mode {
-            // HTML is collapsible, so show the full config
             ReprMode::Html => {
                 let py_config: PyRepositoryConfig = repo.config().clone().into();
-                vec![
-                    ("format_version", spec_version),
-                    ("storage", storage),
-                    ("config", py_config.render(mode)),
-                ]
+                vec![("storage", storage), ("config", py_config.render(mode))]
             }
-            // str/repr: config is too verbose when expanded recursively
             _ => vec![
-                ("format_version", spec_version),
                 ("storage", storage),
                 ("config", "<RepositoryConfig ...>".to_string()),
             ],
         }
+    }
+}
+
+impl PyRepository {
+    fn cls_name_with_version(&self) -> String {
+        let repo = self.0.blocking_read();
+        format!("icechunk.Repository (v{})", repo.spec_version() as u8)
     }
 }
 
@@ -1176,15 +1175,23 @@ impl PyRepr for PyRepository {
 /// python threads can make progress in the case of an actual block
 impl PyRepository {
     pub(crate) fn __repr__(&self) -> String {
-        <Self as PyRepr>::__repr__(self)
+        let cls = self.cls_name_with_version();
+        let fields = self.fields(ReprMode::Str);
+        let refs: Vec<(&str, &str)> =
+            fields.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        crate::display::dataclass_str(&cls, &refs)
     }
 
     pub(crate) fn __str__(&self) -> String {
-        <Self as PyRepr>::__str__(self)
+        self.__repr__()
     }
 
     pub(crate) fn _repr_html_(&self) -> String {
-        <Self as PyRepr>::_repr_html_(self)
+        let cls = self.cls_name_with_version();
+        let fields = self.fields(ReprMode::Html);
+        let refs: Vec<(&str, &str)> =
+            fields.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        crate::display::dataclass_html_repr(&cls, &refs)
     }
 
     #[classmethod]
