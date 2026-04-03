@@ -4,7 +4,7 @@ title: Specification
 # Icechunk Specification, version 1
 
 !!! Note
-    See also [spec version 2](./spec-v2.md).
+    See also [spec version 2](./spec.md).
 
 !!! Note
 
