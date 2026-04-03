@@ -33,12 +33,12 @@ use conflicts::{
     PyBasicConflictSolver, PyConflict, PyConflictDetector, PyConflictSolver,
     PyConflictType, PyVersionSelection,
 };
+use display::PyAncestryGraph;
 use errors::{IcechunkError, PyConflictError, PyRebaseFailedError};
 use icechunk::{format::format_constants::SpecVersionBin, initialize_tracing};
 use pyo3::prelude::*;
 use pyo3::types::PyMapping;
 use pyo3::wrap_pyfunction;
-use display::PyAncestryGraph;
 use repository::{
     PyDiff, PyFeatureFlag, PyGCSummary, PyManifestFileInfo, PyRepoAvailability,
     PyRepoStatus, PyRepository, PySnapshotInfo, PySpecVersion, PyUpdate, PyUpdateType,
