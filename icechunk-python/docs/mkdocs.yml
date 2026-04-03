@@ -221,6 +221,7 @@ nav:
     - Icechunk for Git Users: icechunk-for-git-users.md
     - Creating Icechunk Datasets:
       - Global Raster Data cube: ingestion/glad-ingest.ipynb
+  - Sample Datasets: sample-datasets.md
   - Reference:
     - Spec: spec.md
     - Version Policy: version-policy.md
