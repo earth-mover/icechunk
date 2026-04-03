@@ -45,12 +45,36 @@ Icechunk requires that the storage system support the following operations:
 - **In-place write** - Strong read-after-write and list-after-write consistency is expected. Files are not moved or altered once they are written.
 - **Write-if-not-exists** - For creating new references.
 - **Conditional update** - For the commit process to be safe and consistent, the storage system must be able to atomically update a file only if the current version is known to the writer.
-- **Seekable reads** - Chunk file formats may require seek support (e.g. shards).
+- **Seekable reads** - Chunk file formats may require seek support, or at least range-requests (e.g. for reading a chunk within a shard).
 - **Deletes** - Delete files that are no longer used (via a garbage-collection operation).
 
 These requirements are compatible with object stores, like S3, as well as with filesystems.
 
 The storage system is not required to support random-access writes. Once written, most files are immutable until they are deleted. The only exception to this rule is the `RepoInfo` object, which is main entry point to a repository, stored an object with path `repo` under the repository prefix.
+
+### Consistency and Optimistic Concurrency 
+
+Icechunk achieves transactional consistency using only the limited consistency guarantees offered by object storage.
+Icechunk V2 does this entirely via careful management of creation and conditional updating of the `RepoInfo` object.
+(The exact contents of the `RepoInfo` object are defined in the format specification section below.)
+
+When a client attempts to make a change to the repository, it fetches the latest version of the repo info object and applies its changes in memory first.
+However, when updating the object in storage, the client must detect whether a _different session_ has updated the repo info in the interim, possibly retrying or failing the update if so.
+This is an "optimistic concurrency" strategy; the resolution mechanism can be expensive, but conflicts are expected to be infrequent.
+
+All major object stores support a "conditional update" operation.
+In other words, object stores can guard against the race condition which occurs when two sessions attempt to update the same file at the same time. Only one of those will succeed.
+
+This mechanism is used by Icechunk on all updates.
+When it tries to update the repo info object, it attempts to conditionally update this file in an atomic "all or nothing" operation.
+If this succeeds, the update is successful.
+If this fails (because another client updated that file since the session started), the update fails. At this point the operation is retried.
+
+If at any point during the update attempt an incompatible change is detected, the update operation is flagged as failed, the repo is not modified, and an error is shown to the user.
+Some examples of incompatible changes are:
+
+- A commit is attempted to a branch that was deleted by other session
+- A branch is reset but it was deleted by other session
 
 ## Specification
 
@@ -146,25 +170,6 @@ This object stores:
 - The repository status (read-only, online, etc.).
 - The repository level metadata (user attributes set at the repository level).
 - The feature flags settings.
-
-The process of creating and updating the repo info object is designed to use the limited consistency guarantees offered by object storage to ensure transactional consistency.
-When a client attempts to make a change to the repository, it fetches the latest version of the repo info object and applies its changes in memory first.
-However, when updating the object in storage, the client must detect whether a _different session_ has updated the repo info in the interim, possibly retrying or failing the update if so.
-This is an "optimistic concurrency" strategy; the resolution mechanism can be expensive, but conflicts are expected to be infrequent.
-
-All major object stores support a "conditional update" operation.
-In other words, object stores can guard against the race condition which occurs when two sessions attempt to update the same file at the same time. Only one of those will succeed.
-
-This mechanism is used by Icechunk on all updates.
-When it tries to update the repo info object, it attempts to conditionally update this file in an atomic "all or nothing" operation.
-If this succeeds, the update is successful.
-If this fails (because another client updated that file since the session started), the update fails. At this point the operation is retried.
-
-If at any point during the update attempt an incompatible change is detected, the update operation is flagged as failed, the repo is not modified, and an error is shown to the user.
-Some examples of incompatible changes are:
-
-- A commit is attempted to a branch that was deleted by other session
-- A branch is reset but it was deleted by other session
 
 ##### Updates to the repo info file
 
