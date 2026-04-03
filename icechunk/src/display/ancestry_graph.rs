@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::fmt;
 
 use icechunk_format::SnapshotId;
 use icechunk_format::snapshot::SnapshotInfo;
@@ -337,152 +336,12 @@ const PALETTE: &[BranchColor] = &[
     BranchColor { ansi: "\x1b[36m", hex: "#56b6c2" }, // cyan
 ];
 
-fn palette_ansi(idx: usize) -> &'static str {
+pub fn palette_ansi(idx: usize) -> &'static str {
     PALETTE[idx % PALETTE.len()].ansi
 }
 
 pub fn palette_hex(idx: usize) -> &'static str {
     PALETTE[idx % PALETTE.len()].hex
-}
-
-// -- ANSI rendering ----------------------------------------------------------
-
-const RESET: &str = "\x1b[0m";
-const BOLD: &str = "\x1b[1m";
-const DIM: &str = "\x1b[2m";
-const GREEN: &str = "\x1b[32m";
-const YELLOW: &str = "\x1b[33m";
-
-fn truncate_message(msg: &str, max_len: usize) -> String {
-    let first_line = msg.lines().next().unwrap_or("");
-    if first_line.len() <= max_len {
-        first_line.to_string()
-    } else {
-        format!("{}...", &first_line[..max_len - 3])
-    }
-}
-
-impl AncestryGraph {
-    fn format_labels_ansi(node: &AncestryNode) -> String {
-        let mut parts = Vec::new();
-        for b in &node.branches {
-            parts.push(format!("{BOLD}{GREEN}{b}{RESET}"));
-        }
-        for t in &node.tags {
-            parts.push(format!("{BOLD}{YELLOW}{t}{RESET}"));
-        }
-        if parts.is_empty() { String::new() } else { format!(" ({})", parts.join(", ")) }
-    }
-
-    /// Render a graph line prefix: for each column, draw ●, │, ╱, or blank.
-    fn render_prefix(
-        &self,
-        num_columns: usize,
-        col_colors: &[usize],
-        glyph_for: impl Fn(usize) -> Option<char>,
-    ) -> String {
-        let mut out = String::with_capacity(num_columns * 8);
-        for (c, &color_idx) in col_colors.iter().enumerate() {
-            if let Some(ch) = glyph_for(c) {
-                let color = palette_ansi(color_idx);
-                out.push_str(&format!("{color}{ch}{RESET} "));
-            } else {
-                out.push_str("  ");
-            }
-        }
-        out
-    }
-}
-
-impl fmt::Display for AncestryGraph {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.nodes.is_empty() {
-            return writeln!(f, "(empty history)");
-        }
-
-        let col_colors = self.column_colors();
-        let elements = self.layout();
-
-        // Group elements by the row they follow (connector rows come after node rows).
-        // We process in order: for each node, render the node line, then any connectors.
-        let mut connector_lines: HashMap<usize, Vec<&LayoutElement>> = HashMap::new();
-        for elem in &elements {
-            match elem {
-                LayoutElement::Line { from_row, .. }
-                | LayoutElement::Fork { from_row, .. } => {
-                    connector_lines.entry(*from_row).or_default().push(elem);
-                }
-                LayoutElement::Node { .. } => {}
-            }
-        }
-
-        for (row, node) in self.nodes.iter().enumerate() {
-            // Node line
-            let prefix = self.render_prefix(self.num_columns, &col_colors, |c| {
-                if c == node.column {
-                    Some('●')
-                } else {
-                    // Show │ for columns that have a pipe on this row's connector
-                    // (i.e., active columns). Check if there's a Line element for this column.
-                    let has_line = connector_lines.get(&row).is_some_and(|elems| {
-                        elems.iter().any(|e| matches!(e, LayoutElement::Line { col, .. } if *col == c))
-                    });
-                    // Also check if there's a line from the previous row.
-                    let had_line = row > 0
-                        && connector_lines.get(&(row - 1)).is_some_and(|elems| {
-                            elems.iter().any(|e| {
-                                matches!(e, LayoutElement::Line { col, .. } if *col == c)
-                                    || matches!(e, LayoutElement::Fork { to_col, .. } if *to_col == c)
-                            })
-                        });
-                    if has_line || had_line {
-                        Some('│')
-                    } else {
-                        None
-                    }
-                }
-            });
-
-            let short_id = &node.info.id.to_string()[..8];
-            let labels = Self::format_labels_ansi(node);
-            let msg = truncate_message(&node.info.message, 60);
-            writeln!(f, "{prefix}{DIM}{short_id}{RESET}{labels} {msg}")?;
-
-            // Connector line (if any elements follow this row)
-            if let Some(elems) = connector_lines.get(&row) {
-                let line =
-                    self.render_prefix(self.num_columns, &col_colors, |c| {
-                        // Check for fork in this column
-                        let is_fork = elems.iter().any(|e| {
-                            matches!(e, LayoutElement::Fork { from_col, .. } if *from_col == c)
-                        });
-                        if is_fork {
-                            return Some('╱');
-                        }
-                        // Check for pipe in this column
-                        let is_pipe = elems.iter().any(|e| {
-                            matches!(e, LayoutElement::Line { col, .. } if *col == c)
-                        });
-                        if is_pipe {
-                            Some('│')
-                        } else {
-                            None
-                        }
-                    });
-                writeln!(f, "{line}")?;
-            }
-        }
-
-        if self.total_snapshots > self.nodes.len() {
-            writeln!(
-                f,
-                "{DIM}  ... (showing {} of {} snapshots){RESET}",
-                self.nodes.len(),
-                self.total_snapshots
-            )?;
-        }
-        Ok(())
-    }
 }
 
 #[cfg(test)]
