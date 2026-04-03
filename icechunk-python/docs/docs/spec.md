@@ -175,7 +175,7 @@ The header contains the following fields, in order:
 | Field | Size | Description |
 |-------|------|-------------|
 | Magic bytes | 12 bytes | The UTF-8 encoding of `ICE🧊CHUNK`. |
-| Implementation name | 24 bytes | A left-padded, space-filled UTF-8 string identifying the writing client. Readers MUST ignore this field. |
+| Implementation name | 24 bytes | A left-aligned, right-space-padded UTF-8 string identifying the writing client. |
 | Spec version | 1 byte | `1` for spec version 1, `2` for spec version 2. |
 | File type | 1 byte | `1` = Snapshot, `2` = Manifest, `3` = Attributes, `4` = RepoInfo, `5` = TransactionLog, `6` = Chunk. |
 | Compression algorithm | 1 byte | `0` = none, `1` = zstd. |
