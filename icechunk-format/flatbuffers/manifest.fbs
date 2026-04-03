@@ -2,6 +2,7 @@ include "common.fbs";
 
 namespace generated;
 
+// --8<-- [start:chunk_ref]
 // We don't use unions and datastructures for the different types of refs
 // If we do that, the manifest grows in size a lot, because of the extra
 // offsets needed. This makes the code more complex because we need to
@@ -44,7 +45,9 @@ table ChunkRef {
   // Introduced in spec version 2
   extra: [uint8];
 }
+// --8<-- [end:chunk_ref]
 
+// --8<-- [start:array_manifest]
 table ArrayManifest {
   // the id of the node the chunk refs belong to
   node_id: ObjectId8 (required);
@@ -57,7 +60,9 @@ table ArrayManifest {
   // Introduced in spec version 2
   extra: [uint8];
 }
+// --8<-- [end:array_manifest]
 
+// --8<-- [start:manifest_table]
 table Manifest {
   // the manifest id
   id: ObjectId12 (required);
@@ -79,5 +84,6 @@ table Manifest {
   // Introduced in spec version 2
   extra: [uint8];
 }
+// --8<-- [end:manifest_table]
 
 root_type Manifest;
