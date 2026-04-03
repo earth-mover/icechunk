@@ -197,26 +197,36 @@ These references point to a specific snapshot of the repository.
 #### Snapshot Files
 
 The snapshot file fully describes the schema of the repository, including all arrays and groups. Each commit to an Icechunk
-repository creates a new snapshot file. This snapshot iniforms what are the available groups and arrays
+repository creates a new snapshot file. This snapshot informs what are the available groups and arrays
 in this commit, and provides a way to access the chunk manifests for each array.
 
-The snapshot file is encoded using [flatbuffers](https://github.com/google/flatbuffers). The IDL for the
-on-disk format can be found in [the fbs file](https://github.com/earth-mover/icechunk/blob/404100b584fb7ac70de860bd430aa8291df98c4d/icechunk-format/flatbuffers/snapshot.fbs).
+The snapshot file is encoded using [flatbuffers](https://github.com/google/flatbuffers). The full IDL
+can be found in [`snapshot.fbs`](https://github.com/earth-mover/icechunk/tree/main/icechunk-format/flatbuffers/snapshot.fbs).
 
-The most important parts of a snapshot file are:
+The `Snapshot` table is the root type:
 
-- An id, 12 random bytes also encoded in the file name.
-- The id of its parent snapshot. All snapshots but the first one in the repository must have a parent.
-- The commit time (`flushed_at`), message string, (`message`) and metadata map (`metadata`).
-- A list of `NodeSnapshot`, one item for each group or array in the repository snapshot.
-- A list of `ManifestFileInfo`
+```protobuf
+--8<-- "icechunk-format/flatbuffers/snapshot.fbs:snapshot_table"
+```
 
-`NodeSnapshot` objects can also be found in the same flatbuffers file. They contain:
+The most important fields are:
 
-- A node id (8 random bytes).
-- The node path within the repository hierarchy, for example `foo/bar/baz`.
-- `user_data`, any metadata used to create the node, this will usually be the Zarr metadata.
-- A `node_data` union, that can be either an `ArrayNodeData` or a `GroupNodeData`.
+- `id` — 12 random bytes, also encoded in the file name.
+- `parent_id` — the id of the parent snapshot. All snapshots but the first one in the repository MUST have a parent.
+- `flushed_at`, `message`, and `metadata` — the commit time, message string, and metadata map.
+- `nodes` — a list of `NodeSnapshot`, one item for each group or array in the repository snapshot.
+- `manifest_files` / `manifest_files_v2` — the list of all manifest files this snapshot points to.
+
+Each node in the repository is represented by a `NodeSnapshot`:
+
+```protobuf
+--8<-- "icechunk-format/flatbuffers/snapshot.fbs:node_snapshot"
+```
+
+- `id` — 8 random bytes.
+- `path` — the absolute path within the repository hierarchy, for example `foo/bar/baz`.
+- `user_data` — any metadata used to create the node, this will usually be the Zarr metadata.
+- `node_data` — a union that can be either an `ArrayNodeData` or a `GroupNodeData`.
 
 `GroupNodeData` is empty, so it works as a pure marker signaling that the node is a group.
 

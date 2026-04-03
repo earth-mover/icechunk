@@ -77,7 +77,7 @@ docs = [
   "mkdocs-breadcrumbs-plugin",
   "mkdocs-minify-plugin",
   "mkdocs-open-in-new-tab",
-  "mkdocs",
+  "mkdocs<2",
   "mkdocs-material[imaging]",
   "mkdocstrings[python]",
   "mkdocs-jupyter",
