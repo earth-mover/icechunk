@@ -169,6 +169,24 @@ The full set of file types and their definitions are:
 
 (Note that the flatbuffers also share some common utility definitions, defined in [`common.fbs`](https://github.com/earth-mover/icechunk/blob/404100b584fb7ac70de860bd430aa8291df98c4d/icechunk-format/flatbuffers/common.fbs).)
 
+All object identifiers in the format are fixed-size byte arrays:
+
+??? note "Flatbuffers definition: `ObjectId12`, `ObjectId8`"
+    ```protobuf
+    --8<-- "icechunk-format/flatbuffers/common.fbs:object_id_12"
+    ```
+
+    ```protobuf
+    --8<-- "icechunk-format/flatbuffers/common.fbs:object_id_8"
+    ```
+
+Snapshot-level metadata is stored as a list of key-value pairs:
+
+??? note "Flatbuffers definition: `MetadataItem`"
+    ```protobuf
+    --8<-- "icechunk-format/flatbuffers/common.fbs:metadata_item"
+    ```
+
 The rest of this section describes the meaning of the fields in each flatbuffers file, and any other concerns that implementations should be aware of.
 
 #### Repo info file
@@ -184,6 +202,49 @@ This object stores:
 - The repository status (read-only, online, etc.).
 - The repository level metadata (user attributes set at the repository level).
 - The feature flags settings.
+
+The `Repo` table is the root type:
+
+??? note "Flatbuffers definition: `Repo`"
+    ```protobuf
+    --8<-- "icechunk-format/flatbuffers/repo.fbs:repo_table"
+    ```
+
+Branches and tags are stored as sorted lists of `Ref`, each mapping a name to a snapshot index:
+
+??? note "Flatbuffers definition: `Ref`"
+    ```protobuf
+    --8<-- "icechunk-format/flatbuffers/repo.fbs:ref"
+    ```
+
+The `snapshots` field is a sorted list of `SnapshotInfo`, recording every valid snapshot with its parent, timestamp, message, and metadata:
+
+??? note "Flatbuffers definition: `SnapshotInfo`"
+    ```protobuf
+    --8<-- "icechunk-format/flatbuffers/repo.fbs:snapshot_info"
+    ```
+
+The `status` field tracks repository availability:
+
+??? note "Flatbuffers definition: `RepoAvailability`, `RepoStatus`"
+    ```protobuf
+    --8<-- "icechunk-format/flatbuffers/repo.fbs:repo_availability"
+    ```
+
+    ```protobuf
+    --8<-- "icechunk-format/flatbuffers/repo.fbs:repo_status"
+    ```
+
+The `latest_updates` field is the ops log, a list of `Update` entries. Each update carries a type from the `UpdateType` union, which covers all possible repository operations (commits, tag/branch creation and deletion, resets, migrations, etc.):
+
+??? note "Flatbuffers definition: `Update`, `UpdateType`"
+    ```protobuf
+    --8<-- "icechunk-format/flatbuffers/repo.fbs:update"
+    ```
+
+    ```protobuf
+    --8<-- "icechunk-format/flatbuffers/repo.fbs:update_type_union"
+    ```
 
 ##### Updates to the repo info file
 
