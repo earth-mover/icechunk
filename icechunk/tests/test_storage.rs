@@ -195,15 +195,15 @@ where
         let s = common::make_r2_integration_storage(prefix.clone())?;
         storages.push(("R2_slash", s));
     }
-    if env::var("TIGRIS_BUCKET").is_ok() {
-        let prefix = common::get_random_prefix("with_storage");
-        let s = common::make_tigris_integration_storage(prefix.clone())?;
-        storages.push(("Tigris", s));
+    // if env::var("TIGRIS_BUCKET").is_ok() {
+    //     let prefix = common::get_random_prefix("with_storage");
+    //     let s = common::make_tigris_integration_storage(prefix.clone())?;
+    //     storages.push(("Tigris", s));
 
-        let prefix = format!("{}/", common::get_random_prefix("with_storage"));
-        let s = common::make_tigris_integration_storage(prefix.clone())?;
-        storages.push(("Tigris_slash", s));
-    }
+    //     let prefix = format!("{}/", common::get_random_prefix("with_storage"));
+    //     let s = common::make_tigris_integration_storage(prefix.clone())?;
+    //     storages.push(("Tigris_slash", s));
+    // }
 
     let futures = storages.into_iter().map(|(name, storage)| {
         println!("Using {name} storage");
