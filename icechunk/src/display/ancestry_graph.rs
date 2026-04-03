@@ -216,17 +216,14 @@ impl AncestryGraph {
 
     /// Render a multi-column tree graph.
     fn fmt_tree(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // Track which columns are currently active (have a branch line running through)
+        // Track which columns are currently active (have rendered their first * node)
         let mut active_columns: Vec<bool> = vec![false; self.num_columns];
 
-        // Pre-compute: for each side-branch column, which trunk node does it fork from?
-        // Maps side-branch column → (last node id in that column, parent id = fork point)
+        // Pre-compute: for each side-branch column, which node is its fork point?
         let mut fork_targets: HashMap<usize, SnapshotId> = HashMap::new();
         for col in 1..self.num_columns {
-            // Find the last (oldest) node in this column
             if let Some(last_in_col) = self.nodes.iter().rev().find(|n| n.column == col) {
                 if let Some(parent_id) = &last_in_col.info.parent_id {
-                    // The parent should be on the trunk (column 0) — that's the fork point
                     fork_targets.insert(col, parent_id.clone());
                 }
             }
@@ -235,7 +232,7 @@ impl AncestryGraph {
         for (i, node) in self.nodes.iter().enumerate() {
             let col = node.column;
 
-            // Activate this column if not already active
+            // Activate this column now that we've hit its first node
             active_columns[col] = true;
 
             // Build the graph prefix: show `|` for active columns, `*` for current node
@@ -297,11 +294,10 @@ impl AncestryGraph {
                         active_columns[merge_col] = false;
                     }
                 } else if !more_in_column && col != 0 {
-                    // Side branch ends but parent isn't the immediate next node —
-                    // draw a merge line toward column 0
+                    // Side branch ends — draw a / merge line toward the trunk
                     let mut merge_line = String::new();
                     for c in 0..self.num_columns {
-                        if c == 0 {
+                        if c == 0 && active_columns[0] {
                             let color = branch_color(0);
                             merge_line.push_str(&format!("{color}|{RESET}"));
                         } else if c == col {
@@ -445,6 +441,77 @@ mod tests {
         assert!(s4_node.is_some());
         assert_eq!(s3_node.map(|n| n.column), Some(0));
         assert_eq!(s4_node.map(|n| n.column), Some(1));
+    }
+
+    #[test]
+    fn test_minimal_fork_display() {
+        // Simplest possible fork:
+        //   main: s1 -> s2 (tip)
+        //   feat: s1 -> s3 (tip)
+        //
+        // Expected output (stripped of ANSI):
+        //     * (feat) Commit 3
+        //    /
+        //   * (main) Commit 2
+        //   |
+        //   * Commit 1
+        //
+        // Key: no trunk | above the trunk's first * node.
+        let s1 = make_snapshot(1, None);
+        let s2 = make_snapshot(2, Some(1));
+        let s3 = make_snapshot(3, Some(1));
+
+        let branch_ancestries = vec![
+            ("main".to_string(), vec![s2.clone(), s1.clone()]),
+            ("feat".to_string(), vec![s3.clone(), s1.clone()]),
+        ];
+
+        let graph = AncestryGraph::from_tree(branch_ancestries, &HashMap::new());
+        let output = graph.to_string();
+        let plain = strip_ansi(&output);
+        let lines: Vec<&str> = plain.lines().collect();
+
+        eprintln!("=== minimal fork display ===");
+        for line in &lines {
+            eprintln!("  {:?}", line);
+        }
+
+        // First line: feat tip — should NOT have a | for trunk before it
+        assert!(lines[0].contains("feat"), "first line should have feat label");
+        assert!(lines[0].contains("Commit 3"), "first line should be s3");
+        assert!(
+            !lines[0].starts_with('|'),
+            "trunk | should not appear above trunk's first node: {:?}",
+            lines[0]
+        );
+
+        // There should be a / fork connector
+        let has_fork = lines.iter().any(|l| l.contains('/'));
+        assert!(has_fork, "should have a / fork connector: {plain}");
+
+        // main tip should appear
+        assert!(
+            lines.iter().any(|l| l.contains("main") && l.contains("Commit 2")),
+            "should have main Commit 2: {plain}"
+        );
+    }
+
+    /// Strip ANSI escape codes from a string.
+    fn strip_ansi(s: &str) -> String {
+        let mut result = String::new();
+        let mut in_escape = false;
+        for c in s.chars() {
+            if c == '\x1b' {
+                in_escape = true;
+            } else if in_escape {
+                if c.is_ascii_alphabetic() {
+                    in_escape = false;
+                }
+            } else {
+                result.push(c);
+            }
+        }
+        result
     }
 
     #[test]
