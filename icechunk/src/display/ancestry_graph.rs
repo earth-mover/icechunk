@@ -24,6 +24,8 @@ pub struct AncestryGraph {
     pub nodes: Vec<AncestryNode>,
     /// Number of columns needed for rendering (1 for single-branch linear view).
     pub num_columns: usize,
+    /// All branch names in the repo (sorted), used for consistent color assignment.
+    pub all_branches: Vec<String>,
 }
 
 /// Look up labels for a snapshot from a reverse map, returning an empty vec if absent.
@@ -40,6 +42,7 @@ impl AncestryGraph {
         snapshots: Vec<SnapshotInfo>,
         branch_map: &HashMap<SnapshotId, Vec<String>>,
         tag_map: &HashMap<SnapshotId, Vec<String>>,
+        all_branches: Vec<String>,
     ) -> Self {
         let nodes = snapshots
             .into_iter()
@@ -50,7 +53,7 @@ impl AncestryGraph {
             })
             .collect();
 
-        Self { nodes, num_columns: 1 }
+        Self { nodes, num_columns: 1, all_branches }
     }
 
     /// Build a tree graph from multiple branches.
@@ -63,9 +66,10 @@ impl AncestryGraph {
     pub fn from_tree(
         branch_ancestries: Vec<(String, Vec<SnapshotInfo>)>,
         tag_map: &HashMap<SnapshotId, Vec<String>>,
+        all_branches: Vec<String>,
     ) -> Self {
         if branch_ancestries.is_empty() {
-            return Self { nodes: Vec::new(), num_columns: 0 };
+            return Self { nodes: Vec::new(), num_columns: 0, all_branches };
         }
 
         // Register all branch tip labels up front so they're available regardless
@@ -99,7 +103,16 @@ impl AncestryGraph {
         let mut nodes: Vec<AncestryNode> = node_map.into_values().collect();
         nodes.sort_by(|a, b| b.info.flushed_at.cmp(&a.info.flushed_at));
 
-        Self { nodes, num_columns }
+        Self { nodes, num_columns, all_branches }
+    }
+
+    /// Get a stable color index for a branch name based on its position in the
+    /// sorted list of all branches in the repo.
+    fn color_index_for_branch(&self, name: &str) -> usize {
+        self.all_branches
+            .iter()
+            .position(|b| b == name)
+            .unwrap_or(0)
     }
 }
 
@@ -177,8 +190,30 @@ impl AncestryGraph {
         }
     }
 
+    /// Get a stable color for a column by looking up which branch owns it.
+    fn column_colors(&self) -> Vec<usize> {
+        // For each column, find the first node in that column and use its branch label
+        // to determine color. Falls back to column index if no branch label found.
+        (0..self.num_columns)
+            .map(|col| {
+                self.nodes
+                    .iter()
+                    .find(|n| n.column == col)
+                    .and_then(|n| n.branches.first())
+                    .map(|name| self.color_index_for_branch(name))
+                    .unwrap_or(col)
+            })
+            .collect()
+    }
+
     fn fmt_linear(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let color = branch_color(0);
+        // Use the tip node's branch label for consistent color
+        let color_idx = self.nodes.first()
+            .and_then(|n| n.branches.first())
+            .map(|name| self.color_index_for_branch(name))
+            .unwrap_or(0);
+        let color = branch_color(color_idx);
+
         for (i, node) in self.nodes.iter().enumerate() {
             let short_id = &node.info.id.to_string()[..8];
             let labels = Self::format_labels(node);
@@ -193,6 +228,7 @@ impl AncestryGraph {
 
     fn fmt_tree(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut active: Vec<bool> = vec![false; self.num_columns];
+        let col_colors = self.column_colors();
 
         // Pre-compute: for each side-branch, find its fork point (parent of its oldest node).
         let mut fork_targets: HashMap<usize, SnapshotId> = HashMap::new();
@@ -210,9 +246,9 @@ impl AncestryGraph {
 
             // Node line: * for this column, | for other active columns
             let prefix = render_columns(self.num_columns, |c| {
-                if c == col { (Glyph::Node, c) }
-                else if active[c] { (Glyph::Pipe, c) }
-                else { (Glyph::Blank, c) }
+                if c == col { (Glyph::Node, col_colors[c]) }
+                else if active[c] { (Glyph::Pipe, col_colors[c]) }
+                else { (Glyph::Blank, 0) }
             });
             let short_id = &node.info.id.to_string()[..8];
             let labels = Self::format_labels(node);
@@ -237,10 +273,10 @@ impl AncestryGraph {
                 // Draw a / merge line for each merging column
                 for &mc in &merging {
                     let line = render_columns(self.num_columns, |c| {
-                        if c == mc { (Glyph::Merge, mc) }
-                        else if c == col { (Glyph::Pipe, c) }
-                        else if active[c] { (Glyph::Pipe, c) }
-                        else { (Glyph::Blank, c) }
+                        if c == mc { (Glyph::Merge, col_colors[mc]) }
+                        else if c == col { (Glyph::Pipe, col_colors[c]) }
+                        else if active[c] { (Glyph::Pipe, col_colors[c]) }
+                        else { (Glyph::Blank, 0) }
                     });
                     writeln!(f, "{line}")?;
                     active[mc] = false;
@@ -248,9 +284,9 @@ impl AncestryGraph {
             } else if !has_more && col != 0 {
                 // Side branch's last node — draw / toward trunk
                 let line = render_columns(self.num_columns, |c| {
-                    if c == col { (Glyph::Merge, col) }
-                    else if active[c] { (Glyph::Pipe, c) }
-                    else { (Glyph::Blank, c) }
+                    if c == col { (Glyph::Merge, col_colors[col]) }
+                    else if active[c] { (Glyph::Pipe, col_colors[c]) }
+                    else { (Glyph::Blank, 0) }
                 });
                 writeln!(f, "{line}")?;
                 active[col] = false;
@@ -260,7 +296,7 @@ impl AncestryGraph {
                     active[col] = false;
                 }
                 let line = render_columns(self.num_columns, |c| {
-                    if active[c] { (Glyph::Pipe, c) } else { (Glyph::Blank, c) }
+                    if active[c] { (Glyph::Pipe, col_colors[c]) } else { (Glyph::Blank, 0) }
                 });
                 writeln!(f, "{line}")?;
             }
@@ -311,7 +347,7 @@ mod tests {
 
     #[test]
     fn test_from_linear_empty() {
-        let graph = AncestryGraph::from_linear(vec![], &HashMap::new(), &HashMap::new());
+        let graph = AncestryGraph::from_linear(vec![], &HashMap::new(), &HashMap::new(), vec![]);
         assert_eq!(graph.nodes.len(), 0);
         assert_eq!(graph.num_columns, 1);
     }
@@ -329,7 +365,7 @@ mod tests {
         tag_map.insert(s1.id.clone(), vec!["v1.0".to_string()]);
 
         let graph =
-            AncestryGraph::from_linear(vec![s3.clone(), s2.clone(), s1.clone()], &branch_map, &tag_map);
+            AncestryGraph::from_linear(vec![s3.clone(), s2.clone(), s1.clone()], &branch_map, &tag_map, vec!["main".to_string()]);
 
         assert_eq!(graph.nodes.len(), 3);
         assert_eq!(graph.num_columns, 1);
@@ -342,7 +378,7 @@ mod tests {
 
     #[test]
     fn test_from_tree_empty() {
-        let graph = AncestryGraph::from_tree(vec![], &HashMap::new());
+        let graph = AncestryGraph::from_tree(vec![], &HashMap::new(), vec![]);
         assert_eq!(graph.nodes.len(), 0);
         assert_eq!(graph.num_columns, 0);
     }
@@ -361,7 +397,8 @@ mod tests {
             ("feat".to_string(), vec![s4.clone(), s2.clone(), s1.clone()]),
         ];
 
-        let graph = AncestryGraph::from_tree(branch_ancestries, &HashMap::new());
+        let all = vec!["feat".to_string(), "main".to_string()];
+        let graph = AncestryGraph::from_tree(branch_ancestries, &HashMap::new(), all);
 
         // s1, s2, s3 from main + s4 from feat = 4 unique nodes
         assert_eq!(graph.nodes.len(), 4);
@@ -399,7 +436,8 @@ mod tests {
             ("feat".to_string(), vec![s3.clone(), s1.clone()]),
         ];
 
-        let graph = AncestryGraph::from_tree(branch_ancestries, &HashMap::new());
+        let all = vec!["feat".to_string(), "main".to_string()];
+        let graph = AncestryGraph::from_tree(branch_ancestries, &HashMap::new(), all);
         let output = graph.to_string();
         let plain = strip_ansi(&output);
         let lines: Vec<&str> = plain.lines().collect();
@@ -482,7 +520,8 @@ mod tests {
         let mut tag_map = HashMap::new();
         tag_map.insert(s2.id.clone(), vec!["v1.0".to_string()]);
 
-        let graph = AncestryGraph::from_tree(branch_ancestries, &tag_map);
+        let all = vec!["experiment".to_string(), "hotfix".to_string(), "main".to_string()];
+        let graph = AncestryGraph::from_tree(branch_ancestries, &tag_map, all);
 
         // 6 unique snapshots
         assert_eq!(graph.nodes.len(), 6);
