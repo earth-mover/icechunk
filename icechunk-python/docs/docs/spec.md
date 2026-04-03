@@ -76,6 +76,20 @@ Some examples of incompatible changes are:
 - A commit is attempted to a branch that was deleted by other session
 - A branch is reset but it was deleted by other session
 
+### References
+
+Similar to Git, Icechunk supports the concept of _branches_ and _tags_.
+These references point to a specific snapshot of the repository.
+
+- **Branches** are _mutable_ references to a snapshot.
+  Repositories may have one or more branches.
+  The default branch name is `main`.
+  Repositories must always have a `main` branch, which is used to detect the existence of a valid repository in a given path.
+  After creation, branches may be updated to point to a different snapshot.
+- **Tags** are _immutable_ references to a snapshot.
+  A repository may contain zero or more tags.
+  After creation, tags may never be updated, unlike in Git. Tag delete is allowed, but a new tag with the name of a deleted one cannot be added.
+
 ## Specification
 
 ### Overview
@@ -190,20 +204,6 @@ listing the prefix, but Icechunk itself doesn't depend on this property.
 
 These backups of the repo info file are only used by Icechunk for its `ops_log` functionality. These files are linked in
 the repo info object itself, and they form a single linked list for ops logs that go beyond the 1,000 operations limit.
-
-##### References
-
-Similar to Git, Icechunk supports the concept of _branches_ and _tags_.
-These references point to a specific snapshot of the repository.
-
-- **Branches** are _mutable_ references to a snapshot.
-  Repositories may have one or more branches.
-  The default branch name is `main`.
-  Repositories must always have a `main` branch, which is used to detect the existence of a valid repository in a given path.
-  After creation, branches may be updated to point to a different snapshot.
-- **Tags** are _immutable_ references to a snapshot.
-  A repository may contain zero or more tags.
-  After creation, tags may never be updated, unlike in Git. Tag delete is allowed, but a new tag with the name of a deleted one cannot be added.
 
 #### Snapshot Files
 
