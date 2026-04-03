@@ -6,7 +6,7 @@ use std::{
     sync::Arc,
 };
 
-use crate::display::{PyRepr, ReprMode, py_bool, py_option};
+use crate::display::{PyAncestryGraph, PyRepr, ReprMode, py_bool, py_option};
 use itertools::Itertools as _;
 
 use chrono::{DateTime, Utc};
@@ -283,29 +283,6 @@ impl PySnapshotInfo {
 
     pub(crate) fn _repr_html_(&self) -> String {
         <Self as PyRepr>::_repr_html_(self)
-    }
-}
-
-#[pyclass(name = "AncestryGraph")]
-#[derive(Debug, Clone)]
-pub(crate) struct PyAncestryGraph {
-    inner: icechunk::display::AncestryGraph,
-}
-
-impl From<icechunk::display::AncestryGraph> for PyAncestryGraph {
-    fn from(inner: icechunk::display::AncestryGraph) -> Self {
-        Self { inner }
-    }
-}
-
-#[pymethods]
-impl PyAncestryGraph {
-    pub(crate) fn __repr__(&self) -> String {
-        self.inner.to_string()
-    }
-
-    pub(crate) fn __str__(&self) -> String {
-        self.inner.to_string()
     }
 }
 
