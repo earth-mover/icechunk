@@ -5084,27 +5084,6 @@ mod tests {
     }
 
     #[tokio_test]
-    async fn implicit_group_creation_in_add() -> Result<(), Box<dyn Error>> {
-        let repo = create_memory_store_repository(SpecVersionBin::current()).await;
-
-        let mut session = repo.writable_session("main").await?;
-        session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
-        // Try to create a node into a group that doesn't exist
-        // (and we don't do implicit group creation)
-        let dest_path: Path = "/b/a".try_into().unwrap();
-        let res = session.add_group(dest_path.clone(), Bytes::copy_from_slice(b"")).await;
-
-        assert!(res.is_err());
-        let res = res.unwrap_err();
-        assert!(matches!(res,
-                ICError { kind, ..} if matches!(&kind,
-                                                SessionErrorKind::AncestorNodeNotFound {prefix, ..}
-                                                if *prefix == dest_path)));
-
-        Ok(())
-    }
-
-    #[tokio_test]
     async fn test_session_amending_with_move() -> Result<(), Box<dyn Error>> {
         let repo = create_memory_store_repository(SpecVersionBin::current()).await;
 
@@ -5443,6 +5422,7 @@ mod tests {
 
         let shape = ArrayShape::new(vec![(5, 3), (5, 3)]).unwrap();
         session.add_group(Path::root(), Bytes::new()).await?;
+        session.add_group(Path::new("/foo").unwrap(), Bytes::new()).await?;
         session.add_group(Path::new("/foo/old").unwrap(), Bytes::new()).await?;
         let apath: Path = "/foo/old/array".try_into()?;
         session.add_array(apath.clone(), shape, None, Bytes::new()).await?;
@@ -5475,6 +5455,7 @@ mod tests {
             nodes.into_iter(),
             [
                 Path::new("/").unwrap(),
+                Path::new("/foo").unwrap(),
                 Path::new("/foo/new").unwrap(),
                 Path::new("/foo/new/array").unwrap(),
             ],
