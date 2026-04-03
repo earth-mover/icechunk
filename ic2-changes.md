@@ -12,7 +12,7 @@
 - `shift_array(path, offset)`: shift all chunks by a chunk offset
 - `reindex_array(path, fn)`: arbitrary chunk coordinate transformation via a user-provided function
 
-**More ergonomic distributed writes**: Icechunk doesn't enforce committing chnages before executing distributed writes. `ForkSession` is now based off of an anonymous snapshot that captures uncommitted state, and allows writes but disallows commits. Fork sessions are serializable (picklable) for distribution to workers, and are merged back via `session.merge(fork_session)` as previously.
+**More ergonomic distributed writes**: Icechunk doesn't enforce committing changes before executing distributed writes. `ForkSession` is now based off of an anonymous snapshot that captures uncommitted state, and allows writes but disallows commits. Fork sessions are serializable (picklable) for distribution to workers, and are merged back via `session.merge(fork_session)` as previously.
 
 ### Version Control
 
