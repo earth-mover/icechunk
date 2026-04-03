@@ -151,6 +151,7 @@ class TestRepr:
         assert "read_only: False" in repr_str
         assert "branch: main" in repr_str
         assert "has_uncommitted_changes: False" in repr_str
+        assert session.snapshot_id in repr_str
 
     def test_session_readonly_omits_branch(self, repo: Repository) -> None:
         session = repo.writable_session("main")
@@ -160,6 +161,7 @@ class TestRepr:
         readonly_session = repo.readonly_session("main")
         repr_str = repr(readonly_session)
         assert "read_only: True" in repr_str
+        assert readonly_session.snapshot_id in repr_str
         assert "branch" not in repr_str
         assert "has_uncommitted_changes" not in repr_str
 
