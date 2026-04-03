@@ -442,10 +442,22 @@ impl Display for GetModifiedResult {
 /// Fetch and write the parquet files that represent the repository in object store
 ///
 /// Different implementation can cache the files differently, or not at all.
+/// Structured metadata about a storage backend, for display/repr purposes.
+#[derive(Debug, Clone)]
+pub struct StorageInfo {
+    /// Human-readable backend type, e.g. "S3", "GCS", "in-memory".
+    pub backend_type: &'static str,
+    /// Key-value pairs of relevant configuration (bucket, prefix, path, etc.).
+    pub fields: Vec<(&'static str, String)>,
+}
+
 /// Implementations are free to assume files are never overwritten.
 #[async_trait]
 #[typetag::serde(tag = "type")]
 pub trait Storage: fmt::Debug + Display + sealed::Sealed + Sync + Send {
+    /// Return structured metadata about this storage backend.
+    fn storage_info(&self) -> StorageInfo;
+
     async fn default_settings(&self) -> StorageResult<Settings> {
         Ok(Default::default())
     }

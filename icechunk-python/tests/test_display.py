@@ -141,7 +141,9 @@ class TestRepr:
     def test_repository(self, repo: Repository) -> None:
         repr_str = repr(repo)
         assert repr_str.startswith("<icechunk.Repository>")
+        assert "format_version:" in repr_str
         assert "storage:" in repr_str
+        assert "in-memory" in repr_str
         assert "config: <RepositoryConfig ...>" in repr_str
 
     def test_session_writable(self, repo: Repository) -> None:
@@ -316,6 +318,40 @@ class TestReprHtml:
 # =============================================================================
 # Structural tests for classes not covered by roundtrip or other sections
 # =============================================================================
+class TestStorageRepr:
+    """Test Storage __repr__, __str__, and _repr_html_."""
+
+    def test_in_memory(self) -> None:
+        s = in_memory_storage()
+        repr_str = repr(s)
+        assert "<icechunk.Storage>" in repr_str
+        assert "type: in-memory" in repr_str
+
+    def test_in_memory_html(self) -> None:
+        s = in_memory_storage()
+        html = s._repr_html_()
+        assert "icechunk.Storage" in html
+        assert "in-memory" in html
+        assert '<div class="icechunk-repr">' in html
+
+    def test_local_filesystem(self, tmp_path: object) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as td:
+            s = icechunk.local_filesystem_storage(td)
+            repr_str = repr(s)
+            assert "<icechunk.Storage>" in repr_str
+            assert "type: local filesystem" in repr_str
+            assert "path:" in repr_str
+            assert td in repr_str
+
+    def test_repo_shows_storage_info(self, repo: Repository) -> None:
+        repr_str = repr(repo)
+        assert "in-memory" in repr_str
+        html = repo._repr_html_()
+        assert "in-memory" in html
+
+
 class TestReprStructural:
     """Check repr content for classes that aren't tested elsewhere."""
 

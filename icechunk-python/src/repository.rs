@@ -1139,15 +1139,31 @@ impl PyRepr for PyRepository {
 
     fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
         let repo = self.0.blocking_read();
-        let storage = format!("{}", repo.storage());
+        let spec_version = format!("{}", repo.spec_version() as u8);
+        let info = repo.storage().storage_info();
+        let mut storage_fields = vec![("type", info.backend_type.to_string())];
+        storage_fields.extend(info.fields);
+        let storage_refs: Vec<(&str, &str)> =
+            storage_fields.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        let storage = match mode {
+            ReprMode::Html => {
+                crate::display::dataclass_html_repr("icechunk.Storage", &storage_refs)
+            }
+            _ => crate::display::dataclass_str("icechunk.Storage", &storage_refs),
+        };
         match mode {
             // HTML is collapsible, so show the full config
             ReprMode::Html => {
                 let py_config: PyRepositoryConfig = repo.config().clone().into();
-                vec![("storage", storage), ("config", py_config.render(mode))]
+                vec![
+                    ("format_version", spec_version),
+                    ("storage", storage),
+                    ("config", py_config.render(mode)),
+                ]
             }
             // str/repr: config is too verbose when expanded recursively
             _ => vec![
+                ("format_version", spec_version),
                 ("storage", storage),
                 ("config", "<RepositoryConfig ...>".to_string()),
             ],
