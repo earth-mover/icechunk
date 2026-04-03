@@ -171,7 +171,11 @@ impl JsStore {
     }
 
     #[napi]
-    pub async fn set_if_not_exists(&self, key: String, value: Buffer) -> napi::Result<()> {
+    pub async fn set_if_not_exists(
+        &self,
+        key: String,
+        value: Buffer,
+    ) -> napi::Result<()> {
         let bytes = Bytes::from(value.to_vec());
         self.0.set_if_not_exists(&key, bytes).await.map_napi_err()
     }

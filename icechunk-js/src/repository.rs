@@ -87,11 +87,8 @@ pub struct JsSnapshotInfo {
 
 impl From<SnapshotInfo> for JsSnapshotInfo {
     fn from(info: SnapshotInfo) -> Self {
-        let metadata: serde_json::Map<String, serde_json::Value> = info
-            .metadata
-            .into_iter()
-            .map(|(k, v)| (k, v))
-            .collect();
+        let metadata: serde_json::Map<String, serde_json::Value> =
+            info.metadata.into_iter().collect();
         Self {
             id: info.id.to_string(),
             parent_id: info.parent_id.map(|id| id.to_string()),
@@ -134,18 +131,31 @@ impl From<Diff> for JsDiff {
         let moved_nodes = diff
             .moved_nodes
             .into_iter()
-            .map(|m| JsMovedNode {
-                from: m.from.to_string(),
-                to: m.to.to_string(),
-            })
+            .map(|m| JsMovedNode { from: m.from.to_string(), to: m.to.to_string() })
             .collect();
         Self {
             new_groups: diff.new_groups.into_iter().map(|p| p.to_string()).collect(),
             new_arrays: diff.new_arrays.into_iter().map(|p| p.to_string()).collect(),
-            deleted_groups: diff.deleted_groups.into_iter().map(|p| p.to_string()).collect(),
-            deleted_arrays: diff.deleted_arrays.into_iter().map(|p| p.to_string()).collect(),
-            updated_groups: diff.updated_groups.into_iter().map(|p| p.to_string()).collect(),
-            updated_arrays: diff.updated_arrays.into_iter().map(|p| p.to_string()).collect(),
+            deleted_groups: diff
+                .deleted_groups
+                .into_iter()
+                .map(|p| p.to_string())
+                .collect(),
+            deleted_arrays: diff
+                .deleted_arrays
+                .into_iter()
+                .map(|p| p.to_string())
+                .collect(),
+            updated_groups: diff
+                .updated_groups
+                .into_iter()
+                .map(|p| p.to_string())
+                .collect(),
+            updated_arrays: diff
+                .updated_arrays
+                .into_iter()
+                .map(|p| p.to_string())
+                .collect(),
             updated_chunks: serde_json::to_value(updated_chunks).unwrap_or_default(),
             moved_nodes,
         }
@@ -370,9 +380,7 @@ impl JsRepository {
             .map(|s| SnapshotId::try_from(s.as_str()).map_napi_err())
             .transpose()?;
         let repo = self.0.read().await;
-        repo.reset_branch(&branch, &to_id, from_id.as_ref())
-            .await
-            .map_napi_err()
+        repo.reset_branch(&branch, &to_id, from_id.as_ref()).await.map_napi_err()
     }
 
     #[napi]
@@ -427,13 +435,10 @@ impl JsRepository {
     pub async fn fetch_config(
         storage: &JsStorage,
     ) -> napi::Result<Option<JsRepositoryConfig>> {
-        let res = Repository::fetch_config(Arc::clone(&storage.0))
-            .await
-            .map_napi_err()?;
+        let res =
+            Repository::fetch_config(Arc::clone(&storage.0)).await.map_napi_err()?;
         match res {
-            Some((config, _version_info)) => {
-                Ok(Some(config.into()))
-            }
+            Some((config, _version_info)) => Ok(Some(config.into())),
             None => Ok(None),
         }
     }

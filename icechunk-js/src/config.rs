@@ -240,16 +240,9 @@ impl From<RepositoryConfig> for JsRepositoryConfig {
             get_partial_values_concurrency: value
                 .get_partial_values_concurrency
                 .map(|v| v as u32),
-            compression: value.compression.map(|c| {
-                JsCompressionConfig {
-                    algorithm: match c.algorithm {
-                        Some(CompressionAlgorithm::Zstd) => {
-                            Some(JsCompressionAlgorithm::Zstd)
-                        }
-                        None => None,
-                    },
-                    level: c.level.map(|l| l as u32),
-                }
+            compression: value.compression.map(|c| JsCompressionConfig {
+                algorithm: c.algorithm.map(|CompressionAlgorithm::Zstd| JsCompressionAlgorithm::Zstd),
+                level: c.level.map(|l| l as u32),
             }),
             max_concurrent_requests: value.max_concurrent_requests.map(|v| v as u32),
             caching: value.caching.map(|c| JsCachingConfig {
@@ -260,15 +253,13 @@ impl From<RepositoryConfig> for JsRepositoryConfig {
                 num_bytes_chunks: c.num_bytes_chunks.map(|v| v as i64),
             }),
             storage: value.storage.map(|s| JsStorageSettings {
-                concurrency: s.concurrency.map(|c| {
-                    JsStorageConcurrencySettings {
-                        max_concurrent_requests_for_object: c
-                            .max_concurrent_requests_for_object
-                            .map(|v| v.get() as u32),
-                        ideal_concurrent_request_size: c
-                            .ideal_concurrent_request_size
-                            .map(|v| v.get() as i64),
-                    }
+                concurrency: s.concurrency.map(|c| JsStorageConcurrencySettings {
+                    max_concurrent_requests_for_object: c
+                        .max_concurrent_requests_for_object
+                        .map(|v| v.get() as u32),
+                    ideal_concurrent_request_size: c
+                        .ideal_concurrent_request_size
+                        .map(|v| v.get() as i64),
                 }),
                 retries: s.retries.map(|r| JsStorageRetriesSettings {
                     max_tries: r.max_tries.map(|v| v.get() as u32),
@@ -291,9 +282,7 @@ impl From<RepositoryConfig> for JsRepositoryConfig {
                     .minimum_size_for_multipart_upload
                     .map(|v| v as i64),
             }),
-            manifest: value
-                .manifest
-                .and_then(|m| serde_json::to_value(m).ok()),
+            manifest: value.manifest.and_then(|m| serde_json::to_value(m).ok()),
             #[cfg(not(target_family = "wasm"))]
             virtual_chunk_containers: None, // Cannot easily round-trip VirtualChunkContainer
         }

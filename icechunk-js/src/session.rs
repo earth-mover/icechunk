@@ -129,24 +129,16 @@ impl JsSession {
     #[napi]
     pub async fn amend(&self, message: String) -> napi::Result<String> {
         let mut session = self.0.write().await;
-        let snapshot_id = session
-            .commit(&message)
-            .amend()
-            .execute()
-            .await
-            .map_napi_err()?;
+        let snapshot_id =
+            session.commit(&message).amend().execute().await.map_napi_err()?;
         Ok(snapshot_id.to_string())
     }
 
     #[napi]
     pub async fn flush(&self, message: String) -> napi::Result<String> {
         let mut session = self.0.write().await;
-        let snapshot_id = session
-            .commit(&message)
-            .anonymous()
-            .execute()
-            .await
-            .map_napi_err()?;
+        let snapshot_id =
+            session.commit(&message).anonymous().execute().await.map_napi_err()?;
         Ok(snapshot_id.to_string())
     }
 
