@@ -170,6 +170,8 @@ pub enum SessionErrorKind {
     NoAmendForInitialCommit,
     #[error("failed to create manifest from chunk stream")]
     ManifestCreationError(#[from] Box<SessionError>),
+    #[error("inconsistent manifests detected: {0}")]
+    ManifestsInconsistencyError(String),
     #[error("failed to merge sessions: {0}")]
     SessionMerge(String),
     #[error("byte range {request:?} is out of bounds for chunk of length {chunk_length}")]
@@ -2851,15 +2853,21 @@ async fn do_flush(
     }
 
     // manifest_files & manifest_refs _must_ be consistent
-    debug_assert_eq!(
-        flush_data.manifest_files.iter().map(|x| x.id.clone()).collect::<HashSet<_>>(),
-        flush_data
-            .manifest_refs
-            .values()
-            .flatten()
-            .map(|x| x.object_id.clone())
-            .collect::<HashSet<_>>(),
-    );
+    let mfiles =
+        flush_data.manifest_files.iter().map(|x| x.id.clone()).collect::<HashSet<_>>();
+    let mrefs = flush_data
+        .manifest_refs
+        .values()
+        .flatten()
+        .map(|x| x.object_id.clone())
+        .collect::<HashSet<_>>();
+    if mfiles != mrefs {
+        return Err(SessionError::capture(
+            SessionErrorKind::ManifestsInconsistencyError(format!(
+                "files contains {mfiles:?}, refs contains {mrefs:?}",
+            )),
+        ));
+    }
 
     trace!("Building new snapshot");
     // gather and sort nodes:
@@ -6657,6 +6665,53 @@ mod tests {
             Some(&serde_json::json!({ "rebase_attempts": 3 }))
         );
         assert_eq!(Arc::try_unwrap(attempts).unwrap().into_inner(), 3);
+        Ok(())
+    }
+
+    #[tokio_test]
+    async fn manifest_files_consistency() -> Result<(), Box<dyn Error>> {
+        let repo = Arc::new(create_memory_store_repository(SpecVersionBin::V2).await);
+        let mut session = repo.writable_session("main").await?;
+        session
+            .add_array("/array".try_into().unwrap(), basic_shape(), None, Bytes::new())
+            .await?;
+
+        let properties = Default::default();
+        let manifest_config = ManifestConfig::default();
+        let mut flush_data = FlushProcess::new(
+            Arc::clone(&session.asset_manager),
+            &session.change_set,
+            &Snapshot::INITIAL_SNAPSHOT_ID,
+            &manifest_config,
+        );
+
+        // poke at flush_data to make inconsistent
+        flush_data.manifest_files.insert(ManifestFileInfo {
+            id: ManifestId::random(),
+            num_chunk_refs: 0,
+            size_bytes: 9000,
+        });
+
+        let res = do_flush(
+            flush_data,
+            "fail",
+            1,
+            properties,
+            false,
+            CommitMethod::NewCommit,
+            manifest_config.splitting(),
+        )
+        .await;
+
+        // verify it returns the right error
+        assert!(res.is_err());
+        let res = res.unwrap_err();
+        eprintln!("{res}");
+        assert!(matches!(
+            res,
+            SessionError { kind: SessionErrorKind::ManifestsInconsistencyError(_), .. }
+        ));
+
         Ok(())
     }
 
