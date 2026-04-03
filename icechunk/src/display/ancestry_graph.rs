@@ -219,6 +219,19 @@ impl AncestryGraph {
         // Track which columns are currently active (have a branch line running through)
         let mut active_columns: Vec<bool> = vec![false; self.num_columns];
 
+        // Pre-compute: for each side-branch column, which trunk node does it fork from?
+        // Maps side-branch column → (last node id in that column, parent id = fork point)
+        let mut fork_targets: HashMap<usize, SnapshotId> = HashMap::new();
+        for col in 1..self.num_columns {
+            // Find the last (oldest) node in this column
+            if let Some(last_in_col) = self.nodes.iter().rev().find(|n| n.column == col) {
+                if let Some(parent_id) = &last_in_col.info.parent_id {
+                    // The parent should be on the trunk (column 0) — that's the fork point
+                    fork_targets.insert(col, parent_id.clone());
+                }
+            }
+        }
+
         for (i, node) in self.nodes.iter().enumerate() {
             let col = node.column;
 
@@ -245,36 +258,55 @@ impl AncestryGraph {
 
             writeln!(f, "{prefix}{DIM}{short_id}{RESET}{labels} {msg}")?;
 
-            // Check if this node is a fork point — the next node on this column's
-            // parent is in a different column. If so, draw merge lines.
-            // For now, draw connector lines for all active columns.
             if i < self.nodes.len() - 1 {
-                // Check if this column should deactivate (no more nodes in this column after this one)
+                // Check if this is the last node in its column
                 let more_in_column = self.nodes[i + 1..]
                     .iter()
                     .any(|n| n.column == col);
 
-                // Check if next node is a fork point (it's in a different column and
-                // this column merges into it)
-                let next = &self.nodes[i + 1];
-                let is_fork_point = !more_in_column
-                    && node.info.parent_id.as_ref() == Some(&next.info.id)
-                    && next.column != col;
+                // Check if any side branches fork into this node
+                // (i.e., this node is the fork point target for some column)
+                let mut merging_columns: Vec<usize> = Vec::new();
+                for (&side_col, target_id) in &fork_targets {
+                    if *target_id == node.info.id && active_columns[side_col] {
+                        merging_columns.push(side_col);
+                    }
+                }
+                merging_columns.sort();
 
-                if is_fork_point {
-                    // Draw a merge line: this column merges into the next node's column
+                if !merging_columns.is_empty() {
+                    // Draw merge lines: side branches merge into this node's column
+                    for &merge_col in &merging_columns {
+                        let mut merge_line = String::new();
+                        for c in 0..self.num_columns {
+                            if c == col {
+                                let color = branch_color(c);
+                                merge_line.push_str(&format!("{color}|{RESET}"));
+                            } else if c == merge_col {
+                                let color = branch_color(merge_col);
+                                merge_line.push_str(&format!("{color}/{RESET}"));
+                            } else if active_columns[c] {
+                                let color = branch_color(c);
+                                merge_line.push_str(&format!("{color}|{RESET}"));
+                            } else {
+                                merge_line.push(' ');
+                            }
+                            merge_line.push(' ');
+                        }
+                        writeln!(f, "{merge_line}")?;
+                        active_columns[merge_col] = false;
+                    }
+                } else if !more_in_column && col != 0 {
+                    // Side branch ends but parent isn't the immediate next node —
+                    // draw a merge line toward column 0
                     let mut merge_line = String::new();
                     for c in 0..self.num_columns {
-                        if c == next.column {
-                            let color = branch_color(c);
+                        if c == 0 {
+                            let color = branch_color(0);
                             merge_line.push_str(&format!("{color}|{RESET}"));
                         } else if c == col {
                             let color = branch_color(col);
-                            if col > next.column {
-                                merge_line.push_str(&format!("{color}/{RESET}"));
-                            } else {
-                                merge_line.push_str(&format!("{color}\\{RESET}"));
-                            }
+                            merge_line.push_str(&format!("{color}/{RESET}"));
                         } else if active_columns[c] {
                             let color = branch_color(c);
                             merge_line.push_str(&format!("{color}|{RESET}"));
@@ -324,9 +356,12 @@ impl fmt::Display for AncestryGraph {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::Utc;
+    use chrono::{Duration, Utc};
     use std::collections::BTreeMap;
 
+    /// Create a snapshot with a distinct timestamp based on id_byte
+    /// (higher id_byte = newer, so sorting by timestamp desc gives
+    /// highest id_byte first).
     fn make_snapshot(id_byte: u8, parent_id_byte: Option<u8>) -> SnapshotInfo {
         let mut id_bytes = [0u8; 12];
         id_bytes[0] = id_byte;
@@ -335,10 +370,11 @@ mod tests {
             p[0] = b;
             SnapshotId::new(p)
         });
+        let base = Utc::now() - Duration::hours(100);
         SnapshotInfo {
             id: SnapshotId::new(id_bytes),
             parent_id,
-            flushed_at: Utc::now(),
+            flushed_at: base + Duration::minutes(id_byte as i64),
             message: format!("Commit {id_byte}"),
             metadata: BTreeMap::new(),
         }
@@ -409,5 +445,86 @@ mod tests {
         assert!(s4_node.is_some());
         assert_eq!(s3_node.map(|n| n.column), Some(0));
         assert_eq!(s4_node.map(|n| n.column), Some(1));
+    }
+
+    #[test]
+    fn test_from_tree_three_branches_trunk_priority() {
+        // Reproduces the demo scenario:
+        //   main:       s1 -> s2 -> s3 (tip)
+        //   experiment: s1 -> s2 -> s4 -> s5 (tip, forks from s2)
+        //   hotfix:     s1 -> s2 -> s3 -> s6 (tip, forks from s3)
+        //
+        // "main" should be trunk (column 0) — its commits + shared ancestors
+        // stay in column 0 even though other branches share them.
+        let s1 = make_snapshot(1, None);       // repo init
+        let s2 = make_snapshot(2, Some(1));    // shared ancestor
+        let s3 = make_snapshot(3, Some(2));    // main tip
+        let s4 = make_snapshot(4, Some(2));    // experiment commit
+        let s5 = make_snapshot(5, Some(4));    // experiment tip
+        let s6 = make_snapshot(6, Some(3));    // hotfix tip
+
+        // main is listed FIRST (trunk), then others
+        let branch_ancestries = vec![
+            (
+                "main".to_string(),
+                vec![s3.clone(), s2.clone(), s1.clone()],
+            ),
+            (
+                "experiment".to_string(),
+                vec![s5.clone(), s4.clone(), s2.clone(), s1.clone()],
+            ),
+            (
+                "hotfix".to_string(),
+                vec![s6.clone(), s3.clone(), s2.clone(), s1.clone()],
+            ),
+        ];
+
+        let mut tag_map = HashMap::new();
+        tag_map.insert(s2.id.clone(), vec!["v1.0".to_string()]);
+
+        let graph = AncestryGraph::from_tree(branch_ancestries, &tag_map);
+
+        // 6 unique snapshots
+        assert_eq!(graph.nodes.len(), 6);
+
+        // Shared ancestors (s1, s2, s3) must be in column 0 (trunk)
+        let find = |id: &SnapshotId| graph.nodes.iter().find(|n| &n.info.id == id);
+
+        let s1_node = find(&s1.id).expect("s1 missing");
+        let s2_node = find(&s2.id).expect("s2 missing");
+        let s3_node = find(&s3.id).expect("s3 missing");
+        let s4_node = find(&s4.id).expect("s4 missing");
+        let s5_node = find(&s5.id).expect("s5 missing");
+        let s6_node = find(&s6.id).expect("s6 missing");
+
+        assert_eq!(s1_node.column, 0, "s1 (shared root) should be trunk");
+        assert_eq!(s2_node.column, 0, "s2 (shared ancestor) should be trunk");
+        assert_eq!(s3_node.column, 0, "s3 (main tip) should be trunk");
+        assert_eq!(s5_node.column, 1, "s5 (experiment tip) should be side branch");
+        assert_eq!(s4_node.column, 1, "s4 (experiment commit) should be side branch");
+        assert_eq!(s6_node.column, 2, "s6 (hotfix tip) should be side branch");
+
+        // Branch labels should be on the right nodes
+        assert!(s3_node.branches.contains(&"main".to_string()));
+        assert!(s5_node.branches.contains(&"experiment".to_string()));
+        assert!(s6_node.branches.contains(&"hotfix".to_string()));
+
+        // Tag should be on s2
+        assert!(s2_node.tags.contains(&"v1.0".to_string()));
+
+        // Display output should mention all branches and be connected
+        let output = graph.to_string();
+        assert!(output.contains("main"), "output should mention main");
+        assert!(output.contains("experiment"), "output should mention experiment");
+        assert!(output.contains("hotfix"), "output should mention hotfix");
+        assert!(output.contains("v1.0"), "output should mention v1.0 tag");
+
+        // Trunk nodes should appear with * in column 0
+        // Side branch nodes should appear with * in their column
+        // There should be fork connector lines (/ characters)
+        assert!(
+            output.contains('/') || output.contains('\\'),
+            "tree output should contain fork connectors: {output}"
+        );
     }
 }
