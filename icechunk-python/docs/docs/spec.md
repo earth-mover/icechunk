@@ -76,35 +76,32 @@ In this case, the client may attempt to resolve the conflicts and retry the comm
 ```mermaid
 flowchart TD
     subgraph metadata[Metadata]
-    subgraph repo_info[Entry Point]
-    repo_info[Repo Info File]
+        subgraph entry_point[Entry Point]
+            repo_info[Repo Info File]
+        end
+        subgraph snapshots[Snapshots]
+            snapshot1[Snapshot File 1]
+            snapshot2[Snapshot File 2]
+        end
+        subgraph manifests[Manifests]
+            manifestA[Chunk Manifest A]
+            manifestB[Chunk Manifest B]
+        end
     end
-    subgraph snapshots[Snapshots]
-    snapshot1[Snapshot File 1]
-    snapshot2[Snapshot File 2]
+    subgraph data[Data]
+        chunk1[Chunk File 1]
+        chunk2[Chunk File 2]
+        chunk3[Chunk File 3]
+        chunk4[Chunk File 4]
     end
-    subgraph manifests[Manifests]
-    manifestA[Chunk Manifest A]
-    manifestB[Chunk Manifest B]
-    end
-    end
-
-    subgraph data
-    chunk1[Chunk File 1]
-    chunk2[Chunk File 2]
-    chunk3[Chunk File 3]
-    chunk4[Chunk File 4]
-    end
-
     repo_info -- snapshot ID --> snapshot2
     snapshot1 --> manifestA
-    snapshot2 -->manifestA
-    snapshot2 -->manifestB
+    snapshot2 --> manifestA
+    snapshot2 --> manifestB
     manifestA --> chunk1
     manifestA --> chunk2
     manifestB --> chunk3
     manifestB --> chunk4
-
 ```
 
 ### File Layout
