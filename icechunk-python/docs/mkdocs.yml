@@ -163,7 +163,6 @@ plugins:
         'icechunk-python/dask/index.md': 'dask.md'
         'icechunk-python/xarray/index.md': 'xarray.md'
         'icechunk-python/virtual/index.md': 'virtual.md'
-        'icechunk-python/concurrency/index.md': 'concurrency.md'
         'icechunk-python/parallel/index.md': 'parallel.md'
         'icechunk-python/performance/index.md': 'performance.md'
         'icechunk-python/cheatsheets/git-users/index.md': 'icechunk-for-git-users.md'
