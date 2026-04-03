@@ -61,6 +61,8 @@ table MoveOperation {
 // All ObjectId8 lists below MUST be sorted in ascending byte order
 // (i.e. lexicographic comparison of the 8 raw bytes).
 //
+// TODO: verify this holds after amend merging — a node could
+// end up in both new_* and updated_* lists.
 // A group's node id MUST NOT appear in more than one of
 // new_groups, deleted_groups, or updated_groups.
 // Likewise for arrays across new_arrays, deleted_arrays, or updated_arrays.
@@ -105,13 +107,11 @@ table TransactionLog {
   // If a `to` path was occupied in the parent snapshot, that path
   // MUST also appear as a `from` in another move — moves MUST NOT
   // implicitly delete or overwrite nodes.
-  // Introduced in spec version 2. Absent in V1 transaction logs;
-  // readers MUST treat absence as an empty list.
+  // Introduced in spec version 2.
   moved_nodes: [MoveOperation];
 
   // Reserved for future use. Opaque bytes for future extensions.
-  // Introduced in spec version 2. Absent in V1 transaction logs;
-  // readers MUST treat absence as empty.
+  // Introduced in spec version 2.
   extra: [uint8];
 }
 // --8<-- [end:transaction_log]
