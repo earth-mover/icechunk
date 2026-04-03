@@ -14,10 +14,17 @@ pub struct AncestryNode {
     pub column: usize,
 }
 
+/// Maximum number of nodes to display before truncating.
+const MAX_DISPLAY_NODES: usize = 100;
+
 /// A materialized view of repository commit history, suitable for rendering.
 ///
 /// Built via [`Repository::ancestry_graph()`](crate::Repository) — either for a single
 /// ref (linear history) or all branches (tree view).
+///
+/// Note: only commits reachable from branches are included. Anonymous/detached
+/// snapshots (created via `session.commit("msg").anonymous()`) are not attached
+/// to any branch and will not appear in the graph.
 #[derive(Debug, Clone)]
 pub struct AncestryGraph {
     /// Nodes in display order (newest first).
@@ -26,6 +33,8 @@ pub struct AncestryGraph {
     pub num_columns: usize,
     /// All branch names in the repo (sorted), used for consistent color assignment.
     pub all_branches: Vec<String>,
+    /// Whether the output was truncated (more nodes exist than are displayed).
+    pub truncated: bool,
 }
 
 /// Look up labels for a snapshot from a reverse map, returning an empty vec if absent.
@@ -74,7 +83,12 @@ impl AncestryGraph {
         sort_branches_main_first(&mut all_branches);
 
         if branch_ancestries.is_empty() {
-            return Self { nodes: Vec::new(), num_columns: 0, all_branches };
+            return Self {
+                nodes: Vec::new(),
+                num_columns: 0,
+                all_branches,
+                truncated: false,
+            };
         }
 
         // Register all branch tip labels up front so they're available regardless
@@ -111,7 +125,12 @@ impl AncestryGraph {
         let mut nodes: Vec<AncestryNode> = node_map.into_values().collect();
         nodes.sort_by(|a, b| b.info.flushed_at.cmp(&a.info.flushed_at));
 
-        Self { nodes, num_columns, all_branches }
+        let truncated = nodes.len() > MAX_DISPLAY_NODES;
+        if truncated {
+            nodes.truncate(MAX_DISPLAY_NODES);
+        }
+
+        Self { nodes, num_columns, all_branches, truncated }
     }
 
     /// Get a stable color index for a branch name based on its position in the
@@ -119,6 +138,30 @@ impl AncestryGraph {
     fn color_index_for_branch(&self, name: &str) -> usize {
         self.all_branches.iter().position(|b| b == name).unwrap_or(0)
     }
+
+    /// Render the graph as a plain string with no ANSI color codes.
+    /// Useful for CI logs, piping to files, or consumption by LLM agents.
+    pub fn to_plain_string(&self) -> String {
+        strip_ansi(&self.to_string())
+    }
+}
+
+/// Strip ANSI escape codes from a string.
+fn strip_ansi(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    let mut in_escape = false;
+    for c in s.chars() {
+        if c == '\x1b' {
+            in_escape = true;
+        } else if in_escape {
+            if c.is_ascii_alphabetic() {
+                in_escape = false;
+            }
+        } else {
+            result.push(c);
+        }
+    }
+    result
 }
 
 // -- ANSI rendering ----------------------------------------------------------
@@ -360,7 +403,18 @@ impl fmt::Display for AncestryGraph {
         if self.nodes.is_empty() {
             return writeln!(f, "(empty history)");
         }
-        if self.num_columns <= 1 { self.fmt_linear(f) } else { self.fmt_tree(f) }
+        if self.num_columns <= 1 {
+            self.fmt_linear(f)?;
+        } else {
+            self.fmt_tree(f)?;
+        }
+        if self.truncated {
+            writeln!(
+                f,
+                "{DIM}  ... ({MAX_DISPLAY_NODES} of more snapshots shown){RESET}"
+            )?;
+        }
+        Ok(())
     }
 }
 
@@ -478,7 +532,7 @@ mod tests {
         let all = vec!["feat".to_string(), "main".to_string()];
         let graph = AncestryGraph::new(branch_ancestries, &HashMap::new(), all);
         let output = graph.to_string();
-        let plain = strip_ansi(&output);
+        let plain = super::strip_ansi(&output);
         let lines: Vec<&str> = plain.lines().collect();
 
         eprintln!("=== minimal fork display ===");
@@ -504,24 +558,6 @@ mod tests {
             lines.iter().any(|l| l.contains("main") && l.contains("Commit 2")),
             "should have main Commit 2: {plain}"
         );
-    }
-
-    /// Strip ANSI escape codes from a string.
-    fn strip_ansi(s: &str) -> String {
-        let mut result = String::new();
-        let mut in_escape = false;
-        for c in s.chars() {
-            if c == '\x1b' {
-                in_escape = true;
-            } else if in_escape {
-                if c.is_ascii_alphabetic() {
-                    in_escape = false;
-                }
-            } else {
-                result.push(c);
-            }
-        }
-        result
     }
 
     #[test]

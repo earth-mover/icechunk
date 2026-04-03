@@ -287,4 +287,10 @@ impl PyAncestryGraph {
     pub(crate) fn __str__(&self) -> String {
         self.inner.to_string()
     }
+
+    /// Return the graph as a plain string with no ANSI color codes.
+    /// Useful for CI logs, piping to files, or consumption by LLM agents.
+    pub(crate) fn to_plain_string(&self) -> String {
+        self.inner.to_plain_string()
+    }
 }
