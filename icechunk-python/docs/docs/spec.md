@@ -328,6 +328,8 @@ Each snapshot MUST have a corresponding transaction log file stored at `transact
 
 The transaction log file MUST use the standard [binary file format](#binary-file-format) with file type `TransactionLog`.
 
+The initial snapshot's transaction log MUST have all lists empty — the root group created during repository initialization is not recorded in the transaction log.
+
 !!! tip "For implementers"
     Transaction logs are not needed to read data from a repository — they exist to support
     conflict detection during rebase and to compute diffs between commits.
@@ -343,11 +345,15 @@ The `TransactionLog` table is the root type:
 
 All node ids in this table refer to `NodeSnapshot.id` values from the corresponding snapshot.
 
-The `extra` field is an opaque byte vector reserved for future extensions. It allows small, optional features (e.g. precomputed storage statistics) to be added without requiring a new spec version. The contents of `extra` will be defined by future spec extensions. Implementations MUST preserve it when reading and writing transaction logs.
+The `extra` field is an opaque byte vector reserved for future extensions. It allows small, optional features (e.g. precomputed storage statistics) to be added without requiring a new spec version. The contents of `extra` will be defined by future spec extensions. Transaction log files are immutable once written, but implementations that merge transaction logs (e.g. during amend) MUST preserve the `extra` bytes from the source logs. Implementations creating new transaction logs with no extensions SHOULD write an empty `extra` field.
 
 ##### `ArrayUpdatedChunks`
 
 Each entry in `updated_chunks` identifies which chunk coordinates changed for a given array:
+
+```protobuf
+--8<-- "icechunk-format/flatbuffers/transaction_log.fbs:chunk_indices"
+```
 
 ```protobuf
 --8<-- "icechunk-format/flatbuffers/transaction_log.fbs:array_updated_chunks"
@@ -434,3 +440,4 @@ A tag can be created from any snapshot.
 - For each dimension of each array, instead of storing the `chunk_legth` in the snapshot, the `num_chunks` is now stored.
 This will help with rectilinear chunk grids.
 - Virtual chunk location can optionally be compressed inside the manifest.
+- Transaction logs gained `moved_nodes` and `extra` fields (absent in V1 transaction logs).

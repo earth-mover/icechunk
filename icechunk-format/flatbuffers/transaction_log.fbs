@@ -15,10 +15,12 @@ table ArrayUpdatedChunks {
   // corresponding snapshot.
   node_id: ObjectId8 (required);
 
-  // The coordinates of all chunk references modified in this transaction
-  // for this array. Each ChunkIndices contains a coords vector of uint32
-  // representing the chunk's position in the array's chunk grid.
-  // MUST be sorted in ascending lexicographic order.
+  // The coordinates of all chunk references that were added, overwritten,
+  // or deleted in this transaction for this array. Each ChunkIndices
+  // contains a coords vector of uint32 representing the chunk's position
+  // in the array's chunk grid.
+  // MUST be sorted in ascending lexicographic order (compare first
+  // element, break ties with second element, etc.).
   chunks: [ChunkIndices] (required);
 }
 
@@ -31,9 +33,17 @@ enum NodeType: ubyte { Group = 0, Array }
 // All four fields MUST be present. They are not marked `required`
 // in the flatbuffers schema to allow future schema evolution.
 table MoveOperation {
+  // The node's absolute path in the parent snapshot.
+  // Paths use `/` as separator and MUST start with `/`.
   from: string;
+
+  // The node's absolute path in the current snapshot.
   to: string;
+
+  // The node id of the moved node (referencing NodeSnapshot.id).
   node_id: ObjectId8;
+
+  // Whether this node is a Group or Array.
   node_type: NodeType;
 }
 
@@ -65,10 +75,12 @@ table TransactionLog {
   // Node ids of arrays deleted in this transaction.
   deleted_arrays: [ObjectId8] (required);
 
-  // Node ids of arrays whose user metadata was modified in this transaction.
+  // Node ids of arrays whose user_data (see NodeSnapshot) was modified
+  // in this transaction.
   updated_arrays: [ObjectId8] (required);
 
-  // Node ids of groups whose user metadata was modified in this transaction.
+  // Node ids of groups whose user_data (see NodeSnapshot) was modified
+  // in this transaction.
   updated_groups: [ObjectId8] (required);
 
   // Chunk ref changes made in this transaction.
@@ -86,7 +98,7 @@ table TransactionLog {
   // Introduced in spec version 2.
   moved_nodes: [MoveOperation];
 
-  // Reserved for future use.
+  // Reserved for future use. Opaque bytes for future extensions.
   // Introduced in spec version 2.
   extra: [uint8];
 }
