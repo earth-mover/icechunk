@@ -664,3 +664,33 @@ class TestAncestryGraph:
         graph = repo.ancestry_graph(branch="main")
         output = str(graph)
         assert "v1.0" in output
+
+    def test_repr_svg(self, repo: Repository) -> None:
+        """_repr_svg_ should return raw SVG content."""
+        session = repo.writable_session("main")
+        store = session.store
+        root = zarr.group(store=store)
+        root.create_array("arr", shape=(10,), dtype="float64")
+        session.commit("First commit")
+
+        graph = repo.ancestry_graph(branch="main")
+        svg = graph._repr_svg_()
+        assert "<svg" in svg
+        assert "</svg>" in svg
+        assert "<circle" in svg
+        assert "First commit" in svg
+        assert "main" in svg
+
+    def test_to_plain_string(self, repo: Repository) -> None:
+        """to_plain_string should have no ANSI codes."""
+        session = repo.writable_session("main")
+        store = session.store
+        root = zarr.group(store=store)
+        root.create_array("arr", shape=(10,), dtype="float64")
+        session.commit("First commit")
+
+        graph = repo.ancestry_graph(branch="main")
+        plain = graph.to_plain_string()
+        assert "\x1b" not in plain
+        assert "First commit" in plain
+        assert "main" in plain

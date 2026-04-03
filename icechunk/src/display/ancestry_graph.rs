@@ -562,4 +562,45 @@ mod tests {
             "tree output should contain fork connectors: {output}"
         );
     }
+
+    #[test]
+    fn test_svg_output_structure() {
+        let s1 = make_snapshot(1, None);
+        let s2 = make_snapshot(2, Some(1));
+        let s3 = make_snapshot(3, Some(1));
+
+        let branch_ancestries = vec![
+            ("main".to_string(), vec![s2.clone(), s1.clone()]),
+            ("feat".to_string(), vec![s3.clone(), s1.clone()]),
+        ];
+
+        let all = vec!["feat".to_string(), "main".to_string()];
+        let graph = AncestryGraph::new(branch_ancestries, &HashMap::new(), all);
+        let svg = graph.to_svg();
+
+        // Should be valid raw SVG
+        assert!(svg.contains("<svg"), "should contain SVG element");
+        assert!(svg.contains("</svg>"), "should close SVG element");
+
+        // Should have circles for nodes
+        assert!(svg.contains("<circle"), "should have circle elements for nodes");
+
+        // Should have lines for connections
+        assert!(
+            svg.contains("<line") || svg.contains("<path"),
+            "should have line or path elements for connections"
+        );
+
+        // Should contain branch labels and commit messages
+        assert!(svg.contains("main"), "should mention main branch");
+        assert!(svg.contains("feat"), "should mention feat branch");
+        assert!(svg.contains("Commit 1"), "should contain commit message");
+        assert!(svg.contains("Commit 2"), "should contain commit message");
+
+        // Colors should come from the hex palette
+        assert!(
+            svg.contains("#4ec968") || svg.contains("#e06c75"),
+            "should use hex colors"
+        );
+    }
 }

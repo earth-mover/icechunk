@@ -2559,8 +2559,8 @@ class AncestryGraph:
     def to_plain_string(self) -> str:
         """Return the graph as plain text with no ANSI color codes."""
         ...
-    def _repr_html_(self) -> str:
-        """Return an SVG representation for Jupyter notebooks."""
+    def _repr_svg_(self) -> str:
+        """Return a raw SVG string for Jupyter notebooks."""
         ...
 
 class S3StaticCredentials:
