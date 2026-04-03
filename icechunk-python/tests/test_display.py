@@ -1,6 +1,6 @@
 """Tests for __str__, __repr__, and _repr_html_ display methods."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -470,7 +470,7 @@ class TestReprStructural:
         session = repo.writable_session("main")
         zarr.group(session.store)
         session.commit("init")
-        gc = repo.garbage_collect(datetime.now(tz=timezone.utc) - timedelta(hours=1))
+        gc = repo.garbage_collect(datetime.now(tz=UTC) - timedelta(hours=1))
         repr_str = repr(gc)
         assert "<icechunk.GCSummary>" in repr_str
         assert "bytes_deleted:" in repr_str
@@ -515,9 +515,7 @@ class TestReprStructural:
         assert "icechunk.ChunkStorageStats" in html
 
     def test_virtual_chunk_container_all_modes(self) -> None:
-        vcc = VirtualChunkContainer(
-            "s3://bucket/", ObjectStoreConfig.InMemory()
-        )
+        vcc = VirtualChunkContainer("s3://bucket/", ObjectStoreConfig.InMemory())
         # Executable repr
         repr_str = repr(vcc)
         assert "icechunk.VirtualChunkContainer(" in repr_str
