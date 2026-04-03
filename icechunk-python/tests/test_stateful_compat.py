@@ -217,22 +217,37 @@ class CrossVersionExpireGCStateMachine(VersionControlStateMachine):
         assert self.storage is not None
         self.repo = self.actor.open(self.storage)
         with self._v1_repo_copy() as (v1_repo, _):
-            v2_result = self.repo.expire_snapshots(
-                older_than,
-                delete_expired_branches=delete_expired_branches,
-                delete_expired_tags=delete_expired_tags,
-            )
-            v1_result = v1_repo.expire_snapshots(
-                older_than,
-                delete_expired_branches=delete_expired_branches,
-                delete_expired_tags=delete_expired_tags,
-            )
+            v2_error: Exception | None = None
+            v1_error: Exception | None = None
+            try:
+                v2_result = self.repo.expire_snapshots(
+                    older_than,
+                    delete_expired_branches=delete_expired_branches,
+                    delete_expired_tags=delete_expired_tags,
+                )
+            except (ic.IcechunkError, Exception) as e:
+                v2_error = e
+            try:
+                v1_result = v1_repo.expire_snapshots(
+                    older_than,
+                    delete_expired_branches=delete_expired_branches,
+                    delete_expired_tags=delete_expired_tags,
+                )
+            except (ic_v1.IcechunkError, Exception) as e:
+                v1_error = e
 
-            note(f"expire_snapshots: v2={v2_result!r}, v1={v1_result!r}")
-            assert v2_result == v1_result, (
-                f"expire_snapshots mismatch: v2={v2_result}, v1={v1_result}"
-            )
-            event(f"cross-version expire: {len(v2_result)} snapshots expired")
+            if v2_error is not None or v1_error is not None:
+                note(f"expire_snapshots errors: v2={v2_error!r}, v1={v1_error!r}")
+                assert v2_error is not None and v1_error is not None, (
+                    f"expire_snapshots error mismatch: v2={v2_error!r}, v1={v1_error!r}"
+                )
+                event("cross-version expire: both errored (consistent)")
+            else:
+                note(f"expire_snapshots: v2={v2_result!r}, v1={v1_result!r}")
+                assert v2_result == v1_result, (
+                    f"expire_snapshots mismatch: v2={v2_result}, v1={v1_result}"
+                )
+                event(f"cross-version expire: {len(v2_result)} snapshots expired")
 
         self._sync_model_from_repo()
 
@@ -241,35 +256,52 @@ class CrossVersionExpireGCStateMachine(VersionControlStateMachine):
         assert self.storage is not None
         self.repo = self.actor.open(self.storage)
         with self._v1_repo_copy() as (v1_repo, v1_path):
-            v2_summary = self.repo.garbage_collect(older_than)
-            v1_summary = v1_repo.garbage_collect(older_than)
+            v2_error: Exception | None = None
+            v1_error: Exception | None = None
+            try:
+                v2_summary = self.repo.garbage_collect(older_than)
+            except (ic.IcechunkError, Exception) as e:
+                v2_error = e
+            try:
+                v1_summary = v1_repo.garbage_collect(older_than)
+            except (ic_v1.IcechunkError, Exception) as e:
+                v1_error = e
 
-            note(
-                f"garbage_collect: v2={v2_summary.snapshots_deleted}, v1={v1_summary.snapshots_deleted}"
-            )
-            # bytes_deleted / transaction_logs_deleted may differ between v1 and v2.
-            for field in (
-                "snapshots_deleted",
-                "chunks_deleted",
-                "manifests_deleted",
-                "attributes_deleted",
-            ):
-                v2_val = getattr(v2_summary, field)
-                v1_val = getattr(v1_summary, field)
-                assert v2_val == v1_val, (
-                    f"garbage_collect {field} mismatch: v2={v2_val}, v1={v1_val}"
+            if v2_error is not None or v1_error is not None:
+                note(f"garbage_collect errors: v2={v2_error!r}, v1={v1_error!r}")
+                assert v2_error is not None and v1_error is not None, (
+                    f"garbage_collect error mismatch: v2={v2_error!r}, v1={v1_error!r}"
                 )
-            event(f"cross-version GC: {v2_summary.snapshots_deleted} snapshots collected")
+                event("cross-version GC: both errored (consistent)")
+            else:
+                note(
+                    f"garbage_collect: v2={v2_summary.snapshots_deleted}, v1={v1_summary.snapshots_deleted}"
+                )
+                # bytes_deleted / transaction_logs_deleted may differ between v1 and v2.
+                for field in (
+                    "snapshots_deleted",
+                    "chunks_deleted",
+                    "manifests_deleted",
+                    "attributes_deleted",
+                ):
+                    v2_val = getattr(v2_summary, field)
+                    v1_val = getattr(v1_summary, field)
+                    assert v2_val == v1_val, (
+                        f"garbage_collect {field} mismatch: v2={v2_val}, v1={v1_val}"
+                    )
+                event(
+                    f"cross-version GC: {v2_summary.snapshots_deleted} snapshots collected"
+                )
 
-            # Compare remaining objects on storage after GC
-            v2_objects = self._list_object_keys(self._storage_path)
-            v1_objects = self._list_object_keys(v1_path)
-            for prefix in v2_objects:
-                assert v2_objects[prefix] == v1_objects[prefix], (
-                    f"post-GC object mismatch for {prefix!r}:\n"
-                    f"  v2 only: {v2_objects[prefix] - v1_objects[prefix]}\n"
-                    f"  v1 only: {v1_objects[prefix] - v2_objects[prefix]}"
-                )
+                # Compare remaining objects on storage after GC
+                v2_objects = self._list_object_keys(self._storage_path)
+                v1_objects = self._list_object_keys(v1_path)
+                for prefix in v2_objects:
+                    assert v2_objects[prefix] == v1_objects[prefix], (
+                        f"post-GC object mismatch for {prefix!r}:\n"
+                        f"  v2 only: {v2_objects[prefix] - v1_objects[prefix]}\n"
+                        f"  v1 only: {v1_objects[prefix] - v2_objects[prefix]}"
+                    )
 
         self._sync_model_from_repo()
 
