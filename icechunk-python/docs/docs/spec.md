@@ -169,6 +169,22 @@ The full set of file types and their definitions are:
 
 (Note that the flatbuffers also share some common utility definitions, defined in [`common.fbs`](https://github.com/earth-mover/icechunk/blob/404100b584fb7ac70de860bd430aa8291df98c4d/icechunk-format/flatbuffers/common.fbs).)
 
+All object identifiers in the format are fixed-size byte arrays:
+
+```protobuf
+--8<-- "icechunk-format/flatbuffers/common.fbs:object_id_12"
+```
+
+```protobuf
+--8<-- "icechunk-format/flatbuffers/common.fbs:object_id_8"
+```
+
+Snapshot-level metadata is stored as a list of key-value pairs:
+
+```protobuf
+--8<-- "icechunk-format/flatbuffers/common.fbs:metadata_item"
+```
+
 The rest of this section describes the meaning of the fields in each flatbuffers file, and any other concerns that implementations should be aware of.
 
 #### Repo info file
