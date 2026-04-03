@@ -89,8 +89,8 @@ impl AncestryGraph {
                 LayoutElement::Line { from_row, to_row, col } => {
                     let color = palette_hex(col_colors[*col]);
                     let x = col_x(*col);
-                    let y1 = row_y(*from_row) + NODE_RADIUS + 2.0;
-                    let y2 = row_y(*to_row) - NODE_RADIUS - 2.0;
+                    let y1 = row_y(*from_row) + NODE_RADIUS;
+                    let y2 = row_y(*to_row) - NODE_RADIUS;
                     let _ = writeln!(
                         svg,
                         "  <line x1=\"{x}\" y1=\"{y1}\" x2=\"{x}\" y2=\"{y2}\" \
@@ -100,9 +100,9 @@ impl AncestryGraph {
                 LayoutElement::Fork { from_row, from_col, to_row, to_col } => {
                     let color = palette_hex(col_colors[*from_col]);
                     let x1 = col_x(*from_col);
-                    let y1 = row_y(*from_row) + NODE_RADIUS + 2.0;
+                    let y1 = row_y(*from_row) + NODE_RADIUS;
                     let x2 = col_x(*to_col);
-                    let y2 = row_y(*to_row) - NODE_RADIUS - 2.0;
+                    let y2 = row_y(*to_row) - NODE_RADIUS;
                     // Cubic bezier for a smooth curve
                     let mid_y = (y1 + y2) / 2.0;
                     let _ = writeln!(
