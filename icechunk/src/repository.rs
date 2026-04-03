@@ -37,6 +37,7 @@ use crate::{
         RepositoryConfig,
     },
     diff::{Diff, DiffBuilder},
+    display::AncestryGraph,
     error::ICError,
     feature_flags::{
         CREATE_TAG_FLAG, DELETE_TAG_FLAG, FEATURE_FLAGS, FeatureFlag, MOVE_NODE_FLAG,
@@ -930,6 +931,68 @@ impl Repository {
     ) -> RepositoryResult<impl Stream<Item = RepositoryResult<SnapshotInfo>> + Send + use<>>
     {
         self.ancestry_using(version, None).await
+    }
+
+    /// Build a materialized ancestry graph for visualization.
+    ///
+    /// When `version` is `Some`, returns a linear graph for that single ref.
+    /// When `version` is `None`, walks all branches and returns a tree view.
+    #[instrument(skip(self))]
+    pub async fn ancestry_graph(
+        &self,
+        version: Option<&VersionInfo>,
+    ) -> RepositoryResult<AncestryGraph> {
+        // Build reverse maps: snapshot_id → branch names / tag names
+        let (branch_map, tag_map) = self.build_ref_maps().await?;
+
+        match version {
+            Some(v) => {
+                let stream = self.ancestry(v).await?;
+                let snapshots: Vec<SnapshotInfo> =
+                    stream.try_collect().await?;
+                Ok(AncestryGraph::from_linear(snapshots, &branch_map, &tag_map))
+            }
+            None => {
+                // Walk all branches to build a tree
+                let branches = self.list_branches().await?;
+                let mut branch_ancestries = Vec::with_capacity(branches.len());
+
+                for branch in &branches {
+                    let version = VersionInfo::BranchTipRef(branch.clone());
+                    let stream = self.ancestry(&version).await?;
+                    let snapshots: Vec<SnapshotInfo> =
+                        stream.try_collect().await?;
+                    branch_ancestries.push((branch.clone(), snapshots));
+                }
+
+                Ok(AncestryGraph::from_tree(branch_ancestries, &tag_map))
+            }
+        }
+    }
+
+    /// Build reverse maps from snapshot IDs to branch/tag names.
+    async fn build_ref_maps(
+        &self,
+    ) -> RepositoryResult<(
+        HashMap<SnapshotId, Vec<String>>,
+        HashMap<SnapshotId, Vec<String>>,
+    )> {
+        let mut branch_map: HashMap<SnapshotId, Vec<String>> = HashMap::new();
+        let mut tag_map: HashMap<SnapshotId, Vec<String>> = HashMap::new();
+
+        let branches = self.list_branches().await?;
+        for branch in &branches {
+            let snap_id = self.lookup_branch(branch).await?;
+            branch_map.entry(snap_id).or_default().push(branch.clone());
+        }
+
+        let tags = self.list_tags().await?;
+        for tag in &tags {
+            let snap_id = self.lookup_tag(tag).await?;
+            tag_map.entry(snap_id).or_default().push(tag.clone());
+        }
+
+        Ok((branch_map, tag_map))
     }
 
     async fn ancestry_using(
