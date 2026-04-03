@@ -2543,6 +2543,7 @@ class _PyAsyncSnapshotGenerator(AsyncGenerator[SnapshotInfo], metaclass=abc.ABCM
     def __aiter__(self) -> _PyAsyncSnapshotGenerator: ...
     async def __anext__(self) -> SnapshotInfo: ...
 
+@final
 class AncestryGraph:
     """A visual representation of commit history.
 
