@@ -7,6 +7,7 @@ from typing import Any, Self, cast
 
 from icechunk import ConflictSolver
 from icechunk._icechunk_python import (
+    AncestryGraph,
     ChunkStorageStats,
     Diff,
     FeatureFlag,
@@ -918,6 +919,51 @@ class Repository:
         Only one of the arguments can be specified.
         """
         return self._repository.async_ancestry(
+            branch=branch, tag=tag, snapshot_id=snapshot_id
+        )
+
+    def ancestry_graph(
+        self,
+        *,
+        branch: str | None = None,
+        tag: str | None = None,
+        snapshot_id: str | None = None,
+    ) -> AncestryGraph:
+        """
+        Build a visual representation of the commit history.
+
+        When called with no arguments, shows all branches as a tree.
+        When called with one of branch/tag/snapshot_id, shows that ref's linear history.
+
+        Parameters
+        ----------
+        branch : str, optional
+            Show history for this branch.
+        tag : str, optional
+            Show history from this tag.
+        snapshot_id : str, optional
+            Show history from this snapshot.
+
+        Returns
+        -------
+        AncestryGraph
+            A displayable object. Use print() for colored ASCII output.
+        """
+        return self._repository.ancestry_graph(
+            branch=branch, tag=tag, snapshot_id=snapshot_id
+        )
+
+    async def ancestry_graph_async(
+        self,
+        *,
+        branch: str | None = None,
+        tag: str | None = None,
+        snapshot_id: str | None = None,
+    ) -> AncestryGraph:
+        """
+        Async version of :meth:`ancestry_graph`.
+        """
+        return await self._repository.ancestry_graph_async(
             branch=branch, tag=tag, snapshot_id=snapshot_id
         )
 
