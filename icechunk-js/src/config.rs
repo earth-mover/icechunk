@@ -241,7 +241,9 @@ impl From<RepositoryConfig> for JsRepositoryConfig {
                 .get_partial_values_concurrency
                 .map(|v| v as u32),
             compression: value.compression.map(|c| JsCompressionConfig {
-                algorithm: c.algorithm.map(|CompressionAlgorithm::Zstd| JsCompressionAlgorithm::Zstd),
+                algorithm: c
+                    .algorithm
+                    .map(|CompressionAlgorithm::Zstd| JsCompressionAlgorithm::Zstd),
                 level: c.level.map(|l| l as u32),
             }),
             max_concurrent_requests: value.max_concurrent_requests.map(|v| v as u32),
