@@ -2284,6 +2284,35 @@ impl PyRepr for PyRepositoryConfig {
     fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
         // Scalar fields first, then nested objects, so simple values
         // aren't broken up by large nested blocks in str/html output.
+        let vccs = match &self.virtual_chunk_containers {
+            None => "None".to_string(),
+            Some(map) if map.is_empty() => "{}".to_string(),
+            Some(map) => {
+                use std::fmt::Write as _;
+                let mut out = String::new();
+                match mode {
+                    ReprMode::Html => {
+                        for (prefix, vcc) in map {
+                            let _ = write!(
+                                out,
+                                "<details><summary class=\"icechunk-field-name\">{prefix}</summary>{}</details>",
+                                vcc.render(ReprMode::Html),
+                            );
+                        }
+                    }
+                    _ => {
+                        let entries: Vec<String> = map
+                            .iter()
+                            .map(|(prefix, vcc)| {
+                                format!("\"{}\": {}", prefix, vcc.render(mode))
+                            })
+                            .collect();
+                        let _ = write!(out, "{{{}}}", entries.join(", "));
+                    }
+                }
+                out
+            }
+        };
         vec![
             (
                 "inline_chunk_threshold_bytes",
@@ -2306,6 +2335,7 @@ impl PyRepr for PyRepositoryConfig {
                 "repo_update_retries",
                 py_option_nested_repr(&self.repo_update_retries, mode),
             ),
+            ("virtual_chunk_containers", vccs),
         ]
     }
 }

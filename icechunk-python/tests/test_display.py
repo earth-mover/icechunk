@@ -412,6 +412,27 @@ class TestReprStructural:
         assert "manifest" in repr_str
         assert "repo_update_retries" in repr_str
         assert "num_updates_per_repo_info_file" in repr_str
+        assert "virtual_chunk_containers" in repr_str
+
+    def test_repository_config_shows_virtual_chunk_containers(self) -> None:
+        config = RepositoryConfig()
+        s3_store = ObjectStoreConfig.S3(S3Options(region="us-east-1"))
+        config.set_virtual_chunk_container(
+            VirtualChunkContainer("s3://my-data/", s3_store, name="era5")
+        )
+        # repr (executable)
+        repr_str = repr(config)
+        assert "s3://my-data/" in repr_str
+        assert "icechunk.VirtualChunkContainer(" in repr_str
+        assert 'name="era5"' in repr_str
+        # str (human-readable)
+        str_str = str(config)
+        assert "s3://my-data/" in str_str
+        assert "virtual_chunk_containers:" in str_str
+        # html (collapsible)
+        html = config._repr_html_()
+        assert "s3://my-data/" in html
+        assert "virtual_chunk_containers" in html
 
     def test_object_store_config_inmemory(self) -> None:
         osc = ObjectStoreConfig.InMemory()
