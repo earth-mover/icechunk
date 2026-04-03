@@ -33,11 +33,10 @@ enum NodeType: ubyte { Group = 0, Array }
 // All four fields MUST be present. They are not marked `required`
 // in the flatbuffers schema to allow future schema evolution.
 table MoveOperation {
-  // The node's absolute path in the parent snapshot.
-  // Paths use `/` as separator and MUST start with `/`.
+  // The node's path in the parent snapshot (see node path definition in common.fbs).
   from: string;
 
-  // The node's absolute path in the current snapshot.
+  // The node's path in the current snapshot.
   to: string;
 
   // The node id of the moved node (referencing NodeSnapshot.id).
@@ -88,9 +87,7 @@ table TransactionLog {
   updated_chunks: [ArrayUpdatedChunks] (required);
 
   // Nodes moved in this transaction.
-  // MUST be sorted by final path in component-wise lexicographic order
-  // (i.e. split on `/`, then compare segments left to right).
-  // For example: /a, /a/b, /ab, /b.
+  // MUST be sorted by final path (see node path sort order in common.fbs).
   // MUST be fully collapsed: if a node was moved multiple times
   // (e.g. A -> B, then B -> C), only the net result (A -> C) is recorded.
   // Every moved node MUST have its own entry — moving a group does
