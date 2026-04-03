@@ -142,7 +142,7 @@ class TestRepr:
         repr_str = repr(repo)
         assert repr_str.startswith("<icechunk.Repository>")
         assert "storage:" in repr_str
-        assert "config:" in repr_str
+        assert "config: <RepositoryConfig ...>" in repr_str
 
     def test_session_writable(self, repo: Repository) -> None:
         session = repo.writable_session("main")

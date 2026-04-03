@@ -1140,8 +1140,18 @@ impl PyRepr for PyRepository {
     fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
         let repo = self.0.blocking_read();
         let storage = format!("{}", repo.storage());
-        let py_config: PyRepositoryConfig = repo.config().clone().into();
-        vec![("storage", storage), ("config", py_config.render(mode))]
+        match mode {
+            // HTML is collapsible, so show the full config
+            ReprMode::Html => {
+                let py_config: PyRepositoryConfig = repo.config().clone().into();
+                vec![("storage", storage), ("config", py_config.render(mode))]
+            }
+            // str/repr: config is too verbose when expanded recursively
+            _ => vec![
+                ("storage", storage),
+                ("config", "<RepositoryConfig ...>".to_string()),
+            ],
+        }
     }
 }
 
