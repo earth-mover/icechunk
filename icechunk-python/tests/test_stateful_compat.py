@@ -148,7 +148,7 @@ class CrossVersionExpireGCStateMachine(VersionControlStateMachine):
         super().__init__()
 
     def _make_storage(self) -> ic.Storage:
-        return ic.local_filesystem_storage(self._storage_path)  # type: ignore[no-any-return]
+        return ic.local_filesystem_storage(self._storage_path)
 
     @initialize(
         data=st.data(),
@@ -214,6 +214,7 @@ class CrossVersionExpireGCStateMachine(VersionControlStateMachine):
         delete_expired_tags: bool,
     ) -> None:
         # Reopen to clear any stale caches from prior GC/expire
+        assert self.storage is not None
         self.repo = self.actor.open(self.storage)
         with self._v1_repo_copy() as (v1_repo, _):
             v2_result = self.repo.expire_snapshots(
@@ -237,6 +238,7 @@ class CrossVersionExpireGCStateMachine(VersionControlStateMachine):
 
     def _compare_gc(self, older_than: datetime.datetime) -> None:
         # Reopen to clear any stale caches from prior GC/expire
+        assert self.storage is not None
         self.repo = self.actor.open(self.storage)
         with self._v1_repo_copy() as (v1_repo, v1_path):
             v2_summary = self.repo.garbage_collect(older_than)
