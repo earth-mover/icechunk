@@ -29,7 +29,7 @@ use icechunk_types::ICResultExt as _;
 
 use super::{
     DeleteObjectsResult, GetModifiedResult, ListInfo, Settings, Storage, StorageError,
-    StorageResult, VersionInfo, VersionedUpdateResult,
+    StorageInfo, StorageResult, VersionInfo, VersionedUpdateResult,
 };
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -323,6 +323,13 @@ impl std::fmt::Display for RedirectStorage {
 #[async_trait]
 #[typetag::serde]
 impl Storage for RedirectStorage {
+    fn storage_info(&self) -> StorageInfo {
+        StorageInfo {
+            backend_type: "redirect",
+            fields: vec![("url", self.url.to_string())],
+        }
+    }
+
     async fn can_write(&self) -> StorageResult<bool> {
         self.backend().await?.can_write().await
     }

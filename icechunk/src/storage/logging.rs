@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     DeleteObjectsResult, GetModifiedResult, ListInfo, Settings, Storage, StorageError,
-    StorageResult, VersionInfo, VersionedUpdateResult,
+    StorageInfo, StorageResult, VersionInfo, VersionedUpdateResult,
 };
 use icechunk_storage::sealed;
 
@@ -51,6 +51,10 @@ impl sealed::Sealed for LoggingStorage {}
 #[async_trait]
 #[typetag::serde]
 impl Storage for LoggingStorage {
+    fn storage_info(&self) -> StorageInfo {
+        self.backend.storage_info()
+    }
+
     async fn default_settings(&self) -> StorageResult<Settings> {
         self.backend.default_settings().await
     }
