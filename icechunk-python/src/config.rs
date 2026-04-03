@@ -752,9 +752,9 @@ impl PyRepr for PyVirtualChunkContainer {
     }
     fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
         vec![
+            ("name", py_option_str(&self.name)),
             ("url_prefix", format!("\"{}\"", self.url_prefix)),
             ("store", self.store.render(mode)),
-            ("name", py_option_str(&self.name)),
         ]
     }
 }
@@ -2292,6 +2292,7 @@ impl PyRepr for PyRepositoryConfig {
                 let mut out = String::new();
                 match mode {
                     ReprMode::Html => {
+                        let _ = write!(out, "<div class=\"icechunk-repr\">");
                         for (prefix, vcc) in map {
                             let _ = write!(
                                 out,
@@ -2299,6 +2300,7 @@ impl PyRepr for PyRepositoryConfig {
                                 vcc.render(ReprMode::Html),
                             );
                         }
+                        let _ = write!(out, "</div>");
                     }
                     ReprMode::Repr => {
                         // Black/ruff-style dict formatting:
