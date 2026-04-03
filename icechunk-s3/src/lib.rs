@@ -41,7 +41,7 @@ pub use icechunk_storage::s3_config::{
 };
 use icechunk_storage::{
     DeleteObjectsResult, GetModifiedResult, ListInfo, Settings, Storage, StorageError,
-    StorageErrorKind, StorageResult, VersionInfo, VersionedUpdateResult,
+    StorageErrorKind, StorageInfo, StorageResult, VersionInfo, VersionedUpdateResult,
     obj_not_found_res, obj_store_error, obj_store_error_res, other_error, sealed,
     split_in_multiple_equal_requests, strip_quotes,
 };
@@ -551,6 +551,15 @@ impl sealed::Sealed for S3Storage {}
 #[async_trait]
 #[typetag::serde]
 impl Storage for S3Storage {
+    fn storage_info(&self) -> StorageInfo {
+        let mut fields = vec![("bucket", self.bucket.clone())];
+        if !self.prefix.is_empty() {
+            fields.push(("prefix", self.prefix.clone()));
+        }
+        fields.extend(self.config.info_fields());
+        StorageInfo { backend_type: "S3 (native)", fields }
+    }
+
     async fn can_write(&self) -> StorageResult<bool> {
         Ok(self.can_write)
     }
