@@ -48,7 +48,7 @@ def test_pickle_repository(tmpdir: Path, tmp_repo: Repository) -> None:
     storage = tmp_repo.storage
     assert (
         repr(storage)
-        == f"ObjectStorage(backend=LocalFileSystemObjectStoreBackend(path={tmpdir}))"
+        == f"<icechunk.Storage>\ntype: local filesystem\npath: {tmpdir}\n"
     )
 
 
