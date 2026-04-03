@@ -197,7 +197,7 @@ These references point to a specific snapshot of the repository.
 #### Snapshot Files
 
 The snapshot file fully describes the schema of the repository, including all arrays and groups. Each commit to an Icechunk
-repository creates a new snapshot file. This snapshot iniforms what are the available groups and arrays
+repository creates a new snapshot file. This snapshot informs what are the available groups and arrays
 in this commit, and provides a way to access the chunk manifests for each array.
 
 The snapshot file is encoded using [flatbuffers](https://github.com/google/flatbuffers). The full IDL
