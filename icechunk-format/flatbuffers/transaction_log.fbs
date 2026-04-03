@@ -3,6 +3,8 @@ include "common.fbs";
 namespace generated;
 
 // --8<-- [start:chunk_indices]
+// A single chunk coordinate in the array's chunk grid.
+// coords MUST contain one 0-based uint32 index per array dimension.
 table ChunkIndices {
   coords: [uint32] (required);
 }
@@ -10,9 +12,10 @@ table ChunkIndices {
 // --8<-- [end:chunk_indices]
 
 // --8<-- [start:array_updated_chunks]
+// Identifies an array and lists the chunk coordinates where a
+// reference was added, overwritten, or deleted.
 table ArrayUpdatedChunks {
-  // The node id of the array, referencing a NodeSnapshot.id in the
-  // corresponding snapshot.
+  // The node id of the array.
   node_id: ObjectId8 (required);
 
   // The coordinates of all chunk references that were added, overwritten,
@@ -27,6 +30,8 @@ table ArrayUpdatedChunks {
 // --8<-- [end:array_updated_chunks]
 
 // --8<-- [start:move_operation]
+// Whether a node is a group or an array. Recorded in MoveOperation
+// so conflict detection can proceed without fetching the full snapshot.
 enum NodeType: ubyte { Group = 0, Array }
 
 // A single move operation, recording that a node changed path.
@@ -39,7 +44,7 @@ table MoveOperation {
   // The node's path in the current snapshot.
   to: string;
 
-  // The node id of the moved node (referencing NodeSnapshot.id).
+  // The node id of the moved node.
   node_id: ObjectId8;
 
   // Whether this node is a Group or Array.
@@ -56,8 +61,9 @@ table MoveOperation {
 // new_groups, deleted_groups, or updated_groups.
 // Likewise for arrays across new_arrays, deleted_arrays, or updated_arrays.
 // For example, a group that is created and then has its metadata
-// modified within the same commit SHOULD appear only in new_groups.
+// modified within the same commit MUST appear only in new_groups.
 // A node id MAY appear in both moved_nodes and in one of updated_*, updated_chunks, or new_*.
+// A node id MUST NOT appear in both moved_nodes and deleted_*.
 table TransactionLog {
   // MUST be identical to the id of the corresponding snapshot.
   id: ObjectId12 (required);
@@ -87,16 +93,22 @@ table TransactionLog {
   updated_chunks: [ArrayUpdatedChunks] (required);
 
   // Nodes moved in this transaction.
-  // MUST be sorted by final path (see node path sort order in common.fbs).
+  // MUST be sorted by the `to` field (see node path sort order in common.fbs).
   // MUST be fully collapsed: if a node was moved multiple times
   // (e.g. A -> B, then B -> C), only the net result (A -> C) is recorded.
   // Every moved node MUST have its own entry — moving a group does
   // not implicitly move its children.
-  // Introduced in spec version 2.
+  // Identity moves (from == to) MUST be omitted.
+  // If a `to` path was occupied in the parent snapshot, that path
+  // MUST also appear as a `from` in another move — moves MUST NOT
+  // implicitly delete or overwrite nodes.
+  // Introduced in spec version 2. Absent in V1 transaction logs;
+  // readers MUST treat absence as an empty list.
   moved_nodes: [MoveOperation];
 
   // Reserved for future use. Opaque bytes for future extensions.
-  // Introduced in spec version 2.
+  // Introduced in spec version 2. Absent in V1 transaction logs;
+  // readers MUST treat absence as empty.
   extra: [uint8];
 }
 // --8<-- [end:transaction_log]

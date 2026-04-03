@@ -360,8 +360,6 @@ The `extra` field is an opaque byte vector reserved for future spec extensions. 
 
 ##### `ArrayUpdatedChunks`
 
-Each entry in `updated_chunks` pairs an array's node id with the chunk coordinates that changed in that array during this commit. The `node_id` identifies the array — the same `ObjectId8` that appears as the `id` field of the array's `NodeSnapshot` in the snapshot. The `chunks` list records every coordinate in the array's chunk grid where a chunk reference was added, overwritten, or deleted.
-
 ```protobuf
 --8<-- "icechunk-format/flatbuffers/transaction_log.fbs:chunk_indices"
 ```
@@ -371,8 +369,6 @@ Each entry in `updated_chunks` pairs an array's node id with the chunk coordinat
 ```
 
 ##### `MoveOperation`
-
-Move operations record nodes that changed path within the repository hierarchy:
 
 ```protobuf
 --8<-- "icechunk-format/flatbuffers/transaction_log.fbs:move_operation"
