@@ -158,6 +158,14 @@ All data and metadata files MUST be stored within a root directory using the fol
 - `$ROOT/chunks/` chunks
 - `$ROOT/overwritten/` old versions of the repo info object, used as backup and to maintain the ops log
 
+### Node Paths
+
+Node paths identify a node's position in the repository hierarchy. They are stored as flatbuffers `string` fields throughout the spec.
+
+```protobuf
+--8<-- "icechunk-format/flatbuffers/common.fbs:node_path"
+```
+
 ### Binary File Format
 
 All Icechunk metadata files (repo info, snapshots, manifests, and transaction logs) share a common on-disk format. Each file consists of a binary header followed by a zstd-compressed [flatbuffers](https://github.com/google/flatbuffers) payload.
