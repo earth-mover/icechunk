@@ -143,7 +143,8 @@ class CrossVersionExpireGCStateMachine(VersionControlStateMachine):
     """
 
     def __init__(self) -> None:
-        self._storage_path = tempfile.mkdtemp()
+        self._storage_tmpdir = tempfile.TemporaryDirectory()
+        self._storage_path = self._storage_tmpdir.name
         super().__init__()
 
     def _make_storage(self) -> ic.Storage:
@@ -183,13 +184,10 @@ class CrossVersionExpireGCStateMachine(VersionControlStateMachine):
 
         Yields (v1_repo, v1_path).
         """
-        v1_path = tempfile.mkdtemp()
-        try:
+        with tempfile.TemporaryDirectory() as v1_path:
             shutil.copytree(self._storage_path, v1_path, dirs_exist_ok=True)
             v1_storage = ic_v1.local_filesystem_storage(v1_path)
             yield ic_v1.Repository.open(v1_storage), v1_path
-        finally:
-            shutil.rmtree(v1_path, ignore_errors=True)
 
     def _sync_model_from_repo(self) -> None:
         """Sync the dict model's commit/branch/tag state from the actual repo.
@@ -252,6 +250,8 @@ class CrossVersionExpireGCStateMachine(VersionControlStateMachine):
         delete_expired_branches: bool,
         delete_expired_tags: bool,
     ) -> None:
+        # Reopen to clear any stale caches from prior GC/expire
+        self.repo = self.actor.open(self.storage)
         with self._v1_repo_copy() as (v1_repo, _):
             v2_result = self.repo.expire_snapshots(
                 older_than,
@@ -273,6 +273,8 @@ class CrossVersionExpireGCStateMachine(VersionControlStateMachine):
         self._sync_model_from_repo()
 
     def _compare_gc(self, older_than: datetime.datetime) -> None:
+        # Reopen to clear any stale caches from prior GC/expire
+        self.repo = self.actor.open(self.storage)
         with self._v1_repo_copy() as (v1_repo, v1_path):
             v2_summary = self.repo.garbage_collect(older_than)
             v1_summary = v1_repo.garbage_collect(older_than)
@@ -416,7 +418,4 @@ def test_two_actors_zarr_cross_version() -> None:
     def mk_test_instance_sync() -> CrossVersionTwoActorZarrHierarchyStateMachine:
         return CrossVersionTwoActorZarrHierarchyStateMachine(tempfile.mkdtemp())
 
-    run_state_machine_as_test(
-        mk_test_instance_sync,
-        # settings=settings(report_multiple_bugs=False),
-    )  # type: ignore[no-untyped-call]
+    run_state_machine_as_test(mk_test_instance_sync)  # type: ignore[no-untyped-call]
