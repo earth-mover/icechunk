@@ -257,15 +257,16 @@ def test_moves_amend(
     )
 
 
-def test_doesnt_rebase() -> None:
+async def test_doesnt_rebase() -> None:
     repo = ic.Repository.create(
         storage=ic.in_memory_storage(),
     )
     session = repo.writable_session("main")
-    root = zarr.group(store=session.store, overwrite=True)
+    store = session.store
+    root = zarr.group(store=store, overwrite=True)
     root.create_group("my/old/path", overwrite=True)
     root.create_group("my/new", overwrite=True)
-    all_keys = sorted([k for k in session.store.list()])
+    all_keys = sorted([k async for k in store.list()])
     assert all_keys == sorted(
         [
             "zarr.json",
