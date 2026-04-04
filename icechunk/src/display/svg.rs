@@ -3,7 +3,9 @@
 use std::collections::HashMap;
 use std::fmt::Write as _;
 
-use super::ancestry_graph::{AncestryGraph, AncestryNode, LayoutElement, palette_hex};
+use super::ancestry_graph::{
+    AncestryGraph, AncestryNode, LayoutElement, TAG_COLOR_HEX, palette_hex,
+};
 
 // Layout constants (pixels)
 const COL_SPACING: f64 = 20.0;
@@ -50,7 +52,7 @@ fn format_labels_svg(node: &AncestryNode, col_colors: &[usize]) -> String {
     }
     for t in &node.tags {
         parts.push(format!(
-            "<tspan font-weight=\"bold\" fill=\"#e5c07b\">{}</tspan>",
+            "<tspan font-weight=\"bold\" font-style=\"italic\" fill=\"{TAG_COLOR_HEX}\">{}</tspan>",
             escape_html(t)
         ));
     }

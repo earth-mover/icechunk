@@ -3,13 +3,14 @@
 use std::collections::HashMap;
 use std::fmt;
 
-use super::ancestry_graph::{AncestryGraph, AncestryNode, LayoutElement, palette_ansi};
+use super::ancestry_graph::{
+    AncestryGraph, AncestryNode, LayoutElement, TAG_COLOR_ANSI, palette_ansi,
+};
 
 const RESET: &str = "\x1b[0m";
 const BOLD: &str = "\x1b[1m";
+const ITALIC: &str = "\x1b[3m";
 const DIM: &str = "\x1b[2m";
-const GREEN: &str = "\x1b[32m";
-const YELLOW: &str = "\x1b[33m";
 
 fn truncate_message(msg: &str, max_len: usize) -> String {
     let first_line = msg.lines().next().unwrap_or("");
@@ -20,13 +21,14 @@ fn truncate_message(msg: &str, max_len: usize) -> String {
     }
 }
 
-fn format_labels_ansi(node: &AncestryNode) -> String {
+fn format_labels_ansi(node: &AncestryNode, col_colors: &[usize]) -> String {
     let mut parts = Vec::new();
     for b in &node.branches {
-        parts.push(format!("{BOLD}{GREEN}{b}{RESET}"));
+        let color = palette_ansi(col_colors[node.column]);
+        parts.push(format!("{BOLD}{color}{b}{RESET}"));
     }
     for t in &node.tags {
-        parts.push(format!("{BOLD}{YELLOW}{t}{RESET}"));
+        parts.push(format!("{BOLD}{ITALIC}{TAG_COLOR_ANSI}{t}{RESET}"));
     }
     if parts.is_empty() { String::new() } else { format!(" ({})", parts.join(", ")) }
 }
@@ -93,7 +95,7 @@ impl fmt::Display for AncestryGraph {
             });
 
             let short_id = &node.info.id.to_string()[..8];
-            let labels = format_labels_ansi(node);
+            let labels = format_labels_ansi(node, &col_colors);
             let msg = truncate_message(&node.info.message, 60);
             writeln!(f, "{prefix}{DIM}{short_id}{RESET}{labels} {msg}")?;
 

@@ -321,27 +321,37 @@ impl AncestryGraph {
 }
 
 // -- Color palette -----------------------------------------------------------
+//
+// Colors are an interleaved subset of the Earthmover primary and secondary
+// brand palette. The first entry (lime green) is reserved for the main branch.
+// Tags use a dedicated icechunk blue, separate from the branch palette.
 
 struct BranchColor {
     ansi: &'static str,
     hex: &'static str,
 }
 
-const PALETTE: &[BranchColor] = &[
-    BranchColor { ansi: "\x1b[32m", hex: "#4ec968" }, // green  (main / first branch)
-    BranchColor { ansi: "\x1b[31m", hex: "#e06c75" }, // red
-    BranchColor { ansi: "\x1b[33m", hex: "#e5c07b" }, // yellow
-    BranchColor { ansi: "\x1b[34m", hex: "#61afef" }, // blue
-    BranchColor { ansi: "\x1b[35m", hex: "#c678dd" }, // magenta
-    BranchColor { ansi: "\x1b[36m", hex: "#56b6c2" }, // cyan
+/// Branch color palette. Index 0 = main (lime green), then rotating for others.
+const BRANCH_PALETTE: &[BranchColor] = &[
+    BranchColor { ansi: "\x1b[38;2;183;228;0m", hex: "#B7E400" }, // lime green (main)
+    BranchColor { ansi: "\x1b[38;2;166;83;255m", hex: "#A653FF" }, // violet
+    BranchColor { ansi: "\x1b[38;2;32;31;44m", hex: "#201F2C" },  // midnight
+    BranchColor { ansi: "\x1b[38;2;255;101;84m", hex: "#FF6554" }, // red
+    BranchColor { ansi: "\x1b[38;2;120;120;120m", hex: "#787878" }, // dark grey
+    BranchColor { ansi: "\x1b[38;2;255;158;13m", hex: "#FF9E0D" }, // orange
+    BranchColor { ansi: "\x1b[38;2;248;129;209m", hex: "#F881D1" }, // pink
 ];
 
+/// Dedicated tag color (icechunk blue), separate from branch palette.
+pub const TAG_COLOR_ANSI: &str = "\x1b[38;2;94;196;247m";
+pub const TAG_COLOR_HEX: &str = "#5EC4F7";
+
 pub fn palette_ansi(idx: usize) -> &'static str {
-    PALETTE[idx % PALETTE.len()].ansi
+    BRANCH_PALETTE[idx % BRANCH_PALETTE.len()].ansi
 }
 
 pub fn palette_hex(idx: usize) -> &'static str {
-    PALETTE[idx % PALETTE.len()].hex
+    BRANCH_PALETTE[idx % BRANCH_PALETTE.len()].hex
 }
 
 #[cfg(test)]
@@ -597,10 +607,10 @@ mod tests {
         assert!(svg.contains("Commit 1"), "should contain commit message");
         assert!(svg.contains("Commit 2"), "should contain commit message");
 
-        // Colors should come from the hex palette
+        // Colors should come from the Earthmover hex palette
         assert!(
-            svg.contains("#4ec968") || svg.contains("#e06c75"),
-            "should use hex colors"
+            svg.contains("#B7E400") || svg.contains("#A653FF"),
+            "should use Earthmover brand hex colors"
         );
     }
 }
