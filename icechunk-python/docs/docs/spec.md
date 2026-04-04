@@ -7,6 +7,10 @@ title: Specification
 
     The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT", "SHOULD", "SHOULD NOT", "RECOMMENDED", "MAY", and "OPTIONAL" in this document are to be interpreted as described in [RFC 2119](https://www.rfc-editor.org/rfc/rfc2119.html).
 
+    Sections marked **"For implementers"** are non-normative guidance for anyone writing a conforming implementation. They do not define the on-disk format.
+
+    Comments within the inline flatbuffers definitions are part of the normative specification.
+
 ## Introduction
 
 The Icechunk specification is a storage specification for [Zarr](https://zarr-specs.readthedocs.io/en/latest/specs.html) data.
@@ -144,7 +148,7 @@ flowchart TD
 
 ### File Layout
 
-All data and metadata files are stored within a root directory (typically a prefix within an object store) using the following directory structure.
+All data and metadata files MUST be stored within a root directory using the following directory structure.
 
 - `$ROOT` base URI (s3, gcs, local directory, etc.)
 - `$ROOT/repo` repo info file, entry point for all operations
@@ -154,9 +158,33 @@ All data and metadata files are stored within a root directory (typically a pref
 - `$ROOT/chunks/` chunks
 - `$ROOT/overwritten/` old versions of the repo info object, used as backup and to maintain the ops log
 
+### Node Paths
+
+Node paths identify a node's position in the repository hierarchy. They are stored as flatbuffers `string` fields throughout the spec.
+
+```protobuf
+--8<-- "icechunk-format/flatbuffers/common.fbs:node_path"
+```
+
+### Binary File Format
+
+All Icechunk metadata files (repo info, snapshots, manifests, and transaction logs) share a common on-disk format. Each file consists of a binary header followed by a zstd-compressed [flatbuffers](https://github.com/google/flatbuffers) payload.
+
+The header contains the following fields, in order:
+
+| Field | Size | Description |
+|-------|------|-------------|
+| Magic bytes | 12 bytes | The UTF-8 encoding of `ICE🧊CHUNK` (`49 43 45 F0 9F A7 8A 43 48 55 4E 4B`). |
+| Implementation name | 24 bytes | A left-aligned, right-space-padded UTF-8 string identifying the writing client. |
+| Spec version | 1 byte | `1` for spec version 1, `2` for spec version 2. |
+| File type | 1 byte | `1` = Snapshot, `2` = Manifest, `3` = Attributes, `4` = RepoInfo, `5` = TransactionLog, `6` = Chunk. |
+| Compression algorithm | 1 byte | `0` = none, `1` = zstd. |
+
+The remainder of the file is the flatbuffers payload, compressed with the algorithm specified in the header.
+
 ### File Formats
 
-With the exception of chunk files, each type of file is encoded using [flatbuffers](https://github.com/google/flatbuffers).
+With the exception of chunk files, each type of file is encoded using flatbuffers.
 The IDL for the on-disk format can be found in [the fbs files directory in this repo](https://github.com/earth-mover/icechunk/blob/404100b584fb7ac70de860bd430aa8291df98c4d/icechunk-format/flatbuffers/).
 
 The full set of file types and their definitions are:
@@ -301,27 +329,47 @@ Chunk files can be:
 
 Applications may choose to arrange chunks within files in different ways to optimize I/O patterns.
 
-#### Transaction logs
+#### Transaction Log Files
 
-Transaction logs keep track of the operations done in a commit. They are not used to read objects
-from the repo, but they are useful for features such as commit diff and conflict resolution.
+A transaction log file records which nodes and chunks were modified in a given commit.
+Each snapshot MUST have a corresponding transaction log file stored at `transactions/{id}`, where `{id}` is the Crockford base 32 encoding of the snapshot's id.
 
-Transaction logs are an optimization, to provide fast conflict resolution and commit diff. They are
-not absolutely required, for read-only implementations, to implement the core Icechunk operations.
+The transaction log file MUST use the standard [binary file format](#binary-file-format) with file type `TransactionLog`.
 
-Transaction log files are encoded using flatbuffers. The IDL for the
-on-disk format can be found in [the fbs file](https://github.com/earth-mover/icechunk/blob/9409c43ab49b4c5cc100c874ae3fce3fff08e77e/icechunk-format/flatbuffers/transaction_log.fbs)
+!!! tip "For implementers"
+    Transaction logs are not needed to read data from a repository — they exist to support
+    conflict detection during rebase and to compute diffs between commits.
+    A read-only implementation can safely omit transaction log support.
 
-The transaction log file maintains information about the id of modified objects:
+The full flatbuffers schema can be found in [`transaction_log.fbs`](https://github.com/earth-mover/icechunk/tree/main/icechunk-format/flatbuffers/transaction_log.fbs).
 
-- `new_groups`: list of node ids.
-- `new_arrays`: list of node ids.
-- `deleted_groups`: list of node ids.
-- `deleted_arrays`: list of node ids.
-- `updated_groups`: list of node ids.
-- `updated_arrays`: list of node ids.
-- `updated_chunks`: list of node ids and chunk indices.
-- `moved_nodes`: list of `from`, `to` paths, sorted by first move first.
+The `TransactionLog` table is the root type:
+
+```protobuf
+--8<-- "icechunk-format/flatbuffers/transaction_log.fbs:transaction_log"
+```
+
+!!! tip "For implementers"
+    The `extra` field is an opaque byte vector reserved for future spec extensions.
+    It allows small, optional features (e.g. precomputed storage statistics) to be
+    added without requiring a new spec version.
+
+##### `ArrayUpdatedChunks`
+
+```protobuf
+--8<-- "icechunk-format/flatbuffers/transaction_log.fbs:chunk_indices"
+```
+
+```protobuf
+--8<-- "icechunk-format/flatbuffers/transaction_log.fbs:array_updated_chunks"
+```
+
+##### `MoveOperation`
+
+```protobuf
+--8<-- "icechunk-format/flatbuffers/transaction_log.fbs:move_operation"
+```
+
 
 ## Algorithms
 
@@ -395,3 +443,4 @@ A tag can be created from any snapshot.
 - For each dimension of each array, instead of storing the `chunk_legth` in the snapshot, the `num_chunks` is now stored.
 This will help with rectilinear chunk grids.
 - Virtual chunk location can optionally be compressed inside the manifest.
+- Transaction logs gained `moved_nodes` and `extra` fields (absent in V1 transaction logs).
