@@ -150,7 +150,9 @@ target-version = "py312"
 line-length = 90
 extend-exclude = ["*.ipynb", "doc", "_typed_ops.pyi"]
 
-[tool.ruff.lint]
+[tool.ruff.lint.per-file-ignores]
+"notebooks/*.ipynb" = ["F821"]
+
 extend-select = [
   "F",    # Pyflakes
   "E",    # pycodestyle errors
