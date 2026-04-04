@@ -46,6 +46,22 @@ In-memory storage works on all platforms. The following backends are available o
 - **HTTP** — `Storage.newHttp(baseUrl, config?)`
 - **Local Filesystem** — `Storage.newLocalFilesystem(path)`
 
+### Fetch Storage (read-only, works everywhere)
+
+For read-only access to a publicly hosted Icechunk repository, use the built-in fetch-based storage. This works on both native and WASM builds, making it the easiest way to open a repository in the browser:
+
+```typescript
+import { Repository } from '@earthmover/icechunk'
+import { createFetchStorage } from '@earthmover/icechunk/fetch-storage'
+
+const storage = createFetchStorage('https://my-bucket.s3.us-west-2.amazonaws.com/my-repo.icechunk')
+const repo = await Repository.open(storage)
+const session = await repo.readonlySession({ branch: 'main' })
+const keys = await session.store.list()
+```
+
+The repository must be on S3-compatible storage with public read access and XML listing enabled. `createFetchStorage` uses the browser `fetch` API under the hood, so it works in any environment where `fetch` is available.
+
 ### Custom Storage Backends
 
 For WASM builds (or any environment where the built-in backends aren't suitable), you can provide your own storage implementation in JavaScript using `Storage.newCustom()`:
@@ -85,6 +101,18 @@ Install the package with the `--cpu=wasm32` flag to get the WASM binary:
 ```bash
 npm install @earthmover/icechunk --cpu=wasm32
 ```
+
+To open a public repository in the browser, use fetch storage:
+
+```typescript
+import { Repository } from '@earthmover/icechunk'
+import { createFetchStorage } from '@earthmover/icechunk/fetch-storage'
+
+const storage = createFetchStorage('https://my-bucket.s3.us-west-2.amazonaws.com/my-repo.icechunk')
+const repo = await Repository.open(storage)
+```
+
+For more control, use `Storage.newCustom()` to implement your own storage backend with any JS networking library.
 
 The WASM build uses `SharedArrayBuffer` for threading, which requires your server to send these headers:
 
