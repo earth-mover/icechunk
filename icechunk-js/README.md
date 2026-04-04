@@ -132,6 +132,7 @@ export default defineConfig({
   plugins: [wasm(), topLevelAwait()],
   optimizeDeps: {
     exclude: ['@earthmover/icechunk', '@earthmover/icechunk-wasm32-wasi'],
+    include: ['@earthmover/icechunk > @earthmover/icechunk-wasm32-wasi'],
   },
   server: {
     headers: {

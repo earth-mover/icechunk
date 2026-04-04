@@ -9,13 +9,13 @@
  *   const repo = await Repository.open(storage)
  */
 
-const { Storage } = require('@earthmover/icechunk')
+import { Storage } from '@earthmover/icechunk'
 
 /**
  * @param {string} baseUrl - Base URL of the icechunk repository (no trailing slash)
  * @returns {Storage}
  */
-function createFetchStorage(baseUrl) {
+export function createFetchStorage(baseUrl) {
   // Normalize: strip trailing slash
   const base = baseUrl.replace(/\/+$/, '')
 
@@ -57,9 +57,7 @@ function createFetchStorage(baseUrl) {
     },
 
     listObjects: async (_err, prefix) => {
-      // Try S3-style XML listing
-      // Derive bucket URL and key prefix from the base URL
-      // e.g. https://bucket.s3.region.amazonaws.com/prefix -> bucket URL + key prefix
+      // S3-style XML listing
       const url = new URL(base)
       const keyPrefix = url.pathname.replace(/^\//, '') + '/' + prefix
       const listUrl = `${url.origin}/?list-type=2&prefix=${encodeURIComponent(keyPrefix)}`
@@ -126,5 +124,3 @@ function createFetchStorage(baseUrl) {
     },
   })
 }
-
-module.exports = { createFetchStorage }
