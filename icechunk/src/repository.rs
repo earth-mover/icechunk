@@ -328,22 +328,31 @@ impl Repository {
     ) -> RepositoryResult<Self> {
         debug!("Opening Repository");
 
+        // Merge user-provided storage settings with backend defaults upfront so
+        // that every code path initializes the shared storage client with the
+        // same settings. The S3 client is lazily built via `OnceCell`, so the
+        // first caller locks in the config permanently.
+        let storage_defaults = storage.default_settings().await.inject()?;
+        let settings = match config.as_ref().and_then(|c| c.storage().cloned()) {
+            Some(user_storage) => storage_defaults.merge(user_storage),
+            None => storage_defaults,
+        };
+
         // Launch spec version detection and an optimistic config.yaml fetch concurrently.
         // For IC1 repos this avoids a sequential round-trip; for V2+ repos the config.yaml
         // result is ignored (config lives in the repo info object instead).
-        let temp_settings = storage.default_settings().await.inject()?;
         let temp_am = AssetManager::new_no_cache(
             Arc::clone(&storage),
-            temp_settings,
+            settings.clone(),
             SpecVersionBin::current(),
             1,
             DEFAULT_MAX_CONCURRENT_REQUESTS,
         );
 
         let storage_c = Arc::clone(&storage);
-        let user_settings = config.as_ref().and_then(|c| c.storage().cloned());
+        let settings_c = settings.clone();
         let fetch_version =
-            tokio::spawn(Self::fetch_spec_version(storage_c, user_settings));
+            tokio::spawn(Self::fetch_spec_version(storage_c, Some(settings_c)));
         let fetch_config_yaml = temp_am.fetch_config();
 
         // Use join! (not try_join!) so that a config.yaml error doesn't fail the
@@ -374,20 +383,21 @@ impl Repository {
         // Merge three layers of config (In order of preference):
         //   - User-provided config (passed to open())
         //   - Persisted repo config (saved alongside the data, if any)
-        //   - Backend storage defaults (e.g. S3 retry/concurrency settings)
-        let storage_defaults = storage.default_settings().await.inject()?;
+        //   - Backend storage defaults (already merged with user settings above)
         let repo_config = match persisted_config {
             Some(c) => RepositoryConfig::default().merge(c),
             None => RepositoryConfig::default(),
         };
         // merge user config on top of persisted config and library defaults
-        // no storage merging happening yet.
         let merged_config = config.map(|c| repo_config.merge(c)).unwrap_or(repo_config);
 
-        // construct the merged storage settings
+        // Re-merge in case persisted config introduced additional storage
+        // settings. Note: the S3 client is already initialized with `settings`
+        // from above, so only Icechunk-level settings (concurrency, etc.) can
+        // change here.
         let storage_settings = match merged_config.storage.clone() {
-            Some(s) => storage_defaults.merge(s),
-            None => storage_defaults,
+            Some(s) => settings.merge(s),
+            None => settings,
         };
         // combine merged config settings + merged storage settings
         let final_config =
@@ -420,8 +430,12 @@ impl Repository {
         create_version: Option<SpecVersionBin>,
         check_clean_root: bool,
     ) -> RepositoryResult<Self> {
-        let user_settings = config.as_ref().and_then(|c| c.storage().cloned());
-        if Self::fetch_spec_version(Arc::clone(&storage), user_settings).await?.is_some()
+        let storage_defaults = storage.default_settings().await.inject()?;
+        let settings = match config.as_ref().and_then(|c| c.storage().cloned()) {
+            Some(user_storage) => storage_defaults.merge(user_storage),
+            None => storage_defaults,
+        };
+        if Self::fetch_spec_version(Arc::clone(&storage), Some(settings)).await?.is_some()
         {
             Self::open(config, storage, authorize_virtual_chunk_access).await
         } else {
