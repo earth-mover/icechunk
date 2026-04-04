@@ -33,6 +33,7 @@ use conflicts::{
     PyBasicConflictSolver, PyConflict, PyConflictDetector, PyConflictSolver,
     PyConflictType, PyVersionSelection,
 };
+use display::PyAncestryGraph;
 use errors::{IcechunkError, PyConflictError, PyRebaseFailedError};
 use icechunk::{format::format_constants::SpecVersionBin, initialize_tracing};
 use pyo3::prelude::*;
@@ -181,6 +182,7 @@ fn _icechunk_python(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PySessionMode>()?;
     m.add_class::<PyStore>()?;
     m.add_class::<PySnapshotInfo>()?;
+    m.add_class::<PyAncestryGraph>()?;
     m.add_class::<PyManifestFileInfo>()?;
     m.add_class::<PyChunkStorageStats>()?;
     m.add_class::<PyConflictSolver>()?;

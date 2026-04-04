@@ -6,7 +6,7 @@ use std::{
     sync::Arc,
 };
 
-use crate::display::{PyRepr, ReprMode, py_bool, py_option};
+use crate::display::{PyAncestryGraph, PyRepr, ReprMode, py_bool, py_option};
 use itertools::Itertools as _;
 
 use chrono::{DateTime, Utc};
@@ -1978,6 +1978,49 @@ impl PyRepository {
         })
     }
 
+    #[pyo3(signature = (*, branch = None, tag = None, snapshot_id = None))]
+    pub(crate) fn ancestry_graph(
+        &self,
+        py: Python<'_>,
+        branch: Option<String>,
+        tag: Option<String>,
+        snapshot_id: Option<String>,
+    ) -> PyResult<PyAncestryGraph> {
+        let version = args_to_optional_version_info(branch, tag, snapshot_id)?;
+
+        py.detach(move || {
+            pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+                let repo = self.0.read().await;
+                let graph = repo
+                    .ancestry_graph(version.as_ref())
+                    .await
+                    .map_err(PyIcechunkStoreError::RepositoryError)?;
+                Ok(graph.into())
+            })
+        })
+    }
+
+    #[pyo3(signature = (*, branch = None, tag = None, snapshot_id = None))]
+    fn ancestry_graph_async<'py>(
+        &'py self,
+        py: Python<'py>,
+        branch: Option<String>,
+        tag: Option<String>,
+        snapshot_id: Option<String>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let version = args_to_optional_version_info(branch, tag, snapshot_id)?;
+        let repository = Arc::clone(&self.0);
+
+        pyo3_async_runtimes::tokio::future_into_py::<_, PyAncestryGraph>(py, async move {
+            let repo = repository.read().await;
+            let graph = repo
+                .ancestry_graph(version.as_ref())
+                .await
+                .map_err(PyIcechunkStoreError::RepositoryError)?;
+            Ok(graph.into())
+        })
+    }
+
     pub(crate) fn async_ops_log(&self, py: Python<'_>) -> PyResult<PyAsyncGenerator> {
         // This function calls block_on, so we need to allow other thread python to make progress
         py.detach(move || {
@@ -3073,6 +3116,19 @@ fn map_credentials(
         cred.into_iter().map(|(name, cred)| (name, cred.map(|c| c.into()))).collect()
     })
     .unwrap_or_default()
+}
+
+/// Like `args_to_version_info`, but returns `None` when all args are `None`
+/// (used by `ancestry_graph` where all-None means "show all branches").
+fn args_to_optional_version_info(
+    branch: Option<String>,
+    tag: Option<String>,
+    snapshot: Option<String>,
+) -> PyResult<Option<VersionInfo>> {
+    if branch.is_none() && tag.is_none() && snapshot.is_none() {
+        return Ok(None);
+    }
+    args_to_version_info(branch, tag, snapshot, None).map(Some)
 }
 
 fn args_to_version_info(

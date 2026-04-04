@@ -585,3 +585,112 @@ class TestReprStructural:
         html = vcc._repr_html_()
         assert "icechunk.VirtualChunkContainer" in html
         assert '<div class="icechunk-repr">' in html
+
+
+# =============================================================================
+# AncestryGraph tests
+# =============================================================================
+class TestAncestryGraph:
+    """Test ancestry_graph() visualization."""
+
+    def test_single_branch_linear(self, repo: Repository) -> None:
+        """A single branch should produce a linear graph."""
+        session = repo.writable_session("main")
+        store = session.store
+        root = zarr.group(store=store)
+        root.create_array("arr", shape=(10,), dtype="float64")
+        session.commit("First commit")
+
+        session = repo.writable_session("main")
+        store = session.store
+        zarr.open_array(store=store, path="arr")[:] = 1.0
+        session.commit("Second commit")
+
+        graph = repo.ancestry_graph(branch="main")
+        output = str(graph)
+        assert "Second commit" in output
+        assert "First commit" in output
+        # Branch label should appear on the tip
+        assert "main" in output
+
+    def test_all_branches_tree(self, repo: Repository) -> None:
+        """Multiple branches should produce a tree graph."""
+        # Create initial commit on main
+        session = repo.writable_session("main")
+        store = session.store
+        root = zarr.group(store=store)
+        root.create_array("arr", shape=(10,), dtype="float64")
+        snap1 = session.commit("Initial commit")
+
+        # Create a second commit on main
+        session = repo.writable_session("main")
+        store = session.store
+        zarr.open_array(store=store, path="arr")[:] = 1.0
+        session.commit("Main work")
+
+        # Create a branch from initial commit
+        repo.create_branch("feature", snap1)
+        session = repo.writable_session("feature")
+        store = session.store
+        zarr.open_array(store=store, path="arr")[:] = 2.0
+        session.commit("Feature work")
+
+        # All-branches graph
+        graph = repo.ancestry_graph()
+        output = str(graph)
+        assert "main" in output
+        assert "feature" in output
+        assert "Main work" in output
+        assert "Feature work" in output
+        assert "Initial commit" in output
+
+    def test_empty_repo(self) -> None:
+        """A fresh repo with no commits beyond initial should still work."""
+        repo = Repository.create(storage=in_memory_storage())
+        graph = repo.ancestry_graph(branch="main")
+        output = str(graph)
+        # Should have at least the initial snapshot
+        assert len(output.strip()) > 0
+
+    def test_with_tags(self, repo: Repository) -> None:
+        """Tags should appear as labels on the graph."""
+        session = repo.writable_session("main")
+        store = session.store
+        root = zarr.group(store=store)
+        root.create_array("arr", shape=(10,), dtype="float64")
+        snap = session.commit("Tagged commit")
+
+        repo.create_tag("v1.0", snap)
+        graph = repo.ancestry_graph(branch="main")
+        output = str(graph)
+        assert "v1.0" in output
+
+    def test_repr_svg(self, repo: Repository) -> None:
+        """_repr_svg_ should return raw SVG content."""
+        session = repo.writable_session("main")
+        store = session.store
+        root = zarr.group(store=store)
+        root.create_array("arr", shape=(10,), dtype="float64")
+        session.commit("First commit")
+
+        graph = repo.ancestry_graph(branch="main")
+        svg = graph._repr_svg_()
+        assert "<svg" in svg
+        assert "</svg>" in svg
+        assert "<circle" in svg
+        assert "First commit" in svg
+        assert "main" in svg
+
+    def test_to_plain_string(self, repo: Repository) -> None:
+        """to_plain_string should have no ANSI codes."""
+        session = repo.writable_session("main")
+        store = session.store
+        root = zarr.group(store=store)
+        root.create_array("arr", shape=(10,), dtype="float64")
+        session.commit("First commit")
+
+        graph = repo.ancestry_graph(branch="main")
+        plain = graph.to_plain_string()
+        assert "\x1b" not in plain
+        assert "First commit" in plain
+        assert "main" in plain
