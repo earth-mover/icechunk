@@ -9,9 +9,10 @@ use futures::stream::BoxStream;
 use futures::{Stream, StreamExt};
 use icechunk::storage::{
     DeleteObjectsResult, ETag, Generation, GetModifiedResult, ListInfo, Settings,
-    Storage, StorageError, StorageResult, VersionInfo, VersionedUpdateResult,
+    Storage, StorageError, StorageInfo, StorageResult, VersionInfo,
+    VersionedUpdateResult,
 };
-use napi::bindgen_prelude::Buffer;
+use napi::bindgen_prelude::{Buffer, Promise};
 use napi::threadsafe_function::ThreadsafeFunction;
 use napi_derive::napi;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -28,6 +29,17 @@ pub struct JsStorage(pub(crate) Arc<dyn Storage + Send + Sync>);
 
 fn other_storage_error(s: impl Into<String>) -> StorageError {
     icechunk_storage::other_error(s)
+}
+
+/// Map a JS callback error to the appropriate StorageError.
+/// If the error message contains "ObjectNotFound", return ObjectNotFound.
+fn js_storage_error(context: &str, e: impl std::fmt::Display) -> StorageError {
+    let msg = e.to_string();
+    if msg.contains("ObjectNotFound") {
+        StorageError::capture(icechunk_storage::StorageErrorKind::ObjectNotFound)
+    } else {
+        other_storage_error(format!("{context}: {msg}"))
+    }
 }
 
 /// Version information returned from JS storage callbacks
@@ -184,20 +196,30 @@ pub struct JsStorageGetModifiedResult {
 /// JS libraries (fetch, @aws-sdk/client-s3, etc.), which is especially
 /// useful for WASM builds where native Rust networking is unavailable.
 pub(crate) struct JsCallbackStorage {
-    can_write_fn: ThreadsafeFunction<(), bool>,
-    get_object_range_fn:
-        ThreadsafeFunction<JsStorageGetObjectRangeArgs, JsStorageGetObjectResponse>,
-    put_object_fn:
-        ThreadsafeFunction<JsStoragePutObjectArgs, JsStorageVersionedUpdateResult>,
-    copy_object_fn:
-        ThreadsafeFunction<JsStorageCopyObjectArgs, JsStorageVersionedUpdateResult>,
-    list_objects_fn: ThreadsafeFunction<String, Vec<JsStorageListInfo>>,
-    delete_batch_fn:
-        ThreadsafeFunction<JsStorageDeleteBatchArgs, JsStorageDeleteObjectsResult>,
+    can_write_fn: ThreadsafeFunction<(), Promise<bool>>,
+    get_object_range_fn: ThreadsafeFunction<
+        JsStorageGetObjectRangeArgs,
+        Promise<JsStorageGetObjectResponse>,
+    >,
+    put_object_fn: ThreadsafeFunction<
+        JsStoragePutObjectArgs,
+        Promise<JsStorageVersionedUpdateResult>,
+    >,
+    copy_object_fn: ThreadsafeFunction<
+        JsStorageCopyObjectArgs,
+        Promise<JsStorageVersionedUpdateResult>,
+    >,
+    list_objects_fn: ThreadsafeFunction<String, Promise<Vec<JsStorageListInfo>>>,
+    delete_batch_fn: ThreadsafeFunction<
+        JsStorageDeleteBatchArgs,
+        Promise<JsStorageDeleteObjectsResult>,
+    >,
     get_object_last_modified_fn:
-        ThreadsafeFunction<String, chrono::DateTime<chrono::Utc>>,
-    get_object_conditional_fn:
-        ThreadsafeFunction<JsStorageGetObjectConditionalArgs, JsStorageGetModifiedResult>,
+        ThreadsafeFunction<String, Promise<chrono::DateTime<chrono::Utc>>>,
+    get_object_conditional_fn: ThreadsafeFunction<
+        JsStorageGetObjectConditionalArgs,
+        Promise<JsStorageGetModifiedResult>,
+    >,
 }
 
 impl fmt::Debug for JsCallbackStorage {
@@ -233,11 +255,17 @@ impl icechunk_storage::sealed::Sealed for JsCallbackStorage {}
 #[async_trait]
 #[typetag::serde(name = "js_callback_storage")]
 impl Storage for JsCallbackStorage {
+    fn storage_info(&self) -> StorageInfo {
+        StorageInfo { backend_type: "JsCallback", fields: vec![] }
+    }
+
     async fn can_write(&self) -> StorageResult<bool> {
         self.can_write_fn
             .call_async(Ok(()))
             .await
-            .map_err(|e| other_storage_error(format!("JS canWrite failed: {e}")))
+            .map_err(|e| js_storage_error("JS canWrite call failed", e))?
+            .await
+            .map_err(|e| js_storage_error("JS canWrite failed", e))
     }
 
     async fn get_object_range(
@@ -254,10 +282,13 @@ impl Storage for JsCallbackStorage {
             range_start: range.map(|r| r.start as f64),
             range_end: range.map(|r| r.end as f64),
         };
-        let response =
-            self.get_object_range_fn.call_async(Ok(args)).await.map_err(|e| {
-                other_storage_error(format!("JS getObjectRange failed: {e}"))
-            })?;
+        let response = self
+            .get_object_range_fn
+            .call_async(Ok(args))
+            .await
+            .map_err(|e| js_storage_error("JS getObjectRange call failed", e))?
+            .await
+            .map_err(|e| js_storage_error("JS getObjectRange failed", e))?;
 
         let bytes = Bytes::from(response.data.to_vec());
         let version = response.version.into();
@@ -288,7 +319,9 @@ impl Storage for JsCallbackStorage {
             .put_object_fn
             .call_async(Ok(args))
             .await
-            .map_err(|e| other_storage_error(format!("JS putObject failed: {e}")))?;
+            .map_err(|e| js_storage_error("JS putObject call failed", e))?
+            .await
+            .map_err(|e| js_storage_error("JS putObject failed", e))?;
         result.into_rust()
     }
 
@@ -310,7 +343,9 @@ impl Storage for JsCallbackStorage {
             .copy_object_fn
             .call_async(Ok(args))
             .await
-            .map_err(|e| other_storage_error(format!("JS copyObject failed: {e}")))?;
+            .map_err(|e| js_storage_error("JS copyObject call failed", e))?
+            .await
+            .map_err(|e| js_storage_error("JS copyObject failed", e))?;
         result.into_rust()
     }
 
@@ -319,10 +354,13 @@ impl Storage for JsCallbackStorage {
         _settings: &Settings,
         prefix: &str,
     ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
-        let items =
-            self.list_objects_fn.call_async(Ok(prefix.to_string())).await.map_err(
-                |e| other_storage_error(format!("JS listObjects failed: {e}")),
-            )?;
+        let items = self
+            .list_objects_fn
+            .call_async(Ok(prefix.to_string()))
+            .await
+            .map_err(|e| js_storage_error("JS listObjects call failed", e))?
+            .await
+            .map_err(|e| js_storage_error("JS listObjects failed", e))?;
 
         let rust_items: Vec<StorageResult<ListInfo<String>>> = items
             .into_iter()
@@ -351,10 +389,13 @@ impl Storage for JsCallbackStorage {
                 .map(|(id, size)| JsStorageDeleteItem { id, size: size as f64 })
                 .collect(),
         };
-        let result =
-            self.delete_batch_fn.call_async(Ok(args)).await.map_err(|e| {
-                other_storage_error(format!("JS deleteBatch failed: {e}"))
-            })?;
+        let result = self
+            .delete_batch_fn
+            .call_async(Ok(args))
+            .await
+            .map_err(|e| js_storage_error("JS deleteBatch call failed", e))?
+            .await
+            .map_err(|e| js_storage_error("JS deleteBatch failed", e))?;
 
         Ok(DeleteObjectsResult {
             deleted_objects: result.deleted_objects as u64,
@@ -367,9 +408,12 @@ impl Storage for JsCallbackStorage {
         path: &str,
         _settings: &Settings,
     ) -> StorageResult<chrono::DateTime<chrono::Utc>> {
-        self.get_object_last_modified_fn.call_async(Ok(path.to_string())).await.map_err(
-            |e| other_storage_error(format!("JS getObjectLastModified failed: {e}")),
-        )
+        self.get_object_last_modified_fn
+            .call_async(Ok(path.to_string()))
+            .await
+            .map_err(|e| js_storage_error("JS getObjectLastModified call failed", e))?
+            .await
+            .map_err(|e| js_storage_error("JS getObjectLastModified failed", e))
     }
 
     async fn get_object_conditional(
@@ -382,10 +426,13 @@ impl Storage for JsCallbackStorage {
             path: path.to_string(),
             previous_version: previous_version.map(|v| v.into()),
         };
-        let result =
-            self.get_object_conditional_fn.call_async(Ok(args)).await.map_err(|e| {
-                other_storage_error(format!("JS getObjectConditional failed: {e}"))
-            })?;
+        let result = self
+            .get_object_conditional_fn
+            .call_async(Ok(args))
+            .await
+            .map_err(|e| js_storage_error("JS getObjectConditional call failed", e))?
+            .await
+            .map_err(|e| js_storage_error("JS getObjectConditional failed", e))?;
 
         match result.kind.as_str() {
             "modified" => {

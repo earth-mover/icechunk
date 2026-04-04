@@ -52,8 +52,8 @@ For WASM builds (or any environment where the built-in backends aren't suitable)
 
 ```typescript
 const storage = Storage.newCustom({
-  canWrite: async () => true,
-  getObjectRange: async ({ path, rangeStart, rangeEnd }) => {
+  canWrite: async (_err, ) => true,
+  getObjectRange: async (_err, { path, rangeStart, rangeEnd }) => {
     const headers: Record<string, string> = {}
     if (rangeStart != null && rangeEnd != null) {
       headers['Range'] = `bytes=${rangeStart}-${rangeEnd - 1}`
@@ -61,14 +61,16 @@ const storage = Storage.newCustom({
     const resp = await fetch(`https://my-bucket.example.com/${path}`, { headers })
     return { data: new Uint8Array(await resp.arrayBuffer()), version: { etag: resp.headers.get('etag') ?? undefined } }
   },
-  putObject: async ({ path, data, contentType }) => { /* ... */ },
-  copyObject: async ({ from, to }) => { /* ... */ },
-  listObjects: async (prefix) => { /* return [{ id, createdAt, sizeBytes }] */ },
-  deleteBatch: async ({ prefix, batch }) => { /* return { deletedObjects, deletedBytes } */ },
-  getObjectLastModified: async (path) => { /* return Date */ },
-  getObjectConditional: async ({ path, previousVersion }) => { /* ... */ },
+  putObject: async (_err, { path, data, contentType }) => { /* ... */ },
+  copyObject: async (_err, { from, to }) => { /* ... */ },
+  listObjects: async (_err, prefix) => { /* return [{ id, createdAt, sizeBytes }] */ },
+  deleteBatch: async (_err, { prefix, batch }) => { /* return { deletedObjects, deletedBytes } */ },
+  getObjectLastModified: async (_err, path) => { /* return Date */ },
+  getObjectConditional: async (_err, { path, previousVersion }) => { /* ... */ },
 })
 ```
+
+> **Note:** Callbacks use the Node.js error-first convention — the first argument is always `null` (reserved for errors) and the actual arguments follow. Use `_err` to skip it.
 
 This is the primary way to use cloud storage in the browser, where native Rust networking is unavailable. Each callback method maps to an operation on the underlying `Storage` trait. See the exported `Storage*` TypeScript interfaces for the full type signatures.
 
