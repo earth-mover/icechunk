@@ -19,10 +19,22 @@
     "science",
     "geospatial"
   ],
+  "exports": {
+    ".": {
+      "browser": "./browser.js",
+      "default": "./index.js"
+    },
+    "./fetch-storage": {
+      "types": "./fetch-storage.d.ts",
+      "default": "./fetch-storage.js"
+    }
+  },
   "files": [
     "index.d.ts",
     "index.js",
-    "browser.js"
+    "browser.js",
+    "fetch-storage.js",
+    "fetch-storage.d.ts"
   ],
   "napi": {
     "binaryName": "icechunk",
