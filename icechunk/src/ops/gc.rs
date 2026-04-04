@@ -954,7 +954,9 @@ async fn expire_v2_one_attempt(
                 return Some(new_parent.clone());
             }
         }
-        None
+        // Snapshot not reachable from any ref (e.g. branch was reset away).
+        // Re-parent to the initial snapshot rather than orphaning with None.
+        Some(Snapshot::INITIAL_SNAPSHOT_ID)
     };
 
     debug!("Finding ref tips");
