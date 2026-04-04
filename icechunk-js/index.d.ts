@@ -84,7 +84,14 @@ export type JsStorage = Storage
 
 export declare class Store {
   get(key: string): Promise<Buffer | null>
-  getRange(key: string, offset: number, length?: number | undefined | null): Promise<Buffer | null>
+  /**
+   * Fetch a byte range from a key.
+   *
+   * Accepts zarrita's RangeQuery format:
+   *   { offset: number, length: number } - fetch length bytes starting at offset
+   *   { suffixLength: number } - fetch the last suffixLength bytes
+   */
+  getRange(key: string, range: RangeQuery): Promise<Buffer | null>
   set(key: string, value: Buffer): Promise<void>
   exists(key: string): Promise<boolean>
   delete(key: string): Promise<void>
@@ -222,6 +229,16 @@ export type ObjectStoreConfig =
   | { type: 'Gcs', field0: Record<string, string> }
   | { type: 'Azure', field0: Record<string, string> }
   | { type: 'Tigris', field0: S3Options }
+
+/**
+ * Range query matching zarrita's RangeQuery type:
+ *   { offset: number, length: number } | { suffixLength: number }
+ */
+export interface RangeQuery {
+  offset?: number
+  length?: number
+  suffixLength?: number
+}
 
 export interface ReadonlySessionOptions {
   branch?: string
