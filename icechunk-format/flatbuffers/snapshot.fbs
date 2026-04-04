@@ -2,6 +2,7 @@ include "common.fbs";
 
 namespace generated;
 
+// --8<-- [start:manifest_file_info]
 // a pointer to a manifest file
 struct ManifestFileInfo {
     // id of the object in the repo's object store
@@ -13,7 +14,9 @@ struct ManifestFileInfo {
     // number of chunk refs in the manifest
     num_chunk_refs: uint32;
 }
+// --8<-- [end:manifest_file_info]
 
+// --8<-- [start:manifest_file_info_v2]
 // table version of ManifestFileInfo, allowing optional extra data
 // introduced in spec V2
 table ManifestFileInfoV2 {
@@ -29,7 +32,9 @@ table ManifestFileInfoV2 {
     // Reserved for future use. Opaque byte vector for extensibility.
     extra: [uint8];
 }
+// --8<-- [end:manifest_file_info_v2]
 
+// --8<-- [start:chunk_index_range]
 // A range of chunk indexes
 struct ChunkIndexRange {
   // inclusive
@@ -38,7 +43,9 @@ struct ChunkIndexRange {
   // exclusive
   to: uint32;
 }
+// --8<-- [end:chunk_index_range]
 
+// --8<-- [start:manifest_ref]
 // a pointer to a manifest
 table ManifestRef {
     // id of the object in the repo's object store
@@ -47,7 +54,9 @@ table ManifestRef {
     // one element per dimension of the array, same order as in metadata
     extents: [ChunkIndexRange] (required);
 }
+// --8<-- [end:manifest_ref]
 
+// --8<-- [start:dimension_shape]
 // the shape of the array along a given dimension
 struct DimensionShape {
   array_length: uint64;
@@ -60,20 +69,28 @@ struct DimensionShape {
   // It was only ever used to estimate `num_chunks`.
   chunk_length: uint64;
 }
+// --8<-- [end:dimension_shape]
 
+// --8<-- [start:dimension_shape_v2]
 table DimensionShapeV2 {
   array_length: uint64;
   num_chunks: uint32;
 }
+// --8<-- [end:dimension_shape_v2]
 
+// --8<-- [start:dimension_name]
 table DimensionName {
   // optional
   name: string;
 }
+// --8<-- [end:dimension_name]
 
+// --8<-- [start:group_node_data]
 // a marker for a group node
 table GroupNodeData {}
+// --8<-- [end:group_node_data]
 
+// --8<-- [start:array_node_data]
 // data for an array node
 table ArrayNodeData {
   shape: [DimensionShape] (required);
@@ -90,12 +107,15 @@ table ArrayNodeData {
   // ultimately determines whether this is a V2 snapshot.
   shape_v2: [DimensionShapeV2];
 }
+// --8<-- [end:array_node_data]
 
+// --8<-- [start:node_data]
 // the node contents, that can be either a group or an array
 union NodeData {
   Array :ArrayNodeData,
   Group :GroupNodeData,
 }
+// --8<-- [end:node_data]
 
 // --8<-- [start:node_snapshot]
 // a node

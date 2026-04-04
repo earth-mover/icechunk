@@ -17,7 +17,7 @@ use icechunk_storage::strip_quotes;
 use icechunk_storage::{
     ConcurrencySettings, DeleteObjectsResult, ETag, Generation, GetModifiedResult,
     ListInfo, RetriesSettings, Settings, Storage, StorageError, StorageErrorKind,
-    StorageResult, VersionInfo, VersionedUpdateResult, obj_not_found_res,
+    StorageInfo, StorageResult, VersionInfo, VersionedUpdateResult, obj_not_found_res,
     obj_store_error, obj_store_error_res, other_error, sealed,
 };
 use icechunk_types::ICResultExt as _;
@@ -354,6 +354,10 @@ impl sealed::Sealed for ObjectStorage {}
 #[async_trait]
 #[typetag::serde]
 impl Storage for ObjectStorage {
+    fn storage_info(&self) -> StorageInfo {
+        self.backend.storage_info()
+    }
+
     async fn can_write(&self) -> StorageResult<bool> {
         Ok(self.backend.can_write())
     }
@@ -622,6 +626,9 @@ pub trait ObjectStoreBackend: Debug + Display + Sync + Send {
     /// The prefix for the object store.
     fn prefix(&self) -> String;
 
+    /// Return structured metadata about this backend for display/repr.
+    fn storage_info(&self) -> StorageInfo;
+
     /// We need this because `object_store`'s local file implementation doesn't sort refs. Since this
     /// implementation is used only for tests, it's OK to sort in memory.
     fn artificially_sort_refs_in_mem(&self) -> bool {
@@ -646,6 +653,10 @@ impl Display for InMemoryObjectStoreBackend {
 
 #[typetag::serde(name = "in_memory_object_store_provider")]
 impl ObjectStoreBackend for InMemoryObjectStoreBackend {
+    fn storage_info(&self) -> StorageInfo {
+        StorageInfo { backend_type: "in-memory", fields: vec![] }
+    }
+
     fn mk_object_store(
         &self,
         _settings: &Settings,
@@ -695,6 +706,13 @@ impl Display for LocalFileSystemObjectStoreBackend {
 #[cfg(feature = "fs")]
 #[typetag::serde(name = "local_file_system_object_store_provider")]
 impl ObjectStoreBackend for LocalFileSystemObjectStoreBackend {
+    fn storage_info(&self) -> StorageInfo {
+        StorageInfo {
+            backend_type: "local filesystem",
+            fields: vec![("path", self.path.display().to_string())],
+        }
+    }
+
     fn mk_object_store(
         &self,
         _settings: &Settings,
@@ -764,6 +782,10 @@ impl Display for HttpObjectStoreBackend {
 #[cfg(feature = "http")]
 #[typetag::serde(name = "http_object_store_provider")]
 impl ObjectStoreBackend for HttpObjectStoreBackend {
+    fn storage_info(&self) -> StorageInfo {
+        StorageInfo { backend_type: "HTTP", fields: vec![("url", self.url.clone())] }
+    }
+
     fn mk_object_store(
         &self,
         settings: &Settings,
@@ -843,6 +865,17 @@ impl Display for S3ObjectStoreBackend {
 #[cfg(feature = "s3")]
 #[typetag::serde(name = "s3_object_store_provider")]
 impl ObjectStoreBackend for S3ObjectStoreBackend {
+    fn storage_info(&self) -> StorageInfo {
+        let mut fields = vec![("bucket", self.bucket.clone())];
+        if let Some(prefix) = &self.prefix {
+            fields.push(("prefix", prefix.clone()));
+        }
+        if let Some(config) = &self.config {
+            fields.extend(config.info_fields());
+        }
+        StorageInfo { backend_type: "S3", fields }
+    }
+
     fn mk_object_store(
         &self,
         settings: &Settings,
@@ -948,6 +981,17 @@ impl Display for AzureObjectStoreBackend {
 #[cfg(feature = "azure")]
 #[typetag::serde(name = "azure_object_store_provider")]
 impl ObjectStoreBackend for AzureObjectStoreBackend {
+    fn storage_info(&self) -> StorageInfo {
+        let mut fields = vec![
+            ("account", self.account.clone()),
+            ("container", self.container.clone()),
+        ];
+        if let Some(prefix) = &self.prefix {
+            fields.push(("prefix", prefix.clone()));
+        }
+        StorageInfo { backend_type: "Azure", fields }
+    }
+
     fn mk_object_store(
         &self,
         settings: &Settings,
@@ -1040,6 +1084,14 @@ impl Display for GcsObjectStoreBackend {
 #[cfg(feature = "gcs")]
 #[typetag::serde(name = "gcs_object_store_provider")]
 impl ObjectStoreBackend for GcsObjectStoreBackend {
+    fn storage_info(&self) -> StorageInfo {
+        let mut fields = vec![("bucket", self.bucket.clone())];
+        if let Some(prefix) = &self.prefix {
+            fields.push(("prefix", prefix.clone()));
+        }
+        StorageInfo { backend_type: "GCS", fields }
+    }
+
     fn mk_object_store(
         &self,
         settings: &Settings,

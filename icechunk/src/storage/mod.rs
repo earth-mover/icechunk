@@ -13,7 +13,8 @@ use crate::storage::redirect::RedirectStorage;
 pub use icechunk_storage::{
     ConcurrencySettings, DeleteObjectsResult, ETag, Generation, GetModifiedResult,
     ICError, ListInfo, RetriesSettings, Settings, Storage, StorageError,
-    StorageErrorKind, StorageResult, TimeoutSettings, VersionInfo, VersionedUpdateResult,
+    StorageErrorKind, StorageInfo, StorageResult, TimeoutSettings, VersionInfo,
+    VersionedUpdateResult,
     s3_config::{S3Credentials, S3CredentialsFetcher, S3Options, S3StaticCredentials},
     split_in_multiple_equal_requests, split_in_multiple_requests, strip_quotes,
 };

@@ -2,11 +2,14 @@ include "common.fbs";
 
 namespace generated;
 
+// --8<-- [start:ref]
 table Ref {
     name: string (required);
     snapshot_index: uint32;
 }
+// --8<-- [end:ref]
 
+// --8<-- [start:snapshot_info]
 table SnapshotInfo {
     id: ObjectId12 (required);
     // -1 means no parent
@@ -16,15 +19,21 @@ table SnapshotInfo {
     message: string (required);
     metadata: [MetadataItem];
 }
+// --8<-- [end:snapshot_info]
 
+// --8<-- [start:repo_availability]
 enum RepoAvailability : ubyte { Online = 0, ReadOnly, Offline }
+// --8<-- [end:repo_availability]
 
+// --8<-- [start:repo_status]
 table RepoStatus {
     availability: RepoAvailability;
     set_at: uint64;
     limited_availability_reason: string;
 }
+// --8<-- [end:repo_status]
 
+// --8<-- [start:update_types]
 table RepoInitializedUpdate {
 }
 table RepoMigratedUpdate {
@@ -78,7 +87,9 @@ table FeatureFlagChangedUpdate {
     new_value: bool;
     is_set: bool;
 }
+// --8<-- [end:update_types]
 
+// --8<-- [start:update_type_union]
 union UpdateType {
   RepoInitializedUpdate,
   RepoMigratedUpdate,
@@ -97,7 +108,9 @@ union UpdateType {
   FeatureFlagChangedUpdate,
   RepoStatusChangedUpdate,
 }
+// --8<-- [end:update_type_union]
 
+// --8<-- [start:update]
 table Update {
     update_type: UpdateType (required);
 
@@ -107,7 +120,9 @@ table Update {
     // on updates the repo object is backed up
     backup_path: string;
   }
+// --8<-- [end:update]
 
+// --8<-- [start:repo_table]
 table Repo {
 
   spec_version: uint8;
@@ -145,5 +160,6 @@ table Repo {
   // Introduced in spec version 2
   extra: [uint8];
 }
+// --8<-- [end:repo_table]
 
 root_type Repo;
