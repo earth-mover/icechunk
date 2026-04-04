@@ -332,12 +332,12 @@ struct BranchColor {
 }
 
 /// Branch color palette. Index 0 = main (lime green), then rotating for others.
+/// Excludes midnight (#201F2C) and dark grey (#787878) from the Earthmover
+/// palette — they're invisible on dark backgrounds.
 const BRANCH_PALETTE: &[BranchColor] = &[
     BranchColor { ansi: "\x1b[38;2;183;228;0m", hex: "#B7E400" }, // lime green (main)
     BranchColor { ansi: "\x1b[38;2;166;83;255m", hex: "#A653FF" }, // violet
-    BranchColor { ansi: "\x1b[38;2;32;31;44m", hex: "#201F2C" },  // midnight
     BranchColor { ansi: "\x1b[38;2;255;101;84m", hex: "#FF6554" }, // red
-    BranchColor { ansi: "\x1b[38;2;120;120;120m", hex: "#787878" }, // dark grey
     BranchColor { ansi: "\x1b[38;2;255;158;13m", hex: "#FF9E0D" }, // orange
     BranchColor { ansi: "\x1b[38;2;248;129;209m", hex: "#F881D1" }, // pink
 ];
