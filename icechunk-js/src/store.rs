@@ -4,7 +4,7 @@ use bytes::Bytes;
 use futures::TryStreamExt;
 use icechunk::format::ByteRange;
 use icechunk::store::{Store, StoreErrorKind};
-use napi::bindgen_prelude::Buffer;
+use napi::bindgen_prelude::{Buffer, Uint8Array};
 use napi_derive::napi;
 
 use crate::errors::IntoNapiResult;
@@ -88,10 +88,10 @@ fn normalize_key(key: &str) -> &str {
 #[napi]
 impl JsStore {
     #[napi]
-    pub async fn get(&self, key: String) -> napi::Result<Option<Buffer>> {
+    pub async fn get(&self, key: String) -> napi::Result<Option<Uint8Array>> {
         let key = normalize_key(&key);
         match self.0.get(key, &ByteRange::ALL).await {
-            Ok(bytes) => Ok(Some(bytes.to_vec().into())),
+            Ok(bytes) => Ok(Some(Uint8Array::from(bytes.to_vec()))),
             Err(e) if matches!(e.kind, StoreErrorKind::NotFound(_)) => Ok(None),
             Err(e) => Err(napi::Error::from_reason(e.to_string())),
         }
@@ -107,7 +107,7 @@ impl JsStore {
         &self,
         key: String,
         range: JsRangeQuery,
-    ) -> napi::Result<Option<Buffer>> {
+    ) -> napi::Result<Option<Uint8Array>> {
         let byte_range = if let Some(suffix) = range.suffix_length {
             ByteRange::Last(suffix as u64)
         } else {
@@ -119,7 +119,7 @@ impl JsStore {
         };
         let key = normalize_key(&key);
         match self.0.get(key, &byte_range).await {
-            Ok(bytes) => Ok(Some(bytes.to_vec().into())),
+            Ok(bytes) => Ok(Some(Uint8Array::from(bytes.to_vec()))),
             Err(e) if matches!(e.kind, StoreErrorKind::NotFound(_)) => Ok(None),
             Err(e) => Err(napi::Error::from_reason(e.to_string())),
         }

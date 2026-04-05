@@ -39,7 +39,7 @@ if (__nodeFs.existsSync(__wasmDebugFilePath)) {
   __wasmFilePath = __wasmDebugFilePath
 } else if (!__nodeFs.existsSync(__wasmFilePath)) {
   try {
-    __wasmFilePath = __nodePath.resolve('@earthmover/icechunk-wasm32-wasi')
+    __wasmFilePath = require.resolve('@earthmover/icechunk-wasm32-wasi/icechunk.wasm32-wasi.wasm')
   } catch {
     throw new Error('Cannot find icechunk.wasm32-wasi.wasm file, and @earthmover/icechunk-wasm32-wasi package is not installed.')
   }
