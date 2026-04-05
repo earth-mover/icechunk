@@ -3,6 +3,11 @@ import assert from 'node:assert/strict'
 
 import { Storage, Repository, RepositoryConfig } from '../index'
 
+const decoder = new TextDecoder()
+function decodeBytes(data: Uint8Array): string {
+  return decoder.decode(data)
+}
+
 test('repository lifecycle', async (t) => {
   const storage = await Storage.newInMemory()
 
@@ -48,7 +53,7 @@ test('session and store operations', async (t) => {
   await store.set('zarr.json', data)
   const result = await store.get('zarr.json')
   assert(result)
-  assert.equal(result!.toString(), '{"zarr_format":3,"node_type":"group"}')
+  assert.equal(decodeBytes(result!), '{"zarr_format":3,"node_type":"group"}')
   assert.equal(await store.exists('zarr.json'), true)
 
   // get nonexistent returns null
@@ -104,14 +109,14 @@ test('commit, branches, and tags', async (t) => {
   assert.equal(readSession.readOnly, true)
   const result = await readSession.store.get('zarr.json')
   assert(result)
-  assert.equal(result!.toString(), '{"zarr_format":3,"node_type":"group"}')
+  assert.equal(decodeBytes(result!), '{"zarr_format":3,"node_type":"group"}')
 
   // readonly session from tag
   const tagSession = await repo2.readonlySession({ tag: 'v1.0' })
   assert.equal(tagSession.readOnly, true)
   const tagResult = await tagSession.store.get('zarr.json')
   assert(tagResult)
-  assert.equal(tagResult!.toString(), '{"zarr_format":3,"node_type":"group"}')
+  assert.equal(decodeBytes(tagResult!), '{"zarr_format":3,"node_type":"group"}')
 
   t.pass()
 })
@@ -282,7 +287,7 @@ test('create with full manifest config', async (t) => {
   const readSession = await repo2.readonlySession({ branch: 'main' })
   const result = await readSession.store.get('zarr.json')
   assert(result)
-  assert.equal(result!.toString(), '{"zarr_format":3,"node_type":"group"}')
+  assert.equal(decodeBytes(result!), '{"zarr_format":3,"node_type":"group"}')
 
   t.pass()
 })
