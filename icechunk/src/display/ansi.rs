@@ -97,12 +97,17 @@ impl fmt::Display for AncestryGraph {
                             |e| matches!(e, LayoutElement::Line { col, .. } if *col == c),
                         )
                     });
+                    // A column had a line on the previous row, but NOT if it
+                    // merged (has a Fork) on that row — merged columns stop.
                     let had_line = row > 0
                         && connector_lines.get(&(row - 1)).is_some_and(|elems| {
-                            elems.iter().any(|e| {
-                                matches!(e, LayoutElement::Line { col, .. } if *col == c)
-                                    || matches!(e, LayoutElement::Fork { to_col, .. } if *to_col == c)
-                            })
+                            let has_pipe = elems.iter().any(
+                                |e| matches!(e, LayoutElement::Line { col, .. } if *col == c),
+                            );
+                            let was_merged = elems.iter().any(
+                                |e| matches!(e, LayoutElement::Fork { from_col, .. } if *from_col == c),
+                            );
+                            has_pipe && !was_merged
                         });
                     if has_line || had_line { Some('│') } else { None }
                 }

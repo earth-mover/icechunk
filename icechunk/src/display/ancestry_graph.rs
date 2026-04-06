@@ -227,14 +227,7 @@ impl AncestryGraph {
 
             elements.push(LayoutElement::Node { row, col, node_idx: row });
 
-            if row >= self.nodes.len() - 1 {
-                continue;
-            }
-
-            let next_row = row + 1;
-            let has_more = self.nodes[next_row..].iter().any(|n| n.column == col);
-
-            // Check for columns merging into this node.
+            // Check for columns merging into this node (must happen even on last row).
             let mut merging: Vec<usize> = fork_targets
                 .iter()
                 .filter(|(c, id)| **id == node.info.id && active[**c])
@@ -243,56 +236,42 @@ impl AncestryGraph {
             merging.sort();
 
             if !merging.is_empty() {
+                // Side branches merge into this node. Emit fork lines on the
+                // connector row above this node (row - 1), so the ╱ appears
+                // between the previous node and this fork point.
+                let fork_row = row.saturating_sub(1);
                 for &mc in &merging {
                     elements.push(LayoutElement::Fork {
-                        from_row: row,
+                        from_row: fork_row,
                         from_col: mc,
-                        to_row: next_row,
+                        to_row: row,
                         to_col: col,
                     });
-                    // Emit pipe lines for other active columns on this connector row.
-                    for (c, is_active) in active.iter().enumerate() {
-                        if (c == col || *is_active) && c != mc {
-                            elements.push(LayoutElement::Line {
-                                from_row: row,
-                                to_row: next_row,
-                                col: c,
-                            });
-                        }
-                    }
                     active[mc] = false;
                 }
-            } else if !has_more && col != 0 {
-                // Side branch's last node — fork toward trunk.
-                elements.push(LayoutElement::Fork {
-                    from_row: row,
-                    from_col: col,
-                    to_row: next_row,
-                    to_col: 0,
-                });
-                for (c, is_active) in active.iter().enumerate() {
-                    if *is_active && c != col {
-                        elements.push(LayoutElement::Line {
-                            from_row: row,
-                            to_row: next_row,
-                            col: c,
-                        });
-                    }
-                }
+            }
+
+            if row >= self.nodes.len() - 1 {
+                continue;
+            }
+
+            let next_row = row + 1;
+            let has_more = self.nodes[next_row..].iter().any(|n| n.column == col);
+
+            // Deactivate trunk column if no more of its nodes remain.
+            // Side branch columns stay active until they merge (at the fork point).
+            if !has_more && !fork_targets.contains_key(&col) {
                 active[col] = false;
-            } else {
-                // Normal connector lines for all active columns.
-                if !has_more {
-                    active[col] = false;
-                }
-                for (c, is_active) in active.iter().enumerate() {
-                    if *is_active {
-                        elements.push(LayoutElement::Line {
-                            from_row: row,
-                            to_row: next_row,
-                            col: c,
-                        });
-                    }
+            }
+
+            // Emit pipe lines for all active columns.
+            for (c, is_active) in active.iter().enumerate() {
+                if *is_active {
+                    elements.push(LayoutElement::Line {
+                        from_row: row,
+                        to_row: next_row,
+                        col: c,
+                    });
                 }
             }
         }
@@ -651,11 +630,8 @@ mod tests {
             ("feature-b".to_string(), vec![s4.clone(), s1.clone()]),
         ];
 
-        let all = vec![
-            "feature-a".to_string(),
-            "feature-b".to_string(),
-            "main".to_string(),
-        ];
+        let all =
+            vec!["feature-a".to_string(), "feature-b".to_string(), "main".to_string()];
         let graph = AncestryGraph::new(branch_ancestries, &HashMap::new(), all, true);
         let output = graph.to_string();
         let lines: Vec<&str> = output.lines().collect();
@@ -686,10 +662,8 @@ mod tests {
         );
 
         // No trunk │ should appear above the trunk's first ● node.
-        let main_row = lines
-            .iter()
-            .position(|l| l.contains("main"))
-            .expect("should have main");
+        let main_row =
+            lines.iter().position(|l| l.contains("main")).expect("should have main");
         for line in &lines[..main_row] {
             assert!(
                 !line.starts_with('│'),
