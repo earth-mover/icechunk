@@ -206,6 +206,22 @@ for snapshot in repo.ancestry(branch="main"):
 session = repo.readonly_session(snapshot_id=snapshot_id)
 ```
 
+### Amend a Snapshot
+
+```python
+session = repo.writable_session("branch_name")
+# make changes
+session.amend(message="...")
+```
+
+### Create an empty snapshot
+
+```python
+session = repo.writable_session("branch_name")
+# no changes
+session.commit(message="...", metadata={"foo": "bar"} allow_empty=True)
+```
+
 ### Create a Branch
 
 ```python
