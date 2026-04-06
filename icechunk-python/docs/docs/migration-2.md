@@ -1,7 +1,7 @@
 # Migrate to 2.0
 
 
-Icechunk 2.0 uses a new storage format (spec version 2). Existing repositories created with Icechunk 1.x can be automatically upgraded to version 2.0 using the Icechunk library.
+Icechunk 2.0 uses a new storage format (spec version 2). Existing repositories created with Icechunk 1.x can be automatically upgraded to version 2.0 using the [`upgrade_icechunk_repository()`](./reference.md#icechunk.upgrade_icechunk_repository) function.
 
 ## Running the migration
 
@@ -44,7 +44,7 @@ The migration is designed to be **safe and reversible** at each step:
 
 1. **Validation** — Confirms the repository is spec version 1 and storage is writable.
 2. **Snapshot collection** — Walks the full version history, collecting all branches, tags, and snapshots.
-3. **Ops log reconstruction** — Icechunk 2.0 tracks a richer operations log. The migration reconstructs a synthetic history from your existing snapshot graph so that `Repository.ops_log()` works after migration.
+3. **Ops log reconstruction** — Icechunk 2.0 tracks a richer operations log. The migration reconstructs a synthetic history from your existing snapshot graph so that [`Repository.ops_log()`](./reference.md#icechunk.Repository.ops_log) works after migration.
 4. **Atomic write** — A single new v2 repository info file is written containing all refs, snapshot metadata, configuration, and the reconstructed ops log.
 5. **Verification** — The repository is reopened and verified to be spec version 2. If verification fails, the v2 file is deleted and the repository is left unchanged.
 6. **Cleanup** — If `delete_unused_v1_files=True`, the legacy v1 ref and config files are removed. If any cleanup step fails, the migration rolls back.
@@ -56,4 +56,4 @@ Each step of the process is atomic and if something goes wrong, the repo will be
 
 ### After migration
 
-The original `repo` object is **invalidated** after migration. Any attempt to use it will raise a `RuntimeError`. Always use the new `Repository` object returned by `upgrade_icechunk_repository()`.
+The original `repo` object is **invalidated** after migration. Any attempt to use it will raise a `RuntimeError`. Always use the new [`Repository`](./reference.md#icechunk.Repository) object returned by [`upgrade_icechunk_repository()`](./reference.md#icechunk.upgrade_icechunk_repository).
