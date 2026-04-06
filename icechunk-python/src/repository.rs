@@ -661,9 +661,15 @@ pub(crate) enum PyUpdateType {
 impl PyUpdateType {
     fn __repr__(&self) -> String {
         match self {
-            Self::RepoInitialized {} => "icechunk.snapshots.UpdateType.RepoInitialized()".into(),
-            Self::ConfigChanged {} => "icechunk.snapshots.UpdateType.ConfigChanged()".into(),
-            Self::MetadataChanged {} => "icechunk.snapshots.UpdateType.MetadataChanged()".into(),
+            Self::RepoInitialized {} => {
+                "icechunk.snapshots.UpdateType.RepoInitialized()".into()
+            }
+            Self::ConfigChanged {} => {
+                "icechunk.snapshots.UpdateType.ConfigChanged()".into()
+            }
+            Self::MetadataChanged {} => {
+                "icechunk.snapshots.UpdateType.MetadataChanged()".into()
+            }
             Self::TagCreated { name } => {
                 format!("icechunk.snapshots.UpdateType.TagCreated(name=\"{name}\")")
             }
@@ -691,14 +697,18 @@ impl PyUpdateType {
                 "icechunk.snapshots.UpdateType.RepoMigrated(from_version={from_version}, to_version={to_version})"
             ),
             Self::RepoStatusChanged { status } => {
-                format!("icechunk.snapshots.UpdateType.RepoStatusChanged(status={status})")
+                format!(
+                    "icechunk.snapshots.UpdateType.RepoStatusChanged(status={status})"
+                )
             }
             Self::GCRan {} => "icechunk.snapshots.UpdateType.GCRan()".into(),
             Self::FeatureFlagChanged { id, new_value } => format!(
                 "icechunk.snapshots.UpdateType.FeatureFlagChanged(id={id}, new_value={})",
                 new_value.map(py_bool).unwrap_or_else(|| "None".to_string()),
             ),
-            Self::ExpirationRan {} => "icechunk.snapshots.UpdateType.ExpirationRan()".into(),
+            Self::ExpirationRan {} => {
+                "icechunk.snapshots.UpdateType.ExpirationRan()".into()
+            }
             Self::NewDetachedSnapshot { new_snap_id } => {
                 format!(
                     "icechunk.snapshots.UpdateType.NewDetachedSnapshot(new_snap_id=\"{new_snap_id}\")"

@@ -640,7 +640,9 @@ impl PyObjectStoreConfig {
     fn cls_name(&self) -> &'static str {
         match self {
             Self::InMemory() => "icechunk.config.ObjectStoreConfig.InMemory",
-            Self::LocalFileSystem(_) => "icechunk.config.ObjectStoreConfig.LocalFileSystem",
+            Self::LocalFileSystem(_) => {
+                "icechunk.config.ObjectStoreConfig.LocalFileSystem"
+            }
             Self::S3Compatible(_) => "icechunk.config.ObjectStoreConfig.S3Compatible",
             Self::S3(_) => "icechunk.config.ObjectStoreConfig.S3",
             Self::Gcs(_) => "icechunk.config.ObjectStoreConfig.Gcs",
@@ -1510,10 +1512,14 @@ impl PyManifestPreloadCondition {
                 )
             }
             PathMatches { regex } => {
-                format!("icechunk.config.ManifestPreloadCondition.path_matches(\"{regex}\")")
+                format!(
+                    "icechunk.config.ManifestPreloadCondition.path_matches(\"{regex}\")"
+                )
             }
             NameMatches { regex } => {
-                format!("icechunk.config.ManifestPreloadCondition.name_matches(\"{regex}\")")
+                format!(
+                    "icechunk.config.ManifestPreloadCondition.name_matches(\"{regex}\")"
+                )
             }
             NumRefs { from, to } => {
                 format!(
@@ -1734,12 +1740,18 @@ impl PyManifestSplitCondition {
                 )
             }
             PathMatches { regex } => {
-                format!("icechunk.config.ManifestSplitCondition.path_matches(\"{regex}\")")
+                format!(
+                    "icechunk.config.ManifestSplitCondition.path_matches(\"{regex}\")"
+                )
             }
             NameMatches { regex } => {
-                format!("icechunk.config.ManifestSplitCondition.name_matches(\"{regex}\")")
+                format!(
+                    "icechunk.config.ManifestSplitCondition.name_matches(\"{regex}\")"
+                )
             }
-            AnyArray() => "icechunk.config.ManifestSplitCondition.any_array()".to_string(),
+            AnyArray() => {
+                "icechunk.config.ManifestSplitCondition.any_array()".to_string()
+            }
         }
     }
 
@@ -1810,9 +1822,13 @@ impl PyManifestSplitDimCondition {
     pub fn __repr__(&self) -> String {
         use PyManifestSplitDimCondition::*;
         match self {
-            Axis(axis) => format!("icechunk.config.ManifestSplitDimCondition.axis({axis})"),
+            Axis(axis) => {
+                format!("icechunk.config.ManifestSplitDimCondition.axis({axis})")
+            }
             DimensionName(name) => {
-                format!("icechunk.config.ManifestSplitDimCondition.dimension_name(\"{name}\")")
+                format!(
+                    "icechunk.config.ManifestSplitDimCondition.dimension_name(\"{name}\")"
+                )
             }
             Any() => "icechunk.config.ManifestSplitDimCondition.any()".to_string(),
         }
