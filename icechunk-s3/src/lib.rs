@@ -115,11 +115,11 @@ impl Intercept for ExtraHeadersInterceptor {
     }
 }
 
-/// Strips `x-amz-checksum-crc32` from HTTP 304 (Not Modified) responses.
+/// Strips `x-amz-checksum-*` headers from HTTP 304 (Not Modified) responses.
 ///
-/// R2 includes this header on 304 responses, but because 304 responses have no
-/// body the AWS SDK's checksum validation fails with a mismatch, triggering
-/// transient-error retries with exponential backoff.
+/// R2 includes checksum headers (e.g. crc32, crc64nvme) on 304 responses, but
+/// because 304 responses have no body the AWS SDK's checksum validation fails
+/// with a mismatch, triggering transient-error retries with exponential backoff.
 #[derive(Debug)]
 struct StripChecksumOn304Interceptor;
 
@@ -136,7 +136,15 @@ impl Intercept for StripChecksumOn304Interceptor {
     ) -> Result<(), BoxError> {
         let response = context.response_mut();
         if response.status().as_u16() == 304 {
-            response.headers_mut().remove("x-amz-checksum-crc32");
+            let to_remove: Vec<_> = response
+                .headers()
+                .iter()
+                .filter(|(name, _)| name.starts_with("x-amz-checksum-"))
+                .map(|(name, _)| name.to_owned())
+                .collect();
+            for name in to_remove {
+                response.headers_mut().remove(&name);
+            }
         }
         Ok(())
     }

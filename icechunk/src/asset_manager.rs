@@ -24,7 +24,7 @@ use std::{
 #[expect(clippy::unwrap_used)]
 static RETRYABLE_ERROR: LazyLock<regex::Regex> = LazyLock::new(|| {
     regex::Regex::new(
-        "(?i)StreamingError|DispatchFailure|ConnectorError|IncompleteMessage|connection reset",
+        "(?i)StreamingError|streaming error|DispatchFailure|ConnectorError|IncompleteMessage|connection reset",
     )
     .unwrap()
 });
