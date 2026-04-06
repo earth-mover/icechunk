@@ -1066,7 +1066,7 @@ impl Session {
             let node = self.get_node(&parent).await;
             if node.is_err() {
                 return Err(SessionError::capture(
-                    SessionErrorKind::AncestorNodeNotFound { prefix: path.clone() },
+                    SessionErrorKind::AncestorNodeNotFound { prefix: parent },
                 ));
             }
         }

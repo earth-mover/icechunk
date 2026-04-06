@@ -63,6 +63,9 @@ async def test_basic_move() -> None:
     session = repo.readonly_session("main")
     store = session.store
     group = zarr.open_group(store=store, mode="r")
+    zarr.create_group("my")
+    zarr.create_group("my/new")
+    zarr.create_group("my/new/path")
     array = group["my/new/path/array"]
     numpy.testing.assert_array_equal(array, 42)
 
@@ -268,6 +271,7 @@ async def test_doesnt_rebase() -> None:
     root = zarr.group(store=store, overwrite=True)
     root.create_group("my", overwrite=True)
     root.create_group("my/new", overwrite=True)
+    root.create_group("my/old", overwrite=True)
     root.create_group("my/old/path", overwrite=True)
     all_keys = sorted([k async for k in store.list()])
     assert all_keys == sorted(
