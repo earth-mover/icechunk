@@ -10,12 +10,12 @@ This page explains how to use these specialized functions.
 Start with an icechunk store and dask arrays.
 
 ```python exec="on" session="dask" source="material-block"
-import icechunk
+import icechunk as ic
 import tempfile
 
 # initialize the icechunk store
-storage = icechunk.local_filesystem_storage(tempfile.TemporaryDirectory().name)
-repo = icechunk.Repository.create(storage)
+storage = ic.storage.local_filesystem_storage(tempfile.TemporaryDirectory().name)
+repo = ic.Repository.create(storage)
 session = repo.writable_session("main")
 ```
 

@@ -7,15 +7,15 @@ When creating and opening Icechunk repositories, there are many configuration op
 The `RepositoryConfig` object is used to configure the repository. For convenience, this can be constructed using some sane defaults:
 
 ```python exec="on" session="config" source="material-block"
-import icechunk
+import icechunk as ic
 
-config = icechunk.RepositoryConfig.default()
+config = ic.config.RepositoryConfig.default()
 ```
 
 or it can be optionally loaded from an existing repository:
 
 ```python
-config = icechunk.Repository.fetch_config(storage)
+config = ic.Repository.fetch_config(storage)
 ```
 
 It allows you to configure the following parameters:
@@ -38,9 +38,9 @@ See [Performance | Concurrency](performance#Concurrency) for details.
 Icechunk uses Zstd compression to compress its metadata files. [`CompressionConfig`](./reference.md#icechunk.CompressionConfig) allows you to configure the [compression level](./reference.md#icechunk.CompressionConfig.level) and [algorithm](./reference.md#icechunk.CompressionConfig.algorithm). Currently, the only algorithm available is [`Zstd`](https://facebook.github.io/zstd/).
 
 ```python exec="on" session="config" source="material-block"
-config.compression = icechunk.CompressionConfig(
+config.compression = ic.config.CompressionConfig(
     level=3,
-    algorithm=icechunk.CompressionAlgorithm.Zstd,
+    algorithm=ic.config.CompressionAlgorithm.Zstd,
 )
 ```
 
@@ -49,7 +49,7 @@ config.compression = icechunk.CompressionConfig(
 Icechunk caches files (metadata and chunks) to speed up common operations. [`CachingConfig`](./reference.md#icechunk.CachingConfig) allows you to configure the caching behavior for the repository.
 
 ```python exec="on" session="config" source="material-block"
-config.caching = icechunk.CachingConfig(
+config.caching = ic.config.CachingConfig(
     num_snapshot_nodes=100,
     num_chunk_refs=100,
     num_transaction_changes=100,
@@ -63,8 +63,8 @@ config.caching = icechunk.CachingConfig(
 This configures how Icechunk loads data from the storage backend. [`StorageSettings`](./reference.md#icechunk.StorageSettings) allows you to configure the storage settings.
 
 ```python exec="on" session="config" source="material-block"
-config.storage = icechunk.StorageSettings(
-    concurrency=icechunk.StorageConcurrencySettings(
+config.storage = ic.storage.StorageSettings(
+    concurrency=ic.storage.StorageConcurrencySettings(
         max_concurrent_requests_for_object=10,
         ideal_concurrent_request_size=1_000_000,
     ),
@@ -88,9 +88,9 @@ For example, if we wanted to configure an icechunk repo to be able to contain vi
 
 ```python exec="on" session="config" source="material-block"
 config.set_virtual_chunk_container(
-    icechunk.VirtualChunkContainer(
+    ic.virtual.VirtualChunkContainer(
         "s3://my-s3-bucket/",
-        store=icechunk.s3_store(region="us-east-1"),
+        store=ic.storage.s3_store(region="us-east-1"),
     ),
 )
 ```
@@ -99,9 +99,9 @@ If we also wanted to configure the repo to be able to contain virtual chunks fro
 
 ```python exec="on" session="config" source="material-block"
 config.set_virtual_chunk_container(
-  icechunk.VirtualChunkContainer(
+  ic.virtual.VirtualChunkContainer(
       "s3://my-other-s3-bucket/",
-      store=icechunk.s3_store(region="us-west-2")
+      store=ic.storage.s3_store(region="us-west-2")
   )
 )
 ```
@@ -127,11 +127,11 @@ The `ManifestPreloadConfig` accepts the following parameters:
 For example, if we have a repo which contains data that we plan to open as an [`Xarray`](./xarray.md) dataset, we may want to configure the manifest preload to only preload manifests that contain arrays that are coordinates, in our case `time`, `latitude`, and `longitude`.
 
 ```python exec="on" session="config" source="material-block"
-config.manifest = icechunk.ManifestConfig(
-    preload=icechunk.ManifestPreloadConfig(
+config.manifest = ic.config.ManifestConfig(
+    preload=ic.config.ManifestPreloadConfig(
         max_total_refs=100_000_000,
         max_arrays_to_scan=1000,
-        preload_if=icechunk.ManifestPreloadCondition.name_matches(".*time|.*latitude|.*longitude"),
+        preload_if=ic.config.ManifestPreloadCondition.name_matches(".*time|.*latitude|.*longitude"),
     ),
 )
 ```
@@ -151,14 +151,14 @@ If no config is provided, the repo will be created with the [default configurati
 === "Creating with S3 storage"
 
     ```python
-    storage = icechunk.s3_storage(
+    storage = ic.storage.s3_storage(
         bucket='earthmover-sample-data',
         prefix='icechunk/oisst.2020-2024/',
         region='us-east-1',
         from_env=True,
     )
 
-    repo = icechunk.Repository.create(
+    repo = ic.Repository.create(
         storage=storage,
         config=config,
     )
@@ -167,13 +167,13 @@ If no config is provided, the repo will be created with the [default configurati
 === "Creating with Google Cloud Storage"
 
     ```python
-    storage = icechunk.gcs_storage(
+    storage = ic.storage.gcs_storage(
         bucket='earthmover-sample-data',
         prefix='icechunk/oisst.2020-2024/',
         from_env=True,
     )
 
-    repo = icechunk.Repository.create(
+    repo = ic.Repository.create(
         storage=storage,
         config=config,
     )
@@ -182,13 +182,13 @@ If no config is provided, the repo will be created with the [default configurati
 === "Creating with Azure Blob Storage"
 
     ```python
-    storage = icechunk.azure_storage(
+    storage = ic.storage.azure_storage(
         container='earthmover-sample-data',
         prefix='icechunk/oisst.2020-2024/',
         from_env=True,
     )
 
-    repo = icechunk.Repository.create(
+    repo = ic.Repository.create(
         storage=storage,
         config=config,
     )
@@ -197,8 +197,8 @@ If no config is provided, the repo will be created with the [default configurati
 === "Creating with local filesystem"
 
     ```python
-    repo = icechunk.Repository.create(
-        storage=icechunk.local_filesystem_storage("/path/to/my/dataset"),
+    repo = ic.Repository.create(
+        storage=ic.storage.local_filesystem_storage("/path/to/my/dataset"),
         config=config
     )
     ```
@@ -212,14 +212,14 @@ However, if a config was specified when opening the repo AND a config was previo
 === "Opening from S3 Storage"
 
     ```python
-    storage = icechunk.s3_storage(
+    storage = ic.storage.s3_storage(
         bucket='earthmover-sample-data',
         prefix='icechunk/oisst.2020-2024/',
         region='us-east-1',
         from_env=True,
     )
 
-    repo = icechunk.Repository.open(
+    repo = ic.Repository.open(
         storage=storage,
         config=config,
     )
@@ -228,13 +228,13 @@ However, if a config was specified when opening the repo AND a config was previo
 === "Opening from Google Cloud Storage"
 
     ```python
-    storage = icechunk.gcs_storage(
+    storage = ic.storage.gcs_storage(
         bucket='earthmover-sample-data',
         prefix='icechunk/oisst.2020-2024/',
         from_env=True,
     )
 
-    repo = icechunk.Repository.open(
+    repo = ic.Repository.open(
         storage=storage,
         config=config,
     )
@@ -243,13 +243,13 @@ However, if a config was specified when opening the repo AND a config was previo
 === "Opening from Azure Blob Storage"
 
     ```python
-    storage = icechunk.azure_storage(
+    storage = ic.storage.azure_storage(
         container='earthmover-sample-data',
         prefix='icechunk/oisst.2020-2024/',
         from_env=True,
     )
 
-    repo = icechunk.Repository.open(
+    repo = ic.Repository.open(
         storage=storage,
         config=config,
     )
@@ -258,8 +258,8 @@ However, if a config was specified when opening the repo AND a config was previo
 === "Opening from local filesystem"
 
     ```python
-    storage = icechunk.local_filesystem_storage("/path/to/my/dataset")
-    store = icechunk.IcechunkStore.open(
+    storage = ic.storage.local_filesystem_storage("/path/to/my/dataset")
+    store = ic.zarr.IcechunkStore.open(
         storage=storage,
         config=config,
     )
@@ -284,13 +284,13 @@ When using virtual chunk containers, the containers must be authorized by the re
 Expanding on the example from the [Virtual Chunk Containers](#virtual_chunk_containers) section, we can configure the repo to use the credentials for the `my-s3-bucket` and `my-other-s3-bucket` containers.
 
 ```python
-credentials = icechunk.containers_credentials(
-    { "s3://my_s3_bucket": icechunk.s3_credentials(bucket="my-s3-bucket", region="us-east-1"),
-      "s3://my_other_s3_bucket": icechunk.s3_credentials(bucket="my-other-s3-bucket", region="us-west-2"),
+credentials = ic.credentials.containers_credentials(
+    { "s3://my_s3_bucket": ic.credentials.s3_credentials(bucket="my-s3-bucket", region="us-east-1"),
+      "s3://my_other_s3_bucket": ic.credentials.s3_credentials(bucket="my-other-s3-bucket", region="us-west-2"),
     }
 )
 
-repo = icechunk.Repository.open(
+repo = ic.Repository.open(
     storage=storage,
     config=config,
     authorize_virtual_chunk_access=credentials,

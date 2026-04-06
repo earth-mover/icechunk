@@ -40,25 +40,25 @@ with a bucket or file path that you have access to.
 
 ```python exec="on" session="xarray" source="material-block"
 import xarray as xr
-import icechunk
+import icechunk as ic
 ```
 
 === "S3 Storage"
 
     ```python
-    storage_config = icechunk.s3_storage(
+    storage_config = ic.storage.s3_storage(
         bucket="icechunk-test",
         prefix="xarray-demo"
     )
-    repo = icechunk.Repository.create(storage_config)
+    repo = ic.Repository.create(storage_config)
     ```
 
 === "Local Storage"
 
     ```python exec="on" session="xarray" source="material-block"
     import tempfile
-    storage_config = icechunk.local_filesystem_storage(tempfile.TemporaryDirectory().name)
-    repo = icechunk.Repository.create(storage_config)
+    storage_config = ic.storage.local_filesystem_storage(tempfile.TemporaryDirectory().name)
+    repo = ic.Repository.create(storage_config)
     ```
 
 ## Open tutorial dataset from Xarray

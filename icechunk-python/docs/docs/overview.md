@@ -65,8 +65,8 @@ No matter how careful you are, it is always possible to unintentionally write to
 === "✅ Icechunk (Recoverable)"
 
     ```python
-    import icechunk, zarr
-    repo = icechunk.Repository.open(storage)
+    import icechunk as ic, zarr
+    repo = ic.Repository.open(storage)
 
     with repo.transaction("main", message="Update temp") as store:
         root = zarr.open_group(store)
@@ -149,8 +149,9 @@ Weather forecast datasets not only regularly add new timepoints, but also backfi
 
     ```python
     # January: Run analysis using specific tagged version
-    repo = icechunk.Repository.open(
-        icechunk.s3_storage(bucket="public-weather", prefix="forecast")
+    import icechunk as ic
+    repo = ic.Repository.open(
+        ic.storage.s3_storage(bucket="public-weather", prefix="forecast")
     )
     session = repo.readonly_session(tag="2025-01-15")
     forecast = zarr.open_group(session.store)

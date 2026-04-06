@@ -34,34 +34,34 @@ However, you can also create a repo on your local filesystem.
 === "S3 Storage"
 
     ```python
-    import icechunk
-    storage = icechunk.s3_storage(bucket="my-bucket", prefix="my-prefix", from_env=True)
-    repo = icechunk.Repository.create(storage)
+    import icechunk as ic
+    storage = ic.storage.s3_storage(bucket="my-bucket", prefix="my-prefix", from_env=True)
+    repo = ic.Repository.create(storage)
     ```
 
 === "Google Cloud Storage"
 
     ```python
-    import icechunk
-    storage = icechunk.gcs_storage(bucket="my-bucket", prefix="my-prefix", from_env=True)
-    repo = icechunk.Repository.create(storage)
+    import icechunk as ic
+    storage = ic.storage.gcs_storage(bucket="my-bucket", prefix="my-prefix", from_env=True)
+    repo = ic.Repository.create(storage)
     ```
 
 === "Azure Blob Storage"
 
     ```python
-    import icechunk
-    storage = icechunk.azure_storage(container="my-container", prefix="my-prefix", from_env=True)
-    repo = icechunk.Repository.create(storage)
+    import icechunk as ic
+    storage = ic.storage.azure_storage(container="my-container", prefix="my-prefix", from_env=True)
+    repo = ic.Repository.create(storage)
     ```
 
 === "Local Storage"
 
     ```python exec="on" session="quickstart" source="material-block"
-    import icechunk
+    import icechunk as ic
     import tempfile
-    storage = icechunk.local_filesystem_storage(tempfile.TemporaryDirectory().name)
-    repo = icechunk.Repository.create(storage)
+    storage = ic.storage.local_filesystem_storage(tempfile.TemporaryDirectory().name)
+    repo = ic.Repository.create(storage)
     ```
 
 ## Accessing the Icechunk store

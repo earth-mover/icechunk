@@ -23,11 +23,10 @@ First read some example data, and create an Icechunk Repository.
 ```python exec="on" session="parallel" source="material-block"
 import xarray as xr
 import tempfile
-from icechunk import Repository
-from icechunk.storage import local_filesystem_storage
+import icechunk as ic
 
 ds = xr.tutorial.open_dataset("rasm").isel(time=slice(24))
-repo = Repository.create(local_filesystem_storage(tempfile.TemporaryDirectory().name))
+repo = ic.Repository.create(ic.storage.local_filesystem_storage(tempfile.TemporaryDirectory().name))
 session = repo.writable_session("main")
 ```
 
@@ -53,9 +52,7 @@ print(session.commit("initialize store"))
 First define a function that constitutes one "write task".
 
 ```python exec="on" session="parallel" source="material-block"
-from icechunk.session import Session
-
-def write_timestamp(*, itime: int, session: Session) -> None:
+def write_timestamp(*, itime: int, session: ic.session.Session) -> None:
     # pass a list to isel to preserve the time dimension
     ds = xr.tutorial.open_dataset("rasm").isel(time=[itime])
     # region="auto" tells Xarray to infer which "region" of the output arrays to write to.
@@ -118,10 +115,7 @@ There are three key points to keep in mind:
 First we modify `write_task` to return the `Session`:
 
 ```python
-from icechunk.session import Session
-from icechunk.session import ForkSession
-
-def write_timestamp(*, itime: int, session: ForkSession) -> ForkSession:
+def write_timestamp(*, itime: int, session: ic.session.ForkSession) -> ic.session.ForkSession:
     # pass a list to isel to preserve the time dimension
     ds = xr.tutorial.open_dataset("rasm").isel(time=[itime])
     # region="auto" tells Xarray to infer which "region" of the output arrays to write to.

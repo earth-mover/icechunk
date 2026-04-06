@@ -138,17 +138,16 @@ To solve this issue, Icechunk lets you **split** the manifest files by specifyin
 
 ```python exec="on" session="perf" source="material-block"
 import icechunk as ic
-from icechunk.config import ManifestSplitCondition, ManifestSplittingConfig, ManifestSplitDimCondition
 
-split_config = ManifestSplittingConfig.from_dict(
+split_config = ic.config.ManifestSplittingConfig.from_dict(
     {
-        ManifestSplitCondition.AnyArray(): {
-            ManifestSplitDimCondition.DimensionName("time"): 365 * 24
+        ic.config.ManifestSplitCondition.AnyArray(): {
+            ic.config.ManifestSplitDimCondition.DimensionName("time"): 365 * 24
         }
     }
 )
-repo_config = ic.RepositoryConfig(
-    manifest=ic.ManifestConfig(splitting=split_config),
+repo_config = ic.config.RepositoryConfig(
+    manifest=ic.config.ManifestConfig(splitting=split_config),
 )
 ```
 
@@ -174,14 +173,14 @@ Options for specifying the arrays whose manifest you want to split are:
 `And` and `Or` may be used to combine multiple path and/or name matches. For example,
 
 ```python exec="on" session="perf" source="material-block"
-array_condition = ManifestSplitCondition.or_conditions(
+array_condition = ic.config.ManifestSplitCondition.or_conditions(
     [
-        ManifestSplitCondition.name_matches("temperature"),
-        ManifestSplitCondition.name_matches("salinity"),
+        ic.config.ManifestSplitCondition.name_matches("temperature"),
+        ic.config.ManifestSplitCondition.name_matches("salinity"),
     ]
 )
-sconfig = ManifestSplittingConfig.from_dict(
-    {array_condition: {ManifestSplitDimCondition.DimensionName("longitude"): 3}}
+sconfig = ic.config.ManifestSplittingConfig.from_dict(
+    {array_condition: {ic.config.ManifestSplitDimCondition.DimensionName("longitude"): 3}}
 )
 ```
 
@@ -190,7 +189,7 @@ sconfig = ManifestSplittingConfig.from_dict(
     Instead of using `and_conditions` and `or_conditions`, you can use `&` and `|` operators to combine conditions:
 
     ```python
-    array_condition = ManifestSplitCondition.name_matches("temperature") | ManifestSplitCondition.name_matches("salinity")
+    array_condition = ic.config.ManifestSplitCondition.name_matches("temperature") | ic.config.ManifestSplitCondition.name_matches("salinity")
     ```
 
 Options for specifying how to split along a specific axis or dimension are:
@@ -202,12 +201,10 @@ Options for specifying how to split along a specific axis or dimension are:
 For example, for an array with dimensions `time, latitude, longitude`, the following config
 
 ```python exec="on" session="perf" source="material-block"
-from icechunk.config import ManifestSplitDimCondition
-
 {
-    ManifestSplitDimCondition.DimensionName("longitude"): 3,
-    ManifestSplitDimCondition.Axis(1): 2,
-    ManifestSplitDimCondition.Any(): 1,
+    ic.config.ManifestSplitDimCondition.DimensionName("longitude"): 3,
+    ic.config.ManifestSplitDimCondition.Axis(1): 2,
+    ic.config.ManifestSplitDimCondition.Any(): 1,
 }
 ```
 
@@ -227,18 +224,13 @@ Consider this simple example: a 1D array with split size 1 along axis 0.
 import random
 
 import icechunk as ic
-from icechunk.config import (
-    ManifestSplitCondition,
-    ManifestSplitDimCondition,
-    ManifestSplittingConfig,
-)
 
-split_config = ManifestSplittingConfig.from_dict(
-    {ManifestSplitCondition.AnyArray(): {ManifestSplitDimCondition.Any(): 1}}
+split_config = ic.config.ManifestSplittingConfig.from_dict(
+    {ic.config.ManifestSplitCondition.AnyArray(): {ic.config.ManifestSplitDimCondition.Any(): 1}}
 )
-repo_config = ic.RepositoryConfig(manifest=ic.ManifestConfig(splitting=split_config))
+repo_config = ic.config.RepositoryConfig(manifest=ic.config.ManifestConfig(splitting=split_config))
 
-storage = ic.local_filesystem_storage(
+storage = ic.storage.local_filesystem_storage(
     f"/tmp/splitting-test/{random.randint(100, 20000)}"
 )
 # Note any config passed to Repository.create is persisted to disk.
@@ -280,10 +272,10 @@ print(repo.list_manifest_files(snap))
 Let's open the Repository again with a different splitting config --- where 5 chunk references are in a single manifest.
 
 ```python exec="on" session="perf" source="material-block"
-split_config = ManifestSplittingConfig.from_dict(
-    {ManifestSplitCondition.AnyArray(): {ManifestSplitDimCondition.Any(): 5}}
+split_config = ic.config.ManifestSplittingConfig.from_dict(
+    {ic.config.ManifestSplitCondition.AnyArray(): {ic.config.ManifestSplitDimCondition.Any(): 5}}
 )
-repo_config = ic.RepositoryConfig(manifest=ic.ManifestConfig(splitting=split_config))
+repo_config = ic.config.RepositoryConfig(manifest=ic.config.ManifestConfig(splitting=split_config))
 new_repo = ic.Repository.open(storage, config=repo_config)
 print(new_repo.config.manifest)
 ```
@@ -336,11 +328,11 @@ To force Icechunk to rewrite all chunk refs to the current splitting configurati
 To illustrate, we will use a split size of 3 --- for the current example this will consolidate to two manifests.
 
 ```python exec="on" session="perf" source="material-block"
-split_config = ManifestSplittingConfig.from_dict(
-    {ManifestSplitCondition.AnyArray(): {ManifestSplitDimCondition.Any(): 3}}
+split_config = ic.config.ManifestSplittingConfig.from_dict(
+    {ic.config.ManifestSplitCondition.AnyArray(): {ic.config.ManifestSplitDimCondition.Any(): 3}}
 )
-repo_config = ic.RepositoryConfig(
-    manifest=ic.ManifestConfig(splitting=split_config),
+repo_config = ic.config.RepositoryConfig(
+    manifest=ic.config.ManifestConfig(splitting=split_config),
 )
 new_repo = ic.Repository.open(storage, config=repo_config)
 
@@ -371,11 +363,11 @@ Here is an example workflow for experimenting with splitting
 
 ```python exec="on" session="perf" source="material-block"
 # first define a new config
-split_config = ManifestSplittingConfig.from_dict(
-    {ManifestSplitCondition.AnyArray(): {ManifestSplitDimCondition.Any(): 5}}
+split_config = ic.config.ManifestSplittingConfig.from_dict(
+    {ic.config.ManifestSplitCondition.AnyArray(): {ic.config.ManifestSplitDimCondition.Any(): 5}}
 )
-repo_config = ic.RepositoryConfig(
-    manifest=ic.ManifestConfig(splitting=split_config),
+repo_config = ic.config.RepositoryConfig(
+    manifest=ic.config.ManifestConfig(splitting=split_config),
 )
 # open the repo with the new config.
 repo = ic.Repository.open(storage, config=repo_config)
@@ -429,12 +421,12 @@ To address this, Icechunk provides a way to preload manifests at the time of ope
 To configure manifest preloading, you can use the `ManifestPreloadConfig` class to specify the `ic.RepositoryConfig.manifest.preload` field.
 
 ```python exec="on" session="perf" source="material-block"
-preload_config = ic.ManifestPreloadConfig(
-    preload_if=ic.ManifestPreloadCondition.name_matches("^x$"),  # preload all manifests with the name "x"
+preload_config = ic.config.ManifestPreloadConfig(
+    preload_if=ic.config.ManifestPreloadCondition.name_matches("^x$"),  # preload all manifests with the name "x"
 )
 
-repo_config = ic.RepositoryConfig(
-    manifest=ic.ManifestConfig(
+repo_config = ic.config.RepositoryConfig(
+    manifest=ic.config.ManifestConfig(
         preload=preload_config,
     )
 )
@@ -456,11 +448,11 @@ This example will preload all manifests that match the regex "x" when opening a 
 `And` and `Or` may be used to combine multiple path and/or name matches. For example,
 
 ```python exec="on" session="perf" source="material-block"
-preload_config = ic.ManifestPreloadConfig(
-    preload_if=ic.ManifestPreloadCondition.or_conditions(
+preload_config = ic.config.ManifestPreloadConfig(
+    preload_if=ic.config.ManifestPreloadCondition.or_conditions(
         [
-            ic.ManifestPreloadCondition.name_matches("^x$"),
-            ic.ManifestPreloadCondition.path_matches("y"),
+            ic.config.ManifestPreloadCondition.name_matches("^x$"),
+            ic.config.ManifestPreloadCondition.path_matches("y"),
         ]
     ),
 )
@@ -475,11 +467,11 @@ This will preload all manifests that match the array name "x" or where the array
 Preloading can also be limited to manifests that are within a limited size range. This can be useful to limit the amount of memory used by the preload cache, when some manifest may be very large. This can be configured using the `ic.RepositoryConfig.manifest.preload.num_refs` field.
 
 ```python exec="on" session="perf" source="material-block"
-preload_config = ic.ManifestPreloadConfig(
-    preload_if=ic.ManifestPreloadCondition.and_conditions(
+preload_config = ic.config.ManifestPreloadConfig(
+    preload_if=ic.config.ManifestPreloadCondition.and_conditions(
         [
-            ic.ManifestPreloadCondition.name_matches("x"),
-            ic.ManifestPreloadCondition.num_refs(1000, 10000),
+            ic.config.ManifestPreloadCondition.name_matches("x"),
+            ic.config.ManifestPreloadCondition.num_refs(1000, 10000),
         ]
     ),
 )
@@ -491,16 +483,16 @@ This will preload all manifests that match the array name "x" and have between 1
 
     Like with `ManifestSplitCondition`, you can use `&` and `|` operators to combine conditions instead of `and_conditions` and `or_conditions`:
     ```python
-    preload_config = ic.ManifestPreloadConfig(
-        preload_if=ic.ManifestPreloadCondition.name_matches("x") & ic.ManifestPreloadCondition.num_refs(1000, 10000),
+    preload_config = ic.config.ManifestPreloadConfig(
+        preload_if=ic.config.ManifestPreloadCondition.name_matches("x") & ic.config.ManifestPreloadCondition.num_refs(1000, 10000),
     )
     ```
 
 Lastly, the number of total manifests that can be preloaded can be limited using the `ic.RepositoryConfig.manifest.preload.max_total_refs` field.
 
 ```python exec="on" session="perf" source="material-block"
-preload_config = ic.ManifestPreloadConfig(
-    preload_if=ic.ManifestPreloadCondition.name_matches("x"),
+preload_config = ic.config.ManifestPreloadConfig(
+    preload_if=ic.config.ManifestPreloadCondition.name_matches("x"),
     max_total_refs=10000,
 )
 ```

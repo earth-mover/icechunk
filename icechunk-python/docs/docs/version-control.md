@@ -20,9 +20,9 @@ To get started, we can create a new `Repository`.
 
 
 ```python exec="on" session="version" source="material-block"
-import icechunk
+import icechunk as ic
 
-repo = icechunk.Repository.create(icechunk.in_memory_storage())
+repo = ic.Repository.create(ic.storage.in_memory_storage())
 ```
 
 On creating a new [`Repository`](./reference.md#icechunk.Repository), it will automatically create a `main` branch with an initial snapshot. We can take a look at the ancestry of the `main` branch to confirm this.
@@ -250,11 +250,11 @@ Icechunk is a serverless distributed system, and as such, it is possible to have
 Let's create a fresh repository, add some attributes to the root group and create an array named `data`.
 
 ```python exec="on" session="version" source="material-block" result="code"
-import icechunk
+import icechunk as ic
 import numpy as np
 import zarr
 
-repo = icechunk.Repository.create(icechunk.in_memory_storage())
+repo = ic.Repository.create(ic.storage.in_memory_storage())
 session = repo.writable_session("main")
 root = zarr.create_group(session.store)
 root.attrs["foo"] = "bar"
@@ -308,7 +308,7 @@ To update the second session so it is based off the tip of the `main` branch, we
 First, we can try to rebase, without merging any conflicting changes:
 
 ```python
-session2.rebase(rebase_with=icechunk.ConflictDetector())
+session2.rebase(rebase_with=ic.conflicts.ConflictDetector())
 
 # ---------------------------------------------------------------------------
 # RebaseFailedError                         Traceback (most recent call last)
@@ -327,8 +327,8 @@ This however fails because both sessions modified metadata. We can use the `Reba
 
 ```python
 try:
-    session1.rebase(icechunk.ConflictDetector())
-except icechunk.RebaseFailedError as e:
+    session1.rebase(ic.conflicts.ConflictDetector())
+except ic.exceptions.RebaseFailedError as e:
     for conflict in e.conflicts:
         print(f"Conflict at {conflict.path}: {conflict.conflicted_chunks}")
 
@@ -338,7 +338,7 @@ except icechunk.RebaseFailedError as e:
 We get a clear indication of the conflict, and the chunks that are conflicting. In this case we have decided that the first session's changes are correct, so we can again use the [`BasicConflictSolver`](./reference.md#icechunk.BasicConflictSolver) to resolve the conflict.
 
 ```python
-session1.rebase(icechunk.BasicConflictSolver(on_chunk_conflict=icechunk.VersionSelection.UseOurs))
+session1.rebase(ic.conflicts.BasicConflictSolver(on_chunk_conflict=ic.conflicts.VersionSelection.UseOurs))
 session1.commit(message="Update first element of data array")
 
 # 'R4WXW2CYNAZTQ3HXTNK0'
@@ -376,7 +376,7 @@ root1["data"][3,:] = 3
 root2["data"][4,:] = 4
 
 session1.commit(message="Update fourth row of data array")
-session2.commit(message="Update fifth row of data array", rebase_with=icechunk.ConflictDetector())
+session2.commit(message="Update fifth row of data array", rebase_with=ic.conflicts.ConflictDetector())
 print("Rebase+commit succeeded")
 
 ```

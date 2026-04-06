@@ -17,7 +17,7 @@ import zarr
 import numpy as np
 
 # Create a repository with some data
-repo = ic.Repository.create(ic.in_memory_storage())
+repo = ic.Repository.create(ic.storage.in_memory_storage())
 session = repo.writable_session("main")
 root = zarr.group(session.store)
 root.create_group("data/raw")
@@ -61,7 +61,7 @@ session.commit("Reorganized")
 When you move a group, everything inside moves with it:
 
 ```python exec="on" session="nodes" source="material-block" result="code"
-repo = ic.Repository.create(ic.in_memory_storage())
+repo = ic.Repository.create(ic.storage.in_memory_storage())
 session = repo.writable_session("main")
 root = zarr.group(session.store)
 root.create_group("experiments/exp001")
@@ -94,7 +94,7 @@ print(root.tree())
 Moves will not overwrite existing nodes—delete the destination first if needed:
 
 ```python exec="on" session="nodes" source="material-block" result="code"
-repo = ic.Repository.create(ic.in_memory_storage())
+repo = ic.Repository.create(ic.storage.in_memory_storage())
 session = repo.writable_session("main")
 root = zarr.group(session.store)
 root.create_array("source", shape=(10,), dtype="f4")
@@ -104,7 +104,7 @@ session.commit("Create arrays")
 session = repo.rearrange_session("main")
 try:
     session.move("/source", "/destination")
-except ic.IcechunkError as e:
+except ic.exceptions.IcechunkError as e:
     print(f"IcechunkError: {e}")
 ```
 

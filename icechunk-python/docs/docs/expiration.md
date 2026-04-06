@@ -8,11 +8,11 @@ First create a Repository, configured so that there are no "inline" chunks. This
 
 
 ```python exec="on" session="version" source="material-block"
-import icechunk
+import icechunk as ic
 
-repo = icechunk.Repository.create(
-    icechunk.in_memory_storage(),
-    config=icechunk.RepositoryConfig(inline_chunk_threshold_bytes=0),
+repo = ic.Repository.create(
+    ic.storage.in_memory_storage(),
+    config=ic.config.RepositoryConfig(inline_chunk_threshold_bytes=0),
 )
 ```
 
