@@ -170,6 +170,10 @@ pub enum SessionErrorKind {
     NoAmendForInitialCommit,
     #[error("failed to create manifest from chunk stream")]
     ManifestCreationError(#[from] Box<SessionError>),
+    #[error(
+        "inconsistent manifests detected: Snapshot will reference {snapshot} manifest, while array nodes will reference {nodes} manifests"
+    )]
+    ManifestsInconsistencyError { snapshot: usize, nodes: usize },
     #[error("failed to merge sessions: {0}")]
     SessionMerge(String),
     #[error("byte range {request:?} is out of bounds for chunk of length {chunk_length}")]
@@ -799,6 +803,9 @@ impl Session {
             )));
         }
 
+        // verify all parent nodes in "to" path exist
+        self.check_all_ancestors_exist(&to).await?;
+
         // Get updated subtree
         let subtree_data: Vec<(Path, NodeId, NodeType)> = updated_nodes(
             &from,
@@ -1047,6 +1054,24 @@ impl Session {
         Err(SessionError::capture(SessionErrorKind::AncestorNodeNotFound {
             prefix: path.clone(),
         }))
+    }
+
+    #[instrument(skip(self))]
+    async fn check_all_ancestors_exist(&self, path: &Path) -> SessionResult<()> {
+        let mut ancestors = path.ancestors();
+        // the first element is the `path` itself, which we might be
+        // trying to create now; skip it.
+        let current_path = ancestors.next();
+        debug_assert_eq!(current_path.as_ref(), Some(path));
+        for parent in ancestors {
+            let node = self.get_node(&parent).await;
+            if node.is_err() {
+                return Err(SessionError::capture(
+                    SessionErrorKind::AncestorNodeNotFound { prefix: parent },
+                ));
+            }
+        }
+        Ok(())
     }
 
     #[instrument(skip(self))]
@@ -2851,15 +2876,22 @@ async fn do_flush(
     }
 
     // manifest_files & manifest_refs _must_ be consistent
-    debug_assert_eq!(
-        flush_data.manifest_files.iter().map(|x| x.id.clone()).collect::<HashSet<_>>(),
-        flush_data
-            .manifest_refs
-            .values()
-            .flatten()
-            .map(|x| x.object_id.clone())
-            .collect::<HashSet<_>>(),
-    );
+    let mfiles =
+        flush_data.manifest_files.iter().map(|x| x.id.clone()).collect::<HashSet<_>>();
+    let mrefs = flush_data
+        .manifest_refs
+        .values()
+        .flatten()
+        .map(|x| x.object_id.clone())
+        .collect::<HashSet<_>>();
+    if mfiles != mrefs {
+        return Err(SessionError::capture(
+            SessionErrorKind::ManifestsInconsistencyError {
+                snapshot: mfiles.len(),
+                nodes: mrefs.len(),
+            },
+        ));
+    }
 
     trace!("Building new snapshot");
     // gather and sort nodes:
@@ -5028,6 +5060,31 @@ mod tests {
     }
 
     #[tokio_test]
+    async fn implicit_group_creation_in_move() -> Result<(), Box<dyn Error>> {
+        let repo = create_memory_store_repository(SpecVersionBin::current()).await;
+
+        let mut session = repo.writable_session("main").await?;
+        session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
+        session.add_group("/a".try_into().unwrap(), Bytes::copy_from_slice(b"")).await?;
+        session.commit("setup").max_concurrent_nodes(8).execute().await?;
+
+        // Try to move a node into a group that doesn't exist
+        // (and we don't do implicit group creation)
+        let mut session = repo.rearrange_session("main").await?;
+        let dest_path: Path = "/b/a".try_into().unwrap();
+        let res = session.move_node("/a".try_into().unwrap(), dest_path.clone()).await;
+
+        assert!(res.is_err());
+        let res = res.unwrap_err();
+        assert!(matches!(res,
+                ICError { kind, ..} if matches!(&kind,
+                                                SessionErrorKind::AncestorNodeNotFound {prefix, ..}
+                                                if *prefix == "/b".try_into().unwrap())));
+
+        Ok(())
+    }
+
+    #[tokio_test]
     async fn test_session_amending_with_move() -> Result<(), Box<dyn Error>> {
         let repo = create_memory_store_repository(SpecVersionBin::current()).await;
 
@@ -5366,6 +5423,7 @@ mod tests {
 
         let shape = ArrayShape::new(vec![(5, 3), (5, 3)]).unwrap();
         session.add_group(Path::root(), Bytes::new()).await?;
+        session.add_group(Path::new("/foo").unwrap(), Bytes::new()).await?;
         session.add_group(Path::new("/foo/old").unwrap(), Bytes::new()).await?;
         let apath: Path = "/foo/old/array".try_into()?;
         session.add_array(apath.clone(), shape, None, Bytes::new()).await?;
@@ -5398,6 +5456,7 @@ mod tests {
             nodes.into_iter(),
             [
                 Path::new("/").unwrap(),
+                Path::new("/foo").unwrap(),
                 Path::new("/foo/new").unwrap(),
                 Path::new("/foo/new/array").unwrap(),
             ],
@@ -6657,6 +6716,53 @@ mod tests {
             Some(&serde_json::json!({ "rebase_attempts": 3 }))
         );
         assert_eq!(Arc::try_unwrap(attempts).unwrap().into_inner(), 3);
+        Ok(())
+    }
+
+    #[tokio_test]
+    async fn manifest_files_consistency() -> Result<(), Box<dyn Error>> {
+        let repo = Arc::new(create_memory_store_repository(SpecVersionBin::V2).await);
+        let mut session = repo.writable_session("main").await?;
+        session
+            .add_array("/array".try_into().unwrap(), basic_shape(), None, Bytes::new())
+            .await?;
+
+        let properties = Default::default();
+        let manifest_config = ManifestConfig::default();
+        let mut flush_data = FlushProcess::new(
+            Arc::clone(&session.asset_manager),
+            &session.change_set,
+            &Snapshot::INITIAL_SNAPSHOT_ID,
+            &manifest_config,
+        );
+
+        // poke at flush_data to make inconsistent
+        flush_data.manifest_files.insert(ManifestFileInfo {
+            id: ManifestId::random(),
+            num_chunk_refs: 0,
+            size_bytes: 9000,
+        });
+
+        let res = do_flush(
+            flush_data,
+            "fail",
+            1,
+            properties,
+            false,
+            CommitMethod::NewCommit,
+            manifest_config.splitting(),
+        )
+        .await;
+
+        // verify it returns the right error
+        assert!(matches!(
+            res,
+            Err(SessionError {
+                kind: SessionErrorKind::ManifestsInconsistencyError { snapshot, nodes },
+                ..
+            }) if snapshot == 1 && nodes == 0
+        ));
+
         Ok(())
     }
 

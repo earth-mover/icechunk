@@ -1100,3 +1100,47 @@ async fn test_redirect_storage() -> Result<(), Box<dyn std::error::Error>> {
 
     Ok(())
 }
+
+#[tokio_test]
+#[apply(spec_version_cases)]
+pub async fn test_basic_repo_ops(
+    #[case] spec_version: SpecVersionBin,
+) -> Result<(), Box<dyn std::error::Error>> {
+    with_storage(Permission::Modify, |_, storage| async move {
+        let repo = Repository::create(
+            None,
+            Arc::clone(&storage),
+            Default::default(),
+            Some(spec_version),
+            true,
+        )
+        .await?;
+
+        let branches = repo.list_branches().await?;
+        assert!(branches.contains("main"));
+
+        let session = repo
+            .readonly_session(&icechunk::repository::VersionInfo::BranchTipRef(
+                "main".to_string(),
+            ))
+            .await?;
+        assert_eq!(session.list_nodes(&Path::root()).await?.count(), 0);
+
+        // reopen from storage
+        let repo = Repository::open(None, storage, Default::default()).await?;
+
+        let branches = repo.list_branches().await?;
+        assert!(branches.contains("main"));
+
+        let session = repo
+            .readonly_session(&icechunk::repository::VersionInfo::BranchTipRef(
+                "main".to_string(),
+            ))
+            .await?;
+        assert_eq!(session.list_nodes(&Path::root()).await?.count(), 0);
+
+        Ok(())
+    })
+    .await?;
+    Ok(())
+}

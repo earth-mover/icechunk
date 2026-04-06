@@ -19,7 +19,10 @@ use aws_sdk_s3::{
     config::{
         Builder, ConfigBag, IdentityCache, Intercept, ProvideCredentials, Region,
         RuntimeComponents, StalledStreamProtectionConfig,
-        interceptors::BeforeTransmitInterceptorContextMut,
+        interceptors::{
+            BeforeDeserializationInterceptorContextMut,
+            BeforeTransmitInterceptorContextMut,
+        },
     },
     error::{BoxError, SdkError},
     operation::{copy_object::CopyObjectError, put_object::PutObjectError},
@@ -41,7 +44,7 @@ pub use icechunk_storage::s3_config::{
 };
 use icechunk_storage::{
     DeleteObjectsResult, GetModifiedResult, ListInfo, Settings, Storage, StorageError,
-    StorageErrorKind, StorageResult, VersionInfo, VersionedUpdateResult,
+    StorageErrorKind, StorageInfo, StorageResult, VersionInfo, VersionedUpdateResult,
     obj_not_found_res, obj_store_error, obj_store_error_res, other_error, sealed,
     split_in_multiple_equal_requests, strip_quotes,
 };
@@ -49,7 +52,7 @@ use icechunk_types::ICResultExt as _;
 use serde::{Deserialize, Serialize};
 use tokio::sync::OnceCell;
 use tokio_util::io::StreamReader;
-use tracing::{error, instrument};
+use tracing::{error, instrument, trace};
 use typed_path::Utf8UnixPath;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -106,6 +109,41 @@ impl Intercept for ExtraHeadersInterceptor {
                 for (k, v) in self.extra_write_headers.iter() {
                     request.headers_mut().insert(k.clone(), v.clone());
                 }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Strips `x-amz-checksum-*` headers from HTTP 304 (Not Modified) responses.
+///
+/// R2 includes checksum headers (e.g. crc32, crc64nvme) on 304 responses, but
+/// because 304 responses have no body the AWS SDK's checksum validation fails
+/// with a mismatch, triggering transient-error retries with exponential backoff.
+#[derive(Debug)]
+struct StripChecksumOn304Interceptor;
+
+impl Intercept for StripChecksumOn304Interceptor {
+    fn name(&self) -> &'static str {
+        "StripChecksumOn304"
+    }
+
+    fn modify_before_deserialization(
+        &self,
+        context: &mut BeforeDeserializationInterceptorContextMut<'_>,
+        _runtime_components: &RuntimeComponents,
+        _cfg: &mut ConfigBag,
+    ) -> Result<(), BoxError> {
+        let response = context.response_mut();
+        if response.status().as_u16() == 304 {
+            let to_remove: Vec<_> = response
+                .headers()
+                .iter()
+                .filter(|(name, _)| name.starts_with("x-amz-checksum-"))
+                .map(|(name, _)| name.to_owned())
+                .collect();
+            for name in to_remove {
+                response.headers_mut().remove(&name);
             }
         }
         Ok(())
@@ -240,6 +278,17 @@ pub async fn mk_client(
             extra_read_headers,
             extra_write_headers,
         });
+    }
+
+    // R2 includes x-amz-checksum-crc32 on 304 Not Modified responses, but
+    // because 304 has no body the SDK's checksum validation fails and triggers
+    // expensive transient-error retries.
+    if config
+        .endpoint_url
+        .as_ref()
+        .is_some_and(|url| url.contains(".r2.cloudflarestorage.com"))
+    {
+        s3_builder = s3_builder.interceptor(StripChecksumOn304Interceptor);
     }
 
     let config = s3_builder.build();
@@ -551,6 +600,15 @@ impl sealed::Sealed for S3Storage {}
 #[async_trait]
 #[typetag::serde]
 impl Storage for S3Storage {
+    fn storage_info(&self) -> StorageInfo {
+        let mut fields = vec![("bucket", self.bucket.clone())];
+        if !self.prefix.is_empty() {
+            fields.push(("prefix", self.prefix.clone()));
+        }
+        fields.extend(self.config.info_fields());
+        StorageInfo { backend_type: "S3 (native)", fields }
+    }
+
     async fn can_write(&self) -> StorageResult<bool> {
         Ok(self.can_write)
     }
@@ -864,16 +922,6 @@ impl S3Storage {
                 None => Err(other_error("Object should have an etag".to_string())),
             },
             Err(sdk_err) => {
-                // aws_sdk_s3 on R2 can return a response error (checksum mismatch)
-                // when status 304 (Not Modified) happens, so we need to check
-                // the if it happens here, before other regular checks when
-                // the response is well-formed.
-                if let SdkError::ResponseError(ref e) = sdk_err
-                    && e.raw().status().as_u16() == 304
-                {
-                    return Ok(None);
-                };
-
                 match sdk_err.as_service_error() {
                     Some(e) if e.is_no_such_key() => {
                         obj_not_found_res()
@@ -899,6 +947,7 @@ impl S3Storage {
                             .raw_response()
                             .is_some_and(|x| x.status().as_u16() == 304) =>
                     {
+                        trace!("Received 304 (Not Modified). Treating requested object as up-to-date.");
                         Ok(None)
                     }
                     _ => obj_store_error_res(sdk_err),
