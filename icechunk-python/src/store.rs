@@ -105,7 +105,7 @@ impl PyRepr for PyStore {
     const EXECUTABLE: bool = false;
 
     fn cls_name() -> &'static str {
-        "icechunk.IcechunkStore"
+        "icechunk.store.IcechunkStore"
     }
 
     fn fields(&self, _mode: ReprMode) -> Vec<(&str, String)> {

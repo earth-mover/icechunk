@@ -228,7 +228,7 @@ impl PyRepr for PyManifestFileInfo {
     const EXECUTABLE: bool = false;
 
     fn cls_name() -> &'static str {
-        "icechunk.ManifestFileInfo"
+        "icechunk.snapshots.ManifestFileInfo"
     }
 
     fn fields(&self, _mode: ReprMode) -> Vec<(&str, String)> {
@@ -258,7 +258,7 @@ impl PyManifestFileInfo {
 impl PyRepr for PySnapshotInfo {
     const EXECUTABLE: bool = false;
     fn cls_name() -> &'static str {
-        "icechunk.SnapshotInfo"
+        "icechunk.snapshots.SnapshotInfo"
     }
     fn fields(&self, _mode: ReprMode) -> Vec<(&str, String)> {
         vec![
@@ -353,7 +353,7 @@ impl From<Diff> for PyDiff {
 impl PyRepr for PyDiff {
     const EXECUTABLE: bool = false;
     fn cls_name() -> &'static str {
-        "icechunk.Diff"
+        "icechunk.snapshots.Diff"
     }
     fn fields(&self, _mode: ReprMode) -> Vec<(&str, String)> {
         vec![
@@ -502,7 +502,7 @@ impl From<GCSummary> for PyGCSummary {
 impl PyRepr for PyGCSummary {
     const EXECUTABLE: bool = false;
     fn cls_name() -> &'static str {
-        "icechunk.GCSummary"
+        "icechunk.garbage.GCSummary"
     }
     fn fields(&self, _mode: ReprMode) -> Vec<(&str, String)> {
         vec![
@@ -599,7 +599,7 @@ impl Display for PyRepoStatus {
 impl PyRepr for PyRepoStatus {
     const EXECUTABLE: bool = false;
     fn cls_name() -> &'static str {
-        "icechunk.RepoStatus"
+        "icechunk.repository.RepoStatus"
     }
     fn fields(&self, _mode: ReprMode) -> Vec<(&str, String)> {
         vec![
@@ -661,47 +661,47 @@ pub(crate) enum PyUpdateType {
 impl PyUpdateType {
     fn __repr__(&self) -> String {
         match self {
-            Self::RepoInitialized {} => "icechunk.UpdateType.RepoInitialized()".into(),
-            Self::ConfigChanged {} => "icechunk.UpdateType.ConfigChanged()".into(),
-            Self::MetadataChanged {} => "icechunk.UpdateType.MetadataChanged()".into(),
+            Self::RepoInitialized {} => "icechunk.snapshots.UpdateType.RepoInitialized()".into(),
+            Self::ConfigChanged {} => "icechunk.snapshots.UpdateType.ConfigChanged()".into(),
+            Self::MetadataChanged {} => "icechunk.snapshots.UpdateType.MetadataChanged()".into(),
             Self::TagCreated { name } => {
-                format!("icechunk.UpdateType.TagCreated(name=\"{name}\")")
+                format!("icechunk.snapshots.UpdateType.TagCreated(name=\"{name}\")")
             }
             Self::TagDeleted { name, previous_snap_id } => format!(
-                "icechunk.UpdateType.TagDeleted(name=\"{name}\", previous_snap_id=\"{previous_snap_id}\")"
+                "icechunk.snapshots.UpdateType.TagDeleted(name=\"{name}\", previous_snap_id=\"{previous_snap_id}\")"
             ),
             Self::BranchCreated { name } => {
-                format!("icechunk.UpdateType.BranchCreated(name=\"{name}\")")
+                format!("icechunk.snapshots.UpdateType.BranchCreated(name=\"{name}\")")
             }
             Self::BranchDeleted { name, previous_snap_id } => format!(
-                "icechunk.UpdateType.BranchDeleted(name=\"{name}\", previous_snap_id=\"{previous_snap_id}\")"
+                "icechunk.snapshots.UpdateType.BranchDeleted(name=\"{name}\", previous_snap_id=\"{previous_snap_id}\")"
             ),
             Self::BranchReset { name, previous_snap_id } => format!(
-                "icechunk.UpdateType.BranchReset(name=\"{name}\", previous_snap_id=\"{previous_snap_id}\")"
+                "icechunk.snapshots.UpdateType.BranchReset(name=\"{name}\", previous_snap_id=\"{previous_snap_id}\")"
             ),
             Self::NewCommit { branch, new_snap_id } => {
                 format!(
-                    "icechunk.UpdateType.NewCommit(branch=\"{branch}\", new_snap_id=\"{new_snap_id}\")"
+                    "icechunk.snapshots.UpdateType.NewCommit(branch=\"{branch}\", new_snap_id=\"{new_snap_id}\")"
                 )
             }
             Self::CommitAmended { branch, previous_snap_id, new_snap_id } => format!(
-                "icechunk.UpdateType.CommitAmended(branch=\"{branch}\", previous_snap_id=\"{previous_snap_id}\", new_snap_id=\"{new_snap_id}\")",
+                "icechunk.snapshots.UpdateType.CommitAmended(branch=\"{branch}\", previous_snap_id=\"{previous_snap_id}\", new_snap_id=\"{new_snap_id}\")",
             ),
             Self::RepoMigrated { from_version, to_version } => format!(
-                "icechunk.UpdateType.RepoMigrated(from_version={from_version}, to_version={to_version})"
+                "icechunk.snapshots.UpdateType.RepoMigrated(from_version={from_version}, to_version={to_version})"
             ),
             Self::RepoStatusChanged { status } => {
-                format!("icechunk.UpdateType.RepoStatusChanged(status={status})")
+                format!("icechunk.snapshots.UpdateType.RepoStatusChanged(status={status})")
             }
-            Self::GCRan {} => "icechunk.UpdateType.GCRan()".into(),
+            Self::GCRan {} => "icechunk.snapshots.UpdateType.GCRan()".into(),
             Self::FeatureFlagChanged { id, new_value } => format!(
-                "icechunk.UpdateType.FeatureFlagChanged(id={id}, new_value={})",
+                "icechunk.snapshots.UpdateType.FeatureFlagChanged(id={id}, new_value={})",
                 new_value.map(py_bool).unwrap_or_else(|| "None".to_string()),
             ),
-            Self::ExpirationRan {} => "icechunk.UpdateType.ExpirationRan()".into(),
+            Self::ExpirationRan {} => "icechunk.snapshots.UpdateType.ExpirationRan()".into(),
             Self::NewDetachedSnapshot { new_snap_id } => {
                 format!(
-                    "icechunk.UpdateType.NewDetachedSnapshot(new_snap_id=\"{new_snap_id}\")"
+                    "icechunk.snapshots.UpdateType.NewDetachedSnapshot(new_snap_id=\"{new_snap_id}\")"
                 )
             }
         }
@@ -737,7 +737,7 @@ pub(crate) struct PyUpdate {
 impl PyRepr for PyUpdate {
     const EXECUTABLE: bool = false;
     fn cls_name() -> &'static str {
-        "icechunk.Update"
+        "icechunk.snapshots.Update"
     }
     fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
         vec![
@@ -779,7 +779,7 @@ pub(crate) struct PyFeatureFlag {
 impl PyRepr for PyFeatureFlag {
     const EXECUTABLE: bool = false;
     fn cls_name() -> &'static str {
-        "icechunk.FeatureFlag"
+        "icechunk.config.FeatureFlag"
     }
     fn fields(&self, _mode: ReprMode) -> Vec<(&str, String)> {
         vec![

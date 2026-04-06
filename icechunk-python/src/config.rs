@@ -79,7 +79,7 @@ impl From<PyS3StaticCredentials> for S3StaticCredentials {
 impl PyRepr for PyS3StaticCredentials {
     const EXECUTABLE: bool = false;
     fn cls_name() -> &'static str {
-        "icechunk.S3StaticCredentials"
+        "icechunk.credentials.S3StaticCredentials"
     }
     fn fields(&self, _mode: ReprMode) -> Vec<(&str, String)> {
         vec![
@@ -517,7 +517,7 @@ pub struct PyS3Options {
 impl PyRepr for PyS3Options {
     const EXECUTABLE: bool = true;
     fn cls_name() -> &'static str {
-        "icechunk.S3Options"
+        "icechunk.storage.S3Options"
     }
     fn fields(&self, _mode: ReprMode) -> Vec<(&str, String)> {
         vec![
@@ -639,14 +639,14 @@ impl From<&PyObjectStoreConfig> for ObjectStoreConfig {
 impl PyObjectStoreConfig {
     fn cls_name(&self) -> &'static str {
         match self {
-            Self::InMemory() => "icechunk.ObjectStoreConfig.InMemory",
-            Self::LocalFileSystem(_) => "icechunk.ObjectStoreConfig.LocalFileSystem",
-            Self::S3Compatible(_) => "icechunk.ObjectStoreConfig.S3Compatible",
-            Self::S3(_) => "icechunk.ObjectStoreConfig.S3",
-            Self::Gcs(_) => "icechunk.ObjectStoreConfig.Gcs",
-            Self::Azure(_) => "icechunk.ObjectStoreConfig.Azure",
-            Self::Tigris(_) => "icechunk.ObjectStoreConfig.Tigris",
-            Self::Http(_) => "icechunk.ObjectStoreConfig.Http",
+            Self::InMemory() => "icechunk.config.ObjectStoreConfig.InMemory",
+            Self::LocalFileSystem(_) => "icechunk.config.ObjectStoreConfig.LocalFileSystem",
+            Self::S3Compatible(_) => "icechunk.config.ObjectStoreConfig.S3Compatible",
+            Self::S3(_) => "icechunk.config.ObjectStoreConfig.S3",
+            Self::Gcs(_) => "icechunk.config.ObjectStoreConfig.Gcs",
+            Self::Azure(_) => "icechunk.config.ObjectStoreConfig.Azure",
+            Self::Tigris(_) => "icechunk.config.ObjectStoreConfig.Tigris",
+            Self::Http(_) => "icechunk.config.ObjectStoreConfig.Http",
         }
     }
 
@@ -748,7 +748,7 @@ pub struct PyVirtualChunkContainer {
 impl PyRepr for PyVirtualChunkContainer {
     const EXECUTABLE: bool = true;
     fn cls_name() -> &'static str {
-        "icechunk.VirtualChunkContainer"
+        "icechunk.virtual.VirtualChunkContainer"
     }
     fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
         vec![
@@ -851,7 +851,7 @@ pub struct PyCompressionConfig {
 impl PyRepr for PyCompressionConfig {
     const EXECUTABLE: bool = true;
     fn cls_name() -> &'static str {
-        "icechunk.CompressionConfig"
+        "icechunk.config.CompressionConfig"
     }
     fn fields(&self, _mode: ReprMode) -> Vec<(&str, String)> {
         vec![
@@ -926,7 +926,7 @@ impl PyRepr for PyCachingConfig {
     const EXECUTABLE: bool = true;
 
     fn cls_name() -> &'static str {
-        "icechunk.CachingConfig"
+        "icechunk.config.CachingConfig"
     }
 
     fn fields(&self, _mode: ReprMode) -> Vec<(&str, String)> {
@@ -1037,7 +1037,7 @@ impl From<&PyStorageRetriesSettings> for RetriesSettings {
 impl PyRepr for PyStorageRetriesSettings {
     const EXECUTABLE: bool = true;
     fn cls_name() -> &'static str {
-        "icechunk.StorageRetriesSettings"
+        "icechunk.storage.StorageRetriesSettings"
     }
     fn fields(&self, _mode: ReprMode) -> Vec<(&str, String)> {
         vec![
@@ -1109,7 +1109,7 @@ impl From<&PyStorageTimeoutSettings> for storage::TimeoutSettings {
 impl PyRepr for PyStorageTimeoutSettings {
     const EXECUTABLE: bool = true;
     fn cls_name() -> &'static str {
-        "icechunk.StorageTimeoutSettings"
+        "icechunk.storage.StorageTimeoutSettings"
     }
     fn fields(&self, _mode: ReprMode) -> Vec<(&str, String)> {
         vec![
@@ -1191,7 +1191,7 @@ impl From<&PyRepoUpdateRetryConfig> for RepoUpdateRetryConfig {
 impl PyRepr for PyRepoUpdateRetryConfig {
     const EXECUTABLE: bool = true;
     fn cls_name() -> &'static str {
-        "icechunk.RepoUpdateRetryConfig"
+        "icechunk.config.RepoUpdateRetryConfig"
     }
     fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
         vec![("default", py_option_nested_repr(&self.default, mode))]
@@ -1247,7 +1247,7 @@ impl From<&PyStorageConcurrencySettings> for ConcurrencySettings {
 impl PyRepr for PyStorageConcurrencySettings {
     const EXECUTABLE: bool = true;
     fn cls_name() -> &'static str {
-        "icechunk.StorageConcurrencySettings"
+        "icechunk.storage.StorageConcurrencySettings"
     }
     fn fields(&self, _mode: ReprMode) -> Vec<(&str, String)> {
         vec![
@@ -1369,7 +1369,7 @@ impl Eq for PyStorageSettings {}
 impl PyRepr for PyStorageSettings {
     const EXECUTABLE: bool = true;
     fn cls_name() -> &'static str {
-        "icechunk.StorageSettings"
+        "icechunk.storage.StorageSettings"
     }
     fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
         // Scalar fields first, then nested objects
@@ -1498,32 +1498,32 @@ impl PyManifestPreloadCondition {
             Or(conditions) => {
                 let inner: Vec<_> = conditions.iter().map(|c| c.__repr__()).collect();
                 format!(
-                    "icechunk.ManifestPreloadCondition.or_conditions([{}])",
+                    "icechunk.config.ManifestPreloadCondition.or_conditions([{}])",
                     inner.join(", ")
                 )
             }
             And(conditions) => {
                 let inner: Vec<_> = conditions.iter().map(|c| c.__repr__()).collect();
                 format!(
-                    "icechunk.ManifestPreloadCondition.and_conditions([{}])",
+                    "icechunk.config.ManifestPreloadCondition.and_conditions([{}])",
                     inner.join(", ")
                 )
             }
             PathMatches { regex } => {
-                format!("icechunk.ManifestPreloadCondition.path_matches(\"{regex}\")")
+                format!("icechunk.config.ManifestPreloadCondition.path_matches(\"{regex}\")")
             }
             NameMatches { regex } => {
-                format!("icechunk.ManifestPreloadCondition.name_matches(\"{regex}\")")
+                format!("icechunk.config.ManifestPreloadCondition.name_matches(\"{regex}\")")
             }
             NumRefs { from, to } => {
                 format!(
-                    "icechunk.ManifestPreloadCondition.num_refs({}, {})",
+                    "icechunk.config.ManifestPreloadCondition.num_refs({}, {})",
                     py_option(from),
                     py_option(to),
                 )
             }
-            True() => "icechunk.ManifestPreloadCondition.true()".to_string(),
-            False() => "icechunk.ManifestPreloadCondition.false()".to_string(),
+            True() => "icechunk.config.ManifestPreloadCondition.true()".to_string(),
+            False() => "icechunk.config.ManifestPreloadCondition.false()".to_string(),
         }
     }
 
@@ -1617,7 +1617,7 @@ pub struct PyManifestPreloadConfig {
 impl PyRepr for PyManifestPreloadConfig {
     const EXECUTABLE: bool = true;
     fn cls_name() -> &'static str {
-        "icechunk.ManifestPreloadConfig"
+        "icechunk.config.ManifestPreloadConfig"
     }
     fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
         let preload_if = match &self.preload_if {
@@ -1722,24 +1722,24 @@ impl PyManifestSplitCondition {
             Or(conditions) => {
                 let inner: Vec<_> = conditions.iter().map(|c| c.__repr__()).collect();
                 format!(
-                    "icechunk.ManifestSplitCondition.or_conditions([{}])",
+                    "icechunk.config.ManifestSplitCondition.or_conditions([{}])",
                     inner.join(", ")
                 )
             }
             And(conditions) => {
                 let inner: Vec<_> = conditions.iter().map(|c| c.__repr__()).collect();
                 format!(
-                    "icechunk.ManifestSplitCondition.and_conditions([{}])",
+                    "icechunk.config.ManifestSplitCondition.and_conditions([{}])",
                     inner.join(", ")
                 )
             }
             PathMatches { regex } => {
-                format!("icechunk.ManifestSplitCondition.path_matches(\"{regex}\")")
+                format!("icechunk.config.ManifestSplitCondition.path_matches(\"{regex}\")")
             }
             NameMatches { regex } => {
-                format!("icechunk.ManifestSplitCondition.name_matches(\"{regex}\")")
+                format!("icechunk.config.ManifestSplitCondition.name_matches(\"{regex}\")")
             }
-            AnyArray() => "icechunk.ManifestSplitCondition.any_array()".to_string(),
+            AnyArray() => "icechunk.config.ManifestSplitCondition.any_array()".to_string(),
         }
     }
 
@@ -1810,11 +1810,11 @@ impl PyManifestSplitDimCondition {
     pub fn __repr__(&self) -> String {
         use PyManifestSplitDimCondition::*;
         match self {
-            Axis(axis) => format!("icechunk.ManifestSplitDimCondition.axis({axis})"),
+            Axis(axis) => format!("icechunk.config.ManifestSplitDimCondition.axis({axis})"),
             DimensionName(name) => {
-                format!("icechunk.ManifestSplitDimCondition.dimension_name(\"{name}\")")
+                format!("icechunk.config.ManifestSplitDimCondition.dimension_name(\"{name}\")")
             }
-            Any() => "icechunk.ManifestSplitDimCondition.any()".to_string(),
+            Any() => "icechunk.config.ManifestSplitDimCondition.any()".to_string(),
         }
     }
 
@@ -1871,7 +1871,7 @@ pub struct PyManifestSplittingConfig {
 impl PyRepr for PyManifestSplittingConfig {
     const EXECUTABLE: bool = true;
     fn cls_name() -> &'static str {
-        "icechunk.ManifestSplittingConfig"
+        "icechunk.config.ManifestSplittingConfig"
     }
     fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
         let split_sizes = match &self.split_sizes {
@@ -1986,7 +1986,7 @@ pub struct PyManifestVirtualChunkLocationCompressionConfig {
 impl PyRepr for PyManifestVirtualChunkLocationCompressionConfig {
     const EXECUTABLE: bool = true;
     fn cls_name() -> &'static str {
-        "icechunk.ManifestVirtualChunkLocationCompressionConfig"
+        "icechunk.config.ManifestVirtualChunkLocationCompressionConfig"
     }
     fn fields(&self, _mode: ReprMode) -> Vec<(&str, String)> {
         vec![
@@ -2079,7 +2079,7 @@ pub struct PyManifestConfig {
 impl PyRepr for PyManifestConfig {
     const EXECUTABLE: bool = true;
     fn cls_name() -> &'static str {
-        "icechunk.ManifestConfig"
+        "icechunk.config.ManifestConfig"
     }
     fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
         vec![
@@ -2278,7 +2278,7 @@ impl PyRepr for PyRepositoryConfig {
     const EXECUTABLE: bool = true;
 
     fn cls_name() -> &'static str {
-        "icechunk.RepositoryConfig"
+        "icechunk.config.RepositoryConfig"
     }
 
     fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
@@ -2471,7 +2471,7 @@ pub(crate) struct PyStorageObjectInfo {
 impl PyRepr for PyStorageObjectInfo {
     const EXECUTABLE: bool = false;
     fn cls_name() -> &'static str {
-        "icechunk.StorageObjectInfo"
+        "icechunk.storage.StorageObjectInfo"
     }
     fn fields(&self, _mode: ReprMode) -> Vec<(&str, String)> {
         vec![

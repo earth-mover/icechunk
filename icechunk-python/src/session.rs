@@ -63,7 +63,7 @@ impl PyRepr for PySession {
     const EXECUTABLE: bool = false;
 
     fn cls_name() -> &'static str {
-        "icechunk.Session"
+        "icechunk.session.Session"
     }
 
     fn fields(&self, _mode: ReprMode) -> Vec<(&str, String)> {
