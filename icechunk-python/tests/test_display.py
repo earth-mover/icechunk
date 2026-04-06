@@ -399,7 +399,9 @@ class TestReprStructural:
     def test_manifest_virtual_chunk_location_compression(self) -> None:
         c = ManifestVirtualChunkLocationCompressionConfig(min_num_chunks=500)
         repr_str = repr(c)
-        assert "icechunk.config.ManifestVirtualChunkLocationCompressionConfig(" in repr_str
+        assert (
+            "icechunk.config.ManifestVirtualChunkLocationCompressionConfig(" in repr_str
+        )
         assert "min_num_chunks=500" in repr_str
 
     def test_manifest_preload_config_shows_fields(self) -> None:
