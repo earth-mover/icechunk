@@ -288,12 +288,6 @@ impl PyAncestryGraph {
         self.inner.to_string()
     }
 
-    /// Return the graph as a plain string with no ANSI color codes.
-    /// Useful for CI logs, piping to files, or consumption by LLM agents.
-    pub(crate) fn to_plain_string(&self) -> String {
-        self.inner.to_plain_string()
-    }
-
     /// Return a raw SVG string for Jupyter notebooks.
     pub(crate) fn _repr_svg_(&self) -> String {
         self.inner.to_svg()

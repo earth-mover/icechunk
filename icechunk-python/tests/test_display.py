@@ -681,16 +681,16 @@ class TestAncestryGraph:
         assert "First commit" in svg
         assert "main" in svg
 
-    def test_to_plain_string(self, repo: Repository) -> None:
-        """to_plain_string should have no ANSI codes."""
+    def test_plain_flag(self, repo: Repository) -> None:
+        """plain=True should produce output with no ANSI codes."""
         session = repo.writable_session("main")
         store = session.store
         root = zarr.group(store=store)
         root.create_array("arr", shape=(10,), dtype="float64")
         session.commit("First commit")
 
-        graph = repo.ancestry_graph(branch="main")
-        plain = graph.to_plain_string()
-        assert "\x1b" not in plain
-        assert "First commit" in plain
-        assert "main" in plain
+        graph = repo.ancestry_graph(branch="main", plain=True)
+        output = str(graph)
+        assert "\x1b" not in output
+        assert "First commit" in output
+        assert "main" in output

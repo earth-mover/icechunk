@@ -34,6 +34,8 @@ pub struct AncestryGraph {
     pub all_branches: Vec<String>,
     /// Total number of snapshots before truncation (0 if not truncated).
     pub total_snapshots: usize,
+    /// When true, render without colors (no ANSI codes in text, no fill colors in SVG).
+    pub plain: bool,
 }
 
 /// Look up labels for a snapshot from a reverse map, returning an empty vec if absent.
@@ -65,10 +67,12 @@ impl AncestryGraph {
     /// - `all_branches`: the full set of branch names in the repo (not just the ones
     ///   being displayed). Used to assign each branch a stable color index so that
     ///   e.g. "main" gets the same color whether viewing one branch or all branches.
+    /// - `plain`: when true, render without colors (no ANSI codes, no SVG fill colors).
     pub fn new(
         mut branch_ancestries: Vec<(String, Vec<SnapshotInfo>)>,
         tag_map: &HashMap<SnapshotId, Vec<String>>,
         all_branches: Vec<String>,
+        plain: bool,
     ) -> Self {
         // Sort so "main" is the trunk (column 0), then alphabetically.
         branch_ancestries.sort_by(|a, b| {
@@ -87,6 +91,7 @@ impl AncestryGraph {
                 num_columns: 0,
                 all_branches,
                 total_snapshots: 0,
+                plain,
             };
         }
 
@@ -129,7 +134,7 @@ impl AncestryGraph {
             nodes.truncate(MAX_DISPLAY_NODES);
         }
 
-        Self { nodes, num_columns, all_branches, total_snapshots }
+        Self { nodes, num_columns, all_branches, total_snapshots, plain }
     }
 
     /// Get a stable color index for a branch name based on its position in the
@@ -137,30 +142,6 @@ impl AncestryGraph {
     fn color_index_for_branch(&self, name: &str) -> usize {
         self.all_branches.iter().position(|b| b == name).unwrap_or(0)
     }
-
-    /// Render the graph as a plain string with no ANSI color codes.
-    /// Useful for CI logs, piping to files, or consumption by LLM agents.
-    pub fn to_plain_string(&self) -> String {
-        strip_ansi(&self.to_string())
-    }
-}
-
-/// Strip ANSI escape codes from a string.
-fn strip_ansi(s: &str) -> String {
-    let mut result = String::with_capacity(s.len());
-    let mut in_escape = false;
-    for c in s.chars() {
-        if c == '\x1b' {
-            in_escape = true;
-        } else if in_escape {
-            if c.is_ascii_alphabetic() {
-                in_escape = false;
-            }
-        } else {
-            result.push(c);
-        }
-    }
-    result
 }
 
 // -- Shared layout pass ------------------------------------------------------
@@ -383,7 +364,7 @@ mod tests {
 
     #[test]
     fn test_empty() {
-        let graph = AncestryGraph::new(vec![], &HashMap::new(), vec![]);
+        let graph = AncestryGraph::new(vec![], &HashMap::new(), vec![], false);
         assert_eq!(graph.nodes.len(), 0);
         assert_eq!(graph.num_columns, 0);
     }
@@ -401,6 +382,7 @@ mod tests {
             vec![("main".to_string(), vec![s3.clone(), s2.clone(), s1.clone()])],
             &tag_map,
             vec!["main".to_string()],
+            false,
         );
 
         assert_eq!(graph.nodes.len(), 3);
@@ -427,7 +409,7 @@ mod tests {
         ];
 
         let all = vec!["feat".to_string(), "main".to_string()];
-        let graph = AncestryGraph::new(branch_ancestries, &HashMap::new(), all);
+        let graph = AncestryGraph::new(branch_ancestries, &HashMap::new(), all, false);
 
         // s1, s2, s3 from main + s4 from feat = 4 unique nodes
         assert_eq!(graph.nodes.len(), 4);
@@ -466,10 +448,9 @@ mod tests {
         ];
 
         let all = vec!["feat".to_string(), "main".to_string()];
-        let graph = AncestryGraph::new(branch_ancestries, &HashMap::new(), all);
+        let graph = AncestryGraph::new(branch_ancestries, &HashMap::new(), all, true);
         let output = graph.to_string();
-        let plain = strip_ansi(&output);
-        let lines: Vec<&str> = plain.lines().collect();
+        let lines: Vec<&str> = output.lines().collect();
 
         eprintln!("=== minimal fork display ===");
         for line in &lines {
@@ -487,12 +468,12 @@ mod tests {
 
         // There should be a / fork connector
         let has_fork = lines.iter().any(|l| l.contains('╱'));
-        assert!(has_fork, "should have a / fork connector: {plain}");
+        assert!(has_fork, "should have a / fork connector: {output}");
 
         // main tip should appear
         assert!(
             lines.iter().any(|l| l.contains("main") && l.contains("Commit 2")),
-            "should have main Commit 2: {plain}"
+            "should have main Commit 2: {output}"
         );
     }
 
@@ -527,7 +508,7 @@ mod tests {
 
         let all =
             vec!["experiment".to_string(), "hotfix".to_string(), "main".to_string()];
-        let graph = AncestryGraph::new(branch_ancestries, &tag_map, all);
+        let graph = AncestryGraph::new(branch_ancestries, &tag_map, all, false);
 
         // 6 unique snapshots
         assert_eq!(graph.nodes.len(), 6);
@@ -585,7 +566,7 @@ mod tests {
         ];
 
         let all = vec!["feat".to_string(), "main".to_string()];
-        let graph = AncestryGraph::new(branch_ancestries, &HashMap::new(), all);
+        let graph = AncestryGraph::new(branch_ancestries, &HashMap::new(), all, false);
         let svg = graph.to_svg();
 
         // Should be valid raw SVG

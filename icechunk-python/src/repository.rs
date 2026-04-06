@@ -1978,13 +1978,14 @@ impl PyRepository {
         })
     }
 
-    #[pyo3(signature = (*, branch = None, tag = None, snapshot_id = None))]
+    #[pyo3(signature = (*, branch = None, tag = None, snapshot_id = None, plain = false))]
     pub(crate) fn ancestry_graph(
         &self,
         py: Python<'_>,
         branch: Option<String>,
         tag: Option<String>,
         snapshot_id: Option<String>,
+        plain: bool,
     ) -> PyResult<PyAncestryGraph> {
         let version = args_to_optional_version_info(branch, tag, snapshot_id)?;
 
@@ -1992,7 +1993,7 @@ impl PyRepository {
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
                 let repo = self.0.read().await;
                 let graph = repo
-                    .ancestry_graph(version.as_ref())
+                    .ancestry_graph(version.as_ref(), plain)
                     .await
                     .map_err(PyIcechunkStoreError::RepositoryError)?;
                 Ok(graph.into())
@@ -2000,13 +2001,14 @@ impl PyRepository {
         })
     }
 
-    #[pyo3(signature = (*, branch = None, tag = None, snapshot_id = None))]
+    #[pyo3(signature = (*, branch = None, tag = None, snapshot_id = None, plain = false))]
     fn ancestry_graph_async<'py>(
         &'py self,
         py: Python<'py>,
         branch: Option<String>,
         tag: Option<String>,
         snapshot_id: Option<String>,
+        plain: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
         let version = args_to_optional_version_info(branch, tag, snapshot_id)?;
         let repository = Arc::clone(&self.0);
@@ -2014,7 +2016,7 @@ impl PyRepository {
         pyo3_async_runtimes::tokio::future_into_py::<_, PyAncestryGraph>(py, async move {
             let repo = repository.read().await;
             let graph = repo
-                .ancestry_graph(version.as_ref())
+                .ancestry_graph(version.as_ref(), plain)
                 .await
                 .map_err(PyIcechunkStoreError::RepositoryError)?;
             Ok(graph.into())

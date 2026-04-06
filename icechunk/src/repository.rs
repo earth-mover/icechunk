@@ -944,6 +944,7 @@ impl Repository {
     pub async fn ancestry_graph(
         &self,
         version: Option<&VersionInfo>,
+        plain: bool,
     ) -> RepositoryResult<AncestryGraph> {
         let all_branches: Vec<String> = self.list_branches().await?.into_iter().collect();
 
@@ -964,6 +965,7 @@ impl Repository {
                     vec![("".to_string(), snapshots)],
                     &tag_map,
                     all_branches,
+                    plain,
                 ));
             }
             None => all_branches.clone(),
@@ -977,7 +979,7 @@ impl Repository {
             branch_ancestries.push((branch.clone(), snapshots));
         }
 
-        Ok(AncestryGraph::new(branch_ancestries, &tag_map, all_branches))
+        Ok(AncestryGraph::new(branch_ancestries, &tag_map, all_branches, plain))
     }
 
     async fn ancestry_using(

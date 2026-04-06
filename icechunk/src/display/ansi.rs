@@ -21,28 +21,42 @@ fn truncate_message(msg: &str, max_len: usize) -> String {
     }
 }
 
-fn format_labels_ansi(node: &AncestryNode, col_colors: &[usize]) -> String {
+fn format_labels(node: &AncestryNode, col_colors: &[usize], plain: bool) -> String {
     let mut parts = Vec::new();
     for b in &node.branches {
-        let color = palette_ansi(col_colors[node.column]);
-        parts.push(format!("{BOLD}{color}{b}{RESET}"));
+        if plain {
+            parts.push(b.clone());
+        } else {
+            let color = palette_ansi(col_colors[node.column]);
+            parts.push(format!("{BOLD}{color}{b}{RESET}"));
+        }
     }
     for t in &node.tags {
-        parts.push(format!("{BOLD}{ITALIC}{TAG_COLOR_ANSI}{t}{RESET}"));
+        if plain {
+            parts.push(t.clone());
+        } else {
+            parts.push(format!("{BOLD}{ITALIC}{TAG_COLOR_ANSI}{t}{RESET}"));
+        }
     }
     if parts.is_empty() { String::new() } else { format!(" ({})", parts.join(", ")) }
 }
 
-/// Render a graph line prefix: for each column, draw a colored glyph or blank.
+/// Render a graph line prefix: for each column, draw a (optionally colored) glyph or blank.
 fn render_prefix(
     col_colors: &[usize],
+    plain: bool,
     glyph_for: impl Fn(usize) -> Option<char>,
 ) -> String {
     let mut out = String::with_capacity(col_colors.len() * 8);
     for (c, &color_idx) in col_colors.iter().enumerate() {
         if let Some(ch) = glyph_for(c) {
-            let color = palette_ansi(color_idx);
-            out.push_str(&format!("{color}{ch}{RESET} "));
+            if plain {
+                out.push(ch);
+                out.push(' ');
+            } else {
+                let color = palette_ansi(color_idx);
+                out.push_str(&format!("{color}{ch}{RESET} "));
+            }
         } else {
             out.push_str("  ");
         }
@@ -73,7 +87,7 @@ impl fmt::Display for AncestryGraph {
 
         for (row, node) in self.nodes.iter().enumerate() {
             // Node line
-            let prefix = render_prefix(&col_colors, |c| {
+            let prefix = render_prefix(&col_colors, self.plain, |c| {
                 if c == node.column {
                     Some('●')
                 } else {
@@ -95,13 +109,17 @@ impl fmt::Display for AncestryGraph {
             });
 
             let short_id = &node.info.id.to_string()[..8];
-            let labels = format_labels_ansi(node, &col_colors);
+            let labels = format_labels(node, &col_colors, self.plain);
             let msg = truncate_message(&node.info.message, 60);
-            writeln!(f, "{prefix}{DIM}{short_id}{RESET}{labels} {msg}")?;
+            if self.plain {
+                writeln!(f, "{prefix}{short_id}{labels} {msg}")?;
+            } else {
+                writeln!(f, "{prefix}{DIM}{short_id}{RESET}{labels} {msg}")?;
+            }
 
             // Connector line (if any elements follow this row)
             if let Some(elems) = connector_lines.get(&row) {
-                let line = render_prefix(&col_colors, |c| {
+                let line = render_prefix(&col_colors, self.plain, |c| {
                     let is_fork = elems.iter().any(|e| {
                         matches!(e, LayoutElement::Fork { from_col, .. } if *from_col == c)
                     });
@@ -118,12 +136,21 @@ impl fmt::Display for AncestryGraph {
         }
 
         if self.total_snapshots > self.nodes.len() {
-            writeln!(
-                f,
-                "{DIM}  ... (showing {} of {} snapshots){RESET}",
-                self.nodes.len(),
-                self.total_snapshots
-            )?;
+            if self.plain {
+                writeln!(
+                    f,
+                    "  ... (showing {} of {} snapshots)",
+                    self.nodes.len(),
+                    self.total_snapshots
+                )?;
+            } else {
+                writeln!(
+                    f,
+                    "{DIM}  ... (showing {} of {} snapshots){RESET}",
+                    self.nodes.len(),
+                    self.total_snapshots
+                )?;
+            }
         }
         Ok(())
     }

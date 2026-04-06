@@ -2122,6 +2122,7 @@ class PyRepository:
         branch: str | None = None,
         tag: str | None = None,
         snapshot_id: str | None = None,
+        plain: bool = False,
     ) -> AncestryGraph: ...
     async def ancestry_graph_async(
         self,
@@ -2129,6 +2130,7 @@ class PyRepository:
         branch: str | None = None,
         tag: str | None = None,
         snapshot_id: str | None = None,
+        plain: bool = False,
     ) -> AncestryGraph: ...
     def async_ops_log(self) -> AsyncIterator[Update]: ...
     def create_branch(self, branch_name: str, snapshot_id: str) -> None: ...
@@ -2547,18 +2549,16 @@ class _PyAsyncSnapshotGenerator(AsyncGenerator[SnapshotInfo], metaclass=abc.ABCM
 class AncestryGraph:
     """A visual representation of commit history.
 
-    Use ``print()`` for colored Unicode output in a terminal.
-    Use ``.to_plain_string()`` for plain text without ANSI color codes
-    (useful for CI logs, files, or LLM agents).
+    Use ``print()`` for colored Unicode output in a terminal, or display
+    in Jupyter for an SVG diagram. Pass ``plain=True`` to
+    ``ancestry_graph()`` for output without colors (useful for CI, files,
+    or LLM agents).
 
     Note: only commits reachable from branches are included. Anonymous/detached
     snapshots are not attached to any branch and will not appear.
     """
     def __str__(self) -> str: ...
     def __repr__(self) -> str: ...
-    def to_plain_string(self) -> str:
-        """Return the graph as plain text with no ANSI color codes."""
-        ...
     def _repr_svg_(self) -> str:
         """Return a raw SVG string for Jupyter notebooks."""
         ...

@@ -928,6 +928,7 @@ class Repository:
         branch: str | None = None,
         tag: str | None = None,
         snapshot_id: str | None = None,
+        plain: bool = False,
     ) -> AncestryGraph:
         """
         Build a visual representation of the commit history.
@@ -943,14 +944,18 @@ class Repository:
             Show history from this tag.
         snapshot_id : str, optional
             Show history from this snapshot.
+        plain : bool, optional
+            If True, render without colors (no ANSI codes in text, no fill colors
+            in SVG). Useful for CI logs, piping to files, or LLM agents.
 
         Returns
         -------
         AncestryGraph
-            A displayable object. Use print() for colored ASCII output.
+            A displayable object. Use print() for colored terminal output,
+            or display in Jupyter for an SVG diagram.
         """
         return self._repository.ancestry_graph(
-            branch=branch, tag=tag, snapshot_id=snapshot_id
+            branch=branch, tag=tag, snapshot_id=snapshot_id, plain=plain
         )
 
     async def ancestry_graph_async(
@@ -959,12 +964,13 @@ class Repository:
         branch: str | None = None,
         tag: str | None = None,
         snapshot_id: str | None = None,
+        plain: bool = False,
     ) -> AncestryGraph:
         """
         Async version of :meth:`ancestry_graph`.
         """
         return await self._repository.ancestry_graph_async(
-            branch=branch, tag=tag, snapshot_id=snapshot_id
+            branch=branch, tag=tag, snapshot_id=snapshot_id, plain=plain
         )
 
     def ops_log(self) -> Iterator[Update]:
