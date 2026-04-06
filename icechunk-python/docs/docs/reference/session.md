@@ -1,5 +1,5 @@
 # icechunk.session
 
-Sessions for reading and writing data within a repository.
+Additional session types: `ForkSession` for distributed writes, and `SessionMode`.
 
 ::: icechunk.session

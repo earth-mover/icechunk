@@ -10,7 +10,6 @@ from icechunk.zarr import IcechunkStore
 
 __all__ = [
     "ForkSession",
-    "Session",
     "SessionMode",
 ]
 

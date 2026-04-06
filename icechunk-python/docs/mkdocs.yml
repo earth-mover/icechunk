@@ -232,7 +232,6 @@ nav:
       - icechunk.credentials: reference/credentials.md
       - icechunk.exceptions: reference/exceptions.md
       - icechunk.ops: reference/ops.md
-      - icechunk.repository: reference/repository.md
       - icechunk.session: reference/session.md
       - icechunk.snapshots: reference/snapshots.md
       - icechunk.storage: reference/storage.md
