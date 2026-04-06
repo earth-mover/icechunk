@@ -154,8 +154,7 @@ plugins:
         # Redirects from icechunk-python subdirectory to root docs (post-reorganization)
         # These redirects work with use_directory_urls: true (default)
         'icechunk-python/quickstart/index.md': 'quickstart.md'
-        'icechunk-python/reference/index.md': 'reference/index.md'
-        'reference.md': 'reference/index.md'
+        'icechunk-python/reference/index.md': 'reference.md'
         'icechunk-python/async/index.md': 'async.md'
         'icechunk-python/configuration/index.md': 'configuration.md'
         'icechunk-python/storage/index.md': 'storage.md'
@@ -225,21 +224,7 @@ nav:
   - Reference:
     - Spec: spec.md
     - Version Policy: version-policy.md
-    - Python API Reference:
-      - reference/index.md
-      - icechunk.config: reference/config.md
-      - icechunk.conflicts: reference/conflicts.md
-      - icechunk.credentials: reference/credentials.md
-      - icechunk.exceptions: reference/exceptions.md
-      - icechunk.ops: reference/ops.md
-      - icechunk.repository: reference/repository.md
-      - icechunk.session: reference/session.md
-      - icechunk.snapshots: reference/snapshots.md
-      - icechunk.storage: reference/storage.md
-      - icechunk.zarr: reference/zarr.md
-      - icechunk.virtual: reference/virtual.md
-      - icechunk.xarray: reference/xarray.md
-      - icechunk.dask: reference/dask.md
+    - Python API Reference: reference.md
     - Icechunk Rust: icechunk-rust.md
     - Contributing: contributing.md
     - AI Usage Policy: ai-policy.md
