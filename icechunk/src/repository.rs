@@ -960,24 +960,26 @@ impl Repository {
             tag_map.entry(snap_id).or_default().push(tag);
         }
 
-        // Decide which branches to walk based on the requested version.
-        let branches_to_walk: Vec<String> = match version {
-            Some(VersionInfo::BranchTipRef(name)) => vec![name.clone()],
-            Some(v) => {
-                let snapshots: Vec<SnapshotInfo> =
-                    self.ancestry(v).await?.try_collect().await?;
-                return Ok(AncestryGraph::new(
-                    vec![("".to_string(), snapshots)],
-                    &tag_map,
-                    all_branches,
-                    plain,
-                ));
-            }
-            None => all_branches.clone(),
+        // Early return for tag/snapshot_id — walk as an anonymous single branch.
+        if let Some(v) = version.filter(|v| !matches!(v, VersionInfo::BranchTipRef(_))) {
+            let snapshots: Vec<SnapshotInfo> =
+                self.ancestry(v).await?.try_collect().await?;
+            return Ok(AncestryGraph::new(
+                vec![("".to_string(), snapshots)],
+                &tag_map,
+                all_branches,
+                plain,
+            ));
+        }
+
+        // Walk either the requested branch or all branches.
+        let branches_to_walk: &[String] = match version {
+            Some(VersionInfo::BranchTipRef(name)) => std::slice::from_ref(name),
+            _ => &all_branches,
         };
 
         let branch_ancestries: Vec<(String, Vec<SnapshotInfo>)> =
-            stream::iter(branches_to_walk.iter())
+            stream::iter(branches_to_walk)
                 .then(|branch| async {
                     let v = VersionInfo::BranchTipRef(branch.clone());
                     let snapshots: Vec<SnapshotInfo> =
