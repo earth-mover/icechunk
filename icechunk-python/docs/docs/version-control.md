@@ -117,6 +117,8 @@ print(root.attrs["foo"])
 
 ## Branches
 
+### Creating Branches
+
 If we want to modify the data from a previous snapshot, we can create a new branch from that snapshot with [`create_branch`](./reference/index.md#icechunk.Repository.create_branch).
 
 ```python exec="on" session="version" source="material-block"
@@ -170,7 +172,9 @@ gitGraph
 )
 ```
 
-We can also [list all branches](./reference/index.md#icechunk.Repository.list_branches) in the repository.
+### Listing and Looking Up Branches
+
+We can [list all branches](./reference/index.md#icechunk.Repository.list_branches) in the repository.
 
 ```python exec="on" session="version" source="material-block" result="code"
 print(repo.list_branches())
@@ -182,17 +186,52 @@ If we need to find the snapshot that a branch is based on, we can use the [`look
 print(repo.lookup_branch("feature"))
 ```
 
-We can also [delete a branch](./reference/index.md#icechunk.Repository.delete_branch) with [`delete_branch`](./reference/index.md#icechunk.Repository.delete_branch).
+### Deleting and Resetting Branches
+
+We can [delete a branch](./reference/index.md#icechunk.Repository.delete_branch) with [`delete_branch`](./reference/index.md#icechunk.Repository.delete_branch).
 
 ```python exec="on" session="version" source="material-block"
 repo.delete_branch("feature")
 ```
 
-Finally, we can [reset a branch](./reference/index.md#icechunk.Repository.reset_branch) to a previous snapshot with [`reset_branch`](./reference/index.md#icechunk.Repository.reset_branch). This immediately modifies the branch tip to the specified snapshot, changing the history of the branch.
+We can also [reset a branch](./reference/index.md#icechunk.Repository.reset_branch) to a previous snapshot with [`reset_branch`](./reference/index.md#icechunk.Repository.reset_branch). This immediately modifies the branch tip to the specified snapshot, changing the history of the branch.
 
 ```python exec="on" session="version" source="material-block"
 repo.reset_branch("dev", snapshot_id=main_branch_snapshot_id)
 ```
+
+### Creating Anonymous Snapshots
+
+Sometimes you want to save your work without committing to any branch. The [`flush`](./reference.md#icechunk.Session.flush) method creates a new snapshot from the session's changes but does not update any branch pointer. The resulting snapshot is "anonymous" — it exists in the store but no branch or tag points to it.
+
+This can be useful for:
+
+- **Exploratory work** — saving intermediate results without cluttering a branch's history.
+- **Deferred decisions** — creating several candidate snapshots and deciding later which one to keep.
+
+```python exec="on" session="version" source="material-block" result="code"
+session = repo.writable_session("main")
+root = zarr.open_group(session.store)
+root.attrs["experiment"] = "trial-1"
+
+snapshot_id = session.flush(message="Exploratory change")
+print(snapshot_id)
+```
+
+After a flush the session becomes read-only, just like after a commit. The returned snapshot ID can be used later to attach the snapshot to a branch with [`reset_branch`](./reference.md#icechunk.Repository.reset_branch), or simply kept as a reference for time-travel.
+
+```python exec="on" session="version" source="material-block"
+# Adopt the flushed snapshot on the dev branch
+repo.reset_branch("dev", snapshot_id=snapshot_id)
+```
+
+!!! note
+
+    Unlike `commit`, `flush` does not support rebasing or amending. It is a simple, one-step save operation.
+
+!!! tip
+
+    The pattern of `flush` followed by `reset_branch` effectively gives you temporary branch semantics — you can do exploratory work without committing to a branch, then adopt the result onto a branch only if you're happy with it.
 
 ## Tags
 
