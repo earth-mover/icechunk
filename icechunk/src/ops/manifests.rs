@@ -39,13 +39,13 @@ pub async fn rewrite_manifests(
         .await
         .map_err(|e| ManifestOpsError::ManifestRewriteError(Box::new(e.inject())))?;
 
-    let mut builder = session
-        .commit(message)
-        .max_concurrent_nodes(max_concurrent_manifests)
-        .rewrite_manifests();
-    if commit_method == CommitMethod::Amend {
-        builder = builder.amend();
+    let mut builder = if commit_method == CommitMethod::Amend {
+        session.amend(Some(message.to_string()))
+    } else {
+        session.commit(message)
     }
+    .max_concurrent_nodes(max_concurrent_manifests)
+    .rewrite_manifests();
     if let Some(props) = properties {
         builder = builder.properties(props);
     }

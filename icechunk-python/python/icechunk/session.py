@@ -507,7 +507,7 @@ class Session:
 
     def amend(
         self,
-        message: str,
+        message: str | None = None,
         metadata: dict[str, Any] | None = None,
         allow_empty: bool = False,
     ) -> str:
@@ -524,10 +524,10 @@ class Session:
 
         Parameters
         ----------
-        message : str
-            The message to write with the commit.
+        message : str | None, optional
+            The message to write with the commit. If None, reuses the message from the previous commit.
         metadata : dict[str, Any] | None, optional
-            Additional metadata to store with the commit snapshot.
+            Additional metadata to store with the commit snapshot. If None, reuses the metadata from the previous commit.
         allow_empty : bool, optional
             If True, allow amending even if no data changes have been made to the session.
             This is useful when you only want to update the commit message. Default is False.
@@ -546,7 +546,7 @@ class Session:
 
     async def amend_async(
         self,
-        message: str,
+        message: str | None = None,
         metadata: dict[str, Any] | None = None,
         allow_empty: bool = False,
     ) -> str:
@@ -563,10 +563,10 @@ class Session:
 
         Parameters
         ----------
-        message : str
-            The message to write with the commit.
+        message : str | None, optional
+            The message to write with the commit. If None, reuses the message from the previous commit.
         metadata : dict[str, Any] | None, optional
-            Additional metadata to store with the commit snapshot.
+            Additional metadata to store with the commit snapshot. If None, reuses the metadata from the previous commit.
         allow_empty : bool, optional
             If True, allow amending even if no data changes have been made to the session.
             This is useful when you only want to update the commit message. Default is False.
