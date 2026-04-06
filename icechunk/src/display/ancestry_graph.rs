@@ -620,4 +620,81 @@ mod tests {
             "should show truncation message: {output}"
         );
     }
+
+    #[test]
+    fn test_multiple_branches_from_same_commit() {
+        // Two side branches fork from the same trunk commit (s1):
+        //   main:      s1 -> s2 (tip)
+        //   feature-a: s1 -> s3 (tip, forks from s1)
+        //   feature-b: s1 -> s4 (tip, forks from s1)
+        //
+        // Expected output:
+        //     ●   (feature-b) Commit 4
+        //     │
+        //   ● │   (feature-a) Commit 3
+        //   ╱ ╱
+        //   ●     (main) Commit 2
+        //   │
+        //   ●     Commit 1
+        //
+        // Key: both ╱ connectors appear on the same row (just above the
+        // fork point s1), with │ lines running from each tip down to that row.
+        // feature-b must NOT look like it branched from feature-a.
+        let s1 = make_snapshot(1, None);
+        let s2 = make_snapshot(2, Some(1)); // main tip
+        let s3 = make_snapshot(3, Some(1)); // feature-a tip
+        let s4 = make_snapshot(4, Some(1)); // feature-b tip
+
+        let branch_ancestries = vec![
+            ("main".to_string(), vec![s2.clone(), s1.clone()]),
+            ("feature-a".to_string(), vec![s3.clone(), s1.clone()]),
+            ("feature-b".to_string(), vec![s4.clone(), s1.clone()]),
+        ];
+
+        let all = vec![
+            "feature-a".to_string(),
+            "feature-b".to_string(),
+            "main".to_string(),
+        ];
+        let graph = AncestryGraph::new(branch_ancestries, &HashMap::new(), all, true);
+        let output = graph.to_string();
+        let lines: Vec<&str> = output.lines().collect();
+
+        eprintln!("=== multiple branches from same commit ===");
+        for line in &lines {
+            eprintln!("  {line:?}");
+        }
+
+        // Both side branch nodes should be present
+        assert!(output.contains("feature-a"), "should mention feature-a");
+        assert!(output.contains("feature-b"), "should mention feature-b");
+
+        // The fork connectors (╱) should appear on the row just above the
+        // fork point node (Commit 1), not immediately after each branch tip.
+        let fork_point_row = lines
+            .iter()
+            .position(|l| l.contains("Commit 1"))
+            .expect("should have Commit 1");
+
+        // The row just above Commit 1 should contain both ╱ connectors.
+        assert!(fork_point_row > 0, "fork point should not be the first row");
+        let connector_row = lines[fork_point_row - 1];
+        let fork_count = connector_row.matches('╱').count();
+        assert_eq!(
+            fork_count, 2,
+            "both branches should have ╱ on the row above the fork point: {connector_row:?}"
+        );
+
+        // No trunk │ should appear above the trunk's first ● node.
+        let main_row = lines
+            .iter()
+            .position(|l| l.contains("main"))
+            .expect("should have main");
+        for line in &lines[..main_row] {
+            assert!(
+                !line.starts_with('│'),
+                "no trunk │ should appear above trunk's first node: {line:?}"
+            );
+        }
+    }
 }
