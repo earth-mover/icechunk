@@ -26,12 +26,10 @@ __all__ = [
     "ManifestPreloadConfig",
     "ManifestSplitCondition",
     "ManifestSplitDimCondition",
-    "ManifestSplitValues",
     "ManifestSplittingConfig",
     "ManifestVirtualChunkLocationCompressionConfig",
     "ObjectStoreConfig",
     "RepositoryConfig",
-    "SplitSizesDict",
     "initialize_logs",
     "set_logs_filter",
 ]
