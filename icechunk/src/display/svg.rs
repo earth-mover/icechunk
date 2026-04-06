@@ -92,6 +92,14 @@ impl AncestryGraph {
         let mut col_line_spans: HashMap<usize, (usize, usize)> = HashMap::new();
         let mut merged_lines: Vec<(usize, usize, usize)> = Vec::new(); // (col, from_row, to_row)
 
+        // Collect which columns have a Fork (merge) — these break the line span.
+        let mut fork_cols: HashMap<usize, usize> = HashMap::new(); // col → fork row
+        for elem in &elements {
+            if let LayoutElement::Fork { from_col, from_row, .. } = elem {
+                fork_cols.insert(*from_col, *from_row);
+            }
+        }
+
         for elem in &elements {
             if let LayoutElement::Line { from_row, to_row, col } = elem {
                 let entry = col_line_spans.entry(*col);
@@ -110,6 +118,16 @@ impl AncestryGraph {
                     std::collections::hash_map::Entry::Vacant(e) => {
                         e.insert((*from_row, *to_row));
                     }
+                }
+                // If this column forks, stop the line at the fork row
+                // so it doesn't extend past the curve start.
+                if let Some(mut span) = fork_cols
+                    .get(col)
+                    .filter(|&&fr| *to_row > fr)
+                    .and_then(|_| col_line_spans.remove(col))
+                {
+                    span.1 = fork_cols[col];
+                    merged_lines.push((*col, span.0, span.1));
                 }
             }
         }
