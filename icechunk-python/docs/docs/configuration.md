@@ -2,7 +2,7 @@
 
 When creating and opening Icechunk repositories, there are many configuration options available to control the behavior of the repository and the storage backend. This page will guide you through the available options and how to use them.
 
-## [`RepositoryConfig`](./reference.md#icechunk.RepositoryConfig)
+## [`RepositoryConfig`](./reference/config.md#icechunk.config.RepositoryConfig)
 
 The `RepositoryConfig` object is used to configure the repository. For convenience, this can be constructed using some sane defaults:
 
@@ -20,22 +20,22 @@ config = ic.Repository.fetch_config(storage)
 
 It allows you to configure the following parameters:
 
-### [`inline_chunk_threshold_bytes`](./reference.md#icechunk.RepositoryConfig.inline_chunk_threshold_bytes)
+### [`inline_chunk_threshold_bytes`](./reference/config.md#icechunk.config.RepositoryConfig.inline_chunk_threshold_bytes)
 
 The threshold for when to inline a chunk into a manifest instead of storing it as a separate object in the storage backend.
 
-### [`get_partial_values_concurrency`](./reference.md#icechunk.RepositoryConfig.get_partial_values_concurrency)
+### [`get_partial_values_concurrency`](./reference/config.md#icechunk.config.RepositoryConfig.get_partial_values_concurrency)
 
 The number of concurrent requests to make when getting partial values from storage.
 
-### [`max_concurrent_requests`](./reference.md#icechunk.RepositoryConfig.max_concurrent_requests)
+### [`max_concurrent_requests`](./reference/config.md#icechunk.config.RepositoryConfig.max_concurrent_requests)
 
 The maximum total number of concurrent requests this repo will allow.
 See [Performance | Concurrency](performance#Concurrency) for details.
 
-### [`compression`](./reference.md#icechunk.RepositoryConfig.compression)
+### [`compression`](./reference/config.md#icechunk.config.RepositoryConfig.compression)
 
-Icechunk uses Zstd compression to compress its metadata files. [`CompressionConfig`](./reference.md#icechunk.CompressionConfig) allows you to configure the [compression level](./reference.md#icechunk.CompressionConfig.level) and [algorithm](./reference.md#icechunk.CompressionConfig.algorithm). Currently, the only algorithm available is [`Zstd`](https://facebook.github.io/zstd/).
+Icechunk uses Zstd compression to compress its metadata files. [`CompressionConfig`](./reference/config.md#icechunk.config.CompressionConfig) allows you to configure the [compression level](./reference/config.md#icechunk.config.CompressionConfig.level) and [algorithm](./reference/config.md#icechunk.config.CompressionConfig.algorithm). Currently, the only algorithm available is [`Zstd`](https://facebook.github.io/zstd/).
 
 ```python exec="on" session="config" source="material-block"
 config.compression = ic.config.CompressionConfig(
@@ -44,9 +44,9 @@ config.compression = ic.config.CompressionConfig(
 )
 ```
 
-### [`caching`](./reference.md#icechunk.RepositoryConfig.caching)
+### [`caching`](./reference/config.md#icechunk.config.RepositoryConfig.caching)
 
-Icechunk caches files (metadata and chunks) to speed up common operations. [`CachingConfig`](./reference.md#icechunk.CachingConfig) allows you to configure the caching behavior for the repository.
+Icechunk caches files (metadata and chunks) to speed up common operations. [`CachingConfig`](./reference/config.md#icechunk.config.CachingConfig) allows you to configure the caching behavior for the repository.
 
 ```python exec="on" session="config" source="material-block"
 config.caching = ic.config.CachingConfig(
@@ -58,9 +58,9 @@ config.caching = ic.config.CachingConfig(
 )
 ```
 
-### [`storage`](./reference.md#icechunk.RepositoryConfig.storage)
+### [`storage`](./reference/config.md#icechunk.config.RepositoryConfig.storage)
 
-This configures how Icechunk loads data from the storage backend. [`StorageSettings`](./reference.md#icechunk.StorageSettings) allows you to configure the storage settings.
+This configures how Icechunk loads data from the storage backend. [`StorageSettings`](./reference/storage.md#icechunk.storage.StorageSettings) allows you to configure the storage settings.
 
 ```python exec="on" session="config" source="material-block"
 config.storage = ic.storage.StorageSettings(
@@ -74,9 +74,9 @@ config.storage = ic.storage.StorageSettings(
 )
 ```
 
-### [`virtual_chunk_containers`](./reference.md#icechunk.RepositoryConfig.virtual_chunk_containers)
+### [`virtual_chunk_containers`](./reference/config.md#icechunk.config.RepositoryConfig.virtual_chunk_containers)
 
-Icechunk allows repos to contain [virtual chunks](./virtual.md). To allow for referencing these virtual chunks, you must configure the `virtual_chunk_containers` parameter to specify the storage locations and configurations for any virtual chunks. Each virtual chunk container is specified by a [`VirtualChunkContainer`](./reference.md#icechunk.VirtualChunkContainer) object which contains a url prefix, and a storage configuration. When a container is added to the settings, any virtual chunks with a url that starts with the configured prefix will use the storage configuration for that matching container.
+Icechunk allows repos to contain [virtual chunks](./virtual.md). To allow for referencing these virtual chunks, you must configure the `virtual_chunk_containers` parameter to specify the storage locations and configurations for any virtual chunks. Each virtual chunk container is specified by a [`VirtualChunkContainer`](./reference/virtual.md#icechunk.virtual.VirtualChunkContainer) object which contains a url prefix, and a storage configuration. When a container is added to the settings, any virtual chunks with a url that starts with the configured prefix will use the storage configuration for that matching container.
 
 !!! note
 
@@ -110,11 +110,11 @@ This will add a second `VirtualChunkContainer` but not overwrite the first one t
 
 !!! note
 
-    While virtual chunk containers specify the storage configuration for any virtual chunks, they do not contain any authentication information. The credentials must also be specified when opening the repository using the [`authorize_virtual_chunk_access`](./reference.md#icechunk.Repository.open) parameter. This parameter also serves as a way for the user to authorize the access to the virtual chunk containers, containers that are not explicitly allowed with `authorize_virtual_chunk_access` won't be able to fetch their chunks. See the [Virtual Chunk Credentials](#virtual-chunk-credentials) section for more information.
+    While virtual chunk containers specify the storage configuration for any virtual chunks, they do not contain any authentication information. The credentials must also be specified when opening the repository using the [`authorize_virtual_chunk_access`](./reference/index.md#icechunk.Repository.open) parameter. This parameter also serves as a way for the user to authorize the access to the virtual chunk containers, containers that are not explicitly allowed with `authorize_virtual_chunk_access` won't be able to fetch their chunks. See the [Virtual Chunk Credentials](#virtual-chunk-credentials) section for more information.
 
-### [`manifest`](./reference.md#icechunk.RepositoryConfig.manifest)
+### [`manifest`](./reference/config.md#icechunk.config.RepositoryConfig.manifest)
 
-The manifest configuration for the repository. [`ManifestConfig`](./reference.md#icechunk.ManifestConfig) allows you to configure behavior for how manifests are loaded. In particular, the `preload` parameter allows you to configure the preload behavior of the manifest using a [`ManifestPreloadConfig`](./reference.md#icechunk.ManifestPreloadConfig). This allows you to control the number of references that are loaded into memory when a session is created, along with which manifests are available to be preloaded.
+The manifest configuration for the repository. [`ManifestConfig`](./reference/config.md#icechunk.config.ManifestConfig) allows you to configure behavior for how manifests are loaded. In particular, the `preload` parameter allows you to configure the preload behavior of the manifest using a [`ManifestPreloadConfig`](./reference/config.md#icechunk.config.ManifestPreloadConfig). This allows you to control the number of references that are loaded into memory when a session is created, along with which manifests are available to be preloaded.
 
 The `ManifestPreloadConfig` accepts the following parameters:
 
@@ -142,7 +142,7 @@ Now we can now create or open an Icechunk repo using our config.
 
 #### Creating a new repo
 
-If no config is provided, the repo will be created with the [default configuration](./reference.md#icechunk.RepositoryConfig.default).
+If no config is provided, the repo will be created with the [default configuration](./reference/config.md#icechunk.config.RepositoryConfig.default).
 
 !!! note
 
@@ -205,7 +205,7 @@ If no config is provided, the repo will be created with the [default configurati
 
 #### Opening an existing repo
 
-When opening an existing repo, the config will be loaded from the repo if it exists. If no config exists and no config was specified, the repo will be opened with the [default configuration](./reference.md#icechunk.RepositoryConfig.default).
+When opening an existing repo, the config will be loaded from the repo if it exists. If no config exists and no config was specified, the repo will be opened with the [default configuration](./reference/config.md#icechunk.config.RepositoryConfig.default).
 
 However, if a config was specified when opening the repo AND a config was previously persisted in the repo, the two configurations will be merged. The config specified when opening the repo will take precedence over the persisted config.
 
@@ -267,7 +267,7 @@ However, if a config was specified when opening the repo AND a config was previo
 
 ### Persisting Configuration
 
-Once the repo is opened, the current config can be persisted to the repo by calling [`save_config`](./reference.md#icechunk.Repository.save_config).
+Once the repo is opened, the current config can be persisted to the repo by calling [`save_config`](./reference/index.md#icechunk.Repository.save_config).
 
 ```python
 repo.save_config()
@@ -277,7 +277,7 @@ The next time this repo is opened, the persisted config will be loaded by defaul
 
 ## Virtual Chunk Credentials
 
-When using virtual chunk containers, the containers must be authorized by the repo user, and the credentials for the storage backend must be specified. This is done using the [`authorize_virtual_chunk_access`](./reference.md#icechunk.Repository.open) parameter when creating or opening the repo. Credentials are specified as a dictionary of container url prefixes mapping to credential objects or `None`. A `None` credential will fetch credentials from the process environment or it will use anonymous credentials if the container allows it. A helper function, [`containers_credentials`](./reference.md#icechunk.containers_credentials), is provided to make it easier to specify credentials for multiple containers.
+When using virtual chunk containers, the containers must be authorized by the repo user, and the credentials for the storage backend must be specified. This is done using the [`authorize_virtual_chunk_access`](./reference/index.md#icechunk.Repository.open) parameter when creating or opening the repo. Credentials are specified as a dictionary of container url prefixes mapping to credential objects or `None`. A `None` credential will fetch credentials from the process environment or it will use anonymous credentials if the container allows it. A helper function, [`containers_credentials`](./reference/credentials.md#icechunk.credentials.containers_credentials), is provided to make it easier to specify credentials for multiple containers.
 
 ### Example
 

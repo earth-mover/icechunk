@@ -15,7 +15,7 @@ and `icechunk.xarray.to_icechunk` methods.
 !!!note "`to_icechunk` vs `to_zarr`"
 
     [`xarray.Dataset.to_zarr`](https://docs.xarray.dev/en/latest/generated/xarray.Dataset.to_zarr.html#xarray.Dataset.to_zarr)
-    and [`to_icechunk`](./reference.md#icechunk.xarray.to_icechunk) are nearly functionally identical.
+    and [`to_icechunk`](./reference/xarray.md#icechunk.xarray.to_icechunk) are nearly functionally identical.
 
     In a distributed context, e.g.
     writes orchestrated with `multiprocesssing` or a `dask.distributed.Client` and `dask.array`, you *must* use `to_icechunk`.

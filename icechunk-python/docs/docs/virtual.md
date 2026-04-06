@@ -88,7 +88,7 @@ We have a virtual dataset with 31 timestamps! One hint that this worked correctl
 
 !!! note
 
-    Take note of the [`VirtualChunkContainer`](./reference.md#icechunk.VirtualChunkContainer) passed into the [`RepositoryConfig`](./reference.md#icechunk.RepositoryConfig) when creating the store. We specify the storage configuration necessary to access the anonymous S3 bucket that holds the OISST netCDF files, along with credentials that match. This creates a mapping between the `s3` virtual chunk container and the credentials passed for the `s3` namespace. For more configuration options, see the [configuration page](./configuration.md).
+    Take note of the [`VirtualChunkContainer`](./reference/virtual.md#icechunk.virtual.VirtualChunkContainer) passed into the [`RepositoryConfig`](./reference/config.md#icechunk.config.RepositoryConfig) when creating the store. We specify the storage configuration necessary to access the anonymous S3 bucket that holds the OISST netCDF files, along with credentials that match. This creates a mapping between the `s3` virtual chunk container and the credentials passed for the `s3` namespace. For more configuration options, see the [configuration page](./configuration.md).
 
 ```python
 import icechunk as ic
@@ -162,7 +162,7 @@ ds.sst.isel(time=26, zlev=0).plot(x='lon', y='lat', vmin=0)
 
 ## Virtual Reference API
 
-While `VirtualiZarr` is the easiest way to create virtual datasets with Icechunk, the Store API that it uses to create the datasets in Icechunk is public. `IcechunkStore` contains a [`set_virtual_ref`](./reference.md#icechunk.IcechunkStore.set_virtual_ref) method that specifies a virtual ref for a specified chunk.
+While `VirtualiZarr` is the easiest way to create virtual datasets with Icechunk, the Store API that it uses to create the datasets in Icechunk is public. `IcechunkStore` contains a [`set_virtual_ref`](./reference/zarr.md#icechunk.zarr.IcechunkStore.set_virtual_ref) method that specifies a virtual ref for a specified chunk.
 
 !!! important "URL prefix must end with a trailing slash"
 
