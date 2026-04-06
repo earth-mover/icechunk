@@ -174,7 +174,7 @@ markdown_extensions:
       toc_depth: 2
   - pymdownx.inlinehilite
   - pymdownx.snippets:
-      base_path: ["docs/docs", ".."]
+      base_path: ["docs/docs", "..", "../.."]
   - pymdownx.superfences:
       # make exceptions to highlighting of code:
       custom_fences:
