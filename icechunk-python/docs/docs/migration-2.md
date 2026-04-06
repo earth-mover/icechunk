@@ -49,7 +49,7 @@ The migration is designed to be **safe and reversible** at each step:
 5. **Verification** — The repository is reopened and verified to be spec version 2. If verification fails, the v2 file is deleted and the repository is left unchanged.
 6. **Cleanup** — If `delete_unused_v1_files=True`, the legacy v1 ref and config files are removed. If any cleanup step fails, the migration rolls back.
 
-Each step of the process is atomic and if something goes wrong, leaves a working repo in place. 
+Each step of the process is atomic and if something goes wrong, leaves a working repo in place.
 
 !!! note
     The migration is usually fast, but can take several minutes for repositories with thousands of snapshots.
