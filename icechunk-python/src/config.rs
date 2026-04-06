@@ -2515,6 +2515,21 @@ impl PyStorageObjectInfo {
 #[derive(Clone, Debug)]
 pub(crate) struct PyStorage(pub Arc<dyn Storage + Send + Sync>);
 
+impl PyRepr for PyStorage {
+    const EXECUTABLE: bool = false;
+
+    fn cls_name() -> &'static str {
+        "icechunk.Storage"
+    }
+
+    fn fields(&self, _mode: ReprMode) -> Vec<(&str, String)> {
+        let info = self.0.storage_info();
+        let mut result = vec![("type", info.backend_type.to_string())];
+        result.extend(info.fields);
+        result
+    }
+}
+
 /// Storage wrapper that adds artificial read/write latency for testing.
 ///
 /// Wraps any Storage backend and injects configurable delays before write
@@ -2800,11 +2815,15 @@ impl PyStorage {
     }
 
     pub(crate) fn __repr__(&self) -> String {
-        format!("{}", self.0)
+        <Self as PyRepr>::__repr__(self)
     }
 
     pub(crate) fn __str__(&self) -> String {
-        self.__repr__()
+        <Self as PyRepr>::__str__(self)
+    }
+
+    pub(crate) fn _repr_html_(&self) -> String {
+        <Self as PyRepr>::_repr_html_(self)
     }
 
     pub(crate) fn default_settings(&self) -> PyResult<PyStorageSettings> {
