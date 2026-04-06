@@ -9,7 +9,7 @@ The `icechunk` package is organized into the following modules:
 | [`icechunk.credentials`](credentials.md) | Credential types and factories for S3, GCS, Azure |
 | [`icechunk.exceptions`](exceptions.md) | Exception types |
 | [`icechunk.ops`](ops.md) | Operation types: updates, garbage collection summaries |
-| [`icechunk.session`](session.md) | `ForkSession`, `SessionMode` |
+| [`icechunk.session`](session.md) | Sessions for reading and writing data |
 | [`icechunk.snapshots`](snapshots.md) | Snapshot metadata, diffs, manifest file info |
 | [`icechunk.storage`](storage.md) | Storage backends and configuration |
 | [`icechunk.zarr`](zarr.md) | The Zarr-compatible `IcechunkStore` |
@@ -20,10 +20,6 @@ The `icechunk` package is organized into the following modules:
 ## `icechunk.Repository`
 
 ::: icechunk.Repository
-
-## `icechunk.Session`
-
-::: icechunk.session.Session
 
 ## Top-level utilities
 
