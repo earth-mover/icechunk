@@ -1,5 +1,6 @@
 import test from 'ava'
 import assert from 'node:assert/strict'
+import * as zarr from 'zarrita'
 
 import { Storage, Repository, RepositoryConfig } from '../index'
 
@@ -336,6 +337,57 @@ test('reopen with different manifest config', async (t) => {
   const session2 = await repo2.writableSession('main')
   await session2.store.set('data/zarr.json', Buffer.from('{"zarr_format":3,"node_type":"group"}'))
   await session2.commit('with new config')
+
+  t.pass()
+})
+
+test('zarrita read and write', async (t) => {
+  const storage = await Storage.newInMemory()
+  const repo = await Repository.create(storage)
+
+  // Write a root group and a 1D float32 array via the store
+  const session = await repo.writableSession('main')
+  const store = session.store
+  const enc = new TextEncoder()
+
+  await store.set('zarr.json', enc.encode(JSON.stringify({
+    zarr_format: 3,
+    node_type: 'group',
+  })))
+
+  await store.set('temperature/zarr.json', enc.encode(JSON.stringify({
+    zarr_format: 3,
+    node_type: 'array',
+    shape: [4],
+    data_type: 'float32',
+    chunk_grid: { name: 'regular', configuration: { chunk_shape: [4] } },
+    chunk_key_encoding: { name: 'default', configuration: { separator: '/' } },
+    fill_value: 0,
+    codecs: [{ name: 'bytes', configuration: { endian: 'little' } }],
+  })))
+
+  // Write a chunk with 4 float32 values: [1.5, 2.5, 3.5, 4.5]
+  const buf = new ArrayBuffer(16)
+  const view = new Float32Array(buf)
+  view.set([1.5, 2.5, 3.5, 4.5])
+  await store.set('temperature/c/0', new Uint8Array(buf))
+
+  await session.commit('add temperature array')
+
+  // Read back via zarrita
+  const readSession = await repo.readonlySession({ branch: 'main' })
+  const root = zarr.root(readSession.store)
+
+  const arr = await zarr.open(root.resolve('/temperature'), { kind: 'array' })
+  assert.deepEqual(arr.shape, [4])
+  assert.equal(arr.dtype, 'float32')
+
+  const data = await zarr.get(arr)
+  assert.deepEqual(Array.from(data.data as Float32Array), [1.5, 2.5, 3.5, 4.5])
+
+  // Read a slice
+  const slice = await zarr.get(arr, [zarr.slice(1, 3)])
+  assert.deepEqual(Array.from(slice.data as Float32Array), [2.5, 3.5])
 
   t.pass()
 })
