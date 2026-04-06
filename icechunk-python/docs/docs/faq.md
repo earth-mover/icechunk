@@ -376,6 +376,20 @@ Unlike Icechunk, the ocdbt key-value store is not specialized to Zarr, does not 
 
 Icechunk is different from normal Zarr stores because it is stateful. In a distributed setting, you have to be careful to communicate back the Session objects from remote write tasks, merge them appropriately, and then execute the commit. The explicit use of a `fork` allows Icechunk to hint to the user that they need to be sure about what they are doing.
 
+## How can I identify Icechunk requests in my server logs?
+
+All HTTP requests made by Icechunk include a `User-Agent` header of the form `icechunk-rust-<version>` (e.g., `icechunk-rust-2.0.0`). You can filter your object storage access logs for this user agent to isolate Icechunk traffic.
+
+To check the exact user agent string for your installed version:
+
+```python
+import icechunk
+icechunk.user_agent()
+# 'icechunk-rust-2.0.0'
+```
+
+This is set automatically and cannot be overridden.
+
 ## Does `icechunk-python` include logging?
 
 Yes! Set the environment variable `ICECHUNK_LOG=icechunk=debug` to print debug logs to stdout. Available "levels" in order of increasing verbosity are `error`, `warn`, `info`, `debug`, `trace`. The default level is `error`. The Rust library uses `tracing-subscriber` crate. The `ICECHUNK_LOG` variable can be used to filter logging following that crate's [documentation](https://docs.rs/tracing-subscriber/latest/tracing_subscriber/filter/struct.EnvFilter.html#directives). For example, `ICECHUNK_LOG=trace` will set both icechunk and it's dependencies' log levels to `trace` while `ICECHUNK_LOG=icechunk=trace` will enable the `trace` level for icechunk only. For more complex control `ICECHUNK_LOG=debug,icechunk=trace,rustls=info,h2=info,hyper=info` will set `trace` for `icechunk`, `info` for `rustls`,`hyper`, and `h2` crates, and `debug` for every other crate.
