@@ -15,8 +15,8 @@ This enables **rolling time windows**—continuously updating datasets like fore
 
 | Method | Best For | Flexibility |
 |--------|----------|-------------|
-| [`shift_array`][icechunk.Session.shift_array] | Uniform shifts | Simple—just specify offset |
-| [`reindex_array`][icechunk.Session.reindex_array] | Custom transformations | Maximum—you control every chunk |
+| [`shift_array`][icechunk.session.Session.shift_array] | Uniform shifts | Simple—just specify offset |
+| [`reindex_array`][icechunk.session.Session.reindex_array] | Custom transformations | Maximum—you control every chunk |
 
 ## Offsets Are in Chunks, Not Elements
 
@@ -32,7 +32,7 @@ Why chunks instead of elements? Because these are **metadata-only operations**. 
 
 ## `shift_array` { #shift_array }
 
-The [`shift_array`][icechunk.Session.shift_array] method moves all chunks by a fixed offset per dimension (negative to shift toward index 0, positive toward higher indices). Out-of-bounds chunks are discarded, and vacated positions are cleared (reset to fill value).
+The [`shift_array`][icechunk.session.Session.shift_array] method moves all chunks by a fixed offset per dimension (negative to shift toward index 0, positive toward higher indices). Out-of-bounds chunks are discarded, and vacated positions are cleared (reset to fill value).
 
 ```python exec="on" session="chunks" source="material-block" result="code"
 import numpy as np
@@ -134,7 +134,7 @@ This pattern works identically whether your array is 1 KB or 1 PB, and whether i
 
 ## `reindex_array` { #reindex_array }
 
-For transformations that [`shift_array`][icechunk.Session.shift_array] can't express, [`reindex_array`][icechunk.Session.reindex_array] gives you complete control. You provide a `forward` function that maps each chunk's old position to its new position. Your function receives a chunk index (as a list) and returns a new index to move the chunk there, or `None` to skip it (leave it in place).
+For transformations that [`shift_array`][icechunk.session.Session.shift_array] can't express, [`reindex_array`][icechunk.session.Session.reindex_array] gives you complete control. You provide a `forward` function that maps each chunk's old position to its new position. Your function receives a chunk index (as a list) and returns a new index to move the chunk there, or `None` to skip it (leave it in place).
 
 However, `reindex_array` only visits chunk positions that contain data — empty (fill value) positions are skipped. This means that if an empty chunk would shift into an occupied position, the occupied position retains stale data. To handle this, provide a `backward` function — the inverse of `forward`. For each existing chunk position, the backward function determines whether a real chunk should have moved there; if not, the position is cleared to the fill value. See [Providing a Backward Function](#backward-function) for an example.
 
@@ -229,7 +229,7 @@ print("With backward:", arr[:])  # [-1,  1,  3] — index 0 correctly cleared
 ```
 
 !!! tip
-    [`shift_array`][icechunk.Session.shift_array] always provides both forward and
+    [`shift_array`][icechunk.session.Session.shift_array] always provides both forward and
     backward functions internally, so it handles empty chunks correctly without
     any extra work.
 
