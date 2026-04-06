@@ -1035,11 +1035,14 @@ class StorageRetriesSettings:
         Parameters
         ----------
         max_tries: int | None
-            The maximum number of tries, including the initial one. Set to 1 to disable retries
+            The maximum number of tries, including the initial one. Set to 1 to disable retries.
+            Default: 10
         initial_backoff_ms: int | None
-            The initial backoff duration in milliseconds
+            The initial backoff duration in milliseconds.
+            Default: 100
         max_backoff_ms: int | None
-            The limit to backoff duration in milliseconds
+            The limit to backoff duration in milliseconds.
+            Default: 180,000 (3 minutes)
         """
         ...
     @property
@@ -1124,6 +1127,10 @@ class StorageTimeoutSettings:
     ) -> StorageTimeoutSettings:
         """
         Create a new `StorageTimeoutSettings` object
+
+        All timeouts default to None, meaning the underlying
+        `AWS SDK default <https://docs.aws.amazon.com/sdk-for-rust/latest/dg/timeouts.html>`_
+        is used.
 
         Parameters
         ----------
@@ -1390,6 +1397,7 @@ class RepoUpdateRetryConfig:
         ----------
         default: StorageRetriesSettings | None
             Default retry settings for all repo update operations.
+            Defaults: `max_tries`=100, `initial_backoff_ms`=50, `max_backoff_ms`=30,000
         """
         ...
     @property
