@@ -46,7 +46,7 @@ In-memory storage works on all platforms. The following backends are available o
 - **HTTP** — `Storage.newHttp(baseUrl, config?)`
 - **Local Filesystem** — `Storage.newLocalFilesystem(path)`
 
-### Fetch Storage (read-only, works everywhere)
+#### Fetch Storage (read-only, works everywhere)
 
 For read-only access to a publicly hosted Icechunk repository, use the built-in fetch-based storage. This works on both native and WASM builds, making it the easiest way to open a repository in the browser:
 
@@ -62,7 +62,7 @@ const keys = await session.store.list()
 
 The repository must be on S3-compatible storage with public read access and XML listing enabled. `createFetchStorage` uses the browser `fetch` API under the hood, so it works in any environment where `fetch` is available.
 
-### Custom Storage Backends
+#### Custom Storage Backends
 
 For WASM builds (or any environment where the built-in backends aren't suitable), you can provide your own storage implementation in JavaScript using `Storage.newCustom()`:
 
@@ -90,7 +90,7 @@ const storage = Storage.newCustom({
 
 This is the primary way to use cloud storage in the browser, where native Rust networking is unavailable. Each callback method maps to an operation on the underlying `Storage` trait. See the exported `Storage*` TypeScript interfaces for the full type signatures.
 
-### Virtual Chunks
+#### Virtual Chunks
 
 Virtual chunks are supported in node but not in WASM builds.
 

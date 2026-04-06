@@ -15,7 +15,7 @@ on:
       - "icechunk/**"
       - "icechunk-js/**"
   pull_request:
-    types: [opened, synchronize, reopened, labeled]
+    types: [opened, synchronize, reopened]
     paths:
       - "icechunk/**"
       - "icechunk-js/**"
@@ -238,9 +238,7 @@ jobs:
 
   publish:
     name: Publish
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event.action == 'labeled' && github.event.label.name == 'publish-npm')
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     defaults:
       run:
