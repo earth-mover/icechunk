@@ -21,6 +21,7 @@ from icechunk.storage import Storage, StorageSettings
 from icechunk.types import CommitMethod
 from icechunk.zarr import IcechunkStore
 
+
 class Repository:
     """An Icechunk repository."""
 

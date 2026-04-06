@@ -230,7 +230,6 @@ nav:
       - icechunk.config: reference/config.md
       - icechunk.conflicts: reference/conflicts.md
       - icechunk.credentials: reference/credentials.md
-      - icechunk.exceptions: reference/exceptions.md
       - icechunk.ops: reference/ops.md
       - icechunk.session: reference/session.md
       - icechunk.snapshots: reference/snapshots.md

@@ -3,6 +3,9 @@
 
 from icechunk._icechunk_python import (
     ChunkType,
+    ConflictError,
+    IcechunkError,
+    RebaseFailedError,
     RepoAvailability,
     RepoStatus,
     SessionMode,
@@ -67,11 +70,6 @@ from icechunk.credentials import (
     s3_from_env_credentials,
     s3_refreshable_credentials,
     s3_static_credentials,
-)
-from icechunk.exceptions import (
-    ConflictError,
-    IcechunkError,
-    RebaseFailedError,
 )
 from icechunk.ops import GCSummary, Update, UpdateType
 from icechunk.repository import Repository
