@@ -12,6 +12,12 @@ from icechunk import (
 from icechunk._icechunk_python import PySession
 from icechunk.store import IcechunkStore
 
+__all__ = [
+    "ForkSession",
+    "Session",
+    "SessionMode",
+]
+
 
 class Session:
     """A session object that allows for reading and writing data from an Icechunk repository."""

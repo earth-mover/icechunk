@@ -26,6 +26,10 @@ from icechunk.session import Session
 from icechunk.store import IcechunkStore
 from icechunk.types import CommitMethod
 
+__all__ = [
+    "Repository",
+]
+
 
 class Repository:
     """An Icechunk repository."""
