@@ -132,8 +132,8 @@ The steps for making a distribute write are as follows:
 
 1. fork the Session with `Session.fork`,
 2. gather the ForkSessions from individual tasks,
-3. merge the `Session` with the gathered ForkSessions using [`Session.merge`](./reference.md#icechunk.Session.merge), and finally
-4. make a successful commit using [`Session.commit`](./reference.md#icechunk.Session.commit).
+3. merge the `Session` with the gathered ForkSessions using [`Session.merge`](./reference/session.md#icechunk.session.Session.merge), and finally
+4. make a successful commit using [`Session.commit`](./reference/session.md#icechunk.session.Session.commit).
 
 ```python
 from concurrent.futures import ProcessPoolExecutor
