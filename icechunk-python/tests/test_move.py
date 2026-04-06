@@ -63,9 +63,6 @@ async def test_basic_move() -> None:
     session = repo.readonly_session("main")
     store = session.store
     group = zarr.open_group(store=store, mode="r")
-    zarr.create_group("my")
-    zarr.create_group("my/new")
-    zarr.create_group("my/new/path")
     array = group["my/new/path/array"]
     numpy.testing.assert_array_equal(array, 42)
 

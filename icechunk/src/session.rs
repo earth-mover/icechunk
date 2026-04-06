@@ -5078,7 +5078,7 @@ mod tests {
         assert!(matches!(res,
                 ICError { kind, ..} if matches!(&kind,
                                                 SessionErrorKind::AncestorNodeNotFound {prefix, ..}
-                                                if *prefix == dest_path)));
+                                                if *prefix == "/b".try_into().unwrap())));
 
         Ok(())
     }
