@@ -1061,9 +1061,9 @@ impl Session {
         let mut ancestors = path.ancestors();
         // the first element is the `path` itself, which we might be
         // trying to create now; skip it.
-        debug_assert_eq!(ancestors.next().as_ref(), Some(path));
+        let current_path = ancestors.next();
+        debug_assert_eq!(current_path.as_ref(), Some(path));
         for parent in ancestors {
-            dbg!((path, &parent));
             let node = self.get_node(&parent).await;
             if node.is_err() {
                 return Err(SessionError::capture(
