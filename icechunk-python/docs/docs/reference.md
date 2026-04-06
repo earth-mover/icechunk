@@ -22,9 +22,9 @@
 
 ::: icechunk.exceptions
 
-## `icechunk.garbage`
+## `icechunk.ops`
 
-::: icechunk.garbage
+::: icechunk.ops
 
 ## `icechunk.repository`
 

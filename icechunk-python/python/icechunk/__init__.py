@@ -73,15 +73,13 @@ from icechunk.exceptions import (
     IcechunkError,
     RebaseFailedError,
 )
-from icechunk.garbage import GCSummary
+from icechunk.ops import GCSummary, Update, UpdateType
 from icechunk.repository import Repository
 from icechunk.session import ForkSession, Session
 from icechunk.snapshots import (
     Diff,
     ManifestFileInfo,
     SnapshotInfo,
-    Update,
-    UpdateType,
 )
 from icechunk.storage import (
     AnyObjectStoreConfig,

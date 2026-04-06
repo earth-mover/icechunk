@@ -502,7 +502,7 @@ impl From<GCSummary> for PyGCSummary {
 impl PyRepr for PyGCSummary {
     const EXECUTABLE: bool = false;
     fn cls_name() -> &'static str {
-        "icechunk.garbage.GCSummary"
+        "icechunk.ops.GCSummary"
     }
     fn fields(&self, _mode: ReprMode) -> Vec<(&str, String)> {
         vec![
@@ -662,56 +662,56 @@ impl PyUpdateType {
     fn __repr__(&self) -> String {
         match self {
             Self::RepoInitialized {} => {
-                "icechunk.snapshots.UpdateType.RepoInitialized()".into()
+                "icechunk.ops.UpdateType.RepoInitialized()".into()
             }
             Self::ConfigChanged {} => {
-                "icechunk.snapshots.UpdateType.ConfigChanged()".into()
+                "icechunk.ops.UpdateType.ConfigChanged()".into()
             }
             Self::MetadataChanged {} => {
-                "icechunk.snapshots.UpdateType.MetadataChanged()".into()
+                "icechunk.ops.UpdateType.MetadataChanged()".into()
             }
             Self::TagCreated { name } => {
-                format!("icechunk.snapshots.UpdateType.TagCreated(name=\"{name}\")")
+                format!("icechunk.ops.UpdateType.TagCreated(name=\"{name}\")")
             }
             Self::TagDeleted { name, previous_snap_id } => format!(
-                "icechunk.snapshots.UpdateType.TagDeleted(name=\"{name}\", previous_snap_id=\"{previous_snap_id}\")"
+                "icechunk.ops.UpdateType.TagDeleted(name=\"{name}\", previous_snap_id=\"{previous_snap_id}\")"
             ),
             Self::BranchCreated { name } => {
-                format!("icechunk.snapshots.UpdateType.BranchCreated(name=\"{name}\")")
+                format!("icechunk.ops.UpdateType.BranchCreated(name=\"{name}\")")
             }
             Self::BranchDeleted { name, previous_snap_id } => format!(
-                "icechunk.snapshots.UpdateType.BranchDeleted(name=\"{name}\", previous_snap_id=\"{previous_snap_id}\")"
+                "icechunk.ops.UpdateType.BranchDeleted(name=\"{name}\", previous_snap_id=\"{previous_snap_id}\")"
             ),
             Self::BranchReset { name, previous_snap_id } => format!(
-                "icechunk.snapshots.UpdateType.BranchReset(name=\"{name}\", previous_snap_id=\"{previous_snap_id}\")"
+                "icechunk.ops.UpdateType.BranchReset(name=\"{name}\", previous_snap_id=\"{previous_snap_id}\")"
             ),
             Self::NewCommit { branch, new_snap_id } => {
                 format!(
-                    "icechunk.snapshots.UpdateType.NewCommit(branch=\"{branch}\", new_snap_id=\"{new_snap_id}\")"
+                    "icechunk.ops.UpdateType.NewCommit(branch=\"{branch}\", new_snap_id=\"{new_snap_id}\")"
                 )
             }
             Self::CommitAmended { branch, previous_snap_id, new_snap_id } => format!(
-                "icechunk.snapshots.UpdateType.CommitAmended(branch=\"{branch}\", previous_snap_id=\"{previous_snap_id}\", new_snap_id=\"{new_snap_id}\")",
+                "icechunk.ops.UpdateType.CommitAmended(branch=\"{branch}\", previous_snap_id=\"{previous_snap_id}\", new_snap_id=\"{new_snap_id}\")",
             ),
             Self::RepoMigrated { from_version, to_version } => format!(
-                "icechunk.snapshots.UpdateType.RepoMigrated(from_version={from_version}, to_version={to_version})"
+                "icechunk.ops.UpdateType.RepoMigrated(from_version={from_version}, to_version={to_version})"
             ),
             Self::RepoStatusChanged { status } => {
                 format!(
-                    "icechunk.snapshots.UpdateType.RepoStatusChanged(status={status})"
+                    "icechunk.ops.UpdateType.RepoStatusChanged(status={status})"
                 )
             }
-            Self::GCRan {} => "icechunk.snapshots.UpdateType.GCRan()".into(),
+            Self::GCRan {} => "icechunk.ops.UpdateType.GCRan()".into(),
             Self::FeatureFlagChanged { id, new_value } => format!(
-                "icechunk.snapshots.UpdateType.FeatureFlagChanged(id={id}, new_value={})",
+                "icechunk.ops.UpdateType.FeatureFlagChanged(id={id}, new_value={})",
                 new_value.map(py_bool).unwrap_or_else(|| "None".to_string()),
             ),
             Self::ExpirationRan {} => {
-                "icechunk.snapshots.UpdateType.ExpirationRan()".into()
+                "icechunk.ops.UpdateType.ExpirationRan()".into()
             }
             Self::NewDetachedSnapshot { new_snap_id } => {
                 format!(
-                    "icechunk.snapshots.UpdateType.NewDetachedSnapshot(new_snap_id=\"{new_snap_id}\")"
+                    "icechunk.ops.UpdateType.NewDetachedSnapshot(new_snap_id=\"{new_snap_id}\")"
                 )
             }
         }
@@ -747,7 +747,7 @@ pub(crate) struct PyUpdate {
 impl PyRepr for PyUpdate {
     const EXECUTABLE: bool = false;
     fn cls_name() -> &'static str {
-        "icechunk.snapshots.Update"
+        "icechunk.ops.Update"
     }
     fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
         vec![

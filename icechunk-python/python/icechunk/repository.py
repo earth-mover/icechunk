@@ -14,9 +14,9 @@ from icechunk._icechunk_python import (
 from icechunk.config import FeatureFlag, RepositoryConfig
 from icechunk.conflicts import ConflictSolver
 from icechunk.credentials import AnyCredential
-from icechunk.garbage import GCSummary
+from icechunk.ops import GCSummary, Update
 from icechunk.session import Session
-from icechunk.snapshots import Diff, ManifestFileInfo, SnapshotInfo, Update
+from icechunk.snapshots import Diff, ManifestFileInfo, SnapshotInfo
 from icechunk.storage import Storage, StorageSettings
 from icechunk.types import CommitMethod
 from icechunk.zarr import IcechunkStore

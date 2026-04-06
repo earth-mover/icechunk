@@ -528,11 +528,11 @@ class TestReprStructural:
         session.commit("init")
         gc = repo.garbage_collect(datetime.now(tz=UTC) - timedelta(hours=1))
         repr_str = repr(gc)
-        assert "<icechunk.garbage.GCSummary>" in repr_str
+        assert "<icechunk.ops.GCSummary>" in repr_str
         assert "bytes_deleted:" in repr_str
         assert "chunks_deleted:" in repr_str
         html = gc._repr_html_()
-        assert "icechunk.garbage.GCSummary" in html
+        assert "icechunk.ops.GCSummary" in html
 
     def test_feature_flag(self, repo: Repository) -> None:
         flags = repo.feature_flags()
@@ -554,11 +554,11 @@ class TestReprStructural:
         assert len(updates) > 0
         update = updates[0]
         repr_str = repr(update)
-        assert "<icechunk.snapshots.Update>" in repr_str
+        assert "<icechunk.ops.Update>" in repr_str
         assert "kind:" in repr_str
         assert "updated_at:" in repr_str
         html = update._repr_html_()
-        assert "icechunk.snapshots.Update" in html
+        assert "icechunk.ops.Update" in html
 
     def test_chunk_storage_stats(self, repo: Repository) -> None:
         stats = repo.chunk_storage_stats()
