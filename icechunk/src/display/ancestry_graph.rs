@@ -589,4 +589,35 @@ mod tests {
             "should use hex colors from palette"
         );
     }
+
+    #[test]
+    fn test_truncation() {
+        // Build a chain longer than MAX_DISPLAY_NODES
+        let count = MAX_DISPLAY_NODES + 50;
+        let snapshots: Vec<SnapshotInfo> = (0..count as u8)
+            .map(|i| {
+                let parent = if i == 0 { None } else { Some(i - 1) };
+                make_snapshot(i, parent)
+            })
+            .collect();
+
+        // Reverse so newest first (highest id_byte = newest timestamp)
+        let reversed: Vec<SnapshotInfo> = snapshots.into_iter().rev().collect();
+
+        let graph = AncestryGraph::new(
+            vec![("main".to_string(), reversed)],
+            &HashMap::new(),
+            vec!["main".to_string()],
+            false,
+        );
+
+        assert_eq!(graph.nodes.len(), MAX_DISPLAY_NODES);
+        assert_eq!(graph.total_snapshots, count);
+
+        let output = graph.to_string();
+        assert!(
+            output.contains("showing 100 of 150 snapshots"),
+            "should show truncation message: {output}"
+        );
+    }
 }
