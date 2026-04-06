@@ -258,6 +258,12 @@ session = repo.readonly_session(tag="v1.0.0")
 repo.delete_tag("v1.0.0")
 ```
 
+### Diff Two Versions
+
+```python
+diff = repo.diff(from_tag="v1.0.0", to_branch="main")
+```
+
 ## Moving Chunks and Nodes
 
 For more depth, see [Moving Chunks](./moving-chunks.md) and [Moving and Renaming Nodes](./moving-nodes.md).
