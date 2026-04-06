@@ -43,7 +43,7 @@ class S3Options:
             Whether to force use of path-style addressing for buckets.
         network_stream_timeout_seconds: int | None
             Timeout requests if no bytes can be transmitted during this period of time.
-            If set to 0, timeout is disabled. Default is 60 seconds.
+            If set to 0, timeout is disabled. Default: 60.
         requester_pays: bool
             Enable requester pays for S3 buckets
         """
@@ -384,8 +384,10 @@ class CompressionConfig:
         ----------
         algorithm: CompressionAlgorithm | None
             The compression algorithm to use.
+            Default: Zstd
         level: int | None
             The compression level to use.
+            Default: 3
         """
         ...
     @property
@@ -460,14 +462,19 @@ class CachingConfig:
         ----------
         num_snapshot_nodes: int | None
             The number of snapshot nodes to cache.
+            Default: 500,000
         num_chunk_refs: int | None
             The number of chunk references to cache.
+            Default: 15,000,000
         num_transaction_changes: int | None
             The number of transaction changes to cache.
+            Default: 0
         num_bytes_attributes: int | None
             The number of bytes of attributes to cache.
+            Default: 0
         num_bytes_chunks: int | None
             The number of bytes of chunks to cache.
+            Default: 0
         """
     def __repr__(self, /) -> str: ...
     def __str__(self, /) -> str: ...
@@ -1176,8 +1183,10 @@ class StorageConcurrencySettings:
         ----------
         max_concurrent_requests_for_object: int | None
             The maximum number of concurrent requests for an object.
+            Default: 18
         ideal_concurrent_request_size: int | None
-            The ideal concurrent request size.
+            The ideal concurrent request size in bytes.
+            Default: 12,582,912 (12 MB)
         """
         ...
     @property
@@ -1256,16 +1265,19 @@ class StorageSettings:
             If set to False, Icechunk loses some of its consistency guarantees.
             This is only useful in object stores that don't support the feature.
             Use it at your own risk.
+            Default: True
 
         unsafe_use_conditional_create: bool | None
             If set to False, Icechunk loses some of its consistency guarantees.
             This is only useful in object stores that don't support the feature.
             Use at your own risk.
+            Default: True
 
         unsafe_use_metadata: bool | None
             Don't write metadata fields in Icechunk files.
             This is only useful in object stores that don't support the feature.
             Use at your own risk.
+            Default: True
 
         storage_class: str | None
             Store all objects using this object store storage class
@@ -1428,13 +1440,15 @@ class RepositoryConfig:
         ----------
         inline_chunk_threshold_bytes: int | None
             The maximum size of a chunk that will be stored inline in the repository.
+            Default: 512
         get_partial_values_concurrency: int | None
             The number of concurrent requests to make when getting partial values from storage.
+            Default: 10
         compression: CompressionConfig | None
             The compression configuration for the repository.
         max_concurrent_requests: int | None
             The maximum number of concurrent HTTP requests Icechunk will do for this repo.
-            Default is 256.
+            Default: 256
         caching: CachingConfig | None
             The caching configuration for the repository.
         storage: StorageSettings | None
@@ -1449,7 +1463,7 @@ class RepositoryConfig:
             Maximum number of updates stored in a single repo info file. When this
             limit is reached, a new repo info file is created. Lower values produce
             slightly smaller repo info files but require more object fetches to
-            reconstruct the ops log. Default is 1000.
+            reconstruct the ops log. Default: 1000
         """
         ...
     def __repr__(self, /) -> str: ...

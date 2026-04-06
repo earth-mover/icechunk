@@ -169,7 +169,7 @@ def s3_storage(
         Whether to force using path-style addressing for buckets
     network_stream_timeout_seconds: int
         Timeout requests if no bytes can be transmitted during this period of time.
-        If set to 0, timeout is disabled.
+        If set to 0, timeout is disabled. Default: 60.
     requester_pays: bool
         Enable requester pays for S3 buckets
     """
@@ -298,7 +298,7 @@ def tigris_storage(
         obtained are stored, and they can be sent over the network if you pickle the session/repo.
     network_stream_timeout_seconds: int
         Timeout requests if no bytes can be transmitted during this period of time.
-        If set to 0, timeout is disabled.
+        If set to 0, timeout is disabled. Default: 60.
     """
     credentials = s3_credentials(
         access_key_id=access_key_id,
@@ -384,7 +384,7 @@ def r2_storage(
         obtained are stored, and they can be sent over the network if you pickle the session/repo.
     network_stream_timeout_seconds: int
         Timeout requests if no bytes can be transmitted during this period of time.
-        If set to 0, timeout is disabled.
+        If set to 0, timeout is disabled. Default: 60.
     """
     credentials = s3_credentials(
         access_key_id=access_key_id,
