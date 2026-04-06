@@ -8,6 +8,7 @@ members = [
   "icechunk-arrow-object-store",
   "icechunk-python",
   "icechunk-macros",
+  "icechunk-js",
 ]
 default-members = ["icechunk"]
 resolver = "2"

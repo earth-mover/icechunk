@@ -876,39 +876,61 @@ fn compress_locations(
     config: &LocationCompressionConfig,
 ) -> Vec<Option<Vec<u8>>> {
     let compression_level = config.compression_level;
-    let num_threads =
-        std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).min(8);
-    let slice_size = chunks.len().div_ceil(num_threads);
 
-    std::thread::scope(|s| {
-        let handles: Vec<_> = chunks
-            .chunks(slice_size)
-            .map(|slice| {
-                s.spawn(|| {
-                    let mut comp =
-                        zstd::bulk::Compressor::with_dictionary(compression_level, dict)
-                            .ok();
-                    slice
-                        .iter()
-                        .map(|chunk| match (&chunk.payload, comp.as_mut()) {
-                            (ChunkPayload::Virtual(vref), Some(comp)) => {
-                                comp.compress(vref.location.url().as_bytes()).ok()
-                            }
-                            _ => None,
-                        })
-                        .collect::<Vec<_>>()
+    #[cfg(not(target_family = "wasm"))]
+    {
+        let num_threads =
+            std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).min(8);
+        let slice_size = chunks.len().div_ceil(num_threads);
+
+        std::thread::scope(|s| {
+            let handles: Vec<_> = chunks
+                .chunks(slice_size)
+                .map(|slice| {
+                    s.spawn(|| {
+                        let mut comp = zstd::bulk::Compressor::with_dictionary(
+                            compression_level,
+                            dict,
+                        )
+                        .ok();
+                        slice
+                            .iter()
+                            .map(|chunk| match (&chunk.payload, comp.as_mut()) {
+                                (ChunkPayload::Virtual(vref), Some(comp)) => {
+                                    comp.compress(vref.location.url().as_bytes()).ok()
+                                }
+                                _ => None,
+                            })
+                            .collect::<Vec<_>>()
+                    })
                 })
-            })
-            .collect();
+                .collect();
 
-        #[expect(clippy::expect_used)]
-        handles
-            .into_iter()
-            .flat_map(|h| {
-                h.join().expect("Cannot join threads compressing virtual chunk locations")
+            #[expect(clippy::expect_used)]
+            handles
+                .into_iter()
+                .flat_map(|h| {
+                    h.join()
+                        .expect("Cannot join threads compressing virtual chunk locations")
+                })
+                .collect()
+        })
+    }
+
+    #[cfg(target_family = "wasm")]
+    {
+        let mut comp =
+            zstd::bulk::Compressor::with_dictionary(compression_level, dict).ok();
+        chunks
+            .iter()
+            .map(|chunk| match (&chunk.payload, comp.as_mut()) {
+                (ChunkPayload::Virtual(vref), Some(comp)) => {
+                    comp.compress(vref.location.url().as_bytes()).ok()
+                }
+                _ => None,
             })
             .collect()
-    })
+    }
 }
 
 fn mk_chunk_ref<'bldr>(
