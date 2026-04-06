@@ -30,6 +30,8 @@ __all__ = [
     "ManifestVirtualChunkLocationCompressionConfig",
     "ObjectStoreConfig",
     "RepositoryConfig",
+    "ManifestSplitValues",
+    "SplitSizesDict",
     "initialize_logs",
     "set_logs_filter",
 ]
