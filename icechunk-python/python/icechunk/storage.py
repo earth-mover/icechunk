@@ -2,6 +2,7 @@ from collections.abc import Callable
 from datetime import datetime
 
 from icechunk._icechunk_python import (
+    ChunkType,
     GcsBearerCredential,
     ObjectStoreConfig,
     S3Options,
@@ -20,6 +21,7 @@ from icechunk.credentials import (
 
 __all__ = [
     "AnyObjectStoreConfig",
+    "ChunkType",
     "ObjectStoreConfig",
     "S3Options",
     "Storage",

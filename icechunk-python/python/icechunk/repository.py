@@ -18,8 +18,8 @@ from icechunk.garbage import GCSummary
 from icechunk.session import Session
 from icechunk.snapshots import Diff, ManifestFileInfo, SnapshotInfo, Update
 from icechunk.storage import Storage, StorageSettings
-from icechunk.store import IcechunkStore
 from icechunk.types import CommitMethod
+from icechunk.zarr import IcechunkStore
 
 __all__ = [
     "Repository",

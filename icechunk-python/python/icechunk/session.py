@@ -6,7 +6,7 @@ from icechunk._icechunk_python import ChunkType, PySession, SessionMode
 from icechunk.config import RepositoryConfig
 from icechunk.conflicts import ConflictSolver
 from icechunk.snapshots import Diff
-from icechunk.store import IcechunkStore
+from icechunk.zarr import IcechunkStore
 
 __all__ = [
     "ForkSession",

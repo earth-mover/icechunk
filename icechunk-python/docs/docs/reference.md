@@ -42,9 +42,9 @@
 
 ::: icechunk.storage
 
-## `icechunk.store`
+## `icechunk.zarr`
 
-::: icechunk.store
+::: icechunk.zarr
 
 ## `icechunk.virtual`
 
