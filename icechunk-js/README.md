@@ -167,7 +167,7 @@ NAPI_RS_FORCE_WASI=1 yarn test
 ```
 
 > [!IMPORTANT]
-> Building the WASM target requires Rust 1.95+ (or a nightly after 2026-01-19).
-> Rust 1.94 has a bug where `std::thread::spawn` is unconditionally disabled on all WASI targets,
+> Building the WASM target requires Rust 1.94.1 or later.
+> Rust 1.94.0 has a bug where `std::thread::spawn` is unconditionally disabled on all WASI targets,
 > including `wasm32-wasip1-threads` which supports threading.
 > See [rust-lang/rust#151309](https://github.com/rust-lang/rust/pull/151309) for the fix.
