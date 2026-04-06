@@ -155,7 +155,7 @@ class Repository:
 
         !!! warning
             This method must be used with care in a multiprocessing context.
-            Read more in our [Parallel Write Guide](./parallel.md#uncooperative-distributed-writes).
+            Read more in our [Parallel Write Guide](../parallel.md#uncooperative-distributed-writes).
 
         Parameters
         ----------
@@ -199,7 +199,7 @@ class Repository:
 
         !!! warning
             This method must be used with care in a multiprocessing context.
-            Read more in our [Parallel Write Guide](./parallel.md#uncooperative-distributed-writes).
+            Read more in our [Parallel Write Guide](../parallel.md#uncooperative-distributed-writes).
 
         Parameters
         ----------
@@ -243,7 +243,7 @@ class Repository:
 
         !!! warning
             This method must be used with care in a multiprocessing context.
-            Read more in our [Parallel Write Guide](./parallel.md#uncooperative-distributed-writes).
+            Read more in our [Parallel Write Guide](../parallel.md#uncooperative-distributed-writes).
 
             Attempting to create a Repo concurrently in the same location from multiple processes is not safe.
             Instead, create a Repo once and then open it concurrently.
@@ -297,7 +297,7 @@ class Repository:
 
         !!! warning
             This method must be used with care in a multiprocessing context.
-            Read more in our [Parallel Write Guide](./parallel.md#uncooperative-distributed-writes).
+            Read more in our [Parallel Write Guide](../parallel.md#uncooperative-distributed-writes).
 
             Attempting to create a Repo concurrently in the same location from multiple processes is not safe.
             Instead, create a Repo once and then open it concurrently.

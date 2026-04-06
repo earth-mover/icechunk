@@ -202,7 +202,7 @@ repo.reset_branch("dev", snapshot_id=main_branch_snapshot_id)
 
 ### Creating Anonymous Snapshots
 
-Sometimes you want to save your work without committing to any branch. The [`flush`](./reference.md#icechunk.Session.flush) method creates a new snapshot from the session's changes but does not update any branch pointer. The resulting snapshot is "anonymous" — it exists in the store but no branch or tag points to it.
+Sometimes you want to save your work without committing to any branch. The [`flush`](./reference/session.md#icechunk.session.Session.flush) method creates a new snapshot from the session's changes but does not update any branch pointer. The resulting snapshot is "anonymous" — it exists in the store but no branch or tag points to it.
 
 This can be useful for:
 
@@ -218,7 +218,7 @@ snapshot_id = session.flush(message="Exploratory change")
 print(snapshot_id)
 ```
 
-After a flush the session becomes read-only, just like after a commit. The returned snapshot ID can be used later to attach the snapshot to a branch with [`reset_branch`](./reference.md#icechunk.Repository.reset_branch), or simply kept as a reference for time-travel.
+After a flush the session becomes read-only, just like after a commit. The returned snapshot ID can be used later to attach the snapshot to a branch with [`reset_branch`](./reference/index.md#icechunk.Repository.reset_branch), or simply kept as a reference for time-travel.
 
 ```python exec="on" session="version" source="material-block"
 # Adopt the flushed snapshot on the dev branch
