@@ -1,5 +1,59 @@
+# API Reference
+
+## `icechunk`
+
 ::: icechunk
+    options:
+      members: [Repository, print_debug_info, upgrade_icechunk_repository, supported_spec_versions]
+
+## `icechunk.config`
+
+::: icechunk.config
+
+## `icechunk.conflicts`
+
+::: icechunk.conflicts
+
+## `icechunk.credentials`
+
+::: icechunk.credentials
+
+## `icechunk.exceptions`
+
+::: icechunk.exceptions
+
+## `icechunk.garbage`
+
+::: icechunk.garbage
+
+## `icechunk.repository`
+
+::: icechunk.repository
+
+## `icechunk.session`
+
+::: icechunk.session
+
+## `icechunk.snapshots`
+
+::: icechunk.snapshots
+
+## `icechunk.storage`
+
+::: icechunk.storage
+
+## `icechunk.store`
+
+::: icechunk.store
+
+## `icechunk.virtual`
+
+::: icechunk.virtual
+
+## `icechunk.xarray`
 
 ::: icechunk.xarray
+
+## `icechunk.dask`
 
 ::: icechunk.dask

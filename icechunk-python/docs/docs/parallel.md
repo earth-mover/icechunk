@@ -23,7 +23,8 @@ First read some example data, and create an Icechunk Repository.
 ```python exec="on" session="parallel" source="material-block"
 import xarray as xr
 import tempfile
-from icechunk import Repository, local_filesystem_storage
+from icechunk import Repository
+from icechunk.storage import local_filesystem_storage
 
 ds = xr.tutorial.open_dataset("rasm").isel(time=slice(24))
 repo = Repository.create(local_filesystem_storage(tempfile.TemporaryDirectory().name))
@@ -52,7 +53,7 @@ print(session.commit("initialize store"))
 First define a function that constitutes one "write task".
 
 ```python exec="on" session="parallel" source="material-block"
-from icechunk import Session
+from icechunk.session import Session
 
 def write_timestamp(*, itime: int, session: Session) -> None:
     # pass a list to isel to preserve the time dimension
@@ -117,7 +118,7 @@ There are three key points to keep in mind:
 First we modify `write_task` to return the `Session`:
 
 ```python
-from icechunk import Session
+from icechunk.session import Session
 from icechunk.session import ForkSession
 
 def write_timestamp(*, itime: int, session: ForkSession) -> ForkSession:

@@ -138,7 +138,7 @@ To solve this issue, Icechunk lets you **split** the manifest files by specifyin
 
 ```python exec="on" session="perf" source="material-block"
 import icechunk as ic
-from icechunk import ManifestSplitCondition, ManifestSplittingConfig, ManifestSplitDimCondition
+from icechunk.config import ManifestSplitCondition, ManifestSplittingConfig, ManifestSplitDimCondition
 
 split_config = ManifestSplittingConfig.from_dict(
     {
@@ -202,7 +202,7 @@ Options for specifying how to split along a specific axis or dimension are:
 For example, for an array with dimensions `time, latitude, longitude`, the following config
 
 ```python exec="on" session="perf" source="material-block"
-from icechunk import ManifestSplitDimCondition
+from icechunk.config import ManifestSplitDimCondition
 
 {
     ManifestSplitDimCondition.DimensionName("longitude"): 3,
@@ -227,7 +227,7 @@ Consider this simple example: a 1D array with split size 1 along axis 0.
 import random
 
 import icechunk as ic
-from icechunk import (
+from icechunk.config import (
     ManifestSplitCondition,
     ManifestSplitDimCondition,
     ManifestSplittingConfig,
