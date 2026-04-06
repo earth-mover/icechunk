@@ -664,9 +664,7 @@ impl PyUpdateType {
             Self::RepoInitialized {} => {
                 "icechunk.ops.UpdateType.RepoInitialized()".into()
             }
-            Self::ConfigChanged {} => {
-                "icechunk.ops.UpdateType.ConfigChanged()".into()
-            }
+            Self::ConfigChanged {} => "icechunk.ops.UpdateType.ConfigChanged()".into(),
             Self::MetadataChanged {} => {
                 "icechunk.ops.UpdateType.MetadataChanged()".into()
             }
@@ -697,18 +695,14 @@ impl PyUpdateType {
                 "icechunk.ops.UpdateType.RepoMigrated(from_version={from_version}, to_version={to_version})"
             ),
             Self::RepoStatusChanged { status } => {
-                format!(
-                    "icechunk.ops.UpdateType.RepoStatusChanged(status={status})"
-                )
+                format!("icechunk.ops.UpdateType.RepoStatusChanged(status={status})")
             }
             Self::GCRan {} => "icechunk.ops.UpdateType.GCRan()".into(),
             Self::FeatureFlagChanged { id, new_value } => format!(
                 "icechunk.ops.UpdateType.FeatureFlagChanged(id={id}, new_value={})",
                 new_value.map(py_bool).unwrap_or_else(|| "None".to_string()),
             ),
-            Self::ExpirationRan {} => {
-                "icechunk.ops.UpdateType.ExpirationRan()".into()
-            }
+            Self::ExpirationRan {} => "icechunk.ops.UpdateType.ExpirationRan()".into(),
             Self::NewDetachedSnapshot { new_snap_id } => {
                 format!(
                     "icechunk.ops.UpdateType.NewDetachedSnapshot(new_snap_id=\"{new_snap_id}\")"
