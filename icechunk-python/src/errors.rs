@@ -145,7 +145,7 @@ impl IcechunkError {
     }
 
     fn __repr__(&self) -> String {
-        format!("icechunk.exceptions.IcechunkError(message=\"{}\")", self.message)
+        format!("icechunk.IcechunkError(message=\"{}\")", self.message)
     }
 
     fn __str__(&self) -> String {
@@ -192,7 +192,7 @@ impl PyConflictError {
 
     fn __repr__(&self) -> String {
         format!(
-            "icechunk.exceptions.ConflictError(expected_parent={}, actual_parent={})",
+            "icechunk.ConflictError(expected_parent={}, actual_parent={})",
             self.expected_parent.as_deref().unwrap_or("None"),
             self.actual_parent.as_deref().unwrap_or("None")
         )
@@ -242,7 +242,7 @@ impl PyRebaseFailedError {
 
     fn __repr__(&self) -> String {
         format!(
-            "icechunk.exceptions.RebaseFailedError(snapshot=\"{}\", conflicts={:?})",
+            "icechunk.RebaseFailedError(snapshot=\"{}\", conflicts={:?})",
             self.snapshot, self.conflicts
         )
     }
