@@ -47,6 +47,7 @@ async def test_basic_move() -> None:
 
     session = repo.rearrange_session("main")
     store = session.store
+    print(root.tree())
     session.move("/my/old", "/my/new")
     all_keys = sorted([k async for k in store.list()])
     assert all_keys == sorted(

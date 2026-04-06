@@ -1063,6 +1063,7 @@ impl Session {
         // trying to create now; skip it.
         debug_assert_eq!(ancestors.next().as_ref(), Some(path));
         for parent in ancestors {
+            dbg!((path, &parent));
             let node = self.get_node(&parent).await;
             if node.is_err() {
                 return Err(SessionError::capture(
