@@ -2,14 +2,10 @@ import contextlib
 from collections.abc import AsyncIterator, Callable, Generator, Iterable, Sequence
 from typing import Any
 
-from icechunk import (
-    ChunkType,
-    ConflictSolver,
-    Diff,
-    RepositoryConfig,
-    SessionMode,
-)
-from icechunk._icechunk_python import PySession
+from icechunk._icechunk_python import ChunkType, PySession, SessionMode
+from icechunk.config import RepositoryConfig
+from icechunk.conflicts import ConflictSolver
+from icechunk.snapshots import Diff
 from icechunk.store import IcechunkStore
 
 __all__ = [

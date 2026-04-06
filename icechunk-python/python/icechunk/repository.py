@@ -5,24 +5,19 @@ from collections.abc import AsyncIterator, Iterator
 from contextlib import contextmanager
 from typing import Any, Self, cast
 
-from icechunk import ConflictSolver
 from icechunk._icechunk_python import (
     ChunkStorageStats,
-    Diff,
-    FeatureFlag,
-    GCSummary,
-    ManifestFileInfo,
     PyRepository,
-    RepositoryConfig,
     RepoStatus,
-    SnapshotInfo,
     SpecVersion,
-    Storage,
-    StorageSettings,
-    Update,
 )
+from icechunk.config import FeatureFlag, RepositoryConfig
+from icechunk.conflicts import ConflictSolver
 from icechunk.credentials import AnyCredential
+from icechunk.garbage import GCSummary
 from icechunk.session import Session
+from icechunk.snapshots import Diff, ManifestFileInfo, SnapshotInfo, Update
+from icechunk.storage import Storage, StorageSettings
 from icechunk.store import IcechunkStore
 from icechunk.types import CommitMethod
 
