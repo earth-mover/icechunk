@@ -154,8 +154,6 @@ plugins:
         # Redirects from icechunk-python subdirectory to root docs (post-reorganization)
         # These redirects work with use_directory_urls: true (default)
         'icechunk-python/quickstart/index.md': 'quickstart.md'
-        'icechunk-python/reference/index.md': 'reference/index.md'
-        'reference.md': 'reference/index.md'
         'icechunk-python/async/index.md': 'async.md'
         'icechunk-python/configuration/index.md': 'configuration.md'
         'icechunk-python/storage/index.md': 'storage.md'
