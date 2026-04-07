@@ -10,6 +10,8 @@ workloads, all while maintaining format compatibility. Icechunk 2 can read and w
 Icechunk 1 repos, and when you're ready to upgrade the format, a single function call migrates
 your repos quickly and safely.
 
+Migrate your existing repos using our [migration guide](https://icechunk.io/en/latest/migration-2/).
+
 We hope you enjoy the new release!
 
 ### Features
@@ -100,6 +102,7 @@ In Icechunk 2.0, all repository state is referenced from a unified repo table of
 **Concurrent transaction log fetching in rebase**: Transaction logs are now fetched concurrently during rebase, speeding up conflict detection.
 
 **Virtual References Optimizations**: Many low-level optimizations were made for common workloads involving manifests with large numbers of virtual references. Our internal benchmarks show 3X speedup.
+
 ### Reliability & Storage
 
 **[Expanded retries](https://icechunk.io/en/latest/flaky-networks/)**: Retries on HTTP 408 (timeout), 429 (rate limit), 499 (client closed), plus connection reset and stalled stream detection. Configurable `max_tries`, backoff, and per-operation timeouts.
