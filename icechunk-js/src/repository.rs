@@ -423,10 +423,10 @@ impl JsRepository {
         storage_settings: Option<JsStorageSettings>,
     ) -> napi::Result<Option<u32>> {
         let settings = storage_settings.map(|s| s.into());
-        let version = Repository::fetch_spec_version(Arc::clone(&storage.0), settings)
+        let detected = Repository::fetch_spec_version(Arc::clone(&storage.0), settings)
             .await
             .map_napi_err()?;
-        Ok(version.map(|v| v as u32))
+        Ok(detected.map(|d| d.spec_version() as u32))
     }
 
     // --- Config operations ---
