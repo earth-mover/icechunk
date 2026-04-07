@@ -244,3 +244,4 @@ nav:
     - AI Usage Policy: ai-policy.md
     - Migrate to 1.0: migration.md
     - Migrate to 2.0: migration-2.md
+    - Breaking Changes in 2.0: breaking-changes-2.md
