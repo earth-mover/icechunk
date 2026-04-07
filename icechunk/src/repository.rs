@@ -645,7 +645,9 @@ impl Repository {
                 );
                 am.fetch_config().await
             }
-            None => Ok(None),
+            None => {
+                Err(RepositoryError::capture(RepositoryErrorKind::RepositoryDoesntExist))
+            }
         }
     }
 
