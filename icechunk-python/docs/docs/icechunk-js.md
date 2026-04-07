@@ -8,13 +8,13 @@ The official [`@earthmover/icechunk`](https://www.npmjs.com/package/@earthmover/
 
 ## Installation
 
-For your default platform: 
+For your default platform:
 
 ```bash
 npm install @earthmover/icechunk zarrita
 ```
 
-Explicitely for WASM:
+Explicitly for WASM:
 
 ```bash
 npm install @earthmover/icechunk --cpu=wasm32 zarrita
