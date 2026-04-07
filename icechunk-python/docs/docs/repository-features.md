@@ -6,9 +6,9 @@ title: Repository Features
 
 ## Repository Status
 
-Every Icechunk repository has a `status` that controls its availability. The status is represented by a [`RepoStatus`](./reference.md#icechunk.RepoStatus) object with three fields:
+Every Icechunk repository has a `status` that controls its availability. The status is represented by a [`RepoStatus`](./reference/index.md#icechunk.Repository.status) object with three fields:
 
-- `availability` - either `online` (fully available for reads and writes) or `read_only` (available for reads only). See [`RepoAvailability`](./reference.md#icechunk.RepoAvailability).
+- `availability` - either `online` (fully available for reads and writes) or `read_only` (available for reads only). See [`RepoAvailability`](./reference/index.md#icechunk.Repository).
 - `set_at` - the timestamp when the status was last changed.
 - `limited_availability_reason` - an optional human-readable explanation for why the repository is not fully online.
 

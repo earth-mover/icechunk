@@ -336,7 +336,7 @@ See the [object_store ClientConfigKey documentation](https://docs.rs/object_stor
 
 ### Redirect Storage
 
-Icechunk supports a redirect storage backend that resolves the actual storage location at runtime by following HTTP redirects. Rather than pointing directly at a bucket or path, you provide an HTTP URL that returns a redirect (3xx response with a `Location` header) to a supported storage scheme (`s3://`, `gs://`, `r2://`, `tigris://`, `http+icechunk://`, etc.). [See the API](./reference.md#icechunk.redirect_storage)
+Icechunk supports a redirect storage backend that resolves the actual storage location at runtime by following HTTP redirects. Rather than pointing directly at a bucket or path, you provide an HTTP URL that returns a redirect (3xx response with a `Location` header) to a supported storage scheme (`s3://`, `gs://`, `r2://`, `tigris://`, `http+icechunk://`, etc.). [See the API](./reference/storage.md#icechunk.storage.redirect_storage)
 
 ```python
 icechunk.redirect_storage("https://example.com/my-repo-location")
