@@ -78,15 +78,49 @@ for snapshot in repo.ancestry(branch="main"):
     print(snapshot)
 ```
 
-Visually, this looks like below, where the arrows represent the parent-child relationship between snapshots.
+Visually, this looks like:
 
-```python exec="1" result="mermaid" session="version"
-print("""
-gitGraph
-    commit id: "{}" type: NORMAL
-    commit id: "{}" type: NORMAL
-    commit id: "{}" type: NORMAL
-""".format(*[snap.id[:6] for snap in repo.ancestry(branch="main")]))
+```python exec="on" result="text" session="version" source="material-block"
+print(repo.ancestry_graph(branch="main", plain=True))
+```
+
+### Empty Snapshots
+
+Set the `allow_empty` kwarg to create an "empty" snapshot --- one with no changes, just `metadata` and a `message`.
+```python exec="on" session="version" source="material-block" result="code"
+session = repo.writable_session("main")
+snap = session.commit(
+    "added an empty commit", metadata={"moo": "zoo"}, allow_empty=True
+)
+print(repo.lookup_snapshot(snap))
+```
+
+## Amending a snapshot
+
+Amending a snapshot is allowed:
+
+```python exec="on" session="version" source="material-block" result="code"
+session = repo.writable_session("main")
+root = zarr.open_group(session.store)
+root.attrs["foo"] = "quux"
+print(session.amend("amended commit"))
+```
+
+which edits the history to be
+
+```python exec="on" result="text" session="version" source="material-block"
+print(repo.ancestry_graph(branch="main", plain=True))
+```
+
+Note that the snapshot ID has now changed.
+
+Set the `allow_empty` kwarg to edit just the message
+
+```python exec="on" session="version" source="material-block" result="code"
+session = repo.writable_session("main")
+session.amend("i have edited this message", allow_empty=True)
+for snapshot in repo.ancestry(branch="main"):
+    print(snapshot)
 ```
 
 ## Transaction Context Manager
@@ -146,30 +180,10 @@ root.attrs["foo"] = "cherry"
 print(session.commit(message="Update foo attribute on root group"))
 ```
 
-With these branches created, the hierarchy of the repository now looks like below.
+With these branches created, the hierarchy of the repository now looks like:
 
-```python exec="on" result="mermaid" session="version"
-main_commits = [s.id[:6] for s in list(repo.ancestry(branch='main'))]
-dev_commits = [s.id[:6] for s in list(repo.ancestry(branch='dev'))]
-feature_commits = [s.id[:6] for s in list(repo.ancestry(branch='feature'))]
-print(
-"""
-gitGraph
-    commit id: "{}" type: NORMAL
-    commit id: "{}" type: NORMAL
-    branch dev
-    checkout dev
-    commit id: "{}" type: NORMAL
-
-    checkout main
-    commit id: "{}" type: NORMAL
-
-    checkout main
-    branch feature
-    commit id: "{}" type: NORMAL
-
-""".format(*[main_commits[-2], main_commits[-1], dev_commits[0], main_commits[0],feature_commits[0]])
-)
+```python exec="on" result="text" session="version" source="material-block"
+print(repo.ancestry_graph(plain=True))
 ```
 
 ### Listing and Looking Up Branches
@@ -251,14 +265,8 @@ root = zarr.open_group(session.store, mode="r")
 print(root.attrs["foo"])
 ```
 
-```python exec="1" result="mermaid" session="version"
-print("""
-gitGraph
-    commit id: "{}" type: NORMAL
-    commit id: "{}" type: NORMAL
-    commit tag: "v1.0.0"
-    commit id: "{}" type: NORMAL
-""".format(*[snap.id[:6] for snap in repo.ancestry(branch="main")]))
+```python exec="on" result="text" session="version" source="material-block"
+print(repo.ancestry_graph(branch="main", plain=True))
 ```
 
 We can also [list all tags](./reference.md#icechunk.Repository.list_tags) in the repository.
