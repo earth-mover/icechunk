@@ -56,38 +56,6 @@ repo = icechunk.Repository.open(
 
 In this configuration, even if the upper layers of the stack (Dask and Zarr) issue many more concurrent requests, Icechunk will only open 10 HTTP connections to the object store at once.
 
-### Stalled Network Streams
-
-A stalled network stream is an HTTP connection which does not transfer any data over a certain period.
-Stalled connections may occur in the following situations:
-
-- When the client is connecting to a remote object store behind a slow network connection.
-- When the client is behind a VPN or proxy server which is limiting the number or throughput of connections between the client and the remote object store.
-- When the client tries to issue a high volume of concurrent requests. (Note that the global concurrency limit described above should help avoid this, but the precise limit is hardware- and network-dependent. )
-
-By default, Icechunk detects stalled HTTP connections and raises an error when it sees one.
-These errors typically contain lines like
-
-```
-  |-> I/O error
-  |-> streaming error
-  `-> minimum throughput was specified at 1 B/s, but throughput of 0 B/s was observed
-```
-
-This behavior is configurable when creating a new `Storage` option, via the `network_stream_timeout_seconds` parameter.
-The default is 60 seconds.
-To set a different value, you may specify as follows
-
-```python
-storage=  icechunk.s3_storage(
-    **other_storage_kwargs,
-    network_stream_timeout_seconds=50,
-)
-repo = icechunk.Repository.open(storage=storage)
-```
-
-Specifying a value of 0 disables this check entirely.
-
 ## Scalability
 
 Icechunk is designed to be cloud native, making it able to take advantage of the horizontal scaling of cloud providers. To learn more, check out [this blog post](https://earthmover.io/blog/exploring-icechunk-scalability) which explores just how well Icechunk can perform when matched with AWS S3.

@@ -334,6 +334,62 @@ See the [object_store ClientConfigKey documentation](https://docs.rs/object_stor
 - HTTP storage does not support write operations. Attempting to commit changes to a repository opened with HTTP storage will fail.
 - The HTTP server must serve the repository files as static content at the expected paths.
 
+### Redirect Storage
+
+Icechunk supports a redirect storage backend that resolves the actual storage location at runtime by following HTTP redirects. Rather than pointing directly at a bucket or path, you provide an HTTP URL that returns a redirect (3xx response with a `Location` header) to a supported storage scheme (`s3://`, `gs://`, `r2://`, `tigris://`, `http+icechunk://`, etc.). [See the API](./reference.md#icechunk.redirect_storage)
+
+```python
+icechunk.redirect_storage("https://example.com/my-repo-location")
+```
+
+When the repository is first accessed, Icechunk will follow redirects from the given URL until it reaches a recognized storage scheme, and then use that as the underlying backend. The resolved backend is cached for the lifetime of the storage instance.
+
+This is useful when a service controls which bucket or path a repository lives in. For example, a catalog or registry can serve a redirect so that clients don't need to know the final storage location ahead of time — they only need the stable redirect URL. If the data moves to a different bucket or provider, the redirect can be updated without changing any client code.
+
+#### Example redirect server
+
+The server side of redirect storage is straightforward, any HTTP server that returns a 3xx redirect with a `Location` header will work. Here is a minimal example using Python's built-in `http.server`:
+
+```python
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+REPOS = {
+    "/my-repo": "s3://my-bucket/icechunk/my-repo?region=us-east-1",
+    "/public-era5": "gs://era5-zarr/icechunk/era5",
+}
+
+
+class RedirectHandler(BaseHTTPRequestHandler):
+    def do_GET(self) -> None:
+        location = REPOS.get(self.path)
+        if location is None:
+            self.send_response(404)
+            self.end_headers()
+            return
+
+        self.send_response(302)
+        self.send_header("Location", location)
+        self.end_headers()
+
+
+HTTPServer(("127.0.0.1", 8989), RedirectHandler).serve_forever()
+```
+
+With this server running, you can open a repository through it:
+
+```python
+storage = icechunk.redirect_storage("http://127.0.0.1:8989/my-repo")
+repo = icechunk.Repository.open(storage=storage)
+```
+
+#### Limitations
+
+- Redirect Storage only ever resolves to a read-only backend.
+- The resolved storage will use anonymous credentials, so the target data must be publicly accessible.
+- The URL you provide must return an HTTP redirect. If the server returns a non-redirect response, opening the repository will fail.
+- The redirect target must use one of the supported schemes: `s3://`, `gs://`, `gcs://`, `r2://`, `tigris://`, `http+icechunk://`, `http+ic://`, `https+icechunk://`, or `https+ic://`.
+- A maximum of 10 redirects will be followed before failing.
+
 ### In Memory Storage
 
 While it should never be used for production data, Icechunk can also be used with an in-memory storage backend. This is useful for testing and development purposes. This is volatile and when the Python process ends, all data is lost.

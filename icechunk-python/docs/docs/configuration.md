@@ -2,6 +2,11 @@
 
 When creating and opening Icechunk repositories, there are many configuration options available to control the behavior of the repository and the storage backend. This page will guide you through the available options and how to use them.
 
+!!! note
+
+    Many configuration fields display as `None` in Python. This means "use the built-in default," not "no value."
+    The actual defaults are applied at the Rust layer. See the API reference for each setting's default value.
+
 ## [`RepositoryConfig`](./reference/config.md#icechunk.config.RepositoryConfig)
 
 The `RepositoryConfig` object is used to configure the repository. For convenience, this can be constructed using some sane defaults:
@@ -31,7 +36,7 @@ The number of concurrent requests to make when getting partial values from stora
 ### [`max_concurrent_requests`](./reference/config.md#icechunk.config.RepositoryConfig.max_concurrent_requests)
 
 The maximum total number of concurrent requests this repo will allow.
-See [Performance | Concurrency](performance#Concurrency) for details.
+See [Performance | Concurrency](performance.md#Concurrency) for details.
 
 ### [`compression`](./reference/config.md#icechunk.config.RepositoryConfig.compression)
 
