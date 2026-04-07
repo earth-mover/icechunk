@@ -91,6 +91,25 @@ impl TryFrom<&VersionInfo> for RefVersionInfo {
     }
 }
 
+/// Result of detecting a repository's spec version.
+///
+/// For V2+ repos the [`RepoInfo`] that was fetched during detection is
+/// kept so callers can reuse it without an extra round-trip.
+#[derive(Debug)]
+pub enum DetectedSpecVersion {
+    V1,
+    V2Plus { version: SpecVersionBin, repo_info: Arc<RepoInfo> },
+}
+
+impl DetectedSpecVersion {
+    pub fn spec_version(&self) -> SpecVersionBin {
+        match self {
+            Self::V1 => SpecVersionBin::V1,
+            Self::V2Plus { version, .. } => *version,
+        }
+    }
+}
+
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum RepositoryErrorKind {
@@ -342,6 +361,8 @@ impl Repository {
         // Launch spec version detection and an optimistic config.yaml fetch concurrently.
         // For IC1 repos this avoids a sequential round-trip; for V2+ repos the config.yaml
         // result is ignored (config lives in the repo info object instead).
+        // Note: for V2+ repos, fetch_spec_version already fetches the RepoInfo
+        // internally, so we reuse it to avoid a redundant round-trip.
         let temp_am = AssetManager::new_no_cache(
             Arc::clone(&storage),
             settings.clone(),
@@ -361,23 +382,25 @@ impl Repository {
         let (spec_version_result, config_yaml_result) =
             join!(fetch_version, fetch_config_yaml);
 
-        let spec_version = match spec_version_result.capture()?? {
+        let detected = match spec_version_result.capture()?? {
             Some(v) => Ok(v),
             None => {
                 Err(RepositoryError::capture(RepositoryErrorKind::RepositoryDoesntExist))
             }
         }?;
+        let spec_version = detected.spec_version();
         trace!(%spec_version, "Repository version found");
 
-        let (persisted_config, config_version) = if spec_version >= SpecVersionBin::V2 {
-            // V2+ repos: config is always embedded in the repo info object.
-            let (repo_info, _) = temp_am.fetch_repo_info().await?;
-            (repo_info.config().inject()?, storage::VersionInfo::for_creation())
-        } else {
-            // V1 repos: use the config.yaml result we already fetched
-            match config_yaml_result? {
-                Some((c, v)) => (Some(c), v),
-                None => (None, storage::VersionInfo::for_creation()),
+        let (persisted_config, config_version) = match detected {
+            DetectedSpecVersion::V2Plus { repo_info, .. } => {
+                (repo_info.config().inject()?, storage::VersionInfo::for_creation())
+            }
+            DetectedSpecVersion::V1 => {
+                // V1 repos: use the config.yaml result we already fetched
+                match config_yaml_result? {
+                    Some((c, v)) => (Some(c), v),
+                    None => (None, storage::VersionInfo::for_creation()),
+                }
             }
         };
 
@@ -492,7 +515,7 @@ impl Repository {
     pub async fn fetch_spec_version(
         storage: Arc<dyn Storage + Send + Sync>,
         settings: Option<storage::Settings>,
-    ) -> RepositoryResult<Option<SpecVersionBin>> {
+    ) -> RepositoryResult<Option<DetectedSpecVersion>> {
         let settings = match settings {
             Some(s) => s,
             None => storage.default_settings().await.inject()?,
@@ -525,7 +548,10 @@ impl Repository {
             ));
 
             let res = temp_asset_manager.fetch_repo_info().await;
-            Ok(res.and_then(|(ri, _)| ri.spec_version().inject()))
+            Ok(res.and_then(|(ri, _)| {
+                let version = ri.spec_version().inject()?;
+                Ok((version, ri))
+            }))
         }
         .in_current_span();
 
@@ -533,13 +559,15 @@ impl Repository {
         match after_v1 {
             // if we have both configuration, this is an unfinished migration
             // but still a V2+ repo
-            Ok(v) => Ok(Some(v)),
+            Ok((version, repo_info)) => {
+                Ok(Some(DetectedSpecVersion::V2Plus { version, repo_info }))
+            }
             Err(RepositoryError {
                 kind: RepositoryErrorKind::RepositoryDoesntExist,
                 ..
             }) => {
                 if is_v1 {
-                    Ok(Some(SpecVersionBin::V1))
+                    Ok(Some(DetectedSpecVersion::V1))
                 } else {
                     Ok(None)
                 }
@@ -600,25 +628,24 @@ impl Repository {
         storage: Arc<dyn Storage + Send + Sync>,
     ) -> RepositoryResult<Option<(RepositoryConfig, storage::VersionInfo)>> {
         let settings = storage.default_settings().await.inject()?;
-        let spec_version = Self::fetch_spec_version(Arc::clone(&storage), None)
-            .await?
-            .unwrap_or_default();
+        let detected = Self::fetch_spec_version(Arc::clone(&storage), None).await?;
 
-        let am = AssetManager::new_no_cache(
-            Arc::clone(&storage),
-            settings,
-            spec_version,
-            1, // we are only reading, compression doesn't matter
-            DEFAULT_MAX_CONCURRENT_REQUESTS,
-        );
-
-        if spec_version >= SpecVersionBin::V2 {
-            // V2+ repos: config is always embedded in the repo info object.
-            let (repo_info, version) = am.fetch_repo_info().await?;
-            Ok(repo_info.config().inject()?.map(|config| (config, version)))
-        } else {
-            // V1 repos: read from config.yaml
-            am.fetch_config().await
+        match detected {
+            Some(DetectedSpecVersion::V2Plus { repo_info, .. }) => Ok(repo_info
+                .config()
+                .inject()?
+                .map(|config| (config, storage::VersionInfo::for_creation()))),
+            Some(DetectedSpecVersion::V1) => {
+                let am = AssetManager::new_no_cache(
+                    Arc::clone(&storage),
+                    settings,
+                    SpecVersionBin::V1,
+                    1, // we are only reading, compression doesn't matter
+                    DEFAULT_MAX_CONCURRENT_REQUESTS,
+                );
+                am.fetch_config().await
+            }
+            None => Ok(None),
         }
     }
 
