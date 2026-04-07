@@ -8,6 +8,7 @@ members = [
   "icechunk-arrow-object-store",
   "icechunk-python",
   "icechunk-macros",
+  "icechunk-js",
 ]
 default-members = ["icechunk"]
 resolver = "2"
@@ -80,7 +81,7 @@ tempfile = "3.27.0"
 test-log = { version = "0.2.19", default-features = false, features = ["trace", "color", "unstable"] }
 test-strategy = "0.4.5"
 thiserror = "2.0.18"
-tokio = "1.50.0"
+tokio = "1.51.0"
 tokio-util = { version = "0.7.18", features = ["io-util"] }
 tracing = "0.1.44"
 tracing-chrome = "0.7"
