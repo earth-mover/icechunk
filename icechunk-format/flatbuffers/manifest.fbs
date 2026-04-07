@@ -53,7 +53,6 @@ table ArrayManifest {
 
   // One element per chunk reference in the array.
   // MUST be sorted in ascending lexicographic order of ChunkRef.index
-  // (compare first element, break ties with second, etc.).
   refs: [ChunkRef] (required);
 
   // Reserved for future use. Opaque byte vector for extensibility.
