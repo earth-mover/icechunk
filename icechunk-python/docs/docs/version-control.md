@@ -108,13 +108,8 @@ print(session.amend("amended commit"))
 
 which edits the history to be
 
-```python exec="1" result="mermaid" session="version"
-print("""
-gitGraph
-    commit id: "{}" type: NORMAL
-    commit id: "{}" type: NORMAL
-    commit id: "{}" type: NORMAL
-""".format(*[snap.id[:6] for snap in repo.ancestry(branch="main")]))
+```python exec="on" result="text" session="version"
+print(repo.ancestry_graph(branch="main", plain=True))
 ```
 
 Note that the snapshot ID has now changed.
