@@ -174,7 +174,6 @@ __all__ = [
     "VirtualChunkContainer",
     "VirtualChunkSpec",
     "__version__",
-    "_upgrade_icechunk_repository",
     "azure_credentials",
     "azure_from_env_credentials",
     "azure_refreshable_credentials",
