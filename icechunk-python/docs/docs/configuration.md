@@ -156,7 +156,7 @@ If no config is provided, the repo will be created with the [default configurati
 === "Creating with S3 storage"
 
     ```python
-    storage = ic.storage.s3_storage(
+    storage = ic.s3_storage(
         bucket='earthmover-sample-data',
         prefix='icechunk/oisst.2020-2024/',
         region='us-east-1',
@@ -172,7 +172,7 @@ If no config is provided, the repo will be created with the [default configurati
 === "Creating with Google Cloud Storage"
 
     ```python
-    storage = ic.storage.gcs_storage(
+    storage = ic.gcs_storage(
         bucket='earthmover-sample-data',
         prefix='icechunk/oisst.2020-2024/',
         from_env=True,
@@ -187,7 +187,7 @@ If no config is provided, the repo will be created with the [default configurati
 === "Creating with Azure Blob Storage"
 
     ```python
-    storage = ic.storage.azure_storage(
+    storage = ic.azure_storage(
         container='earthmover-sample-data',
         prefix='icechunk/oisst.2020-2024/',
         from_env=True,
@@ -203,7 +203,7 @@ If no config is provided, the repo will be created with the [default configurati
 
     ```python
     repo = ic.Repository.create(
-        storage=ic.storage.local_filesystem_storage("/path/to/my/dataset"),
+        storage=ic.local_filesystem_storage("/path/to/my/dataset"),
         config=config
     )
     ```
@@ -217,7 +217,7 @@ However, if a config was specified when opening the repo AND a config was previo
 === "Opening from S3 Storage"
 
     ```python
-    storage = ic.storage.s3_storage(
+    storage = ic.s3_storage(
         bucket='earthmover-sample-data',
         prefix='icechunk/oisst.2020-2024/',
         region='us-east-1',
@@ -233,7 +233,7 @@ However, if a config was specified when opening the repo AND a config was previo
 === "Opening from Google Cloud Storage"
 
     ```python
-    storage = ic.storage.gcs_storage(
+    storage = ic.gcs_storage(
         bucket='earthmover-sample-data',
         prefix='icechunk/oisst.2020-2024/',
         from_env=True,
@@ -248,7 +248,7 @@ However, if a config was specified when opening the repo AND a config was previo
 === "Opening from Azure Blob Storage"
 
     ```python
-    storage = ic.storage.azure_storage(
+    storage = ic.azure_storage(
         container='earthmover-sample-data',
         prefix='icechunk/oisst.2020-2024/',
         from_env=True,
@@ -263,7 +263,7 @@ However, if a config was specified when opening the repo AND a config was previo
 === "Opening from local filesystem"
 
     ```python
-    storage = ic.storage.local_filesystem_storage("/path/to/my/dataset")
+    storage = ic.local_filesystem_storage("/path/to/my/dataset")
     store = ic.zarr.IcechunkStore.open(
         storage=storage,
         config=config,

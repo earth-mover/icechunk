@@ -22,7 +22,7 @@ To get started, we can create a new `Repository`.
 ```python exec="on" session="version" source="material-block"
 import icechunk as ic
 
-repo = ic.Repository.create(ic.storage.in_memory_storage())
+repo = ic.Repository.create(ic.in_memory_storage())
 ```
 
 On creating a new [`Repository`](./reference/index.md#icechunk.Repository), it will automatically create a `main` branch with an initial snapshot. We can take a look at the ancestry of the `main` branch to confirm this.
@@ -337,7 +337,7 @@ import icechunk as ic
 import numpy as np
 import zarr
 
-repo = ic.Repository.create(ic.storage.in_memory_storage())
+repo = ic.Repository.create(ic.in_memory_storage())
 session = repo.writable_session("main")
 root = zarr.create_group(session.store)
 root.attrs["foo"] = "bar"

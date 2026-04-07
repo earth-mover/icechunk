@@ -19,7 +19,7 @@ A subset of the Weatherbench2 copy of the ERA5 reanalysis dataset.
     import icechunk as ic
     import xarray as xr
 
-    storage = ic.storage.s3_storage(
+    storage = ic.s3_storage(
         bucket="icechunk-public-data",
         prefix="v1/era5_weatherbench2",
         region="us-east-1",
@@ -39,7 +39,7 @@ A subset of the Weatherbench2 copy of the ERA5 reanalysis dataset.
     import icechunk as ic
     import xarray as xr
 
-    storage = ic.storage.gcs_storage(
+    storage = ic.gcs_storage(
         bucket="icechunk-public-data-gcs",
         prefix="v01/era5_weatherbench2",
     )
@@ -57,7 +57,7 @@ A subset of the Weatherbench2 copy of the ERA5 reanalysis dataset.
     import icechunk as ic
     import xarray as xr
 
-    storage = ic.storage.r2_storage(
+    storage = ic.r2_storage(
         prefix="v1/era5_weatherbench2",
         endpoint_url="https://data.icechunk.cloud",
         anonymous=True,
@@ -127,7 +127,7 @@ See [source](https://storage.googleapis.com/earthenginepartners-hansen/GLCLU2000
     import icechunk as ic
     import xarray as xr
 
-    storage = ic.storage.s3_storage(
+    storage = ic.s3_storage(
         bucket="icechunk-public-data",
         prefix=f"v1/glad",
         region="us-east-1",
@@ -154,7 +154,7 @@ Provided by [dynamical.org](https://dynamical.org/), see [source](https://dynami
     import icechunk as ic
     import xarray as xr
 
-    storage = ic.storage.s3_storage(
+    storage = ic.s3_storage(
         bucket="dynamical-noaa-gfs",
         prefix="noaa-gfs-analysis/v0.1.0.icechunk",
         region="us-west-2",
@@ -177,7 +177,7 @@ Provided by [Development Seed](https://developmentseed.org/), see https://github
     import icechunk as ic
     import xarray as xr
 
-    storage = ic.storage.s3_storage(
+    storage = ic.s3_storage(
         bucket='nasa-waterinsight',
         prefix="virtual-zarr-store/icechunk/RASI/HISTORICAL", #replace HISTORICAL with SSP245/SSP585 for future scenarios
         anonymous=True,

@@ -14,7 +14,7 @@ import icechunk as ic
 import tempfile
 
 # initialize the icechunk store
-storage = ic.storage.local_filesystem_storage(tempfile.TemporaryDirectory().name)
+storage = ic.local_filesystem_storage(tempfile.TemporaryDirectory().name)
 repo = ic.Repository.create(storage)
 session = repo.writable_session("main")
 ```

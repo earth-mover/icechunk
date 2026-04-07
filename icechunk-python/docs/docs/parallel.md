@@ -26,7 +26,7 @@ import tempfile
 import icechunk as ic
 
 ds = xr.tutorial.open_dataset("rasm").isel(time=slice(24))
-repo = ic.Repository.create(ic.storage.local_filesystem_storage(tempfile.TemporaryDirectory().name))
+repo = ic.Repository.create(ic.local_filesystem_storage(tempfile.TemporaryDirectory().name))
 session = repo.writable_session("main")
 ```
 

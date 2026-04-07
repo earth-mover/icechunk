@@ -11,7 +11,7 @@ First create a Repository, configured so that there are no "inline" chunks. This
 import icechunk as ic
 
 repo = ic.Repository.create(
-    ic.storage.in_memory_storage(),
+    ic.in_memory_storage(),
     config=ic.config.RepositoryConfig(inline_chunk_threshold_bytes=0),
 )
 ```

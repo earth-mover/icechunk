@@ -41,7 +41,7 @@ import zarr
 
 np.set_printoptions(formatter={'int': lambda x: f'{x:3d}'})
 
-repo = ic.Repository.create(ic.storage.in_memory_storage())
+repo = ic.Repository.create(ic.in_memory_storage())
 session = repo.writable_session("main")
 arr = zarr.create(
     store=session.store,
@@ -65,7 +65,7 @@ The chunks containing `[0, 1, 2, 3]` were discarded. The vacated end is reset to
 Chunks that shift out of bounds are lost. To preserve all data when shifting, resize first to make room:
 
 ```python exec="on" session="chunks" source="material-block" result="code"
-repo = ic.Repository.create(ic.storage.in_memory_storage())
+repo = ic.Repository.create(ic.in_memory_storage())
 session = repo.writable_session("main")
 arr = zarr.create(
     store=session.store,
@@ -88,7 +88,7 @@ print("After: ", arr[:])
 For N-dimensional arrays, provide an offset for each dimension:
 
 ```python exec="on" session="chunks" source="material-block" result="code"
-repo = ic.Repository.create(ic.storage.in_memory_storage())
+repo = ic.Repository.create(ic.in_memory_storage())
 session = repo.writable_session("main")
 arr = zarr.create(
     store=session.store,
@@ -139,7 +139,7 @@ For transformations that [`shift_array`][icechunk.session.Session.shift_array] c
 However, `reindex_array` only visits chunk positions that contain data — empty (fill value) positions are skipped. This means that if an empty chunk would shift into an occupied position, the occupied position retains stale data. To handle this, provide a `backward` function — the inverse of `forward`. For each existing chunk position, the backward function determines whether a real chunk should have moved there; if not, the position is cleared to the fill value. See [Providing a Backward Function](#backward-function) for an example.
 
 ```python exec="on" session="chunks" source="material-block" result="code"
-repo = ic.Repository.create(ic.storage.in_memory_storage())
+repo = ic.Repository.create(ic.in_memory_storage())
 session = repo.writable_session("main")
 arr = zarr.create(
     store=session.store,
@@ -171,7 +171,7 @@ Here's a concrete example. We create an array with a gap — chunk 0 has value `
 
 ```python exec="on" session="chunks" source="material-block" result="code"
 # Forward only: the empty chunk at index 1 doesn't shift into index 2
-repo = ic.Repository.create(ic.storage.in_memory_storage())
+repo = ic.Repository.create(ic.in_memory_storage())
 session = repo.writable_session("main")
 arr = zarr.create(
     store=session.store, path="arr", shape=(3,), chunks=(1,),
@@ -199,7 +199,7 @@ print("Forward only:", arr[:])  # [ 1,  1,  3] — index 0 is stale!
 Index 0 should be empty after the shift, but the empty chunk at index 1 was never visited, so nothing cleared it. Adding a backward function fixes this:
 
 ```python exec="on" session="chunks" source="material-block" result="code"
-repo = ic.Repository.create(ic.storage.in_memory_storage())
+repo = ic.Repository.create(ic.in_memory_storage())
 session = repo.writable_session("main")
 arr = zarr.create(
     store=session.store, path="arr", shape=(3,), chunks=(1,),
@@ -238,7 +238,7 @@ print("With backward:", arr[:])  # [-1,  1,  3] — index 0 correctly cleared
 With `reindex_array`, you can implement any chunk permutation:
 
 ```python exec="on" session="chunks" source="material-block" result="code"
-repo = ic.Repository.create(ic.storage.in_memory_storage())
+repo = ic.Repository.create(ic.in_memory_storage())
 session = repo.writable_session("main")
 arr = zarr.create(
     store=session.store,
@@ -262,7 +262,7 @@ print("After: ", arr[:])
 ### Multi-dimensional Example
 
 ```python exec="on" session="chunks" source="material-block" result="code"
-repo = ic.Repository.create(ic.storage.in_memory_storage())
+repo = ic.Repository.create(ic.in_memory_storage())
 session = repo.writable_session("main")
 arr = zarr.create(
     store=session.store,

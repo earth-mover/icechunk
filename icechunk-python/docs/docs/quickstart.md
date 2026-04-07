@@ -35,7 +35,7 @@ However, you can also create a repo on your local filesystem.
 
     ```python
     import icechunk as ic
-    storage = ic.storage.s3_storage(bucket="my-bucket", prefix="my-prefix", from_env=True)
+    storage = ic.s3_storage(bucket="my-bucket", prefix="my-prefix", from_env=True)
     repo = ic.Repository.create(storage)
     ```
 
@@ -43,7 +43,7 @@ However, you can also create a repo on your local filesystem.
 
     ```python
     import icechunk as ic
-    storage = ic.storage.gcs_storage(bucket="my-bucket", prefix="my-prefix", from_env=True)
+    storage = ic.gcs_storage(bucket="my-bucket", prefix="my-prefix", from_env=True)
     repo = ic.Repository.create(storage)
     ```
 
@@ -51,7 +51,7 @@ However, you can also create a repo on your local filesystem.
 
     ```python
     import icechunk as ic
-    storage = ic.storage.azure_storage(container="my-container", prefix="my-prefix", from_env=True)
+    storage = ic.azure_storage(container="my-container", prefix="my-prefix", from_env=True)
     repo = ic.Repository.create(storage)
     ```
 
@@ -60,7 +60,7 @@ However, you can also create a repo on your local filesystem.
     ```python exec="on" session="quickstart" source="material-block"
     import icechunk as ic
     import tempfile
-    storage = ic.storage.local_filesystem_storage(tempfile.TemporaryDirectory().name)
+    storage = ic.local_filesystem_storage(tempfile.TemporaryDirectory().name)
     repo = ic.Repository.create(storage)
     ```
 

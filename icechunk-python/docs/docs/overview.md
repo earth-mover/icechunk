@@ -151,7 +151,7 @@ Weather forecast datasets not only regularly add new timepoints, but also backfi
     # January: Run analysis using specific tagged version
     import icechunk as ic
     repo = ic.Repository.open(
-        ic.storage.s3_storage(bucket="public-weather", prefix="forecast")
+        ic.s3_storage(bucket="public-weather", prefix="forecast")
     )
     session = repo.readonly_session(tag="2025-01-15")
     forecast = zarr.open_group(session.store)

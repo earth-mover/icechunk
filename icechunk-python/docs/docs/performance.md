@@ -198,7 +198,7 @@ split_config = ic.config.ManifestSplittingConfig.from_dict(
 )
 repo_config = ic.config.RepositoryConfig(manifest=ic.config.ManifestConfig(splitting=split_config))
 
-storage = ic.storage.local_filesystem_storage(
+storage = ic.local_filesystem_storage(
     f"/tmp/splitting-test/{random.randint(100, 20000)}"
 )
 # Note any config passed to Repository.create is persisted to disk.

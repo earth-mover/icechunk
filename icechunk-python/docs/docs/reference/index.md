@@ -5,12 +5,12 @@ The `icechunk` package provides `Repository` — the main entry point — and a 
 ```python
 import icechunk as ic
 
-# Top-level: Repository, exceptions, utilities
-repo = ic.Repository.create(ic.storage.local_filesystem_storage("/tmp/my-repo"))
+# Top-level: Repository, storage factories, exceptions, utilities
+repo = ic.Repository.create(ic.s3_storage(bucket="my-bucket", prefix="my-prefix", from_env=True))
 
 # Submodules for everything else
 config = ic.config.RepositoryConfig(...)
-storage = ic.storage.s3_storage(bucket="my-bucket", prefix="my-prefix", from_env=True)
+solver = ic.conflicts.BasicConflictSolver(...)
 ```
 
 ## Submodules

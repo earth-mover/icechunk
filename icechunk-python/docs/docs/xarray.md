@@ -46,7 +46,7 @@ import icechunk as ic
 === "S3 Storage"
 
     ```python
-    storage_config = ic.storage.s3_storage(
+    storage_config = ic.s3_storage(
         bucket="icechunk-test",
         prefix="xarray-demo"
     )
@@ -57,7 +57,7 @@ import icechunk as ic
 
     ```python exec="on" session="xarray" source="material-block"
     import tempfile
-    storage_config = ic.storage.local_filesystem_storage(tempfile.TemporaryDirectory().name)
+    storage_config = ic.local_filesystem_storage(tempfile.TemporaryDirectory().name)
     repo = ic.Repository.create(storage_config)
     ```
 
