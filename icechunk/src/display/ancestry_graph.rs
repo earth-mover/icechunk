@@ -237,7 +237,7 @@ impl AncestryGraph {
 
             if !merging.is_empty() {
                 // Side branches merge into this node. Emit fork lines on the
-                // connector row above this node (row - 1), so the ╱ appears
+                // connector row above this node (row - 1), so the ╯ appears
                 // between the previous node and this fork point.
                 let fork_row = row.saturating_sub(1);
                 for &mc in &merging {
@@ -441,8 +441,8 @@ mod tests {
         );
 
         // There should be a / fork connector
-        let has_fork = lines.iter().any(|l| l.contains('╱'));
-        assert!(has_fork, "should have a / fork connector: {output}");
+        let has_fork = lines.iter().any(|l| l.contains('╯'));
+        assert!(has_fork, "should have a ╯ fork connector: {output}");
 
         // main tip should appear
         assert!(
@@ -523,7 +523,7 @@ mod tests {
         // Side branch nodes should appear with * in their column
         // There should be fork connector lines (/ characters)
         assert!(
-            output.contains('╱'),
+            output.contains('╯'),
             "tree output should contain fork connectors: {output}"
         );
     }
@@ -608,16 +608,16 @@ mod tests {
         //   feature-b: s1 -> s4 (tip, forks from s1)
         //
         // Expected output:
-        //     ●   (feature-b) Commit 4
+        //     ●     (feature-b) Commit 4
         //     │
-        //   ● │   (feature-a) Commit 3
-        //   ╱ ╱
-        //   ●     (main) Commit 2
-        //   │
-        //   ●     Commit 1
+        //   ● │     (feature-a) Commit 3
+        //   │ │
+        //   ● │     (main) Commit 2
+        //   │ │
+        //   ● ╯ ╯   Commit 1
         //
-        // Key: both ╱ connectors appear on the same row (just above the
-        // fork point s1), with │ lines running from each tip down to that row.
+        // Key: both ╯ connectors appear on the fork point node's row,
+        // with │ lines running from each tip down to that row.
         // feature-b must NOT look like it branched from feature-a.
         let s1 = make_snapshot(1, None);
         let s2 = make_snapshot(2, Some(1)); // main tip
@@ -645,20 +645,14 @@ mod tests {
         assert!(output.contains("feature-a"), "should mention feature-a");
         assert!(output.contains("feature-b"), "should mention feature-b");
 
-        // The fork connectors (╱) should appear on the row just above the
-        // fork point node (Commit 1), not immediately after each branch tip.
-        let fork_point_row = lines
-            .iter()
-            .position(|l| l.contains("Commit 1"))
-            .expect("should have Commit 1");
+        // The fork connectors (╯) should appear on the fork point node's row.
+        let fork_point_line =
+            lines.iter().find(|l| l.contains("Commit 1")).expect("should have Commit 1");
 
-        // The row just above Commit 1 should contain both ╱ connectors.
-        assert!(fork_point_row > 0, "fork point should not be the first row");
-        let connector_row = lines[fork_point_row - 1];
-        let fork_count = connector_row.matches('╱').count();
+        let fork_count = fork_point_line.matches('╯').count();
         assert_eq!(
             fork_count, 2,
-            "both branches should have ╱ on the row above the fork point: {connector_row:?}"
+            "both branches should have ╯ on the fork point row: {fork_point_line:?}"
         );
 
         // No trunk │ should appear above the trunk's first ● node.

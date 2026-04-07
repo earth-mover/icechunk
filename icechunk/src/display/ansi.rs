@@ -73,41 +73,55 @@ impl fmt::Display for AncestryGraph {
         let col_colors = self.column_colors();
         let elements = self.layout();
 
-        // Group connector elements (Lines, Forks) by the node row they follow.
+        // Group Line elements by their from_row (connector rows between nodes).
         let mut connector_lines: HashMap<usize, Vec<&LayoutElement>> = HashMap::new();
+        // Group Fork elements by their to_row (the fork point node they arrive at).
+        let mut forks_at_node: HashMap<usize, Vec<&LayoutElement>> = HashMap::new();
         for elem in &elements {
             match elem {
-                LayoutElement::Line { from_row, .. }
-                | LayoutElement::Fork { from_row, .. } => {
+                LayoutElement::Line { from_row, .. } => {
                     connector_lines.entry(*from_row).or_default().push(elem);
+                }
+                LayoutElement::Fork { to_row, .. } => {
+                    forks_at_node.entry(*to_row).or_default().push(elem);
                 }
                 LayoutElement::Node { .. } => {}
             }
         }
 
         for (row, node) in self.nodes.iter().enumerate() {
-            // Node line
+            // Node line: show ● for this node's column, ╯ for merging columns,
+            // │ for other active columns.
             let prefix = render_prefix(&col_colors, self.plain, |c| {
                 if c == node.column {
                     Some('●')
                 } else {
-                    // Show │ for active columns (those with a line on this or previous row).
+                    // Check if a fork arrives at this node from column c.
+                    let is_merging = forks_at_node.get(&row).is_some_and(|elems| {
+                        elems.iter().any(
+                            |e| matches!(e, LayoutElement::Fork { from_col, .. } if *from_col == c),
+                        )
+                    });
+                    if is_merging {
+                        return Some('╯');
+                    }
+                    // Show │ for active columns (those with a line on this row).
                     let has_line = connector_lines.get(&row).is_some_and(|elems| {
                         elems.iter().any(
                             |e| matches!(e, LayoutElement::Line { col, .. } if *col == c),
                         )
                     });
-                    // A column had a line on the previous row, but NOT if it
-                    // merged (has a Fork) on that row — merged columns stop.
+                    // Also check previous row's lines, excluding merged columns.
                     let had_line = row > 0
                         && connector_lines.get(&(row - 1)).is_some_and(|elems| {
-                            let has_pipe = elems.iter().any(
+                            elems.iter().any(
                                 |e| matches!(e, LayoutElement::Line { col, .. } if *col == c),
-                            );
-                            let was_merged = elems.iter().any(
+                            )
+                        })
+                        && !forks_at_node.get(&row).is_some_and(|elems| {
+                            elems.iter().any(
                                 |e| matches!(e, LayoutElement::Fork { from_col, .. } if *from_col == c),
-                            );
-                            has_pipe && !was_merged
+                            )
                         });
                     if has_line || had_line { Some('│') } else { None }
                 }
@@ -122,15 +136,9 @@ impl fmt::Display for AncestryGraph {
                 writeln!(f, "{prefix}{DIM}{short_id}{RESET}{labels} {msg}")?;
             }
 
-            // Connector line (if any elements follow this row)
+            // Connector line: │ for active columns (no more ╱ here, forks are on node lines)
             if let Some(elems) = connector_lines.get(&row) {
                 let line = render_prefix(&col_colors, self.plain, |c| {
-                    let is_fork = elems.iter().any(|e| {
-                        matches!(e, LayoutElement::Fork { from_col, .. } if *from_col == c)
-                    });
-                    if is_fork {
-                        return Some('╱');
-                    }
                     let is_pipe = elems.iter().any(
                         |e| matches!(e, LayoutElement::Line { col, .. } if *col == c),
                     );
