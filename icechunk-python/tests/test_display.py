@@ -169,7 +169,7 @@ class TestRepr:
     def test_store(self, repo: Repository) -> None:
         store = repo.writable_session("main").store
         repr_str = repr(store)
-        assert "<icechunk.zarr.IcechunkStore>" in repr_str
+        assert "<icechunk.IcechunkStore>" in repr_str
         assert "read_only: False" in repr_str
         assert "branch: main" in repr_str
 
@@ -244,7 +244,7 @@ class TestStr:
     def test_store(self, repo: Repository) -> None:
         store = repo.writable_session("main").store
         str_str = str(store)
-        assert "<icechunk.zarr.IcechunkStore>" in str_str
+        assert "<icechunk.IcechunkStore>" in str_str
         assert "read_only: False" in str_str
 
     def test_caching_config(self) -> None:
@@ -292,7 +292,7 @@ class TestReprHtml:
     def test_store(self, repo: Repository) -> None:
         html = repo.writable_session("main").store._repr_html_()
         assert '<div class="icechunk-repr">' in html
-        assert "icechunk.zarr.IcechunkStore" in html
+        assert "icechunk.IcechunkStore" in html
 
     def test_caching_config(self) -> None:
         html = CachingConfig(num_snapshot_nodes=100)._repr_html_()

@@ -235,7 +235,6 @@ nav:
       - icechunk.session: reference/session.md
       - icechunk.snapshots: reference/snapshots.md
       - icechunk.storage: reference/storage.md
-      - icechunk.zarr: reference/zarr.md
       - icechunk.virtual: reference/virtual.md
       - icechunk.xarray: reference/xarray.md
       - icechunk.dask: reference/dask.md

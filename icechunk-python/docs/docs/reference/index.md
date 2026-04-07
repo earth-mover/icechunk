@@ -24,7 +24,6 @@ solver = ic.conflicts.BasicConflictSolver(...)
 | [`icechunk.session`](session.md) | Sessions for reading and writing data |
 | [`icechunk.snapshots`](snapshots.md) | Snapshot metadata, diffs, manifest file info |
 | [`icechunk.storage`](storage.md) | Storage backends and configuration |
-| [`icechunk.zarr`](zarr.md) | The Zarr-compatible `IcechunkStore` |
 | [`icechunk.virtual`](virtual.md) | Virtual chunk containers |
 | [`icechunk.xarray`](xarray.md) | Xarray integration |
 | [`icechunk.dask`](dask.md) | Dask integration |
@@ -32,6 +31,10 @@ solver = ic.conflicts.BasicConflictSolver(...)
 ## `icechunk.Repository`
 
 ::: icechunk.Repository
+
+## `icechunk.IcechunkStore`
+
+::: icechunk.zarr.IcechunkStore
 
 ## Exceptions
 
