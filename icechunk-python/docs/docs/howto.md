@@ -39,6 +39,8 @@ If you need to delete a repo, just go to the underlying storage and remove the d
 
 ## Reading, Writing, and Modifying Data with Zarr
 
+For a full walkthrough, see the [Quickstart](./quickstart.md).
+
 Read and write operations occur within the context of a [transaction](./version-control.md).
 The general pattern is
 
@@ -119,6 +121,8 @@ del group["array"]
 ```
 
 ## Reading and Writing Data with Xarray
+
+For more depth, see [Xarray](./xarray.md), [Parallel writes](./parallel.md), and [Dask](./dask.md).
 
 ### Write an in-memory Xarray Dataset
 
@@ -206,6 +210,23 @@ for snapshot in repo.ancestry(branch="main"):
 session = repo.readonly_session(snapshot_id=snapshot_id)
 ```
 
+### Amend a Snapshot
+
+For more, see [amending](./version-controld.md#amending).
+```python
+session = repo.writable_session("branch_name")
+# make changes
+session.amend(message="...")
+```
+
+### Create an empty snapshot
+
+```python
+session = repo.writable_session("branch_name")
+# no changes
+session.commit(message="...", metadata={"foo": "bar"} allow_empty=True)
+```
+
 ### Create a Branch
 
 ```python
@@ -252,6 +273,51 @@ session = repo.readonly_session(tag="v1.0.0")
 
 ```python
 repo.delete_tag("v1.0.0")
+```
+
+### Diff Two Versions
+
+```python
+diff = repo.diff(from_tag="v1.0.0", to_branch="main")
+```
+
+## Moving Chunks and Nodes
+
+For more depth, see [Moving Chunks](./moving-chunks.md) and [Moving and Renaming Nodes](./moving-nodes.md).
+
+### Shift All Chunks by a Fixed Offset
+
+Offsets are in chunks, not array elements. Out-of-bounds chunks are discarded; vacated positions reset to fill value.
+
+```python
+session.shift_array("/my_array", offset=(-2, 0))
+```
+
+### Reindex Chunks with a Custom Function
+
+Provide a `forward` function mapping old chunk index to new. Return `None` to drop a chunk.
+Add a `backward` function (the inverse of `forward`) to correctly clear stale positions when empty chunks exist.
+
+```python
+def fwd(idx):
+    new = idx[0] - 2
+    return [new] if new >= 0 else None
+
+def bwd(idx):
+    new = idx[0] + 2
+    return [new] if new < n_chunks else None
+
+session.reindex_array("/my_array", forward=fwd, backward=bwd)
+```
+
+### Move or Rename an Array or Group
+
+Moving and renaming requires a **rearrange session**.
+
+```python
+session = repo.rearrange_session("main")
+session.move("/old/path", "/new/path")
+session.commit("Renamed old to new")
 ```
 
 ## Repo Maintenance
