@@ -162,7 +162,7 @@ ds.sst.isel(time=26, zlev=0).plot(x='lon', y='lat', vmin=0)
 
 ## Relative Virtual Chunk Containers
 
-By default, every virtual chunk stores a full absolute URL like `s3://bucket/prefix/path/to/chunk.nc`. However, this locks in the location of the chunk - if you move yove your data to a different bucket or cloud provider, you would need to rewrite all the chunk reference URLs.
+By default, every virtual chunk stores a full absolute URL like `s3://bucket/prefix/path/to/chunk.nc`. However, this locks in the location of the chunk - if you move your data to a different bucket or cloud provider, you would need to rewrite all the chunk reference URLs.
 
 To address this, you can give a `VirtualChunkContainer` a **name**. Chunks can then use `vcc://` relative URLs instead of full absolute paths:
 
