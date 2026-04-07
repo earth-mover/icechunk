@@ -43,14 +43,12 @@ fn lookup_labels(map: &HashMap<SnapshotId, Vec<String>>, id: &SnapshotId) -> Vec
     map.get(id).cloned().unwrap_or_default()
 }
 
-/// Sort branch names with "main" first, then alphabetically.
+/// Compare branch names with "main" first, then alphabetically.
 /// This determines both the trunk (column 0) and the color assignment order.
-fn sort_branches_main_first(branches: &mut [String]) {
-    branches.sort_by(|a, b| {
-        let a_is_main = a == "main";
-        let b_is_main = b == "main";
-        b_is_main.cmp(&a_is_main).then(a.cmp(b))
-    });
+fn main_first_cmp(a: &str, b: &str) -> std::cmp::Ordering {
+    let a_is_main = a == "main";
+    let b_is_main = b == "main";
+    b_is_main.cmp(&a_is_main).then(a.cmp(b))
 }
 
 impl AncestryGraph {
@@ -71,19 +69,14 @@ impl AncestryGraph {
     pub fn new(
         mut branch_ancestries: Vec<(String, Vec<SnapshotInfo>)>,
         tag_map: &HashMap<SnapshotId, Vec<String>>,
-        all_branches: Vec<String>,
+        mut all_branches: Vec<String>,
         plain: bool,
     ) -> Self {
         // Sort so "main" is the trunk (column 0), then alphabetically.
-        branch_ancestries.sort_by(|a, b| {
-            let a_is_main = a.0 == "main";
-            let b_is_main = b.0 == "main";
-            b_is_main.cmp(&a_is_main).then(a.0.cmp(&b.0))
-        });
+        branch_ancestries.sort_by(|a, b| main_first_cmp(&a.0, &b.0));
 
         // Sort the full branch list too for consistent color indexing.
-        let mut all_branches = all_branches;
-        sort_branches_main_first(&mut all_branches);
+        all_branches.sort_by(|a, b| main_first_cmp(a, b));
 
         if branch_ancestries.is_empty() {
             return Self {
