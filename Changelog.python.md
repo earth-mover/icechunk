@@ -6,7 +6,7 @@ Icechunk 2 is here! This release represents the next evolution of the Icechunk l
 shaped by hundreds of commits from dozens of contributors.
 
 Icechunk 2 brings new features, stronger consistency guarantees, and higher performance across several
-use cases, all while maintaining format compatibility. Icechunk 2 can read and write your existing
+workloads, all while maintaining format compatibility. Icechunk 2 can read and write your existing
 Icechunk 1 repos, and when you're ready to upgrade the format, a single function call migrates
 your repos quickly and safely.
 
@@ -14,16 +14,14 @@ We hope you enjoy the new release!
 
 ### Features
 
-#### Platforms
+#### Expaned platform support
 
-**WebAssembly**: Icechunk now compiles to WebAssembly, bringing full support for both Node.js and browser
-environments via the `@earthmover/icechunk` npm package. You can create, open, read, and write
-repositories directly in the browser.
+**JavaScript + WebAssembly**: Icechunk now has Javascript bindings, bringing full support for both Node.js (or NAPI compatible runtimes) and browser environments (with WASM-WASI) via the `@earthmover/icechunk` npm package. You can create, open, read, and write repositories from JavaScript or TypeScript.
 
 In the browser, Icechunk supports in-memory storage, read-only fetch-based access to public
 S3-compatible repositories, and a custom storage interface that lets you plug in any
 JavaScript networking library (e.g., `@aws-sdk/client-s3`). Native Node.js builds additionally
-support S3, GCS, Azure Blob, R2, Tigris, and local filesystem backends directly.
+support S3, GCS, Azure Blob, R2, Tigris, and local filesystem backends directly. When possible, native Node.js builds should be preferred for full performance over the WASM builds.
 
 **Python**: Initial support for free-threading. This feature is lightly tested and we welcome contributions to make it work better.
 
@@ -60,7 +58,7 @@ keeps track of every type of operation, from branch deletion to garbage collecti
 
 **Repository Status**: Repos can be marked `Online` or `ReadOnly` with a reason. Status is checked before operations proceed.
 
-**Feature Flags**: Per-repo toggleable flags (e.g., `move_node`, `create_tag`, `delete_tag`) stored in repo info. Allows disabling specific operations. Not all operations are feature-flagged yet, but more are coming soon — feel free to request the ones you need by opening an issue.
+**Feature Flags**: Repositories now have toggleable flags that allowing enabling/disabling certain operations (e.g., `move_node`, `create_tag`, `delete_tag`). Not all operations are feature-flagged yet. Feel free to request the ones you need by opening an issue.
 
 **Repository-Level Metadata**: Key-value metadata on the repo itself, not just on snapshots.
 
@@ -98,7 +96,7 @@ In Icechunk 2.0, all repository state is referenced from the unified repo info o
 **Faster ancestry/GC**: All snapshot info in the repo `toc` file enables O(1) ancestry lookups and fast expiration calculations (no sequential snapshot reads).
 
 **Concurrent transaction log fetching in rebase**: Transaction logs are now fetched concurrently during rebase, speeding up conflict detection.
-
+**Virtual References Optimizations**: Many low-level optimizations were made for common workloads involving manifests with large numbers of virtual references. Our internal benchmarks show 3X speedup.
 ### Reliability & Storage
 
 **Expanded retries**: Retries on HTTP 408 (timeout), 429 (rate limit), 499 (client closed), plus connection reset and stalled stream detection. Configurable `max_tries`, backoff, and per-operation timeouts.
