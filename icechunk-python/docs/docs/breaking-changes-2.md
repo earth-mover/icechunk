@@ -155,17 +155,3 @@ icechunk.config.RepositoryConfig(inline_chunk_threshold_bytes=512, ...)
 
 If your code or tests parse repr strings, they will need updating.
 
-## New in 2.0
-
-These are not breaking changes, but are significant new capabilities:
-
-- **Operations log**: `repo.ops_log()` returns a chronological audit trail of every repository mutation.
-- **[Move and rename nodes](moving-nodes.md)**: `session.move()` via `repo.rearrange_session()`.
-- **[Move chunks](moving-chunks.md)**: `session.shift_array()` and `session.reindex_array()`.
-- **Amend commits**: `session.amend()` replaces the previous commit on a branch.
-- **Repository status**: repos can be marked read-only with `repo.set_status()`.
-- **Repository metadata**: key-value metadata on the repo itself with `repo.set_metadata()`.
-- **Feature flags**: per-repo toggleable flags with `repo.set_feature_flag()`.
-- **HTTP storage**: read-only access via `http_storage()`.
-- **Redirect storage**: `redirect_storage()` follows HTTP 302 redirects.
-- **Ancestry graph**: `repo.ancestry_graph()` for commit history visualization.
