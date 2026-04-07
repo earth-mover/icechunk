@@ -89,11 +89,14 @@ gitGraph
 """.format(*[snap.id[:6] for snap in repo.ancestry(branch="main")]))
 ```
 
+### Empty Snapshots
 
 Set the `allow_empty` kwarg to create an "empty" snapshot --- one with no changes, just `metadata` and a `message`.
 ```python exec="on" session="version" source="material-block" result="code"
 session = repo.writable_session("main")
-snap = session.commit("added an empty commit", metadata={"moo": "zoo"}, allow_empty=True)
+snap = session.commit(
+    "added an empty commit", metadata={"moo": "zoo"}, allow_empty=True
+)
 print(repo.lookup_snapshot(snap))
 ```
 
