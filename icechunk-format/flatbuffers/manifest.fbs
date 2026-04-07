@@ -36,7 +36,7 @@ table ChunkRef {
 
   // Virtual refs: zstd dictionary-compressed location bytes, as an
   // alternative to the location field. When present, the manifest's
-  // location_dictionary field MUST be used for decompression.
+  // location_dictionary field SHOULD be used for decompression.
   // Introduced in spec version 2.
   compressed_location: [uint8];
 

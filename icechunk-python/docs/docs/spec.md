@@ -267,20 +267,19 @@ The `latest_updates` list is the repository ops log — a record of every operat
 
 ##### Updates to the repo info file
 
-The repo info object is the only mutable object in an Icechunk repo. Before an attempt is made to overwrite it, the file
-is copied to the `overwritten` prefix in the repo. The copy will be stored with a path that looks something like
+The repo info object is the only mutable object in an Icechunk repo. Before a client attempts to overwrite it they MUST copy it to the `overwritten` prefix in the repo. The copy MUST be stored with a path composed of:
+
+- The literal `repo.`
+- The current Unix timestamp in milliseconds subtracted from the timestamp
+in milliseconds corresponding to the timestamp `3000-01-01T00:00:00`. This gives a "last one first" ordering when
+listing the prefix, but Icechunk itself doesn't depend on this property.
+- 12 random bytes encoded as Crockford base 32.
+
+for example:
 
 ```
 repo.30729294865234.S0CHS5WSF158RN937BP0
 ```
-
-The key is composed by:
-
-- The literal `repo.`
-- A number that is the current Unix timestamp in milliseconds subtracted from the timestamp
-in milliseconds corresponding to the timestamp `3000-01-01T00:00:00`. This gives a "last one first" ordering when
-listing the prefix, but Icechunk itself doesn't depend on this property.
-- 12 random bytes encoded as Crockford base 32.
 
 These backups serve two purposes: recovery from failed updates, and the ops log. The `Repo.latest_updates` list holds recent operations, but its size is bounded (default: 1,000 entries). When the list overflows, older entries are dropped from the current repo info file. The `Repo.repo_before_updates` field points to the previous backup file (in `overwritten/`), which itself contains an older `latest_updates` list and its own `repo_before_updates` pointer, forming a linked list of repo info files that together contain the complete ops log history.
 
