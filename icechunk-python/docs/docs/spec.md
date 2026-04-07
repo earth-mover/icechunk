@@ -239,7 +239,7 @@ Each snapshot in the repository has a `SnapshotInfo` entry in the repo info file
 --8<-- "icechunk-format/flatbuffers/repo.fbs:snapshot_info"
 ```
 
-##### `Update` (Ops Log)
+##### `Update`
 
 The `latest_updates` list is the repository ops log — a record of every operation performed on the repository. When the list exceeds its size limit, older entries are accessible via the `repo_before_updates` linked list of previous repo info files stored under `overwritten/`.
 
