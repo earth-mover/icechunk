@@ -216,6 +216,7 @@ nav:
     - Dask: dask.md
     - Xarray: xarray.md
     - Tuning Performance: performance.md
+    - Flaky Networks: flaky-networks.md
     - Virtual Datasets: virtual.md
     - Async Usage: async.md
     - Icechunk for Git Users: icechunk-for-git-users.md
