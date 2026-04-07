@@ -80,7 +80,7 @@ for snapshot in repo.ancestry(branch="main"):
 
 Visually, this looks like:
 
-```python exec="on" result="text" session="version"
+```python exec="on" result="text" session="version" source="material-block"
 print(repo.ancestry_graph(branch="main", plain=True))
 ```
 
@@ -108,7 +108,7 @@ print(session.amend("amended commit"))
 
 which edits the history to be
 
-```python exec="on" result="text" session="version"
+```python exec="on" result="text" session="version" source="material-block"
 print(repo.ancestry_graph(branch="main", plain=True))
 ```
 
@@ -182,7 +182,7 @@ print(session.commit(message="Update foo attribute on root group"))
 
 With these branches created, the hierarchy of the repository now looks like:
 
-```python exec="on" result="text" session="version"
+```python exec="on" result="text" session="version" source="material-block"
 print(repo.ancestry_graph(plain=True))
 ```
 
@@ -265,7 +265,7 @@ root = zarr.open_group(session.store, mode="r")
 print(root.attrs["foo"])
 ```
 
-```python exec="on" result="text" session="version"
+```python exec="on" result="text" session="version" source="material-block"
 print(repo.ancestry_graph(branch="main", plain=True))
 ```
 
