@@ -731,5 +731,10 @@ mod tests {
             merge_line.contains('─'),
             "blank columns between ● and ╯ should be filled with ─: {merge_line:?}"
         );
+        // The horizontal connection should be continuous with no spaces
+        assert!(
+            !merge_line.contains("● ─") && !merge_line.contains("─ ╯"),
+            "horizontal line should be continuous (no spaces between ─): {merge_line:?}"
+        );
     }
 }
