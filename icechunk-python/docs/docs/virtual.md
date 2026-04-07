@@ -160,9 +160,34 @@ ds.sst.isel(time=26, zlev=0).plot(x='lon', y='lat', vmin=0)
 
     Users of the repo will need to enable the virtual chunk container by passing the `credentials` argument to `Repository.open`. This way, the repo user, flags the container as authorized. `credentials` argument must be a dict using url prefixes as keys and optional credentials as values. If the container requires no credentials, `None` can be used as the value in the map. Failing to authorize a container, will generate an error when a chunk is fetched from it.
 
+## Relative Virtual Chunk Containers
+
+By default, every virtual chunk stores a full absolute URL like `s3://bucket/prefix/path/to/chunk.nc`. However, this locks in the location of the chunk - if you move yove your data to a different bucket or cloud provider, you would need to rewrite all the chunk reference URLs.
+
+To address this, you can give a `VirtualChunkContainer` a **name**. Chunks can then use `vcc://` relative URLs instead of full absolute paths:
+
+```python
+config = ic.config.RepositoryConfig.default()
+config.set_virtual_chunk_container(
+    ic.virtual.VirtualChunkContainer(
+        "s3://mybucket/my/data/",
+        ic.storage.s3_store(region="us-east-1"),
+        name="my-data",  # give the container a name
+    )
+)
+```
+
+With a named container, chunk locations can be written as `vcc://my-data/file.nc` instead of `s3://mybucket/my/data/file.nc`. The `vcc://` scheme tells Icechunk to look up the container by name and prepend its `url_prefix` to resolve the full path at read time.
+
+Now, if you move the underlying data, you only need to update the VCC's `url_prefix` in the config — all the relative refs will still resolve correctly without rewriting manifests.
+
+!!! note
+
+    Container names must be unique within a repository. Authorization still uses URL prefixes (not names), so named containers do not change the security model.
+
 ## Virtual Reference API
 
-While `VirtualiZarr` is the easiest way to create virtual datasets with Icechunk, the Store API that it uses to create the datasets in Icechunk is public. `IcechunkStore` contains a [`set_virtual_ref`](./reference/index.md#icechunk.IcechunkStore.set_virtual_ref) method that specifies a virtual ref for a specified chunk.
+While `VirtualiZarr` is the easiest way to create virtual datasets with Icechunk, the Store API that it uses to create the datasets in Icechunk is public. `IcechunkStore` contains a [`set_virtual_ref`](./reference/index.md#icechunk.IcechunkStore.set_virtual_ref) method that specifies a virtual ref for a specified chunk. It also has a [`set_virtual_refs`](./reference/index.md#icechunk.IcechunkStore.set_virtual_refs) method for setting many virtual chunk references at once.
 
 !!! important "URL prefix must end with a trailing slash"
 
