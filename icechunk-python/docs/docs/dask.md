@@ -10,18 +10,18 @@ This page explains how to use these specialized functions.
 Start with an icechunk store and dask arrays.
 
 ```python exec="on" session="dask" source="material-block"
-import icechunk
+import icechunk as ic
 import tempfile
 
 # initialize the icechunk store
-storage = icechunk.local_filesystem_storage(tempfile.TemporaryDirectory().name)
-repo = icechunk.Repository.create(storage)
+storage = ic.local_filesystem_storage(tempfile.TemporaryDirectory().name)
+repo = ic.Repository.create(storage)
 session = repo.writable_session("main")
 ```
 
 ## Icechunk + Dask
 
-Use [`icechunk.dask.store_dask`](./reference.md#icechunk.dask.store_dask) to write a Dask array to an Icechunk store.
+Use [`icechunk.dask.store_dask`](./reference/dask.md#icechunk.dask.store_dask) to write a Dask array to an Icechunk store.
 The API follows that of [`dask.array.store`](https://docs.dask.org/en/stable/generated/dask.array.store.html) *without*
 support for the `compute` kwarg.
 
@@ -77,7 +77,7 @@ print(session.commit("wrote a dask array!"))
 
 ## Icechunk + Dask + Xarray
 
-The [`icechunk.xarray.to_icechunk`](./reference.md#icechunk.xarray.to_icechunk) is functionally identical to Xarray's
+The [`icechunk.xarray.to_icechunk`](./reference/xarray.md#icechunk.xarray.to_icechunk) is functionally identical to Xarray's
 [`Dataset.to_zarr`](https://docs.xarray.dev/en/stable/generated/xarray.Dataset.to_zarr.html), including many of the same keyword arguments.
 Notably the ``compute`` kwarg is not supported.
 Now roundtrip an xarray dataset

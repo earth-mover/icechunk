@@ -2,30 +2,25 @@
 
 
 from icechunk._icechunk_python import (
-    AncestryGraph,
-    AzureCredentials,
-    AzureRefreshableCredential,
-    AzureStaticCredentials,
-    BasicConflictSolver,
-    CachingConfig,
     ChunkType,
+    ConflictError,
+    IcechunkError,
+    RebaseFailedError,
+    RepoAvailability,
+    RepoStatus,
+    SessionMode,
+    SpecVersion,
+    __version__,
+    _upgrade_icechunk_repository,
+    spec_version,
+    user_agent,
+)
+from icechunk.config import (
+    CachingConfig,
     CompressionAlgorithm,
     CompressionConfig,
-    Conflict,
-    ConflictDetector,
-    ConflictError,
-    ConflictSolver,
-    ConflictType,
-    Credentials,
-    Diff,
     FeatureFlag,
-    GcsBearerCredential,
-    GcsCredentials,
-    GcsStaticCredentials,
-    GCSummary,
-    IcechunkError,
     ManifestConfig,
-    ManifestFileInfo,
     ManifestPreloadCondition,
     ManifestPreloadConfig,
     ManifestSplitCondition,
@@ -33,32 +28,17 @@ from icechunk._icechunk_python import (
     ManifestSplittingConfig,
     ManifestVirtualChunkLocationCompressionConfig,
     ObjectStoreConfig,
-    RebaseFailedError,
-    RepoAvailability,
     RepositoryConfig,
-    RepoStatus,
-    S3Credentials,
-    S3Options,
-    S3StaticCredentials,
-    SessionMode,
-    SnapshotInfo,
-    SpecVersion,
-    Storage,
-    StorageConcurrencySettings,
-    StorageRetriesSettings,
-    StorageSettings,
-    StorageTimeoutSettings,
-    Update,
-    UpdateType,
-    VersionSelection,
-    VirtualChunkContainer,
-    VirtualChunkSpec,
-    __version__,
-    _upgrade_icechunk_repository,
     initialize_logs,
     set_logs_filter,
-    spec_version,
-    user_agent,
+)
+from icechunk.conflicts import (
+    BasicConflictSolver,
+    Conflict,
+    ConflictDetector,
+    ConflictSolver,
+    ConflictType,
+    VersionSelection,
 )
 from icechunk.credentials import (
     AnyAzureCredential,
@@ -67,6 +47,15 @@ from icechunk.credentials import (
     AnyGcsCredential,
     AnyGcsStaticCredential,
     AnyS3Credential,
+    AzureCredentials,
+    AzureRefreshableCredential,
+    AzureStaticCredentials,
+    Credentials,
+    GcsBearerCredential,
+    GcsCredentials,
+    GcsStaticCredentials,
+    S3Credentials,
+    S3StaticCredentials,
     azure_credentials,
     azure_from_env_credentials,
     azure_refreshable_credentials,
@@ -82,10 +71,23 @@ from icechunk.credentials import (
     s3_refreshable_credentials,
     s3_static_credentials,
 )
+from icechunk.ops import GCSummary, Update, UpdateType
 from icechunk.repository import Repository
 from icechunk.session import ForkSession, Session
+from icechunk.snapshots import (
+    AncestryGraph,
+    Diff,
+    ManifestFileInfo,
+    SnapshotInfo,
+)
 from icechunk.storage import (
     AnyObjectStoreConfig,
+    S3Options,
+    Storage,
+    StorageConcurrencySettings,
+    StorageRetriesSettings,
+    StorageSettings,
+    StorageTimeoutSettings,
     azure_storage,
     gcs_storage,
     gcs_store,
@@ -100,8 +102,12 @@ from icechunk.storage import (
     s3_store,
     tigris_storage,
 )
-from icechunk.store import IcechunkStore
 from icechunk.types import CommitMethod
+from icechunk.virtual import (
+    VirtualChunkContainer,
+    VirtualChunkSpec,
+)
+from icechunk.zarr import IcechunkStore
 
 __all__ = [
     "AncestryGraph",
@@ -218,35 +224,6 @@ def print_debug_info() -> None:
             continue
 
 
-# This monkey patch is a bit annoying. Python dicts preserve insertion order
-# But this gets mapped to a Rust HashMap which does *not* preserve order
-# So on the python side, we can accept a dict as a nicer API, and immediately
-# convert it to tuples that preserve order, and pass those to Rust
-
-type ManifestSplitValues = dict[
-    ManifestSplitDimCondition.Axis
-    | ManifestSplitDimCondition.DimensionName
-    | ManifestSplitDimCondition.Any,
-    int,
-]
-type SplitSizesDict = dict[
-    ManifestSplitCondition,
-    ManifestSplitValues,
-]
-
-
-def from_dict(split_sizes: SplitSizesDict) -> ManifestSplittingConfig:
-    unwrapped = tuple((k, tuple(v.items())) for k, v in split_sizes.items())
-    return ManifestSplittingConfig(unwrapped)
-
-
-def to_dict(config: ManifestSplittingConfig) -> SplitSizesDict:
-    return {
-        split_condition: dict(dim_conditions)
-        for split_condition, dim_conditions in config.split_sizes
-    }
-
-
 class _InvalidatedRepository:
     """Sentinel replacing a PyRepository after migration to prevent stale usage."""
 
@@ -313,8 +290,5 @@ def upgrade_icechunk_repository(
 def supported_spec_versions() -> list[SpecVersion]:
     return [SpecVersion.v2, SpecVersion.v1]
 
-
-ManifestSplittingConfig.from_dict = staticmethod(from_dict)  # type: ignore[method-assign]
-ManifestSplittingConfig.to_dict = to_dict  # type: ignore[method-assign,assignment]
 
 initialize_logs()
