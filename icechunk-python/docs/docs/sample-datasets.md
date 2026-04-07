@@ -9,7 +9,10 @@ All examples only require `icechunk` and `xarray` as dependencies.
 
 ## Earthmover-hosted examples
 
-### Weatherbench2 ERA5 (native, Icechunk v1)
+!!! note
+    These repositories have been upgraded to Icechunk v2, but remain openable with Icechunk v1 as well. Upgrading is a metadata-only change — the repositories contain metadata files for both versions, and the underlying chunks are the same.
+
+### Weatherbench2 ERA5 (native, Icechunk v2)
 
 A subset of the Weatherbench2 copy of the ERA5 reanalysis dataset.
 
@@ -115,7 +118,7 @@ A subset of the Weatherbench2 copy of the ERA5 reanalysis dataset.
 
 <!-- ![oisst](./assets/datasets/oisst.png) -->
 
-### GLAD Land Cover Land Use (native, Icechunk v1)
+### GLAD Land Cover Land Use (native, Icechunk v2)
 
 A copy of the GLAD Land Cover Land Use dataset distributed under a [Creative Commons Attribution 4.0 International License](http://creativecommons.org/licenses/by/4.0/).
 
