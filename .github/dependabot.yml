@@ -29,6 +29,8 @@ updates:
       day: "monday"
       time: "05:00"
       timezone: "US/Pacific"
+    cooldown:
+      default-days: 7
     groups:
       js-dependencies:
         patterns:
