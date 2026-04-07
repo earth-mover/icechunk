@@ -2116,6 +2116,22 @@ class PyRepository:
         tag: str | None = None,
         snapshot_id: str | None = None,
     ) -> AsyncIterator[SnapshotInfo]: ...
+    def ancestry_graph(
+        self,
+        *,
+        branch: str | None = None,
+        tag: str | None = None,
+        snapshot_id: str | None = None,
+        plain: bool = False,
+    ) -> AncestryGraph: ...
+    async def ancestry_graph_async(
+        self,
+        *,
+        branch: str | None = None,
+        tag: str | None = None,
+        snapshot_id: str | None = None,
+        plain: bool = False,
+    ) -> AncestryGraph: ...
     def async_ops_log(self) -> AsyncIterator[Update]: ...
     def create_branch(self, branch_name: str, snapshot_id: str) -> None: ...
     async def create_branch_async(self, branch_name: str, snapshot_id: str) -> None: ...
@@ -2528,6 +2544,24 @@ class SnapshotInfo:
 class _PyAsyncSnapshotGenerator(AsyncGenerator[SnapshotInfo], metaclass=abc.ABCMeta):
     def __aiter__(self) -> _PyAsyncSnapshotGenerator: ...
     async def __anext__(self) -> SnapshotInfo: ...
+
+@final
+class AncestryGraph:
+    """A visual representation of commit history.
+
+    Use ``print()`` for colored Unicode output in a terminal, or display
+    in Jupyter for an SVG diagram. Pass ``plain=True`` to
+    ``ancestry_graph()`` for output without colors (useful for CI, files,
+    or LLM agents).
+
+    Note: only commits reachable from branches are included. Anonymous/detached
+    snapshots are not attached to any branch and will not appear.
+    """
+    def __str__(self) -> str: ...
+    def __repr__(self) -> str: ...
+    def _repr_svg_(self) -> str:
+        """Return a raw SVG string for Jupyter notebooks."""
+        ...
 
 class S3StaticCredentials:
     """Credentials for an S3 storage backend

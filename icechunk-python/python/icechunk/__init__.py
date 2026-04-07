@@ -2,6 +2,7 @@
 
 
 from icechunk._icechunk_python import (
+    AncestryGraph,
     AzureCredentials,
     AzureRefreshableCredential,
     AzureStaticCredentials,
@@ -103,6 +104,7 @@ from icechunk.store import IcechunkStore
 from icechunk.types import CommitMethod
 
 __all__ = [
+    "AncestryGraph",
     "AnyAzureCredential",
     "AnyAzureStaticCredential",
     "AnyCredential",
