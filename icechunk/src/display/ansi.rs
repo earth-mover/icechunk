@@ -42,14 +42,15 @@ fn format_labels(node: &AncestryNode, col_colors: &[usize], plain: bool) -> Stri
 }
 
 /// Render a graph line prefix: for each column, draw a (optionally colored) glyph or blank.
+/// The closure returns `(char, color_index)` or `None` for blank.
 fn render_prefix(
     col_colors: &[usize],
     plain: bool,
-    glyph_for: impl Fn(usize) -> Option<char>,
+    glyph_for: impl Fn(usize) -> Option<(char, usize)>,
 ) -> String {
     let mut out = String::with_capacity(col_colors.len() * 8);
-    for (c, &color_idx) in col_colors.iter().enumerate() {
-        if let Some(ch) = glyph_for(c) {
+    for c in 0..col_colors.len() {
+        if let Some((ch, color_idx)) = glyph_for(c) {
             if plain {
                 out.push(ch);
                 out.push(' ');
@@ -92,39 +93,62 @@ impl fmt::Display for AncestryGraph {
         for (row, node) in self.nodes.iter().enumerate() {
             // Node line: show ● for this node's column, ╯ for merging columns,
             // │ for other active columns.
+            // Find the nearest fork to the right (for ─ fill color).
+            let nearest_fork_color = forks_at_node.get(&row).and_then(|elems| {
+                elems
+                    .iter()
+                    .filter_map(|e| match e {
+                        LayoutElement::Fork { from_col, .. } => {
+                            Some(col_colors[*from_col])
+                        }
+                        _ => None,
+                    })
+                    .next()
+            });
+
             let prefix = render_prefix(&col_colors, self.plain, |c| {
                 if c == node.column {
-                    Some('●')
-                } else {
-                    // Check if a fork arrives at this node from column c.
-                    let is_merging = forks_at_node.get(&row).is_some_and(|elems| {
-                        elems.iter().any(
-                            |e| matches!(e, LayoutElement::Fork { from_col, .. } if *from_col == c),
-                        )
-                    });
-                    if is_merging {
-                        return Some('╯');
-                    }
-                    // Show │ for active columns (those with a line on this row).
-                    let has_line = connector_lines.get(&row).is_some_and(|elems| {
+                    return Some(('●', col_colors[c]));
+                }
+                // Check if a fork arrives at this node from column c.
+                let is_merging = forks_at_node.get(&row).is_some_and(|elems| {
+                    elems.iter().any(
+                        |e| matches!(e, LayoutElement::Fork { from_col, .. } if *from_col == c),
+                    )
+                });
+                if is_merging {
+                    return Some(('╯', col_colors[c]));
+                }
+                // Show │ for active columns (those with a line on this row).
+                let has_line = connector_lines.get(&row).is_some_and(|elems| {
+                    elems.iter().any(
+                        |e| matches!(e, LayoutElement::Line { col, .. } if *col == c),
+                    )
+                });
+                // Also check previous row's lines, excluding merged columns.
+                let had_line =
+                    row > 0 && connector_lines.get(&(row - 1)).is_some_and(|elems| {
                         elems.iter().any(
                             |e| matches!(e, LayoutElement::Line { col, .. } if *col == c),
                         )
-                    });
-                    // Also check previous row's lines, excluding merged columns.
-                    let had_line = row > 0
-                        && connector_lines.get(&(row - 1)).is_some_and(|elems| {
-                            elems.iter().any(
-                                |e| matches!(e, LayoutElement::Line { col, .. } if *col == c),
-                            )
-                        })
-                        && !forks_at_node.get(&row).is_some_and(|elems| {
-                            elems.iter().any(
-                                |e| matches!(e, LayoutElement::Fork { from_col, .. } if *from_col == c),
-                            )
-                        });
-                    if has_line || had_line { Some('│') } else { None }
+                    }) && !is_merging;
+                if has_line || had_line {
+                    return Some(('│', col_colors[c]));
                 }
+                // Fill blank columns between ● and ╯ with ─, colored to
+                // match the merging branch.
+                if c > node.column && nearest_fork_color.is_some() {
+                    let has_fork_to_right =
+                        forks_at_node.get(&row).is_some_and(|elems| {
+                            elems.iter().any(|e| {
+                                matches!(e, LayoutElement::Fork { from_col, .. } if *from_col > c)
+                            })
+                        });
+                    if has_fork_to_right {
+                        return Some(('─', nearest_fork_color.unwrap_or(0)));
+                    }
+                }
+                None
             });
 
             let short_id = &node.info.id.to_string()[..8];
@@ -142,7 +166,7 @@ impl fmt::Display for AncestryGraph {
                     let is_pipe = elems.iter().any(
                         |e| matches!(e, LayoutElement::Line { col, .. } if *col == c),
                     );
-                    if is_pipe { Some('│') } else { None }
+                    if is_pipe { Some(('│', col_colors[c])) } else { None }
                 });
                 writeln!(f, "{line}")?;
             }

@@ -665,4 +665,71 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn test_horizontal_fill_between_node_and_fork() {
+        // When a fork connector (╯) is separated from the ● by empty columns,
+        // those columns should be filled with ─ to show the connection.
+        //
+        // Setup: main has 3 commits, branch-a forks from s2 (col 1), branch-b
+        // forks from s3 (col 2). When branch-a merges at s2, col 1 is empty.
+        // Then at s3's row: ● is col 0, col 1 is blank, ╯ is col 2 — the
+        // blank col 1 should be filled with ─.
+        //
+        //   main:     s1 -> s2 -> s3 -> s4 (tip)
+        //   branch-a: s2 -> s5 (tip, forks from s2, col 1)
+        //   branch-b: s3 -> s6 (tip, forks from s3, col 2)
+        //
+        // At s3: ● col0, ╯ col1 (branch-a merges here)
+        // At s2 earlier: ● col0, but branch-b already merged — col2 now blank
+        // Actually we want the opposite: ● at col0, blank col1, ╯ at col2.
+        //
+        // Better setup: main + a branch at col 2 with nothing at col 1:
+        //   main:     s1 -> s2 -> s3 (tip)
+        //   branch-a: s1 -> s4 (tip, col 1)
+        //   branch-b: s2 -> s5 -> s6 (tip, col 2, forks from s2)
+        //
+        // At s2's row: ● col0, col1 has ╯ (branch-a merges to s1 below),
+        //   col2 has... actually this gets complicated.
+        //
+        // Simplest case: main + one branch at col 2, col 1 deactivated.
+        //   main:     s1 -> s2 -> s3 -> s4 (tip)
+        //   alpha:    s1 -> s5 (tip, col 1) — merges at s1
+        //   beta:     s3 -> s6 (tip, col 2) — merges at s3
+        //
+        // When beta merges at s3: ● is col0, col1 is inactive, ╯ is col2.
+        // Col 1 should be ─.
+        let s1 = make_snapshot(1, None);
+        let s2 = make_snapshot(2, Some(1));
+        let s3 = make_snapshot(3, Some(2));
+        let s4 = make_snapshot(4, Some(3)); // main tip
+        let s5 = make_snapshot(5, Some(4)); // alpha tip (forks from s4 = main tip)
+        let s6 = make_snapshot(6, Some(2)); // beta tip (forks from s2)
+
+        let branch_ancestries = vec![
+            ("main".to_string(), vec![s4.clone(), s3.clone(), s2.clone(), s1.clone()]),
+            ("alpha".to_string(), vec![s5.clone(), s4.clone()]),
+            ("beta".to_string(), vec![s6.clone(), s2.clone()]),
+        ];
+
+        let all = vec!["alpha".to_string(), "beta".to_string(), "main".to_string()];
+        let graph = AncestryGraph::new(branch_ancestries, &HashMap::new(), all, true);
+        let output = graph.to_string();
+        let lines: Vec<&str> = output.lines().collect();
+
+        eprintln!("=== horizontal fill test ===");
+        for line in &lines {
+            eprintln!("  {line:?}");
+        }
+
+        // Find the row where beta merges (s2, "Commit 2"). At this row,
+        // ● is col 0, col 1 is inactive (alpha already merged above), ╯ is col 2.
+        // Col 1 should be filled with ─.
+        let merge_line =
+            lines.iter().find(|l| l.contains("Commit 2")).expect("should have Commit 2");
+        assert!(
+            merge_line.contains('─'),
+            "blank columns between ● and ╯ should be filled with ─: {merge_line:?}"
+        );
+    }
 }
