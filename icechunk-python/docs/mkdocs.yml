@@ -212,6 +212,7 @@ nav:
     - Storage: storage.md
     - Moving Chunks: moving-chunks.md
     - Moving Nodes: moving-nodes.md
+    - Operations Log: ops-log.md
     - Dask: dask.md
     - Xarray: xarray.md
     - Tuning Performance: performance.md
