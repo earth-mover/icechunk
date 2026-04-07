@@ -367,7 +367,7 @@ This however fails because both sessions modified metadata. We can use the `Reba
 ```python
 try:
     session1.rebase(ic.conflicts.ConflictDetector())
-except ic.exceptions.RebaseFailedError as e:
+except ic.RebaseFailedError as e:
     for conflict in e.conflicts:
         print(f"Conflict at {conflict.path}: {conflict.conflicted_chunks}")
 

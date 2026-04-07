@@ -104,7 +104,7 @@ session.commit("Create arrays")
 session = repo.rearrange_session("main")
 try:
     session.move("/source", "/destination")
-except ic.exceptions.IcechunkError as e:
+except ic.IcechunkError as e:
     print(f"IcechunkError: {e}")
 ```
 
