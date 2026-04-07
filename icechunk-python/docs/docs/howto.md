@@ -212,7 +212,7 @@ session = repo.readonly_session(snapshot_id=snapshot_id)
 
 ### Amend a Snapshot
 
-For more, see [amending](./version-controld.md#amending).
+For more, see [amending](./version-control.md#amending).
 ```python
 session = repo.writable_session("branch_name")
 # make changes
