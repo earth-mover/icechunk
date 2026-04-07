@@ -89,6 +89,50 @@ gitGraph
 """.format(*[snap.id[:6] for snap in repo.ancestry(branch="main")]))
 ```
 
+### Empty Snapshots
+
+Set the `allow_empty` kwarg to create an "empty" snapshot --- one with no changes, just `metadata` and a `message`.
+```python exec="on" session="version" source="material-block" result="code"
+session = repo.writable_session("main")
+snap = session.commit(
+    "added an empty commit", metadata={"moo": "zoo"}, allow_empty=True
+)
+print(repo.lookup_snapshot(snap))
+```
+
+## Amending a snapshot
+
+Amending a snapshot is allowed:
+
+```python exec="on" session="version" source="material-block" result="code"
+session = repo.writable_session("main")
+root = zarr.open_group(session.store)
+root.attrs["foo"] = "quux"
+print(session.amend("amended commit"))
+```
+
+which edits the history to be
+
+```python exec="1" result="mermaid" session="version"
+print("""
+gitGraph
+    commit id: "{}" type: NORMAL
+    commit id: "{}" type: NORMAL
+    commit id: "{}" type: NORMAL
+""".format(*[snap.id[:6] for snap in repo.ancestry(branch="main")]))
+```
+
+Note that the snapshot ID has now changed.
+
+Set the `allow_empty` kwarg to edit just the message
+
+```python exec="on" session="version" source="material-block" result="code"
+session = repo.writable_session("main")
+session.amend("i have edited this message", allow_empty=True)
+for snapshot in repo.ancestry(branch="main"):
+    print(snapshot)
+```
+
 ## Transaction Context Manager
 
 To simplify the process of updating a repo, Icechunk provides a `transaction` context manager which yields an `IcechunkStore` object directly:

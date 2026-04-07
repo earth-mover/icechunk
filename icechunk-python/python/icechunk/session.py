@@ -1,5 +1,4 @@
-import contextlib
-from collections.abc import AsyncIterator, Callable, Generator, Iterable, Sequence
+from collections.abc import AsyncIterator, Callable, Iterable, Sequence
 from typing import Any
 
 from icechunk import (
@@ -56,18 +55,6 @@ class Session:
         if not isinstance(state, dict):
             raise ValueError("Invalid state")
         self._session = PySession.from_bytes(state["_session"])
-
-    @contextlib.contextmanager
-    def allow_pickling(self) -> Generator[None, None, None]:
-        """
-        Context manager to allow unpickling this store if writable.
-        """
-        raise RuntimeError(
-            "The allow_pickling context manager has been removed. "
-            "Use the new `Session.fork` API instead. "
-            # FIXME: Add link to docs
-            "Better yet, use `to_icechunk` if that will fit your needs."
-        )
 
     @property
     def read_only(self) -> bool:
@@ -413,6 +400,7 @@ class Session:
         self,
         message: str,
         metadata: dict[str, Any] | None = None,
+        *,
         rebase_with: ConflictSolver | None = None,
         rebase_tries: int = 1_000,
         allow_empty: bool = False,
@@ -461,6 +449,7 @@ class Session:
         self,
         message: str,
         metadata: dict[str, Any] | None = None,
+        *,
         rebase_with: ConflictSolver | None = None,
         rebase_tries: int = 1_000,
         allow_empty: bool = False,
@@ -508,6 +497,7 @@ class Session:
     def amend(
         self,
         message: str,
+        *,
         metadata: dict[str, Any] | None = None,
         allow_empty: bool = False,
     ) -> str:
@@ -547,6 +537,7 @@ class Session:
     async def amend_async(
         self,
         message: str,
+        *,
         metadata: dict[str, Any] | None = None,
         allow_empty: bool = False,
     ) -> str:
@@ -586,6 +577,7 @@ class Session:
     def flush(
         self,
         message: str,
+        *,
         metadata: dict[str, Any] | None = None,
     ) -> str:
         """
@@ -610,6 +602,7 @@ class Session:
     async def flush_async(
         self,
         message: str,
+        *,
         metadata: dict[str, Any] | None = None,
     ) -> str:
         """
