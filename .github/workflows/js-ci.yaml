@@ -115,7 +115,7 @@ jobs:
         run: ${{ matrix.settings.build }}
         shell: bash
       - name: Upload artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: bindings-${{ matrix.settings.target }}
           path: |
@@ -156,7 +156,7 @@ jobs:
       - name: Install dependencies
         run: yarn install
       - name: Download artifacts
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: bindings-${{ matrix.settings.target }}
           path: ./icechunk-js
@@ -193,7 +193,7 @@ jobs:
       - name: Install dependencies
         run: yarn install
       - name: Download artifacts
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: bindings-${{ matrix.target }}
           path: ./icechunk-js
@@ -224,7 +224,7 @@ jobs:
           yarn config set supportedArchitectures.cpu "wasm32"
           yarn install
       - name: Download artifacts
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: bindings-wasm32-wasip1-threads
           path: ./icechunk-js
@@ -263,7 +263,7 @@ jobs:
       - name: Create npm dirs
         run: yarn napi create-npm-dirs
       - name: Download all artifacts
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           path: ./icechunk-js/artifacts
       - name: Move artifacts
