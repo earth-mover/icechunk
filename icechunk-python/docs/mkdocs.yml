@@ -203,6 +203,7 @@ nav:
     - How To: howto.md
   - Understanding Icechunk:
     - Core Concepts: concepts.md
+    - Repository Features: repository-features.md
     - Transactions and Version Control: version-control.md
     - Data Expiration and Garbage Collection: expiration.md
     - Parallel / Distributed Writing: parallel.md
@@ -215,6 +216,7 @@ nav:
     - Dask: dask.md
     - Xarray: xarray.md
     - Tuning Performance: performance.md
+    - Flaky Networks: flaky-networks.md
     - Virtual Datasets: virtual.md
     - Async Usage: async.md
     - Icechunk for Git Users: icechunk-for-git-users.md
@@ -229,3 +231,4 @@ nav:
     - Contributing: contributing.md
     - AI Usage Policy: ai-policy.md
     - Migrate to 1.0: migration.md
+    - Migrate to 2.0: migration-2.md

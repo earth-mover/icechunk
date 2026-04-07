@@ -2,6 +2,11 @@
 
 When creating and opening Icechunk repositories, there are many configuration options available to control the behavior of the repository and the storage backend. This page will guide you through the available options and how to use them.
 
+!!! note
+
+    Many configuration fields display as `None` in Python. This means "use the built-in default," not "no value."
+    The actual defaults are applied at the Rust layer. See the API reference for each setting's default value.
+
 ## [`RepositoryConfig`](./reference.md#icechunk.RepositoryConfig)
 
 The `RepositoryConfig` object is used to configure the repository. For convenience, this can be constructed using some sane defaults:
