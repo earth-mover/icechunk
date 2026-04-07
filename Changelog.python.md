@@ -72,8 +72,9 @@ keeps track of every type of operation, from branch deletion to garbage collecti
 
 #### Other
 
-**Pretty Reprs**: All Python classes now define complete string, executable, and HTML reprs.
+**Object Reprs**: All Python classes now define complete string, executable, and HTML reprs.
 
+**Ancestry Graph**: A new method `Repository.ancestry_graph()` will display a (ASCII string or SVG) plot of the history of commits, branches, and tags.
 **Inspect functions**: A more complete set of `inspect` functions so that you can understand the state of your repo: `inspect_snapshot`, `inspect_repo_info`, `inspect_manifest`, and `inspect_transaction_log`.
 
 **IC1 → IC2 Migration**: `icechunk.upgrade_icechunk_repository()` with dry-run support. See the [migration guide](https://icechunk.io/en/latest/migration-2/).
