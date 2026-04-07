@@ -60,7 +60,7 @@ session = repo.readonly_session("my-new-branch")
 session = repo.writable_session("my-new-branch")
 ```
 
-Once we have checked out a session, the [`store`](./reference/session.md#icechunk.session.Session.store) method will return a [`Store`](./reference/zarr.md#icechunk.zarr.IcechunkStore) object that we can use to read and write data to the repository with `zarr`.
+Once we have checked out a session, the [`store`](./reference/session.md#icechunk.session.Session.store) method will return a [`Store`](./reference/index.md#icechunk.IcechunkStore) object that we can use to read and write data to the repository with `zarr`.
 
 ### Resetting a branch
 
