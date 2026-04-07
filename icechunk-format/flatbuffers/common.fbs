@@ -16,6 +16,8 @@ namespace generated;
 // When comparing paths for sort order, comparison is component-wise
 // lexicographic: split on `/`, then compare segments left to right.
 // For example: /a < /a/b < /ab < /b.
+// Note: this differs from raw byte comparison. For instance,
+// /a/b < /a-b in component-wise order, but /a-b < /a/b in byte order.
 // --8<-- [end:node_path]
 
 // --8<-- [start:object_id_12]
@@ -38,8 +40,9 @@ table MetadataItem {
   // the name of the attribute
   name: string (required);
 
-  // the value, serialized as rmp_serde of the json value
-  // TODO: better serialization format
+  // A JSON-compatible value (null, bool, number, string, array, or object).
+  // In V1: encoded as MessagePack (https://msgpack.org/).
+  // In V2: encoded as FlexBuffers (https://flatbuffers.dev/flexbuffers.html).
   value: [uint8] (required);
 }
 // --8<-- [end:metadata_item]

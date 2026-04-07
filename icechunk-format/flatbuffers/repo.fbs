@@ -3,20 +3,35 @@ include "common.fbs";
 namespace generated;
 
 // --8<-- [start:ref]
+// A named reference (branch or tag) pointing to a snapshot.
 table Ref {
+    // The branch or tag name.
     name: string (required);
+
+    // Index into the Repo.snapshots list identifying the target snapshot.
     snapshot_index: uint32;
 }
 // --8<-- [end:ref]
 
 // --8<-- [start:snapshot_info]
+// Summary of a snapshot, stored in the repo info file.
+// This is not the snapshot file itself — it provides enough
+// information to locate and identify the snapshot without fetching it.
 table SnapshotInfo {
     id: ObjectId12 (required);
-    // -1 means no parent
+
+    // Index of this snapshot's parent in the Repo.snapshots list
+    // (offset from the start of the list, not from this entry).
+    // -1 means no parent (the initial snapshot).
     parent_offset: int32;
-    // micros since epoch
+
+    // Non-leap microseconds since Jan 1, 1970 UTC.
     flushed_at: uint64;
+
+    // Commit message.
     message: string (required);
+
+    // Snapshot-level metadata.
     metadata: [MetadataItem];
 }
 // --8<-- [end:snapshot_info]
@@ -28,6 +43,7 @@ enum RepoAvailability : ubyte { Online = 0, ReadOnly, Offline }
 // --8<-- [start:repo_status]
 table RepoStatus {
     availability: RepoAvailability;
+    // Non-leap microseconds since Jan 1, 1970 UTC.
     set_at: uint64;
     limited_availability_reason: string;
 }
@@ -111,53 +127,67 @@ union UpdateType {
 // --8<-- [end:update_type_union]
 
 // --8<-- [start:update]
+// A single entry in the repository ops log.
 table Update {
     update_type: UpdateType (required);
 
-    // micros since epoch
+    // Non-leap microseconds since Jan 1, 1970 UTC.
     updated_at: uint64;
 
-    // on updates the repo object is backed up
+    // Path to the backup copy of the repo info file before this update
+    // (stored under the overwritten/ prefix).
     backup_path: string;
   }
 // --8<-- [end:update]
 
 // --8<-- [start:repo_table]
+// The repo info file — the single entry point and only mutable object
+// in an Icechunk V2 repository. Stored at `$ROOT/repo`.
 table Repo {
 
+  // The spec version of this repository (1 or 2).
   spec_version: uint8;
 
-  // sorted by name
+  // All tags. MUST be sorted in ascending UTF-8 byte order of Ref.name.
   tags: [Ref] (required);
 
-  // sorted by name
+  // All branches. MUST be sorted in ascending UTF-8 byte order of Ref.name.
   branches: [Ref] (required);
 
-  // sorted
+  // Names of deleted tags. MUST be sorted in ascending UTF-8 byte order.
   deleted_tags: [string] (required);
 
-  // sorted by id
+  // All snapshots in this repository.
+  // MUST be sorted in ascending byte order of SnapshotInfo.id.
   snapshots: [SnapshotInfo] (required);
 
+  // Current repository availability status.
   status: RepoStatus (required);
 
+  // Repository-level metadata (user attributes).
   metadata: [MetadataItem];
 
+  // The ops log — a list of recent operations performed on this repository.
   latest_updates: [Update] (required);
 
+  // Path to the previous repo info file (in the overwritten/ prefix),
+  // forming a linked list for ops log entries beyond this file.
   repo_before_updates: string;
 
-  // RepositoryConfig serialized as flexbuffers
+  // Repository configuration, serialized as FlexBuffers.
   config: [uint8] (flexbuffer);
 
-  // List of features flags ids explicitly set by the user in state enabled/disabled
-  // Flags not present in either list are at their default value
-  // Sorted in ascending order of id
+  // Feature flag ids explicitly enabled by the user.
+  // MUST be sorted in ascending numeric order.
   enabled_feature_flags: [uint16];
+
+  // Feature flag ids explicitly disabled by the user.
+  // MUST be sorted in ascending numeric order.
+  // Flags not in either list are at their default value.
   disabled_feature_flags: [uint16];
 
-  // Reserved for future use. Opaque byte vector for extensibility.
-  // Introduced in spec version 2
+  // Reserved for future use. Opaque bytes for future extensions.
+  // Introduced in spec version 2.
   extra: [uint8];
 }
 // --8<-- [end:repo_table]
