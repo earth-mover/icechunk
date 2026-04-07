@@ -1426,10 +1426,10 @@ impl PyRepository {
         // This function calls block_on, so we need to allow other thread python to make progress
         py.detach(move || {
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
-                let spec_version = Repository::fetch_spec_version(storage.0, settings)
+                let detected = Repository::fetch_spec_version(storage.0, settings)
                     .await
                     .map_err(PyIcechunkStoreError::RepositoryError)?;
-                Ok(spec_version.map(|v| v.into()))
+                Ok(detected.map(|d| d.spec_version().into()))
             })
         })
     }
@@ -1445,10 +1445,10 @@ impl PyRepository {
         pyo3_async_runtimes::tokio::future_into_py::<_, Option<PySpecVersion>>(
             py,
             async move {
-                let spec_version = Repository::fetch_spec_version(storage.0, settings)
+                let detected = Repository::fetch_spec_version(storage.0, settings)
                     .await
                     .map_err(PyIcechunkStoreError::RepositoryError)?;
-                Ok(spec_version.map(|v| v.into()))
+                Ok(detected.map(|d| d.spec_version().into()))
             },
         )
     }
