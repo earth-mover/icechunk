@@ -1,9 +1,6 @@
 # Migrate to 2.0
 
-
-Icechunk 2.0 uses a new storage format (spec version 2). Existing repositories created with Icechunk 1.x can be automatically upgraded to version 2.0 using the [`upgrade_icechunk_repository()`](./reference.md#icechunk.upgrade_icechunk_repository) function.
-
-## Running the migration
+Icechunk 2.0 uses a new storage format (spec version 2). Existing repositories created with Icechunk 1.x can be automatically upgraded to version 2.0 using the [`upgrade_icechunk_repository()`](./reference.md#icechunk.upgrade_icechunk_repository) function:
 
 ```python
 import icechunk as ic
@@ -16,11 +13,11 @@ storage = ic.s3_storage(
 )
 repo = ic.Repository.open(storage)
 
-# First, do a dry run to validate the migration
-migrated_repo = ic.upgrade_icechunk_repository(repo, dry_run=True)
-
-# Then run the actual migration
+# You can use `dry_run=True` to test the migration process without writing the
+# icechunk version 2 specific files. `dry_run=False` will run the migration
+# and when complete will not be reversible.
 migrated_repo = ic.upgrade_icechunk_repository(repo, dry_run=False)
+assert migrated_repo.spec_version == 2
 
 # Use migrated_repo from here on — the original `repo` object is invalidated
 session = migrated_repo.writable_session("main")
@@ -32,24 +29,17 @@ session = migrated_repo.writable_session("main")
 ### Parameters
 
 | Parameter | Default | Description |
-|---|---|---|sd
+|---|---|---|
 | `repo` | *(required)* | The v1 repository to migrate. |
-| `dry_run` | *(required)* | If `True`, validates the migration without making changes. |
+| `dry_run` | *(required)* | If `True`, it attempts the migration without writing version 2 specific files, leaving the v1 repo in place |
 | `delete_unused_v1_files` | `True` | Remove legacy v1 metadata files after migration. |
-| `prefetch_concurrency` | `64` | Number of snapshots to fetch concurrently. Lower this for environments that cannot fit many snapshots in memory. |
+| `prefetch_concurrency` | `64` | Number of snapshots to fetch concurrently while migrating. Lower this for environments that cannot fit many snapshots in memory. |
 
 ### How it works
 
-The migration is designed to be **safe and reversible** at each step:
+The migration reads all snapshots pointed to by branches and tags, and collects them into the new version 2 schema with a reconstructed ops log. If successful and `delete_unused_v1_files=True`, the legacy v1 metadata files are removed.
 
-1. **Validation** — Confirms the repository is spec version 1 and storage is writable.
-2. **Snapshot collection** — Walks the full version history, collecting all branches, tags, and snapshots.
-3. **Ops log reconstruction** — Icechunk 2.0 tracks a richer operations log. The migration reconstructs a synthetic history from your existing snapshot graph so that [`Repository.ops_log()`](./reference.md#icechunk.Repository.ops_log) works after migration.
-4. **Atomic write** — A single new v2 repository info file is written containing all refs, snapshot metadata, configuration, and the reconstructed ops log.
-5. **Verification** — The repository is reopened and verified to be spec version 2. If verification fails, the v2 file is deleted and the repository is left unchanged.
-6. **Cleanup** — If `delete_unused_v1_files=True`, the legacy v1 ref and config files are removed. If any cleanup step fails, the migration rolls back.
-
-Each step of the process is atomic and if something goes wrong, the repo will be left in a working state.
+If something goes wrong at any step, the repository is left in a working state.
 
 !!! note
     The migration is usually fast, but can take several minutes for repositories with thousands of snapshots.
