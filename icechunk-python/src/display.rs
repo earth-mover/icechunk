@@ -1,5 +1,7 @@
 use std::fmt::{Display, Write as _};
 
+use icechunk::display::AncestryGraph;
+use pyo3::prelude::*;
 use pyo3::{Py, PyClass, Python};
 
 /// The rendering mode, controlling how nested objects format themselves.
@@ -262,4 +264,32 @@ pub(crate) fn dataclass_html_repr(cls_name: &str, fields: &[(&str, &str)]) -> St
     }
     let _ = writeln!(out, "</div>");
     out
+}
+
+#[pyclass(name = "AncestryGraph")]
+#[derive(Debug, Clone)]
+pub(crate) struct PyAncestryGraph {
+    inner: AncestryGraph,
+}
+
+impl From<AncestryGraph> for PyAncestryGraph {
+    fn from(inner: AncestryGraph) -> Self {
+        Self { inner }
+    }
+}
+
+#[pymethods]
+impl PyAncestryGraph {
+    pub(crate) fn __repr__(&self) -> String {
+        self.inner.to_string()
+    }
+
+    pub(crate) fn __str__(&self) -> String {
+        self.inner.to_string()
+    }
+
+    /// Return a raw SVG string for Jupyter notebooks.
+    pub(crate) fn _repr_svg_(&self) -> String {
+        self.inner.to_svg()
+    }
 }

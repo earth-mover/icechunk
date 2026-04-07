@@ -2,6 +2,7 @@
 
 
 from icechunk._icechunk_python import (
+    AncestryGraph,
     ChunkType,
     ConflictError,
     IcechunkError,
@@ -109,6 +110,7 @@ from icechunk.virtual import (
 from icechunk.zarr import IcechunkStore
 
 __all__ = [
+    "AncestryGraph",
     "AnyAzureCredential",
     "AnyAzureStaticCredential",
     "AnyCredential",
