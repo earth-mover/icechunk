@@ -6,6 +6,7 @@ use std::{
     sync::Arc,
 };
 
+use crate::display::{PyAncestryGraph, PyRepr, ReprMode, py_bool, py_option};
 use itertools::Itertools as _;
 
 use chrono::{DateTime, Utc};
@@ -42,7 +43,6 @@ use tokio::sync::{Mutex, RwLock};
 use crate::{
     config::{
         PyCredentials, PyRepositoryConfig, PyStorage, PyStorageSettings, datetime_repr,
-        format_bool, format_option, format_option_to_string,
     },
     errors::PyIcechunkStoreError,
     impl_pickle,
@@ -224,30 +224,65 @@ impl From<SnapshotInfo> for PySnapshotInfo {
     }
 }
 
+impl PyRepr for PyManifestFileInfo {
+    const EXECUTABLE: bool = false;
+
+    fn cls_name() -> &'static str {
+        "icechunk.snapshots.ManifestFileInfo"
+    }
+
+    fn fields(&self, _mode: ReprMode) -> Vec<(&str, String)> {
+        vec![
+            ("id", self.id.clone()),
+            ("size_bytes", self.size_bytes.to_string()),
+            ("num_chunk_refs", self.num_chunk_refs.to_string()),
+        ]
+    }
+}
+
 #[pymethods]
 impl PyManifestFileInfo {
     pub(crate) fn __repr__(&self) -> String {
-        format!(
-            r#"ManifestFileInfo(id="{id}", size_bytes={size}, num_chunk_refs={chunks})"#,
-            id = self.id,
-            size = self.size_bytes,
-            chunks = self.num_chunk_refs,
-        )
+        <Self as PyRepr>::__repr__(self)
+    }
+
+    pub(crate) fn __str__(&self) -> String {
+        <Self as PyRepr>::__str__(self)
+    }
+
+    pub(crate) fn _repr_html_(&self) -> String {
+        <Self as PyRepr>::_repr_html_(self)
+    }
+}
+
+impl PyRepr for PySnapshotInfo {
+    const EXECUTABLE: bool = false;
+    fn cls_name() -> &'static str {
+        "icechunk.snapshots.SnapshotInfo"
+    }
+    fn fields(&self, _mode: ReprMode) -> Vec<(&str, String)> {
+        vec![
+            ("id", self.id.clone()),
+            ("parent_id", py_option(&self.parent_id)),
+            ("written_at", datetime_repr(&self.written_at)),
+            ("message", self.message.clone()),
+            ("metadata", format!("{:?}", self.metadata)),
+        ]
     }
 }
 
 #[pymethods]
 impl PySnapshotInfo {
     pub(crate) fn __repr__(&self) -> String {
-        // TODO: escape
-        format!(
-            r#"SnapshotInfo(id="{id}", parent_id={parent}, written_at={at}, message="{message}")"#,
-            id = self.id,
-            parent = format_option_to_string(self.parent_id.as_ref()),
-            at = datetime_repr(&self.written_at),
-            // TODO: what would be a better default here?
-            message = self.message.chars().take(10).collect::<String>() + "...",
-        )
+        <Self as PyRepr>::__repr__(self)
+    }
+
+    pub(crate) fn __str__(&self) -> String {
+        <Self as PyRepr>::__str__(self)
+    }
+
+    pub(crate) fn _repr_html_(&self) -> String {
+        <Self as PyRepr>::_repr_html_(self)
     }
 }
 
@@ -315,6 +350,25 @@ impl From<Diff> for PyDiff {
     }
 }
 
+impl PyRepr for PyDiff {
+    const EXECUTABLE: bool = false;
+    fn cls_name() -> &'static str {
+        "icechunk.snapshots.Diff"
+    }
+    fn fields(&self, _mode: ReprMode) -> Vec<(&str, String)> {
+        vec![
+            ("new_groups", format!("{:?}", self.new_groups)),
+            ("new_arrays", format!("{:?}", self.new_arrays)),
+            ("deleted_groups", format!("{:?}", self.deleted_groups)),
+            ("deleted_arrays", format!("{:?}", self.deleted_arrays)),
+            ("updated_groups", format!("{:?}", self.updated_groups)),
+            ("updated_arrays", format!("{:?}", self.updated_arrays)),
+            ("updated_chunks", format!("{:?}", self.updated_chunks)),
+            ("moved_nodes", format!("{:?}", self.moved_nodes)),
+        ]
+    }
+}
+
 #[pymethods]
 impl PyDiff {
     /// Returns true if the diff contains no changes.
@@ -329,8 +383,14 @@ impl PyDiff {
             && self.moved_nodes.is_empty()
     }
 
-    #[expect(clippy::unwrap_used)]
     pub fn __repr__(&self) -> String {
+        self.__str__()
+    }
+
+    /// Custom human-readable format (not generic `PyRepr`) because diffs
+    /// are much more readable with section headers than field: value.
+    #[expect(clippy::unwrap_used)]
+    pub fn __str__(&self) -> String {
         let mut res = String::new();
         use std::fmt::Write as _;
 
@@ -348,7 +408,6 @@ impl PyDiff {
             }
             res.push('\n');
         }
-
         if !self.updated_groups.is_empty() {
             res.push_str("Group definitions updated:\n");
             for g in self.updated_groups.iter() {
@@ -356,7 +415,6 @@ impl PyDiff {
             }
             res.push('\n');
         }
-
         if !self.updated_arrays.is_empty() {
             res.push_str("Array definitions updated:\n");
             for g in self.updated_arrays.iter() {
@@ -364,7 +422,6 @@ impl PyDiff {
             }
             res.push('\n');
         }
-
         if !self.deleted_groups.is_empty() {
             res.push_str("Groups deleted:\n");
             for g in self.deleted_groups.iter() {
@@ -372,7 +429,6 @@ impl PyDiff {
             }
             res.push('\n');
         }
-
         if !self.deleted_arrays.is_empty() {
             res.push_str("Arrays deleted:\n");
             for g in self.deleted_arrays.iter() {
@@ -380,15 +436,6 @@ impl PyDiff {
             }
             res.push('\n');
         }
-
-        if !self.moved_nodes.is_empty() {
-            res.push_str("Nodes moved/renamed:\n");
-            for (from, to) in self.moved_nodes.iter() {
-                writeln!(res, "    {from} -> {to}").unwrap();
-            }
-            res.push('\n');
-        }
-
         if !self.updated_chunks.is_empty() {
             res.push_str("Chunks updated:\n");
             for (path, chunks) in self.updated_chunks.iter() {
@@ -405,7 +452,18 @@ impl PyDiff {
                 }
             }
         }
+        if !self.moved_nodes.is_empty() {
+            res.push_str("Nodes moved/renamed:\n");
+            for (from, to) in self.moved_nodes.iter() {
+                writeln!(res, "    {from} -> {to}").unwrap();
+            }
+            res.push('\n');
+        }
         res
+    }
+
+    pub fn _repr_html_(&self) -> String {
+        <Self as PyRepr>::_repr_html_(self)
     }
 }
 
@@ -441,18 +499,35 @@ impl From<GCSummary> for PyGCSummary {
     }
 }
 
+impl PyRepr for PyGCSummary {
+    const EXECUTABLE: bool = false;
+    fn cls_name() -> &'static str {
+        "icechunk.ops.GCSummary"
+    }
+    fn fields(&self, _mode: ReprMode) -> Vec<(&str, String)> {
+        vec![
+            ("bytes_deleted", self.bytes_deleted.to_string()),
+            ("chunks_deleted", self.chunks_deleted.to_string()),
+            ("manifests_deleted", self.manifests_deleted.to_string()),
+            ("snapshots_deleted", self.snapshots_deleted.to_string()),
+            ("attributes_deleted", self.attributes_deleted.to_string()),
+            ("transaction_logs_deleted", self.transaction_logs_deleted.to_string()),
+        ]
+    }
+}
+
 #[pymethods]
 impl PyGCSummary {
     pub(crate) fn __repr__(&self) -> String {
-        format!(
-            r#"GCSummary(bytes_deleted={bytes}, chunks_deleted={chunks}, manifests_deleted={manifests}, snapshots_deleted={snapshots}, attributes_deleted={atts}, transaction_logs_deleted={txs})"#,
-            bytes = self.bytes_deleted,
-            chunks = self.chunks_deleted,
-            manifests = self.manifests_deleted,
-            snapshots = self.snapshots_deleted,
-            atts = self.attributes_deleted,
-            txs = self.transaction_logs_deleted,
-        )
+        <Self as PyRepr>::__repr__(self)
+    }
+
+    pub(crate) fn __str__(&self) -> String {
+        <Self as PyRepr>::__str__(self)
+    }
+
+    pub(crate) fn _repr_html_(&self) -> String {
+        <Self as PyRepr>::_repr_html_(self)
     }
 }
 
@@ -521,6 +596,20 @@ impl Display for PyRepoStatus {
     }
 }
 
+impl PyRepr for PyRepoStatus {
+    const EXECUTABLE: bool = false;
+    fn cls_name() -> &'static str {
+        "icechunk.repository.RepoStatus"
+    }
+    fn fields(&self, _mode: ReprMode) -> Vec<(&str, String)> {
+        vec![
+            ("availability", format!("{:?}", self.availability)),
+            ("set_at", datetime_repr(&self.set_at)),
+            ("limited_availability_reason", py_option(&self.limited_availability_reason)),
+        ]
+    }
+}
+
 #[pymethods]
 impl PyRepoStatus {
     #[new]
@@ -535,12 +624,15 @@ impl PyRepoStatus {
     }
 
     fn __repr__(&self) -> String {
-        format!(
-            "RepoStatus(availability={:?}, set_at={}, limited_availability_reason={})",
-            self.availability,
-            self.set_at,
-            format_option_to_string(self.limited_availability_reason.as_ref()),
-        )
+        <Self as PyRepr>::__repr__(self)
+    }
+
+    fn __str__(&self) -> String {
+        <Self as PyRepr>::__str__(self)
+    }
+
+    fn _repr_html_(&self) -> String {
+        <Self as PyRepr>::_repr_html_(self)
     }
 }
 
@@ -567,53 +659,68 @@ pub(crate) enum PyUpdateType {
 
 #[pymethods]
 impl PyUpdateType {
-    fn __repr__(&self) -> Cow<'static, str> {
+    fn __repr__(&self) -> String {
         match self {
-            Self::RepoInitialized {} => "RepoInitialized()".into(),
-            Self::ConfigChanged {} => "ConfigChanged()".into(),
-            Self::MetadataChanged {} => "MetadataChanged()".into(),
-            Self::TagCreated { name } => format!("TagCreated(name={name})").into(),
+            Self::RepoInitialized {} => {
+                "icechunk.ops.UpdateType.RepoInitialized()".into()
+            }
+            Self::ConfigChanged {} => "icechunk.ops.UpdateType.ConfigChanged()".into(),
+            Self::MetadataChanged {} => {
+                "icechunk.ops.UpdateType.MetadataChanged()".into()
+            }
+            Self::TagCreated { name } => {
+                format!("icechunk.ops.UpdateType.TagCreated(name=\"{name}\")")
+            }
             Self::TagDeleted { name, previous_snap_id } => format!(
-                "TagDeleted(name={name}, previous_snap_id={previous_snap_id})"
-            )
-            .into(),
+                "icechunk.ops.UpdateType.TagDeleted(name=\"{name}\", previous_snap_id=\"{previous_snap_id}\")"
+            ),
             Self::BranchCreated { name } => {
-                format!("BranchCreated(name={name})").into()
+                format!("icechunk.ops.UpdateType.BranchCreated(name=\"{name}\")")
             }
             Self::BranchDeleted { name, previous_snap_id } => format!(
-                "BranchDeleted(name={name}, previous_snap_id={previous_snap_id})"
-            )
-            .into(),
+                "icechunk.ops.UpdateType.BranchDeleted(name=\"{name}\", previous_snap_id=\"{previous_snap_id}\")"
+            ),
             Self::BranchReset { name, previous_snap_id } => format!(
-                "BranchReset(name={name}, previous_snap_id={previous_snap_id})"
-            )
-            .into(),
+                "icechunk.ops.UpdateType.BranchReset(name=\"{name}\", previous_snap_id=\"{previous_snap_id}\")"
+            ),
             Self::NewCommit { branch, new_snap_id } => {
-                format!("NewCommit(branch={branch}, new_snap_id={new_snap_id})")
-                    .into()
+                format!(
+                    "icechunk.ops.UpdateType.NewCommit(branch=\"{branch}\", new_snap_id=\"{new_snap_id}\")"
+                )
             }
             Self::CommitAmended { branch, previous_snap_id, new_snap_id } => format!(
-                "CommitAmended(branch={branch}, previous_snap_id={previous_snap_id}, new_snap_id={new_snap_id})",
-            )
-            .into(),
+                "icechunk.ops.UpdateType.CommitAmended(branch=\"{branch}\", previous_snap_id=\"{previous_snap_id}\", new_snap_id=\"{new_snap_id}\")",
+            ),
             Self::RepoMigrated { from_version, to_version } => format!(
-                "RepoMigrated(from_version={from_version}, to_version={to_version})"
-            )
-            .into(),
+                "icechunk.ops.UpdateType.RepoMigrated(from_version={from_version}, to_version={to_version})"
+            ),
             Self::RepoStatusChanged { status } => {
-                format!("RepoStatusChanged(status={status})",).into()
+                format!("icechunk.ops.UpdateType.RepoStatusChanged(status={status})")
             }
-            Self::GCRan {} => "GCRan()".into(),
+            Self::GCRan {} => "icechunk.ops.UpdateType.GCRan()".into(),
             Self::FeatureFlagChanged { id, new_value } => format!(
-                "FeatureFlagChanged(id={}, new_value={})",
-                id,
-                format_option(new_value.map(format_bool))
-            )
-            .into(),
-            Self::ExpirationRan {} => "ExpirationRan()".into(),
+                "icechunk.ops.UpdateType.FeatureFlagChanged(id={id}, new_value={})",
+                new_value.map(py_bool).unwrap_or_else(|| "None".to_string()),
+            ),
+            Self::ExpirationRan {} => "icechunk.ops.UpdateType.ExpirationRan()".into(),
             Self::NewDetachedSnapshot { new_snap_id } => {
-                format!("NewDetachedSnapshot(new_snap_id={new_snap_id})").into()
+                format!(
+                    "icechunk.ops.UpdateType.NewDetachedSnapshot(new_snap_id=\"{new_snap_id}\")"
+                )
             }
+        }
+    }
+
+    fn __str__(&self) -> String {
+        self.__repr__()
+    }
+}
+
+impl PyUpdateType {
+    pub(crate) fn render(&self, mode: ReprMode) -> String {
+        match mode {
+            ReprMode::Str => self.__str__(),
+            ReprMode::Repr | ReprMode::Html => self.__repr__(),
         }
     }
 }
@@ -631,16 +738,30 @@ pub(crate) struct PyUpdate {
     backup_path: Option<String>,
 }
 
+impl PyRepr for PyUpdate {
+    const EXECUTABLE: bool = false;
+    fn cls_name() -> &'static str {
+        "icechunk.ops.Update"
+    }
+    fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
+        vec![
+            ("kind", self.kind.render(mode)),
+            ("updated_at", datetime_repr(&self.updated_at)),
+            ("backup_path", py_option(&self.backup_path)),
+        ]
+    }
+}
+
 #[pymethods]
 impl PyUpdate {
-    fn __repr__(&self) -> Cow<'static, str> {
-        format!(
-            "Update(kind={}, updated_at='{}', backup_path={:?})",
-            self.kind.__repr__(),
-            self.updated_at,
-            self.backup_path
-        )
-        .into()
+    fn __repr__(&self) -> String {
+        <Self as PyRepr>::__repr__(self)
+    }
+    fn __str__(&self) -> String {
+        <Self as PyRepr>::__str__(self)
+    }
+    fn _repr_html_(&self) -> String {
+        <Self as PyRepr>::_repr_html_(self)
     }
 }
 
@@ -659,17 +780,32 @@ pub(crate) struct PyFeatureFlag {
     enabled: bool,
 }
 
+impl PyRepr for PyFeatureFlag {
+    const EXECUTABLE: bool = false;
+    fn cls_name() -> &'static str {
+        "icechunk.config.FeatureFlag"
+    }
+    fn fields(&self, _mode: ReprMode) -> Vec<(&str, String)> {
+        vec![
+            ("id", self.id.to_string()),
+            ("name", self.name.clone()),
+            ("default_enabled", py_bool(self.default_enabled)),
+            ("setting", self.setting.map(py_bool).unwrap_or_else(|| "None".to_string())),
+            ("enabled", py_bool(self.enabled)),
+        ]
+    }
+}
+
 #[pymethods]
 impl PyFeatureFlag {
-    fn __repr__(&self) -> PyResult<String> {
-        Ok(format!(
-            "FeatureFlag(id={}, name={}, default_enabled={}, setting={}, enabled={})",
-            self.id,
-            self.name,
-            format_bool(self.default_enabled),
-            format_option(self.setting.map(format_bool)),
-            format_bool(self.enabled),
-        ))
+    fn __repr__(&self) -> String {
+        <Self as PyRepr>::__repr__(self)
+    }
+    fn __str__(&self) -> String {
+        <Self as PyRepr>::__str__(self)
+    }
+    fn _repr_html_(&self) -> String {
+        <Self as PyRepr>::_repr_html_(self)
     }
 }
 
@@ -998,10 +1134,70 @@ impl PyRepository {
     }
 }
 
+impl PyRepr for PyRepository {
+    const EXECUTABLE: bool = false;
+
+    fn cls_name() -> &'static str {
+        "icechunk.Repository"
+    }
+
+    fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
+        let repo = self.0.blocking_read();
+        let info = repo.storage().storage_info();
+        let mut storage_fields = vec![("type", info.backend_type.to_string())];
+        storage_fields.extend(info.fields);
+        let storage_refs: Vec<(&str, &str)> =
+            storage_fields.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        let storage = match mode {
+            ReprMode::Html => {
+                crate::display::dataclass_html_repr("icechunk.Storage", &storage_refs)
+            }
+            _ => crate::display::dataclass_str("icechunk.Storage", &storage_refs),
+        };
+        match mode {
+            ReprMode::Html => {
+                let py_config: PyRepositoryConfig = repo.config().clone().into();
+                vec![("storage", storage), ("config", py_config.render(mode))]
+            }
+            _ => vec![
+                ("storage", storage),
+                ("config", "<RepositoryConfig ...>".to_string()),
+            ],
+        }
+    }
+}
+
+impl PyRepository {
+    fn cls_name_with_version(&self) -> String {
+        let repo = self.0.blocking_read();
+        format!("icechunk.Repository (v{})", repo.spec_version() as u8)
+    }
+}
+
 #[pymethods]
 /// Most functions in this class call `Runtime.block_on` so they need to `detach` so other
 /// python threads can make progress in the case of an actual block
 impl PyRepository {
+    pub(crate) fn __repr__(&self) -> String {
+        let cls = self.cls_name_with_version();
+        let fields = self.fields(ReprMode::Str);
+        let refs: Vec<(&str, &str)> =
+            fields.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        crate::display::dataclass_str(&cls, &refs)
+    }
+
+    pub(crate) fn __str__(&self) -> String {
+        self.__repr__()
+    }
+
+    pub(crate) fn _repr_html_(&self) -> String {
+        let cls = self.cls_name_with_version();
+        let fields = self.fields(ReprMode::Html);
+        let refs: Vec<(&str, &str)> =
+            fields.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        crate::display::dataclass_html_repr(&cls, &refs)
+    }
+
     #[classmethod]
     #[pyo3(signature = (storage, *, config = None, authorize_virtual_chunk_access = None, spec_version = None, check_clean_root = true))]
     fn create(
@@ -1230,10 +1426,10 @@ impl PyRepository {
         // This function calls block_on, so we need to allow other thread python to make progress
         py.detach(move || {
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
-                let spec_version = Repository::fetch_spec_version(storage.0, settings)
+                let detected = Repository::fetch_spec_version(storage.0, settings)
                     .await
                     .map_err(PyIcechunkStoreError::RepositoryError)?;
-                Ok(spec_version.map(|v| v.into()))
+                Ok(detected.map(|d| d.spec_version().into()))
             })
         })
     }
@@ -1249,10 +1445,10 @@ impl PyRepository {
         pyo3_async_runtimes::tokio::future_into_py::<_, Option<PySpecVersion>>(
             py,
             async move {
-                let spec_version = Repository::fetch_spec_version(storage.0, settings)
+                let detected = Repository::fetch_spec_version(storage.0, settings)
                     .await
                     .map_err(PyIcechunkStoreError::RepositoryError)?;
-                Ok(spec_version.map(|v| v.into()))
+                Ok(detected.map(|d| d.spec_version().into()))
             },
         )
     }
@@ -1783,6 +1979,51 @@ impl PyRepository {
 
             let prepared_list = Arc::new(Mutex::new(parents.err_into().boxed()));
             Ok(PyAsyncGenerator::new(prepared_list))
+        })
+    }
+
+    #[pyo3(signature = (*, branch = None, tag = None, snapshot_id = None, plain = false))]
+    pub(crate) fn ancestry_graph(
+        &self,
+        py: Python<'_>,
+        branch: Option<String>,
+        tag: Option<String>,
+        snapshot_id: Option<String>,
+        plain: bool,
+    ) -> PyResult<PyAncestryGraph> {
+        let version = args_to_optional_version_info(branch, tag, snapshot_id)?;
+
+        py.detach(move || {
+            pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+                let repo = self.0.read().await;
+                let graph = repo
+                    .ancestry_graph(version.as_ref(), plain)
+                    .await
+                    .map_err(PyIcechunkStoreError::RepositoryError)?;
+                Ok(graph.into())
+            })
+        })
+    }
+
+    #[pyo3(signature = (*, branch = None, tag = None, snapshot_id = None, plain = false))]
+    fn ancestry_graph_async<'py>(
+        &'py self,
+        py: Python<'py>,
+        branch: Option<String>,
+        tag: Option<String>,
+        snapshot_id: Option<String>,
+        plain: bool,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let version = args_to_optional_version_info(branch, tag, snapshot_id)?;
+        let repository = Arc::clone(&self.0);
+
+        pyo3_async_runtimes::tokio::future_into_py::<_, PyAncestryGraph>(py, async move {
+            let repo = repository.read().await;
+            let graph = repo
+                .ancestry_graph(version.as_ref(), plain)
+                .await
+                .map_err(PyIcechunkStoreError::RepositoryError)?;
+            Ok(graph.into())
         })
     }
 
@@ -2881,6 +3122,19 @@ fn map_credentials(
         cred.into_iter().map(|(name, cred)| (name, cred.map(|c| c.into()))).collect()
     })
     .unwrap_or_default()
+}
+
+/// Like `args_to_version_info`, but returns `None` when all args are `None`
+/// (used by `ancestry_graph` where all-None means "show all branches").
+fn args_to_optional_version_info(
+    branch: Option<String>,
+    tag: Option<String>,
+    snapshot: Option<String>,
+) -> PyResult<Option<VersionInfo>> {
+    if branch.is_none() && tag.is_none() && snapshot.is_none() {
+        return Ok(None);
+    }
+    args_to_version_info(branch, tag, snapshot, None).map(Some)
 }
 
 fn args_to_version_info(

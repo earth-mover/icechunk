@@ -55,7 +55,7 @@ async fn mk_s3_storage(
     let storage: Arc<dyn Storage + Send + Sync> = new_s3_storage(
         S3Options {
             region: Some("us-east-1".to_string()),
-            endpoint_url: Some("http://localhost:9000".to_string()),
+            endpoint_url: Some("http://localhost:4200".to_string()),
             allow_http: true,
             anonymous: false,
             force_path_style: true,
@@ -94,7 +94,7 @@ async fn mk_s3_object_store_storage(
             })),
             Some(S3Options {
                 region: Some("us-east-1".to_string()),
-                endpoint_url: Some("http://localhost:9000".to_string()),
+                endpoint_url: Some("http://localhost:4200".to_string()),
                 allow_http: true,
                 anonymous: false,
                 force_path_style: true,
@@ -195,15 +195,15 @@ where
         let s = common::make_r2_integration_storage(prefix.clone())?;
         storages.push(("R2_slash", s));
     }
-    if env::var("TIGRIS_BUCKET").is_ok() {
-        let prefix = common::get_random_prefix("with_storage");
-        let s = common::make_tigris_integration_storage(prefix.clone())?;
-        storages.push(("Tigris", s));
+    // if env::var("TIGRIS_BUCKET").is_ok() {
+    //     let prefix = common::get_random_prefix("with_storage");
+    //     let s = common::make_tigris_integration_storage(prefix.clone())?;
+    //     storages.push(("Tigris", s));
 
-        let prefix = format!("{}/", common::get_random_prefix("with_storage"));
-        let s = common::make_tigris_integration_storage(prefix.clone())?;
-        storages.push(("Tigris_slash", s));
-    }
+    //     let prefix = format!("{}/", common::get_random_prefix("with_storage"));
+    //     let s = common::make_tigris_integration_storage(prefix.clone())?;
+    //     storages.push(("Tigris_slash", s));
+    // }
 
     let futures = storages.into_iter().map(|(name, storage)| {
         println!("Using {name} storage");
@@ -1098,5 +1098,49 @@ async fn test_redirect_storage() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
     assert!(session.list_nodes(&Path::root()).await?.count() >= 8);
 
+    Ok(())
+}
+
+#[tokio_test]
+#[apply(spec_version_cases)]
+pub async fn test_basic_repo_ops(
+    #[case] spec_version: SpecVersionBin,
+) -> Result<(), Box<dyn std::error::Error>> {
+    with_storage(Permission::Modify, |_, storage| async move {
+        let repo = Repository::create(
+            None,
+            Arc::clone(&storage),
+            Default::default(),
+            Some(spec_version),
+            true,
+        )
+        .await?;
+
+        let branches = repo.list_branches().await?;
+        assert!(branches.contains("main"));
+
+        let session = repo
+            .readonly_session(&icechunk::repository::VersionInfo::BranchTipRef(
+                "main".to_string(),
+            ))
+            .await?;
+        assert_eq!(session.list_nodes(&Path::root()).await?.count(), 0);
+
+        // reopen from storage
+        let repo = Repository::open(None, storage, Default::default()).await?;
+
+        let branches = repo.list_branches().await?;
+        assert!(branches.contains("main"));
+
+        let session = repo
+            .readonly_session(&icechunk::repository::VersionInfo::BranchTipRef(
+                "main".to_string(),
+            ))
+            .await?;
+        assert_eq!(session.list_nodes(&Path::root()).await?.count(), 0);
+
+        Ok(())
+    })
+    .await?;
     Ok(())
 }

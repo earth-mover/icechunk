@@ -32,7 +32,7 @@ def get_bad_credentials() -> S3StaticCredentials:
 def test_refreshable_credentials_grant_access(scatter_initial_credentials: bool) -> None:
     good_storage = s3_storage(
         region="us-east-1",
-        endpoint_url="http://localhost:9000",
+        endpoint_url="http://localhost:4200",
         allow_http=True,
         force_path_style=True,
         bucket="testbucket",
@@ -42,7 +42,7 @@ def test_refreshable_credentials_grant_access(scatter_initial_credentials: bool)
     )
     bad_storage = s3_storage(
         region="us-east-1",
-        endpoint_url="http://localhost:9000",
+        endpoint_url="http://localhost:4200",
         allow_http=True,
         force_path_style=True,
         bucket="testbucket",
@@ -74,7 +74,7 @@ def test_refreshable_credentials_errors(scatter_initial_credentials: bool) -> No
         with pytest.raises(IcechunkError, match="bad creds"):
             st = s3_storage(
                 region="us-east-1",
-                endpoint_url="http://localhost:9000",
+                endpoint_url="http://localhost:4200",
                 allow_http=True,
                 bucket="testbucket",
                 prefix="this-repo-does-not-exist",
@@ -84,7 +84,7 @@ def test_refreshable_credentials_errors(scatter_initial_credentials: bool) -> No
     else:
         st = s3_storage(
             region="us-east-1",
-            endpoint_url="http://localhost:9000",
+            endpoint_url="http://localhost:4200",
             allow_http=True,
             bucket="testbucket",
             prefix="this-repo-does-not-exist",
@@ -98,7 +98,7 @@ def test_refreshable_credentials_errors(scatter_initial_credentials: bool) -> No
     st = Storage.new_s3(
         config=S3Options(
             region="us-east-1",
-            endpoint_url="http://localhost:9000",
+            endpoint_url="http://localhost:4200",
             allow_http=True,
             force_path_style=True,
         ),
@@ -113,7 +113,7 @@ def test_refreshable_credentials_errors(scatter_initial_credentials: bool) -> No
     st = Storage.new_s3(
         config=S3Options(
             region="us-east-1",
-            endpoint_url="http://localhost:9000",
+            endpoint_url="http://localhost:4200",
             allow_http=True,
             force_path_style=True,
         ),
@@ -159,7 +159,7 @@ def test_s3_refreshable_credentials_refresh(
 
     st = s3_storage(
         region="us-east-1",
-        endpoint_url="http://localhost:9000",
+        endpoint_url="http://localhost:4200",
         allow_http=True,
         force_path_style=True,
         bucket="testbucket",
@@ -198,7 +198,7 @@ def test_s3_refreshable_credentials_pickle_with_optimization(
 
     st = s3_storage(
         region="us-east-1",
-        endpoint_url="http://localhost:9000",
+        endpoint_url="http://localhost:4200",
         allow_http=True,
         force_path_style=True,
         bucket="testbucket",

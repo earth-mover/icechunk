@@ -165,6 +165,43 @@ Profiles are registered in `tests/conftest.py`. Individual tests should **not** 
 `max_examples` or `stateful_step_count` — let the profile control these so that nightly
 runs automatically explore more.
 
+#### Cross-Version Stateful Tests
+
+The cross-version stateful tests (`tests/test_stateful_compat.py`) verify that repositories created by different major versions of icechunk are compatible. They require a renamed copy of icechunk v1 installed alongside the current dev version using [third-wheel](https://github.com/earth-mover/third-wheel).
+
+`third-wheel` is included in the dev dependencies, and the rename is pre-configured in `pyproject.toml` under `[tool.third-wheel]`. To install the renamed `icechunk_v1` package:
+
+=== "pixi (Recommended)"
+
+    ```bash
+    pixi run third-wheel sync -v
+    ```
+
+=== "uv"
+
+    ```bash
+    cd icechunk-python
+    uv run third-wheel sync -v
+    ```
+
+This downloads icechunk v1 from PyPI, renames it to `icechunk_v1`, and installs it into your environment. Then run the tests:
+
+=== "pixi (Recommended)"
+
+    ```bash
+    just pytest tests/test_stateful_compat.py -v
+    ```
+
+=== "uv"
+
+    ```bash
+    cd icechunk-python
+    uv run pytest tests/test_stateful_compat.py -v
+    ```
+
+!!! note
+    If `icechunk_v1` is not installed, these tests are automatically skipped.
+
 !!! important
 
     The full Python test suite depends on S3 and Azure compatible object stores. See [here](#docker-setup-for-local-storage-testing) for detailed instructions. If this is not set up some tests will fail
@@ -516,7 +553,7 @@ This builds the site to `docs/.site` directory.
 
 In order to run local versions of S3 and Azure compatible object stores with Docker, you have to [install Docker](https://docs.docker.com/desktop/) first.
 We provide a docker compose `compose.yaml` file, which you can run with `docker compose up -d` from the root of the repo to start the containers in detached mode.
-`docker ps` should show the `azurite` and `icechunk_minio` containers as running (you can also navigate to the GUI e.g. for the minIO container at `localhost:9001` and log in with the username and password from the `compose.yaml` file to navigate the buckets).
+`docker ps` should show the `azurite` and `icechunk_rustfs` containers as running (you can also navigate to the GUI e.g. for the rustfs container at `localhost:4201` and log in with the username and password from the `compose.yaml` file to navigate the buckets).
 
 After testing you can clean up with `docker compose down`. To verify that all containers are down use `docker ps` again.
 
@@ -540,34 +577,21 @@ rustflags = ["-C", "link-arg=-fuse-ld=mold"]
 
 ### Features
 
-- Support more object stores and more of their custom features
+- Bindings to other languages: C, Julia
 - Better Python API and helper functions
-- Bindings to other languages: C, Wasm
-- Better, faster, more secure distributed sessions
+- Branch merge
 - Savepoints and persistent sessions
 - Chunk and repo level statistics and metrics
 - More powerful conflict detection and resolution
-- Efficient move operation
 - Telemetry
-- Zarr-less usage from Python and other languages
-- Better documentation and examples
+- More powerful integration with Zarrs
+- [Zep 8](https://github.com/zarr-developers/zarr-python/issues/2943) support
 
 ### Performance
 
 - Lower changeset memory footprint
-- Optimize virtual dataset prefixes
 - Bring back manifest joining for small arrays
-- Improve performance of `ancestry`, `garbage_collect`, `get_size` and other metrics
 - More flexible caching hierarchy
-- Better I/O pipeline
-- Better GIL management
 - Request batching and splitting
 - Bringing parts of the codec pipeline to the Rust side
 - Chunk compaction
-
-### Zarr-related
-
-We’re very excited about a number of extensions to Zarr that would work great with Icechunk.
-
-- [Variable length chunks](https://zarr.dev/zeps/draft/ZEP0003.html)
-- [Chunk-level statistics](https://zarr.dev/zeps/draft/ZEP0005.html)

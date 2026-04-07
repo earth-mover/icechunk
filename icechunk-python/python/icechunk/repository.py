@@ -5,26 +5,22 @@ from collections.abc import AsyncIterator, Iterator
 from contextlib import contextmanager
 from typing import Any, Self, cast
 
-from icechunk import ConflictSolver
 from icechunk._icechunk_python import (
+    AncestryGraph,
     ChunkStorageStats,
-    Diff,
-    FeatureFlag,
-    GCSummary,
-    ManifestFileInfo,
     PyRepository,
-    RepositoryConfig,
     RepoStatus,
-    SnapshotInfo,
     SpecVersion,
-    Storage,
-    StorageSettings,
-    Update,
 )
+from icechunk.config import FeatureFlag, RepositoryConfig
+from icechunk.conflicts import ConflictSolver
 from icechunk.credentials import AnyCredential
+from icechunk.ops import GCSummary, Update
 from icechunk.session import Session
-from icechunk.store import IcechunkStore
+from icechunk.snapshots import Diff, ManifestFileInfo, SnapshotInfo
+from icechunk.storage import Storage, StorageSettings
 from icechunk.types import CommitMethod
+from icechunk.zarr import IcechunkStore
 
 
 class Repository:
@@ -34,6 +30,15 @@ class Repository:
 
     def __init__(self, repository: PyRepository):
         self._repository = repository
+
+    def __repr__(self) -> str:
+        return repr(self._repository)
+
+    def __str__(self) -> str:
+        return str(self._repository)
+
+    def _repr_html_(self) -> str:
+        return self._repository._repr_html_()
 
     @classmethod
     def create(
@@ -147,7 +152,7 @@ class Repository:
 
         !!! warning
             This method must be used with care in a multiprocessing context.
-            Read more in our [Parallel Write Guide](./parallel.md#uncooperative-distributed-writes).
+            Read more in our [Parallel Write Guide](../parallel.md#uncooperative-distributed-writes).
 
         Parameters
         ----------
@@ -191,7 +196,7 @@ class Repository:
 
         !!! warning
             This method must be used with care in a multiprocessing context.
-            Read more in our [Parallel Write Guide](./parallel.md#uncooperative-distributed-writes).
+            Read more in our [Parallel Write Guide](../parallel.md#uncooperative-distributed-writes).
 
         Parameters
         ----------
@@ -235,7 +240,7 @@ class Repository:
 
         !!! warning
             This method must be used with care in a multiprocessing context.
-            Read more in our [Parallel Write Guide](./parallel.md#uncooperative-distributed-writes).
+            Read more in our [Parallel Write Guide](../parallel.md#uncooperative-distributed-writes).
 
             Attempting to create a Repo concurrently in the same location from multiple processes is not safe.
             Instead, create a Repo once and then open it concurrently.
@@ -289,7 +294,7 @@ class Repository:
 
         !!! warning
             This method must be used with care in a multiprocessing context.
-            Read more in our [Parallel Write Guide](./parallel.md#uncooperative-distributed-writes).
+            Read more in our [Parallel Write Guide](../parallel.md#uncooperative-distributed-writes).
 
             Attempting to create a Repo concurrently in the same location from multiple processes is not safe.
             Instead, create a Repo once and then open it concurrently.
@@ -910,6 +915,57 @@ class Repository:
         """
         return self._repository.async_ancestry(
             branch=branch, tag=tag, snapshot_id=snapshot_id
+        )
+
+    def ancestry_graph(
+        self,
+        *,
+        branch: str | None = None,
+        tag: str | None = None,
+        snapshot_id: str | None = None,
+        plain: bool = False,
+    ) -> AncestryGraph:
+        """
+        Build a visual representation of the commit history.
+
+        When called with no arguments, shows all branches as a tree.
+        When called with one of branch/tag/snapshot_id, shows that ref's linear history.
+
+        Parameters
+        ----------
+        branch : str, optional
+            Show history for this branch.
+        tag : str, optional
+            Show history from this tag.
+        snapshot_id : str, optional
+            Show history from this snapshot.
+        plain : bool, optional
+            If True, render without colors (no ANSI codes in text, no fill colors
+            in SVG). Useful for CI logs, piping to files, or LLM agents.
+
+        Returns
+        -------
+        AncestryGraph
+            A displayable object. Use print() for colored terminal output,
+            or display in Jupyter for an SVG diagram.
+        """
+        return self._repository.ancestry_graph(
+            branch=branch, tag=tag, snapshot_id=snapshot_id, plain=plain
+        )
+
+    async def ancestry_graph_async(
+        self,
+        *,
+        branch: str | None = None,
+        tag: str | None = None,
+        snapshot_id: str | None = None,
+        plain: bool = False,
+    ) -> AncestryGraph:
+        """
+        Async version of :meth:`ancestry_graph`.
+        """
+        return await self._repository.ancestry_graph_async(
+            branch=branch, tag=tag, snapshot_id=snapshot_id, plain=plain
         )
 
     def ops_log(self) -> Iterator[Update]:

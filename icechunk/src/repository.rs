@@ -37,6 +37,7 @@ use crate::{
         RepositoryConfig,
     },
     diff::{Diff, DiffBuilder},
+    display::AncestryGraph,
     error::ICError,
     feature_flags::{
         CREATE_TAG_FLAG, DELETE_TAG_FLAG, FEATURE_FLAGS, FeatureFlag, MOVE_NODE_FLAG,
@@ -86,6 +87,25 @@ impl TryFrom<&VersionInfo> for RefVersionInfo {
                 Ok(RefVersionInfo::BranchTipRef(name.clone()))
             }
             VersionInfo::AsOf { branch, at } => Err((branch.clone(), *at)),
+        }
+    }
+}
+
+/// Result of detecting a repository's spec version.
+///
+/// For V2+ repos the [`RepoInfo`] that was fetched during detection is
+/// kept so callers can reuse it without an extra round-trip.
+#[derive(Debug)]
+pub enum DetectedSpecVersion {
+    V1,
+    V2Plus { version: SpecVersionBin, repo_info: Arc<RepoInfo> },
+}
+
+impl DetectedSpecVersion {
+    pub fn spec_version(&self) -> SpecVersionBin {
+        match self {
+            Self::V1 => SpecVersionBin::V1,
+            Self::V2Plus { version, .. } => *version,
         }
     }
 }
@@ -328,22 +348,33 @@ impl Repository {
     ) -> RepositoryResult<Self> {
         debug!("Opening Repository");
 
+        // Merge user-provided storage settings with backend defaults upfront so
+        // that every code path initializes the shared storage client with the
+        // same settings. The S3 client is lazily built via `OnceCell`, so the
+        // first caller locks in the config permanently.
+        let storage_defaults = storage.default_settings().await.inject()?;
+        let settings = match config.as_ref().and_then(|c| c.storage().cloned()) {
+            Some(user_storage) => storage_defaults.merge(user_storage),
+            None => storage_defaults,
+        };
+
         // Launch spec version detection and an optimistic config.yaml fetch concurrently.
         // For IC1 repos this avoids a sequential round-trip; for V2+ repos the config.yaml
         // result is ignored (config lives in the repo info object instead).
-        let temp_settings = storage.default_settings().await.inject()?;
+        // Note: for V2+ repos, fetch_spec_version already fetches the RepoInfo
+        // internally, so we reuse it to avoid a redundant round-trip.
         let temp_am = AssetManager::new_no_cache(
             Arc::clone(&storage),
-            temp_settings,
+            settings.clone(),
             SpecVersionBin::current(),
             1,
             DEFAULT_MAX_CONCURRENT_REQUESTS,
         );
 
         let storage_c = Arc::clone(&storage);
-        let user_settings = config.as_ref().and_then(|c| c.storage().cloned());
+        let settings_c = settings.clone();
         let fetch_version =
-            tokio::spawn(Self::fetch_spec_version(storage_c, user_settings));
+            tokio::spawn(Self::fetch_spec_version(storage_c, Some(settings_c)));
         let fetch_config_yaml = temp_am.fetch_config();
 
         // Use join! (not try_join!) so that a config.yaml error doesn't fail the
@@ -351,43 +382,46 @@ impl Repository {
         let (spec_version_result, config_yaml_result) =
             join!(fetch_version, fetch_config_yaml);
 
-        let spec_version = match spec_version_result.capture()?? {
+        let detected = match spec_version_result.capture()?? {
             Some(v) => Ok(v),
             None => {
                 Err(RepositoryError::capture(RepositoryErrorKind::RepositoryDoesntExist))
             }
         }?;
+        let spec_version = detected.spec_version();
         trace!(%spec_version, "Repository version found");
 
-        let (persisted_config, config_version) = if spec_version >= SpecVersionBin::V2 {
-            // V2+ repos: config is always embedded in the repo info object.
-            let (repo_info, _) = temp_am.fetch_repo_info().await?;
-            (repo_info.config().inject()?, storage::VersionInfo::for_creation())
-        } else {
-            // V1 repos: use the config.yaml result we already fetched
-            match config_yaml_result? {
-                Some((c, v)) => (Some(c), v),
-                None => (None, storage::VersionInfo::for_creation()),
+        let (persisted_config, config_version) = match detected {
+            DetectedSpecVersion::V2Plus { repo_info, .. } => {
+                (repo_info.config().inject()?, storage::VersionInfo::for_creation())
+            }
+            DetectedSpecVersion::V1 => {
+                // V1 repos: use the config.yaml result we already fetched
+                match config_yaml_result? {
+                    Some((c, v)) => (Some(c), v),
+                    None => (None, storage::VersionInfo::for_creation()),
+                }
             }
         };
 
         // Merge three layers of config (In order of preference):
         //   - User-provided config (passed to open())
         //   - Persisted repo config (saved alongside the data, if any)
-        //   - Backend storage defaults (e.g. S3 retry/concurrency settings)
-        let storage_defaults = storage.default_settings().await.inject()?;
+        //   - Backend storage defaults (already merged with user settings above)
         let repo_config = match persisted_config {
             Some(c) => RepositoryConfig::default().merge(c),
             None => RepositoryConfig::default(),
         };
         // merge user config on top of persisted config and library defaults
-        // no storage merging happening yet.
         let merged_config = config.map(|c| repo_config.merge(c)).unwrap_or(repo_config);
 
-        // construct the merged storage settings
+        // Re-merge in case persisted config introduced additional storage
+        // settings. Note: the S3 client is already initialized with `settings`
+        // from above, so only Icechunk-level settings (concurrency, etc.) can
+        // change here.
         let storage_settings = match merged_config.storage.clone() {
-            Some(s) => storage_defaults.merge(s),
-            None => storage_defaults,
+            Some(s) => settings.merge(s),
+            None => settings,
         };
         // combine merged config settings + merged storage settings
         let final_config =
@@ -420,8 +454,12 @@ impl Repository {
         create_version: Option<SpecVersionBin>,
         check_clean_root: bool,
     ) -> RepositoryResult<Self> {
-        let user_settings = config.as_ref().and_then(|c| c.storage().cloned());
-        if Self::fetch_spec_version(Arc::clone(&storage), user_settings).await?.is_some()
+        let storage_defaults = storage.default_settings().await.inject()?;
+        let settings = match config.as_ref().and_then(|c| c.storage().cloned()) {
+            Some(user_storage) => storage_defaults.merge(user_storage),
+            None => storage_defaults,
+        };
+        if Self::fetch_spec_version(Arc::clone(&storage), Some(settings)).await?.is_some()
         {
             Self::open(config, storage, authorize_virtual_chunk_access).await
         } else {
@@ -477,7 +515,7 @@ impl Repository {
     pub async fn fetch_spec_version(
         storage: Arc<dyn Storage + Send + Sync>,
         settings: Option<storage::Settings>,
-    ) -> RepositoryResult<Option<SpecVersionBin>> {
+    ) -> RepositoryResult<Option<DetectedSpecVersion>> {
         let settings = match settings {
             Some(s) => s,
             None => storage.default_settings().await.inject()?,
@@ -510,7 +548,10 @@ impl Repository {
             ));
 
             let res = temp_asset_manager.fetch_repo_info().await;
-            Ok(res.and_then(|(ri, _)| ri.spec_version().inject()))
+            Ok(res.and_then(|(ri, _)| {
+                let version = ri.spec_version().inject()?;
+                Ok((version, ri))
+            }))
         }
         .in_current_span();
 
@@ -518,13 +559,15 @@ impl Repository {
         match after_v1 {
             // if we have both configuration, this is an unfinished migration
             // but still a V2+ repo
-            Ok(v) => Ok(Some(v)),
+            Ok((version, repo_info)) => {
+                Ok(Some(DetectedSpecVersion::V2Plus { version, repo_info }))
+            }
             Err(RepositoryError {
                 kind: RepositoryErrorKind::RepositoryDoesntExist,
                 ..
             }) => {
                 if is_v1 {
-                    Ok(Some(SpecVersionBin::V1))
+                    Ok(Some(DetectedSpecVersion::V1))
                 } else {
                     Ok(None)
                 }
@@ -585,25 +628,26 @@ impl Repository {
         storage: Arc<dyn Storage + Send + Sync>,
     ) -> RepositoryResult<Option<(RepositoryConfig, storage::VersionInfo)>> {
         let settings = storage.default_settings().await.inject()?;
-        let spec_version = Self::fetch_spec_version(Arc::clone(&storage), None)
-            .await?
-            .unwrap_or_default();
+        let detected = Self::fetch_spec_version(Arc::clone(&storage), None).await?;
 
-        let am = AssetManager::new_no_cache(
-            Arc::clone(&storage),
-            settings,
-            spec_version,
-            1, // we are only reading, compression doesn't matter
-            DEFAULT_MAX_CONCURRENT_REQUESTS,
-        );
-
-        if spec_version >= SpecVersionBin::V2 {
-            // V2+ repos: config is always embedded in the repo info object.
-            let (repo_info, version) = am.fetch_repo_info().await?;
-            Ok(repo_info.config().inject()?.map(|config| (config, version)))
-        } else {
-            // V1 repos: read from config.yaml
-            am.fetch_config().await
+        match detected {
+            Some(DetectedSpecVersion::V2Plus { repo_info, .. }) => Ok(repo_info
+                .config()
+                .inject()?
+                .map(|config| (config, storage::VersionInfo::for_creation()))),
+            Some(DetectedSpecVersion::V1) => {
+                let am = AssetManager::new_no_cache(
+                    Arc::clone(&storage),
+                    settings,
+                    SpecVersionBin::V1,
+                    1, // we are only reading, compression doesn't matter
+                    DEFAULT_MAX_CONCURRENT_REQUESTS,
+                );
+                am.fetch_config().await
+            }
+            None => {
+                Err(RepositoryError::capture(RepositoryErrorKind::RepositoryDoesntExist))
+            }
         }
     }
 
@@ -726,7 +770,11 @@ impl Repository {
         let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str, _| {
             Ok(Arc::new(
                 repo_info
-                    .set_status(self.spec_version(), status, backup_path, num_updates)
+                    .set_status(
+                        self.spec_version(),
+                        status,
+                        Some((backup_path, num_updates)),
+                    )
                     .inject()?,
             ))
         };
@@ -912,6 +960,65 @@ impl Repository {
     ) -> RepositoryResult<impl Stream<Item = RepositoryResult<SnapshotInfo>> + Send + use<>>
     {
         self.ancestry_using(version, None).await
+    }
+
+    /// Build a materialized ancestry graph for visualization.
+    ///
+    /// When `version` is `Some`, returns a linear graph for that single ref.
+    /// When `version` is `None`, walks all branches and returns a tree view.
+    ///
+    /// This method only fetches data (ancestries, branches, tags) — all display
+    /// logic (sorting, column assignment, rendering) lives in [`AncestryGraph`].
+    #[instrument(skip(self))]
+    pub async fn ancestry_graph(
+        &self,
+        version: Option<&VersionInfo>,
+        plain: bool,
+    ) -> RepositoryResult<AncestryGraph> {
+        let all_branches: Vec<String> = self.list_branches().await?.into_iter().collect();
+
+        let tags = self.list_tags().await?;
+        let tag_entries: Vec<(SnapshotId, String)> = stream::iter(tags.iter())
+            .then(|tag| async {
+                Ok::<_, RepositoryError>((self.lookup_tag(tag).await?, tag.clone()))
+            })
+            .try_collect()
+            .await?;
+        let mut tag_map: HashMap<SnapshotId, Vec<String>> = HashMap::new();
+        for (snap_id, tag) in tag_entries {
+            tag_map.entry(snap_id).or_default().push(tag);
+        }
+
+        // Early return for tag/snapshot_id — walk as an anonymous single branch.
+        if let Some(v) = version.filter(|v| !matches!(v, VersionInfo::BranchTipRef(_))) {
+            let snapshots: Vec<SnapshotInfo> =
+                self.ancestry(v).await?.try_collect().await?;
+            return Ok(AncestryGraph::new(
+                vec![("".to_string(), snapshots)],
+                &tag_map,
+                all_branches,
+                plain,
+            ));
+        }
+
+        // Walk either the requested branch or all branches.
+        let branches_to_walk: &[String] = match version {
+            Some(VersionInfo::BranchTipRef(name)) => std::slice::from_ref(name),
+            _ => &all_branches,
+        };
+
+        let branch_ancestries: Vec<(String, Vec<SnapshotInfo>)> =
+            stream::iter(branches_to_walk)
+                .then(|branch| async {
+                    let v = VersionInfo::BranchTipRef(branch.clone());
+                    let snapshots: Vec<SnapshotInfo> =
+                        self.ancestry(&v).await?.try_collect().await?;
+                    Ok::<_, RepositoryError>((branch.clone(), snapshots))
+                })
+                .try_collect()
+                .await?;
+
+        Ok(AncestryGraph::new(branch_ancestries, &tag_map, all_branches, plain))
     }
 
     async fn ancestry_using(
@@ -1739,8 +1846,10 @@ impl Repository {
 
         let builder = fut
             .try_fold(DiffBuilder::default(), |mut res, log| {
-                res.add_changes(log.as_ref());
-                ready(Ok(res))
+                ready(match res.add_changes(log.as_ref()) {
+                    Ok(_) => Ok(res),
+                    Err(e) => Err(RepositoryError::capture(e.kind)),
+                })
             })
             .await
             .inject()?;
@@ -4228,6 +4337,442 @@ mod tests {
                 .await?;
         }
         do_distributed_writes(&mut session, &array_path).await?;
+
+        Ok(())
+    }
+
+    #[tokio_test]
+    async fn rearrange_session_amend_on_top_of_amend() -> Result<(), Box<dyn Error>> {
+        let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+        let repo = Repository::create(
+            None,
+            Arc::clone(&storage),
+            HashMap::new(),
+            Some(SpecVersionBin::current()),
+            true,
+        )
+        .await?;
+
+        // Create initial structure
+        let mut session = repo.writable_session("main").await?;
+        session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
+        session
+            .add_group("/source".try_into().unwrap(), Bytes::copy_from_slice(b""))
+            .await?;
+        let initial_snap_id = session.commit("init").execute().await?;
+        // Check if transaction log has no moves
+        let tx_log = repo.asset_manager.fetch_transaction_log(&initial_snap_id).await?;
+        assert!(tx_log.moves().count() == 0);
+
+        // Check if group still shows up properly after commit
+        let session = repo
+            .readonly_session(&VersionInfo::SnapshotId(initial_snap_id.clone()))
+            .await?;
+        assert!(session.get_group(&"/source".try_into().unwrap()).await.is_ok());
+
+        // Rearrange session: move a node
+        let mut session = repo.rearrange_session("main").await?;
+        session
+            .move_node("/source".try_into().unwrap(), "/dest".try_into().unwrap())
+            .await?;
+        let first_rearr_snap_id = session
+            .commit("moved source to dest")
+            .max_concurrent_nodes(1)
+            .execute()
+            .await?;
+
+        // Check if moved group still shows up properly after commit
+        let session = repo
+            .readonly_session(&VersionInfo::SnapshotId(first_rearr_snap_id.clone()))
+            .await?;
+        assert!(session.get_group(&"/dest".try_into().unwrap()).await.is_ok());
+        assert!(session.get_group(&"/source".try_into().unwrap()).await.is_err());
+        // Check if transaction log has just one move
+        let tx_log =
+            repo.asset_manager.fetch_transaction_log(&first_rearr_snap_id).await?;
+        assert!(tx_log.moves().count() == 1);
+
+        // Rearrange session: move node again, amend this time
+        let mut session = repo.rearrange_session("main").await?;
+        session
+            .move_node("/dest".try_into().unwrap(), "/another_dest".try_into().unwrap())
+            .await?;
+        let first_amend_snap_id =
+            session.commit("moved dest to another_dest").amend().execute().await?;
+
+        // Check if moved group still shows up properly after commit
+        let session = repo
+            .readonly_session(&VersionInfo::SnapshotId(first_amend_snap_id.clone()))
+            .await?;
+        assert!(session.get_group(&"/another_dest".try_into().unwrap()).await.is_ok());
+        assert!(session.get_group(&"/dest".try_into().unwrap()).await.is_err());
+        // Transaction log should have just one move,
+        // because the one from previous tx_log overlaps with this one
+        // and so they are collapsed
+        let tx_log =
+            repo.asset_manager.fetch_transaction_log(&first_amend_snap_id).await?;
+        assert!(tx_log.moves().count() == 1);
+
+        // Another rearrange session: move node again, amend again
+        let mut session = repo.rearrange_session("main").await?;
+        session
+            .move_node("/another_dest".try_into().unwrap(), "/src".try_into().unwrap())
+            .await?;
+        let second_amend_snap_id =
+            session.commit("moved another_dest to src").amend().execute().await?;
+
+        // Check if moved group still shows up properly after commit
+        let session = repo
+            .readonly_session(&VersionInfo::SnapshotId(second_amend_snap_id.clone()))
+            .await?;
+        assert!(session.get_group(&"/src".try_into().unwrap()).await.is_ok());
+        assert!(session.get_group(&"/dest".try_into().unwrap()).await.is_err());
+        assert!(session.get_group(&"/another_dest".try_into().unwrap()).await.is_err());
+        assert!(session.get_group(&"/source".try_into().unwrap()).await.is_err());
+        // Transaction log should have just one move,
+        // because the one from previous tx_log overlaps with this one
+        // and so they are collapsed
+        let tx_log =
+            repo.asset_manager.fetch_transaction_log(&second_amend_snap_id).await?;
+        assert!(tx_log.moves().count() == 1);
+
+        let (stream, _, _) = repo.ops_log().await?;
+        let ops: Vec<_> = stream.try_collect().await?;
+
+        assert_eq!(ops.len(), 5);
+        // Check snapshot ID lineage for amends
+        assert!(matches!(
+            &ops[1].1,
+            UpdateType::CommitAmendedUpdate {
+                previous_snap_id,
+                new_snap_id,
+                ..
+            } if *previous_snap_id == first_rearr_snap_id && *new_snap_id == first_amend_snap_id
+        ));
+        assert!(matches!(
+            &ops[0].1,
+            UpdateType::CommitAmendedUpdate {
+                previous_snap_id,
+                new_snap_id,
+                ..
+            } if *previous_snap_id == first_amend_snap_id && *new_snap_id == second_amend_snap_id
+        ));
+
+        let diff = repo
+            .diff(
+                &VersionInfo::SnapshotId(initial_snap_id.clone()),
+                &VersionInfo::SnapshotId(second_amend_snap_id.clone()),
+            )
+            .await?;
+
+        // Final diff should have just one move,
+        // since they were all collapsed
+        assert_eq!(diff.moved_nodes.len(), 1);
+
+        Ok(())
+    }
+
+    /// What happens when we move a node around, but it ends up in the same place?
+    #[tokio_test]
+    async fn rearrange_session_amend_identity_moves() -> Result<(), Box<dyn Error>> {
+        let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+        let repo = Repository::create(
+            None,
+            Arc::clone(&storage),
+            HashMap::new(),
+            Some(SpecVersionBin::current()),
+            true,
+        )
+        .await?;
+
+        // Create initial structure
+        let mut session = repo.writable_session("main").await?;
+        session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
+        session
+            .add_group("/foo".try_into().unwrap(), Bytes::copy_from_slice(b""))
+            .await?;
+        session
+            .add_group("/foo/bar".try_into().unwrap(), Bytes::copy_from_slice(b""))
+            .await?;
+        let initial_snap_id = session.commit("init").execute().await?;
+        // Check if transaction log has no moves
+        let tx_log = repo.asset_manager.fetch_transaction_log(&initial_snap_id).await?;
+        assert!(tx_log.moves().count() == 0);
+
+        // Check initial group creation worked
+        let session = repo
+            .readonly_session(&VersionInfo::SnapshotId(initial_snap_id.clone()))
+            .await?;
+        assert!(session.get_group(&"/foo".try_into().unwrap()).await.is_ok());
+        assert!(session.get_group(&"/foo/bar".try_into().unwrap()).await.is_ok());
+
+        // Rearrange session: move a node
+        let mut session = repo.rearrange_session("main").await?;
+        session.move_node("/foo".try_into().unwrap(), "/f".try_into().unwrap()).await?;
+        let first_rearr_snap_id =
+            session.commit("foo to f").max_concurrent_nodes(8).execute().await?;
+
+        // Check if moved (and nested) groups still show up properly after commit
+        let session = repo
+            .readonly_session(&VersionInfo::SnapshotId(first_rearr_snap_id.clone()))
+            .await?;
+        assert!(session.get_group(&"/f".try_into().unwrap()).await.is_ok());
+        assert!(session.get_group(&"/f/bar".try_into().unwrap()).await.is_ok());
+        assert!(session.get_group(&"/foo".try_into().unwrap()).await.is_err());
+        assert!(session.get_group(&"/foo/bar".try_into().unwrap()).await.is_err());
+
+        // Check if transaction log has two moves,
+        // one for parent /foo -> /f
+        // another for child /foo/bar -> /f/bar
+        let tx_log =
+            repo.asset_manager.fetch_transaction_log(&first_rearr_snap_id).await?;
+        assert!(tx_log.moves().count() == 2);
+
+        // Rearrange session: move a node
+        let mut session = repo.rearrange_session("main").await?;
+        session.move_node("/f".try_into().unwrap(), "/foo".try_into().unwrap()).await?;
+        let amend_snap_id =
+            session.commit("f to foo").max_concurrent_nodes(8).amend().execute().await?;
+
+        // Check if moved (and nested) groups still show up properly after commit
+        let session = repo
+            .readonly_session(&VersionInfo::SnapshotId(amend_snap_id.clone()))
+            .await?;
+        assert!(session.get_group(&"/foo".try_into().unwrap()).await.is_ok());
+        assert!(session.get_group(&"/foo/bar".try_into().unwrap()).await.is_ok());
+        assert!(session.get_group(&"/f".try_into().unwrap()).await.is_err());
+        assert!(session.get_group(&"/f/bar".try_into().unwrap()).await.is_err());
+
+        // Check if transaction log has no moves, since everything was moved
+        // back to their initial location.
+        let tx_log = repo.asset_manager.fetch_transaction_log(&amend_snap_id).await?;
+        assert!(tx_log.moves().count() == 0);
+
+        let diff = repo
+            .diff(
+                &VersionInfo::SnapshotId(initial_snap_id.clone()),
+                &VersionInfo::SnapshotId(amend_snap_id.clone()),
+            )
+            .await?;
+
+        assert_eq!(diff.moved_nodes.len(), 0);
+
+        Ok(())
+    }
+
+    #[tokio_test]
+    async fn rearrange_session_amend_reuse_path() -> Result<(), Box<dyn Error>> {
+        let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+        let repo = Repository::create(
+            None,
+            Arc::clone(&storage),
+            HashMap::new(),
+            Some(SpecVersionBin::current()),
+            true,
+        )
+        .await?;
+
+        // Create initial structure
+        let mut session = repo.writable_session("main").await?;
+        session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
+        session
+            .add_group("/foo".try_into().unwrap(), Bytes::copy_from_slice(b""))
+            .await?;
+        session
+            .add_group("/foo/bar".try_into().unwrap(), Bytes::copy_from_slice(b""))
+            .await?;
+        let initial_snap_id = session.commit("init").execute().await?;
+        // Check if transaction log has no moves
+        let tx_log = repo.asset_manager.fetch_transaction_log(&initial_snap_id).await?;
+        assert!(tx_log.moves().count() == 0);
+
+        // Check initial group creation worked
+        let session = repo
+            .readonly_session(&VersionInfo::SnapshotId(initial_snap_id.clone()))
+            .await?;
+        assert!(session.get_group(&"/foo".try_into().unwrap()).await.is_ok());
+        assert!(session.get_group(&"/foo/bar".try_into().unwrap()).await.is_ok());
+
+        // Rearrange session: move a node
+        let mut session = repo.rearrange_session("main").await?;
+        session.move_node("/foo".try_into().unwrap(), "/f".try_into().unwrap()).await?;
+        let first_rearr_snap_id =
+            session.commit("foo to f").max_concurrent_nodes(8).execute().await?;
+
+        // Check if moved (and nested) groups still show up properly after commit
+        let session = repo
+            .readonly_session(&VersionInfo::SnapshotId(first_rearr_snap_id.clone()))
+            .await?;
+        assert!(session.get_group(&"/f".try_into().unwrap()).await.is_ok());
+        assert!(session.get_group(&"/f/bar".try_into().unwrap()).await.is_ok());
+        assert!(session.get_group(&"/foo/bar".try_into().unwrap()).await.is_err());
+        // Check if transaction log has two moves,
+        // one for parent /foo -> /f
+        // another for child /foo/bar -> /f/bar
+        let tx_log =
+            repo.asset_manager.fetch_transaction_log(&first_rearr_snap_id).await?;
+        assert!(tx_log.moves().count() == 2);
+
+        // Rearrange session: move node again, amend this time.
+        // Reuse previous /foo path
+        let mut session = repo.rearrange_session("main").await?;
+        session
+            .move_node("/f/bar".try_into().unwrap(), "/foo".try_into().unwrap())
+            .await?;
+        let first_amend_snap_id =
+            session.commit("f/bar to foo").amend().execute().await?;
+
+        // Check if moved (and nested) groups still show up properly after commit
+        let session = repo
+            .readonly_session(&VersionInfo::SnapshotId(first_amend_snap_id.clone()))
+            .await?;
+        assert!(session.get_group(&"/foo".try_into().unwrap()).await.is_ok());
+        assert!(session.get_group(&"/f".try_into().unwrap()).await.is_ok());
+        assert!(session.get_group(&"/f/bar".try_into().unwrap()).await.is_err());
+        // Check if transaction log has two moves,
+        // one for parent /foo -> /f
+        // another for child /foo/bar -> /foo
+        let tx_log =
+            repo.asset_manager.fetch_transaction_log(&first_amend_snap_id).await?;
+        assert!(tx_log.moves().count() == 2);
+
+        let (stream, _, _) = repo.ops_log().await?;
+        let ops: Vec<_> = stream.try_collect().await?;
+
+        assert_eq!(ops.len(), 4);
+        // Check snapshot ID lineage for amends
+        assert!(matches!(
+            &ops[0].1,
+            UpdateType::CommitAmendedUpdate {
+                previous_snap_id,
+                new_snap_id,
+                ..
+            } if *previous_snap_id == first_rearr_snap_id && *new_snap_id == first_amend_snap_id
+        ));
+
+        let diff = repo
+            .diff(
+                &VersionInfo::SnapshotId(initial_snap_id.clone()),
+                &VersionInfo::SnapshotId(first_amend_snap_id.clone()),
+            )
+            .await?;
+
+        assert_eq!(diff.moved_nodes.len(), 2);
+
+        Ok(())
+    }
+
+    #[tokio_test]
+    async fn rearrange_session_amend_children() -> Result<(), Box<dyn Error>> {
+        let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+        let repo = Repository::create(
+            None,
+            Arc::clone(&storage),
+            HashMap::new(),
+            Some(SpecVersionBin::current()),
+            true,
+        )
+        .await?;
+
+        // Create initial structure.
+        // We can't move node into a parent that doesn't exist yet,
+        // so we create /b and /c here too.
+        let mut session = repo.writable_session("main").await?;
+        session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
+        session.add_group("/a".try_into().unwrap(), Bytes::copy_from_slice(b"")).await?;
+        session.add_group("/b".try_into().unwrap(), Bytes::copy_from_slice(b"")).await?;
+        session.add_group("/c".try_into().unwrap(), Bytes::copy_from_slice(b"")).await?;
+        let initial_snap_id = session.commit("init").execute().await?;
+        // Check if transaction log has no moves
+        let tx_log = repo.asset_manager.fetch_transaction_log(&initial_snap_id).await?;
+        assert!(tx_log.moves().count() == 0);
+
+        // Check initial group creation worked
+        let session = repo
+            .readonly_session(&VersionInfo::SnapshotId(initial_snap_id.clone()))
+            .await?;
+        assert!(session.get_group(&"/a".try_into().unwrap()).await.is_ok());
+        assert!(session.get_group(&"/b".try_into().unwrap()).await.is_ok());
+        assert!(session.get_group(&"/c".try_into().unwrap()).await.is_ok());
+
+        debug!("first rearrange session");
+        // Rearrange session: move `/a` node into `/b/a`
+        let mut session = repo.rearrange_session("main").await?;
+        session.move_node("/a".try_into().unwrap(), "/b/a".try_into().unwrap()).await?;
+        let first_rearr_snap_id =
+            session.commit("a to b/a").max_concurrent_nodes(8).execute().await?;
+
+        // Check if moved (and nested) groups still show up properly after commit
+        let session = repo
+            .readonly_session(&VersionInfo::SnapshotId(first_rearr_snap_id.clone()))
+            .await?;
+        assert!(session.get_group(&"/b/a".try_into().unwrap()).await.is_ok());
+        assert!(session.get_group(&"/b".try_into().unwrap()).await.is_ok());
+        assert!(session.get_group(&"/a".try_into().unwrap()).await.is_err());
+        // Check if transaction log has just one move
+        let tx_log =
+            repo.asset_manager.fetch_transaction_log(&first_rearr_snap_id).await?;
+        assert!(tx_log.moves().count() == 1);
+
+        debug!("second rearrange session");
+        // Rearrange session: move another node, amend this time
+        let mut session = repo.rearrange_session("main").await?;
+        session.move_node("/b".try_into().unwrap(), "/d".try_into().unwrap()).await?;
+        let second_amend_snap_id = session.commit("b to d").amend().execute().await?;
+
+        // Check if moved (and nested) groups still show up properly after commit
+        let session = repo
+            .readonly_session(&VersionInfo::SnapshotId(second_amend_snap_id.clone()))
+            .await?;
+        assert!(session.get_group(&"/d".try_into().unwrap()).await.is_ok());
+        assert!(session.get_group(&"/d/a".try_into().unwrap()).await.is_ok());
+        assert!(session.get_group(&"/a".try_into().unwrap()).await.is_err());
+        assert!(session.get_group(&"/b".try_into().unwrap()).await.is_err());
+        assert!(session.get_group(&"/b/a".try_into().unwrap()).await.is_err());
+        // Check if transaction log has two moves
+        // one for parent /b -> /d
+        // another for child /a -> /d/a
+        let tx_log =
+            repo.asset_manager.fetch_transaction_log(&second_amend_snap_id).await?;
+        assert!(tx_log.moves().count() == 2);
+
+        debug!("third rearrange session");
+        // Rearrange session: move child from one top-level node to another
+        let mut session = repo.rearrange_session("main").await?;
+        session.move_node("/d/a".try_into().unwrap(), "/c/e".try_into().unwrap()).await?;
+        let third_amend_snap_id = session.commit("d/a to c/e").amend().execute().await?;
+
+        // Check if moved (and nested) groups still show up properly after commit
+        let session = repo
+            .readonly_session(&VersionInfo::SnapshotId(third_amend_snap_id.clone()))
+            .await?;
+        assert!(session.get_group(&"/c/e".try_into().unwrap()).await.is_ok());
+        assert!(session.get_group(&"/d".try_into().unwrap()).await.is_ok());
+        assert!(session.get_group(&"/c".try_into().unwrap()).await.is_ok());
+        assert!(session.get_group(&"/d/a".try_into().unwrap()).await.is_err());
+        assert!(session.get_group(&"/a".try_into().unwrap()).await.is_err());
+        assert!(session.get_group(&"/b".try_into().unwrap()).await.is_err());
+        assert!(session.get_group(&"/b/a".try_into().unwrap()).await.is_err());
+        // Check if transaction log has just two moves
+        // one for /b -> /d
+        // another for /a -> /c/e
+        //   /a -> /d/a -> /c/e is a collapsed move
+        let tx_log =
+            repo.asset_manager.fetch_transaction_log(&third_amend_snap_id).await?;
+        assert!(tx_log.moves().count() == 2);
+
+        let (stream, _, _) = repo.ops_log().await?;
+        let ops: Vec<_> = stream.try_collect().await?;
+        assert_eq!(ops.len(), 5);
+
+        let diff = repo
+            .diff(
+                &VersionInfo::SnapshotId(Snapshot::INITIAL_SNAPSHOT_ID),
+                &VersionInfo::SnapshotId(third_amend_snap_id.clone()),
+            )
+            .await?;
+
+        assert_eq!(diff.moved_nodes.len(), 2);
 
         Ok(())
     }

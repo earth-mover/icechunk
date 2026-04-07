@@ -43,7 +43,7 @@ class S3Options:
             Whether to force use of path-style addressing for buckets.
         network_stream_timeout_seconds: int | None
             Timeout requests if no bytes can be transmitted during this period of time.
-            If set to 0, timeout is disabled. Default is 60 seconds.
+            If set to 0, timeout is disabled. Default: 60.
         requester_pays: bool
             Enable requester pays for S3 buckets
         """
@@ -195,33 +195,61 @@ class S3Options:
 class ObjectStoreConfig:
     class InMemory:
         def __new__(cls) -> ObjectStoreConfig.InMemory: ...
+        def __repr__(self) -> str: ...
+        def __str__(self) -> str: ...
+        def _repr_html_(self) -> str: ...
 
     class LocalFileSystem:
         def __new__(cls, path: str) -> ObjectStoreConfig.LocalFileSystem: ...
+        def __repr__(self) -> str: ...
+        def __str__(self) -> str: ...
+        def _repr_html_(self) -> str: ...
 
     class S3Compatible:
         def __new__(cls, options: S3Options) -> ObjectStoreConfig.S3Compatible: ...
+        def __repr__(self) -> str: ...
+        def __str__(self) -> str: ...
+        def _repr_html_(self) -> str: ...
 
     class S3:
         def __new__(cls, options: S3Options) -> ObjectStoreConfig.S3: ...
+        def __repr__(self) -> str: ...
+        def __str__(self) -> str: ...
+        def _repr_html_(self) -> str: ...
 
     class Gcs:
         def __new__(
             cls, opts: Mapping[str, str] | None = None
         ) -> ObjectStoreConfig.Gcs: ...
+        def __repr__(self) -> str: ...
+        def __str__(self) -> str: ...
+        def _repr_html_(self) -> str: ...
 
     class Azure:
         def __new__(
             cls, opts: Mapping[str, str] | None = None
         ) -> ObjectStoreConfig.Azure: ...
+        def __repr__(self) -> str: ...
+        def __str__(self) -> str: ...
+        def _repr_html_(self) -> str: ...
 
     class Tigris:
         def __new__(cls, opts: S3Options) -> ObjectStoreConfig.Tigris: ...
+        def __repr__(self) -> str: ...
+        def __str__(self) -> str: ...
+        def _repr_html_(self) -> str: ...
 
     class Http:
         def __new__(
             cls, opts: Mapping[str, str] | None = None
         ) -> ObjectStoreConfig.Http: ...
+        def __repr__(self) -> str: ...
+        def __str__(self) -> str: ...
+        def _repr_html_(self) -> str: ...
+
+    def __repr__(self) -> str: ...
+    def __str__(self) -> str: ...
+    def _repr_html_(self) -> str: ...
 
 _AnyObjectStoreConfig = (
     ObjectStoreConfig.InMemory
@@ -271,6 +299,10 @@ class VirtualChunkContainer:
             Optional name for this container. When set, chunks can use relative ``vcc://name/path``
             locations instead of full absolute URLs.
         """
+
+    def __repr__(self) -> str: ...
+    def __str__(self) -> str: ...
+    def _repr_html_(self) -> str: ...
 
 class VirtualChunkSpec:
     """The specification for a virtual chunk reference."""
@@ -352,8 +384,10 @@ class CompressionConfig:
         ----------
         algorithm: CompressionAlgorithm | None
             The compression algorithm to use.
+            Default: Zstd
         level: int | None
             The compression level to use.
+            Default: 3
         """
         ...
     @property
@@ -428,15 +462,23 @@ class CachingConfig:
         ----------
         num_snapshot_nodes: int | None
             The number of snapshot nodes to cache.
+            Default: 500,000
         num_chunk_refs: int | None
             The number of chunk references to cache.
+            Default: 15,000,000
         num_transaction_changes: int | None
             The number of transaction changes to cache.
+            Default: 0
         num_bytes_attributes: int | None
             The number of bytes of attributes to cache.
+            Default: 0
         num_bytes_chunks: int | None
             The number of bytes of chunks to cache.
+            Default: 0
         """
+    def __repr__(self, /) -> str: ...
+    def __str__(self, /) -> str: ...
+    def _repr_html_(self, /) -> str: ...
     @property
     def num_snapshot_nodes(self) -> int | None:
         """
@@ -795,7 +837,7 @@ class ManifestSplittingConfig:
             int,
         ],
     ]: ...
-    def __new__(cls, split_sizes: _SplitSizes) -> ManifestSplittingConfig:
+    def __new__(cls, split_sizes: _SplitSizes | None = None) -> ManifestSplittingConfig:
         """Configuration for how Icechunk manifests will be split.
 
         Parameters
@@ -1000,11 +1042,14 @@ class StorageRetriesSettings:
         Parameters
         ----------
         max_tries: int | None
-            The maximum number of tries, including the initial one. Set to 1 to disable retries
+            The maximum number of tries, including the initial one. Set to 1 to disable retries.
+            Default: 10
         initial_backoff_ms: int | None
-            The initial backoff duration in milliseconds
+            The initial backoff duration in milliseconds.
+            Default: 100
         max_backoff_ms: int | None
-            The limit to backoff duration in milliseconds
+            The limit to backoff duration in milliseconds.
+            Default: 180,000 (3 minutes)
         """
         ...
     @property
@@ -1090,6 +1135,10 @@ class StorageTimeoutSettings:
         """
         Create a new `StorageTimeoutSettings` object
 
+        All timeouts default to None, meaning the underlying
+        `AWS SDK default <https://docs.aws.amazon.com/sdk-for-rust/latest/dg/timeouts.html>`_
+        is used.
+
         Parameters
         ----------
         connect_timeout_ms: int | None
@@ -1134,8 +1183,10 @@ class StorageConcurrencySettings:
         ----------
         max_concurrent_requests_for_object: int | None
             The maximum number of concurrent requests for an object.
+            Default: 18
         ideal_concurrent_request_size: int | None
-            The ideal concurrent request size.
+            The ideal concurrent request size in bytes.
+            Default: 12,582,912 (12 MB)
         """
         ...
     @property
@@ -1214,16 +1265,19 @@ class StorageSettings:
             If set to False, Icechunk loses some of its consistency guarantees.
             This is only useful in object stores that don't support the feature.
             Use it at your own risk.
+            Default: True
 
         unsafe_use_conditional_create: bool | None
             If set to False, Icechunk loses some of its consistency guarantees.
             This is only useful in object stores that don't support the feature.
             Use at your own risk.
+            Default: True
 
         unsafe_use_metadata: bool | None
             Don't write metadata fields in Icechunk files.
             This is only useful in object stores that don't support the feature.
             Use at your own risk.
+            Default: True
 
         storage_class: str | None
             Store all objects using this object store storage class
@@ -1249,6 +1303,9 @@ class StorageSettings:
             The configuration for AWS SDK timeout settings.
         """
         ...
+    def __repr__(self, /) -> str: ...
+    def __str__(self, /) -> str: ...
+    def _repr_html_(self, /) -> str: ...
     @property
     def concurrency(self) -> StorageConcurrencySettings | None:
         """
@@ -1352,6 +1409,7 @@ class RepoUpdateRetryConfig:
         ----------
         default: StorageRetriesSettings | None
             Default retry settings for all repo update operations.
+            Defaults: `max_tries`=100, `initial_backoff_ms`=50, `max_backoff_ms`=30,000
         """
         ...
     @property
@@ -1382,13 +1440,15 @@ class RepositoryConfig:
         ----------
         inline_chunk_threshold_bytes: int | None
             The maximum size of a chunk that will be stored inline in the repository.
+            Default: 512
         get_partial_values_concurrency: int | None
             The number of concurrent requests to make when getting partial values from storage.
+            Default: 10
         compression: CompressionConfig | None
             The compression configuration for the repository.
         max_concurrent_requests: int | None
             The maximum number of concurrent HTTP requests Icechunk will do for this repo.
-            Default is 256.
+            Default: 256
         caching: CachingConfig | None
             The caching configuration for the repository.
         storage: StorageSettings | None
@@ -1403,9 +1463,12 @@ class RepositoryConfig:
             Maximum number of updates stored in a single repo info file. When this
             limit is reached, a new repo info file is created. Lower values produce
             slightly smaller repo info files but require more object fetches to
-            reconstruct the ops log. Default is 1000.
+            reconstruct the ops log. Default: 1000
         """
         ...
+    def __repr__(self, /) -> str: ...
+    def __str__(self, /) -> str: ...
+    def _repr_html_(self, /) -> str: ...
     @staticmethod
     def default() -> RepositoryConfig:
         """Create a default repository config instance"""
@@ -1690,6 +1753,9 @@ class Diff:
         The list of node moves, in order of application, as tuples (from_path, to_path).
         """
         ...
+    def __repr__(self) -> str: ...
+    def __str__(self) -> str: ...
+    def _repr_html_(self) -> str: ...
 
 class GCSummary:
     """Summarizes the results of a garbage collection operation on an icechunk repo"""
@@ -1729,6 +1795,9 @@ class GCSummary:
         How many transaction logs were deleted.
         """
         ...
+    def __repr__(self) -> str: ...
+    def __str__(self) -> str: ...
+    def _repr_html_(self) -> str: ...
 
 @final
 class RepoAvailability(Enum):
@@ -1772,6 +1841,9 @@ class RepoStatus:
             An optional reason for limited availability.
         """
         ...
+    def __repr__(self) -> str: ...
+    def __str__(self) -> str: ...
+    def _repr_html_(self) -> str: ...
 
 @final
 class Update:
@@ -1781,6 +1853,9 @@ class Update:
     def updated_at(self) -> datetime.datetime: ...
     @property
     def backup_path(self) -> str | None: ...
+    def __repr__(self) -> str: ...
+    def __str__(self) -> str: ...
+    def _repr_html_(self) -> str: ...
 
 class UpdateType:
     @final
@@ -1880,10 +1955,16 @@ class FeatureFlag:
     def setting(self) -> bool | None: ...
     @property
     def enabled(self) -> bool: ...
+    def __repr__(self) -> str: ...
+    def __str__(self) -> str: ...
+    def _repr_html_(self) -> str: ...
 
 class ManifestFileInfo:
     """Manifest file metadata"""
 
+    def __repr__(self, /) -> str: ...
+    def __str__(self, /) -> str: ...
+    def _repr_html_(self, /) -> str: ...
     @property
     def id(self) -> str:
         """The manifest id"""
@@ -1909,6 +1990,7 @@ class SpecVersion(IntEnum):
     def current() -> SpecVersion: ...
 
 class PyRepository:
+    def _repr_html_(self) -> str: ...
     @classmethod
     def create(
         cls,
@@ -2034,6 +2116,22 @@ class PyRepository:
         tag: str | None = None,
         snapshot_id: str | None = None,
     ) -> AsyncIterator[SnapshotInfo]: ...
+    def ancestry_graph(
+        self,
+        *,
+        branch: str | None = None,
+        tag: str | None = None,
+        snapshot_id: str | None = None,
+        plain: bool = False,
+    ) -> AncestryGraph: ...
+    async def ancestry_graph_async(
+        self,
+        *,
+        branch: str | None = None,
+        tag: str | None = None,
+        snapshot_id: str | None = None,
+        plain: bool = False,
+    ) -> AncestryGraph: ...
     def async_ops_log(self) -> AsyncIterator[Update]: ...
     def create_branch(self, branch_name: str, snapshot_id: str) -> None: ...
     async def create_branch_async(self, branch_name: str, snapshot_id: str) -> None: ...
@@ -2222,6 +2320,7 @@ class SessionMode(Enum):
     rearrange = 2
 
 class PySession:
+    def _repr_html_(self) -> str: ...
     @classmethod
     def from_bytes(cls, bytes: bytes) -> PySession: ...
     def __eq__(self, value: object, /) -> bool: ...
@@ -2334,6 +2433,7 @@ class PySession:
     async def rebase_async(self, solver: ConflictSolver) -> None: ...
 
 class PyStore:
+    def _repr_html_(self) -> str: ...
     @classmethod
     def from_bytes(cls, bytes: bytes) -> PyStore: ...
     def __eq__(self, value: object, /) -> bool: ...
@@ -2437,10 +2537,31 @@ class SnapshotInfo:
         The metadata of the snapshot
         """
         ...
+    def __repr__(self) -> str: ...
+    def __str__(self) -> str: ...
+    def _repr_html_(self) -> str: ...
 
 class _PyAsyncSnapshotGenerator(AsyncGenerator[SnapshotInfo], metaclass=abc.ABCMeta):
     def __aiter__(self) -> _PyAsyncSnapshotGenerator: ...
     async def __anext__(self) -> SnapshotInfo: ...
+
+@final
+class AncestryGraph:
+    """A visual representation of commit history.
+
+    Use ``print()`` for colored Unicode output in a terminal, or display
+    in Jupyter for an SVG diagram. Pass ``plain=True`` to
+    ``ancestry_graph()`` for output without colors (useful for CI, files,
+    or LLM agents).
+
+    Note: only commits reachable from branches are included. Anonymous/detached
+    snapshots are not attached to any branch and will not appear.
+    """
+    def __str__(self) -> str: ...
+    def __repr__(self) -> str: ...
+    def _repr_svg_(self) -> str:
+        """Return a raw SVG string for Jupyter notebooks."""
+        ...
 
 class S3StaticCredentials:
     """Credentials for an S3 storage backend
@@ -2909,6 +3030,8 @@ class Storage:
         base_url: str,
     ) -> Storage: ...
     def __repr__(self) -> str: ...
+    def __str__(self) -> str: ...
+    def _repr_html_(self) -> str: ...
     def default_settings(self) -> StorageSettings: ...
     def list_objects(
         self, settings: StorageSettings | None = None, prefix: str | None = None
@@ -3297,4 +3420,6 @@ class ChunkStorageStats:
         ...
 
     def __repr__(self) -> str: ...
+    def __str__(self) -> str: ...
+    def _repr_html_(self) -> str: ...
     def __add__(self, other: ChunkStorageStats, /) -> ChunkStorageStats: ...

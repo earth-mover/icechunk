@@ -23,6 +23,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
 use crate::{
+    display::{PyRepr, ReprMode, py_bool},
     errors::{PyIcechunkStoreError, PyIcechunkStoreResult},
     impl_pickle,
     session::PySession,
@@ -100,6 +101,28 @@ impl_pickle!(VirtualChunkSpec);
 #[derive(Clone, Debug)]
 pub struct PyStore(pub Arc<Store>);
 
+impl PyRepr for PyStore {
+    const EXECUTABLE: bool = false;
+
+    fn cls_name() -> &'static str {
+        "icechunk.IcechunkStore"
+    }
+
+    fn fields(&self, _mode: ReprMode) -> Vec<(&str, String)> {
+        let session = self.0.session();
+        let session_guard = session.blocking_read();
+        let branch = session_guard
+            .branch()
+            .map(|b| b.to_string())
+            .unwrap_or_else(|| "None".to_string());
+        vec![
+            ("read_only", py_bool(session_guard.read_only())),
+            ("snapshot_id", session_guard.snapshot_id().to_string()),
+            ("branch", branch),
+        ]
+    }
+}
+
 #[pymethods]
 impl PyStore {
     #[classmethod]
@@ -123,6 +146,18 @@ impl PyStore {
     fn __eq__(&self, other: &PyStore) -> bool {
         // If the stores were created from the same session they are equal
         Arc::ptr_eq(&self.0.session(), &other.0.session())
+    }
+
+    pub(crate) fn __repr__(&self) -> String {
+        <Self as PyRepr>::__repr__(self)
+    }
+
+    pub(crate) fn __str__(&self) -> String {
+        <Self as PyRepr>::__str__(self)
+    }
+
+    pub(crate) fn _repr_html_(&self) -> String {
+        <Self as PyRepr>::_repr_html_(self)
     }
 
     #[getter]

@@ -7,6 +7,7 @@ from hypothesis import strategies as st
 
 import icechunk as ic
 import zarr
+from icechunk.testing.invariants import assert_moves_sorted_by_final_path
 from icechunk.testing.trees import GroupNode, tree_and_moves
 from icechunk.testing.utils import (
     precommit_postcommit_readonly,
@@ -22,6 +23,8 @@ async def test_basic_move() -> None:
     session = repo.writable_session("main")
     store = session.store
     root = zarr.group(store=store, overwrite=True)
+    root.create_group("my", overwrite=True)
+    root.create_group("my/old", overwrite=True)
     group = root.create_group("my/old/path", overwrite=True)
     group.create_array("array", shape=(10, 10), chunks=(2, 2), dtype="i4", fill_value=42)
     all_keys = sorted([k async for k in store.list()])
@@ -44,6 +47,7 @@ async def test_basic_move() -> None:
 
     session = repo.rearrange_session("main")
     store = session.store
+    print(root.tree())
     session.move("/my/old", "/my/new")
     all_keys = sorted([k async for k in store.list()])
     assert all_keys == sorted(
@@ -70,12 +74,20 @@ async def test_basic_move() -> None:
 
     a, b, *_ = repo.ancestry(branch="main")
     diff = repo.diff(from_snapshot_id=b.id, to_snapshot_id=a.id)
-    assert diff.moved_nodes == [("/my/old", "/my/new")]
+    assert set(diff.moved_nodes) == set(
+        [
+            ("/my/old", "/my/new"),
+            ("/my/old/path", "/my/new/path"),
+            ("/my/old/path/array", "/my/new/path/array"),
+        ]
+    )
     assert (
         repr(diff)
         == """\
 Nodes moved/renamed:
     /my/old -> /my/new
+    /my/old/path -> /my/new/path
+    /my/old/path/array -> /my/new/path/array
 
 """
     )
@@ -152,6 +164,7 @@ def test_moves(
     )
 
     expected = repr(zarr.open_group(model).tree())
+    snap_before = session.snapshot_id
     for label, store in precommit_postcommit_readonly(session, repo):
         actual = repr(zarr.open_group(store, mode="r").tree())
         assert expected == actual, (
@@ -163,10 +176,13 @@ def test_moves(
             f"\n\nactual:\n{actual}"
         )
 
+    # Moves in the tx log must be sorted by final path
+    snap_after = repo.lookup_branch("main")
+    diff = repo.diff(from_snapshot_id=snap_before, to_snapshot_id=snap_after)
+    if diff.moved_nodes:
+        assert_moves_sorted_by_final_path(diff.moved_nodes)
 
-@pytest.mark.xfail(
-    reason="move collapsing in transaction log not yet implemented", strict=False
-)
+
 @given(
     tree_moves=tree_and_moves(n_moves=st.integers(min_value=2, max_value=10)),
     data=st.data(),
@@ -244,13 +260,27 @@ def test_moves_amend(
     )
 
 
-def test_doesnt_rebase() -> None:
+async def test_doesnt_rebase() -> None:
     repo = ic.Repository.create(
         storage=ic.in_memory_storage(),
     )
     session = repo.writable_session("main")
-    root = zarr.group(store=session.store, overwrite=True)
+    store = session.store
+    root = zarr.group(store=store, overwrite=True)
+    root.create_group("my", overwrite=True)
+    root.create_group("my/new", overwrite=True)
+    root.create_group("my/old", overwrite=True)
     root.create_group("my/old/path", overwrite=True)
+    all_keys = sorted([k async for k in store.list()])
+    assert all_keys == sorted(
+        [
+            "zarr.json",
+            "my/zarr.json",
+            "my/old/zarr.json",
+            "my/old/path/zarr.json",
+            "my/new/zarr.json",
+        ]
+    )
     session.commit("create group")
 
     session1 = repo.rearrange_session("main")

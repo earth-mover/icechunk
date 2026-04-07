@@ -965,12 +965,29 @@ async fn expire_v2_one_attempt(
         repo_info.branches()?.map(|(_, id)| id).collect();
     let main_pointee = repo_info.resolve_branch(Ref::DEFAULT_BRANCH)?;
 
-    debug!("Calculating released snapshots");
-    let released_snapshots: HashSet<SnapshotId> = repo_info
+    // All non-root snapshots old enough to be considered expired, regardless of
+    // ref protection. Used to determine which branch/tag refs should be deleted.
+    // Unlike released_snapshots, this does not exclude snapshots protected by
+    // branch/tag tips (e.g. main), so a feature branch sharing main's tip can
+    // still be deleted (#1520). Root snapshots (no parent) are always excluded
+    // so tags/branches pointing to the initial commit are never deleted (#1534).
+    let expired_snapshot_infos: Vec<SnapshotInfo> = repo_info
         .all_snapshots()?
         .filter_map(|si| match si {
-            // we retain all roots
             Ok(si) if si.flushed_at < older_than && si.parent_id.is_some() => {
+                Some(Ok(si))
+            }
+            Ok(_) => None,
+            Err(e) => Some(Err(e)),
+        })
+        .try_collect()?;
+
+    debug!("Calculating released snapshots");
+    let released_snapshots: HashSet<SnapshotId> = expired_snapshot_infos
+        .iter()
+        .filter_map(|si| {
+            // we retain all roots
+            if si.flushed_at < older_than && si.parent_id.is_some() {
                 use ExpiredRefAction::*;
                 if expired_tags == Ignore && tag_tip_ids.contains(&si.id)
                     || (expired_branches == Ignore || si.id == main_pointee)
@@ -978,13 +995,16 @@ async fn expire_v2_one_attempt(
                 {
                     None
                 } else {
-                    Some(Ok(si.id))
+                    Some(si.id.clone())
                 }
+            } else {
+                None
             }
-            Ok(_i) => None,
-            Err(e) => Some(Err(e)),
         })
-        .try_collect()?;
+        .collect();
+
+    let expired_snapshots: HashSet<SnapshotId> =
+        expired_snapshot_infos.into_iter().map(|x| x.id).collect();
 
     let num_released_snapshots = released_snapshots.len();
 
@@ -1020,7 +1040,7 @@ async fn expire_v2_one_attempt(
         .into_iter()
         .filter_map(|(r, snap_id)| {
             if expired_tags == ExpiredRefAction::Delete
-                && released_snapshots.contains(&snap_id)
+                && expired_snapshots.contains(&snap_id)
             {
                 Some(r)
             } else {
@@ -1034,7 +1054,7 @@ async fn expire_v2_one_attempt(
         .filter_map(|(r, snap_id)| {
             if expired_branches == ExpiredRefAction::Delete
                 && r.name() != Ref::DEFAULT_BRANCH
-                && released_snapshots.contains(&snap_id)
+                && expired_snapshots.contains(&snap_id)
             {
                 Some(r)
             } else {

@@ -15,7 +15,7 @@ and `icechunk.xarray.to_icechunk` methods.
 !!!note "`to_icechunk` vs `to_zarr`"
 
     [`xarray.Dataset.to_zarr`](https://docs.xarray.dev/en/latest/generated/xarray.Dataset.to_zarr.html#xarray.Dataset.to_zarr)
-    and [`to_icechunk`](./reference.md#icechunk.xarray.to_icechunk) are nearly functionally identical.
+    and [`to_icechunk`](./reference/xarray.md#icechunk.xarray.to_icechunk) are nearly functionally identical.
 
     In a distributed context, e.g.
     writes orchestrated with `multiprocesssing` or a `dask.distributed.Client` and `dask.array`, you *must* use `to_icechunk`.
@@ -40,25 +40,25 @@ with a bucket or file path that you have access to.
 
 ```python exec="on" session="xarray" source="material-block"
 import xarray as xr
-import icechunk
+import icechunk as ic
 ```
 
 === "S3 Storage"
 
     ```python
-    storage_config = icechunk.s3_storage(
+    storage_config = ic.s3_storage(
         bucket="icechunk-test",
         prefix="xarray-demo"
     )
-    repo = icechunk.Repository.create(storage_config)
+    repo = ic.Repository.create(storage_config)
     ```
 
 === "Local Storage"
 
     ```python exec="on" session="xarray" source="material-block"
     import tempfile
-    storage_config = icechunk.local_filesystem_storage(tempfile.TemporaryDirectory().name)
-    repo = icechunk.Repository.create(storage_config)
+    storage_config = ic.local_filesystem_storage(tempfile.TemporaryDirectory().name)
+    repo = ic.Repository.create(storage_config)
     ```
 
 ## Open tutorial dataset from Xarray

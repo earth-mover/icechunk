@@ -50,7 +50,7 @@ class Permission(Enum):
             case Permission.MODIFY:
                 return ("modify", "modifydata")
             case Permission.SUPERUSER:
-                return ("minio123", "minio123")
+                return ("test123", "test123")
 
 
 def parse_repo(
@@ -89,7 +89,7 @@ def get_minio_client() -> S3Client:
         (aws_access_key_id, aws_secret_access_key) = Permission.MODIFY.keys()
         minio_client = boto3.client(
             "s3",
-            endpoint_url="http://localhost:9000",
+            endpoint_url="http://localhost:4200",
             use_ssl=False,
             aws_access_key_id=aws_access_key_id,
             aws_secret_access_key=aws_secret_access_key,

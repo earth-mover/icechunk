@@ -1,16 +1,17 @@
-import contextlib
-from collections.abc import AsyncIterator, Callable, Generator, Iterable, Sequence
+from collections.abc import AsyncIterator, Callable, Iterable, Sequence
 from typing import Any
 
-from icechunk import (
-    ChunkType,
-    ConflictSolver,
-    Diff,
-    RepositoryConfig,
-    SessionMode,
-)
-from icechunk._icechunk_python import PySession
-from icechunk.store import IcechunkStore
+from icechunk._icechunk_python import ChunkType, PySession, SessionMode
+from icechunk.config import RepositoryConfig
+from icechunk.conflicts import ConflictSolver
+from icechunk.snapshots import Diff
+from icechunk.zarr import IcechunkStore
+
+__all__ = [
+    "ForkSession",
+    "Session",
+    "SessionMode",
+]
 
 
 class Session:
@@ -20,6 +21,15 @@ class Session:
 
     def __init__(self, session: PySession):
         self._session = session
+
+    def __repr__(self) -> str:
+        return repr(self._session)
+
+    def __str__(self) -> str:
+        return str(self._session)
+
+    def _repr_html_(self) -> str:
+        return self._session._repr_html_()
 
     def __eq__(self, value: object) -> bool:
         if not isinstance(value, Session):
@@ -47,18 +57,6 @@ class Session:
         if not isinstance(state, dict):
             raise ValueError("Invalid state")
         self._session = PySession.from_bytes(state["_session"])
-
-    @contextlib.contextmanager
-    def allow_pickling(self) -> Generator[None, None, None]:
-        """
-        Context manager to allow unpickling this store if writable.
-        """
-        raise RuntimeError(
-            "The allow_pickling context manager has been removed. "
-            "Use the new `Session.fork` API instead. "
-            # FIXME: Add link to docs
-            "Better yet, use `to_icechunk` if that will fit your needs."
-        )
 
     @property
     def read_only(self) -> bool:
@@ -404,6 +402,7 @@ class Session:
         self,
         message: str,
         metadata: dict[str, Any] | None = None,
+        *,
         rebase_with: ConflictSolver | None = None,
         rebase_tries: int = 1_000,
         allow_empty: bool = False,
@@ -452,6 +451,7 @@ class Session:
         self,
         message: str,
         metadata: dict[str, Any] | None = None,
+        *,
         rebase_with: ConflictSolver | None = None,
         rebase_tries: int = 1_000,
         allow_empty: bool = False,
@@ -499,6 +499,7 @@ class Session:
     def amend(
         self,
         message: str,
+        *,
         metadata: dict[str, Any] | None = None,
         allow_empty: bool = False,
     ) -> str:
@@ -538,6 +539,7 @@ class Session:
     async def amend_async(
         self,
         message: str,
+        *,
         metadata: dict[str, Any] | None = None,
         allow_empty: bool = False,
     ) -> str:
@@ -577,6 +579,7 @@ class Session:
     def flush(
         self,
         message: str,
+        *,
         metadata: dict[str, Any] | None = None,
     ) -> str:
         """
@@ -601,6 +604,7 @@ class Session:
     async def flush_async(
         self,
         message: str,
+        *,
         metadata: dict[str, Any] | None = None,
     ) -> str:
         """

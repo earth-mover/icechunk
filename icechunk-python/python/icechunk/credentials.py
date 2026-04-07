@@ -15,6 +15,39 @@ from icechunk._icechunk_python import (
     S3StaticCredentials,
 )
 
+__all__ = [
+    "AnyAzureCredential",
+    "AnyAzureStaticCredential",
+    "AnyCredential",
+    "AnyGcsCredential",
+    "AnyGcsStaticCredential",
+    "AnyS3Credential",
+    "AzureCredentials",
+    "AzureRefreshableCredential",
+    "AzureStaticCredentials",
+    "Credentials",
+    "GcsBearerCredential",
+    "GcsCredentials",
+    "GcsStaticCredentials",
+    "S3Credentials",
+    "S3StaticCredentials",
+    "azure_credentials",
+    "azure_from_env_credentials",
+    "azure_refreshable_credentials",
+    "azure_static_credentials",
+    "containers_credentials",
+    "gcs_anonymous_credentials",
+    "gcs_credentials",
+    "gcs_from_env_credentials",
+    "gcs_refreshable_credentials",
+    "gcs_static_credentials",
+    "s3_anonymous_credentials",
+    "s3_credentials",
+    "s3_from_env_credentials",
+    "s3_refreshable_credentials",
+    "s3_static_credentials",
+]
+
 AnyS3Credential = (
     S3Credentials.Static
     | S3Credentials.Anonymous
@@ -406,7 +439,7 @@ def containers_credentials(
 
     virtual_store_config = ic.s3_store(
         region="us-east-1",
-        endpoint_url="http://localhost:9000",
+        endpoint_url="http://localhost:4200",
         allow_http=True,
         s3_compatible=True,
         force_path_style=True,

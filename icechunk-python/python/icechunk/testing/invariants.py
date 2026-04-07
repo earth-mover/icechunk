@@ -8,12 +8,13 @@ from collections.abc import Iterable
 from hypothesis import event
 
 from icechunk._icechunk_python import SnapshotInfo
-from icechunk.store import IcechunkStore
 from icechunk.testing.models import ModelStore
+from icechunk.zarr import IcechunkStore
 
 __all__ = [
     "assert_ancestry_invariants",
     "assert_list_dir_equal",
+    "assert_moves_sorted_by_final_path",
     "compare_list_dir",
 ]
 
@@ -21,6 +22,8 @@ __all__ = [
 def assert_ancestry_invariants(
     ancestry: list[SnapshotInfo],
     known_commits: set[str] | None = None,
+    *,
+    must_contain_initial: bool = True,
 ) -> None:
     """Assert fundamental invariants on a snapshot ancestry chain.
 
@@ -29,6 +32,10 @@ def assert_ancestry_invariants(
 
     If ``known_commits`` is provided, also checks that every snapshot in the
     ancestry is a member of that set.
+
+    If ``must_contain_initial`` is False, the ancestry is allowed to terminate
+    at any snapshot with ``parent_id=None`` (not just the initial snapshot).
+    This can happen after expiration reparents orphaned snapshots.
     """
     ancestry_set = set([snap.id for snap in ancestry])
     if known_commits is not None:
@@ -37,13 +44,14 @@ def assert_ancestry_invariants(
     assert all(a.written_at > b.written_at for a, b in itertools.pairwise(ancestry))
     # ancestry must be unique
     assert len(ancestry_set) == len(ancestry)
-    # the ancestry chain must terminate at the initial snapshot with no parent
+    # the ancestry chain must terminate at a snapshot with no parent
     INITIAL_SNAPSHOT = "1CECHNKREP0F1RSTCMT0"
-    assert ancestry[-1].id == INITIAL_SNAPSHOT, (
-        f"Last snapshot in ancestry is {ancestry[-1].id}, expected {INITIAL_SNAPSHOT}"
-    )
+    if must_contain_initial:
+        assert ancestry[-1].id == INITIAL_SNAPSHOT, (
+            f"Last snapshot in ancestry is {ancestry[-1].id}, expected {INITIAL_SNAPSHOT}"
+        )
     assert ancestry[-1].parent_id is None, (
-        f"Initial snapshot {ancestry[-1].id} has parent_id={ancestry[-1].parent_id}"
+        f"Last snapshot {ancestry[-1].id} has parent_id={ancestry[-1].parent_id}, expected None"
     )
     # every non-root snapshot must have a parent
     for snap in ancestry[:-1]:
@@ -53,6 +61,21 @@ def assert_ancestry_invariants(
     n = len(ancestry)
     bucket = f"{n // 10 * 10}-{n // 10 * 10 + 9}"
     event(f"ancestry length: {bucket}")
+
+
+def assert_moves_sorted_by_final_path(
+    moved_nodes: list[tuple[str, str]],
+) -> None:
+    """Assert that moved_nodes are sorted by final path (component-based).
+
+    Rust's Path::cmp compares by path components, not raw bytes, so we
+    split on '/' to match (e.g. /a < /a/b < /a-b).
+    """
+    assert moved_nodes, "Expected non-empty moved_nodes"
+    final_paths = [to for _, to in moved_nodes]
+    assert final_paths == sorted(final_paths, key=lambda p: p.split("/")), (
+        f"Moves not sorted by final path: {moved_nodes}"
+    )
 
 
 def assert_list_dir_equal(path: str, expected: list[str], actual: list[str]) -> None:

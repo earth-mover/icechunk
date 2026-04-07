@@ -122,6 +122,10 @@ jobs:
               sleep 1
           done
 
+      - name: Install flatc
+        run: |
+          sudo apt-get update && sudo apt-get install -y flatbuffers-compiler
+
       - name: Run pytest (non-hypothesis)
         shell: bash
         working-directory: icechunk-python
@@ -192,6 +196,10 @@ jobs:
               fi
               sleep 1
           done
+
+      - name: Install flatc
+        run: |
+          sudo apt-get update && sudo apt-get install -y flatbuffers-compiler
 
       - name: Run pytest (non-hypothesis)
         shell: bash
@@ -288,12 +296,7 @@ jobs:
           PYTHON_TAG="cp$(echo ${{ env.PYTHON_VERSION }} | tr -d '.')"
           WHEEL=$(ls dist/*-${PYTHON_TAG}-*.whl)
           uv pip install "$WHEEL" --group test
-          uvx --from "git+https://github.com/earth-mover/third-wheel" \
-            third-wheel download icechunk --version ">=1,<2" \
-            --rename icechunk_v1 \
-            --python-version ${{ env.PYTHON_VERSION }} \
-            -o ./dist-v1/
-          uv pip install dist-v1/icechunk_v1-*.whl
+          uv run third-wheel sync -v
 
       - name: Run cross-version stateful tests
         shell: bash

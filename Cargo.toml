@@ -8,6 +8,7 @@ members = [
   "icechunk-arrow-object-store",
   "icechunk-python",
   "icechunk-macros",
+  "icechunk-js",
 ]
 default-members = ["icechunk"]
 resolver = "2"
@@ -18,13 +19,13 @@ edition = "2024"
 
 [workspace.dependencies]
 # Internal crates
-icechunk = { path = "icechunk", version = "2.0.0-alpha.5" }
-icechunk-arrow-object-store = { path = "icechunk-arrow-object-store", version = "2.0.0-alpha.5", default-features = false }
-icechunk-format = { path = "icechunk-format", version = "2.0.0-alpha.5" }
-icechunk-macros = { path = "icechunk-macros", version = "2.0.0-alpha.5" }
-icechunk-s3 = { path = "icechunk-s3", version = "2.0.0-alpha.5" }
-icechunk-storage = { path = "icechunk-storage", version = "2.0.0-alpha.5" }
-icechunk-types = { path = "icechunk-types", version = "2.0.0-alpha.5" }
+icechunk = { path = "icechunk", version = "2.0.0-alpha.7" }
+icechunk-arrow-object-store = { path = "icechunk-arrow-object-store", version = "2.0.0-alpha.7", default-features = false }
+icechunk-format = { path = "icechunk-format", version = "2.0.0-alpha.7" }
+icechunk-macros = { path = "icechunk-macros", version = "2.0.0-alpha.7" }
+icechunk-s3 = { path = "icechunk-s3", version = "2.0.0-alpha.7" }
+icechunk-storage = { path = "icechunk-storage", version = "2.0.0-alpha.7" }
+icechunk-types = { path = "icechunk-types", version = "2.0.0-alpha.7" }
 
 # External dependencies
 anyhow = "1.0.102"
@@ -80,7 +81,7 @@ tempfile = "3.27.0"
 test-log = { version = "0.2.19", default-features = false, features = ["trace", "color", "unstable"] }
 test-strategy = "0.4.5"
 thiserror = "2.0.18"
-tokio = "1.50.0"
+tokio = "1.51.0"
 tokio-util = { version = "0.7.18", features = ["io-util"] }
 tracing = "0.1.44"
 tracing-chrome = "0.7"

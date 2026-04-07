@@ -136,6 +136,7 @@ mod tests {
 
     use bytes::Bytes;
     use futures::TryStreamExt as _;
+    use icechunk_types::Path;
 
     use crate::{
         Repository, Storage,
@@ -417,6 +418,7 @@ mod tests {
 
         // create a group so we have something to move
         let mut session = repo.writable_session("main").await.unwrap();
+        session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await.unwrap();
         session
             .add_group("/source".try_into().unwrap(), Bytes::copy_from_slice(b""))
             .await
@@ -462,6 +464,7 @@ mod tests {
 
         // create a group so we have something to move
         let mut session = repo.writable_session("main").await.unwrap();
+        session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await.unwrap();
         session
             .add_group("/source".try_into().unwrap(), Bytes::copy_from_slice(b""))
             .await

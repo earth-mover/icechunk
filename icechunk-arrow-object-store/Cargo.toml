@@ -1,6 +1,6 @@
 [package]
 name = "icechunk-arrow-object-store"
-version = "2.0.0-alpha.5"
+version = "2.0.0-alpha.7"
 description = "Apache Arrow object_store storage backend for icechunk"
 readme = "../README.md"
 repository = "https://github.com/earth-mover/icechunk"
