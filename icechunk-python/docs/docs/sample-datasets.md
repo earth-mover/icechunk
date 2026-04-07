@@ -33,23 +33,23 @@ A subset of the Weatherbench2 copy of the ERA5 reanalysis dataset.
     )
     ```
 
-=== "Google Cloud"
+<!-- === "Google Cloud" -->
 
-    ```python
-    import icechunk as ic
-    import xarray as xr
+<!--     ```python -->
+<!--     import icechunk as ic -->
+<!--     import xarray as xr -->
 
-    storage = ic.gcs_storage(
-        bucket="icechunk-public-data-gcs",
-        prefix="v01/era5_weatherbench2",
-    )
+<!--     storage = ic.gcs_storage( -->
+<!--         bucket="icechunk-public-data-gcs", -->
+<!--         prefix="v01/era5_weatherbench2", -->
+<!--     ) -->
 
-    repo = ic.Repository.open(storage=storage)
-    session = repo.readonly_session("main")
-    ds = xr.open_dataset(
-        session.store, group="1x721x1440", engine="zarr", chunks=None, consolidated=False
-    )
-    ```
+<!--     repo = ic.Repository.open(storage=storage) -->
+<!--     session = repo.readonly_session("main") -->
+<!--     ds = xr.open_dataset( -->
+<!--         session.store, group="1x721x1440", engine="zarr", chunks=None, consolidated=False -->
+<!--     ) -->
+<!--     ``` -->
 
 === "Cloudflare R2"
 
