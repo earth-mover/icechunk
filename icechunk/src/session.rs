@@ -240,7 +240,7 @@ enum CommitKind {
 
 pub struct CommitBuilder<'a> {
     session: &'a mut Session,
-    message: String,
+    message: Option<String>,
     properties: Option<SnapshotProperties>,
     max_concurrent_nodes: usize,
     allow_empty: bool,
@@ -262,14 +262,30 @@ impl std::fmt::Debug for CommitBuilder<'_> {
 }
 
 impl<'a> CommitBuilder<'a> {
-    fn new(session: &'a mut Session, message: String) -> Self {
+    fn for_commit(session: &'a mut Session, message: String) -> Self {
+        Self {
+            session,
+            message: Some(message),
+            properties: None,
+            max_concurrent_nodes: 1,
+            allow_empty: false,
+            amend: false,
+            kind: CommitKind::NewCommit,
+            rebase_solver: None,
+            rebase_attempts: 0,
+            before_rebase: None,
+            after_rebase: None,
+        }
+    }
+
+    fn for_amend(session: &'a mut Session, message: Option<String>) -> Self {
         Self {
             session,
             message,
             properties: None,
             max_concurrent_nodes: 1,
             allow_empty: false,
-            amend: false,
+            amend: true,
             kind: CommitKind::NewCommit,
             rebase_solver: None,
             rebase_attempts: 0,
@@ -290,11 +306,6 @@ impl<'a> CommitBuilder<'a> {
 
     pub fn allow_empty(mut self, allow_empty: bool) -> Self {
         self.allow_empty = allow_empty;
-        self
-    }
-
-    pub fn amend(mut self) -> Self {
-        self.amend = true;
         self
     }
 
@@ -361,12 +372,38 @@ impl<'a> CommitBuilder<'a> {
             ));
         }
 
-        if self.amend {
+        if self.message.is_none() && !self.amend {
+            return Err(SessionError::capture(
+                SessionErrorKind::InvalidCommitConfiguration {
+                    reason: "message can be None only if amending",
+                },
+            ));
+        }
+
+        let (properties, message) = if self.amend {
             self.session
                 .asset_manager
                 .fail_unless_spec_at_least(SpecVersionBin::V2)
                 .inject()?;
-        }
+            let snapshot = self
+                .session
+                .asset_manager
+                .fetch_snapshot(&self.session.snapshot_id)
+                .await
+                .inject()?;
+            let properties = match self.properties {
+                Some(p) => Some(p),
+                None => Some(snapshot.metadata().inject()?),
+            };
+            let message = self.message.unwrap_or_else(|| snapshot.message());
+            (properties, message)
+        } else {
+            #[allow(clippy::expect_used)]
+            (
+                self.properties,
+                self.message.expect("message cannot be None if not amending."),
+            )
+        };
 
         let commit_method =
             if self.amend { CommitMethod::Amend } else { CommitMethod::NewCommit };
@@ -374,15 +411,15 @@ impl<'a> CommitBuilder<'a> {
         match self.kind {
             CommitKind::Flush => {
                 self.session
-                    .do_flush(&self.message, self.max_concurrent_nodes, self.properties)
+                    .do_flush(&message, self.max_concurrent_nodes, properties)
                     .await
             }
             CommitKind::RewriteManifests => {
                 self.session
                     .do_rewrite_manifests(
-                        &self.message,
+                        &message,
                         self.max_concurrent_nodes,
-                        self.properties,
+                        properties,
                         commit_method,
                     )
                     .await
@@ -393,9 +430,9 @@ impl<'a> CommitBuilder<'a> {
                         .do_commit_rebasing(
                             solver,
                             self.rebase_attempts,
-                            &self.message,
+                            &message,
                             self.max_concurrent_nodes,
-                            self.properties,
+                            properties,
                             self.allow_empty,
                             self.before_rebase,
                             self.after_rebase,
@@ -404,9 +441,9 @@ impl<'a> CommitBuilder<'a> {
                 } else {
                     self.session
                         .commit_inner(
-                            &self.message,
+                            &message,
                             self.max_concurrent_nodes,
-                            self.properties,
+                            properties,
                             false,
                             commit_method,
                             self.allow_empty,
@@ -1435,7 +1472,11 @@ impl Session {
     }
 
     pub fn commit(&mut self, message: impl Into<String>) -> CommitBuilder<'_> {
-        CommitBuilder::new(self, message.into())
+        CommitBuilder::for_commit(self, message.into())
+    }
+
+    pub fn amend(&mut self, message: Option<String>) -> CommitBuilder<'_> {
+        CommitBuilder::for_amend(self, message)
     }
 
     async fn flush_v2(&mut self, new_snap: Arc<Snapshot>) -> SessionResult<()> {
@@ -4933,9 +4974,8 @@ mod tests {
         let mut session = repo.writable_session("main").await?;
         session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
         let amend_result = session
-            .commit("cannot amend initial commit")
+            .amend(Some("cannot amend initial commit".to_string()))
             .max_concurrent_nodes(8)
-            .amend()
             .execute()
             .await;
         assert!(amend_result.is_err());
@@ -4943,9 +4983,8 @@ mod tests {
 
         let mut session = repo.writable_session("main").await?;
         let amend_result = session
-            .commit("cannot amend initial commit")
+            .amend(Some("cannot amend initial commit".to_string()))
             .max_concurrent_nodes(8)
-            .amend()
             .allow_empty(true)
             .execute()
             .await;
@@ -4964,9 +5003,8 @@ mod tests {
         let mut session = repo.writable_session("main").await?;
         session.add_group("/b".try_into().unwrap(), Bytes::copy_from_slice(b"")).await?;
         let before_amend2 = session
-            .commit("first amend")
+            .amend(Some("first amend".to_string()))
             .max_concurrent_nodes(8)
-            .amend()
             .execute()
             .await?;
 
@@ -4997,9 +5035,8 @@ mod tests {
             .add_group("/error".try_into().unwrap(), Bytes::copy_from_slice(b""))
             .await?;
         let after_amend2 = session
-            .commit("second amend")
+            .amend(Some("second amend".to_string()))
             .max_concurrent_nodes(8)
-            .amend()
             .execute()
             .await?;
 
@@ -5060,6 +5097,84 @@ mod tests {
     }
 
     #[tokio_test]
+    async fn test_amend_reuses_message_and_metadata() -> Result<(), Box<dyn Error>> {
+        let repo = create_memory_store_repository(SpecVersionBin::current()).await;
+
+        // Create initial commit
+        let mut session = repo.writable_session("main").await?;
+        session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
+        session.commit("make root").max_concurrent_nodes(8).execute().await?;
+
+        // Commit with message and metadata
+        let mut session = repo.writable_session("main").await?;
+        session.add_group("/a".try_into().unwrap(), Bytes::copy_from_slice(b"")).await?;
+        let mut props = SnapshotProperties::default();
+        props.insert("key".to_string(), serde_json::Value::String("value".to_string()));
+        session
+            .commit("original message")
+            .max_concurrent_nodes(8)
+            .properties(props)
+            .execute()
+            .await?;
+
+        let asset_manager = repo.asset_manager();
+
+        // Amend with None message and None metadata — should reuse both
+        let mut session = repo.writable_session("main").await?;
+        session.add_group("/b".try_into().unwrap(), Bytes::copy_from_slice(b"")).await?;
+        let snap_id = session.amend(None).max_concurrent_nodes(8).execute().await?;
+
+        let info = asset_manager.fetch_snapshot_info(&snap_id).await?;
+        assert_eq!(info.message, "original message");
+        assert_eq!(
+            info.metadata.get("key"),
+            Some(&serde_json::Value::String("value".to_string()))
+        );
+
+        // Amend with new message but None metadata — should override message, keep metadata
+        let mut session = repo.writable_session("main").await?;
+        session.add_group("/c".try_into().unwrap(), Bytes::copy_from_slice(b"")).await?;
+        let snap_id = session
+            .amend(Some("new message".to_string()))
+            .max_concurrent_nodes(8)
+            .execute()
+            .await?;
+
+        let info = asset_manager.fetch_snapshot_info(&snap_id).await?;
+        assert_eq!(info.message, "new message");
+        assert_eq!(
+            info.metadata.get("key"),
+            Some(&serde_json::Value::String("value".to_string()))
+        );
+
+        // Amend with new properties but None message — should keep message, override metadata
+        let mut session = repo.writable_session("main").await?;
+        session.add_group("/d".try_into().unwrap(), Bytes::copy_from_slice(b"")).await?;
+        let mut new_props = SnapshotProperties::default();
+        new_props.insert(
+            "new_key".to_string(),
+            serde_json::Value::String("new_value".to_string()),
+        );
+        let snap_id = session
+            .amend(None)
+            .max_concurrent_nodes(8)
+            .properties(new_props)
+            .execute()
+            .await?;
+
+        let info = asset_manager.fetch_snapshot_info(&snap_id).await?;
+        assert_eq!(info.message, "new message");
+        assert_eq!(
+            info.metadata.get("new_key"),
+            Some(&serde_json::Value::String("new_value".to_string()))
+        );
+        // Old key should be gone since we provided explicit properties
+        assert!(info.metadata.get("key").is_none());
+
+        Ok(())
+    }
+
+    #[tokio_test]
     async fn implicit_group_creation_in_move() -> Result<(), Box<dyn Error>> {
         let repo = create_memory_store_repository(SpecVersionBin::current()).await;
 
@@ -5108,9 +5223,8 @@ mod tests {
             .add_group("/fail".try_into().unwrap(), Bytes::copy_from_slice(b""))
             .await?;
         let result = session
-            .commit("amend after move")
+            .amend(Some("amend after move".to_string()))
             .max_concurrent_nodes(8)
-            .amend()
             .execute()
             .await;
         assert!(result.is_err());
@@ -5123,9 +5237,8 @@ mod tests {
             .move_node("/dest".try_into().unwrap(), "/another_dest".try_into().unwrap())
             .await?;
         let result = session
-            .commit("amend after move, only new moves")
+            .amend(Some("amend after move, only new moves".to_string()))
             .max_concurrent_nodes(8)
-            .amend()
             .execute()
             .await;
         assert!(result.is_ok());
@@ -5190,9 +5303,8 @@ mod tests {
             )
             .await?;
         let snapshot_id = session
-            .commit("amend nested groups move ")
+            .amend(Some("amend nested groups move ".to_string()))
             .max_concurrent_nodes(8)
-            .amend()
             .execute()
             .await?;
 

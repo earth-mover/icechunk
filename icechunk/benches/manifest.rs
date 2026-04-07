@@ -171,10 +171,9 @@ fn benchmark_get_chunks(c: &mut Criterion) {
                                     let mut session =
                                         repo.writable_session("main").await.unwrap();
                                     session
-                                        .commit("rewrite")
+                                        .amend(Some("rewrite".to_string()))
                                         .max_concurrent_nodes(8)
                                         .rewrite_manifests()
-                                        .amend()
                                         .execute()
                                         .await
                                         .unwrap();

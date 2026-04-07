@@ -598,21 +598,21 @@ impl PySession {
         })
     }
 
-    #[pyo3(signature = (message, metadata=None, allow_empty=false))]
+    #[pyo3(signature = (message=None, *, metadata=None, allow_empty=false))]
     pub fn amend(
         &self,
         py: Python<'_>,
-        message: &str,
+        message: Option<&str>,
         metadata: Option<PySnapshotProperties>,
         allow_empty: bool,
     ) -> PyResult<String> {
         let metadata = metadata.map(|m| m.into());
+        let message = message.map(|m| m.to_string());
         // This is blocking function, we need to release the Gil
         py.detach(move || {
             pyo3_async_runtimes::tokio::get_runtime().block_on(async {
                 let mut session = self.0.write().await;
-                let mut builder =
-                    session.commit(message).amend().allow_empty(allow_empty);
+                let mut builder = session.amend(message).allow_empty(allow_empty);
                 if let Some(props) = metadata {
                     builder = builder.properties(props);
                 }
@@ -625,21 +625,21 @@ impl PySession {
         })
     }
 
-    #[pyo3(signature = (message, metadata=None, allow_empty=false))]
+    #[pyo3(signature = (message=None, *, metadata=None, allow_empty=false))]
     pub fn amend_async<'py>(
         &'py self,
         py: Python<'py>,
-        message: &str,
+        message: Option<&str>,
         metadata: Option<PySnapshotProperties>,
         allow_empty: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
         let session = Arc::clone(&self.0);
-        let message = message.to_owned();
+        let message = message.map(|m| m.to_string());
 
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let metadata = metadata.map(|m| m.into());
             let mut session = session.write().await;
-            let mut builder = session.commit(&message).amend().allow_empty(allow_empty);
+            let mut builder = session.amend(message).allow_empty(allow_empty);
             if let Some(props) = metadata {
                 builder = builder.properties(props);
             }

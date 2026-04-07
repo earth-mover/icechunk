@@ -2381,13 +2381,13 @@ class PySession:
     ) -> str: ...
     def amend(
         self,
-        message: str,
+        message: str | None = None,
         metadata: dict[str, Any] | None = None,
         allow_empty: bool = False,
     ) -> str: ...
     async def amend_async(
         self,
-        message: str,
+        message: str | None = None,
         metadata: dict[str, Any] | None = None,
         allow_empty: bool = False,
     ) -> str: ...
