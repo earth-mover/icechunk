@@ -2,7 +2,6 @@
 
 
 from icechunk._icechunk_python import (
-    AncestryGraph,
     ChunkType,
     ConflictError,
     IcechunkError,
@@ -76,6 +75,7 @@ from icechunk.ops import GCSummary, Update, UpdateType
 from icechunk.repository import Repository
 from icechunk.session import ForkSession, Session
 from icechunk.snapshots import (
+    AncestryGraph,
     Diff,
     ManifestFileInfo,
     SnapshotInfo,
