@@ -78,7 +78,7 @@ struct DimensionShape {
 // --8<-- [start:dimension_shape_v2]
 // V2 shape representation for one dimension.
 table DimensionShapeV2 {
-  // Total number of elements along this dimension.
+  // Total number of array elements along this dimension.
   array_length: uint64;
 
   // Number of chunks along this dimension.
