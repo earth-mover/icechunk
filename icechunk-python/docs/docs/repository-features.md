@@ -47,6 +47,19 @@ repo.set_status(
 )
 ```
 
+## Repository Metadata
+
+If you manage a number of Icechunk repositories, it may be useful to classify them using metadata.
+Icechunk allows you to set and retrieve arbitrary JSON-like metadata at the repository level.
+
+```python
+repo = icechunk.Repository.open(...)
+repo.set_metadata(dict(test=True, team="science"))
+repo.update_metadata(dict(number_of_bugs=42))
+print(repo.get_metadata())
+```
+
+
 ## Operations Log
 
 Who changed what, and when? As repositories grow and multiple collaborators commit, branch, tag, and run maintenance tasks, it's easy to lose track of what happened. Traditional object storage gives you no history of structural changes—you'd need to build your own audit trail.
@@ -119,18 +132,6 @@ Every repository mutation creates exactly one log entry. The `kind` field tells 
 | `UpdateType.ExpirationRan` | — | Running snapshot expiration |
 | `UpdateType.RepoMigrated` | `from_version`, `to_version` | Upgrading from an older format version |
 
-
-## Repository Metadata
-
-If you manage a number of Icechunk repositories, it may be useful to classify them using metadata.
-Icechunk allows you to set and retrieve arbitrary JSON-like metadata at the repository level.
-
-```python
-repo = icechunk.Repository.open(...)
-repo.set_metadata(dict(test=True, team="science"))
-repo.update_metadata(dict(number_of_bugs=42))
-print(repo.get_metadata())
-```
 
 ## Feature Flags
 
