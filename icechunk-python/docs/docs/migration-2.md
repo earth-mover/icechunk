@@ -1,6 +1,9 @@
 # Migrate to 2.0
 
-Icechunk 2.0 uses a new storage format (spec version 2). Existing repositories created with Icechunk 1.x can be automatically upgraded to version 2.0 using the [`upgrade_icechunk_repository()`](./reference.md#icechunk.upgrade_icechunk_repository) function:
+Icechunk 2.0 uses a new storage format (spec version 2). Existing repositories created with Icechunk 1.x can be automatically upgraded to version 2.0 using the [`upgrade_icechunk_repository()`](./reference.md#icechunk.upgrade_icechunk_repository) function. This migration only uses  repository metadata, and it will not read or write any chunks.
+
+!!! warning
+    This is an administrative operation. It **must be executed in isolation** — no other readers or writers should be accessing the repository during the migration. Any writes made during the migration may be lost.
 
 ```python
 import icechunk as ic
@@ -22,9 +25,6 @@ assert migrated_repo.spec_version == 2
 # Use migrated_repo from here on — the original `repo` object is invalidated
 session = migrated_repo.writable_session("main")
 ```
-
-!!! warning
-    This is an administrative operation. It **must be executed in isolation** — no other readers or writers should be accessing the repository during the migration. Any writes made during the migration may be lost.
 
 ### Parameters
 

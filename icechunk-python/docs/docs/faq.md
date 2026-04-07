@@ -378,7 +378,7 @@ Icechunk is different from normal Zarr stores because it is stateful. In a distr
 
 ## How can I identify Icechunk requests in my server logs?
 
-All HTTP requests made by Icechunk include a `User-Agent` header of the form `icechunk-rust-<version>` (e.g., `icechunk-rust-2.0.0`). You can filter your object storage access logs for this user agent to isolate Icechunk traffic.
+In icechunk 2.0 and up, HTTP requests made by Icechunk include a `User-Agent` header of the form `icechunk-rust-<version>` (e.g., `icechunk-rust-2.0.0`). You can filter your object storage access logs for this user agent to isolate Icechunk traffic.
 
 To check the exact user agent string for your installed version:
 
