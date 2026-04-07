@@ -67,7 +67,21 @@ def http_store(
 
 
 def redirect_storage(base_url: str) -> Storage:
-    # FIXME: document
+    """Create a read-only Storage instance that follows HTTP redirects to resolve the underlying storage backend.
+
+    The given URL is expected to return an HTTP redirect (3xx) with a ``Location`` header
+    pointing to a supported storage scheme (``s3://``, ``gs://``, ``r2://``, ``tigris://``,
+    ``http+icechunk://``, etc.). Icechunk will follow redirects until it reaches a recognized
+    scheme and then use that as the actual storage backend.
+
+    This is useful when a service controls which bucket or path a repository lives in, so
+    clients don't need to know the final storage location ahead of time.
+
+    Parameters
+    ----------
+    base_url: str
+        The URL that will be followed to discover the actual storage location.
+    """
     return Storage.new_redirect(base_url)
 
 
@@ -169,7 +183,7 @@ def s3_storage(
         Whether to force using path-style addressing for buckets
     network_stream_timeout_seconds: int
         Timeout requests if no bytes can be transmitted during this period of time.
-        If set to 0, timeout is disabled.
+        If set to 0, timeout is disabled. Default: 60.
     requester_pays: bool
         Enable requester pays for S3 buckets
     """
@@ -298,7 +312,7 @@ def tigris_storage(
         obtained are stored, and they can be sent over the network if you pickle the session/repo.
     network_stream_timeout_seconds: int
         Timeout requests if no bytes can be transmitted during this period of time.
-        If set to 0, timeout is disabled.
+        If set to 0, timeout is disabled. Default: 60.
     """
     credentials = s3_credentials(
         access_key_id=access_key_id,
@@ -384,7 +398,7 @@ def r2_storage(
         obtained are stored, and they can be sent over the network if you pickle the session/repo.
     network_stream_timeout_seconds: int
         Timeout requests if no bytes can be transmitted during this period of time.
-        If set to 0, timeout is disabled.
+        If set to 0, timeout is disabled. Default: 60.
     """
     credentials = s3_credentials(
         access_key_id=access_key_id,
