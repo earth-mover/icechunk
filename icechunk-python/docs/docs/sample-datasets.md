@@ -174,10 +174,10 @@ Provided by [Development Seed](https://developmentseed.org/), see https://github
 === "AWS"
 
     ```python
-    import icechunk
+    import icechunk as ic
     import xarray as xr
 
-    storage = icechunk.s3_storage(
+    storage = ic.s3_storage(
         bucket='nasa-waterinsight',
         prefix="virtual-zarr-store/icechunk/RASI/HISTORICAL", #replace HISTORICAL with SSP245/SSP585 for future scenarios
         anonymous=True,
@@ -185,11 +185,11 @@ Provided by [Development Seed](https://developmentseed.org/), see https://github
     )
 
     chunk_url = "s3://nasa-waterinsight/RASI/"
-    virtual_credentials = icechunk.containers_credentials({
-        chunk_url: icechunk.s3_anonymous_credentials()
+    virtual_credentials = ic.credentials.containers_credentials({
+        chunk_url: ic.credentials.s3_anonymous_credentials()
     })
 
-    repo = icechunk.Repository.open(
+    repo = ic.Repository.open(
         storage=storage,
         authorize_virtual_chunk_access=virtual_credentials,
     )

@@ -22,3 +22,28 @@ updates:
       actions:
         patterns:
           - "*"
+  - package-ecosystem: "npm"
+    directory: "/icechunk-js"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "05:00"
+      timezone: "US/Pacific"
+    cooldown:
+      default-days: 7
+    groups:
+      js-dependencies:
+        patterns:
+          - "*"
+  - package-ecosystem: "npm"
+    directory: "/icechunk-js/examples/node-cli"
+    schedule:
+      interval: "monthly"
+    ignore:
+      - dependency-name: "*"
+  - package-ecosystem: "npm"
+    directory: "/icechunk-js/examples/react-wasm"
+    schedule:
+      interval: "monthly"
+    ignore:
+      - dependency-name: "*"

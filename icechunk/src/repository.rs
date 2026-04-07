@@ -37,6 +37,7 @@ use crate::{
         RepositoryConfig,
     },
     diff::{Diff, DiffBuilder},
+    display::AncestryGraph,
     error::ICError,
     feature_flags::{
         CREATE_TAG_FLAG, DELETE_TAG_FLAG, FEATURE_FLAGS, FeatureFlag, MOVE_NODE_FLAG,
@@ -930,6 +931,65 @@ impl Repository {
     ) -> RepositoryResult<impl Stream<Item = RepositoryResult<SnapshotInfo>> + Send + use<>>
     {
         self.ancestry_using(version, None).await
+    }
+
+    /// Build a materialized ancestry graph for visualization.
+    ///
+    /// When `version` is `Some`, returns a linear graph for that single ref.
+    /// When `version` is `None`, walks all branches and returns a tree view.
+    ///
+    /// This method only fetches data (ancestries, branches, tags) — all display
+    /// logic (sorting, column assignment, rendering) lives in [`AncestryGraph`].
+    #[instrument(skip(self))]
+    pub async fn ancestry_graph(
+        &self,
+        version: Option<&VersionInfo>,
+        plain: bool,
+    ) -> RepositoryResult<AncestryGraph> {
+        let all_branches: Vec<String> = self.list_branches().await?.into_iter().collect();
+
+        let tags = self.list_tags().await?;
+        let tag_entries: Vec<(SnapshotId, String)> = stream::iter(tags.iter())
+            .then(|tag| async {
+                Ok::<_, RepositoryError>((self.lookup_tag(tag).await?, tag.clone()))
+            })
+            .try_collect()
+            .await?;
+        let mut tag_map: HashMap<SnapshotId, Vec<String>> = HashMap::new();
+        for (snap_id, tag) in tag_entries {
+            tag_map.entry(snap_id).or_default().push(tag);
+        }
+
+        // Early return for tag/snapshot_id — walk as an anonymous single branch.
+        if let Some(v) = version.filter(|v| !matches!(v, VersionInfo::BranchTipRef(_))) {
+            let snapshots: Vec<SnapshotInfo> =
+                self.ancestry(v).await?.try_collect().await?;
+            return Ok(AncestryGraph::new(
+                vec![("".to_string(), snapshots)],
+                &tag_map,
+                all_branches,
+                plain,
+            ));
+        }
+
+        // Walk either the requested branch or all branches.
+        let branches_to_walk: &[String] = match version {
+            Some(VersionInfo::BranchTipRef(name)) => std::slice::from_ref(name),
+            _ => &all_branches,
+        };
+
+        let branch_ancestries: Vec<(String, Vec<SnapshotInfo>)> =
+            stream::iter(branches_to_walk)
+                .then(|branch| async {
+                    let v = VersionInfo::BranchTipRef(branch.clone());
+                    let snapshots: Vec<SnapshotInfo> =
+                        self.ancestry(&v).await?.try_collect().await?;
+                    Ok::<_, RepositoryError>((branch.clone(), snapshots))
+                })
+                .try_collect()
+                .await?;
+
+        Ok(AncestryGraph::new(branch_ancestries, &tag_map, all_branches, plain))
     }
 
     async fn ancestry_using(

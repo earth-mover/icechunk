@@ -126,7 +126,7 @@ pub(crate) struct PyConflict {
 impl PyRepr for PyConflict {
     const EXECUTABLE: bool = false;
     fn cls_name() -> &'static str {
-        "icechunk.Conflict"
+        "icechunk.conflicts.Conflict"
     }
     fn fields(&self, _mode: ReprMode) -> Vec<(&str, String)> {
         vec![

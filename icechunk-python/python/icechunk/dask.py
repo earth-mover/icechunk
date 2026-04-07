@@ -72,9 +72,8 @@ def store_dask(
     merge the changesets corresponding to each write task. The `store` object
     passed in will be updated in-place with the fully merged changeset.
 
-    For distributed or multi-processing writes, this method must be called within
-    the `Session.allow_pickling()` context. All Zarr arrays in `targets` must also
-    be created within this context since they contain a reference to the Session.
+    For distributed or multi-processing writes, use `Session.fork()` to create a
+    `ForkSession` that can be pickled and distributed to remote workers.
 
     Parameters
     ----------
