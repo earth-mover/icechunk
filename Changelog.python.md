@@ -1,5 +1,114 @@
 # Changelog
 
+## Python Icechunk Library 2.0.0
+
+Icechunk 2 is here! This release represents the next evolution of the Icechunk library and on-disk format,
+shaped by hundreds of commits from dozens of contributors.
+
+Icechunk 2 brings new features, stronger consistency guarantees, and higher performance across several
+use cases, all while maintaining format compatibility. Icechunk 2 can read and write your existing
+Icechunk 1 repos, and when you're ready to upgrade the format, a single function call migrates
+your repos quickly and safely.
+
+We hope you enjoy the new release!
+
+### Features
+
+#### Platforms
+
+**WebAssembly**: Icechunk now compiles to WebAssembly, bringing full support for both Node.js and browser
+environments via the `@earthmover/icechunk` npm package. You can create, open, read, and write
+repositories directly in the browser.
+
+In the browser, Icechunk supports in-memory storage, read-only fetch-based access to public
+S3-compatible repositories, and a custom storage interface that lets you plug in any
+JavaScript networking library (e.g., `@aws-sdk/client-s3`). Native Node.js builds additionally
+support S3, GCS, Azure Blob, R2, Tigris, and local filesystem backends directly.
+
+**Python**: Initial support for free-threading. This feature is lightly tested and we welcome contributions to make it work better.
+
+#### Array Operations
+
+**Rectilinear Chunk Grids**: Support for Zarr 3 rectilinear (variable-sized) chunk grids, where each chunk along a dimension can have a different size. Chunk shapes can be specified inline (fully listed) or run-length encoded.
+
+**Move**: `session.move(from_path, to_path)` moves or renames arrays and groups. Unlike vanilla Zarr, this is a cheap metadata-only operation that doesn't require copying any chunks. Requires a dedicated `rearrange_session` (cannot be mixed with data writes).
+
+**Shift & Reindex**:
+
+- `shift_array(path, offset)`: shift all chunks by a chunk offset
+- `reindex_array(array_path, forward, backward=None)`: arbitrary chunk coordinate transformation via a user-provided function, with an optional inverse
+
+**More ergonomic distributed writes**: Icechunk no longer requires committing changes before executing distributed writes. `ForkSession` is now based on an anonymous snapshot that captures uncommitted state, allowing writes but disallowing commits. Fork sessions are serializable (picklable) for distribution to workers, and are merged back via `session.merge(fork_session)` as before.
+
+#### Version Control
+
+**Ops log**: A new `Repository.ops_log` method shows all operations executed on the repository. Unlike `Repository.ancestry`, this
+keeps track of every type of operation, from branch deletion to garbage collection.
+
+**Amend**: `amend()` replaces the previous commit on a branch instead of creating a new one.
+
+**Anonymous Snapshots**: `session.flush(message)` creates a detached snapshot without advancing the branch. In Icechunk 2, these are first-class citizens tracked in the repo info and ops log.
+
+**Beautiful ancestry trees**: `ancestry` now renders as a visual commit graph with Unicode glyphs, ANSI-colored
+  branch and tag labels in the terminal, and SVG diagrams in Jupyter notebooks.
+
+**Empty Commits**: `allow_empty = True` on `Session.commit` permits commits with no data changes.
+
+**Rebase attempt tracking**: Rebase attempts are recorded in snapshot metadata, giving visibility into conflict resolution history.
+
+#### Repository-level features
+
+**Repository Status**: Repos can be marked `Online` or `ReadOnly` with a reason. Status is checked before operations proceed.
+
+**Feature Flags**: Per-repo toggleable flags (e.g., `move_node`, `create_tag`, `delete_tag`) stored in repo info. Allows disabling specific operations. Not all operations are feature-flagged yet, but more are coming soon — feel free to request the ones you need by opening an issue.
+
+**Repository-Level Metadata**: Key-value metadata on the repo itself, not just on snapshots.
+
+#### Storage Backends
+
+**HTTP Storage Backend**: Read-only access to repositories served over HTTP/HTTPS, enabling public or CDN-hosted repos.
+
+**Redirect Storage**: `RedirectStorage` follows HTTP 302 redirects to resolve the actual storage backend (S3, R2, Tigris, GCS). Useful for CDN/load-balancing scenarios.
+
+#### Other
+
+**Pretty Reprs**: All Python classes now define complete string, executable, and HTML reprs.
+
+**IC1 → IC2 Migration**: `icechunk.upgrade_icechunk_repository()` with dry-run support.
+
+#### Virtual datasets
+
+**Relative virtual chunks (`vcc://` URLs)**: Virtual chunk locations can reference named Virtual Chunk Containers: `vcc://container-name/relative/path`. Assets can be relocated without breaking references by just changing the VCCs.
+
+**Zstd dictionary compression**: Virtual chunk URLs (often repetitive S3 paths) are automatically compressed using a trained zstd dictionary per manifest.
+
+### Consistency
+
+In Icechunk 1.0, refs (branches/tags) and repository config were independent objects in storage. Updates could race, and operations like
+garbage collection or configuration changes had no way to get a consistent view of the full repository state.
+
+In Icechunk 2.0, all repository state is referenced from the unified repo info object, the repo `toc`. Every mutation, whether it's a commit, branch operation, config change, GC, or expiration, is applied to the freshest state using optimistic concurrency control with automatic retry and backoff on conflict.
+
+### Performance
+
+**Parallel flush**: Array nodes are flushed in parallel during commit, significantly speeding up commits modifying multiple arrays.
+
+**NodeSnapshot cache**: A small cache for frequently accessed snapshot nodes, reducing deserialization cost and speeding up operations such as Zarr's `tree`.
+
+**Faster ancestry/GC**: All snapshot info in the repo `toc` file enables O(1) ancestry lookups and fast expiration calculations (no sequential snapshot reads).
+
+**Concurrent transaction log fetching in rebase**: Transaction logs are now fetched concurrently during rebase, speeding up conflict detection.
+
+### Reliability & Storage
+
+**Expanded retries**: Retries on HTTP 408 (timeout), 429 (rate limit), 499 (client closed), plus connection reset and stalled stream detection. Configurable `max_tries`, backoff, and per-operation timeouts.
+
+**Timeout settings**: `TimeoutSettings` wired through to S3 client: connect, read, operation, and attempt timeouts. Stalled stream protection with configurable grace period.
+
+**User agent headers**: All requests include `icechunk-rust-<version>` for tracing.
+
+**GC consistency**: Handles concurrent repo modifications during GC via retry with exponential backoff. Detects and re-processes when new snapshots appear during collection. Proper parent rewriting when deleting snapshot chains.
+
 ## Python Icechunk Library 1.1.11
 
 ### Features
