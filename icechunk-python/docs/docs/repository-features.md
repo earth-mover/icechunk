@@ -6,7 +6,7 @@ title: Repository Features
 
 ## Repository Status
 
-Every Icechunk repository has a **status** that controls its availability. The status is represented by a [`RepoStatus`](./reference.md#icechunk.RepoStatus) object with three fields:
+Every Icechunk repository has a `status` that controls its availability. The status is represented by a [`RepoStatus`](./reference.md#icechunk.RepoStatus) object with three fields:
 
 - `availability` - either `online` (fully available for reads and writes) or `read_only` (available for reads only). See [`RepoAvailability`](./reference.md#icechunk.RepoAvailability).
 - `set_at` - the timestamp when the status was last changed.
@@ -30,6 +30,9 @@ repo.set_status(
         limited_availability_reason="Maintenance in progress",
     )
 )
+
+# raises an error
+session = repo.writable_session("main")
 
 # Restore full access
 repo.set_status(
