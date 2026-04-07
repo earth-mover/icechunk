@@ -6,7 +6,7 @@ Icechunk provides configurable retries and timeouts to handle unreliable network
 
     If you encounter errors or operations that you believe should be retried but aren't, please [open an issue](https://github.com/earth-mover/icechunk/issues).
 
-## Retries: [`StorageRetriesSettings`](./reference.md#icechunk.StorageRetriesSettings)
+## Retries: [`StorageRetriesSettings`](./reference/storage.md#icechunk.storage.StorageRetriesSettings)
 
 Controls retry behavior for all storage operations (reads, writes, deletes).
 
@@ -27,7 +27,7 @@ config.storage.retries = icechunk.StorageRetriesSettings(
 )
 ```
 
-## Timeouts: [`StorageTimeoutSettings`](./reference.md#icechunk.StorageTimeoutSettings)
+## Timeouts: [`StorageTimeoutSettings`](./reference/storage.md#icechunk.storage.StorageTimeoutSettings)
 
 Controls connect, read, and operation timeouts for the underlying S3 client. All values are in milliseconds. By default, these are unset and the [AWS SDK defaults](https://docs.aws.amazon.com/sdk-for-rust/latest/dg/timeouts.html) apply.
 

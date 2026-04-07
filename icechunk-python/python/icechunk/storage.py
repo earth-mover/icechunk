@@ -2,17 +2,49 @@ from collections.abc import Callable
 from datetime import datetime
 
 from icechunk._icechunk_python import (
+    ChunkType,
     GcsBearerCredential,
     ObjectStoreConfig,
     S3Options,
     S3StaticCredentials,
     Storage,
+    StorageConcurrencySettings,
+    StorageRetriesSettings,
+    StorageSettings,
+    StorageTimeoutSettings,
 )
 from icechunk.credentials import (
     azure_credentials,
     gcs_credentials,
     s3_credentials,
 )
+
+__all__ = [
+    "AnyObjectStoreConfig",
+    "ChunkType",
+    "ObjectStoreConfig",
+    "S3Options",
+    "Storage",
+    "StorageConcurrencySettings",
+    "StorageRetriesSettings",
+    "StorageSettings",
+    "StorageTimeoutSettings",
+    "azure_storage",
+    "azure_store",
+    "gcs_storage",
+    "gcs_store",
+    "http_storage",
+    "http_store",
+    "in_memory_storage",
+    "local_filesystem_storage",
+    "local_filesystem_store",
+    "r2_storage",
+    "redirect_storage",
+    "s3_object_store_storage",
+    "s3_storage",
+    "s3_store",
+    "tigris_storage",
+]
 
 AnyObjectStoreConfig = (
     ObjectStoreConfig.InMemory

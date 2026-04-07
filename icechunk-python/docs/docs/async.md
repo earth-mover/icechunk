@@ -11,9 +11,9 @@ The async interface allows for icechunk operations to run concurrently, without 
 You can call both sync and async methods on a `Repository`, `Session`, or `Store` as needed. (Of course, to use the async methods, you must be within a async function.) Methods that support async are named with an `_async` postfix:
 
 ```python exec="on" session="async_usage" source="material-block"
-import icechunk
+import icechunk as ic
 
-async def get_branches(storage: icechunk.Storage) -> set[str]:
-    repo = await icechunk.Repository.open_async(storage)
+async def get_branches(storage: ic.storage.Storage) -> set[str]:
+    repo = await ic.Repository.open_async(storage)
     return await repo.list_branches_async()
 ```
