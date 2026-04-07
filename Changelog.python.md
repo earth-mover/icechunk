@@ -14,14 +14,14 @@ We hope you enjoy the new release!
 
 ### Features
 
-#### Expaned platform support
+#### Expanded platform support
 
 **JavaScript + WebAssembly**: Icechunk now has Javascript bindings, bringing full support for both Node.js (or NAPI compatible runtimes) and browser environments (with WASM-WASI) via the `@earthmover/icechunk` npm package. You can create, open, read, and write repositories from JavaScript or TypeScript.
 
 In the browser, Icechunk supports in-memory storage, read-only fetch-based access to public
 S3-compatible repositories, and a custom storage interface that lets you plug in any
 JavaScript networking library (e.g., `@aws-sdk/client-s3`). Native Node.js builds additionally
-support S3, GCS, Azure Blob, R2, Tigris, and local filesystem backends directly. When possible, native Node.js builds should be preferred for full performance over the WASM builds.
+support S3, GCS, Azure Blob, R2, Tigris, and local filesystem backends directly. When possible, native Node.js builds should be preferred for full performance over the WASM builds. See the [JavaScript documentation](https://icechunk.io/en/latest/icechunk-js/) for more.
 
 **Python**: Initial support for free-threading. This feature is lightly tested and we welcome contributions to make it work better.
 
@@ -29,50 +29,52 @@ support S3, GCS, Azure Blob, R2, Tigris, and local filesystem backends directly.
 
 **Rectilinear Chunk Grids**: Support for Zarr 3 rectilinear (variable-sized) chunk grids, where each chunk along a dimension can have a different size. Chunk shapes can be specified inline (fully listed) or run-length encoded.
 
-**Move**: `session.move(from_path, to_path)` moves or renames arrays and groups. Unlike vanilla Zarr, this is a cheap metadata-only operation that doesn't require copying any chunks. Requires a dedicated `rearrange_session` (cannot be mixed with data writes).
+**[Move](https://icechunk.io/en/latest/moving-nodes/)**: `session.move(from_path, to_path)` moves or renames arrays and groups. Unlike vanilla Zarr, this is a cheap metadata-only operation that doesn't require copying any chunks. Requires a dedicated `rearrange_session` (cannot be mixed with data writes).
 
-**Shift & Reindex**:
+**[Shift & Reindex](https://icechunk.io/en/latest/moving-chunks/)**:
 
 - `shift_array(path, offset)`: shift all chunks by a chunk offset
 - `reindex_array(array_path, forward, backward=None)`: arbitrary chunk coordinate transformation via a user-provided function, with an optional inverse
 
-**More ergonomic distributed writes**: Icechunk no longer requires committing changes before executing distributed writes. `ForkSession` is now based on an anonymous snapshot that captures uncommitted state, allowing writes but disallowing commits. Fork sessions are serializable (picklable) for distribution to workers, and are merged back via `session.merge(fork_session)` as before.
+**More ergonomic distributed writes**: Icechunk no longer requires committing changes before executing distributed writes. `ForkSession` is now based on an [anonymous snapshot](https://icechunk.io/en/latest/version-control/#flush-anonymous-snapshots) that captures uncommitted state, allowing writes but disallowing commits. Fork sessions are serializable (picklable) for distribution to workers, and are merged back via `session.merge(fork_session)` as before.
 
 #### Version Control
 
 **Ops log**: A new `Repository.ops_log` method shows all operations executed on the repository. Unlike `Repository.ancestry`, this
 keeps track of every type of operation, from branch deletion to garbage collection.
 
-**Amend**: `amend()` replaces the previous commit on a branch instead of creating a new one.
+**[Amend](https://icechunk.io/en/latest/version-control/#amending-a-snapshot)**: `amend()` replaces the previous commit on a branch instead of creating a new one.
 
 **Anonymous Snapshots**: `session.flush(message)` creates a detached snapshot without advancing the branch. In Icechunk 2, these are first-class citizens tracked in the repo info and ops log.
 
 **Beautiful ancestry trees**: `ancestry` now renders as a visual commit graph with Unicode glyphs, ANSI-colored
-  branch and tag labels in the terminal, and SVG diagrams in Jupyter notebooks.
+  branch and tag labels in the terminal, and SVG diagrams in Jupyter notebooks. See examples on our [version control page](https://icechunk.io/en/latest/version-control/).
 
-**Empty Commits**: `allow_empty = True` on `Session.commit` permits commits with no data changes.
+**[Empty Commits](https://icechunk.io/en/latest/version-control/#empty-snapshots)**: `allow_empty = True` on `Session.commit` permits commits with no data changes.
 
 **Rebase attempt tracking**: Rebase attempts are recorded in snapshot metadata, giving visibility into conflict resolution history.
 
 #### Repository-level features
 
-**Repository Status**: Repos can be marked `Online` or `ReadOnly` with a reason. Status is checked before operations proceed.
+**[Repository Status](https://icechunk.io/en/latest/repository-features/#repository-status)**: Repos can be marked `Online` or `ReadOnly` with a reason. Status is checked before operations proceed.
 
 **Feature Flags**: Repositories now have toggleable flags that allowing enabling/disabling certain operations (e.g., `move_node`, `create_tag`, `delete_tag`). Not all operations are feature-flagged yet. Feel free to request the ones you need by opening an issue.
 
-**Repository-Level Metadata**: Key-value metadata on the repo itself, not just on snapshots.
+**[Repository-Level Metadata](https://icechunk.io/en/latest/repository-features/#repository-metadata)**: Key-value metadata on the repo itself, not just on snapshots.
 
 #### Storage Backends
 
-**HTTP Storage Backend**: Read-only access to repositories served over HTTP/HTTPS, enabling public or CDN-hosted repos.
+**[HTTP Storage Backend](https://icechunk.io/en/latest/storage/#http-storage)**: Read-only access to repositories served over HTTP/HTTPS, enabling public or CDN-hosted repos.
 
-**Redirect Storage**: `RedirectStorage` follows HTTP 302 redirects to resolve the actual storage backend (S3, R2, Tigris, GCS). Useful for CDN/load-balancing scenarios.
+**[Redirect Storage](https://icechunk.io/en/latest/storage/#redirect-storage)**: `RedirectStorage` follows HTTP 302 redirects to resolve the actual storage backend (S3, R2, Tigris, GCS). Useful for CDN/load-balancing scenarios.
 
 #### Other
 
 **Pretty Reprs**: All Python classes now define complete string, executable, and HTML reprs.
 
-**IC1 → IC2 Migration**: `icechunk.upgrade_icechunk_repository()` with dry-run support.
+**Inspect functions**: A more complete set of `inspect` functions so that you can understand the state of your repo: `inspect_snapshot`, `inspect_repo_info`, `inspect_manifest`, and `inspect_transaction_log`.
+
+**IC1 → IC2 Migration**: `icechunk.upgrade_icechunk_repository()` with dry-run support. See the [migration guide](https://icechunk.io/en/latest/migration-2/).
 
 #### Virtual datasets
 
@@ -85,7 +87,7 @@ keeps track of every type of operation, from branch deletion to garbage collecti
 In Icechunk 1.0, refs (branches/tags) and repository config were independent objects in storage. Updates could race, and operations like
 garbage collection or configuration changes had no way to get a consistent view of the full repository state.
 
-In Icechunk 2.0, all repository state is referenced from the unified repo info object, the repo `toc`. Every mutation, whether it's a commit, branch operation, config change, GC, or expiration, is applied to the freshest state using optimistic concurrency control with automatic retry and backoff on conflict.
+In Icechunk 2.0, all repository state is referenced from a unified repo table of contents (`toc`) object. Every mutation, whether it's a commit, branch operation, config change, GC, or expiration, is applied to the freshest state using optimistic concurrency control with automatic retry and backoff on conflict.
 
 ### Performance
 
@@ -96,14 +98,15 @@ In Icechunk 2.0, all repository state is referenced from the unified repo info o
 **Faster ancestry/GC**: All snapshot info in the repo `toc` file enables O(1) ancestry lookups and fast expiration calculations (no sequential snapshot reads).
 
 **Concurrent transaction log fetching in rebase**: Transaction logs are now fetched concurrently during rebase, speeding up conflict detection.
+
 **Virtual References Optimizations**: Many low-level optimizations were made for common workloads involving manifests with large numbers of virtual references. Our internal benchmarks show 3X speedup.
 ### Reliability & Storage
 
-**Expanded retries**: Retries on HTTP 408 (timeout), 429 (rate limit), 499 (client closed), plus connection reset and stalled stream detection. Configurable `max_tries`, backoff, and per-operation timeouts.
+**[Expanded retries](https://icechunk.io/en/latest/flaky-networks/)**: Retries on HTTP 408 (timeout), 429 (rate limit), 499 (client closed), plus connection reset and stalled stream detection. Configurable `max_tries`, backoff, and per-operation timeouts.
 
-**Timeout settings**: `TimeoutSettings` wired through to S3 client: connect, read, operation, and attempt timeouts. Stalled stream protection with configurable grace period.
+**[Timeout settings](https://icechunk.io/en/latest/flaky-networks/#timeouts-storagetimeoutsettings)**: `TimeoutSettings` wired through to S3 client: connect, read, operation, and attempt timeouts. Stalled stream protection with configurable grace period.
 
-**User agent headers**: All requests include `icechunk-rust-<version>` for tracing.
+**[User agent headers](https://icechunk.io/en/latest/faq/#how-can-i-identify-icechunk-requests-in-my-server-logs)**: All requests include `icechunk-rust-<version>` for tracing.
 
 **GC consistency**: Handles concurrent repo modifications during GC via retry with exponential backoff. Detects and re-processes when new snapshots appear during collection. Proper parent rewriting when deleting snapshot chains.
 
