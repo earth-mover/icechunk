@@ -141,4 +141,4 @@ If your code or tests parse repr strings, they will need updating.
 
 ## Deprecations
 
-[`list_objects`](icechunk.storage.Storage.list_objects) has been deprecated in favor of [`list_objects_metadata`](icechunk.storage.Storage.list_objects_metadata) which returns the complete info about objects. Now including the `created_at` time.
+[`list_objects`][icechunk.storage.Storage.list_objects] has been deprecated in favor of [`list_objects_metadata`][icechunk.storage.Storage.list_objects_metadata] which returns the complete info about objects. Now including the `created_at` time.
