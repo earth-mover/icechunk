@@ -10,7 +10,7 @@ workloads, all while maintaining format compatibility. Icechunk 2 can read and w
 Icechunk 1 repos, and when you're ready to upgrade the format, a single function call migrates
 your repos quickly and safely.
 
-Migrate your existing repos using our [migration guide](https://icechunk.io/en/latest/migration-2/).
+Migrate your existing repos using our [migration guide](https://icechunk.io/en/latest/migration-2/) and review the [breaking changes](https://icechunk.io/en/latest/breaking-changes-2/) from Icechunk 1.
 
 We hope you enjoy the new release!
 
@@ -29,30 +29,30 @@ support S3, GCS, Azure Blob, R2, Tigris, and local filesystem backends directly.
 
 #### Array Operations
 
-**Rectilinear Chunk Grids**: Support for Zarr 3 rectilinear (variable-sized) chunk grids, where each chunk along a dimension can have a different size. Chunk shapes can be specified inline (fully listed) or run-length encoded.
+**[Rectilinear Chunk Grids](https://icechunk.io/en/latest/zarr/#rectilinear-chunk-grids)**: Support for Zarr 3 rectilinear (variable-sized) chunk grids, where each chunk along a dimension can have a different size. Chunk shapes can be specified inline (fully listed) or run-length encoded.
 
-**[Move](https://icechunk.io/en/latest/moving-nodes/)**: `session.move(from_path, to_path)` moves or renames arrays and groups. Unlike vanilla Zarr, this is a cheap metadata-only operation that doesn't require copying any chunks. Requires a dedicated `rearrange_session` (cannot be mixed with data writes).
+**[Move](https://icechunk.io/en/latest/moving-nodes/)**: [`session.move(from_path, to_path)`](https://icechunk.io/en/latest/reference/#icechunk.Session.move) moves or renames arrays and groups. Unlike vanilla Zarr, this is a cheap metadata-only operation that doesn't require copying any chunks. Requires a dedicated `rearrange_session` (cannot be mixed with data writes).
 
 **[Shift & Reindex](https://icechunk.io/en/latest/moving-chunks/)**:
 
-- `shift_array(path, offset)`: shift all chunks by a chunk offset
-- `reindex_array(array_path, forward, backward=None)`: arbitrary chunk coordinate transformation via a user-provided function, with an optional inverse
+- [`shift_array(path, offset)`](https://icechunk.io/en/latest/reference/#icechunk.Session.shift_array): shift all chunks by a chunk offset
+- [`reindex_array(array_path, forward, backward=None)`](https://icechunk.io/en/latest/reference/#icechunk.Session.reindex_array): arbitrary chunk coordinate transformation via a user-provided function, with an optional inverse
 
-**More ergonomic distributed writes**: Icechunk no longer requires committing changes before executing distributed writes. `ForkSession` is now based on an [anonymous snapshot](https://icechunk.io/en/latest/version-control/#flush-anonymous-snapshots) that captures uncommitted state, allowing writes but disallowing commits. Fork sessions are serializable (picklable) for distribution to workers, and are merged back via `session.merge(fork_session)` as before.
+**More ergonomic distributed writes**: Icechunk no longer requires committing changes before executing distributed writes. `ForkSession` is now based on an [anonymous snapshot](https://icechunk.io/en/latest/version-control/#flush-anonymous-snapshots) that captures uncommitted state, allowing writes but disallowing commits. Fork sessions are serializable (picklable) for distribution to workers, and are merged back via [`session.merge(fork_session)`](https://icechunk.io/en/latest/reference/#icechunk.Session.merge) as before.
 
 #### Version Control
 
-**Ops log**: A new `Repository.ops_log` method shows all operations executed on the repository. Unlike `Repository.ancestry`, this
+**[Ops log](https://icechunk.io/en/latest/repository-features/#operations-log)**: A new [`Repository.ops_log`](https://icechunk.io/en/latest/reference/#icechunk.Repository.ops_log) method shows all operations executed on the repository. Unlike `Repository.ancestry`, this
 keeps track of every type of operation, from branch deletion to garbage collection.
 
-**[Amend](https://icechunk.io/en/latest/version-control/#amending-a-snapshot)**: `amend()` replaces the previous commit on a branch instead of creating a new one.
+**[Amend](https://icechunk.io/en/latest/version-control/#amending-a-snapshot)**: [`amend()`](https://icechunk.io/en/latest/reference/#icechunk.Session.amend) replaces the previous commit on a branch instead of creating a new one.
 
-**Anonymous Snapshots**: `session.flush(message)` creates a detached snapshot without advancing the branch. In Icechunk 2, these are first-class citizens tracked in the repo info and ops log.
+**[Anonymous Snapshots](https://icechunk.io/en/latest/version-control/#creating-anonymous-snapshots)**: [`session.flush(message)`](https://icechunk.io/en/latest/reference/#icechunk.Session.flush) creates a detached snapshot without advancing the branch. In Icechunk 2, these are first-class citizens tracked in the repo info and ops log.
 
 **Beautiful ancestry trees**: `ancestry` now renders as a visual commit graph with Unicode glyphs, ANSI-colored
   branch and tag labels in the terminal, and SVG diagrams in Jupyter notebooks. See examples on our [version control page](https://icechunk.io/en/latest/version-control/).
 
-**[Empty Commits](https://icechunk.io/en/latest/version-control/#empty-snapshots)**: `allow_empty = True` on `Session.commit` permits commits with no data changes.
+**[Empty Commits](https://icechunk.io/en/latest/version-control/#empty-snapshots)**: `allow_empty = True` on [`Session.commit`](https://icechunk.io/en/latest/reference/#icechunk.Session.commit) permits commits with no data changes.
 
 **Rebase attempt tracking**: Rebase attempts are recorded in snapshot metadata, giving visibility into conflict resolution history.
 
@@ -60,7 +60,7 @@ keeps track of every type of operation, from branch deletion to garbage collecti
 
 **[Repository Status](https://icechunk.io/en/latest/repository-features/#repository-status)**: Repos can be marked `Online` or `ReadOnly` with a reason. Status is checked before operations proceed.
 
-**Feature Flags**: Repositories now have toggleable flags that allowing enabling/disabling certain operations (e.g., `move_node`, `create_tag`, `delete_tag`). Not all operations are feature-flagged yet. Feel free to request the ones you need by opening an issue.
+**[Feature Flags](https://icechunk.io/en/latest/repository-features/#feature-flags)**: Repositories now have toggleable flags that allowing enabling/disabling certain operations (e.g., `move_node`, `create_tag`, `delete_tag`). Not all operations are feature-flagged yet. Feel free to request the ones you need by opening an issue.
 
 **[Repository-Level Metadata](https://icechunk.io/en/latest/repository-features/#repository-metadata)**: Key-value metadata on the repo itself, not just on snapshots.
 
@@ -74,14 +74,14 @@ keeps track of every type of operation, from branch deletion to garbage collecti
 
 **Object Reprs**: All Python classes now define complete string, executable, and HTML reprs.
 
-**Ancestry Graph**: A new method `Repository.ancestry_graph()` will display a (ASCII string or SVG) plot of the history of commits, branches, and tags.
-**Inspect functions**: A more complete set of `inspect` functions so that you can understand the state of your repo: `inspect_snapshot`, `inspect_repo_info`, `inspect_manifest`, and `inspect_transaction_log`.
+**Ancestry Graph**: A new method [`Repository.ancestry_graph()`](https://icechunk.io/en/latest/reference/#icechunk.Repository.ancestry_graph) will display a (ASCII string or SVG) plot of the history of commits, branches, and tags.
+**Inspect functions**: A more complete set of `inspect` functions so that you can understand the state of your repo: [`inspect_snapshot`](https://icechunk.io/en/latest/reference/#icechunk.Repository.inspect_snapshot), [`inspect_repo_info`](https://icechunk.io/en/latest/reference/#icechunk.Repository.inspect_repo_info), [`inspect_manifest`](https://icechunk.io/en/latest/reference/#icechunk.Repository.inspect_manifest), and [`inspect_transaction_log`](https://icechunk.io/en/latest/reference/#icechunk.Repository.inspect_transaction_log).
 
-**IC1 → IC2 Migration**: `icechunk.upgrade_icechunk_repository()` with dry-run support. See the [migration guide](https://icechunk.io/en/latest/migration-2/).
+**IC1 → IC2 Migration**: [`icechunk.upgrade_icechunk_repository()`](https://icechunk.io/en/latest/reference/#icechunk.upgrade_icechunk_repository) with dry-run support. See the [migration guide](https://icechunk.io/en/latest/migration-2/).
 
 #### Virtual datasets
 
-**Relative virtual chunks (`vcc://` URLs)**: Virtual chunk locations can reference named Virtual Chunk Containers: `vcc://container-name/relative/path`. Assets can be relocated without breaking references by just changing the VCCs.
+**[Relative virtual chunks (`vcc://` URLs)](https://icechunk.io/en/latest/virtual/#relative-virtual-chunk-containers)**: Virtual chunk locations can reference named Virtual Chunk Containers: `vcc://container-name/relative/path`. Assets can be relocated without breaking references by just changing the VCCs.
 
 **Zstd dictionary compression**: Virtual chunk URLs (often repetitive S3 paths) are automatically compressed using a trained zstd dictionary per manifest.
 
