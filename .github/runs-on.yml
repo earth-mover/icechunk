@@ -2,13 +2,17 @@ runners:
   small-ubuntu24:
     cpu: [2, 4]
     image: ubuntu24-full-x64
+    extras: [s3-cache]
   default-ubuntu24:
     cpu: [4, 8]
     image: ubuntu24-full-x64
+    extras: [s3-cache]
   large-ubuntu24:
     cpu: [8, 16]
     image: ubuntu24-full-x64
+    extras: [s3-cache]
   arm-ubuntu24:
     cpu: [4, 8]
     family: ["c7g", "m7g", "r7g"]
     image: ubuntu24-full-arm64
+    extras: [s3-cache]
