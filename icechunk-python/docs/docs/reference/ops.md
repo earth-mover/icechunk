@@ -2,4 +2,8 @@
 
 Operation types: repository updates, garbage collection summaries.
 
-::: icechunk.ops
+::: icechunk.ops.GCSummary
+
+::: icechunk.ops.Update
+
+::: icechunk.ops.UpdateType
