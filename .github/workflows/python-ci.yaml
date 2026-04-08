@@ -63,6 +63,8 @@ jobs:
     # If updating the logic, ensure BOTH steps are updated identically.
     steps:
       - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0 # v2
+        with:
+          sccache: s3
       # Checkout main branch (skip if only building support/v1.x)
       - name: Checkout main
         if: ${{ github.event_name == 'schedule' || inputs.branch != 'support/v1.x' }}
@@ -147,6 +149,8 @@ jobs:
             manylinux: 2_28
     steps:
       - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0 # v2
+        with:
+          sccache: s3
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           ref: ${{ matrix.branch }}
@@ -202,6 +206,8 @@ jobs:
             target: armv7
     steps:
       - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0 # v2
+        with:
+          sccache: s3
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           ref: ${{ matrix.branch }}
@@ -313,6 +319,8 @@ jobs:
         branch: ${{ github.event_name == 'schedule' && fromJSON('["main", "support/v1.x"]') || fromJSON(format('["{0}"]', inputs.branch)) }}
     steps:
       - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0 # v2
+        with:
+          sccache: s3
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           ref: ${{ matrix.branch }}
@@ -345,6 +353,8 @@ jobs:
     needs: [linux, musllinux, windows, macos, sdist]
     steps:
       - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0 # v2
+        with:
+          sccache: s3
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
       - name: Publish to PyPI
         uses: PyO3/maturin-action@db323e2cf5679b7feb8bcb561a36b27a0bc19e79 # v1
@@ -359,6 +369,8 @@ jobs:
     needs: [linux, musllinux, windows, macos, sdist]
     steps:
       - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0 # v2
+        with:
+          sccache: s3
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           path: dist
