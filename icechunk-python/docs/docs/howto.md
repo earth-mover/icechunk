@@ -32,12 +32,26 @@ config.caching = icechunk.CachingConfig(num_bytes_chunks=100_000_000)
 repo = icechunk.Repository.open(storage, config=config)
 ```
 
+### Set Repo Metadata
+
+If you manage a number of Icechunk repositories, it could be useful to classify them using metadata.
+Icechunk allows you to set and retrieve arbitrary JSON-like metadata at the repository level.
+
+```python
+repo = icechunk.Repository.open(...)
+repo.set_metadata(dict(test=True, team="science"))
+repo.update_metadata(dict(number_of_bugs=42))
+print(repo.get_metadata())
+```
+
 ### Deleting a Repo
 
 Icechunk doesn't provide a way to delete a repo once it has been created.
 If you need to delete a repo, just go to the underlying storage and remove the directory where you created the repo.
 
 ## Reading, Writing, and Modifying Data with Zarr
+
+For a full walkthrough, see the [Quickstart](./quickstart.md).
 
 Read and write operations occur within the context of a [transaction](./version-control.md).
 The general pattern is
@@ -48,7 +62,6 @@ session = repo.writable_session(branch="main")
 # ...
 session.commit(message="wrote some data")
 ```
-
 
 !!! info
 
@@ -62,7 +75,6 @@ which automatically commits when the context exits.
 with repo.transaction(branch="main", message="wrote some data") as store:
     # interact with the repo via store
 ```
-
 
 ### Create a Group
 
@@ -120,12 +132,13 @@ del group["array"]
 
 ## Reading and Writing Data with Xarray
 
+For more depth, see [Xarray](./xarray.md), [Parallel writes](./parallel.md), and [Dask](./dask.md).
+
 ### Write an in-memory Xarray Dataset
 
 ```python
 ds.to_zarr(session.store, group="my-group", zarr_format=3, consolidated=False)
 ```
-
 
 ### Append to an existing datast
 
@@ -142,7 +155,6 @@ See [Parallel writes](./parallel.md) and [Xarray](./xarray.md) for more detail.
 from icechunk.xarray import to_icechunk
 to_icechunk(ds, session)
 ```
-
 
 ### Read a dataset with Xarray
 
@@ -206,6 +218,23 @@ for snapshot in repo.ancestry(branch="main"):
 session = repo.readonly_session(snapshot_id=snapshot_id)
 ```
 
+### Amend a Snapshot
+
+For more, see [amending](./version-control.md#amending-a-snapshot).
+```python
+session = repo.writable_session("branch_name")
+# make changes
+session.amend(message="...")
+```
+
+### Create an empty snapshot
+
+```python
+session = repo.writable_session("branch_name")
+# no changes
+session.commit(message="...", metadata={"foo": "bar"} allow_empty=True)
+```
+
 ### Create a Branch
 
 ```python
@@ -252,6 +281,51 @@ session = repo.readonly_session(tag="v1.0.0")
 
 ```python
 repo.delete_tag("v1.0.0")
+```
+
+### Diff Two Versions
+
+```python
+diff = repo.diff(from_tag="v1.0.0", to_branch="main")
+```
+
+## Moving Chunks and Nodes
+
+For more depth, see [Moving Chunks](./moving-chunks.md) and [Moving and Renaming Nodes](./moving-nodes.md).
+
+### Shift All Chunks by a Fixed Offset
+
+Offsets are in chunks, not array elements. Out-of-bounds chunks are discarded; vacated positions reset to fill value.
+
+```python
+session.shift_array("/my_array", offset=(-2, 0))
+```
+
+### Reindex Chunks with a Custom Function
+
+Provide a `forward` function mapping old chunk index to new. Return `None` to drop a chunk.
+Add a `backward` function (the inverse of `forward`) to correctly clear stale positions when empty chunks exist.
+
+```python
+def fwd(idx):
+    new = idx[0] - 2
+    return [new] if new >= 0 else None
+
+def bwd(idx):
+    new = idx[0] + 2
+    return [new] if new < n_chunks else None
+
+session.reindex_array("/my_array", forward=fwd, backward=bwd)
+```
+
+### Move or Rename an Array or Group
+
+Moving and renaming requires a **rearrange session**.
+
+```python
+session = repo.rearrange_session("main")
+session.move("/old/path", "/new/path")
+session.commit("Renamed old to new")
 ```
 
 ## Repo Maintenance

@@ -19,7 +19,7 @@ impl From<ChunkStorageStats> for PyChunkStorageStats {
 impl PyRepr for PyChunkStorageStats {
     const EXECUTABLE: bool = false;
     fn cls_name() -> &'static str {
-        "icechunk.ChunkStorageStats"
+        "icechunk.stats.ChunkStorageStats"
     }
     fn fields(&self, _mode: ReprMode) -> Vec<(&str, String)> {
         vec![

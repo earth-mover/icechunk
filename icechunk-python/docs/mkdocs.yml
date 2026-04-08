@@ -154,7 +154,6 @@ plugins:
         # Redirects from icechunk-python subdirectory to root docs (post-reorganization)
         # These redirects work with use_directory_urls: true (default)
         'icechunk-python/quickstart/index.md': 'quickstart.md'
-        'icechunk-python/reference/index.md': 'reference.md'
         'icechunk-python/async/index.md': 'async.md'
         'icechunk-python/configuration/index.md': 'configuration.md'
         'icechunk-python/storage/index.md': 'storage.md'
@@ -174,7 +173,7 @@ markdown_extensions:
       toc_depth: 2
   - pymdownx.inlinehilite
   - pymdownx.snippets:
-      base_path: ["docs/docs", ".."]
+      base_path: ["docs/docs", "..", "../..", '.']
   - pymdownx.superfences:
       # make exceptions to highlighting of code:
       custom_fences:
@@ -203,6 +202,7 @@ nav:
     - How To: howto.md
   - Understanding Icechunk:
     - Core Concepts: concepts.md
+    - Repository Features: repository-features.md
     - Transactions and Version Control: version-control.md
     - Data Expiration and Garbage Collection: expiration.md
     - Parallel / Distributed Writing: parallel.md
@@ -215,17 +215,32 @@ nav:
     - Dask: dask.md
     - Xarray: xarray.md
     - Tuning Performance: performance.md
+    - Flaky Networks: flaky-networks.md
     - Virtual Datasets: virtual.md
     - Async Usage: async.md
     - Icechunk for Git Users: icechunk-for-git-users.md
     - Creating Icechunk Datasets:
       - Global Raster Data cube: ingestion/glad-ingest.ipynb
   - Sample Datasets: sample-datasets.md
+  - Related Projects: related-projects.md
   - Reference:
     - Spec: spec.md
     - Version Policy: version-policy.md
-    - Python API Reference: reference.md
+    - Python API Reference:
+      - reference/index.md
+      - icechunk.config: reference/config.md
+      - icechunk.conflicts: reference/conflicts.md
+      - icechunk.credentials: reference/credentials.md
+      - icechunk.ops: reference/ops.md
+      - icechunk.session: reference/session.md
+      - icechunk.snapshots: reference/snapshots.md
+      - icechunk.storage: reference/storage.md
+      - icechunk.virtual: reference/virtual.md
+      - icechunk.xarray: reference/xarray.md
+      - icechunk.dask: reference/dask.md
+    - Icechunk JavaScript / TypeScript: icechunk-js.md
     - Icechunk Rust: icechunk-rust.md
     - Contributing: contributing.md
     - AI Usage Policy: ai-policy.md
     - Migrate to 1.0: migration.md
+    - Migrate to 2.0: migration-2.md

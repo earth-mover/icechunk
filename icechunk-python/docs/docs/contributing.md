@@ -577,34 +577,21 @@ rustflags = ["-C", "link-arg=-fuse-ld=mold"]
 
 ### Features
 
-- Support more object stores and more of their custom features
+- Bindings to other languages: C, Julia
 - Better Python API and helper functions
-- Bindings to other languages: C, Wasm
-- Better, faster, more secure distributed sessions
+- Branch merge
 - Savepoints and persistent sessions
 - Chunk and repo level statistics and metrics
 - More powerful conflict detection and resolution
-- Efficient move operation
 - Telemetry
-- Zarr-less usage from Python and other languages
-- Better documentation and examples
+- More powerful integration with Zarrs
+- [Zep 8](https://github.com/zarr-developers/zarr-python/issues/2943) support
 
 ### Performance
 
 - Lower changeset memory footprint
-- Optimize virtual dataset prefixes
 - Bring back manifest joining for small arrays
-- Improve performance of `ancestry`, `garbage_collect`, `get_size` and other metrics
 - More flexible caching hierarchy
-- Better I/O pipeline
-- Better GIL management
 - Request batching and splitting
 - Bringing parts of the codec pipeline to the Rust side
 - Chunk compaction
-
-### Zarr-related
-
-We’re very excited about a number of extensions to Zarr that would work great with Icechunk.
-
-- [Variable length chunks](https://zarr.dev/zeps/draft/ZEP0003.html)
-- [Chunk-level statistics](https://zarr.dev/zeps/draft/ZEP0005.html)
