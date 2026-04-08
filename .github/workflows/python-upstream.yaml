@@ -30,7 +30,7 @@ defaults:
 jobs:
   build:
     name: upstream-dev
-    runs-on: runs-on=${{ github.run_id }}/runner=8cpu-linux-x64
+    runs-on: runs-on=${{ github.run_id }}/runner=8cpu-linux-x64/extras=s3-cache
     continue-on-error: true
     if: ${{
       (contains(github.event.pull_request.labels.*.name, 'test-upstream') && github.event_name == 'pull_request')
@@ -248,7 +248,7 @@ jobs:
 
   xarray-backends:
     name: xarray-tests-upstream
-    runs-on: runs-on=${{ github.run_id }}/runner=8cpu-linux-x64
+    runs-on: runs-on=${{ github.run_id }}/runner=8cpu-linux-x64/extras=s3-cache
     if: ${{
       (contains(github.event.pull_request.labels.*.name, 'test-upstream') && github.event_name == 'pull_request')
       || github.event_name == 'workflow_dispatch'

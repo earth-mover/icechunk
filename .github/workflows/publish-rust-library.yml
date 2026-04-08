@@ -17,7 +17,7 @@ on:
 jobs:
   publish:
     name: Check and publish
-    runs-on: runs-on=${{ github.run_id }}/runner=8cpu-linux-x64
+    runs-on: runs-on=${{ github.run_id }}/runner=8cpu-linux-x64/extras=s3-cache
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
