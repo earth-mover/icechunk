@@ -21,19 +21,7 @@ No other existing enums had their variants renamed. `VersionSelection`, `Conflic
 
 ## Module Reorganization
 
-The flat `icechunk` namespace was split into focused submodules ([#1995](https://github.com/earth-mover/icechunk/pull/1995)). **All existing top-level imports continue to work**, so `from icechunk import X` is unaffected. However, if your code imported from the internal `icechunk.store` module, that path has changed:
-
-=== "2.0"
-
-    ```python
-    from icechunk.zarr import IcechunkStore
-    ```
-
-=== "1.x"
-
-    ```python
-    from icechunk.store import IcechunkStore
-    ```
+The flat `icechunk` namespace was split into focused submodules ([#1995](https://github.com/earth-mover/icechunk/pull/1995)). **All existing top-level imports continue to work**, so `from icechunk import X` is unaffected.
 
 The new submodule layout is:
 
@@ -46,8 +34,8 @@ The new submodule layout is:
 | `icechunk.session` | `Session`, `ForkSession`, `SessionMode` |
 | `icechunk.snapshots` | `SnapshotInfo`, `Diff`, `ManifestFileInfo` |
 | `icechunk.storage` | `Storage`, `S3Options`, `StorageSettings`, storage factory functions |
+| `icechunk.store` | `IcechunkStore` |
 | `icechunk.virtual` | `VirtualChunkContainer`, `VirtualChunkSpec` |
-| `icechunk.zarr` | `IcechunkStore` |
 
 ## Manifest API Changes
 
