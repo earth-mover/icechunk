@@ -288,7 +288,7 @@ Here is how we can set the chunk at key `c/0` to point to a file on my local fil
 
 ```python
 config = ic.config.RepositoryConfig.default()
-config.set_virtual_chunk_container(ic.virtual.VirtualChunkContainer("s3://mybucket/my/data/", ic.storage.local_filesystem_store("/path/to/my")))
+config.set_virtual_chunk_container(ic.virtual.VirtualChunkContainer("file:///path/to/my/", ic.storage.local_filesystem_store("/path/to/my")))
 repo = ic.Repository.create(storage, config)
 session = repo.writable_session("main")
 session.store.set_virtual_ref('c/0', 'file:///path/to/my/file.nc', offset=20, length=100)
