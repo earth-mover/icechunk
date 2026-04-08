@@ -123,7 +123,7 @@ Several parameters became keyword-only and a new `allow_empty` parameter was add
 - `ForkSession.commit()` raises `IcechunkError` instead of `TypeError`.
 - Merge direction is enforced: `Session.merge(ForkSession)` works, but `ForkSession.merge(Session)` does not.
 
-See [Parallel / Distributed Writing](parallel.md) for the updated patterns.
+See [Parallel / Distributed Writing](../understanding/parallel.md) for the updated patterns.
 
 ## Repr Strings
 

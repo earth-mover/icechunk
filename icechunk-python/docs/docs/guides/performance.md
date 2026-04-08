@@ -133,10 +133,10 @@ This particular example splits manifests so that each manifest contains `365 * 2
 
 Options for specifying the arrays whose manifest you want to split are:
 
-1. [`ManifestSplitCondition.name_matches`](./reference/config.md#icechunk.config.ManifestSplitCondition.name_matches) takes a regular expression used to match an array's name;
-2. [`ManifestSplitCondition.path_matches`](./reference/config.md#icechunk.config.ManifestSplitCondition.path_matches) takes a regular expression used to match an array's path;
-3. [`ManifestSplitCondition.and_conditions`](./reference/config.md#icechunk.config.ManifestSplitCondition.and_conditions) to combine (1), (2), and (4) together; and
-4. [`ManifestSplitCondition.or_conditions`](./reference/config.md#icechunk.config.ManifestSplitCondition.or_conditions) to combine (1), (2), and (3) together.
+1. [`ManifestSplitCondition.name_matches`](../reference/config.md#icechunk.config.ManifestSplitCondition.name_matches) takes a regular expression used to match an array's name;
+2. [`ManifestSplitCondition.path_matches`](../reference/config.md#icechunk.config.ManifestSplitCondition.path_matches) takes a regular expression used to match an array's path;
+3. [`ManifestSplitCondition.and_conditions`](../reference/config.md#icechunk.config.ManifestSplitCondition.and_conditions) to combine (1), (2), and (4) together; and
+4. [`ManifestSplitCondition.or_conditions`](../reference/config.md#icechunk.config.ManifestSplitCondition.or_conditions) to combine (1), (2), and (3) together.
 
 `And` and `Or` may be used to combine multiple path and/or name matches. For example,
 
@@ -162,9 +162,9 @@ sconfig = ic.config.ManifestSplittingConfig.from_dict(
 
 Options for specifying how to split along a specific axis or dimension are:
 
-1. [`ManifestSplitDimCondition.Axis`](./reference/config.md#icechunk.config.ManifestSplitDimCondition.Axis) takes an integer axis;
-2. [`ManifestSplitDimCondition.DimensionName`](./reference/config.md#icechunk.config.ManifestSplitDimCondition.DimensionName) takes a regular expression used to match the dimension names of the array;
-3. [`ManifestSplitDimCondition.Any`](./reference/config.md#icechunk.config.ManifestSplitDimCondition.Any) matches any _remaining_ dimension name or axis.
+1. [`ManifestSplitDimCondition.Axis`](../reference/config.md#icechunk.config.ManifestSplitDimCondition.Axis) takes an integer axis;
+2. [`ManifestSplitDimCondition.DimensionName`](../reference/config.md#icechunk.config.ManifestSplitDimCondition.DimensionName) takes a regular expression used to match the dimension names of the array;
+3. [`ManifestSplitDimCondition.Any`](../reference/config.md#icechunk.config.ManifestSplitDimCondition.Any) matches any _remaining_ dimension name or axis.
 
 For example, for an array with dimensions `time, latitude, longitude`, the following config
 
@@ -231,7 +231,7 @@ And commit
 snap = session.commit("Add 5 chunks")
 ```
 
-Use [`repo.list_manifest_files`](./reference/index.md#icechunk.Repository.list_manifest_files) to examine the manifests associated with a Snapshot
+Use [`repo.list_manifest_files`](../reference/index.md#icechunk.Repository.list_manifest_files) to examine the manifests associated with a Snapshot
 
 ```python exec="on" session="perf" source="material-block"
 print(repo.list_manifest_files(snap))
@@ -291,7 +291,7 @@ For large enough arrays, you might see a relative performance hit while committi
 or when reading from a Repository object that was just created.
 At that point, you will want to experiment with different manifest split configurations.
 
-To force Icechunk to rewrite all chunk refs to the current splitting configuration use [`rewrite_manifests`](./reference/index.md#icechunk.Repository.rewrite_manifests)
+To force Icechunk to rewrite all chunk refs to the current splitting configuration use [`rewrite_manifests`](../reference/index.md#icechunk.Repository.rewrite_manifests)
 
 To illustrate, we will use a split size of 3 --- for the current example this will consolidate to two manifests.
 

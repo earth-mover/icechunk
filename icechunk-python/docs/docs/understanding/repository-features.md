@@ -6,9 +6,9 @@ title: Repository Features
 
 ## Repository Status
 
-Every Icechunk repository has a `status` that controls its availability. The status is represented by a [`RepoStatus`](./reference/index.md#icechunk.Repository.status) object with three fields:
+Every Icechunk repository has a `status` that controls its availability. The status is represented by a [`RepoStatus`](../reference/index.md#icechunk.Repository.status) object with three fields:
 
-- `availability` - either `online` (fully available for reads and writes) or `read_only` (available for reads only). See [`RepoAvailability`](./reference/index.md#icechunk.Repository).
+- `availability` - either `online` (fully available for reads and writes) or `read_only` (available for reads only). See [`RepoAvailability`](../reference/index.md#icechunk.Repository).
 - `set_at` - the timestamp when the status was last changed.
 - `limited_availability_reason` - an optional human-readable explanation for why the repository is not fully online.
 
@@ -136,11 +136,11 @@ Every repository mutation creates exactly one log entry. The `kind` field tells 
 ## Feature Flags
 
 Feature flags let you selectively disable operations on an Icechunk repository. This is useful for protecting production repositories from accidental modifications, like node moves on a dataset.
-They are stored in the repository itself, and enforced for all clients that open the repository. Changes to feature flags are recorded in the [ops log](./reference/index.md#icechunk.Repository.ops_log).
+They are stored in the repository itself, and enforced for all clients that open the repository. Changes to feature flags are recorded in the [ops log](../reference/index.md#icechunk.Repository.ops_log).
 
 ### Listing Feature Flags
 
-Use [`Repository.feature_flags`](./reference/index.md#icechunk.Repository.feature_flags) to inspect all flags and their current state.
+Use [`Repository.feature_flags`](../reference/index.md#icechunk.Repository.feature_flags) to inspect all flags and their current state.
 
 ```python exec="on" session="ff" source="material-block" result="code"
 import icechunk as ic
@@ -151,7 +151,7 @@ for flag in repo.feature_flags():
     print(flag)
 ```
 
-Each [`FeatureFlag`](./reference/config.md#icechunk.config.FeatureFlag) has the following attributes:
+Each [`FeatureFlag`](../reference/config.md#icechunk.config.FeatureFlag) has the following attributes:
 
 | Attribute         | Description                                                                 |
 |-------------------|-----------------------------------------------------------------------------|
@@ -175,7 +175,7 @@ All flags are enabled by default on a new repository. The current set of flags i
 
 ### Setting Feature Flags
 
-Use [`set_feature_flag`](./reference/index.md#icechunk.Repository.set_feature_flag) to change a flag's state:
+Use [`set_feature_flag`](../reference/index.md#icechunk.Repository.set_feature_flag) to change a flag's state:
 
 - `False` — explicitly disable the feature.
 - `True` — explicitly enable the feature (even if the default changes in a future version).

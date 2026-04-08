@@ -3,11 +3,11 @@
 ## Parallel Writes
 
 Icechunk is a stateful store and requires care when executing distributed writes.
-Icechunk 1.0 introduces new API for safe [_coordinated_ distributed writes](./parallel.md#cooperative-distributed-writes) where a Session is distributed to remote workers:
+Icechunk 1.0 introduces new API for safe [_coordinated_ distributed writes](../understanding/parallel.md#cooperative-distributed-writes) where a Session is distributed to remote workers:
 
-1. Create a [`ForkSession`](./reference/session.md#icechunk.session.ForkSession) using [`Session.fork`](./reference/session.md#icechunk.session.Session.fork) instead of the `Session.allow_pickling` context manager. ForkSessions can be pickled and written to in remote distributed workers.
+1. Create a [`ForkSession`](./session.md#icechunk.session.ForkSession) using [`Session.fork`](./session.md#icechunk.session.Session.fork) instead of the `Session.allow_pickling` context manager. ForkSessions can be pickled and written to in remote distributed workers.
 1. Only Sessions with _no_ changes can be forked. You may need to insert commits in your current workflows.
-1. [`Session.merge`](./reference/session.md#icechunk.session.Session.merge) can now merge multiple sessions, so the use of [`merge_sessions`](./reference/dask.md#icechunk.distributed.merge_sessions) is discouraged.
+1. [`Session.merge`](./session.md#icechunk.session.Session.merge) can now merge multiple sessions, so the use of [`merge_sessions`](./dask.md#icechunk.distributed.merge_sessions) is discouraged.
 
 The tabs below highlight typical code changes required:
 
