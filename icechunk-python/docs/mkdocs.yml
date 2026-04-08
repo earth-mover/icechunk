@@ -214,6 +214,7 @@ nav:
     - Moving Nodes: moving-nodes.md
     - Dask: dask.md
     - Xarray: xarray.md
+    - Zarr: zarr.md
     - Tuning Performance: performance.md
     - Flaky Networks: flaky-networks.md
     - Virtual Datasets: virtual.md

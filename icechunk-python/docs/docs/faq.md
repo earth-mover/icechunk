@@ -413,4 +413,8 @@ you do to the Zarr store, a read-only session cannot do writes.
 
 ## Does Icechunk work with Zarr sharding?
 
-Yes, as long as you use `zarr.config.set({"async.concurrency": 1})` when _writing_ as the Zarr sharding implementation is [not parallel-safe for _writes_](https://github.com/zarr-developers/zarr-python/pull/3217).
+Yes! See the [Zarr guide](./zarr.md#sharding) for details and an example.
+
+## Does Icechunk support rectilinear (non-uniform) chunk grids?
+
+Yes! See the [Zarr guide](./zarr.md#rectilinear-chunk-grids) for details and an example.
