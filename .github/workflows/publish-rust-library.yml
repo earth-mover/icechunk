@@ -42,7 +42,9 @@ jobs:
           done
 
       - name: Install Just
-        run: sudo snap install --edge --classic just
+        uses: taiki-e/install-action@98ec31d284eb962f41c14065e9391a955aa810cf # v2
+        with:
+          tool: just
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@98ec31d284eb962f41c14065e9391a955aa810cf # nextest

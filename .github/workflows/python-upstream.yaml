@@ -40,7 +40,9 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
       - name: Install Just
-        run: sudo snap install --edge --classic just
+        uses: taiki-e/install-action@98ec31d284eb962f41c14065e9391a955aa810cf # v2
+        with:
+          tool: just
       - name: Stand up RustFS
         run: |
           docker compose up -d rustfs_init
