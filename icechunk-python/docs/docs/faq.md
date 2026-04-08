@@ -413,45 +413,8 @@ you do to the Zarr store, a read-only session cannot do writes.
 
 ## Does Icechunk work with Zarr sharding?
 
-Yes, as long as you use `zarr.config.set({"async.concurrency": 1})` when _writing_ as the Zarr sharding implementation is [not parallel-safe for _writes_](https://github.com/zarr-developers/zarr-python/pull/3217).
+Yes! See the [Zarr guide](./zarr.md#sharding) for details and an example.
 
 ## Does Icechunk support rectilinear (non-uniform) chunk grids?
 
-Yes! Icechunk supports Zarr's [rectilinear chunk grid](https://zarr.dev/zeps/draft/ZEP0003.html) feature ([zarr-python PR](https://github.com/zarr-developers/zarr-python/pull/3802)), which allows chunk sizes to vary along each dimension. This is useful when your data has a natural non-uniform partitioning (e.g. variable-length time intervals or irregular spatial tiles).
-
-!!! note
-
-    Rectilinear chunk grids require a development version of zarr-python with the feature branch:
-
-    ```
-    pip install zarr @ git+https://github.com/maxrjones/zarr-python.git@poc/unified-chunk-grid
-    ```
-
-Here is a minimal example:
-
-```python
-import numpy as np
-import zarr
-import icechunk
-
-zarr.config.set({"array.rectilinear_chunks": True})
-
-repo = icechunk.Repository.create(storage=icechunk.in_memory_storage())
-session = repo.writable_session("main")
-store = session.store
-
-# Chunks of size 3, 3, 4 along dim 0 and 4, 4, 4 along dim 1
-chunks = [[3, 3, 4], [4, 4, 4]]
-
-arr = zarr.create_array(
-    store=store,
-    name="rectilinear_2d",
-    shape=(10, 12),
-    dtype="float64",
-    fill_value=0.0,
-    chunks=chunks,
-)
-
-arr[:] = np.arange(120, dtype="float64").reshape(10, 12)
-session.commit("add rectilinear array")
-```
+Yes! See the [Zarr guide](./zarr.md#rectilinear-chunk-grids) for details and an example.
