@@ -971,7 +971,7 @@ impl Session {
     ) -> SessionResult<()> {
         let node = self.get_array(node_path).await?;
         for coord in coords {
-            self.set_node_chunk_ref(node.clone(), coord, None).await?;
+            self.set_node_chunk_ref(&node, coord, None).await?;
         }
         Ok(())
     }
@@ -987,7 +987,7 @@ impl Session {
         data: Option<ChunkPayload>,
     ) -> SessionResult<()> {
         let node_snapshot = self.get_array(&path).await?;
-        self.set_node_chunk_ref(node_snapshot, coord, data).await
+        self.set_node_chunk_ref(&node_snapshot, coord, data).await
     }
 
     fn change_set(&self) -> &ChangeSet {
@@ -1013,15 +1013,15 @@ impl Session {
 
     // Helper function that accepts a NodeSnapshot instead of a path,
     // this lets us do bulk sets (and deletes) without repeatedly grabbing the node.
-    async fn set_node_chunk_ref(
+    pub(crate) async fn set_node_chunk_ref(
         &mut self,
-        node: NodeSnapshot,
+        node: &NodeSnapshot,
         coord: ChunkIndices,
         data: Option<ChunkPayload>,
     ) -> SessionResult<()> {
-        if let NodeData::Array { shape, .. } = node.node_data {
+        if let NodeData::Array { ref shape, .. } = node.node_data {
             if shape.valid_chunk_coord(&coord) {
-                self.change_set_mut()?.set_chunk_ref(node.id, coord, data)?;
+                self.change_set_mut()?.set_chunk_ref(node.id.clone(), coord, data)?;
                 Ok(())
             } else {
                 Err(SessionError::capture(SessionErrorKind::InvalidIndex {
