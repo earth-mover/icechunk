@@ -102,12 +102,12 @@ from icechunk.storage import (
     s3_store,
     tigris_storage,
 )
+from icechunk.store import IcechunkStore
 from icechunk.types import CommitMethod
 from icechunk.virtual import (
     VirtualChunkContainer,
     VirtualChunkSpec,
 )
-from icechunk.store import IcechunkStore
 
 __all__ = [
     "AncestryGraph",

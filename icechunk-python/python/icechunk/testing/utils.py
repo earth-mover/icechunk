@@ -6,9 +6,9 @@ from collections.abc import Generator
 
 from icechunk import Repository, in_memory_storage
 from icechunk.session import Session
+from icechunk.store import IcechunkStore
 from icechunk.testing.models import ModelStore
 from icechunk.testing.trees import GroupNode
-from icechunk.store import IcechunkStore
 
 
 def tree_to_model_and_icechunk(
