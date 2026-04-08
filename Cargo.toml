@@ -16,6 +16,7 @@ resolver = "2"
 [workspace.package]
 rust-version = "1.94.0"
 edition = "2024"
+readme = "README.md"
 
 [workspace.dependencies]
 # Internal crates
