@@ -91,22 +91,6 @@ Manifest access was consolidated into a single method on `Repository`. The `mani
     print(data["message"])
     ```
 
-## IcechunkStore Constructor
-
-The `for_fork` parameter was removed from `IcechunkStore.__init__()`. If you were constructing stores directly (rather than through `session.store`), remove the `for_fork` argument.
-
-=== "2.0"
-
-    ```python
-    store = IcechunkStore(session_store, read_only=False)
-    ```
-
-=== "1.x"
-
-    ```python
-    store = IcechunkStore(session_store, for_fork=False, read_only=False)
-    ```
-
 ## Session.commit() and Session.flush() Signatures
 
 Several parameters became keyword-only and a new `allow_empty` parameter was added ([#1603](https://github.com/earth-mover/icechunk/pull/1603)):
@@ -131,11 +115,11 @@ Several parameters became keyword-only and a new `allow_empty` parameter was add
     session.flush("snapshot", {"key": "value"})
     ```
 
-## ForkSession Changes
+## Distributed Writes
 
-`ForkSession` was redesigned in 2.0 ([#1876](https://github.com/earth-mover/icechunk/pull/1876)):
+`ForkSession` was redesigned in 2.0 ([#1876](https://github.com/earth-mover/icechunk/pull/1876)) to allow significantly simpler distributed writes:
 
-- `ForkSession` is now based on an anonymous snapshot that captures uncommitted state.
+- `ForkSession` is now based on an anonymous snapshot that captures uncommitted state. Users need not commit unstaged changes before creating a ForkSession.
 - `ForkSession.commit()` raises `IcechunkError` instead of `TypeError`.
 - Merge direction is enforced: `Session.merge(ForkSession)` works, but `ForkSession.merge(Session)` does not.
 
