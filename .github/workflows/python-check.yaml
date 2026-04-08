@@ -277,6 +277,9 @@ jobs:
     if: always()
     needs: [test-hypothesis-shard]
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: .
     steps:
       - name: Verify all shards passed
         run: |
