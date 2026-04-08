@@ -43,7 +43,7 @@ class S3Options:
             Whether to force use of path-style addressing for buckets.
         network_stream_timeout_seconds: int | None
             Timeout requests if no bytes can be transmitted during this period of time.
-            If set to 0, timeout is disabled. Default is 60 seconds.
+            If set to 0, timeout is disabled. Default: 60.
         requester_pays: bool
             Enable requester pays for S3 buckets
         """
@@ -384,8 +384,10 @@ class CompressionConfig:
         ----------
         algorithm: CompressionAlgorithm | None
             The compression algorithm to use.
+            Default: Zstd
         level: int | None
             The compression level to use.
+            Default: 3
         """
         ...
     @property
@@ -460,14 +462,19 @@ class CachingConfig:
         ----------
         num_snapshot_nodes: int | None
             The number of snapshot nodes to cache.
+            Default: 500,000
         num_chunk_refs: int | None
             The number of chunk references to cache.
+            Default: 15,000,000
         num_transaction_changes: int | None
             The number of transaction changes to cache.
+            Default: 0
         num_bytes_attributes: int | None
             The number of bytes of attributes to cache.
+            Default: 0
         num_bytes_chunks: int | None
             The number of bytes of chunks to cache.
+            Default: 0
         """
     def __repr__(self, /) -> str: ...
     def __str__(self, /) -> str: ...
@@ -1035,11 +1042,14 @@ class StorageRetriesSettings:
         Parameters
         ----------
         max_tries: int | None
-            The maximum number of tries, including the initial one. Set to 1 to disable retries
+            The maximum number of tries, including the initial one. Set to 1 to disable retries.
+            Default: 10
         initial_backoff_ms: int | None
-            The initial backoff duration in milliseconds
+            The initial backoff duration in milliseconds.
+            Default: 100
         max_backoff_ms: int | None
-            The limit to backoff duration in milliseconds
+            The limit to backoff duration in milliseconds.
+            Default: 180,000 (3 minutes)
         """
         ...
     @property
@@ -1125,6 +1135,10 @@ class StorageTimeoutSettings:
         """
         Create a new `StorageTimeoutSettings` object
 
+        All timeouts default to None, meaning the underlying
+        `AWS SDK default <https://docs.aws.amazon.com/sdk-for-rust/latest/dg/timeouts.html>`_
+        is used.
+
         Parameters
         ----------
         connect_timeout_ms: int | None
@@ -1169,8 +1183,10 @@ class StorageConcurrencySettings:
         ----------
         max_concurrent_requests_for_object: int | None
             The maximum number of concurrent requests for an object.
+            Default: 18
         ideal_concurrent_request_size: int | None
-            The ideal concurrent request size.
+            The ideal concurrent request size in bytes.
+            Default: 12,582,912 (12 MB)
         """
         ...
     @property
@@ -1249,16 +1265,19 @@ class StorageSettings:
             If set to False, Icechunk loses some of its consistency guarantees.
             This is only useful in object stores that don't support the feature.
             Use it at your own risk.
+            Default: True
 
         unsafe_use_conditional_create: bool | None
             If set to False, Icechunk loses some of its consistency guarantees.
             This is only useful in object stores that don't support the feature.
             Use at your own risk.
+            Default: True
 
         unsafe_use_metadata: bool | None
             Don't write metadata fields in Icechunk files.
             This is only useful in object stores that don't support the feature.
             Use at your own risk.
+            Default: True
 
         storage_class: str | None
             Store all objects using this object store storage class
@@ -1390,6 +1409,7 @@ class RepoUpdateRetryConfig:
         ----------
         default: StorageRetriesSettings | None
             Default retry settings for all repo update operations.
+            Defaults: `max_tries`=100, `initial_backoff_ms`=50, `max_backoff_ms`=30,000
         """
         ...
     @property
@@ -1420,13 +1440,15 @@ class RepositoryConfig:
         ----------
         inline_chunk_threshold_bytes: int | None
             The maximum size of a chunk that will be stored inline in the repository.
+            Default: 512
         get_partial_values_concurrency: int | None
             The number of concurrent requests to make when getting partial values from storage.
+            Default: 10
         compression: CompressionConfig | None
             The compression configuration for the repository.
         max_concurrent_requests: int | None
             The maximum number of concurrent HTTP requests Icechunk will do for this repo.
-            Default is 256.
+            Default: 256
         caching: CachingConfig | None
             The caching configuration for the repository.
         storage: StorageSettings | None
@@ -1441,7 +1463,7 @@ class RepositoryConfig:
             Maximum number of updates stored in a single repo info file. When this
             limit is reached, a new repo info file is created. Lower values produce
             slightly smaller repo info files but require more object fetches to
-            reconstruct the ops log. Default is 1000.
+            reconstruct the ops log. Default: 1000
         """
         ...
     def __repr__(self, /) -> str: ...
@@ -1825,6 +1847,20 @@ class RepoStatus:
 
 @final
 class Update:
+    """A single entry in the repository operations log.
+
+    Each update records an administrative action taken on the repository,
+    along with when it occurred.
+
+    Attributes
+    ----------
+    kind : UpdateType
+        The type of operation that was performed.
+    updated_at : datetime.datetime
+        When the operation occurred.
+    backup_path : str | None
+        Path to a backup created before the operation, if any.
+    """
     @property
     def kind(self) -> UpdateType: ...
     @property
@@ -1836,13 +1872,20 @@ class Update:
     def _repr_html_(self) -> str: ...
 
 class UpdateType:
+    """The type of operation recorded in an ``Update``.
+
+    This is a tagged union — each variant is a nested class with its own
+    fields describing what happened.
+    """
     @final
     class BranchCreated(UpdateType):
+        """A new branch was created."""
         @property
         def name(self) -> str: ...
 
     @final
     class BranchDeleted(UpdateType):
+        """A branch was deleted."""
         @property
         def name(self) -> str: ...
         @property
@@ -1850,6 +1893,7 @@ class UpdateType:
 
     @final
     class BranchReset(UpdateType):
+        """A branch was reset to a different snapshot."""
         @property
         def name(self) -> str: ...
         @property
@@ -1857,6 +1901,7 @@ class UpdateType:
 
     @final
     class CommitAmended(UpdateType):
+        """A commit on a branch was amended."""
         @property
         def branch(self) -> str: ...
         @property
@@ -1865,26 +1910,40 @@ class UpdateType:
         def new_snap_id(self) -> str: ...
 
     @final
-    class ConfigChanged(UpdateType): ...
+    class ConfigChanged(UpdateType):
+        """The repository configuration was changed."""
+
+        ...
 
     @final
-    class ExpirationRan(UpdateType): ...
+    class ExpirationRan(UpdateType):
+        """Snapshot expiration was run."""
+
+        ...
 
     @final
     class FeatureFlagChanged(UpdateType):
+        """A feature flag was changed."""
         @property
         def id(self) -> int: ...
         @property
         def new_value(self) -> bool | None: ...
 
     @final
-    class GCRan(UpdateType): ...
+    class GCRan(UpdateType):
+        """Garbage collection was run."""
+
+        ...
 
     @final
-    class MetadataChanged(UpdateType): ...
+    class MetadataChanged(UpdateType):
+        """Repository metadata was changed."""
+
+        ...
 
     @final
     class NewCommit(UpdateType):
+        """A new commit was made on a branch."""
         @property
         def branch(self) -> str: ...
         @property
@@ -1892,14 +1951,19 @@ class UpdateType:
 
     @final
     class NewDetachedSnapshot(UpdateType):
+        """A new detached snapshot was created."""
         @property
         def new_snap_id(self) -> str: ...
 
     @final
-    class RepoInitialized(UpdateType): ...
+    class RepoInitialized(UpdateType):
+        """The repository was initialized."""
+
+        ...
 
     @final
     class RepoMigrated(UpdateType):
+        """The repository was migrated to a new spec version."""
         @property
         def from_version(self) -> int: ...
         @property
@@ -1907,16 +1971,19 @@ class UpdateType:
 
     @final
     class RepoStatusChanged(UpdateType):
+        """The repository availability status was changed."""
         @property
         def status(self) -> RepoStatus: ...
 
     @final
     class TagCreated(UpdateType):
+        """A new tag was created."""
         @property
         def name(self) -> str: ...
 
     @final
     class TagDeleted(UpdateType):
+        """A tag was deleted."""
         @property
         def name(self) -> str: ...
         @property
@@ -2094,6 +2161,22 @@ class PyRepository:
         tag: str | None = None,
         snapshot_id: str | None = None,
     ) -> AsyncIterator[SnapshotInfo]: ...
+    def ancestry_graph(
+        self,
+        *,
+        branch: str | None = None,
+        tag: str | None = None,
+        snapshot_id: str | None = None,
+        plain: bool = False,
+    ) -> AncestryGraph: ...
+    async def ancestry_graph_async(
+        self,
+        *,
+        branch: str | None = None,
+        tag: str | None = None,
+        snapshot_id: str | None = None,
+        plain: bool = False,
+    ) -> AncestryGraph: ...
     def async_ops_log(self) -> AsyncIterator[Update]: ...
     def create_branch(self, branch_name: str, snapshot_id: str) -> None: ...
     async def create_branch_async(self, branch_name: str, snapshot_id: str) -> None: ...
@@ -2506,6 +2589,24 @@ class SnapshotInfo:
 class _PyAsyncSnapshotGenerator(AsyncGenerator[SnapshotInfo], metaclass=abc.ABCMeta):
     def __aiter__(self) -> _PyAsyncSnapshotGenerator: ...
     async def __anext__(self) -> SnapshotInfo: ...
+
+@final
+class AncestryGraph:
+    """A visual representation of commit history.
+
+    Use ``print()`` for colored Unicode output in a terminal, or display
+    in Jupyter for an SVG diagram. Pass ``plain=True`` to
+    ``ancestry_graph()`` for output without colors (useful for CI, files,
+    or LLM agents).
+
+    Note: only commits reachable from branches are included. Anonymous/detached
+    snapshots are not attached to any branch and will not appear.
+    """
+    def __str__(self) -> str: ...
+    def __repr__(self) -> str: ...
+    def _repr_svg_(self) -> str:
+        """Return a raw SVG string for Jupyter notebooks."""
+        ...
 
 class S3StaticCredentials:
     """Credentials for an S3 storage backend

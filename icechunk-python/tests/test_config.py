@@ -134,7 +134,7 @@ def test_virtual_chunk_containers() -> None:
     container = icechunk.VirtualChunkContainer("s3://testbucket/", store_config)
     config.set_virtual_chunk_container(container)
     repr_str = repr(config)
-    assert "icechunk.RepositoryConfig(" in repr_str
+    assert "icechunk.config.RepositoryConfig(" in repr_str
     assert "inline_chunk_threshold_bytes=None" in repr_str
     assert "caching=None" in repr_str
     assert "compression=None" in repr_str
@@ -201,14 +201,14 @@ def test_can_change_deep_config_values(any_spec_version: int | None) -> None:
     )
 
     repr_str = repr(config)
-    assert "icechunk.RepositoryConfig(" in repr_str
+    assert "icechunk.config.RepositoryConfig(" in repr_str
     assert "inline_chunk_threshold_bytes=5" in repr_str
     assert "get_partial_values_concurrency=42" in repr_str
-    assert "icechunk.CachingConfig(" in repr_str
+    assert "icechunk.config.CachingConfig(" in repr_str
     assert "num_chunk_refs=8" in repr_str
-    assert "icechunk.CompressionConfig(" in repr_str
-    assert "icechunk.StorageSettings(" in repr_str
-    assert "icechunk.ManifestConfig(" in repr_str
+    assert "icechunk.config.CompressionConfig(" in repr_str
+    assert "icechunk.storage.StorageSettings(" in repr_str
+    assert "icechunk.config.ManifestConfig(" in repr_str
     repo = icechunk.Repository.open(
         storage=storage,
         config=config,

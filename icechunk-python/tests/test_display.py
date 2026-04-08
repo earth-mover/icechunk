@@ -148,7 +148,7 @@ class TestRepr:
     def test_session_writable(self, repo: Repository) -> None:
         session = repo.writable_session("main")
         repr_str = repr(session)
-        assert "<icechunk.Session>" in repr_str
+        assert "<icechunk.session.Session>" in repr_str
         assert "read_only: False" in repr_str
         assert "branch: main" in repr_str
         assert "has_uncommitted_changes: False" in repr_str
@@ -176,7 +176,7 @@ class TestRepr:
     def test_conflict(self) -> None:
         c = Conflict(ConflictType(6), "/my/array", [[0, 0]])
         repr_str = repr(c)
-        assert "<icechunk.Conflict>" in repr_str
+        assert "<icechunk.conflicts.Conflict>" in repr_str
         assert "ChunkDoubleUpdate" in repr_str
         assert "/my/array" in repr_str
         assert "conflicted_chunks" in repr_str
@@ -184,23 +184,23 @@ class TestRepr:
     def test_repo_status(self) -> None:
         status = RepoStatus(icechunk.RepoAvailability.online)
         repr_str = repr(status)
-        assert "<icechunk.RepoStatus>" in repr_str
+        assert "<icechunk.repository.RepoStatus>" in repr_str
         assert "Online" in repr_str
 
     def test_nested_repr_is_executable(self) -> None:
         """An executable parent's __repr__ should contain executable nested reprs."""
         config = RepositoryConfig(caching=CachingConfig(num_snapshot_nodes=42))
         repr_str = repr(config)
-        assert "icechunk.CachingConfig(" in repr_str
+        assert "icechunk.config.CachingConfig(" in repr_str
         assert "num_snapshot_nodes=42" in repr_str
 
     def test_nested_str_is_not_executable(self) -> None:
         """An executable parent's __str__ should contain non-executable nested reprs."""
         config = RepositoryConfig(caching=CachingConfig(num_snapshot_nodes=42))
         str_str = str(config)
-        assert "<icechunk.CachingConfig>" in str_str
+        assert "<icechunk.config.CachingConfig>" in str_str
         assert "num_snapshot_nodes: 42" in str_str
-        assert "icechunk.CachingConfig(" not in str_str
+        assert "icechunk.config.CachingConfig(" not in str_str
 
 
 # =============================================================================
@@ -237,7 +237,7 @@ class TestStr:
     def test_session(self, repo: Repository) -> None:
         session = repo.writable_session("main")
         str_str = str(session)
-        assert "<icechunk.Session>" in str_str
+        assert "<icechunk.session.Session>" in str_str
         assert "read_only: False" in str_str
         assert "branch: main" in str_str
 
@@ -250,13 +250,13 @@ class TestStr:
     def test_caching_config(self) -> None:
         config = CachingConfig(num_snapshot_nodes=100)
         str_str = str(config)
-        assert "<icechunk.CachingConfig>" in str_str
+        assert "<icechunk.config.CachingConfig>" in str_str
         assert "num_snapshot_nodes: 100" in str_str
 
     def test_storage_settings(self) -> None:
         ss = StorageSettings(retries=StorageRetriesSettings(max_tries=5))
         str_str = str(ss)
-        assert "<icechunk.StorageSettings>" in str_str
+        assert "<icechunk.storage.StorageSettings>" in str_str
         assert "retries:" in str_str
         assert "max_tries: 5" in str_str
 
@@ -286,7 +286,7 @@ class TestReprHtml:
     def test_session(self, repo: Repository) -> None:
         html = repo.writable_session("main")._repr_html_()
         assert '<div class="icechunk-repr">' in html
-        assert "icechunk.Session" in html
+        assert "icechunk.session.Session" in html
         assert "read_only" in html
 
     def test_store(self, repo: Repository) -> None:
@@ -358,14 +358,14 @@ class TestReprStructural:
         """CompressionConfig should show the actual algorithm, not hardcoded None."""
         config = CompressionConfig(algorithm=icechunk.CompressionAlgorithm(), level=3)
         repr_str = repr(config)
-        assert "icechunk.CompressionConfig(" in repr_str
+        assert "icechunk.config.CompressionConfig(" in repr_str
         assert "Zstd" in repr_str
         assert "level=3" in repr_str
 
     def test_s3_options_shows_all_fields(self) -> None:
         opts = S3Options(region="us-east-1", allow_http=True, requester_pays=True)
         repr_str = repr(opts)
-        assert "icechunk.S3Options(" in repr_str
+        assert "icechunk.storage.S3Options(" in repr_str
         assert 'region="us-east-1"' in repr_str
         assert "allow_http=True" in repr_str
         assert "requester_pays=True" in repr_str
@@ -386,39 +386,41 @@ class TestReprStructural:
     def test_storage_concurrency_settings_shows_fields(self) -> None:
         s = StorageConcurrencySettings()
         repr_str = repr(s)
-        assert "icechunk.StorageConcurrencySettings(" in repr_str
+        assert "icechunk.storage.StorageConcurrencySettings(" in repr_str
         assert "max_concurrent_requests_for_object" in repr_str
 
     def test_storage_settings_shows_all_fields(self) -> None:
         s = StorageSettings(storage_class="STANDARD_IA")
         repr_str = repr(s)
-        assert "icechunk.StorageSettings(" in repr_str
+        assert "icechunk.storage.StorageSettings(" in repr_str
         assert 'storage_class="STANDARD_IA"' in repr_str
         assert "minimum_size_for_multipart_upload" in repr_str
 
     def test_manifest_virtual_chunk_location_compression(self) -> None:
         c = ManifestVirtualChunkLocationCompressionConfig(min_num_chunks=500)
         repr_str = repr(c)
-        assert "icechunk.ManifestVirtualChunkLocationCompressionConfig(" in repr_str
+        assert (
+            "icechunk.config.ManifestVirtualChunkLocationCompressionConfig(" in repr_str
+        )
         assert "min_num_chunks=500" in repr_str
 
     def test_manifest_preload_config_shows_fields(self) -> None:
         c = ManifestPreloadConfig(max_total_refs=42, max_arrays_to_scan=10)
         repr_str = repr(c)
-        assert "icechunk.ManifestPreloadConfig(" in repr_str
+        assert "icechunk.config.ManifestPreloadConfig(" in repr_str
         assert "max_total_refs=42" in repr_str
         assert "max_arrays_to_scan=10" in repr_str
 
     def test_manifest_splitting_config_shows_fields(self) -> None:
         c = ManifestSplittingConfig()
         repr_str = repr(c)
-        assert "icechunk.ManifestSplittingConfig(" in repr_str
+        assert "icechunk.config.ManifestSplittingConfig(" in repr_str
         assert "split_sizes" in repr_str
 
     def test_manifest_config_shows_fields(self) -> None:
         c = ManifestConfig()
         repr_str = repr(c)
-        assert "icechunk.ManifestConfig(" in repr_str
+        assert "icechunk.config.ManifestConfig(" in repr_str
         assert "preload" in repr_str
         assert "splitting" in repr_str
         assert "virtual_chunk_location_compression" in repr_str
@@ -432,14 +434,14 @@ class TestReprStructural:
         )
         vcc = icechunk.VirtualChunkContainer("s3://bucket/", store_config)
         repr_str = repr(vcc)
-        assert "icechunk.VirtualChunkContainer(" in repr_str
+        assert "icechunk.virtual.VirtualChunkContainer(" in repr_str
         assert 'url_prefix="s3://bucket/"' in repr_str
         assert "store=" in repr_str
 
     def test_repository_config_shows_all_fields(self) -> None:
         config = RepositoryConfig()
         repr_str = repr(config)
-        assert "icechunk.RepositoryConfig(" in repr_str
+        assert "icechunk.config.RepositoryConfig(" in repr_str
         assert "inline_chunk_threshold_bytes" in repr_str
         assert "compression" in repr_str
         assert "caching" in repr_str
@@ -458,7 +460,7 @@ class TestReprStructural:
         # repr (executable)
         repr_str = repr(config)
         assert "s3://my-data/" in repr_str
-        assert "icechunk.VirtualChunkContainer(" in repr_str
+        assert "icechunk.virtual.VirtualChunkContainer(" in repr_str
         assert 'name="era5"' in repr_str
         # str (human-readable)
         str_str = str(config)
@@ -471,25 +473,25 @@ class TestReprStructural:
 
     def test_object_store_config_inmemory(self) -> None:
         osc = ObjectStoreConfig.InMemory()
-        assert "icechunk.ObjectStoreConfig.InMemory(" in repr(osc)
-        assert "<icechunk.ObjectStoreConfig.InMemory>" in str(osc)
+        assert "icechunk.config.ObjectStoreConfig.InMemory(" in repr(osc)
+        assert "<icechunk.config.ObjectStoreConfig.InMemory>" in str(osc)
         html = osc._repr_html_()
-        assert "icechunk.ObjectStoreConfig.InMemory" in html
+        assert "icechunk.config.ObjectStoreConfig.InMemory" in html
         assert '<div class="icechunk-repr">' in html
 
     def test_object_store_config_s3(self) -> None:
         osc = ObjectStoreConfig.S3(S3Options(region="us-east-1"))
         repr_str = repr(osc)
-        assert "icechunk.ObjectStoreConfig.S3(" in repr_str
+        assert "icechunk.config.ObjectStoreConfig.S3(" in repr_str
         assert "us-east-1" in repr_str
         str_str = str(osc)
-        assert "<icechunk.ObjectStoreConfig.S3>" in str_str
+        assert "<icechunk.config.ObjectStoreConfig.S3>" in str_str
         assert "us-east-1" in str_str
 
     def test_object_store_config_local_filesystem(self) -> None:
         osc = ObjectStoreConfig.LocalFileSystem("/tmp/test")
         repr_str = repr(osc)
-        assert "icechunk.ObjectStoreConfig.LocalFileSystem(" in repr_str
+        assert "icechunk.config.ObjectStoreConfig.LocalFileSystem(" in repr_str
         assert "/tmp/test" in repr_str
 
     def test_snapshot_info(self, repo: Repository) -> None:
@@ -500,13 +502,13 @@ class TestReprStructural:
         assert len(infos) >= 1
         info = infos[0]
         repr_str = repr(info)
-        assert "<icechunk.SnapshotInfo>" in repr_str
+        assert "<icechunk.snapshots.SnapshotInfo>" in repr_str
         assert "id:" in repr_str
         assert "message:" in repr_str
         assert "written_at:" in repr_str
         assert "metadata:" in repr_str
         html = info._repr_html_()
-        assert "icechunk.SnapshotInfo" in html
+        assert "icechunk.snapshots.SnapshotInfo" in html
 
     def test_diff(self, repo: Repository) -> None:
         session = repo.writable_session("main")
@@ -520,7 +522,7 @@ class TestReprStructural:
         assert "Arrays created" in repr_str
         assert "arr2" in repr_str
         html = diff._repr_html_()
-        assert "icechunk.Diff" in html
+        assert "icechunk.snapshots.Diff" in html
 
     def test_gc_summary(self, repo: Repository) -> None:
         session = repo.writable_session("main")
@@ -528,23 +530,23 @@ class TestReprStructural:
         session.commit("init")
         gc = repo.garbage_collect(datetime.now(tz=UTC) - timedelta(hours=1))
         repr_str = repr(gc)
-        assert "<icechunk.GCSummary>" in repr_str
+        assert "<icechunk.ops.GCSummary>" in repr_str
         assert "bytes_deleted:" in repr_str
         assert "chunks_deleted:" in repr_str
         html = gc._repr_html_()
-        assert "icechunk.GCSummary" in html
+        assert "icechunk.ops.GCSummary" in html
 
     def test_feature_flag(self, repo: Repository) -> None:
         flags = repo.feature_flags()
         assert len(flags) > 0
         flag = flags[0]
         repr_str = repr(flag)
-        assert "<icechunk.FeatureFlag>" in repr_str
+        assert "<icechunk.config.FeatureFlag>" in repr_str
         assert "name:" in repr_str
         assert "default_enabled:" in repr_str
         assert "enabled:" in repr_str
         html = flag._repr_html_()
-        assert "icechunk.FeatureFlag" in html
+        assert "icechunk.config.FeatureFlag" in html
 
     def test_update(self, repo: Repository) -> None:
         session = repo.writable_session("main")
@@ -554,34 +556,147 @@ class TestReprStructural:
         assert len(updates) > 0
         update = updates[0]
         repr_str = repr(update)
-        assert "<icechunk.Update>" in repr_str
+        assert "<icechunk.ops.Update>" in repr_str
         assert "kind:" in repr_str
         assert "updated_at:" in repr_str
         html = update._repr_html_()
-        assert "icechunk.Update" in html
+        assert "icechunk.ops.Update" in html
 
     def test_chunk_storage_stats(self, repo: Repository) -> None:
         stats = repo.chunk_storage_stats()
         repr_str = repr(stats)
-        assert "<icechunk.ChunkStorageStats>" in repr_str
+        assert "<icechunk.stats.ChunkStorageStats>" in repr_str
         assert "native_bytes:" in repr_str
         assert "virtual_bytes:" in repr_str
         assert "inlined_bytes:" in repr_str
         html = stats._repr_html_()
-        assert "icechunk.ChunkStorageStats" in html
+        assert "icechunk.stats.ChunkStorageStats" in html
 
     def test_virtual_chunk_container_all_modes(self) -> None:
         vcc = VirtualChunkContainer("s3://bucket/", ObjectStoreConfig.InMemory())
         # Executable repr
         repr_str = repr(vcc)
-        assert "icechunk.VirtualChunkContainer(" in repr_str
+        assert "icechunk.virtual.VirtualChunkContainer(" in repr_str
         assert 'url_prefix="s3://bucket/"' in repr_str
         # Str
         str_str = str(vcc)
-        assert "<icechunk.VirtualChunkContainer>" in str_str
+        assert "<icechunk.virtual.VirtualChunkContainer>" in str_str
         assert "url_prefix:" in str_str
         assert "store:" in str_str
         # HTML
         html = vcc._repr_html_()
-        assert "icechunk.VirtualChunkContainer" in html
+        assert "icechunk.virtual.VirtualChunkContainer" in html
         assert '<div class="icechunk-repr">' in html
+
+
+# =============================================================================
+# AncestryGraph tests
+# =============================================================================
+class TestAncestryGraph:
+    """Test ancestry_graph() visualization."""
+
+    def test_single_branch_linear(self, repo: Repository) -> None:
+        """A single branch should produce a linear graph."""
+        session = repo.writable_session("main")
+        store = session.store
+        root = zarr.group(store=store)
+        root.create_array("arr", shape=(10,), dtype="float64")
+        session.commit("First commit")
+
+        session = repo.writable_session("main")
+        store = session.store
+        zarr.open_array(store=store, path="arr")[:] = 1.0
+        session.commit("Second commit")
+
+        graph = repo.ancestry_graph(branch="main")
+        output = str(graph)
+        assert "Second commit" in output
+        assert "First commit" in output
+        # Branch label should appear on the tip
+        assert "main" in output
+
+    def test_all_branches_tree(self, repo: Repository) -> None:
+        """Multiple branches should produce a tree graph."""
+        # Create initial commit on main
+        session = repo.writable_session("main")
+        store = session.store
+        root = zarr.group(store=store)
+        root.create_array("arr", shape=(10,), dtype="float64")
+        snap1 = session.commit("Initial commit")
+
+        # Create a second commit on main
+        session = repo.writable_session("main")
+        store = session.store
+        zarr.open_array(store=store, path="arr")[:] = 1.0
+        session.commit("Main work")
+
+        # Create a branch from initial commit
+        repo.create_branch("feature", snap1)
+        session = repo.writable_session("feature")
+        store = session.store
+        zarr.open_array(store=store, path="arr")[:] = 2.0
+        session.commit("Feature work")
+
+        # All-branches graph
+        graph = repo.ancestry_graph()
+        output = str(graph)
+        assert "main" in output
+        assert "feature" in output
+        assert "Main work" in output
+        assert "Feature work" in output
+        assert "Initial commit" in output
+
+    def test_empty_repo(self) -> None:
+        """A fresh repo with no commits beyond initial should still work."""
+        repo = Repository.create(storage=in_memory_storage())
+        graph = repo.ancestry_graph(branch="main")
+        output = str(graph)
+        # Should have at least the initial snapshot
+        assert len(output.strip()) > 0
+
+    def test_with_tags(self, repo: Repository) -> None:
+        """Tags should appear as labels on the graph."""
+        session = repo.writable_session("main")
+        store = session.store
+        root = zarr.group(store=store)
+        root.create_array("arr", shape=(10,), dtype="float64")
+        snap = session.commit("Tagged commit")
+
+        repo.create_tag("v1.0", snap)
+        graph = repo.ancestry_graph(branch="main")
+        output = str(graph)
+        assert "v1.0" in output
+
+    def test_repr_svg(self, repo: Repository) -> None:
+        """_repr_svg_ should return raw SVG content."""
+        session = repo.writable_session("main")
+        store = session.store
+        root = zarr.group(store=store)
+        root.create_array("arr", shape=(10,), dtype="float64")
+        session.commit("First commit")
+
+        graph = repo.ancestry_graph(branch="main")
+        svg = graph._repr_svg_()
+        assert "<svg" in svg
+        assert "</svg>" in svg
+        assert "<circle" in svg
+        assert "First commit" in svg
+        assert "main" in svg
+
+    def test_plain_flag(self, repo: Repository) -> None:
+        """plain=True should strip ANSI codes, plain=False should include them."""
+        session = repo.writable_session("main")
+        store = session.store
+        root = zarr.group(store=store)
+        root.create_array("arr", shape=(10,), dtype="float64")
+        session.commit("First commit")
+
+        plain = str(repo.ancestry_graph(branch="main", plain=True))
+        assert "\x1b" not in plain
+        assert "First commit" in plain
+        assert "main" in plain
+
+        colored = str(repo.ancestry_graph(branch="main", plain=False))
+        assert "\x1b" in colored
+        assert "First commit" in colored
+        assert "main" in colored

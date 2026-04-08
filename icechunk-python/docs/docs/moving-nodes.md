@@ -2,7 +2,7 @@
 
 Made a typo in an array name? Created data in the wrong group? With traditional cloud storage, fixing these mistakes means downloading the entire dataset, writing it to a new location, and deleting the original—potentially gigabytes of transfers for a one-character fix.
 
-With Icechunk, renaming or moving any node is instant—just a small metadata update. See the [`move`][icechunk.Session.move] API reference for details.
+With Icechunk, renaming or moving any node is instant—just a small metadata update. See the [`move`][icechunk.session.Session.move] API reference for details.
 
 !!! note "Moving Nodes vs Moving Chunks"
     This page covers moving **nodes** (arrays and groups) in the hierarchy.

@@ -23,10 +23,10 @@ First read some example data, and create an Icechunk Repository.
 ```python exec="on" session="parallel" source="material-block"
 import xarray as xr
 import tempfile
-from icechunk import Repository, local_filesystem_storage
+import icechunk as ic
 
 ds = xr.tutorial.open_dataset("rasm").isel(time=slice(24))
-repo = Repository.create(local_filesystem_storage(tempfile.TemporaryDirectory().name))
+repo = ic.Repository.create(ic.local_filesystem_storage(tempfile.TemporaryDirectory().name))
 session = repo.writable_session("main")
 ```
 
@@ -52,9 +52,7 @@ print(session.commit("initialize store"))
 First define a function that constitutes one "write task".
 
 ```python exec="on" session="parallel" source="material-block"
-from icechunk import Session
-
-def write_timestamp(*, itime: int, session: Session) -> None:
+def write_timestamp(*, itime: int, session: ic.session.Session) -> None:
     # pass a list to isel to preserve the time dimension
     ds = xr.tutorial.open_dataset("rasm").isel(time=[itime])
     # region="auto" tells Xarray to infer which "region" of the output arrays to write to.
@@ -117,10 +115,7 @@ There are three key points to keep in mind:
 First we modify `write_task` to return the `Session`:
 
 ```python
-from icechunk import Session
-from icechunk.session import ForkSession
-
-def write_timestamp(*, itime: int, session: ForkSession) -> ForkSession:
+def write_timestamp(*, itime: int, session: ic.session.ForkSession) -> ic.session.ForkSession:
     # pass a list to isel to preserve the time dimension
     ds = xr.tutorial.open_dataset("rasm").isel(time=[itime])
     # region="auto" tells Xarray to infer which "region" of the output arrays to write to.
@@ -132,8 +127,8 @@ The steps for making a distribute write are as follows:
 
 1. fork the Session with `Session.fork`,
 2. gather the ForkSessions from individual tasks,
-3. merge the `Session` with the gathered ForkSessions using [`Session.merge`](./reference.md#icechunk.Session.merge), and finally
-4. make a successful commit using [`Session.commit`](./reference.md#icechunk.Session.commit).
+3. merge the `Session` with the gathered ForkSessions using [`Session.merge`](./reference/session.md#icechunk.session.Session.merge), and finally
+4. make a successful commit using [`Session.commit`](./reference/session.md#icechunk.session.Session.commit).
 
 ```python
 from concurrent.futures import ProcessPoolExecutor
