@@ -135,7 +135,7 @@ jobs:
           just profile=ci run-all-examples
 
       - name: Run unit tests only
-        if: !contains(matrix.os, 'linux') && !contains(matrix.os, 'ubuntu')
+        if: ${{ !contains(matrix.os, 'linux') && !contains(matrix.os, 'ubuntu') }}
         run: |
           cargo test --lib --profile ci
 
