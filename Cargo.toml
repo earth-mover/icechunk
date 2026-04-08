@@ -14,18 +14,19 @@ default-members = ["icechunk"]
 resolver = "2"
 
 [workspace.package]
-rust-version = "1.94.0"
+rust-version = "1.91.1"
 edition = "2024"
+readme = "README.md"
 
 [workspace.dependencies]
 # Internal crates
-icechunk = { path = "icechunk", version = "2.0.0" }
-icechunk-arrow-object-store = { path = "icechunk-arrow-object-store", version = "2.0.0", default-features = false }
-icechunk-format = { path = "icechunk-format", version = "2.0.0" }
-icechunk-macros = { path = "icechunk-macros", version = "2.0.0" }
-icechunk-s3 = { path = "icechunk-s3", version = "2.0.0" }
-icechunk-storage = { path = "icechunk-storage", version = "2.0.0" }
-icechunk-types = { path = "icechunk-types", version = "2.0.0" }
+icechunk = { path = "icechunk", version = "2.0.1" }
+icechunk-arrow-object-store = { path = "icechunk-arrow-object-store", version = "2.0.1", default-features = false }
+icechunk-format = { path = "icechunk-format", version = "2.0.1" }
+icechunk-macros = { path = "icechunk-macros", version = "2.0.1" }
+icechunk-s3 = { path = "icechunk-s3", version = "2.0.1" }
+icechunk-storage = { path = "icechunk-storage", version = "2.0.1" }
+icechunk-types = { path = "icechunk-types", version = "2.0.1" }
 
 # External dependencies
 anyhow = "1.0.102"

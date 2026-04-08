@@ -53,7 +53,7 @@ jobs:
           - host: "runs-on=${{ github.run_id }}/runner=4cpu-linux-x64/extras=s3-cache"
             target: wasm32-wasip1-threads
             build: yarn build --target wasm32-wasip1-threads
-            rust: '1.94.1'
+            rust: '1.91.1'
             setup: |
               sudo apt-get update
               sudo apt-get install -y --no-install-recommends clang llvm wasi-libc libc++-dev

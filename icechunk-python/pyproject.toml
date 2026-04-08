@@ -14,7 +14,7 @@ classifiers = [
   "Programming Language :: Python :: 3.13",
   "Programming Language :: Python :: 3.14",
 ]
-readme = "../README.md"
+readme = "README.md"
 license = { file = "LICENSE" }
 dynamic = ["version"]
 authors = [{ name = "Earthmover", email = "info@earthmover.io" }]
@@ -99,7 +99,6 @@ docs = [
 features = ["pyo3/extension-module"]
 module-name = "icechunk._icechunk_python"
 python-source = "python"
-exclude = ["README.md"]
 editable-profile = "dev"
 cargo-extra-args = ["--workspace"]
 
