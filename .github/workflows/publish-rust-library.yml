@@ -8,7 +8,7 @@ env:
   RUSTFLAGS: "-D warnings"
   RUSTUP_MAX_RETRIES: 10
   # update RUST_CHANNEL and CARGO_DENY in sync
-  RUST_CHANNEL: '1.91.0'
+  RUST_CHANNEL: '1.91.1'
   CARGO_DENY_VERSION: '0.19.0'
 
 on:
