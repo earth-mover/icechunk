@@ -271,3 +271,51 @@ def test_write_split_manifest_refs_append(
         session_from_setup.commit("wrote refs")
 
     benchmark.pedantic(commit, setup=write_refs, iterations=1, rounds=rounds)
+
+
+FAKE_URL_PREFIX = "s3://esgf-world/CMIP6/CMIP/CCCma/CanESM5/historical/r10i1p1f1/Omon/uo/gn/v20190429/uo_Omon_CanESM5_historical_r10i1p1f1_gn_185001"
+
+
+@pytest.mark.benchmark(group="refs-write-e2e")
+def test_write_virtual_refs_e2e(benchmark, repo) -> None:
+    """End-to-end benchmark: build VirtualChunkSpec list + set_virtual_refs.
+
+    Simulates VirtualiZarr's write_manifest_virtual_refs workflow:
+    iterates manifest entries in Python, creates VirtualChunkSpec objects,
+    then calls store.set_virtual_refs().
+    """
+    session = repo.writable_session("main")
+    store = session.store
+    group = zarr.group(store)
+    kwargs = dict(
+        name="array",
+        shape=(NUM_VIRTUAL_CHUNK_REFS,),
+        chunks=(1,),
+        dtype=np.int8,
+        dimension_names=("t",),
+        overwrite=True,
+    )
+    try:
+        group.create_array(**kwargs)
+    except AttributeError:
+        group.array(**kwargs)
+    session.commit("initialized")
+
+    @benchmark
+    def write():
+        session = repo.writable_session("main")
+
+        # This mirrors VirtualiZarr's write_manifest_virtual_refs:
+        # Python loop building VirtualChunkSpec objects from manifest entries
+        chunks = [
+            VirtualChunkSpec(
+                index=[i],
+                location=f"{FAKE_URL_PREFIX}-{i}.nc",
+                offset=i * 10,
+                length=i + 5,
+            )
+            for i in range(NUM_VIRTUAL_CHUNK_REFS)
+        ]
+        session.store.set_virtual_refs(
+            "array", chunks, validate_containers=False
+        )
