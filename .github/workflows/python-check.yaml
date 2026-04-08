@@ -68,8 +68,6 @@ jobs:
             zarr: "latest-release"
     steps:
       - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0 # v2
-        with:
-          sccache: s3
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
       - name: Stand up RustFS
         run: |
@@ -170,8 +168,6 @@ jobs:
     needs: [build-wheels-free-threaded]
     steps:
       - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0 # v2
-        with:
-          sccache: s3
       - uses: actions/checkout@v6
       - name: Stand up RustFS
         run: |
@@ -230,8 +226,6 @@ jobs:
         shard-id: [0, 1, 2]
     steps:
       - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0 # v2
-        with:
-          sccache: s3
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: Download wheels
@@ -297,8 +291,6 @@ jobs:
         working-directory: .
     steps:
       - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0 # v2
-        with:
-          sccache: s3
       - name: Verify all shards passed
         run: |
           if [ "${{ needs.test-hypothesis-shard.result }}" != "success" ]; then
@@ -311,8 +303,6 @@ jobs:
     needs: [build-wheels]
     steps:
       - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0 # v2
-        with:
-          sccache: s3
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: Download wheels
@@ -361,8 +351,6 @@ jobs:
             zarr: "latest-release"
     steps:
       - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0 # v2
-        with:
-          sccache: s3
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           path: "icechunk"
@@ -456,8 +444,6 @@ jobs:
     needs: [build-wheels]
     steps:
       - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0 # v2
-        with:
-          sccache: s3
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: Download wheels
@@ -488,8 +474,6 @@ jobs:
     runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/extras=s3-cache
     steps:
       - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0 # v2
-        with:
-          sccache: s3
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           path: "icechunk"
