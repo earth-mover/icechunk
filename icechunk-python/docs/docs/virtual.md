@@ -47,19 +47,15 @@ oisst_files = sorted(['s3://'+f for f in oisst_files])
 #]
 ```
 
-VirtualiZarr uses [`obstore`](https://developmentseed.org/obstore/latest/) to access remote files, and we need to create an `ObjectStoreRegistry` containing an obstore `S3Store` for this bucket.
+VirtualiZarr uses [`obstore`](https://developmentseed.org/obstore/latest/) to access remote files, and we need to create an `ObjectStoreRegistry` containing an obstore store for this bucket.
 
 ```python
-from obstore.store import S3Store
+from obstore.store import from_url
 from obspec_utils.registry import ObjectStoreRegistry
 
-bucket = "noaa-cdr-sea-surface-temp-optimum-interpolation-pds/"
-store = S3Store(
-    bucket=bucket,
-    region="us-east-1",
-    skip_signature=True
-)
-registry = ObjectStoreRegistry({f"s3://{bucket}": store})
+bucket = "s3://noaa-cdr-sea-surface-temp-optimum-interpolation-pds/"
+store = from_url(bucket, region="us-east-1", skip_signature=True)
+registry = ObjectStoreRegistry({bucket: store})
 ```
 
 These are netCDF4 files, which are really HDF5 files, so we need to user virtualizarr's `HDFParser`.
