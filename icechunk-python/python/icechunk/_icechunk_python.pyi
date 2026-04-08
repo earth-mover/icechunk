@@ -1876,41 +1876,6 @@ class UpdateType:
 
     This is a tagged union — each variant is a nested class with its own
     fields describing what happened.
-
-    Variants
-    --------
-    BranchCreated
-        A new branch was created.
-    BranchDeleted
-        A branch was deleted.
-    BranchReset
-        A branch was reset to a different snapshot.
-    CommitAmended
-        A commit on a branch was amended.
-    ConfigChanged
-        The repository configuration was changed.
-    ExpirationRan
-        Snapshot expiration was run.
-    FeatureFlagChanged
-        A feature flag was changed.
-    GCRan
-        Garbage collection was run.
-    MetadataChanged
-        Repository metadata was changed.
-    NewCommit
-        A new commit was made on a branch.
-    NewDetachedSnapshot
-        A new detached snapshot was created.
-    RepoInitialized
-        The repository was initialized.
-    RepoMigrated
-        The repository was migrated to a new spec version.
-    RepoStatusChanged
-        The repository availability status was changed.
-    TagCreated
-        A new tag was created.
-    TagDeleted
-        A tag was deleted.
     """
     @final
     class BranchCreated(UpdateType):
@@ -1947,11 +1912,13 @@ class UpdateType:
     @final
     class ConfigChanged(UpdateType):
         """The repository configuration was changed."""
+
         ...
 
     @final
     class ExpirationRan(UpdateType):
         """Snapshot expiration was run."""
+
         ...
 
     @final
@@ -1965,11 +1932,13 @@ class UpdateType:
     @final
     class GCRan(UpdateType):
         """Garbage collection was run."""
+
         ...
 
     @final
     class MetadataChanged(UpdateType):
         """Repository metadata was changed."""
+
         ...
 
     @final
@@ -1989,6 +1958,7 @@ class UpdateType:
     @final
     class RepoInitialized(UpdateType):
         """The repository was initialized."""
+
         ...
 
     @final
