@@ -10,7 +10,7 @@ While Icechunk works wonderfully with native chunks managed by Zarr, there is lo
 
 !!! note
 
-    Currently, Icechunk support virtual references to data stored in `s3` compatible,`gcs`, `http/https`, and  `local` storage backends. Support for [`azure`](https://github.com/earth-mover/icechunk/issues/602) is on the roadmap.
+    Currently, Icechunk supports virtual references to data stored in `s3` compatible, `gcs`, `azure`, `http/https`, and `local` storage backends.
 
 !!! warning "Security considerations with virtual chunks"
 
@@ -51,7 +51,7 @@ VirtualiZarr uses [`obstore`](https://developmentseed.org/obstore/latest/) to ac
 
 ```python
 from obstore.store import S3Store
-from virtualizarr.registry import ObjectStoreRegistry
+from obspec_utils.registry import ObjectStoreRegistry
 
 bucket = "noaa-cdr-sea-surface-temp-optimum-interpolation-pds/"
 store = S3Store(
