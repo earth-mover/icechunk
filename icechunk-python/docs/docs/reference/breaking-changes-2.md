@@ -42,7 +42,7 @@ The new submodule layout is:
 | `icechunk.config` | `RepositoryConfig`, `CachingConfig`, `CompressionConfig`, `ManifestConfig`, ... |
 | `icechunk.conflicts` | `ConflictSolver`, `BasicConflictSolver`, `Conflict`, `ConflictType`, `VersionSelection` |
 | `icechunk.credentials` | All credential types and factory functions |
-| `icechunk.ops` | [`Update`](reference/ops.md), [`UpdateType`](reference/ops.md), `GCSummary` |
+| `icechunk.ops` | [`Update`](ops.md), [`UpdateType`](ops.md), `GCSummary` |
 | `icechunk.session` | `Session`, `ForkSession`, `SessionMode` |
 | `icechunk.snapshots` | `SnapshotInfo`, `Diff`, `ManifestFileInfo` |
 | `icechunk.storage` | `Storage`, `S3Options`, `StorageSettings`, storage factory functions |
@@ -123,7 +123,7 @@ Several parameters became keyword-only and a new `allow_empty` parameter was add
 - `ForkSession.commit()` raises `IcechunkError` instead of `TypeError`.
 - Merge direction is enforced: `Session.merge(ForkSession)` works, but `ForkSession.merge(Session)` does not.
 
-See [Parallel / Distributed Writing](parallel.md) for the updated patterns.
+See [Parallel / Distributed Writing](../understanding/parallel.md) for the updated patterns.
 
 ## Repr Strings
 

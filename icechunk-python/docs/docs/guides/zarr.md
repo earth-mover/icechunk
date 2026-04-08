@@ -1,9 +1,9 @@
 # Icechunk + Zarr
 
-Icechunk implements the [Zarr store interface](./faq.md#what-is-icechunks-relationship-to-zarr), so all standard Zarr operations work out of the box.
+Icechunk implements the [Zarr store interface](../understanding/faq.md#what-is-icechunks-relationship-to-zarr), so all standard Zarr operations work out of the box.
 This page covers Zarr-specific features that are worth highlighting when used with Icechunk.
 
-For basic read/write operations, see the [Quickstart](./quickstart.md) and [How To](./howto.md#reading-writing-and-modifying-data-with-zarr) guides.
+For basic read/write operations, see the [Quickstart](../getting-started/quickstart.md) and [How To](../getting-started/howto.md#reading-writing-and-modifying-data-with-zarr) guides.
 
 ## Sharding
 

@@ -6,7 +6,7 @@ It is not intended as a deep explanation of how Icechunk works.
 ## Creating and Opening Repos
 
 Creating and opening repos requires creating a `Storage` object.
-See the [Storage guide](./storage.md) for all the details.
+See the [Storage guide](../guides/storage.md) for all the details.
 
 ### Create a New Repo
 
@@ -24,7 +24,7 @@ repo = icechunk.Repository.open(storage)
 ### Specify Custom Config when Opening a Repo
 
 There are many configuration options available to control the behavior of the repository and the storage backend.
-See [Configuration](./configuration.md) for all the details.
+See [Configuration](../guides/configuration.md) for all the details.
 
 ```python
 config = icechunk.RepositoryConfig.default()
@@ -53,7 +53,7 @@ If you need to delete a repo, just go to the underlying storage and remove the d
 
 For a full walkthrough, see the [Quickstart](./quickstart.md).
 
-Read and write operations occur within the context of a [transaction](./version-control.md).
+Read and write operations occur within the context of a [transaction](../understanding/version-control.md).
 The general pattern is
 
 ```python
@@ -132,7 +132,7 @@ del group["array"]
 
 ## Reading and Writing Data with Xarray
 
-For more depth, see [Xarray](./xarray.md), [Parallel writes](./parallel.md), and [Dask](./dask.md).
+For more depth, see [Xarray](../guides/xarray.md), [Parallel writes](../understanding/parallel.md), and [Dask](../guides/dask.md).
 
 ### Write an in-memory Xarray Dataset
 
@@ -149,7 +149,7 @@ ds.to_zarr(session.store, group="my-group", append_dim='time', consolidated=Fals
 ### Write an Xarray dataset with Dask
 
 Writing with Dask or any other parallel execution framework requires special care.
-See [Parallel writes](./parallel.md) and [Xarray](./xarray.md) for more detail.
+See [Parallel writes](../understanding/parallel.md) and [Xarray](../guides/xarray.md) for more detail.
 
 ```python
 from icechunk.xarray import to_icechunk
@@ -167,7 +167,7 @@ ds = xr.open_zarr(session.store, group="my-group", zarr_format=3, consolidated=F
 
 ## Transactions and Version Control
 
-For more depth, see [Transactions and Version Control](./version-control.md).
+For more depth, see [Transactions and Version Control](../understanding/version-control.md).
 
 ### Create a Snapshot via a Transaction
 
@@ -220,7 +220,7 @@ session = repo.readonly_session(snapshot_id=snapshot_id)
 
 ### Amend a Snapshot
 
-For more, see [amending](./version-control.md#amending-a-snapshot).
+For more, see [amending](../understanding/version-control.md#amending-a-snapshot).
 ```python
 session = repo.writable_session("branch_name")
 # make changes
@@ -291,7 +291,7 @@ diff = repo.diff(from_tag="v1.0.0", to_branch="main")
 
 ## Moving Chunks and Nodes
 
-For more depth, see [Moving Chunks](./moving-chunks.md) and [Moving and Renaming Nodes](./moving-nodes.md).
+For more depth, see [Moving Chunks](../guides/moving-chunks.md) and [Moving and Renaming Nodes](../guides/moving-nodes.md).
 
 ### Shift All Chunks by a Fixed Offset
 
@@ -330,7 +330,7 @@ session.commit("Renamed old to new")
 
 ## Repo Maintenance
 
-For more depth, see [Data Expiration](./expiration.md).
+For more depth, see [Data Expiration](../understanding/expiration.md).
 
 ### Run Snapshot Expiration
 
@@ -348,7 +348,7 @@ results = repo.garbage_collect(expiry_time)
 
 ### Usage in async contexts
 
-Most methods in Icechunk have an async counterpart, named with an `_async` postfix. For more info, see [Async Usage](./async.md).
+Most methods in Icechunk have an async counterpart, named with an `_async` postfix. For more info, see [Async Usage](../guides/async.md).
 
 ```python
 results = await repo.garbage_collect_async(expiry_time)

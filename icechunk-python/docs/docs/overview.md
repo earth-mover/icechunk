@@ -3,9 +3,9 @@ title: Overview
 ---
 # Icechunk
 
-Icechunk is an open-source [transactional](concepts.md#transactions) [storage engine](concepts.md#what-is-icechunk) for [Zarr](https://zarr.dev/). Icechunk enables using Zarr as a true database for array data.
+Icechunk is an open-source [transactional](understanding/concepts.md#transactions) [storage engine](understanding/concepts.md#what-is-icechunk) for [Zarr](https://zarr.dev/). Icechunk enables using Zarr as a true database for array data.
 
-[Get started with the Quickstart →](quickstart.md)
+[Get started with the Quickstart →](getting-started/quickstart.md)
 
 ## Why Icechunk?
 
@@ -17,13 +17,13 @@ Zarr is a [cloud-optimized](https://earthmover.io/blog/fundamentals-what-is-clou
 
 These limitations mean Zarr cannot be reliably used as a database—a critical capability for modern data-intensive workflows like weather forecasting, climate modeling, and geospatial analysis where multiple teams need to safely read and update shared datasets.
 
-Icechunk provides git-like [snapshots](concepts.md#snapshots) combined with [ACID transactions](concepts.md#acid-transactions). This provides:
+Icechunk provides git-like [snapshots](understanding/concepts.md#snapshots) combined with [ACID transactions](understanding/concepts.md#acid-transactions). This provides:
 
 - **[Safety](#safety)**: Recover from corrupted or accidentally deleted data using version history
 - **[Consistency](#consistency)**: Ensure readers always see complete, valid snapshots—never partial writes
 - **[Reproducibility](#reproducibility)**: Reference any version of your data permanently via commits or tags
 
-Every write operation creates an immutable snapshot, while [branches and tags](concepts.md#branches-and-tags) provide familiar version control semantics.
+Every write operation creates an immutable snapshot, while [branches and tags](understanding/concepts.md#branches-and-tags) provide familiar version control semantics.
 
 ```python
 # Write and commit atomically - readers never see partial updates
@@ -41,7 +41,7 @@ repo.create_tag("v1.0-release", snapshot_id="abc123")  # Immutable reference
 session = repo.readonly_session(tag="v1.0-release")
 ```
 
-Learn more about [Icechunk's core concepts](concepts.md).
+Learn more about [Icechunk's core concepts](understanding/concepts.md).
 
 ### Safety
 
@@ -124,7 +124,7 @@ This is a serious problem as weather model writes are large enough that there ca
 
 There are other consistency issues with Zarr that you can read about in more detail in the [Multi-Player Mode](https://earthmover.io/blog/multi-player-mode-why-teams-that-use-zarr-need-icechunk) blog post.
 
-In contrast, **Icechunk** is, by design, always consistent. It implements [ACID transactions](concepts.md#acid-transactions), which ensures you will never run into these issues.
+In contrast, **Icechunk** is, by design, always consistent. It implements [ACID transactions](understanding/concepts.md#acid-transactions), which ensures you will never run into these issues.
 
 ### Reproducibility
 
@@ -175,6 +175,6 @@ But will this version history balloon storage costs? **No** it will not. Icechun
 
 Ready to use Icechunk?
 
-- **[Quickstart](quickstart.md)** - Get up and running with Icechunk in 5 minutes
-- **[Core Concepts](concepts.md)** - Understand transactions, snapshots, branches, and tags
-- **[Configuration](configuration.md)** - Set up storage backends and tune performance
+- **[Quickstart](getting-started/quickstart.md)** - Get up and running with Icechunk in 5 minutes
+- **[Core Concepts](understanding/concepts.md)** - Understand transactions, snapshots, branches, and tags
+- **[Configuration](guides/configuration.md)** - Set up storage backends and tune performance
