@@ -91,9 +91,9 @@ for update in repo.ops_log():
     print(f"{update.updated_at}  {update.kind}")
 ```
 
-Each entry is an [`Update`](reference/ops.md) with three fields:
+Each entry is an [`Update`](../reference/ops.md) with three fields:
 
-- `kind` — an [`UpdateType`](reference/ops.md) variant describing what happened
+- `kind` — an [`UpdateType`](../reference/ops.md) variant describing what happened
 - `updated_at` — a `datetime.datetime` timestamp (UTC, microsecond precision)
 - `backup_path` — internal storage detail (you can ignore this)
 

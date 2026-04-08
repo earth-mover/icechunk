@@ -42,7 +42,7 @@ The new submodule layout is:
 | `icechunk.config` | `RepositoryConfig`, `CachingConfig`, `CompressionConfig`, `ManifestConfig`, ... |
 | `icechunk.conflicts` | `ConflictSolver`, `BasicConflictSolver`, `Conflict`, `ConflictType`, `VersionSelection` |
 | `icechunk.credentials` | All credential types and factory functions |
-| `icechunk.ops` | [`Update`](reference/ops.md), [`UpdateType`](reference/ops.md), `GCSummary` |
+| `icechunk.ops` | [`Update`](ops.md), [`UpdateType`](ops.md), `GCSummary` |
 | `icechunk.session` | `Session`, `ForkSession`, `SessionMode` |
 | `icechunk.snapshots` | `SnapshotInfo`, `Diff`, `ManifestFileInfo` |
 | `icechunk.storage` | `Storage`, `S3Options`, `StorageSettings`, storage factory functions |
