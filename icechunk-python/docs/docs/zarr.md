@@ -9,7 +9,7 @@ For basic read/write operations, see the [Quickstart](./quickstart.md) and [How 
 
 Icechunk supports [Zarr sharding](https://zarr-specs.readthedocs.io/en/latest/v3/codecs/sharding-indexed/v1.0.html), which packs multiple chunks into a single storage object. This can dramatically reduce the number of objects in storage for datasets with many small chunks.
 
-```python
+```python exec="on" session="zarr" source="material-block"
 import numpy as np
 import zarr
 import icechunk
@@ -29,7 +29,10 @@ arr = zarr.create_array(
 )
 
 arr[:] = np.random.default_rng(0).standard_normal((100, 100))
-session.commit("add sharded array")
+```
+
+```python exec="on" session="zarr" source="material-block" result="code"
+print(session.commit("add sharded array"))
 ```
 
 ## Rectilinear chunk grids
@@ -48,7 +51,7 @@ This is useful when your data has a natural non-uniform partitioning
     pip install zarr @ git+https://github.com/maxrjones/zarr-python.git@poc/unified-chunk-grid
     ```
 
-```python
+```python exec="on" session="zarr-rect" source="material-block"
 import numpy as np
 import zarr
 import icechunk
@@ -72,5 +75,8 @@ arr = zarr.create_array(
 )
 
 arr[:] = np.arange(120, dtype="float64").reshape(10, 12)
-session.commit("add rectilinear array")
+```
+
+```python exec="on" session="zarr-rect" source="material-block" result="code"
+print(session.commit("add rectilinear array"))
 ```
