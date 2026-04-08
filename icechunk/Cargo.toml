@@ -2,7 +2,7 @@
 name = "icechunk"
 version = "2.0.0"
 description = "Transactional storage engine for Zarr designed for use on cloud object storage"
-readme.workspace = true
+readme = "README.md"
 repository = "https://github.com/earth-mover/icechunk"
 homepage = "https://icechunk.io"
 license = "Apache-2.0"
