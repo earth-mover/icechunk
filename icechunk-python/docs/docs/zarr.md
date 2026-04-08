@@ -45,7 +45,7 @@ This is useful when your data has a natural non-uniform partitioning
 
 !!! note
 
-    Rectilinear chunk grids require a development version of zarr-python with the feature branch:
+    Rectilinear chunk grids require an unreleased development version of zarr-python:
 
     ```
     pip install zarr @ git+https://github.com/maxrjones/zarr-python.git@main
