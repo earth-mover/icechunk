@@ -38,6 +38,7 @@ jobs:
       || github.event_name == 'schedule'
       }}
     steps:
+      - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0 # v2
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
       - name: Install Just
         uses: taiki-e/install-action@98ec31d284eb962f41c14065e9391a955aa810cf # v2
@@ -70,7 +71,6 @@ jobs:
           working-directory: icechunk-python
           # target: ${{ matrix.platform.target }}
           args: --release --out dist --find-interpreter
-          sccache: true
           # manylinux: ${{ matrix.platform.manylinux }} # https://github.com/PyO3/maturin-action/issues/245
 
       - name: setup
@@ -255,6 +255,7 @@ jobs:
       || github.event_name == 'schedule'
       }}
     steps:
+      - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0 # v2
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           path: "icechunk"

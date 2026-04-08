@@ -28,6 +28,7 @@ jobs:
   build-wheels:
     runs-on: runs-on=${{ github.run_id }}/runner=8cpu-linux-x64/extras=s3-cache
     steps:
+      - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0 # v2
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
         with:
@@ -38,7 +39,6 @@ jobs:
         with:
           working-directory: icechunk-python
           args: --release --out dist -i python${{ env.PYTHON_VERSION }}
-          sccache: true
           manylinux: auto
 
       - name: Upload wheels
@@ -64,6 +64,7 @@ jobs:
             distributed: "latest-release"
             zarr: "latest-release"
     steps:
+      - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0 # v2
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
       - name: Stand up RustFS
         run: |
@@ -137,6 +138,7 @@ jobs:
   build-wheels-free-threaded:
     runs-on: runs-on=${{ github.run_id }}/runner=8cpu-linux-x64/extras=s3-cache
     steps:
+      - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0 # v2
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
         with:
@@ -147,7 +149,6 @@ jobs:
         with:
           working-directory: icechunk-python
           args: --release --out dist -i python3.13t
-          sccache: true
           manylinux: auto
 
       - name: Upload wheels
@@ -160,6 +161,7 @@ jobs:
     runs-on: runs-on=${{ github.run_id }}/runner=4cpu-linux-x64/extras=s3-cache
     needs: [build-wheels-free-threaded]
     steps:
+      - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0 # v2
       - uses: actions/checkout@v6
       - name: Stand up RustFS
         run: |
@@ -217,6 +219,7 @@ jobs:
       matrix:
         shard-id: [0, 1, 2]
     steps:
+      - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0 # v2
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: Download wheels
@@ -281,6 +284,7 @@ jobs:
       run:
         working-directory: .
     steps:
+      - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0 # v2
       - name: Verify all shards passed
         run: |
           if [ "${{ needs.test-hypothesis-shard.result }}" != "success" ]; then
@@ -292,6 +296,7 @@ jobs:
     runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/extras=s3-cache
     needs: [build-wheels]
     steps:
+      - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0 # v2
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: Download wheels
@@ -339,6 +344,7 @@ jobs:
             version: "latest-release"
             zarr: "latest-release"
     steps:
+      - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0 # v2
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           path: "icechunk"
@@ -431,6 +437,7 @@ jobs:
     runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/extras=s3-cache
     needs: [build-wheels]
     steps:
+      - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0 # v2
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: Download wheels
@@ -460,6 +467,7 @@ jobs:
   check-xarray-docs:
     runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/extras=s3-cache
     steps:
+      - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0 # v2
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           path: "icechunk"

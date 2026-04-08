@@ -71,6 +71,7 @@ jobs:
     name: stable - ${{ matrix.settings.target }} - node@22
     runs-on: ${{ matrix.settings.host }}
     steps:
+      - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0 # v2
       - uses: actions/checkout@v6
       - name: Setup node
         uses: actions/setup-node@v6
@@ -183,6 +184,7 @@ jobs:
           - "22"
     runs-on: runs-on=${{ github.run_id }}/runner=4cpu-linux-x64/extras=s3-cache
     steps:
+      - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0 # v2
       - uses: actions/checkout@v6
       - name: Setup node
         uses: actions/setup-node@v6
@@ -212,6 +214,7 @@ jobs:
       run:
         working-directory: ./icechunk-js
     steps:
+      - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0 # v2
       - uses: actions/checkout@v6
       - name: Setup node
         uses: actions/setup-node@v6
@@ -251,6 +254,7 @@ jobs:
       - test-linux-binding
       - test-wasi
     steps:
+      - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0 # v2
       - uses: actions/checkout@v6
       - name: Setup node
         uses: actions/setup-node@v6
