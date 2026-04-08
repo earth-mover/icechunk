@@ -51,7 +51,7 @@ This is useful when your data has a natural non-uniform partitioning
     pip install zarr @ git+https://github.com/maxrjones/zarr-python.git@poc/unified-chunk-grid
     ```
 
-```python exec="on" session="zarr-rect" source="material-block"
+```python
 import numpy as np
 import zarr
 import icechunk
@@ -75,8 +75,5 @@ arr = zarr.create_array(
 )
 
 arr[:] = np.arange(120, dtype="float64").reshape(10, 12)
-```
-
-```python exec="on" session="zarr-rect" source="material-block" result="code"
-print(session.commit("add rectilinear array"))
+session.commit("add rectilinear array")
 ```
