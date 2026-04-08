@@ -207,6 +207,11 @@ jobs:
           source .venv/bin/activate
           pip list
 
+      - name: Install flatc
+        if: always()
+        run: |
+          sudo apt-get update && sudo apt-get install -y flatbuffers-compiler
+
       - name: pytest
         id: pytest-icechunk
         if: always()
