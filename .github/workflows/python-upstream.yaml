@@ -198,7 +198,7 @@ jobs:
             cache-hypothesis-
 
       - name: describe environment
-        if: always()
+        if: steps.setup.outcome == 'success'
         shell: bash
         working-directory: icechunk-python
         run: |
@@ -208,13 +208,13 @@ jobs:
           pip list
 
       - name: Install flatc
-        if: always()
+        if: steps.setup.outcome == 'success'
         run: |
           sudo apt-get update && sudo apt-get install -y flatbuffers-compiler
 
       - name: pytest
         id: pytest-icechunk
-        if: always()
+        if: steps.setup.outcome == 'success'
         shell: bash
         working-directory: icechunk-python
         env:
