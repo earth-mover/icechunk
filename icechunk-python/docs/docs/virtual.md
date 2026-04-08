@@ -28,7 +28,7 @@ Before we get started, we need to install `virtualizarr` (version 2.4.0 or later
 pip install "virtualizarr>=2.4.0" icechunk fsspec s3fs
 ```
 
-First, we need to find all of the files we are interested in. 
+First, we need to find all of the files we are interested in.
 We can do this with fsspec using a `glob` expression to find every netcdf file in the August 2024 folder in the bucket:
 
 ```python
