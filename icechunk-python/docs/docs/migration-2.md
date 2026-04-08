@@ -1,6 +1,6 @@
 # Migrate to 2.0
 
-Icechunk 2.0 uses a new storage format (spec version 2). Existing repositories created with Icechunk 1.x can be automatically upgraded to version 2.0 using the [`upgrade_icechunk_repository()`](./reference.md#icechunk.upgrade_icechunk_repository) function. This migration only uses  repository metadata, and it will not read or write any chunks.
+Icechunk 2.0 uses a new storage format (spec version 2). Existing repositories created with Icechunk 1.x can be automatically upgraded to version 2.0 using the [`upgrade_icechunk_repository()`](./reference/index.md#icechunk.upgrade_icechunk_repository) function. This migration only uses  repository metadata, and it will not read or write any chunks.
 
 !!! warning
     This is an administrative operation. It **must be executed in isolation** — no other readers or writers should be accessing the repository during the migration. Any writes made during the migration may be lost.
@@ -46,4 +46,4 @@ If something goes wrong at any step, the repository is left in a working state.
 
 ### After migration
 
-The original `repo` object is **invalidated** after migration. Any attempt to use it will raise a `RuntimeError`. Always use the new [`Repository`](./reference.md#icechunk.Repository) object returned by [`upgrade_icechunk_repository()`](./reference.md#icechunk.upgrade_icechunk_repository).
+The original `repo` object is **invalidated** after migration. Any attempt to use it will raise a `RuntimeError`. Always use the new [`Repository`](./reference/index.md#icechunk.Repository) object returned by [`upgrade_icechunk_repository()`](./reference/index.md#icechunk.upgrade_icechunk_repository).

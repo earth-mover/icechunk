@@ -9,7 +9,7 @@ When using Icechunk with s3 compatible storage systems, credentials must be prov
 === "From environment"
 
     With this option, the credentials for connecting to S3 are detected automatically from your environment.
-    This is usually the best choice if you are connecting from within an AWS environment (e.g. from EC2). [See the API](./reference.md#icechunk.s3_storage)
+    This is usually the best choice if you are connecting from within an AWS environment (e.g. from EC2). [See the API](./reference/storage.md#icechunk.storage.s3_storage)
 
     ```python
     icechunk.s3_storage(
@@ -21,7 +21,7 @@ When using Icechunk with s3 compatible storage systems, credentials must be prov
 
 === "Provide credentials"
 
-    With this option, you provide your credentials and other details explicitly. [See the API](./reference.md#icechunk.s3_storage)
+    With this option, you provide your credentials and other details explicitly. [See the API](./reference/storage.md#icechunk.storage.s3_storage)
 
     ```python
     icechunk.s3_storage(
@@ -40,7 +40,7 @@ When using Icechunk with s3 compatible storage systems, credentials must be prov
 === "Anonymous"
 
     With this option, you connect to S3 anonymously (without credentials).
-    This is suitable for public data. [See the API](./reference.md#icechunk.s3_storage)
+    This is suitable for public data. [See the API](./reference/storage.md#icechunk.storage.s3_storage)
 
     ```python
     icechunk.s3_storage(
@@ -53,7 +53,7 @@ When using Icechunk with s3 compatible storage systems, credentials must be prov
 
 === "Refreshable Credentials"
 
-    With this option, you provide a callback function that will be called to obtain S3 credentials when needed. This is useful for workloads that depend on retrieving short-lived credentials from AWS or similar authority, allowing for credentials to be refreshed as needed without interrupting any workflows. [See the API](./reference.md#icechunk.s3_storage)
+    With this option, you provide a callback function that will be called to obtain S3 credentials when needed. This is useful for workloads that depend on retrieving short-lived credentials from AWS or similar authority, allowing for credentials to be refreshed as needed without interrupting any workflows. [See the API](./reference/storage.md#icechunk.storage.s3_storage)
 
     ```python
     def get_credentials() -> S3StaticCredentials:
@@ -75,7 +75,7 @@ When using Icechunk with s3 compatible storage systems, credentials must be prov
 
 #### Tigris
 
-[Tigris](https://www.tigrisdata.com/) is available as a storage backend for Icechunk. Icechunk provides a helper function specifically for [creating Tigris storage configurations](./reference.md#icechunk.tigris_storage).
+[Tigris](https://www.tigrisdata.com/) is available as a storage backend for Icechunk. Icechunk provides a helper function specifically for [creating Tigris storage configurations](./reference/storage.md#icechunk.storage.tigris_storage).
 
 ```python
 icechunk.tigris_storage(
@@ -168,7 +168,7 @@ Icechunk can be used with [Google Cloud Storage](https://cloud.google.com/storag
 
 === "From environment"
 
-    With this option, the credentials for connecting to GCS are detected automatically from your environment.  [See the API](./reference.md#icechunk.gcs_storage)
+    With this option, the credentials for connecting to GCS are detected automatically from your environment.  [See the API](./reference/storage.md#icechunk.storage.gcs_storage)
 
     ```python
     icechunk.gcs_storage(
@@ -180,7 +180,7 @@ Icechunk can be used with [Google Cloud Storage](https://cloud.google.com/storag
 
 === "Service Account File"
 
-    With this option, you provide the path to a [service account file](https://cloud.google.com/iam/docs/service-account-creds#key-types). [See the API](./reference.md#icechunk.gcs_storage)
+    With this option, you provide the path to a [service account file](https://cloud.google.com/iam/docs/service-account-creds#key-types). [See the API](./reference/storage.md#icechunk.storage.gcs_storage)
 
     ```python
     icechunk.gcs_storage(
@@ -192,7 +192,7 @@ Icechunk can be used with [Google Cloud Storage](https://cloud.google.com/storag
 
 === "Service Account Key"
 
-    With this option, you provide the service account key as a string. [See the API](./reference.md#icechunk.gcs_storage)
+    With this option, you provide the service account key as a string. [See the API](./reference/storage.md#icechunk.storage.gcs_storage)
 
     ```python
     icechunk.gcs_storage(
@@ -210,7 +210,7 @@ Icechunk can be used with [Google Cloud Storage](https://cloud.google.com/storag
 
 === "Application Default Credentials"
 
-    With this option, you use the [application default credentials (ADC)](https://cloud.google.com/docs/authentication/provide-credentials-adc) to authentication with GCS. Provide the path to the credentials. [See the API](./reference.md#icechunk.gcs_storage)
+    With this option, you use the [application default credentials (ADC)](https://cloud.google.com/docs/authentication/provide-credentials-adc) to authentication with GCS. Provide the path to the credentials. [See the API](./reference/storage.md#icechunk.storage.gcs_storage)
 
     ```python
     icechunk.gcs_storage(
@@ -222,7 +222,7 @@ Icechunk can be used with [Google Cloud Storage](https://cloud.google.com/storag
 
 === "Bearer Token"
 
-    With this option, you provide a bearer token to use for the object store. This is useful for short lived workflows where expiration is not relevant or when the bearer token will not expire [See the API](./reference.md#icechunk.gcs_storage)
+    With this option, you provide a bearer token to use for the object store. This is useful for short lived workflows where expiration is not relevant or when the bearer token will not expire [See the API](./reference/storage.md#icechunk.storage.gcs_storage)
 
     ```python
     icechunk.gcs_storage(
@@ -234,7 +234,7 @@ Icechunk can be used with [Google Cloud Storage](https://cloud.google.com/storag
 
 === "Refreshable Credentials"
 
-    With this option, you provide a callback function that will be called to obtain GCS credentials when needed. This is useful for workloads that depend on retrieving short-lived credentials from GCS or similar authority, allowing for credentials to be refreshed as needed without interrupting any workflows. This works at a lower level than the other methods, and accepts a bearer token and expiration time. These are the same credentials that are created for you when specifying the service account file, key, or ADC. [See the API](./reference.md#icechunk.gcs_storage)
+    With this option, you provide a callback function that will be called to obtain GCS credentials when needed. This is useful for workloads that depend on retrieving short-lived credentials from GCS or similar authority, allowing for credentials to be refreshed as needed without interrupting any workflows. This works at a lower level than the other methods, and accepts a bearer token and expiration time. These are the same credentials that are created for you when specifying the service account file, key, or ADC. [See the API](./reference/storage.md#icechunk.storage.gcs_storage)
 
     ```python
     def get_credentials() -> GcsBearerCredential:
@@ -260,7 +260,7 @@ Icechunk can be used with [Azure Blob Storage](https://azure.microsoft.com/en-us
 
 === "From environment"
 
-    With this option, the credentials for connecting to Azure Blob Storage are detected automatically from your environment. [See the API](./reference.md#icechunk.azure_storage)
+    With this option, the credentials for connecting to Azure Blob Storage are detected automatically from your environment. [See the API](./reference/storage.md#icechunk.storage.azure_storage)
 
     ```python
     icechunk.azure_storage(
@@ -273,7 +273,7 @@ Icechunk can be used with [Azure Blob Storage](https://azure.microsoft.com/en-us
 
 === "Provide credentials"
 
-    With this option, you provide your credentials and other details explicitly. [See the API](./reference.md#icechunk.azure_storage)
+    With this option, you provide your credentials and other details explicitly. [See the API](./reference/storage.md#icechunk.storage.azure_storage)
 
     ```python
     icechunk.azure_storage(
@@ -289,7 +289,7 @@ Icechunk can be used with [Azure Blob Storage](https://azure.microsoft.com/en-us
 
 ### Filesystem Storage
 
-Icechunk can also be used on a [local filesystem](./reference.md#icechunk.local_filesystem_storage) by providing a path to the location of the store
+Icechunk can also be used on a [local filesystem](./reference/storage.md#icechunk.storage.local_filesystem_storage) by providing a path to the location of the store
 
 === "Local filesystem"
 
@@ -306,7 +306,7 @@ Icechunk can also be used on a [local filesystem](./reference.md#icechunk.local_
 
 ### HTTP Storage
 
-Icechunk can read repositories served over HTTP or HTTPS. This is useful for accessing publicly available datasets or repositories hosted on static file servers. [See the API](./reference.md#icechunk.http_storage)
+Icechunk can read repositories served over HTTP or HTTPS. This is useful for accessing publicly available datasets or repositories hosted on static file servers. [See the API](./reference/storage.md#icechunk.storage.http_storage)
 
 ```python
 icechunk.http_storage("https://example.com/path/to/repo")
@@ -336,7 +336,7 @@ See the [object_store ClientConfigKey documentation](https://docs.rs/object_stor
 
 ### Redirect Storage
 
-Icechunk supports a redirect storage backend that resolves the actual storage location at runtime by following HTTP redirects. Rather than pointing directly at a bucket or path, you provide an HTTP URL that returns a redirect (3xx response with a `Location` header) to a supported storage scheme (`s3://`, `gs://`, `r2://`, `tigris://`, `http+icechunk://`, etc.). [See the API](./reference.md#icechunk.redirect_storage)
+Icechunk supports a redirect storage backend that resolves the actual storage location at runtime by following HTTP redirects. Rather than pointing directly at a bucket or path, you provide an HTTP URL that returns a redirect (3xx response with a `Location` header) to a supported storage scheme (`s3://`, `gs://`, `r2://`, `tigris://`, `http+icechunk://`, etc.). [See the API](./reference/storage.md#icechunk.storage.redirect_storage)
 
 ```python
 icechunk.redirect_storage("https://example.com/my-repo-location")

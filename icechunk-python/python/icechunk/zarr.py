@@ -3,6 +3,10 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal
 
 from icechunk._icechunk_python import PyStore, VirtualChunkSpec
+
+__all__ = [
+    "IcechunkStore",
+]
 from zarr.abc.store import (
     ByteRequest,
     OffsetByteRequest,

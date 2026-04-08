@@ -32,6 +32,18 @@ config.caching = icechunk.CachingConfig(num_bytes_chunks=100_000_000)
 repo = icechunk.Repository.open(storage, config=config)
 ```
 
+### Set Repo Metadata
+
+If you manage a number of Icechunk repositories, it could be useful to classify them using metadata.
+Icechunk allows you to set and retrieve arbitrary JSON-like metadata at the repository level.
+
+```python
+repo = icechunk.Repository.open(...)
+repo.set_metadata(dict(test=True, team="science"))
+repo.update_metadata(dict(number_of_bugs=42))
+print(repo.get_metadata())
+```
+
 ### Deleting a Repo
 
 Icechunk doesn't provide a way to delete a repo once it has been created.
@@ -51,7 +63,6 @@ session = repo.writable_session(branch="main")
 session.commit(message="wrote some data")
 ```
 
-
 !!! info
 
     In the examples below, we just show the interaction with the `store` object.
@@ -64,7 +75,6 @@ which automatically commits when the context exits.
 with repo.transaction(branch="main", message="wrote some data") as store:
     # interact with the repo via store
 ```
-
 
 ### Create a Group
 
@@ -130,7 +140,6 @@ For more depth, see [Xarray](./xarray.md), [Parallel writes](./parallel.md), and
 ds.to_zarr(session.store, group="my-group", zarr_format=3, consolidated=False)
 ```
 
-
 ### Append to an existing datast
 
 ```python
@@ -146,7 +155,6 @@ See [Parallel writes](./parallel.md) and [Xarray](./xarray.md) for more detail.
 from icechunk.xarray import to_icechunk
 to_icechunk(ds, session)
 ```
-
 
 ### Read a dataset with Xarray
 
@@ -212,7 +220,7 @@ session = repo.readonly_session(snapshot_id=snapshot_id)
 
 ### Amend a Snapshot
 
-For more, see [amending](./version-controld.md#amending).
+For more, see [amending](./version-control.md#amending-a-snapshot).
 ```python
 session = repo.writable_session("branch_name")
 # make changes
