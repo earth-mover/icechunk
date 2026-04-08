@@ -154,4 +154,3 @@ icechunk.config.RepositoryConfig(inline_chunk_threshold_bytes=512, ...)
 ```
 
 If your code or tests parse repr strings, they will need updating.
-
