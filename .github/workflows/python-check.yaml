@@ -26,7 +26,7 @@ defaults:
 
 jobs:
   build-wheels:
-    runs-on: runs-on=${{ github.run_id }}/runner=large-ubuntu24
+    runs-on: runs-on=${{ github.run_id }}/runner=8cpu-linux-x64
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
@@ -48,7 +48,7 @@ jobs:
           path: icechunk-python/dist
 
   test:
-    runs-on: runs-on=${{ github.run_id }}/runner=default-ubuntu24
+    runs-on: runs-on=${{ github.run_id }}/runner=4cpu-linux-x64
     needs: [build-wheels]
     strategy:
       matrix:
@@ -135,7 +135,7 @@ jobs:
           python -m pytest -n 4 -m "not hypothesis"
 
   build-wheels-free-threaded:
-    runs-on: runs-on=${{ github.run_id }}/runner=large-ubuntu24
+    runs-on: runs-on=${{ github.run_id }}/runner=8cpu-linux-x64
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
@@ -157,7 +157,7 @@ jobs:
           path: icechunk-python/dist
 
   test-free-threaded:
-    runs-on: runs-on=${{ github.run_id }}/runner=default-ubuntu24
+    runs-on: runs-on=${{ github.run_id }}/runner=4cpu-linux-x64
     needs: [build-wheels-free-threaded]
     steps:
       - uses: actions/checkout@v6
@@ -210,7 +210,7 @@ jobs:
           python -m pytest -n 4 -m "not hypothesis"
 
   test-hypothesis-shard:
-    runs-on: runs-on=${{ github.run_id }}/runner=default-ubuntu24
+    runs-on: runs-on=${{ github.run_id }}/runner=4cpu-linux-x64
     needs: [build-wheels]
     strategy:
       fail-fast: false
@@ -276,7 +276,7 @@ jobs:
   test-hypothesis:
     if: always()
     needs: [test-hypothesis-shard]
-    runs-on: runs-on=${{ github.run_id }}/runner=small-ubuntu24
+    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64
     defaults:
       run:
         working-directory: .
@@ -289,7 +289,7 @@ jobs:
           fi
 
   compat-stateful:
-    runs-on: runs-on=${{ github.run_id }}/runner=small-ubuntu24
+    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64
     needs: [build-wheels]
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
@@ -327,7 +327,7 @@ jobs:
           python -m pytest tests/test_stateful_compat.py -v
 
   xarray-backends:
-    runs-on: runs-on=${{ github.run_id }}/runner=default-ubuntu24
+    runs-on: runs-on=${{ github.run_id }}/runner=4cpu-linux-x64
     needs: [build-wheels]
     strategy:
       matrix:
@@ -428,7 +428,7 @@ jobs:
           python -m pytest -c=../../xarray/pyproject.toml -W ignore --override-ini="strict_markers=false" tests/run_xarray_backends_tests.py
 
   stubtest:
-    runs-on: runs-on=${{ github.run_id }}/runner=small-ubuntu24
+    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64
     needs: [build-wheels]
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
@@ -458,7 +458,7 @@ jobs:
           python -m mypy.stubtest --ignore-disjoint-bases icechunk._icechunk_python --allowlist stubtest_allowlist.txt
 
   check-xarray-docs:
-    runs-on: runs-on=${{ github.run_id }}/runner=small-ubuntu24
+    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
