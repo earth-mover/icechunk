@@ -34,7 +34,7 @@ solver = ic.conflicts.BasicConflictSolver(...)
 
 ## `icechunk.IcechunkStore`
 
-::: icechunk.zarr.IcechunkStore
+::: icechunk.store.IcechunkStore
 
 ## Exceptions
 

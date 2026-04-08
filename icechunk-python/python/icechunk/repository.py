@@ -20,7 +20,7 @@ from icechunk.session import Session
 from icechunk.snapshots import Diff, ManifestFileInfo, SnapshotInfo
 from icechunk.storage import Storage, StorageSettings
 from icechunk.types import CommitMethod
-from icechunk.zarr import IcechunkStore
+from icechunk.store import IcechunkStore
 
 
 class Repository:

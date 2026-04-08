@@ -9,7 +9,7 @@ from hypothesis import event
 
 from icechunk._icechunk_python import SnapshotInfo
 from icechunk.testing.models import ModelStore
-from icechunk.zarr import IcechunkStore
+from icechunk.store import IcechunkStore
 
 __all__ = [
     "assert_ancestry_invariants",
