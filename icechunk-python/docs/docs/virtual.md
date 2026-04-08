@@ -179,6 +179,10 @@ ds.sst.isel(time=26, zlev=0).plot(x='lon', y='lat', vmin=0)
 
 ![oisst](assets/datasets/oisst.png)
 
+### Appending to an existing store
+
+You can append new virtual data to an existing Icechunk store using `to_icechunk`'s `append_dim` argument. See the [VirtualiZarr docs on appending](https://virtualizarr.readthedocs.io/en/latest/usage.html#append-to-an-existing-icechunk-store) for details.
+
 !!! note
 
     Users of the repo will need to enable the virtual chunk container by passing the `credentials` argument to `Repository.open`. This way, the repo user, flags the container as authorized. `credentials` argument must be a dict using url prefixes as keys and optional credentials as values. If the container requires no credentials, `None` can be used as the value in the map. Failing to authorize a container, will generate an error when a chunk is fetched from it.
