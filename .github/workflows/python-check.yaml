@@ -262,7 +262,7 @@ jobs:
         run: |
           set -e
           source .venv/bin/activate
-          python -m pytest -m hypothesis --hypothesis-seed=${{ matrix.shard-id }}
+          python -m pytest -m hypothesis
 
       - name: Save cached hypothesis directory
         id: save-hypothesis-cache

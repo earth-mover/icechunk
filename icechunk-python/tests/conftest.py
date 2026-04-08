@@ -18,10 +18,11 @@ from icechunk import Repository, SpecVersion, in_memory_storage, local_filesyste
 # Select with: pytest --hypothesis-profile=nightly
 #
 # When HYPOTHESIS_NUM_SHARDS > 1, max_examples is divided across shards so
-# each parallel runner does a fraction of the work. Use --hypothesis-seed=<N>
-# per shard to ensure different shards explore different example spaces.
+# each parallel runner does a fraction of the work. derandomize is disabled
+# so each shard naturally gets a unique random seed — no fixed seeds needed.
 # ---------------------------------------------------------------------------
 _num_shards = int(os.environ.get("HYPOTHESIS_NUM_SHARDS", "1"))
+_sharding = _num_shards > 1
 
 settings.register_profile(
     "default",
@@ -34,6 +35,7 @@ settings.register_profile(
     parent=settings.get_profile("ci"),
     max_examples=math.ceil(200 / _num_shards),
     stateful_step_count=75,
+    derandomize=not _sharding,
     suppress_health_check=[HealthCheck.filter_too_much, HealthCheck.too_slow],
 )
 settings.register_profile(
