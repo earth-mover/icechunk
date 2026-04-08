@@ -8,8 +8,8 @@ from collections.abc import Iterable
 from hypothesis import event
 
 from icechunk._icechunk_python import SnapshotInfo
+from icechunk.store import IcechunkStore
 from icechunk.testing.models import ModelStore
-from icechunk.zarr import IcechunkStore
 
 __all__ = [
     "assert_ancestry_invariants",
