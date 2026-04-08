@@ -1,3 +1,5 @@
+import math
+import os
 from enum import Enum
 from typing import Literal, cast
 
@@ -14,7 +16,13 @@ from icechunk import Repository, SpecVersion, in_memory_storage, local_filesyste
 # Inherits from hypothesis's built-in "default" and "ci" profiles.
 # hypothesis auto-selects "ci" when the CI env var is set.
 # Select with: pytest --hypothesis-profile=nightly
+#
+# When HYPOTHESIS_NUM_SHARDS > 1, max_examples is divided across shards so
+# each parallel runner does a fraction of the work. Use --hypothesis-seed=<N>
+# per shard to ensure different shards explore different example spaces.
 # ---------------------------------------------------------------------------
+_num_shards = int(os.environ.get("HYPOTHESIS_NUM_SHARDS", "1"))
+
 settings.register_profile(
     "default",
     parent=settings.get_profile("default"),
@@ -24,7 +32,7 @@ settings.register_profile(
 settings.register_profile(
     "ci",
     parent=settings.get_profile("ci"),
-    max_examples=200,
+    max_examples=math.ceil(200 / _num_shards),
     stateful_step_count=75,
     suppress_health_check=[HealthCheck.filter_too_much, HealthCheck.too_slow],
 )

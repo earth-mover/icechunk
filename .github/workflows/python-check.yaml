@@ -251,18 +251,18 @@ jobs:
           PYTHON_TAG="cp$(echo ${{ env.PYTHON_VERSION }} | tr -d '.')"
           WHEEL=$(ls dist/*-${PYTHON_TAG}-*.whl)
           uv pip install "$WHEEL" --group test
-          uv pip install pytest-shard
 
       - name: Run hypothesis tests (shard ${{ matrix.shard-id }}/3)
         shell: bash
         working-directory: icechunk-python
         env:
           HYPOTHESIS_EXPERIMENTAL_OBSERVABILITY: "1"
+          HYPOTHESIS_NUM_SHARDS: "3"
           NOCOLOR: 1
         run: |
           set -e
           source .venv/bin/activate
-          python -m pytest -m hypothesis --num-shards=3 --shard-id=${{ matrix.shard-id }}
+          python -m pytest -m hypothesis --hypothesis-seed=${{ matrix.shard-id }}
 
       - name: Save cached hypothesis directory
         id: save-hypothesis-cache
