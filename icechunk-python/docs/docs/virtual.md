@@ -302,7 +302,7 @@ Icechunk supports storing virtual references to any format that VirtualiZarr can
 
 Support for other common filetypes is under development within the VirtualiZarr project. Below are some relevant issues:
 
-- [VirtualiZarr docs on Custom Parsers](https://virtualizarr.readthedocs.io/en/stable/custom_parsers.html)
+- [VirtualiZarr docs on Custom Parsers](https://virtualizarr.readthedocs.io/en/latest/custom_parsers.html)
 - [Meta issue for all file format support](https://github.com/zarr-developers/VirtualiZarr/issues/218)
 - [Issue tracking support for GRIB2 files](https://github.com/zarr-developers/VirtualiZarr/issues/312)
 - [Issue tracking support for GRIB2 files with datatree](https://github.com/zarr-developers/VirtualiZarr/issues/11)
