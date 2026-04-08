@@ -30,7 +30,7 @@ env:
 jobs:
   zarrs:
     name: zarrs-upstream
-    runs-on: ubuntu-latest
+    runs-on: runs-on=${{ github.run_id }}/runner=4cpu-linux-x64
     continue-on-error: true
     if: ${{
       (contains(github.event.pull_request.labels.*.name, 'test-upstream') && github.event_name == 'pull_request')

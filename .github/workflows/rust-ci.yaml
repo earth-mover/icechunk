@@ -44,7 +44,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, ubuntu-24.04-arm, macos-15-intel, macos-latest]
+        os: ["runs-on=${{ github.run_id }}/runner=4cpu-linux-x64", ubuntu-24.04-arm, macos-15-intel, macos-latest]
 
     steps:
       - name: Checkout repository
@@ -60,12 +60,12 @@ jobs:
           grep 'The current MSRV is `${{ env.RUST_CHANNEL }}`' icechunk-python/docs/docs/reference/contributing.md
 
       - name: Stand up docker services
-        if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm'
+        if: contains(matrix.os, 'linux') || contains(matrix.os, 'ubuntu')
         run: |
           docker compose up -d
 
       - name: Wait for containers to be ready
-        if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm'
+        if: contains(matrix.os, 'linux') || contains(matrix.os, 'ubuntu')
         run: |
           for _ in {1..30}; do
               if docker compose ps --status exited --filter status==0 | grep rustfs ; then
@@ -81,7 +81,7 @@ jobs:
           done
 
       - name: Install Just
-        if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm'
+        if: contains(matrix.os, 'linux') || contains(matrix.os, 'ubuntu')
         run: sudo snap install --edge --classic just
 
       - name: Install cargo nextest
@@ -100,7 +100,7 @@ jobs:
           key: ${{ env.RUST_CHANNEL }}
 
       - name: Run tests with Docker services
-        if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm'
+        if: contains(matrix.os, 'linux') || contains(matrix.os, 'ubuntu')
         env:
           RUST_LOG: icechunk=trace
           R2_BUCKET: ${{ secrets.R2_BUCKET }}
@@ -123,17 +123,17 @@ jobs:
           just profile=ci test
 
       - name: Run doc tests
-        if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm'
+        if: contains(matrix.os, 'linux') || contains(matrix.os, 'ubuntu')
         run: |
           just profile=ci doctest
 
       - name: Run examples
-        if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm'
+        if: contains(matrix.os, 'linux') || contains(matrix.os, 'ubuntu')
         run: |
           just profile=ci run-all-examples
 
       - name: Run unit tests only
-        if: matrix.os != 'ubuntu-latest' && matrix.os != 'ubuntu-24.04-arm'
+        if: !contains(matrix.os, 'linux') && !contains(matrix.os, 'ubuntu')
         run: |
           cargo test --lib --profile ci
 
@@ -187,7 +187,7 @@ jobs:
   wasm-build:
     name: WASM Build
     timeout-minutes: 15
-    runs-on: ubuntu-latest
+    runs-on: runs-on=${{ github.run_id }}/runner=4cpu-linux-x64
     defaults:
       run:
         working-directory: ./

@@ -37,7 +37,7 @@ jobs:
           - host: windows-latest
             build: yarn build --target x86_64-pc-windows-msvc
             target: x86_64-pc-windows-msvc
-          - host: ubuntu-latest
+          - host: "runs-on=${{ github.run_id }}/runner=4cpu-linux-x64"
             target: x86_64-unknown-linux-gnu
             build: yarn build --target x86_64-unknown-linux-gnu --use-napi-cross
             setup: |
@@ -50,7 +50,7 @@ jobs:
           - host: macos-latest
             target: aarch64-apple-darwin
             build: yarn build --target aarch64-apple-darwin
-          - host: ubuntu-latest
+          - host: "runs-on=${{ github.run_id }}/runner=4cpu-linux-x64"
             target: wasm32-wasip1-threads
             build: yarn build --target wasm32-wasip1-threads
             rust: '1.94.1'
@@ -181,7 +181,7 @@ jobs:
         node:
           - "20"
           - "22"
-    runs-on: ubuntu-latest
+    runs-on: runs-on=${{ github.run_id }}/runner=4cpu-linux-x64
     steps:
       - uses: actions/checkout@v6
       - name: Setup node
@@ -207,7 +207,7 @@ jobs:
     name: Test WASI target
     needs:
       - build
-    runs-on: ubuntu-latest
+    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64
     defaults:
       run:
         working-directory: ./icechunk-js
@@ -239,7 +239,7 @@ jobs:
   publish:
     name: Publish
     if: github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
+    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64
     defaults:
       run:
         working-directory: ./icechunk-js
