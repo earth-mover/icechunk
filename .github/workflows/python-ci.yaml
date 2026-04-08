@@ -133,15 +133,15 @@ jobs:
         # Note: fromJSON converts JSON string to array since GH Actions doesn't support array literals in expressions
         branch: ${{ github.event_name == 'schedule' && fromJSON('["main", "support/v1.x"]') || fromJSON(format('["{0}"]', inputs.branch)) }}
         platform:
-          - runner: "runs-on=${{ github.run_id }}/runner=4cpu-linux-x64"
+          - runner: "runs-on=${{ github.run_id }}/runner=8cpu-linux-x64"
             target: x86_64
             manylinux: auto
-          # - runner: "runs-on=${{ github.run_id }}/runner=4cpu-linux-x64"
+          # - runner: "runs-on=${{ github.run_id }}/runner=8cpu-linux-x64"
           #   target: x86
-          - runner: "runs-on=${{ github.run_id }}/runner=4cpu-linux-x64"
+          - runner: "runs-on=${{ github.run_id }}/runner=8cpu-linux-x64"
             target: aarch64
             manylinux: 2_28
-          - runner: "runs-on=${{ github.run_id }}/runner=4cpu-linux-x64"
+          - runner: "runs-on=${{ github.run_id }}/runner=8cpu-linux-x64"
             target: armv7
             manylinux: 2_28
     steps:
@@ -190,13 +190,13 @@ jobs:
       matrix:
         branch: ${{ github.event_name == 'schedule' && fromJSON('["main", "support/v1.x"]') || fromJSON(format('["{0}"]', inputs.branch)) }}
         platform:
-          - runner: "runs-on=${{ github.run_id }}/runner=4cpu-linux-x64"
+          - runner: "runs-on=${{ github.run_id }}/runner=8cpu-linux-x64"
             target: x86_64
-          - runner: "runs-on=${{ github.run_id }}/runner=4cpu-linux-x64"
+          - runner: "runs-on=${{ github.run_id }}/runner=8cpu-linux-x64"
             target: x86
-          - runner: "runs-on=${{ github.run_id }}/runner=4cpu-linux-x64"
+          - runner: "runs-on=${{ github.run_id }}/runner=8cpu-linux-x64"
             target: aarch64
-          - runner: "runs-on=${{ github.run_id }}/runner=4cpu-linux-x64"
+          - runner: "runs-on=${{ github.run_id }}/runner=8cpu-linux-x64"
             target: armv7
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
