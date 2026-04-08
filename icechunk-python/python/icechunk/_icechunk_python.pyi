@@ -1847,6 +1847,20 @@ class RepoStatus:
 
 @final
 class Update:
+    """A single entry in the repository operations log.
+
+    Each update records an administrative action taken on the repository,
+    along with when it occurred.
+
+    Attributes
+    ----------
+    kind : UpdateType
+        The type of operation that was performed.
+    updated_at : datetime.datetime
+        When the operation occurred.
+    backup_path : str | None
+        Path to a backup created before the operation, if any.
+    """
     @property
     def kind(self) -> UpdateType: ...
     @property
@@ -1858,13 +1872,20 @@ class Update:
     def _repr_html_(self) -> str: ...
 
 class UpdateType:
+    """The type of operation recorded in an ``Update``.
+
+    This is a tagged union — each variant is a nested class with its own
+    fields describing what happened.
+    """
     @final
     class BranchCreated(UpdateType):
+        """A new branch was created."""
         @property
         def name(self) -> str: ...
 
     @final
     class BranchDeleted(UpdateType):
+        """A branch was deleted."""
         @property
         def name(self) -> str: ...
         @property
@@ -1872,6 +1893,7 @@ class UpdateType:
 
     @final
     class BranchReset(UpdateType):
+        """A branch was reset to a different snapshot."""
         @property
         def name(self) -> str: ...
         @property
@@ -1879,6 +1901,7 @@ class UpdateType:
 
     @final
     class CommitAmended(UpdateType):
+        """A commit on a branch was amended."""
         @property
         def branch(self) -> str: ...
         @property
@@ -1887,26 +1910,40 @@ class UpdateType:
         def new_snap_id(self) -> str: ...
 
     @final
-    class ConfigChanged(UpdateType): ...
+    class ConfigChanged(UpdateType):
+        """The repository configuration was changed."""
+
+        ...
 
     @final
-    class ExpirationRan(UpdateType): ...
+    class ExpirationRan(UpdateType):
+        """Snapshot expiration was run."""
+
+        ...
 
     @final
     class FeatureFlagChanged(UpdateType):
+        """A feature flag was changed."""
         @property
         def id(self) -> int: ...
         @property
         def new_value(self) -> bool | None: ...
 
     @final
-    class GCRan(UpdateType): ...
+    class GCRan(UpdateType):
+        """Garbage collection was run."""
+
+        ...
 
     @final
-    class MetadataChanged(UpdateType): ...
+    class MetadataChanged(UpdateType):
+        """Repository metadata was changed."""
+
+        ...
 
     @final
     class NewCommit(UpdateType):
+        """A new commit was made on a branch."""
         @property
         def branch(self) -> str: ...
         @property
@@ -1914,14 +1951,19 @@ class UpdateType:
 
     @final
     class NewDetachedSnapshot(UpdateType):
+        """A new detached snapshot was created."""
         @property
         def new_snap_id(self) -> str: ...
 
     @final
-    class RepoInitialized(UpdateType): ...
+    class RepoInitialized(UpdateType):
+        """The repository was initialized."""
+
+        ...
 
     @final
     class RepoMigrated(UpdateType):
+        """The repository was migrated to a new spec version."""
         @property
         def from_version(self) -> int: ...
         @property
@@ -1929,16 +1971,19 @@ class UpdateType:
 
     @final
     class RepoStatusChanged(UpdateType):
+        """The repository availability status was changed."""
         @property
         def status(self) -> RepoStatus: ...
 
     @final
     class TagCreated(UpdateType):
+        """A new tag was created."""
         @property
         def name(self) -> str: ...
 
     @final
     class TagDeleted(UpdateType):
+        """A tag was deleted."""
         @property
         def name(self) -> str: ...
         @property
