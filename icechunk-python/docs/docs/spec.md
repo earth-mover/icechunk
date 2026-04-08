@@ -17,7 +17,7 @@ The Icechunk specification is a storage specification for [Zarr](https://zarr-sp
 Icechunk is inspired by Apache Iceberg and borrows many concepts and ideas from the [Iceberg Spec](https://iceberg.apache.org/spec/#version-2-row-level-deletes).
 
 This specification describes a single Icechunk **repository**.
-A repository is defined as a Zarr store containing one or more Arrays and Groups.
+A repository is defined as a Zarr store containing one or more [Arrays](https://zarr-specs.readthedocs.io/en/latest/v3/core/index.html#array) and [Groups](https://zarr-specs.readthedocs.io/en/latest/v3/core/index.html#group).
 The most common scenario is for a repository to contain a single Zarr group with multiple arrays, each corresponding to different physical variables but sharing common spatiotemporal coordinates.
 However, formally a repository can be any valid Zarr hierarchy, from a single Array to a deeply nested structure of Groups and Arrays.
 Users of Icechunk should aim to scope their repository only to related arrays and groups that require consistent transactional updates.
@@ -46,7 +46,7 @@ The spec is not designed to enable fine-grained access restrictions (e.g. only r
 
 Icechunk requires that the storage system support the following operations:
 
-- **In-place write** — the storage system MUST provide strong read-after-write and list-after-write consistency. Files are not moved or altered once written.
+- **In-place write** — the storage system MUST provide strong read-after-write consistency. Files are not moved or altered once written.
 - **Conditional update** — the storage system MUST support atomically updating a file only if the current version is known to the writer.
 - **Range reads** — the storage system SHOULD support reading a byte range within a file, required for reading chunks stored at an offset within a larger file.
 - **Deletes** — the storage system SHOULD support deleting files, required for garbage collection.
@@ -62,8 +62,9 @@ Icechunk V2 does this entirely via careful management of creation and conditiona
 (The exact contents of the `RepoInfo` object are defined in the format specification section below.)
 
 When a client attempts to make a change to the repository, it fetches the latest version of the repo info object and applies its changes in memory first.
+The repo info object is small, so holding it in memory is inexpensive; the window of potential conflict is also very small and unrelated to the duration of the write session.
 However, when updating the object in storage, the client MUST detect whether a _different session_ has updated the repo info in the interim, possibly retrying or failing the update if so.
-This is an "optimistic concurrency" strategy; the resolution mechanism can be expensive, but conflicts are expected to be infrequent.
+This is an "optimistic concurrency" strategy; retries may be needed, but conflicts are expected to be infrequent.
 
 All major object stores support a "conditional update" operation.
 In other words, object stores can guard against the race condition which occurs when two sessions attempt to update the same file at the same time. Only one of those will succeed.
@@ -83,10 +84,11 @@ Some examples of incompatible changes are:
 
 Similar to Git, Icechunk supports the concept of _branches_ and _tags_.
 These references point to a specific snapshot of the repository.
+Each snapshot records its parent snapshot id, and these parent links form the snapshot history tree.
 
 - **Branches** are _mutable_ references to a snapshot.
   A repository MAY have one or more branches.
-  The default branch name is `main`. A repository MUST always have a `main` branch, which is used to detect the existence of a valid repository at a given path.
+  A repository MUST always have a `main` branch. The default branch name SHOULD be `main`.
   After creation, branches MAY be updated to point to a different snapshot.
 - **Tags** are _immutable_ references to a snapshot.
   A repository MAY contain zero or more tags.
@@ -99,7 +101,7 @@ These references point to a specific snapshot of the repository.
 Icechunk uses a series of linked metadata files to describe the state of the repository.
 
 - **Repository info file**, also called repo info or repo object, is the entry point linking to other files, particularly to snapshot files. Every change to the repository modifies this file in some way, doing conditional updates.
-- **Snapshot files** record all of the different arrays and groups in a specific snapshot of the repository, plus their metadata. A single snapshot file describes a specific version of the repo, and every new commit creates a new snapshot file. The snapshot file contains pointers to one or more chunk manifest files.
+- **Snapshot files** record all of the different arrays and groups in a specific snapshot of the repository, plus their metadata. A single snapshot file describes a specific version of the repo, and every new commit creates a new snapshot file. The snapshot file contains pointers to zero or more chunk manifest files.
 - **Chunk manifests** store references to individual chunks. A single manifest may store references for multiple arrays or a subset of all the references for a single array. Anytime a commit is made which writes new chunks, a new manifest file is also written.
 - **Chunk files** store the actual compressed chunk data, potentially containing data for multiple chunks in a single file (i.e. a shard).
 - **Transaction log files**, an overview of the operations executed during a session, used for rebase and diffs.
@@ -200,7 +202,7 @@ The header contains the following fields, in order:
 | Magic bytes | 12 bytes | The UTF-8 encoding of `ICE🧊CHUNK` (`49 43 45 F0 9F A7 8A 43 48 55 4E 4B`). |
 | Implementation name | 24 bytes | A left-aligned, right-space-padded UTF-8 string identifying the writing client. |
 | Spec version | 1 byte | `1` for spec version 1, `2` for spec version 2. |
-| File type | 1 byte | `1` = Snapshot, `2` = Manifest, `3` = Attributes, `4` = TransactionLog, `5` = Chunk, `6` = RepoInfo. |
+| File type | 1 byte | `1` = Snapshot, `2` = Manifest, `4` = TransactionLog, `6` = RepoInfo. |
 | Compression algorithm | 1 byte | `0` = none, `1` = zstd. |
 
 The remainder of the file is the flatbuffers payload, compressed with the algorithm specified in the header.
@@ -341,7 +343,7 @@ Each `ManifestRef` identifies a manifest file and the region of the array's chun
 
 ##### `ManifestFileInfo`
 
-The snapshot's `manifest_files` / `manifest_files_v2` lists provide summary metadata about every manifest file referenced by the snapshot. These are separate from the per-array `ManifestRef` pointers — they describe the manifest files themselves rather than which chunks they cover.
+The snapshot's `manifest_files` / `manifest_files_v2` lists provide summary metadata about every manifest file referenced by the snapshot. These are separate from the per-array `ManifestRef` pointers — they describe the manifest files themselves rather than which chunks they cover. V2 repositories write their manifests using `ManifestFileInfoV2`; IC1 repositories use `ManifestFileInfo`.
 
 ```protobuf
 --8<-- "icechunk-format/flatbuffers/snapshot.fbs:manifest_file_info"
@@ -439,7 +441,6 @@ The `TransactionLog` table is the root type:
 --8<-- "icechunk-format/flatbuffers/transaction_log.fbs:move_operation"
 ```
 
-
 ## Algorithms
 
 ### Initialize New Repository
@@ -480,7 +481,7 @@ Usually, a client will want to read from the latest branch (e.g. `main`).
 
 ### Write New Snapshot
 
-1. Open a repository at a specific branch as described above, keeping track of the sequence number and branch name in the session context.
+1. Open a repository at a specific branch as described above, keeping track of the parent snapshot id and branch name in the session context.
 1. [optional] Write new chunk files.
 1. [optional] Write new chunk manifests.
 1. Write a new transaction log file summarizing all changes in the session.
@@ -503,7 +504,7 @@ A tag can be created from any snapshot.
 ## Changes from spec version 1
 
 - The repo info object was introduced as a single point of consistency and atomicity. This file is in the `repo` path, inside the repository tree. Many new fields are introduced in this object, such as feature flags, status, spec version and others.
-- There is now a single mutable object: `repo`. Updates to this file first backup the original contents in `overwritten` prefix.
+- There is now a single mutable object: `repo`. Updates to this file first backup the original contents in the new `overwritten/` prefix.
 - There is no longer a `refs` prefix, branches and tags are stored in the repo info object.
 - A transaction id is written for the first commit that initializes the repo.
 - There is no longer a `config.yaml` file, repo configuration has been moved to the repo info object.
