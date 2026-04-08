@@ -27,6 +27,7 @@ chrono.workspace = true
 futures.workspace = true
 itertools.workspace = true
 miette.workspace = true
+numpy = "0.27"
 pyo3.workspace = true
 pyo3-async-runtimes.workspace = true
 pyo3-bytes.workspace = true

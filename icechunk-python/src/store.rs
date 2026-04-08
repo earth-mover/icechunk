@@ -12,11 +12,12 @@ use icechunk::{
     store::{SetVirtualRefsResult, StoreError, StoreErrorKind},
 };
 use itertools::Itertools as _;
+use numpy::PyReadonlyArray1;
 use pyo3::{
     conversion::IntoPyObjectExt as _,
     exceptions::{PyKeyError, PyValueError},
     prelude::*,
-    types::{PyTuple, PyType},
+    types::{PyList, PyTuple, PyType},
 };
 use pyo3_bytes::PyBytes;
 use serde::{Deserialize, Serialize};
@@ -28,6 +29,7 @@ use crate::{
     impl_pickle,
     session::PySession,
     streams::PyAsyncGenerator,
+    virtualrefs::{build_vrefs_from_arrays, do_set_virtual_refs, vrefs_result_to_py},
 };
 
 type KeyRanges = Vec<(String, (Option<ChunkOffset>, Option<ChunkOffset>))>;
@@ -515,6 +517,89 @@ impl PyStore {
                         Ok(Some(res))
                     }),
                 }
+            },
+        )
+    }
+
+    /// Set virtual references from columnar data (list of locations + numpy arrays).
+    ///
+    /// More efficient than `set_virtual_refs` as it avoids creating per-chunk
+    /// Python VirtualChunkSpec objects.
+    #[pyo3(signature = (array_path, chunk_grid_shape, locations, offsets, lengths, *, validate_containers = true, arr_offset = None, checksum = None))]
+    fn set_virtual_refs_arr(
+        &self,
+        py: Python<'_>,
+        array_path: String,
+        chunk_grid_shape: Vec<u32>,
+        locations: &Bound<'_, PyList>,
+        offsets: PyReadonlyArray1<'_, u64>,
+        lengths: PyReadonlyArray1<'_, u64>,
+        validate_containers: bool,
+        arr_offset: Option<Vec<u32>>,
+        checksum: Option<ChecksumArgument>,
+    ) -> PyResult<Option<Vec<Py<PyTuple>>>> {
+        let vrefs = build_vrefs_from_arrays(
+            locations,
+            offsets.as_slice().map_err(|e| {
+                PyValueError::new_err(format!("offsets array must be contiguous: {e}"))
+            })?,
+            lengths.as_slice().map_err(|e| {
+                PyValueError::new_err(format!("lengths array must be contiguous: {e}"))
+            })?,
+            &chunk_grid_shape,
+            arr_offset.as_deref(),
+            checksum.map(|c| c.into()),
+        )?;
+
+        let store = Arc::clone(&self.0);
+        py.detach(move || {
+            let res = pyo3_async_runtimes::tokio::get_runtime().block_on(
+                do_set_virtual_refs(store, array_path, validate_containers, vrefs),
+            )?;
+            vrefs_result_to_py(res)
+        })
+    }
+
+    /// Async variant of `set_virtual_refs_arr`.
+    ///
+    /// The vref construction still requires the GIL (to borrow strings from
+    /// the Python list), but the store insertion releases it. Use
+    /// `asyncio.gather()` to overlap vref building for one array with store
+    /// insertion for another.
+    #[pyo3(signature = (array_path, chunk_grid_shape, locations, offsets, lengths, *, validate_containers = true, arr_offset = None, checksum = None))]
+    fn set_virtual_refs_arr_async<'py>(
+        &'py self,
+        py: Python<'py>,
+        array_path: String,
+        chunk_grid_shape: Vec<u32>,
+        locations: &Bound<'_, PyList>,
+        offsets: PyReadonlyArray1<'_, u64>,
+        lengths: PyReadonlyArray1<'_, u64>,
+        validate_containers: bool,
+        arr_offset: Option<Vec<u32>>,
+        checksum: Option<ChecksumArgument>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let vrefs = build_vrefs_from_arrays(
+            locations,
+            offsets.as_slice().map_err(|e| {
+                PyValueError::new_err(format!("offsets array must be contiguous: {e}"))
+            })?,
+            lengths.as_slice().map_err(|e| {
+                PyValueError::new_err(format!("lengths array must be contiguous: {e}"))
+            })?,
+            &chunk_grid_shape,
+            arr_offset.as_deref(),
+            checksum.map(|c| c.into()),
+        )?;
+
+        let store = Arc::clone(&self.0);
+        pyo3_async_runtimes::tokio::future_into_py::<_, Option<Vec<Py<PyTuple>>>>(
+            py,
+            async move {
+                let res =
+                    do_set_virtual_refs(store, array_path, validate_containers, vrefs)
+                        .await?;
+                vrefs_result_to_py(res)
             },
         )
     }
