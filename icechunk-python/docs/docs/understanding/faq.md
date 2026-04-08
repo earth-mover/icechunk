@@ -64,7 +64,7 @@ Icechunk is a storage engine which creates a layer of indirection between the
 Zarr keys and the actual files in storage.
 A Zarr library doesn't have to know explicitly how Icechunk works or how it's storing data on disk.
 It just gets / sets keys as it would with any store.
-Icechunk figures out how to materialize these keys based on its [storage schema](./spec.md).
+Icechunk figures out how to materialize these keys based on its [storage schema](../reference/spec.md).
 
 <div class="grid cards" markdown>
 
@@ -284,7 +284,7 @@ On the other hand, tabular data can be modeled in Zarr / Icechunk in a relativel
 Iceberg is commonly used to manage many Parquet files as a single table in object storage.
 
 Iceberg was influential in the design of Icechunk.
-Many of the [spec](./spec.md) core requirements are similar to Iceberg.
+Many of the [spec](../reference/spec.md) core requirements are similar to Iceberg.
 Specifically, both formats share the following properties:
 
 - Files written to object storage immutably
@@ -413,8 +413,8 @@ you do to the Zarr store, a read-only session cannot do writes.
 
 ## Does Icechunk work with Zarr sharding?
 
-Yes! See the [Zarr guide](./zarr.md#sharding) for details and an example.
+Yes! See the [Zarr guide](../guides/zarr.md#sharding) for details and an example.
 
 ## Does Icechunk support rectilinear (non-uniform) chunk grids?
 
-Yes! See the [Zarr guide](./zarr.md#rectilinear-chunk-grids) for details and an example.
+Yes! See the [Zarr guide](../guides/zarr.md#rectilinear-chunk-grids) for details and an example.

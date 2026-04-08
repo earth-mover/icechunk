@@ -4,13 +4,13 @@ While Icechunk does not work the same way as [git](https://git-scm.com/), it bor
 
 ## Repositories
 
-The main primitive in Icechunk is the [repository](./reference/index.md#icechunk.Repository). Similar to git, the repository is the entry point for all operations and the source of truth for the data. However there are many important differences.
+The main primitive in Icechunk is the [repository](../reference/index.md#icechunk.Repository). Similar to git, the repository is the entry point for all operations and the source of truth for the data. However there are many important differences.
 
 When developing with git, you will commonly have a local and remote copy of the repository. The local copy is where you do all of your work. The remote copy is where you push your changes when you are ready to share them with others. In Icechunk, there is not local or remote repository, but a single repository that typically exists in a cloud storage bucket. This means that every transaction is saved to the same repository that others may be working on. Icechunk uses the consistency guarantees from storage systems to provide strong consistency even when multiple users are working on the same repository.
 
 ## Working with branches
 
-Icechunk has [branches](version-control.md#branches) similar to git.
+Icechunk has [branches](../understanding/version-control.md#branches) similar to git.
 
 ### Creating a branch
 
@@ -47,9 +47,9 @@ Two things to note:
 
 ### Checking out a branch
 
-In git, you can check out a branch by using the `git checkout` command. Icechunk does not have the concept of checking out a branch, instead you create [`Session`s](./reference/session.md#icechunk.session.Session) that are based on the tip of a branch.
+In git, you can check out a branch by using the `git checkout` command. Icechunk does not have the concept of checking out a branch, instead you create [`Session`s](../reference/session.md#icechunk.session.Session) that are based on the tip of a branch.
 
-We can either check out a branch for [read-only access](./reference/index.md#icechunk.Repository.readonly_session) or for [read-write access](./reference/index.md#icechunk.Repository.writable_session).
+We can either check out a branch for [read-only access](../reference/index.md#icechunk.Repository.readonly_session) or for [read-write access](../reference/index.md#icechunk.Repository.writable_session).
 
 ```python
 # check out a branch for read-only access
@@ -60,11 +60,11 @@ session = repo.readonly_session("my-new-branch")
 session = repo.writable_session("my-new-branch")
 ```
 
-Once we have checked out a session, the [`store`](./reference/session.md#icechunk.session.Session.store) method will return a [`Store`](./reference/index.md#icechunk.IcechunkStore) object that we can use to read and write data to the repository with `zarr`.
+Once we have checked out a session, the [`store`](../reference/session.md#icechunk.session.Session.store) method will return a [`Store`](../reference/index.md#icechunk.IcechunkStore) object that we can use to read and write data to the repository with `zarr`.
 
 ### Resetting a branch
 
-In git, you can reset a branch to previous commit. Similarly, in Icechunk you can [reset a branch to a previous snapshot](./reference/index.md#icechunk.Repository.reset_branch).
+In git, you can reset a branch to previous commit. Similarly, in Icechunk you can [reset a branch to a previous snapshot](../reference/index.md#icechunk.Repository.reset_branch).
 
 ```python
 # reset the branch to the previous snapshot
@@ -90,7 +90,7 @@ were done to it since you last checked.
 
 ### Branch History
 
-In Icechunk, you can view the history of a branch by using the [`repo.ancestry()`](./reference/index.md#icechunk.Repository.ancestry) command, similar to the `git log` command.
+In Icechunk, you can view the history of a branch by using the [`repo.ancestry()`](../reference/index.md#icechunk.Repository.ancestry) command, similar to the `git log` command.
 
 ```python
 [ancestor for ancestor in repo.ancestry(branch="my-new-branch")]
@@ -100,7 +100,7 @@ In Icechunk, you can view the history of a branch by using the [`repo.ancestry()
 
 ### Listing branches
 
-We can also [list all branches](./reference/index.md#icechunk.Repository.list_branches) in the repository.
+We can also [list all branches](../reference/index.md#icechunk.Repository.list_branches) in the repository.
 
 ```python
 repo.list_branches()
@@ -108,7 +108,7 @@ repo.list_branches()
 # ['main', 'my-new-branch']
 ```
 
-You can also view the snapshot that a branch is based on by using the [`repo.lookup_branch()`](./reference/index.md#icechunk.Repository.lookup_branch) command.
+You can also view the snapshot that a branch is based on by using the [`repo.lookup_branch()`](../reference/index.md#icechunk.Repository.lookup_branch) command.
 
 ```python
 repo.lookup_branch("my-new-branch")
@@ -118,7 +118,7 @@ repo.lookup_branch("my-new-branch")
 
 ### Deleting a branch
 
-You can delete a branch by using the [`repo.delete_branch()`](./reference/index.md#icechunk.Repository.delete_branch) command.
+You can delete a branch by using the [`repo.delete_branch()`](../reference/index.md#icechunk.Repository.delete_branch) command.
 
 ```python
 repo.delete_branch("my-new-branch")
@@ -126,17 +126,17 @@ repo.delete_branch("my-new-branch")
 
 ## Working with tags
 
-Icechunk [tags](version-control.md#tags) are also similar to git tags.
+Icechunk [tags](../understanding/version-control.md#tags) are also similar to git tags.
 
 ### Creating a tag
 
-We [create a tag](./reference/index.md#icechunk.Repository.create_tag) by providing a name and a snapshot id, similar to the `git tag` command.
+We [create a tag](../reference/index.md#icechunk.Repository.create_tag) by providing a name and a snapshot id, similar to the `git tag` command.
 
 ```python
 repo.create_tag("my-new-tag", "198273178639187")
 ```
 
-Just like git tags, Icechunk tags are immutable and cannot be modified. They can however be [deleted like git tags](./reference/index.md#icechunk.Repository.delete_tag):
+Just like git tags, Icechunk tags are immutable and cannot be modified. They can however be [deleted like git tags](../reference/index.md#icechunk.Repository.delete_tag):
 
 ```python
 repo.delete_tag("my-new-tag")
@@ -152,7 +152,7 @@ repo.create_tag("my-new-tag", "198273178639187")
 
 ### Listing tags
 
-We can also [list all tags](./reference/index.md#icechunk.Repository.list_tags) in the repository.
+We can also [list all tags](../reference/index.md#icechunk.Repository.list_tags) in the repository.
 
 ```python
 repo.list_tags()
@@ -162,13 +162,13 @@ repo.list_tags()
 
 ### Viewing tag history
 
-We can also view the history of a tag by using the [`repo.ancestry()`](./reference/index.md#icechunk.Repository.ancestry) command.
+We can also view the history of a tag by using the [`repo.ancestry()`](../reference/index.md#icechunk.Repository.ancestry) command.
 
 ```python
 repo.ancestry(tag="my-new-tag")
 ```
 
-This will return an iterator of snapshots that are ancestors of the tag. Similar to branches we can lookup the snapshot that a tag is based on by using the [`repo.lookup_tag()`](./reference/index.md#icechunk.Repository.lookup_tag) command.
+This will return an iterator of snapshots that are ancestors of the tag. Similar to branches we can lookup the snapshot that a tag is based on by using the [`repo.lookup_tag()`](../reference/index.md#icechunk.Repository.lookup_tag) command.
 
 ```python
 repo.lookup_tag("my-new-tag")
@@ -178,4 +178,4 @@ repo.lookup_tag("my-new-tag")
 
 ## Merging and Rebasing
 
-Git supports merging and rebasing branches together. Icechunk currently does not support merging and rebasing branches together. It does support [rebasing sessions that share the same branch](version-control.md#conflict-resolution).
+Git supports merging and rebasing branches together. Icechunk currently does not support merging and rebasing branches together. It does support [rebasing sessions that share the same branch](../understanding/version-control.md#conflict-resolution).

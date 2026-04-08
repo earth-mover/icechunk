@@ -15,12 +15,12 @@ and `icechunk.xarray.to_icechunk` methods.
 !!!note "`to_icechunk` vs `to_zarr`"
 
     [`xarray.Dataset.to_zarr`](https://docs.xarray.dev/en/latest/generated/xarray.Dataset.to_zarr.html#xarray.Dataset.to_zarr)
-    and [`to_icechunk`](./reference/xarray.md#icechunk.xarray.to_icechunk) are nearly functionally identical.
+    and [`to_icechunk`](../reference/xarray.md#icechunk.xarray.to_icechunk) are nearly functionally identical.
 
     In a distributed context, e.g.
     writes orchestrated with `multiprocesssing` or a `dask.distributed.Client` and `dask.array`, you *must* use `to_icechunk`.
     This will ensure that you can execute a commit that successfully records all remote writes.
-    See [these docs on orchestrating parallel writes](./parallel.md) and [these docs on dask.array with distributed](./dask.md#icechunk-dask-xarray)
+    See [these docs on orchestrating parallel writes](../understanding/parallel.md) and [these docs on dask.array with distributed](./dask.md#icechunk-dask-xarray)
     for more.
 
     If using `to_zarr`, remember to set `zarr_format=3, consolidated=False`. Consolidated metadata
@@ -33,7 +33,7 @@ to it, and append data a second block of data using Icechunk's version control f
 
 ## Create a new repo
 
-Similar to the example in [quickstart](./quickstart.md), we'll create an
+Similar to the example in [quickstart](../getting-started/quickstart.md), we'll create an
 Icechunk repo in S3 or a local file system. You will need to replace the `StorageConfig`
 with a bucket or file path that you have access to.
 

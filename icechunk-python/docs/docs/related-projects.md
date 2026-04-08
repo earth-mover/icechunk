@@ -19,7 +19,7 @@ This page lists community and ecosystem projects that integrate with Icechunk.
 
 !!! note
 
-    This is a community-built alternative to the official [Icechunk JavaScript/TypeScript package](./icechunk-js.md), which provides full read-write support via NAPI and WASM bindings.
+    This is a community-built alternative to the official [Icechunk JavaScript/TypeScript package](reference/icechunk-js.md), which provides full read-write support via NAPI and WASM bindings.
 
 ## Zarrs.jl
 
