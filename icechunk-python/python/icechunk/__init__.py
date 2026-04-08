@@ -107,7 +107,7 @@ from icechunk.virtual import (
     VirtualChunkContainer,
     VirtualChunkSpec,
 )
-from icechunk.zarr import IcechunkStore
+from icechunk.store import IcechunkStore
 
 __all__ = [
     "AncestryGraph",

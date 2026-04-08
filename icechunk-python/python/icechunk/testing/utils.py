@@ -8,7 +8,7 @@ from icechunk import Repository, in_memory_storage
 from icechunk.session import Session
 from icechunk.testing.models import ModelStore
 from icechunk.testing.trees import GroupNode
-from icechunk.zarr import IcechunkStore
+from icechunk.store import IcechunkStore
 
 
 def tree_to_model_and_icechunk(
