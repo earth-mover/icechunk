@@ -15,7 +15,7 @@ permissions:
 jobs:
   codespell:
     name: Check for spelling errors
-    runs-on: runs-on=${{ github.run_id }}/runner=small
+    runs-on: runs-on=${{ github.run_id }}/runner=small-ubuntu24
 
     steps:
       - name: Checkout

@@ -30,7 +30,7 @@ defaults:
 jobs:
   build:
     name: upstream-dev
-    runs-on: runs-on=${{ github.run_id }}/runner=large
+    runs-on: runs-on=${{ github.run_id }}/runner=large-ubuntu24
     continue-on-error: true
     if: ${{
       (contains(github.event.pull_request.labels.*.name, 'test-upstream') && github.event_name == 'pull_request')
@@ -248,7 +248,7 @@ jobs:
 
   xarray-backends:
     name: xarray-tests-upstream
-    runs-on: runs-on=${{ github.run_id }}/runner=large
+    runs-on: runs-on=${{ github.run_id }}/runner=large-ubuntu24
     if: ${{
       (contains(github.event.pull_request.labels.*.name, 'test-upstream') && github.event_name == 'pull_request')
       || github.event_name == 'workflow_dispatch'
