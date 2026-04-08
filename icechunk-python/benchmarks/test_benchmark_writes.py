@@ -319,3 +319,48 @@ def test_write_virtual_refs_e2e(benchmark, repo) -> None:
         session.store.set_virtual_refs(
             "array", chunks, validate_containers=False
         )
+
+
+@pytest.mark.benchmark(group="refs-write-e2e")
+def test_write_virtual_refs_arr_e2e(benchmark, repo) -> None:
+    """End-to-end benchmark: tolist() + set_virtual_refs_arr.
+
+    Same data as test_write_virtual_refs_e2e but uses the new array API.
+    Includes the tolist() conversion to fairly represent the full cost.
+    """
+    session = repo.writable_session("main")
+    store = session.store
+    group = zarr.group(store)
+    kwargs = dict(
+        name="array",
+        shape=(NUM_VIRTUAL_CHUNK_REFS,),
+        chunks=(1,),
+        dtype=np.int8,
+        dimension_names=("t",),
+        overwrite=True,
+    )
+    try:
+        group.create_array(**kwargs)
+    except AttributeError:
+        group.array(**kwargs)
+    session.commit("initialized")
+
+    # Pre-build the numpy arrays (simulating what VirtualiZarr already holds)
+    locations_arr = np.array(
+        [f"{FAKE_URL_PREFIX}-{i}.nc" for i in range(NUM_VIRTUAL_CHUNK_REFS)],
+        dtype=np.dtypes.StringDType(),
+    )
+    offsets_arr = (np.arange(NUM_VIRTUAL_CHUNK_REFS, dtype=np.uint64) * 10)
+    lengths_arr = (np.arange(NUM_VIRTUAL_CHUNK_REFS, dtype=np.uint64) + 5)
+
+    @benchmark
+    def write():
+        session = repo.writable_session("main")
+        session.store.set_virtual_refs_arr(
+            "array",
+            chunk_grid_shape=(NUM_VIRTUAL_CHUNK_REFS,),
+            locations=locations_arr.tolist(),
+            offsets=offsets_arr,
+            lengths=lengths_arr,
+            validate_containers=False,
+        )
