@@ -22,10 +22,10 @@ While Icechunk works wonderfully with native chunks managed by Zarr, there is lo
 
 We are going to create a virtual dataset pointing to all of the [OISST](https://www.ncei.noaa.gov/products/optimum-interpolation-sst) data for August 2024. This data is distributed publicly as [netCDF files on AWS S3](https://registry.opendata.aws/noaa-cdr-oceanic/), with one netCDF file containing the Sea Surface Temperature (SST) data for each day of the month. We are going to use `VirtualiZarr` to combine all of these files into a single virtual dataset spanning the entire month, then write that dataset to Icechunk for use in analysis.
 
-Before we get started, we need to install `virtualizarr` (this notebook uses VirtualiZarr v2.0.0), and `icechunk`. We also need to install `fsspec`, `s3fs`, and `obstore` for working with data on s3.
+Before we get started, we need to install `virtualizarr` (version 2.4.0 or later) and `icechunk`. We also need to install `fsspec` and `s3fs` for discovering files on s3.
 
 ```shell
-pip install virtualizarr icechunk fsspec s3fs obstore
+pip install "virtualizarr>=2.4.0" icechunk fsspec s3fs
 ```
 
 First, we need to find all of the files we are interested in. 
