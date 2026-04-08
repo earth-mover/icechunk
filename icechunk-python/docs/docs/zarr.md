@@ -9,21 +9,10 @@ For basic read/write operations, see the [Quickstart](./quickstart.md) and [How 
 
 Icechunk supports [Zarr sharding](https://zarr-specs.readthedocs.io/en/latest/v3/codecs/sharding-indexed/v1.0.html), which packs multiple chunks into a single storage object. This can dramatically reduce the number of objects in storage for datasets with many small chunks.
 
-!!! warning
-
-    The Zarr sharding implementation is currently [not parallel-safe for writes](https://github.com/zarr-developers/zarr-python/pull/3217).
-    When writing sharded arrays, set:
-
-    ```python
-    zarr.config.set({"async.concurrency": 1})
-    ```
-
 ```python
 import numpy as np
 import zarr
 import icechunk
-
-zarr.config.set({"async.concurrency": 1})
 
 repo = icechunk.Repository.create(storage=icechunk.in_memory_storage())
 session = repo.writable_session("main")
