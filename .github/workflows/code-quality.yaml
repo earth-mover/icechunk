@@ -26,7 +26,7 @@ jobs:
   code-quality:
     name: Code Quality
     timeout-minutes: 15
-    runs-on: runs-on=${{ github.run_id }}/runner=8cpu-linux-x64
+    runs-on: runs-on=${{ github.run_id }}/runner=large
 
     steps:
       - name: Checkout repository

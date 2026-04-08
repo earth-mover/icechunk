@@ -46,7 +46,7 @@ defaults:
 jobs:
   version:
     name: Generate dynamic version
-    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64
+    runs-on: runs-on=${{ github.run_id }}/runner=small
     defaults:
       run:
         working-directory: .
@@ -133,15 +133,15 @@ jobs:
         # Note: fromJSON converts JSON string to array since GH Actions doesn't support array literals in expressions
         branch: ${{ github.event_name == 'schedule' && fromJSON('["main", "support/v1.x"]') || fromJSON(format('["{0}"]', inputs.branch)) }}
         platform:
-          - runner: "runs-on=${{ github.run_id }}/runner=8cpu-linux-x64"
+          - runner: "runs-on=${{ github.run_id }}/runner=large"
             target: x86_64
             manylinux: auto
-          # - runner: "runs-on=${{ github.run_id }}/runner=8cpu-linux-x64"
+          # - runner: "runs-on=${{ github.run_id }}/runner=large"
           #   target: x86
-          - runner: "runs-on=${{ github.run_id }}/runner=8cpu-linux-x64"
+          - runner: "runs-on=${{ github.run_id }}/runner=large"
             target: aarch64
             manylinux: 2_28
-          - runner: "runs-on=${{ github.run_id }}/runner=8cpu-linux-x64"
+          - runner: "runs-on=${{ github.run_id }}/runner=large"
             target: armv7
             manylinux: 2_28
     steps:
@@ -190,13 +190,13 @@ jobs:
       matrix:
         branch: ${{ github.event_name == 'schedule' && fromJSON('["main", "support/v1.x"]') || fromJSON(format('["{0}"]', inputs.branch)) }}
         platform:
-          - runner: "runs-on=${{ github.run_id }}/runner=8cpu-linux-x64"
+          - runner: "runs-on=${{ github.run_id }}/runner=large"
             target: x86_64
-          - runner: "runs-on=${{ github.run_id }}/runner=8cpu-linux-x64"
+          - runner: "runs-on=${{ github.run_id }}/runner=large"
             target: x86
-          - runner: "runs-on=${{ github.run_id }}/runner=8cpu-linux-x64"
+          - runner: "runs-on=${{ github.run_id }}/runner=large"
             target: aarch64
-          - runner: "runs-on=${{ github.run_id }}/runner=8cpu-linux-x64"
+          - runner: "runs-on=${{ github.run_id }}/runner=large"
             target: armv7
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
@@ -303,7 +303,7 @@ jobs:
           path: icechunk-python/dist
 
   sdist:
-    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64
+    runs-on: runs-on=${{ github.run_id }}/runner=small
     needs: version
     strategy:
       matrix:
@@ -334,7 +334,7 @@ jobs:
 
   release:
     name: Release
-    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64
+    runs-on: runs-on=${{ github.run_id }}/runner=small
     permissions:
       id-token: write # IMPORTANT: this permission is mandatory for trusted publishing
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.pypi_release }}
@@ -349,7 +349,7 @@ jobs:
 
   nightly:
     name: Upload nightly wheels
-    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64
+    runs-on: runs-on=${{ github.run_id }}/runner=small
     if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
     needs: [linux, musllinux, windows, macos, sdist]
     steps:

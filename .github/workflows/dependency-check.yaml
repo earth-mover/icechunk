@@ -29,7 +29,7 @@ jobs:
   check-dependencies:
     name: Check Dependencies
     timeout-minutes: 10
-    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64
+    runs-on: runs-on=${{ github.run_id }}/runner=small
 
     steps:
       - name: Checkout repository
