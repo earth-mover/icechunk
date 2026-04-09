@@ -23,9 +23,10 @@ env:
   CARGO_NET_RETRY: 10
   CI: 1
   RUST_BACKTRACE: short
-  RUSTFLAGS: "-D warnings -W unreachable-pub -W bare-trait-objects"
+  RUSTFLAGS: "-D warnings"
   RUSTUP_MAX_RETRIES: 10
   RUST_CHANNEL: '1.91.1'
+  CARGO_DENY_VERSION: '0.19.0'
 
 jobs:
   rust:
@@ -47,7 +48,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           ref: ${{ github.event.pull_request.head.sha }}
 
@@ -56,7 +57,7 @@ jobs:
           set -e
           grep 'rust-version = "${{ env.RUST_CHANNEL }}"' Cargo.toml
           # shellcheck disable=SC2016
-          grep 'The current MSRV is `${{ env.RUST_CHANNEL }}`' icechunk-python/docs/docs/contributing.md
+          grep 'The current MSRV is `${{ env.RUST_CHANNEL }}`' icechunk-python/docs/docs/reference/contributing.md
 
       - name: Stand up docker services
         if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm'
@@ -84,7 +85,7 @@ jobs:
         run: sudo snap install --edge --classic just
 
       - name: Install cargo nextest
-        uses: taiki-e/install-action@nextest
+        uses: taiki-e/install-action@98ec31d284eb962f41c14065e9391a955aa810cf # nextest
 
       - name: Install Rust toolchain
         run: |
@@ -93,7 +94,7 @@ jobs:
           rustup default ${{ env.RUST_CHANNEL }}
 
       - name: Cache Dependencies
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
         with:
           # workspaces: "rust -> target"
           key: ${{ env.RUST_CHANNEL }}
@@ -157,6 +158,32 @@ jobs:
         run: |
           cargo test --profile ci --workspace --all-targets -- --ignored
 
+  # shuttle:
+  #   name: Shuttle concurrency tests
+  #   timeout-minutes: 30
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - name: Checkout repository
+  #       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+  #       with:
+  #         ref: ${{ github.event.pull_request.head.sha }}
+
+  #     - name: Install Rust toolchain
+  #       run: |
+  #         rustup update --no-self-update ${{ env.RUST_CHANNEL }}
+  #         rustup default ${{ env.RUST_CHANNEL }}
+
+  #     - name: Cache Dependencies
+  #       uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
+  #       with:
+  #         key: shuttle-${{ env.RUST_CHANNEL }}
+
+  #     - name: Compile shuttle tests
+  #       run: cargo test -p icechunk --features shuttle --test test_shuttle --no-run
+
+  #     - name: Run shuttle tests
+  #       run: cargo test -p icechunk --features shuttle --test test_shuttle -- --nocapture
+
   wasm-build:
     name: WASM Build
     timeout-minutes: 15
@@ -171,7 +198,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           ref: ${{ github.event.pull_request.head.sha }}
 
@@ -195,7 +222,7 @@ jobs:
           test -f /usr/include/wasm32-wasi/limits.h && echo "found /usr/include/wasm32-wasi/limits.h"
 
       - name: Cache Dependencies
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
         with:
           key: wasm-${{ env.RUST_CHANNEL }}
 

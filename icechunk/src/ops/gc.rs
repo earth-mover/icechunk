@@ -7,10 +7,10 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use backon::{BackoffBuilder as _, ExponentialBuilder, Retryable};
+use backon::{BackoffBuilder as _, ExponentialBuilder, Retryable as _};
 use chrono::{DateTime, Utc};
-use futures::{Stream, StreamExt, TryStream, TryStreamExt, stream};
-use itertools::Itertools;
+use futures::{Stream, StreamExt as _, TryStream, TryStreamExt as _, stream};
+use itertools::Itertools as _;
 use tokio::task::{self};
 use tracing::{debug, error, info, instrument, trace};
 
@@ -22,7 +22,7 @@ use crate::{
         ChunkId, FileTypeTag, IcechunkFormatError, ManifestId, ObjectId, SnapshotId,
         format_constants::SpecVersionBin,
         manifest::{ChunkPayload, Manifest},
-        repo_info::{RepoInfo, UpdateInfo, UpdateType},
+        repo_info::{RepoAvailability, RepoInfo, UpdateInfo, UpdateType},
         snapshot::{ManifestFileInfo, Snapshot, SnapshotInfo},
     },
     ops::pointed_snapshots,
@@ -31,6 +31,7 @@ use crate::{
     storage::{self, DeleteObjectsResult, ListInfo},
     stream_utils::{StreamLimiter, try_unique_stream},
 };
+use icechunk_types::{ICResultExt as _, error::ICResultCtxExt as _};
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Action {
@@ -55,7 +56,7 @@ pub struct GCConfig {
 }
 
 impl GCConfig {
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn new(
         extra_roots: HashSet<SnapshotId>,
         dangling_chunks: Action,
@@ -199,14 +200,12 @@ async fn snapshot_retained(
     keep_snapshots
         .lock()
         .map_err(|_| {
-            RepositoryError::from(RepositoryErrorKind::Other(
-                "can't lock retained snapshots mutex".to_string(),
-            ))
-        })?
+            RepositoryErrorKind::Other("can't lock retained snapshots mutex".to_string())
+        })
+        .capture()?
         .insert(snap.id());
-    Ok(stream::iter(
-        snap.manifest_files().map(Ok::<_, RepositoryError>).collect::<Vec<_>>(),
-    ))
+    let files: Vec<ManifestFileInfo> = snap.manifest_files().try_collect().inject()?;
+    Ok(stream::iter(files.into_iter().map(Ok)))
 }
 
 async fn manifest_retained(
@@ -217,10 +216,9 @@ async fn manifest_retained(
     keep_manifests
         .lock()
         .map_err(|_| {
-            RepositoryError::from(RepositoryErrorKind::Other(
-                "can't lock retained manifests mutex".to_string(),
-            ))
-        })?
+            RepositoryErrorKind::Other("can't lock retained manifests mutex".to_string())
+        })
+        .capture()?
         .insert(minfo.id.clone());
     let manifest = asset_manager.fetch_manifest(&minfo.id, minfo.size_bytes).await?;
     Ok((manifest, minfo))
@@ -232,28 +230,29 @@ async fn chunks_retained(
     minfo: ManifestFileInfo,
 ) -> RepositoryResult<ManifestFileInfo> {
     task::spawn_blocking(move || {
-        let chunk_ids = manifest.chunk_payloads()?.filter_map(|payload| match payload {
-            Ok(ChunkPayload::Ref(chunk_ref)) => Some(chunk_ref.id.clone()),
-            Ok(_) => None,
-            Err(err) => {
-                tracing::error!(
-                    error = %err,
-                    "Error in chunk payload iterator"
-                );
-                None
-            }
-        });
+        let chunk_ids =
+            manifest.chunk_payloads().inject()?.filter_map(|payload| match payload {
+                Ok(ChunkPayload::Ref(chunk_ref)) => Some(chunk_ref.id.clone()),
+                Ok(_) => None,
+                Err(err) => {
+                    tracing::error!(
+                        error = %err,
+                        "Error in chunk payload iterator"
+                    );
+                    None
+                }
+            });
         keep_chunks
             .lock()
             .map_err(|_| {
-                RepositoryError::from(RepositoryErrorKind::Other(
-                    "can't lock retained chunks mutex".to_string(),
-                ))
-            })?
+                RepositoryErrorKind::Other("can't lock retained chunks mutex".to_string())
+            })
+            .capture()?
             .extend(chunk_ids);
         Ok::<_, RepositoryError>(())
     })
-    .await??;
+    .await
+    .capture()??;
     Ok(minfo)
 }
 
@@ -302,7 +301,7 @@ pub async fn find_retained(
 
     debug_assert_eq!(limiter.current_usage(), 0);
 
-    #[allow(clippy::expect_used)]
+    #[expect(clippy::expect_used)]
     Ok((
         Arc::try_unwrap(keep_chunks)
             .expect("Logic error: multiple owners to retained chunks")
@@ -326,10 +325,23 @@ pub async fn garbage_collect(
     num_updates_per_repo_info_file: u16,
 ) -> GCResult<GCSummary> {
     if !asset_manager.can_write_to_storage().await? {
-        return Err(GCError::Repository(
-            RepositoryErrorKind::ReadonlyStorage("Cannot garbage collect".to_string())
-                .into(),
-        ));
+        return Err(RepositoryErrorKind::ReadonlyStorage(
+            "Cannot garbage collect".to_string(),
+        ))
+        .capture()
+        .map_err(GCError::Repository)?;
+    }
+
+    // Check repo status (only available on IC2+)
+    if asset_manager.spec_version() >= SpecVersionBin::V2 {
+        let (repo_info, _) = asset_manager.fetch_repo_info().await?;
+        if repo_info.status()?.availability != RepoAvailability::Online {
+            return Err(RepositoryErrorKind::ReadonlyRepository(
+                "Cannot garbage collect".to_string(),
+            ))
+            .capture()
+            .map_err(GCError::Repository)?;
+        }
     }
 
     let default_retry_config = RepoUpdateRetryConfig::default();
@@ -397,7 +409,7 @@ async fn garbage_collect_one_attempt(
     let mut non_pointed_but_new = HashSet::new();
 
     let mut all_snaps = HashSet::new();
-    let repo_info = if asset_manager.spec_version() > SpecVersionBin::V1dot0 {
+    let repo_info = if asset_manager.spec_version() > SpecVersionBin::V1 {
         let (ri, _) = asset_manager.fetch_repo_info().await?;
         non_pointed_but_new = ri
             .all_snapshots()?
@@ -487,18 +499,18 @@ async fn garbage_collect_one_attempt(
 ///
 /// There are a few complex cases:
 ///
-/// 1. A reset_branch operation may generate a snapshot we want to retain (because it's new),
+/// 1. A `reset_branch` operation may generate a snapshot we want to retain (because it's new),
 ///    with a parent (that is old) we want to drop. We avoid this issue by setting the parent
-///    to INITIAL_SNAPSHOT_ID
+///    to `INITIAL_SNAPSHOT_ID`
 /// 2. There may be new snapshots in the repo info object since we started GC
-///    a.  New snapshots with parents not in drop_snapshots can be retained (their manifests and
+///    a.  New snapshots with parents not in `drop_snapshots` can be retained (their manifests and
 ///    chunks are new so they won't be deleted)
-///    b. New snapshots with parents in drop_snapshot means we need to restart GC to rebuild the tree
+///    b. New snapshots with parents in `drop_snapshot` means we need to restart GC to rebuild the tree
 ///    of pointed snaps.
 /// 3. Branches or tags pointing to drop snapshots must generate a retry
 ///
-/// How to distinguish 1 from 2b: snapshots in 1. are in retain_snapshots but not in
-/// drop_snapshots; snapshots in 2b are in neither map.
+/// How to distinguish 1 from 2b: snapshots in 1. are in `retain_snapshots` but not in
+/// `drop_snapshots`; snapshots in 2b are in neither map.
 ///
 /// It adds any new snapshots that must be kept to `keep_snapshots`
 async fn delete_snapshots_from_repo_info(
@@ -510,10 +522,10 @@ async fn delete_snapshots_from_repo_info(
     trace!("deleting snapshots from repo info");
     let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str, _| {
         let mut final_snaps = HashSet::with_capacity(2 * keep_snapshots.len());
-        for si in repo_info.all_snapshots()? {
-            let si = si?;
+        for si in repo_info.all_snapshots().inject()? {
+            let si = si.inject()?;
 
-            #[allow(clippy::panic)]
+            #[expect(clippy::panic)]
             match (keep_snapshots.contains(&si.id), drop_snapshots.contains(&si.id)) {
                 (true, false) => {
                     // a snapshot that we explicitly want to keep
@@ -551,7 +563,9 @@ async fn delete_snapshots_from_repo_info(
                     {
                         // this is a new snapshot created since we started GC
                         // but we are trying to drop its parent. Case 2b
-                        return Err(RepositoryErrorKind::RepoInfoUpdated.into());
+                        return Err(RepositoryError::capture(
+                            RepositoryErrorKind::RepoInfoUpdated,
+                        ));
                     } else {
                         // a new snapshot with the root as parent or with a parent we don't want to drop
                         // root is always retained
@@ -567,32 +581,38 @@ async fn delete_snapshots_from_repo_info(
 
         // TODO: quite inefficient
         let final_snap_ids: HashSet<_> = final_snaps.iter().map(|si| &si.id).collect();
-        for (_, pointed_snap) in repo_info.tags()?.chain(repo_info.branches()?) {
+        for (_, pointed_snap) in
+            repo_info.tags().inject()?.chain(repo_info.branches().inject()?)
+        {
             if !final_snap_ids.contains(&pointed_snap) {
-                return Err(RepositoryErrorKind::RepoInfoUpdated.into());
+                return Err(RepositoryError::capture(
+                    RepositoryErrorKind::RepoInfoUpdated,
+                ));
             }
         }
 
-        let config_bytes = repo_info.config_bytes_raw()?;
+        let config_bytes = repo_info.config_bytes_raw().inject()?;
         let new_repo_info = RepoInfo::new(
             asset_manager.spec_version(),
-            repo_info.tags()?,
-            repo_info.branches()?,
-            repo_info.deleted_tags()?,
+            repo_info.tags().inject()?,
+            repo_info.branches().inject()?,
+            repo_info.deleted_tags().inject()?,
             final_snaps,
-            &repo_info.metadata()?,
+            &repo_info.metadata().inject()?,
             UpdateInfo {
                 update_type: UpdateType::GCRanUpdate,
                 update_time: Utc::now(),
-                previous_updates: repo_info.latest_updates()?,
+                previous_updates: repo_info.latest_updates().inject()?,
             },
             Some(backup_path),
             num_updates_per_repo_info_file,
-            repo_info.repo_before_updates()?,
+            repo_info.repo_before_updates().inject()?,
             config_bytes.as_deref(),
-            repo_info.enabled_feature_flags()?,
-            repo_info.disabled_feature_flags()?,
-        )?;
+            repo_info.enabled_feature_flags().inject()?,
+            repo_info.disabled_feature_flags().inject()?,
+            &repo_info.status().inject()?,
+        )
+        .inject()?;
 
         Ok(Arc::new(new_repo_info))
     };
@@ -778,13 +798,25 @@ pub async fn expire(
     num_updates_per_repo_info_file: u16,
 ) -> GCResult<ExpireResult> {
     if !asset_manager.can_write_to_storage().await? {
-        return Err(GCError::Repository(
-            RepositoryErrorKind::ReadonlyStorage("Cannot expire".to_string()).into(),
-        ));
+        return Err(RepositoryErrorKind::ReadonlyStorage("Cannot expire".to_string()))
+            .capture()
+            .map_err(GCError::Repository)?;
+    }
+
+    // Check repo status (only available on IC2+)
+    if asset_manager.spec_version() >= SpecVersionBin::V2 {
+        let (repo_info, _) = asset_manager.fetch_repo_info().await?;
+        if repo_info.status()?.availability != RepoAvailability::Online {
+            return Err(RepositoryErrorKind::ReadonlyRepository(
+                "Cannot garbage collect".to_string(),
+            ))
+            .capture()
+            .map_err(GCError::Repository)?;
+        }
     }
 
     match asset_manager.spec_version() {
-        SpecVersionBin::V1dot0 => {
+        SpecVersionBin::V1 => {
             super::expiration_v1::expire(
                 asset_manager,
                 older_than,
@@ -793,7 +825,7 @@ pub async fn expire(
             )
             .await
         }
-        SpecVersionBin::V2dot0 => {
+        SpecVersionBin::V2 => {
             expire_v2(
                 asset_manager,
                 older_than,
@@ -807,7 +839,7 @@ pub async fn expire(
     }
 }
 
-/// Since expire_v2 is a relatively fast operation (repo object only) we retry it if the repo info
+/// Since `expire_v2` is a relatively fast operation (repo object only) we retry it if the repo info
 /// object was modified since it started
 #[instrument(skip(asset_manager))]
 pub async fn expire_v2(
@@ -931,12 +963,29 @@ async fn expire_v2_one_attempt(
         repo_info.branches()?.map(|(_, id)| id).collect();
     let main_pointee = repo_info.resolve_branch(Ref::DEFAULT_BRANCH)?;
 
-    debug!("Calculating released snapshots");
-    let released_snapshots: HashSet<SnapshotId> = repo_info
+    // All non-root snapshots old enough to be considered expired, regardless of
+    // ref protection. Used to determine which branch/tag refs should be deleted.
+    // Unlike released_snapshots, this does not exclude snapshots protected by
+    // branch/tag tips (e.g. main), so a feature branch sharing main's tip can
+    // still be deleted (#1520). Root snapshots (no parent) are always excluded
+    // so tags/branches pointing to the initial commit are never deleted (#1534).
+    let expired_snapshot_infos: Vec<SnapshotInfo> = repo_info
         .all_snapshots()?
         .filter_map(|si| match si {
-            // we retain all roots
             Ok(si) if si.flushed_at < older_than && si.parent_id.is_some() => {
+                Some(Ok(si))
+            }
+            Ok(_) => None,
+            Err(e) => Some(Err(e)),
+        })
+        .try_collect()?;
+
+    debug!("Calculating released snapshots");
+    let released_snapshots: HashSet<SnapshotId> = expired_snapshot_infos
+        .iter()
+        .filter_map(|si| {
+            // we retain all roots
+            if si.flushed_at < older_than && si.parent_id.is_some() {
                 use ExpiredRefAction::*;
                 if expired_tags == Ignore && tag_tip_ids.contains(&si.id)
                     || (expired_branches == Ignore || si.id == main_pointee)
@@ -944,13 +993,16 @@ async fn expire_v2_one_attempt(
                 {
                     None
                 } else {
-                    Some(Ok(si.id))
+                    Some(si.id.clone())
                 }
+            } else {
+                None
             }
-            Ok(_i) => None,
-            Err(e) => Some(Err(e)),
         })
-        .try_collect()?;
+        .collect();
+
+    let expired_snapshots: HashSet<SnapshotId> =
+        expired_snapshot_infos.into_iter().map(|x| x.id).collect();
 
     let num_released_snapshots = released_snapshots.len();
 
@@ -986,7 +1038,7 @@ async fn expire_v2_one_attempt(
         .into_iter()
         .filter_map(|(r, snap_id)| {
             if expired_tags == ExpiredRefAction::Delete
-                && released_snapshots.contains(&snap_id)
+                && expired_snapshots.contains(&snap_id)
             {
                 Some(r)
             } else {
@@ -1000,7 +1052,7 @@ async fn expire_v2_one_attempt(
         .filter_map(|(r, snap_id)| {
             if expired_branches == ExpiredRefAction::Delete
                 && r.name() != Ref::DEFAULT_BRANCH
-                && released_snapshots.contains(&snap_id)
+                && expired_snapshots.contains(&snap_id)
             {
                 Some(r)
             } else {
@@ -1019,43 +1071,46 @@ async fn expire_v2_one_attempt(
     let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str, version| {
         // we retry if the repo info object was modified since we started
         if version != repo_info_version_at_start {
-            return Err(RepositoryErrorKind::RepoInfoUpdated.into());
+            return Err(RepositoryError::capture(RepositoryErrorKind::RepoInfoUpdated));
         }
 
         let tags = repo_info
-            .tags()?
+            .tags()
+            .inject()?
             .filter(|(name, _)| !deleted_tags.contains(&Ref::Tag(name.to_string())));
 
-        let branches = repo_info.branches()?.filter(|(name, _)| {
+        let branches = repo_info.branches().inject()?.filter(|(name, _)| {
             !deleted_branches.contains(&Ref::Branch(name.to_string()))
         });
 
-        let deleted_tag_names = repo_info.deleted_tags()?.chain(
+        let deleted_tag_names = repo_info.deleted_tags().inject()?.chain(
             deleted_tags.iter().filter_map(|r| match r {
                 Ref::Tag(name) => Some(name.as_str()),
                 Ref::Branch(_) => None,
             }),
         );
-        let config_bytes = repo_info.config_bytes_raw()?;
+        let config_bytes = repo_info.config_bytes_raw().inject()?;
         let new_repo_info = RepoInfo::new(
             asset_manager.spec_version(),
             tags,
             branches,
             deleted_tag_names,
             retained.clone(),
-            &repo_info.metadata()?,
+            &repo_info.metadata().inject()?,
             UpdateInfo {
                 update_type: UpdateType::ExpirationRanUpdate,
                 update_time: Utc::now(),
-                previous_updates: repo_info.latest_updates()?,
+                previous_updates: repo_info.latest_updates().inject()?,
             },
             Some(backup_path),
             num_updates_per_repo_info_file,
-            repo_info.repo_before_updates()?,
+            repo_info.repo_before_updates().inject()?,
             config_bytes.as_deref(),
-            repo_info.enabled_feature_flags()?,
-            repo_info.disabled_feature_flags()?,
-        )?;
+            repo_info.enabled_feature_flags().inject()?,
+            repo_info.disabled_feature_flags().inject()?,
+            &repo_info.status().inject()?,
+        )
+        .inject()?;
 
         Ok(Arc::new(new_repo_info))
     };

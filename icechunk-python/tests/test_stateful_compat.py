@@ -11,9 +11,14 @@ Requires:
 Skipped entirely if icechunk_v1 is not installed.
 """
 
+import contextlib
+import datetime
+import shutil
 import tempfile
+from typing import Any
 
 import pytest
+from hypothesis import settings
 from packaging.version import Version
 
 import icechunk as ic
@@ -35,10 +40,17 @@ repo_ops_mod.IcechunkError = (ic.IcechunkError, ic_v1.IcechunkError)  # type: ig
 
 
 import hypothesis.strategies as st
-from hypothesis import note, settings
-from hypothesis.stateful import initialize, precondition, rule, run_state_machine_as_test
+from hypothesis import event, note
+from hypothesis.stateful import (
+    initialize,
+    precondition,
+    rule,
+    run_state_machine_as_test,
+)
 
+from icechunk.testing.strategies import draw_older_than
 from tests.test_stateful_repo_ops import (
+    DEFAULT_BRANCH,
     VersionControlStateMachine,
 )
 from tests.test_zarr.test_stateful import (
@@ -62,6 +74,27 @@ class CrossVersionVersionControlStateMachine(VersionControlStateMachine):
     @rule()
     @precondition(lambda self: False)
     def upgrade_spec_version(self) -> None:
+        pass
+
+    # icechunk V1 does not support the list_objects_metadata needed to grab create_at timestamps
+    @precondition(lambda self: False)
+    @rule(data=st.data())
+    def garbage_collect(self, data: st.DataObject) -> None:
+        pass
+
+    # icechunk V1 does not support the list_objects_metadata needed to grab create_at timestamps
+    @precondition(lambda self: False)
+    @rule(
+        data=st.data(),
+        delete_expired_branches=st.sampled_from([True, True, True, False]),
+        delete_expired_tags=st.sampled_from([True, True, True, False]),
+    )
+    def expire_snapshots(
+        self,
+        data: st.DataObject,
+        delete_expired_branches: bool,
+        delete_expired_tags: bool,
+    ) -> None:
         pass
 
     def _make_storage(self) -> ic.Storage:
@@ -92,6 +125,226 @@ class CrossVersionVersionControlStateMachine(VersionControlStateMachine):
 def test_two_actors_cross_version() -> None:
     run_state_machine_as_test(  # type: ignore[no-untyped-call]
         CrossVersionVersionControlStateMachine
+    )
+
+
+class CrossVersionExpireGCStateMachine(VersionControlStateMachine):
+    """
+    The goal of this test is to gain confidence that IC2 replicated the behaviour of IC1
+    w.r.t GC & expiry. Doing so is complicated by bugs in the IC1 impl (due to various side-effects).
+    So exactly modeling this is not possible/not worth it. Fixing it is also not worth it.
+
+    So instead:
+    1. we run the VersionControlStateMachine as usual
+    2. on expire and GC:
+       a. we copy the repo over to a new temp directory;
+       b. run GC & expire with IC1 (`icechunk_v1`)
+       c. assert the return values are identical to that with IC2 (`icechunk`)
+    """
+
+    def __init__(self) -> None:
+        self._storage_tmpdir = tempfile.TemporaryDirectory()
+        self._storage_path = self._storage_tmpdir.name
+        super().__init__()
+
+    def _make_storage(self) -> ic.Storage:
+        return ic.local_filesystem_storage(self._storage_path)
+
+    @initialize(
+        data=st.data(),
+        target=VersionControlStateMachine.branches,
+    )
+    def initialize(self, data: st.DataObject) -> str:
+        return super().initialize(data, spec_version=1)  # type: ignore[return-value]
+
+    # v2-only features — disable for spec_version=1
+    @rule()
+    @precondition(lambda self: False)
+    def upgrade_spec_version(self) -> None:
+        pass
+
+    def checks(self) -> None:
+        assert self.model.spec_version == getattr(self.repo, "spec_version", 1)
+        self.check_list_prefix_from_root()
+        self.check_tags()
+        self.check_branches()
+        # check_ancestry disabled: after expire/GC the model's commits
+        # are synced from on-disk snapshots, not ancestry, so the sets
+        # may diverge from what ancestry traversal returns.
+        # self.check_ancestry()
+        self.check_ops_log()
+        self.check_repo_info()
+        self.check_file_invariants()
+
+    # ---- helpers ----
+
+    @contextlib.contextmanager
+    def _v1_repo_copy(self) -> Any:
+        """Copy storage to a tempdir, open with icechunk_v1, and clean up.
+
+        Yields (v1_repo, v1_path).
+        """
+        with tempfile.TemporaryDirectory() as v1_path:
+            shutil.copytree(self._storage_path, v1_path, dirs_exist_ok=True)
+            v1_storage = ic_v1.local_filesystem_storage(v1_path)
+            yield ic_v1.Repository.open(v1_storage), v1_path
+
+    def _sync_model_from_repo(self) -> None:
+        """Reopen repo and sync model state after expire/GC."""
+        assert self.storage is not None
+        self.repo = self.actor.open(self.storage)
+        self.model.sync_from_repo(self.repo, self.storage)
+        self.session = self.repo.writable_session(self.model.branch or DEFAULT_BRANCH)
+
+    @staticmethod
+    def _list_object_keys(storage_path: str) -> dict[str, set[str]]:
+        """List object keys per prefix using v2 storage (which has list_objects_metadata)."""
+        storage = ic.local_filesystem_storage(storage_path)
+        result: dict[str, set[str]] = {}
+        for prefix in ("snapshots", "manifests", "chunks", "attributes", "transactions"):
+            result[prefix] = {
+                obj.key for obj in storage.list_objects_metadata(prefix=prefix)
+            }
+        return result
+
+    def _compare_expire(
+        self,
+        older_than: datetime.datetime,
+        delete_expired_branches: bool,
+        delete_expired_tags: bool,
+    ) -> None:
+        # Reopen to clear any stale caches from prior GC/expire
+        assert self.storage is not None
+        self.repo = self.actor.open(self.storage)
+        with self._v1_repo_copy() as (v1_repo, _):
+            v2_error: Exception | None = None
+            v1_error: Exception | None = None
+            try:
+                v2_result = self.repo.expire_snapshots(
+                    older_than,
+                    delete_expired_branches=delete_expired_branches,
+                    delete_expired_tags=delete_expired_tags,
+                )
+            except (ic.IcechunkError, Exception) as e:
+                v2_error = e
+            try:
+                v1_result = v1_repo.expire_snapshots(
+                    older_than,
+                    delete_expired_branches=delete_expired_branches,
+                    delete_expired_tags=delete_expired_tags,
+                )
+            except (ic_v1.IcechunkError, Exception) as e:
+                v1_error = e
+
+            if v2_error is not None or v1_error is not None:
+                note(f"expire_snapshots errors: v2={v2_error!r}, v1={v1_error!r}")
+                assert v2_error is not None and v1_error is not None, (
+                    f"expire_snapshots error mismatch: v2={v2_error!r}, v1={v1_error!r}"
+                )
+                event("cross-version expire: both errored (consistent)")
+            else:
+                note(f"expire_snapshots: v2={v2_result!r}, v1={v1_result!r}")
+                assert v2_result == v1_result, (
+                    f"expire_snapshots mismatch: v2={v2_result}, v1={v1_result}"
+                )
+                event(f"cross-version expire: {len(v2_result)} snapshots expired")
+
+        self._sync_model_from_repo()
+
+    def _compare_gc(self, older_than: datetime.datetime) -> None:
+        # Reopen to clear any stale caches from prior GC/expire
+        assert self.storage is not None
+        self.repo = self.actor.open(self.storage)
+        with self._v1_repo_copy() as (v1_repo, v1_path):
+            v2_error: Exception | None = None
+            v1_error: Exception | None = None
+            try:
+                v2_summary = self.repo.garbage_collect(older_than)
+            except (ic.IcechunkError, Exception) as e:
+                v2_error = e
+            try:
+                v1_summary = v1_repo.garbage_collect(older_than)
+            except (ic_v1.IcechunkError, Exception) as e:
+                v1_error = e
+
+            if v2_error is not None or v1_error is not None:
+                note(f"garbage_collect errors: v2={v2_error!r}, v1={v1_error!r}")
+                assert v2_error is not None and v1_error is not None, (
+                    f"garbage_collect error mismatch: v2={v2_error!r}, v1={v1_error!r}"
+                )
+                event("cross-version GC: both errored (consistent)")
+            else:
+                note(
+                    f"garbage_collect: v2={v2_summary.snapshots_deleted}, v1={v1_summary.snapshots_deleted}"
+                )
+                # bytes_deleted / transaction_logs_deleted may differ between v1 and v2.
+                for field in (
+                    "snapshots_deleted",
+                    "chunks_deleted",
+                    "manifests_deleted",
+                    "attributes_deleted",
+                ):
+                    v2_val = getattr(v2_summary, field)
+                    v1_val = getattr(v1_summary, field)
+                    assert v2_val == v1_val, (
+                        f"garbage_collect {field} mismatch: v2={v2_val}, v1={v1_val}"
+                    )
+                event(
+                    f"cross-version GC: {v2_summary.snapshots_deleted} snapshots collected"
+                )
+
+                # Compare remaining objects on storage after GC
+                v2_objects = self._list_object_keys(self._storage_path)
+                v1_objects = self._list_object_keys(v1_path)
+                for prefix in v2_objects:
+                    assert v2_objects[prefix] == v1_objects[prefix], (
+                        f"post-GC object mismatch for {prefix!r}:\n"
+                        f"  v2 only: {v2_objects[prefix] - v1_objects[prefix]}\n"
+                        f"  v1 only: {v1_objects[prefix] - v2_objects[prefix]}"
+                    )
+
+        self._sync_model_from_repo()
+
+    @precondition(lambda self: bool(self.model.commits))
+    @rule(
+        data=st.data(),
+        delete_expired_branches=st.sampled_from([True, True, True, False]),
+        delete_expired_tags=st.sampled_from([True, True, True, False]),
+    )
+    def expire_snapshots(
+        self,
+        data: st.DataObject,
+        delete_expired_branches: bool,
+        delete_expired_tags: bool,
+    ) -> None:
+        assert self.storage is not None
+        older_than = draw_older_than(data, self.storage)
+        note(
+            f"Expiring snapshots {older_than=!r}, {delete_expired_branches=!r}, {delete_expired_tags=!r}"
+        )
+        self._compare_expire(older_than, delete_expired_branches, delete_expired_tags)
+
+    @precondition(lambda self: bool(self.model.commit_times))
+    @rule(data=st.data())
+    def garbage_collect(self, data: st.DataObject) -> None:
+        assert self.storage is not None
+        older_than = draw_older_than(data, self.storage)
+        note(f"running garbage_collect for {older_than=!r}")
+        self._compare_gc(older_than)
+
+    def teardown(self) -> None:
+        """Always run expire + GC at the end to guarantee they fire at least once."""
+        if self.storage is None:
+            return
+        far_future = datetime.datetime(2099, 1, 1, tzinfo=datetime.UTC)
+        self._compare_expire(far_future, True, True)
+        self._compare_gc(far_future)
+
+
+def test_two_repos_expire_gc_comparison() -> None:
+    run_state_machine_as_test(  # type: ignore[no-untyped-call]
+        CrossVersionExpireGCStateMachine,
+        settings=settings(report_multiple_bugs=False),
     )
 
 
@@ -162,7 +415,4 @@ def test_two_actors_zarr_cross_version() -> None:
     def mk_test_instance_sync() -> CrossVersionTwoActorZarrHierarchyStateMachine:
         return CrossVersionTwoActorZarrHierarchyStateMachine(tempfile.mkdtemp())
 
-    run_state_machine_as_test(  # type: ignore[no-untyped-call]
-        mk_test_instance_sync,
-        settings=settings(max_examples=150, stateful_step_count=100),
-    )
+    run_state_machine_as_test(mk_test_instance_sync)  # type: ignore[no-untyped-call]

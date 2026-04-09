@@ -1,4 +1,4 @@
-use futures::TryStreamExt;
+use futures::TryStreamExt as _;
 use icechunk::{
     ObjectStoreConfig, Repository, RepositoryConfig, Storage, Store,
     config::{
@@ -17,7 +17,7 @@ use icechunk::{
     repository::VersionInfo,
     session::{SessionErrorKind, get_chunk},
     storage::{
-        self, ConcurrencySettings, ETag, ObjectStorage, new_s3_storage, s3::mk_client,
+        self, ConcurrencySettings, ETag, ObjectStorage, mk_client, new_s3_storage,
     },
     store::{StoreError, StoreErrorKind},
     virtual_chunks::VirtualChunkContainer,
@@ -36,7 +36,7 @@ use tempfile::TempDir;
 use tokio::sync::RwLock;
 
 use bytes::Bytes;
-use object_store::{
+use icechunk_arrow_object_store::object_store::{
     ObjectStore, PutMode, PutOptions, PutPayload, azure::AzureConfigKey,
     local::LocalFileSystem,
 };
@@ -44,14 +44,14 @@ use pretty_assertions::assert_eq;
 
 #[template]
 #[rstest]
-#[case::v1(SpecVersionBin::V1dot0)]
-#[case::v2(SpecVersionBin::V2dot0)]
+#[case::v1(SpecVersionBin::V1)]
+#[case::v2(SpecVersionBin::V2)]
 fn spec_version_cases(#[case] spec_version: SpecVersionBin) {}
 
 fn minio_s3_config() -> (S3Options, S3Credentials) {
     let config = S3Options {
         region: Some("us-east-1".to_string()),
-        endpoint_url: Some("http://localhost:9000".to_string()),
+        endpoint_url: Some("http://localhost:4200".to_string()),
         allow_http: true,
         anonymous: false,
         force_path_style: true,
@@ -59,8 +59,8 @@ fn minio_s3_config() -> (S3Options, S3Credentials) {
         requester_pays: false,
     };
     let credentials = S3Credentials::Static(S3StaticCredentials {
-        access_key_id: "minio123".into(),
-        secret_access_key: "minio123".into(),
+        access_key_id: "test123".into(),
+        secret_access_key: "test123".into(),
         session_token: None,
         expires_after: None,
     });
@@ -216,7 +216,7 @@ async fn create_minio_repository(spec_version: SpecVersionBin) -> Repository {
             "s3://testbucket/".to_string(),
             ObjectStoreConfig::S3Compatible(S3Options {
                 region: Some(String::from("us-east-1")),
-                endpoint_url: Some("http://localhost:9000".to_string()),
+                endpoint_url: Some("http://localhost:4200".to_string()),
                 anonymous: false,
                 allow_http: true,
                 force_path_style: true,
@@ -229,7 +229,7 @@ async fn create_minio_repository(spec_version: SpecVersionBin) -> Repository {
             "s3://testbucket/path with spaces/".to_string(),
             ObjectStoreConfig::S3Compatible(S3Options {
                 region: Some(String::from("us-east-1")),
-                endpoint_url: Some("http://localhost:9000".to_string()),
+                endpoint_url: Some("http://localhost:4200".to_string()),
                 anonymous: false,
                 allow_http: true,
                 force_path_style: true,
@@ -252,8 +252,8 @@ async fn create_minio_repository(spec_version: SpecVersionBin) -> Repository {
         (
             "s3://testbucket/".to_string(),
             Some(Credentials::S3(S3Credentials::Static(S3StaticCredentials {
-                access_key_id: "minio123".to_string(),
-                secret_access_key: "minio123".to_string(),
+                access_key_id: "test123".to_string(),
+                secret_access_key: "test123".to_string(),
                 session_token: None,
                 expires_after: None,
             }))),
@@ -261,8 +261,8 @@ async fn create_minio_repository(spec_version: SpecVersionBin) -> Repository {
         (
             "s3://testbucket/path with spaces/".to_string(),
             Some(Credentials::S3(S3Credentials::Static(S3StaticCredentials {
-                access_key_id: "minio123".to_string(),
-                secret_access_key: "minio123".to_string(),
+                access_key_id: "test123".to_string(),
+                secret_access_key: "test123".to_string(),
                 session_token: None,
                 expires_after: None,
             }))),
@@ -353,7 +353,7 @@ async fn test_repository_with_local_virtual_refs(
             .await;
     let mut ds = repo.writable_session("main").await.unwrap();
 
-    let shape = ArrayShape::new(vec![(1, 1), (1, 1), (2, 1)]).unwrap();
+    let shape = ArrayShape::new(vec![(1, 1), (1, 1), (2, 2)]).unwrap();
     let user_data = Bytes::new();
     let payload1 = ChunkPayload::Virtual(VirtualChunkRef {
         location: VirtualChunkLocation::from_url(&format!(
@@ -428,7 +428,7 @@ async fn test_repository_with_local_virtual_refs(
             )
             .await
             .unwrap(),
-            Some(range.slice(bytes1.clone()))
+            Some(range.slice(&bytes1))
         );
     }
     Ok(())
@@ -450,7 +450,7 @@ async fn test_repository_with_minio_virtual_refs(
     let repo = create_minio_repository(spec_version).await;
     let mut ds = repo.writable_session("main").await.unwrap();
 
-    let shape = ArrayShape::new(vec![(1, 1), (1, 1), (2, 1)]).unwrap();
+    let shape = ArrayShape::new(vec![(1, 1), (1, 1), (2, 2)]).unwrap();
     let user_data = Bytes::new();
     let payload1 = ChunkPayload::Virtual(VirtualChunkRef {
         location: VirtualChunkLocation::from_url(&format!(
@@ -528,12 +528,12 @@ async fn test_repository_with_minio_virtual_refs(
             )
             .await
             .unwrap(),
-            Some(range.slice(bytes1.clone()))
+            Some(range.slice(&bytes1))
         );
     }
 
     // check if we can fetch the virtual chunks in multiple small requests
-    ds.commit("done", None).await?;
+    ds.commit("done").max_concurrent_nodes(8).execute().await?;
 
     let mut config = repo.config().clone();
     config.storage = Some(storage::Settings {
@@ -581,7 +581,7 @@ async fn test_repository_with_minio_virtual_refs(
 #[apply(spec_version_cases)]
 async fn test_zarr_store_virtual_refs_minio_set_and_get(
     #[case] spec_version: SpecVersionBin,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<(), Box<dyn Error>> {
     let bytes1 = Bytes::copy_from_slice(b"first");
     let bytes2 = Bytes::copy_from_slice(b"second0000");
     let chunks = [
@@ -654,7 +654,7 @@ async fn test_zarr_store_virtual_refs_minio_set_and_get(
 #[apply(spec_version_cases)]
 async fn test_zarr_store_virtual_refs_azure_set_and_get(
     #[case] spec_version: SpecVersionBin,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<(), Box<dyn Error>> {
     let bytes1 = Bytes::copy_from_slice(b"first");
     let bytes2 = Bytes::copy_from_slice(b"second0000");
     let chunks =
@@ -710,7 +710,7 @@ async fn test_zarr_store_virtual_refs_azure_set_and_get(
 #[apply(spec_version_cases)]
 async fn test_zarr_store_virtual_refs_from_public_s3(
     #[case] spec_version: SpecVersionBin,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<(), Box<dyn Error>> {
     let repo_dir = TempDir::new()?;
     let repo = create_local_repository(repo_dir.path(), None, spec_version).await;
     let ds = repo.writable_session("main").await.unwrap();
@@ -754,7 +754,7 @@ async fn test_zarr_store_virtual_refs_from_public_s3(
 #[apply(spec_version_cases)]
 async fn test_zarr_store_virtual_refs_from_public_gcs(
     #[case] spec_version: SpecVersionBin,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<(), Box<dyn Error>> {
     let repo_dir = TempDir::new()?;
     let repo = create_local_repository(repo_dir.path(), None, spec_version).await;
     let ds = repo.writable_session("main").await.unwrap();
@@ -838,7 +838,7 @@ async fn test_zarr_store_virtual_refs_from_public_gcs(
 #[apply(spec_version_cases)]
 async fn test_zarr_store_with_multiple_virtual_chunk_containers(
     #[case] spec_version: SpecVersionBin,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<(), Box<dyn Error>> {
     // we create a repository with 3 virtual chunk containers: one for minio chunks, one for
     // local filesystem chunks and one for chunks in a public S3 bucket.
 
@@ -855,7 +855,7 @@ async fn test_zarr_store_with_multiple_virtual_chunk_containers(
             "s3://testbucket/".to_string(),
             ObjectStoreConfig::S3Compatible(S3Options {
                 region: Some(String::from("us-east-1")),
-                endpoint_url: Some("http://localhost:9000".to_string()),
+                endpoint_url: Some("http://localhost:4200".to_string()),
                 anonymous: false,
                 allow_http: true,
                 force_path_style: true,
@@ -888,8 +888,8 @@ async fn test_zarr_store_with_multiple_virtual_chunk_containers(
         (
             "s3://testbucket".to_string(),
             Some(Credentials::S3(S3Credentials::Static(S3StaticCredentials {
-                access_key_id: "minio123".to_string(),
-                secret_access_key: "minio123".to_string(),
+                access_key_id: "test123".to_string(),
+                secret_access_key: "test123".to_string(),
                 session_token: None,
                 expires_after: None,
             }))),
@@ -1219,12 +1219,19 @@ async fn test_virtual_refs_with_vcc_relative_urls(
             )
             .await
             .unwrap(),
-            Some(range.slice(bytes1.clone()))
+            Some(range.slice(&bytes1))
         );
     }
 
     // Commit and verify all_virtual_chunk_locations returns expanded absolute URLs
-    store.session().write().await.commit("vcc test", None).await?;
+    store
+        .session()
+        .write()
+        .await
+        .commit("vcc test")
+        .max_concurrent_nodes(8)
+        .execute()
+        .await?;
 
     let session =
         repo.readonly_session(&VersionInfo::BranchTipRef("main".to_string())).await?;

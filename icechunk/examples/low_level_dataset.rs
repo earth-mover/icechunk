@@ -9,7 +9,7 @@ use icechunk::{
     session::{Session, SessionError},
     storage::new_in_memory_storage,
 };
-use itertools::Itertools;
+use itertools::Itertools as _;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -103,11 +103,11 @@ ds.add_array(array1_path.clone(), zarr_meta1).await?;
     print_nodes(&ds).await?;
 
     println!("## Committing");
-    let v1_id = ds.commit("some message", Default::default()).await?;
+    let v1_id = ds.commit("some message").max_concurrent_nodes(8).execute().await?;
     println!(
         r#"
 ```
-ds.commit("some message", Default::default()).await?;
+ds.commit("some message").execute().await?;
 => {v1_id:?}
 ```
  "#
@@ -149,11 +149,11 @@ let chunk = ds.get_chunk_ref(&array1_path, &ChunkIndices(vec![0])).await.unwrap(
 
     println!();
     println!("## Committing");
-    let v2_id = ds.commit("a message", Default::default()).await?;
+    let v2_id = ds.commit("a message").max_concurrent_nodes(8).execute().await?;
     println!(
         r#"
 ```
-ds.flush("a message", Default::default()).await?;
+ds.commit("a message").anonymous().execute().await?;
 => {v2_id:?}
 ```
  "#
@@ -202,11 +202,11 @@ ds.set_chunk(
 
     println!();
     println!("## Committing");
-    let v3_id = ds.commit("commit", Default::default()).await?;
+    let v3_id = ds.commit("commit").max_concurrent_nodes(8).execute().await?;
     println!(
         r#"
 ```
-ds.flush("commit", Default::default()).await?;
+ds.commit("commit").anonymous().execute().await?;
 => {v3_id:?}
 ```
  "#

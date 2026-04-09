@@ -18,7 +18,7 @@ permissions:
   contents: read
 
 env:
-  PYTHON_VERSION: "3.11"
+  PYTHON_VERSION: "3.12"
 
 defaults:
   run:
@@ -28,13 +28,13 @@ jobs:
   build-wheels:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Build wheels
-        uses: PyO3/maturin-action@v1
+        uses: PyO3/maturin-action@db323e2cf5679b7feb8bcb561a36b27a0bc19e79 # v1
         with:
           working-directory: icechunk-python
           args: --release --out dist -i python${{ env.PYTHON_VERSION }}
@@ -42,7 +42,7 @@ jobs:
           manylinux: auto
 
       - name: Upload wheels
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
         with:
           name: test-wheels
           path: icechunk-python/dist
@@ -64,20 +64,20 @@ jobs:
             distributed: "latest-release"
             zarr: "latest-release"
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
       - name: Stand up RustFS
         run: |
           docker compose up -d rustfs_init
 
       - name: Download wheels
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: test-wheels
           path: icechunk-python/dist
 
       - name: Restore cached hypothesis directory
         id: restore-hypothesis-cache
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
         with:
           path: icechunk-python/.hypothesis/
           key: cache-hypothesis-${{ runner.os }}-${{ github.run_id }}
@@ -85,7 +85,7 @@ jobs:
             cache-hypothesis-
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
         with:
           enable-cache: true
           python-version: ${{ env.PYTHON_VERSION }}
@@ -122,38 +122,186 @@ jobs:
               sleep 1
           done
 
-      - name: Run pytest
+      - name: Install flatc
+        run: |
+          sudo apt-get update && sudo apt-get install -y flatbuffers-compiler
+
+      - name: Run pytest (non-hypothesis)
         shell: bash
         working-directory: icechunk-python
         run: |
           set -e
           source .venv/bin/activate
-          # Run tests
-          python -m pytest -n 4
+          python -m pytest -n 4 -m "not hypothesis"
 
-      # explicitly save the cache so it gets updated, also do this even if it fails.
+  build-wheels-free-threaded:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13t"
+
+      - name: Build wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          working-directory: icechunk-python
+          args: --release --out dist -i python3.13t
+          sccache: true
+          manylinux: auto
+
+      - name: Upload wheels
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-wheels-free-threaded
+          path: icechunk-python/dist
+
+  test-free-threaded:
+    runs-on: ubuntu-latest
+    needs: [build-wheels-free-threaded]
+    steps:
+      - uses: actions/checkout@v6
+      - name: Stand up RustFS
+        run: |
+          docker compose up -d rustfs_init
+
+      - name: Download wheels
+        uses: actions/download-artifact@v8
+        with:
+          name: test-wheels-free-threaded
+          path: icechunk-python/dist
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          python-version: "3.13t"
+
+      - name: Install dependencies
+        shell: bash
+        working-directory: icechunk-python
+        run: |
+          set -e
+          uv venv
+          source .venv/bin/activate
+          python --version
+          WHEEL=$(ls dist/*-cp313t-*.whl)
+          uv pip install "$WHEEL" --group test
+
+      - name: Wait for RustFS to be ready
+        run: |
+          for _ in {1..30}; do
+              if docker compose ps --status exited --filter status==0 | grep rustfs ; then
+              break
+              fi
+              sleep 1
+          done
+
+      - name: Install flatc
+        run: |
+          sudo apt-get update && sudo apt-get install -y flatbuffers-compiler
+
+      - name: Run pytest (non-hypothesis)
+        shell: bash
+        working-directory: icechunk-python
+        run: |
+          set -e
+          source .venv/bin/activate
+          python -m pytest -n 4 -m "not hypothesis"
+
+  test-hypothesis-shard:
+    runs-on: ubuntu-latest
+    needs: [build-wheels]
+    strategy:
+      fail-fast: false
+      matrix:
+        shard-id: [0, 1, 2]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Download wheels
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: test-wheels
+          path: icechunk-python/dist
+
+      - name: Restore cached hypothesis directory
+        id: restore-hypothesis-cache
+        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
+        with:
+          path: icechunk-python/.hypothesis/
+          key: cache-hypothesis-${{ runner.os }}-shard${{ matrix.shard-id }}-${{ github.run_id }}
+          restore-keys: |
+            cache-hypothesis-${{ runner.os }}-shard${{ matrix.shard-id }}-
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
+        with:
+          enable-cache: true
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        shell: bash
+        working-directory: icechunk-python
+        run: |
+          set -e
+          uv venv
+          source .venv/bin/activate
+          python --version
+          PYTHON_TAG="cp$(echo ${{ env.PYTHON_VERSION }} | tr -d '.')"
+          WHEEL=$(ls dist/*-${PYTHON_TAG}-*.whl)
+          uv pip install "$WHEEL" --group test
+          uv pip install pytest-shard
+
+      - name: Run hypothesis tests (shard ${{ matrix.shard-id }}/3)
+        shell: bash
+        working-directory: icechunk-python
+        env:
+          HYPOTHESIS_EXPERIMENTAL_OBSERVABILITY: "1"
+          NOCOLOR: 1
+        run: |
+          set -e
+          source .venv/bin/activate
+          python -m pytest -m hypothesis --num-shards=3 --shard-id=${{ matrix.shard-id }}
+
       - name: Save cached hypothesis directory
         id: save-hypothesis-cache
         if: always()
-        uses: actions/cache/save@v5
+        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
         with:
           path: icechunk-python/.hypothesis/
-          key: cache-hypothesis-${{ runner.os }}-${{ github.run_id }}-${{ matrix.deps-version.name }}
+          key: cache-hypothesis-${{ runner.os }}-shard${{ matrix.shard-id }}-${{ github.run_id }}
+
+  # Aggregation job preserves the required "test-hypothesis" check name
+  test-hypothesis:
+    if: always()
+    needs: [test-hypothesis-shard]
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - name: Verify all shards passed
+        run: |
+          if [ "${{ needs.test-hypothesis-shard.result }}" != "success" ]; then
+            echo "::error::One or more hypothesis test shards failed"
+            exit 1
+          fi
 
   compat-stateful:
     runs-on: ubuntu-latest
     needs: [build-wheels]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: Download wheels
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: test-wheels
           path: icechunk-python/dist
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
         with:
           enable-cache: true
           python-version: ${{ env.PYTHON_VERSION }}
@@ -168,12 +316,7 @@ jobs:
           PYTHON_TAG="cp$(echo ${{ env.PYTHON_VERSION }} | tr -d '.')"
           WHEEL=$(ls dist/*-${PYTHON_TAG}-*.whl)
           uv pip install "$WHEEL" --group test
-          uvx --from "git+https://github.com/earth-mover/third-wheel" \
-            third-wheel download icechunk --version ">=1,<2" \
-            --rename icechunk_v1 \
-            --python-version ${{ env.PYTHON_VERSION }} \
-            -o ./dist-v1/
-          uv pip install dist-v1/icechunk_v1-*.whl
+          uv run third-wheel sync -v
 
       - name: Run cross-version stateful tests
         shell: bash
@@ -196,7 +339,7 @@ jobs:
             version: "latest-release"
             zarr: "latest-release"
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           path: "icechunk"
 
@@ -206,13 +349,13 @@ jobs:
           docker compose up -d rustfs_init
 
       - name: Download wheels
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: test-wheels
           path: icechunk/icechunk-python/dist
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
         with:
           enable-cache: true
           python-version: ${{ env.PYTHON_VERSION }}
@@ -288,16 +431,16 @@ jobs:
     runs-on: ubuntu-latest
     needs: [build-wheels]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: Download wheels
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: test-wheels
           path: icechunk-python/dist
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
         with:
           enable-cache: true
           python-version: ${{ env.PYTHON_VERSION }}
@@ -317,18 +460,18 @@ jobs:
   check-xarray-docs:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           path: "icechunk"
 
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           repository: "pydata/xarray"
           path: "xarray"
           fetch-depth: 0
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
         with:
           enable-cache: true
           python-version: ${{ env.PYTHON_VERSION }}

@@ -1,24 +1,20 @@
-#![allow(clippy::unwrap_used)]
-
-use std::convert::Infallible;
 use std::sync::Arc;
 
 use bytes::Bytes;
-use criterion::{
-    BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main,
-};
+use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group};
 use icechunk::asset_manager::AssetManager;
 use icechunk::format::format_constants::SpecVersionBin;
 use icechunk::format::manifest::{ChunkInfo, ChunkPayload, Manifest};
 use icechunk::format::snapshot::{ArrayShape, NodeData, NodeSnapshot, Snapshot};
-use icechunk::format::{ChunkIndices, ManifestId, NodeId, Path};
+use icechunk::format::{ChunkIndices, IcechunkFormatError, ManifestId, NodeId, Path};
 use icechunk::storage::{self, new_local_filesystem_storage};
 use tempfile::TempDir;
 use tokio::runtime::Runtime;
 
 fn make_snapshot(num_nodes: usize) -> Arc<Snapshot> {
     let user_data = Bytes::from_static(br#"{"this":"node"}"#);
-    let mut nodes: Vec<Result<NodeSnapshot, Infallible>> = Vec::with_capacity(num_nodes);
+    let mut nodes: Vec<Result<NodeSnapshot, IcechunkFormatError>> =
+        Vec::with_capacity(num_nodes);
 
     // Root group at "/"
     nodes.push(Ok(NodeSnapshot {
@@ -49,7 +45,7 @@ fn make_snapshot(num_nodes: usize) -> Arc<Snapshot> {
             None,
             None,
             SpecVersionBin::current(),
-            "bench snapshot".to_string(),
+            "bench snapshot",
             None,
             vec![],
             None,
@@ -87,10 +83,10 @@ fn benchmark_write_new_snapshot(c: &mut Criterion) {
                     |snapshot| {
                         rt.block_on(async {
                             asset_manager.write_snapshot(snapshot).await.unwrap();
-                        })
+                        });
                     },
                     BatchSize::SmallInput,
-                )
+                );
             },
         );
     }
@@ -134,13 +130,16 @@ fn benchmark_write_new_manifest(c: &mut Criterion) {
             |manifest| {
                 rt.block_on(async {
                     asset_manager.write_manifest(manifest).await.unwrap();
-                })
+                });
             },
             BatchSize::SmallInput,
-        )
+        );
     });
     group.finish();
 }
 
-criterion_group!(benches, benchmark_write_new_snapshot, benchmark_write_new_manifest);
-criterion_main!(benches);
+criterion_group!(
+    asset_manager_benches,
+    benchmark_write_new_snapshot,
+    benchmark_write_new_manifest
+);

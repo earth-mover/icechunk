@@ -1,7 +1,7 @@
 use std::{borrow::Cow, sync::Arc};
 
 use chrono::Utc;
-use futures::{StreamExt, TryStreamExt};
+use futures::{StreamExt as _, TryStreamExt as _};
 use icechunk::{
     Store,
     format::{
@@ -13,7 +13,7 @@ use icechunk::{
 };
 use itertools::Itertools as _;
 use pyo3::{
-    conversion::IntoPyObjectExt,
+    conversion::IntoPyObjectExt as _,
     exceptions::{PyKeyError, PyValueError},
     prelude::*,
     types::{PyTuple, PyType},
@@ -23,6 +23,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
 use crate::{
+    display::{PyRepr, ReprMode, py_bool},
     errors::{PyIcechunkStoreError, PyIcechunkStoreResult},
     impl_pickle,
     session::PySession,
@@ -97,8 +98,30 @@ impl VirtualChunkSpec {
 impl_pickle!(VirtualChunkSpec);
 
 #[pyclass(name = "PyStore")]
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct PyStore(pub Arc<Store>);
+
+impl PyRepr for PyStore {
+    const EXECUTABLE: bool = false;
+
+    fn cls_name() -> &'static str {
+        "icechunk.IcechunkStore"
+    }
+
+    fn fields(&self, _mode: ReprMode) -> Vec<(&str, String)> {
+        let session = self.0.session();
+        let session_guard = session.blocking_read();
+        let branch = session_guard
+            .branch()
+            .map(|b| b.to_string())
+            .unwrap_or_else(|| "None".to_string());
+        vec![
+            ("read_only", py_bool(session_guard.read_only())),
+            ("snapshot_id", session_guard.snapshot_id().to_string()),
+            ("branch", branch),
+        ]
+    }
+}
 
 #[pymethods]
 impl PyStore {
@@ -111,7 +134,7 @@ impl PyStore {
         // This is a compute intensive task, we need to release the Gil
         py.detach(move || {
             let bytes = bytes.into_inner();
-            let store = Store::from_bytes(bytes).map_err(|e| {
+            let store = Store::from_bytes(&bytes).map_err(|e| {
                 PyValueError::new_err(format!(
                     "Failed to deserialize store from bytes: {e}"
                 ))
@@ -123,6 +146,18 @@ impl PyStore {
     fn __eq__(&self, other: &PyStore) -> bool {
         // If the stores were created from the same session they are equal
         Arc::ptr_eq(&self.0.session(), &other.0.session())
+    }
+
+    pub(crate) fn __repr__(&self) -> String {
+        <Self as PyRepr>::__repr__(self)
+    }
+
+    pub(crate) fn __str__(&self) -> String {
+        <Self as PyRepr>::__str__(self)
+    }
+
+    pub(crate) fn _repr_html_(&self) -> String {
+        <Self as PyRepr>::_repr_html_(self)
     }
 
     #[getter]
@@ -303,7 +338,7 @@ impl PyStore {
         })
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn set_virtual_ref(
         &self,
         py: Python<'_>,
@@ -336,7 +371,7 @@ impl PyStore {
         })
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn set_virtual_ref_async<'py>(
         &'py self,
         py: Python<'py>,
@@ -397,7 +432,7 @@ impl PyStore {
                 let array_path = if !array_path.starts_with("/") {
                     format!("/{array_path}")
                 } else {
-                    array_path.to_string()
+                    array_path.clone()
                 };
 
                 let path = Path::try_from(array_path).map_err(|e| {
@@ -457,7 +492,7 @@ impl PyStore {
                 let array_path = if !array_path.starts_with("/") {
                     format!("/{array_path}")
                 } else {
-                    array_path.to_string()
+                    array_path.clone()
                 };
 
                 let path = Path::try_from(array_path).map_err(|e| {
@@ -563,7 +598,6 @@ impl PyStore {
         py.detach(move || {
             let store = Arc::clone(&self.0);
 
-            #[allow(deprecated)]
             let list = pyo3_async_runtimes::tokio::get_runtime()
                 .block_on(async move { store.list().await })?
                 .map_err(PyIcechunkStoreError::StoreError)
@@ -588,7 +622,6 @@ impl PyStore {
         py.detach(move || {
             let store = Arc::clone(&self.0);
 
-            #[allow(deprecated)]
             let list = pyo3_async_runtimes::tokio::get_runtime()
                 .block_on(async move { store.list_prefix(prefix.as_str()).await })?
                 .map_err(PyIcechunkStoreError::StoreError)
@@ -612,7 +645,6 @@ impl PyStore {
         py.detach(move || {
             let store = Arc::clone(&self.0);
 
-            #[allow(deprecated)]
             let list = pyo3_async_runtimes::tokio::get_runtime()
                 .block_on(async move { store.list_dir(prefix.as_str()).await })?
                 .map_err(PyIcechunkStoreError::StoreError)

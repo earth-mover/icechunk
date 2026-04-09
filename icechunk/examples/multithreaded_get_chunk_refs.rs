@@ -18,7 +18,7 @@ use std::{
 };
 
 use bytes::Bytes;
-use futures::{StreamExt, stream::FuturesUnordered};
+use futures::{StreamExt as _, stream::FuturesUnordered};
 use icechunk::{
     Repository, RepositoryConfig,
     config::CompressionConfig,
@@ -67,7 +67,7 @@ async fn do_writes(path: &std::path::Path) -> Result<(), Box<dyn std::error::Err
     let dimension_names = Some(vec!["i".into(), "j".into(), "k".into(), "l".into()]);
     let path: Path = "/array".try_into().unwrap();
     session.add_array(path.clone(), shape, dimension_names, user_data).await?;
-    session.commit("array created", None).await?;
+    session.commit("array created").max_concurrent_nodes(8).execute().await?;
 
     let session = Arc::new(RwLock::new(repo.writable_session("main").await?));
     println!("Doing {} writes, wait...", MAX_I * MAX_J * MAX_K * MAX_L);
@@ -75,7 +75,7 @@ async fn do_writes(path: &std::path::Path) -> Result<(), Box<dyn std::error::Err
     let futures: FuturesUnordered<_> = iproduct!(0..MAX_I, 0..MAX_J, 0..MAX_L, 0..MAX_K)
         .map(|(i, j, k, l)| {
             let path = path.clone();
-            let session = session.clone();
+            let session = Arc::clone(&session);
             async move {
                 let mut session = session.write().await;
                 let payload = ChunkPayload::Ref(ChunkRef {
@@ -99,7 +99,13 @@ async fn do_writes(path: &std::path::Path) -> Result<(), Box<dyn std::error::Err
     println!("Time to execute writes: {:?}", before.elapsed());
     let before = Instant::now();
     println!("Committing");
-    session.write().await.commit("array created", None).await?;
+    session
+        .write()
+        .await
+        .commit("array created")
+        .max_concurrent_nodes(8)
+        .execute()
+        .await?;
     println!("Time to execute commit: {:?}", before.elapsed());
     Ok(())
 }
@@ -113,10 +119,10 @@ async fn do_reads(path: &std::path::Path) -> Result<(), Box<dyn std::error::Erro
     let path: Path = "/array".try_into().unwrap();
     println!("Doing {} reads, wait...", 4 * (READS / 4));
     let before = Instant::now();
-    let join1 = tokio::spawn(thread_reads(session.clone(), path.clone(), READS / 4));
-    let join2 = tokio::spawn(thread_reads(session.clone(), path.clone(), READS / 4));
-    let join3 = tokio::spawn(thread_reads(session.clone(), path.clone(), READS / 4));
-    let join4 = tokio::spawn(thread_reads(session.clone(), path.clone(), READS / 4));
+    let join1 = tokio::spawn(thread_reads(Arc::clone(&session), path.clone(), READS / 4));
+    let join2 = tokio::spawn(thread_reads(Arc::clone(&session), path.clone(), READS / 4));
+    let join3 = tokio::spawn(thread_reads(Arc::clone(&session), path.clone(), READS / 4));
+    let join4 = tokio::spawn(thread_reads(Arc::clone(&session), path.clone(), READS / 4));
 
     let total = join1.await? + join2.await? + join3.await? + join4.await?;
     assert_eq!(total, 4 * (READS / 4));
@@ -158,7 +164,7 @@ async fn thread_reads(session: Arc<RwLock<Session>>, path: Path, reads: u64) -> 
             let k = random_range(0..MAX_K);
             let l = random_range(0..MAX_L);
             let path = path.clone();
-            let session = session.clone();
+            let session = Arc::clone(&session);
             async move {
                 let session = session.read().await;
                 let the_ref = session

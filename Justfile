@@ -38,9 +38,14 @@ build-release *args:
 develop *args:
   cd icechunk-python && uv run -m maturin_import_hook site install && maturin develop --uv --profile {{profile}} "$@"
 
+# Use --all-features for the workspace but skip icechunk's `shuttle` feature,
+# which swaps tokio for shuttle-tokio and is incompatible with other crates.
+icechunk_features := "s3,object-store-s3,object-store-gcs,object-store-azure,object-store-http,object-store-fs,redirect,logs,cli,napi-send-contract"
+
 [doc("Run clippy lints on all features")]
 lint *args:
-  cargo clippy --profile {{profile}} --all-features "$@"
+  cargo clippy --profile {{profile}} --all-features --exclude icechunk "$@"
+  cargo clippy --profile {{profile}} -p icechunk --features {{icechunk_features}} "$@"
 
 [doc("Format all Rust files (pass `--check` to verify only)")]
 format *args:
@@ -61,10 +66,10 @@ run-all-examples:
 [doc("Fast Rust pre-commit: format + lint (~3s)")]
 pre-commit-fast:
   just format
-  just lint "--workspace"
+  just lint "--workspace" "--all-targets"
 
 [doc("Medium Rust pre-commit: compile, build, format, lint, deps (~2-3min)")]
-pre-commit $RUSTFLAGS="-D warnings -W unreachable-pub -W bare-trait-objects":
+pre-commit $RUSTFLAGS="-D warnings":
   just compile-tests "--locked"
   just build
   just format
@@ -72,7 +77,7 @@ pre-commit $RUSTFLAGS="-D warnings -W unreachable-pub -W bare-trait-objects":
   just check-deps
 
 [doc("Full Rust CI pre-commit: all checks including tests and examples (~5+min)")]
-pre-commit-ci $RUSTFLAGS="-D warnings -W unreachable-pub -W bare-trait-objects":
+pre-commit-ci $RUSTFLAGS="-D warnings":
   just profile=ci compile-tests "--locked"
   just profile=ci build
   just format "--check"
@@ -86,6 +91,14 @@ pre-commit-ci $RUSTFLAGS="-D warnings -W unreachable-pub -W bare-trait-objects":
 pre-commit-python:
   just format "-p icechunk-python"
   just lint "-p icechunk-python"
+
+[doc("Profile benchmarks with cargo-samply (tracing spans become profiler markers)")]
+samply *args:
+  ICECHUNK_TRACE=samply cargo samply --features logs --bench main -- {{args}} --test
+
+[doc("Run benchmarks and emit a Chrome trace JSON file (open in Perfetto UI)")]
+chrome-trace *args:
+  ICECHUNK_TRACE=chrome cargo bench --features logs --bench main -- {{args}} --test
 
 [doc("Compare pytest-benchmark results")]
 bench-compare *args:

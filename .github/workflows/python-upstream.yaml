@@ -4,7 +4,7 @@ on:
   push:
     branches:
       - main
-      - 'support/**'
+      - "support/**"
   pull_request:
     types: [opened, reopened, synchronize, labeled]
   merge_group:
@@ -38,7 +38,7 @@ jobs:
       || github.event_name == 'schedule'
       }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
       - name: Install Just
         run: sudo snap install --edge --classic just
       - name: Stand up RustFS
@@ -53,17 +53,17 @@ jobs:
               fi
               sleep 3
           done
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Build wheels
-        uses: PyO3/maturin-action@v1
+        uses: PyO3/maturin-action@db323e2cf5679b7feb8bcb561a36b27a0bc19e79 # v1
         with:
           working-directory: icechunk-python
           # target: ${{ matrix.platform.target }}
@@ -88,6 +88,7 @@ jobs:
           uv pip install "$WHEEL" --group dev \
             --resolution highest \
             --index-strategy unsafe-best-match 2>&1 | tee setup-output.log
+          uv pip install "hypothesis @ git+https://github.com/ianhi/hypothesis.git@flaky-feedback#subdirectory=hypothesis-python"
           uv pip list
 
       - name: Create or update setup failure issue
@@ -189,7 +190,7 @@ jobs:
       - name: Restore cached hypothesis directory
         id: restore-hypothesis-cache
         if: always()
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
         with:
           path: icechunk-python/.hypothesis/
           key: cache-hypothesis-${{ runner.os }}-${{ github.run_id }}
@@ -197,7 +198,7 @@ jobs:
             cache-hypothesis-
 
       - name: describe environment
-        if: always()
+        if: steps.setup.outcome == 'success'
         shell: bash
         working-directory: icechunk-python
         run: |
@@ -206,22 +207,29 @@ jobs:
           source .venv/bin/activate
           pip list
 
+      - name: Install flatc
+        if: steps.setup.outcome == 'success'
+        run: |
+          sudo apt-get update && sudo apt-get install -y flatbuffers-compiler
+
       - name: pytest
         id: pytest-icechunk
-        if: always()
+        if: steps.setup.outcome == 'success'
         shell: bash
         working-directory: icechunk-python
+        env:
+          HYPOTHESIS_EXPERIMENTAL_OBSERVABILITY: "1"
         run: |
           set -e
           python3 -m venv .venv
           source .venv/bin/activate
-          pytest -n 4 --report-log output-pytest-log.jsonl
+          pytest -n 4 --hypothesis-profile=nightly --report-log output-pytest-log.jsonl
 
       # explicitly save the cache so it gets updated, also do this even if it fails.
       - name: Save cached hypothesis directory
         id: save-hypothesis-cache
         if: always()
-        uses: actions/cache/save@v5
+        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
         with:
           path: icechunk-python/.hypothesis/
           key: cache-hypothesis-${{ runner.os }}-${{ github.run_id }}
@@ -232,7 +240,7 @@ jobs:
           && steps.pytest-icechunk.outcome == 'failure'
           && github.event_name == 'schedule'
           && github.repository_owner == 'earth-mover'
-        uses: xarray-contrib/issue-from-pytest-log@v1
+        uses: xarray-contrib/issue-from-pytest-log@f94477e45ef40e4403d7585ba639a9a3bcc53d43 # v1
         with:
           log-path: icechunk-python/output-pytest-log.jsonl
 
@@ -245,27 +253,27 @@ jobs:
       || github.event_name == 'schedule'
       }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           path: "icechunk"
 
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           repository: "pydata/xarray"
           path: "xarray"
           fetch-depth: 0 # Fetch all history for all branches and tags.
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Build wheels
-        uses: PyO3/maturin-action@v1
+        uses: PyO3/maturin-action@db323e2cf5679b7feb8bcb561a36b27a0bc19e79 # v1
         with:
           working-directory: icechunk/icechunk-python
           args: --release --out dist --find-interpreter
@@ -321,7 +329,7 @@ jobs:
           && steps.pytest-xarray-backends.outcome == 'failure'
           && github.event_name == 'schedule'
           && github.repository_owner == 'earth-mover'
-        uses: xarray-contrib/issue-from-pytest-log@v1
+        uses: xarray-contrib/issue-from-pytest-log@f94477e45ef40e4403d7585ba639a9a3bcc53d43 # v1
         with:
           log-path: icechunk/icechunk-python/output-pytest-log.jsonl
           issue-title: "Nightly Xarray backends tests failed"

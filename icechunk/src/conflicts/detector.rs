@@ -2,12 +2,12 @@
 
 use std::{
     collections::{HashMap, HashSet},
-    ops::DerefMut,
+    ops::DerefMut as _,
     sync::Mutex,
 };
 
 use async_trait::async_trait;
-use futures::{StreamExt, TryStreamExt, stream};
+use futures::{StreamExt as _, TryStreamExt as _, stream};
 
 use crate::{
     change_set::ChangeSet,
@@ -293,9 +293,13 @@ impl<It: Iterator<Item = SessionResult<NodeSnapshot>>> PathFinder<It> {
                 }
             }
             *iter = None;
-            Err(SessionErrorKind::ConflictingPathNotFound(node_id.clone()).into())
+            Err(SessionError::capture(SessionErrorKind::ConflictingPathNotFound(
+                node_id.clone(),
+            )))
         } else {
-            Err(SessionErrorKind::ConflictingPathNotFound(node_id.clone()).into())
+            Err(SessionError::capture(SessionErrorKind::ConflictingPathNotFound(
+                node_id.clone(),
+            )))
         }
     }
 }

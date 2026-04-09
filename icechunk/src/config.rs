@@ -23,17 +23,20 @@ use crate::{
 
 // Re-export backend-specific types from their canonical modules so that existing
 // consumers (`crate::config::S3Options`, etc.) continue to work.
-#[cfg(feature = "object-store-azure")]
-pub use crate::storage::object_store::{AzureCredentials, AzureStaticCredentials};
-#[cfg(feature = "object-store-gcs")]
-pub use crate::storage::object_store::{
-    GcsBearerCredential, GcsCredentials, GcsCredentialsFetcher, GcsStaticCredentials,
-};
 pub use crate::storage::s3_config::{
     S3Credentials, S3CredentialsFetcher, S3Options, S3StaticCredentials,
 };
+#[cfg(feature = "object-store-azure")]
+pub use crate::storage::{
+    AzureCredentials, AzureCredentialsFetcher, AzureRefreshableCredential,
+    AzureStaticCredentials,
+};
 #[cfg(feature = "object-store-gcs")]
-pub use object_store::gcp::GcpCredential;
+pub use crate::storage::{
+    GcsBearerCredential, GcsCredentials, GcsCredentialsFetcher, GcsStaticCredentials,
+};
+#[cfg(feature = "object-store-gcs")]
+pub use icechunk_arrow_object_store::object_store::gcp::GcpCredential;
 
 /// Storage backend configuration.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -62,7 +65,7 @@ pub enum CompressionAlgorithm {
     Zstd,
 }
 
-#[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Default)]
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Copy, Default)]
 pub struct CompressionConfig {
     #[serde(default)]
     pub algorithm: Option<CompressionAlgorithm>,
@@ -88,7 +91,7 @@ impl CompressionConfig {
 }
 
 /// Cache size configuration for in-memory caches.
-#[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Default)]
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Copy, Default)]
 pub struct CachingConfig {
     #[serde(default)]
     pub num_snapshot_nodes: Option<u64>,
@@ -319,7 +322,7 @@ impl ManifestPreloadConfig {
 static DEFAULT_MANIFEST_PRELOAD_CONDITION: OnceLock<ManifestPreloadCondition> =
     OnceLock::new();
 
-#[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Default)]
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Copy, Default)]
 pub struct ManifestVirtualChunkLocationCompressionConfig {
     #[serde(default)]
     pub min_num_chunks: Option<u16>,
@@ -362,6 +365,19 @@ impl ManifestVirtualChunkLocationCompressionConfig {
     }
 }
 
+impl From<&ManifestVirtualChunkLocationCompressionConfig>
+    for crate::format::manifest::LocationCompressionConfig
+{
+    fn from(c: &ManifestVirtualChunkLocationCompressionConfig) -> Self {
+        Self {
+            min_num_chunks: c.min_num_chunks(),
+            dictionary_max_training_samples: c.dictionary_max_training_samples(),
+            dictionary_max_size_bytes: c.dictionary_max_size_bytes(),
+            compression_level: c.compression_level(),
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Default)]
 pub struct ManifestConfig {
     #[serde(default)]
@@ -391,7 +407,7 @@ impl ManifestConfig {
             ) {
                 (None, None) => None,
                 (None, Some(c)) => Some(c),
-                (Some(c), None) => Some(c.clone()),
+                (Some(c), None) => Some(*c),
                 (Some(mine), Some(theirs)) => Some(mine.merge(theirs)),
             },
         }
@@ -434,7 +450,7 @@ impl ManifestConfig {
 }
 
 /// Retry configuration for repo info update operations.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct RepoUpdateRetryConfig {
     /// Default retry settings for all repo update operations.
     #[serde(default)]
@@ -461,7 +477,7 @@ impl RepoUpdateRetryConfig {
             default: match (&self.default, other.default) {
                 (None, None) => None,
                 (None, Some(c)) => Some(c),
-                (Some(c), None) => Some(c.clone()),
+                (Some(c), None) => Some(*c),
                 (Some(mine), Some(theirs)) => Some(mine.merge(theirs)),
             },
         }
@@ -475,7 +491,7 @@ pub struct RepositoryConfig {
     #[serde(default)]
     pub inline_chunk_threshold_bytes: Option<u16>,
 
-    /// Concurrency used by the get_partial_values operation to fetch different keys in parallel
+    /// Concurrency used by the `get_partial_values` operation to fetch different keys in parallel
     #[serde(default)]
     pub get_partial_values_concurrency: Option<u16>,
 
@@ -518,7 +534,7 @@ static DEFAULT_MANIFEST_CONFIG: OnceLock<ManifestConfig> = OnceLock::new();
 static DEFAULT_REPO_UPDATE_RETRY_CONFIG: OnceLock<RepoUpdateRetryConfig> =
     OnceLock::new();
 pub const DEFAULT_MAX_CONCURRENT_REQUESTS: u16 = 256;
-pub const DEFAULT_NUM_UPDATES_PER_REPO_INFO_FILE: u16 = 100;
+pub const DEFAULT_NUM_UPDATES_PER_REPO_INFO_FILE: u16 = 1_000;
 
 impl RepositoryConfig {
     pub fn inline_chunk_threshold_bytes(&self) -> u16 {
@@ -574,7 +590,7 @@ impl RepositoryConfig {
             compression: match (&self.compression, other.compression) {
                 (None, None) => None,
                 (None, Some(c)) => Some(c),
-                (Some(c), None) => Some(c.clone()),
+                (Some(c), None) => Some(*c),
                 (Some(mine), Some(theirs)) => Some(mine.merge(theirs)),
             },
             max_concurrent_requests: match (
@@ -589,7 +605,7 @@ impl RepositoryConfig {
             caching: match (&self.caching, other.caching) {
                 (None, None) => None,
                 (None, Some(c)) => Some(c),
-                (Some(c), None) => Some(c.clone()),
+                (Some(c), None) => Some(*c),
                 (Some(mine), Some(theirs)) => Some(mine.merge(theirs)),
             },
             storage: match (&self.storage, other.storage) {
@@ -627,7 +643,7 @@ impl RepositoryConfig {
             ) {
                 (None, None) => None,
                 (None, Some(c)) => Some(c),
-                (Some(c), None) => Some(c.clone()),
+                (Some(c), None) => Some(*c),
                 (Some(mine), Some(theirs)) => Some(mine.merge(theirs)),
             },
             num_updates_per_repo_info_file: match (
@@ -676,7 +692,7 @@ impl RepositoryConfig {
     }
 
     pub fn clear_virtual_chunk_containers(&mut self) {
-        self.virtual_chunk_containers = Some(Default::default())
+        self.virtual_chunk_containers = Some(Default::default());
     }
 }
 
@@ -691,30 +707,7 @@ pub enum Credentials {
     Azure(AzureCredentials),
 }
 
-// This macro is used for creating property tests
-// which check that serializing and deserializing
-// an instance of a type T is equivalent to the
-// identity function
-// Given pairs of test names and arbitraries to be used
-// for the tests, e.g., (n1, a1), (n2, a2),... (nx, ax)
-// the tests can be created by doing
-// roundtrip_serialization_tests!(n1 - a1, n2 - a2, .... nx - ax)
-#[macro_export]
-macro_rules! roundtrip_serialization_tests {
-        ($($test_name: ident - $generator: ident), +) => {
-                            $(
-                proptest!{
-        #[icechunk_macros::test]
-                    fn $test_name(elem in $generator()) {
-           let bytes = rmp_serde::to_vec(&elem).unwrap();
-            let roundtrip = rmp_serde::from_slice(&bytes).unwrap();
-            assert_eq!(elem, roundtrip);
-        }})*
-        }
-    }
-
 #[cfg(test)]
-#[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use crate::{
         ObjectStoreConfig, RepositoryConfig,
@@ -722,6 +715,7 @@ mod tests {
         strategies::{repository_config, s3_static_credentials},
         virtual_chunks::VirtualChunkContainer,
     };
+    use icechunk_format::roundtrip_serialization_tests;
 
     use proptest::prelude::*;
 
@@ -739,10 +733,12 @@ mod tests {
     use crate::strategies::gcs_static_credentials;
 
     #[cfg(feature = "object-store-azure")]
-    roundtrip_serialization_tests!(test_azure_credentials_roundtrip - azure_credentials);
+    roundtrip_serialization_tests!(
+        test_azure_static_credentials_roundtrip - azure_static_credentials
+    );
 
     #[cfg(feature = "object-store-azure")]
-    use crate::strategies::azure_credentials;
+    use crate::strategies::azure_static_credentials;
 
     #[icechunk_macros::test]
     fn test_merge_replaces_virtual_chunk_containers() {
@@ -901,7 +897,7 @@ virtual_chunk_containers:
                 assert_eq!(opts.network_stream_timeout_seconds, Some(60));
                 assert!(!opts.requester_pays);
             }
-            other => panic!("Expected S3, got {:?}", other),
+            other => panic!("Expected S3, got {other:?}"),
         }
 
         // HTTP container

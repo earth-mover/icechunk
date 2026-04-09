@@ -26,3 +26,5 @@ icechunk-python/uv.lock
 # pixi environments
 .pixi/*
 !.pixi/config.toml
+
+.cache/

@@ -1,7 +1,7 @@
 [package]
 name = "icechunk-macros"
 description = "Support and helper macros for the Icechunk library"
-version = "0.1.0"
+version = "2.0.1"
 readme = "../README.md"
 repository = "https://github.com/earth-mover/icechunk"
 homepage = "https://icechunk.io"
@@ -14,12 +14,11 @@ publish = true
 rust-version.workspace = true
 
 [dependencies]
-syn = { version = "2.0", features = ["full"] }
-quote = "1.0"
+quote.workspace = true
+syn.workspace = true
 
 [lints]
 workspace = true
-
 
 [lib]
 proc-macro = true

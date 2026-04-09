@@ -1,8 +1,8 @@
 [package]
 name = "icechunk"
-version = "2.0.0-alpha.3"
+version = "2.0.1"
 description = "Transactional storage engine for Zarr designed for use on cloud object storage"
-readme = "../README.md"
+readme = "README.md"
 repository = "https://github.com/earth-mover/icechunk"
 homepage = "https://icechunk.io"
 license = "Apache-2.0"
@@ -12,97 +12,97 @@ authors = ["Earthmover PBC"]
 edition.workspace = true
 publish = true
 rust-version.workspace = true
+autobenches = false
 autotests = false
 
 [dependencies]
-async-trait = "0.1.89"
-bytes = { version = "1.11.1", features = ["serde"] }
-futures = "0.3.32"
-itertools = "0.14.0"
-object_store = { version = "0.13.1", default-features = false, features = [] }
-rand = "0.10.0"
-thiserror = "2.0.18"
-serde_json = "1.0.149"
-serde = { version = "1.0.228", features = ["derive", "rc"] }
-serde_with = { version = "3.17.0", features = ["hex"] }
-quick_cache = "0.6.19"
-base32 = "0.5.1"
-chrono = { version = "0.4.44", features = ["serde"] }
-async-recursion = "1.1.1"
-rmp-serde = "1.3.1"
-url = { version = "2.5.8", features = ["serde"] }
-async-stream = "0.3.6"
-aws-sdk-s3 = { version = "1.125.0", optional = true }
-aws-config = { version = "1.8.15", optional = true }
-aws-credential-types = { version = "1.2.14", optional = true }
-typed-path = "0.12.3"
-aws-smithy-runtime = { version = "1.10.3", optional = true }
-aws-smithy-types-convert = { version = "0.60.14", features = [
-  "convert-chrono",
-  "convert-streams",
-], optional = true }
-typetag = "0.2.21"
-zstd = "0.13.3"
-tokio-util = { version = "0.7.18", features = ["compat", "io-util"] }
-regex = "1.12.3"
-tracing-error = "0.2.1"
-tracing-subscriber = { version = "0.3.22", features = [
-  "env-filter",
-], optional = true }
-tracing = "0.1.44"
-err-into = "1.0.1"
-serde_yaml_ng = "0.10.0"
-clap = { version = "4.5", features = ["derive"], optional = true }
-anyhow = { version = "1.0.102", optional = true }
-dialoguer = { version = "0.12.0", optional = true }
-dirs = { version = "6.0.0", optional = true }
-flexbuffers = "25.12.19"
-flatbuffers = "25.12.19"
-urlencoding = "2.1.3"
-backon = "1.6.0"
+icechunk-arrow-object-store.workspace = true
+icechunk-format.workspace = true
+icechunk-storage.workspace = true
+icechunk-types.workspace = true
+icechunk-s3 = { workspace = true, optional = true }
 
-# reqwest's default-features enables default-tls which ultimately leads to an openssl dependencies
-# which we are not including as it is not included in manylinux wheels. Instead depend on rustls-tls only
-# https://github.com/earth-mover/icechunk/issues/1400
-reqwest = { version = "0.12.28", default-features = false, features = [
-  "rustls-tls",
-  # defaults we rely on. Add explicitly because we set default-features to false
-  "charset",
-  "http2",
-  "system-proxy",
-], optional = true }
-async-compression = { version = "0.4.41", features = ["tokio", "zstd"] }
-serde_bytes = "0.11.19"
+async-compression.workspace = true
+async-recursion.workspace = true
+async-stream.workspace = true
+async-trait.workspace = true
+backon.workspace = true
+bytes.workspace = true
+chrono.workspace = true
+flexbuffers.workspace = true
+futures.workspace = true
+itertools.workspace = true
+quick_cache.workspace = true
+rand.workspace = true
+regex.workspace = true
+rmp-serde.workspace = true
+serde.workspace = true
+serde_bytes.workspace = true
+serde_json.workspace = true
+serde_with = { workspace = true, features = ["hex"] }
+serde_yaml_ng.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tracing-error.workspace = true
+typetag.workspace = true
+url.workspace = true
+urlencoding.workspace = true
+zstd.workspace = true
+
+# Optional dependencies
+anyhow = { workspace = true, optional = true }
+clap = { workspace = true, optional = true }
+dialoguer = { workspace = true, optional = true }
+dirs = { workspace = true, optional = true }
+reqwest = { workspace = true, optional = true }
+tracing-subscriber = { workspace = true, optional = true }
+# shuttle-tokio = { package = "shuttle-tokio", git = "https://github.com/awslabs/shuttle", branch = "main", features = [
+#   "rt-multi-thread",
+#   "macros",
+# ], version = "0.1.0", optional = true }
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
-tokio = { version = "1.50.0", features = ["rt-multi-thread", "macros"] }
+tokio = { workspace = true, features = [
+  "rt-multi-thread",
+  "macros",
+  "sync",
+  "time",
+  "io-util",
+  "rt",
+] }
 
 [target.'cfg(target_family = "wasm")'.dependencies]
-tokio = { version = "1.50.0", features = ["rt", "macros"] }
+tokio = { workspace = true, features = [
+  "rt",
+  "macros",
+  "sync",
+  "time",
+  "io-util",
+] }
 
 [dev-dependencies]
-clap = { version = "4.5", features = ["derive"] }
-assert_fs = "1.1.3"
-fs_extra = "1.3.0"
-icechunk-macros = { path = "../icechunk-macros", version = "0.1.0" }
-port_check = "0.3.0"
-pretty_assertions = "1.4.1"
-proptest = "1.10.0"
-proptest-state-machine = "0.7.0"
-rstest = "0.26.1"
-rstest_reuse = "0.7.0"
-tempfile = "3.27.0"
-test-log = { version = "0.2.19", default-features = false, features = [
-  "trace",
-  "color",
-  "unstable",
-] }
-test-strategy = "0.4.5"
-warp = { version = "0.4.2", features = ["server"] }
-noxious-client = "1.0"
-reqwest = { version = "0.12", features = ["json"] }
-uuid = { version = "1.22", features = ["v4"] }
-criterion = { version = "0.8.2", features = ["async_tokio"] }
+icechunk-macros.workspace = true
+
+assert_fs.workspace = true
+clap.workspace = true
+criterion.workspace = true
+fs_extra.workspace = true
+noxious-client.workspace = true
+port_check.workspace = true
+pretty_assertions.workspace = true
+proptest.workspace = true
+proptest-state-machine.workspace = true
+reqwest = { workspace = true, features = ["json"] }
+rstest.workspace = true
+rstest_reuse.workspace = true
+tempfile.workspace = true
+test-log.workspace = true
+test-strategy.workspace = true
+tracing-chrome.workspace = true
+tracing-samply.workspace = true
+uuid.workspace = true
+warp.workspace = true
+# shuttle = { git = "https://github.com/awslabs/shuttle", branch = "main" }
 
 [lints]
 workspace = true
@@ -118,21 +118,17 @@ default = [
   "redirect",
 ]
 napi-send-contract = []
-s3 = [
-  "dep:aws-sdk-s3",
-  "dep:aws-config",
-  "dep:aws-credential-types",
-  "dep:aws-smithy-runtime",
-  "dep:aws-smithy-types-convert",
-]
-object-store-s3 = ["object_store/aws"]
-object-store-gcs = ["object_store/gcp"]
-object-store-azure = ["object_store/azure"]
-object-store-http = ["object_store/http"]
-object-store-fs = ["object_store/fs"]
+s3 = ["dep:icechunk-s3"]
+object-store-s3 = ["icechunk-arrow-object-store/s3"]
+object-store-gcs = ["icechunk-arrow-object-store/gcs"]
+object-store-azure = ["icechunk-arrow-object-store/azure"]
+object-store-http = ["icechunk-arrow-object-store/http"]
+object-store-fs = ["icechunk-arrow-object-store/fs"]
 redirect = ["dep:reqwest"]
 logs = ["dep:tracing-subscriber"]
 cli = ["dep:clap", "dep:anyhow", "dep:dialoguer", "dep:dirs"]
+# shuttle = ["dep:shuttle-tokio", "shuttle-tokio/shuttle"]
+shuttle = []
 
 [[bin]]
 name = "icechunk"
@@ -143,12 +139,12 @@ required-features = ["cli"]
 name = "main"
 path = "tests/main.rs"
 
-[[bench]]
-name = "manifest"
-harness = false
+[[test]]
+name = "test_shuttle"
+path = "tests/test_shuttle.rs"
 
 [[bench]]
-name = "asset_manager"
+name = "main"
 harness = false
 
 [package.metadata.cargo-machete]

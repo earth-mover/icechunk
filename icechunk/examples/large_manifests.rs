@@ -39,7 +39,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(config),
         storage,
         HashMap::new(),
-        Some(SpecVersionBin::V2dot0),
+        Some(SpecVersionBin::V2),
         true,
     )
     .await?;
@@ -77,7 +77,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_TASKS));
 
     for i in 0..NUM_TASKS {
-        let semaphore = semaphore.clone();
+        let semaphore = Arc::clone(&semaphore);
         let cloned_session = Arc::clone(&session);
         set.spawn(async move {
             let _permit = semaphore.acquire().await.unwrap();
@@ -88,7 +88,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     set.join_all().await;
     eprintln!("Done writing refs, committing...");
 
-    session.write().await.commit("first", None).await?;
+    session.write().await.commit("first").max_concurrent_nodes(8).execute().await?;
     eprintln!("Done.");
 
     Ok(())

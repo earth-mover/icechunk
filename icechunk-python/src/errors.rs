@@ -10,7 +10,7 @@ use icechunk::{
 use miette::{Diagnostic, GraphicalReportHandler};
 use pyo3::{
     PyErr,
-    conversion::IntoPyObjectExt,
+    conversion::IntoPyObjectExt as _,
     exceptions::{PyException, PyKeyError, PyValueError},
     prelude::*,
 };
@@ -19,14 +19,14 @@ use thiserror::Error;
 
 use crate::{conflicts::PyConflict, impl_pickle};
 
-/// A simple wrapper around the StoreError to make it easier to convert to a PyErr
+/// A simple wrapper around the `StoreError` to make it easier to convert to a `PyErr`
 ///
 /// When you use the ? operator, the error is coerced. But if you return the value it is not.
 /// So for now we just use the extra operation to get the coercion instead of manually mapping
 /// the errors where this is returned from a python class
-#[allow(clippy::enum_variant_names)]
+#[expect(clippy::enum_variant_names)]
 #[derive(Debug, Error, Diagnostic)]
-#[allow(dead_code)]
+#[expect(dead_code)]
 pub(crate) enum PyIcechunkStoreError {
     #[error(transparent)]
     StorageError(StorageError),
@@ -145,7 +145,7 @@ impl IcechunkError {
     }
 
     fn __repr__(&self) -> String {
-        format!("IcechunkError(message={})", self.message)
+        format!("icechunk.IcechunkError(message=\"{}\")", self.message)
     }
 
     fn __str__(&self) -> String {
@@ -192,7 +192,7 @@ impl PyConflictError {
 
     fn __repr__(&self) -> String {
         format!(
-            "ConflictError(expected_parent={}, actual_parent={})",
+            "icechunk.ConflictError(expected_parent={}, actual_parent={})",
             self.expected_parent.as_deref().unwrap_or("None"),
             self.actual_parent.as_deref().unwrap_or("None")
         )
@@ -242,7 +242,7 @@ impl PyRebaseFailedError {
 
     fn __repr__(&self) -> String {
         format!(
-            "RebaseFailedError(snapshot={}, conflicts={:?})",
+            "icechunk.RebaseFailedError(snapshot=\"{}\", conflicts={:?})",
             self.snapshot, self.conflicts
         )
     }

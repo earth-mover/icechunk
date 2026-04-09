@@ -5,6 +5,7 @@ from typing import cast
 
 from icechunk._icechunk_python import (
     AzureCredentials,
+    AzureRefreshableCredential,
     AzureStaticCredentials,
     Credentials,
     GcsBearerCredential,
@@ -13,6 +14,39 @@ from icechunk._icechunk_python import (
     S3Credentials,
     S3StaticCredentials,
 )
+
+__all__ = [
+    "AnyAzureCredential",
+    "AnyAzureStaticCredential",
+    "AnyCredential",
+    "AnyGcsCredential",
+    "AnyGcsStaticCredential",
+    "AnyS3Credential",
+    "AzureCredentials",
+    "AzureRefreshableCredential",
+    "AzureStaticCredentials",
+    "Credentials",
+    "GcsBearerCredential",
+    "GcsCredentials",
+    "GcsStaticCredentials",
+    "S3Credentials",
+    "S3StaticCredentials",
+    "azure_credentials",
+    "azure_from_env_credentials",
+    "azure_refreshable_credentials",
+    "azure_static_credentials",
+    "containers_credentials",
+    "gcs_anonymous_credentials",
+    "gcs_credentials",
+    "gcs_from_env_credentials",
+    "gcs_refreshable_credentials",
+    "gcs_static_credentials",
+    "s3_anonymous_credentials",
+    "s3_credentials",
+    "s3_from_env_credentials",
+    "s3_refreshable_credentials",
+    "s3_static_credentials",
+]
 
 AnyS3Credential = (
     S3Credentials.Static
@@ -41,7 +75,9 @@ AnyAzureStaticCredential = (
     | AzureStaticCredentials.BearerToken
 )
 
-AnyAzureCredential = AzureCredentials.FromEnv | AzureCredentials.Static
+AnyAzureCredential = (
+    AzureCredentials.FromEnv | AzureCredentials.Static | AzureCredentials.Refreshable
+)
 
 
 AnyCredential = Credentials.S3 | Credentials.Gcs | Credentials.Azure
@@ -318,6 +354,28 @@ def azure_static_credentials(
     )
 
 
+def azure_refreshable_credentials(
+    get_credentials: Callable[[], AzureRefreshableCredential],
+    scatter_initial_credentials: bool = False,
+) -> AzureCredentials.Refreshable:
+    """Create refreshable credentials for Azure Blob Storage object store.
+
+    Parameters
+    ----------
+    get_credentials: Callable[[], AzureRefreshableCredential]
+        Use this function to get and refresh the credentials. The function must be picklable.
+    scatter_initial_credentials: bool, optional
+        Immediately call and store the value returned by get_credentials. This is useful if the
+        repo or session will be pickled to generate many copies. Passing scatter_initial_credentials=True will
+        ensure all those copies don't need to call get_credentials immediately. After the initial
+        set of credentials has expired, the cached value is no longer used. Notice that credentials
+        obtained are stored, and they can be sent over the network if you pickle the session/repo.
+    """
+
+    current = get_credentials() if scatter_initial_credentials else None
+    return AzureCredentials.Refreshable(pickle.dumps(get_credentials), current)
+
+
 def azure_from_env_credentials() -> AzureCredentials.FromEnv:
     """Instruct Azure Blob Storage object store to fetch credentials from the operative system environment."""
     return AzureCredentials.FromEnv()
@@ -329,11 +387,19 @@ def azure_credentials(
     sas_token: str | None = None,
     bearer_token: str | None = None,
     from_env: bool | None = None,
+    get_credentials: Callable[[], AzureRefreshableCredential] | None = None,
+    scatter_initial_credentials: bool = False,
 ) -> AnyAzureCredential:
     """Create credentials Azure Blob Storage object store.
 
     If all arguments are None, credentials are fetched from the operative system environment.
     """
+    if get_credentials is not None:
+        return azure_refreshable_credentials(
+            get_credentials,
+            scatter_initial_credentials=scatter_initial_credentials,
+        )
+
     if (from_env is None or from_env) and (
         access_key is None and sas_token is None and bearer_token is None
     ):
@@ -373,7 +439,7 @@ def containers_credentials(
 
     virtual_store_config = ic.s3_store(
         region="us-east-1",
-        endpoint_url="http://localhost:9000",
+        endpoint_url="http://localhost:4200",
         allow_http=True,
         s3_compatible=True,
         force_path_style=True,
@@ -405,8 +471,10 @@ def containers_credentials(
             or isinstance(cred, GcsCredentials.Anonymous)
         ):
             res[name] = Credentials.Gcs(cast(GcsCredentials, cred))
-        elif isinstance(cred, AzureCredentials.FromEnv) or isinstance(
-            cred, AzureCredentials.Static
+        elif (
+            isinstance(cred, AzureCredentials.FromEnv)
+            or isinstance(cred, AzureCredentials.Static)
+            or isinstance(cred, AzureCredentials.Refreshable)
         ):
             res[name] = Credentials.Azure(cast(AzureCredentials, cred))
         else:

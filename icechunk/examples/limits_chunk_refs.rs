@@ -15,12 +15,14 @@ use icechunk::{
 };
 
 use bytes::Bytes;
-use itertools::Itertools;
+use itertools::Itertools as _;
 use tokio::sync::RwLock;
 
 use clap::Parser;
 use test_log::tracing_subscriber;
-use test_log::tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use test_log::tracing_subscriber::{
+    layer::SubscriberExt as _, util::SubscriberInitExt as _,
+};
 use tracing::info;
 
 #[derive(Parser, Debug)]
@@ -30,11 +32,11 @@ struct Args {
     #[arg(default_value = "test_repo")]
     repo_dir: PathBuf,
 
-    /// Number of chunk_refs to set
+    /// Number of `chunk_refs` to set
     #[arg(default_value_t = 1_000_000)]
     count: u32,
 
-    /// Number of chunk_refs per manifest
+    /// Number of `chunk_refs` per manifest
     #[arg(default_value_t = 50_000_000)]
     num_chunks: u32,
 }
@@ -107,7 +109,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         for idx in chnk {
             let new_array_path = new_array_path.clone();
             let payload = payload.clone();
-            let ds = ds.clone();
+            let ds = Arc::clone(&ds);
 
             set.spawn(async move {
                 ds.write()
@@ -128,7 +130,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     info!("starting commit");
-    ds.write().await.commit("really big changeset", None).await?;
+    ds.write()
+        .await
+        .commit("really big changeset")
+        .max_concurrent_nodes(8)
+        .execute()
+        .await?;
 
     Ok(())
 }

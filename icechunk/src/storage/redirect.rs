@@ -14,6 +14,7 @@ use tracing::{debug, trace};
 use url::Url;
 
 use crate::config::{S3Credentials, S3Options};
+use crate::storage::StorageErrorKind;
 #[cfg(feature = "object-store-http")]
 use crate::storage::new_http_storage;
 #[cfg(feature = "object-store-gcs")]
@@ -23,11 +24,12 @@ use crate::{
     new_s3_storage,
     storage::{new_r2_storage, new_tigris_storage},
 };
-use crate::{private, storage::StorageErrorKind};
+use icechunk_storage::sealed;
+use icechunk_types::ICResultExt as _;
 
 use super::{
     DeleteObjectsResult, GetModifiedResult, ListInfo, Settings, Storage, StorageError,
-    StorageResult, VersionInfo, VersionedUpdateResult,
+    StorageInfo, StorageResult, VersionInfo, VersionedUpdateResult,
 };
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -35,7 +37,7 @@ pub struct RedirectStorage {
     url: Url,
 
     #[serde(skip)]
-    backend: OnceCell<Arc<dyn Storage>>,
+    backend: OnceCell<Arc<dyn Storage + Send + Sync>>,
 }
 
 const HANDLED_SCHEMES: [&str; 9] = [
@@ -55,12 +57,12 @@ impl RedirectStorage {
         Self { url, backend: OnceCell::new() }
     }
 
-    async fn backend(&self) -> StorageResult<&dyn Storage> {
+    async fn backend(&self) -> StorageResult<&(dyn Storage + Send + Sync)> {
         self.backend.get_or_try_init(|| self.mk_backend()).await.map(|arc| arc.as_ref())
     }
 
-    async fn mk_backend(&self) -> StorageResult<Arc<dyn Storage>> {
-        let redirect = |attempt: rw::redirect::Attempt| {
+    async fn mk_backend(&self) -> StorageResult<Arc<dyn Storage + Send + Sync>> {
+        let redirect = |attempt: rw::redirect::Attempt<'_>| {
             // TODO: make configurable
             if attempt.previous().len() > 10 {
                 attempt.error("too many redirects")
@@ -78,41 +80,51 @@ impl RedirectStorage {
             .redirect(rw::redirect::Policy::custom(redirect))
             .build()
             .map_err(|e| {
-                StorageError::from(StorageErrorKind::BadRedirect(format!(
+                StorageErrorKind::BadRedirect(format!(
                     "Cannot build http client for redirect Storage instance: {e}"
-                )))
-            })?;
+                ))
+            })
+            .capture()?;
 
-        let req = client.get(self.url.clone()).build().map_err(|e| {
-            StorageError::from(StorageErrorKind::BadRedirect(format!(
-                "Cannot build http request for redirect Storage instance: {e}"
-            )))
-        })?;
+        let req = client
+            .get(self.url.clone())
+            .build()
+            .map_err(|e| {
+                StorageErrorKind::BadRedirect(format!(
+                    "Cannot build http request for redirect Storage instance: {e}"
+                ))
+            })
+            .capture()?;
         let res = client.execute(req).await.map_err(|e| {
-            StorageError::from(StorageErrorKind::BadRedirect(format!(
+            StorageErrorKind::BadRedirect(format!(
                 "Request to redirect url ({}) failed, cannot find target Storage instance: {e}",
                 &self.url
-            )))
-        })?;
-        let storage_url = res.headers().get("location").ok_or_else(|| {
-            StorageError::from(StorageErrorKind::BadRedirect(
-                "Redirect Storage response must be a redirect, no location header detected".to_string()
             ))
-        })?.to_str().map_err(|e| {
-            StorageError::from(StorageErrorKind::BadRedirect(format!(
+        }).capture()?;
+        let storage_url = res.headers().get("location").ok_or_else(|| {
+            StorageErrorKind::BadRedirect(
+                "Redirect Storage response must be a redirect, no location header detected".to_string()
+            )
+        }).capture()?.to_str().map_err(|e| {
+            StorageErrorKind::BadRedirect(format!(
                 "Request to redirect url ({}) doesn't return a proper redirect to a known Storage protocol: {e}", &self.url
-            )))
-        })?;
+            ))
+        }).capture()?;
 
         self.mk_storage(storage_url).await
     }
 
-    async fn mk_storage(&self, url: &str) -> StorageResult<Arc<dyn Storage>> {
-        let url = Url::parse(url).map_err(|e| {
-            StorageError::from(StorageErrorKind::BadRedirect(format!(
-                "Storage url cannot be parsed ({url}): {e}"
-            )))
-        })?;
+    async fn mk_storage(
+        &self,
+        url: &str,
+    ) -> StorageResult<Arc<dyn Storage + Send + Sync>> {
+        let url = Url::parse(url)
+            .map_err(|e| {
+                StorageErrorKind::BadRedirect(format!(
+                    "Storage url cannot be parsed ({url}): {e}"
+                ))
+            })
+            .capture()?;
         match url.scheme() {
             #[cfg(feature = "s3")]
             "s3" => {
@@ -141,8 +153,8 @@ impl RedirectStorage {
             "s3" => Err(StorageErrorKind::BadRedirect(
                 "Redirect target uses `s3://` but the `s3` feature is disabled"
                     .to_string(),
-            )
-            .into()),
+            ))
+            .capture(),
             #[cfg(feature = "s3")]
             "r2" => {
                 let (bucket, prefix) = repo_location(&url)?;
@@ -170,8 +182,8 @@ impl RedirectStorage {
             "r2" => Err(StorageErrorKind::BadRedirect(
                 "Redirect target uses `r2://` but the `s3` feature is disabled"
                     .to_string(),
-            )
-            .into()),
+            ))
+            .capture(),
             #[cfg(feature = "s3")]
             "tigris" => {
                 let (bucket, prefix) = repo_location(&url)?;
@@ -198,21 +210,21 @@ impl RedirectStorage {
             "tigris" => Err(StorageErrorKind::BadRedirect(
                 "Redirect target uses `tigris://` but the `s3` feature is disabled"
                     .to_string(),
-            )
-            .into()),
+            ))
+            .capture(),
 
             #[cfg(feature = "object-store-http")]
             "http+icechunk" | "http+ic" | "https+icechunk" | "https+ic" => {
                 let mut base_url = url.clone();
                 // we can expect here because the scheme is already matched as http[s]
-                #[allow(clippy::expect_used)]
+                #[expect(clippy::expect_used)]
                 let new_scheme = base_url
                     .scheme()
                     .split_once('+')
                     .map(|(x, _)| x)
                     .expect("Internal error, bad url scheme")
                     .to_string();
-                #[allow(clippy::expect_used)]
+                #[expect(clippy::expect_used)]
                 base_url
                     .set_scheme(new_scheme.as_str())
                     .expect("Internal error, cannot set url scheme");
@@ -222,9 +234,9 @@ impl RedirectStorage {
             "http+icechunk" | "http+ic" | "https+icechunk" | "https+ic" => Err(
                 StorageErrorKind::BadRedirect(
                     "Redirect target uses `http+icechunk://` or `https+icechunk://`, but the `http-store` feature is disabled".to_string(),
-                )
-                .into(),
-            ),
+                ),
+            )
+            .capture(),
             #[cfg(feature = "object-store-gcs")]
             "gs" | "gcs" => {
                 let (bucket, prefix) = repo_location(&url)?;
@@ -239,12 +251,12 @@ impl RedirectStorage {
             "gs" | "gcs" => Err(StorageErrorKind::BadRedirect(
                 "Redirect target uses `gs://`/`gcs://` but the `gcs` feature is disabled"
                     .to_string(),
-            )
-            .into()),
+            ))
+            .capture(),
             _ => Err(StorageErrorKind::BadRedirect(format!(
                 "Bad URL for redirect Storage, unknown scheme: {url}"
-            ))
-            .into()),
+            )))
+            .capture(),
         }
     }
 }
@@ -253,17 +265,18 @@ fn repo_location(url: &Url) -> StorageResult<(String, String)> {
     let bucket = url
         .host()
         .ok_or_else(|| {
-            StorageError::from(StorageErrorKind::BadRedirect(format!(
+            StorageErrorKind::BadRedirect(format!(
                 "Storage url doesn't have a host to indicate the bucket ({url})"
-            )))
-        })?
+            ))
+        })
+        .capture()?
         .to_string();
     let path = url.path();
     if !path.starts_with('/') {
         return Err(StorageErrorKind::BadRedirect(format!(
             "Invalid Storage URL, must have a path to indicate bucket prefix: {url}"
-        ))
-        .into());
+        )))
+        .capture();
     }
     let prefix = path[1..].to_string();
     Ok((bucket, prefix))
@@ -277,7 +290,8 @@ fn repo_region(url: &Url) -> StorageResult<String> {
             StorageErrorKind::BadRedirect(format!(
                 "Invalid Storage URL, must have a region query parameter: {url}"
             ))
-        })?
+        })
+        .capture()?
         .1
         .to_string();
     Ok(res)
@@ -291,13 +305,14 @@ fn repo_account_id(url: &Url) -> StorageResult<String> {
             StorageErrorKind::BadRedirect(format!(
                 "Invalid Storage URL, must have an account_id query parameter: {url}"
             ))
-        })?
+        })
+        .capture()?
         .1
         .to_string();
     Ok(res)
 }
 
-impl private::Sealed for RedirectStorage {}
+impl sealed::Sealed for RedirectStorage {}
 
 impl std::fmt::Display for RedirectStorage {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -308,6 +323,13 @@ impl std::fmt::Display for RedirectStorage {
 #[async_trait]
 #[typetag::serde]
 impl Storage for RedirectStorage {
+    fn storage_info(&self) -> StorageInfo {
+        StorageInfo {
+            backend_type: "redirect",
+            fields: vec![("url", self.url.to_string())],
+        }
+    }
+
     async fn can_write(&self) -> StorageResult<bool> {
         self.backend().await?.can_write().await
     }

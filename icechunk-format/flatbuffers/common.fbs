@@ -1,0 +1,48 @@
+namespace generated;
+
+// --8<-- [start:node_path]
+// Node paths are UTF-8 strings that identify a node's position in the
+// repository hierarchy. They are stored as flatbuffers `string` fields.
+//
+// A valid node path:
+//   - MUST start with `/` (absolute).
+//   - MUST use `/` as the path separator.
+//   - MUST NOT have a trailing `/` (except the root path `/`).
+//   - MUST be in canonical form (no `.`, `..`, or empty segments).
+//   - Path segments MAY contain any valid UTF-8 characters except `/`.
+//
+// The root path is `/`. Example paths: `/`, `/foo`, `/foo/bar`.
+//
+// When comparing paths for sort order, comparison is component-wise
+// lexicographic: split on `/`, then compare segments left to right.
+// For example: /a < /a/b < /ab < /b.
+// Note: this differs from raw byte comparison. For instance,
+// /a/b < /a-b in component-wise order, but /a-b < /a/b in byte order.
+// --8<-- [end:node_path]
+
+// --8<-- [start:object_id_12]
+// used for SnapshotIds, ChunkIds, etc
+struct ObjectId12 {
+  bytes:[uint8:12];
+}
+// --8<-- [end:object_id_12]
+
+// --8<-- [start:object_id_8]
+// used for NodeIds
+struct ObjectId8 {
+  bytes:[uint8:8];
+}
+// --8<-- [end:object_id_8]
+
+// --8<-- [start:metadata_item]
+// a single key-value of snapshot metadata
+table MetadataItem {
+  // the name of the attribute
+  name: string (required);
+
+  // A JSON-compatible value (null, bool, number, string, array, or object).
+  // In V1: encoded as MessagePack (https://msgpack.org/).
+  // In V2: encoded as FlexBuffers (https://flatbuffers.dev/flexbuffers.html).
+  value: [uint8] (required);
+}
+// --8<-- [end:metadata_item]

@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
-use itertools::Itertools;
+use itertools::Itertools as _;
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -19,9 +19,11 @@ use crate::{
         snapshot::{
             ManifestFileInfo, NodeData, NodeSnapshot, NodeType, SnapshotProperties,
         },
+        transaction_log::TransactionLog,
     },
     repository::{RepositoryErrorKind, RepositoryResult},
 };
+use icechunk_types::{ICResultExt as _, error::ICResultCtxExt as _};
 
 #[derive(Debug, Serialize, Deserialize)]
 struct ManifestFileInfoInspect {
@@ -105,11 +107,11 @@ async fn inspect_snapshot(
     let snap = asset_manager.fetch_snapshot(id).await?;
     let res = SnapshotInfoInspect {
         id: snap.id().to_string(),
-        flushed_at: snap.flushed_at()?,
+        flushed_at: snap.flushed_at().inject()?,
         commit_message: snap.message(),
-        metadata: snap.metadata()?,
-        manifests: snap.manifest_files().map(|f| f.into()).collect(),
-        nodes: snap.iter().map_ok(|n| n.into()).try_collect()?,
+        metadata: snap.metadata().inject()?,
+        manifests: snap.manifest_files().map_ok(|f| f.into()).try_collect().inject()?,
+        nodes: snap.iter().map_ok(|n| n.into()).try_collect().inject()?,
     };
 
     Ok(res)
@@ -126,7 +128,8 @@ pub async fn snapshot_json(
     } else {
         serde_json::to_string(&info)
     }
-    .map_err(|e| RepositoryErrorKind::Other(e.to_string()))?;
+    .map_err(|e| RepositoryErrorKind::Other(e.to_string()))
+    .capture()?;
     Ok(res)
 }
 
@@ -151,6 +154,10 @@ impl From<UpdateType> for UpdateTypeInspect {
                     "from_version": from_version.to_string(),
                     "to_version": to_version.to_string(),
                 }),
+            },
+            UpdateType::RepoStatusChangedUpdate { status } => Self {
+                type_name: "RepoStatusChangedUpdate".into(),
+                details: serde_json::json!({ "status": status }),
             },
             UpdateType::ConfigChangedUpdate => Self {
                 type_name: "ConfigChangedUpdate".into(),
@@ -264,19 +271,23 @@ async fn inspect_repo_info(
     let (info, _) = asset_manager.fetch_repo_info().await?;
 
     let branches = info
-        .branches()?
+        .branches()
+        .inject()?
         .map(|(branch, snapshot)| (branch.to_string(), snapshot.to_string()))
         .collect::<BTreeMap<_, _>>();
 
     let tags = info
-        .tags()?
+        .tags()
+        .inject()?
         .map(|(tag, snapshot)| (tag.to_string(), snapshot.to_string()))
         .collect::<BTreeMap<_, _>>();
 
-    let deleted_tags = info.deleted_tags()?.map(|s| s.to_string()).collect::<Vec<_>>();
+    let deleted_tags =
+        info.deleted_tags().inject()?.map(|s| s.to_string()).collect::<Vec<_>>();
 
     let snapshots = info
-        .all_snapshots()?
+        .all_snapshots()
+        .inject()?
         .map_ok(|snap| RepoInfoSnapshotInspect {
             id: snap.id.to_string(),
             parent_id: snap.parent_id.map(|x| x.to_string()),
@@ -284,26 +295,29 @@ async fn inspect_repo_info(
             message: snap.message,
             metadata: snap.metadata,
         })
-        .collect::<Result<Vec<RepoInfoSnapshotInspect>, _>>()?;
+        .collect::<Result<Vec<RepoInfoSnapshotInspect>, _>>()
+        .inject()?;
 
     let latest_updates = info
-        .latest_updates()?
+        .latest_updates()
+        .inject()?
         .map_ok(|(update_type, at, path)| UpdateInspect {
             update_type: update_type.into(),
             updated_at: at,
             backup_path: path.map(|x| x.to_string()),
         })
-        .collect::<Result<Vec<UpdateInspect>, _>>()?;
+        .collect::<Result<Vec<UpdateInspect>, _>>()
+        .inject()?;
 
     Ok(RepoInfoInspect {
-        spec_version: info.spec_version()?.to_string(),
+        spec_version: info.spec_version().inject()?.to_string(),
         branches,
         tags,
         deleted_tags,
         snapshots,
-        metadata: info.metadata()?,
+        metadata: info.metadata().inject()?,
         latest_updates,
-        repo_before_updates: info.repo_before_updates()?.map(|x| x.to_string()),
+        repo_before_updates: info.repo_before_updates().inject()?.map(|x| x.to_string()),
     })
 }
 
@@ -317,7 +331,8 @@ pub async fn repo_info_json(
     } else {
         serde_json::to_string(&info)
     }
-    .map_err(|e| RepositoryErrorKind::Other(e.to_string()))?;
+    .map_err(|e| RepositoryErrorKind::Other(e.to_string()))
+    .capture()?;
     Ok(res)
 }
 
@@ -361,11 +376,12 @@ async fn inspect_manifest(
     for node_id in node_ids {
         let (mut num_inline, mut num_native, mut num_virtual) = (0, 0, 0);
         let node_id_str = node_id.to_string();
-        for payload in Arc::clone(&manifest).iter(node_id)? {
-            match payload? {
+        for payload in Arc::clone(&manifest).iter(node_id).inject()? {
+            match payload.inject()? {
                 (_, ChunkPayload::Inline(_)) => num_inline += 1,
                 (_, ChunkPayload::Ref(_)) => num_native += 1,
                 (_, ChunkPayload::Virtual(_)) => num_virtual += 1,
+                (_, _) => {}
             }
         }
         arrays.push(ArrayManifestInspect {
@@ -409,16 +425,84 @@ pub async fn manifest_json(
     } else {
         serde_json::to_string(&info)
     }
-    .map_err(|e| RepositoryErrorKind::Other(e.to_string()))?;
+    .map_err(|e| RepositoryErrorKind::Other(e.to_string()))
+    .capture()?;
+    Ok(res)
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct MoveInspect {
+    from: String,
+    to: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct UpdatedChunksInspect {
+    node_id: String,
+    chunks: Vec<Vec<u32>>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct TransactionLogInspect {
+    new_groups: Vec<String>,
+    new_arrays: Vec<String>,
+    deleted_groups: Vec<String>,
+    deleted_arrays: Vec<String>,
+    updated_groups: Vec<String>,
+    updated_arrays: Vec<String>,
+    updated_chunks: Vec<UpdatedChunksInspect>,
+    moved_nodes: Vec<MoveInspect>,
+}
+
+fn inspect_transaction_log(
+    tx: &TransactionLog,
+) -> RepositoryResult<TransactionLogInspect> {
+    Ok(TransactionLogInspect {
+        new_groups: tx.new_groups().map(|id| id.to_string()).collect(),
+        new_arrays: tx.new_arrays().map(|id| id.to_string()).collect(),
+        deleted_groups: tx.deleted_groups().map(|id| id.to_string()).collect(),
+        deleted_arrays: tx.deleted_arrays().map(|id| id.to_string()).collect(),
+        updated_groups: tx.updated_groups().map(|id| id.to_string()).collect(),
+        updated_arrays: tx.updated_arrays().map(|id| id.to_string()).collect(),
+        updated_chunks: tx
+            .updated_chunks()
+            .map(|(node_id, chunks)| UpdatedChunksInspect {
+                node_id: node_id.to_string(),
+                chunks: chunks.map(|c| c.0.clone()).collect(),
+            })
+            .collect(),
+        moved_nodes: tx
+            .moves()
+            .map(|m| {
+                let m = m.inject()?;
+                Ok(MoveInspect { from: m.from.to_string(), to: m.to.to_string() })
+            })
+            .try_collect()?,
+    })
+}
+
+pub async fn transaction_log_json(
+    asset_manager: &AssetManager,
+    id: &SnapshotId,
+    pretty: bool,
+) -> RepositoryResult<String> {
+    let tx = asset_manager.fetch_transaction_log(id).await?;
+    let info = inspect_transaction_log(&tx)?;
+    let res = if pretty {
+        serde_json::to_string_pretty(&info)
+    } else {
+        serde_json::to_string(&info)
+    }
+    .map_err(|e| RepositoryErrorKind::Other(e.to_string()))
+    .capture()?;
     Ok(res)
 }
 
 #[cfg(all(test, feature = "object-store-fs"))]
-#[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use crate::{ObjectStorage, Repository, repository::VersionInfo};
-    use futures::{StreamExt, TryStreamExt};
+    use futures::{StreamExt as _, TryStreamExt as _};
     use std::{path::PathBuf, sync::Arc};
 
     #[icechunk_macros::tokio_test]

@@ -1,0 +1,50 @@
+[package]
+name = "icechunk-arrow-object-store"
+version = "2.0.1"
+description = "Apache Arrow object_store storage backend for icechunk"
+readme = "../README.md"
+repository = "https://github.com/earth-mover/icechunk"
+homepage = "https://icechunk.io"
+license = "Apache-2.0"
+keywords = ["zarr", "xarray", "database"]
+categories = ["database", "science", "science::geo"]
+authors = ["Earthmover PBC"]
+edition.workspace = true
+publish = true
+rust-version.workspace = true
+
+[dependencies]
+icechunk-storage.workspace = true
+icechunk-types.workspace = true
+
+async-trait.workspace = true
+bytes.workspace = true
+chrono.workspace = true
+futures.workspace = true
+object_store.workspace = true
+rand.workspace = true
+serde.workspace = true
+tokio = { workspace = true, features = ["sync"] }
+tokio-util.workspace = true
+tracing.workspace = true
+typetag.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+icechunk-macros.workspace = true
+
+rmp-serde.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
+test-log.workspace = true
+
+[features]
+default = ["s3", "gcs", "azure", "http", "fs"]
+s3 = ["object_store/aws"]
+gcs = ["object_store/gcp"]
+azure = ["object_store/azure"]
+http = ["object_store/http"]
+fs = ["object_store/fs"]
+
+[lints]
+workspace = true

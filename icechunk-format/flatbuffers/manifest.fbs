@@ -1,0 +1,91 @@
+include "common.fbs";
+
+namespace generated;
+
+// --8<-- [start:chunk_ref]
+// A single chunk reference. The three ref types are encoded in the same table
+// using optional fields. The type is determined by which fields are present:
+//   - Inline: `inline` is present.
+//   - Native: `chunk_id` is present.
+//   - Virtual: `location` or `compressed_location` is present.
+// Exactly one of these three sets MUST be populated.
+table ChunkRef {
+  // 0-based chunk coordinates, one per array dimension, in the same order
+  // as the array's dimensions.
+  index: [uint32] (required);
+
+  // Inline refs: the encoded chunk bytes (post Zarr codec pipeline),
+  // stored directly in the manifest without additional compression.
+  inline: [uint8];
+
+  // Native and virtual refs: byte offset and length within the target object.
+  offset: uint64 = 0;
+  length: uint64 = 0;
+
+  // Native refs: the id of the chunk file in the repository's storage.
+  chunk_id: ObjectId12;
+
+  // Virtual refs: absolute URL to the object containing the chunk.
+  location: string;
+
+  // Virtual refs: optional checksums for the target object.
+  // At most one of these fields will be present.
+  checksum_etag: string;
+  // Seconds since the Unix epoch.
+  checksum_last_modified: uint32 = 0;
+
+  // Virtual refs: zstd dictionary-compressed location bytes, as an
+  // alternative to the location field. When present, the manifest's
+  // location_dictionary field SHOULD be used for decompression.
+  // Introduced in spec version 2.
+  compressed_location: [uint8];
+
+  // Reserved for future use. Opaque bytes for future extensions.
+  // Introduced in spec version 2.
+  extra: [uint8];
+}
+// --8<-- [end:chunk_ref]
+
+// --8<-- [start:array_manifest]
+table ArrayManifest {
+  // The node id of the array these chunk refs belong to.
+  node_id: ObjectId8 (required);
+
+  // One element per chunk reference in the array.
+  // MUST be sorted in ascending lexicographic order of ChunkRef.index
+  refs: [ChunkRef] (required);
+
+  // Reserved for future use. Opaque byte vector for extensibility.
+  // Introduced in spec version 2
+  extra: [uint8];
+}
+// --8<-- [end:array_manifest]
+
+// --8<-- [start:manifest_table]
+table Manifest {
+  // the manifest id
+  id: ObjectId12 (required);
+
+  // One element for each array that has chunk refs in this manifest.
+  // MUST be sorted in ascending byte order of ArrayManifest.node_id.
+  arrays: [ArrayManifest] (required);
+
+  // A pre-trained zstd dictionary in zstd's standard format (as produced by
+  // ZDICT_trainFromBuffer or equivalent). Used to decompress
+  // ChunkRef.compressed_location fields in this manifest.
+  // Introduced in spec version 2.
+  location_dictionary: [uint8];
+
+  // Compression algorithm for compressed_location fields.
+  // 0 = none (compressed_location contains raw bytes),
+  // 1 = zstd dictionary compression (use location_dictionary).
+  // Introduced in spec version 2.
+  compression_algorithm: uint8 = 1;
+
+  // Reserved for future use. Opaque byte vector for extensibility.
+  // Introduced in spec version 2
+  extra: [uint8];
+}
+// --8<-- [end:manifest_table]
+
+root_type Manifest;

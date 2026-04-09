@@ -24,11 +24,12 @@ pub async fn rewrite_manifests(
     repository: &Repository,
     branch: &str,
     message: &str,
+    max_concurrent_manifests: usize,
     properties: Option<SnapshotProperties>,
     commit_method: CommitMethod,
 ) -> ManifestOpsResult<SnapshotId> {
     if commit_method == CommitMethod::Amend
-        && repository.spec_version() < SpecVersionBin::V2dot0
+        && repository.spec_version() < SpecVersionBin::V2
     {
         return Err(ManifestOpsError::AmendNotSupportedForV1);
     }
@@ -36,10 +37,20 @@ pub async fn rewrite_manifests(
     let mut session = repository
         .writable_session(branch)
         .await
-        .map_err(|e| ManifestOpsError::ManifestRewriteError(Box::new(e.into())))?;
+        .map_err(|e| ManifestOpsError::ManifestRewriteError(Box::new(e.inject())))?;
 
-    session
-        .rewrite_manifests(message, properties, commit_method)
+    let mut builder = session
+        .commit(message)
+        .max_concurrent_nodes(max_concurrent_manifests)
+        .rewrite_manifests();
+    if commit_method == CommitMethod::Amend {
+        builder = builder.amend();
+    }
+    if let Some(props) = properties {
+        builder = builder.properties(props);
+    }
+    builder
+        .execute()
         .await
         .map_err(|e| ManifestOpsError::ManifestRewriteError(Box::new(e)))
 }

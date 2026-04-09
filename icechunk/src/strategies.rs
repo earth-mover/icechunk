@@ -20,7 +20,8 @@ use crate::format::snapshot::{
     ArrayShape, DimensionName, ManifestFileInfo, NodeData, NodeSnapshot,
 };
 use crate::format::{
-    AttributesId, ChunkId, ChunkIndices, ManifestId, NodeId, Path, SnapshotId, manifest,
+    AttributesId, ChunkId, ChunkIndices, ManifestId, NodeId, NodeType, Path, SnapshotId,
+    manifest,
 };
 use crate::session::Session;
 use crate::storage::{
@@ -56,7 +57,7 @@ pub fn node_paths() -> impl Strategy<Value = Path> {
 }
 
 pub fn spec_version() -> BoxedStrategy<SpecVersionBin> {
-    prop_oneof![Just(SpecVersionBin::V2dot0), Just(SpecVersionBin::V1dot0)].boxed()
+    prop_oneof![Just(SpecVersionBin::V2), Just(SpecVersionBin::V1)].boxed()
 }
 
 prop_compose! {
@@ -98,30 +99,36 @@ pub struct ShapeDim {
     pub dimension_names: Option<Vec<DimensionName>>,
 }
 
-pub fn shapes_and_dims(max_ndim: Option<usize>) -> impl Strategy<Value = ShapeDim> {
+pub fn shapes_and_dims(
+    max_ndim: Option<usize>,
+    min_dim_size: Option<usize>,
+) -> impl Strategy<Value = ShapeDim> {
     // FIXME: ndim = 0
     let max_ndim = max_ndim.unwrap_or(MAX_NDIM);
-    vec(1u64..26u64, 1..max_ndim)
-        .prop_flat_map(|shape| {
+    let min_size = min_dim_size.unwrap_or(0);
+    vec((min_size as u64)..26u64, 1..max_ndim)
+        .prop_flat_map(move |shape| {
             let ndim = shape.len();
-            let chunk_shape: Vec<BoxedStrategy<NonZeroU64>> = shape
+            let chunk_shape: Vec<BoxedStrategy<u64>> = shape
                 .clone()
                 .into_iter()
-                .map(|size| {
-                    (1u64..=size)
-                        .prop_map(|chunk_size| {
-                            NonZeroU64::new(chunk_size)
-                                .expect("logic bug no zeros allowed")
-                        })
-                        .boxed()
-                })
+                .map(move |size| ((min_size as u64)..=size).boxed())
                 .collect();
             (Just(shape), chunk_shape, option::of(vec(option::of(any::<String>()), ndim)))
         })
         .prop_map(|(shape, chunk_shape, dimension_names)| ShapeDim {
-            shape: ArrayShape::new(
-                shape.into_iter().zip(chunk_shape.iter().map(|n| n.get())),
-            )
+            shape: ArrayShape::new(shape.into_iter().zip(chunk_shape.iter()).map(
+                |(dim_length, chunk_size)| {
+                    (
+                        dim_length,
+                        if chunk_size == &0 {
+                            0
+                        } else {
+                            dim_length.div_ceil(*chunk_size) as u32
+                        },
+                    )
+                },
+            ))
             .expect("Invalid array shape"),
             dimension_names: dimension_names.map(|ds| {
                 ds.iter().map(|s| From::from(s.as_ref().map(|s| s.as_str()))).collect()
@@ -254,7 +261,7 @@ prop_compose! {
             #[cfg(feature = "object-store-azure")]
             Azure(_) => VirtualChunkContainer::new("az://somebucket/".to_string(),store).unwrap(),
             Tigris(_) => VirtualChunkContainer::new("tigris://somebucket/".to_string(),store).unwrap(),
-            #[allow(unreachable_patterns)]
+            #[expect(unreachable_patterns)]
             _ => panic!("unsupported store config for this feature set"),
         }
     }
@@ -322,8 +329,8 @@ pub fn manifest_split_condition() -> BoxedStrategy<ManifestSplitCondition> {
     ];
     leaf.prop_recursive(4, 20, 5, |inner| {
         prop_oneof![
-            proptest::collection::vec(inner.clone(), 1..4).prop_map(Or),
-            proptest::collection::vec(inner.clone(), 1..4).prop_map(And),
+            vec(inner.clone(), 1..4).prop_map(Or),
+            vec(inner.clone(), 1..4).prop_map(And),
         ]
     })
     .boxed()
@@ -534,13 +541,13 @@ fn file_path_components() -> impl Strategy<Value = Vec<String>> {
 
 // Given a collection of directory names, an absolute Unix style path
 // using the directory names in order is generated
-fn to_abs_unix_path(path_components: Vec<String>) -> String {
+fn to_abs_unix_path(path_components: &[String]) -> String {
     format!("/{}", path_components.join("/"))
 }
 
 // Generates Unix style absolute file paths
 fn absolute_path() -> impl Strategy<Value = String> {
-    file_path_components().prop_map(to_abs_unix_path)
+    file_path_components().prop_map(|c| to_abs_unix_path(&c))
 }
 
 pub fn path() -> impl Strategy<Value = Path> {
@@ -549,11 +556,11 @@ pub fn path() -> impl Strategy<Value = Path> {
     })
 }
 
-type DimensionShapeInfo = (u64, u64);
+type DimensionShapeInfo = (u64, u32);
 
 prop_compose! {
-    fn dimension_shape_info()(dim_length in any::<u64>(), chunk_length in any::<NonZeroU64>()) -> DimensionShapeInfo {
-        (dim_length, chunk_length.get())
+    fn dimension_shape_info()(dim_length in any::<u64>(), chunk_length in any::<u64>()) -> DimensionShapeInfo {
+        (dim_length, dim_length.div_ceil(chunk_length) as u32)
     }
 }
 
@@ -616,7 +623,7 @@ prop_compose! {
     fn url_with_host_and_path()(protocol in transfer_protocol(),
         host in non_empty_alphanumeric_string(),
         path in non_empty_alphanumeric_string()) -> String {
-        format!("{}://{}/{}", protocol, host, path)
+        format!("{protocol}://{host}/{path}")
     }
 }
 
@@ -645,6 +652,10 @@ fn chunk_payload() -> impl Strategy<Value = ChunkPayload> {
     ]
 }
 
+fn node_types() -> impl Strategy<Value = NodeType> {
+    prop_oneof![Just(NodeType::Group), Just(NodeType::Array)]
+}
+
 pub fn large_chunk_indices(dim: usize) -> impl Strategy<Value = ChunkIndices> {
     any::<Range<u32>>().prop_flat_map(move |data| chunk_indices(dim, data))
 }
@@ -657,8 +668,8 @@ pub fn split_manifest()
 }
 
 prop_compose! {
-    pub fn gen_move()(to in path(), from in path()) -> Move {
-        Move{to, from}
+    pub fn gen_move()(to in path(), from in path(), node_id in node_id(), node_type in node_types() ) -> Move {
+        Move{to, from, node_id, node_type}
     }
 }
 

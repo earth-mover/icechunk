@@ -1,0 +1,195 @@
+include "common.fbs";
+
+namespace generated;
+
+// --8<-- [start:ref]
+// A named reference (branch or tag) pointing to a snapshot.
+table Ref {
+    // The branch or tag name.
+    name: string (required);
+
+    // Index into the Repo.snapshots list identifying the target snapshot.
+    snapshot_index: uint32;
+}
+// --8<-- [end:ref]
+
+// --8<-- [start:snapshot_info]
+// Summary of a snapshot, stored in the repo info file.
+// This is not the snapshot file itself — it provides enough
+// information to locate and identify the snapshot without fetching it.
+table SnapshotInfo {
+    id: ObjectId12 (required);
+
+    // Index of this snapshot's parent in the Repo.snapshots list
+    // (offset from the start of the list, not from this entry).
+    // -1 means no parent (the initial snapshot).
+    parent_offset: int32;
+
+    // Non-leap microseconds since Jan 1, 1970 UTC.
+    flushed_at: uint64;
+
+    // Commit message.
+    message: string (required);
+
+    // Snapshot-level metadata.
+    metadata: [MetadataItem];
+}
+// --8<-- [end:snapshot_info]
+
+// --8<-- [start:repo_availability]
+enum RepoAvailability : ubyte { Online = 0, ReadOnly, Offline }
+// --8<-- [end:repo_availability]
+
+// --8<-- [start:repo_status]
+table RepoStatus {
+    availability: RepoAvailability;
+    // Non-leap microseconds since Jan 1, 1970 UTC.
+    set_at: uint64;
+    limited_availability_reason: string;
+}
+// --8<-- [end:repo_status]
+
+// --8<-- [start:update_types]
+table RepoInitializedUpdate {
+}
+table RepoMigratedUpdate {
+  from_version: uint8;
+  to_version: uint8;
+}
+table RepoStatusChangedUpdate{
+  status: RepoStatus;
+}
+table ConfigChangedUpdate {
+}
+table MetadataChangedUpdate {
+}
+table TagCreatedUpdate {
+  name: string (required);
+}
+table TagDeletedUpdate {
+  name: string (required);
+  previous_snap_id: ObjectId12 (required);
+}
+table BranchCreatedUpdate {
+  name: string (required);
+}
+table BranchDeletedUpdate {
+  name: string (required);
+  previous_snap_id: ObjectId12 (required);
+}
+table BranchResetUpdate {
+  name: string (required);
+  previous_snap_id: ObjectId12 (required);
+}
+table NewCommitUpdate {
+  branch: string (required);
+  new_snap_id: ObjectId12 (required);
+}
+table CommitAmendedUpdate {
+  branch: string (required);
+  previous_snap_id: ObjectId12 (required);
+  new_snap_id: ObjectId12 (required);
+}
+table NewDetachedSnapshotUpdate {
+  new_snap_id: ObjectId12 (required);
+}
+table GCRanUpdate {
+}
+table ExpirationRanUpdate {
+}
+
+table FeatureFlagChangedUpdate {
+    id: uint16;
+    new_value: bool;
+    is_set: bool;
+}
+// --8<-- [end:update_types]
+
+// --8<-- [start:update_type_union]
+union UpdateType {
+  RepoInitializedUpdate,
+  RepoMigratedUpdate,
+  ConfigChangedUpdate,
+  MetadataChangedUpdate,
+  TagCreatedUpdate,
+  TagDeletedUpdate,
+  BranchCreatedUpdate,
+  BranchDeletedUpdate,
+  BranchResetUpdate,
+  NewCommitUpdate,
+  CommitAmendedUpdate,
+  NewDetachedSnapshotUpdate,
+  GCRanUpdate,
+  ExpirationRanUpdate,
+  FeatureFlagChangedUpdate,
+  RepoStatusChangedUpdate,
+}
+// --8<-- [end:update_type_union]
+
+// --8<-- [start:update]
+// A single entry in the repository ops log.
+table Update {
+    update_type: UpdateType (required);
+
+    // Non-leap microseconds since Jan 1, 1970 UTC.
+    updated_at: uint64;
+
+    // Path to the backup copy of the repo info file before this update
+    // (stored under the overwritten/ prefix).
+    backup_path: string;
+  }
+// --8<-- [end:update]
+
+// --8<-- [start:repo_table]
+// The repo info file — the single entry point and only mutable object
+// in an Icechunk V2 repository. Stored at `$ROOT/repo`.
+table Repo {
+
+  // The spec version of this repository (1 or 2).
+  spec_version: uint8;
+
+  // All tags. MUST be sorted in ascending UTF-8 byte order of Ref.name.
+  tags: [Ref] (required);
+
+  // All branches. MUST be sorted in ascending UTF-8 byte order of Ref.name.
+  branches: [Ref] (required);
+
+  // Names of deleted tags. MUST be sorted in ascending UTF-8 byte order.
+  deleted_tags: [string] (required);
+
+  // All snapshots in this repository.
+  // MUST be sorted in ascending byte order of SnapshotInfo.id.
+  snapshots: [SnapshotInfo] (required);
+
+  // Current repository availability status.
+  status: RepoStatus (required);
+
+  // Repository-level metadata (user attributes).
+  metadata: [MetadataItem];
+
+  // The ops log — a list of recent operations performed on this repository.
+  latest_updates: [Update] (required);
+
+  // Path to the previous repo info file (in the overwritten/ prefix),
+  // forming a linked list for ops log entries beyond this file.
+  repo_before_updates: string;
+
+  // Repository configuration, serialized as FlexBuffers.
+  config: [uint8] (flexbuffer);
+
+  // Feature flag ids explicitly enabled by the user.
+  // MUST be sorted in ascending numeric order.
+  enabled_feature_flags: [uint16];
+
+  // Feature flag ids explicitly disabled by the user.
+  // MUST be sorted in ascending numeric order.
+  // Flags not in either list are at their default value.
+  disabled_feature_flags: [uint16];
+
+  // Reserved for future use. Opaque bytes for future extensions.
+  // Introduced in spec version 2.
+  extra: [uint8];
+}
+// --8<-- [end:repo_table]
+
+root_type Repo;

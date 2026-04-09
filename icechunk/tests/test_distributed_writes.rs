@@ -1,3 +1,5 @@
+#![cfg(not(feature = "shuttle"))]
+#![allow(clippy::unwrap_used)]
 use chrono::Utc;
 use icechunk_macros::tokio_test;
 use pretty_assertions::assert_eq;
@@ -22,8 +24,8 @@ use crate::common::Permission;
 
 #[template]
 #[rstest]
-#[case::v1(SpecVersionBin::V1dot0)]
-#[case::v2(SpecVersionBin::V2dot0)]
+#[case::v1(SpecVersionBin::V1)]
+#[case::v2(SpecVersionBin::V2)]
 fn spec_version_cases(#[case] spec_version: SpecVersionBin) {}
 
 const SIZE: usize = 10;
@@ -180,19 +182,21 @@ where
 
     let mut ds1 = repo1.writable_session("main").await?;
 
-    let shape = ArrayShape::new(vec![(SIZE as u64, 1), (SIZE as u64, 1)]).unwrap();
+    let shape =
+        ArrayShape::new(vec![(SIZE as u64, SIZE as u32), (SIZE as u64, SIZE as u32)])
+            .unwrap();
     let user_data = Bytes::new();
 
     let new_array_path: Path = "/array".try_into().unwrap();
     ds1.add_array(new_array_path.clone(), shape, None, user_data).await?;
-    ds1.commit("create array", None).await?;
+    ds1.commit("create array").max_concurrent_nodes(8).execute().await?;
 
     let repo2 = mk_repo(storage2, false, spec_version).await?;
     let repo3 = mk_repo(storage3, false, spec_version).await?;
     let repo4 = mk_repo(storage4, false, spec_version).await?;
 
     let mut set = JoinSet::new();
-    #[allow(clippy::erasing_op, clippy::identity_op)]
+    #[expect(clippy::erasing_op, clippy::identity_op)]
     {
         let size2 = SIZE as u32;
         let size24 = size2 / 4;
@@ -213,7 +217,7 @@ where
     assert!(write_results.iter().all(|r| {
         r.as_ref()
             .inspect_err(
-                #[allow(clippy::dbg_macro)]
+                #[expect(clippy::dbg_macro)]
                 |e| {
                     dbg!(e);
                 },
@@ -232,7 +236,7 @@ where
     let raw_sessions: Vec<Vec<u8>> =
         vec![ds2.as_bytes().unwrap(), ds3.as_bytes().unwrap(), ds4.as_bytes().unwrap()];
     let sessions =
-        raw_sessions.into_iter().map(|bytes| Session::from_bytes(bytes).unwrap());
+        raw_sessions.into_iter().map(|bytes| Session::from_bytes(&bytes).unwrap());
 
     // Merge the changesets into the first repo
     for session in sessions {
@@ -241,7 +245,8 @@ where
 
     // Distributed commit now, using arbitrarily one of the repos as base and the others as extra
     // changesets
-    let _new_snapshot = ds1.commit("distributed commit", None).await?;
+    let _new_snapshot =
+        ds1.commit("distributed commit").max_concurrent_nodes(8).execute().await?;
 
     // We check we can read all chunks correctly
     verify(ds1).await?;

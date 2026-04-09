@@ -2,17 +2,49 @@ from collections.abc import Callable
 from datetime import datetime
 
 from icechunk._icechunk_python import (
+    ChunkType,
     GcsBearerCredential,
     ObjectStoreConfig,
     S3Options,
     S3StaticCredentials,
     Storage,
+    StorageConcurrencySettings,
+    StorageRetriesSettings,
+    StorageSettings,
+    StorageTimeoutSettings,
 )
 from icechunk.credentials import (
     azure_credentials,
     gcs_credentials,
     s3_credentials,
 )
+
+__all__ = [
+    "AnyObjectStoreConfig",
+    "ChunkType",
+    "ObjectStoreConfig",
+    "S3Options",
+    "Storage",
+    "StorageConcurrencySettings",
+    "StorageRetriesSettings",
+    "StorageSettings",
+    "StorageTimeoutSettings",
+    "azure_storage",
+    "azure_store",
+    "gcs_storage",
+    "gcs_store",
+    "http_storage",
+    "http_store",
+    "in_memory_storage",
+    "local_filesystem_storage",
+    "local_filesystem_store",
+    "r2_storage",
+    "redirect_storage",
+    "s3_object_store_storage",
+    "s3_storage",
+    "s3_store",
+    "tigris_storage",
+]
 
 AnyObjectStoreConfig = (
     ObjectStoreConfig.InMemory
@@ -67,7 +99,21 @@ def http_store(
 
 
 def redirect_storage(base_url: str) -> Storage:
-    # FIXME: document
+    """Create a read-only Storage instance that follows HTTP redirects to resolve the underlying storage backend.
+
+    The given URL is expected to return an HTTP redirect (3xx) with a ``Location`` header
+    pointing to a supported storage scheme (``s3://``, ``gs://``, ``r2://``, ``tigris://``,
+    ``http+icechunk://``, etc.). Icechunk will follow redirects until it reaches a recognized
+    scheme and then use that as the actual storage backend.
+
+    This is useful when a service controls which bucket or path a repository lives in, so
+    clients don't need to know the final storage location ahead of time.
+
+    Parameters
+    ----------
+    base_url: str
+        The URL that will be followed to discover the actual storage location.
+    """
     return Storage.new_redirect(base_url)
 
 
@@ -142,7 +188,7 @@ def s3_storage(
     region: str | None
         The region to use in the object store, if `None` a default region will be used
     endpoint_url: str | None
-        Optional endpoint where the object store serves data, example: http://localhost:9000
+        Optional endpoint where the object store serves data, example: http://localhost:4200
     allow_http: bool
         If the object store can be accessed using http protocol instead of https
     access_key_id: str | None
@@ -169,7 +215,7 @@ def s3_storage(
         Whether to force using path-style addressing for buckets
     network_stream_timeout_seconds: int
         Timeout requests if no bytes can be transmitted during this period of time.
-        If set to 0, timeout is disabled.
+        If set to 0, timeout is disabled. Default: 60.
     requester_pays: bool
         Enable requester pays for S3 buckets
     """
@@ -269,7 +315,7 @@ def tigris_storage(
     region: str | None
         The region to use in the object store, if `None` a default region will be used
     endpoint_url: str | None
-        Optional endpoint where the object store serves data, example: http://localhost:9000
+        Optional endpoint where the object store serves data, example: http://localhost:4200
     use_weak_consistency: bool
         If set to True it will return a Storage instance that is read only, and can read from the
         the closest Tigris region. Behavior is undefined if objects haven't propagated to the region yet.
@@ -298,7 +344,7 @@ def tigris_storage(
         obtained are stored, and they can be sent over the network if you pickle the session/repo.
     network_stream_timeout_seconds: int
         Timeout requests if no bytes can be transmitted during this period of time.
-        If set to 0, timeout is disabled.
+        If set to 0, timeout is disabled. Default: 60.
     """
     credentials = s3_credentials(
         access_key_id=access_key_id,
@@ -384,7 +430,7 @@ def r2_storage(
         obtained are stored, and they can be sent over the network if you pickle the session/repo.
     network_stream_timeout_seconds: int
         Timeout requests if no bytes can be transmitted during this period of time.
-        If set to 0, timeout is disabled.
+        If set to 0, timeout is disabled. Default: 60.
     """
     credentials = s3_credentials(
         access_key_id=access_key_id,

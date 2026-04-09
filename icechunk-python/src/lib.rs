@@ -1,5 +1,10 @@
+// PyO3 extracts Python objects into owned Rust types (String, Vec<u8>, etc.),
+// so #[pymethods] signatures inherently take arguments by value.
+#![allow(clippy::needless_pass_by_value)]
+
 mod config;
 mod conflicts;
+mod display;
 mod errors;
 mod pickle;
 mod repository;
@@ -11,13 +16,13 @@ mod streams;
 use std::env;
 
 use config::{
-    PyAzureCredentials, PyAzureStaticCredentials, PyCachingConfig,
-    PyCompressionAlgorithm, PyCompressionConfig, PyCredentials, PyGcsBearerCredential,
-    PyGcsCredentials, PyGcsStaticCredentials, PyManifestConfig,
-    PyManifestPreloadCondition, PyManifestPreloadConfig,
+    PyAzureCredentials, PyAzureRefreshableCredential, PyAzureStaticCredentials,
+    PyCachingConfig, PyCompressionAlgorithm, PyCompressionConfig, PyCredentials,
+    PyGcsBearerCredential, PyGcsCredentials, PyGcsStaticCredentials, PyLatencyStorage,
+    PyManifestConfig, PyManifestPreloadCondition, PyManifestPreloadConfig,
     PyManifestVirtualChunkLocationCompressionConfig, PyObjectStoreConfig,
     PyRepoUpdateRetryConfig, PyRepositoryConfig, PyS3Credentials, PyS3Options,
-    PyS3StaticCredentials, PyStorage, PyStorageConcurrencySettings,
+    PyS3StaticCredentials, PyStorage, PyStorageConcurrencySettings, PyStorageObjectInfo,
     PyStorageRetriesSettings, PyStorageSettings, PyStorageTimeoutSettings,
     PyVirtualChunkContainer,
 };
@@ -28,30 +33,32 @@ use conflicts::{
     PyBasicConflictSolver, PyConflict, PyConflictDetector, PyConflictSolver,
     PyConflictType, PyVersionSelection,
 };
+use display::PyAncestryGraph;
 use errors::{IcechunkError, PyConflictError, PyRebaseFailedError};
 use icechunk::{format::format_constants::SpecVersionBin, initialize_tracing};
 use pyo3::prelude::*;
 use pyo3::types::PyMapping;
 use pyo3::wrap_pyfunction;
 use repository::{
-    PyDiff, PyFeatureFlag, PyGCSummary, PyManifestFileInfo, PyRepository, PySnapshotInfo,
-    PyUpdate, PyUpdateType,
+    PyDiff, PyFeatureFlag, PyGCSummary, PyManifestFileInfo, PyRepoAvailability,
+    PyRepoStatus, PyRepository, PySnapshotInfo, PySpecVersion, PyUpdate, PyUpdateType,
 };
 use session::{ChunkType, PySession, PySessionMode};
 use stats::PyChunkStorageStats;
 use store::{PyStore, VirtualChunkSpec};
 
 #[cfg(feature = "cli")]
-use clap::Parser;
+use clap::Parser as _;
 #[cfg(feature = "cli")]
 use icechunk::cli::interface::{IcechunkCLI, run_cli};
 
 #[cfg(feature = "cli")]
 #[pyfunction]
-fn cli_entrypoint(py: Python) -> PyResult<()> {
+#[expect(clippy::exit)] // CLI entrypoint must exit the process on error
+fn cli_entrypoint(py: Python<'_>) -> PyResult<()> {
     let sys = py.import("sys")?;
     let args: Vec<String> = sys.getattr("argv")?.extract()?;
-    match IcechunkCLI::try_parse_from(args.to_vec()) {
+    match IcechunkCLI::try_parse_from(args.clone()) {
         Ok(cli_args) => pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
             if let Err(e) = run_cli(cli_args).await {
                 eprintln!("{e}");
@@ -73,24 +80,24 @@ fn cli_entrypoint(py: Python) -> PyResult<()> {
 
 #[cfg(not(feature = "cli"))]
 #[pyfunction]
-fn cli_entrypoint(_py: Python) -> PyResult<()> {
+fn cli_entrypoint(_py: Python<'_>) -> PyResult<()> {
     println!("Must install the optional `cli` feature to use the Icechunk CLI.");
     Ok(())
 }
 
-fn log_filters_from_env(py: Python) -> PyResult<Option<String>> {
+fn log_filters_from_env(py: Python<'_>) -> PyResult<Option<String>> {
     let os = py.import("os")?;
     let environ = os.getattr("environ")?;
-    let environ: &Bound<PyMapping> = environ.cast()?;
+    let environ: &Bound<'_, PyMapping> = environ.cast()?;
     let value = environ.get_item("ICECHUNK_LOG").ok().and_then(|v| v.extract().ok());
     Ok(value)
 }
 
 #[pyfunction]
-fn initialize_logs(py: Python) -> PyResult<()> {
+fn initialize_logs(py: Python<'_>) -> PyResult<()> {
     if env::var("ICECHUNK_NO_LOGS").is_err() {
         let log_filter_directive = log_filters_from_env(py)?;
-        initialize_tracing(log_filter_directive.as_deref())
+        initialize_tracing(log_filter_directive.as_deref());
     }
     Ok(())
 }
@@ -122,7 +129,7 @@ fn check_filter_for_misspellings(filter: &str) {
 }
 
 #[pyfunction]
-fn set_logs_filter(py: Python, log_filter_directive: Option<String>) -> PyResult<()> {
+fn set_logs_filter(py: Python<'_>, log_filter_directive: Option<String>) -> PyResult<()> {
     let log_filter_directive =
         log_filter_directive.or_else(|| log_filters_from_env(py).ok().flatten());
 
@@ -137,8 +144,8 @@ fn set_logs_filter(py: Python, log_filter_directive: Option<String>) -> PyResult
 #[pyfunction]
 /// The spec version that this version of the Icechunk library
 /// uses to write metadata files
-fn spec_version() -> u8 {
-    SpecVersionBin::current() as u8
+fn spec_version() -> PySpecVersion {
+    SpecVersionBin::current().into()
 }
 
 #[pyfunction]
@@ -150,7 +157,7 @@ fn user_agent() -> &'static str {
 #[pyfunction]
 #[pyo3(signature = (repo, *, dry_run = true, delete_unused_v1_files = true, prefetch_concurrency = None))]
 fn _upgrade_icechunk_repository(
-    py: Python,
+    py: Python<'_>,
     repo: &PyRepository,
     dry_run: bool,
     delete_unused_v1_files: bool,
@@ -175,6 +182,7 @@ fn _icechunk_python(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PySessionMode>()?;
     m.add_class::<PyStore>()?;
     m.add_class::<PySnapshotInfo>()?;
+    m.add_class::<PyAncestryGraph>()?;
     m.add_class::<PyManifestFileInfo>()?;
     m.add_class::<PyChunkStorageStats>()?;
     m.add_class::<PyConflictSolver>()?;
@@ -186,12 +194,15 @@ fn _icechunk_python(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyGcsCredentials>()?;
     m.add_class::<PyGcsBearerCredential>()?;
     m.add_class::<PyGcsStaticCredentials>()?;
+    m.add_class::<PyAzureRefreshableCredential>()?;
     m.add_class::<PyAzureCredentials>()?;
     m.add_class::<PyAzureStaticCredentials>()?;
     m.add_class::<PyCredentials>()?;
     m.add_class::<PyS3Options>()?;
     m.add_class::<PyObjectStoreConfig>()?;
+    m.add_class::<PyStorageObjectInfo>()?;
     m.add_class::<PyStorage>()?;
+    m.add_class::<PyLatencyStorage>()?;
     m.add_class::<PyVirtualChunkContainer>()?;
     m.add_class::<PyCompressionAlgorithm>()?;
     m.add_class::<PyCompressionConfig>()?;
@@ -210,6 +221,9 @@ fn _icechunk_python(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyStorageSettings>()?;
     m.add_class::<PyGCSummary>()?;
     m.add_class::<PyDiff>()?;
+    m.add_class::<PyRepoAvailability>()?;
+    m.add_class::<PyRepoStatus>()?;
+    m.add_class::<PySpecVersion>()?;
     m.add_class::<PyUpdateType>()?;
     m.add_class::<PyUpdate>()?;
     m.add_class::<PyFeatureFlag>()?;

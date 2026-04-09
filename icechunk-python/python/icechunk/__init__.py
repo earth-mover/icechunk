@@ -1,30 +1,26 @@
 # module
 
-from typing import TypeAlias
 
 from icechunk._icechunk_python import (
-    AzureCredentials,
-    AzureStaticCredentials,
-    BasicConflictSolver,
-    CachingConfig,
     ChunkType,
+    ConflictError,
+    IcechunkError,
+    RebaseFailedError,
+    RepoAvailability,
+    RepoStatus,
+    SessionMode,
+    SpecVersion,
+    __version__,
+    _upgrade_icechunk_repository,
+    spec_version,
+    user_agent,
+)
+from icechunk.config import (
+    CachingConfig,
     CompressionAlgorithm,
     CompressionConfig,
-    Conflict,
-    ConflictDetector,
-    ConflictError,
-    ConflictSolver,
-    ConflictType,
-    Credentials,
-    Diff,
     FeatureFlag,
-    GcsBearerCredential,
-    GcsCredentials,
-    GcsStaticCredentials,
-    GCSummary,
-    IcechunkError,
     ManifestConfig,
-    ManifestFileInfo,
     ManifestPreloadCondition,
     ManifestPreloadConfig,
     ManifestSplitCondition,
@@ -32,29 +28,17 @@ from icechunk._icechunk_python import (
     ManifestSplittingConfig,
     ManifestVirtualChunkLocationCompressionConfig,
     ObjectStoreConfig,
-    RebaseFailedError,
     RepositoryConfig,
-    S3Credentials,
-    S3Options,
-    S3StaticCredentials,
-    SessionMode,
-    SnapshotInfo,
-    Storage,
-    StorageConcurrencySettings,
-    StorageRetriesSettings,
-    StorageSettings,
-    StorageTimeoutSettings,
-    Update,
-    UpdateType,
-    VersionSelection,
-    VirtualChunkContainer,
-    VirtualChunkSpec,
-    __version__,
-    _upgrade_icechunk_repository,
     initialize_logs,
     set_logs_filter,
-    spec_version,
-    user_agent,
+)
+from icechunk.conflicts import (
+    BasicConflictSolver,
+    Conflict,
+    ConflictDetector,
+    ConflictSolver,
+    ConflictType,
+    VersionSelection,
 )
 from icechunk.credentials import (
     AnyAzureCredential,
@@ -63,8 +47,18 @@ from icechunk.credentials import (
     AnyGcsCredential,
     AnyGcsStaticCredential,
     AnyS3Credential,
+    AzureCredentials,
+    AzureRefreshableCredential,
+    AzureStaticCredentials,
+    Credentials,
+    GcsBearerCredential,
+    GcsCredentials,
+    GcsStaticCredentials,
+    S3Credentials,
+    S3StaticCredentials,
     azure_credentials,
     azure_from_env_credentials,
+    azure_refreshable_credentials,
     azure_static_credentials,
     containers_credentials,
     gcs_credentials,
@@ -77,10 +71,23 @@ from icechunk.credentials import (
     s3_refreshable_credentials,
     s3_static_credentials,
 )
+from icechunk.ops import GCSummary, Update, UpdateType
 from icechunk.repository import Repository
 from icechunk.session import ForkSession, Session
+from icechunk.snapshots import (
+    AncestryGraph,
+    Diff,
+    ManifestFileInfo,
+    SnapshotInfo,
+)
 from icechunk.storage import (
     AnyObjectStoreConfig,
+    S3Options,
+    Storage,
+    StorageConcurrencySettings,
+    StorageRetriesSettings,
+    StorageSettings,
+    StorageTimeoutSettings,
     azure_storage,
     gcs_storage,
     gcs_store,
@@ -97,8 +104,13 @@ from icechunk.storage import (
 )
 from icechunk.store import IcechunkStore
 from icechunk.types import CommitMethod
+from icechunk.virtual import (
+    VirtualChunkContainer,
+    VirtualChunkSpec,
+)
 
 __all__ = [
+    "AncestryGraph",
     "AnyAzureCredential",
     "AnyAzureStaticCredential",
     "AnyCredential",
@@ -107,6 +119,7 @@ __all__ = [
     "AnyObjectStoreConfig",
     "AnyS3Credential",
     "AzureCredentials",
+    "AzureRefreshableCredential",
     "AzureStaticCredentials",
     "BasicConflictSolver",
     "CachingConfig",
@@ -139,6 +152,8 @@ __all__ = [
     "ManifestVirtualChunkLocationCompressionConfig",
     "ObjectStoreConfig",
     "RebaseFailedError",
+    "RepoAvailability",
+    "RepoStatus",
     "Repository",
     "RepositoryConfig",
     "S3Credentials",
@@ -147,6 +162,7 @@ __all__ = [
     "Session",
     "SessionMode",
     "SnapshotInfo",
+    "SpecVersion",
     "Storage",
     "StorageConcurrencySettings",
     "StorageRetriesSettings",
@@ -158,9 +174,9 @@ __all__ = [
     "VirtualChunkContainer",
     "VirtualChunkSpec",
     "__version__",
-    "_upgrade_icechunk_repository",
     "azure_credentials",
     "azure_from_env_credentials",
+    "azure_refreshable_credentials",
     "azure_static_credentials",
     "azure_storage",
     "containers_credentials",
@@ -205,35 +221,6 @@ def print_debug_info() -> None:
             print(f"{package}:  {import_module(package).__version__}")
         except ModuleNotFoundError:
             continue
-
-
-# This monkey patch is a bit annoying. Python dicts preserve insertion order
-# But this gets mapped to a Rust HashMap which does *not* preserve order
-# So on the python side, we can accept a dict as a nicer API, and immediately
-# convert it to tuples that preserve order, and pass those to Rust
-
-ManifestSplitValues: TypeAlias = dict[
-    ManifestSplitDimCondition.Axis
-    | ManifestSplitDimCondition.DimensionName
-    | ManifestSplitDimCondition.Any,
-    int,
-]
-SplitSizesDict: TypeAlias = dict[
-    ManifestSplitCondition,
-    ManifestSplitValues,
-]
-
-
-def from_dict(split_sizes: SplitSizesDict) -> ManifestSplittingConfig:
-    unwrapped = tuple((k, tuple(v.items())) for k, v in split_sizes.items())
-    return ManifestSplittingConfig(unwrapped)
-
-
-def to_dict(config: ManifestSplittingConfig) -> SplitSizesDict:
-    return {
-        split_condition: dict(dim_conditions)
-        for split_condition, dim_conditions in config.split_sizes
-    }
 
 
 class _InvalidatedRepository:
@@ -299,7 +286,8 @@ def upgrade_icechunk_repository(
     return Repository(new_repo)
 
 
-ManifestSplittingConfig.from_dict = staticmethod(from_dict)  # type: ignore[method-assign]
-ManifestSplittingConfig.to_dict = to_dict  # type: ignore[method-assign,assignment]
+def supported_spec_versions() -> list[SpecVersion]:
+    return [SpecVersion.v2, SpecVersion.v1]
+
 
 initialize_logs()

@@ -1,0 +1,1177 @@
+//! Native S3 client implementation of [`Storage`](icechunk_storage::Storage).
+
+// Re-export AWS SDK types needed by consumers (e.g., icechunk's virtual_chunks)
+pub use aws_sdk_s3;
+
+use std::{
+    collections::HashMap, fmt, future::ready, ops::Range, path::PathBuf, pin::Pin,
+    sync::Arc, time::Duration,
+};
+
+use async_trait::async_trait;
+use aws_config::{
+    AppName, BehaviorVersion, meta::region::RegionProviderChain, retry::RetryConfig,
+    timeout::TimeoutConfig,
+};
+use aws_credential_types::provider::error::CredentialsError;
+use aws_sdk_s3::{
+    Client,
+    config::{
+        Builder, ConfigBag, IdentityCache, Intercept, ProvideCredentials, Region,
+        RuntimeComponents, StalledStreamProtectionConfig,
+        interceptors::{
+            BeforeDeserializationInterceptorContextMut,
+            BeforeTransmitInterceptorContextMut,
+        },
+    },
+    error::{BoxError, SdkError},
+    operation::{copy_object::CopyObjectError, put_object::PutObjectError},
+    primitives::ByteStream,
+    types::{CompletedMultipartUpload, CompletedPart, Delete, Object, ObjectIdentifier},
+};
+use aws_smithy_runtime::client::retries::classifiers::HttpStatusCodeClassifier;
+use aws_smithy_types_convert::{
+    date_time::DateTimeExt as _, stream::PaginationStreamExt as _,
+};
+use bytes::Bytes;
+use chrono::{DateTime, Utc};
+use futures::{
+    Stream, StreamExt as _, TryStreamExt as _,
+    stream::{self, BoxStream, FuturesOrdered},
+};
+pub use icechunk_storage::s3_config::{
+    S3Credentials, S3CredentialsFetcher, S3Options, S3StaticCredentials,
+};
+use icechunk_storage::{
+    DeleteObjectsResult, GetModifiedResult, ListInfo, Settings, Storage, StorageError,
+    StorageErrorKind, StorageInfo, StorageResult, VersionInfo, VersionedUpdateResult,
+    obj_not_found_res, obj_store_error, obj_store_error_res, other_error, sealed,
+    split_in_multiple_equal_requests, strip_quotes,
+};
+use icechunk_types::ICResultExt as _;
+use serde::{Deserialize, Serialize};
+use tokio::sync::OnceCell;
+use tokio_util::io::StreamReader;
+use tracing::{error, instrument, trace};
+use typed_path::Utf8UnixPath;
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct S3Storage {
+    // config and credentials are stored so we are able to serialize and deserialize the struct
+    config: S3Options,
+    credentials: S3Credentials,
+    bucket: String,
+    prefix: String,
+    can_write: bool,
+    extra_read_headers: Vec<(String, String)>,
+    extra_write_headers: Vec<(String, String)>,
+    #[serde(skip)]
+    /// We need to use `OnceCell` to allow async initialization, because serde
+    /// does not support async cfunction calls from deserialization. This gives
+    /// us a way to lazily initialize the client.
+    client: OnceCell<Arc<Client>>,
+}
+
+impl fmt::Display for S3Storage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "S3Storage(bucket={}, prefix={}, config={})",
+            self.bucket, self.prefix, self.config,
+        )
+    }
+}
+#[derive(Debug)]
+struct ExtraHeadersInterceptor {
+    extra_read_headers: Vec<(String, String)>,
+    extra_write_headers: Vec<(String, String)>,
+}
+
+impl Intercept for ExtraHeadersInterceptor {
+    fn name(&self) -> &'static str {
+        "ExtraHeaders"
+    }
+
+    fn modify_before_retry_loop(
+        &self,
+        context: &mut BeforeTransmitInterceptorContextMut<'_>,
+        _runtime_components: &RuntimeComponents,
+        _cfg: &mut ConfigBag,
+    ) -> Result<(), BoxError> {
+        let request = context.request_mut();
+        match request.method() {
+            "GET" | "HEAD" | "OPTIONS" | "TRACE" => {
+                for (k, v) in self.extra_read_headers.iter() {
+                    request.headers_mut().insert(k.clone(), v.clone());
+                }
+            }
+            _ => {
+                for (k, v) in self.extra_write_headers.iter() {
+                    request.headers_mut().insert(k.clone(), v.clone());
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Strips `x-amz-checksum-*` headers from HTTP 304 (Not Modified) responses.
+///
+/// R2 includes checksum headers (e.g. crc32, crc64nvme) on 304 responses, but
+/// because 304 responses have no body the AWS SDK's checksum validation fails
+/// with a mismatch, triggering transient-error retries with exponential backoff.
+#[derive(Debug)]
+struct StripChecksumOn304Interceptor;
+
+impl Intercept for StripChecksumOn304Interceptor {
+    fn name(&self) -> &'static str {
+        "StripChecksumOn304"
+    }
+
+    fn modify_before_deserialization(
+        &self,
+        context: &mut BeforeDeserializationInterceptorContextMut<'_>,
+        _runtime_components: &RuntimeComponents,
+        _cfg: &mut ConfigBag,
+    ) -> Result<(), BoxError> {
+        let response = context.response_mut();
+        if response.status().as_u16() == 304 {
+            let to_remove: Vec<_> = response
+                .headers()
+                .iter()
+                .filter(|(name, _)| name.starts_with("x-amz-checksum-"))
+                .map(|(name, _)| name.to_owned())
+                .collect();
+            for name in to_remove {
+                response.headers_mut().remove(&name);
+            }
+        }
+        Ok(())
+    }
+}
+
+#[instrument(skip(credentials))]
+pub async fn mk_client(
+    config: &S3Options,
+    credentials: S3Credentials,
+    extra_read_headers: Vec<(String, String)>,
+    extra_write_headers: Vec<(String, String)>,
+    settings: &Settings,
+) -> Client {
+    let region = config
+        .region
+        .as_ref()
+        .map(|r| RegionProviderChain::first_try(Some(Region::new(r.clone()))))
+        .unwrap_or_else(RegionProviderChain::default_provider);
+
+    let endpoint = config.endpoint_url.clone();
+    let region = if endpoint.is_some() {
+        // GH793, the S3 SDK requires a region even though it may not make sense
+        // for S3-compatible object stores like Tigris or Ceph.
+        // So we set a fake region, using the `endpoint_url` as a sign that
+        // we are not talking to real S3
+        region.or_else(Region::new("region-was-not-set"))
+    } else {
+        region
+    };
+
+    #[expect(clippy::unwrap_used)]
+    let app_name = AppName::new(icechunk_types::user_agent()).unwrap();
+    let mut aws_config = aws_config::defaults(BehaviorVersion::v2026_01_12())
+        .region(region)
+        .app_name(app_name);
+
+    if let Some(endpoint) = endpoint {
+        aws_config = aws_config.endpoint_url(endpoint);
+    }
+
+    let stalled_stream = if config.network_stream_timeout_seconds == Some(0) {
+        StalledStreamProtectionConfig::disabled()
+    } else {
+        StalledStreamProtectionConfig::enabled()
+            .grace_period(Duration::from_secs(
+                config.network_stream_timeout_seconds.unwrap_or(10) as u64,
+            ))
+            .build()
+    };
+    aws_config = aws_config.stalled_stream_protection(stalled_stream);
+
+    match credentials {
+        S3Credentials::FromEnv => {}
+        S3Credentials::Anonymous => aws_config = aws_config.no_credentials(),
+        S3Credentials::Static(credentials) => {
+            aws_config =
+                aws_config.credentials_provider(aws_credential_types::Credentials::new(
+                    credentials.access_key_id,
+                    credentials.secret_access_key,
+                    credentials.session_token,
+                    credentials.expires_after.map(|e| e.into()),
+                    "user",
+                ));
+        }
+        S3Credentials::Refreshable(fetcher) => {
+            aws_config =
+                aws_config.credentials_provider(ProvideRefreshableCredentials(fetcher));
+        }
+    }
+
+    let retry_config = RetryConfig::standard()
+        .with_max_attempts(settings.retries().max_tries().get() as u32)
+        .with_initial_backoff(Duration::from_millis(
+            settings.retries().initial_backoff_ms() as u64,
+        ))
+        .with_max_backoff(Duration::from_millis(
+            settings.retries().max_backoff_ms() as u64
+        ));
+
+    if let Some(timeouts) = settings.timeouts() {
+        let mut timeout_builder = TimeoutConfig::builder();
+        if let Some(ms) = timeouts.connect_timeout_ms {
+            timeout_builder =
+                timeout_builder.connect_timeout(Duration::from_millis(ms as u64));
+        }
+        if let Some(ms) = timeouts.read_timeout_ms {
+            timeout_builder =
+                timeout_builder.read_timeout(Duration::from_millis(ms as u64));
+        }
+        if let Some(ms) = timeouts.operation_timeout_ms {
+            timeout_builder =
+                timeout_builder.operation_timeout(Duration::from_millis(ms as u64));
+        }
+        if let Some(ms) = timeouts.operation_attempt_timeout_ms {
+            timeout_builder = timeout_builder
+                .operation_attempt_timeout(Duration::from_millis(ms as u64));
+        }
+        aws_config = aws_config.timeout_config(timeout_builder.build());
+    }
+
+    let mut s3_builder = Builder::from(&aws_config.load().await)
+        .force_path_style(config.force_path_style)
+        .retry_config(retry_config);
+
+    // credentials may take a while to refresh, defaults are too strict
+    let id_cache = IdentityCache::lazy()
+        .load_timeout(Duration::from_secs(120))
+        .buffer_time(Duration::from_secs(120))
+        .build();
+
+    s3_builder = s3_builder.identity_cache(id_cache);
+
+    // Add retry classifier for HTTP 408 (Request Timeout) and 429 (Too Many Requests).
+    // The default HttpStatusCodeClassifier only retries on 500, 502, 503, 504
+    // Note R2 sends 429 for "slowdown" while S3 sends 503.
+    //   - R2: https://developers.cloudflare.com/r2/api/error-codes/
+    //   - S3: https://docs.aws.amazon.com/AmazonS3/latest/API/ErrorResponses.html
+    // Tigris can occasionally respond with 499: "Client Closed Request"
+    static RETRY_CODES: &[u16] = &[408, 429, 499];
+    // This confusingly named `retry_classifier` method ends up calling
+    // `push_retry_classifier` after wrapping our custom classifier in `SharedRetryClassifier`.
+    // Ultimately, this is a push on to a `Vec<SharedRetryClassifier>`, and is thus additive
+    // to the existing default retry configuration.
+    // https://github.com/smithy-lang/smithy-rs/blob/cfcc39cf4b5bea665bba684b64bfca2b89e4bc73/rust-runtime/aws-smithy-runtime-api/src/client/runtime_components.rs#L755
+    // https://github.com/smithy-lang/smithy-rs/blob/cfcc39cf4b5bea665bba684b64bfca2b89e4bc73/rust-runtime/aws-smithy-runtime-api/src/client/runtime_components.rs#L370
+    s3_builder = s3_builder
+        .retry_classifier(HttpStatusCodeClassifier::new_from_codes(RETRY_CODES));
+
+    if !extra_read_headers.is_empty() || !extra_write_headers.is_empty() {
+        s3_builder = s3_builder.interceptor(ExtraHeadersInterceptor {
+            extra_read_headers,
+            extra_write_headers,
+        });
+    }
+
+    // R2 includes x-amz-checksum-crc32 on 304 Not Modified responses, but
+    // because 304 has no body the SDK's checksum validation fails and triggers
+    // expensive transient-error retries.
+    if config
+        .endpoint_url
+        .as_ref()
+        .is_some_and(|url| url.contains(".r2.cloudflarestorage.com"))
+    {
+        s3_builder = s3_builder.interceptor(StripChecksumOn304Interceptor);
+    }
+
+    let config = s3_builder.build();
+
+    Client::from_conf(config)
+}
+
+fn stream2stream(
+    s: ByteStream,
+) -> Pin<Box<dyn Stream<Item = Result<Bytes, std::io::Error>> + Send>> {
+    let res = stream::try_unfold(s, move |mut stream| async move {
+        let next = stream.try_next().await?;
+        Ok(next.map(|bytes| (bytes, stream)))
+    });
+    Box::pin(res)
+}
+
+impl S3Storage {
+    pub fn new(
+        config: S3Options,
+        bucket: String,
+        prefix: Option<String>,
+        credentials: S3Credentials,
+        can_write: bool,
+        extra_read_headers: Vec<(String, String)>,
+        extra_write_headers: Vec<(String, String)>,
+    ) -> Result<S3Storage, StorageError> {
+        let client = OnceCell::new();
+        let prefix = prefix.unwrap_or_default();
+        let prefix = prefix.strip_suffix("/").unwrap_or(prefix.as_str()).to_string();
+        Ok(S3Storage {
+            client,
+            config,
+            bucket,
+            prefix,
+            credentials,
+            can_write,
+            extra_read_headers,
+            extra_write_headers,
+        })
+    }
+
+    /// Get the client, initializing it if it hasn't been initialized yet. This is necessary because the
+    /// client is not serializeable and must be initialized after deserialization. Under normal construction
+    /// the original client is returned immediately.
+    #[instrument(skip_all)]
+    pub async fn get_client(&self, settings: &Settings) -> &Arc<Client> {
+        self.client
+            .get_or_init(|| async {
+                Arc::new(
+                    mk_client(
+                        &self.config,
+                        self.credentials.clone(),
+                        self.extra_read_headers.clone(),
+                        self.extra_write_headers.clone(),
+                        settings,
+                    )
+                    .await,
+                )
+            })
+            .await
+    }
+
+    pub fn get_path_str(&self, file_prefix: &str, id: &str) -> StorageResult<String> {
+        let path = PathBuf::from_iter([self.prefix.as_str(), file_prefix, id]);
+        let path_str = path
+            .into_os_string()
+            .into_string()
+            .map_err(|s| StorageError::capture(StorageErrorKind::BadPrefix(s)))?;
+
+        Ok(path_str.replace("\\", "/"))
+    }
+
+    fn prefixed_path(&self, path: &str) -> String {
+        format!("{}/{path}", self.prefix)
+    }
+
+    async fn put_object_single<
+        I: IntoIterator<Item = (impl Into<String>, impl Into<String>)>,
+    >(
+        &self,
+        settings: &Settings,
+        key: &str,
+        bytes: Bytes,
+        content_type: Option<impl Into<String>>,
+        metadata: I,
+        previous_version: Option<&VersionInfo>,
+    ) -> StorageResult<VersionedUpdateResult> {
+        let mut req = self
+            .get_client(settings)
+            .await
+            .put_object()
+            .bucket(self.bucket.clone())
+            .key(key)
+            .body(bytes.into());
+
+        if settings.unsafe_use_metadata() {
+            if let Some(ct) = content_type {
+                req = req.content_type(ct);
+            };
+
+            for (k, v) in metadata {
+                req = req.metadata(k, v);
+            }
+        }
+
+        if let Some(klass) = settings.storage_class() {
+            let klass = klass.as_str().into();
+            req = req.storage_class(klass);
+        }
+
+        if let Some(previous_version) = previous_version.as_ref() {
+            match (
+                previous_version.etag(),
+                settings.unsafe_use_conditional_create(),
+                settings.unsafe_use_conditional_update(),
+            ) {
+                (None, true, _) => req = req.if_none_match("*"),
+                (Some(etag), _, true) => req = req.if_match(strip_quotes(etag)),
+                (_, _, _) => {}
+            }
+        }
+
+        match req.send().await {
+            Ok(out) => {
+                let new_etag = out
+                    .e_tag()
+                    .ok_or(other_error("Object should have an etag".to_string()))?
+                    .to_string();
+                let new_version = VersionInfo::from_etag_only(new_etag);
+                Ok(VersionedUpdateResult::Updated { new_version })
+            }
+            // minio returns this
+            Err(SdkError::ServiceError(err)) => {
+                let code = err.err().meta().code().unwrap_or_default();
+                if code == "PreconditionFailed"
+                    || code == "ConditionalRequestConflict"
+                    // ConcurrentModification sent by Ceph Object Gateway
+                    || code == "ConcurrentModification"
+                {
+                    Ok(VersionedUpdateResult::NotOnLatestVersion)
+                } else {
+                    obj_store_error_res(SdkError::<PutObjectError>::ServiceError(err))
+                }
+            }
+            // S3 API documents this
+            Err(SdkError::ResponseError(err)) => {
+                let status = err.raw().status().as_u16();
+                // see https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutObject.html#API_PutObject_RequestSyntax
+                if status == 409 || status == 412 {
+                    Ok(VersionedUpdateResult::NotOnLatestVersion)
+                } else {
+                    obj_store_error_res(SdkError::<PutObjectError>::ResponseError(err))
+                }
+            }
+            Err(err) => obj_store_error_res(err),
+        }
+    }
+
+    async fn put_object_multipart<
+        I: IntoIterator<Item = (impl Into<String>, impl Into<String>)>,
+    >(
+        &self,
+        settings: &Settings,
+        key: &str,
+        bytes: &Bytes,
+        content_type: Option<impl Into<String>>,
+        metadata: I,
+        previous_version: Option<&VersionInfo>,
+    ) -> StorageResult<VersionedUpdateResult> {
+        let mut multi = self
+            .get_client(settings)
+            .await
+            .create_multipart_upload()
+            // We would like this, but it fails in MinIO
+            //.checksum_type(aws_sdk_s3::types::ChecksumType::FullObject)
+            //.checksum_algorithm(aws_sdk_s3::types::ChecksumAlgorithm::Crc64Nvme)
+            .bucket(self.bucket.clone())
+            .key(key);
+
+        if settings.unsafe_use_metadata() {
+            if let Some(ct) = content_type {
+                multi = multi.content_type(ct);
+            };
+            for (k, v) in metadata {
+                multi = multi.metadata(k, v);
+            }
+        }
+
+        if let Some(klass) = settings.storage_class() {
+            let klass = klass.as_str().into();
+            multi = multi.storage_class(klass);
+        }
+
+        let create_res = multi.send().await.capture_box()?;
+        let upload_id = create_res.upload_id().ok_or(other_error(
+            "No upload_id in create multipart upload result".to_string(),
+        ))?;
+
+        // We need to ensure all requests are the same size except for the last one, which can be
+        // smaller. This is a requirement for R2 compatibility
+        let parts = split_in_multiple_equal_requests(
+            &(0..bytes.len() as u64),
+            settings.concurrency().ideal_concurrent_request_size().get(),
+            settings.concurrency().max_concurrent_requests_for_object().get(),
+        )
+        .collect::<Vec<_>>();
+
+        let results = parts
+            .into_iter()
+            .enumerate()
+            .map(|(part_idx, range)| async move {
+                let body = bytes.slice(range.start as usize..range.end as usize).into();
+                let idx = part_idx as i32 + 1;
+                let req = self
+                    .get_client(settings)
+                    .await
+                    .upload_part()
+                    .upload_id(upload_id)
+                    .bucket(self.bucket.clone())
+                    .key(key)
+                    .part_number(idx)
+                    .body(body);
+
+                req.send().await.map(|res| (idx, res))
+            })
+            .collect::<FuturesOrdered<_>>();
+
+        let completed_parts = results
+            .map_ok(|(idx, res)| {
+                let etag = res.e_tag().unwrap_or("");
+                CompletedPart::builder()
+                    .e_tag(strip_quotes(etag))
+                    .part_number(idx)
+                    .build()
+            })
+            .try_collect::<Vec<_>>()
+            .await
+            .capture_box()?;
+
+        let completed_parts =
+            CompletedMultipartUpload::builder().set_parts(Some(completed_parts)).build();
+
+        let mut req = self
+            .get_client(settings)
+            .await
+            .complete_multipart_upload()
+            .bucket(self.bucket.clone())
+            .key(key)
+            .upload_id(upload_id)
+            //.checksum_type(aws_sdk_s3::types::ChecksumType::FullObject)
+            .multipart_upload(completed_parts);
+
+        if let Some(previous_version) = previous_version.as_ref() {
+            match (
+                previous_version.etag(),
+                settings.unsafe_use_conditional_create(),
+                settings.unsafe_use_conditional_update(),
+            ) {
+                (None, true, _) => req = req.if_none_match("*"),
+                (Some(etag), _, true) => req = req.if_match(strip_quotes(etag)),
+                (_, _, _) => {}
+            }
+        }
+
+        match req.send().await {
+            Ok(out) => {
+                let new_etag = out
+                    .e_tag()
+                    .ok_or(other_error("Object should have an etag".to_string()))?
+                    .to_string();
+                let new_version = VersionInfo::from_etag_only(new_etag);
+                Ok(VersionedUpdateResult::Updated { new_version })
+            }
+            // minio returns this
+            Err(SdkError::ServiceError(err)) => {
+                let code = err.err().meta().code().unwrap_or_default();
+                if code == "PreconditionFailed"
+                    || code == "ConditionalRequestConflict"
+                    // ConcurrentModification sent by Ceph Object Gateway
+                    || code == "ConcurrentModification"
+                {
+                    Ok(VersionedUpdateResult::NotOnLatestVersion)
+                } else {
+                    obj_store_error_res(SdkError::ServiceError(err))
+                }
+            }
+            // S3 API documents this
+            Err(SdkError::ResponseError(err)) => {
+                let status = err.raw().status().as_u16();
+                // see https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutObject.html#API_PutObject_RequestSyntax
+                if status == 409 || status == 412 {
+                    Ok(VersionedUpdateResult::NotOnLatestVersion)
+                } else {
+                    obj_store_error_res(SdkError::<PutObjectError>::ResponseError(err))
+                }
+            }
+            Err(err) => obj_store_error_res(err),
+        }
+    }
+}
+
+pub fn range_to_header(range: &Range<u64>) -> String {
+    format!("bytes={}-{}", range.start, range.end - 1)
+}
+
+impl sealed::Sealed for S3Storage {}
+
+#[async_trait]
+#[typetag::serde]
+impl Storage for S3Storage {
+    fn storage_info(&self) -> StorageInfo {
+        let mut fields = vec![("bucket", self.bucket.clone())];
+        if !self.prefix.is_empty() {
+            fields.push(("prefix", self.prefix.clone()));
+        }
+        fields.extend(self.config.info_fields());
+        StorageInfo { backend_type: "S3 (native)", fields }
+    }
+
+    async fn can_write(&self) -> StorageResult<bool> {
+        Ok(self.can_write)
+    }
+
+    async fn put_object(
+        &self,
+        settings: &Settings,
+        path: &str,
+        bytes: Bytes,
+        content_type: Option<&str>,
+        metadata: Vec<(String, String)>,
+        previous_version: Option<&VersionInfo>,
+    ) -> StorageResult<VersionedUpdateResult> {
+        let path = self.prefixed_path(path);
+        if bytes.len() >= settings.minimum_size_for_multipart_upload() as usize {
+            self.put_object_multipart(
+                settings,
+                path.as_str(),
+                &bytes,
+                content_type,
+                metadata,
+                previous_version,
+            )
+            .await
+        } else {
+            self.put_object_single(
+                settings,
+                path.as_str(),
+                bytes,
+                content_type,
+                metadata,
+                previous_version,
+            )
+            .await
+        }
+    }
+
+    async fn copy_object(
+        &self,
+        settings: &Settings,
+        from: &str,
+        to: &str,
+        content_type: Option<&str>,
+        version: &VersionInfo,
+    ) -> StorageResult<VersionedUpdateResult> {
+        let from = format!("{}/{}", self.bucket, self.prefixed_path(from));
+        let to = self.prefixed_path(to);
+        let mut req = self
+            .get_client(settings)
+            .await
+            .copy_object()
+            .bucket(self.bucket.clone())
+            .key(to)
+            .copy_source(from);
+        if settings.unsafe_use_conditional_update()
+            && let Some(etag) = version.etag()
+        {
+            req = req.copy_source_if_match(strip_quotes(etag));
+        }
+        if let Some(klass) = settings.storage_class() {
+            let klass = klass.as_str().into();
+            req = req.storage_class(klass);
+        }
+        if let Some(ct) = content_type {
+            req = req.content_type(ct);
+        }
+        if self.config.requester_pays {
+            req = req.request_payer(aws_sdk_s3::types::RequestPayer::Requester);
+        }
+        match req.send().await {
+            Ok(_) => Ok(VersionedUpdateResult::Updated { new_version: version.clone() }),
+            Err(SdkError::ServiceError(err)) => {
+                let code = err.err().meta().code().unwrap_or_default();
+                if code == "PreconditionFailed"
+                    || code == "ConditionalRequestConflict"
+                    // ConcurrentModification sent by Ceph Object Gateway
+                    || code == "ConcurrentModification"
+                {
+                    Ok(VersionedUpdateResult::NotOnLatestVersion)
+                } else {
+                    obj_store_error_res(SdkError::<CopyObjectError>::ServiceError(err))
+                }
+            }
+            // S3 API documents this
+            Err(SdkError::ResponseError(err)) => {
+                let status = err.raw().status().as_u16();
+                // see https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutObject.html#API_PutObject_RequestSyntax
+                if status == 409 || status == 412 {
+                    Ok(VersionedUpdateResult::NotOnLatestVersion)
+                } else {
+                    obj_store_error_res(SdkError::<PutObjectError>::ResponseError(err))
+                }
+            }
+            Err(sdk_err) => match sdk_err.as_service_error() {
+                Some(_)
+                    if sdk_err
+                        .raw_response()
+                        .is_some_and(|x| x.status().as_u16() == 404) =>
+                {
+                    // needed for Cloudflare R2 public bucket URLs
+                    // if object doesn't exist we get a 404 that isn't parsed by the AWS SDK
+                    // into anything useful. So we need to parse the raw response, and match
+                    // the status code.
+                    obj_not_found_res()
+                }
+                _ => obj_store_error_res(sdk_err),
+            },
+        }
+    }
+
+    #[instrument(skip(self, settings))]
+    async fn list_objects<'a>(
+        &'a self,
+        settings: &Settings,
+        prefix: &str,
+    ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
+        let prefix = format!("{}/{}", self.prefix, prefix).replace("//", "/");
+        let mut req = self
+            .get_client(settings)
+            .await
+            .list_objects_v2()
+            .bucket(self.bucket.clone())
+            .prefix(prefix.clone());
+
+        if self.config.requester_pays {
+            req = req.request_payer(aws_sdk_s3::types::RequestPayer::Requester);
+        }
+
+        let stream = req
+            .into_paginator()
+            .send()
+            .into_stream_03x()
+            .map_err(obj_store_error)
+            .try_filter_map(|page| {
+                let contents = page.contents.map(|cont| stream::iter(cont).map(Ok));
+                ready(Ok(contents))
+            })
+            .try_flatten()
+            .and_then(move |object| {
+                let prefix = prefix.clone();
+                ready(object_to_list_info(prefix.as_str(), &object))
+            });
+        Ok(stream.boxed())
+    }
+
+    #[instrument(skip(self, batch))]
+    async fn delete_batch(
+        &self,
+        settings: &Settings,
+        prefix: &str,
+        batch: Vec<(String, u64)>,
+    ) -> StorageResult<DeleteObjectsResult> {
+        let mut sizes = HashMap::new();
+        let mut ids = Vec::new();
+        for (id, size) in batch.into_iter() {
+            if let Ok(key) = self.get_path_str(prefix, id.as_str())
+                && let Ok(ident) = ObjectIdentifier::builder().key(key.clone()).build()
+            {
+                ids.push(ident);
+                sizes.insert(key, size);
+            }
+        }
+
+        let delete = Delete::builder()
+            .set_objects(Some(ids))
+            .build()
+            .map_err(|e| other_error(e.to_string()))?;
+
+        let mut req = self
+            .get_client(settings)
+            .await
+            .delete_objects()
+            .bucket(self.bucket.clone())
+            .delete(delete);
+
+        if self.config.requester_pays {
+            req = req.request_payer(aws_sdk_s3::types::RequestPayer::Requester);
+        }
+
+        let res = req.send().await.capture_box()?;
+
+        if let Some(err) = res.errors.as_ref().and_then(|e| e.first()) {
+            tracing::error!(
+                error = ?err,
+                "Errors deleting objects",
+            );
+        }
+
+        let mut result = DeleteObjectsResult::default();
+        for deleted in res.deleted() {
+            if let Some(key) = deleted.key() {
+                let size = sizes.get(key).unwrap_or(&0);
+                result.deleted_bytes += *size;
+                result.deleted_objects += 1;
+            } else {
+                tracing::error!("Deleted object without key");
+            }
+        }
+        Ok(result)
+    }
+
+    #[instrument(skip(self, settings))]
+    async fn get_object_last_modified(
+        &self,
+        path: &str,
+        settings: &Settings,
+    ) -> StorageResult<DateTime<Utc>> {
+        let key = self.prefixed_path(path);
+        let mut req = self
+            .get_client(settings)
+            .await
+            .head_object()
+            .bucket(self.bucket.clone())
+            .key(key);
+
+        if self.config.requester_pays {
+            req = req.request_payer(aws_sdk_s3::types::RequestPayer::Requester);
+        }
+
+        let res = req.send().await.capture_box()?;
+
+        let res = res
+            .last_modified
+            .ok_or(other_error("Object has no last_modified field".to_string()))?;
+        let res = res
+            .to_chrono_utc()
+            .map_err(|_| other_error("Invalid metadata timestamp".to_string()))?;
+
+        Ok(res)
+    }
+
+    #[instrument(skip(self, settings))]
+    async fn get_object_conditional(
+        &self,
+        settings: &Settings,
+        path: &str,
+        previous_version: Option<&VersionInfo>,
+    ) -> StorageResult<GetModifiedResult> {
+        match self
+            .get_object_range_conditional(settings, path, None, previous_version)
+            .await
+        {
+            Ok(Some((stream, new_version))) => {
+                let reader = StreamReader::new(stream.map_err(std::io::Error::other));
+                Ok(GetModifiedResult::Modified { data: Box::pin(reader), new_version })
+            }
+            Ok(None) => Ok(GetModifiedResult::OnLatestVersion),
+            Err(e) => Err(e),
+        }
+    }
+
+    async fn get_object_range(
+        &self,
+        settings: &Settings,
+        path: &str,
+        range: Option<&Range<u64>>,
+    ) -> StorageResult<(
+        Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>,
+        VersionInfo,
+    )> {
+        self.get_object_range_conditional(settings, path, range, None).await.map(|v| {
+            // If we got a result, then we can unwrap safely here:
+            // Errors would be in the other branch, and None is only expected
+            // if previous_version was passed in function call, but we set it to None
+            #[expect(clippy::expect_used)]
+            v.expect("Logic bug in get_object_range_conditional, should not get None")
+        })
+    }
+}
+
+impl S3Storage {
+    async fn get_object_range_conditional(
+        &self,
+        settings: &Settings,
+        path: &str,
+        range: Option<&Range<u64>>,
+        previous_version: Option<&VersionInfo>,
+    ) -> StorageResult<
+        Option<(
+            Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>,
+            VersionInfo,
+        )>,
+    > {
+        let client = self.get_client(settings).await;
+        let bucket = self.bucket.clone();
+        let key = self.prefixed_path(path);
+
+        let mut req = client.get_object().bucket(bucket).key(key);
+
+        if let Some(range) = range {
+            req = req.range(range_to_header(range));
+        }
+
+        if self.config.requester_pays {
+            req = req.request_payer(aws_sdk_s3::types::RequestPayer::Requester);
+        }
+
+        if let Some(previous_version) = previous_version.as_ref()
+            && let Some(etag) = previous_version.etag()
+        {
+            req = req.if_none_match(strip_quotes(etag));
+        };
+
+        match req.send().await {
+            Ok(output) => match output.e_tag {
+                Some(etag) => {
+                    let stream = stream2stream(output.body)
+                        .map_err(|e| StorageError::capture(e.into()));
+                    Ok(Some((Box::pin(stream), VersionInfo::from_etag_only(etag))))
+                }
+                None => Err(other_error("Object should have an etag".to_string())),
+            },
+            Err(sdk_err) => {
+                match sdk_err.as_service_error() {
+                    Some(e) if e.is_no_such_key() => {
+                        obj_not_found_res()
+                    }
+                    Some(_)
+                        if sdk_err
+                            .raw_response()
+                            .is_some_and(|x| x.status().as_u16() == 404) =>
+                    {
+                        // needed for Cloudflare R2 public bucket URLs
+                        // if object doesn't exist we get a 404 that isn't parsed by the AWS SDK
+                        // into anything useful. So we need to parse the raw response, and match
+                        // the status code.
+                        obj_not_found_res()
+                    }
+                    Some(_)
+                        // aws_sdk_s3 doesn't return an error when
+                        // status 304 (Not Modified) happens, so
+                        // check the http status code here and
+                        // return None to make it easy to catch
+                        // downstream
+                        if sdk_err
+                            .raw_response()
+                            .is_some_and(|x| x.status().as_u16() == 304) =>
+                    {
+                        trace!("Received 304 (Not Modified). Treating requested object as up-to-date.");
+                        Ok(None)
+                    }
+                    _ => obj_store_error_res(sdk_err),
+                }
+            }
+        }
+    }
+}
+
+fn object_to_list_info(prefix: &str, object: &Object) -> StorageResult<ListInfo<String>> {
+    let inner = || {
+        let key = object.key()?;
+        let last_modified = object.last_modified()?;
+        let created_at = last_modified.to_chrono_utc().ok()?;
+        let prefix = Utf8UnixPath::new(prefix);
+        let id = Utf8UnixPath::new(key).strip_prefix(prefix).ok()?.to_string();
+        let size_bytes = object.size.unwrap_or(0) as u64;
+        Some(ListInfo { id, created_at, size_bytes })
+    };
+    inner()
+        .ok_or_else(|| StorageError::capture(StorageErrorKind::BadPrefix(prefix.into())))
+}
+
+#[derive(Debug)]
+struct ProvideRefreshableCredentials(Arc<dyn S3CredentialsFetcher>);
+
+impl ProvideCredentials for ProvideRefreshableCredentials {
+    fn provide_credentials<'a>(
+        &'a self,
+    ) -> aws_credential_types::provider::future::ProvideCredentials<'a>
+    where
+        Self: 'a,
+    {
+        aws_credential_types::provider::future::ProvideCredentials::new(self.provide())
+    }
+}
+
+impl ProvideRefreshableCredentials {
+    async fn provide(
+        &self,
+    ) -> Result<aws_credential_types::Credentials, CredentialsError> {
+        let creds = self
+            .0
+            .get()
+            .await
+            .inspect_err(|err| error!(error = err, "Cannot load credentials"))
+            .map_err(CredentialsError::not_loaded)?;
+        let creds = aws_credential_types::Credentials::new(
+            creds.access_key_id,
+            creds.secret_access_key,
+            creds.session_token,
+            creds.expires_after.map(|e| e.into()),
+            "user",
+        );
+        Ok(creds)
+    }
+}
+
+// Factory functions
+
+pub fn new_s3_storage(
+    config: S3Options,
+    bucket: String,
+    prefix: Option<String>,
+    credentials: Option<S3Credentials>,
+) -> StorageResult<Arc<dyn Storage + Send + Sync>> {
+    if let Some(endpoint) = &config.endpoint_url
+        && (endpoint.contains("fly.storage.tigris.dev")
+            || endpoint.contains("t3.storage.dev"))
+    {
+        return Err(other_error(
+            "Tigris Storage is not S3 compatible, use the Tigris specific constructor instead"
+                .to_string(),
+        ));
+    }
+
+    let st = S3Storage::new(
+        config,
+        bucket,
+        prefix,
+        credentials.unwrap_or(S3Credentials::FromEnv),
+        true,
+        Vec::new(),
+        Vec::new(),
+    )?;
+    Ok(Arc::new(st))
+}
+
+pub fn new_r2_storage(
+    config: S3Options,
+    bucket: Option<String>,
+    prefix: Option<String>,
+    account_id: Option<String>,
+    credentials: Option<S3Credentials>,
+) -> StorageResult<Arc<dyn Storage + Send + Sync>> {
+    let (bucket, prefix) = match (bucket, prefix) {
+        (Some(bucket), Some(prefix)) => (bucket, Some(prefix)),
+        (None, Some(prefix)) => match prefix.split_once("/") {
+            Some((bucket, prefix)) => (bucket.to_string(), Some(prefix.to_string())),
+            None => (prefix, None),
+        },
+        (Some(bucket), None) => (bucket, None),
+        (None, None) => {
+            return Err(StorageErrorKind::R2ConfigurationError(
+                "Either bucket or prefix must be provided.".to_string(),
+            ))
+            .capture();
+        }
+    };
+
+    if config.endpoint_url.is_none() && account_id.is_none() {
+        return Err(StorageErrorKind::R2ConfigurationError(
+            "Either endpoint_url or account_id must be provided.".to_string(),
+        ))
+        .capture();
+    }
+
+    let config = S3Options {
+        region: config.region.or(Some("auto".to_string())),
+        endpoint_url: config
+            .endpoint_url
+            .or(account_id.map(|x| format!("https://{x}.r2.cloudflarestorage.com"))),
+        force_path_style: true,
+        ..config
+    };
+    let st = S3Storage::new(
+        config,
+        bucket,
+        prefix,
+        credentials.unwrap_or(S3Credentials::FromEnv),
+        true,
+        Vec::new(),
+        Vec::new(),
+    )?;
+    Ok(Arc::new(st))
+}
+
+pub fn new_tigris_storage(
+    config: S3Options,
+    bucket: String,
+    prefix: Option<String>,
+    credentials: Option<S3Credentials>,
+    use_weak_consistency: bool,
+) -> StorageResult<Arc<dyn Storage + Send + Sync>> {
+    let config = S3Options {
+        endpoint_url: Some(
+            config.endpoint_url.unwrap_or("https://t3.storage.dev".to_string()),
+        ),
+        ..config
+    };
+    let mut extra_write_headers = Vec::with_capacity(2);
+    let mut extra_read_headers = Vec::with_capacity(3);
+
+    if !use_weak_consistency {
+        // TODO: Tigris will need more than this to offer good eventually consistent behavior
+        // For example: we should use no-cache for branches and config file
+        if let Some(region) = config.region.as_ref() {
+            extra_write_headers.push(("X-Tigris-Regions".to_string(), region.clone()));
+            extra_write_headers
+                .push(("X-Tigris-Consistent".to_string(), "true".to_string()));
+
+            extra_read_headers.push(("X-Tigris-Regions".to_string(), region.clone()));
+            extra_read_headers
+                .push(("Cache-Control".to_string(), "no-cache".to_string()));
+            extra_read_headers
+                .push(("X-Tigris-Consistent".to_string(), "true".to_string()));
+        } else {
+            return Err(other_error("Tigris storage requires a region to provide full consistency. Either set the region for the bucket or use the read-only, eventually consistent storage by passing `use_weak_consistency=True` (experts only)".to_string()));
+        }
+    }
+    let st = S3Storage::new(
+        config,
+        bucket,
+        prefix,
+        credentials.unwrap_or(S3Credentials::FromEnv),
+        !use_weak_consistency, // notice eventually consistent storage can't do writes
+        extra_read_headers,
+        extra_write_headers,
+    )?;
+    Ok(Arc::new(st))
+}
+
+#[cfg(test)]
+mod tests {
+    use icechunk_macros::tokio_test;
+
+    use super::*;
+
+    #[tokio_test]
+    async fn test_serialize_s3_storage() {
+        let config = S3Options {
+            region: Some("us-west-2".to_string()),
+            endpoint_url: Some("http://localhost:4200".to_string()),
+            allow_http: true,
+            anonymous: false,
+            force_path_style: false,
+            network_stream_timeout_seconds: None,
+            requester_pays: false,
+        };
+        let credentials = S3Credentials::Static(S3StaticCredentials {
+            access_key_id: "access_key_id".to_string(),
+            secret_access_key: "secret_access_key".to_string(),
+            session_token: Some("session_token".to_string()),
+            expires_after: None,
+        });
+        let storage = S3Storage::new(
+            config,
+            "bucket".to_string(),
+            Some("prefix".to_string()),
+            credentials,
+            true,
+            Vec::new(),
+            Vec::new(),
+        )
+        .unwrap();
+
+        let serialized = serde_json::to_string(&storage).unwrap();
+
+        assert_eq!(
+            serialized,
+            r#"{"config":{"region":"us-west-2","endpoint_url":"http://localhost:4200","anonymous":false,"allow_http":true,"force_path_style":false,"network_stream_timeout_seconds":null,"requester_pays":false},"credentials":{"s3_credential_type":"static","access_key_id":"access_key_id","secret_access_key":"secret_access_key","session_token":"session_token","expires_after":null},"bucket":"bucket","prefix":"prefix","can_write":true,"extra_read_headers":[],"extra_write_headers":[]}"#
+        );
+
+        let deserialized: S3Storage = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(storage.config, deserialized.config);
+    }
+}

@@ -101,3 +101,31 @@ def test_exists_and_fetch_spec_version_with_storage_settings() -> None:
     ic.Repository.create(storage2, spec_version=2)
     assert ic.Repository.exists(storage2, storage_settings=settings)
     assert ic.Repository.fetch_spec_version(storage2, storage_settings=settings) == 2
+
+
+def test_non_existing_version() -> None:
+    storage = ic.in_memory_storage()
+
+    with pytest.raises(ValueError) as e:
+        # using 255 here because it is an u8 underneath
+        ic.Repository.create(storage, spec_version=255)
+    assert "Unsupported version 255" in str(e)
+
+    with pytest.raises(ValueError) as e:
+        # strings are not valid versions
+        ic.Repository.create(storage, spec_version="v1")  # type: ignore[arg-type]
+    assert "Couldn't parse a valid version" in str(e)
+
+
+def test_version_int_or_specversion() -> None:
+    storage = ic.in_memory_storage()
+    repo = ic.Repository.create(storage, spec_version=ic.SpecVersion.v2)
+    assert repo.spec_version == ic.SpecVersion.v2
+    assert repo.spec_version == 2
+    assert ic.SpecVersion.current() == ic.SpecVersion.v2
+
+
+def test_version_supported_listing() -> None:
+    assert (
+        str(ic.supported_spec_versions()) == "[SpecVersion.v2 (current), SpecVersion.v1]"
+    )

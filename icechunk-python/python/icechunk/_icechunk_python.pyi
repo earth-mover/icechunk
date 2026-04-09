@@ -8,8 +8,9 @@ from collections.abc import (
     Mapping,
     Sequence,
 )
-from enum import Enum
-from typing import Any, TypeAlias, final
+from enum import Enum, IntEnum
+from functools import total_ordering
+from typing import Any, final
 
 from icechunk.types import CommitMethod
 
@@ -42,7 +43,7 @@ class S3Options:
             Whether to force use of path-style addressing for buckets.
         network_stream_timeout_seconds: int | None
             Timeout requests if no bytes can be transmitted during this period of time.
-            If set to 0, timeout is disabled. Default is 60 seconds.
+            If set to 0, timeout is disabled. Default: 60.
         requester_pays: bool
             Enable requester pays for S3 buckets
         """
@@ -194,33 +195,61 @@ class S3Options:
 class ObjectStoreConfig:
     class InMemory:
         def __new__(cls) -> ObjectStoreConfig.InMemory: ...
+        def __repr__(self) -> str: ...
+        def __str__(self) -> str: ...
+        def _repr_html_(self) -> str: ...
 
     class LocalFileSystem:
         def __new__(cls, path: str) -> ObjectStoreConfig.LocalFileSystem: ...
+        def __repr__(self) -> str: ...
+        def __str__(self) -> str: ...
+        def _repr_html_(self) -> str: ...
 
     class S3Compatible:
         def __new__(cls, options: S3Options) -> ObjectStoreConfig.S3Compatible: ...
+        def __repr__(self) -> str: ...
+        def __str__(self) -> str: ...
+        def _repr_html_(self) -> str: ...
 
     class S3:
         def __new__(cls, options: S3Options) -> ObjectStoreConfig.S3: ...
+        def __repr__(self) -> str: ...
+        def __str__(self) -> str: ...
+        def _repr_html_(self) -> str: ...
 
     class Gcs:
         def __new__(
             cls, opts: Mapping[str, str] | None = None
         ) -> ObjectStoreConfig.Gcs: ...
+        def __repr__(self) -> str: ...
+        def __str__(self) -> str: ...
+        def _repr_html_(self) -> str: ...
 
     class Azure:
         def __new__(
             cls, opts: Mapping[str, str] | None = None
         ) -> ObjectStoreConfig.Azure: ...
+        def __repr__(self) -> str: ...
+        def __str__(self) -> str: ...
+        def _repr_html_(self) -> str: ...
 
     class Tigris:
         def __new__(cls, opts: S3Options) -> ObjectStoreConfig.Tigris: ...
+        def __repr__(self) -> str: ...
+        def __str__(self) -> str: ...
+        def _repr_html_(self) -> str: ...
 
     class Http:
         def __new__(
             cls, opts: Mapping[str, str] | None = None
         ) -> ObjectStoreConfig.Http: ...
+        def __repr__(self) -> str: ...
+        def __str__(self) -> str: ...
+        def _repr_html_(self) -> str: ...
+
+    def __repr__(self) -> str: ...
+    def __str__(self) -> str: ...
+    def _repr_html_(self) -> str: ...
 
 _AnyObjectStoreConfig = (
     ObjectStoreConfig.InMemory
@@ -270,6 +299,10 @@ class VirtualChunkContainer:
             Optional name for this container. When set, chunks can use relative ``vcc://name/path``
             locations instead of full absolute URLs.
         """
+
+    def __repr__(self) -> str: ...
+    def __str__(self) -> str: ...
+    def _repr_html_(self) -> str: ...
 
 class VirtualChunkSpec:
     """The specification for a virtual chunk reference."""
@@ -351,8 +384,10 @@ class CompressionConfig:
         ----------
         algorithm: CompressionAlgorithm | None
             The compression algorithm to use.
+            Default: Zstd
         level: int | None
             The compression level to use.
+            Default: 3
         """
         ...
     @property
@@ -427,15 +462,23 @@ class CachingConfig:
         ----------
         num_snapshot_nodes: int | None
             The number of snapshot nodes to cache.
+            Default: 500,000
         num_chunk_refs: int | None
             The number of chunk references to cache.
+            Default: 15,000,000
         num_transaction_changes: int | None
             The number of transaction changes to cache.
+            Default: 0
         num_bytes_attributes: int | None
             The number of bytes of attributes to cache.
+            Default: 0
         num_bytes_chunks: int | None
             The number of bytes of chunks to cache.
+            Default: 0
         """
+    def __repr__(self, /) -> str: ...
+    def __str__(self, /) -> str: ...
+    def _repr_html_(self, /) -> str: ...
     @property
     def num_snapshot_nodes(self) -> int | None:
         """
@@ -594,10 +637,10 @@ class ManifestPreloadCondition:
     def false() -> ManifestPreloadCondition:
         """Create a preload condition that never matches any manifests"""
         ...
-    def __and__(self, other: ManifestPreloadCondition) -> ManifestPreloadCondition:
+    def __and__(self, other: ManifestPreloadCondition, /) -> ManifestPreloadCondition:
         """Create a preload condition that matches if both this condition and `other` match."""
         ...
-    def __or__(self, other: ManifestPreloadCondition) -> ManifestPreloadCondition:
+    def __or__(self, other: ManifestPreloadCondition, /) -> ManifestPreloadCondition:
         """Create a preload condition that matches if either this condition or `other` match."""
         ...
 
@@ -729,11 +772,11 @@ class ManifestSplitCondition:
         """Create a splitting condition that matches any array."""
         ...
 
-    def __or__(self, other: ManifestSplitCondition) -> ManifestSplitCondition:
+    def __or__(self, other: ManifestSplitCondition, /) -> ManifestSplitCondition:
         """Create a splitting condition that matches if either this condition or `other` matches"""
         ...
 
-    def __and__(self, other: ManifestSplitCondition) -> ManifestSplitCondition:
+    def __and__(self, other: ManifestSplitCondition, /) -> ManifestSplitCondition:
         """Create a splitting condition that matches if both this condition and `other` match"""
         ...
 
@@ -751,8 +794,8 @@ class ManifestSplitDimCondition:
         """Split along any other unspecified dimension."""
         def __new__(cls) -> ManifestSplitDimCondition.Any: ...
 
-_DimSplitSize: TypeAlias = int
-_SplitSizes: TypeAlias = tuple[
+type _DimSplitSize = int
+type _SplitSizes = tuple[
     tuple[
         ManifestSplitCondition,
         tuple[
@@ -794,7 +837,7 @@ class ManifestSplittingConfig:
             int,
         ],
     ]: ...
-    def __new__(cls, split_sizes: _SplitSizes) -> ManifestSplittingConfig:
+    def __new__(cls, split_sizes: _SplitSizes | None = None) -> ManifestSplittingConfig:
         """Configuration for how Icechunk manifests will be split.
 
         Parameters
@@ -999,11 +1042,14 @@ class StorageRetriesSettings:
         Parameters
         ----------
         max_tries: int | None
-            The maximum number of tries, including the initial one. Set to 1 to disable retries
+            The maximum number of tries, including the initial one. Set to 1 to disable retries.
+            Default: 10
         initial_backoff_ms: int | None
-            The initial backoff duration in milliseconds
+            The initial backoff duration in milliseconds.
+            Default: 100
         max_backoff_ms: int | None
-            The limit to backoff duration in milliseconds
+            The limit to backoff duration in milliseconds.
+            Default: 180,000 (3 minutes)
         """
         ...
     @property
@@ -1089,6 +1135,10 @@ class StorageTimeoutSettings:
         """
         Create a new `StorageTimeoutSettings` object
 
+        All timeouts default to None, meaning the underlying
+        `AWS SDK default <https://docs.aws.amazon.com/sdk-for-rust/latest/dg/timeouts.html>`_
+        is used.
+
         Parameters
         ----------
         connect_timeout_ms: int | None
@@ -1133,8 +1183,10 @@ class StorageConcurrencySettings:
         ----------
         max_concurrent_requests_for_object: int | None
             The maximum number of concurrent requests for an object.
+            Default: 18
         ideal_concurrent_request_size: int | None
-            The ideal concurrent request size.
+            The ideal concurrent request size in bytes.
+            Default: 12,582,912 (12 MB)
         """
         ...
     @property
@@ -1213,16 +1265,19 @@ class StorageSettings:
             If set to False, Icechunk loses some of its consistency guarantees.
             This is only useful in object stores that don't support the feature.
             Use it at your own risk.
+            Default: True
 
         unsafe_use_conditional_create: bool | None
             If set to False, Icechunk loses some of its consistency guarantees.
             This is only useful in object stores that don't support the feature.
             Use at your own risk.
+            Default: True
 
         unsafe_use_metadata: bool | None
             Don't write metadata fields in Icechunk files.
             This is only useful in object stores that don't support the feature.
             Use at your own risk.
+            Default: True
 
         storage_class: str | None
             Store all objects using this object store storage class
@@ -1248,6 +1303,9 @@ class StorageSettings:
             The configuration for AWS SDK timeout settings.
         """
         ...
+    def __repr__(self, /) -> str: ...
+    def __str__(self, /) -> str: ...
+    def _repr_html_(self, /) -> str: ...
     @property
     def concurrency(self) -> StorageConcurrencySettings | None:
         """
@@ -1351,6 +1409,7 @@ class RepoUpdateRetryConfig:
         ----------
         default: StorageRetriesSettings | None
             Default retry settings for all repo update operations.
+            Defaults: `max_tries`=100, `initial_backoff_ms`=50, `max_backoff_ms`=30,000
         """
         ...
     @property
@@ -1381,13 +1440,15 @@ class RepositoryConfig:
         ----------
         inline_chunk_threshold_bytes: int | None
             The maximum size of a chunk that will be stored inline in the repository.
+            Default: 512
         get_partial_values_concurrency: int | None
             The number of concurrent requests to make when getting partial values from storage.
+            Default: 10
         compression: CompressionConfig | None
             The compression configuration for the repository.
         max_concurrent_requests: int | None
             The maximum number of concurrent HTTP requests Icechunk will do for this repo.
-            Default is 256.
+            Default: 256
         caching: CachingConfig | None
             The caching configuration for the repository.
         storage: StorageSettings | None
@@ -1398,8 +1459,16 @@ class RepositoryConfig:
             The manifest configuration for the repository.
         repo_update_retries: RepoUpdateRetryConfig | None
             Retry configuration for repo info update operations.
+        num_updates_per_repo_info_file: int | None
+            Maximum number of updates stored in a single repo info file. When this
+            limit is reached, a new repo info file is created. Lower values produce
+            slightly smaller repo info files but require more object fetches to
+            reconstruct the ops log. Default: 1000
         """
         ...
+    def __repr__(self, /) -> str: ...
+    def __str__(self, /) -> str: ...
+    def _repr_html_(self, /) -> str: ...
     @staticmethod
     def default() -> RepositoryConfig:
         """Create a default repository config instance"""
@@ -1601,7 +1670,11 @@ class RepositoryConfig:
     def repo_update_retries(self, value: RepoUpdateRetryConfig | None) -> None: ...
     @property
     def num_updates_per_repo_info_file(self) -> int | None:
-        """The number of updates per repo info file."""
+        """Maximum number of updates stored in a single repo info file. When this
+        limit is reached, a new repo info file is created. Lower values produce
+        slightly smaller repo info files but require more object fetches to
+        reconstruct the ops log. Default is 1000.
+        """
         ...
     @num_updates_per_repo_info_file.setter
     def num_updates_per_repo_info_file(self, value: int | None) -> None: ...
@@ -1680,6 +1753,9 @@ class Diff:
         The list of node moves, in order of application, as tuples (from_path, to_path).
         """
         ...
+    def __repr__(self) -> str: ...
+    def __str__(self) -> str: ...
+    def _repr_html_(self) -> str: ...
 
 class GCSummary:
     """Summarizes the results of a garbage collection operation on an icechunk repo"""
@@ -1719,24 +1795,97 @@ class GCSummary:
         How many transaction logs were deleted.
         """
         ...
+    def __repr__(self) -> str: ...
+    def __str__(self) -> str: ...
+    def _repr_html_(self) -> str: ...
+
+@final
+class RepoAvailability(Enum):
+    """The availability status of a repository.
+
+    Attributes
+    ----------
+    online: int
+        The repository is fully available for reads and writes.
+    read_only: int
+        The repository is available for reads only.
+    """
+
+    online = 0
+    read_only = 1
+
+@final
+class RepoStatus:
+    """The current status of a repository."""
+
+    availability: RepoAvailability
+    set_at: datetime.datetime
+    limited_availability_reason: str | None
+
+    def __new__(
+        cls,
+        availability: RepoAvailability,
+        set_at: datetime.datetime | None = None,
+        limited_availability_reason: str | None = None,
+    ) -> RepoStatus:
+        """
+        Create a new `RepoStatus` object
+
+        Parameters
+        ----------
+        availability: RepoAvailability
+            The availability status of the repository.
+        set_at: datetime.datetime | None
+            The time at which the status was set. Defaults to the current time.
+        limited_availability_reason: str | None
+            An optional reason for limited availability.
+        """
+        ...
+    def __repr__(self) -> str: ...
+    def __str__(self) -> str: ...
+    def _repr_html_(self) -> str: ...
 
 @final
 class Update:
+    """A single entry in the repository operations log.
+
+    Each update records an administrative action taken on the repository,
+    along with when it occurred.
+
+    Attributes
+    ----------
+    kind : UpdateType
+        The type of operation that was performed.
+    updated_at : datetime.datetime
+        When the operation occurred.
+    backup_path : str | None
+        Path to a backup created before the operation, if any.
+    """
     @property
     def kind(self) -> UpdateType: ...
     @property
     def updated_at(self) -> datetime.datetime: ...
     @property
     def backup_path(self) -> str | None: ...
+    def __repr__(self) -> str: ...
+    def __str__(self) -> str: ...
+    def _repr_html_(self) -> str: ...
 
 class UpdateType:
+    """The type of operation recorded in an ``Update``.
+
+    This is a tagged union — each variant is a nested class with its own
+    fields describing what happened.
+    """
     @final
     class BranchCreated(UpdateType):
+        """A new branch was created."""
         @property
         def name(self) -> str: ...
 
     @final
     class BranchDeleted(UpdateType):
+        """A branch was deleted."""
         @property
         def name(self) -> str: ...
         @property
@@ -1744,6 +1893,7 @@ class UpdateType:
 
     @final
     class BranchReset(UpdateType):
+        """A branch was reset to a different snapshot."""
         @property
         def name(self) -> str: ...
         @property
@@ -1751,6 +1901,7 @@ class UpdateType:
 
     @final
     class CommitAmended(UpdateType):
+        """A commit on a branch was amended."""
         @property
         def branch(self) -> str: ...
         @property
@@ -1759,26 +1910,40 @@ class UpdateType:
         def new_snap_id(self) -> str: ...
 
     @final
-    class ConfigChanged(UpdateType): ...
+    class ConfigChanged(UpdateType):
+        """The repository configuration was changed."""
+
+        ...
 
     @final
-    class ExpirationRan(UpdateType): ...
+    class ExpirationRan(UpdateType):
+        """Snapshot expiration was run."""
+
+        ...
 
     @final
     class FeatureFlagChanged(UpdateType):
+        """A feature flag was changed."""
         @property
         def id(self) -> int: ...
         @property
         def new_value(self) -> bool | None: ...
 
     @final
-    class GCRan(UpdateType): ...
+    class GCRan(UpdateType):
+        """Garbage collection was run."""
+
+        ...
 
     @final
-    class MetadataChanged(UpdateType): ...
+    class MetadataChanged(UpdateType):
+        """Repository metadata was changed."""
+
+        ...
 
     @final
     class NewCommit(UpdateType):
+        """A new commit was made on a branch."""
         @property
         def branch(self) -> str: ...
         @property
@@ -1786,26 +1951,39 @@ class UpdateType:
 
     @final
     class NewDetachedSnapshot(UpdateType):
+        """A new detached snapshot was created."""
         @property
         def new_snap_id(self) -> str: ...
 
     @final
-    class RepoInitialized(UpdateType): ...
+    class RepoInitialized(UpdateType):
+        """The repository was initialized."""
+
+        ...
 
     @final
     class RepoMigrated(UpdateType):
+        """The repository was migrated to a new spec version."""
         @property
         def from_version(self) -> int: ...
         @property
         def to_version(self) -> int: ...
 
     @final
+    class RepoStatusChanged(UpdateType):
+        """The repository availability status was changed."""
+        @property
+        def status(self) -> RepoStatus: ...
+
+    @final
     class TagCreated(UpdateType):
+        """A new tag was created."""
         @property
         def name(self) -> str: ...
 
     @final
     class TagDeleted(UpdateType):
+        """A tag was deleted."""
         @property
         def name(self) -> str: ...
         @property
@@ -1822,10 +2000,16 @@ class FeatureFlag:
     def setting(self) -> bool | None: ...
     @property
     def enabled(self) -> bool: ...
+    def __repr__(self) -> str: ...
+    def __str__(self) -> str: ...
+    def _repr_html_(self) -> str: ...
 
 class ManifestFileInfo:
     """Manifest file metadata"""
 
+    def __repr__(self, /) -> str: ...
+    def __str__(self, /) -> str: ...
+    def _repr_html_(self, /) -> str: ...
     @property
     def id(self) -> str:
         """The manifest id"""
@@ -1839,7 +2023,19 @@ class ManifestFileInfo:
         """The number of chunk references contained in this manifest"""
         ...
 
+@final
+@total_ordering
+class SpecVersion(IntEnum):
+    v1 = 1
+    v2 = 2
+
+    def __eq__(self, other: object, /) -> bool: ...
+    def __lt__(self, other: object, /) -> bool: ...
+    @staticmethod
+    def current() -> SpecVersion: ...
+
 class PyRepository:
+    def _repr_html_(self) -> str: ...
     @classmethod
     def create(
         cls,
@@ -1847,7 +2043,7 @@ class PyRepository:
         *,
         config: RepositoryConfig | None = None,
         authorize_virtual_chunk_access: dict[str, _AnyCredential | None] | None = None,
-        spec_version: int | None = None,
+        spec_version: SpecVersion | int | None = None,
         check_clean_root: bool = True,
     ) -> PyRepository: ...
     @classmethod
@@ -1857,7 +2053,7 @@ class PyRepository:
         *,
         config: RepositoryConfig | None = None,
         authorize_virtual_chunk_access: dict[str, _AnyCredential | None] | None = None,
-        spec_version: int | None = None,
+        spec_version: SpecVersion | int | None = None,
         check_clean_root: bool = True,
     ) -> PyRepository: ...
     @classmethod
@@ -1883,7 +2079,7 @@ class PyRepository:
         *,
         config: RepositoryConfig | None = None,
         authorize_virtual_chunk_access: dict[str, _AnyCredential | None] | None = None,
-        create_version: int | None = None,
+        create_version: SpecVersion | int | None = None,
         check_clean_root: bool = True,
     ) -> PyRepository: ...
     @classmethod
@@ -1893,7 +2089,7 @@ class PyRepository:
         *,
         config: RepositoryConfig | None = None,
         authorize_virtual_chunk_access: dict[str, _AnyCredential | None] | None = None,
-        create_version: int | None = None,
+        create_version: SpecVersion | int | None = None,
         check_clean_root: bool = True,
     ) -> PyRepository: ...
     @staticmethod
@@ -1907,11 +2103,11 @@ class PyRepository:
     @staticmethod
     def fetch_spec_version(
         storage: Storage, storage_settings: StorageSettings | None = None
-    ) -> int | None: ...
+    ) -> SpecVersion | None: ...
     @staticmethod
     async def fetch_spec_version_async(
         storage: Storage, storage_settings: StorageSettings | None = None
-    ) -> int | None: ...
+    ) -> SpecVersion | None: ...
     @classmethod
     def from_bytes(cls, bytes: bytes) -> PyRepository: ...
     def as_bytes(self) -> bytes: ...
@@ -1946,6 +2142,10 @@ class PyRepository:
     async def set_metadata_async(self, metadata: dict[str, Any]) -> None: ...
     def update_metadata(self, metadata: dict[str, Any]) -> dict[str, Any]: ...
     async def update_metadata_async(self, metadata: dict[str, Any]) -> dict[str, Any]: ...
+    def get_status(self) -> RepoStatus: ...
+    async def get_status_async(self) -> RepoStatus: ...
+    def set_status(self, status: RepoStatus) -> None: ...
+    async def set_status_async(self, status: RepoStatus) -> None: ...
     def feature_flags(self) -> list[FeatureFlag]: ...
     async def feature_flags_async(self) -> list[FeatureFlag]: ...
     def enabled_feature_flags(self) -> list[FeatureFlag]: ...
@@ -1961,6 +2161,22 @@ class PyRepository:
         tag: str | None = None,
         snapshot_id: str | None = None,
     ) -> AsyncIterator[SnapshotInfo]: ...
+    def ancestry_graph(
+        self,
+        *,
+        branch: str | None = None,
+        tag: str | None = None,
+        snapshot_id: str | None = None,
+        plain: bool = False,
+    ) -> AncestryGraph: ...
+    async def ancestry_graph_async(
+        self,
+        *,
+        branch: str | None = None,
+        tag: str | None = None,
+        snapshot_id: str | None = None,
+        plain: bool = False,
+    ) -> AncestryGraph: ...
     def async_ops_log(self) -> AsyncIterator[Update]: ...
     def create_branch(self, branch_name: str, snapshot_id: str) -> None: ...
     async def create_branch_async(self, branch_name: str, snapshot_id: str) -> None: ...
@@ -2102,8 +2318,14 @@ class PyRepository:
     async def inspect_manifest_async(
         self, manifest_id: str, *, pretty: bool = True
     ) -> str: ...
+    def inspect_transaction_log(
+        self, snapshot_id: str, *, pretty: bool = True
+    ) -> str: ...
+    async def inspect_transaction_log_async(
+        self, snapshot_id: str, *, pretty: bool = True
+    ) -> str: ...
     @property
-    def spec_version(self) -> int: ...
+    def spec_version(self) -> SpecVersion: ...
 
 class ChunkType(Enum):
     """Enum for Zarr chunk types
@@ -2143,12 +2365,16 @@ class SessionMode(Enum):
     rearrange = 2
 
 class PySession:
+    def _repr_html_(self) -> str: ...
     @classmethod
     def from_bytes(cls, bytes: bytes) -> PySession: ...
-    def __eq__(self, value: object) -> bool: ...
+    def __eq__(self, value: object, /) -> bool: ...
     def as_bytes(self) -> bytes: ...
+    def fork(self) -> PySession: ...
     @property
     def read_only(self) -> bool: ...
+    @property
+    def is_fork(self) -> bool: ...
     @property
     def mode(self) -> SessionMode: ...
     @property
@@ -2160,11 +2386,39 @@ class PySession:
     def status(self) -> Diff: ...
     def discard_changes(self) -> None: ...
     def move_node(self, from_path: str, to_path: str) -> None: ...
+    def get_node_id(self, path: str) -> str: ...
+    async def get_node_id_async(self, path: str) -> str: ...
     def reindex_array(
         self,
         array_path: str,
-        shift_chunk: Callable[[Iterable[int]], Iterable[int] | None],
-    ) -> None: ...
+        forward: Callable[[Iterable[int]], Iterable[int] | None],
+        backward: Callable[[Iterable[int]], Iterable[int] | None] | None = None,
+    ) -> None:
+        """Reindex chunks in an array by applying a transformation function.
+
+        Only existing (non-empty) chunks are visited — empty positions are
+        skipped. This means that if an empty chunk would have shifted into an
+        occupied position, that position retains stale data unless a backward
+        function is also provided.
+
+        Parameters
+        ----------
+        array_path : str
+            Path to the array.
+        forward : Callable[[Iterable[int]], Iterable[int] | None]
+            Function that maps old chunk coordinates to new coordinates. Receives
+            a list of non-negative integers (the current chunk index) and must return
+            either a new index (as a list/tuple of non-negative integers within the
+            array's chunk grid bounds) or ``None`` to skip the chunk (leave it in place).
+        backward : Callable[[Iterable[int]], Iterable[int] | None], optional
+            Inverse of ``forward``: given a chunk position, returns the position
+            that would have mapped there under ``forward``. Must follow the same
+            return conventions as ``forward``. When provided, each existing chunk
+            position is checked to determine whether it should be cleared — if
+            ``backward`` returns ``None`` (out of bounds) or points to a position
+            with no chunk, that position is reset to the fill value.
+        """
+        ...
     def shift_array(self, array_path: str, chunk_offset: Iterable[int]) -> None: ...
     async def move_node_async(self, from_path: str, to_path: str) -> None: ...
     def all_virtual_chunk_locations(self) -> list[str]: ...
@@ -2224,9 +2478,10 @@ class PySession:
     async def rebase_async(self, solver: ConflictSolver) -> None: ...
 
 class PyStore:
+    def _repr_html_(self) -> str: ...
     @classmethod
     def from_bytes(cls, bytes: bytes) -> PyStore: ...
-    def __eq__(self, value: object) -> bool: ...
+    def __eq__(self, value: object, /) -> bool: ...
     @property
     def read_only(self) -> bool: ...
     @property
@@ -2327,10 +2582,31 @@ class SnapshotInfo:
         The metadata of the snapshot
         """
         ...
+    def __repr__(self) -> str: ...
+    def __str__(self) -> str: ...
+    def _repr_html_(self) -> str: ...
 
 class _PyAsyncSnapshotGenerator(AsyncGenerator[SnapshotInfo], metaclass=abc.ABCMeta):
     def __aiter__(self) -> _PyAsyncSnapshotGenerator: ...
     async def __anext__(self) -> SnapshotInfo: ...
+
+@final
+class AncestryGraph:
+    """A visual representation of commit history.
+
+    Use ``print()`` for colored Unicode output in a terminal, or display
+    in Jupyter for an SVG diagram. Pass ``plain=True`` to
+    ``ancestry_graph()`` for output without colors (useful for CI, files,
+    or LLM agents).
+
+    Note: only commits reachable from branches are included. Anonymous/detached
+    snapshots are not attached to any branch and will not appear.
+    """
+    def __str__(self) -> str: ...
+    def __repr__(self) -> str: ...
+    def _repr_svg_(self) -> str:
+        """Return a raw SVG string for Jupyter notebooks."""
+        ...
 
 class S3StaticCredentials:
     """Credentials for an S3 storage backend
@@ -2539,6 +2815,33 @@ _AnyGcsCredential = (
     | GcsCredentials.Refreshable
 )
 
+class AzureRefreshableCredential:
+    """A refreshable credential for Azure storage with optional expiration."""
+
+    class AccessKey:
+        """Refreshable access key credential."""
+        def __new__(
+            cls, key: str, *, expires_after: datetime.datetime | None = None
+        ) -> AzureRefreshableCredential.AccessKey: ...
+
+    class SasToken:
+        """Refreshable SAS token credential."""
+        def __new__(
+            cls, token: str, *, expires_after: datetime.datetime | None = None
+        ) -> AzureRefreshableCredential.SasToken: ...
+
+    class BearerToken:
+        """Refreshable bearer token credential."""
+        def __new__(
+            cls, bearer: str, *, expires_after: datetime.datetime | None = None
+        ) -> AzureRefreshableCredential.BearerToken: ...
+
+_AnyAzureRefreshableCredential = (
+    AzureRefreshableCredential.AccessKey
+    | AzureRefreshableCredential.SasToken
+    | AzureRefreshableCredential.BearerToken
+)
+
 class AzureStaticCredentials:
     """Credentials for an azure storage backend"""
     class AccessKey:
@@ -2598,7 +2901,20 @@ class AzureCredentials:
             cls, credentials: _AnyAzureStaticCredential
         ) -> AzureCredentials.Static: ...
 
-_AnyAzureCredential = AzureCredentials.FromEnv | AzureCredentials.Static
+    class Refreshable:
+        """Allows for an outside authority to pass in a function that can be used to provide credentials.
+
+        This is useful for credentials that have an expiration time, or are otherwise not known ahead of time.
+        """
+        def __new__(
+            cls,
+            pickled_function: bytes,
+            current: AzureRefreshableCredential | None = None,
+        ) -> AzureCredentials.Refreshable: ...
+
+_AnyAzureCredential = (
+    AzureCredentials.FromEnv | AzureCredentials.Static | AzureCredentials.Refreshable
+)
 
 class Credentials:
     class S3:
@@ -2611,6 +2927,68 @@ class Credentials:
         def __new__(cls, credentials: AzureCredentials) -> Credentials.Azure: ...
 
 _AnyCredential = Credentials.S3 | Credentials.Gcs | Credentials.Azure
+
+@final
+class LatencyStorage(Storage):
+    """Storage wrapper that adds artificial read/write latency for testing.
+
+    Wraps any ``Storage`` backend and injects configurable delays before
+    write and read operations. Useful for reproducing timing-sensitive bugs
+    or for benchmarking.
+
+    Parameters
+    ----------
+    inner : Storage
+        The storage backend to wrap.
+    write_latency_ms : int, default 0
+        Delay in milliseconds before each write operation.
+    read_latency_ms : int, default 0
+        Delay in milliseconds before each read operation.
+
+    Examples
+    --------
+    >>> from icechunk.testing import LatencyStorage
+    >>> storage = LatencyStorage(ic.in_memory_storage(), write_latency_ms=15)
+    >>> repo = ic.Repository.create(storage=storage, ...)
+    >>> storage.write_latency_ms = 50  # adjust at runtime
+    """
+
+    def __new__(
+        cls,
+        inner: Storage,
+        *,
+        write_latency_ms: int = 0,
+        read_latency_ms: int = 0,
+    ) -> LatencyStorage: ...
+    @property
+    def write_latency_ms(self) -> int: ...
+    @write_latency_ms.setter
+    def write_latency_ms(self, ms: int) -> None: ...
+    @property
+    def read_latency_ms(self) -> int: ...
+    @read_latency_ms.setter
+    def read_latency_ms(self, ms: int) -> None: ...
+
+@final
+class StorageObjectInfo:
+    """Metadata for an object in storage.
+
+    Parameters
+    ----------
+    key : str
+        The object key (path relative to the storage prefix).
+    size_bytes : int
+        Size of the object in bytes.
+    created_at : datetime.datetime
+        Timestamp when the object was written to storage.
+    """
+
+    @property
+    def key(self) -> str: ...
+    @property
+    def size_bytes(self) -> int: ...
+    @property
+    def created_at(self) -> datetime.datetime: ...
 
 class Storage:
     """Storage configuration for an IcechunkStore
@@ -2697,11 +3075,16 @@ class Storage:
         base_url: str,
     ) -> Storage: ...
     def __repr__(self) -> str: ...
+    def __str__(self) -> str: ...
+    def _repr_html_(self) -> str: ...
     def default_settings(self) -> StorageSettings: ...
     def list_objects(
         self, settings: StorageSettings | None = None, prefix: str | None = None
     ) -> list[tuple[str, int]]:
         """List objects in the storage backend, optionally filtered by a key prefix.
+
+        Deprecated: use ``list_objects_metadata`` instead, which also returns
+        the ``created_at`` timestamp.
 
         Parameters
         ----------
@@ -2715,6 +3098,24 @@ class Storage:
         -------
         list[tuple[str, int]]
             A list of ``(key, size_in_bytes)`` tuples for each object found.
+        """
+        ...
+    def list_objects_metadata(
+        self, settings: StorageSettings | None = None, prefix: str | None = None
+    ) -> list[StorageObjectInfo]:
+        """List objects with full metadata, optionally filtered by a key prefix.
+
+        Parameters
+        ----------
+        settings : StorageSettings | None
+            Optional storage settings to override the defaults.
+        prefix : str | None
+            If provided, only objects whose keys start with this prefix are returned.
+
+        Returns
+        -------
+        list[StorageObjectInfo]
+            A list of :class:`StorageObjectInfo` objects.
         """
         ...
 
@@ -2979,7 +3380,7 @@ def set_logs_filter(log_filter_directive: str | None) -> None:
     """
     ...
 
-def spec_version() -> int:
+def spec_version() -> SpecVersion:
     """
     The version of the Icechunk specification that the library is compatible with.
 
@@ -3064,4 +3465,6 @@ class ChunkStorageStats:
         ...
 
     def __repr__(self) -> str: ...
-    def __add__(self, other: ChunkStorageStats) -> ChunkStorageStats: ...
+    def __str__(self) -> str: ...
+    def _repr_html_(self) -> str: ...
+    def __add__(self, other: ChunkStorageStats, /) -> ChunkStorageStats: ...
