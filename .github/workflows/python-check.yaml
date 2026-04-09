@@ -42,7 +42,8 @@ jobs:
           working-directory: icechunk-python
           args: --profile ci-release --out dist -i python${{ env.PYTHON_VERSION }}
           sccache: true
-          manylinux: "off"
+          manylinux: auto
+          docker-options: --tmpfs /tmp:exec --tmpfs /root/.cargo:exec
 
       - name: Upload wheels
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
@@ -155,7 +156,8 @@ jobs:
           working-directory: icechunk-python
           args: --profile ci-release --out dist -i python3.13t
           sccache: true
-          manylinux: "off"
+          manylinux: auto
+          docker-options: --tmpfs /tmp:exec --tmpfs /root/.cargo:exec
 
       - name: Upload wheels
         uses: actions/upload-artifact@v7
