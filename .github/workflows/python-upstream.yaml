@@ -240,7 +240,7 @@ jobs:
           && steps.pytest-icechunk.outcome == 'failure'
           && github.event_name == 'schedule'
           && github.repository_owner == 'earth-mover'
-        uses: xarray-contrib/issue-from-pytest-log@f94477e45ef40e4403d7585ba639a9a3bcc53d43 # v1
+        uses: xarray-contrib/issue-from-pytest-log@8e905db353437cda1d6a773de245343fbfc940dd # v1
         with:
           log-path: icechunk-python/output-pytest-log.jsonl
 
@@ -329,7 +329,7 @@ jobs:
           && steps.pytest-xarray-backends.outcome == 'failure'
           && github.event_name == 'schedule'
           && github.repository_owner == 'earth-mover'
-        uses: xarray-contrib/issue-from-pytest-log@f94477e45ef40e4403d7585ba639a9a3bcc53d43 # v1
+        uses: xarray-contrib/issue-from-pytest-log@8e905db353437cda1d6a773de245343fbfc940dd # v1
         with:
           log-path: icechunk/icechunk-python/output-pytest-log.jsonl
           issue-title: "Nightly Xarray backends tests failed"
