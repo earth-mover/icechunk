@@ -1207,7 +1207,11 @@ impl PyRepr for PyRepoUpdateRetryConfig {
         "icechunk.config.RepoUpdateRetryConfig"
     }
     fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
-        vec![("default", py_option_nested_repr(&self.default, mode))]
+        vec![("default", py_option_nested_repr_or_default(
+            &self.default,
+            mode,
+            || RepoUpdateRetryConfig::default().retries().clone().into(),
+        ))]
     }
 }
 
@@ -2364,27 +2368,28 @@ impl PyRepr for PyRepositoryConfig {
                 out
             }
         };
+        let d = RepositoryConfig::default();
         vec![
             (
                 "inline_chunk_threshold_bytes",
-                py_option(&self.inline_chunk_threshold_bytes),
+                py_option_or_default(&self.inline_chunk_threshold_bytes, &d.inline_chunk_threshold_bytes().to_string(), mode),
             ),
             (
                 "get_partial_values_concurrency",
-                py_option(&self.get_partial_values_concurrency),
+                py_option_or_default(&self.get_partial_values_concurrency, &d.get_partial_values_concurrency().to_string(), mode),
             ),
-            ("max_concurrent_requests", py_option(&self.max_concurrent_requests)),
+            ("max_concurrent_requests", py_option_or_default(&self.max_concurrent_requests, &d.max_concurrent_requests().to_string(), mode)),
             (
                 "num_updates_per_repo_info_file",
-                py_option(&self.num_updates_per_repo_info_file),
+                py_option_or_default(&self.num_updates_per_repo_info_file, &d.num_updates_per_repo_info_file().to_string(), mode),
             ),
-            ("compression", py_option_nested_repr(&self.compression, mode)),
-            ("caching", py_option_nested_repr(&self.caching, mode)),
+            ("compression", py_option_nested_repr_or_default(&self.compression, mode, || CompressionConfig::default().into())),
+            ("caching", py_option_nested_repr_or_default(&self.caching, mode, || CachingConfig::default().into())),
             ("storage", py_option_nested_repr(&self.storage, mode)),
-            ("manifest", py_option_nested_repr(&self.manifest, mode)),
+            ("manifest", py_option_nested_repr_or_default(&self.manifest, mode, || ManifestConfig::default().into())),
             (
                 "repo_update_retries",
-                py_option_nested_repr(&self.repo_update_retries, mode),
+                py_option_nested_repr_or_default(&self.repo_update_retries, mode, || RepoUpdateRetryConfig::default().into()),
             ),
             ("virtual_chunk_containers", vccs),
         ]
