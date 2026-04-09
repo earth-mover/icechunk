@@ -1633,14 +1633,15 @@ impl PyRepr for PyManifestPreloadConfig {
         "icechunk.config.ManifestPreloadConfig"
     }
     fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
+        let d = ManifestPreloadConfig::default();
         let preload_if = match &self.preload_if {
             None => "None".to_string(),
             Some(py_obj) => Python::attach(|py| py_obj.borrow(py).render(mode)),
         };
         vec![
-            ("max_total_refs", py_option(&self.max_total_refs)),
+            ("max_total_refs", py_option_or_default(&self.max_total_refs, &d.max_total_refs().to_string(), mode)),
             ("preload_if", preload_if),
-            ("max_arrays_to_scan", py_option(&self.max_arrays_to_scan)),
+            ("max_arrays_to_scan", py_option_or_default(&self.max_arrays_to_scan, &d.max_arrays_to_scan().to_string(), mode)),
         ]
     }
 }
@@ -2011,15 +2012,16 @@ impl PyRepr for PyManifestVirtualChunkLocationCompressionConfig {
     fn cls_name() -> &'static str {
         "icechunk.config.ManifestVirtualChunkLocationCompressionConfig"
     }
-    fn fields(&self, _mode: ReprMode) -> Vec<(&str, String)> {
+    fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
+        let d = ManifestVirtualChunkLocationCompressionConfig::default();
         vec![
-            ("min_num_chunks", py_option(&self.min_num_chunks)),
+            ("min_num_chunks", py_option_or_default(&self.min_num_chunks, &d.min_num_chunks().to_string(), mode)),
             (
                 "dictionary_max_training_samples",
-                py_option(&self.dictionary_max_training_samples),
+                py_option_or_default(&self.dictionary_max_training_samples, &d.dictionary_max_training_samples().to_string(), mode),
             ),
-            ("dictionary_max_size_bytes", py_option(&self.dictionary_max_size_bytes)),
-            ("compression_level", py_option(&self.compression_level)),
+            ("dictionary_max_size_bytes", py_option_or_default(&self.dictionary_max_size_bytes, &d.dictionary_max_size_bytes().to_string(), mode)),
+            ("compression_level", py_option_or_default(&self.compression_level, &d.compression_level().to_string(), mode)),
         ]
     }
 }
@@ -2106,11 +2108,11 @@ impl PyRepr for PyManifestConfig {
     }
     fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
         vec![
-            ("preload", py_option_nested_repr(&self.preload, mode)),
-            ("splitting", py_option_nested_repr(&self.splitting, mode)),
+            ("preload", py_option_nested_repr_or_default(&self.preload, mode, || ManifestPreloadConfig::default().into())),
+            ("splitting", py_option_nested_repr_or_default(&self.splitting, mode, || ManifestSplittingConfig::default().into())),
             (
                 "virtual_chunk_location_compression",
-                py_option_nested_repr(&self.virtual_chunk_location_compression, mode),
+                py_option_nested_repr_or_default(&self.virtual_chunk_location_compression, mode, || ManifestVirtualChunkLocationCompressionConfig::default().into()),
             ),
         ]
     }
