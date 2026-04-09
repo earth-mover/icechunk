@@ -1262,7 +1262,7 @@ impl PyRepr for PyRepoUpdateRetryConfig {
         vec![(
             "default",
             py_option_nested_repr_or_default(&self.default, mode, || {
-                RepoUpdateRetryConfig::default().retries().clone().into()
+                (*RepoUpdateRetryConfig::default().retries()).into()
             }),
         )]
     }
