@@ -1,5 +1,13 @@
 # Changelog
 
+## Python Icechunk Library 2.0.1
+
+This release brings minor fixes to unintended backwards incompatible changes.
+
+- Fix `icechunk.store` module renamed to `icechunk.zarr`
+- Fix build from `sdist`
+- Optimize set_virtual_refs to do a single node lookup by @TomNicholas in #2045
+
 ## Python Icechunk Library 2.0.0
 
 Icechunk 2 is here! This release represents the next evolution of the Icechunk library and on-disk format,
