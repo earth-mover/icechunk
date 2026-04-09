@@ -943,11 +943,46 @@ impl PyRepr for PyCachingConfig {
     fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
         let d = CachingConfig::default();
         vec![
-            ("num_snapshot_nodes", py_option_or_default(&self.num_snapshot_nodes, &d.num_snapshot_nodes().to_string(), mode)),
-            ("num_chunk_refs", py_option_or_default(&self.num_chunk_refs, &d.num_chunk_refs().to_string(), mode)),
-            ("num_transaction_changes", py_option_or_default(&self.num_transaction_changes, &d.num_transaction_changes().to_string(), mode)),
-            ("num_bytes_attributes", py_option_or_default(&self.num_bytes_attributes, &d.num_bytes_attributes().to_string(), mode)),
-            ("num_bytes_chunks", py_option_or_default(&self.num_bytes_chunks, &d.num_bytes_chunks().to_string(), mode)),
+            (
+                "num_snapshot_nodes",
+                py_option_or_default(
+                    &self.num_snapshot_nodes,
+                    &d.num_snapshot_nodes().to_string(),
+                    mode,
+                ),
+            ),
+            (
+                "num_chunk_refs",
+                py_option_or_default(
+                    &self.num_chunk_refs,
+                    &d.num_chunk_refs().to_string(),
+                    mode,
+                ),
+            ),
+            (
+                "num_transaction_changes",
+                py_option_or_default(
+                    &self.num_transaction_changes,
+                    &d.num_transaction_changes().to_string(),
+                    mode,
+                ),
+            ),
+            (
+                "num_bytes_attributes",
+                py_option_or_default(
+                    &self.num_bytes_attributes,
+                    &d.num_bytes_attributes().to_string(),
+                    mode,
+                ),
+            ),
+            (
+                "num_bytes_chunks",
+                py_option_or_default(
+                    &self.num_bytes_chunks,
+                    &d.num_bytes_chunks().to_string(),
+                    mode,
+                ),
+            ),
         ]
     }
 }
@@ -1054,9 +1089,26 @@ impl PyRepr for PyStorageRetriesSettings {
     fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
         let d = RetriesSettings::default();
         vec![
-            ("max_tries", py_option_or_default(&self.max_tries, &d.max_tries().to_string(), mode)),
-            ("initial_backoff_ms", py_option_or_default(&self.initial_backoff_ms, &d.initial_backoff_ms().to_string(), mode)),
-            ("max_backoff_ms", py_option_or_default(&self.max_backoff_ms, &d.max_backoff_ms().to_string(), mode)),
+            (
+                "max_tries",
+                py_option_or_default(&self.max_tries, &d.max_tries().to_string(), mode),
+            ),
+            (
+                "initial_backoff_ms",
+                py_option_or_default(
+                    &self.initial_backoff_ms,
+                    &d.initial_backoff_ms().to_string(),
+                    mode,
+                ),
+            ),
+            (
+                "max_backoff_ms",
+                py_option_or_default(
+                    &self.max_backoff_ms,
+                    &d.max_backoff_ms().to_string(),
+                    mode,
+                ),
+            ),
         ]
     }
 }
@@ -1207,11 +1259,12 @@ impl PyRepr for PyRepoUpdateRetryConfig {
         "icechunk.config.RepoUpdateRetryConfig"
     }
     fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
-        vec![("default", py_option_nested_repr_or_default(
-            &self.default,
-            mode,
-            || RepoUpdateRetryConfig::default().retries().clone().into(),
-        ))]
+        vec![(
+            "default",
+            py_option_nested_repr_or_default(&self.default, mode, || {
+                RepoUpdateRetryConfig::default().retries().clone().into()
+            }),
+        )]
     }
 }
 
@@ -1271,11 +1324,19 @@ impl PyRepr for PyStorageConcurrencySettings {
         vec![
             (
                 "max_concurrent_requests_for_object",
-                py_option_or_default(&self.max_concurrent_requests_for_object, &d.max_concurrent_requests_for_object().to_string(), mode),
+                py_option_or_default(
+                    &self.max_concurrent_requests_for_object,
+                    &d.max_concurrent_requests_for_object().to_string(),
+                    mode,
+                ),
             ),
             (
                 "ideal_concurrent_request_size",
-                py_option_or_default(&self.ideal_concurrent_request_size, &d.ideal_concurrent_request_size().to_string(), mode),
+                py_option_or_default(
+                    &self.ideal_concurrent_request_size,
+                    &d.ideal_concurrent_request_size().to_string(),
+                    mode,
+                ),
             ),
         ]
     }
@@ -1395,25 +1456,51 @@ impl PyRepr for PyStorageSettings {
         vec![
             (
                 "unsafe_use_conditional_create",
-                py_option_bool_or_default(&self.unsafe_use_conditional_create, d.unsafe_use_conditional_create(), mode),
+                py_option_bool_or_default(
+                    &self.unsafe_use_conditional_create,
+                    d.unsafe_use_conditional_create(),
+                    mode,
+                ),
             ),
             (
                 "unsafe_use_conditional_update",
-                py_option_bool_or_default(&self.unsafe_use_conditional_update, d.unsafe_use_conditional_update(), mode),
+                py_option_bool_or_default(
+                    &self.unsafe_use_conditional_update,
+                    d.unsafe_use_conditional_update(),
+                    mode,
+                ),
             ),
             (
                 "unsafe_use_metadata",
-                py_option_bool_or_default(&self.unsafe_use_metadata, d.unsafe_use_metadata(), mode),
+                py_option_bool_or_default(
+                    &self.unsafe_use_metadata,
+                    d.unsafe_use_metadata(),
+                    mode,
+                ),
             ),
             ("storage_class", py_option_str(&self.storage_class)),
             ("metadata_storage_class", py_option_str(&self.metadata_storage_class)),
             ("chunks_storage_class", py_option_str(&self.chunks_storage_class)),
             (
                 "minimum_size_for_multipart_upload",
-                py_option_or_default(&self.minimum_size_for_multipart_upload, &d.minimum_size_for_multipart_upload().to_string(), mode),
+                py_option_or_default(
+                    &self.minimum_size_for_multipart_upload,
+                    &d.minimum_size_for_multipart_upload().to_string(),
+                    mode,
+                ),
             ),
-            ("concurrency", py_option_nested_repr_or_default(&self.concurrency, mode, || ConcurrencySettings::default().into())),
-            ("retries", py_option_nested_repr_or_default(&self.retries, mode, || RetriesSettings::default().into())),
+            (
+                "concurrency",
+                py_option_nested_repr_or_default(&self.concurrency, mode, || {
+                    ConcurrencySettings::default().into()
+                }),
+            ),
+            (
+                "retries",
+                py_option_nested_repr_or_default(&self.retries, mode, || {
+                    RetriesSettings::default().into()
+                }),
+            ),
             ("timeouts", py_option_nested_repr(&self.timeouts, mode)),
         ]
     }
@@ -1643,9 +1730,23 @@ impl PyRepr for PyManifestPreloadConfig {
             Some(py_obj) => Python::attach(|py| py_obj.borrow(py).render(mode)),
         };
         vec![
-            ("max_total_refs", py_option_or_default(&self.max_total_refs, &d.max_total_refs().to_string(), mode)),
+            (
+                "max_total_refs",
+                py_option_or_default(
+                    &self.max_total_refs,
+                    &d.max_total_refs().to_string(),
+                    mode,
+                ),
+            ),
             ("preload_if", preload_if),
-            ("max_arrays_to_scan", py_option_or_default(&self.max_arrays_to_scan, &d.max_arrays_to_scan().to_string(), mode)),
+            (
+                "max_arrays_to_scan",
+                py_option_or_default(
+                    &self.max_arrays_to_scan,
+                    &d.max_arrays_to_scan().to_string(),
+                    mode,
+                ),
+            ),
         ]
     }
 }
@@ -2019,13 +2120,38 @@ impl PyRepr for PyManifestVirtualChunkLocationCompressionConfig {
     fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
         let d = ManifestVirtualChunkLocationCompressionConfig::default();
         vec![
-            ("min_num_chunks", py_option_or_default(&self.min_num_chunks, &d.min_num_chunks().to_string(), mode)),
+            (
+                "min_num_chunks",
+                py_option_or_default(
+                    &self.min_num_chunks,
+                    &d.min_num_chunks().to_string(),
+                    mode,
+                ),
+            ),
             (
                 "dictionary_max_training_samples",
-                py_option_or_default(&self.dictionary_max_training_samples, &d.dictionary_max_training_samples().to_string(), mode),
+                py_option_or_default(
+                    &self.dictionary_max_training_samples,
+                    &d.dictionary_max_training_samples().to_string(),
+                    mode,
+                ),
             ),
-            ("dictionary_max_size_bytes", py_option_or_default(&self.dictionary_max_size_bytes, &d.dictionary_max_size_bytes().to_string(), mode)),
-            ("compression_level", py_option_or_default(&self.compression_level, &d.compression_level().to_string(), mode)),
+            (
+                "dictionary_max_size_bytes",
+                py_option_or_default(
+                    &self.dictionary_max_size_bytes,
+                    &d.dictionary_max_size_bytes().to_string(),
+                    mode,
+                ),
+            ),
+            (
+                "compression_level",
+                py_option_or_default(
+                    &self.compression_level,
+                    &d.compression_level().to_string(),
+                    mode,
+                ),
+            ),
         ]
     }
 }
@@ -2112,11 +2238,25 @@ impl PyRepr for PyManifestConfig {
     }
     fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
         vec![
-            ("preload", py_option_nested_repr_or_default(&self.preload, mode, || ManifestPreloadConfig::default().into())),
-            ("splitting", py_option_nested_repr_or_default(&self.splitting, mode, || ManifestSplittingConfig::default().into())),
+            (
+                "preload",
+                py_option_nested_repr_or_default(&self.preload, mode, || {
+                    ManifestPreloadConfig::default().into()
+                }),
+            ),
+            (
+                "splitting",
+                py_option_nested_repr_or_default(&self.splitting, mode, || {
+                    ManifestSplittingConfig::default().into()
+                }),
+            ),
             (
                 "virtual_chunk_location_compression",
-                py_option_nested_repr_or_default(&self.virtual_chunk_location_compression, mode, || ManifestVirtualChunkLocationCompressionConfig::default().into()),
+                py_option_nested_repr_or_default(
+                    &self.virtual_chunk_location_compression,
+                    mode,
+                    || ManifestVirtualChunkLocationCompressionConfig::default().into(),
+                ),
             ),
         ]
     }
@@ -2372,24 +2512,60 @@ impl PyRepr for PyRepositoryConfig {
         vec![
             (
                 "inline_chunk_threshold_bytes",
-                py_option_or_default(&self.inline_chunk_threshold_bytes, &d.inline_chunk_threshold_bytes().to_string(), mode),
+                py_option_or_default(
+                    &self.inline_chunk_threshold_bytes,
+                    &d.inline_chunk_threshold_bytes().to_string(),
+                    mode,
+                ),
             ),
             (
                 "get_partial_values_concurrency",
-                py_option_or_default(&self.get_partial_values_concurrency, &d.get_partial_values_concurrency().to_string(), mode),
+                py_option_or_default(
+                    &self.get_partial_values_concurrency,
+                    &d.get_partial_values_concurrency().to_string(),
+                    mode,
+                ),
             ),
-            ("max_concurrent_requests", py_option_or_default(&self.max_concurrent_requests, &d.max_concurrent_requests().to_string(), mode)),
+            (
+                "max_concurrent_requests",
+                py_option_or_default(
+                    &self.max_concurrent_requests,
+                    &d.max_concurrent_requests().to_string(),
+                    mode,
+                ),
+            ),
             (
                 "num_updates_per_repo_info_file",
-                py_option_or_default(&self.num_updates_per_repo_info_file, &d.num_updates_per_repo_info_file().to_string(), mode),
+                py_option_or_default(
+                    &self.num_updates_per_repo_info_file,
+                    &d.num_updates_per_repo_info_file().to_string(),
+                    mode,
+                ),
             ),
-            ("compression", py_option_nested_repr_or_default(&self.compression, mode, || CompressionConfig::default().into())),
-            ("caching", py_option_nested_repr_or_default(&self.caching, mode, || CachingConfig::default().into())),
+            (
+                "compression",
+                py_option_nested_repr_or_default(&self.compression, mode, || {
+                    CompressionConfig::default().into()
+                }),
+            ),
+            (
+                "caching",
+                py_option_nested_repr_or_default(&self.caching, mode, || {
+                    CachingConfig::default().into()
+                }),
+            ),
             ("storage", py_option_nested_repr(&self.storage, mode)),
-            ("manifest", py_option_nested_repr_or_default(&self.manifest, mode, || ManifestConfig::default().into())),
+            (
+                "manifest",
+                py_option_nested_repr_or_default(&self.manifest, mode, || {
+                    ManifestConfig::default().into()
+                }),
+            ),
             (
                 "repo_update_retries",
-                py_option_nested_repr_or_default(&self.repo_update_retries, mode, || RepoUpdateRetryConfig::default().into()),
+                py_option_nested_repr_or_default(&self.repo_update_retries, mode, || {
+                    RepoUpdateRetryConfig::default().into()
+                }),
             ),
             ("virtual_chunk_containers", vccs),
         ]
