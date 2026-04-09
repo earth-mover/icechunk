@@ -43,10 +43,6 @@ jobs:
           args: --profile ci-release --out dist -i python${{ env.PYTHON_VERSION }}
           sccache: true
           manylinux: auto
-          before-script-linux: |
-            curl -L https://github.com/rui314/mold/releases/download/v2.35.1/mold-2.35.1-x86_64-linux.tar.gz | tar xz -C /usr/local --strip-components=1
-        env:
-          RUSTFLAGS: "-C link-arg=-fuse-ld=mold"
 
       - name: Upload wheels
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
@@ -160,10 +156,6 @@ jobs:
           args: --profile ci-release --out dist -i python3.13t
           sccache: true
           manylinux: auto
-          before-script-linux: |
-            curl -L https://github.com/rui314/mold/releases/download/v2.35.1/mold-2.35.1-x86_64-linux.tar.gz | tar xz -C /usr/local --strip-components=1
-        env:
-          RUSTFLAGS: "-C link-arg=-fuse-ld=mold"
 
       - name: Upload wheels
         uses: actions/upload-artifact@v7
