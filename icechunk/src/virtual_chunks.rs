@@ -1403,12 +1403,8 @@ mod tests {
 
         let custom_settings = crate::storage::Settings {
             concurrency: Some(crate::storage::ConcurrencySettings {
-                max_concurrent_requests_for_object: Some(
-                    NonZeroU16::new(42).unwrap(),
-                ),
-                ideal_concurrent_request_size: Some(
-                    NonZeroU64::new(8192).unwrap(),
-                ),
+                max_concurrent_requests_for_object: Some(NonZeroU16::new(42).unwrap()),
+                ideal_concurrent_request_size: Some(NonZeroU64::new(8192).unwrap()),
             }),
             ..Default::default()
         };
