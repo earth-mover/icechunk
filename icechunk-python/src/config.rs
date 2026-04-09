@@ -36,7 +36,8 @@ use pyo3::{
 
 use crate::display::{
     PyRepr, ReprMode, dataclass_html_repr, dataclass_str, py_bool, py_option,
-    py_option_nested_repr, py_option_str,
+    py_option_bool_or_default, py_option_nested_repr, py_option_nested_repr_or_default,
+    py_option_or_default, py_option_str,
 };
 use crate::errors::PyIcechunkStoreError;
 
