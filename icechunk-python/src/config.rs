@@ -856,16 +856,24 @@ impl PyRepr for PyCompressionConfig {
     fn cls_name() -> &'static str {
         "icechunk.config.CompressionConfig"
     }
-    fn fields(&self, _mode: ReprMode) -> Vec<(&str, String)> {
+    fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
+        let defaults = CompressionConfig::default();
         vec![
             (
                 "algorithm",
-                self.algorithm
-                    .as_ref()
-                    .map(|a| format!("{a:?}"))
-                    .unwrap_or_else(|| "None".to_string()),
+                match (&self.algorithm, mode) {
+                    (Some(a), _) => format!("{a:?}"),
+                    (None, ReprMode::Repr) => "None".to_string(),
+                    (None, _) => {
+                        let alg: PyCompressionAlgorithm = defaults.algorithm().into();
+                        format!("{alg:?} (default)")
+                    }
+                },
             ),
-            ("level", py_option(&self.level)),
+            (
+                "level",
+                py_option_or_default(&self.level, &defaults.level().to_string(), mode),
+            ),
         ]
     }
 }
@@ -932,13 +940,14 @@ impl PyRepr for PyCachingConfig {
         "icechunk.config.CachingConfig"
     }
 
-    fn fields(&self, _mode: ReprMode) -> Vec<(&str, String)> {
+    fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
+        let d = CachingConfig::default();
         vec![
-            ("num_snapshot_nodes", py_option(&self.num_snapshot_nodes)),
-            ("num_chunk_refs", py_option(&self.num_chunk_refs)),
-            ("num_transaction_changes", py_option(&self.num_transaction_changes)),
-            ("num_bytes_attributes", py_option(&self.num_bytes_attributes)),
-            ("num_bytes_chunks", py_option(&self.num_bytes_chunks)),
+            ("num_snapshot_nodes", py_option_or_default(&self.num_snapshot_nodes, &d.num_snapshot_nodes().to_string(), mode)),
+            ("num_chunk_refs", py_option_or_default(&self.num_chunk_refs, &d.num_chunk_refs().to_string(), mode)),
+            ("num_transaction_changes", py_option_or_default(&self.num_transaction_changes, &d.num_transaction_changes().to_string(), mode)),
+            ("num_bytes_attributes", py_option_or_default(&self.num_bytes_attributes, &d.num_bytes_attributes().to_string(), mode)),
+            ("num_bytes_chunks", py_option_or_default(&self.num_bytes_chunks, &d.num_bytes_chunks().to_string(), mode)),
         ]
     }
 }
