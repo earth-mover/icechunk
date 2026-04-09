@@ -1399,6 +1399,49 @@ mod tests {
         ));
     }
 
+    #[cfg(feature = "object-store-fs")]
+    #[tokio::test]
+    async fn test_resolver_passes_settings_to_fetcher() {
+        use std::collections::HashMap;
+        use std::num::{NonZeroU16, NonZeroU64};
+        use url::Url;
+
+        let custom_settings = crate::storage::Settings {
+            concurrency: Some(crate::storage::ConcurrencySettings {
+                max_concurrent_requests_for_object: Some(
+                    NonZeroU16::new(42).unwrap(),
+                ),
+                ideal_concurrent_request_size: Some(
+                    NonZeroU64::new(8192).unwrap(),
+                ),
+            }),
+            ..Default::default()
+        };
+
+        let container = VirtualChunkContainer::new(
+            "file:///example/".to_string(),
+            ObjectStoreConfig::LocalFileSystem("/example".into()),
+        )
+        .unwrap();
+
+        let mut credentials: HashMap<String, Option<crate::config::Credentials>> =
+            HashMap::new();
+        credentials.insert("file:///example/".to_string(), None);
+
+        let resolver = VirtualChunkResolver::new(
+            [container].into_iter(),
+            credentials,
+            custom_settings,
+        );
+
+        let url = Url::parse("file:///example/foo.nc").unwrap();
+        let fetcher = resolver.get_fetcher(&url).await.unwrap();
+
+        // These should reflect the custom settings, not defaults or hardcoded values
+        assert_eq!(fetcher.max_concurrent_requests_for_object().get(), 42);
+        assert_eq!(fetcher.ideal_concurrent_request_size().get(), 8192);
+    }
+
     #[test]
     fn test_resolver_preserves_names() {
         let cont = VirtualChunkContainer::new_named(
