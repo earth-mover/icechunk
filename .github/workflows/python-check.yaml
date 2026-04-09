@@ -26,7 +26,7 @@ defaults:
 
 jobs:
   build-wheels:
-    runs-on: runs-on=${{ github.run_id }}/runner=16cpu-linux-x64/extras=s3-cache
+    runs-on: runs-on=${{ github.run_id }}/runner=16cpu-linux-x64/extras=s3-cache+tmpfs/family=r7
     steps:
       - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0 # v2
         with:
@@ -139,7 +139,7 @@ jobs:
           python -m pytest -n 4 -m "not hypothesis"
 
   build-wheels-free-threaded:
-    runs-on: runs-on=${{ github.run_id }}/runner=16cpu-linux-x64/extras=s3-cache
+    runs-on: runs-on=${{ github.run_id }}/runner=16cpu-linux-x64/extras=s3-cache+tmpfs/family=r7
     steps:
       - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0 # v2
         with:
