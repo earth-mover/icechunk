@@ -573,6 +573,7 @@ impl VirtualChunkResolver {
                         None,
                         creds,
                         Some(opts.clone()),
+                        self.settings.clone(),
                     )
                     .await?,
                 ))
@@ -592,7 +593,7 @@ impl VirtualChunkResolver {
             #[cfg(feature = "object-store-fs")]
             ObjectStoreConfig::LocalFileSystem { .. } => {
                 match self.credentials.get(&cont.url_prefix) {
-                    Some(None) => Ok(Arc::new(ObjectStoreFetcher::new_local())),
+                    Some(None) => Ok(Arc::new(ObjectStoreFetcher::new_local(self.settings.clone()))),
                     Some(Some(_)) => {
                         Err(VirtualReferenceErrorKind::InvalidCredentials(
                             "file".to_string(),
@@ -643,6 +644,7 @@ impl VirtualChunkResolver {
                         None,
                         Some(creds.clone()),
                         opts.clone(),
+                        self.settings.clone(),
                     )
                     .await?,
                 ))
@@ -676,7 +678,7 @@ impl VirtualChunkResolver {
                 };
 
                 let root_url = format!("{}://{}", chunk_location.scheme(), hostname);
-                Ok(Arc::new(ObjectStoreFetcher::new_http(&root_url, opts).await?))
+                Ok(Arc::new(ObjectStoreFetcher::new_http(&root_url, opts, self.settings.clone()).await?))
             }
             #[cfg(feature = "object-store-azure")]
             ObjectStoreConfig::Azure(config) => {
@@ -718,6 +720,7 @@ impl VirtualChunkResolver {
                         None,
                         Some(creds.clone()),
                         config.clone(),
+                        self.settings.clone(),
                     )
                     .await?,
                 ))
@@ -918,21 +921,13 @@ impl private::Sealed for ObjectStoreFetcher {}
 ))]
 impl ObjectStoreFetcher {
     #[cfg(feature = "object-store-fs")]
-    fn new_local() -> Self {
+    fn new_local(settings: storage::Settings) -> Self {
         ObjectStoreFetcher {
             client: Arc::new(LocalFileSystem::new()),
             settings: storage::Settings {
-                concurrency: Some(storage::ConcurrencySettings {
-                    max_concurrent_requests_for_object: Some(
-                        NonZeroU16::new(5).unwrap_or(NonZeroU16::MIN),
-                    ),
-                    ideal_concurrent_request_size: Some(
-                        NonZeroU64::new(4 * 1024).unwrap_or(NonZeroU64::MIN),
-                    ),
-                }),
                 unsafe_use_conditional_update: Some(false),
                 unsafe_use_metadata: Some(false),
-                ..Default::default()
+                ..settings
             },
         }
     }
@@ -943,9 +938,9 @@ impl ObjectStoreFetcher {
         prefix: Option<String>,
         credentials: Option<S3Credentials>,
         config: Option<S3Options>,
+        settings: storage::Settings,
     ) -> Result<Self, VirtualReferenceError> {
         let backend = S3ObjectStoreBackend { bucket, prefix, credentials, config };
-        let settings = storage::Settings::default();
         let client = backend
             .mk_object_store(&settings)
             .map_err(|e| VirtualReferenceErrorKind::OtherError(Box::new(e)))
@@ -957,6 +952,7 @@ impl ObjectStoreFetcher {
     pub async fn new_http(
         url: &str,
         opts: &HashMap<String, String>,
+        settings: storage::Settings,
     ) -> Result<Self, VirtualReferenceError> {
         let config = opts
             .iter()
@@ -966,7 +962,6 @@ impl ObjectStoreFetcher {
             .collect();
         let backend =
             HttpObjectStoreBackend { url: url.to_string(), config: Some(config) };
-        let settings = storage::Settings::default();
         let client = backend
             .mk_object_store(&settings)
             .map_err(|e| VirtualReferenceErrorKind::OtherError(Box::new(e)))
@@ -980,6 +975,7 @@ impl ObjectStoreFetcher {
         prefix: Option<String>,
         credentials: Option<GcsCredentials>,
         config: HashMap<String, String>,
+        settings: storage::Settings,
     ) -> Result<Self, VirtualReferenceError> {
         let config = config
             .into_iter()
@@ -989,7 +985,6 @@ impl ObjectStoreFetcher {
             .collect();
         let backend =
             GcsObjectStoreBackend { bucket, prefix, credentials, config: Some(config) };
-        let settings = storage::Settings::default();
         let client = backend
             .mk_object_store(&settings)
             .map_err(|e| VirtualReferenceErrorKind::OtherError(Box::new(e)))
@@ -1005,6 +1000,7 @@ impl ObjectStoreFetcher {
         prefix: Option<String>,
         credentials: Option<AzureCredentials>,
         config: HashMap<String, String>,
+        settings: storage::Settings,
     ) -> Result<Self, VirtualReferenceError> {
         let config = config
             .into_iter()
@@ -1020,7 +1016,6 @@ impl ObjectStoreFetcher {
             config: Some(config),
         };
 
-        let settings = storage::Settings::default();
         let client = backend
             .mk_object_store(&settings)
             .map_err(|e| VirtualReferenceErrorKind::OtherError(Box::new(e)))
