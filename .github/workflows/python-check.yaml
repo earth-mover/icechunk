@@ -26,7 +26,7 @@ defaults:
 
 jobs:
   build-wheels:
-    runs-on: runs-on=${{ github.run_id }}/runner=8cpu-linux-x64/extras=s3-cache
+    runs-on: runs-on=${{ github.run_id }}/runner=16cpu-linux-x64/extras=s3-cache
     steps:
       - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0 # v2
         with:
@@ -40,9 +40,13 @@ jobs:
         uses: PyO3/maturin-action@db323e2cf5679b7feb8bcb561a36b27a0bc19e79 # v1
         with:
           working-directory: icechunk-python
-          args: --release --out dist -i python${{ env.PYTHON_VERSION }}
+          args: --profile ci-release --out dist -i python${{ env.PYTHON_VERSION }}
           sccache: true
           manylinux: auto
+          before-script-linux: |
+            curl -L https://github.com/rui314/mold/releases/download/v2.35.1/mold-2.35.1-x86_64-linux.tar.gz | tar xz -C /usr/local --strip-components=1
+        env:
+          RUSTFLAGS: "-C link-arg=-fuse-ld=mold"
 
       - name: Upload wheels
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
@@ -139,7 +143,7 @@ jobs:
           python -m pytest -n 4 -m "not hypothesis"
 
   build-wheels-free-threaded:
-    runs-on: runs-on=${{ github.run_id }}/runner=8cpu-linux-x64/extras=s3-cache
+    runs-on: runs-on=${{ github.run_id }}/runner=16cpu-linux-x64/extras=s3-cache
     steps:
       - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0 # v2
         with:
@@ -153,9 +157,13 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           working-directory: icechunk-python
-          args: --release --out dist -i python3.13t
+          args: --profile ci-release --out dist -i python3.13t
           sccache: true
           manylinux: auto
+          before-script-linux: |
+            curl -L https://github.com/rui314/mold/releases/download/v2.35.1/mold-2.35.1-x86_64-linux.tar.gz | tar xz -C /usr/local --strip-components=1
+        env:
+          RUSTFLAGS: "-C link-arg=-fuse-ld=mold"
 
       - name: Upload wheels
         uses: actions/upload-artifact@v7
