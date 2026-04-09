@@ -1051,11 +1051,12 @@ impl PyRepr for PyStorageRetriesSettings {
     fn cls_name() -> &'static str {
         "icechunk.storage.StorageRetriesSettings"
     }
-    fn fields(&self, _mode: ReprMode) -> Vec<(&str, String)> {
+    fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
+        let d = RetriesSettings::default();
         vec![
-            ("max_tries", py_option(&self.max_tries)),
-            ("initial_backoff_ms", py_option(&self.initial_backoff_ms)),
-            ("max_backoff_ms", py_option(&self.max_backoff_ms)),
+            ("max_tries", py_option_or_default(&self.max_tries, &d.max_tries().to_string(), mode)),
+            ("initial_backoff_ms", py_option_or_default(&self.initial_backoff_ms, &d.initial_backoff_ms().to_string(), mode)),
+            ("max_backoff_ms", py_option_or_default(&self.max_backoff_ms, &d.max_backoff_ms().to_string(), mode)),
         ]
     }
 }
@@ -1261,15 +1262,16 @@ impl PyRepr for PyStorageConcurrencySettings {
     fn cls_name() -> &'static str {
         "icechunk.storage.StorageConcurrencySettings"
     }
-    fn fields(&self, _mode: ReprMode) -> Vec<(&str, String)> {
+    fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
+        let d = ConcurrencySettings::default();
         vec![
             (
                 "max_concurrent_requests_for_object",
-                py_option(&self.max_concurrent_requests_for_object),
+                py_option_or_default(&self.max_concurrent_requests_for_object, &d.max_concurrent_requests_for_object().to_string(), mode),
             ),
             (
                 "ideal_concurrent_request_size",
-                py_option(&self.ideal_concurrent_request_size),
+                py_option_or_default(&self.ideal_concurrent_request_size, &d.ideal_concurrent_request_size().to_string(), mode),
             ),
         ]
     }
@@ -1384,35 +1386,30 @@ impl PyRepr for PyStorageSettings {
         "icechunk.storage.StorageSettings"
     }
     fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
+        let d = storage::Settings::default();
         // Scalar fields first, then nested objects
         vec![
             (
                 "unsafe_use_conditional_create",
-                self.unsafe_use_conditional_create
-                    .map(py_bool)
-                    .unwrap_or_else(|| "None".to_string()),
+                py_option_bool_or_default(&self.unsafe_use_conditional_create, d.unsafe_use_conditional_create(), mode),
             ),
             (
                 "unsafe_use_conditional_update",
-                self.unsafe_use_conditional_update
-                    .map(py_bool)
-                    .unwrap_or_else(|| "None".to_string()),
+                py_option_bool_or_default(&self.unsafe_use_conditional_update, d.unsafe_use_conditional_update(), mode),
             ),
             (
                 "unsafe_use_metadata",
-                self.unsafe_use_metadata
-                    .map(py_bool)
-                    .unwrap_or_else(|| "None".to_string()),
+                py_option_bool_or_default(&self.unsafe_use_metadata, d.unsafe_use_metadata(), mode),
             ),
             ("storage_class", py_option_str(&self.storage_class)),
             ("metadata_storage_class", py_option_str(&self.metadata_storage_class)),
             ("chunks_storage_class", py_option_str(&self.chunks_storage_class)),
             (
                 "minimum_size_for_multipart_upload",
-                py_option(&self.minimum_size_for_multipart_upload),
+                py_option_or_default(&self.minimum_size_for_multipart_upload, &d.minimum_size_for_multipart_upload().to_string(), mode),
             ),
-            ("concurrency", py_option_nested_repr(&self.concurrency, mode)),
-            ("retries", py_option_nested_repr(&self.retries, mode)),
+            ("concurrency", py_option_nested_repr_or_default(&self.concurrency, mode, || ConcurrencySettings::default().into())),
+            ("retries", py_option_nested_repr_or_default(&self.retries, mode, || RetriesSettings::default().into())),
             ("timeouts", py_option_nested_repr(&self.timeouts, mode)),
         ]
     }
