@@ -252,6 +252,10 @@ class TestStr:
         str_str = str(config)
         assert "<icechunk.config.CachingConfig>" in str_str
         assert "num_snapshot_nodes: 100" in str_str
+        # Explicitly set value should not show (default)
+        assert "(default)" not in str_str.split("num_snapshot_nodes")[1].split("\n")[0]
+        # Unset fields should show their effective defaults
+        assert "15000000 (default)" in str_str  # num_chunk_refs
 
     def test_storage_settings(self) -> None:
         ss = StorageSettings(retries=StorageRetriesSettings(max_tries=5))
@@ -259,6 +263,8 @@ class TestStr:
         assert "<icechunk.storage.StorageSettings>" in str_str
         assert "retries:" in str_str
         assert "max_tries: 5" in str_str
+        # Bool defaults should show effective values
+        assert "True (default)" in str_str  # unsafe_use_conditional_create etc.
 
     def test_manifest_preload_condition(self) -> None:
         cond = ManifestPreloadCondition.name_matches("foo")
@@ -299,6 +305,8 @@ class TestReprHtml:
         assert '<div class="icechunk-repr">' in html
         assert "num_snapshot_nodes" in html
         assert "100" in html
+        # Unset fields should show defaults in HTML too
+        assert "15000000 (default)" in html
 
     def test_nested_html_uses_details(self) -> None:
         """Nested HTML reprs should use collapsible <details> elements."""
@@ -361,6 +369,17 @@ class TestReprStructural:
         assert "icechunk.config.CompressionConfig(" in repr_str
         assert "Zstd" in repr_str
         assert "level=3" in repr_str
+
+    def test_compression_config_defaults_in_str(self) -> None:
+        """Default CompressionConfig str should show effective defaults."""
+        config = CompressionConfig()
+        str_str = str(config)
+        assert "Zstd (default)" in str_str
+        assert "3 (default)" in str_str
+        # repr should still show None (round-trip fidelity)
+        repr_str = repr(config)
+        assert "algorithm=None" in repr_str
+        assert "(default)" not in repr_str
 
     def test_s3_options_shows_all_fields(self) -> None:
         opts = S3Options(region="us-east-1", allow_http=True, requester_pays=True)
@@ -450,6 +469,13 @@ class TestReprStructural:
         assert "repo_update_retries" in repr_str
         assert "num_updates_per_repo_info_file" in repr_str
         assert "virtual_chunk_containers" in repr_str
+        # str should show scalar defaults and expand nested default configs
+        str_str = str(config)
+        assert "512 (default)" in str_str  # inline_chunk_threshold_bytes
+        assert "256 (default)" in str_str  # max_concurrent_requests
+        # Nested defaults should be expanded
+        assert "Zstd (default)" in str_str  # from CompressionConfig
+        assert "500000 (default)" in str_str  # from CachingConfig
 
     def test_repository_config_shows_virtual_chunk_containers(self) -> None:
         config = RepositoryConfig()
