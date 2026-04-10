@@ -24,8 +24,7 @@ These capabilities are available in both Icechunk and Arraylake.
 | ACID transactions with serializable isolation | :material-check: | :material-check: |
 | Virtual chunk references (HDF5, NetCDF, GRIB, TIFF) | :material-check: | :material-check: |
 | Parallel / distributed writes | :material-check: | :material-check: |
-| Cloud storage backends (S3, GCS, Azure, R2, etc.) | :material-check: Self-configured | :material-check: Managed or bring your own bucket |
-| Local filesystem storage | :material-check: | :material-minus: |
+| Cloud storage (S3, GCS, Azure, R2, etc.) | :material-check: Self-managed | :material-check: Earthmover-managed or bring your own bucket |
 
 ### Collaboration & Access Control
 
@@ -63,14 +62,6 @@ Arraylake's [Flux](https://docs.earthmover.io/guides/flux/) service exposes your
 |---|---|---|
 | Data marketplace | :material-minus: | :material-check: Publish and subscribe to datasets (free or paid) |
 
-### Integrations
-
-| Feature | Icechunk | Arraylake |
-|---|---|---|
-| Zarr / Xarray / Dask | :material-check: | :material-check: |
-| MLflow | :material-minus: | :material-check: |
-| Weights & Biases | :material-minus: | :material-check: |
-
 ### Support & Pricing
 
 | Feature | Icechunk | Arraylake |
@@ -86,8 +77,7 @@ Arraylake's [Flux](https://docs.earthmover.io/guides/flux/) service exposes your
 
 ## No Lock-in
 
-Arraylake stores your data in Icechunk format in your own object storage (bring your own bucket).
-You can always read your data directly with the open-source Icechunk library, with no proprietary format or vendor lock-in.
+Arraylake stores your data in Icechunk format in your own object storage (bring your own bucket), following the open Icechunk Format Specification.
 
 ## Links
 
