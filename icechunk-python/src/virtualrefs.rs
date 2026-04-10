@@ -43,14 +43,14 @@ pub(crate) fn build_vrefs_from_arrays(
         )));
     }
 
-    if let Some(offset) = arr_offset {
-        if offset.len() != chunk_grid_shape.len() {
-            return Err(PyValueError::new_err(format!(
-                "arr_offset length ({}) != chunk_grid_shape length ({})",
-                offset.len(),
-                chunk_grid_shape.len()
-            )));
-        }
+    if let Some(offset) = arr_offset
+        && offset.len() != chunk_grid_shape.len()
+    {
+        return Err(PyValueError::new_err(format!(
+            "arr_offset length ({}) != chunk_grid_shape length ({})",
+            offset.len(),
+            chunk_grid_shape.len()
+        )));
     }
 
     (0..n)
@@ -71,7 +71,7 @@ pub(crate) fn build_vrefs_from_arrays(
         .collect()
 }
 
-/// Normalize path and call store.set_virtual_refs.
+/// Normalize path and call `store.set_virtual_refs`.
 pub(crate) async fn do_set_virtual_refs(
     store: Arc<Store>,
     array_path: String,
@@ -88,7 +88,7 @@ pub(crate) async fn do_set_virtual_refs(
         .map_err(|e| PyIcechunkStoreError::from(e).into())
 }
 
-/// Convert SetVirtualRefsResult to the Python return type.
+/// Convert `SetVirtualRefsResult` to the Python return type.
 pub(crate) fn vrefs_result_to_py(
     res: SetVirtualRefsResult,
 ) -> PyResult<Option<Vec<Py<PyTuple>>>> {

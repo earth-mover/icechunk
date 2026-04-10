@@ -524,7 +524,8 @@ impl PyStore {
     /// Set virtual references from columnar data (list of locations + numpy arrays).
     ///
     /// More efficient than `set_virtual_refs` as it avoids creating per-chunk
-    /// Python VirtualChunkSpec objects.
+    /// Python `VirtualChunkSpec` objects.
+    #[allow(clippy::too_many_arguments)]
     #[pyo3(signature = (array_path, chunk_grid_shape, locations, offsets, lengths, *, validate_containers = true, arr_offset = None, checksum = None))]
     fn set_virtual_refs_arr(
         &self,
@@ -566,6 +567,7 @@ impl PyStore {
     /// the Python list), but the store insertion releases it. Use
     /// `asyncio.gather()` to overlap vref building for one array with store
     /// insertion for another.
+    #[allow(clippy::too_many_arguments)]
     #[pyo3(signature = (array_path, chunk_grid_shape, locations, offsets, lengths, *, validate_containers = true, arr_offset = None, checksum = None))]
     fn set_virtual_refs_arr_async<'py>(
         &'py self,
