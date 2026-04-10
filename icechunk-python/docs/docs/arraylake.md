@@ -38,6 +38,7 @@ Arraylake adds team-oriented security and identity management on top of Icechunk
 | SSO / SAML authentication | :material-minus: | :material-check: Google, GitHub, Microsoft AD |
 | Credential vending | :material-minus: You manage credentials | :material-check: Automatic temporary credential delegation |
 | API keys for service accounts | :material-minus: | :material-check: Scoped permissions with expiration |
+| Virtual chunk security | :material-minus: Every reader must manage credentials for external data sources | :material-check: Org-level policies control which external sources are accessible; readers never handle credentials |
 
 ### Data Catalog & Sharing
 
