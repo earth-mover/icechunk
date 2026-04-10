@@ -361,6 +361,136 @@ class IcechunkStore(Store, SyncMixin):
             array_path, chunks, validate_containers
         )
 
+    def set_virtual_refs_arr(
+        self,
+        array_path: str,
+        chunk_grid_shape: tuple[int, ...],
+        locations: list[str],
+        offsets: "np.ndarray[Any, np.dtype[np.uint64]]",
+        lengths: "np.ndarray[Any, np.dtype[np.uint64]]",
+        *,
+        validate_containers: bool = True,
+        arr_offset: tuple[int, ...] | None = None,
+        checksum: datetime | str | None = None,
+    ) -> list[tuple[int, ...]] | None:
+        """Store virtual references for an array from flat arrays of locations, offsets, and lengths.
+
+        More efficient than ``set_virtual_refs`` as it avoids creating
+        per-chunk ``VirtualChunkSpec`` Python objects. The locations list
+        is iterated in Rust (borrowing strings directly from CPython),
+        and the offset/length numpy arrays are accessed via zero-copy.
+
+        Parameters
+        ----------
+        array_path : str
+            The path to the array inside the Zarr store.
+            Example: "/groupA/groupB/outputs/my-array"
+        chunk_grid_shape : tuple[int, ...]
+            Shape of the chunk grid (number of chunks per dimension).
+            The product must equal the length of the arrays.
+            Arrays are assumed to be flattened in C (row-major) order.
+        locations : list[str]
+            URLs to external files containing chunk data.
+            Example: ["s3://bucket/file1.nc", "s3://bucket/file2.nc"]
+        offsets : np.ndarray
+            1-D uint64 array of byte offsets within each file.
+        lengths : np.ndarray
+            1-D uint64 array of byte lengths of each chunk.
+        validate_containers : bool
+            If True, validate that locations match registered virtual
+            chunk containers. Default is True.
+        arr_offset : tuple[int, ...] | None
+            Optional offset to add to computed chunk indices. Useful for
+            append operations where new chunks should be written at an
+            offset from (0, 0, ...). Must have the same length as
+            chunk_grid_shape. Default is None.
+        checksum : datetime | str | None
+            Optional checksum for all chunks. Can be a datetime
+            (last modified time) or a string (ETag). Default is None.
+
+        Returns
+        -------
+        list[tuple[int, ...]] | None
+            If all virtual references were successfully updated, returns None.
+            If there were validation errors, returns the chunk indices of
+            all failed references.
+        """
+        return self._store.set_virtual_refs_arr(
+            array_path,
+            list(chunk_grid_shape),
+            locations,
+            offsets,
+            lengths,
+            validate_containers=validate_containers,
+            arr_offset=list(arr_offset) if arr_offset is not None else None,
+            checksum=checksum,
+        )
+
+    async def set_virtual_refs_arr_async(
+        self,
+        array_path: str,
+        chunk_grid_shape: tuple[int, ...],
+        locations: list[str],
+        offsets: "np.ndarray[Any, np.dtype[np.uint64]]",
+        lengths: "np.ndarray[Any, np.dtype[np.uint64]]",
+        *,
+        validate_containers: bool = True,
+        arr_offset: tuple[int, ...] | None = None,
+        checksum: datetime | str | None = None,
+    ) -> list[tuple[int, ...]] | None:
+        """Store virtual references for an array from flat arrays (async).
+
+        Async variant of ``set_virtual_refs_arr``. The vref construction
+        still requires the GIL (to borrow strings from the Python list),
+        but the store insertion releases it. Use ``asyncio.gather()`` to
+        overlap vref building for one array with store insertion for another.
+
+        Parameters
+        ----------
+        array_path : str
+            The path to the array inside the Zarr store.
+            Example: "/groupA/groupB/outputs/my-array"
+        chunk_grid_shape : tuple[int, ...]
+            Shape of the chunk grid (number of chunks per dimension).
+            The product must equal the length of the arrays.
+            Arrays are assumed to be flattened in C (row-major) order.
+        locations : list[str]
+            URLs to external files containing chunk data.
+            Example: ["s3://bucket/file1.nc", "s3://bucket/file2.nc"]
+        offsets : np.ndarray
+            1-D uint64 array of byte offsets within each file.
+        lengths : np.ndarray
+            1-D uint64 array of byte lengths of each chunk.
+        validate_containers : bool
+            If True, validate that locations match registered virtual
+            chunk containers. Default is True.
+        arr_offset : tuple[int, ...] | None
+            Optional offset to add to computed chunk indices. Useful for
+            append operations where new chunks should be written at an
+            offset from (0, 0, ...). Must have the same length as
+            chunk_grid_shape. Default is None.
+        checksum : datetime | str | None
+            Optional checksum for all chunks. Can be a datetime
+            (last modified time) or a string (ETag). Default is None.
+
+        Returns
+        -------
+        list[tuple[int, ...]] | None
+            If all virtual references were successfully updated, returns None.
+            If there were validation errors, returns the chunk indices of
+            all failed references.
+        """
+        return await self._store.set_virtual_refs_arr_async(
+            array_path,
+            list(chunk_grid_shape),
+            locations,
+            offsets,
+            lengths,
+            validate_containers=validate_containers,
+            arr_offset=list(arr_offset) if arr_offset is not None else None,
+            checksum=checksum,
+        )
+
     async def delete(self, key: str) -> None:
         """Remove a key from the store
 
