@@ -1,6 +1,6 @@
 [package]
 name = "icechunk-storage"
-version = "2.0.0-alpha.7"
+version = "2.0.1"
 description = "Storage trait and shared types for icechunk"
 readme = "../README.md"
 repository = "https://github.com/earth-mover/icechunk"

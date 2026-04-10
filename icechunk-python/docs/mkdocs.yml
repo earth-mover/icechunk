@@ -151,20 +151,49 @@ plugins:
   - markdown-exec
   - redirects:
       redirect_maps:
-        # Redirects from icechunk-python subdirectory to root docs (post-reorganization)
-        # These redirects work with use_directory_urls: true (default)
-        'icechunk-python/quickstart/index.md': 'quickstart.md'
-        'icechunk-python/async/index.md': 'async.md'
-        'icechunk-python/configuration/index.md': 'configuration.md'
-        'icechunk-python/storage/index.md': 'storage.md'
-        'icechunk-python/version-control/index.md': 'version-control.md'
-        'icechunk-python/expiration/index.md': 'expiration.md'
-        'icechunk-python/dask/index.md': 'dask.md'
-        'icechunk-python/xarray/index.md': 'xarray.md'
-        'icechunk-python/virtual/index.md': 'virtual.md'
-        'icechunk-python/parallel/index.md': 'parallel.md'
-        'icechunk-python/performance/index.md': 'performance.md'
-        'icechunk-python/cheatsheets/git-users/index.md': 'icechunk-for-git-users.md'
+        # Redirects from icechunk-python subdirectory (legacy URLs)
+        'icechunk-python/quickstart/index.md': 'getting-started/quickstart.md'
+        'icechunk-python/async/index.md': 'guides/async.md'
+        'icechunk-python/configuration/index.md': 'guides/configuration.md'
+        'icechunk-python/storage/index.md': 'guides/storage.md'
+        'icechunk-python/version-control/index.md': 'understanding/version-control.md'
+        'icechunk-python/expiration/index.md': 'understanding/expiration.md'
+        'icechunk-python/dask/index.md': 'guides/dask.md'
+        'icechunk-python/xarray/index.md': 'guides/xarray.md'
+        'icechunk-python/virtual/index.md': 'guides/virtual.md'
+        'icechunk-python/parallel/index.md': 'understanding/parallel.md'
+        'icechunk-python/performance/index.md': 'guides/performance.md'
+        'icechunk-python/cheatsheets/git-users/index.md': 'guides/icechunk-for-git-users.md'
+        # Redirects from old flat structure
+        'quickstart.md': 'getting-started/quickstart.md'
+        'howto.md': 'getting-started/howto.md'
+        'concepts.md': 'understanding/concepts.md'
+        'repository-features.md': 'understanding/repository-features.md'
+        'version-control.md': 'understanding/version-control.md'
+        'expiration.md': 'understanding/expiration.md'
+        'parallel.md': 'understanding/parallel.md'
+        'faq.md': 'understanding/faq.md'
+        'configuration.md': 'guides/configuration.md'
+        'storage.md': 'guides/storage.md'
+        'moving-chunks.md': 'guides/moving-chunks.md'
+        'moving-nodes.md': 'guides/moving-nodes.md'
+        'dask.md': 'guides/dask.md'
+        'xarray.md': 'guides/xarray.md'
+        'zarr.md': 'guides/zarr.md'
+        'performance.md': 'guides/performance.md'
+        'flaky-networks.md': 'guides/flaky-networks.md'
+        'virtual.md': 'guides/virtual.md'
+        'async.md': 'guides/async.md'
+        'icechunk-for-git-users.md': 'guides/icechunk-for-git-users.md'
+        'spec.md': 'reference/spec.md'
+        'version-policy.md': 'reference/version-policy.md'
+        'icechunk-js.md': 'reference/icechunk-js.md'
+        'icechunk-rust.md': 'reference/icechunk-rust.md'
+        'contributing.md': 'reference/contributing.md'
+        'ai-policy.md': 'reference/ai-policy.md'
+        'migration.md': 'reference/migration.md'
+        'migration-2.md': 'reference/migration-2.md'
+        'breaking-changes-2.md': 'reference/breaking-changes-2.md'
 
 markdown_extensions:
   - admonition
@@ -198,34 +227,35 @@ nav:
   - Home: index.md
   - Overview: overview.md
   - Getting Started:
-    - Quickstart: quickstart.md
-    - How To: howto.md
+    - Quickstart: getting-started/quickstart.md
+    - How To: getting-started/howto.md
   - Understanding Icechunk:
-    - Core Concepts: concepts.md
-    - Repository Features: repository-features.md
-    - Transactions and Version Control: version-control.md
-    - Data Expiration and Garbage Collection: expiration.md
-    - Parallel / Distributed Writing: parallel.md
-    - FAQ: faq.md
+    - Core Concepts: understanding/concepts.md
+    - Repository Features: understanding/repository-features.md
+    - Transactions and Version Control: understanding/version-control.md
+    - Data Expiration and Garbage Collection: understanding/expiration.md
+    - Parallel / Distributed Writing: understanding/parallel.md
+    - FAQ: understanding/faq.md
   - Guides:
-    - Configuration: configuration.md
-    - Storage: storage.md
-    - Moving Chunks: moving-chunks.md
-    - Moving Nodes: moving-nodes.md
-    - Dask: dask.md
-    - Xarray: xarray.md
-    - Tuning Performance: performance.md
-    - Flaky Networks: flaky-networks.md
-    - Virtual Datasets: virtual.md
-    - Async Usage: async.md
-    - Icechunk for Git Users: icechunk-for-git-users.md
+    - Configuration: guides/configuration.md
+    - Storage: guides/storage.md
+    - Moving Chunks: guides/moving-chunks.md
+    - Moving Nodes: guides/moving-nodes.md
+    - Dask: guides/dask.md
+    - Xarray: guides/xarray.md
+    - Zarr: guides/zarr.md
+    - Tuning Performance: guides/performance.md
+    - Flaky Networks: guides/flaky-networks.md
+    - Virtual Datasets: guides/virtual.md
+    - Async Usage: guides/async.md
+    - Icechunk for Git Users: guides/icechunk-for-git-users.md
     - Creating Icechunk Datasets:
-      - Global Raster Data cube: ingestion/glad-ingest.ipynb
+      - Global Raster Data cube: guides/ingestion/glad-ingest.ipynb
   - Sample Datasets: sample-datasets.md
   - Related Projects: related-projects.md
   - Reference:
-    - Spec: spec.md
-    - Version Policy: version-policy.md
+    - Spec: reference/spec.md
+    - Version Policy: reference/version-policy.md
     - Python API Reference:
       - reference/index.md
       - icechunk.config: reference/config.md
@@ -238,10 +268,10 @@ nav:
       - icechunk.virtual: reference/virtual.md
       - icechunk.xarray: reference/xarray.md
       - icechunk.dask: reference/dask.md
-    - Icechunk JavaScript / TypeScript: icechunk-js.md
-    - Icechunk Rust: icechunk-rust.md
-    - Contributing: contributing.md
-    - AI Usage Policy: ai-policy.md
-    - Migrate to 1.0: migration.md
-    - Migrate to 2.0: migration-2.md
-    - Breaking Changes in 2.0: breaking-changes-2.md
+    - Icechunk JavaScript / TypeScript: reference/icechunk-js.md
+    - Icechunk Rust: reference/icechunk-rust.md
+    - Contributing: reference/contributing.md
+    - AI Usage Policy: reference/ai-policy.md
+    - Migrate to 1.0: reference/migration.md
+    - Migrate to 2.0: reference/migration-2.md
+    - Breaking Changes in 2.0: reference/breaking-changes-2.md

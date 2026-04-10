@@ -1,5 +1,13 @@
 # Changelog
 
+## Python Icechunk Library 2.0.1
+
+This release brings minor fixes to unintended backwards incompatible changes.
+
+- Fix `icechunk.store` module renamed to `icechunk.zarr`
+- Fix build from `sdist`
+- Optimize set_virtual_refs to do a single node lookup by @TomNicholas in #2045
+
 ## Python Icechunk Library 2.0.0
 
 Icechunk 2 is here! This release represents the next evolution of the Icechunk library and on-disk format,
@@ -113,6 +121,103 @@ In Icechunk 2.0, all repository state is referenced from a unified repo table of
 **[User agent headers](https://icechunk.io/en/stable/faq/#how-can-i-identify-icechunk-requests-in-my-server-logs)**: All requests include `icechunk-rust-<version>` for tracing.
 
 **GC consistency**: Handles concurrent repo modifications during GC via retry with exponential backoff. Detects and re-processes when new snapshots appear during collection. Proper parent rewriting when deleting snapshot chains.
+
+## Python Icechunk Library 1.1.21
+
+### Fixes
+
+- Fix `list_prefix` stopping too early when non-matching nodes precede valid children in sort order ([#1842](https://github.com/earth-mover/icechunk/pull/1842)).
+
+### Documentation
+
+- Updated [version policy](https://icechunk.io/version-policy) with support window, migration, and compatibility guarantees ([#1769](https://github.com/earth-mover/icechunk/pull/1769)).
+
+## Python Icechunk Library 1.1.20
+
+### Fixes
+
+- Don't override all storage defaults when user passes a config ([#1699](https://github.com/earth-mover/icechunk/pull/1699)).
+- Allow delete + recreate in rebase ([#1742](https://github.com/earth-mover/icechunk/pull/1742)).
+- Don't panic when writing manifest fails ([#1609](https://github.com/earth-mover/icechunk/pull/1609)).
+- Retry on HTTP 429 and 499 status codes ([#1768](https://github.com/earth-mover/icechunk/pull/1768)).
+- Retry on Connection Reset errors while streaming bytes ([#1795](https://github.com/earth-mover/icechunk/pull/1795)).
+- Throw a clear error when attempting to open a v2 repository from v1 icechunk ([#1749](https://github.com/earth-mover/icechunk/pull/1749)).
+
+## Python Icechunk Library 1.1.19
+
+### Fixes
+
+- Retry when stalled streams error out. This should help avoid the "0B/s" error that sometimes occurs.
+  The default `network_stream_timeout_seconds` has been reduced to 10s to match the AWS default.
+  If you have previously set this parameter to 0, we recommend unsetting it and working with the defaults now.
+
+## Python Icechunk Library 1.1.18
+
+### Fixes
+
+- Bug where `RepositoryConfig.clear_virtual_chunk_containers()` was not respected.
+- Minor bug in merge conflict report.
+
+## Python Icechunk Library 1.1.17
+
+### Features
+
+- Add warning for large number of chunks in a single commit.
+
+### Fixes
+
+- Retry on HTTP Status 408.
+- Update S3 SDK dependency to avoid a CVE in one of their dependencies.
+
+## Python Icechunk Library 1.1.16
+
+### Features
+
+- Extend storage stats calculation to include virtual and inline chunks.
+- New methods `Session.chunk_type` and `Session.chunk_type_async` for returning the chunk type (native, inline, virtual, and uninitialized).
+
+### Fixes
+
+- Anonymous GCS credentials when setting `icechunk.gcs_credentials(anonymous=True)` now works.
+- Fix anonymous S3 storage access for public buckets.
+
+## Python Icechunk Library 1.1.15
+
+### Features
+
+- Increase the maximum allowed size of manifests and snapshot files.
+
+### Fixes
+
+- Retry with backoff on `429 - Too many requests` from GCS.
+
+## Python Icechunk Library 1.1.14
+
+### Fixes
+
+- Solve issue resolving virtual chunks in URLs with special characters
+
+## Python Icechunk Library 1.1.13
+
+### Features
+
+- Add support for requester pays in S3: `s3_storage(..., requester_pays=True)`.
+- Add support for network proxy when using S3 compatible storage, using
+  environment variables:
+  - `HTTPS_PROXY` (this is probably the one you want),
+  - `HTTP_PROXY`,
+  - `ALL_PROXY`,
+  - `NO_PROXY`
+
+## Python Icechunk Library 1.1.12
+
+### Features
+
+- Added `RepositoryConfig.merge` method.
+
+### Fixes
+
+- Virtual chunk containers now accept URLs starting with `gs://`, as well as ones starting with `gcs://`.
 
 ## Python Icechunk Library 1.1.11
 

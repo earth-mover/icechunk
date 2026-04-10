@@ -1,0 +1,597 @@
+---
+title: Contributing
+---
+# Contributing
+
+👋 Hi! Thanks for your interest in contributing to Icechunk!
+
+!!! note
+    Check the [latest version of this page](https://icechunk.io/en/latest/contributing/)
+    for the most up-to-date development environment setup instructions.
+
+Icechunk is an open source (Apache 2.0) project and welcomes contributions in the form of:
+
+- Usage questions - [open a GitHub issue](https://github.com/earth-mover/icechunk/issues)
+- Bug reports - [open a GitHub issue](https://github.com/earth-mover/icechunk/issues)
+- Feature requests - [open a GitHub issue](https://github.com/earth-mover/icechunk/issues)
+- Documentation improvements - [open a GitHub pull request](https://github.com/earth-mover/icechunk/pulls)
+- Bug fixes and enhancements - [open a GitHub pull request](https://github.com/earth-mover/icechunk/pulls)
+
+🤖 Please review our [AI Usage Policy](ai-policy.md), which also serves as contribution guidelines, before submitting pull requests.
+
+## Development
+
+This guide describes the local development workflow for:
+
+- [Python](#python-development-workflow)
+- [Rust](#rust-development-workflow)
+- Building the [Documentation](#building-documentation)
+- Setup instructions for additional resources (e.g. [Local Storage Docker Containers](#docker-setup-for-local-storage-testing))
+
+### Setting up your development environment
+
+We use [pixi](https://pixi.prefix.dev/latest/) to manage both the python and rust dependencies in the development workflow. This will ensure that your development workflow reflects the CI as closely as possible. If you do not want to use pixi we provide more manual alternatives in tabs.
+
+=== "pixi (Recommended)"
+    Activate the developer shell (all following commands should be run within)
+
+    ```bash
+    pixi shell -m icechunk-python/pyproject.toml
+    just develop
+    ```
+
+    `just develop` will set up the `maturin-import-hook` for fast incremental Rust compilation
+    and do the first build with `maturin develop --uv`. `just develop` can be skipped in future
+    developer shell activations, but should also run fast after the first invocation (and if
+    there no changes in the Rust code).
+
+    !!! Usage without pixi shell
+        You could run all commands below using this pattern:
+        ```shell
+        pixi run -m icechunk-python/pyproject.toml <your-command>
+        ```
+        This is used e.g. in the [Readthedocs build](https://github.com/earth-mover/icechunk/blob/main/.readthedocs.yaml).
+
+=== "uv"
+
+    The easiest way to get started is with [uv](https://docs.astral.sh/uv/), which handles virtual environments and dependencies:
+
+    ```bash
+    # Install all development dependencies (includes test dependencies, mypy, ruff, maturin)
+    uv sync
+
+    # Configure maturin-import-hook for fast incremental Rust compilation
+    uv run -m maturin_import_hook site install
+
+    # Build the Rust extension
+    uv run maturin develop --uv
+    ```
+
+    **Why these steps?** Icechunk is a mixed Python/Rust project. The `maturin-import-hook` enables incremental Rust compilation (7-20 seconds) instead of full rebuilds (5+ minutes) every time you run tests or import the module. This makes development significantly faster.
+
+=== "Venv"
+
+    ```bash
+    python3 -m venv .venv
+    source .venv/bin/activate
+
+    # Install maturin and dependencies
+    pip install maturin
+    pip install --group dev
+
+    # Build the Rust extension
+    maturin develop
+    ```
+
+=== "Conda / Mamba"
+
+    ```bash
+    mamba create -n icechunk python=3.12 rust zarr
+    mamba activate icechunk
+
+    # Install maturin and dependencies
+    pip install maturin
+    pip install --group dev
+
+    # Build the Rust extension
+    maturin develop
+    ```
+
+All build, test, and code quality tasks are managed with [`just`](https://github.com/casey/just). Run `just --list` to see all available recipes with descriptions.
+
+### Python Development Workflow
+
+#### Testing
+
+=== "pixi (Recommended)"
+    The Python code is developed in the `icechunk-python` subdirectory. When you use pixi all commands can be run from the repo root.
+
+    ```bash
+    # Run tests (Rust changes will automatically trigger incremental rebuild)
+    just pytest
+    ```
+
+=== "uv"
+    The Python code is developed in the `icechunk-python` subdirectory. To make changes first enter that directory:
+
+    ```bash
+    cd icechunk-python
+    ```
+
+    ```bash
+    # Run tests (Rust changes will automatically trigger incremental rebuild)
+    uv run pytest
+    ```
+=== "Venv/Conda"
+
+    The Python code is developed in the `icechunk-python` subdirectory. To make changes first enter that directory:
+
+    ```bash
+    cd icechunk-python
+    ```
+
+    ```bash
+    # Run tests (Rust changes will automatically trigger incremental rebuild)
+    pytest
+    ```
+
+!!! note pytest-xdist configuration
+
+    By default pytest will run tests in parallel on all available cores of your machine. If you want to specify the number of cores manually set the `-n <number-of-workers>` manually (set 0 to run the test in serial)
+
+#### Hypothesis Profiles
+
+We use [Hypothesis](https://hypothesis.readthedocs.io/) for property-based and stateful testing.
+Three profiles control how many examples and steps Hypothesis explores:
+
+| Profile   | `max_examples` | `stateful_step_count` | Used in |
+|-----------|---------------:|----------------------:|---------|
+| `default` | 100            | 50                    | Local dev |
+| `ci`      | 500            | 200                   | PR checks |
+| `nightly` | 1000           | 500                   | Nightly CI |
+
+Hypothesis auto-selects the `ci` profile on GitHub Actions (via the `CI` env var).
+Select a profile with the built-in pytest flag:
+
+```bash
+# Run with nightly settings locally
+uv run pytest --hypothesis-profile=nightly
+
+# Run with CI settings locally
+uv run pytest --hypothesis-profile=ci
+```
+
+Profiles are registered in `tests/conftest.py`. Individual tests should **not** override
+`max_examples` or `stateful_step_count` — let the profile control these so that nightly
+runs automatically explore more.
+
+#### Cross-Version Stateful Tests
+
+The cross-version stateful tests (`tests/test_stateful_compat.py`) verify that repositories created by different major versions of icechunk are compatible. They require a renamed copy of icechunk v1 installed alongside the current dev version using [third-wheel](https://github.com/earth-mover/third-wheel).
+
+`third-wheel` is included in the dev dependencies, and the rename is pre-configured in `pyproject.toml` under `[tool.third-wheel]`. To install the renamed `icechunk_v1` package:
+
+=== "pixi (Recommended)"
+
+    ```bash
+    pixi run third-wheel sync -v
+    ```
+
+=== "uv"
+
+    ```bash
+    cd icechunk-python
+    uv run third-wheel sync -v
+    ```
+
+This downloads icechunk v1 from PyPI, renames it to `icechunk_v1`, and installs it into your environment. Then run the tests:
+
+=== "pixi (Recommended)"
+
+    ```bash
+    just pytest tests/test_stateful_compat.py -v
+    ```
+
+=== "uv"
+
+    ```bash
+    cd icechunk-python
+    uv run pytest tests/test_stateful_compat.py -v
+    ```
+
+!!! note
+    If `icechunk_v1` is not installed, these tests are automatically skipped.
+
+!!! important
+
+    The full Python test suite depends on S3 and Azure compatible object stores. See [here](#docker-setup-for-local-storage-testing) for detailed instructions. If this is not set up some tests will fail
+
+#### Code Quality Checks
+
+=== "pixi (Recommended)"
+    The Python code is developed in the `icechunk-python` subdirectory. When you use pixi all commands can be run from the repo root.
+
+    ```bash
+    just ruff-format
+    just ruff # add --fix to automatically apply safe fixes
+    just mypy
+    just py-pre-commit
+    ```
+
+#### Testing with Upstream Dependencies
+
+To test Icechunk against development versions of upstream packages (zarr, xarray, dask, distributed), use the nightly wheels from the scientific-python-nightly-wheels repository:
+
+```bash
+# Install with nightly wheels
+export UV_INDEX="https://pypi.anaconda.org/scientific-python-nightly-wheels/simple/"
+export UV_PRERELEASE=allow
+uv sync --group test \
+  --resolution highest \
+  --index-strategy unsafe-best-match
+
+# Run tests
+uv run pytest
+```
+
+#### Running Xarray Backend Tests
+
+Icechunk includes integration tests that verify compatibility with Xarray's zarr backend API. These tests require the Xarray repository to be cloned locally.
+
+Set the environment variables (adjust `XARRAY_DIR` to point to your local Xarray clone):
+
+```bash
+export ICECHUNK_XARRAY_BACKENDS_TESTS=1
+export XARRAY_DIR=~/Documents/dev/xarray  # or your xarray location
+```
+
+Run the Xarray backend tests:
+
+```bash
+python -m pytest -xvs tests/run_xarray_backends_tests.py \
+  -c $XARRAY_DIR/pyproject.toml \
+  -W ignore \
+  --override-ini="addopts="
+```
+
+To run a specific Xarray test you have first specify a class defined in `@icechunk-python/tests/run_xarray_backends_tests.py` and then specify an xarray test. For example:
+
+```bash
+python -m pytest -xvs tests/run_xarray_backends_tests.py::TestIcechunkStoreFilesystem::test_pickle \
+  -c $XARRAY_DIR/pyproject.toml \
+  -W ignore \
+  --override-ini="addopts="
+```
+
+#### Checking Xarray Documentation Consistency
+
+Icechunk's `to_icechunk` function shares several parameters with Xarray's `to_zarr` function. To ensure documentation stays in sync, use the documentation checker script.
+
+From the `icechunk-python` directory:
+
+```bash
+# Set XARRAY_DIR to point to your local Xarray clone
+export XARRAY_DIR=~/Documents/dev/xarray
+
+# Run the documentation consistency check
+uv run scripts/check_xarray_docs_sync.py
+```
+
+The script will display a side-by-side comparison of any documentation differences, with missing text highlighted in red.
+
+**Known Differences**: Some differences are acceptable (e.g., Sphinx formatting like `:py:func:` doesn't work in mkdocs). These are tracked in `scripts/known-xarray-doc-diffs.json`. Known differences are displayed but don't cause the check to fail.
+
+**Updating Known Differences**: After making intentional documentation changes, update the known diffs file:
+
+```bash
+# Mark current diffs as known (creates/updates scripts/known-xarray-doc-diffs.json)
+uv run scripts/check_xarray_docs_sync.py --update-known-diffs
+
+# Edit scripts/known-xarray-doc-diffs.json to add reasons for each difference
+```
+
+**CI Integration**: The script returns exit code 0 if only known differences exist, allowing CI to pass while still displaying diffs for review.
+
+#### Troubleshooting
+
+**Too many open Files**: If your limit for open file descriptors is set low (usually only a problem on macOS) some tests might fail. Adjusting the level with e.g. `ulimit -n 1024` should fix this issue.
+
+### Rust Development Workflow
+
+#### Prerequisites
+
+Make sure you have activated your [development environment](#setting-up-your-development-environment) before proceeding, because the full rust build will also compile the python bindings.
+
+##### just, cargo-nextest, cargo-deny
+
+!!! note
+    If you use pixi and have activated the shell per instructions [above](#setting-up-your-development-environment) you can skip to the next section!
+
+Install the `just` command runner (used for build tasks and pre-commit hooks):
+
+```bash
+cargo install just
+```
+
+Or using other package managers:
+
+- **macOS**: `brew install just`
+- **Ubuntu**: `snap install --edge --classic just`
+
+Ensure you have navigated to the root directory of the cloned repo (i.e. not the `icechunk-python` subdirectory).
+
+For running the tests we also leverage [cargo-nextest](https://nexte.st/),
+for building it from source run
+
+```bash
+cargo install cargo-nextest
+```
+
+or check the [installation instructions](https://nexte.st/docs/installation/)
+for pre-built binaries or using package managers.
+
+To run all code quality checks you will also need `cargo-deny`:
+
+```bash
+cargo install cargo-deny
+```
+
+##### WASM Compiler Setup (macOS)
+
+To compile `icechunk` for `wasm32-wasip1-threads`, you need the Rust target and a C toolchain with WebAssembly support (needed by `zstd-sys`).
+
+1. Install the Rust target:
+
+    ```bash
+    rustup target add wasm32-wasip1-threads
+    ```
+
+2. Install a WASM-capable C toolchain. Apple CLT `clang` does not include WASM targets by default:
+
+    ```bash
+    brew install llvm
+    ```
+
+3. Configure Cargo to use LLVM tools for this target:
+
+    ```bash
+    export PATH="/opt/homebrew/opt/llvm/bin:$PATH"
+    export CC_wasm32_wasip1_threads=/opt/homebrew/opt/llvm/bin/clang
+    export CXX_wasm32_wasip1_threads=/opt/homebrew/opt/llvm/bin/clang++
+    export AR_wasm32_wasip1_threads=/opt/homebrew/opt/llvm/bin/llvm-ar
+    ```
+
+4. `tokio` on WASM currently requires the unstable cfg. This repository sets it automatically for `wasm32-wasip1-threads` in `.cargo/config.toml`.
+
+5. Verify the build:
+
+    ```bash
+    cargo check -p icechunk --no-default-features --target wasm32-wasip1-threads
+    ```
+
+#### Building
+
+Build the Rust workspace:
+
+```bash
+# Build all packages
+just build
+
+# Build release version
+just build-release
+
+# Compile tests without running them
+just compile-tests
+```
+
+#### Testing
+
+```bash
+# Run all tests
+just test
+
+# Run tests with logs enabled
+just test-logs debug
+
+# Run only specific tests
+cargo test test_name
+```
+
+!!! important
+
+    The full Rust test suite depends on S3 and Azure compatible object stores. See [here](#docker-setup-for-local-storage-testing) for detailed instructions.
+
+#### Code Quality
+
+We use a tiered pre-commit system for fast development:
+
+```bash
+# Fast checks (~3 seconds) - format and lint only
+just pre-commit-fast
+
+# Medium checks (~2-3 minutes) - includes compilation and deps
+just pre-commit
+
+# Full CI checks (~5+ minutes) - includes all tests and examples
+just pre-commit-ci
+```
+
+Individual checks:
+
+```bash
+# Format code
+just format
+
+# Check formatting without changing files
+just format --check
+
+# Lint with clippy
+just lint
+
+# Check dependencies for security issues
+just check-deps
+```
+
+#### Error Handling
+
+All Icechunk errors use the [`ICError<E>`](https://github.com/earth-mover/icechunk/blob/main/icechunk-types/src/error.rs) wrapper, which pairs an error kind with a [`SpanTrace`](https://docs.rs/tracing-error/latest/tracing_error/struct.SpanTrace.html) captured at the point of construction. Every error type is an alias:
+
+```rust
+type SessionError = ICError<SessionErrorKind>;
+type RepositoryError = ICError<RepositoryErrorKind>;
+```
+
+There are two ways to construct or convert errors: **`inject`** and **`capture`**. Prefer `inject` whenever the source error is already an `ICError`, because it preserves the original span trace. Use `capture` only for foreign (non-ICError) errors.
+
+| Method | Input | Span trace | Use when |
+|---|---|---|---|
+| `ICError::capture(kind)` | bare error kind | **new** | constructing a fresh error |
+| `.capture()` | `Result<T, E>` where `E: Into<Kind>` | **new** | converting a foreign (non-`ICError`) result |
+| `.capture_box()` | `Result<T, E>` where `E: Error` | **new** | same, when `Kind` has `From<Box<dyn Error>>` |
+| `.inject()` | `Result<T, ICError<E>>` | **preserved** | propagating between `ICError` kinds |
+| `ICError::inject(self)` | `ICError<E>` | **preserved** | same, outside of `Result` |
+
+##### Examples
+
+Constructing a fresh error (use the type alias, not `ICError` directly):
+
+```rust
+Err(SessionError::capture(SessionErrorKind::ReadOnlySession))
+```
+
+Converting a foreign result (e.g. serde, I/O) — captures a new span trace:
+
+```rust
+serde_json::to_vec(&data).capture()?;
+builder.build().capture_box()?;
+rmp_serde::to_vec(&data).map_err(Box::new).capture()?;
+```
+
+Propagating between `ICError` kinds — preserves the original span trace:
+
+```rust
+session_fn().inject()?;  // SessionError → RepositoryError
+```
+
+!!! tip
+    The traits `ICResultExt` (for `.capture()` / `.capture_box()`) and `ICResultCtxExt` (for `.inject()`) are defined in `icechunk-types` and should be imported wherever you handle errors.
+
+    There is intentionally no `From<E> for ICError<E>` impl — this forces every conversion to go through `capture` or `inject` so the span trace decision is always explicit.
+
+#### Pre-commit Hooks
+
+We use [pre-commit](https://pre-commit.com/) to automatically run checks. Install it:
+
+```bash
+pip install pre-commit
+pre-commit install
+```
+
+The pre-commit configuration automatically runs:
+
+- **Every commit**: Fast Python and Rust checks (~2 seconds total)
+- **Before push**: Medium Rust checks (compilation + dependencies)
+- **Manual**: Full CI-level checks when needed
+
+To run manually:
+
+```bash
+# Run on changed files only
+pre-commit run
+
+# Run on all files
+pre-commit run --all-files
+
+# Run full CI checks manually
+pre-commit run rust-pre-commit-ci --hook-stage manual
+```
+
+#### Minimum supported Rust version
+
+The current MSRV is `1.91.1`.
+
+We maintain packages for [PyPI](https://pypi.org/project/icechunk)
+and [conda-forge](https://github.com/conda-forge/icechunk-feedstock)
+as part of the release process.
+As a rule of thumb we support an MSRV that can be installed from `conda-forge` (including the most recent Rust release),
+since we need it to build the package there.
+The latest official Rust release usually lags a couple of days before it is available in `conda-forge`.
+
+As Icechunk starts to be packaged for other distributions and package managers
+we might review this policy to include older Rust releases.
+
+### Building Documentation
+
+#### Python Documentation
+
+The documentation is built with [MkDocs](https://www.mkdocs.org/) using [Material for MkDocs](https://squidfunk.github.io/mkdocs-material/).
+
+Make sure to [activate](#setting-up-your-development-environment) the pixi shell before running these commands.
+
+```bash
+# Start the MkDocs development server
+just docs-serve
+```
+
+The development server will start at `http://127.0.0.1:8000` with live reload enabled.
+
+**Build static site**:
+
+```bash
+just docs-build
+```
+
+This builds the site to `docs/.site` directory.
+
+**Tips**:
+
+- Use `just docs-serve --dirty` to only rebuild changed files (faster for iterative development)
+- You may need to restart if you make changes to `mkdocs.yml`
+- For debugging the doc build logs, check out [docs-output-filter](https://github.com/ianhi/docs-output-filter) (you can run `docs-output-filter -- just docs-serve` once installed). *`docs-output-filter` also works to debug remote builds like RTD with the `--url` flag*
+
+### Docker setup for local storage testing
+
+In order to run local versions of S3 and Azure compatible object stores with Docker, you have to [install Docker](https://docs.docker.com/desktop/) first.
+We provide a docker compose `compose.yaml` file, which you can run with `docker compose up -d` from the root of the repo to start the containers in detached mode.
+`docker ps` should show the `azurite` and `icechunk_rustfs` containers as running (you can also navigate to the GUI e.g. for the rustfs container at `localhost:4201` and log in with the username and password from the `compose.yaml` file to navigate the buckets).
+
+After testing you can clean up with `docker compose down`. To verify that all containers are down use `docker ps` again.
+
+#### Faster linking for incremental builds with mold
+
+On Linux you can use the mold linker for
+significantly faster linking (~5-10x improvement on incremental builds).
+It can be installed with `apt install mold` or `dnf install mold`
+
+Then edit your `~/.cargo/config.toml` to include these configs:
+
+```toml
+[target.x86_64-unknown-linux-gnu]
+rustflags = ["-C", "link-arg=-fuse-ld=mold"]
+
+[target.aarch64-unknown-linux-gnu]
+rustflags = ["-C", "link-arg=-fuse-ld=mold"]
+```
+
+## Roadmap
+
+### Features
+
+- Bindings to other languages: C, Julia
+- Better Python API and helper functions
+- Branch merge
+- Savepoints and persistent sessions
+- Chunk and repo level statistics and metrics
+- More powerful conflict detection and resolution
+- Telemetry
+- More powerful integration with Zarrs
+- [Zep 8](https://github.com/zarr-developers/zarr-python/issues/2943) support
+
+### Performance
+
+- Lower changeset memory footprint
+- Bring back manifest joining for small arrays
+- More flexible caching hierarchy
+- Request batching and splitting
+- Bringing parts of the codec pipeline to the Rust side
+- Chunk compaction

@@ -51,7 +51,7 @@ The following classes, exceptions, and utilities are available directly in the `
 
 ## `icechunk.IcechunkStore`
 
-::: icechunk.zarr.IcechunkStore
+::: icechunk.store.IcechunkStore
 
 ## Exceptions
 
