@@ -9,7 +9,11 @@ use icechunk::{
     store::SetVirtualRefsResult,
 };
 use itertools::Itertools as _;
-use pyo3::{exceptions::PyValueError, prelude::*, types::{PyList, PyTuple}};
+use pyo3::{
+    exceptions::PyValueError,
+    prelude::*,
+    types::{PyList, PyTuple},
+};
 
 use crate::errors::PyIcechunkStoreError;
 
@@ -74,11 +78,8 @@ pub(crate) async fn do_set_virtual_refs(
     validate_containers: bool,
     vrefs: Vec<(ChunkIndices, VirtualChunkRef)>,
 ) -> PyResult<SetVirtualRefsResult> {
-    let array_path = if !array_path.starts_with("/") {
-        format!("/{array_path}")
-    } else {
-        array_path
-    };
+    let array_path =
+        if !array_path.starts_with("/") { format!("/{array_path}") } else { array_path };
     let path = Path::try_from(array_path)
         .map_err(|e| PyValueError::new_err(format!("Invalid array path: {e}")))?;
     store
