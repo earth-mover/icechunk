@@ -84,9 +84,9 @@ Arraylake automates routine maintenance and gives visibility into repository hea
 
 ## When to Use Which
 
-**Use Icechunk on its own** if you are comfortable managing your own cloud infrastructure, don't need a web UI or access control beyond cloud IAM, and want full control with no additional cost or vendor dependency.
+**Use Icechunk on its own** if you are comfortable managing your own cloud infrastructure, don't need a web UI or access control beyond cloud IAM, and want full control with no additional cost or vendor dependency, and only want to access free and open data sources.
 
-**Use Arraylake** if you need team collaboration with role-based access, want a web UI for managing repositories, need to serve data via standard protocols (OGC, OPeNDAP), or want managed operations like garbage collection, credential vending, and monitoring.
+**Use Arraylake** if you need team collaboration with role-based access, want a web UI for managing repositories, need to serve data via standard protocols (OGC, OPeNDAP), or want managed operations like garbage collection, credential vending, and monitoring, or if you want access to paid datasets on Arraylake.
 
 ## No Lock-in
 
