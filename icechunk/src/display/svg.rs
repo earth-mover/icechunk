@@ -186,7 +186,7 @@ impl AncestryGraph {
 
             let _ = writeln!(
                 svg,
-                "  <text x=\"{text_x}\" y=\"{text_y}\">\
+                "  <text x=\"{text_x}\" y=\"{text_y}\" fill=\"#aaa\">\
                  <tspan fill=\"#888\">{short_id}</tspan>\
                  {labels} {msg}</text>"
             );
