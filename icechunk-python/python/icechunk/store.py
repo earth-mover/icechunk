@@ -2,6 +2,8 @@ from collections.abc import AsyncIterator, Iterable
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal
 
+import numpy as np
+
 from icechunk._icechunk_python import PyStore, VirtualChunkSpec
 
 __all__ = [
