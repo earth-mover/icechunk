@@ -271,3 +271,94 @@ def test_write_split_manifest_refs_append(
         session_from_setup.commit("wrote refs")
 
     benchmark.pedantic(commit, setup=write_refs, iterations=1, rounds=rounds)
+
+
+FAKE_URL_PREFIX = "s3://esgf-world/CMIP6/CMIP/CCCma/CanESM5/historical/r10i1p1f1/Omon/uo/gn/v20190429/uo_Omon_CanESM5_historical_r10i1p1f1_gn_185001"
+
+
+@pytest.mark.benchmark(group="refs-write-e2e")
+def test_write_virtual_refs_e2e(benchmark, repo) -> None:
+    """End-to-end benchmark: build VirtualChunkSpec list + set_virtual_refs.
+
+    Simulates VirtualiZarr's write_manifest_virtual_refs workflow:
+    iterates manifest entries in Python, creates VirtualChunkSpec objects,
+    then calls store.set_virtual_refs().
+    """
+    session = repo.writable_session("main")
+    store = session.store
+    group = zarr.group(store)
+    kwargs = dict(
+        name="array",
+        shape=(NUM_VIRTUAL_CHUNK_REFS,),
+        chunks=(1,),
+        dtype=np.int8,
+        dimension_names=("t",),
+        overwrite=True,
+    )
+    try:
+        group.create_array(**kwargs)
+    except AttributeError:
+        group.array(**kwargs)
+    session.commit("initialized")
+
+    @benchmark
+    def write():
+        session = repo.writable_session("main")
+
+        # This mirrors VirtualiZarr's write_manifest_virtual_refs:
+        # Python loop building VirtualChunkSpec objects from manifest entries
+        chunks = [
+            VirtualChunkSpec(
+                index=[i],
+                location=f"{FAKE_URL_PREFIX}-{i}.nc",
+                offset=i * 10,
+                length=i + 5,
+            )
+            for i in range(NUM_VIRTUAL_CHUNK_REFS)
+        ]
+        session.store.set_virtual_refs("array", chunks, validate_containers=False)
+
+
+@pytest.mark.benchmark(group="refs-write-e2e")
+def test_write_virtual_refs_arr_e2e(benchmark, repo) -> None:
+    """End-to-end benchmark: tolist() + set_virtual_refs_arr.
+
+    Same data as test_write_virtual_refs_e2e but uses the new array API.
+    Includes the tolist() conversion to fairly represent the full cost.
+    """
+    session = repo.writable_session("main")
+    store = session.store
+    group = zarr.group(store)
+    kwargs = dict(
+        name="array",
+        shape=(NUM_VIRTUAL_CHUNK_REFS,),
+        chunks=(1,),
+        dtype=np.int8,
+        dimension_names=("t",),
+        overwrite=True,
+    )
+    try:
+        group.create_array(**kwargs)
+    except AttributeError:
+        group.array(**kwargs)
+    session.commit("initialized")
+
+    # Pre-build the numpy arrays (simulating what VirtualiZarr already holds)
+    locations_arr = np.array(
+        [f"{FAKE_URL_PREFIX}-{i}.nc" for i in range(NUM_VIRTUAL_CHUNK_REFS)],
+        dtype=np.dtypes.StringDType(),
+    )
+    offsets_arr = np.arange(NUM_VIRTUAL_CHUNK_REFS, dtype=np.uint64) * 10
+    lengths_arr = np.arange(NUM_VIRTUAL_CHUNK_REFS, dtype=np.uint64) + 5
+
+    @benchmark
+    def write():
+        session = repo.writable_session("main")
+        session.store.set_virtual_refs_arr(
+            "array",
+            chunk_grid_shape=(NUM_VIRTUAL_CHUNK_REFS,),
+            locations=locations_arr.tolist(),
+            offsets=offsets_arr,
+            lengths=lengths_arr,
+            validate_containers=False,
+        )

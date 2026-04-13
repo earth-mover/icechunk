@@ -12,6 +12,7 @@ mod session;
 mod stats;
 mod store;
 mod streams;
+mod virtualrefs;
 
 use std::env;
 
