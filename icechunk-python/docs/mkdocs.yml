@@ -275,3 +275,4 @@ nav:
     - Migrate to 1.0: reference/migration.md
     - Migrate to 2.0: reference/migration-2.md
     - Breaking Changes in 2.0: reference/breaking-changes-2.md
+  - Arraylake: arraylake.md
