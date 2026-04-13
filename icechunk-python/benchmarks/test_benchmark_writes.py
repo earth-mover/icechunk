@@ -316,9 +316,7 @@ def test_write_virtual_refs_e2e(benchmark, repo) -> None:
             )
             for i in range(NUM_VIRTUAL_CHUNK_REFS)
         ]
-        session.store.set_virtual_refs(
-            "array", chunks, validate_containers=False
-        )
+        session.store.set_virtual_refs("array", chunks, validate_containers=False)
 
 
 @pytest.mark.benchmark(group="refs-write-e2e")
@@ -350,8 +348,8 @@ def test_write_virtual_refs_arr_e2e(benchmark, repo) -> None:
         [f"{FAKE_URL_PREFIX}-{i}.nc" for i in range(NUM_VIRTUAL_CHUNK_REFS)],
         dtype=np.dtypes.StringDType(),
     )
-    offsets_arr = (np.arange(NUM_VIRTUAL_CHUNK_REFS, dtype=np.uint64) * 10)
-    lengths_arr = (np.arange(NUM_VIRTUAL_CHUNK_REFS, dtype=np.uint64) + 5)
+    offsets_arr = np.arange(NUM_VIRTUAL_CHUNK_REFS, dtype=np.uint64) * 10
+    lengths_arr = np.arange(NUM_VIRTUAL_CHUNK_REFS, dtype=np.uint64) + 5
 
     @benchmark
     def write():
