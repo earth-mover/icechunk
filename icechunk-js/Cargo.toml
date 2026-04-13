@@ -25,7 +25,7 @@ serde = { version = "1.0.228", features = ["derive", "rc"] }
 chrono = "0.4"
 async-trait = "0.1.89"
 typetag = "0.2.21"
-rand = "0.10.0"
+rand = "0.10.1"
 icechunk-storage = { path = "../icechunk-storage" }
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
