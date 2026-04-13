@@ -17,11 +17,11 @@ Migrating from Icechunk to Arraylake is easy, as any Icechunk Repository can be 
 
 ### Open-Source Storage Engine
 
-These core capabilities ship with Icechunk and are available in both Icechunk and Arraylake.
+Arraylake is built on Icechunk, so these core capabilities ship with Icechunk and are available in both Icechunk and Arraylake.
 
 | Feature | Icechunk | Arraylake |
 |---|---|---|
-| Transactional storage engine | :material-check: | :material-check: Built on Icechunk |
+| Transactional storage engine | :material-check: | :material-check: |
 | Version control (branches, tags, time travel) | :material-check: | :material-check: |
 | ACID transactions with serializable isolation | :material-check: | :material-check: |
 | Virtual chunk references (HDF5, NetCDF, GRIB, TIFF) | :material-check: | :material-check: |
