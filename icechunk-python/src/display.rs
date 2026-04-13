@@ -37,9 +37,44 @@ pub(crate) fn py_option_str(o: &Option<String>) -> String {
     }
 }
 
+/// Format an `Option<T>` showing the effective default in human-readable modes.
+///
+/// - `Repr` mode: `"None"` (preserves round-trip fidelity for `eval(repr(x))`)
+/// - `Str` / `Html` mode: `"<default> (default)"` when `None`, or the value when `Some`
+pub(crate) fn py_option_or_default<T: Display>(
+    o: &Option<T>,
+    default: &str,
+    mode: ReprMode,
+) -> String {
+    match o {
+        Some(v) => v.to_string(),
+        None => match mode {
+            ReprMode::Repr => "None".to_string(),
+            ReprMode::Str | ReprMode::Html => format!("{default} (default)"),
+        },
+    }
+}
+
 /// Format a bool as a Python literal (`True` / `False`).
 pub(crate) fn py_bool(b: bool) -> String {
     if b { "True" } else { "False" }.to_string()
+}
+
+/// Format an `Option<bool>` showing the effective default in human-readable modes.
+pub(crate) fn py_option_bool_or_default(
+    o: &Option<bool>,
+    default: bool,
+    mode: ReprMode,
+) -> String {
+    match o {
+        Some(b) => py_bool(*b),
+        None => match mode {
+            ReprMode::Repr => "None".to_string(),
+            ReprMode::Str | ReprMode::Html => {
+                format!("{} (default)", py_bool(default))
+            }
+        },
+    }
 }
 
 /// Trait for Python repr/str/html methods on icechunk classes.
@@ -119,6 +154,28 @@ pub(crate) fn py_option_nested_repr<T: PyRepr + PyClass>(
     match opt {
         None => "None".to_string(),
         Some(py_obj) => Python::attach(|py| py_obj.borrow(py).render(mode)),
+    }
+}
+
+/// Like [`py_option_nested_repr`], but when the value is `None`, renders the
+/// effective default in human-readable modes (`Str` / `Html`).
+///
+/// The `make_default` closure constructs a default instance of the Python wrapper
+/// type (typically via `RustConfig::default().into()`). The default instance's own
+/// `fields()` method then shows per-field defaults recursively.
+///
+/// `Repr` mode still returns `"None"` to preserve `eval(repr(x))` round-trips.
+pub(crate) fn py_option_nested_repr_or_default<T: PyRepr + PyClass>(
+    opt: &Option<Py<T>>,
+    mode: ReprMode,
+    make_default: impl FnOnce() -> T,
+) -> String {
+    match opt {
+        Some(py_obj) => Python::attach(|py| py_obj.borrow(py).render(mode)),
+        None => match mode {
+            ReprMode::Repr => "None".to_string(),
+            _ => make_default().render(mode),
+        },
     }
 }
 
