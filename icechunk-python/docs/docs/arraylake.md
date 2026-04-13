@@ -9,7 +9,7 @@ title: Arraylake
 Both are made by [Earthmover](https://earthmover.io/).
 
 Icechunk is a fully capable, standalone product -- you never need Arraylake to use it.
-Arraylake adds operational, collaboration, and data delivery features on top of Icechunk for teams that want a managed experience.
+Arraylake adds operational, collaboration, and data-delivery features on top of Icechunk for teams that want a managed experience.
 
 Migrating from Icechunk to Arraylake is easy, as any Icechunk Repository can be directly imported into Arraylake.
 
@@ -84,13 +84,14 @@ Arraylake automates routine maintenance and gives visibility into repository hea
 
 ## When to Use Which
 
-**Use Icechunk on its own** if you are comfortable managing your own cloud infrastructure, don't need a web UI or access control beyond cloud IAM, and want full control with zero cost and zero vendor dependency.
+**Use Icechunk on its own** if you are comfortable managing your own cloud infrastructure, don't need a web UI or access control beyond cloud IAM, and want full control with no additional cost or vendor dependency.
 
 **Use Arraylake** if you need team collaboration with role-based access, want a web UI for managing repositories, need to serve data via standard protocols (OGC, OPeNDAP), or want managed operations like garbage collection, credential vending, and monitoring.
 
 ## No Lock-in
 
 Arraylake stores your data in Icechunk format in your own object storage (bring your own bucket), following the open Icechunk Format Specification.
+If you discontinue your Arraylake subscription, you can still read and write all of your data using Icechunk.
 
 ## Links
 
