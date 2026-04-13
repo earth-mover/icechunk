@@ -70,10 +70,10 @@ Arraylake automates routine maintenance and gives visibility into repository hea
 
 | Feature | Icechunk | Arraylake |
 |---|---|---|
-| [Garbage collection & data expiration](https://docs.earthmover.io/guide/04-garbage-collection) | :material-check: You run it | :material-check: Scheduled, runs on managed compute |
+| [Garbage collection & data expiration](https://docs.earthmover.io/guide/04-garbage-collection) | :material-minus: You run it | :material-check: Scheduled, runs on managed compute |
 | Monitoring & metrics dashboards | :material-minus: | :material-check: Repo-level and org-level |
 | [Webhooks & Slack notifications](https://docs.earthmover.io/guide/07-notifications) | :material-minus: | :material-check: Commit events |
-| [Performance tuning](https://docs.earthmover.io/guide/05-performance) | :material-check: Manual configuration | :material-check: `arraylake repo tune` benchmarking |
+| [Performance tuning](https://docs.earthmover.io/guide/05-performance) | :material-minus: Manual configuration | :material-check: `arraylake repo tune` benchmarking |
 
 ### Support & Pricing
 
