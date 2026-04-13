@@ -73,10 +73,10 @@
     "@emnapi/runtime": "^1.8.1",
     "@napi-rs/cli": "^3.2.0",
     "@napi-rs/wasm-runtime": "^1.1.1",
-    "@oxc-node/core": "^0.0.35",
+    "@oxc-node/core": "^0.1.0",
     "@taplo/cli": "^0.7.0",
     "@tybys/wasm-util": "^0.10.1",
-    "ava": "^6.4.1",
+    "ava": "^7.0.0",
     "chalk": "^5.6.2",
     "husky": "^9.1.7",
     "lint-staged": "^16.1.6",
@@ -84,7 +84,7 @@
     "oxlint": "^1.14.0",
     "prettier": "^3.6.2",
     "tinybench": "^6.0.0",
-    "typescript": "^5.9.2",
+    "typescript": "^6.0.2",
     "zarrita": "^0.6.2"
   },
   "lint-staged": {
