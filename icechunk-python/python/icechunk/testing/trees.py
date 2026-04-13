@@ -20,6 +20,7 @@ import numpy as np
 
 import zarr
 import zarr.abc.store
+import zarr.api.asynchronous
 import zarr.testing.strategies as zrst
 from zarr.testing.strategies import node_names
 
@@ -38,27 +39,27 @@ class ArrayNode:
 class GroupNode:
     children: dict[str, ArrayNode | GroupNode] = field(default_factory=dict)
 
-    def _walk(self, prefix: str = "") -> Iterator[tuple[str, Node]]:
+    def walk(self, prefix: str = "") -> Iterator[tuple[str, Node]]:
         """Yield ``(path, child)`` for every node, depth-first."""
         for name, child in self.children.items():
             p = f"{prefix}/{name}" if prefix else name
             yield p, child
             if isinstance(child, GroupNode):
-                yield from child._walk(p)
+                yield from child.walk(p)
 
     def nodes(self, prefix: str = "", *, include_root: bool = False) -> list[str]:
         """Return paths of all nodes, optionally including root."""
         root = [prefix] if include_root else []
-        return root + [p for p, _ in self._walk(prefix)]
+        return root + [p for p, _ in self.walk(prefix)]
 
     def groups(self, prefix: str = "", *, include_root: bool = False) -> list[str]:
         """Return paths of all group nodes, optionally including root."""
         root = [prefix] if include_root else []
-        return root + [p for p, c in self._walk(prefix) if isinstance(c, GroupNode)]
+        return root + [p for p, c in self.walk(prefix) if isinstance(c, GroupNode)]
 
     def arrays(self, prefix: str = "") -> list[str]:
         """Return paths of all array nodes."""
-        return [p for p, c in self._walk(prefix) if isinstance(c, ArrayNode)]
+        return [p for p, c in self.walk(prefix) if isinstance(c, ArrayNode)]
 
     def materialize(self, store: zarr.abc.store.Store) -> zarr.Group:
         """Write this tree into *store* and return the root group."""
@@ -107,6 +108,28 @@ class GroupNode:
             for part in parts[:-1]:
                 current = current.setdefault(part, {})
             current[parts[-1]] = ArrayNode(shape=(1,), dtype=np.dtype("i4"))
+        return cls.from_dict(tree)
+
+    @classmethod
+    async def from_store_async(cls, store: zarr.abc.store.Store) -> GroupNode:
+        """Build a GroupNode by reading a zarr store's structure.
+
+        Example::
+
+            await GroupNode.from_store_async(some_memory_store)
+        """
+        root = await zarr.api.asynchronous.open_group(store, mode="r")
+        tree: dict[str, Any] = {}
+        async for path, obj in root.members(max_depth=None):
+            parts = path.split("/")
+            current = tree
+            if isinstance(obj, zarr.AsyncArray):
+                for part in parts[:-1]:
+                    current = current.setdefault(part, {})
+                current[parts[-1]] = ArrayNode(shape=obj.shape, dtype=obj.dtype)
+            else:
+                for part in parts:
+                    current = current.setdefault(part, {})
         return cls.from_dict(tree)
 
     @classmethod
