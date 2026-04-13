@@ -12,6 +12,8 @@ from enum import Enum, IntEnum
 from functools import total_ordering
 from typing import Any, final
 
+import numpy as np
+
 from icechunk.types import CommitMethod
 
 class S3Options:
@@ -2534,6 +2536,30 @@ class PyStore:
         array_path: str,
         chunks: list[VirtualChunkSpec],
         validate_containers: bool,
+    ) -> list[tuple[int, ...]] | None: ...
+    def set_virtual_refs_arr(
+        self,
+        array_path: str,
+        chunk_grid_shape: list[int],
+        locations: list[str],
+        offsets: np.ndarray[Any, np.dtype[np.uint64]],
+        lengths: np.ndarray[Any, np.dtype[np.uint64]],
+        *,
+        validate_containers: bool = True,
+        arr_offset: list[int] | None = None,
+        checksum: datetime.datetime | str | None = None,
+    ) -> list[tuple[int, ...]] | None: ...
+    async def set_virtual_refs_arr_async(
+        self,
+        array_path: str,
+        chunk_grid_shape: list[int],
+        locations: list[str],
+        offsets: np.ndarray[Any, np.dtype[np.uint64]],
+        lengths: np.ndarray[Any, np.dtype[np.uint64]],
+        *,
+        validate_containers: bool = True,
+        arr_offset: list[int] | None = None,
+        checksum: datetime.datetime | str | None = None,
     ) -> list[tuple[int, ...]] | None: ...
     async def delete(self, key: str) -> None: ...
     async def delete_dir(self, prefix: str) -> None: ...
