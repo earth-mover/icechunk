@@ -57,7 +57,7 @@ lint *args:
 
 [doc("Run check on all features")]
 check *args:
-  cargo check --profile {{profile}} --all --all-features "$@"
+  cargo check --profile {{profile}} --workspace --all-features "$@"
 
 [doc("Format all Rust files (pass `--check` to verify only)")]
 format *args:
