@@ -1,7 +1,7 @@
 [package]
 name = "icechunk-macros"
 description = "Support and helper macros for the Icechunk library"
-version = "2.0.1"
+version = "2.0.2"
 readme = "../README.md"
 repository = "https://github.com/earth-mover/icechunk"
 homepage = "https://icechunk.io"
