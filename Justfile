@@ -36,7 +36,15 @@ build-release *args:
 
 [doc("Prepare environment for development")]
 develop *args:
-  cd icechunk-python && uv run -m maturin_import_hook site install && maturin develop --uv --profile {{profile}} "$@"
+  cd icechunk-python && maturin develop --uv --profile {{profile}} "$@"
+
+[doc("Install maturin import hook for more convenient development flow")]
+import-hook *args:
+  cd icechunk-python && python -m maturin_import_hook site install
+
+[doc("Uninstall maturin import hook")]
+import-hook-remove *args:
+  cd icechunk-python && python -m maturin_import_hook site uninstall
 
 # Use --all-features for the workspace but skip icechunk's `shuttle` feature,
 # which swaps tokio for shuttle-tokio and is incompatible with other crates.
@@ -46,6 +54,10 @@ icechunk_features := "s3,object-store-s3,object-store-gcs,object-store-azure,obj
 lint *args:
   cargo clippy --profile {{profile}} --all-features --exclude icechunk "$@"
   cargo clippy --profile {{profile}} -p icechunk --features {{icechunk_features}} "$@"
+
+[doc("Run check on all features")]
+check *args:
+  cargo check --profile {{profile}} --all --all-features "$@"
 
 [doc("Format all Rust files (pass `--check` to verify only)")]
 format *args:
