@@ -1486,9 +1486,17 @@ mod tests {
     }
 
     async fn create_memory_store_repository() -> Repository {
+        create_memory_store_repository_with_spec(None).await
+    }
+
+    async fn create_memory_store_repository_with_spec(
+        spec_version: Option<SpecVersionBin>,
+    ) -> Repository {
         let storage =
             new_in_memory_storage().await.expect("failed to create in-memory store");
-        Repository::create(None, storage, HashMap::new(), None, true).await.unwrap()
+        Repository::create(None, storage, HashMap::new(), spec_version, true)
+            .await
+            .unwrap()
     }
 
     async fn all_keys(store: &Store) -> Result<Vec<String>, Box<dyn std::error::Error>> {
@@ -1811,19 +1819,8 @@ mod tests {
     #[tokio_test]
     async fn test_rectilinear_rejected_on_spec_v1()
     -> Result<(), Box<dyn std::error::Error>> {
-        use icechunk_format::format_constants::SpecVersionBin;
-
-        let storage =
-            new_in_memory_storage().await.expect("failed to create in-memory store");
-        let repo = Repository::create(
-            None,
-            storage,
-            HashMap::new(),
-            Some(SpecVersionBin::V1),
-            true,
-        )
-        .await
-        .unwrap();
+        let repo =
+            create_memory_store_repository_with_spec(Some(SpecVersionBin::V1)).await;
         let session = repo.writable_session("main").await?;
         let session = Arc::new(RwLock::new(session));
         let store = Store::from_session(Arc::clone(&session)).await;
