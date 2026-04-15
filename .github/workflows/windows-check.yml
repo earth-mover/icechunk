@@ -8,6 +8,13 @@ on:
       - main
       - 'support/**'
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  content: read
+
 env:
   CARGO_INCREMENTAL: 0
   CARGO_NET_RETRY: 10
@@ -15,43 +22,33 @@ env:
   RUST_BACKTRACE: short
   RUSTFLAGS: "-D warnings"
   RUSTUP_MAX_RETRIES: 10
+  PIXI_VERSION: "v0.63.2"
 
 jobs:
   rust:
     name: Run rust tests in windows
     timeout-minutes: 20
     runs-on: windows-latest
-    #defaults:
-    #  run:
-    #    working-directory: ./
-    #permissions:
-      #contents: read
-      #actions: read
-      #pull-requests: read
-    env:
-      #CC: deny_c
-      RUST_CHANNEL: '1.91.1'
-      CARGO_DENY_VERSION: '0.19.0'
-
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           ref: ${{ github.event.pull_request.head.sha }}
-
-      - name: Install Rust toolchain
-        run: |
-          rustup update --no-self-update ${{ env.RUST_CHANNEL }}
-          rustup component add --toolchain ${{ env.RUST_CHANNEL }} rustfmt rust-src clippy
-          rustup default ${{ env.RUST_CHANNEL }}
+          persist-credentials: false
 
       - name: Cache Dependencies
         uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
         with:
-          # workspaces: "rust -> target"
-          key: windows-${{ env.RUST_CHANNEL }}
+          add-job-id-key: "false"
 
-      - name: Check
+      - uses: prefix-dev/setup-pixi@a0af7a228712d6121d37aba47adf55c1332c9c2e # v0.9.4
+        with:
+          pixi-version: ${{ env.PIXI_VERSION }}
+          cache: true
+          activate-environment: true
+          manifest-path: icechunk-python/pyproject.toml
+
+      - name: Run tests
         run: |
-          cargo test --lib --profile ci
+          just profile=ci unit-test
