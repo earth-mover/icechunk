@@ -223,3 +223,6 @@ default = { features = [
   "test",
 ], solve-group = "default" }
 benchmark = { features = ["benchmark"], solve-group = "default" }
+
+[tool.pixi.system-requirements]
+libc   = { family = "glibc", version = "2.30" }
