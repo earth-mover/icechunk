@@ -148,6 +148,34 @@ docs-serve *args:
 docs-build *args:
   mkdocs build -f icechunk-python/docs/mkdocs.yml "$@"
 
+[doc("Check compatibility with zarrs_icechunk")]
+zarrs-upstream zarrs_dir="../zarrs_icechunk": zarrs-upstream-clone zarrs-upstream-patch zarrs-upstream-build zarrs-upstream-test
+  @echo "zarrs_upstream check passed"
+  rm -rf {{zarrs_dir}}
+
+zarrs-upstream-clone zarrs_dir="../zarrs_icechunk":
+  rm -rf {{zarrs_dir}}
+  git clone https://github.com/zarrs/zarrs_icechunk {{zarrs_dir}}
+
+[doc("Patch zarrs_icechunk Cargo.toml to use local icechunk crate")]
+zarrs-upstream-patch zarrs_dir="../zarrs_icechunk":
+  #!/usr/bin/env bash
+  set -euo pipefail
+  icechunk_path=$(realpath icechunk)
+  sed -i '/^\[patch\.crates-io\]/a icechunk = { path = "'"$icechunk_path"'" }' {{zarrs_dir}}/Cargo.toml
+
+[doc("Build zarrs_icechunk against local icechunk")]
+zarrs-upstream-build zarrs_dir="../zarrs_icechunk":
+  #!/usr/bin/env bash
+  set -euo pipefail
+  cd {{zarrs_dir}} && cargo build 2>&1 | tee build-output.log
+
+[doc("Test zarrs_icechunk against local icechunk")]
+zarrs-upstream-test zarrs_dir="../zarrs_icechunk":
+  #!/usr/bin/env bash
+  set -euo pipefail
+  cd {{zarrs_dir}} && cargo test 2>&1 | tee test-output.log
+
 [doc("Run all Python and Rust checks")]
 all-checks:
   just pytest

@@ -24,8 +24,7 @@ env:
   CARGO_NET_RETRY: 10
   RUST_BACKTRACE: short
   RUSTFLAGS: "-D warnings"
-  RUST_CHANNEL: '1.91.1'
-  CARGO_DENY_VERSION: '0.19.0'
+  PIXI_VERSION: "v0.63.2"
 
 jobs:
   zarrs:
@@ -50,38 +49,35 @@ jobs:
           repository: "zarrs/zarrs_icechunk"
           path: "zarrs_icechunk"
 
-      - name: Patch zarrs_icechunk to use local icechunk
-        shell: bash
-        run: |
-          # zarrs_icechunk already has a [patch.crates-io] section (with commented entries),
-          # so we append the icechunk entry under it instead of creating a duplicate section.
-          sed -i '/^\[patch\.crates-io\]/a icechunk = { path = "../icechunk/icechunk" }' zarrs_icechunk/Cargo.toml
-
-      - name: Install Rust toolchain
-        run: |
-          rustup update --no-self-update ${{ env.RUST_CHANNEL }}
-          rustup default ${{ env.RUST_CHANNEL }}
-
       - name: Cache Dependencies
         uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
         with:
           workspaces: "zarrs_icechunk -> target"
-          key: zarrs-upstream-${{ env.RUST_CHANNEL }}
+
+      - uses: prefix-dev/setup-pixi@a0af7a228712d6121d37aba47adf55c1332c9c2e # v0.9.4
+        with:
+          pixi-version: ${{ env.PIXI_VERSION }}
+          cache: true
+          activate-environment: true
+          manifest-path: icechunk/icechunk-python/pyproject.toml
+
+      - name: Patch zarrs_icechunk to use local icechunk
+        working-directory: icechunk
+        run: |
+          just zarrs-upstream-patch
 
       - name: Build zarrs_icechunk
         id: build
-        shell: bash
-        working-directory: zarrs_icechunk
+        working-directory: icechunk
         run: |
-          cargo build 2>&1 | tee build-output.log
+          just zarrs-upstream-build
 
       - name: Test zarrs_icechunk
         id: test
         if: steps.build.outcome == 'success'
-        shell: bash
-        working-directory: zarrs_icechunk
+        working-directory: icechunk
         run: |
-          cargo test 2>&1 | tee test-output.log
+          just zarrs-upstream-test
 
       - name: Create or update failure issue
         if: |
