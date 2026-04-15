@@ -46,9 +46,12 @@ jobs:
         with:
           pixi-version: ${{ env.PIXI_VERSION }}
           cache: true
-          activate-environment: true
           manifest-path: icechunk-python/pyproject.toml
+          # environment activation doesn't work on windows
+          # https://github.com/prefix-dev/setup-pixi/issues/122#issuecomment-2326495414
+          # activate-environment: true
 
       - name: Run tests
+        shell: pixi run pwsh -Command {0}
         run: |
           just profile=ci unit-test
