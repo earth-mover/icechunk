@@ -58,7 +58,7 @@ jobs:
           activate-environment: true
           manifest-path: icechunk/icechunk-python/pyproject.toml
 
-      - name: Patch zarrs_icechunk to use local icechunk
+      - name: clone zarrs_icechunk
         working-directory: icechunk
         run: |
           just zarrs-upstream-clone
@@ -67,6 +67,11 @@ jobs:
         working-directory: icechunk
         run: |
           just zarrs-upstream-patch
+
+      - name: check Cargo.toml
+        working-directory: zarrs_icechunk
+        run: |
+          cat Cargo.toml
 
       - name: Build zarrs_icechunk
         id: build
