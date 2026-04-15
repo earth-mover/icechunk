@@ -848,9 +848,9 @@ async fn set_array_meta(
     array_meta: ArrayMetadata,
     session: &mut Session,
 ) -> StoreResult<()> {
-    if array_meta.is_rectilinear() && session.spec_version() < SpecVersionBin::V2 {
+    if !array_meta.is_regular() && session.spec_version() < SpecVersionBin::V2 {
         return Err(StoreErrorKind::BadChunkGridMetadata(
-            "Rectilinear chunk grids are not supported in icechunk format version 1. \
+            "Non-regular chunk grids are not supported in icechunk format version 1. \
              Please use spec_version=2 or higher."
                 .into(),
         ))
@@ -1155,8 +1155,8 @@ impl ArrayMetadata {
             .map(|ds| ds.iter().map(|d| d.as_ref().map(|s| s.as_str()).into()).collect())
     }
 
-    fn is_rectilinear(&self) -> bool {
-        self.chunk_grid.name == "rectilinear"
+    fn is_regular(&self) -> bool {
+        self.chunk_grid.name == "regular"
     }
 
     fn num_chunks(&self) -> StoreResult<Vec<u32>> {
@@ -1832,7 +1832,7 @@ mod tests {
         assert!(result.is_err(), "store.set should reject rectilinear on V1");
         let err = result.unwrap_err().to_string();
         assert!(
-            err.contains("Rectilinear chunk grids are not supported"),
+            err.contains("Non-regular chunk grids are not supported"),
             "unexpected error: {err}"
         );
         Ok(())
