@@ -17,7 +17,6 @@ concurrency:
 
 permissions:
   contents: read
-  issues: write
 
 env:
   CARGO_INCREMENTAL: 0
@@ -42,12 +41,14 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           path: "icechunk"
+          persist-credentials: false
 
       - name: Checkout zarrs_icechunk
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           repository: "zarrs/zarrs_icechunk"
           path: "zarrs_icechunk"
+          persist-credentials: false
 
       - name: Cache Dependencies
         uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
@@ -87,6 +88,8 @@ jobs:
           && github.repository_owner == 'earth-mover'
         shell: bash
         working-directory: .
+        permissions:
+          issues: write
         run: |
           # Read the template
           template=$(cat icechunk/.github/zarrs-upstream-failure-template.md)
@@ -111,9 +114,9 @@ jobs:
           fi
 
           # Replace placeholders
-          issue_body="${template//\{\{WORKFLOW\}\}/${{ github.workflow }}}"
-          issue_body="${issue_body//\{\{RUN_ID\}\}/${{ github.run_id }}}"
-          issue_body="${issue_body//\{\{RUN_URL\}\}/${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}}"
+          issue_body="${template//\{\{WORKFLOW\}\}/${GITHUB_WORKFLOW}}"
+          issue_body="${issue_body//\{\{RUN_ID\}\}/${RUN_ID}}"
+          issue_body="${issue_body//\{\{RUN_URL\}\}/${RUN_URL}}"
           issue_body="${issue_body//\{\{DATE\}\}/$(date -u)}"
           issue_body="${issue_body//\{\{TEST_OUTPUT\}\}/$test_output}"
 
@@ -135,3 +138,5 @@ jobs:
           fi
         env:
           GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
