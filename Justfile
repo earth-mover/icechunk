@@ -149,7 +149,7 @@ docs-build *args:
   mkdocs build -f icechunk-python/docs/mkdocs.yml "$@"
 
 [doc("Check compatibility with zarrs_icechunk")]
-zarrs-upstream zarrs_dir="../zarrs_icechunk":  zarrs-upstream-clone zarrs-upstream-test
+zarrs-upstream zarrs_dir="../zarrs_icechunk": zarrs-upstream-clone zarrs-upstream-test
   @echo "zarrs_upstream check passed"
   rm -rf {{zarrs_dir}}
 
