@@ -68,11 +68,6 @@ jobs:
         run: |
           just zarrs-upstream-patch
 
-      - name: check Cargo.toml
-        working-directory: zarrs_icechunk
-        run: |
-          cat Cargo.toml
-
       - name: Build zarrs_icechunk
         id: build
         working-directory: icechunk
