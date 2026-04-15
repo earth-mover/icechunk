@@ -46,13 +46,6 @@ jobs:
           path: "icechunk"
           persist-credentials: false
 
-      - name: Checkout zarrs_icechunk
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
-        with:
-          repository: "zarrs/zarrs_icechunk"
-          path: "zarrs_icechunk"
-          persist-credentials: false
-
       - name: Cache Dependencies
         uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
         with:
@@ -64,6 +57,11 @@ jobs:
           cache: true
           activate-environment: true
           manifest-path: icechunk/icechunk-python/pyproject.toml
+
+      - name: Patch zarrs_icechunk to use local icechunk
+        working-directory: icechunk
+        run: |
+          just zarrs-upstream-clone
 
       - name: Patch zarrs_icechunk to use local icechunk
         working-directory: icechunk
