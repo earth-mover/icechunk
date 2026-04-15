@@ -25,8 +25,8 @@ env:
   RUST_BACKTRACE: short
   RUSTFLAGS: "-D warnings"
   RUSTUP_MAX_RETRIES: 10
-  RUST_CHANNEL: '1.91.1'
-  CARGO_DENY_VERSION: '0.19.0'
+  MSRV: '1.91.1'
+  PIXI_VERSION: "v0.63.2"
 
 jobs:
   rust:
@@ -55,9 +55,9 @@ jobs:
       - name: Check if MSRV is up to date
         run: |
           set -e
-          grep 'rust-version = "${{ env.RUST_CHANNEL }}"' Cargo.toml
+          grep 'rust-version = "${{ env.MSRV }}"' Cargo.toml
           # shellcheck disable=SC2016
-          grep 'The current MSRV is `${{ env.RUST_CHANNEL }}`' icechunk-python/docs/docs/reference/contributing.md
+          grep 'The current MSRV is `${{ env.MSRV }}`' icechunk-python/docs/docs/reference/contributing.md
 
       - name: Stand up docker services
         if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm'
@@ -80,24 +80,17 @@ jobs:
               sleep 1
           done
 
-      - name: Install Just
-        if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm'
-        run: sudo snap install --edge --classic just
-
-      - name: Install cargo nextest
-        uses: taiki-e/install-action@98ec31d284eb962f41c14065e9391a955aa810cf # nextest
-
-      - name: Install Rust toolchain
-        run: |
-          rustup update --no-self-update ${{ env.RUST_CHANNEL }}
-          rustup component add --toolchain ${{ env.RUST_CHANNEL }} rustfmt rust-src clippy
-          rustup default ${{ env.RUST_CHANNEL }}
-
       - name: Cache Dependencies
         uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
         with:
-          # workspaces: "rust -> target"
-          key: ${{ env.RUST_CHANNEL }}
+          add-job-id-key: "false"
+
+      - uses: prefix-dev/setup-pixi@a0af7a228712d6121d37aba47adf55c1332c9c2e # v0.9.4
+        with:
+          pixi-version: ${{ env.PIXI_VERSION }}
+          cache: true
+          activate-environment: true
+          manifest-path: icechunk-python/pyproject.toml
 
       - name: Run tests with Docker services
         if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm'
@@ -135,7 +128,7 @@ jobs:
       - name: Run unit tests only
         if: matrix.os != 'ubuntu-latest' && matrix.os != 'ubuntu-24.04-arm'
         run: |
-          cargo test --lib --profile ci
+          just profile=ci unit-test
 
       - name: Run integration tests against object stores
         if: github.event_name == 'cron'
@@ -204,8 +197,8 @@ jobs:
 
       - name: Install Rust toolchain
         run: |
-          rustup update --no-self-update ${{ env.RUST_CHANNEL }}
-          rustup default ${{ env.RUST_CHANNEL }}
+          rustup update --no-self-update ${{ env.MSRV }}
+          rustup default ${{ env.MSRV }}
           rustup target add wasm32-wasip1-threads
 
       - name: Install LLVM toolchain for wasm C deps
@@ -224,7 +217,7 @@ jobs:
       - name: Cache Dependencies
         uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
         with:
-          key: wasm-${{ env.RUST_CHANNEL }}
+          key: wasm-${{ env.MSRV }}
 
       - name: Run wasm build check
         env:
