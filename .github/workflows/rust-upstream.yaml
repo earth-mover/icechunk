@@ -30,6 +30,9 @@ jobs:
     name: zarrs-upstream
     runs-on: ubuntu-latest
     continue-on-error: true
+    outputs:
+      build-outcome: ${{ steps.build.outcome }}
+      test-outcome: ${{ steps.test.outcome }}
     if: ${{
       (contains(github.event.pull_request.labels.*.name, 'test-upstream') && github.event_name == 'pull_request')
       || github.event_name == 'workflow_dispatch'
@@ -81,26 +84,27 @@ jobs:
           just zarrs-upstream-test
 
       - name: Upload log
+        if: always()
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
         with:
           name: test-output.log
           path: zarrs-icechunk/test-output.log
 
   zarrs-report:
-    name: zarrs-upstream
+    name: zarrs-upstream-report
     runs-on: ubuntu-latest
     continue-on-error: true
     needs: zarrs
     permissions:
       issues: write
+    if: |
+      always()
+      && (needs.zarrs.outputs.build-outcome == 'failure' || needs.zarrs.outputs.test-outcome == 'failure')
+      && github.event_name == 'schedule'
+      && github.repository_owner == 'earth-mover'
     steps:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
       - name: Create or update failure issue
-        if: |
-          always()
-          && (steps.build.outcome == 'failure' || steps.test.outcome == 'failure')
-          && github.event_name == 'schedule'
-          && github.repository_owner == 'earth-mover'
         shell: bash
         working-directory: .
         run: |
