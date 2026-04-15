@@ -52,6 +52,6 @@ jobs:
           # activate-environment: true
 
       - name: Run tests
-        shell: pixi -m icechunk-python/pyproject.toml run pwsh -Command {0}
+        shell: pixi run -m icechunk-python/pyproject.toml pwsh -Command {0}
         run: |
           just profile=ci unit-test
