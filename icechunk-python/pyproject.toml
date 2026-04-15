@@ -215,6 +215,12 @@ cargo-nextest = ">=0.9.106,<0.10"
 flatbuffers = "*"
 samply = ">=0.13.1,<0.14"
 
+[tool.pixi.feature.build.target.linux-64.dependencies]
+sysroot_linux-64 = ">=2.34"
+
+[tool.pixi.feature.build.target.linux-aarch64.dependencies]
+sysroot_linux-aarch64 = ">=2.34"
+
 [tool.pixi.environments]
 default = { features = [
   "build",
@@ -225,4 +231,4 @@ default = { features = [
 benchmark = { features = ["benchmark"], solve-group = "default" }
 
 [tool.pixi.system-requirements]
-libc   = { family = "glibc", version = "2.30" }
+libc   = { family = "glibc", version = "2.34" }
