@@ -80,7 +80,9 @@ session.commit("add rectilinear array")
 
 ## Virtually ingesting existing Zarr stores
 
-If your data is already in Zarr format — either Zarr v2 or Zarr v3 — you can virtually ingest it into Icechunk without rewriting any chunks. Every chunk stays in the source store; Icechunk just records a reference to it. This is a fast way to bring an existing Zarr archive under Icechunk's version control, and a stepping stone for consolidating multiple stores into a single Icechunk repository. See the [Virtual Datasets guide](./virtual.md) for background on how virtual references work.
+If your data is already in Zarr format — either Zarr v2 or Zarr v3 — you can virtually ingest it into Icechunk without rewriting any chunks. This brings an existing Zarr archive under Icechunk's version control and makes it possible to consolidate multiple stores into a single Icechunk repository, all without copying data.
+
+Crucially, because the chunks remain in the source store and Icechunk only records references to them, the Icechunk repo depends on the source store continuing to exist — if the source is deleted or moved, reads from the Icechunk repo will fail. See the [Virtual Datasets guide](./virtual.md) for background on how virtual references work.
 
 Use VirtualiZarr's [`ZarrParser`](https://virtualizarr.readthedocs.io/en/latest/usage.html), which handles both v2 and v3 stores and auto-detects the format. This requires `virtualizarr >= 2.5.0` (sharded v3 arrays require `>= 2.5.1`).
 
@@ -138,6 +140,6 @@ virtual_ds.vz.to_icechunk(session.store)
 session.commit("Virtually ingest existing Zarr store")
 ```
 
-!!! note
+!!! tip
 
-    Virtual ingestion does not move or copy the original chunks — the Icechunk repo will fail to read if the source store is deleted. If you later want Icechunk to own the data, you can read back the virtual dataset and rewrite it as native chunks (e.g. with `xarray`'s `to_zarr` into a fresh Icechunk session).
+    If you later want Icechunk to own the data outright (so the source store can be deleted), read back the virtual dataset and rewrite it as native chunks — e.g. with `xarray`'s `to_zarr` into a fresh Icechunk session.
