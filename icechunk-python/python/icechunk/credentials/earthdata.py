@@ -105,11 +105,9 @@ class _EarthdataCredentialFetcher:
                 "NASA Earthdata bearer token was rejected. "
                 "The token may be expired or invalid."
             )
-            raise PermissionError(msg)
+            raise PermissionError(msg) from None
 
-    def _fetch_with_basic_auth(
-        self, auth: tuple[str, str] | None
-    ) -> dict[str, str]:
+    def _fetch_with_basic_auth(self, auth: tuple[str, str] | None) -> dict[str, str]:
         """Fetch credentials via the Basic Auth redirect flow.
 
         1. GET /s3credentials → 307 to EDL authorize
@@ -140,17 +138,13 @@ class _EarthdataCredentialFetcher:
                 f"Set EARTHDATA_USERNAME and EARTHDATA_PASSWORD environment "
                 f"variables, or add an entry for '{self.host}' in ~/.netrc."
             )
-            raise PermissionError(msg)
+            raise PermissionError(msg) from None
 
-        encoded = base64.b64encode(
-            f"{cred_auth[0]}:{cred_auth[1]}".encode()
-        ).decode()
+        encoded = base64.b64encode(f"{cred_auth[0]}:{cred_auth[1]}".encode()).decode()
 
         # Steps 2-3: authenticate with EDL, then follow the remaining
         # redirect chain back to the DAAC with cookie handling
-        cookie_opener = build_opener(
-            HTTPCookieProcessor(http.cookiejar.CookieJar())
-        )
+        cookie_opener = build_opener(HTTPCookieProcessor(http.cookiejar.CookieJar()))
         req = Request(
             redirect_url,
             headers={"Authorization": f"Basic {encoded}"},
@@ -161,7 +155,7 @@ class _EarthdataCredentialFetcher:
             return json.loads(data)  # type: ignore[no-any-return]
         except json.JSONDecodeError:
             msg = "NASA Earthdata Login credentials were rejected."
-            raise PermissionError(msg)
+            raise PermissionError(msg) from None
 
 
 def s3_earthdata_credentials(
@@ -257,14 +251,10 @@ def s3_earthdata_credentials(
     ...     "s3://nsidc-cumulus-prod-protected/": creds,
     ... })
     """
-    resolved_host = host or os.environ.get(
-        "EARTHDATA_HOST", DEFAULT_EARTHDATA_HOST
-    )
+    resolved_host = host or os.environ.get("EARTHDATA_HOST", DEFAULT_EARTHDATA_HOST)
     resolved_auth = auth or _read_earthdata_auth_from_env()
 
-    fetcher = _EarthdataCredentialFetcher(
-        credentials_url, resolved_host, resolved_auth
-    )
+    fetcher = _EarthdataCredentialFetcher(credentials_url, resolved_host, resolved_auth)
     return s3_refreshable_credentials(
         fetcher,
         scatter_initial_credentials=scatter_initial_credentials,
