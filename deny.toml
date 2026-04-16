@@ -16,10 +16,6 @@ unmaintained = "workspace"
 ignore = [
   # generator crate: transitive dev-dependency via noxious-client, only used in tests
   "RUSTSEC-2020-0151",
-  # rustls-webpki CRL matching bug: transitive dep via aws-smithy-http-client -> rustls 0.21.
-  # No newer aws-smithy-http-client available that uses rustls 0.23+. Low impact per advisory:
-  # requires compromised CA, and default UnknownStatusPolicy::Deny fails safe.
-  "RUSTSEC-2026-0049",
 ]
 
 [licenses]
