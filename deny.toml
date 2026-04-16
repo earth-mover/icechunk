@@ -16,10 +16,11 @@ unmaintained = "workspace"
 ignore = [
   # generator crate: transitive dev-dependency via noxious-client, only used in tests
   "RUSTSEC-2020-0151",
-  # rustls-webpki 0.101.7 URI name constraint bug: transitive dep via aws-smithy-http-client
+  # rustls-webpki 0.101.7 name constraint bugs: transitive dep via aws-smithy-http-client
   # -> rustls 0.21. No upgrade path until AWS SDK drops rustls 0.21. Low impact: reachable
   # only after signature verification and requires CA misissuance to exploit.
   "RUSTSEC-2026-0098",
+  "RUSTSEC-2026-0099",
 ]
 
 [licenses]
