@@ -15,6 +15,9 @@ Many NASA datasets are hosted in AWS S3 but require authentication through [NASA
     Direct S3 access to [NASA Earthdata](https://www.earthdata.nasa.gov/) buckets **only works from the us-west-2 AWS region**.
     The temporary credentials are scoped to same-region access only — attempting
     to read data from outside us-west-2 will result in an `AccessDenied` error.
+    To access NASA data from outside us-west-2, virtual datasets can be built
+    with HTTPS references instead of S3 references, using Icechunk's
+    [HTTP virtual chunk containers](../guides/virtual.md).
 
 ## Example: Reading a virtual dataset
 
