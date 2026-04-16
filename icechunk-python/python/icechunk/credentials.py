@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import http.cookiejar
 import json
 import netrc as _netrc_module
 import os
@@ -8,7 +9,12 @@ from collections.abc import Callable, Mapping
 from datetime import datetime
 from typing import cast
 from urllib.parse import urlparse
-from urllib.request import HTTPRedirectHandler, Request, build_opener
+from urllib.request import (
+    HTTPCookieProcessor,
+    HTTPRedirectHandler,
+    Request,
+    build_opener,
+)
 
 from icechunk._icechunk_python import (
     AzureCredentials,
@@ -577,19 +583,26 @@ class _EarthdataCredentialFetcher:
     def _fetch_with_basic_auth(
         self, auth: tuple[str, str] | None
     ) -> dict[str, str]:
+        """Fetch credentials via the Basic Auth redirect flow.
+
+        1. GET /s3credentials → 307 to EDL authorize
+        2. GET EDL with Basic Auth → 302 back to DAAC /redirect?code=...
+        3. Follow remaining redirects with cookies → returns JSON
+        """
         import base64
 
-        opener = build_opener(_NoRedirectHandler)
+        # Step 1: capture the redirect to EDL
+        no_redirect_opener = build_opener(_NoRedirectHandler)
         req = Request(self.credentials_url)
 
         try:
-            response = opener.open(req)
+            response = no_redirect_opener.open(req)
             return json.loads(response.read().decode())  # type: ignore[no-any-return]
         except _Redirect as r:
             redirect_url = r.url
 
+        # Resolve auth credentials
         redirect_host = urlparse(redirect_url).hostname
-
         cred_auth = auth if redirect_host == self.host else None
         if cred_auth is None and redirect_host:
             cred_auth = _read_auth_from_netrc(redirect_host)
@@ -608,19 +621,20 @@ class _EarthdataCredentialFetcher:
             f"{cred_auth[0]}:{cred_auth[1]}".encode()
         ).decode()
 
+        # Steps 2-3: authenticate with EDL, then follow the remaining
+        # redirect chain back to the DAAC with cookie handling
+        cookie_opener = build_opener(
+            HTTPCookieProcessor(http.cookiejar.CookieJar())
+        )
         req = Request(
             redirect_url,
             headers={"Authorization": f"Basic {encoded}"},
         )
+        response = cookie_opener.open(req)
+        data = response.read().decode()
         try:
-            response = opener.open(req)
-            data = response.read().decode()
-            try:
-                return json.loads(data)  # type: ignore[no-any-return]
-            except json.JSONDecodeError:
-                msg = "NASA Earthdata Login credentials were rejected."
-                raise PermissionError(msg)
-        except _Redirect:
+            return json.loads(data)  # type: ignore[no-any-return]
+        except json.JSONDecodeError:
             msg = "NASA Earthdata Login credentials were rejected."
             raise PermissionError(msg)
 
