@@ -170,13 +170,13 @@ jobs:
 
   #     - name: Install Rust toolchain
   #       run: |
-  #         rustup update --no-self-update ${{ env.RUST_CHANNEL }}
-  #         rustup default ${{ env.RUST_CHANNEL }}
+  #         rustup update --no-self-update ${{ env.MSRV }}
+  #         rustup default ${{ env.MSRV }}
 
   #     - name: Cache Dependencies
   #       uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
   #       with:
-  #         key: shuttle-${{ env.RUST_CHANNEL }}
+  #         key: shuttle-${{ env.MSRV }}
 
   #     - name: Compile shuttle tests
   #       run: cargo test -p icechunk --features shuttle --test test_shuttle --no-run
