@@ -30,7 +30,7 @@ env:
 jobs:
   zarrs:
     name: zarrs-upstream
-    runs-on: ubuntu-latest
+    runs-on: runs-on=${{ github.run_id }}/runner=8cpu-linux-x64/extras=s3-cache
     continue-on-error: true
     if: ${{
       (contains(github.event.pull_request.labels.*.name, 'test-upstream') && github.event_name == 'pull_request')
@@ -39,6 +39,7 @@ jobs:
       || github.event_name == 'push'
       }}
     steps:
+      - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0 # v2
       - name: Checkout icechunk
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
