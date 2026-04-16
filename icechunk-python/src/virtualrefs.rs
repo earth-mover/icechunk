@@ -57,6 +57,14 @@ pub(crate) fn build_vrefs_from_arrays(
         .map(|i| {
             let loc_item = locations.get_item(i)?;
             let loc_str: &str = loc_item.extract()?;
+            // Empty paths represent missing chunks — skip them.
+            // We use empty strings rather than Option/None because callers
+            // (e.g. VirtualiZarr) store paths in numpy StringDType arrays,
+            // which can be passed via `.tolist()` directly. Using None would
+            // require a Python loop to convert empty strings to None first.
+            if loc_str.is_empty() {
+                return Ok(None);
+            }
             let location = VirtualChunkLocation::from_url(loc_str)
                 .map_err(PyIcechunkStoreError::from)?;
             let indices = flat_to_nd_indices(i, chunk_grid_shape, arr_offset);
@@ -66,8 +74,9 @@ pub(crate) fn build_vrefs_from_arrays(
                 length: lengths[i],
                 checksum: checksum.clone(),
             };
-            Ok((indices, vref))
+            Ok(Some((indices, vref)))
         })
+        .filter_map(|r| r.transpose())
         .collect()
 }
 
