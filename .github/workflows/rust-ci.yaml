@@ -85,6 +85,10 @@ jobs:
         uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
         with:
           add-job-id-key: "false"
+          # The rust cache includes a dep on the Python version (when building icechunk-python)
+          # so we need to bump the version here whenever Python version is updated
+          # Currently: 3.14
+          prefix-key: "rust-py314"
 
       - uses: prefix-dev/setup-pixi@a0af7a228712d6121d37aba47adf55c1332c9c2e # v0.9.4
         with:
