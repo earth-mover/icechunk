@@ -511,7 +511,7 @@ class _Redirect(Exception):
 
 class _NoRedirectHandler(HTTPRedirectHandler):
     def redirect_request(
-        self, req, fp, code, msg, headers, newurl  # noqa: ANN001
+        self, req: Request, fp: object, code: int, msg: str, headers: object, newurl: str
     ) -> None:
         raise _Redirect(newurl)
 
