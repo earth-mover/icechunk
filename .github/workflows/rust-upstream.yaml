@@ -94,7 +94,7 @@ jobs:
     continue-on-error: true
     needs: zarrs
     permissions:
-      issues: write
+      issues: write # needed to create/update failure issues when nightly tests fail
     if: |
       always()
       && (needs.zarrs.outputs.build-outcome == 'failure' || needs.zarrs.outputs.test-outcome == 'failure')

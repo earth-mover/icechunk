@@ -24,6 +24,9 @@ env:
   RUSTUP_MAX_RETRIES: 10
   PIXI_VERSION: "v0.63.2"
 
+permissions:
+  contents: read
+
 jobs:
   check-dependencies:
     name: Check Dependencies
@@ -35,6 +38,7 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
 
       - uses: prefix-dev/setup-pixi@a0af7a228712d6121d37aba47adf55c1332c9c2e # v0.9.4
         with:
