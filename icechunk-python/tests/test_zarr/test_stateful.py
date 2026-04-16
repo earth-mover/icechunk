@@ -4,9 +4,8 @@ from collections.abc import Callable
 from typing import Any, TypeVar
 
 import hypothesis.strategies as st
-import numpy as np
 import pytest
-from hypothesis import assume, note
+from hypothesis import note
 from hypothesis.stateful import (
     initialize,
     invariant,
@@ -32,10 +31,6 @@ from zarr.core.buffer import default_buffer_prototype
 from zarr.testing.stateful import ZarrHierarchyStateMachine, split_prefix_name
 
 PROTOTYPE = default_buffer_prototype()
-from zarr.testing.strategies import (
-    node_names,
-    np_array_and_chunks,
-)
 
 Frequency = TypeVar("Frequency", bound=Callable[..., Any])
 
@@ -285,22 +280,6 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         note(f"shifting array '{array_path}' by {offset}")
         self.store.session.shift_array(f"/{array_path}", offset)
         self._sync(self.model.shift_array(array_path, offset, num_chunks))
-
-    @rule(
-        data=st.data(),
-        name=node_names,
-        array_and_chunks=np_array_and_chunks(),
-    )
-    def add_array(
-        self,
-        data: st.DataObject,
-        name: str,
-        array_and_chunks: tuple[np.ndarray[Any, Any], tuple[int, ...]],
-    ) -> None:
-        array, _ = array_and_chunks
-        # TODO: support size-0 arrays GH392
-        assume(array.size > 0)
-        super().add_array(data, name, array_and_chunks)
 
     def _compare_list_dir(
         self, model: ModelStore, store: ic.IcechunkStore, paths: set[str]
