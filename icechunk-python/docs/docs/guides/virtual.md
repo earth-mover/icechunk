@@ -298,7 +298,7 @@ No extra configuration is necessary for local filesystem references.
 
 ### Virtual Reference File Format Support
 
-Icechunk supports storing virtual references to any format that VirtualiZarr can parse. VirtualiZarr ships with parsers for a range of formats, including `HDF5`, `netcdf4`, `netcdf3`, and `TIFF/GeoTIFF`. You can also write your own [custom parser](https://virtualizarr.readthedocs.io/en/latest/custom_parsers.html) for virtualizing other file formats.
+Icechunk supports storing virtual references to any format that VirtualiZarr can parse. VirtualiZarr ships with parsers for a range of formats, including `HDF5`, `netcdf4`, `netcdf3`, `TIFF/GeoTIFF`, and [`Zarr` (v2 and v3)](./zarr.md#virtually-ingesting-existing-zarr-stores). You can also write your own [custom parser](https://virtualizarr.readthedocs.io/en/latest/custom_parsers.html) for virtualizing other file formats.
 
 Support for other common filetypes is under development within the VirtualiZarr project. Below are some relevant issues:
 
