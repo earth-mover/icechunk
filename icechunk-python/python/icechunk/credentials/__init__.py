@@ -486,6 +486,6 @@ def containers_credentials(
 
 
 # Re-export from credentials.earthdata submodule
-from icechunk.credentials.earthdata import (  # noqa: E402
+from icechunk.credentials.earthdata import (
     s3_earthdata_credentials,
 )
