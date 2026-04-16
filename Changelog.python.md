@@ -1,5 +1,11 @@
 # Changelog
 
+## Python Icechunk Library 2.0.3
+
+### Fixes
+
+- Fix an issue where temporary configuration used during migration was persisted to the migrated repo
+
 ## Python Icechunk Library 2.0.2
 
 ### Features
