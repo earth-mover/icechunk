@@ -8,7 +8,8 @@ import pytest
 from hypothesis import given
 
 import zarr
-from icechunk.testing.trees import GroupNode, trees
+from icechunk.testing.models import GroupNode
+from icechunk.testing.trees import trees
 from icechunk.testing.utils import (
     precommit_postcommit_readonly,
     tree_to_model_and_icechunk,
