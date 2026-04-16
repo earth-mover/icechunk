@@ -33,8 +33,11 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      issues: write # needed to create/update issues on nightly failures
     continue-on-error: true
+    outputs:
+      setup-outcome: ${{ steps.setup.outcome }}
+      mypy-outcome: ${{ steps.mypy.outcome }}
+      pytest-outcome: ${{ steps.pytest-icechunk.outcome }}
     if: ${{
       (contains(github.event.pull_request.labels.*.name, 'test-upstream') && github.event_name == 'pull_request')
       || github.event_name == 'workflow_dispatch'
@@ -70,12 +73,81 @@ jobs:
         run: |
           just python-upstream-setup
 
+      - name: mypy
+        id: mypy
+        working-directory: .
+        run: |
+          just python-upstream-mypy
+
+      - name: Restore cached hypothesis directory
+        id: restore-hypothesis-cache
+        if: always()
+        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
+        with:
+          path: icechunk-python/.hypothesis/
+          key: cache-hypothesis-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: |
+            cache-hypothesis-
+
+      - name: describe environment
+        if: steps.setup.outcome == 'success'
+        working-directory: .
+        run: |
+          just python-upstream-describe
+
+      - name: pytest
+        id: pytest-icechunk
+        if: steps.setup.outcome == 'success'
+        working-directory: .
+        env:
+          HYPOTHESIS_EXPERIMENTAL_OBSERVABILITY: "1"
+        run: |
+          just python-upstream-pytest
+
+      # explicitly save the cache so it gets updated, also do this even if it fails.
+      - name: Save cached hypothesis directory
+        id: save-hypothesis-cache
+        if: always()
+        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
+        with:
+          path: icechunk-python/.hypothesis/
+          key: cache-hypothesis-${{ runner.os }}-${{ github.run_id }}
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
+        with:
+          name: upstream-dev-logs
+          path: |
+            icechunk-python/setup-output.log
+            icechunk-python/mypy-output.log
+            icechunk-python/output-pytest-log.jsonl
+          if-no-files-found: ignore
+
+  build-report:
+    name: upstream-dev-report
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    needs: build
+    permissions:
+      issues: write # needed to create/update issues on nightly failures
+    if: |
+      always()
+      && (needs.build.outputs.setup-outcome == 'failure' || needs.build.outputs.mypy-outcome == 'failure' || needs.build.outputs.pytest-outcome == 'failure')
+      && github.event_name == 'schedule'
+      && github.repository_owner == 'earth-mover'
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: upstream-dev-logs
+          path: icechunk-python
+
       - name: Create or update setup failure issue
-        if: |
-          always()
-          && steps.setup.outcome == 'failure'
-          && github.event_name == 'schedule'
-          && github.repository_owner == 'earth-mover'
+        if: needs.build.outputs.setup-outcome == 'failure'
         shell: bash
         working-directory: .
         run: |
@@ -116,18 +188,8 @@ jobs:
           RUN_ID: ${{ github.run_id }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
-      - name: mypy
-        id: mypy
-        working-directory: .
-        run: |
-          just python-upstream-mypy
-
       - name: Create or update mypy failure issue
-        if: |
-          always()
-          && steps.mypy.outcome == 'failure'
-          && github.event_name == 'schedule'
-          && github.repository_owner == 'earth-mover'
+        if: needs.build.outputs.mypy-outcome == 'failure'
         shell: bash
         working-directory: .
         run: |
@@ -168,46 +230,8 @@ jobs:
           RUN_ID: ${{ github.run_id }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
-      - name: Restore cached hypothesis directory
-        id: restore-hypothesis-cache
-        if: always()
-        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
-        with:
-          path: icechunk-python/.hypothesis/
-          key: cache-hypothesis-${{ runner.os }}-${{ github.run_id }}
-          restore-keys: |
-            cache-hypothesis-
-
-      - name: describe environment
-        if: steps.setup.outcome == 'success'
-        working-directory: .
-        run: |
-          just python-upstream-describe
-
-      - name: pytest
-        id: pytest-icechunk
-        if: steps.setup.outcome == 'success'
-        working-directory: .
-        env:
-          HYPOTHESIS_EXPERIMENTAL_OBSERVABILITY: "1"
-        run: |
-          just python-upstream-pytest
-
-      # explicitly save the cache so it gets updated, also do this even if it fails.
-      - name: Save cached hypothesis directory
-        id: save-hypothesis-cache
-        if: always()
-        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
-        with:
-          path: icechunk-python/.hypothesis/
-          key: cache-hypothesis-${{ runner.os }}-${{ github.run_id }}
-
       - name: Generate and publish the pytest report
-        if: |
-          always()
-          && steps.pytest-icechunk.outcome == 'failure'
-          && github.event_name == 'schedule'
-          && github.repository_owner == 'earth-mover'
+        if: needs.build.outputs.pytest-outcome == 'failure'
         uses: xarray-contrib/issue-from-pytest-log@f94477e45ef40e4403d7585ba639a9a3bcc53d43 # v1
         with:
           log-path: icechunk-python/output-pytest-log.jsonl
@@ -215,6 +239,9 @@ jobs:
   xarray-backends:
     name: xarray-tests-upstream
     runs-on: ubuntu-latest
+    continue-on-error: true
+    outputs:
+      pytest-outcome: ${{ steps.pytest-xarray-backends.outcome }}
     if: ${{
       (contains(github.event.pull_request.labels.*.name, 'test-upstream') && github.event_name == 'pull_request')
       || github.event_name == 'workflow_dispatch'
@@ -264,13 +291,33 @@ jobs:
         run: |
           just xarray-upstream-pytest
 
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
+        with:
+          name: xarray-backends-logs
+          path: icechunk/icechunk-python/output-pytest-log.jsonl
+          if-no-files-found: ignore
+
+  xarray-report:
+    name: xarray-tests-upstream-report
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    needs: xarray-backends
+    permissions:
+      issues: write # needed to create/update issues on nightly failures
+    if: |
+      always()
+      && needs.xarray-backends.outputs.pytest-outcome == 'failure'
+      && github.event_name == 'schedule'
+      && github.repository_owner == 'earth-mover'
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: xarray-backends-logs
+
       - name: Generate and publish the xarray backends report
-        if: |
-          failure()
-          && steps.pytest-xarray-backends.outcome == 'failure'
-          && github.event_name == 'schedule'
-          && github.repository_owner == 'earth-mover'
         uses: xarray-contrib/issue-from-pytest-log@f94477e45ef40e4403d7585ba639a9a3bcc53d43 # v1
         with:
-          log-path: icechunk/icechunk-python/output-pytest-log.jsonl
+          log-path: xarray-backends-logs/output-pytest-log.jsonl
           issue-title: "Nightly Xarray backends tests failed"
