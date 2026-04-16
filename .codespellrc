@@ -3,4 +3,4 @@
 skip = .git*,*.svg,*.lock,*lock.json,*.css,.codespellrc,icechunk-js/.yarn/releases/*,*.cjs
 check-hidden = true
 ignore-regex = ^\s*"image/\S+": ".*|\bND\b
-ignore-words-list = crate,firs,anc
+ignore-words-list = crate,firs,anc,ges
