@@ -77,3 +77,69 @@ arr = zarr.create_array(
 arr[:] = np.arange(120, dtype="float64").reshape(10, 12)
 session.commit("add rectilinear array")
 ```
+
+## Virtually ingesting existing Zarr stores
+
+If your data is already in Zarr format — either Zarr v2 or Zarr v3 — you can virtually ingest it into Icechunk without rewriting any chunks. This brings an existing Zarr archive under Icechunk's version control and makes it possible to consolidate multiple stores into a single Icechunk repository, all without copying data.
+
+Crucially, because the chunks remain in the source store and Icechunk only records references to them, the Icechunk repo depends on the source store continuing to exist — if the source is deleted or moved, reads from the Icechunk repo will fail. See the [Virtual Datasets guide](./virtual.md) for background on how virtual references work.
+
+Use VirtualiZarr's [`ZarrParser`](https://virtualizarr.readthedocs.io/en/latest/usage.html), which handles both v2 and v3 stores and auto-detects the format. This requires `virtualizarr >= 2.5.0` (sharded v3 arrays require `>= 2.5.1`).
+
+```shell
+pip install "virtualizarr>=2.5.1" icechunk
+```
+
+Point `open_virtual_dataset` at the existing store:
+
+```python
+from virtualizarr import open_virtual_dataset
+from virtualizarr.parsers import ZarrParser
+from obstore.store import from_url
+from obspec_utils.registry import ObjectStoreRegistry
+
+bucket = "s3://mybucket/"
+store = from_url(bucket, region="us-east-1")
+registry = ObjectStoreRegistry({bucket: store})
+
+virtual_ds = open_virtual_dataset(
+    url="s3://mybucket/path/to/store.zarr",
+    parser=ZarrParser(),
+    registry=registry,
+)
+```
+
+If the source store contains multiple groups, select one with the `group` argument, or use [`open_virtual_datatree`](https://virtualizarr.readthedocs.io/en/latest/usage.html) to open them all at once:
+
+```python
+virtual_ds = open_virtual_dataset(
+    url="s3://mybucket/store.zarr",
+    parser=ZarrParser(),
+    group="my_group",
+    registry=registry,
+)
+```
+
+Writing the result to an Icechunk repo works the same as for any other virtual dataset — configure a [`VirtualChunkContainer`](../reference/virtual.md#icechunk.virtual.VirtualChunkContainer) matching the source location, then call `.vz.to_icechunk`:
+
+```python
+import icechunk as ic
+
+storage = ic.local_filesystem_storage(path="my_repo")
+config = ic.config.RepositoryConfig.default()
+config.set_virtual_chunk_container(
+    ic.virtual.VirtualChunkContainer("s3://mybucket/", ic.storage.s3_store(region="us-east-1"))
+)
+credentials = ic.credentials.containers_credentials(
+    {"s3://mybucket/": ic.credentials.s3_credentials(anonymous=True)}
+)
+repo = ic.Repository.create(storage, config, credentials)
+
+session = repo.writable_session("main")
+virtual_ds.vz.to_icechunk(session.store)
+session.commit("Virtually ingest existing Zarr store")
+```
+
+!!! tip
+
+    If you later want Icechunk to own the data outright (so the source store can be deleted), read back the virtual dataset and rewrite it as native chunks — e.g. with `xarray`'s `to_zarr` into a fresh Icechunk session.
