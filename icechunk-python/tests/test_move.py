@@ -8,7 +8,8 @@ from hypothesis import strategies as st
 import icechunk as ic
 import zarr
 from icechunk.testing.invariants import assert_moves_sorted_by_final_path
-from icechunk.testing.trees import GroupNode, tree_and_moves
+from icechunk.testing.models import GroupNode
+from icechunk.testing.trees import tree_and_moves
 from icechunk.testing.utils import (
     precommit_postcommit_readonly,
     tree_to_model_and_icechunk,
