@@ -39,14 +39,12 @@ podaac_creds = ic.s3_earthdata_credentials(
     "https://archive.podaac.earthdata.nasa.gov/s3credentials"
 )
 
-container_credentials = ic.containers_credentials({
-    "s3://podaac-ops-cumulus-protected/MUR-JPL-L4-GLOB-v4.1/": podaac_creds,
-})
-
 # Open the repo with virtual chunk access authorized
 repo = ic.Repository.open(
     storage=storage,
-    authorize_virtual_chunk_access=container_credentials,
+    authorize_virtual_chunk_access=ic.containers_credentials({
+        "s3://podaac-ops-cumulus-protected/MUR-JPL-L4-GLOB-v4.1/": podaac_creds,
+    }),
 )
 
 # Read with xarray
