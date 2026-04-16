@@ -18,7 +18,6 @@ concurrency:
 
 permissions:
   contents: read
-  issues: write
 
 env:
   PYTHON_VERSION: "3.14"
@@ -32,6 +31,9 @@ jobs:
   build:
     name: upstream-dev
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write # needed to create/update issues on nightly failures
     continue-on-error: true
     if: ${{
       (contains(github.event.pull_request.labels.*.name, 'test-upstream') && github.event_name == 'pull_request')
@@ -40,6 +42,8 @@ jobs:
       }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
 
       - uses: prefix-dev/setup-pixi@a0af7a228712d6121d37aba47adf55c1332c9c2e # v0.9.4
         with:
@@ -84,9 +88,9 @@ jobs:
           fi
 
           # Replace placeholders
-          issue_body="${template//\{\{WORKFLOW\}\}/${{ github.workflow }}}"
-          issue_body="${issue_body//\{\{RUN_ID\}\}/${{ github.run_id }}}"
-          issue_body="${issue_body//\{\{RUN_URL\}\}/${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}}"
+          issue_body="${template//\{\{WORKFLOW\}\}/$WORKFLOW_NAME}"
+          issue_body="${issue_body//\{\{RUN_ID\}\}/$RUN_ID}"
+          issue_body="${issue_body//\{\{RUN_URL\}\}/$RUN_URL}"
           issue_body="${issue_body//\{\{DATE\}\}/$(date -u)}"
           issue_body="${issue_body//\{\{SETUP_OUTPUT\}\}/$setup_output}"
 
@@ -108,6 +112,9 @@ jobs:
           fi
         env:
           GH_TOKEN: ${{ github.token }}
+          WORKFLOW_NAME: ${{ github.workflow }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
       - name: mypy
         id: mypy
@@ -133,9 +140,9 @@ jobs:
           fi
 
           # Replace placeholders
-          issue_body="${template//\{\{WORKFLOW\}\}/${{ github.workflow }}}"
-          issue_body="${issue_body//\{\{RUN_ID\}\}/${{ github.run_id }}}"
-          issue_body="${issue_body//\{\{RUN_URL\}\}/${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}}"
+          issue_body="${template//\{\{WORKFLOW\}\}/$WORKFLOW_NAME}"
+          issue_body="${issue_body//\{\{RUN_ID\}\}/$RUN_ID}"
+          issue_body="${issue_body//\{\{RUN_URL\}\}/$RUN_URL}"
           issue_body="${issue_body//\{\{DATE\}\}/$(date -u)}"
           issue_body="${issue_body//\{\{MYPY_OUTPUT\}\}/$mypy_output}"
 
@@ -157,6 +164,9 @@ jobs:
           fi
         env:
           GH_TOKEN: ${{ github.token }}
+          WORKFLOW_NAME: ${{ github.workflow }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
       - name: Restore cached hypothesis directory
         id: restore-hypothesis-cache
@@ -214,12 +224,14 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           path: "icechunk"
+          persist-credentials: false
 
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           repository: "pydata/xarray"
           path: "xarray"
           fetch-depth: 0 # Fetch all history for all branches and tags.
+          persist-credentials: false
 
       - uses: prefix-dev/setup-pixi@a0af7a228712d6121d37aba47adf55c1332c9c2e # v0.9.4
         with:
