@@ -10,9 +10,11 @@ Many NASA datasets are hosted in AWS S3 but require authentication through [NASA
     - A `~/.netrc` entry: `machine urs.earthdata.nasa.gov login <user> password <pass>`
     - Or pass them directly to `s3_earthdata_credentials(auth=("user", "pass"))`
 
-!!! note
+!!! warning
 
-    Direct S3 access to NASA data requires running in the **us-west-2** AWS region.
+    Direct S3 access to [NASA Earthdata](https://www.earthdata.nasa.gov/) buckets **only works from the us-west-2 AWS region**.
+    The temporary credentials are scoped to same-region access only — attempting
+    to read data from outside us-west-2 will result in an `AccessDenied` error.
 
 ## Example: Reading a virtual dataset
 
@@ -30,17 +32,16 @@ storage = ic.s3_storage(
     anonymous=True,
 )
 
-# Fetch the repo config to discover its virtual chunk containers
-config = ic.Repository.fetch_config(storage=storage)
-
-# Create refreshable credentials for each container.
-# Icechunk will automatically call the PO.DAAC /s3credentials endpoint
-# and refresh the temporary AWS credentials whenever they expire (~1 hour).
-container_credentials = ic.containers_credentials(
-    {k: ic.s3_earthdata_credentials(
-        "https://archive.podaac.earthdata.nasa.gov/s3credentials"
-    ) for k in config.virtual_chunk_containers.keys()}
+# Create refreshable credentials for the PO.DAAC virtual chunk container.
+# Icechunk will automatically call the /s3credentials endpoint and
+# refresh the temporary AWS credentials whenever they expire (~1 hour).
+podaac_creds = ic.s3_earthdata_credentials(
+    "https://archive.podaac.earthdata.nasa.gov/s3credentials"
 )
+
+container_credentials = ic.containers_credentials({
+    "s3://podaac-ops-cumulus-protected/MUR-JPL-L4-GLOB-v4.1/": podaac_creds,
+})
 
 # Open the repo with virtual chunk access authorized
 repo = ic.Repository.open(

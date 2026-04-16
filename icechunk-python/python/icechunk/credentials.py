@@ -694,7 +694,10 @@ def s3_earthdata_credentials(
     Notes
     -----
     - Temporary S3 credentials are valid for approximately 1 hour.
-    - Direct S3 access requires running in the **us-west-2** AWS region.
+    - Direct S3 access to NASA Earthdata buckets requires running in the
+      **us-west-2** AWS region. The temporary credentials are scoped to
+      same-region access only; reads from outside us-west-2 will fail
+      with ``AccessDenied``.
     - Credentials are scoped to a single DAAC. If accessing data from
       multiple DAACs, create separate credentials for each.
     - A free NASA Earthdata account is required:
