@@ -176,6 +176,97 @@ zarrs-upstream-test zarrs_dir="../zarrs_icechunk":
   set -euo pipefail
   cd {{zarrs_dir}} && cargo test 2>&1 | tee test-output.log
 
+[doc("Start RustFS via docker compose")]
+rustfs-up:
+  docker compose up -d rustfs_init
+
+[doc("Wait for RustFS container to be ready")]
+rustfs-wait:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  for _ in {1..10}; do
+    if docker compose ps --status exited --filter status==0 | grep rustfs ; then
+      break
+    fi
+    sleep 3
+  done
+
+[doc("Build Python wheels with maturin")]
+build-wheels *args:
+  cd icechunk-python && maturin build --release --out dist --find-interpreter "$@"
+
+[doc("Install Python upstream nightly dependencies")]
+python-upstream-setup:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  cd icechunk-python
+  python3 -m venv .venv
+  source .venv/bin/activate
+  python --version
+  PY_TAG="cp${PYTHON_VERSION//./}"
+  WHEEL=$(ls dist/*-"${PY_TAG}"-*.whl)
+  export UV_INDEX="https://pypi.anaconda.org/scientific-python-nightly-wheels/simple/"
+  export UV_PRERELEASE=allow
+  uv pip install "$WHEEL" --group dev \
+    --resolution highest \
+    --index-strategy unsafe-best-match 2>&1 | tee setup-output.log
+  uv pip install "hypothesis @ git+https://github.com/ianhi/hypothesis.git@flaky-feedback#subdirectory=hypothesis-python"
+  uv pip list
+
+[doc("Run mypy against Python upstream nightly")]
+python-upstream-mypy:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  cd icechunk-python
+  python3 -m venv .venv
+  source .venv/bin/activate
+  mypy --python-version "$PYTHON_VERSION" python 2>&1 | tee mypy-output.log
+
+[doc("Describe Python upstream nightly environment")]
+python-upstream-describe:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  cd icechunk-python
+  python3 -m venv .venv
+  source .venv/bin/activate
+  pip list
+
+[doc("Run pytest with Python upstream nightly dependencies")]
+python-upstream-pytest:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  cd icechunk-python
+  python3 -m venv .venv
+  source .venv/bin/activate
+  pytest -n 4 --hypothesis-profile=nightly --report-log output-pytest-log.jsonl
+
+[doc("Install xarray upstream test dependencies")]
+xarray-upstream-setup:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  cd icechunk-python
+  python3 -m venv .venv
+  source .venv/bin/activate
+  python --version
+  PY_TAG="cp${PYTHON_VERSION//./}"
+  WHEEL=$(ls dist/*-"${PY_TAG}"-*.whl)
+  export UV_INDEX="https://pypi.anaconda.org/scientific-python-nightly-wheels/simple/"
+  export UV_PRERELEASE=allow
+  uv pip install "$WHEEL" --group test pytest-mypy-plugins \
+    --resolution highest \
+    --index-strategy unsafe-best-match
+  uv pip list
+
+[doc("Run xarray backend tests against local icechunk")]
+xarray-upstream-pytest xarray_dir="../xarray":
+  #!/usr/bin/env bash
+  set -euo pipefail
+  xarray_abs=$(realpath "{{xarray_dir}}")
+  cd icechunk-python
+  python3 -m venv .venv
+  source .venv/bin/activate
+  pytest -c="$xarray_abs/pyproject.toml" -W ignore tests/run_xarray_backends_tests.py --report-log output-pytest-log.jsonl
+
 [doc("Run all Python and Rust checks")]
 all-checks:
   just pytest

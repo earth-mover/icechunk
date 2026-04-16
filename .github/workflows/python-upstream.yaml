@@ -22,6 +22,7 @@ permissions:
 
 env:
   PYTHON_VERSION: "3.14"
+  PIXI_VERSION: "v0.63.2"
 
 defaults:
   run:
@@ -39,57 +40,31 @@ jobs:
       }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
-      - name: Install Just
-        run: sudo snap install --edge --classic just
+
+      - uses: prefix-dev/setup-pixi@a0af7a228712d6121d37aba47adf55c1332c9c2e # v0.9.4
+        with:
+          pixi-version: ${{ env.PIXI_VERSION }}
+          cache: true
+          activate-environment: true
+          manifest-path: icechunk-python/pyproject.toml
+
       - name: Stand up RustFS
-        run: |
-          docker compose up -d rustfs_init
+        working-directory: .
+        run: just rustfs-up
 
       - name: Wait for RustFS to be ready
-        run: |
-          for _ in {1..10}; do
-              if docker compose ps --status exited --filter status==0 | grep rustfs ; then
-              break
-              fi
-              sleep 3
-          done
-      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
+        working-directory: .
+        run: just rustfs-wait
 
       - name: Build wheels
-        uses: PyO3/maturin-action@db323e2cf5679b7feb8bcb561a36b27a0bc19e79 # v1
-        with:
-          working-directory: icechunk-python
-          # target: ${{ matrix.platform.target }}
-          args: --release --out dist --find-interpreter
-          sccache: true
-          # manylinux: ${{ matrix.platform.manylinux }} # https://github.com/PyO3/maturin-action/issues/245
+        working-directory: .
+        run: just build-wheels
 
       - name: setup
         id: setup
-        shell: bash
-        working-directory: icechunk-python
+        working-directory: .
         run: |
-          set -e
-          python3 -m venv .venv
-          source .venv/bin/activate
-          python --version
-          PY_TAG="cp${PYTHON_VERSION//./}"
-          WHEEL=$(ls dist/*-${PY_TAG}-*.whl)
-          # Install upstream dependencies from nightly wheels
-          export UV_INDEX="https://pypi.anaconda.org/scientific-python-nightly-wheels/simple/"
-          export UV_PRERELEASE=allow
-          uv pip install "$WHEEL" --group dev \
-            --resolution highest \
-            --index-strategy unsafe-best-match 2>&1 | tee setup-output.log
-          uv pip install "hypothesis @ git+https://github.com/ianhi/hypothesis.git@flaky-feedback#subdirectory=hypothesis-python"
-          uv pip list
+          just python-upstream-setup
 
       - name: Create or update setup failure issue
         if: |
@@ -136,13 +111,9 @@ jobs:
 
       - name: mypy
         id: mypy
-        shell: bash
-        working-directory: icechunk-python
+        working-directory: .
         run: |
-          set -e
-          python3 -m venv .venv
-          source .venv/bin/activate
-          mypy --python-version ${{ env.PYTHON_VERSION }} python 2>&1 | tee mypy-output.log
+          just python-upstream-mypy
 
       - name: Create or update mypy failure issue
         if: |
@@ -199,31 +170,18 @@ jobs:
 
       - name: describe environment
         if: steps.setup.outcome == 'success'
-        shell: bash
-        working-directory: icechunk-python
+        working-directory: .
         run: |
-          set -e
-          python3 -m venv .venv
-          source .venv/bin/activate
-          pip list
-
-      - name: Install flatc
-        if: steps.setup.outcome == 'success'
-        run: |
-          sudo apt-get update && sudo apt-get install -y flatbuffers-compiler
+          just python-upstream-describe
 
       - name: pytest
         id: pytest-icechunk
         if: steps.setup.outcome == 'success'
-        shell: bash
-        working-directory: icechunk-python
+        working-directory: .
         env:
           HYPOTHESIS_EXPERIMENTAL_OBSERVABILITY: "1"
         run: |
-          set -e
-          python3 -m venv .venv
-          source .venv/bin/activate
-          pytest -n 4 --hypothesis-profile=nightly --report-log output-pytest-log.jsonl
+          just python-upstream-pytest
 
       # explicitly save the cache so it gets updated, also do this even if it fails.
       - name: Save cached hypothesis directory
@@ -263,65 +221,36 @@ jobs:
           path: "xarray"
           fetch-depth: 0 # Fetch all history for all branches and tags.
 
-      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+      - uses: prefix-dev/setup-pixi@a0af7a228712d6121d37aba47adf55c1332c9c2e # v0.9.4
         with:
-          python-version: ${{ env.PYTHON_VERSION }}
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
+          pixi-version: ${{ env.PIXI_VERSION }}
+          cache: true
+          activate-environment: true
+          manifest-path: icechunk/icechunk-python/pyproject.toml
 
       - name: Build wheels
-        uses: PyO3/maturin-action@db323e2cf5679b7feb8bcb561a36b27a0bc19e79 # v1
-        with:
-          working-directory: icechunk/icechunk-python
-          args: --release --out dist --find-interpreter
+        working-directory: icechunk
+        run: just build-wheels
 
       - name: setup
-        shell: bash
-        working-directory: icechunk/icechunk-python
+        working-directory: icechunk
         run: |
-          set -e
-          python3 -m venv .venv
-          source .venv/bin/activate
-          python --version
-          PY_TAG="cp${PYTHON_VERSION//./}"
-          WHEEL=$(ls dist/*-${PY_TAG}-*.whl)
-          # Install upstream dependencies from nightly wheels
-          export UV_INDEX="https://pypi.anaconda.org/scientific-python-nightly-wheels/simple/"
-          export UV_PRERELEASE=allow
-          uv pip install "$WHEEL" --group test pytest-mypy-plugins \
-            --resolution highest \
-            --index-strategy unsafe-best-match
-          uv pip list
+          just xarray-upstream-setup
 
       - name: Stand up RustFS
         working-directory: icechunk
-        run: |
-          docker compose up -d rustfs_init
+        run: just rustfs-up
 
       - name: Wait for RustFS to be ready
         working-directory: icechunk
-        run: |
-          for _ in {1..10}; do
-              if docker compose ps --status exited --filter status==0 | grep rustfs ; then
-              break
-              fi
-              sleep 3
-          done
+        run: just rustfs-wait
       - name: pytest
         id: pytest-xarray-backends
-        shell: bash
-        working-directory: icechunk/icechunk-python
+        working-directory: icechunk
         env:
           ICECHUNK_XARRAY_BACKENDS_TESTS: 1
         run: |
-          set -e
-          python3 -m venv .venv
-          source .venv/bin/activate
-          # pass xarray's pyproject.toml so that pytest can find the `flaky` fixture
-          pytest -c=../../xarray/pyproject.toml -W ignore tests/run_xarray_backends_tests.py --report-log output-pytest-log.jsonl
+          just xarray-upstream-pytest
 
       - name: Generate and publish the xarray backends report
         if: |
