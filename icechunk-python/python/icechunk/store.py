@@ -392,7 +392,8 @@ class IcechunkStore(Store, SyncMixin):
             The product must equal the length of the arrays.
             Arrays are assumed to be flattened in C (row-major) order.
         locations : list[str]
-            URLs to external files containing chunk data.
+            URLs to external files containing chunk data. Empty strings
+            represent missing chunks and are silently skipped.
             Example: ["s3://bucket/file1.nc", "s3://bucket/file2.nc"]
         offsets : np.ndarray
             1-D uint64 array of byte offsets within each file.
@@ -457,7 +458,8 @@ class IcechunkStore(Store, SyncMixin):
             The product must equal the length of the arrays.
             Arrays are assumed to be flattened in C (row-major) order.
         locations : list[str]
-            URLs to external files containing chunk data.
+            URLs to external files containing chunk data. Empty strings
+            represent missing chunks and are silently skipped.
             Example: ["s3://bucket/file1.nc", "s3://bucket/file2.nc"]
         offsets : np.ndarray
             1-D uint64 array of byte offsets within each file.

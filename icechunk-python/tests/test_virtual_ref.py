@@ -492,6 +492,33 @@ def test_cannot_write_invalid_urls(any_spec_version: int | None) -> None:
         )
 
 
+def test_set_virtual_refs_arr_skips_empty_paths() -> None:
+    """Empty paths represent missing chunks and should be silently skipped."""
+    repo = Repository.create(storage=in_memory_storage())
+    session = repo.writable_session("main")
+    store = session.store
+
+    zarr.create_array(store, shape=(3,), chunks=(1,), dtype="i4", compressors=None)
+    session.commit("init")
+
+    session = repo.writable_session("main")
+    store = session.store
+
+    # locations[1] is empty — should be skipped, not raise an error
+    store.set_virtual_refs_arr(
+        array_path="/",
+        chunk_grid_shape=(3,),
+        locations=["s3://bucket/a.nc", "", "s3://bucket/c.nc"],
+        offsets=np.array([0, 0, 0], dtype=np.uint64),
+        lengths=np.array([4, 0, 4], dtype=np.uint64),
+        validate_containers=False,
+    )
+
+    # Only the two non-empty chunks should have been written
+    locations = session.all_virtual_chunk_locations()
+    assert sorted(locations) == ["s3://bucket/a.nc", "s3://bucket/c.nc"]
+
+
 @pytest.mark.filterwarnings("ignore:datetime.datetime.utcnow")
 async def test_write_minio_virtual_refs_with_vcc_urls(
     any_spec_version: int | None,

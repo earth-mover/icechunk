@@ -466,10 +466,21 @@ pub async fn migrate_1_to_2(
         .max(repo.config().num_updates_per_repo_info_file());
 
     info!("Creating repository info file");
-    let config = repo.config().clone();
-    let config_bytes: Vec<u8> = flexbuffers::to_vec(&config)
-        .map_err(|e| IcechunkFormatErrorKind::SerializationErrorFlexBuffers(Box::new(e)))
-        .capture()?;
+    // Read the original V1 config.yaml instead of using repo.config(), which
+    // is the fully-merged runtime config. Persisting the runtime config would
+    // bake instance-local settings (caching, storage) from the migration
+    // caller into the V2 repo, overriding every future client's defaults.
+    let persisted_config = repo.asset_manager().fetch_config().await.inject()?;
+    let config_bytes: Option<Vec<u8>> = match persisted_config {
+        Some((config, _)) => Some(
+            flexbuffers::to_vec(&config)
+                .map_err(|e| {
+                    IcechunkFormatErrorKind::SerializationErrorFlexBuffers(Box::new(e))
+                })
+                .capture()?,
+        ),
+        None => None,
+    };
 
     // main_ancestry is tip-to-root, so last element is the root
     let root = &main_ancestry[main_ancestry.len() - 1];
@@ -494,7 +505,7 @@ pub async fn migrate_1_to_2(
             None,
             migration_page_size,
             None,
-            Some(config_bytes.as_slice()),
+            config_bytes.as_deref(),
             None::<std::iter::Empty<u16>>,
             None::<std::iter::Empty<u16>>,
             &RepoStatus {
@@ -682,8 +693,40 @@ mod tests {
     #[tokio_test]
     /// Copy the source tree 1.0 repository to a temp dir, then migrate it
     async fn test_1_to_2_migration() -> Result<(), Box<dyn std::error::Error>> {
+        use crate::config::CachingConfig;
+
         let (repo, _tmp) = prepare_v1_repo().await?;
         let storage = Arc::clone(repo.storage());
+
+        // Persist a custom caching config to the V1 repo's config.yaml
+        let repo = Repository::open(
+            Some(RepositoryConfig {
+                caching: Some(CachingConfig {
+                    num_chunk_refs: Some(10_000),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+            Arc::clone(&storage),
+            Default::default(),
+        )
+        .await?;
+        repo.save_config().await?;
+
+        // Re-open with a *different* caching value to simulate a migration
+        // client that tuned cache sizes for the migration workload.
+        let repo = Repository::open(
+            Some(RepositoryConfig {
+                caching: Some(CachingConfig {
+                    num_chunk_refs: Some(99),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+            Arc::clone(&storage),
+            Default::default(),
+        )
+        .await?;
 
         let mut tag_ancestries_before = HashMap::new();
         for tag in repo.list_tags().await? {
@@ -835,6 +878,14 @@ mod tests {
                 "ops log timestamps must be strictly decreasing: {time_a} should be > {time_b}"
             );
         }
+
+        // Verify the persisted V1 caching config (num_chunk_refs=10_000) survived
+        // migration, and the migration caller's runtime value (99) did NOT leak.
+        assert_eq!(
+            repo.config().caching().num_chunk_refs(),
+            10_000,
+            "persisted caching config should survive migration unchanged"
+        );
 
         Ok(())
     }

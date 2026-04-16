@@ -1,5 +1,24 @@
 # Changelog
 
+## Python Icechunk Library 2.0.3
+
+### Fixes
+
+- Fix an issue where temporary configuration used during migration was persisted to the migrated repo
+
+## Python Icechunk Library 2.0.2
+
+### Features
+
+- Add async `from_store` and make `walk` public on `GroupNode` ([#2074](https://github.com/earth-mover/icechunk/pull/2074)).
+- Add `set_virtual_refs_arr` with numpy arrays ([#2049](https://github.com/earth-mover/icechunk/pull/2049)).
+
+### Fixes
+
+- Fix SVG ancestry graph text invisible on dark backgrounds ([#2070](https://github.com/earth-mover/icechunk/pull/2070)).
+- Show effective default values in config reprs ([#2062](https://github.com/earth-mover/icechunk/pull/2062)).
+- Pass storage settings to virtual chunk fetchers ([#2061](https://github.com/earth-mover/icechunk/pull/2061)).
+
 ## Python Icechunk Library 2.0.1
 
 This release brings minor fixes to unintended backwards incompatible changes.
