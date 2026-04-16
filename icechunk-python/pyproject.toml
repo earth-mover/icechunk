@@ -201,7 +201,7 @@ platforms = ["osx-arm64", "linux-64", "linux-aarch64", "win-64", "osx-64"]
 cairo = ">=1.18.4,<2"
 
 [tool.pixi.feature.build.dependencies]
-python = ">=3.11,<3.14"
+python = "~=3.14"
 rust = "~=1.94.0"
 just = ">=1.46.0,<2"
 compilers = ">=1.11.0,<2"
