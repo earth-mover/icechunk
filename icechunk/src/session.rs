@@ -1484,7 +1484,7 @@ impl Session {
         Ok(())
     }
 
-    fn spec_version(&self) -> SpecVersionBin {
+    pub(crate) fn spec_version(&self) -> SpecVersionBin {
         self.asset_manager.spec_version()
     }
 

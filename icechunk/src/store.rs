@@ -29,6 +29,7 @@ use crate::{
     error::ICError,
     format::{
         ByteRange, ChunkIndices, ChunkOffset, Path, PathError,
+        format_constants::SpecVersionBin,
         manifest::{ChunkPayload, VirtualChunkRef},
         snapshot::{ArrayShape, DimensionName, NodeData, NodeSnapshot, NodeType},
     },
@@ -847,6 +848,14 @@ async fn set_array_meta(
     array_meta: ArrayMetadata,
     session: &mut Session,
 ) -> StoreResult<()> {
+    if !array_meta.is_regular() && session.spec_version() < SpecVersionBin::V2 {
+        return Err(StoreErrorKind::BadChunkGridMetadata(
+            "Non-regular chunk grids are not supported in icechunk format version 1. \
+             Please use spec_version=2 or higher."
+                .into(),
+        ))
+        .capture();
+    }
     let shape = array_meta.shape()?;
     if let Ok(node) = session.get_array(&path).await {
         if let NodeData::Array { .. } = node.node_data
@@ -1144,6 +1153,10 @@ impl ArrayMetadata {
         self.dimension_names
             .as_ref()
             .map(|ds| ds.iter().map(|d| d.as_ref().map(|s| s.as_str()).into()).collect())
+    }
+
+    fn is_regular(&self) -> bool {
+        self.chunk_grid.name == "regular"
     }
 
     fn num_chunks(&self) -> StoreResult<Vec<u32>> {
@@ -1473,9 +1486,17 @@ mod tests {
     }
 
     async fn create_memory_store_repository() -> Repository {
+        create_memory_store_repository_with_spec(None).await
+    }
+
+    async fn create_memory_store_repository_with_spec(
+        spec_version: Option<SpecVersionBin>,
+    ) -> Repository {
         let storage =
             new_in_memory_storage().await.expect("failed to create in-memory store");
-        Repository::create(None, storage, HashMap::new(), None, true).await.unwrap()
+        Repository::create(None, storage, HashMap::new(), spec_version, true)
+            .await
+            .unwrap()
     }
 
     async fn all_keys(store: &Store) -> Result<Vec<String>, Box<dyn std::error::Error>> {
@@ -1792,6 +1813,28 @@ mod tests {
         } else {
             unreachable!();
         }
+        Ok(())
+    }
+
+    #[tokio_test]
+    async fn test_rectilinear_rejected_on_spec_v1()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let repo =
+            create_memory_store_repository_with_spec(Some(SpecVersionBin::V1)).await;
+        let session = repo.writable_session("main").await?;
+        let session = Arc::new(RwLock::new(session));
+        let store = Store::from_session(Arc::clone(&session)).await;
+
+        let zarr_meta = Bytes::from(
+            r#"{"zarr_format":3,"node_type":"array","shape":[4],"data_type":"bool","chunk_grid":{"name":"rectilinear","configuration":{"kind":"inline","chunk_shapes":[[1,2,1]]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":false,"codecs":[{"name":"bytes","configuration":{"endian":"little"}}]}"#,
+        );
+        let result = store.set("a/zarr.json", zarr_meta).await;
+        assert!(result.is_err(), "store.set should reject rectilinear on V1");
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("Non-regular chunk grids are not supported"),
+            "unexpected error: {err}"
+        );
         Ok(())
     }
 
