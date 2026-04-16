@@ -251,6 +251,8 @@ nav:
     - Icechunk for Git Users: guides/icechunk-for-git-users.md
     - Creating Icechunk Datasets:
       - Global Raster Data cube: guides/ingestion/glad-ingest.ipynb
+  - Integrations:
+    - NASA Earthdata: integrations/nasa-earthdata.md
   - Sample Datasets: sample-datasets.md
   - Related Projects: related-projects.md
   - Blog: blog-posts.md
