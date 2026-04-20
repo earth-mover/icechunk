@@ -17,9 +17,10 @@ on:
 jobs:
   publish:
     name: Check and publish
-    runs-on: ubuntu-latest
+    runs-on: runs-on=${{ github.run_id }}/runner=8cpu-linux-x64/extras=s3-cache
 
     steps:
+      - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0 # v2
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: Stand up docker services
@@ -42,7 +43,9 @@ jobs:
           done
 
       - name: Install Just
-        run: sudo snap install --edge --classic just
+        uses: taiki-e/install-action@98ec31d284eb962f41c14065e9391a955aa810cf # v2
+        with:
+          tool: just
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@98ec31d284eb962f41c14065e9391a955aa810cf # nextest

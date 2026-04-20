@@ -30,7 +30,7 @@ defaults:
 jobs:
   build:
     name: upstream-dev
-    runs-on: ubuntu-latest
+    runs-on: runs-on=${{ github.run_id }}/runner=8cpu-linux-x64/extras=s3-cache
     continue-on-error: true
     if: ${{
       (contains(github.event.pull_request.labels.*.name, 'test-upstream') && github.event_name == 'pull_request')
@@ -38,9 +38,14 @@ jobs:
       || github.event_name == 'schedule'
       }}
     steps:
+      - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0 # v2
+        with:
+          sccache: s3
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
       - name: Install Just
-        run: sudo snap install --edge --classic just
+        uses: taiki-e/install-action@98ec31d284eb962f41c14065e9391a955aa810cf # v2
+        with:
+          tool: just
       - name: Stand up RustFS
         run: |
           docker compose up -d rustfs_init
@@ -246,13 +251,16 @@ jobs:
 
   xarray-backends:
     name: xarray-tests-upstream
-    runs-on: ubuntu-latest
+    runs-on: runs-on=${{ github.run_id }}/runner=8cpu-linux-x64/extras=s3-cache
     if: ${{
       (contains(github.event.pull_request.labels.*.name, 'test-upstream') && github.event_name == 'pull_request')
       || github.event_name == 'workflow_dispatch'
       || github.event_name == 'schedule'
       }}
     steps:
+      - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0 # v2
+        with:
+          sccache: s3
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           path: "icechunk"

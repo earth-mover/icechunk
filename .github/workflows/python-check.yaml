@@ -26,8 +26,11 @@ defaults:
 
 jobs:
   build-wheels:
-    runs-on: ubuntu-latest
+    runs-on: runs-on=${{ github.run_id }}/runner=16cpu-linux-x64/extras=s3-cache+tmpfs/family=r7
     steps:
+      - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0 # v2
+        with:
+          sccache: s3
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
         with:
@@ -37,9 +40,10 @@ jobs:
         uses: PyO3/maturin-action@db323e2cf5679b7feb8bcb561a36b27a0bc19e79 # v1
         with:
           working-directory: icechunk-python
-          args: --release --out dist -i python${{ env.PYTHON_VERSION }}
+          args: --profile ci-release --out dist -i python${{ env.PYTHON_VERSION }}
           sccache: true
           manylinux: auto
+          docker-options: --tmpfs /tmp:exec --tmpfs /root/.cargo:exec
 
       - name: Upload wheels
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
@@ -48,7 +52,7 @@ jobs:
           path: icechunk-python/dist
 
   test:
-    runs-on: ubuntu-latest
+    runs-on: runs-on=${{ github.run_id }}/runner=4cpu-linux-x64/extras=s3-cache
     needs: [build-wheels]
     strategy:
       matrix:
@@ -64,6 +68,7 @@ jobs:
             distributed: "latest-release"
             zarr: "latest-release"
     steps:
+      - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0 # v2
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
       - name: Stand up RustFS
         run: |
@@ -135,8 +140,11 @@ jobs:
           python -m pytest -n 4 -m "not hypothesis"
 
   build-wheels-free-threaded:
-    runs-on: ubuntu-latest
+    runs-on: runs-on=${{ github.run_id }}/runner=16cpu-linux-x64/extras=s3-cache+tmpfs/family=r7
     steps:
+      - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0 # v2
+        with:
+          sccache: s3
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
         with:
@@ -146,9 +154,10 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           working-directory: icechunk-python
-          args: --release --out dist -i python3.13t
+          args: --profile ci-release --out dist -i python3.13t
           sccache: true
           manylinux: auto
+          docker-options: --tmpfs /tmp:exec --tmpfs /root/.cargo:exec
 
       - name: Upload wheels
         uses: actions/upload-artifact@v7
@@ -157,9 +166,10 @@ jobs:
           path: icechunk-python/dist
 
   test-free-threaded:
-    runs-on: ubuntu-latest
+    runs-on: runs-on=${{ github.run_id }}/runner=4cpu-linux-x64/extras=s3-cache
     needs: [build-wheels-free-threaded]
     steps:
+      - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0 # v2
       - uses: actions/checkout@v6
       - name: Stand up RustFS
         run: |
@@ -210,13 +220,14 @@ jobs:
           python -m pytest -n 4 -m "not hypothesis"
 
   test-hypothesis-shard:
-    runs-on: ubuntu-latest
+    runs-on: runs-on=${{ github.run_id }}/runner=4cpu-linux-x64/extras=s3-cache
     needs: [build-wheels]
     strategy:
       fail-fast: false
       matrix:
         shard-id: [0, 1, 2]
     steps:
+      - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0 # v2
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: Download wheels
@@ -276,11 +287,12 @@ jobs:
   test-hypothesis:
     if: always()
     needs: [test-hypothesis-shard]
-    runs-on: ubuntu-latest
+    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/extras=s3-cache
     defaults:
       run:
         working-directory: .
     steps:
+      - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0 # v2
       - name: Verify all shards passed
         run: |
           if [ "${{ needs.test-hypothesis-shard.result }}" != "success" ]; then
@@ -289,9 +301,10 @@ jobs:
           fi
 
   compat-stateful:
-    runs-on: ubuntu-latest
+    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/extras=s3-cache
     needs: [build-wheels]
     steps:
+      - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0 # v2
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: Download wheels
@@ -327,7 +340,7 @@ jobs:
           python -m pytest tests/test_stateful_compat.py -v
 
   xarray-backends:
-    runs-on: ubuntu-latest
+    runs-on: runs-on=${{ github.run_id }}/runner=4cpu-linux-x64/extras=s3-cache
     needs: [build-wheels]
     strategy:
       matrix:
@@ -339,6 +352,7 @@ jobs:
             version: "latest-release"
             zarr: "latest-release"
     steps:
+      - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0 # v2
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           path: "icechunk"
@@ -428,9 +442,10 @@ jobs:
           python -m pytest -c=../../xarray/pyproject.toml -W ignore --override-ini="strict_markers=false" tests/run_xarray_backends_tests.py
 
   stubtest:
-    runs-on: ubuntu-latest
+    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/extras=s3-cache
     needs: [build-wheels]
     steps:
+      - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0 # v2
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: Download wheels
@@ -458,8 +473,9 @@ jobs:
           python -m mypy.stubtest --ignore-disjoint-bases icechunk._icechunk_python --allowlist stubtest_allowlist.txt
 
   check-xarray-docs:
-    runs-on: ubuntu-latest
+    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/extras=s3-cache
     steps:
+      - uses: runs-on/action@742bf56072eb4845a0f94b3394673e4903c90ff0 # v2
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           path: "icechunk"

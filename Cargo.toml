@@ -207,6 +207,13 @@ debug = 0
 [profile.ci.package."*"]
 opt-level = 1
 
+# CI wheel builds: optimized enough for testing, but fast to compile.
+# Uses more codegen units and skips LTO for parallelism.
+[profile.ci-release]
+inherits = "release"
+lto = "thin"
+codegen-units = 8
+
 # For convenience with cargo-samply
 [profile.samply]
 inherits = "bench"
