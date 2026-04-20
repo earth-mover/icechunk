@@ -89,7 +89,7 @@ jobs:
           # Currently: 3.14
           prefix-key: "rust-py314"
           shared-key: "rust"
-          #save-if: ${{ github.ref == 'refs/heads/main' }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - uses: prefix-dev/setup-pixi@a0af7a228712d6121d37aba47adf55c1332c9c2e # v0.9.4
         with:
