@@ -18,10 +18,10 @@ concurrency:
 
 permissions:
   contents: read
-  issues: write
 
 env:
   PYTHON_VERSION: "3.14"
+  PIXI_VERSION: "v0.63.2"
 
 defaults:
   run:
@@ -31,7 +31,13 @@ jobs:
   build:
     name: upstream-dev
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     continue-on-error: true
+    outputs:
+      setup-outcome: ${{ steps.setup.outcome }}
+      mypy-outcome: ${{ steps.mypy.outcome }}
+      pytest-outcome: ${{ steps.pytest-icechunk.outcome }}
     if: ${{
       (contains(github.event.pull_request.labels.*.name, 'test-upstream') && github.event_name == 'pull_request')
       || github.event_name == 'workflow_dispatch'
@@ -39,64 +45,109 @@ jobs:
       }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
-      - name: Install Just
-        run: sudo snap install --edge --classic just
+        with:
+          persist-credentials: false
+
+      - uses: prefix-dev/setup-pixi@a0af7a228712d6121d37aba47adf55c1332c9c2e # v0.9.4
+        with:
+          pixi-version: ${{ env.PIXI_VERSION }}
+          cache: true
+          activate-environment: true
+          manifest-path: icechunk-python/pyproject.toml
+
       - name: Stand up RustFS
-        run: |
-          docker compose up -d rustfs_init
+        working-directory: .
+        run: just rustfs-up
 
       - name: Wait for RustFS to be ready
-        run: |
-          for _ in {1..10}; do
-              if docker compose ps --status exited --filter status==0 | grep rustfs ; then
-              break
-              fi
-              sleep 3
-          done
-      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
+        working-directory: .
+        run: just rustfs-wait
 
       - name: Build wheels
-        uses: PyO3/maturin-action@db323e2cf5679b7feb8bcb561a36b27a0bc19e79 # v1
-        with:
-          working-directory: icechunk-python
-          # target: ${{ matrix.platform.target }}
-          args: --release --out dist --find-interpreter
-          sccache: true
-          # manylinux: ${{ matrix.platform.manylinux }} # https://github.com/PyO3/maturin-action/issues/245
+        working-directory: .
+        run: just build-wheels
 
       - name: setup
         id: setup
-        shell: bash
-        working-directory: icechunk-python
+        working-directory: .
         run: |
-          set -e
-          python3 -m venv .venv
-          source .venv/bin/activate
-          python --version
-          PY_TAG="cp${PYTHON_VERSION//./}"
-          WHEEL=$(ls dist/*-${PY_TAG}-*.whl)
-          # Install upstream dependencies from nightly wheels
-          export UV_INDEX="https://pypi.anaconda.org/scientific-python-nightly-wheels/simple/"
-          export UV_PRERELEASE=allow
-          uv pip install "$WHEEL" --group dev \
-            --resolution highest \
-            --index-strategy unsafe-best-match 2>&1 | tee setup-output.log
-          uv pip install "hypothesis @ git+https://github.com/ianhi/hypothesis.git@flaky-feedback#subdirectory=hypothesis-python"
-          uv pip list
+          just python-upstream-setup
+
+      - name: mypy
+        id: mypy
+        working-directory: .
+        run: |
+          just python-upstream-mypy
+
+      - name: Restore cached hypothesis directory
+        id: restore-hypothesis-cache
+        if: always()
+        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
+        with:
+          path: icechunk-python/.hypothesis/
+          key: cache-hypothesis-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: |
+            cache-hypothesis-
+
+      - name: describe environment
+        if: steps.setup.outcome == 'success'
+        working-directory: .
+        run: |
+          just python-upstream-describe
+
+      - name: pytest
+        id: pytest-icechunk
+        if: steps.setup.outcome == 'success'
+        working-directory: .
+        env:
+          HYPOTHESIS_EXPERIMENTAL_OBSERVABILITY: "1"
+        run: |
+          just python-upstream-pytest
+
+      # explicitly save the cache so it gets updated, also do this even if it fails.
+      - name: Save cached hypothesis directory
+        id: save-hypothesis-cache
+        if: always()
+        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
+        with:
+          path: icechunk-python/.hypothesis/
+          key: cache-hypothesis-${{ runner.os }}-${{ github.run_id }}
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
+        with:
+          name: upstream-dev-logs
+          path: |
+            icechunk-python/setup-output.log
+            icechunk-python/mypy-output.log
+            icechunk-python/output-pytest-log.jsonl
+          if-no-files-found: ignore
+
+  build-report:
+    name: upstream-dev-report
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    needs: build
+    permissions:
+      issues: write # needed to create/update issues on nightly failures
+    if: |
+      always()
+      && (needs.build.outputs.setup-outcome == 'failure' || needs.build.outputs.mypy-outcome == 'failure' || needs.build.outputs.pytest-outcome == 'failure')
+      && github.event_name == 'schedule'
+      && github.repository_owner == 'earth-mover'
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: upstream-dev-logs
+          path: icechunk-python
 
       - name: Create or update setup failure issue
-        if: |
-          always()
-          && steps.setup.outcome == 'failure'
-          && github.event_name == 'schedule'
-          && github.repository_owner == 'earth-mover'
+        if: needs.build.outputs.setup-outcome == 'failure'
         shell: bash
         working-directory: .
         run: |
@@ -109,9 +160,9 @@ jobs:
           fi
 
           # Replace placeholders
-          issue_body="${template//\{\{WORKFLOW\}\}/${{ github.workflow }}}"
-          issue_body="${issue_body//\{\{RUN_ID\}\}/${{ github.run_id }}}"
-          issue_body="${issue_body//\{\{RUN_URL\}\}/${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}}"
+          issue_body="${template//\{\{WORKFLOW\}\}/$WORKFLOW_NAME}"
+          issue_body="${issue_body//\{\{RUN_ID\}\}/$RUN_ID}"
+          issue_body="${issue_body//\{\{RUN_URL\}\}/$RUN_URL}"
           issue_body="${issue_body//\{\{DATE\}\}/$(date -u)}"
           issue_body="${issue_body//\{\{SETUP_OUTPUT\}\}/$setup_output}"
 
@@ -133,23 +184,12 @@ jobs:
           fi
         env:
           GH_TOKEN: ${{ github.token }}
-
-      - name: mypy
-        id: mypy
-        shell: bash
-        working-directory: icechunk-python
-        run: |
-          set -e
-          python3 -m venv .venv
-          source .venv/bin/activate
-          mypy --python-version ${{ env.PYTHON_VERSION }} python 2>&1 | tee mypy-output.log
+          WORKFLOW_NAME: ${{ github.workflow }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
       - name: Create or update mypy failure issue
-        if: |
-          always()
-          && steps.mypy.outcome == 'failure'
-          && github.event_name == 'schedule'
-          && github.repository_owner == 'earth-mover'
+        if: needs.build.outputs.mypy-outcome == 'failure'
         shell: bash
         working-directory: .
         run: |
@@ -162,9 +202,9 @@ jobs:
           fi
 
           # Replace placeholders
-          issue_body="${template//\{\{WORKFLOW\}\}/${{ github.workflow }}}"
-          issue_body="${issue_body//\{\{RUN_ID\}\}/${{ github.run_id }}}"
-          issue_body="${issue_body//\{\{RUN_URL\}\}/${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}}"
+          issue_body="${template//\{\{WORKFLOW\}\}/$WORKFLOW_NAME}"
+          issue_body="${issue_body//\{\{RUN_ID\}\}/$RUN_ID}"
+          issue_body="${issue_body//\{\{RUN_URL\}\}/$RUN_URL}"
           issue_body="${issue_body//\{\{DATE\}\}/$(date -u)}"
           issue_body="${issue_body//\{\{MYPY_OUTPUT\}\}/$mypy_output}"
 
@@ -186,60 +226,12 @@ jobs:
           fi
         env:
           GH_TOKEN: ${{ github.token }}
-
-      - name: Restore cached hypothesis directory
-        id: restore-hypothesis-cache
-        if: always()
-        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
-        with:
-          path: icechunk-python/.hypothesis/
-          key: cache-hypothesis-${{ runner.os }}-${{ github.run_id }}
-          restore-keys: |
-            cache-hypothesis-
-
-      - name: describe environment
-        if: steps.setup.outcome == 'success'
-        shell: bash
-        working-directory: icechunk-python
-        run: |
-          set -e
-          python3 -m venv .venv
-          source .venv/bin/activate
-          pip list
-
-      - name: Install flatc
-        if: steps.setup.outcome == 'success'
-        run: |
-          sudo apt-get update && sudo apt-get install -y flatbuffers-compiler
-
-      - name: pytest
-        id: pytest-icechunk
-        if: steps.setup.outcome == 'success'
-        shell: bash
-        working-directory: icechunk-python
-        env:
-          HYPOTHESIS_EXPERIMENTAL_OBSERVABILITY: "1"
-        run: |
-          set -e
-          python3 -m venv .venv
-          source .venv/bin/activate
-          pytest -n 4 --hypothesis-profile=nightly --report-log output-pytest-log.jsonl
-
-      # explicitly save the cache so it gets updated, also do this even if it fails.
-      - name: Save cached hypothesis directory
-        id: save-hypothesis-cache
-        if: always()
-        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
-        with:
-          path: icechunk-python/.hypothesis/
-          key: cache-hypothesis-${{ runner.os }}-${{ github.run_id }}
+          WORKFLOW_NAME: ${{ github.workflow }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
       - name: Generate and publish the pytest report
-        if: |
-          always()
-          && steps.pytest-icechunk.outcome == 'failure'
-          && github.event_name == 'schedule'
-          && github.repository_owner == 'earth-mover'
+        if: needs.build.outputs.pytest-outcome == 'failure'
         uses: xarray-contrib/issue-from-pytest-log@f94477e45ef40e4403d7585ba639a9a3bcc53d43 # v1
         with:
           log-path: icechunk-python/output-pytest-log.jsonl
@@ -247,6 +239,9 @@ jobs:
   xarray-backends:
     name: xarray-tests-upstream
     runs-on: ubuntu-latest
+    continue-on-error: true
+    outputs:
+      pytest-outcome: ${{ steps.pytest-xarray-backends.outcome }}
     if: ${{
       (contains(github.event.pull_request.labels.*.name, 'test-upstream') && github.event_name == 'pull_request')
       || github.event_name == 'workflow_dispatch'
@@ -256,80 +251,73 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           path: "icechunk"
+          persist-credentials: false
 
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           repository: "pydata/xarray"
           path: "xarray"
           fetch-depth: 0 # Fetch all history for all branches and tags.
+          persist-credentials: false
 
-      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+      - uses: prefix-dev/setup-pixi@a0af7a228712d6121d37aba47adf55c1332c9c2e # v0.9.4
         with:
-          python-version: ${{ env.PYTHON_VERSION }}
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
+          pixi-version: ${{ env.PIXI_VERSION }}
+          cache: true
+          activate-environment: true
+          manifest-path: icechunk/icechunk-python/pyproject.toml
 
       - name: Build wheels
-        uses: PyO3/maturin-action@db323e2cf5679b7feb8bcb561a36b27a0bc19e79 # v1
-        with:
-          working-directory: icechunk/icechunk-python
-          args: --release --out dist --find-interpreter
+        working-directory: icechunk
+        run: just build-wheels
 
       - name: setup
-        shell: bash
-        working-directory: icechunk/icechunk-python
+        working-directory: icechunk
         run: |
-          set -e
-          python3 -m venv .venv
-          source .venv/bin/activate
-          python --version
-          PY_TAG="cp${PYTHON_VERSION//./}"
-          WHEEL=$(ls dist/*-${PY_TAG}-*.whl)
-          # Install upstream dependencies from nightly wheels
-          export UV_INDEX="https://pypi.anaconda.org/scientific-python-nightly-wheels/simple/"
-          export UV_PRERELEASE=allow
-          uv pip install "$WHEEL" --group test pytest-mypy-plugins \
-            --resolution highest \
-            --index-strategy unsafe-best-match
-          uv pip list
+          just xarray-upstream-setup
 
       - name: Stand up RustFS
         working-directory: icechunk
-        run: |
-          docker compose up -d rustfs_init
+        run: just rustfs-up
 
       - name: Wait for RustFS to be ready
         working-directory: icechunk
-        run: |
-          for _ in {1..10}; do
-              if docker compose ps --status exited --filter status==0 | grep rustfs ; then
-              break
-              fi
-              sleep 3
-          done
+        run: just rustfs-wait
       - name: pytest
         id: pytest-xarray-backends
-        shell: bash
-        working-directory: icechunk/icechunk-python
+        working-directory: icechunk
         env:
           ICECHUNK_XARRAY_BACKENDS_TESTS: 1
         run: |
-          set -e
-          python3 -m venv .venv
-          source .venv/bin/activate
-          # pass xarray's pyproject.toml so that pytest can find the `flaky` fixture
-          pytest -c=../../xarray/pyproject.toml -W ignore tests/run_xarray_backends_tests.py --report-log output-pytest-log.jsonl
+          just xarray-upstream-pytest
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
+        with:
+          name: xarray-backends-logs
+          path: icechunk/icechunk-python/output-pytest-log.jsonl
+          if-no-files-found: ignore
+
+  xarray-report:
+    name: xarray-tests-upstream-report
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    needs: xarray-backends
+    permissions:
+      issues: write # needed to create/update issues on nightly failures
+    if: |
+      always()
+      && needs.xarray-backends.outputs.pytest-outcome == 'failure'
+      && github.event_name == 'schedule'
+      && github.repository_owner == 'earth-mover'
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: xarray-backends-logs
 
       - name: Generate and publish the xarray backends report
-        if: |
-          failure()
-          && steps.pytest-xarray-backends.outcome == 'failure'
-          && github.event_name == 'schedule'
-          && github.repository_owner == 'earth-mover'
         uses: xarray-contrib/issue-from-pytest-log@f94477e45ef40e4403d7585ba639a9a3bcc53d43 # v1
         with:
-          log-path: icechunk/icechunk-python/output-pytest-log.jsonl
+          log-path: xarray-backends-logs/output-pytest-log.jsonl
           issue-title: "Nightly Xarray backends tests failed"

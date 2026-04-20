@@ -22,8 +22,10 @@ env:
   CI: 1
   RUST_BACKTRACE: short
   RUSTUP_MAX_RETRIES: 10
-  RUST_CHANNEL: '1.91.1'
-  CARGO_DENY_VERSION: '0.19.0'
+  PIXI_VERSION: "v0.63.2"
+
+permissions:
+  contents: read
 
 jobs:
   check-dependencies:
@@ -36,25 +38,14 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
 
-      - name: Install Rust toolchain
-        run: |
-          rustup update --no-self-update ${{ env.RUST_CHANNEL }}
-          rustup default ${{ env.RUST_CHANNEL }}
-
-      - name: Cache cargo-deny
-        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
-        id: cargo_deny_cache
+      - uses: prefix-dev/setup-pixi@a0af7a228712d6121d37aba47adf55c1332c9c2e # v0.9.4
         with:
-          path: ~/.cargo/bin/cargo-deny
-          key: cargo-deny-${{ env.CARGO_DENY_VERSION }}-${{ runner.os }}
-
-      - name: Install cargo-deny
-        if: steps.cargo_deny_cache.outputs.cache-hit != 'true'
-        run: cargo install --locked cargo-deny --version ${{ env.CARGO_DENY_VERSION }}
-
-      - name: Install Just
-        run: sudo snap install --edge --classic just
+          pixi-version: ${{ env.PIXI_VERSION }}
+          cache: true
+          activate-environment: true
+          manifest-path: icechunk-python/pyproject.toml
 
       - name: Run dependency checks
         run: |
