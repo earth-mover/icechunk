@@ -41,11 +41,11 @@ develop *args:
   cd icechunk-python && maturin develop --uv --profile {{profile}} "$@"
 
 [doc("Install maturin import hook for more convenient development flow")]
-import-hook *args:
+import-hook:
   cd icechunk-python && python -m maturin_import_hook site install
 
 [doc("Uninstall maturin import hook")]
-import-hook-remove *args:
+import-hook-remove:
   cd icechunk-python && python -m maturin_import_hook site uninstall
 
 # Use --all-features for the workspace but skip icechunk's `shuttle` feature,
@@ -59,7 +59,8 @@ lint *args:
 
 [doc("Run check on all features")]
 check *args:
-  cargo check --profile {{profile}} --workspace --all-features "$@"
+  cargo check --profile {{profile}} --all-features --workspace --exclude icechunk "$@"
+  cargo check --profile {{profile}} -p icechunk --features {{icechunk_features}} "$@"
 
 [doc("Format all Rust files (pass `--check` to verify only)")]
 format *args:
@@ -164,7 +165,9 @@ zarrs-upstream-patch zarrs_dir="../zarrs_icechunk":
   #!/usr/bin/env bash
   set -euo pipefail
   icechunk_path=$(realpath icechunk)
-  sed -i '/^\[patch\.crates-io\]/a icechunk = { path = "'"$icechunk_path"'" }' {{zarrs_dir}}/Cargo.toml
+  if ! grep -q 'icechunk = { path' {{zarrs_dir}}/Cargo.toml; then
+    sed -i '/^\[patch\.crates-io\]/a icechunk = { path = "'"$icechunk_path"'" }' {{zarrs_dir}}/Cargo.toml
+  fi
 
 [doc("Build zarrs_icechunk against local icechunk")]
 zarrs-upstream-build zarrs_dir="../zarrs_icechunk":
@@ -189,9 +192,12 @@ rustfs-wait:
   for _ in {1..10}; do
     if docker compose ps --status exited --filter status==0 | grep rustfs ; then
       break
+      exit 0
     fi
     sleep 3
   done
+  echo "ERROR: RustFS did not become ready in time" >&2
+  exit 1
 
 [doc("Build Python wheels with maturin")]
 build-wheels *args:
