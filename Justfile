@@ -6,6 +6,8 @@ set positional-arguments
 alias fmt := format
 alias pre := pre-commit
 
+export PYTHON_VERSION := "3.14"
+
 [doc("Run all Rust tests via cargo-nextest")]
 test *args:
   export DYLD_LIBRARY_PATH="${CONDA_PREFIX:-}/lib" && cargo nextest run --no-fail-fast --cargo-profile {{profile}} --workspace --lib --bins --tests --examples "$@"
@@ -193,7 +195,11 @@ rustfs-wait:
 
 [doc("Build Python wheels with maturin")]
 build-wheels *args:
-  cd icechunk-python && maturin build --release --out dist --find-interpreter "$@"
+  cd icechunk-python && maturin build --release --out dist -i $PYTHON_VERSION "$@"
+
+[doc("Run Python checks with upstream nightly dependencies")]
+python-upstream: build-wheels python-upstream-setup python-upstream-mypy python-upstream-describe python-upstream-pytest
+  echo "python upstream nightly checks passed"
 
 [doc("Install Python upstream nightly dependencies")]
 python-upstream-setup:
@@ -232,13 +238,23 @@ python-upstream-describe:
   pip list
 
 [doc("Run pytest with Python upstream nightly dependencies")]
-python-upstream-pytest:
+python-upstream-pytest *args:
   #!/usr/bin/env bash
   set -euo pipefail
   cd icechunk-python
   python3 -m venv .venv
   source .venv/bin/activate
-  pytest -n 4 --hypothesis-profile=nightly --report-log output-pytest-log.jsonl
+  pytest -n 4 --hypothesis-profile=nightly --report-log output-pytest-log.jsonl "$@"
+
+[doc("Run full xarray-upstream checks")]
+xarray-upstream xarray_dir="../xarray": xarray-upstream-clone build-wheels xarray-upstream-setup xarray-upstream-pytest
+  echo "xarray-upstream checks passed"
+  rm -rf {{xarray_dir}}
+
+[doc("Clone xarray from upstream")]
+xarray-upstream-clone xarray_dir="../xarray":
+  rm -rf {{xarray_dir}}
+  git clone https://github.com/pydata/xarray {{xarray_dir}}
 
 [doc("Install xarray upstream test dependencies")]
 xarray-upstream-setup:
