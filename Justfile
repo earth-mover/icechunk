@@ -170,13 +170,13 @@ zarrs-upstream-patch zarrs_dir="../zarrs_icechunk":
   fi
 
 [doc("Build zarrs_icechunk against local icechunk")]
-zarrs-upstream-build zarrs_dir="../zarrs_icechunk":
+zarrs-upstream-build zarrs_dir="../zarrs_icechunk": zarrs-upstream-patch
   #!/usr/bin/env bash
   set -euo pipefail
   cd {{zarrs_dir}} && cargo build 2>&1 | tee build-output.log
 
 [doc("Test zarrs_icechunk against local icechunk")]
-zarrs-upstream-test zarrs_dir="../zarrs_icechunk":
+zarrs-upstream-test zarrs_dir="../zarrs_icechunk": zarrs-upstream-patch zarrs-upstream-build
   #!/usr/bin/env bash
   set -euo pipefail
   cd {{zarrs_dir}} && cargo test 2>&1 | tee test-output.log
@@ -191,7 +191,6 @@ rustfs-wait:
   set -euo pipefail
   for _ in {1..10}; do
     if docker compose ps --status exited --filter status==0 | grep rustfs ; then
-      break
       exit 0
     fi
     sleep 3
@@ -226,29 +225,26 @@ python-upstream-setup:
   uv pip list
 
 [doc("Run mypy against Python upstream nightly")]
-python-upstream-mypy:
+python-upstream-mypy: python-upstream-setup
   #!/usr/bin/env bash
   set -euo pipefail
   cd icechunk-python
-  python3 -m venv .venv
   source .venv/bin/activate
   mypy --python-version "$PYTHON_VERSION" python 2>&1 | tee mypy-output.log
 
 [doc("Describe Python upstream nightly environment")]
-python-upstream-describe:
+python-upstream-describe: python-upstream-setup
   #!/usr/bin/env bash
   set -euo pipefail
   cd icechunk-python
-  python3 -m venv .venv
   source .venv/bin/activate
   pip list
 
 [doc("Run pytest with Python upstream nightly dependencies")]
-python-upstream-pytest *args:
+python-upstream-pytest *args: python-upstream-setup
   #!/usr/bin/env bash
   set -euo pipefail
   cd icechunk-python
-  python3 -m venv .venv
   source .venv/bin/activate
   pytest -n 4 --hypothesis-profile=nightly --report-log output-pytest-log.jsonl "$@"
 
@@ -280,12 +276,11 @@ xarray-upstream-setup:
   uv pip list
 
 [doc("Run xarray backend tests against local icechunk")]
-xarray-upstream-pytest xarray_dir="../xarray":
+xarray-upstream-pytest xarray_dir="../xarray": xarray-upstream-setup
   #!/usr/bin/env bash
   set -euo pipefail
   xarray_abs=$(realpath "{{xarray_dir}}")
   cd icechunk-python
-  python3 -m venv .venv
   source .venv/bin/activate
   pytest -c="$xarray_abs/pyproject.toml" -W ignore tests/run_xarray_backends_tests.py --report-log output-pytest-log.jsonl
 

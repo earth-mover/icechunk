@@ -23,10 +23,6 @@ env:
   PYTHON_VERSION: "3.14"
   PIXI_VERSION: "v0.63.2"
 
-defaults:
-  run:
-    working-directory: ./icechunk-python
-
 jobs:
   build:
     name: upstream-dev
@@ -56,26 +52,21 @@ jobs:
           manifest-path: icechunk-python/pyproject.toml
 
       - name: Stand up RustFS
-        working-directory: .
         run: just rustfs-up
 
       - name: Wait for RustFS to be ready
-        working-directory: .
         run: just rustfs-wait
 
       - name: Build wheels
-        working-directory: .
         run: just build-wheels
 
       - name: setup
         id: setup
-        working-directory: .
         run: |
           just python-upstream-setup
 
       - name: mypy
         id: mypy
-        working-directory: .
         run: |
           just python-upstream-mypy
 
@@ -91,14 +82,12 @@ jobs:
 
       - name: describe environment
         if: steps.setup.outcome == 'success'
-        working-directory: .
         run: |
           just python-upstream-describe
 
       - name: pytest
         id: pytest-icechunk
         if: steps.setup.outcome == 'success'
-        working-directory: .
         env:
           HYPOTHESIS_EXPERIMENTAL_OBSERVABILITY: "1"
         run: |
@@ -149,7 +138,6 @@ jobs:
       - name: Create or update setup failure issue
         if: needs.build.outputs.setup-outcome == 'failure'
         shell: bash
-        working-directory: .
         run: |
           # Read the template and setup output
           template=$(cat .github/setup-failure-template.md)
@@ -191,7 +179,6 @@ jobs:
       - name: Create or update mypy failure issue
         if: needs.build.outputs.mypy-outcome == 'failure'
         shell: bash
-        working-directory: .
         run: |
           # Read the template and mypy output
           template=$(cat .github/mypy-failure-template.md)
