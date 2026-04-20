@@ -117,7 +117,6 @@ jobs:
 
       - name: Create or update failure issue
         shell: bash
-        working-directory: .
         run: |
           # Read the template
           template=$(cat .github/zarrs-upstream-failure-template.md)

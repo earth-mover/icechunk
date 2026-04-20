@@ -156,6 +156,7 @@ zarrs-upstream zarrs_dir="../zarrs_icechunk": zarrs-upstream-clone zarrs-upstrea
   @echo "zarrs_upstream check passed"
   rm -rf {{zarrs_dir}}
 
+[doc("Clone zarrs_icechunk for local checks")]
 zarrs-upstream-clone zarrs_dir="../zarrs_icechunk":
   rm -rf {{zarrs_dir}}
   git clone https://github.com/zarrs/zarrs_icechunk {{zarrs_dir}}
@@ -211,6 +212,10 @@ python-upstream-setup:
   #!/usr/bin/env bash
   set -euo pipefail
   cd icechunk-python
+  if [ -d .venv ] && .venv/bin/python -c "import icechunk" 2>/dev/null; then
+    echo "Setup already done, skipping"
+    exit 0
+  fi
   python3 -m venv .venv
   source .venv/bin/activate
   python --version
@@ -276,12 +281,13 @@ xarray-upstream-setup:
   uv pip list
 
 [doc("Run xarray backend tests against local icechunk")]
-xarray-upstream-pytest xarray_dir="../xarray": xarray-upstream-setup
+xarray-upstream-pytest xarray_dir="../xarray": xarray-upstream-clone xarray-upstream-setup
   #!/usr/bin/env bash
   set -euo pipefail
   xarray_abs=$(realpath "{{xarray_dir}}")
   cd icechunk-python
   source .venv/bin/activate
+  export ICECHUNK_XARRAY_BACKENDS_TESTS=1
   pytest -c="$xarray_abs/pyproject.toml" -W ignore tests/run_xarray_backends_tests.py --report-log output-pytest-log.jsonl
 
 [doc("Run all Python and Rust checks")]
