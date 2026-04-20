@@ -212,10 +212,6 @@ python-upstream-setup:
   #!/usr/bin/env bash
   set -euo pipefail
   cd icechunk-python
-  if [ -d .venv ] && .venv/bin/python -c "import icechunk" 2>/dev/null; then
-    echo "Setup already done, skipping"
-    exit 0
-  fi
   python3 -m venv .venv
   source .venv/bin/activate
   python --version
