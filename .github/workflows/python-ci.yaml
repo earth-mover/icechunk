@@ -178,7 +178,7 @@ jobs:
           rust-toolchain: stable
           manylinux: ${{ matrix.platform.manylinux }} # https://github.com/PyO3/maturin-action/issues/245
       - name: Upload wheels
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: wheels-linux-${{ matrix.branch == 'main' && 'main' || 'support-v1.x' }}-${{ matrix.platform.target }}
           path: icechunk-python/dist
@@ -221,7 +221,7 @@ jobs:
           rust-toolchain: stable
           manylinux: musllinux_1_2
       - name: Upload wheels
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: wheels-musllinux-${{ matrix.branch == 'main' && 'main' || 'support-v1.x' }}-${{ matrix.platform.target }}
           path: icechunk-python/dist
@@ -259,7 +259,7 @@ jobs:
           args: --release --out dist -i ${{ env.PYTHON_INTERPRETERS }}
           rust-toolchain: stable
       - name: Upload wheels
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: wheels-windows-${{ matrix.branch == 'main' && 'main' || 'support-v1.x' }}-${{ matrix.platform.target }}
           path: icechunk-python/dist
@@ -297,7 +297,7 @@ jobs:
           args: --release --out dist -i ${{ env.PYTHON_INTERPRETERS }}
           rust-toolchain: stable
       - name: Upload wheels
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: wheels-macos-${{ matrix.branch == 'main' && 'main' || 'support-v1.x' }}-${{ matrix.platform.target }}
           path: icechunk-python/dist
@@ -327,7 +327,7 @@ jobs:
           args: --out dist
           rust-toolchain: stable
       - name: Upload sdist
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: wheels-sdist-${{ matrix.branch == 'main' && 'main' || 'support-v1.x' }}
           path: icechunk-python/dist
@@ -359,7 +359,7 @@ jobs:
           merge-multiple: true
 
       - name: Upload nightly wheels
-        uses: scientific-python/upload-nightly-action@5748273c71e2d8d3a61f3a11a16421c8954f9ecf
+        uses: scientific-python/upload-nightly-action@e76cfec8a4611fd02808a801b0ff5a7d7c1b2d99
         with:
           artifacts_path: dist
           anaconda_nightly_upload_token: ${{ secrets.ANACONDA_ORG_UPLOAD_TOKEN }}
