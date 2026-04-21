@@ -194,7 +194,7 @@ ban-relative-imports = "all"
 icechunk = "icechunk._icechunk_python:cli_entrypoint"
 
 [tool.pixi.workspace]
-channels = ["conda-forge"]
+channels = ["conda-forge", "https://prefix.dev/github-releases"]
 platforms = ["osx-arm64", "linux-64", "linux-aarch64", "win-64", "osx-64"]
 
 [tool.pixi.feature.docs.dependencies]
@@ -214,6 +214,7 @@ netcdf4 = ">=1.7.4,<2"
 cargo-nextest = ">=0.9.106,<0.10"
 flatbuffers = "*"
 samply = ">=0.13.1,<0.14"
+cargo-release = ">=1.1.2,<2"
 
 [tool.pixi.feature.build.target.linux-64.dependencies]
 sysroot_linux-64 = ">=2.34"

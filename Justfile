@@ -182,6 +182,10 @@ zarrs-upstream-test zarrs_dir="../zarrs_icechunk": zarrs-upstream-patch zarrs-up
   set -euo pipefail
   cd {{zarrs_dir}} && cargo test 2>&1 | tee test-output.log
 
+[doc("Start all docker compose services")]
+contup:
+  docker compose up -d
+
 [doc("Start RustFS via docker compose")]
 rustfs-up:
   docker compose up -d rustfs_init
@@ -198,6 +202,26 @@ rustfs-wait:
   done
   echo "ERROR: RustFS did not become ready in time" >&2
   exit 1
+
+[doc("Wait for Azurite container to be ready")]
+azurite-wait:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  for _ in {1..60}; do
+    if curl --silent --fail "http://localhost:10000/devstoreaccount1/testcontainer?sv=2023-01-03&ss=btqf&srt=sco&spr=https%2Chttp&st=2025-01-06T14%3A53%3A30Z&se=2035-01-07T14%3A53%3A00Z&sp=rwdftlacup&sig=jclETGilOzONYp4Y0iK9SpVRLGyehaS5lg5booJ9VYA%3D&restype=container"; then
+      exit 0
+    fi
+    sleep 1
+  done
+  echo "ERROR: Azurite did not become ready in time" >&2
+  exit 1
+
+[doc("Wait for all docker compose services to be ready")]
+contwait: rustfs-wait azurite-wait
+
+[doc("Publish workspace crates to crates.io via cargo-release")]
+publish-crates:
+  cargo release --workspace --unpublished --no-confirm --no-tag --no-push --execute
 
 [doc("Build Python wheels with maturin")]
 build-wheels *args:
