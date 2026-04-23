@@ -45,6 +45,12 @@ A curated list of blog posts about Icechunk from around the ecosystem.
 
     *December 2, 2025* — Preview of Icechunk 2 features and the migration path from 1.x.
 
+-   [![Zarr Everywhere](https://developmentseed.org/static/a169ba6827b60c16d7853b7eb03e00ac/00db2/zarr%20blog%20cover.png){ loading=lazy }](https://developmentseed.org/blog/2025-10-13-zarr/)
+
+    **[Zarr Everywhere](https://developmentseed.org/blog/2025-10-13-zarr/)**
+
+    *October 13, 2025* — Development Seed's overview of their work on cloud-native array tooling, including Icechunk, VirtualiZarr, and Zarr v3 adoption across the ecosystem.
+
 -   [![From 10 Minutes to 10 Seconds](https://earthmover.io/images/blog/covers/from-10-minutes-to-10-seconds-how-woods-hole-scientists-used-icechunk-to-optimize-ocean-data-access.jpg){ loading=lazy }](https://www.earthmover.io/blog/from-10-minutes-to-10-seconds-how-woods-hole-scientists-used-icechunk-to-optimize-ocean-data-access)
 
     **[From 10 Minutes to 10 Seconds: How Woods Hole Scientists used Icechunk to Optimize Ocean Data Access](https://www.earthmover.io/blog/from-10-minutes-to-10-seconds-how-woods-hole-scientists-used-icechunk-to-optimize-ocean-data-access)**
