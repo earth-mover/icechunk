@@ -3,11 +3,17 @@ title: Blog Posts
 ---
 # Blog Posts
 
-A curated list of [Earthmover](https://www.earthmover.io) blog posts about Icechunk.
+A curated list of blog posts about Icechunk from around the ecosystem.
 
 ## 2026
 
 <div class="grid cards" markdown>
+
+-   [![Designing a data pipeline for our highest-resolution dataset yet](./assets/blog/carbonplan-producing-ocr-data.png){ loading=lazy }](https://carbonplan.org/blog/producing-ocr-data)
+
+    **[Designing a data pipeline for our highest-resolution dataset yet](https://carbonplan.org/blog/producing-ocr-data)**
+
+    *April 22, 2026* — CarbonPlan on using Icechunk's transactional writes to build a fault-tolerant, idempotent pipeline for their highest-resolution wildfire risk dataset.
 
 -   [![Ship fast, break nothing](https://earthmover.io/images/blog/covers/icechunk-rigor-swarm.png){ loading=lazy }](https://www.earthmover.io/blog/engineering-rigor-in-icechunk-part-1)
 
