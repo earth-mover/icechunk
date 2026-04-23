@@ -30,6 +30,15 @@ repos:
     hooks:
       - id: codespell
 
+  - repo: https://github.com/zizmorcore/zizmor-pre-commit
+    rev: v1.24.1
+    hooks:
+    - id: zizmor
+      files: \.github\/workflows\/(code-quality|dependency-check|python-upstream|publish-rust-library|rust-ci|rust-upstream|windows-check)\.ya?ml
+      args:
+        - "--no-progress" # https://github.com/zizmorcore/zizmor/issues/582
+        - "--pedantic"
+
   - repo: local
     hooks:
       - id: rust-pre-commit-fast

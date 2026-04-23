@@ -17,21 +17,22 @@ concurrency:
 
 permissions:
   contents: read
-  issues: write
 
 env:
   CARGO_INCREMENTAL: 0
   CARGO_NET_RETRY: 10
   RUST_BACKTRACE: short
   RUSTFLAGS: "-D warnings"
-  RUST_CHANNEL: '1.91.1'
-  CARGO_DENY_VERSION: '0.19.0'
+  PIXI_VERSION: "v0.63.2"
 
 jobs:
   zarrs:
     name: zarrs-upstream
     runs-on: ubuntu-latest
     continue-on-error: true
+    outputs:
+      build-outcome: ${{ steps.build.outcome }}
+      test-outcome: ${{ steps.test.outcome }}
     if: ${{
       (contains(github.event.pull_request.labels.*.name, 'test-upstream') && github.event_name == 'pull_request')
       || github.event_name == 'workflow_dispatch'
@@ -43,57 +44,82 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           path: "icechunk"
-
-      - name: Checkout zarrs_icechunk
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
-        with:
-          repository: "zarrs/zarrs_icechunk"
-          path: "zarrs_icechunk"
-
-      - name: Patch zarrs_icechunk to use local icechunk
-        shell: bash
-        run: |
-          # zarrs_icechunk already has a [patch.crates-io] section (with commented entries),
-          # so we append the icechunk entry under it instead of creating a duplicate section.
-          sed -i '/^\[patch\.crates-io\]/a icechunk = { path = "../icechunk/icechunk" }' zarrs_icechunk/Cargo.toml
-
-      - name: Install Rust toolchain
-        run: |
-          rustup update --no-self-update ${{ env.RUST_CHANNEL }}
-          rustup default ${{ env.RUST_CHANNEL }}
+          persist-credentials: false
 
       - name: Cache Dependencies
         uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
         with:
           workspaces: "zarrs_icechunk -> target"
-          key: zarrs-upstream-${{ env.RUST_CHANNEL }}
+          shared-key: "upstream-zarrs"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - uses: prefix-dev/setup-pixi@a0af7a228712d6121d37aba47adf55c1332c9c2e # v0.9.4
+        with:
+          pixi-version: ${{ env.PIXI_VERSION }}
+          cache: true
+          activate-environment: true
+          manifest-path: icechunk/icechunk-python/pyproject.toml
+
+      - name: clone zarrs_icechunk
+        working-directory: icechunk
+        run: |
+          just zarrs-upstream-clone
+
+      - name: Patch zarrs_icechunk to use local icechunk
+        working-directory: icechunk
+        run: |
+          just zarrs-upstream-patch
 
       - name: Build zarrs_icechunk
         id: build
-        shell: bash
-        working-directory: zarrs_icechunk
+        working-directory: icechunk
         run: |
-          cargo build 2>&1 | tee build-output.log
+          just zarrs-upstream-build
 
       - name: Test zarrs_icechunk
         id: test
         if: steps.build.outcome == 'success'
-        shell: bash
-        working-directory: zarrs_icechunk
+        working-directory: icechunk
         run: |
-          cargo test 2>&1 | tee test-output.log
+          just zarrs-upstream-test
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
+        with:
+          name: zarrs-upstream-logs
+          path: |
+            zarrs_icechunk/build-output.log
+            zarrs_icechunk/test-output.log
+          if-no-files-found: ignore
+
+  zarrs-report:
+    name: zarrs-upstream-report
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    needs: zarrs
+    permissions:
+      issues: write # needed to create/update failure issues when nightly tests fail
+    if: |
+      always()
+      && (needs.zarrs.outputs.build-outcome == 'failure' || needs.zarrs.outputs.test-outcome == 'failure')
+      && github.event_name == 'schedule'
+      && github.repository_owner == 'earth-mover'
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: zarrs-upstream-logs
+          path: zarrs_icechunk
 
       - name: Create or update failure issue
-        if: |
-          always()
-          && (steps.build.outcome == 'failure' || steps.test.outcome == 'failure')
-          && github.event_name == 'schedule'
-          && github.repository_owner == 'earth-mover'
         shell: bash
-        working-directory: .
         run: |
           # Read the template
-          template=$(cat icechunk/.github/zarrs-upstream-failure-template.md)
+          template=$(cat .github/zarrs-upstream-failure-template.md)
 
           # Combine build and test output
           test_output="=== Build Output ===
@@ -115,9 +141,9 @@ jobs:
           fi
 
           # Replace placeholders
-          issue_body="${template//\{\{WORKFLOW\}\}/${{ github.workflow }}}"
-          issue_body="${issue_body//\{\{RUN_ID\}\}/${{ github.run_id }}}"
-          issue_body="${issue_body//\{\{RUN_URL\}\}/${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}}"
+          issue_body="${template//\{\{WORKFLOW\}\}/$WORKFLOW_NAME}"
+          issue_body="${issue_body//\{\{RUN_ID\}\}/$RUN_ID}"
+          issue_body="${issue_body//\{\{RUN_URL\}\}/$RUN_URL}"
           issue_body="${issue_body//\{\{DATE\}\}/$(date -u)}"
           issue_body="${issue_body//\{\{TEST_OUTPUT\}\}/$test_output}"
 
@@ -139,3 +165,6 @@ jobs:
           fi
         env:
           GH_TOKEN: ${{ github.token }}
+          WORKFLOW_NAME: ${{ github.workflow }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
