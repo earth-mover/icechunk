@@ -1,7 +1,7 @@
 ---
-title: Blog Posts
+title: Blog
 ---
-# Blog Posts
+# Blog
 
 A curated list of blog posts about Icechunk.
 
