@@ -11,6 +11,7 @@ written to MemoryStore, IcechunkStore, etc. for comparison testing.
 from __future__ import annotations
 
 import itertools
+import posixpath
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import Any
@@ -70,8 +71,15 @@ class ModelStore(MemoryStore):
     async def move(self, source: str, dest: str) -> None:
         """Move all keys from source to dest.
 
+        Paths must be absolute (leading ``/``); root is ``"/"``.
         Store keys always have form "node/zarr.json" or "node/c/...", never bare "node".
         """
+        if not source.startswith("/") or not dest.startswith("/"):
+            raise ValueError(
+                f"paths must start with '/'; got source={source!r}, dest={dest!r}"
+            )
+        source = source[1:]
+        dest = dest[1:]
         all_keys = [k async for k in self.list_prefix("")]
         keys_to_move = [k for k in all_keys if k.startswith(source + "/")]
         for old_key in keys_to_move:
@@ -110,7 +118,7 @@ class GroupNode:
     def walk(self, prefix: str = "") -> Iterator[tuple[str, Node]]:
         """Yield ``(path, child)`` for every node, depth-first."""
         for name, child in self.children.items():
-            p = f"{prefix}/{name}" if prefix else name
+            p = posixpath.join(prefix, name)
             yield p, child
             if isinstance(child, GroupNode):
                 yield from child.walk(p)
@@ -158,19 +166,26 @@ class GroupNode:
     def from_paths(cls, arrays: set[str], groups: set[str]) -> GroupNode:
         """Build a GroupNode from flat sets of array and group paths.
 
+        Paths must be absolute (leading ``/``); root is ``"/"``.
+
         Example::
 
             GroupNode.from_paths(
-                arrays={"a/x", "b"},
-                groups={"a"},
+                arrays={"/a/x", "/b"},
+                groups={"/a"},
             )
         """
+        for path in arrays | groups:
+            if not path.startswith("/"):
+                raise ValueError(f"path must start with '/'; got {path!r}")
         tree: dict[str, Any] = {}
-        for path in sorted(groups - {""}):
+        normalized_groups = {g[1:] for g in groups}
+        normalized_arrays = {a[1:] for a in arrays}
+        for path in sorted(normalized_groups - {""}):
             current = tree
             for part in path.split("/"):
                 current = current.setdefault(part, {})
-        for path in sorted(arrays):
+        for path in sorted(normalized_arrays):
             parts = path.split("/")
             current = tree
             for part in parts[:-1]:

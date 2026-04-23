@@ -9,7 +9,10 @@ import icechunk as ic
 import zarr
 from icechunk.testing.invariants import assert_moves_sorted_by_final_path
 from icechunk.testing.models import GroupNode
-from icechunk.testing.trees import tree_and_moves
+from icechunk.testing.trees import (
+    tree_and_invalid_moves,
+    tree_and_valid_moves,
+)
 from icechunk.testing.utils import (
     precommit_postcommit_readonly,
     tree_to_model_and_icechunk,
@@ -94,50 +97,83 @@ Nodes moved/renamed:
     )
 
 
-def test_move_errors() -> None:
-    repo = ic.Repository.create(
-        storage=ic.in_memory_storage(),
+@example(
+    tree_moves=(
+        GroupNode.from_paths(arrays={"/my/old/path/array"}, groups=set()),
+        [("/my/old/path", "/my/old/path", "into itself or its own descendant")],
     )
-    session = repo.writable_session("main")
-    store = session.store
-    root = zarr.group(store=store, overwrite=True)
-    group = root.create_group("my/old/path", overwrite=True)
-    group.create_array("array", shape=(10, 10), chunks=(2, 2), dtype="i4", fill_value=42)
-    session.commit("create array")
+)
+@example(
+    tree_moves=(
+        GroupNode.from_paths(arrays={"/my/old/path/array"}, groups=set()),
+        [
+            (
+                "/my/old/path",
+                "/my/old/path/array",
+                "into itself or its own descendant",
+            )
+        ],
+    )
+)
+@example(
+    tree_moves=(
+        GroupNode.from_paths(arrays={"/my/old/path/array"}, groups=set()),
+        [("/not-found", "/my/new/path", "node not found|could not create path")],
+    )
+)
+@example(
+    tree_moves=(
+        GroupNode.from_paths(arrays={"/array"}, groups=set()),
+        [("/", "/renamed-root", "into itself or its own descendant")],
+    )
+)
+@example(
+    tree_moves=(
+        GroupNode.from_paths(arrays={"/arr", "/src"}, groups=set()),
+        [("/src", "/arr/x", "parent .* is an array")],
+    )
+)
+@given(tree_and_invalid_moves(n_moves=st.integers(min_value=1, max_value=4)))
+def test_invalid_moves(
+    tree_moves: tuple[GroupNode, list[tuple[str, str, str]]],
+) -> None:
+    """Every invalid move must raise with its expected error pattern.
 
-    session = repo.rearrange_session("main")
-    store = session.store
+    The strategy bundles each invalid move with the regex its rejection error
+    must match. Each move is independent — the rearrange session is reusable
+    since rejections happen before the change_set is touched.
+    """
+    tree, moves = tree_moves
+    _, session, repo = tree_to_model_and_icechunk(tree)
+    session.commit("init")
 
-    with pytest.raises(ic.IcechunkError, match="overwrite existing node"):
-        session.move("/my/old/path", "/my/old/path")
-    with pytest.raises(ic.IcechunkError, match="node not found"):
-        session.move("/not-found", "/my/new/path")
-
-    # TODO: moving root should error but doesn't yet, see #1562
-    # with pytest.raises(ic.IcechunkError):
-    #     session.move("/", "/new")
+    rearrange = repo.rearrange_session("main")
+    for src, dst, pattern in moves:
+        note(f"expecting {pattern!r}: {src} -> {dst}")
+        with pytest.raises(ic.IcechunkError, match=pattern):
+            rearrange.move(src, dst)
 
 
 @example(
     tree_moves=(
-        GroupNode.from_paths(arrays=set(), groups={"foo/bar", "baz"}),
-        [("foo/bar", "baz/bar")],
+        GroupNode.from_paths(arrays=set(), groups={"/foo/bar", "/baz"}),
+        [("/foo/bar", "/baz/bar")],
     )
 )
 @example(
-    tree_moves=(GroupNode.from_paths(arrays={"0/0/0"}, groups=set()), [("0", "0_0")])
+    tree_moves=(GroupNode.from_paths(arrays={"/0/0/0"}, groups=set()), [("/0", "/0_0")])
 )
 @example(
     tree_moves=(
-        GroupNode.from_paths(arrays={"0/1"}, groups=set()),
-        [("0/1", "0/0"), ("0", "1")],
+        GroupNode.from_paths(arrays={"/0/1"}, groups=set()),
+        [("/0/1", "/0/0"), ("/0", "/1")],
     )
 )
-@given(tree_moves=tree_and_moves())
-def test_moves(
+@given(tree_moves=tree_and_valid_moves())
+def test_valid_moves(
     tree_moves: tuple[GroupNode, list[tuple[str, str]]],
 ) -> None:
-    """A sequence of moves should produce the correct tree before, and commit and in a fresh
+    """A sequence of moves should produce the correct tree before, and after commit, and in a fresh
     readonly_session.
     """
     tree, moves = tree_moves
@@ -148,9 +184,9 @@ def test_moves(
 
     session = repo.rearrange_session("main")
     for source, dest in moves:
-        note(f"moving: /{source} -> /{dest}")
+        note(f"moving: {source} -> {dest}")
         sync(model.move(source, dest))
-        session.move(f"/{source}", f"/{dest}")
+        session.move(source, dest)
 
     # All model paths should be reachable as group members in the store
     model_paths = {path for path, _ in zarr.open_group(model).members(max_depth=None)}
@@ -172,7 +208,7 @@ def test_moves(
             f"\ntree mismatch [{label}]:"
             f"\n\noriginal tree:\n{original_tree}"
             f"\n\nmoves:\n"
-            + "\n".join(f"  /{s} -> /{d}" for s, d in moves)
+            + "\n".join(f"  {s} -> {d}" for s, d in moves)
             + f"\n\nexpected:\n{expected}"
             f"\n\nactual:\n{actual}"
         )
@@ -185,7 +221,7 @@ def test_moves(
 
 
 @given(
-    tree_moves=tree_and_moves(n_moves=st.integers(min_value=2, max_value=10)),
+    tree_moves=tree_and_valid_moves(n_moves=st.integers(min_value=2, max_value=10)),
     data=st.data(),
 )
 def test_moves_amend(
@@ -216,14 +252,14 @@ def test_moves_amend(
     note(f"tree: {tree!r}")
     note(f"batches: {[len(b) for b in batches]} ({len(moves)} moves)")
     for i, (s, d) in enumerate(moves):
-        note(f"  move {i}: /{s} -> /{d}")
+        note(f"  move {i}: {s} -> {d}")
 
     # Repo A: all moves in one commit
     _, session_a, repo_a = tree_to_model_and_icechunk(tree)
     session_a.commit("init")
     session_a = repo_a.rearrange_session("main")
     for source, dest in moves:
-        session_a.move(f"/{source}", f"/{dest}")
+        session_a.move(source, dest)
     session_a.commit("all moves")
 
     # Repo B: same moves split across multiple amends
@@ -233,7 +269,7 @@ def test_moves_amend(
     for batch in batches:
         session_b = repo_b.rearrange_session("main")
         for source, dest in batch:
-            session_b.move(f"/{source}", f"/{dest}")
+            session_b.move(source, dest)
         session_b.amend("amend")
 
     # Trees must match

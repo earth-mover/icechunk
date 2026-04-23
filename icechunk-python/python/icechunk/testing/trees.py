@@ -8,12 +8,25 @@ that produces realistic prefix collisions (e.g. ``EC-Earth3`` / ``EC-Earth3-Veg`
 
 from __future__ import annotations
 
+import posixpath
+from itertools import combinations
+from typing import Literal
+
 import hypothesis.strategies as st
 import numpy as np
 
 import zarr.testing.strategies as zrst
 from icechunk.testing.models import ArrayNode, GroupNode, Node
 from zarr.testing.strategies import node_names
+
+InvalidMoveReason = Literal[
+    "self",
+    "descendant",
+    "missing_parent",
+    "parent_not_group",
+    "overwrite",
+    "source_missing",
+]
 
 # ---------------------------------------------------------------------------
 # Name strategies — pool-based derivation for prefix collisions
@@ -82,6 +95,20 @@ def similar_name(
     return st.one_of(*strategies).filter(lambda name: name not in sibling_names)
 
 
+def fresh_name(pool: set[str], exclude: set[str]) -> st.SearchStrategy[str]:
+    """A single-segment name biased toward similarity with ``pool``, not in ``exclude``.
+
+    Falls back to random ``node_names`` when both ``pool`` and ``exclude`` are empty.
+    Uniqueness across multiple draws is *not* guaranteed — callers that need
+    distinct names must filter or use ``unique_sibling_names``.
+    """
+    if not pool and not exclude:
+        return node_names
+    return st.one_of(node_names, similar_name(pool, exclude)).filter(
+        lambda n: n not in exclude
+    )
+
+
 @st.composite
 def unique_sibling_names(
     draw: st.DrawFn,
@@ -89,40 +116,24 @@ def unique_sibling_names(
     num_names: int,
     existing_siblings: set[str] | None = None,
 ) -> list[str]:
-    """Draw *num_names* unique names, biased toward collisions with existing ones.
+    """Draw *num_names* names from ``fresh_name`` that are unique among themselves
+    and not in ``existing_siblings``.
 
     Parameters
     ----------
     existing_names : set[str]
-        All names already present in the tree. Used to generate
-        similar-looking candidates (affixed siblings, reused cousins).
+        Pool of names used to bias the draws toward realistic prefix collisions
+        (passed through to ``fresh_name``).
     num_names : int
         Number of unique names to generate.
     existing_siblings : set[str] | None
-        Names already present at the destination that must not be reused.
-        Used by valid_moves to avoid collisions with existing children.
-
-    Returns
-    -------
-    list[str]
-        The generated names, unique among themselves and not in existing_siblings.
+        Names that must not be reused (e.g. the existing children at a destination).
     """
-    generated_names: set[str] = set()
-    already_taken = existing_siblings or set()
-
+    generated: set[str] = set()
+    initial_exclude = existing_siblings or set()
     for _ in range(num_names):
-        excluded = generated_names | already_taken
-        # Filter the whole strategy — similar_name can produce collisions.
-        generated_names.add(
-            draw(
-                (
-                    st.one_of(node_names, similar_name(existing_names, excluded))
-                    if bool(existing_names) | bool(generated_names)
-                    else node_names
-                ).filter(lambda name_, ex=excluded: name_ not in ex)  # type: ignore[misc]
-            )
-        )
-    return list(generated_names)
+        generated.add(draw(fresh_name(existing_names, initial_exclude | generated)))
+    return list(generated)
 
 
 # ---------------------------------------------------------------------------
@@ -219,16 +230,131 @@ def child_names_at(parent: str, all_paths: set[str]) -> set[str]:
     return results
 
 
+def is_descendant(path: str, ancestor: str) -> bool:
+    """True if *path* is a strict descendant of *ancestor*."""
+    return path.startswith(ancestor + "/")
+
+
+# A move paired with the regex pattern its rejection error must match.
+# ``None`` indicates a valid move (no expected error).
+MixedMove = tuple[str, str, str | None]
+
+
+def absolute(path: str) -> str:
+    """Convert a tree-internal path (no leading slash, root="") to icechunk's `/`-prefixed form."""
+    return "/" if path == "" else f"/{path}"
+
+
 @st.composite
-def valid_moves(
+def invalid_move(
+    draw: st.DrawFn,
+    all_nodes: set[str],
+    all_arrays: set[str],
+    name_pool: set[str],
+) -> tuple[str, str, str]:
+    """One invalid move with the regex its rejection error must match."""
+    eligible: list[InvalidMoveReason] = ["self", "descendant", "source_missing"]
+    # Overwrite needs two distinct nodes neither an ancestor of the other; a
+    # pure chain (e.g. /a, /a/b, /a/b/c) fails every pairing.
+    if any(not is_descendant(b, a) for a, b in combinations(sorted(all_nodes), 2)):
+        eligible.append("overwrite")
+    if all_nodes:
+        eligible.append("missing_parent")
+    # parent_not_group needs an array AND a src that isn't an ancestor of the
+    # array (otherwise the descendant check fires first and shadows this one).
+    if any(
+        n != arr and not is_descendant(arr, n) for arr in all_arrays for n in all_nodes
+    ):
+        eligible.append("parent_not_group")
+
+    reason = draw(st.sampled_from(eligible))
+    match reason:
+        case "self":
+            s = draw(st.sampled_from(sorted(all_nodes | {""})))
+            return s, s, "into itself or its own descendant"
+        case "descendant":
+            s = draw(st.sampled_from(sorted(all_nodes | {""})))
+            leaf = draw(fresh_name(name_pool, child_names_at(s, all_nodes)))
+            return s, posixpath.join(s, leaf), "into itself or its own descendant"
+        case "overwrite":
+            s, d = draw(
+                st.tuples(
+                    st.sampled_from(sorted(all_nodes)),
+                    st.sampled_from(sorted(all_nodes)),
+                ).filter(
+                    lambda sd: (
+                        sd[0] != sd[1]
+                        and not is_descendant(sd[1], sd[0])
+                        and not is_descendant(sd[0], sd[1])
+                    )
+                )
+            )
+            return s, d, "overwrite existing node"
+        case "missing_parent":
+            s = draw(st.sampled_from(sorted(all_nodes)))
+            parent = draw(fresh_name(name_pool, exclude=name_pool))
+            leaf = draw(fresh_name(name_pool, exclude=name_pool))
+            return s, posixpath.join(parent, leaf), "destination's parent group"
+        case "source_missing":
+            # Two unique top-level anchors guarantee src != dst. ``src`` may
+            # be deeply nested so we exercise the case of a non-existent
+            # multi-segment source; ``dst`` doesn't matter since icechunk's
+            # source check fires before any destination validation.
+            src_anchor, dst = draw(
+                unique_sibling_names(name_pool, 2, existing_siblings=name_pool)
+            )
+            src_extra = draw(
+                st.lists(fresh_name(name_pool, exclude=name_pool), max_size=3)
+            )
+            src = posixpath.join(src_anchor, *src_extra)
+            return src, dst, "node not found|could not create path"
+        case "parent_not_group":
+            array_parent = draw(st.sampled_from(sorted(all_arrays)))
+            leaf = draw(fresh_name(name_pool, exclude=name_pool))
+            # src must not be the array or an ancestor of it; otherwise the
+            # descendant check fires first and shadows parent_not_group.
+            src_candidates = sorted(
+                n
+                for n in all_nodes
+                if n != array_parent and not is_descendant(array_parent, n)
+            )
+            src = draw(st.sampled_from(src_candidates))
+            return (
+                src,
+                posixpath.join(array_parent, leaf),
+                "parent .* is an array",
+            )
+
+
+@st.composite
+def valid_move(
+    draw: st.DrawFn,
+    all_nodes: set[str],
+    all_groups: set[str],
+    name_pool: set[str],
+) -> tuple[str, str]:
+    """One valid move against the given tree state."""
+    source = draw(st.sampled_from(sorted(all_nodes)))
+    candidates = sorted(
+        g for g in all_groups if g != source and not is_descendant(g, source)
+    )
+    dest_parent = draw(st.sampled_from(candidates))
+    dest_name = draw(fresh_name(name_pool, child_names_at(dest_parent, all_nodes)))
+    return source, posixpath.join(dest_parent, dest_name)
+
+
+@st.composite
+def mixed_moves(
     draw: st.DrawFn,
     tree: GroupNode,
-    n_moves: st.SearchStrategy[int] = st.just(1),  # noqa: B008
-) -> list[tuple[str, str]]:
-    """Generate a sequence of valid moves for a tree.
+    n_moves: st.SearchStrategy[int] = st.integers(min_value=1, max_value=10),  # noqa: B008
+    p_invalid: st.SearchStrategy[float] = st.floats(min_value=0.0, max_value=1.0),  # noqa: B008
+) -> list[MixedMove]:
+    """A sequence of valid and invalid moves combined.
 
-    Each move updates the tracked paths so subsequent moves see the new state
-    (e.g. moving into an already-moved group, or moving the same node again).
+    Each iteration picks invalid with probability ``p_invalid`` (drawn once per
+    sequence so hypothesis can shrink it). Valid moves update the tracked
+    state; invalid moves don't.
     """
     from icechunk.testing.utils import update_paths_after_move
 
@@ -237,36 +363,47 @@ def valid_moves(
     all_arrays = all_nodes - all_groups
     name_pool = {path.split("/")[-1] for path in all_nodes}
 
-    num_moves = draw(n_moves)
-    moves: list[tuple[str, str]] = []
-    for _ in range(num_moves):
-        if not all_nodes:
-            break
-
-        source = draw(st.sampled_from(sorted(all_nodes)))
-
-        source_and_descendants = {source} | {
-            g for g in all_groups if g.startswith(source + "/")
-        }
-        dest_parent = draw(st.sampled_from(sorted(all_groups - source_and_descendants)))
-
-        existing_siblings = child_names_at(dest_parent, all_nodes)
-        (dest_name,) = draw(
-            unique_sibling_names(name_pool, 1, existing_siblings=existing_siblings)
-        )
-
-        dest = f"{dest_parent}/{dest_name}" if dest_parent else dest_name
-        moves.append((source, dest))
-        all_arrays, all_groups = update_paths_after_move(
-            source, dest, all_arrays, all_groups
-        )
-        all_nodes = all_arrays | (all_groups - {""})
-
+    p = draw(p_invalid)
+    roll = st.floats(min_value=0.0, max_value=1.0, exclude_max=True)
+    moves: list[MixedMove] = []
+    for _ in range(draw(n_moves)):
+        if draw(roll) < p:
+            src, dst, pattern = draw(invalid_move(all_nodes, all_arrays, name_pool))
+            moves.append((absolute(src), absolute(dst), pattern))
+        else:
+            src, dst = draw(valid_move(all_nodes, all_groups, name_pool))
+            moves.append((absolute(src), absolute(dst), None))
+            all_arrays, all_groups = update_paths_after_move(
+                src, dst, all_arrays, all_groups
+            )
+            all_nodes = all_arrays | (all_groups - {""})
     return moves
 
 
 @st.composite
-def tree_and_moves(
+def valid_moves(
+    draw: st.DrawFn,
+    tree: GroupNode,
+    n_moves: st.SearchStrategy[int] = st.integers(min_value=1, max_value=10),  # noqa: B008
+) -> list[tuple[str, str]]:
+    """A sequence of valid moves; ``mixed_moves`` with all-valid probability."""
+    mixed = draw(mixed_moves(tree, n_moves=n_moves, p_invalid=st.just(0.0)))
+    return [(src, dst) for src, dst, _ in mixed]
+
+
+@st.composite
+def invalid_moves(
+    draw: st.DrawFn,
+    tree: GroupNode,
+    n_moves: st.SearchStrategy[int] = st.integers(min_value=1, max_value=10),  # noqa: B008
+) -> list[tuple[str, str, str]]:
+    """A sequence of invalid moves; ``mixed_moves`` with all-invalid probability."""
+    mixed = draw(mixed_moves(tree, n_moves=n_moves, p_invalid=st.just(1.0)))
+    return [(src, dst, pattern) for src, dst, pattern in mixed if pattern is not None]
+
+
+@st.composite
+def tree_and_valid_moves(
     draw: st.DrawFn,
     max_leaves: st.SearchStrategy[int] | None = None,
     max_children: st.SearchStrategy[int] | None = None,
@@ -280,4 +417,41 @@ def tree_and_moves(
         kwargs["max_children"] = max_children
     tree = draw(trees(**kwargs))
     moves = draw(valid_moves(tree, n_moves=n_moves))
+    return tree, moves
+
+
+@st.composite
+def tree_and_invalid_moves(
+    draw: st.DrawFn,
+    max_leaves: st.SearchStrategy[int] | None = None,
+    max_children: st.SearchStrategy[int] | None = None,
+    n_moves: st.SearchStrategy[int] = st.integers(min_value=1, max_value=10),  # noqa: B008
+) -> tuple[GroupNode, list[tuple[str, str, str]]]:
+    """Generate a tree paired with a sequence of invalid moves."""
+    kwargs = {}
+    if max_leaves is not None:
+        kwargs["max_leaves"] = max_leaves
+    if max_children is not None:
+        kwargs["max_children"] = max_children
+    tree = draw(trees(**kwargs))
+    moves = draw(invalid_moves(tree, n_moves=n_moves))
+    return tree, moves
+
+
+@st.composite
+def tree_and_mixed_moves(
+    draw: st.DrawFn,
+    max_leaves: st.SearchStrategy[int] | None = None,
+    max_children: st.SearchStrategy[int] | None = None,
+    n_moves: st.SearchStrategy[int] = st.integers(min_value=1, max_value=10),  # noqa: B008
+    p_invalid: st.SearchStrategy[float] = st.floats(min_value=0.0, max_value=1.0),  # noqa: B008
+) -> tuple[GroupNode, list[MixedMove]]:
+    """Generate a tree paired with a mixed sequence of valid and invalid moves."""
+    kwargs = {}
+    if max_leaves is not None:
+        kwargs["max_leaves"] = max_leaves
+    if max_children is not None:
+        kwargs["max_children"] = max_children
+    tree = draw(trees(**kwargs))
+    moves = draw(mixed_moves(tree, n_moves=n_moves, p_invalid=p_invalid))
     return tree, moves

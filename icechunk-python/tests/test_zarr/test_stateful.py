@@ -216,14 +216,17 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         pending_arrays = self.all_arrays.copy()
         pending_groups = self.all_groups.copy()
 
-        tree = GroupNode.from_paths(pending_arrays, pending_groups | {""})
+        tree = GroupNode.from_paths(
+            {f"/{p}" for p in pending_arrays},
+            {f"/{p}" for p in pending_groups - {""}} | {"/"},
+        )
         moves = data.draw(valid_moves(tree, n_moves=st.just(num_moves)))
         for source, dest in moves:
             note(f"moving {source!r} to {dest!r}")
-            session.move(f"/{source}", f"/{dest}")
+            session.move(source, dest)
             self._sync(pending_model.move(source, dest))
             pending_arrays, pending_groups = update_paths_after_move(
-                source, dest, pending_arrays, pending_groups
+                source.lstrip("/"), dest.lstrip("/"), pending_arrays, pending_groups
             )
             self._compare_list_dir(
                 pending_model, session.store, pending_arrays | pending_groups
