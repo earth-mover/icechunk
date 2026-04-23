@@ -253,6 +253,7 @@ nav:
       - Global Raster Data cube: guides/ingestion/glad-ingest.ipynb
   - Sample Datasets: sample-datasets.md
   - Related Projects: related-projects.md
+  - Blog Posts: blog-posts.md
   - Reference:
     - Spec: reference/spec.md
     - Version Policy: reference/version-policy.md
