@@ -81,6 +81,12 @@ A curated list of [Earthmover](https://www.earthmover.io) blog posts about Icech
 
     *April 10, 2025* — Demonstrating that Icechunk scales to hundreds of thousands of requests per second on S3.
 
+-   [![Solving NASA's Cloud Data Dilemma](https://earthmover.io/images/blog/covers/nasa-icechunk.webp){ loading=lazy }](https://www.earthmover.io/blog/nasa-icechunk)
+
+    **[Solving NASA's Cloud Data Dilemma: How Icechunk Revolutionizes Earth Data Access](https://www.earthmover.io/blog/nasa-icechunk)**
+
+    *March 27, 2025* — Case study on the Earthmover and Development Seed NASA pilot, enabling 100x faster cloud-native access to archival Earth science datasets without costly data migration.
+
 </div>
 
 ## 2024
