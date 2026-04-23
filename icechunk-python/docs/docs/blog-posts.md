@@ -3,7 +3,7 @@ title: Blog Posts
 ---
 # Blog Posts
 
-A curated list of [Earthmover](https://www.earthmover.io) blog posts about Icechunk, ordered from newest to oldest.
+A curated list of [Earthmover](https://www.earthmover.io) blog posts about Icechunk.
 
 ## 2026
 
