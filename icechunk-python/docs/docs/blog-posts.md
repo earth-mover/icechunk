@@ -3,7 +3,7 @@ title: Blog Posts
 ---
 # Blog Posts
 
-A curated list of blog posts about Icechunk from around the ecosystem.
+A curated list of blog posts about Icechunk.
 
 ## 2026
 
