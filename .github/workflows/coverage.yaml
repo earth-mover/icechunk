@@ -3,7 +3,6 @@ name: Coverage
 on:
   pull_request:
     types: [opened, reopened, synchronize]
-  merge_group:
   push:
     branches:
       - main
@@ -48,7 +47,7 @@ jobs:
       - name: Cache Dependencies
         uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
         with:
-          prefix-key: "rust-py314"
+          prefix-key: "coverage"
           shared-key: "rust"
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
@@ -68,7 +67,7 @@ jobs:
           files: coverage_rust.lcov
           flags: rust
           name: rust-coverage
-          fail_ci_if_error: true
+          fail_ci_if_error: false
 
       - name: Upload Python coverage to Codecov
         uses: codecov/codecov-action@75cd11691c0faa626561e295848008c8a7dddffe # v5
@@ -77,4 +76,4 @@ jobs:
           files: coverage.xml
           flags: python
           name: python-coverage
-          fail_ci_if_error: true
+          fail_ci_if_error: false

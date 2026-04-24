@@ -30,7 +30,7 @@ icechunk-python/uv.lock
 .cache/
 
 # Coverage reports
-coverage.lcov
+*.lcov
 coverage.xml
 .coverage
 htmlcov/
