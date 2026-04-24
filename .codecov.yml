@@ -1,0 +1,25 @@
+codecov:
+  require_ci_to_pass: yes
+
+coverage:
+  status:
+    project:
+      default:
+        target: auto
+        threshold: 1%
+    patch:
+      default:
+        target: 80%
+
+ignore:
+  - "icechunk-python/tests/"
+  - "icechunk-python/integration_tests/"
+  - "icechunk/tests/"
+  - "icechunk/examples/"
+  - "icechunk-macros/"
+  - "**/*test*.rs"
+  - "design-docs/"
+
+comment:
+  layout: "reach,diff,flags,tree"
+  behavior: default
