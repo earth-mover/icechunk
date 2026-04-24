@@ -315,13 +315,13 @@ coverage *args:
   #!/usr/bin/env bash
   set -euo pipefail
   export DYLD_LIBRARY_PATH="${CONDA_PREFIX:-}/lib"
-  source <(cargo llvm-cov show-env --export-prefix)
+  source <(cargo llvm-cov show-env --sh --profile {{ profile }})
   export CARGO_TARGET_DIR=$CARGO_LLVM_COV_TARGET_DIR
-  cargo llvm-cov clean --workspace
-  (cd icechunk-python && maturin develop --uv)
+  cargo llvm-cov clean --workspace --profile {{ profile }}
+  cargo nextest run --no-fail-fast --cargo-profile {{profile}} --workspace --lib --bins --tests --examples
+  (cd icechunk-python && maturin develop --uv --profile {{profile}})
   (cd icechunk-python && pytest tests --cov=icechunk --cov-report xml:../coverage.xml --cov-report term -m 'not hypothesis' -n auto "$@")
-  cargo nextest run --no-fail-fast --workspace --lib --bins --tests --examples
-  cargo llvm-cov report --lcov --output-path coverage_rust.lcov
+  cargo llvm-cov report --profile {{ profile }} --lcov --output-path coverage_rust.lcov
   echo "Coverage reports: coverage_rust.lcov (Rust, unified FFI + native), coverage.xml (Python)"
 
 [doc("Run all Python and Rust checks")]
