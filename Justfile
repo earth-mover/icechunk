@@ -310,6 +310,20 @@ xarray-upstream-pytest xarray_dir="../xarray": xarray-upstream-clone xarray-upst
   export ICECHUNK_XARRAY_BACKENDS_TESTS=1
   pytest -c="$xarray_abs/pyproject.toml" -W ignore tests/run_xarray_backends_tests.py --report-log output-pytest-log.jsonl
 
+[doc("Run unified Rust + Python code coverage (FFI via pytest + Rust native tests)")]
+coverage:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  export DYLD_LIBRARY_PATH="${CONDA_PREFIX:-}/lib"
+  source <(cargo llvm-cov show-env --export-prefix)
+  export CARGO_TARGET_DIR=$CARGO_LLVM_COV_TARGET_DIR
+  cargo llvm-cov clean --workspace
+  (cd icechunk-python && maturin develop --uv)
+  (cd icechunk-python && pytest tests --cov=icechunk --cov-report xml:../coverage.xml --cov-report term -n auto)
+  cargo nextest run --no-fail-fast --workspace --lib --bins --tests --examples
+  cargo llvm-cov report --lcov --output-path coverage_rust.lcov
+  echo "Coverage reports: coverage_rust.lcov (Rust, unified FFI + native), coverage.xml (Python)"
+
 [doc("Run all Python and Rust checks")]
 all-checks:
   just pytest

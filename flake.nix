@@ -118,6 +118,7 @@
                 pkgs.cargo-edit
                 pkgs.cargo-msrv
                 pkgs.cargo-machete
+                pkgs.cargo-llvm-cov
 
                 pkgs.mold
                 pkgs.taplo # toml lsp server
@@ -142,7 +143,7 @@
               // lib.optionalAttrs pkgs.stdenv.isLinux {
                 # Python libraries often load native shared objects using dlopen(3).
                 # Setting LD_LIBRARY_PATH makes the dynamic library loader aware of libraries without using RPATH for lookup.
-                LD_LIBRARY_PATH = lib.makeLibraryPath pkgs.pythonManylinuxPackages.manylinux1;
+                LD_LIBRARY_PATH = "${pkgs.stdenv.cc.cc.lib}/lib";
               };
               shellHook = ''
                 unset PYTHONPATH
