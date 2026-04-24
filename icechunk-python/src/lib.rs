@@ -172,6 +172,7 @@ fn pep440_version() -> String {
     cargo_version.replace("-rc.", "rc").replace("-alpha.", "a").replace("-beta.", "b")
 }
 
+// LCOV_EXCL_START - PyO3 module initialization cannot be directly tested
 /// The icechunk Python module implemented in Rust.
 #[pymodule]
 fn _icechunk_python(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -246,3 +247,4 @@ fn _icechunk_python(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     Ok(())
 }
+// LCOV_EXCL_STOP
