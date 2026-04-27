@@ -82,7 +82,7 @@ jobs:
           done
 
       - name: Cache Dependencies
-        uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           # The rust cache includes a dep on the Python version (when building icechunk-python)
           # so we need to bump the version here whenever Python version is updated
@@ -91,7 +91,7 @@ jobs:
           shared-key: "rust"
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      - uses: prefix-dev/setup-pixi@a0af7a228712d6121d37aba47adf55c1332c9c2e # v0.9.4
+      - uses: prefix-dev/setup-pixi@1b2de7f3351f171c8b4dfeb558c639cb58ed4ec0 # v0.9.5
         with:
           pixi-version: ${{ env.PIXI_VERSION }}
           cache: true
@@ -230,7 +230,7 @@ jobs:
           test -f /usr/include/wasm32-wasi/limits.h && echo "found /usr/include/wasm32-wasi/limits.h"
 
       - name: Cache Dependencies
-        uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           key: wasm-${{ env.MSRV }}
 

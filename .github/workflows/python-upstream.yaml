@@ -42,7 +42,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: prefix-dev/setup-pixi@a0af7a228712d6121d37aba47adf55c1332c9c2e # v0.9.4
+      - uses: prefix-dev/setup-pixi@1b2de7f3351f171c8b4dfeb558c639cb58ed4ec0 # v0.9.5
         with:
           pixi-version: ${{ env.PIXI_VERSION }}
           cache: true
@@ -102,7 +102,7 @@ jobs:
 
       - name: Upload logs
         if: always()
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: upstream-dev-logs
           path: |
@@ -217,7 +217,7 @@ jobs:
 
       - name: Generate and publish the pytest report
         if: needs.build.outputs.pytest-outcome == 'failure'
-        uses: xarray-contrib/issue-from-pytest-log@f94477e45ef40e4403d7585ba639a9a3bcc53d43 # v1
+        uses: xarray-contrib/issue-from-pytest-log@8e905db353437cda1d6a773de245343fbfc940dd # v1
         with:
           log-path: icechunk-python/output-pytest-log.jsonl
 
@@ -245,7 +245,7 @@ jobs:
           fetch-depth: 0 # Fetch all history for all branches and tags.
           persist-credentials: false
 
-      - uses: prefix-dev/setup-pixi@a0af7a228712d6121d37aba47adf55c1332c9c2e # v0.9.4
+      - uses: prefix-dev/setup-pixi@1b2de7f3351f171c8b4dfeb558c639cb58ed4ec0 # v0.9.5
         with:
           pixi-version: ${{ env.PIXI_VERSION }}
           cache: true
@@ -279,7 +279,7 @@ jobs:
 
       - name: Upload logs
         if: always()
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: xarray-backends-logs
           path: icechunk/icechunk-python/output-pytest-log.jsonl
@@ -303,7 +303,7 @@ jobs:
           name: xarray-backends-logs
 
       - name: Generate and publish the xarray backends report
-        uses: xarray-contrib/issue-from-pytest-log@f94477e45ef40e4403d7585ba639a9a3bcc53d43 # v1
+        uses: xarray-contrib/issue-from-pytest-log@8e905db353437cda1d6a773de245343fbfc940dd # v1
         with:
           log-path: xarray-backends-logs/output-pytest-log.jsonl
           issue-title: "Nightly Xarray backends tests failed"
