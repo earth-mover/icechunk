@@ -157,32 +157,32 @@ jobs:
         run: |
           cargo test --profile ci --workspace --all-targets -- --ignored
 
-  # shuttle:
-  #   name: Shuttle concurrency tests
-  #   timeout-minutes: 30
-  #   runs-on: ubuntu-latest
-  #   steps:
-  #     - name: Checkout repository
-  #       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
-  #       with:
-  #         ref: ${{ github.event.pull_request.head.sha }}
-  #         persist-credentials: false
+  shuttle:
+    name: Shuttle concurrency tests
+    timeout-minutes: 30
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
 
-  #     - name: Install Rust toolchain
-  #       run: |
-  #         rustup update --no-self-update ${{ env.MSRV }}
-  #         rustup default ${{ env.MSRV }}
+      - name: Install Rust toolchain
+        run: |
+          rustup update --no-self-update ${MSRV}
+          rustup default ${MSRV}
 
-  #     - name: Cache Dependencies
-  #       uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
-  #       with:
-  #         key: shuttle-${{ env.MSRV }}
+      - name: Cache Dependencies
+        uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
+        with:
+          key: shuttle-${{ env.MSRV }}
 
-  #     - name: Compile shuttle tests
-  #       run: cargo test -p icechunk --features shuttle --test test_shuttle --no-run
+      - name: Compile shuttle tests
+        run: cargo test -p icechunk --features shuttle --test test_shuttle --no-run
 
-  #     - name: Run shuttle tests
-  #       run: cargo test -p icechunk --features shuttle --test test_shuttle -- --nocapture
+      - name: Run shuttle tests
+        run: cargo test -p icechunk --features shuttle --test test_shuttle -- --nocapture
 
   wasm-build:
     name: WASM Build

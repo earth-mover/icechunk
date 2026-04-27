@@ -33,8 +33,8 @@
 //! ```
 //!
 
-// #[cfg(feature = "shuttle")]
-// extern crate shuttle_tokio as tokio;
+#[cfg(feature = "shuttle")]
+extern crate shuttle_tokio as tokio;
 
 pub mod asset_manager;
 pub mod change_set;
