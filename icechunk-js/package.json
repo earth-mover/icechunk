@@ -85,7 +85,7 @@
     "prettier": "^3.6.2",
     "tinybench": "^6.0.0",
     "typescript": "^6.0.2",
-    "zarrita": "^0.6.2"
+    "zarrita": "^0.7.1"
   },
   "lint-staged": {
     "*.@(js|ts|tsx)": [
