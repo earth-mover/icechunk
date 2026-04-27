@@ -176,7 +176,12 @@ jobs:
       - name: Cache Dependencies
         uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
         with:
-          key: shuttle-${{ env.MSRV }}
+          # The rust cache includes a dep on the Python version (when building icechunk-python)
+          # so we need to bump the version here whenever Python version is updated
+          # Currently: 3.14
+          prefix-key: "rust-py314"
+          shared-key: "rust"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Compile shuttle tests
         run: cargo test -p icechunk --features shuttle --test test_shuttle --no-run
