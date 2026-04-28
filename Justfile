@@ -1,6 +1,9 @@
 # Cargo profile: override with `just profile=ci test` (default: dev)
 profile := "dev"
 
+# Enable coverage instrumentation: override with `just coverage=true build-wheels` (default: false)
+coverage := "false"
+
 set positional-arguments
 
 alias fmt := format
@@ -45,6 +48,13 @@ gen-flatbuffers:
 develop *args:
   #!/usr/bin/env bash
   set -euo pipefail
+
+  if [ "{{ coverage }}" = "true" ]; then
+    export DYLD_LIBRARY_PATH="${CONDA_PREFIX:-}/lib"
+    source <(cargo llvm-cov show-env --sh --profile {{ profile }})
+    export CARGO_TARGET_DIR=$CARGO_LLVM_COV_TARGET_DIR
+  fi
+
   cd icechunk-python
   if [[ -n "${CONDA_PREFIX:-}" ]]; then
     export VIRTUAL_ENV="$CONDA_PREFIX"
@@ -268,8 +278,15 @@ jaeger-down:
 publish-crates:
   cargo release --workspace --unpublished --no-confirm --no-tag --no-push --execute
 
-[doc("Build Python wheels with maturin")]
+[doc("Build Python wheels with maturin (set coverage=true for coverage instrumentation)")]
 build-wheels *args:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  if [ "{{ coverage }}" = "true" ]; then
+    export DYLD_LIBRARY_PATH="${CONDA_PREFIX:-}/lib"
+    source <(cargo llvm-cov show-env --sh --profile {{ profile }})
+    export CARGO_TARGET_DIR=$CARGO_LLVM_COV_TARGET_DIR
+  fi
   cd icechunk-python && maturin build --release --out dist -i $PYTHON_VERSION "$@"
 
 [doc("Run Python checks with upstream nightly dependencies")]
@@ -309,10 +326,15 @@ python-upstream-describe: python-upstream-setup
   source .venv/bin/activate
   pip list
 
-[doc("Run pytest with Python upstream nightly dependencies")]
+[doc("Run pytest with Python upstream nightly dependencies (set coverage=true to capture FFI coverage)")]
 python-upstream-pytest *args: python-upstream-setup
   #!/usr/bin/env bash
   set -euo pipefail
+  if [ "{{ coverage }}" = "true" ]; then
+    export DYLD_LIBRARY_PATH="${CONDA_PREFIX:-}/lib"
+    source <(cargo llvm-cov show-env --sh --profile {{ profile }})
+    export CARGO_TARGET_DIR=$CARGO_LLVM_COV_TARGET_DIR
+  fi
   cd icechunk-python
   source .venv/bin/activate
   pytest -n 4 --hypothesis-profile=nightly --report-log output-pytest-log.jsonl "$@"
@@ -343,10 +365,15 @@ xarray-upstream-setup:
     --index-strategy unsafe-best-match
   uv pip list
 
-[doc("Run xarray backend tests against local icechunk")]
+[doc("Run xarray backend tests against local icechunk (set coverage=true to capture FFI coverage)")]
 xarray-upstream-pytest xarray_dir="../xarray": xarray-upstream-clone xarray-upstream-setup
   #!/usr/bin/env bash
   set -euo pipefail
+  if [ "{{ coverage }}" = "true" ]; then
+    export DYLD_LIBRARY_PATH="${CONDA_PREFIX:-}/lib"
+    source <(cargo llvm-cov show-env --sh --profile {{ profile }})
+    export CARGO_TARGET_DIR=$CARGO_LLVM_COV_TARGET_DIR
+  fi
   xarray_abs=$(realpath "{{xarray_dir}}")
   cd icechunk-python
   source .venv/bin/activate
@@ -354,7 +381,7 @@ xarray-upstream-pytest xarray_dir="../xarray": xarray-upstream-clone xarray-upst
   pytest -c="$xarray_abs/pyproject.toml" -W ignore tests/run_xarray_backends_tests.py --report-log output-pytest-log.jsonl
 
 [doc("Run unified Rust + Python code coverage (FFI via pytest + Rust native tests)")]
-coverage *args:
+coverage-old *args:
   #!/usr/bin/env bash
   set -euo pipefail
   export DYLD_LIBRARY_PATH="${CONDA_PREFIX:-}/lib"
@@ -366,6 +393,21 @@ coverage *args:
   (cd icechunk-python && pytest tests --cov=icechunk --cov-report xml:../coverage.xml --cov-report term -m 'not hypothesis' -n auto "$@")
   cargo llvm-cov report --profile {{ profile }} --lcov --output-path coverage_rust.lcov
   echo "Coverage reports: coverage_rust.lcov (Rust, unified FFI + native), coverage.xml (Python)"
+
+[doc("code coverage report generation (for Rust + FFI)")]
+coverage-report *args:
+  #!/usr/bin/env bash
+  set -euo pipefail
+
+  export DYLD_LIBRARY_PATH="${CONDA_PREFIX:-}/lib"
+  source <(cargo llvm-cov show-env --sh --profile {{ profile }})
+  export CARGO_TARGET_DIR=$CARGO_LLVM_COV_TARGET_DIR
+  cargo llvm-cov report --profile {{ profile }} --lcov --output-path coverage_rust.lcov
+  echo "Coverage report: coverage_rust.lcov (Rust, unified FFI + native)"
+
+coverage-clean *args:
+  find . -iname "*.profraw" -delete
+  -rm coverage_rust.lcov coverage.lcov coverage.xml
 
 [doc("Run all Python and Rust checks")]
 all-checks:
