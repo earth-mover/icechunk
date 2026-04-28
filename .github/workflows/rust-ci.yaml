@@ -35,6 +35,8 @@ jobs:
     # Headroom for the slow macos-15-intel runner
     timeout-minutes: 45
     runs-on: ${{ matrix.os }}
+    env:
+      coverage: ${{ matrix.coverage }}
     defaults:
       run:
         working-directory: ./
@@ -42,7 +44,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, ubuntu-24.04-arm, macos-15-intel, macos-latest]
+        include:
+          - os: ubuntu-latest
+            coverage: true
+          - os: ubuntu-24.04-arm
+            coverage: false
+          - os: macos-15-intel
+            coverage: false
+          - os: macos-latest
+            coverage: false
 
     steps:
       - name: Checkout repository
@@ -61,7 +71,7 @@ jobs:
       - name: Stand up docker services
         if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm'
         run: |
-          docker compose up -d
+          just contup
 
       - name: Wait for containers to be ready
         if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm'
@@ -122,23 +132,23 @@ jobs:
           TIGRIS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
 
         run: |
-          just profile=ci coverage=true compile-tests "--locked"
-          just profile=ci coverage=true test
+          just profile=ci coverage=${coverage} compile-tests "--locked"
+          just profile=ci coverage=${coverage} test
 
       - name: Run doc tests
         if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm'
         run: |
-          just profile=ci coverage=true doctest
+          just profile=ci coverage=${coverage} doctest
 
       - name: Run examples
         if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm'
         run: |
-          just profile=ci coverage=true run-all-examples
+          just profile=ci coverage=${coverage} run-all-examples
 
       - name: Run unit tests only
         if: matrix.os != 'ubuntu-latest' && matrix.os != 'ubuntu-24.04-arm'
         run: |
-          just profile=ci coverage=true unit-test
+          just profile=ci coverage=${coverage} unit-test
 
       # Runs nightly, on manual dispatch, or on any PR labeled
       # `run-integration-tests`
@@ -186,6 +196,7 @@ jobs:
 
       - name: Upload Rust coverage to Codecov
         uses: codecov/codecov-action@75cd11691c0faa626561e295848008c8a7dddffe # v5
+        if: matrix.coverage
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: coverage_rust.lcov
