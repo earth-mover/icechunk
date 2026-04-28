@@ -36,10 +36,6 @@ jobs:
     defaults:
       run:
         working-directory: ./
-    #permissions:
-      #contents: read
-      #actions: read
-      #pull-requests: read
 
     strategy:
       fail-fast: false
@@ -87,9 +83,9 @@ jobs:
           # The rust cache includes a dep on the Python version (when building icechunk-python)
           # so we need to bump the version here whenever Python version is updated
           # Currently: 3.14
-          prefix-key: "rust-py314"
+          prefix-key: "coverage-py314"
           shared-key: "rust"
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          #save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - uses: prefix-dev/setup-pixi@1b2de7f3351f171c8b4dfeb558c639cb58ed4ec0 # v0.9.5
         with:
@@ -118,23 +114,23 @@ jobs:
           TIGRIS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
 
         run: |
-          just profile=ci compile-tests "--locked"
-          just profile=ci test
+          just profile=ci coverage=true compile-tests "--locked"
+          just profile=ci coverage=true test
 
       - name: Run doc tests
         if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm'
         run: |
-          just profile=ci doctest
+          just profile=ci coverage=true doctest
 
       - name: Run examples
         if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm'
         run: |
-          just profile=ci run-all-examples
+          just profile=ci coverage=true run-all-examples
 
       - name: Run unit tests only
         if: matrix.os != 'ubuntu-latest' && matrix.os != 'ubuntu-24.04-arm'
         run: |
-          just profile=ci unit-test
+          just profile=ci coverage=true unit-test
 
       - name: Run integration tests against object stores
         if: github.event_name == 'cron'
@@ -155,7 +151,16 @@ jobs:
           TIGRIS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
 
         run: |
-          cargo test --profile ci --workspace --all-targets -- --ignored
+          just profile=ci coverage=true test-integration
+
+      - name: Upload Rust coverage to Codecov
+        uses: codecov/codecov-action@75cd11691c0faa626561e295848008c8a7dddffe # v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: coverage_rust.lcov
+          flags: rust
+          name: rust-coverage
+          fail_ci_if_error: false
 
   shuttle:
     name: Shuttle concurrency tests
@@ -174,7 +179,7 @@ jobs:
           # The rust cache includes a dep on the Python version (when building icechunk-python)
           # so we need to bump the version here whenever Python version is updated
           # Currently: 3.14
-          prefix-key: "rust-py314"
+          prefix-key: "coverage-py314"
           shared-key: "rust"
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
