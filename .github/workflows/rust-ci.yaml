@@ -59,6 +59,13 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
+      - uses: prefix-dev/setup-pixi@1b2de7f3351f171c8b4dfeb558c639cb58ed4ec0 # v0.9.5
+        with:
+          pixi-version: ${{ env.PIXI_VERSION }}
+          cache: true
+          activate-environment: true
+          manifest-path: icechunk-python/pyproject.toml
+
       - name: Check if MSRV is up to date
         run: |
           set -e
@@ -85,13 +92,6 @@ jobs:
           prefix-key: "coverage-py314"
           shared-key: "rust"
           #save-if: ${{ github.ref == 'refs/heads/main' }}
-
-      - uses: prefix-dev/setup-pixi@1b2de7f3351f171c8b4dfeb558c639cb58ed4ec0 # v0.9.5
-        with:
-          pixi-version: ${{ env.PIXI_VERSION }}
-          cache: true
-          activate-environment: true
-          manifest-path: icechunk-python/pyproject.toml
 
       - name: Run tests with Docker services
         if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm'
