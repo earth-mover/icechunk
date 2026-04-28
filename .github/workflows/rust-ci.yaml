@@ -194,6 +194,11 @@ jobs:
           fi
           exit $rc
 
+      - name: Prepare coverage for upload
+        if: matrix.coverage
+        run: |
+          just profile=ci coverage=${coverage} coverage-report
+
       - name: Upload Rust coverage to Codecov
         uses: codecov/codecov-action@75cd11691c0faa626561e295848008c8a7dddffe # v5
         if: matrix.coverage
