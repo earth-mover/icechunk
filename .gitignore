@@ -34,3 +34,4 @@ icechunk-python/uv.lock
 coverage.xml
 .coverage
 htmlcov/
+*.profraw
