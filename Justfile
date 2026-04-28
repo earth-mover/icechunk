@@ -359,14 +359,11 @@ xarray-upstream-pytest xarray_dir="../xarray": xarray-upstream-clone xarray-upst
   export ICECHUNK_XARRAY_BACKENDS_TESTS=1
   pytest -c="$xarray_abs/pyproject.toml" -W ignore tests/run_xarray_backends_tests.py --report-log output-pytest-log.jsonl
 
+[script]
 [doc("code coverage report generation (for Rust + FFI)")]
 coverage-report *args:
-  #!/usr/bin/env bash
-  set -euo pipefail
-
-  export DYLD_LIBRARY_PATH="${CONDA_PREFIX:-}/lib"
-  source <(cargo llvm-cov show-env --sh --profile {{ profile }})
-  export CARGO_TARGET_DIR=$CARGO_LLVM_COV_TARGET_DIR
+  {{coverage_env}}
+  setup_coverage_env
   cargo llvm-cov report --profile {{ profile }} --lcov --output-path coverage_rust.lcov
   echo "Coverage report: coverage_rust.lcov (Rust, unified FFI + native)"
 
