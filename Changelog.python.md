@@ -1,5 +1,12 @@
 # Changelog
 
+## Python Icechunk Library 2.0.4
+
+### Fixes
+
+- Ignore checksum error on empty 304 response from Scaleway S3 Object storage
+- Don't allow non-regular chunk grids on format 1
+
 ## Python Icechunk Library 2.0.3
 
 ### Fixes
