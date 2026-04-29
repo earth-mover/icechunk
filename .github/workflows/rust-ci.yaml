@@ -34,7 +34,7 @@ jobs:
     timeout-minutes: 20
     runs-on: ${{ matrix.os }}
     env:
-      coverage: ${{ matrix.coverage }}
+      coverage: ${{ matrix.os == 'ubuntu-latest' }}
     defaults:
       run:
         working-directory: ./
@@ -42,15 +42,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: ubuntu-latest
-            coverage: true
-          - os: ubuntu-24.04-arm
-            coverage: false
-          - os: macos-15-intel
-            coverage: false
-          - os: macos-latest
-            coverage: false
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-15-intel, macos-latest]
 
     steps:
       - name: Checkout repository
@@ -153,13 +145,13 @@ jobs:
           just profile=ci coverage=${coverage} test-integration
 
       - name: Prepare coverage for upload
-        if: matrix.coverage
+        if: ${{ matrix.os == 'ubuntu-latest' }}
         run: |
           just profile=ci coverage=${coverage} coverage-report
 
       - name: Upload Rust coverage to Codecov
         uses: codecov/codecov-action@75cd11691c0faa626561e295848008c8a7dddffe # v5
-        if: matrix.coverage
+        if: ${{ matrix.os == 'ubuntu-latest' }}
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: coverage_rust.lcov
