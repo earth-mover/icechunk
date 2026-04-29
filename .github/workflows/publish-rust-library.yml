@@ -30,6 +30,13 @@ jobs:
         with:
           persist-credentials: false
 
+      - uses: prefix-dev/setup-pixi@1b2de7f3351f171c8b4dfeb558c639cb58ed4ec0 # v0.9.5
+        with:
+          pixi-version: ${{ env.PIXI_VERSION }}
+          cache: true
+          activate-environment: true
+          manifest-path: icechunk-python/pyproject.toml
+
       - name: Stand up docker services
         run: just contup
 
@@ -44,17 +51,9 @@ jobs:
       #    prefix-key: "rust-py314"
       #    shared-key: "rust"
 
-      - uses: prefix-dev/setup-pixi@1b2de7f3351f171c8b4dfeb558c639cb58ed4ec0 # v0.9.5
-        with:
-          pixi-version: ${{ env.PIXI_VERSION }}
-          cache: true
-          activate-environment: true
-          manifest-path: icechunk-python/pyproject.toml
-
-      # FIXME: uncomment
-      # - name: Check
-      #   run: |
-      #     just-pre-commit-ci
+      - name: Check
+        run: |
+          just pre-commit-ci
 
       - name: Setup git committer
         run: |
