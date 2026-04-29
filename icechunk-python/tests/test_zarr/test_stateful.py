@@ -25,7 +25,7 @@ from icechunk.testing.invariants import (
     assert_moves_sorted_by_final_path,
 )
 from icechunk.testing.models import GroupNode, ModelStore
-from icechunk.testing.trees import valid_moves
+from icechunk.testing.trees import absolute, valid_moves
 from icechunk.testing.utils import update_paths_after_move
 from zarr import Array
 from zarr.core.buffer import default_buffer_prototype
@@ -217,8 +217,8 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         pending_groups = self.all_groups.copy()
 
         tree = GroupNode.from_paths(
-            {f"/{p}" for p in pending_arrays},
-            {f"/{p}" for p in pending_groups - {""}} | {"/"},
+            {absolute(p) for p in pending_arrays},
+            {absolute(p) for p in pending_groups},
         )
         moves = data.draw(valid_moves(tree, n_moves=st.just(num_moves)))
         for source, dest in moves:

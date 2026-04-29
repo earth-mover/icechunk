@@ -9,6 +9,7 @@ that produces realistic prefix collisions (e.g. ``EC-Earth3`` / ``EC-Earth3-Veg`
 from __future__ import annotations
 
 import posixpath
+import re
 from itertools import combinations
 from typing import Literal
 
@@ -27,6 +28,15 @@ InvalidMoveReason = Literal[
     "overwrite",
     "source_missing",
 ]
+
+# Error-message regex fragments that uniquely identify each rejection reason.
+# Shared between ``invalid_move`` (which returns one per generated invalid move)
+# and ``@example`` seeds in tests, so the strategy and seed values can't drift.
+ERR_SELF_OR_DESCENDANT = "into itself or its own descendant"
+ERR_OVERWRITE = "overwrite existing node"
+ERR_MISSING_PARENT = "destination's parent group"
+ERR_SOURCE_MISSING = "node not found|could not create path"
+ERR_PARENT_NOT_GROUP = "is an array, not a group"
 
 # ---------------------------------------------------------------------------
 # Name strategies — pool-based derivation for prefix collisions
@@ -98,9 +108,24 @@ def similar_name(
 def fresh_name(pool: set[str], exclude: set[str]) -> st.SearchStrategy[str]:
     """A single-segment name biased toward similarity with ``pool``, not in ``exclude``.
 
-    Falls back to random ``node_names`` when both ``pool`` and ``exclude`` are empty.
-    Uniqueness across multiple draws is *not* guaranteed — callers that need
-    distinct names must filter or use ``unique_sibling_names``.
+    Parameters
+    ----------
+    pool : set[str]
+        Existing names used to seed ``similar_name`` for realistic prefix
+        collisions (affixed variants, reused cousins).
+    exclude : set[str]
+        Names that must not be drawn — applied as a strategy filter.
+
+    Returns
+    -------
+    SearchStrategy[str]
+        Strategy producing one name. Falls back to plain ``node_names`` when
+        both ``pool`` and ``exclude`` are empty.
+
+    Notes
+    -----
+    Uniqueness across multiple draws is *not* guaranteed. Callers that need
+    distinct names should use *fresh_names*.
     """
     if not pool and not exclude:
         return node_names
@@ -110,30 +135,38 @@ def fresh_name(pool: set[str], exclude: set[str]) -> st.SearchStrategy[str]:
 
 
 @st.composite
-def unique_sibling_names(
-    draw: st.DrawFn,
-    existing_names: set[str],
-    num_names: int,
-    existing_siblings: set[str] | None = None,
-) -> list[str]:
-    """Draw *num_names* names from ``fresh_name`` that are unique among themselves
-    and not in ``existing_siblings``.
+def fresh_names(draw: st.DrawFn, pool: set[str], exclude: set[str], n: int) -> list[str]:
+    """``n`` distinct *fresh_name* draws.
 
     Parameters
     ----------
-    existing_names : set[str]
-        Pool of names used to bias the draws toward realistic prefix collisions
-        (passed through to ``fresh_name``).
-    num_names : int
-        Number of unique names to generate.
-    existing_siblings : set[str] | None
-        Names that must not be reused (e.g. the existing children at a destination).
+    pool : set[str]
+        Passed through to *fresh_name* to bias each draw toward
+        pool-similar candidates.
+    exclude : set[str]
+        Names that must not appear in the result.
+    n : int
+        Length of the returned list.
+
+    Returns
+    -------
+    list[str]
+        ``n`` names, all distinct from each other and from ``exclude``.
+
+    Notes
+    -----
+    Threads the accumulating set of already-drawn names back into
+    *fresh_name* as additional ``exclude`` on each iteration. This is
+    load-bearing: ``similar_name`` uses its ``sibling_names`` argument (i.e.
+    ``exclude`` here) as the **base** for affixed variants like ``"foo_0"``,
+    so feeding prior draws back in is what produces the prefix-collision
+    candidates the strategy exists to generate. ``st.lists(..., unique=True)``
+    cannot do this — its element strategy is fixed at construction time.
     """
-    generated: set[str] = set()
-    initial_exclude = existing_siblings or set()
-    for _ in range(num_names):
-        generated.add(draw(fresh_name(existing_names, initial_exclude | generated)))
-    return list(generated)
+    drawn: set[str] = set()
+    for _ in range(n):
+        drawn.add(draw(fresh_name(pool, exclude | drawn)))
+    return list(drawn)
 
 
 # ---------------------------------------------------------------------------
@@ -187,7 +220,7 @@ def trees(
         group: GroupNode, existing_names: set[str]
     ) -> tuple[GroupNode, set[str]]:
         new_names = draw(
-            unique_sibling_names(existing_names, num_names=len(group.children))
+            fresh_names(existing_names, exclude=set(), n=len(group.children))
         )
         existing_names = existing_names | set(new_names)
         children: dict[str, Node] = {}
@@ -245,18 +278,31 @@ def absolute(path: str) -> str:
     return "/" if path == "" else f"/{path}"
 
 
-@st.composite
-def invalid_move(
-    draw: st.DrawFn,
-    all_nodes: set[str],
-    all_arrays: set[str],
-    name_pool: set[str],
-) -> tuple[str, str, str]:
-    """One invalid move with the regex its rejection error must match."""
+def wrap_tolerant(pattern: str) -> str:
+    """Make *pattern* match across miette's ``\\n  | `` continuation wraps.
+
+    miette's ``GraphicalReportHandler`` wraps long lines and inserts a ``  | ``
+    continuation prefix, replacing a single space in the source text with
+    ``\\n  | ``. Replace each space-run in *pattern* with a regex fragment that
+    accepts either form. Other regex syntax in *pattern* (alternation, etc.)
+    is left intact.
+    """
+    return re.sub(r" +", lambda _: r"\s+\|?\s*", pattern)
+
+
+def _invalid_move_eligibility(
+    all_nodes: set[str], all_arrays: set[str]
+) -> list[InvalidMoveReason]:
+    """Reasons that can be generated against the given tree state.
+
+    Pure function — call once and reuse until the tree state changes.
+    """
+    # these are always possible - root moves give us the first two
+    # and source missing can be anything
     eligible: list[InvalidMoveReason] = ["self", "descendant", "source_missing"]
     # Overwrite needs two distinct nodes neither an ancestor of the other; a
     # pure chain (e.g. /a, /a/b, /a/b/c) fails every pairing.
-    if any(not is_descendant(b, a) for a, b in combinations(sorted(all_nodes), 2)):
+    if any(not is_descendant(b, a) for a, b in combinations(all_nodes, 2)):
         eligible.append("overwrite")
     if all_nodes:
         eligible.append("missing_parent")
@@ -266,16 +312,34 @@ def invalid_move(
         n != arr and not is_descendant(arr, n) for arr in all_arrays for n in all_nodes
     ):
         eligible.append("parent_not_group")
+    return eligible
 
+
+@st.composite
+def invalid_move(
+    draw: st.DrawFn,
+    all_nodes: set[str],
+    all_arrays: set[str],
+    name_pool: set[str],
+    *,
+    eligible: list[InvalidMoveReason] | None = None,
+) -> tuple[str, str, str]:
+    """One invalid move with the regex its rejection error must match.
+
+    ``eligible`` may be passed pre-computed by callers that draw many
+    invalid moves against the same tree state.
+    """
+    if eligible is None:
+        eligible = _invalid_move_eligibility(all_nodes, all_arrays)
     reason = draw(st.sampled_from(eligible))
     match reason:
         case "self":
             s = draw(st.sampled_from(sorted(all_nodes | {""})))
-            return s, s, "into itself or its own descendant"
+            return s, s, ERR_SELF_OR_DESCENDANT
         case "descendant":
             s = draw(st.sampled_from(sorted(all_nodes | {""})))
             leaf = draw(fresh_name(name_pool, child_names_at(s, all_nodes)))
-            return s, posixpath.join(s, leaf), "into itself or its own descendant"
+            return s, posixpath.join(s, leaf), ERR_SELF_OR_DESCENDANT
         case "overwrite":
             s, d = draw(
                 st.tuples(
@@ -289,25 +353,23 @@ def invalid_move(
                     )
                 )
             )
-            return s, d, "overwrite existing node"
+            return s, d, ERR_OVERWRITE
         case "missing_parent":
             s = draw(st.sampled_from(sorted(all_nodes)))
             parent = draw(fresh_name(name_pool, exclude=name_pool))
             leaf = draw(fresh_name(name_pool, exclude=name_pool))
-            return s, posixpath.join(parent, leaf), "destination's parent group"
+            return s, posixpath.join(parent, leaf), ERR_MISSING_PARENT
         case "source_missing":
             # Two unique top-level anchors guarantee src != dst. ``src`` may
             # be deeply nested so we exercise the case of a non-existent
             # multi-segment source; ``dst`` doesn't matter since icechunk's
             # source check fires before any destination validation.
-            src_anchor, dst = draw(
-                unique_sibling_names(name_pool, 2, existing_siblings=name_pool)
-            )
+            src_anchor, dst = draw(fresh_names(name_pool, exclude=name_pool, n=2))
             src_extra = draw(
                 st.lists(fresh_name(name_pool, exclude=name_pool), max_size=3)
             )
             src = posixpath.join(src_anchor, *src_extra)
-            return src, dst, "node not found|could not create path"
+            return src, dst, ERR_SOURCE_MISSING
         case "parent_not_group":
             array_parent = draw(st.sampled_from(sorted(all_arrays)))
             leaf = draw(fresh_name(name_pool, exclude=name_pool))
@@ -319,11 +381,7 @@ def invalid_move(
                 if n != array_parent and not is_descendant(array_parent, n)
             )
             src = draw(st.sampled_from(src_candidates))
-            return (
-                src,
-                posixpath.join(array_parent, leaf),
-                "parent .* is an array",
-            )
+            return src, posixpath.join(array_parent, leaf), ERR_PARENT_NOT_GROUP
 
 
 @st.composite
@@ -344,7 +402,7 @@ def valid_move(
 
 
 @st.composite
-def mixed_moves(
+def valid_and_invalid_moves(
     draw: st.DrawFn,
     tree: GroupNode,
     n_moves: st.SearchStrategy[int] = st.integers(min_value=1, max_value=10),  # noqa: B008
@@ -366,9 +424,14 @@ def mixed_moves(
     p = draw(p_invalid)
     roll = st.floats(min_value=0.0, max_value=1.0, exclude_max=True)
     moves: list[MixedMove] = []
+    eligible_invalid_moves = _invalid_move_eligibility(all_nodes, all_arrays)
     for _ in range(draw(n_moves)):
         if draw(roll) < p:
-            src, dst, pattern = draw(invalid_move(all_nodes, all_arrays, name_pool))
+            src, dst, pattern = draw(
+                invalid_move(
+                    all_nodes, all_arrays, name_pool, eligible=eligible_invalid_moves
+                )
+            )
             moves.append((absolute(src), absolute(dst), pattern))
         else:
             src, dst = draw(valid_move(all_nodes, all_groups, name_pool))
@@ -377,6 +440,8 @@ def mixed_moves(
                 src, dst, all_arrays, all_groups
             )
             all_nodes = all_arrays | (all_groups - {""})
+            # valid move mutated state; recompute eligibility
+            eligible_invalid_moves = _invalid_move_eligibility(all_nodes, all_arrays)
     return moves
 
 
@@ -387,7 +452,7 @@ def valid_moves(
     n_moves: st.SearchStrategy[int] = st.integers(min_value=1, max_value=10),  # noqa: B008
 ) -> list[tuple[str, str]]:
     """A sequence of valid moves; ``mixed_moves`` with all-valid probability."""
-    mixed = draw(mixed_moves(tree, n_moves=n_moves, p_invalid=st.just(0.0)))
+    mixed = draw(valid_and_invalid_moves(tree, n_moves=n_moves, p_invalid=st.just(0.0)))
     return [(src, dst) for src, dst, _ in mixed]
 
 
@@ -398,7 +463,7 @@ def invalid_moves(
     n_moves: st.SearchStrategy[int] = st.integers(min_value=1, max_value=10),  # noqa: B008
 ) -> list[tuple[str, str, str]]:
     """A sequence of invalid moves; ``mixed_moves`` with all-invalid probability."""
-    mixed = draw(mixed_moves(tree, n_moves=n_moves, p_invalid=st.just(1.0)))
+    mixed = draw(valid_and_invalid_moves(tree, n_moves=n_moves, p_invalid=st.just(1.0)))
     return [(src, dst, pattern) for src, dst, pattern in mixed if pattern is not None]
 
 
@@ -453,5 +518,5 @@ def tree_and_mixed_moves(
     if max_children is not None:
         kwargs["max_children"] = max_children
     tree = draw(trees(**kwargs))
-    moves = draw(mixed_moves(tree, n_moves=n_moves, p_invalid=p_invalid))
+    moves = draw(valid_and_invalid_moves(tree, n_moves=n_moves, p_invalid=p_invalid))
     return tree, moves
