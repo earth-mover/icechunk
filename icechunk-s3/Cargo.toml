@@ -1,6 +1,6 @@
 [package]
 name = "icechunk-s3"
-version = "2.0.3"
+version = "2.0.4"
 description = "Native AWS S3 storage backend for icechunk"
 readme = "../README.md"
 repository = "https://github.com/earth-mover/icechunk"
