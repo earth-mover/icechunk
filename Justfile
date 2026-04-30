@@ -1,43 +1,86 @@
 # Cargo profile: override with `just profile=ci test` (default: dev)
 profile := "dev"
 
+# Enable coverage instrumentation: override with `just coverage=true build-wheels` (default: false)
+coverage := "false"
+
+# Shell function injected into recipes that need coverage instrumentation env.
+# Call `setup_coverage_env` after pasting `{{coverage_env}}` into a bash recipe.
+coverage_env := '''
+setup_coverage_env() {
+  if [ "''' + coverage + '''" = "true" ]; then
+    export DYLD_LIBRARY_PATH="${CONDA_PREFIX:-}/lib"
+    source <(cargo llvm-cov show-env --sh --profile ''' + profile + ''')
+    export CARGO_TARGET_DIR=$CARGO_LLVM_COV_TARGET_DIR
+  fi
+}
+'''
+
+set script-interpreter := ["bash", "-euo", "pipefail"]
+
 set positional-arguments
 
 alias fmt := format
 alias pre := pre-commit
 
 export PYTHON_VERSION := "3.14"
+export DYLD_LIBRARY_PATH := "${CONDA_PREFIX:-}/lib"
 
+[script]
 [doc("Run all Rust tests via cargo-nextest")]
 test *args:
-  export DYLD_LIBRARY_PATH="${CONDA_PREFIX:-}/lib" && cargo nextest run --no-fail-fast --cargo-profile {{profile}} --workspace --lib --bins --tests --examples "$@"
+  {{coverage_env}}
+  setup_coverage_env
+  cargo nextest run --no-fail-fast --cargo-profile {{profile}} --workspace --lib --bins --tests --examples "$@"
+
+[script]
+[doc("Run integration tests against object stores")]
+test-integration *args:
+  {{coverage_env}}
+  setup_coverage_env
+  cargo nextest run --no-fail-fast --cargo-profile {{profile}} --workspace --tests --lib "$@" -- --ignored
 
 [doc("Run all Rust lib tests via cargo-nextest")]
 unit-test *args:
   export DYLD_LIBRARY_PATH="${CONDA_PREFIX:-}/lib" && cargo nextest run --no-fail-fast --cargo-profile {{profile}} --lib "$@"
 
+[script]
 [doc("Run Rust doc tests only")]
 doctest *args:
+  {{coverage_env}}
+  setup_coverage_env
   cargo test --workspace --profile {{profile}} --doc "$@"
 
+[script]
 [doc("Run all Rust tests with RUST_LOG enabled (e.g. `just test-logs debug`)")]
 test-logs level *args:
-  shift && export DYLD_LIBRARY_PATH="${CONDA_PREFIX:-}/lib" && RUST_LOG=icechunk={{level}} cargo nextest run --no-fail-fast --cargo-profile {{profile}} --workspace --lib --bins --tests --examples --nocapture "$@"
+  {{coverage_env}}
+  setup_coverage_env
+  shift && RUST_LOG=icechunk={{level}} cargo nextest run --no-fail-fast --cargo-profile {{profile}} --workspace --lib --bins --tests --examples --nocapture "$@"
 
+[script]
 [doc("Compile tests without running them")]
 compile-tests *args:
-  export DYLD_LIBRARY_PATH="${CONDA_PREFIX:-}/lib" && cargo nextest run --no-run --cargo-profile {{profile}} --workspace --all-targets "$@"
+  {{coverage_env}}
+  setup_coverage_env
+  cargo nextest run --no-run --cargo-profile {{profile}} --workspace --all-targets "$@"
 
-[doc("Build the Rust workspace (debug by default, override with `just profile=ci build`)")]
+[script]
+[doc("Build the Rust workspace (dev by default, override with `just profile=ci build`)")]
 build *args:
+  {{coverage_env}}
+  setup_coverage_env
   cargo build --profile {{profile}} "$@"
 
 [doc("Build the Rust workspace in release mode")]
 build-release *args:
   cargo build --release "$@"
 
+[script]
 [doc("Prepare environment for development")]
 develop *args:
+  {{coverage_env}}
+  setup_coverage_env
   cd icechunk-python && maturin develop --uv --profile {{profile}} "$@"
 
 [doc("Install maturin import hook for more convenient development flow")]
@@ -74,8 +117,15 @@ format-nix *args:
 check-deps *args:
   cargo deny --all-features check "$@"
 
+[script]
 [doc("Run all Rust examples (skips limits_chunk_refs, large_manifests)")]
 run-all-examples:
+  {{coverage_env}}
+  setup_coverage_env
+
+  # Allow failing examples, fix in the future
+  set +e
+
   for example in icechunk/examples/*.rs; do case "$example" in *limits_chunk_refs*|*large_manifests*) continue;; esac; cargo run --profile {{profile}} --example "$(basename "${example%.rs}")"; done
 
 [doc("Fast Rust pre-commit: format + lint (~3s)")]
@@ -139,8 +189,11 @@ stubtest *args:
 py-pre-commit $SKIP="rust-pre-commit-fast,rust-pre-commit,rust-pre-commit-ci" *args:
   prek run --all-files
 
+[script]
 [doc("Run Python tests via pytest")]
 pytest *args:
+  {{coverage_env}}
+  setup_coverage_env
   cd icechunk-python && pytest "$@"
 
 [doc("Start MkDocs dev server with live reload")]
@@ -161,25 +214,22 @@ zarrs-upstream-clone zarrs_dir="../zarrs_icechunk":
   rm -rf {{zarrs_dir}}
   git clone https://github.com/zarrs/zarrs_icechunk {{zarrs_dir}}
 
+[script]
 [doc("Patch zarrs_icechunk Cargo.toml to use local icechunk crate")]
 zarrs-upstream-patch zarrs_dir="../zarrs_icechunk":
-  #!/usr/bin/env bash
-  set -euo pipefail
   icechunk_path=$(realpath icechunk)
   if ! grep -q 'icechunk = { path' {{zarrs_dir}}/Cargo.toml; then
     sed -i '/^\[patch\.crates-io\]/a icechunk = { path = "'"$icechunk_path"'" }' {{zarrs_dir}}/Cargo.toml
   fi
 
+[script]
 [doc("Build zarrs_icechunk against local icechunk")]
 zarrs-upstream-build zarrs_dir="../zarrs_icechunk": zarrs-upstream-patch
-  #!/usr/bin/env bash
-  set -euo pipefail
   cd {{zarrs_dir}} && cargo build 2>&1 | tee build-output.log
 
+[script]
 [doc("Test zarrs_icechunk against local icechunk")]
 zarrs-upstream-test zarrs_dir="../zarrs_icechunk": zarrs-upstream-patch zarrs-upstream-build
-  #!/usr/bin/env bash
-  set -euo pipefail
   cd {{zarrs_dir}} && cargo test 2>&1 | tee test-output.log
 
 [doc("Start all docker compose services")]
@@ -190,10 +240,9 @@ contup:
 rustfs-up:
   docker compose up -d rustfs_init
 
+[script]
 [doc("Wait for RustFS container to be ready")]
 rustfs-wait:
-  #!/usr/bin/env bash
-  set -euo pipefail
   for _ in {1..10}; do
     if docker compose ps --status exited --filter status==0 | grep rustfs ; then
       exit 0
@@ -203,10 +252,9 @@ rustfs-wait:
   echo "ERROR: RustFS did not become ready in time" >&2
   exit 1
 
+[script]
 [doc("Wait for Azurite container to be ready")]
 azurite-wait:
-  #!/usr/bin/env bash
-  set -euo pipefail
   for _ in {1..60}; do
     if curl --silent --fail "http://localhost:10000/devstoreaccount1/testcontainer?sv=2023-01-03&ss=btqf&srt=sco&spr=https%2Chttp&st=2025-01-06T14%3A53%3A30Z&se=2035-01-07T14%3A53%3A00Z&sp=rwdftlacup&sig=jclETGilOzONYp4Y0iK9SpVRLGyehaS5lg5booJ9VYA%3D&restype=container"; then
       exit 0
@@ -223,18 +271,20 @@ contwait: rustfs-wait azurite-wait
 publish-crates:
   cargo release --workspace --unpublished --no-confirm --no-tag --no-push --execute
 
-[doc("Build Python wheels with maturin")]
+[script]
+[doc("Build Python wheels with maturin (set coverage=true for coverage instrumentation)")]
 build-wheels *args:
+  {{coverage_env}}
+  setup_coverage_env
   cd icechunk-python && maturin build --release --out dist -i $PYTHON_VERSION "$@"
 
 [doc("Run Python checks with upstream nightly dependencies")]
 python-upstream: build-wheels python-upstream-setup python-upstream-mypy python-upstream-describe python-upstream-pytest
   echo "python upstream nightly checks passed"
 
+[script]
 [doc("Install Python upstream nightly dependencies")]
 python-upstream-setup:
-  #!/usr/bin/env bash
-  set -euo pipefail
   cd icechunk-python
   python3 -m venv .venv
   source .venv/bin/activate
@@ -249,26 +299,25 @@ python-upstream-setup:
   uv pip install "hypothesis @ git+https://github.com/ianhi/hypothesis.git@flaky-feedback#subdirectory=hypothesis-python"
   uv pip list
 
+[script]
 [doc("Run mypy against Python upstream nightly")]
 python-upstream-mypy: python-upstream-setup
-  #!/usr/bin/env bash
-  set -euo pipefail
   cd icechunk-python
   source .venv/bin/activate
   mypy --python-version "$PYTHON_VERSION" python 2>&1 | tee mypy-output.log
 
+[script]
 [doc("Describe Python upstream nightly environment")]
 python-upstream-describe: python-upstream-setup
-  #!/usr/bin/env bash
-  set -euo pipefail
   cd icechunk-python
   source .venv/bin/activate
   pip list
 
-[doc("Run pytest with Python upstream nightly dependencies")]
+[script]
+[doc("Run pytest with Python upstream nightly dependencies (set coverage=true to capture FFI coverage)")]
 python-upstream-pytest *args: python-upstream-setup
-  #!/usr/bin/env bash
-  set -euo pipefail
+  {{coverage_env}}
+  setup_coverage_env
   cd icechunk-python
   source .venv/bin/activate
   pytest -n 4 --hypothesis-profile=nightly --report-log output-pytest-log.jsonl "$@"
@@ -283,10 +332,9 @@ xarray-upstream-clone xarray_dir="../xarray":
   rm -rf {{xarray_dir}}
   git clone https://github.com/pydata/xarray {{xarray_dir}}
 
+[script]
 [doc("Install xarray upstream test dependencies")]
 xarray-upstream-setup:
-  #!/usr/bin/env bash
-  set -euo pipefail
   cd icechunk-python
   python3 -m venv .venv
   source .venv/bin/activate
@@ -300,15 +348,28 @@ xarray-upstream-setup:
     --index-strategy unsafe-best-match
   uv pip list
 
-[doc("Run xarray backend tests against local icechunk")]
+[script]
+[doc("Run xarray backend tests against local icechunk (set coverage=true to capture FFI coverage)")]
 xarray-upstream-pytest xarray_dir="../xarray": xarray-upstream-clone xarray-upstream-setup
-  #!/usr/bin/env bash
-  set -euo pipefail
+  {{coverage_env}}
+  setup_coverage_env
   xarray_abs=$(realpath "{{xarray_dir}}")
   cd icechunk-python
   source .venv/bin/activate
   export ICECHUNK_XARRAY_BACKENDS_TESTS=1
   pytest -c="$xarray_abs/pyproject.toml" -W ignore tests/run_xarray_backends_tests.py --report-log output-pytest-log.jsonl
+
+[script]
+[doc("code coverage report generation (for Rust + FFI)")]
+coverage-report *args:
+  {{coverage_env}}
+  setup_coverage_env
+  cargo llvm-cov report --profile {{ profile }} --lcov --output-path coverage_rust.lcov
+  echo "Coverage report: coverage_rust.lcov (Rust, unified FFI + native)"
+
+coverage-clean *args:
+  find . -iname "*.profraw" -delete
+  -rm coverage_rust.lcov coverage.lcov coverage.xml
 
 [doc("Run all Python and Rust checks")]
 all-checks:

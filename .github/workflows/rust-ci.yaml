@@ -33,13 +33,11 @@ jobs:
     name: Rust CI
     timeout-minutes: 20
     runs-on: ${{ matrix.os }}
+    env:
+      coverage: ${{ matrix.os == 'ubuntu-latest' }}
     defaults:
       run:
         working-directory: ./
-    #permissions:
-      #contents: read
-      #actions: read
-      #pull-requests: read
 
     strategy:
       fail-fast: false
@@ -53,6 +51,13 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
+      - uses: prefix-dev/setup-pixi@1b2de7f3351f171c8b4dfeb558c639cb58ed4ec0 # v0.9.5
+        with:
+          pixi-version: ${{ env.PIXI_VERSION }}
+          cache: true
+          activate-environment: true
+          manifest-path: icechunk-python/pyproject.toml
+
       - name: Check if MSRV is up to date
         run: |
           set -e
@@ -63,23 +68,12 @@ jobs:
       - name: Stand up docker services
         if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm'
         run: |
-          docker compose up -d
+          just contup
 
       - name: Wait for containers to be ready
         if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm'
         run: |
-          for _ in {1..30}; do
-              if docker compose ps --status exited --filter status==0 | grep rustfs ; then
-              break
-              fi
-              sleep 1
-          done
-          for _ in {1..60}; do
-              if curl --silent --fail "http://localhost:10000/devstoreaccount1/testcontainer?sv=2023-01-03&ss=btqf&srt=sco&spr=https%2Chttp&st=2025-01-06T14%3A53%3A30Z&se=2035-01-07T14%3A53%3A00Z&sp=rwdftlacup&sig=jclETGilOzONYp4Y0iK9SpVRLGyehaS5lg5booJ9VYA%3D&restype=container"; then
-              break
-              fi
-              sleep 1
-          done
+          just contwait
 
       - name: Cache Dependencies
         uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
@@ -87,16 +81,9 @@ jobs:
           # The rust cache includes a dep on the Python version (when building icechunk-python)
           # so we need to bump the version here whenever Python version is updated
           # Currently: 3.14
-          prefix-key: "rust-py314"
+          prefix-key: "coverage-py314"
           shared-key: "rust"
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-
-      - uses: prefix-dev/setup-pixi@1b2de7f3351f171c8b4dfeb558c639cb58ed4ec0 # v0.9.5
-        with:
-          pixi-version: ${{ env.PIXI_VERSION }}
-          cache: true
-          activate-environment: true
-          manifest-path: icechunk-python/pyproject.toml
+          #save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Run tests with Docker services
         if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm'
@@ -118,23 +105,23 @@ jobs:
           TIGRIS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
 
         run: |
-          just profile=ci compile-tests "--locked"
-          just profile=ci test
+          just profile=ci coverage=${coverage} compile-tests "--locked"
+          just profile=ci coverage=${coverage} test
 
       - name: Run doc tests
         if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm'
         run: |
-          just profile=ci doctest
+          just profile=ci coverage=${coverage} doctest
 
       - name: Run examples
         if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm'
         run: |
-          just profile=ci run-all-examples
+          just profile=ci coverage=${coverage} run-all-examples
 
       - name: Run unit tests only
         if: matrix.os != 'ubuntu-latest' && matrix.os != 'ubuntu-24.04-arm'
         run: |
-          just profile=ci unit-test
+          just profile=ci coverage=${coverage} unit-test
 
       - name: Run integration tests against object stores
         if: github.event_name == 'cron'
@@ -155,7 +142,22 @@ jobs:
           TIGRIS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
 
         run: |
-          cargo test --profile ci --workspace --all-targets -- --ignored
+          just profile=ci coverage=${coverage} test-integration
+
+      - name: Prepare coverage for upload
+        if: ${{ matrix.os == 'ubuntu-latest' }}
+        run: |
+          just profile=ci coverage=${coverage} coverage-report
+
+      - name: Upload Rust coverage to Codecov
+        uses: codecov/codecov-action@75cd11691c0faa626561e295848008c8a7dddffe # v5
+        if: ${{ matrix.os == 'ubuntu-latest' }}
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: coverage_rust.lcov
+          flags: rust
+          name: rust-coverage
+          fail_ci_if_error: false
 
   shuttle:
     name: Shuttle concurrency tests
@@ -174,7 +176,7 @@ jobs:
           # The rust cache includes a dep on the Python version (when building icechunk-python)
           # so we need to bump the version here whenever Python version is updated
           # Currently: 3.14
-          prefix-key: "rust-py314"
+          prefix-key: "coverage-py314"
           shared-key: "rust"
           save-if: ${{ github.ref == 'refs/heads/main' }}
 

@@ -28,3 +28,10 @@ icechunk-python/uv.lock
 !.pixi/config.toml
 
 .cache/
+
+# Coverage reports
+*.lcov
+coverage.xml
+.coverage
+htmlcov/
+*.profraw
