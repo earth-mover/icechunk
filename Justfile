@@ -6,7 +6,7 @@ set positional-arguments
 alias fmt := format
 alias pre := pre-commit
 
-export PYTHON_VERSION := "3.14"
+export PYTHON_VERSION := env_var_or_default("PYTHON_VERSION", "3.14")
 
 [doc("Run all Rust tests via cargo-nextest")]
 test *args:
@@ -226,6 +226,27 @@ publish-crates:
 [doc("Build Python wheels with maturin")]
 build-wheels *args:
   cd icechunk-python && maturin build --release --out dist -i $PYTHON_VERSION "$@"
+
+[doc("Install built wheel and test dependencies into a venv")]
+install-test-wheel group="test" *args:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  shift
+  cd icechunk-python
+  uv venv
+  source .venv/bin/activate
+  python --version
+  PY_TAG="cp${PYTHON_VERSION//./}"
+  WHEEL=$(ls dist/*-"${PY_TAG}"-*.whl)
+  uv pip install "$WHEEL" --group "{{group}}" "$@"
+
+[doc("Run pytest from the test venv")]
+pytest-venv *args:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  cd icechunk-python
+  source .venv/bin/activate
+  python -m pytest "$@"
 
 [doc("Run Python checks with upstream nightly dependencies")]
 python-upstream: build-wheels python-upstream-setup python-upstream-mypy python-upstream-describe python-upstream-pytest

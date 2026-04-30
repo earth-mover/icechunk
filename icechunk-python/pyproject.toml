@@ -200,8 +200,16 @@ platforms = ["osx-arm64", "linux-64", "linux-aarch64", "win-64", "osx-64"]
 [tool.pixi.feature.docs.dependencies]
 cairo = ">=1.18.4,<2"
 
-[tool.pixi.feature.build.dependencies]
+[tool.pixi.feature.py312.dependencies]
+python = "~=3.12"
+
+[tool.pixi.feature.py314.dependencies]
 python = "~=3.14"
+
+[tool.pixi.feature.py313t.dependencies]
+python = "~=3.13t"
+
+[tool.pixi.feature.build.dependencies]
 rust = "~=1.94.0"
 just = ">=1.46.0,<2"
 compilers = ">=1.11.0,<2"
@@ -224,12 +232,27 @@ sysroot_linux-aarch64 = ">=2.34"
 
 [tool.pixi.environments]
 default = { features = [
+  "py314",
   "build",
   "dev",
   "docs",
   "test",
 ], solve-group = "default" }
 benchmark = { features = ["benchmark"], solve-group = "default" }
+py313t = { features = [
+  "py313t",
+  "build",
+  "dev",
+  "docs",
+  "test",
+]}
+py312 = { features = [
+  "py312",
+  "build",
+  "dev",
+  "docs",
+  "test",
+]}
 
 [tool.pixi.system-requirements]
 libc   = { family = "glibc", version = "2.34" }
