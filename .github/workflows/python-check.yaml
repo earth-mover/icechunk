@@ -19,27 +19,27 @@ permissions:
 
 env:
   PYTHON_VERSION: "3.12"
-
-defaults:
-  run:
-    working-directory: ./icechunk-python
+  PIXI_VERSION: "v0.72.0"
 
 jobs:
   build-wheels:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
-          python-version: ${{ env.PYTHON_VERSION }}
+          persist-credentials: false
+
+      - uses: prefix-dev/setup-pixi@5185adfbffb4bd703da3010310260805d89ebb11 # v0.9.6
+        with:
+          pixi-version: ${{ env.PIXI_VERSION }}
+          cache: true
+          activate-environment: true
+          manifest-path: icechunk-python/pyproject.toml
+          environments: >-
+            py312
 
       - name: Build wheels
-        uses: PyO3/maturin-action@db323e2cf5679b7feb8bcb561a36b27a0bc19e79 # v1
-        with:
-          working-directory: icechunk-python
-          args: --release --out dist -i python${{ env.PYTHON_VERSION }}
-          sccache: true
-          manylinux: auto
+        run: just build-wheels
 
       - name: Upload wheels
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -65,9 +65,20 @@ jobs:
             zarr: "latest-release"
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - uses: prefix-dev/setup-pixi@5185adfbffb4bd703da3010310260805d89ebb11 # v0.9.6
+        with:
+          pixi-version: ${{ env.PIXI_VERSION }}
+          cache: true
+          activate-environment: true
+          manifest-path: icechunk-python/pyproject.toml
+          environments: >-
+            py312
+
       - name: Stand up RustFS
-        run: |
-          docker compose up -d rustfs_init
+        run: just rustfs-up
 
       - name: Download wheels
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -84,15 +95,8 @@ jobs:
           restore-keys: |
             cache-hypothesis-
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
-        with:
-          enable-cache: true
-          python-version: ${{ env.PYTHON_VERSION }}
-
       - name: Install dependencies - ${{ matrix.deps-version.name }}
         shell: bash
-        working-directory: icechunk-python
         run: |
           set -e
           uv venv
@@ -103,51 +107,42 @@ jobs:
           # Install specific versions based on matrix
           if [ "${{ matrix.deps-version.name }}" = "minimum" ]; then
             echo "Installing minimum versions:"
+            cd icechunk-python && source .venv/bin/activate
             uv pip install --upgrade 'xarray==${{ matrix.deps-version.xarray }}' 'dask==${{ matrix.deps-version.dask }}' 'distributed==${{ matrix.deps-version.distributed }}' 'zarr==${{ matrix.deps-version.zarr }}'
-          else
-            echo "Using latest versions (already installed)"
           fi
+          cd icechunk-python && source .venv/bin/activate
           echo "Installed package versions:"
           uv pip list | grep -E "(xarray|dask|distributed|zarr)"
 
       # this is here instead of earlier to give RustFS more time to get up and running
       # checking and waiting only right before we need it
       - name: Wait for RustFS to be ready
-        run: |
-          for _ in {1..30}; do
-              if docker compose ps --status exited --filter status==0 | grep rustfs ; then
-              break
-              fi
-              sleep 1
-          done
-
-      - name: Install flatc
-        run: |
-          sudo apt-get update && sudo apt-get install -y flatbuffers-compiler
+        run: just rustfs-wait
 
       - name: Run pytest (non-hypothesis)
-        shell: bash
-        working-directory: icechunk-python
-        run: |
-          set -e
-          source .venv/bin/activate
-          python -m pytest -n 4 -m "not hypothesis"
+        run: just pytest-venv -n 4 -m "not hypothesis"
 
   build-wheels-free-threaded:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
-          python-version: "3.14t"
+          persist-credentials: false
+
+      - uses: prefix-dev/setup-pixi@5185adfbffb4bd703da3010310260805d89ebb11 # v0.9.6
+        with:
+          pixi-version: ${{ env.PIXI_VERSION }}
+          cache: true
+          activate-environment: true
+          manifest-path: icechunk-python/pyproject.toml
+          environments: >-
+            py314t
 
       - name: Build wheels
-        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1
-        with:
-          working-directory: icechunk-python
-          args: --release --out dist -i python3.14t
-          sccache: true
-          manylinux: auto
+        working-directory: icechunk-python
+        run: just build-wheels
+        env:
+          PYTHON_VERSION: "3.14t"
 
       - name: Upload wheels
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -160,9 +155,20 @@ jobs:
     needs: [build-wheels-free-threaded]
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - uses: prefix-dev/setup-pixi@5185adfbffb4bd703da3010310260805d89ebb11 # v0.9.6
+        with:
+          pixi-version: ${{ env.PIXI_VERSION }}
+          cache: true
+          activate-environment: true
+          manifest-path: icechunk-python/pyproject.toml
+          environments: >-
+            py314t
+
       - name: Stand up RustFS
-        run: |
-          docker compose up -d rustfs_init
+        run: just rustfs-up
 
       - name: Download wheels
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -170,43 +176,22 @@ jobs:
           name: test-wheels-free-threaded
           path: icechunk-python/dist
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
-        with:
-          enable-cache: true
-          python-version: "3.14t"
-
       - name: Install dependencies
         shell: bash
         working-directory: icechunk-python
         run: |
           set -e
-          uv venv
+          uv venv --python 3.14t
           source .venv/bin/activate
           python --version
           WHEEL=$(ls dist/*-cp314t-*.whl)
           uv pip install "$WHEEL" --group test
 
       - name: Wait for RustFS to be ready
-        run: |
-          for _ in {1..30}; do
-              if docker compose ps --status exited --filter status==0 | grep rustfs ; then
-              break
-              fi
-              sleep 1
-          done
-
-      - name: Install flatc
-        run: |
-          sudo apt-get update && sudo apt-get install -y flatbuffers-compiler
+        run: just rustfs-wait
 
       - name: Run pytest (non-hypothesis)
-        shell: bash
-        working-directory: icechunk-python
-        run: |
-          set -e
-          source .venv/bin/activate
-          python -m pytest -n 4 -m "not hypothesis"
+        run: just pytest-venv -n 4 -m "not hypothesis"
 
   test-hypothesis-shard:
     runs-on: ubuntu-latest
@@ -217,6 +202,17 @@ jobs:
         shard-id: [0, 1, 2]
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - uses: prefix-dev/setup-pixi@5185adfbffb4bd703da3010310260805d89ebb11 # v0.9.6
+        with:
+          pixi-version: ${{ env.PIXI_VERSION }}
+          cache: true
+          activate-environment: true
+          manifest-path: icechunk-python/pyproject.toml
+          environments: >-
+            py312
 
       - name: Download wheels
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -233,34 +229,14 @@ jobs:
           restore-keys: |
             cache-hypothesis-${{ runner.os }}-shard${{ matrix.shard-id }}-
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
-        with:
-          enable-cache: true
-          python-version: ${{ env.PYTHON_VERSION }}
-
       - name: Install dependencies
-        shell: bash
-        working-directory: icechunk-python
-        run: |
-          set -e
-          uv venv
-          source .venv/bin/activate
-          python --version
-          WHEEL=$(ls dist/*-abi3-*.whl)
-          uv pip install "$WHEEL" --group test
-          uv pip install pytest-shard
+        run: just install-test-wheel pytest-shard
 
       - name: Run hypothesis tests (shard ${{ matrix.shard-id }}/3)
-        shell: bash
-        working-directory: icechunk-python
         env:
           HYPOTHESIS_EXPERIMENTAL_OBSERVABILITY: "1"
           NOCOLOR: 1
-        run: |
-          set -e
-          source .venv/bin/activate
-          python -m pytest -m hypothesis --num-shards=3 --shard-id=${{ matrix.shard-id }}
+        run: just pytest-venv -m hypothesis --num-shards=3 --shard-id=${{ matrix.shard-id }}
 
       - name: Save cached hypothesis directory
         id: save-hypothesis-cache
@@ -270,14 +246,11 @@ jobs:
           path: icechunk-python/.hypothesis/
           key: cache-hypothesis-${{ runner.os }}-shard${{ matrix.shard-id }}-${{ github.run_id }}
 
-  # Aggregation job preserves the required "test-hypothesis" check name
+        # Aggregation job preserves the required "test-hypothesis" check name
   test-hypothesis:
     if: always()
     needs: [test-hypothesis-shard]
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: .
     steps:
       - name: Verify all shards passed
         run: |
@@ -291,6 +264,17 @@ jobs:
     needs: [build-wheels]
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - uses: prefix-dev/setup-pixi@5185adfbffb4bd703da3010310260805d89ebb11 # v0.9.6
+        with:
+          pixi-version: ${{ env.PIXI_VERSION }}
+          cache: true
+          activate-environment: true
+          manifest-path: icechunk-python/pyproject.toml
+          environments: >-
+            py312
 
       - name: Download wheels
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -298,15 +282,8 @@ jobs:
           name: test-wheels
           path: icechunk-python/dist
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
-        with:
-          enable-cache: true
-          python-version: ${{ env.PYTHON_VERSION }}
-
       - name: Install icechunk + deps + icechunk_v1
         shell: bash
-        working-directory: icechunk-python
         run: |
           set -e
           uv venv
@@ -316,12 +293,7 @@ jobs:
           uv run third-wheel sync -v
 
       - name: Run cross-version stateful tests
-        shell: bash
-        working-directory: icechunk-python
-        run: |
-          set -e
-          source .venv/bin/activate
-          python -m pytest tests/test_stateful_compat.py -v
+        run: just pytest-venv tests/test_stateful_compat.py -v
 
   xarray-backends:
     runs-on: ubuntu-latest
@@ -339,23 +311,26 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           path: "icechunk"
+          persist-credentials: false
+
+      - uses: prefix-dev/setup-pixi@5185adfbffb4bd703da3010310260805d89ebb11 # v0.9.6
+        with:
+          pixi-version: ${{ env.PIXI_VERSION }}
+          cache: true
+          activate-environment: true
+          manifest-path: icechunk/icechunk-python/pyproject.toml
+          environments: >-
+            py312
 
       - name: Stand up RustFS
         working-directory: icechunk
-        run: |
-          docker compose up -d rustfs_init
+        run: just rustfs-up
 
       - name: Download wheels
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: test-wheels
           path: icechunk/icechunk-python/dist
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
-        with:
-          enable-cache: true
-          python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Install dependencies
         shell: bash
@@ -405,13 +380,8 @@ jobs:
 
       - name: Wait for RustFS to be ready
         working-directory: icechunk
-        run: |
-          for _ in {1..30}; do
-              if docker compose ps --status exited --filter status==0 | grep rustfs ; then
-              break
-              fi
-              sleep 1
-          done
+        run: just rustfs-wait
+
       - name: Run xarray backends tests
         shell: bash
         working-directory: icechunk/icechunk-python
@@ -428,6 +398,17 @@ jobs:
     needs: [build-wheels]
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - uses: prefix-dev/setup-pixi@5185adfbffb4bd703da3010310260805d89ebb11 # v0.9.6
+        with:
+          pixi-version: ${{ env.PIXI_VERSION }}
+          cache: true
+          activate-environment: true
+          manifest-path: icechunk-python/pyproject.toml
+          environments: >-
+            py312
 
       - name: Download wheels
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -435,18 +416,12 @@ jobs:
           name: test-wheels
           path: icechunk-python/dist
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
-        with:
-          enable-cache: true
-          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install dependencies
+        run: just install-test-wheel group=dev
 
       - name: Run stubtest
-        shell: bash
         working-directory: icechunk-python
         run: |
-          set -e
-          uv venv
           source .venv/bin/activate
           WHEEL=$(ls dist/*-abi3-*.whl)
           uv pip install "$WHEEL" --group dev
@@ -458,24 +433,26 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           path: "icechunk"
+          persist-credentials: false
 
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: "pydata/xarray"
           path: "xarray"
           fetch-depth: 0
+          persist-credentials: false
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
+      - uses: prefix-dev/setup-pixi@5185adfbffb4bd703da3010310260805d89ebb11 # v0.9.6
         with:
-          enable-cache: true
-          python-version: ${{ env.PYTHON_VERSION }}
+          pixi-version: ${{ env.PIXI_VERSION }}
+          cache: true
+          activate-environment: true
+          manifest-path: icechunk/icechunk-python/pyproject.toml
+          environments: >-
+            py312
 
       - name: Check xarray documentation consistency
-        shell: bash
         working-directory: icechunk/icechunk-python
         env:
           XARRAY_DIR: ../../xarray
-        run: |
-          set -e
-          uv run scripts/check_xarray_docs_sync.py
+        run: uv run scripts/check_xarray_docs_sync.py

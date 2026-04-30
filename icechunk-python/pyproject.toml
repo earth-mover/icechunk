@@ -213,8 +213,16 @@ platforms = [
 [tool.pixi.feature.docs.dependencies]
 cairo = ">=1.18.4,<2"
 
-[tool.pixi.feature.build.dependencies]
+[tool.pixi.feature.py312.dependencies]
 python = "~=3.12.0"
+
+[tool.pixi.feature.py314.dependencies]
+python = "~=3.14.0"
+
+[tool.pixi.feature.py314t.dependencies]
+python-freethreading = "~=3.14.0"
+
+[tool.pixi.feature.build.dependencies]
 rust = "~=1.96.0"
 just = ">=1.51.0,<2"
 compilers = ">=1.11.0,<2"
@@ -239,9 +247,24 @@ sysroot_linux-aarch64 = ">=2.34"
 
 [tool.pixi.environments]
 default = { features = [
+  "py314",
   "build",
   "dev",
   "docs",
   "test",
 ], solve-group = "default" }
 benchmark = { features = ["benchmark"], solve-group = "default" }
+py314t = { features = [
+  "py314t",
+  "build",
+  "dev",
+  "docs",
+  "test",
+]}
+py312 = { features = [
+  "py312",
+  "build",
+  "dev",
+  "docs",
+  "test",
+]}

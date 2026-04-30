@@ -304,6 +304,27 @@ publish-crates:
 build-wheels *args:
   cd icechunk-python && maturin build --release --out dist -i $PYTHON_VERSION "$@"
 
+[doc("Install built wheel and test dependencies into a venv")]
+install-test-wheel group="test" *args:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  shift
+  cd icechunk-python
+  uv venv
+  source .venv/bin/activate
+  python --version
+  PY_TAG="cp${PYTHON_VERSION//./}"
+  WHEEL=$(ls dist/*-"${PY_TAG}"-*.whl)
+  uv pip install "$WHEEL" --group "{{group}}" "$@"
+
+[doc("Run pytest from the test venv")]
+pytest-venv *args:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  cd icechunk-python
+  source .venv/bin/activate
+  python -m pytest "$@"
+
 [doc("Run Python checks with upstream nightly dependencies")]
 python-upstream: build-wheels python-upstream-setup python-upstream-mypy python-upstream-describe python-upstream-pytest
   echo "python upstream nightly checks passed"
