@@ -113,6 +113,26 @@ pub enum SessionErrorKind {
     NonRearrangeSession,
     #[error("move cannot overwrite existing node at `{0}`")]
     MoveWontOverwrite(String),
+    #[error(
+        "cannot move `{from}` into itself or its own descendant `{to}`.\n\n\
+         A move would require `{from}` to be both an ancestor and a descendant of itself, which is impossible. \
+         If your intent is to nest `{from}`'s contents under a new group at `{to}`, create `{to}` as a new \
+         group yourself in a writable_session, then in a rearrange_session move each direct child of `{from}` \
+         to `{to}/<child_name>`. Note that `{from}`'s metadata is not carried over to `{to}` — copy any \
+         attributes you need to preserve onto the new group when you create it."
+    )]
+    MoveIntoSelfOrDescendant { from: Path, to: Path },
+    #[error(
+        "cannot move to `{to}`: the destination's parent group `{missing_parent}` does not exist. \
+         Icechunk's `move` never creates intermediate groups — create `{missing_parent}` in a writable_session \
+         and commit first, then retry the move in a rearrange_session."
+    )]
+    MoveDestinationParentMissing { to: Path, missing_parent: Path },
+    #[error(
+        "cannot move to `{to}`: the destination's parent `{parent}` is an array, not a group. \
+         Move destinations must land under groups; arrays cannot have children."
+    )]
+    MoveDestinationParentNotGroup { to: Path, parent: Path },
     #[error("snapshot not found: `{id}`")]
     SnapshotNotFound { id: SnapshotId },
     #[error("no ancestor node was found for `{prefix}`")]
@@ -796,6 +816,12 @@ impl Session {
         self.asset_manager.fail_unless_spec_at_least(SpecVersionBin::V2).inject()?;
         // does the source node exist?
         let node = self.get_node(&from).await?;
+        // self-referential move: to == from or to is a descendant of from
+        if to.starts_with(&from) {
+            return Err(SessionError::capture(
+                SessionErrorKind::MoveIntoSelfOrDescendant { from, to },
+            ));
+        }
         // are we overwriting the destination node?
         if (self.get_node(&to).await).is_ok() {
             return Err(SessionError::capture(SessionErrorKind::MoveWontOverwrite(
@@ -803,8 +829,30 @@ impl Session {
             )));
         }
 
-        // verify all parent nodes in "to" path exist
-        self.check_all_ancestors_exist(&to).await?;
+        // destination's immediate parent must exist and be a group. Deeper
+        // ancestors are guaranteed groups when the immediate parent is one
+        // (the tree is well-formed).
+        if let Some(parent) = to.ancestors().nth(1) {
+            match self.get_node(&parent).await {
+                Ok(NodeSnapshot { node_data: NodeData::Array { .. }, .. }) => {
+                    return Err(SessionError::capture(
+                        SessionErrorKind::MoveDestinationParentNotGroup {
+                            to: to.clone(),
+                            parent,
+                        },
+                    ));
+                }
+                Ok(_) => {}
+                Err(_) => {
+                    return Err(SessionError::capture(
+                        SessionErrorKind::MoveDestinationParentMissing {
+                            to: to.clone(),
+                            missing_parent: parent,
+                        },
+                    ));
+                }
+            }
+        }
 
         // Get updated subtree
         let subtree_data: Vec<(Path, NodeId, NodeType)> = updated_nodes(
@@ -1054,24 +1102,6 @@ impl Session {
         Err(SessionError::capture(SessionErrorKind::AncestorNodeNotFound {
             prefix: path.clone(),
         }))
-    }
-
-    #[instrument(skip(self))]
-    async fn check_all_ancestors_exist(&self, path: &Path) -> SessionResult<()> {
-        let mut ancestors = path.ancestors();
-        // the first element is the `path` itself, which we might be
-        // trying to create now; skip it.
-        let current_path = ancestors.next();
-        debug_assert_eq!(current_path.as_ref(), Some(path));
-        for parent in ancestors {
-            let node = self.get_node(&parent).await;
-            if node.is_err() {
-                return Err(SessionError::capture(
-                    SessionErrorKind::AncestorNodeNotFound { prefix: parent },
-                ));
-            }
-        }
-        Ok(())
     }
 
     #[instrument(skip(self))]
@@ -5078,8 +5108,62 @@ mod tests {
         let res = res.unwrap_err();
         assert!(matches!(res,
                 ICError { kind, ..} if matches!(&kind,
-                                                SessionErrorKind::AncestorNodeNotFound {prefix, ..}
-                                                if *prefix == "/b".try_into().unwrap())));
+                                                SessionErrorKind::MoveDestinationParentMissing {missing_parent, ..}
+                                                if *missing_parent == "/b".try_into().unwrap())));
+
+        Ok(())
+    }
+
+    #[tokio_test]
+    async fn move_into_self_or_descendant_is_rejected() -> Result<(), Box<dyn Error>> {
+        let repo = create_memory_store_repository(SpecVersionBin::current()).await;
+
+        let mut session = repo.writable_session("main").await?;
+        session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
+        session.add_group("/a".try_into().unwrap(), Bytes::copy_from_slice(b"")).await?;
+        session
+            .add_group("/a/b".try_into().unwrap(), Bytes::copy_from_slice(b""))
+            .await?;
+        session
+            .add_group("/a/b/c".try_into().unwrap(), Bytes::copy_from_slice(b""))
+            .await?;
+        session.commit("setup").max_concurrent_nodes(8).execute().await?;
+
+        // to == from
+        let mut rearrange = repo.rearrange_session("main").await?;
+        let res =
+            rearrange.move_node("/a".try_into().unwrap(), "/a".try_into().unwrap()).await;
+        assert!(matches!(
+            res,
+            Err(SessionError {
+                kind: SessionErrorKind::MoveIntoSelfOrDescendant { .. },
+                ..
+            })
+        ));
+
+        // to is a strict descendant of from
+        let res = rearrange
+            .move_node("/a".try_into().unwrap(), "/a/c".try_into().unwrap())
+            .await;
+        assert!(matches!(
+            res,
+            Err(SessionError {
+                kind: SessionErrorKind::MoveIntoSelfOrDescendant { .. },
+                ..
+            })
+        ));
+
+        // to is a deep descendant of from
+        let res = rearrange
+            .move_node("/a".try_into().unwrap(), "/a/b/c/d".try_into().unwrap())
+            .await;
+        assert!(matches!(
+            res,
+            Err(SessionError {
+                kind: SessionErrorKind::MoveIntoSelfOrDescendant { .. },
+                ..
+            })
+        ));
 
         Ok(())
     }
@@ -5549,14 +5633,15 @@ mod tests {
         session.add_group(Path::root(), Bytes::new()).await?;
         let apath: Path = "/foo/old/array".try_into()?;
         session.add_array(apath.clone(), shape, None, Bytes::new()).await?;
+        session.add_group("/foo/other".try_into()?, Bytes::new()).await?;
         session.commit("first commit").max_concurrent_nodes(8).execute().await?;
 
         let mut session = repo.rearrange_session("main").await?;
         assert!(matches!(
                 session
-                    .move_node(Path::new("/foo/old/array").unwrap(), Path::new("/foo/old/array").unwrap())
+                    .move_node(Path::new("/foo/old/array").unwrap(), Path::new("/foo/other").unwrap())
                     .await,
-                Err(SessionError{kind: SessionErrorKind::MoveWontOverwrite(s), ..}) if s == "/foo/old/array"
+                Err(SessionError{kind: SessionErrorKind::MoveWontOverwrite(s), ..}) if s == "/foo/other"
         ));
 
         assert!(matches!(

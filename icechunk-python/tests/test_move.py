@@ -9,12 +9,42 @@ import icechunk as ic
 import zarr
 from icechunk.testing.invariants import assert_moves_sorted_by_final_path
 from icechunk.testing.models import GroupNode
-from icechunk.testing.trees import tree_and_moves
+from icechunk.testing.trees import (
+    ERR_PARENT_NOT_GROUP,
+    ERR_SELF_OR_DESCENDANT,
+    ERR_SOURCE_MISSING,
+    tree_and_invalid_moves,
+    tree_and_mixed_moves,
+    tree_and_valid_moves,
+    wrap_tolerant,
+)
 from icechunk.testing.utils import (
     precommit_postcommit_readonly,
     tree_to_model_and_icechunk,
 )
 from zarr.core.sync import sync
+
+
+def _format_tree_mismatch(
+    label: str,
+    move_lines: str,
+    expected: str,
+    actual: str,
+    *,
+    original_tree: str | None = None,
+) -> str:
+    parts = [f"tree mismatch [{label}]:"]
+    if original_tree is not None:
+        parts += ["", f"original tree:\n{original_tree}"]
+    parts += [
+        "",
+        f"moves:\n{move_lines}",
+        "",
+        f"expected:\n{expected}",
+        "",
+        f"actual:\n{actual}",
+    ]
+    return "\n".join(parts)
 
 
 async def test_basic_move() -> None:
@@ -94,50 +124,92 @@ Nodes moved/renamed:
     )
 
 
-def test_move_errors() -> None:
-    repo = ic.Repository.create(
-        storage=ic.in_memory_storage(),
+@example(
+    tree_moves=(
+        GroupNode.from_paths(arrays={"/my/old/path/array"}, groups=set()),
+        [("/my/old/path", "/my/old/path", ERR_SELF_OR_DESCENDANT)],
     )
-    session = repo.writable_session("main")
-    store = session.store
-    root = zarr.group(store=store, overwrite=True)
-    group = root.create_group("my/old/path", overwrite=True)
-    group.create_array("array", shape=(10, 10), chunks=(2, 2), dtype="i4", fill_value=42)
-    session.commit("create array")
+)
+@example(
+    tree_moves=(
+        GroupNode.from_paths(arrays={"/my/old/path/array"}, groups=set()),
+        [
+            (
+                "/my/old/path",
+                "/my/old/path/array",
+                ERR_SELF_OR_DESCENDANT,
+            )
+        ],
+    )
+)
+@example(
+    tree_moves=(
+        GroupNode.from_paths(arrays={"/my/old/path/array"}, groups=set()),
+        [("/not-found", "/my/new/path", ERR_SOURCE_MISSING)],
+    )
+)
+@example(
+    tree_moves=(
+        GroupNode.from_paths(arrays={"/array"}, groups=set()),
+        [("/", "/renamed-root", ERR_SELF_OR_DESCENDANT)],
+    )
+)
+@example(
+    tree_moves=(
+        GroupNode.from_paths(arrays={"/arr", "/src"}, groups=set()),
+        [("/src", "/arr/x", ERR_PARENT_NOT_GROUP)],
+    )
+)
+@given(tree_and_invalid_moves(n_moves=st.integers(min_value=1, max_value=4)))
+def test_invalid_moves(
+    tree_moves: tuple[GroupNode, list[tuple[str, str, str]]],
+) -> None:
+    """Every invalid move must raise with its expected error pattern.
 
-    session = repo.rearrange_session("main")
-    store = session.store
+    The strategy bundles each invalid move with the regex its rejection error
+    must match. Each move is independent — the rearrange session is reusable
+    since rejections happen before the change_set is touched.
+    """
+    tree, moves = tree_moves
+    _, session, repo = tree_to_model_and_icechunk(tree)
+    session.commit("init")
 
-    with pytest.raises(ic.IcechunkError, match="overwrite existing node"):
-        session.move("/my/old/path", "/my/old/path")
-    with pytest.raises(ic.IcechunkError, match="node not found"):
-        session.move("/not-found", "/my/new/path")
+    tree_before = repr(
+        zarr.open_group(repo.readonly_session("main").store, mode="r").tree()
+    )
+    rearrange = repo.rearrange_session("main")
+    for src, dst, pattern in moves:
+        note(f"expecting {pattern!r}: {src} -> {dst}")
+        with pytest.raises(ic.IcechunkError, match=wrap_tolerant(pattern)):
+            rearrange.move(src, dst)
 
-    # TODO: moving root should error but doesn't yet, see #1562
-    # with pytest.raises(ic.IcechunkError):
-    #     session.move("/", "/new")
+    # Rejected moves must not mutate the session: no uncommitted changes,
+    # an empty status diff, and the tree is exactly what we started with.
+    assert not rearrange.has_uncommitted_changes
+    assert rearrange.status().is_empty()
+    assert repr(zarr.open_group(rearrange.store, mode="r").tree()) == tree_before
 
 
 @example(
     tree_moves=(
-        GroupNode.from_paths(arrays=set(), groups={"foo/bar", "baz"}),
-        [("foo/bar", "baz/bar")],
+        GroupNode.from_paths(arrays=set(), groups={"/foo/bar", "/baz"}),
+        [("/foo/bar", "/baz/bar")],
     )
 )
 @example(
-    tree_moves=(GroupNode.from_paths(arrays={"0/0/0"}, groups=set()), [("0", "0_0")])
+    tree_moves=(GroupNode.from_paths(arrays={"/0/0/0"}, groups=set()), [("/0", "/0_0")])
 )
 @example(
     tree_moves=(
-        GroupNode.from_paths(arrays={"0/1"}, groups=set()),
-        [("0/1", "0/0"), ("0", "1")],
+        GroupNode.from_paths(arrays={"/0/1"}, groups=set()),
+        [("/0/1", "/0/0"), ("/0", "/1")],
     )
 )
-@given(tree_moves=tree_and_moves())
-def test_moves(
+@given(tree_moves=tree_and_valid_moves())
+def test_valid_moves(
     tree_moves: tuple[GroupNode, list[tuple[str, str]]],
 ) -> None:
-    """A sequence of moves should produce the correct tree before, and commit and in a fresh
+    """A sequence of moves should produce the correct tree before, and after commit, and in a fresh
     readonly_session.
     """
     tree, moves = tree_moves
@@ -148,9 +220,9 @@ def test_moves(
 
     session = repo.rearrange_session("main")
     for source, dest in moves:
-        note(f"moving: /{source} -> /{dest}")
+        note(f"moving: {source} -> {dest}")
         sync(model.move(source, dest))
-        session.move(f"/{source}", f"/{dest}")
+        session.move(source, dest)
 
     # All model paths should be reachable as group members in the store
     model_paths = {path for path, _ in zarr.open_group(model).members(max_depth=None)}
@@ -166,15 +238,11 @@ def test_moves(
 
     expected = repr(zarr.open_group(model).tree())
     snap_before = session.snapshot_id
+    move_lines = "\n".join(f"  {s} -> {d}" for s, d in moves)
     for label, store in precommit_postcommit_readonly(session, repo):
         actual = repr(zarr.open_group(store, mode="r").tree())
-        assert expected == actual, (
-            f"\ntree mismatch [{label}]:"
-            f"\n\noriginal tree:\n{original_tree}"
-            f"\n\nmoves:\n"
-            + "\n".join(f"  /{s} -> /{d}" for s, d in moves)
-            + f"\n\nexpected:\n{expected}"
-            f"\n\nactual:\n{actual}"
+        assert expected == actual, _format_tree_mismatch(
+            label, move_lines, expected, actual, original_tree=original_tree
         )
 
     # Moves in the tx log must be sorted by final path
@@ -184,8 +252,42 @@ def test_moves(
         assert_moves_sorted_by_final_path(diff.moved_nodes)
 
 
+@given(tree_moves=tree_and_mixed_moves(n_moves=st.integers(min_value=2, max_value=8)))
+def test_mixed_moves(
+    tree_moves: tuple[GroupNode, list[tuple[str, str, str | None]]],
+) -> None:
+    """Interleaved valid and invalid moves in one rearrange session.
+
+    Invalid moves must raise their expected error and leave the session
+    untouched; valid moves must apply and have the expected final tree.
+    """
+    tree, moves = tree_moves
+    model, session, repo = tree_to_model_and_icechunk(tree)
+    session.commit("init")
+
+    rearrange = repo.rearrange_session("main")
+    for src, dst, pattern in moves:
+        note(f"{'INVALID' if pattern else 'VALID':8s} {src} -> {dst}")
+        if pattern is None:
+            sync(model.move(src, dst))
+            rearrange.move(src, dst)
+        else:
+            with pytest.raises(ic.IcechunkError, match=wrap_tolerant(pattern)):
+                rearrange.move(src, dst)
+
+    expected = repr(zarr.open_group(model).tree())
+    move_lines = "\n".join(
+        f"  {'INVALID' if p else 'VALID':8s} {s} -> {d}" for s, d, p in moves
+    )
+    for label, store in precommit_postcommit_readonly(rearrange, repo, allow_empty=True):
+        actual = repr(zarr.open_group(store, mode="r").tree())
+        assert expected == actual, _format_tree_mismatch(
+            label, move_lines, expected, actual
+        )
+
+
 @given(
-    tree_moves=tree_and_moves(n_moves=st.integers(min_value=2, max_value=10)),
+    tree_moves=tree_and_valid_moves(n_moves=st.integers(min_value=2, max_value=10)),
     data=st.data(),
 )
 def test_moves_amend(
@@ -216,14 +318,14 @@ def test_moves_amend(
     note(f"tree: {tree!r}")
     note(f"batches: {[len(b) for b in batches]} ({len(moves)} moves)")
     for i, (s, d) in enumerate(moves):
-        note(f"  move {i}: /{s} -> /{d}")
+        note(f"  move {i}: {s} -> {d}")
 
     # Repo A: all moves in one commit
     _, session_a, repo_a = tree_to_model_and_icechunk(tree)
     session_a.commit("init")
     session_a = repo_a.rearrange_session("main")
     for source, dest in moves:
-        session_a.move(f"/{source}", f"/{dest}")
+        session_a.move(source, dest)
     session_a.commit("all moves")
 
     # Repo B: same moves split across multiple amends
@@ -233,7 +335,7 @@ def test_moves_amend(
     for batch in batches:
         session_b = repo_b.rearrange_session("main")
         for source, dest in batch:
-            session_b.move(f"/{source}", f"/{dest}")
+            session_b.move(source, dest)
         session_b.amend("amend")
 
     # Trees must match

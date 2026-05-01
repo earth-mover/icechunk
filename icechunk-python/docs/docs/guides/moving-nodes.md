@@ -108,6 +108,15 @@ except ic.IcechunkError as e:
     print(f"IcechunkError: {e}")
 ```
 
+## Constraints
+
+Icechunk's `move` is a rename primitive — it **never synthesizes groups**. That means:
+
+1. **The destination's parent must already exist.** `move("/a", "/x/y/z")` fails if `/x` or `/x/y` don't exist. Create them first in a regular `writable_session`, then do the move in a `rearrange_session`.
+2. **A node cannot be moved into itself or any of its own descendants.** `move("/a", "/a/c")` is rejected — such a move is not representable (the node would need to be both an ancestor and a descendant of itself). To nest a group's contents under a new descendant, create the new group yourself and move each child into it explicitly.
+3. **Moves do not overwrite.** If a node already exists at the destination, the move is rejected — `move` will not silently replace it. Delete or rename the existing node first if you want it gone.
+4. **The destination's parent must be a group.** `move("/a", "/arr/x")` fails when `/arr` is an array, since arrays cannot have children.
+
 ## Async API
 
 ```python

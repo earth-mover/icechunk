@@ -31,14 +31,14 @@ def tree_to_model_and_icechunk(
 
 
 def precommit_postcommit_readonly(
-    session: Session, repo: Repository
+    session: Session, repo: Repository, *, allow_empty: bool = False
 ) -> Generator[tuple[str, IcechunkStore], None, None]:
     """Yield (label, store) for the three icechunk lifecycle phases.
 
     Commits the session between pre-commit and post-commit phases.
     """
     yield "pre-commit", session.store
-    session.commit("commit")
+    session.commit("commit", allow_empty=allow_empty)
     yield "post-commit", session.store
     yield "readonly", repo.readonly_session(branch="main").store
 

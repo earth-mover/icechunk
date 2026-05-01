@@ -25,7 +25,7 @@ from icechunk.testing.invariants import (
     assert_moves_sorted_by_final_path,
 )
 from icechunk.testing.models import GroupNode, ModelStore
-from icechunk.testing.trees import valid_moves
+from icechunk.testing.trees import absolute, valid_moves
 from icechunk.testing.utils import update_paths_after_move
 from zarr import Array
 from zarr.core.buffer import default_buffer_prototype
@@ -216,14 +216,17 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         pending_arrays = self.all_arrays.copy()
         pending_groups = self.all_groups.copy()
 
-        tree = GroupNode.from_paths(pending_arrays, pending_groups | {""})
+        tree = GroupNode.from_paths(
+            {absolute(p) for p in pending_arrays},
+            {absolute(p) for p in pending_groups},
+        )
         moves = data.draw(valid_moves(tree, n_moves=st.just(num_moves)))
         for source, dest in moves:
             note(f"moving {source!r} to {dest!r}")
-            session.move(f"/{source}", f"/{dest}")
+            session.move(source, dest)
             self._sync(pending_model.move(source, dest))
             pending_arrays, pending_groups = update_paths_after_move(
-                source, dest, pending_arrays, pending_groups
+                source.lstrip("/"), dest.lstrip("/"), pending_arrays, pending_groups
             )
             self._compare_list_dir(
                 pending_model, session.store, pending_arrays | pending_groups
