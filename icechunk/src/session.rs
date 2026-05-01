@@ -1484,7 +1484,7 @@ impl Session {
         Ok(())
     }
 
-    fn spec_version(&self) -> SpecVersionBin {
+    pub(crate) fn spec_version(&self) -> SpecVersionBin {
         self.asset_manager.spec_version()
     }
 
@@ -3342,7 +3342,7 @@ mod tests {
     use proptest::prelude::{prop_assert, prop_assert_eq};
     use storage::logging::LoggingStorage;
     use test_strategy::proptest;
-    // #[cfg(not(feature = "shuttle"))]
+    #[cfg(not(feature = "shuttle"))]
     use tokio::sync::Barrier;
 
     use crate::test_utils::spec_version_cases;

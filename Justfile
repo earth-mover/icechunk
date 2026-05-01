@@ -6,6 +6,8 @@ set positional-arguments
 alias fmt := format
 alias pre := pre-commit
 
+export PYTHON_VERSION := "3.14"
+
 [doc("Run all Rust tests via cargo-nextest")]
 test *args:
   export DYLD_LIBRARY_PATH="${CONDA_PREFIX:-}/lib" && cargo nextest run --no-fail-fast --cargo-profile {{profile}} --workspace --lib --bins --tests --examples "$@"
@@ -36,7 +38,15 @@ build-release *args:
 
 [doc("Prepare environment for development")]
 develop *args:
-  cd icechunk-python && uv run -m maturin_import_hook site install && maturin develop --uv --profile {{profile}} "$@"
+  cd icechunk-python && maturin develop --uv --profile {{profile}} "$@"
+
+[doc("Install maturin import hook for more convenient development flow")]
+import-hook:
+  cd icechunk-python && python -m maturin_import_hook site install
+
+[doc("Uninstall maturin import hook")]
+import-hook-remove:
+  cd icechunk-python && python -m maturin_import_hook site uninstall
 
 # Use --all-features for the workspace but skip icechunk's `shuttle` feature,
 # which swaps tokio for shuttle-tokio and is incompatible with other crates.
@@ -46,6 +56,11 @@ icechunk_features := "s3,object-store-s3,object-store-gcs,object-store-azure,obj
 lint *args:
   cargo clippy --profile {{profile}} --all-features --exclude icechunk "$@"
   cargo clippy --profile {{profile}} -p icechunk --features {{icechunk_features}} "$@"
+
+[doc("Run check on all features")]
+check *args:
+  cargo check --profile {{profile}} --all-features --workspace --exclude icechunk "$@"
+  cargo check --profile {{profile}} -p icechunk --features {{icechunk_features}} "$@"
 
 [doc("Format all Rust files (pass `--check` to verify only)")]
 format *args:
@@ -135,6 +150,165 @@ docs-serve *args:
 [doc("Build MkDocs static site")]
 docs-build *args:
   mkdocs build -f icechunk-python/docs/mkdocs.yml "$@"
+
+[doc("Check compatibility with zarrs_icechunk")]
+zarrs-upstream zarrs_dir="../zarrs_icechunk": zarrs-upstream-clone zarrs-upstream-patch zarrs-upstream-build zarrs-upstream-test
+  @echo "zarrs_upstream check passed"
+  rm -rf {{zarrs_dir}}
+
+[doc("Clone zarrs_icechunk for local checks")]
+zarrs-upstream-clone zarrs_dir="../zarrs_icechunk":
+  rm -rf {{zarrs_dir}}
+  git clone https://github.com/zarrs/zarrs_icechunk {{zarrs_dir}}
+
+[doc("Patch zarrs_icechunk Cargo.toml to use local icechunk crate")]
+zarrs-upstream-patch zarrs_dir="../zarrs_icechunk":
+  #!/usr/bin/env bash
+  set -euo pipefail
+  icechunk_path=$(realpath icechunk)
+  if ! grep -q 'icechunk = { path' {{zarrs_dir}}/Cargo.toml; then
+    sed -i '/^\[patch\.crates-io\]/a icechunk = { path = "'"$icechunk_path"'" }' {{zarrs_dir}}/Cargo.toml
+  fi
+
+[doc("Build zarrs_icechunk against local icechunk")]
+zarrs-upstream-build zarrs_dir="../zarrs_icechunk": zarrs-upstream-patch
+  #!/usr/bin/env bash
+  set -euo pipefail
+  cd {{zarrs_dir}} && cargo build 2>&1 | tee build-output.log
+
+[doc("Test zarrs_icechunk against local icechunk")]
+zarrs-upstream-test zarrs_dir="../zarrs_icechunk": zarrs-upstream-patch zarrs-upstream-build
+  #!/usr/bin/env bash
+  set -euo pipefail
+  cd {{zarrs_dir}} && cargo test 2>&1 | tee test-output.log
+
+[doc("Start all docker compose services")]
+contup:
+  docker compose up -d
+
+[doc("Start RustFS via docker compose")]
+rustfs-up:
+  docker compose up -d rustfs_init
+
+[doc("Wait for RustFS container to be ready")]
+rustfs-wait:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  for _ in {1..10}; do
+    if docker compose ps --status exited --filter status==0 | grep rustfs ; then
+      exit 0
+    fi
+    sleep 3
+  done
+  echo "ERROR: RustFS did not become ready in time" >&2
+  exit 1
+
+[doc("Wait for Azurite container to be ready")]
+azurite-wait:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  for _ in {1..60}; do
+    if curl --silent --fail "http://localhost:10000/devstoreaccount1/testcontainer?sv=2023-01-03&ss=btqf&srt=sco&spr=https%2Chttp&st=2025-01-06T14%3A53%3A30Z&se=2035-01-07T14%3A53%3A00Z&sp=rwdftlacup&sig=jclETGilOzONYp4Y0iK9SpVRLGyehaS5lg5booJ9VYA%3D&restype=container"; then
+      exit 0
+    fi
+    sleep 1
+  done
+  echo "ERROR: Azurite did not become ready in time" >&2
+  exit 1
+
+[doc("Wait for all docker compose services to be ready")]
+contwait: rustfs-wait azurite-wait
+
+[doc("Publish workspace crates to crates.io via cargo-release")]
+publish-crates:
+  cargo release --workspace --unpublished --no-confirm --no-tag --no-push --execute
+
+[doc("Build Python wheels with maturin")]
+build-wheels *args:
+  cd icechunk-python && maturin build --release --out dist -i $PYTHON_VERSION "$@"
+
+[doc("Run Python checks with upstream nightly dependencies")]
+python-upstream: build-wheels python-upstream-setup python-upstream-mypy python-upstream-describe python-upstream-pytest
+  echo "python upstream nightly checks passed"
+
+[doc("Install Python upstream nightly dependencies")]
+python-upstream-setup:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  cd icechunk-python
+  python3 -m venv .venv
+  source .venv/bin/activate
+  python --version
+  PY_TAG="cp${PYTHON_VERSION//./}"
+  WHEEL=$(ls dist/*-"${PY_TAG}"-*.whl)
+  export UV_INDEX="https://pypi.anaconda.org/scientific-python-nightly-wheels/simple/"
+  export UV_PRERELEASE=allow
+  uv pip install "$WHEEL" --group dev \
+    --resolution highest \
+    --index-strategy unsafe-best-match 2>&1 | tee setup-output.log
+  uv pip install "hypothesis @ git+https://github.com/ianhi/hypothesis.git@flaky-feedback#subdirectory=hypothesis-python"
+  uv pip list
+
+[doc("Run mypy against Python upstream nightly")]
+python-upstream-mypy: python-upstream-setup
+  #!/usr/bin/env bash
+  set -euo pipefail
+  cd icechunk-python
+  source .venv/bin/activate
+  mypy --python-version "$PYTHON_VERSION" python 2>&1 | tee mypy-output.log
+
+[doc("Describe Python upstream nightly environment")]
+python-upstream-describe: python-upstream-setup
+  #!/usr/bin/env bash
+  set -euo pipefail
+  cd icechunk-python
+  source .venv/bin/activate
+  pip list
+
+[doc("Run pytest with Python upstream nightly dependencies")]
+python-upstream-pytest *args: python-upstream-setup
+  #!/usr/bin/env bash
+  set -euo pipefail
+  cd icechunk-python
+  source .venv/bin/activate
+  pytest -n 4 --hypothesis-profile=nightly --report-log output-pytest-log.jsonl "$@"
+
+[doc("Run full xarray-upstream checks")]
+xarray-upstream xarray_dir="../xarray": xarray-upstream-clone build-wheels xarray-upstream-setup xarray-upstream-pytest
+  echo "xarray-upstream checks passed"
+  rm -rf {{xarray_dir}}
+
+[doc("Clone xarray from upstream")]
+xarray-upstream-clone xarray_dir="../xarray":
+  rm -rf {{xarray_dir}}
+  git clone https://github.com/pydata/xarray {{xarray_dir}}
+
+[doc("Install xarray upstream test dependencies")]
+xarray-upstream-setup:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  cd icechunk-python
+  python3 -m venv .venv
+  source .venv/bin/activate
+  python --version
+  PY_TAG="cp${PYTHON_VERSION//./}"
+  WHEEL=$(ls dist/*-"${PY_TAG}"-*.whl)
+  export UV_INDEX="https://pypi.anaconda.org/scientific-python-nightly-wheels/simple/"
+  export UV_PRERELEASE=allow
+  uv pip install "$WHEEL" --group test pytest-mypy-plugins \
+    --resolution highest \
+    --index-strategy unsafe-best-match
+  uv pip list
+
+[doc("Run xarray backend tests against local icechunk")]
+xarray-upstream-pytest xarray_dir="../xarray": xarray-upstream-clone xarray-upstream-setup
+  #!/usr/bin/env bash
+  set -euo pipefail
+  xarray_abs=$(realpath "{{xarray_dir}}")
+  cd icechunk-python
+  source .venv/bin/activate
+  export ICECHUNK_XARRAY_BACKENDS_TESTS=1
+  pytest -c="$xarray_abs/pyproject.toml" -W ignore tests/run_xarray_backends_tests.py --report-log output-pytest-log.jsonl
 
 [doc("Run all Python and Rust checks")]
 all-checks:

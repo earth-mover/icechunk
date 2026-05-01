@@ -1744,7 +1744,7 @@ mod test {
             ]
         );
 
-        // other walues still cached
+        // other values still cached
         caching.fetch_manifest(&id, size).await?;
         assert_eq!(
             logging.fetch_operations(),

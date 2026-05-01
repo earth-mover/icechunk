@@ -1,1 +1,1 @@
-icechunk-python/docs/docs/ai-policy.md
+icechunk-python/docs/docs/reference/ai-policy.md

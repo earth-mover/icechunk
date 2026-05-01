@@ -21,6 +21,9 @@ ignore = [
   # only after signature verification and requires CA misissuance to exploit.
   "RUSTSEC-2026-0098",
   "RUSTSEC-2026-0099",
+  # rustls-webpki v0.101.7 has a panic related to certificate list revocation.
+  # we don't enable the `clr` feature that would trigger it.
+  "RUSTSEC-2026-0104",
 ]
 
 [licenses]

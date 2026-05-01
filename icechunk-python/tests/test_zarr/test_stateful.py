@@ -23,8 +23,8 @@ from icechunk.testing.invariants import (
     assert_list_dir_equal,
     assert_moves_sorted_by_final_path,
 )
-from icechunk.testing.models import ModelStore
-from icechunk.testing.trees import GroupNode, valid_moves
+from icechunk.testing.models import GroupNode, ModelStore
+from icechunk.testing.trees import valid_moves
 from icechunk.testing.utils import update_paths_after_move
 from zarr import Array
 from zarr.core.buffer import default_buffer_prototype
