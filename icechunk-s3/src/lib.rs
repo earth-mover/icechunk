@@ -280,14 +280,12 @@ pub async fn mk_client(
         });
     }
 
-    // R2 includes x-amz-checksum-crc32 on 304 Not Modified responses, but
-    // because 304 has no body the SDK's checksum validation fails and triggers
-    // expensive transient-error retries.
-    if config
-        .endpoint_url
-        .as_ref()
-        .is_some_and(|url| url.contains(".r2.cloudflarestorage.com"))
-    {
+    // R2 and Scaleway include x-amz-checksum-* headers on 304 Not Modified
+    // responses, but because 304 has no body the SDK's checksum validation
+    // fails and triggers expensive transient-error retries.
+    if config.endpoint_url.as_ref().is_some_and(|url| {
+        url.contains(".r2.cloudflarestorage.com") || url.contains(".scw.cloud")
+    }) {
         s3_builder = s3_builder.interceptor(StripChecksumOn304Interceptor);
     }
 
