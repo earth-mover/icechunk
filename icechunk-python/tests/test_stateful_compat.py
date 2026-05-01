@@ -22,10 +22,24 @@ from hypothesis import settings
 from packaging.version import Version
 
 import icechunk as ic
+import zarr
 
 pytest.importorskip("hypothesis")
 pytest.importorskip("xarray")
 ic_v1 = pytest.importorskip("icechunk_v1")
+
+
+# These tests pin spec_version=1, which does not support rectilinear chunk grids.
+# The package conftest globally enables `array.rectilinear_chunks`, which causes
+# zarr's metadata strategies to draw rectilinear grids — disable for this module.
+@pytest.fixture(autouse=True)
+def _disable_rectilinear_chunks() -> Any:
+    if "array.rectilinear_chunks" not in zarr.config:
+        yield
+        return
+    with zarr.config.set({"array.rectilinear_chunks": False}):
+        yield
+
 
 # Suppress LocalFileSystem warnings for these tests (which use filesystem storage).
 log_filter = "warn,icechunk::storage::object_store=error"

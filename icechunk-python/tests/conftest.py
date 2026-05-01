@@ -6,7 +6,14 @@ import pytest
 from hypothesis import HealthCheck, settings
 from mypy_boto3_s3.client import S3Client
 
+import zarr
 from icechunk import Repository, SpecVersion, in_memory_storage, local_filesystem_storage
+
+# Zarr may gate rectilinear chunk grids behind a config flag.
+# Icechunk supports them, so enable unconditionally for tests.
+zarr_has_rectilinear_chunks = "array.rectilinear_chunks" in zarr.config
+if zarr_has_rectilinear_chunks:
+    zarr.config.set({"array.rectilinear_chunks": True})
 
 # ---------------------------------------------------------------------------
 # Hypothesis profiles
