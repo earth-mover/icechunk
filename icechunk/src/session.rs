@@ -5633,14 +5633,15 @@ mod tests {
         session.add_group(Path::root(), Bytes::new()).await?;
         let apath: Path = "/foo/old/array".try_into()?;
         session.add_array(apath.clone(), shape, None, Bytes::new()).await?;
+        session.add_group("/foo/other".try_into()?, Bytes::new()).await?;
         session.commit("first commit").max_concurrent_nodes(8).execute().await?;
 
         let mut session = repo.rearrange_session("main").await?;
         assert!(matches!(
                 session
-                    .move_node(Path::new("/foo/old/array").unwrap(), Path::new("/foo/old/array").unwrap())
+                    .move_node(Path::new("/foo/old/array").unwrap(), Path::new("/foo/other").unwrap())
                     .await,
-                Err(SessionError{kind: SessionErrorKind::MoveWontOverwrite(s), ..}) if s == "/foo/old/array"
+                Err(SessionError{kind: SessionErrorKind::MoveWontOverwrite(s), ..}) if s == "/foo/other"
         ));
 
         assert!(matches!(

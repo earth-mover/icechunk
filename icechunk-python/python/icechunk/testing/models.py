@@ -11,9 +11,9 @@ written to MemoryStore, IcechunkStore, etc. for comparison testing.
 from __future__ import annotations
 
 import itertools
-import posixpath
 from collections.abc import Iterator
 from dataclasses import dataclass, field
+from pathlib import PurePosixPath
 from typing import Any
 
 import numpy as np
@@ -115,10 +115,12 @@ class ArrayNode:
 class GroupNode:
     children: dict[str, ArrayNode | GroupNode] = field(default_factory=dict)
 
-    def walk(self, prefix: str = "") -> Iterator[tuple[str, Node]]:
+    def walk(
+        self, prefix: str | PurePosixPath = ""
+    ) -> Iterator[tuple[PurePosixPath, Node]]:
         """Yield ``(path, child)`` for every node, depth-first."""
         for name, child in self.children.items():
-            p = posixpath.join(prefix, name)
+            p = PurePosixPath(prefix) / name
             yield p, child
             if isinstance(child, GroupNode):
                 yield from child.walk(p)
@@ -126,16 +128,16 @@ class GroupNode:
     def nodes(self, prefix: str = "", *, include_root: bool = False) -> list[str]:
         """Return paths of all nodes, optionally including root."""
         root = [prefix] if include_root else []
-        return root + [p for p, _ in self.walk(prefix)]
+        return root + [str(p) for p, _ in self.walk(prefix)]
 
     def groups(self, prefix: str = "", *, include_root: bool = False) -> list[str]:
         """Return paths of all group nodes, optionally including root."""
         root = [prefix] if include_root else []
-        return root + [p for p, c in self.walk(prefix) if isinstance(c, GroupNode)]
+        return root + [str(p) for p, c in self.walk(prefix) if isinstance(c, GroupNode)]
 
     def arrays(self, prefix: str = "") -> list[str]:
         """Return paths of all array nodes."""
-        return [p for p, c in self.walk(prefix) if isinstance(c, ArrayNode)]
+        return [str(p) for p, c in self.walk(prefix) if isinstance(c, ArrayNode)]
 
     def materialize(self, store: zarr.abc.store.Store) -> zarr.Group:
         """Write this tree into *store* and return the root group."""
