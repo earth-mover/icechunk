@@ -75,7 +75,7 @@ rstest_reuse = "0.7.0"
 serde = { version = "1.0.228", features = ["derive", "rc"] }
 serde_bytes = "0.11.19"
 serde_json = "1.0.149"
-serde_with = "3.18.0"
+serde_with = "3.19.0"
 serde_yaml_ng = "0.10.0"
 shuttle = "0.9.1"
 shuttle-tokio = { version = "0.1.0", features = ["rt-multi-thread", "macros"] }
@@ -85,7 +85,7 @@ tempfile = "3.27.0"
 test-log = { version = "0.2.20", default-features = false, features = ["trace", "color", "unstable"] }
 test-strategy = "0.4.5"
 thiserror = "2.0.18"
-tokio = "1.52.1"
+tokio = "1.52.2"
 tokio-util = { version = "0.7.18", features = ["io-util"] }
 tracing = "0.1.44"
 tracing-chrome = "0.7"
