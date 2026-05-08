@@ -310,7 +310,7 @@ install-test-wheel group="test" *args:
   set -euo pipefail
   shift
   cd icechunk-python
-  uv venv
+  uv venv --python=${PYTHON_VERSION}
   source .venv/bin/activate
   python --version
   PY_TAG="cp${PYTHON_VERSION//./}"
