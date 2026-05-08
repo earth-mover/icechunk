@@ -201,12 +201,13 @@ platforms = ["osx-arm64", "linux-64", "linux-aarch64", "win-64", "osx-64"]
 cairo = ">=1.18.4,<2"
 
 [tool.pixi.feature.py312.dependencies]
-python = "~=3.12"
+python = "~=3.12.0"
 
 [tool.pixi.feature.py314.dependencies]
-python = "~=3.14"
+python = "~=3.14.0"
 
 [tool.pixi.feature.py313t.dependencies]
+#python-freethreading = "~=3.13.0"
 python = "~=3.13t"
 
 [tool.pixi.feature.build.dependencies]
