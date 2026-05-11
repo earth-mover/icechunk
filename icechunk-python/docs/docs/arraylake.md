@@ -11,7 +11,7 @@ Both are made by [Earthmover](https://earthmover.io/).
 Icechunk is a fully capable, standalone product -- you never need Arraylake to use it.
 Arraylake adds operational, collaboration, and data-delivery features on top of Icechunk for teams that want a managed experience.
 
-Adding Arraylake to your existing Icechunk datasets is easy, as any Icechunk Repository can be directly imported into Arraylake.
+Adding Arraylake to your existing Icechunk datasets is easy, as any Icechunk Repository can be directly [imported](https://docs.earthmover.io/guide/manage-repos#import-an-existing-icechunk-repo) into Arraylake.
 
 ## Feature Comparison
 
