@@ -542,16 +542,21 @@ mod native {
 
     impl From<JsS3Options> for icechunk::config::S3Options {
         fn from(opts: JsS3Options) -> Self {
-            icechunk::config::S3Options {
-                region: opts.region,
-                endpoint_url: opts.endpoint_url,
-                allow_http: opts.allow_http.unwrap_or(false),
-                anonymous: opts.anonymous.unwrap_or(false),
-                force_path_style: opts.force_path_style.unwrap_or(false),
-                network_stream_timeout_seconds: opts.network_stream_timeout_seconds,
-                requester_pays: opts.requester_pays.unwrap_or(false),
-                checksum_algorithm: None,
+            let mut s3 = icechunk::config::S3Options::default()
+                .with_allow_http(opts.allow_http.unwrap_or(false))
+                .with_anonymous(opts.anonymous.unwrap_or(false))
+                .with_force_path_style(opts.force_path_style.unwrap_or(false))
+                .with_requester_pays(opts.requester_pays.unwrap_or(false));
+            if let Some(region) = opts.region {
+                s3 = s3.with_region(region);
             }
+            if let Some(endpoint_url) = opts.endpoint_url {
+                s3 = s3.with_endpoint_url(endpoint_url);
+            }
+            if let Some(seconds) = opts.network_stream_timeout_seconds {
+                s3 = s3.with_network_stream_timeout_seconds(seconds);
+            }
+            s3
         }
     }
 
@@ -930,16 +935,7 @@ impl JsStorage {
 
 #[cfg(not(target_family = "wasm"))]
 fn default_s3_options() -> icechunk::config::S3Options {
-    icechunk::config::S3Options {
-        region: None,
-        endpoint_url: None,
-        allow_http: false,
-        anonymous: false,
-        force_path_style: false,
-        network_stream_timeout_seconds: None,
-        requester_pays: false,
-        checksum_algorithm: None,
-    }
+    icechunk::config::S3Options::default()
 }
 
 #[cfg(not(target_family = "wasm"))]
@@ -962,16 +958,7 @@ impl JsStorage {
         options: Option<JsS3Options>,
     ) -> napi::Result<JsStorage> {
         let creds = credentials.map(|c| c.into());
-        let opts = options.map(|o| o.into()).unwrap_or(icechunk::config::S3Options {
-            region: None,
-            endpoint_url: None,
-            allow_http: false,
-            anonymous: false,
-            force_path_style: false,
-            network_stream_timeout_seconds: None,
-            requester_pays: false,
-            checksum_algorithm: None,
-        });
+        let opts = options.map(|o| o.into()).unwrap_or_default();
         let storage = icechunk::storage::new_s3_storage(opts, bucket, prefix, creds)
             .map_napi_err()?;
         Ok(JsStorage(storage))
@@ -986,16 +973,7 @@ impl JsStorage {
         options: Option<JsS3Options>,
     ) -> napi::Result<JsStorage> {
         let creds = credentials.map(|c| c.into());
-        let opts = options.map(|o| o.into()).unwrap_or(icechunk::config::S3Options {
-            region: None,
-            endpoint_url: None,
-            allow_http: false,
-            anonymous: false,
-            force_path_style: false,
-            network_stream_timeout_seconds: None,
-            requester_pays: false,
-            checksum_algorithm: None,
-        });
+        let opts = options.map(|o| o.into()).unwrap_or_default();
         let storage =
             icechunk::storage::new_r2_storage(opts, bucket, prefix, account_id, creds)
                 .map_napi_err()?;
@@ -1011,16 +989,7 @@ impl JsStorage {
         use_weak_consistency: Option<bool>,
     ) -> napi::Result<JsStorage> {
         let creds = credentials.map(|c| c.into());
-        let opts = options.map(|o| o.into()).unwrap_or(icechunk::config::S3Options {
-            region: None,
-            endpoint_url: None,
-            allow_http: false,
-            anonymous: false,
-            force_path_style: false,
-            network_stream_timeout_seconds: None,
-            requester_pays: false,
-            checksum_algorithm: None,
-        });
+        let opts = options.map(|o| o.into()).unwrap_or_default();
         let weak_consistency = use_weak_consistency.unwrap_or(false);
         let storage = icechunk::storage::new_tigris_storage(
             opts,
@@ -1041,16 +1010,7 @@ impl JsStorage {
         options: Option<JsS3Options>,
     ) -> napi::Result<JsStorage> {
         let creds = credentials.map(|c| c.into());
-        let opts = options.map(|o| o.into()).unwrap_or(icechunk::config::S3Options {
-            region: None,
-            endpoint_url: None,
-            allow_http: false,
-            anonymous: false,
-            force_path_style: false,
-            network_stream_timeout_seconds: None,
-            requester_pays: false,
-            checksum_algorithm: None,
-        });
+        let opts = options.map(|o| o.into()).unwrap_or_default();
         let storage =
             icechunk::storage::new_s3_object_store_storage(opts, bucket, prefix, creds)
                 .await

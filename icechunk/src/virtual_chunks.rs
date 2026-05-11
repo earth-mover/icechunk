@@ -520,13 +520,13 @@ impl VirtualChunkResolver {
                         .capture()?
                     }
                 };
+                let opts_with_endpoint;
                 let opts = if opts.endpoint_url.is_some() {
                     opts
                 } else {
-                    &S3Options {
-                        endpoint_url: Some("https://t3.storage.dev".to_string()),
-                        ..opts.clone()
-                    }
+                    opts_with_endpoint =
+                        opts.clone().with_endpoint_url("https://t3.storage.dev");
+                    &opts_with_endpoint
                 };
                 Ok(Arc::new(S3Fetcher::new(opts, creds, self.settings.clone()).await))
             }
@@ -1108,112 +1108,49 @@ mod tests {
         assert!(
             VirtualChunkContainer::new(
                 "s3://".to_string(),
-                ObjectStoreConfig::S3Compatible(S3Options {
-                    region: None,
-                    endpoint_url: None,
-                    anonymous: false,
-                    allow_http: false,
-                    force_path_style: false,
-                    network_stream_timeout_seconds: None,
-                    requester_pays: false,
-                    checksum_algorithm: None,
-                })
+                ObjectStoreConfig::S3Compatible(S3Options::default())
             )
             .is_err()
         );
         assert!(
             VirtualChunkContainer::new(
                 "file://".to_string(),
-                ObjectStoreConfig::S3Compatible(S3Options {
-                    region: None,
-                    endpoint_url: None,
-                    anonymous: false,
-                    allow_http: false,
-                    force_path_style: false,
-                    network_stream_timeout_seconds: None,
-                    requester_pays: false,
-                    checksum_algorithm: None,
-                })
+                ObjectStoreConfig::S3Compatible(S3Options::default())
             )
             .is_err()
         );
         assert!(
             VirtualChunkContainer::new(
                 "file:///".to_string(),
-                ObjectStoreConfig::S3Compatible(S3Options {
-                    region: None,
-                    endpoint_url: None,
-                    anonymous: false,
-                    allow_http: false,
-                    force_path_style: false,
-                    network_stream_timeout_seconds: None,
-                    requester_pays: false,
-                    checksum_algorithm: None,
-                })
+                ObjectStoreConfig::S3Compatible(S3Options::default())
             )
             .is_err()
         );
         assert!(
             VirtualChunkContainer::new(
                 "gcs://".to_string(),
-                ObjectStoreConfig::S3Compatible(S3Options {
-                    region: None,
-                    endpoint_url: None,
-                    anonymous: false,
-                    allow_http: false,
-                    force_path_style: false,
-                    network_stream_timeout_seconds: None,
-                    requester_pays: false,
-                    checksum_algorithm: None,
-                })
+                ObjectStoreConfig::S3Compatible(S3Options::default())
             )
             .is_err()
         );
         assert!(
             VirtualChunkContainer::new(
                 "http://".to_string(),
-                ObjectStoreConfig::S3Compatible(S3Options {
-                    region: None,
-                    endpoint_url: None,
-                    anonymous: false,
-                    allow_http: false,
-                    force_path_style: false,
-                    network_stream_timeout_seconds: None,
-                    requester_pays: false,
-                    checksum_algorithm: None,
-                })
+                ObjectStoreConfig::S3Compatible(S3Options::default())
             )
             .is_err()
         );
         assert!(
             VirtualChunkContainer::new(
                 "https://".to_string(),
-                ObjectStoreConfig::S3Compatible(S3Options {
-                    region: None,
-                    endpoint_url: None,
-                    anonymous: false,
-                    allow_http: false,
-                    force_path_style: false,
-                    network_stream_timeout_seconds: None,
-                    requester_pays: false,
-                    checksum_algorithm: None,
-                })
+                ObjectStoreConfig::S3Compatible(S3Options::default())
             )
             .is_err()
         );
         assert!(
             VirtualChunkContainer::new(
                 "custom://".to_string(),
-                ObjectStoreConfig::S3Compatible(S3Options {
-                    region: None,
-                    endpoint_url: None,
-                    anonymous: false,
-                    allow_http: false,
-                    force_path_style: false,
-                    network_stream_timeout_seconds: None,
-                    requester_pays: false,
-                    checksum_algorithm: None,
-                })
+                ObjectStoreConfig::S3Compatible(S3Options::default())
             )
             .is_err()
         );
@@ -1297,16 +1234,7 @@ mod tests {
     }
 
     fn s3_store_config() -> ObjectStoreConfig {
-        ObjectStoreConfig::S3(S3Options {
-            region: Some("us-east-1".to_string()),
-            endpoint_url: None,
-            anonymous: false,
-            allow_http: false,
-            force_path_style: false,
-            network_stream_timeout_seconds: None,
-            requester_pays: false,
-            checksum_algorithm: None,
-        })
+        ObjectStoreConfig::S3(S3Options::default().with_region("us-east-1"))
     }
 
     #[test]

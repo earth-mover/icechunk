@@ -29,6 +29,7 @@ pub enum S3ChecksumAlgorithm {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct S3Options {
     pub region: Option<String>,
     pub endpoint_url: Option<String>,
@@ -48,7 +49,62 @@ fn default_force_path_style() -> bool {
     false
 }
 
+impl Default for S3Options {
+    fn default() -> Self {
+        Self {
+            region: None,
+            endpoint_url: None,
+            anonymous: false,
+            allow_http: false,
+            force_path_style: default_force_path_style(),
+            network_stream_timeout_seconds: None,
+            requester_pays: false,
+            checksum_algorithm: None,
+        }
+    }
+}
+
 impl S3Options {
+    pub fn with_region(mut self, region: impl Into<String>) -> Self {
+        self.region = Some(region.into());
+        self
+    }
+
+    pub fn with_endpoint_url(mut self, endpoint_url: impl Into<String>) -> Self {
+        self.endpoint_url = Some(endpoint_url.into());
+        self
+    }
+
+    pub fn with_anonymous(mut self, anonymous: bool) -> Self {
+        self.anonymous = anonymous;
+        self
+    }
+
+    pub fn with_allow_http(mut self, allow_http: bool) -> Self {
+        self.allow_http = allow_http;
+        self
+    }
+
+    pub fn with_force_path_style(mut self, force_path_style: bool) -> Self {
+        self.force_path_style = force_path_style;
+        self
+    }
+
+    pub fn with_network_stream_timeout_seconds(mut self, seconds: u32) -> Self {
+        self.network_stream_timeout_seconds = Some(seconds);
+        self
+    }
+
+    pub fn with_requester_pays(mut self, requester_pays: bool) -> Self {
+        self.requester_pays = requester_pays;
+        self
+    }
+
+    pub fn with_checksum_algorithm(mut self, algorithm: S3ChecksumAlgorithm) -> Self {
+        self.checksum_algorithm = Some(algorithm);
+        self
+    }
+
     /// Return key-value pairs of non-default configuration for display purposes.
     pub fn info_fields(&self) -> Vec<(&'static str, String)> {
         let mut fields = Vec::new();

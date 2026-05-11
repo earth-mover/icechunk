@@ -315,16 +315,7 @@ fn add_repo_to_config(
 
             RepositoryDefinition::S3 {
                 location: RepoLocation { bucket, prefix: Some(prefix) },
-                object_store_config: S3Options {
-                    region: Some(region),
-                    endpoint_url: None,
-                    anonymous: false,
-                    allow_http: false,
-                    force_path_style: false,
-                    network_stream_timeout_seconds: None,
-                    requester_pays: false,
-                    checksum_algorithm: None,
-                },
+                object_store_config: S3Options::default().with_region(region),
                 credentials: S3Credentials::FromEnv,
                 config: RepositoryConfig::default(),
             }
@@ -349,16 +340,9 @@ fn add_repo_to_config(
 
             RepositoryDefinition::Tigris {
                 location: RepoLocation { bucket, prefix: Some(prefix) },
-                object_store_config: S3Options {
-                    region: Some(region),
-                    endpoint_url: Some(endpoint_url),
-                    anonymous: false,
-                    allow_http: false,
-                    force_path_style: false,
-                    network_stream_timeout_seconds: None,
-                    requester_pays: false,
-                    checksum_algorithm: None,
-                },
+                object_store_config: S3Options::default()
+                    .with_region(region)
+                    .with_endpoint_url(endpoint_url),
                 credentials: S3Credentials::FromEnv,
                 config: RepositoryConfig::default(),
             }

@@ -619,16 +619,24 @@ impl PyS3Options {
 
 impl From<&PyS3Options> for S3Options {
     fn from(options: &PyS3Options) -> Self {
-        S3Options {
-            region: options.region.clone(),
-            endpoint_url: options.endpoint_url.clone(),
-            allow_http: options.allow_http,
-            anonymous: options.anonymous,
-            force_path_style: options.force_path_style,
-            network_stream_timeout_seconds: options.network_stream_timeout_seconds,
-            requester_pays: options.requester_pays,
-            checksum_algorithm: options.checksum_algorithm.map(Into::into),
+        let mut s3 = S3Options::default()
+            .with_allow_http(options.allow_http)
+            .with_anonymous(options.anonymous)
+            .with_force_path_style(options.force_path_style)
+            .with_requester_pays(options.requester_pays);
+        if let Some(region) = options.region.clone() {
+            s3 = s3.with_region(region);
         }
+        if let Some(endpoint_url) = options.endpoint_url.clone() {
+            s3 = s3.with_endpoint_url(endpoint_url);
+        }
+        if let Some(seconds) = options.network_stream_timeout_seconds {
+            s3 = s3.with_network_stream_timeout_seconds(seconds);
+        }
+        if let Some(algo) = options.checksum_algorithm {
+            s3 = s3.with_checksum_algorithm(algo.into());
+        }
+        s3
     }
 }
 
