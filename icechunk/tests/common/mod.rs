@@ -38,6 +38,7 @@ pub(crate) fn make_minio_integration_storage(
             force_path_style: true,
             network_stream_timeout_seconds: None,
             requester_pays: false,
+            checksum_algorithm: None,
         },
         "testbucket".to_string(),
         Some(prefix),
@@ -72,6 +73,7 @@ pub(crate) fn make_tigris_integration_storage(
             force_path_style: false,
             network_stream_timeout_seconds: None,
             requester_pays: false,
+            checksum_algorithm: None,
         },
         bucket,
         Some(prefix),
@@ -101,6 +103,7 @@ pub(crate) fn make_r2_integration_storage(
             force_path_style: false,
             network_stream_timeout_seconds: None,
             requester_pays: false,
+            checksum_algorithm: None,
         },
         Some(bucket),
         Some(prefix),
@@ -139,6 +142,7 @@ pub(crate) fn get_aws_integration_options()
         force_path_style: false,
         network_stream_timeout_seconds: None,
         requester_pays: false,
+        checksum_algorithm: None,
     };
     Ok(res)
 }

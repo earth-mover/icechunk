@@ -216,6 +216,7 @@ pub(crate) fn rustfs_s3_options(endpoint_port: u16) -> S3Options {
         force_path_style: true,
         network_stream_timeout_seconds: None,
         requester_pays: false,
+        checksum_algorithm: None,
     }
 }
 

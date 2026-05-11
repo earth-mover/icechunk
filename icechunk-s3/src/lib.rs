@@ -40,7 +40,8 @@ use futures::{
     stream::{self, BoxStream, FuturesOrdered},
 };
 pub use icechunk_storage::s3_config::{
-    S3Credentials, S3CredentialsFetcher, S3Options, S3StaticCredentials,
+    S3ChecksumAlgorithm, S3Credentials, S3CredentialsFetcher, S3Options,
+    S3StaticCredentials,
 };
 use icechunk_storage::{
     DeleteObjectsResult, GetModifiedResult, ListInfo, Settings, Storage, StorageError,
@@ -294,6 +295,17 @@ pub async fn mk_client(
     Client::from_conf(config)
 }
 
+fn to_sdk_checksum(a: S3ChecksumAlgorithm) -> aws_sdk_s3::types::ChecksumAlgorithm {
+    use aws_sdk_s3::types::ChecksumAlgorithm as Sdk;
+    match a {
+        S3ChecksumAlgorithm::Crc32 => Sdk::Crc32,
+        S3ChecksumAlgorithm::Crc32c => Sdk::Crc32C,
+        S3ChecksumAlgorithm::Crc64Nvme => Sdk::Crc64Nvme,
+        S3ChecksumAlgorithm::Sha1 => Sdk::Sha1,
+        S3ChecksumAlgorithm::Sha256 => Sdk::Sha256,
+    }
+}
+
 fn stream2stream(
     s: ByteStream,
 ) -> Pin<Box<dyn Stream<Item = Result<Bytes, std::io::Error>> + Send>> {
@@ -382,6 +394,10 @@ impl S3Storage {
             .bucket(self.bucket.clone())
             .key(key)
             .body(bytes.into());
+
+        if let Some(algo) = self.config.checksum_algorithm {
+            req = req.checksum_algorithm(to_sdk_checksum(algo));
+        }
 
         if settings.unsafe_use_metadata() {
             if let Some(ct) = content_type {
@@ -501,7 +517,7 @@ impl S3Storage {
             .map(|(part_idx, range)| async move {
                 let body = bytes.slice(range.start as usize..range.end as usize).into();
                 let idx = part_idx as i32 + 1;
-                let req = self
+                let mut req = self
                     .get_client(settings)
                     .await
                     .upload_part()
@@ -510,6 +526,10 @@ impl S3Storage {
                     .key(key)
                     .part_number(idx)
                     .body(body);
+
+                if let Some(algo) = self.config.checksum_algorithm {
+                    req = req.checksum_algorithm(to_sdk_checksum(algo));
+                }
 
                 req.send().await.map(|res| (idx, res))
             })
@@ -781,6 +801,10 @@ impl Storage for S3Storage {
             .delete_objects()
             .bucket(self.bucket.clone())
             .delete(delete);
+
+        if let Some(algo) = self.config.checksum_algorithm {
+            req = req.checksum_algorithm(to_sdk_checksum(algo));
+        }
 
         if self.config.requester_pays {
             req = req.request_payer(aws_sdk_s3::types::RequestPayer::Requester);
@@ -1144,6 +1168,7 @@ mod tests {
             force_path_style: false,
             network_stream_timeout_seconds: None,
             requester_pays: false,
+            checksum_algorithm: None,
         };
         let credentials = S3Credentials::Static(S3StaticCredentials {
             access_key_id: "access_key_id".to_string(),
@@ -1166,7 +1191,7 @@ mod tests {
 
         assert_eq!(
             serialized,
-            r#"{"config":{"region":"us-west-2","endpoint_url":"http://localhost:4200","anonymous":false,"allow_http":true,"force_path_style":false,"network_stream_timeout_seconds":null,"requester_pays":false},"credentials":{"s3_credential_type":"static","access_key_id":"access_key_id","secret_access_key":"secret_access_key","session_token":"session_token","expires_after":null},"bucket":"bucket","prefix":"prefix","can_write":true,"extra_read_headers":[],"extra_write_headers":[]}"#
+            r#"{"config":{"region":"us-west-2","endpoint_url":"http://localhost:4200","anonymous":false,"allow_http":true,"force_path_style":false,"network_stream_timeout_seconds":null,"requester_pays":false,"checksum_algorithm":null},"credentials":{"s3_credential_type":"static","access_key_id":"access_key_id","secret_access_key":"secret_access_key","session_token":"session_token","expires_after":null},"bucket":"bucket","prefix":"prefix","can_write":true,"extra_read_headers":[],"extra_write_headers":[]}"#
         );
 
         let deserialized: S3Storage = serde_json::from_str(&serialized).unwrap();

@@ -24,7 +24,8 @@ use icechunk::{
         ManifestPreloadConfig, ManifestSplitCondition, ManifestSplitDim,
         ManifestSplitDimCondition, ManifestSplittingConfig,
         ManifestVirtualChunkLocationCompressionConfig, RepoUpdateRetryConfig,
-        S3Credentials, S3CredentialsFetcher, S3Options, S3StaticCredentials,
+        S3ChecksumAlgorithm, S3Credentials, S3CredentialsFetcher, S3Options,
+        S3StaticCredentials,
     },
     storage::{self, ConcurrencySettings},
     virtual_chunks::VirtualChunkContainer,
@@ -496,6 +497,40 @@ impl From<PyCredentials> for Credentials {
     }
 }
 
+#[pyclass(name = "ChecksumAlgorithm", eq, eq_int)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PyChecksumAlgorithm {
+    Crc32,
+    Crc32c,
+    Crc64Nvme,
+    Sha1,
+    Sha256,
+}
+
+impl From<PyChecksumAlgorithm> for S3ChecksumAlgorithm {
+    fn from(a: PyChecksumAlgorithm) -> Self {
+        match a {
+            PyChecksumAlgorithm::Crc32 => S3ChecksumAlgorithm::Crc32,
+            PyChecksumAlgorithm::Crc32c => S3ChecksumAlgorithm::Crc32c,
+            PyChecksumAlgorithm::Crc64Nvme => S3ChecksumAlgorithm::Crc64Nvme,
+            PyChecksumAlgorithm::Sha1 => S3ChecksumAlgorithm::Sha1,
+            PyChecksumAlgorithm::Sha256 => S3ChecksumAlgorithm::Sha256,
+        }
+    }
+}
+
+impl From<S3ChecksumAlgorithm> for PyChecksumAlgorithm {
+    fn from(a: S3ChecksumAlgorithm) -> Self {
+        match a {
+            S3ChecksumAlgorithm::Crc32 => PyChecksumAlgorithm::Crc32,
+            S3ChecksumAlgorithm::Crc32c => PyChecksumAlgorithm::Crc32c,
+            S3ChecksumAlgorithm::Crc64Nvme => PyChecksumAlgorithm::Crc64Nvme,
+            S3ChecksumAlgorithm::Sha1 => PyChecksumAlgorithm::Sha1,
+            S3ChecksumAlgorithm::Sha256 => PyChecksumAlgorithm::Sha256,
+        }
+    }
+}
+
 #[pyclass(name = "S3Options", eq)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PyS3Options {
@@ -513,6 +548,8 @@ pub struct PyS3Options {
     pub network_stream_timeout_seconds: Option<u32>,
     #[pyo3(get, set)]
     pub requester_pays: bool,
+    #[pyo3(get, set)]
+    pub checksum_algorithm: Option<PyChecksumAlgorithm>,
 }
 
 impl PyRepr for PyS3Options {
@@ -532,6 +569,12 @@ impl PyRepr for PyS3Options {
                 py_option(&self.network_stream_timeout_seconds),
             ),
             ("requester_pays", py_bool(self.requester_pays)),
+            (
+                "checksum_algorithm",
+                self.checksum_algorithm
+                    .map(|a| format!("icechunk.ChecksumAlgorithm.{a:?}"))
+                    .unwrap_or_else(|| "None".to_string()),
+            ),
         ]
     }
 }
@@ -539,7 +582,8 @@ impl PyRepr for PyS3Options {
 #[pymethods]
 impl PyS3Options {
     #[new]
-    #[pyo3(signature = ( region=None, endpoint_url=None, allow_http=false, anonymous=false, force_path_style=false, network_stream_timeout_seconds=None, requester_pays=false))]
+    #[pyo3(signature = ( region=None, endpoint_url=None, allow_http=false, anonymous=false, force_path_style=false, network_stream_timeout_seconds=None, requester_pays=false, checksum_algorithm=None))]
+    #[expect(clippy::too_many_arguments)]
     pub(crate) fn new(
         region: Option<String>,
         endpoint_url: Option<String>,
@@ -548,6 +592,7 @@ impl PyS3Options {
         force_path_style: bool,
         network_stream_timeout_seconds: Option<u32>,
         requester_pays: bool,
+        checksum_algorithm: Option<PyChecksumAlgorithm>,
     ) -> Self {
         Self {
             region,
@@ -557,6 +602,7 @@ impl PyS3Options {
             force_path_style,
             network_stream_timeout_seconds,
             requester_pays,
+            checksum_algorithm,
         }
     }
 
@@ -581,6 +627,7 @@ impl From<&PyS3Options> for S3Options {
             force_path_style: options.force_path_style,
             network_stream_timeout_seconds: options.network_stream_timeout_seconds,
             requester_pays: options.requester_pays,
+            checksum_algorithm: options.checksum_algorithm.map(Into::into),
         }
     }
 }
@@ -595,6 +642,7 @@ impl From<S3Options> for PyS3Options {
             force_path_style: value.force_path_style,
             network_stream_timeout_seconds: value.network_stream_timeout_seconds,
             requester_pays: value.requester_pays,
+            checksum_algorithm: value.checksum_algorithm.map(Into::into),
         }
     }
 }

@@ -106,6 +106,7 @@ mod tests {
             force_path_style: false,
             network_stream_timeout_seconds: None,
             requester_pays: false,
+            checksum_algorithm: None,
         };
         let credentials = S3Credentials::FromEnv;
         let repo_config = RepositoryConfig::default();

@@ -197,6 +197,7 @@ prop_compose! {
             force_path_style: should_path_style_be_forced,
             network_stream_timeout_seconds,
             requester_pays,
+            checksum_algorithm: None,
         }
     }
 }
