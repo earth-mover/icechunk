@@ -23,6 +23,7 @@ icechunk = { workspace = true, features = ["logs"] }
 
 async-stream.workspace = true
 async-trait.workspace = true
+bytes.workspace = true
 chrono.workspace = true
 futures.workspace = true
 itertools.workspace = true

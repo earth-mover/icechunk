@@ -1392,6 +1392,19 @@ impl Session {
     }
 
     #[instrument(skip(self))]
+    /// Resolve a possibly-relative virtual chunk location to its absolute URL.
+    ///
+    /// `vcc://name/path` URLs are expanded against the session's registered
+    /// virtual chunk containers. Absolute URLs (`s3://`, `gs://`, `file://`, …)
+    /// are returned as-is.
+    pub fn resolve_virtual_location(
+        &self,
+        location: &VirtualChunkLocation,
+    ) -> Result<String, icechunk_format::manifest::VirtualReferenceError> {
+        self.virtual_resolver.expand_location(location.url())
+    }
+
+    #[instrument(skip(self))]
     pub async fn all_virtual_chunk_locations(
         &self,
     ) -> SessionResult<impl Stream<Item = SessionResult<String>> + '_> {

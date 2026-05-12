@@ -274,6 +274,47 @@ class IcechunkStore(Store, SyncMixin):
             key, location, offset, length, checksum, validate_container
         )
 
+    def array_chunk_iterator(
+        self,
+        array_path: str,
+        batch_size: int = 100_000,
+    ) -> AsyncIterator[
+        tuple[
+            "np.ndarray[Any, np.dtype[np.uint32]]",
+            "np.ndarray[Any, np.dtype[np.uint8]]",
+            list[str],
+            "np.ndarray[Any, np.dtype[np.uint64]]",
+            "np.ndarray[Any, np.dtype[np.uint64]]",
+            dict[int, bytes],
+        ]
+    ]:
+        """Async generator of columnar chunk-reference batches for one array.
+
+        Each yielded batch is a 6-tuple::
+
+            (coords, kinds, paths, offsets, lengths, inlined)
+
+            coords:   np.ndarray[uint32, (n, ndim)]  — chunk grid coordinates
+            kinds:    np.ndarray[uint8]              — 1=virtual, 2=native, 3=inline
+            paths:    list[str]                      — URL (virtual) | bare chunk_id (native) | "" (inline)
+            offsets:  np.ndarray[uint64]
+            lengths:  np.ndarray[uint64]
+            inlined:  dict[int, bytes]               — keyed by index within this batch
+
+        ``vcc://`` virtual locations are resolved against the session's
+        registered containers before yielding. Native chunk ids are returned
+        bare — the caller chooses how to render them (e.g. by prepending an
+        S3 prefix). Missing chunks are not yielded.
+
+        Parameters
+        ----------
+        array_path : str
+            Zarr path to the array (e.g. ``"a"`` or ``"/group/var"``).
+        batch_size : int
+            Maximum number of chunks per yielded batch.
+        """
+        return self._store.array_chunk_iterator(array_path, batch_size)
+
     async def set_virtual_ref_async(
         self,
         key: str,
