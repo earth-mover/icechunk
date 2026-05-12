@@ -16,6 +16,31 @@ import numpy as np
 
 from icechunk.types import CommitMethod
 
+@final
+class ChecksumAlgorithm(Enum):
+    """Checksum algorithm to use on S3 write requests.
+
+    When :attr:`S3Options.checksum_algorithm` is unset, the AWS SDK picks its
+    own default for the ``x-amz-checksum-*`` header on ``PutObject``,
+    ``UploadPart``, and ``DeleteObjects``. Some S3-compatible services only
+    accept a subset of algorithms; set this option to override the SDK's
+    choice.
+
+    Attributes
+    ----------
+    Crc32: int
+    Crc32c: int
+    Crc64Nvme: int
+    Sha1: int
+    Sha256: int
+    """
+
+    Crc32 = 0
+    Crc32c = 1
+    Crc64Nvme = 2
+    Sha1 = 3
+    Sha256 = 4
+
 class S3Options:
     """Options for accessing an S3-compatible storage backend"""
     def __new__(
@@ -27,6 +52,7 @@ class S3Options:
         force_path_style: bool = False,
         network_stream_timeout_seconds: int | None = None,
         requester_pays: bool = False,
+        checksum_algorithm: ChecksumAlgorithm | None = None,
     ) -> S3Options:
         """
         Create a new `S3Options` object
@@ -48,6 +74,10 @@ class S3Options:
             If set to 0, timeout is disabled. Default: 60.
         requester_pays: bool
             Enable requester pays for S3 buckets
+        checksum_algorithm: ChecksumAlgorithm | None
+            Override the checksum algorithm used for write requests. Defaults to ``None``,
+            in which case the AWS SDK picks its own default. Set explicitly when
+            targeting an S3-compatible service that rejects the SDK's default.
         """
 
     @property

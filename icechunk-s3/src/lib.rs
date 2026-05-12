@@ -40,7 +40,8 @@ use futures::{
     stream::{self, BoxStream, FuturesOrdered},
 };
 pub use icechunk_storage::s3_config::{
-    S3Credentials, S3CredentialsFetcher, S3Options, S3StaticCredentials,
+    S3ChecksumAlgorithm, S3Credentials, S3CredentialsFetcher, S3Options,
+    S3StaticCredentials,
 };
 use icechunk_storage::{
     DeleteObjectsResult, GetModifiedResult, ListInfo, Settings, Storage, StorageError,
@@ -294,6 +295,17 @@ pub async fn mk_client(
     Client::from_conf(config)
 }
 
+fn to_sdk_checksum(a: S3ChecksumAlgorithm) -> aws_sdk_s3::types::ChecksumAlgorithm {
+    use aws_sdk_s3::types::ChecksumAlgorithm as Sdk;
+    match a {
+        S3ChecksumAlgorithm::Crc32 => Sdk::Crc32,
+        S3ChecksumAlgorithm::Crc32c => Sdk::Crc32C,
+        S3ChecksumAlgorithm::Crc64Nvme => Sdk::Crc64Nvme,
+        S3ChecksumAlgorithm::Sha1 => Sdk::Sha1,
+        S3ChecksumAlgorithm::Sha256 => Sdk::Sha256,
+    }
+}
+
 fn stream2stream(
     s: ByteStream,
 ) -> Pin<Box<dyn Stream<Item = Result<Bytes, std::io::Error>> + Send>> {
@@ -382,6 +394,10 @@ impl S3Storage {
             .bucket(self.bucket.clone())
             .key(key)
             .body(bytes.into());
+
+        if let Some(algo) = self.config.checksum_algorithm {
+            req = req.checksum_algorithm(to_sdk_checksum(algo));
+        }
 
         if settings.unsafe_use_metadata() {
             if let Some(ct) = content_type {
@@ -501,7 +517,7 @@ impl S3Storage {
             .map(|(part_idx, range)| async move {
                 let body = bytes.slice(range.start as usize..range.end as usize).into();
                 let idx = part_idx as i32 + 1;
-                let req = self
+                let mut req = self
                     .get_client(settings)
                     .await
                     .upload_part()
@@ -510,6 +526,10 @@ impl S3Storage {
                     .key(key)
                     .part_number(idx)
                     .body(body);
+
+                if let Some(algo) = self.config.checksum_algorithm {
+                    req = req.checksum_algorithm(to_sdk_checksum(algo));
+                }
 
                 req.send().await.map(|res| (idx, res))
             })
@@ -781,6 +801,10 @@ impl Storage for S3Storage {
             .delete_objects()
             .bucket(self.bucket.clone())
             .delete(delete);
+
+        if let Some(algo) = self.config.checksum_algorithm {
+            req = req.checksum_algorithm(to_sdk_checksum(algo));
+        }
 
         if self.config.requester_pays {
             req = req.request_payer(aws_sdk_s3::types::RequestPayer::Requester);
@@ -1063,14 +1087,15 @@ pub fn new_r2_storage(
         .capture();
     }
 
-    let config = S3Options {
-        region: config.region.or(Some("auto".to_string())),
-        endpoint_url: config
-            .endpoint_url
-            .or(account_id.map(|x| format!("https://{x}.r2.cloudflarestorage.com"))),
-        force_path_style: true,
-        ..config
-    };
+    let mut config = config;
+    if config.region.is_none() {
+        config.region = Some("auto".to_string());
+    }
+    if config.endpoint_url.is_none() {
+        config.endpoint_url =
+            account_id.map(|x| format!("https://{x}.r2.cloudflarestorage.com"));
+    }
+    config.force_path_style = true;
     let st = S3Storage::new(
         config,
         bucket,
@@ -1090,12 +1115,10 @@ pub fn new_tigris_storage(
     credentials: Option<S3Credentials>,
     use_weak_consistency: bool,
 ) -> StorageResult<Arc<dyn Storage + Send + Sync>> {
-    let config = S3Options {
-        endpoint_url: Some(
-            config.endpoint_url.unwrap_or("https://t3.storage.dev".to_string()),
-        ),
-        ..config
-    };
+    let mut config = config;
+    if config.endpoint_url.is_none() {
+        config.endpoint_url = Some("https://t3.storage.dev".to_string());
+    }
     let mut extra_write_headers = Vec::with_capacity(2);
     let mut extra_read_headers = Vec::with_capacity(3);
 
@@ -1136,15 +1159,10 @@ mod tests {
 
     #[tokio_test]
     async fn test_serialize_s3_storage() {
-        let config = S3Options {
-            region: Some("us-west-2".to_string()),
-            endpoint_url: Some("http://localhost:4200".to_string()),
-            allow_http: true,
-            anonymous: false,
-            force_path_style: false,
-            network_stream_timeout_seconds: None,
-            requester_pays: false,
-        };
+        let config = S3Options::default()
+            .with_region("us-west-2")
+            .with_endpoint_url("http://localhost:4200")
+            .with_allow_http(true);
         let credentials = S3Credentials::Static(S3StaticCredentials {
             access_key_id: "access_key_id".to_string(),
             secret_access_key: "secret_access_key".to_string(),
@@ -1166,7 +1184,7 @@ mod tests {
 
         assert_eq!(
             serialized,
-            r#"{"config":{"region":"us-west-2","endpoint_url":"http://localhost:4200","anonymous":false,"allow_http":true,"force_path_style":false,"network_stream_timeout_seconds":null,"requester_pays":false},"credentials":{"s3_credential_type":"static","access_key_id":"access_key_id","secret_access_key":"secret_access_key","session_token":"session_token","expires_after":null},"bucket":"bucket","prefix":"prefix","can_write":true,"extra_read_headers":[],"extra_write_headers":[]}"#
+            r#"{"config":{"region":"us-west-2","endpoint_url":"http://localhost:4200","anonymous":false,"allow_http":true,"force_path_style":false,"network_stream_timeout_seconds":null,"requester_pays":false,"checksum_algorithm":null},"credentials":{"s3_credential_type":"static","access_key_id":"access_key_id","secret_access_key":"secret_access_key","session_token":"session_token","expires_after":null},"bucket":"bucket","prefix":"prefix","can_write":true,"extra_read_headers":[],"extra_write_headers":[]}"#
         );
 
         let deserialized: S3Storage = serde_json::from_str(&serialized).unwrap();

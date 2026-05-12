@@ -82,6 +82,7 @@ from icechunk.snapshots import (
 )
 from icechunk.storage import (
     AnyObjectStoreConfig,
+    ChecksumAlgorithm,
     S3Options,
     Storage,
     StorageConcurrencySettings,
@@ -123,6 +124,7 @@ __all__ = [
     "AzureStaticCredentials",
     "BasicConflictSolver",
     "CachingConfig",
+    "ChecksumAlgorithm",
     "ChunkType",
     "CommitMethod",
     "CompressionAlgorithm",

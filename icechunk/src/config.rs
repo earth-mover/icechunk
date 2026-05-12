@@ -24,7 +24,8 @@ use crate::{
 // Re-export backend-specific types from their canonical modules so that existing
 // consumers (`crate::config::S3Options`, etc.) continue to work.
 pub use crate::storage::s3_config::{
-    S3Credentials, S3CredentialsFetcher, S3Options, S3StaticCredentials,
+    S3ChecksumAlgorithm, S3Credentials, S3CredentialsFetcher, S3Options,
+    S3StaticCredentials,
 };
 #[cfg(feature = "object-store-azure")]
 pub use crate::storage::{
@@ -748,15 +749,7 @@ mod tests {
             .set_virtual_chunk_container(
                 VirtualChunkContainer::new(
                     "s3://bucket1/".to_string(),
-                    ObjectStoreConfig::S3(S3Options {
-                        region: Some("us-east-1".to_string()),
-                        endpoint_url: None,
-                        anonymous: false,
-                        allow_http: false,
-                        force_path_style: false,
-                        network_stream_timeout_seconds: None,
-                        requester_pays: false,
-                    }),
+                    ObjectStoreConfig::S3(S3Options::default().with_region("us-east-1")),
                 )
                 .unwrap(),
             )
@@ -785,15 +778,7 @@ mod tests {
             .set_virtual_chunk_container(
                 VirtualChunkContainer::new(
                     "s3://bucket1/".to_string(),
-                    ObjectStoreConfig::S3(S3Options {
-                        region: Some("us-east-1".to_string()),
-                        endpoint_url: None,
-                        anonymous: false,
-                        allow_http: false,
-                        force_path_style: false,
-                        network_stream_timeout_seconds: None,
-                        requester_pays: false,
-                    }),
+                    ObjectStoreConfig::S3(S3Options::default().with_region("us-east-1")),
                 )
                 .unwrap(),
             )
@@ -805,15 +790,7 @@ mod tests {
             .set_virtual_chunk_container(
                 VirtualChunkContainer::new(
                     "s3://bucket2/".to_string(),
-                    ObjectStoreConfig::S3(S3Options {
-                        region: Some("us-west-2".to_string()),
-                        endpoint_url: None,
-                        anonymous: false,
-                        allow_http: false,
-                        force_path_style: false,
-                        network_stream_timeout_seconds: None,
-                        requester_pays: false,
-                    }),
+                    ObjectStoreConfig::S3(S3Options::default().with_region("us-west-2")),
                 )
                 .unwrap(),
             )
@@ -940,15 +917,7 @@ virtual_chunk_containers:
                 VirtualChunkContainer::new_named(
                     "my-data".to_string(),
                     "s3://bucket1/prefix/".to_string(),
-                    ObjectStoreConfig::S3(S3Options {
-                        region: Some("us-east-1".to_string()),
-                        endpoint_url: None,
-                        anonymous: false,
-                        allow_http: false,
-                        force_path_style: false,
-                        network_stream_timeout_seconds: None,
-                        requester_pays: false,
-                    }),
+                    ObjectStoreConfig::S3(S3Options::default().with_region("us-east-1")),
                 )
                 .unwrap(),
             )
@@ -960,15 +929,7 @@ virtual_chunk_containers:
                 VirtualChunkContainer::new_named(
                     "my-data".to_string(),
                     "s3://bucket2/other/".to_string(),
-                    ObjectStoreConfig::S3(S3Options {
-                        region: Some("us-east-1".to_string()),
-                        endpoint_url: None,
-                        anonymous: false,
-                        allow_http: false,
-                        force_path_style: false,
-                        network_stream_timeout_seconds: None,
-                        requester_pays: false,
-                    }),
+                    ObjectStoreConfig::S3(S3Options::default().with_region("us-east-1")),
                 )
                 .unwrap(),
             )
@@ -982,15 +943,7 @@ virtual_chunk_containers:
                 VirtualChunkContainer::new_named(
                     "my-data".to_string(),
                     "s3://bucket1/prefix/".to_string(),
-                    ObjectStoreConfig::S3(S3Options {
-                        region: Some("us-west-2".to_string()),
-                        endpoint_url: None,
-                        anonymous: false,
-                        allow_http: false,
-                        force_path_style: false,
-                        network_stream_timeout_seconds: None,
-                        requester_pays: false,
-                    }),
+                    ObjectStoreConfig::S3(S3Options::default().with_region("us-west-2")),
                 )
                 .unwrap(),
             )
@@ -1001,15 +954,7 @@ virtual_chunk_containers:
             .set_virtual_chunk_container(
                 VirtualChunkContainer::new(
                     "s3://bucket3/".to_string(),
-                    ObjectStoreConfig::S3(S3Options {
-                        region: Some("us-east-1".to_string()),
-                        endpoint_url: None,
-                        anonymous: false,
-                        allow_http: false,
-                        force_path_style: false,
-                        network_stream_timeout_seconds: None,
-                        requester_pays: false,
-                    }),
+                    ObjectStoreConfig::S3(S3Options::default().with_region("us-east-1")),
                 )
                 .unwrap(),
             )
