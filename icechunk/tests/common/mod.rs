@@ -30,16 +30,11 @@ pub(crate) fn make_minio_integration_storage(
     let (access_key_id, secret_access_key) = permission.keys();
 
     let storage: Arc<dyn Storage + Send + Sync> = new_s3_storage(
-        S3Options {
-            region: Some("us-east-1".to_string()),
-            endpoint_url: Some("http://localhost:4200".to_string()),
-            allow_http: true,
-            anonymous: false,
-            force_path_style: true,
-            network_stream_timeout_seconds: None,
-            requester_pays: false,
-            checksum_algorithm: None,
-        },
+        S3Options::default()
+            .with_region("us-east-1")
+            .with_endpoint_url("http://localhost:4200")
+            .with_allow_http(true)
+            .with_force_path_style(true),
         "testbucket".to_string(),
         Some(prefix),
         Some(S3Credentials::Static(S3StaticCredentials {
@@ -65,16 +60,7 @@ pub(crate) fn make_tigris_integration_storage(
     let region = env::var("TIGRIS_REGION")?;
 
     let storage: Arc<dyn Storage + Send + Sync> = new_tigris_storage(
-        S3Options {
-            region: Some(region),
-            endpoint_url: None,
-            anonymous: false,
-            allow_http: false,
-            force_path_style: false,
-            network_stream_timeout_seconds: None,
-            requester_pays: false,
-            checksum_algorithm: None,
-        },
+        S3Options::default().with_region(region),
         bucket,
         Some(prefix),
         Some(credentials),
@@ -95,16 +81,7 @@ pub(crate) fn make_r2_integration_storage(
     let bucket = env::var("R2_BUCKET")?;
 
     let storage: Arc<dyn Storage + Send + Sync> = new_r2_storage(
-        S3Options {
-            region: None,
-            endpoint_url: None,
-            anonymous: false,
-            allow_http: false,
-            force_path_style: false,
-            network_stream_timeout_seconds: None,
-            requester_pays: false,
-            checksum_algorithm: None,
-        },
+        S3Options::default(),
         Some(bucket),
         Some(prefix),
         Some(env::var("R2_ACCOUNT_ID")?),
@@ -134,16 +111,7 @@ pub(crate) fn get_aws_integration_credentials()
 
 pub(crate) fn get_aws_integration_options()
 -> Result<S3Options, Box<dyn std::error::Error>> {
-    let res = S3Options {
-        region: Some(get_aws_integration_region()?),
-        endpoint_url: None,
-        anonymous: false,
-        allow_http: false,
-        force_path_style: false,
-        network_stream_timeout_seconds: None,
-        requester_pays: false,
-        checksum_algorithm: None,
-    };
+    let res = S3Options::default().with_region(get_aws_integration_region()?);
     Ok(res)
 }
 

@@ -208,16 +208,11 @@ pub(crate) async fn remove_latency_toxic() -> Result<(), Box<dyn Error>> {
 }
 
 pub(crate) fn rustfs_s3_options(endpoint_port: u16) -> S3Options {
-    S3Options {
-        region: Some("us-east-1".to_string()),
-        endpoint_url: Some(format!("http://localhost:{endpoint_port}")),
-        allow_http: true,
-        anonymous: false,
-        force_path_style: true,
-        network_stream_timeout_seconds: None,
-        requester_pays: false,
-        checksum_algorithm: None,
-    }
+    S3Options::default()
+        .with_region("us-east-1")
+        .with_endpoint_url(format!("http://localhost:{endpoint_port}"))
+        .with_allow_http(true)
+        .with_force_path_style(true)
 }
 
 pub(crate) fn rustfs_credentials() -> S3Credentials {

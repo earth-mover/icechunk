@@ -1087,14 +1087,15 @@ pub fn new_r2_storage(
         .capture();
     }
 
-    let config = S3Options {
-        region: config.region.or(Some("auto".to_string())),
-        endpoint_url: config
-            .endpoint_url
-            .or(account_id.map(|x| format!("https://{x}.r2.cloudflarestorage.com"))),
-        force_path_style: true,
-        ..config
-    };
+    let mut config = config;
+    if config.region.is_none() {
+        config.region = Some("auto".to_string());
+    }
+    if config.endpoint_url.is_none() {
+        config.endpoint_url =
+            account_id.map(|x| format!("https://{x}.r2.cloudflarestorage.com"));
+    }
+    config.force_path_style = true;
     let st = S3Storage::new(
         config,
         bucket,
@@ -1114,12 +1115,10 @@ pub fn new_tigris_storage(
     credentials: Option<S3Credentials>,
     use_weak_consistency: bool,
 ) -> StorageResult<Arc<dyn Storage + Send + Sync>> {
-    let config = S3Options {
-        endpoint_url: Some(
-            config.endpoint_url.unwrap_or("https://t3.storage.dev".to_string()),
-        ),
-        ..config
-    };
+    let mut config = config;
+    if config.endpoint_url.is_none() {
+        config.endpoint_url = Some("https://t3.storage.dev".to_string());
+    }
     let mut extra_write_headers = Vec::with_capacity(2);
     let mut extra_read_headers = Vec::with_capacity(3);
 
@@ -1160,16 +1159,10 @@ mod tests {
 
     #[tokio_test]
     async fn test_serialize_s3_storage() {
-        let config = S3Options {
-            region: Some("us-west-2".to_string()),
-            endpoint_url: Some("http://localhost:4200".to_string()),
-            allow_http: true,
-            anonymous: false,
-            force_path_style: false,
-            network_stream_timeout_seconds: None,
-            requester_pays: false,
-            checksum_algorithm: None,
-        };
+        let config = S3Options::default()
+            .with_region("us-west-2")
+            .with_endpoint_url("http://localhost:4200")
+            .with_allow_http(true);
         let credentials = S3Credentials::Static(S3StaticCredentials {
             access_key_id: "access_key_id".to_string(),
             secret_access_key: "secret_access_key".to_string(),

@@ -98,16 +98,7 @@ mod tests {
             bucket: "my-bucket".to_string(),
             prefix: Some("my-prefix".to_string()),
         };
-        let object_store_config = S3Options {
-            region: Some("us-west-2".to_string()),
-            endpoint_url: None,
-            anonymous: false,
-            allow_http: false,
-            force_path_style: false,
-            network_stream_timeout_seconds: None,
-            requester_pays: false,
-            checksum_algorithm: None,
-        };
+        let object_store_config = S3Options::default().with_region("us-west-2");
         let credentials = S3Credentials::FromEnv;
         let repo_config = RepositoryConfig::default();
 

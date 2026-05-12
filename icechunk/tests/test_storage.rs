@@ -53,16 +53,11 @@ async fn mk_s3_storage(
     let (access_key_id, secret_access_key) = permission.keys();
 
     let storage: Arc<dyn Storage + Send + Sync> = new_s3_storage(
-        S3Options {
-            region: Some("us-east-1".to_string()),
-            endpoint_url: Some("http://localhost:4200".to_string()),
-            allow_http: true,
-            anonymous: false,
-            force_path_style: true,
-            network_stream_timeout_seconds: None,
-            requester_pays: false,
-            checksum_algorithm: None,
-        },
+        S3Options::default()
+            .with_region("us-east-1")
+            .with_endpoint_url("http://localhost:4200")
+            .with_allow_http(true)
+            .with_force_path_style(true),
         "testbucket".to_string(),
         Some(prefix.to_string()),
         Some(S3Credentials::Static(S3StaticCredentials {
@@ -93,16 +88,13 @@ async fn mk_s3_object_store_storage(
                 session_token: None,
                 expires_after: None,
             })),
-            Some(S3Options {
-                region: Some("us-east-1".to_string()),
-                endpoint_url: Some("http://localhost:4200".to_string()),
-                allow_http: true,
-                anonymous: false,
-                force_path_style: true,
-                network_stream_timeout_seconds: None,
-                requester_pays: false,
-                checksum_algorithm: None,
-            }),
+            Some(
+                S3Options::default()
+                    .with_region("us-east-1")
+                    .with_endpoint_url("http://localhost:4200")
+                    .with_allow_http(true)
+                    .with_force_path_style(true),
+            ),
         )
         .await?,
     );
