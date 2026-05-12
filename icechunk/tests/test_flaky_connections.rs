@@ -40,6 +40,7 @@ fn create_proxied_storage(
             force_path_style: true,
             network_stream_timeout_seconds: Some(timeout_seconds),
             requester_pays: false,
+            checksum_algorithm: None,
         },
         "testbucket".to_string(),
         Some(format!("{}-{}", prefix, uuid::Uuid::new_v4())),

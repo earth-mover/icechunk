@@ -57,6 +57,7 @@ fn minio_s3_config() -> (S3Options, S3Credentials) {
         force_path_style: true,
         network_stream_timeout_seconds: None,
         requester_pays: false,
+        checksum_algorithm: None,
     };
     let credentials = S3Credentials::Static(S3StaticCredentials {
         access_key_id: "test123".into(),
@@ -132,6 +133,7 @@ async fn create_local_repository(
                 force_path_style: false,
                 network_stream_timeout_seconds: None,
                 requester_pays: false,
+                checksum_algorithm: None,
             }),
         )
         .unwrap(),
@@ -145,6 +147,7 @@ async fn create_local_repository(
                 force_path_style: false,
                 network_stream_timeout_seconds: None,
                 requester_pays: false,
+                checksum_algorithm: None,
             }),
         )
         .unwrap(),
@@ -222,6 +225,7 @@ async fn create_minio_repository(spec_version: SpecVersionBin) -> Repository {
                 force_path_style: true,
                 network_stream_timeout_seconds: None,
                 requester_pays: false,
+                checksum_algorithm: None,
             }),
         )
         .unwrap(),
@@ -235,6 +239,7 @@ async fn create_minio_repository(spec_version: SpecVersionBin) -> Repository {
                 force_path_style: true,
                 network_stream_timeout_seconds: None,
                 requester_pays: false,
+                checksum_algorithm: None,
             }),
         )
         .unwrap(),
@@ -861,6 +866,7 @@ async fn test_zarr_store_with_multiple_virtual_chunk_containers(
                 force_path_style: true,
                 network_stream_timeout_seconds: None,
                 requester_pays: false,
+                checksum_algorithm: None,
             }),
         )
         .unwrap(),
@@ -879,6 +885,7 @@ async fn test_zarr_store_with_multiple_virtual_chunk_containers(
                 force_path_style: false,
                 network_stream_timeout_seconds: None,
                 requester_pays: false,
+                checksum_algorithm: None,
             }),
         )
         .unwrap(),

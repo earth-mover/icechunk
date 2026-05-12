@@ -550,6 +550,7 @@ mod native {
                 force_path_style: opts.force_path_style.unwrap_or(false),
                 network_stream_timeout_seconds: opts.network_stream_timeout_seconds,
                 requester_pays: opts.requester_pays.unwrap_or(false),
+                checksum_algorithm: None,
             }
         }
     }
@@ -937,6 +938,7 @@ fn default_s3_options() -> icechunk::config::S3Options {
         force_path_style: false,
         network_stream_timeout_seconds: None,
         requester_pays: false,
+        checksum_algorithm: None,
     }
 }
 
@@ -968,6 +970,7 @@ impl JsStorage {
             force_path_style: false,
             network_stream_timeout_seconds: None,
             requester_pays: false,
+            checksum_algorithm: None,
         });
         let storage = icechunk::storage::new_s3_storage(opts, bucket, prefix, creds)
             .map_napi_err()?;
@@ -991,6 +994,7 @@ impl JsStorage {
             force_path_style: false,
             network_stream_timeout_seconds: None,
             requester_pays: false,
+            checksum_algorithm: None,
         });
         let storage =
             icechunk::storage::new_r2_storage(opts, bucket, prefix, account_id, creds)
@@ -1015,6 +1019,7 @@ impl JsStorage {
             force_path_style: false,
             network_stream_timeout_seconds: None,
             requester_pays: false,
+            checksum_algorithm: None,
         });
         let weak_consistency = use_weak_consistency.unwrap_or(false);
         let storage = icechunk::storage::new_tigris_storage(
@@ -1044,6 +1049,7 @@ impl JsStorage {
             force_path_style: false,
             network_stream_timeout_seconds: None,
             requester_pays: false,
+            checksum_algorithm: None,
         });
         let storage =
             icechunk::storage::new_s3_object_store_storage(opts, bucket, prefix, creds)

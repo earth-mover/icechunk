@@ -24,7 +24,8 @@ use crate::{
 // Re-export backend-specific types from their canonical modules so that existing
 // consumers (`crate::config::S3Options`, etc.) continue to work.
 pub use crate::storage::s3_config::{
-    S3Credentials, S3CredentialsFetcher, S3Options, S3StaticCredentials,
+    S3ChecksumAlgorithm, S3Credentials, S3CredentialsFetcher, S3Options,
+    S3StaticCredentials,
 };
 #[cfg(feature = "object-store-azure")]
 pub use crate::storage::{
@@ -756,6 +757,7 @@ mod tests {
                         force_path_style: false,
                         network_stream_timeout_seconds: None,
                         requester_pays: false,
+                        checksum_algorithm: None,
                     }),
                 )
                 .unwrap(),
@@ -793,6 +795,7 @@ mod tests {
                         force_path_style: false,
                         network_stream_timeout_seconds: None,
                         requester_pays: false,
+                        checksum_algorithm: None,
                     }),
                 )
                 .unwrap(),
@@ -813,6 +816,7 @@ mod tests {
                         force_path_style: false,
                         network_stream_timeout_seconds: None,
                         requester_pays: false,
+                        checksum_algorithm: None,
                     }),
                 )
                 .unwrap(),
@@ -948,6 +952,7 @@ virtual_chunk_containers:
                         force_path_style: false,
                         network_stream_timeout_seconds: None,
                         requester_pays: false,
+                        checksum_algorithm: None,
                     }),
                 )
                 .unwrap(),
@@ -968,6 +973,7 @@ virtual_chunk_containers:
                         force_path_style: false,
                         network_stream_timeout_seconds: None,
                         requester_pays: false,
+                        checksum_algorithm: None,
                     }),
                 )
                 .unwrap(),
@@ -990,6 +996,7 @@ virtual_chunk_containers:
                         force_path_style: false,
                         network_stream_timeout_seconds: None,
                         requester_pays: false,
+                        checksum_algorithm: None,
                     }),
                 )
                 .unwrap(),
@@ -1009,6 +1016,7 @@ virtual_chunk_containers:
                         force_path_style: false,
                         network_stream_timeout_seconds: None,
                         requester_pays: false,
+                        checksum_algorithm: None,
                     }),
                 )
                 .unwrap(),
