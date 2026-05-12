@@ -16,6 +16,7 @@ import numpy as np
 
 from icechunk.types import CommitMethod
 
+@final
 class ChecksumAlgorithm(Enum):
     """Checksum algorithm to use on S3 write requests.
 
