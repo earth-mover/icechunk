@@ -2546,6 +2546,20 @@ class PyStore:
         checksum: str | datetime.datetime | None,
         validate_container: bool,
     ) -> None: ...
+    def array_chunk_iterator(
+        self,
+        array_path: str,
+        batch_size: int,
+    ) -> AsyncIterator[
+        tuple[
+            np.ndarray[Any, np.dtype[np.uint32]],
+            np.ndarray[Any, np.dtype[np.uint8]],
+            list[str],
+            np.ndarray[Any, np.dtype[np.uint64]],
+            np.ndarray[Any, np.dtype[np.uint64]],
+            dict[int, bytes],
+        ]
+    ]: ...
     async def set_virtual_ref_async(
         self,
         key: str,
