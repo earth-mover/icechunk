@@ -33,18 +33,12 @@ use crate::{
     display::{PyRepr, ReprMode, py_bool},
     errors::{PyIcechunkStoreError, PyIcechunkStoreResult},
     impl_pickle,
-    session::PySession,
+    session::{ChunkType, PySession},
     streams::PyAsyncGenerator,
     virtualrefs::{build_vrefs_from_arrays, do_set_virtual_refs, vrefs_result_to_py},
 };
 
 type KeyRanges = Vec<(String, (Option<ChunkOffset>, Option<ChunkOffset>))>;
-
-/// Per-slot tag values for [`PyStore::array_chunk_iterator`] batches.
-/// Kept in sync with the docstring on that method.
-const KIND_VIRTUAL: u8 = 1;
-const KIND_NATIVE: u8 = 2;
-const KIND_INLINE: u8 = 3;
 
 #[derive(FromPyObject, Clone, Debug)]
 enum ChecksumArgument {
@@ -625,7 +619,7 @@ impl PyStore {
     /// ```text
     /// (coords, kinds, paths, offsets, lengths, inlined)
     ///   coords   : np.ndarray[uint32, (n, ndim)]  — chunk grid coordinates
-    ///   kinds    : np.ndarray[uint8]              — 1=virtual, 2=native, 3=inline
+    ///   kinds    : np.ndarray[uint8]              — values match `ChunkType` (`native=1`, `virtual=2`, `inline=3`)
     ///   paths    : list[str]                      — URL (virtual) | bare chunk_id (native) | "" (inline)
     ///   offsets  : np.ndarray[uint64]
     ///   lengths  : np.ndarray[uint64]
@@ -685,19 +679,19 @@ impl PyStore {
                                         ),
                                     )
                                 })?;
-                            kinds.push(KIND_VIRTUAL);
+                            kinds.push(ChunkType::Virtual as u8);
                             paths.push(url);
                             offsets.push(offset);
                             lengths.push(length);
                         }
                         ChunkPayload::Ref(ChunkRef { id, offset, length }) => {
-                            kinds.push(KIND_NATIVE);
+                            kinds.push(ChunkType::Native as u8);
                             paths.push(format!("{id}"));
                             offsets.push(offset);
                             lengths.push(length);
                         }
                         ChunkPayload::Inline(bytes) => {
-                            kinds.push(KIND_INLINE);
+                            kinds.push(ChunkType::Inline as u8);
                             paths.push(String::new());
                             offsets.push(0);
                             lengths.push(bytes.len() as u64);

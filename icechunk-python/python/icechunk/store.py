@@ -295,7 +295,8 @@ class IcechunkStore(Store, SyncMixin):
             (coords, kinds, paths, offsets, lengths, inlined)
 
             coords:   np.ndarray[uint32, (n, ndim)]  — chunk grid coordinates
-            kinds:    np.ndarray[uint8]              — 1=virtual, 2=native, 3=inline
+            kinds:    np.ndarray[uint8]              — values match `icechunk.ChunkType`
+                                                       (`native=1`, `virtual=2`, `inline=3`)
             paths:    list[str]                      — URL (virtual) | bare chunk_id (native) | "" (inline)
             offsets:  np.ndarray[uint64]
             lengths:  np.ndarray[uint64]

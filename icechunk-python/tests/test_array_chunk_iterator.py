@@ -7,7 +7,7 @@ Per-array async generator. Each batch is a 6-tuple:
 
 where:
     coords:   np.ndarray[uint32, (n, ndim)]  — chunk grid coordinates
-    kinds:    np.ndarray[uint8]              — 1=virtual, 2=native, 3=inline
+    kinds:    np.ndarray[uint8]              — values match `icechunk.ChunkType`
     paths:    list[str]                      — URL (virtual) | chunk_id (native) | "" (inline)
     offsets:  np.ndarray[uint64]
     lengths:  np.ndarray[uint64]
@@ -22,11 +22,7 @@ import numpy as np
 import pytest
 
 import icechunk
-
-
-KIND_VIRTUAL = 1
-KIND_NATIVE = 2
-KIND_INLINE = 3
+from icechunk import ChunkType
 
 
 def _drain(async_iter) -> list:
@@ -97,14 +93,14 @@ def test_iterator_yields_columnar_batch_for_mixed_payloads() -> None:
     assert set(by_coord) == {(0, 0, 0), (0, 0, 1)}
 
     inline_i = by_coord[(0, 0, 0)]
-    assert kinds[inline_i] == KIND_INLINE
+    assert kinds[inline_i] == ChunkType.inline
     assert paths[inline_i] == ""
     assert offsets[inline_i] == 0
     assert lengths[inline_i] == 4
     assert len(inlined[inline_i]) == 4
 
     virt_i = by_coord[(0, 0, 1)]
-    assert kinds[virt_i] == KIND_VIRTUAL
+    assert kinds[virt_i] == ChunkType.virtual
     assert paths[virt_i] == "s3://bucket/data.nc"
     assert offsets[virt_i] == 100
     assert lengths[virt_i] == 50
@@ -134,7 +130,7 @@ def test_iterator_native_chunk_returns_bare_id() -> None:
     batches = _drain(session.store.array_chunk_iterator("v", batch_size=100))
     assert len(batches) == 1
     coords, kinds, paths, offsets, lengths, inlined = batches[0]
-    assert kinds.tolist() == [KIND_NATIVE, KIND_NATIVE]
+    assert kinds.tolist() == [ChunkType.native, ChunkType.native]
     # Bare chunk_id strings — no URL scheme, no '/' separator
     for p in paths:
         assert "://" not in p
