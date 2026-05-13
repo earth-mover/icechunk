@@ -280,12 +280,12 @@ class IcechunkStore(Store, SyncMixin):
         batch_size: int = 100_000,
     ) -> AsyncIterator[
         tuple[
-            "np.ndarray[Any, np.dtype[np.uint32]]",
-            "np.ndarray[Any, np.dtype[np.uint8]]",
-            list[str],
-            "np.ndarray[Any, np.dtype[np.uint64]]",
-            "np.ndarray[Any, np.dtype[np.uint64]]",
-            dict[int, bytes],
+            "np.ndarray[tuple[int, int], np.dtype[np.uint32]]",  # coords (n, ndim)
+            "np.ndarray[tuple[int], np.dtype[np.uint8]]",        # kinds (n,)
+            list[str],                                           # paths
+            "np.ndarray[tuple[int], np.dtype[np.uint64]]",       # offsets (n,)
+            "np.ndarray[tuple[int], np.dtype[np.uint64]]",       # lengths (n,)
+            dict[int, bytes],                                    # inlined
         ]
     ]:
         """Async generator yielding columnar batches of chunk references for one array.
