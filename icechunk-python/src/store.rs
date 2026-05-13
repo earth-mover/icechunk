@@ -612,23 +612,25 @@ impl PyStore {
         )
     }
 
-    /// Per-array async generator of columnar chunk-reference batches.
+    /// Async generator yielding columnar batches of chunk references for one array.
     ///
-    /// Each yielded item is a 6-tuple:
+    /// Each batch is a 6-tuple; row `i` across the columns describes one
+    /// chunk (columns are aligned in lock-step):
     ///
     /// ```text
-    /// (coords, kinds, paths, offsets, lengths, inlined)
-    ///   coords   : np.ndarray[uint32, (n, ndim)]  — chunk grid coordinates
-    ///   kinds    : np.ndarray[uint8]              — values match `ChunkType` (`native=1`, `virtual=2`, `inline=3`)
-    ///   paths    : list[str]                      — URL (virtual) | bare chunk_id (native) | "" (inline)
+    ///   coords   : np.ndarray[uint32, (n, ndim)]  chunk grid coordinates
+    ///   kinds    : np.ndarray[uint8]              values of icechunk.ChunkType
+    ///                                              (native=1, virtual=2, inline=3)
+    ///   paths    : list[str]                      URL (virtual) | chunk_id (native) | "" (inline)
     ///   offsets  : np.ndarray[uint64]
     ///   lengths  : np.ndarray[uint64]
-    ///   inlined  : dict[int, bytes]               — keyed by index within this batch
+    ///   inlined  : dict[int, bytes]               inline rows only, keyed by row
+    ///                                              index; non-inline rows absent
     /// ```
     ///
-    /// `vcc://` virtual locations are expanded against the session's
-    /// resolver. Native chunk ids are returned bare — the caller renders the
-    /// full URL however suits them. Missing chunks are not yielded.
+    /// `vcc://` virtual locations are resolved before yielding. Native chunk
+    /// ids are returned bare — the caller renders the full URL. Missing
+    /// chunks are not yielded.
     fn array_chunk_iterator(
         &self,
         array_path: String,

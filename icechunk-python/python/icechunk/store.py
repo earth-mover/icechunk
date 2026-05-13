@@ -288,31 +288,30 @@ class IcechunkStore(Store, SyncMixin):
             dict[int, bytes],
         ]
     ]:
-        """Async generator of columnar chunk-reference batches for one array.
+        """Async generator yielding columnar batches of chunk references for one array.
 
-        Each yielded batch is a 6-tuple::
+        Each batch is a 6-tuple; row ``i`` across the columns describes one
+        chunk (columns are aligned in lock-step)::
 
-            (coords, kinds, paths, offsets, lengths, inlined)
-
-            coords:   np.ndarray[uint32, (n, ndim)]  — chunk grid coordinates
-            kinds:    np.ndarray[uint8]              — values match `icechunk.ChunkType`
-                                                       (`native=1`, `virtual=2`, `inline=3`)
-            paths:    list[str]                      — URL (virtual) | bare chunk_id (native) | "" (inline)
+            coords:   np.ndarray[uint32, (n, ndim)]  chunk grid coordinates
+            kinds:    np.ndarray[uint8]              values of icechunk.ChunkType
+                                                      (native=1, virtual=2, inline=3)
+            paths:    list[str]                      URL (virtual) | chunk_id (native) | "" (inline)
             offsets:  np.ndarray[uint64]
             lengths:  np.ndarray[uint64]
-            inlined:  dict[int, bytes]               — keyed by index within this batch
+            inlined:  dict[int, bytes]               inline rows only, keyed by row
+                                                      index; non-inline rows absent
 
-        ``vcc://`` virtual locations are resolved against the session's
-        registered containers before yielding. Native chunk ids are returned
-        bare — the caller chooses how to render them (e.g. by prepending an
-        S3 prefix). Missing chunks are not yielded.
+        ``vcc://`` virtual locations are resolved before yielding. Native
+        chunk ids are returned bare — the caller renders the full URL.
+        Missing chunks are not yielded.
 
         Parameters
         ----------
         array_path : str
             Zarr path to the array (e.g. ``"a"`` or ``"/group/var"``).
         batch_size : int
-            Maximum number of chunks per yielded batch.
+            Maximum number of rows per batch.
         """
         return self._store.array_chunk_iterator(array_path, batch_size)
 
