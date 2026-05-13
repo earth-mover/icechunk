@@ -75,54 +75,35 @@ def _mixed_repo() -> icechunk.Repository:
     return repo
 
 
-def test_iterator_columnar_shape_and_dtypes() -> None:
-    repo = _mixed_repo()
-    session = repo.readonly_session(branch="main")
-    batches = _drain(session.store.array_chunk_iterator("a", batch_size=100))
-    # All present chunks fit in one batch.
-    assert len(batches) == 1
-    coords, kinds, paths, offsets, lengths, inlined = batches[0]
-
-    # Two present chunks: one inline + one virtual
-    n = coords.shape[0]
-    assert n == 2
-    assert coords.shape == (2, 3)
-    assert coords.dtype == np.uint32
-
-    assert kinds.shape == (2,)
-    assert kinds.dtype == np.uint8
-
-    assert isinstance(paths, list)
-    assert len(paths) == 2
-
-    assert offsets.shape == (2,)
-    assert offsets.dtype == np.uint64
-    assert lengths.shape == (2,)
-    assert lengths.dtype == np.uint64
-
-    assert isinstance(inlined, dict)
-
-
-def test_iterator_yields_correct_kinds_and_paths() -> None:
+def test_iterator_yields_columnar_batch_for_mixed_payloads() -> None:
+    """Shape/dtype contract + per-row values for a virtual+inline mix."""
     repo = _mixed_repo()
     session = repo.readonly_session(branch="main")
     (batch,) = _drain(session.store.array_chunk_iterator("a", batch_size=100))
     coords, kinds, paths, offsets, lengths, inlined = batch
 
-    # Build a coord-keyed lookup so test isn't sensitive to iteration order.
+    # Columnar contract: aligned uint{32,8,64} numpy arrays + list[str] + dict.
+    n = coords.shape[0]
+    assert n == 2
+    assert coords.shape == (2, 3) and coords.dtype == np.uint32
+    assert kinds.shape == (2,) and kinds.dtype == np.uint8
+    assert offsets.shape == (2,) and offsets.dtype == np.uint64
+    assert lengths.shape == (2,) and lengths.dtype == np.uint64
+    assert isinstance(paths, list) and len(paths) == 2
+    assert isinstance(inlined, dict)
+
+    # Coord-keyed lookup so the test isn't sensitive to iteration order.
     by_coord = {tuple(c.tolist()): i for i, c in enumerate(coords)}
     assert set(by_coord) == {(0, 0, 0), (0, 0, 1)}
 
     inline_i = by_coord[(0, 0, 0)]
-    virt_i = by_coord[(0, 0, 1)]
-
     assert kinds[inline_i] == KIND_INLINE
     assert paths[inline_i] == ""
     assert offsets[inline_i] == 0
     assert lengths[inline_i] == 4
-    assert inline_i in inlined
     assert len(inlined[inline_i]) == 4
 
+    virt_i = by_coord[(0, 0, 1)]
     assert kinds[virt_i] == KIND_VIRTUAL
     assert paths[virt_i] == "s3://bucket/data.nc"
     assert offsets[virt_i] == 100
