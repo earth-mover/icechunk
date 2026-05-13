@@ -666,6 +666,7 @@ impl PyStore {
                     let ci = ci_res?;
                     ndim = ci.coord.0.len();
                     coords_flat.extend_from_slice(&ci.coord.0);
+                    kinds.push(ChunkType::from(&ci.payload) as u8);
                     match ci.payload {
                         ChunkPayload::Virtual(VirtualChunkRef {
                             location, offset, length, ..
@@ -679,19 +680,16 @@ impl PyStore {
                                         ),
                                     )
                                 })?;
-                            kinds.push(ChunkType::Virtual as u8);
                             paths.push(url);
                             offsets.push(offset);
                             lengths.push(length);
                         }
                         ChunkPayload::Ref(ChunkRef { id, offset, length }) => {
-                            kinds.push(ChunkType::Native as u8);
                             paths.push(format!("{id}"));
                             offsets.push(offset);
                             lengths.push(length);
                         }
                         ChunkPayload::Inline(bytes) => {
-                            kinds.push(ChunkType::Inline as u8);
                             paths.push(String::new());
                             offsets.push(0);
                             lengths.push(bytes.len() as u64);
