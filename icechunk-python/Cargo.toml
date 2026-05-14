@@ -20,6 +20,8 @@ crate-type = ["cdylib"]
 
 [dependencies]
 icechunk = { workspace = true, features = ["logs"] }
+icechunk-arrow-object-store.workspace = true
+object_store.workspace = true
 
 async-stream.workspace = true
 async-trait.workspace = true
@@ -31,6 +33,7 @@ numpy.workspace = true
 pyo3.workspace = true
 pyo3-async-runtimes.workspace = true
 pyo3-bytes.workspace = true
+pyo3-object_store = { version = "0.8", default-features = false }
 rand.workspace = true
 rmp-serde.workspace = true
 serde.workspace = true
@@ -46,6 +49,12 @@ clap = { workspace = true, optional = true }
 [features]
 cli = ["clap", "icechunk/cli"]
 default = ["cli"]
+
+[package.metadata.cargo-machete]
+# `icechunk-arrow-object-store` is used in `src/ingest.rs` via path imports
+# (`use icechunk_arrow_object_store::object_store::...`); cargo-machete
+# doesn't trace through that and would otherwise flag it as unused.
+ignored = ["icechunk-arrow-object-store"]
 
 [lints]
 workspace = true

@@ -2409,12 +2409,15 @@ dependencies = [
  "clap",
  "futures",
  "icechunk",
+ "icechunk-arrow-object-store",
  "itertools 0.14.0",
  "miette",
  "numpy",
+ "object_store",
  "pyo3",
  "pyo3-async-runtimes",
  "pyo3-bytes",
+ "pyo3-object_store",
  "rand 0.10.1",
  "rmp-serde",
  "serde",
@@ -3648,6 +3651,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ab53c047fcd1a1d2a8820fe84f05d6be69e9526be40cb03b73f86b6b03e6d87d"
 dependencies = [
  "chrono",
+ "indexmap 2.13.0",
  "indoc",
  "inventory",
  "libc",
@@ -3725,6 +3729,29 @@ dependencies = [
  "pyo3-build-config",
  "quote",
  "syn 2.0.117",
+]
+
+[[package]]
+name = "pyo3-object_store"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a8b80a3a9af26abe307d2c01c13da487166c5c8ac5ac301a4d8e3c270e58ab50"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "chrono",
+ "futures",
+ "http 1.4.0",
+ "humantime",
+ "itertools 0.14.0",
+ "object_store",
+ "percent-encoding",
+ "pyo3",
+ "pyo3-async-runtimes",
+ "serde",
+ "thiserror 1.0.69",
+ "tokio",
+ "url",
 ]
 
 [[package]]
