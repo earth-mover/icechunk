@@ -122,6 +122,7 @@ addopts = ["-ra", "--strict-config", "--strict-markers", "-n", "auto"]
 markers = [
   "gpu",        # need this to run the zarr tests
   "hypothesis", # auto-applied by hypothesis to @given tests
+  "network",    # requires external network access (skipped in offline CI)
 ]
 filterwarnings = [
   "error",

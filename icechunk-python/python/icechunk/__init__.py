@@ -71,6 +71,7 @@ from icechunk.credentials import (
     s3_refreshable_credentials,
     s3_static_credentials,
 )
+from icechunk.ingest import IngestResult, IngestStats, from_zarr
 from icechunk.ops import GCSummary, Update, UpdateType
 from icechunk.repository import Repository
 from icechunk.session import ForkSession, Session
@@ -142,6 +143,8 @@ __all__ = [
     "GcsStaticCredentials",
     "IcechunkError",
     "IcechunkStore",
+    "IngestResult",
+    "IngestStats",
     "ManifestConfig",
     "ManifestFileInfo",
     "ManifestPreloadCondition",
@@ -180,6 +183,7 @@ __all__ = [
     "azure_static_credentials",
     "azure_storage",
     "containers_credentials",
+    "from_zarr",
     "gcs_credentials",
     "gcs_from_env_credentials",
     "gcs_refreshable_credentials",
