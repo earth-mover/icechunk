@@ -21,7 +21,6 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 import numpy as np
-import pytest
 
 import icechunk
 from icechunk import ChunkType
@@ -31,10 +30,7 @@ def _drain(async_iter: AsyncIterator[Any]) -> list[Any]:
     """Synchronously drain an async generator into a list of batches."""
 
     async def _collect() -> list[Any]:
-        out: list[Any] = []
-        async for b in async_iter:
-            out.append(b)
-        return out
+        return [b async for b in async_iter]
 
     return asyncio.run(_collect())
 
@@ -121,9 +117,7 @@ def test_iterator_native_chunk_returns_bare_id() -> None:
     import zarr
 
     group = zarr.group(store=session.store, overwrite=True)
-    arr = group.create_array(
-        "v", shape=(2,), chunks=(1,), dtype="i4", compressors=None
-    )
+    arr = group.create_array("v", shape=(2,), chunks=(1,), dtype="i4", compressors=None)
     arr[0] = 9
     arr[1] = 10
     session.commit("c")
@@ -131,7 +125,7 @@ def test_iterator_native_chunk_returns_bare_id() -> None:
     session = repo.readonly_session(branch="main")
     batches = _drain(session.store.array_chunk_iterator("v", batch_size=100))
     assert len(batches) == 1
-    coords, kinds, paths, offsets, lengths, inlined = batches[0]
+    _coords, kinds, paths, _offsets, lengths, inlined = batches[0]
     assert kinds.tolist() == [ChunkType.native, ChunkType.native]
     # Bare chunk_id strings — no URL scheme, no '/' separator
     for p in paths:
@@ -152,9 +146,7 @@ def test_iterator_batches_split_at_batch_size() -> None:
     import zarr
 
     group = zarr.group(store=session.store, overwrite=True)
-    arr = group.create_array(
-        "b", shape=(7,), chunks=(1,), dtype="i4", compressors=None
-    )
+    arr = group.create_array("b", shape=(7,), chunks=(1,), dtype="i4", compressors=None)
     # Start from 1 — writing 0 (the default fill value) into an int chunk
     # is treated as a fill-value write and won't materialize a chunk.
     for i in range(7):
