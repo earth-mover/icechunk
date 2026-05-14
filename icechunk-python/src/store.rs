@@ -638,7 +638,7 @@ impl PyStore {
     /// the only structural difference is that `paths[i]` holds a bare
     /// `chunk_id` for native rows vs a fully-resolved URL for virtual rows.
     /// Consumers can therefore treat both uniformly as virtual references
-    /// after prepending a URL prefix to the chunk_id.
+    /// after prepending a URL prefix to the `chunk_id`.
     ///
     /// Virtual locations are passed through the session's resolver before
     /// yielding — relative `vcc://name/path` forms expand to absolute URLs;
