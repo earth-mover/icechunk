@@ -40,6 +40,19 @@ pub enum ChunkType {
     Inline = 3,
 }
 
+impl From<&ChunkPayload> for ChunkType {
+    fn from(payload: &ChunkPayload) -> Self {
+        match payload {
+            ChunkPayload::Inline(_) => ChunkType::Inline,
+            ChunkPayload::Virtual(_) => ChunkType::Virtual,
+            ChunkPayload::Ref(_) => ChunkType::Native,
+            // ChunkPayload is non_exhaustive; unknown future variants are
+            // classified as Uninitialized for now.
+            _ => ChunkType::Uninitialized,
+        }
+    }
+}
+
 /// The mode of a session, determining what operations are allowed.
 #[pyclass(name = "SessionMode", module = "icechunk", eq, rename_all = "snake_case")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -743,12 +756,6 @@ impl PySession {
             .await
             .map_err(PyIcechunkStoreError::SessionError)?;
 
-        match res {
-            None => Ok(ChunkType::Uninitialized),
-            Some(ChunkPayload::Inline(_)) => Ok(ChunkType::Inline),
-            Some(ChunkPayload::Virtual(_)) => Ok(ChunkType::Virtual),
-            Some(ChunkPayload::Ref(_)) => Ok(ChunkType::Native),
-            Some(_) => Ok(ChunkType::Uninitialized),
-        }
+        Ok(res.as_ref().map(ChunkType::from).unwrap_or(ChunkType::Uninitialized))
     }
 }
