@@ -101,11 +101,16 @@ class ModelStore(MemoryStore):
 class ArrayNode:
     shape: tuple[int, ...]
     dtype: np.dtype
+    chunks: tuple[int, ...] | None = None
+    fill_value: Any | None = None
+    attrs: dict[str, Any] = field(default_factory=dict)
+    data: np.ndarray | None = None
 
 
 @dataclass(frozen=True)
 class GroupNode:
     children: dict[str, ArrayNode | GroupNode] = field(default_factory=dict)
+    attrs: dict[str, Any] = field(default_factory=dict)
 
     def walk(self, prefix: str = "") -> Iterator[tuple[str, Node]]:
         """Yield ``(path, child)`` for every node, depth-first."""
@@ -132,13 +137,27 @@ class GroupNode:
     def materialize(self, store: zarr.abc.store.Store) -> zarr.Group:
         """Write this tree into *store* and return the root group."""
         root = zarr.open_group(store, mode="w")
+        if self.attrs:
+            root.attrs.update(self.attrs)
 
         def _write(group: zarr.Group, node: GroupNode) -> None:
             for name, child in node.children.items():
                 if isinstance(child, ArrayNode):
-                    group.create_array(name, shape=child.shape, dtype=child.dtype)
+                    kwargs: dict[str, Any] = {"shape": child.shape, "dtype": child.dtype}
+                    if child.chunks is not None:
+                        kwargs["chunks"] = child.chunks
+                    if child.fill_value is not None:
+                        kwargs["fill_value"] = child.fill_value
+                    arr = group.create_array(name, **kwargs)
+                    if child.attrs:
+                        arr.attrs.update(child.attrs)
+                    if child.data is not None:
+                        arr[:] = child.data
                 else:
-                    _write(group.create_group(name), child)
+                    sub = group.create_group(name)
+                    if child.attrs:
+                        sub.attrs.update(child.attrs)
+                    _write(sub, child)
 
         _write(root, self)
         return root

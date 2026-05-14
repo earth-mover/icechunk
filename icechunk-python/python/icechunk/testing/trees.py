@@ -8,6 +8,8 @@ that produces realistic prefix collisions (e.g. ``EC-Earth3`` / ``EC-Earth3-Veg`
 
 from __future__ import annotations
 
+from typing import Any
+
 import hypothesis.strategies as st
 import numpy as np
 
@@ -130,6 +132,53 @@ def unique_sibling_names(
 # ---------------------------------------------------------------------------
 
 
+# Common-case dtype set for fixtures. Excludes structured dtypes (broken in
+# zarr-python per virtualizarr's notes) and complex types (require list
+# fill_values that complicate generation). Add as needed once those paths are
+# exercised.
+_FIXTURE_DTYPES: tuple[np.dtype, ...] = tuple(
+    np.dtype(s) for s in ("uint8", "int16", "int32", "float32", "float64")
+)
+
+
+@st.composite
+def _attrs(draw: st.DrawFn) -> dict[str, Any]:
+    """Small dict of scalar attrs — keeps fixtures bounded and JSON-clean."""
+    keys = draw(
+        st.lists(st.text(min_size=1, max_size=4), min_size=0, max_size=3, unique=True)
+    )
+    return {
+        k: draw(
+            st.one_of(
+                st.integers(min_value=-1000, max_value=1000),
+                st.floats(allow_nan=False, allow_infinity=False, width=32),
+                st.text(max_size=8),
+            )
+        )
+        for k in keys
+    }
+
+
+@st.composite
+def _array_node(draw: st.DrawFn) -> ArrayNode:
+    """An ArrayNode with hypothesis-generated shape/dtype/chunks/attrs/data."""
+    ndim = draw(st.integers(min_value=1, max_value=3))
+    shape = tuple(draw(st.integers(min_value=1, max_value=4)) for _ in range(ndim))
+    dtype = draw(st.sampled_from(_FIXTURE_DTYPES))
+    chunks = tuple(draw(st.integers(min_value=1, max_value=dim)) for dim in shape)
+    attrs = draw(_attrs())
+    write_data = draw(st.booleans())
+    data: np.ndarray | None
+    if write_data:
+        # Deterministic sequential fill — exercises the chunk-write path
+        # without bringing numpy.random's full surface into the test.
+        n = int(np.prod(shape))
+        data = np.arange(n, dtype=dtype).reshape(shape)
+    else:
+        data = None
+    return ArrayNode(shape=shape, dtype=dtype, chunks=chunks, attrs=attrs, data=data)
+
+
 def skeletons(
     *, max_leaves: int = 50, max_children: int = 4
 ) -> st.SearchStrategy[GroupNode]:
@@ -138,12 +187,15 @@ def skeletons(
     Always returns a GroupNode (the root group). Child names are placeholder
     indices ("0", "1", ...); real names are assigned later by ``trees``.
     """
-    leaves = st.just(ArrayNode(shape=(1,), dtype=np.dtype("i4")))
+    leaves: st.SearchStrategy[Node] = _array_node()
 
     def extend(children: st.SearchStrategy[Node]) -> st.SearchStrategy[GroupNode]:
-        return st.lists(children, min_size=1, max_size=max_children).map(
-            lambda child_list: GroupNode(
-                children={str(i): child for i, child in enumerate(child_list)}
+        return st.tuples(
+            st.lists(children, min_size=1, max_size=max_children), _attrs()
+        ).map(
+            lambda pair: GroupNode(
+                children={str(i): child for i, child in enumerate(pair[0])},
+                attrs=pair[1],
             )
         )
 
@@ -184,7 +236,7 @@ def trees(
             if isinstance(child, GroupNode):
                 child, existing_names = rebuild_with_names(child, existing_names)
             children[name] = child
-        return GroupNode(children=children), existing_names
+        return GroupNode(children=children, attrs=group.attrs), existing_names
 
     # Two-step generation: first draw the tree structure (skeletons uses
     # st.recursive which gives good structural shrinking), then assign real
