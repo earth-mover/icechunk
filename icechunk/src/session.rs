@@ -115,7 +115,7 @@ pub enum SessionErrorKind {
     MoveWontOverwrite(String),
     #[error(
         "cannot move `{from}` into itself or its own descendant `{to}`.\n\n\
-         A move would require `{from}` to be both an ancestor and a descendant of itself, which is impossible. \
+         This move would require `{from}` to be both an ancestor and a descendant of itself, which is impossible. \
          If your intent is to nest `{from}`'s contents under a new group at `{to}`, create `{to}` as a new \
          group yourself in a writable_session, then in a rearrange_session move each direct child of `{from}` \
          to `{to}/<child_name>`. Note that `{from}`'s metadata is not carried over to `{to}` — copy any \
