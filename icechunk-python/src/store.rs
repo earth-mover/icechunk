@@ -622,15 +622,27 @@ impl PyStore {
     ///   kinds    : np.ndarray[uint8]              values of icechunk.ChunkType
     ///                                              (native=1, virtual=2, inline=3)
     ///   paths    : list[str]                      URL (virtual) | chunk_id (native) | "" (inline)
-    ///   offsets  : np.ndarray[uint64]
-    ///   lengths  : np.ndarray[uint64]
-    ///   inlined  : dict[int, bytes]               inline rows only, keyed by row
-    ///                                              index; non-inline rows absent
+    ///   offsets  : np.ndarray[uint64]             byte offset within the source
+    ///                                              URL (virtual) or chunk file
+    ///                                              (native); 0 for inline
+    ///   lengths  : np.ndarray[uint64]             byte length; equals
+    ///                                              len(bytes) for inline
+    ///   inlined  : dict[int, bytes]               *Inline rows only*. Keyed by
+    ///                                              the row index `i` in this
+    ///                                              batch. Rows whose kind is
+    ///                                              virtual, native, or missing
+    ///                                              are NOT present in this dict.
     /// ```
     ///
-    /// `vcc://` virtual locations are resolved before yielding. Native chunk
-    /// ids are returned bare — the caller renders the full URL. Missing
-    /// chunks are not yielded.
+    /// Native and virtual rows share the same `(path, offset, length)` shape;
+    /// the only structural difference is that `paths[i]` holds a bare
+    /// `chunk_id` for native rows vs a fully-resolved URL for virtual rows.
+    /// Consumers can therefore treat both uniformly as virtual references
+    /// after prepending a URL prefix to the chunk_id.
+    ///
+    /// Virtual locations are passed through the session's resolver before
+    /// yielding — relative `vcc://name/path` forms expand to absolute URLs;
+    /// absolute URLs pass through unchanged. Missing chunks are not yielded.
     fn array_chunk_iterator(
         &self,
         array_path: String,
