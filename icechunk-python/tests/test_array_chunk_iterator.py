@@ -17,6 +17,8 @@ where:
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator
+from typing import Any
 
 import numpy as np
 import pytest
@@ -25,11 +27,11 @@ import icechunk
 from icechunk import ChunkType
 
 
-def _drain(async_iter) -> list:
+def _drain(async_iter: AsyncIterator[Any]) -> list[Any]:
     """Synchronously drain an async generator into a list of batches."""
 
-    async def _collect():
-        out = []
+    async def _collect() -> list[Any]:
+        out: list[Any] = []
         async for b in async_iter:
             out.append(b)
         return out
