@@ -6,6 +6,7 @@ mod config;
 mod conflicts;
 mod display;
 mod errors;
+mod ingest;
 mod pickle;
 mod repository;
 mod session;
@@ -235,6 +236,9 @@ fn _icechunk_python(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(user_agent, m)?)?;
     m.add_function(wrap_pyfunction!(cli_entrypoint, m)?)?;
     m.add_function(wrap_pyfunction!(_upgrade_icechunk_repository, m)?)?;
+    m.add_class::<ingest::PyIngestStats>()?;
+    m.add_class::<ingest::PyIngestOutcome>()?;
+    m.add_function(wrap_pyfunction!(ingest::py_ingest_zarr, m)?)?;
     m.add("__version__", pep440_version())?;
 
     // Exceptions

@@ -3494,3 +3494,87 @@ class ChunkStorageStats:
     def __str__(self) -> str: ...
     def _repr_html_(self) -> str: ...
     def __add__(self, other: ChunkStorageStats, /) -> ChunkStorageStats: ...
+
+@final
+class IngestStats:
+    """Counters returned after a `py_ingest_zarr` call."""
+
+    @property
+    def keys(self) -> int:
+        """Number of keys (chunks/metadata files) copied."""
+        ...
+
+    @property
+    def bytes(self) -> int:
+        """Total bytes copied."""
+        ...
+
+    def __repr__(self) -> str: ...
+
+@final
+class IngestOutcome:
+    """Final outcome of a `py_ingest_zarr` call."""
+
+    @property
+    def snapshot_id(self) -> str:
+        """Snapshot id of the final commit on the target branch."""
+        ...
+
+    @property
+    def stats(self) -> IngestStats:
+        """Running counters across every batch in this call."""
+        ...
+
+    def __repr__(self) -> str: ...
+
+def py_ingest_zarr(
+    source: object,
+    source_prefix: str,
+    repo: PyRepository,
+    paths: list[str],
+    branch: str,
+    concurrency: int,
+    skip_existing: bool,
+    overwrite: bool,
+    checkpoint_every: int | None = None,
+    message: str | None = None,
+    progress: Callable[[int, int], None] | None = None,
+) -> IngestOutcome:
+    """Copy keys from an obstore ObjectStore into an icechunk repository.
+
+    Drives a series of commits on ``branch``: skeleton + per-array
+    chunk batches of at most ``checkpoint_every`` keys each.
+
+    Parameters
+    ----------
+    source:
+        An obstore-compatible ObjectStore object.
+    source_prefix:
+        Prefix within the source store to treat as the root.
+    repo:
+        Target icechunk repository.
+    paths:
+        List of paths (relative to `source_prefix`) to copy.
+    branch:
+        Target branch.
+    concurrency:
+        Maximum number of concurrent copy tasks per batch.
+    skip_existing:
+        Skip keys already present in the destination.
+    overwrite:
+        Overwrite keys that already exist in the destination.
+    checkpoint_every:
+        Maximum chunk keys per per-array commit. Defaults to 1000 if
+        ``None``.
+    message:
+        Commit message; a generic per-phase default is used if omitted.
+    progress:
+        Optional callback invoked periodically with ``(keys, bytes)``
+        running totals.
+
+    Returns
+    -------
+    IngestOutcome
+        Final snapshot id plus running counters.
+    """
+    ...

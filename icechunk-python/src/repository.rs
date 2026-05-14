@@ -1097,6 +1097,12 @@ impl PySpecVersion {
 pub(crate) struct PyRepository(Arc<RwLock<Repository>>);
 
 impl PyRepository {
+    /// Borrow the underlying repository handle for use by other Rust
+    /// modules (e.g. ingest, which drives sessions itself).
+    pub(crate) fn inner(&self) -> Arc<RwLock<Repository>> {
+        Arc::clone(&self.0)
+    }
+
     pub(crate) fn migrate_1_to_2(
         &self,
         py: Python<'_>,
