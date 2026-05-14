@@ -832,7 +832,7 @@ impl Session {
         // destination's immediate parent must exist and be a group. Deeper
         // ancestors are guaranteed groups when the immediate parent is one
         // (the tree is well-formed).
-        if let Some(parent) = to.ancestors().nth(1) {
+        if let Some(parent) = to.parent() {
             match self.get_node(&parent).await {
                 Ok(NodeSnapshot { node_data: NodeData::Array { .. }, .. }) => {
                     return Err(SessionError::capture(

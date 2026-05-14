@@ -79,6 +79,10 @@ impl Path {
         self.0.ancestors().map(|p| Path(p.to_owned()))
     }
 
+    pub fn parent(&self) -> Option<Path> {
+        self.0.parent().map(|p| Path(p.to_owned()))
+    }
+
     pub fn name(&self) -> Option<&str> {
         self.0.file_name()
     }
