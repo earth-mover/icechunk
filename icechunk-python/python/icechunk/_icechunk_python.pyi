@@ -2553,11 +2553,11 @@ class PyStore:
     ) -> AsyncIterator[
         tuple[
             np.ndarray[tuple[int, int], np.dtype[np.uint32]],  # coords (n, ndim)
-            np.ndarray[tuple[int], np.dtype[np.uint8]],        # kinds (n,)
-            list[str],                                         # paths
-            np.ndarray[tuple[int], np.dtype[np.uint64]],       # offsets (n,)
-            np.ndarray[tuple[int], np.dtype[np.uint64]],       # lengths (n,)
-            dict[int, bytes],                                  # inlined
+            np.ndarray[tuple[int], np.dtype[np.uint8]],  # kinds (n,)
+            list[str],  # paths
+            np.ndarray[tuple[int], np.dtype[np.uint64]],  # offsets (n,)
+            np.ndarray[tuple[int], np.dtype[np.uint64]],  # lengths (n,)
+            dict[int, bytes],  # inlined
         ]
     ]: ...
     async def set_virtual_ref_async(
