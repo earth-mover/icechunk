@@ -141,7 +141,6 @@ jobs:
             target: aarch64-apple-darwin
             architecture: arm64
         node:
-          - "20"
           - "22"
     runs-on: ${{ matrix.settings.host }}
     steps:
@@ -179,7 +178,6 @@ jobs:
         target:
           - x86_64-unknown-linux-gnu
         node:
-          - "20"
           - "22"
     runs-on: ubuntu-latest
     steps:
