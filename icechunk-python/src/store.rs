@@ -40,6 +40,17 @@ use crate::{
 
 type KeyRanges = Vec<(String, (Option<ChunkOffset>, Option<ChunkOffset>))>;
 
+/// Normalize a user-supplied zarr array path string into an icechunk [`Path`].
+///
+/// Prepends a leading `/` if missing (icechunk paths are absolute), then runs
+/// the standard path validator. Used by every `PyStore` method that takes a
+/// caller-supplied array path.
+pub(crate) fn parse_array_path(path: String) -> PyResult<Path> {
+    let path = if path.starts_with('/') { path } else { format!("/{path}") };
+    Path::try_from(path)
+        .map_err(|e| PyValueError::new_err(format!("Invalid array path: {e}")))
+}
+
 #[derive(FromPyObject, Clone, Debug)]
 enum ChecksumArgument {
     #[pyo3(transparent, annotation = "str")]
@@ -437,15 +448,7 @@ impl PyStore {
                     })
                     .try_collect()?;
 
-                let array_path = if !array_path.starts_with("/") {
-                    format!("/{array_path}")
-                } else {
-                    array_path.clone()
-                };
-
-                let path = Path::try_from(array_path).map_err(|e| {
-                    PyValueError::new_err(format!("Invalid array path: {e}"))
-                })?;
+                let path = parse_array_path(array_path.clone())?;
 
                 let res = store
                     .set_virtual_refs(&path, validate_containers, vrefs)
@@ -497,15 +500,7 @@ impl PyStore {
                     })
                     .try_collect()?;
 
-                let array_path = if !array_path.starts_with("/") {
-                    format!("/{array_path}")
-                } else {
-                    array_path.clone()
-                };
-
-                let path = Path::try_from(array_path).map_err(|e| {
-                    PyValueError::new_err(format!("Invalid array path: {e}"))
-                })?;
+                let path = parse_array_path(array_path.clone())?;
 
                 let res = store
                     .set_virtual_refs(&path, validate_containers, vrefs)
@@ -652,13 +647,8 @@ impl PyStore {
         let res = try_stream! {
             let session_lock = store.session();
             let session = session_lock.read_owned().await;
-            let array_path = if array_path.starts_with('/') {
-                array_path
-            } else {
-                format!("/{array_path}")
-            };
-            let path: Path = array_path.try_into().map_err(|e| {
-                PyIcechunkStoreError::PyValueError(format!("Invalid path: {e}"))
+            let path = parse_array_path(array_path).map_err(|e| {
+                PyIcechunkStoreError::PyError(e)
             })?;
             let stream = session
                 .array_chunk_iterator(&path)

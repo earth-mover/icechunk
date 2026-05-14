@@ -3,7 +3,7 @@ use std::sync::Arc;
 use icechunk::{
     Store,
     format::{
-        ChunkIndices, Path,
+        ChunkIndices,
         manifest::{Checksum, VirtualChunkLocation, VirtualChunkRef},
     },
     store::SetVirtualRefsResult,
@@ -87,10 +87,7 @@ pub(crate) async fn do_set_virtual_refs(
     validate_containers: bool,
     vrefs: Vec<(ChunkIndices, VirtualChunkRef)>,
 ) -> PyResult<SetVirtualRefsResult> {
-    let array_path =
-        if !array_path.starts_with("/") { format!("/{array_path}") } else { array_path };
-    let path = Path::try_from(array_path)
-        .map_err(|e| PyValueError::new_err(format!("Invalid array path: {e}")))?;
+    let path = crate::store::parse_array_path(array_path)?;
     store
         .set_virtual_refs(&path, validate_containers, vrefs)
         .await
