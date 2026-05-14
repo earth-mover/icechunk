@@ -155,13 +155,10 @@ def fresh_names(draw: st.DrawFn, pool: set[str], exclude: set[str], n: int) -> l
 
     Notes
     -----
-    Threads the accumulating set of already-drawn names back into
-    *fresh_name* as additional ``exclude`` on each iteration. This is
-    load-bearing: ``similar_name`` uses its ``sibling_names`` argument (i.e.
-    ``exclude`` here) as the **base** for affixed variants like ``"foo_0"``,
-    so feeding prior draws back in is what produces the prefix-collision
-    candidates the strategy exists to generate. ``st.lists(..., unique=True)``
-    cannot do this — its element strategy is fixed at construction time.
+    Each draw passes the already-drawn names as ``exclude`` so that
+    ``similar_name`` can generate affixed variants of them (e.g. ``"foo_0"``).
+    ``st.lists(..., unique=True)`` can't do this — its element strategy is
+    fixed at construction.
     """
     drawn: set[str] = set()
     for _ in range(n):
@@ -355,6 +352,9 @@ def invalid_move(
             )
             return s, d, ERR_OVERWRITE
         case "missing_parent":
+            # pool==exclude: we want names shaped like existing ones (so the
+            # test exercises realistic prefix collisions) but none that
+            # actually exist in the tree.
             s = draw(st.sampled_from(sorted(all_nodes)))
             parent = draw(fresh_name(name_pool, exclude=name_pool))
             leaf = draw(fresh_name(name_pool, exclude=name_pool))
