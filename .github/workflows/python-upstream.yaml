@@ -292,12 +292,10 @@ jobs:
     needs: xarray-backends
     permissions:
       issues: write # needed to create/update issues on nightly failures
-    # TODO(ci): revert to `github.event_name == 'schedule'` after validating
-    # the report step from a labeled PR run.
     if: |
       always()
       && needs.xarray-backends.outputs.pytest-outcome == 'failure'
-      && (github.event_name == 'schedule' || github.event_name == 'pull_request')
+      && github.event_name == 'schedule'
       && github.repository_owner == 'earth-mover'
     steps:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
