@@ -17,6 +17,7 @@ from packaging.version import Version
 
 import icechunk
 import icechunk as ic
+import zarr
 from zarr.core.buffer import Buffer, default_buffer_prototype
 
 pytest.importorskip("hypothesis")
@@ -653,6 +654,12 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         config = data.draw(repository_configs(ic_module=self.ic))
         self.model.initial_spec_version = spec_version
         self.model.spec_version = spec_version
+
+        # spec_version=1 rejects rectilinear chunk grids. The package conftest
+        # globally enables `array.rectilinear_chunks`; turn it off for v1
+        # examples so v3_array_metadata doesn't draw rectilinear grids.
+        if "array.rectilinear_chunks" in zarr.config:
+            zarr.config.set({"array.rectilinear_chunks": spec_version != 1})
 
         if Version(self.ic.__version__).major >= 2:
             self.repo = self.actor.create(
