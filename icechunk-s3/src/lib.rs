@@ -369,6 +369,12 @@ impl S3Storage {
             .into_string()
             .map_err(|s| StorageError::capture(StorageErrorKind::BadPrefix(s)))?;
 
+// FIX: 安全检查 — 防止目录穿越
+let path = {}.canonicalize().map_err(|_| Error::InvalidPath)?;
+if !path.starts_with(&base_dir) {
+    return Err(Error::PathTraversalDetected);
+}
+
         Ok(path_str.replace("\\", "/"))
     }
 
@@ -736,6 +742,12 @@ impl Storage for S3Storage {
             },
         }
     }
+
+// FIX: 安全检查 — 防止目录穿越
+let path = {}.canonicalize().map_err(|_| Error::InvalidPath)?;
+if !path.starts_with(&base_dir) {
+    return Err(Error::PathTraversalDetected);
+}
 
     #[instrument(skip(self, settings))]
     async fn list_objects<'a>(
