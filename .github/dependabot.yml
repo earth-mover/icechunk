@@ -7,6 +7,11 @@ updates:
       day: "monday"
       time: "05:00"
       timezone: "US/Pacific"
+    cooldown:
+      default-days: 7
+      semver-major-days: 14
+      semver-minor-days: 7
+      semver-patch-days: 3
     groups:
       rust-dependencies:
         patterns:
@@ -18,6 +23,8 @@ updates:
       day: "monday"
       time: "05:00"
       timezone: "US/Pacific"
+    cooldown:
+      default-days: 7
     groups:
       actions:
         patterns:
@@ -31,6 +38,9 @@ updates:
       timezone: "US/Pacific"
     cooldown:
       default-days: 7
+      semver-major-days: 14
+      semver-minor-days: 7
+      semver-patch-days: 3
     groups:
       js-dependencies:
         patterns:

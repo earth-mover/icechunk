@@ -32,15 +32,12 @@ fn create_proxied_storage(
 ) -> Result<Arc<S3Storage>, Box<dyn std::error::Error>> {
     let (access_key_id, secret_access_key) = Permission::Modify.keys();
     let storage = S3Storage::new(
-        S3Options {
-            region: Some("us-east-1".to_string()),
-            endpoint_url: Some(format!("http://localhost:{proxy_port}")),
-            allow_http: true,
-            anonymous: false,
-            force_path_style: true,
-            network_stream_timeout_seconds: Some(timeout_seconds),
-            requester_pays: false,
-        },
+        S3Options::default()
+            .with_region("us-east-1")
+            .with_endpoint_url(format!("http://localhost:{proxy_port}"))
+            .with_allow_http(true)
+            .with_force_path_style(true)
+            .with_network_stream_timeout_seconds(timeout_seconds),
         "testbucket".to_string(),
         Some(format!("{}-{}", prefix, uuid::Uuid::new_v4())),
         S3Credentials::Static(S3StaticCredentials {

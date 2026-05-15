@@ -301,6 +301,7 @@ jobs:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: xarray-backends-logs
+          path: xarray-backends-logs
 
       - name: Generate and publish the xarray backends report
         uses: xarray-contrib/issue-from-pytest-log@8e905db353437cda1d6a773de245343fbfc940dd # v1

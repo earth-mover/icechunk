@@ -188,16 +188,22 @@ prop_compose! {
        network_stream_timeout_seconds in option::of(0..120u32),
        requester_pays in any::<bool>(),
     ) ->S3Options {
-        let cpy = endpoint_url.clone();
-        S3Options{
-            region,
-            endpoint_url,
-            anonymous: is_anonymous,
-            allow_http: cpy.is_none_or(|link| !link.starts_with("https")),
-            force_path_style: should_path_style_be_forced,
-            network_stream_timeout_seconds,
-            requester_pays,
+        let allow_http = endpoint_url.as_ref().is_none_or(|link| !link.starts_with("https"));
+        let mut opts = S3Options::default()
+            .with_anonymous(is_anonymous)
+            .with_allow_http(allow_http)
+            .with_force_path_style(should_path_style_be_forced)
+            .with_requester_pays(requester_pays);
+        if let Some(region) = region {
+            opts = opts.with_region(region);
         }
+        if let Some(endpoint_url) = endpoint_url {
+            opts = opts.with_endpoint_url(endpoint_url);
+        }
+        if let Some(secs) = network_stream_timeout_seconds {
+            opts = opts.with_network_stream_timeout_seconds(secs);
+        }
+        opts
     }
 }
 

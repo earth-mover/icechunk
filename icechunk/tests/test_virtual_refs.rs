@@ -49,15 +49,11 @@ use pretty_assertions::assert_eq;
 fn spec_version_cases(#[case] spec_version: SpecVersionBin) {}
 
 fn minio_s3_config() -> (S3Options, S3Credentials) {
-    let config = S3Options {
-        region: Some("us-east-1".to_string()),
-        endpoint_url: Some("http://localhost:4200".to_string()),
-        allow_http: true,
-        anonymous: false,
-        force_path_style: true,
-        network_stream_timeout_seconds: None,
-        requester_pays: false,
-    };
+    let config = S3Options::default()
+        .with_region("us-east-1")
+        .with_endpoint_url("http://localhost:4200")
+        .with_allow_http(true)
+        .with_force_path_style(true);
     let credentials = S3Credentials::Static(S3StaticCredentials {
         access_key_id: "test123".into(),
         secret_access_key: "test123".into(),
@@ -124,28 +120,16 @@ async fn create_local_repository(
     let mut containers = vec![
         VirtualChunkContainer::new(
             "s3://testbucket/".to_string(),
-            ObjectStoreConfig::S3(S3Options {
-                region: Some("us-east-1".to_string()),
-                endpoint_url: None,
-                anonymous: true,
-                allow_http: false,
-                force_path_style: false,
-                network_stream_timeout_seconds: None,
-                requester_pays: false,
-            }),
+            ObjectStoreConfig::S3(
+                S3Options::default().with_region("us-east-1").with_anonymous(true),
+            ),
         )
         .unwrap(),
         VirtualChunkContainer::new(
             "s3://earthmover-sample-data/".to_string(),
-            ObjectStoreConfig::S3(S3Options {
-                region: Some("us-east-1".to_string()),
-                endpoint_url: None,
-                anonymous: true,
-                allow_http: false,
-                force_path_style: false,
-                network_stream_timeout_seconds: None,
-                requester_pays: false,
-            }),
+            ObjectStoreConfig::S3(
+                S3Options::default().with_region("us-east-1").with_anonymous(true),
+            ),
         )
         .unwrap(),
         VirtualChunkContainer::new(
@@ -214,28 +198,24 @@ async fn create_minio_repository(spec_version: SpecVersionBin) -> Repository {
     let containers = vec![
         VirtualChunkContainer::new(
             "s3://testbucket/".to_string(),
-            ObjectStoreConfig::S3Compatible(S3Options {
-                region: Some(String::from("us-east-1")),
-                endpoint_url: Some("http://localhost:4200".to_string()),
-                anonymous: false,
-                allow_http: true,
-                force_path_style: true,
-                network_stream_timeout_seconds: None,
-                requester_pays: false,
-            }),
+            ObjectStoreConfig::S3Compatible(
+                S3Options::default()
+                    .with_region("us-east-1")
+                    .with_endpoint_url("http://localhost:4200")
+                    .with_allow_http(true)
+                    .with_force_path_style(true),
+            ),
         )
         .unwrap(),
         VirtualChunkContainer::new(
             "s3://testbucket/path with spaces/".to_string(),
-            ObjectStoreConfig::S3Compatible(S3Options {
-                region: Some(String::from("us-east-1")),
-                endpoint_url: Some("http://localhost:4200".to_string()),
-                anonymous: false,
-                allow_http: true,
-                force_path_style: true,
-                network_stream_timeout_seconds: None,
-                requester_pays: false,
-            }),
+            ObjectStoreConfig::S3Compatible(
+                S3Options::default()
+                    .with_region("us-east-1")
+                    .with_endpoint_url("http://localhost:4200")
+                    .with_allow_http(true)
+                    .with_force_path_style(true),
+            ),
         )
         .unwrap(),
         VirtualChunkContainer::new(
@@ -853,15 +833,13 @@ async fn test_zarr_store_with_multiple_virtual_chunk_containers(
     let containers = vec![
         VirtualChunkContainer::new(
             "s3://testbucket/".to_string(),
-            ObjectStoreConfig::S3Compatible(S3Options {
-                region: Some(String::from("us-east-1")),
-                endpoint_url: Some("http://localhost:4200".to_string()),
-                anonymous: false,
-                allow_http: true,
-                force_path_style: true,
-                network_stream_timeout_seconds: None,
-                requester_pays: false,
-            }),
+            ObjectStoreConfig::S3Compatible(
+                S3Options::default()
+                    .with_region("us-east-1")
+                    .with_endpoint_url("http://localhost:4200")
+                    .with_allow_http(true)
+                    .with_force_path_style(true),
+            ),
         )
         .unwrap(),
         VirtualChunkContainer::new(
@@ -871,15 +849,9 @@ async fn test_zarr_store_with_multiple_virtual_chunk_containers(
         .unwrap(),
         VirtualChunkContainer::new(
             "s3://earthmover-sample-data/".to_string(),
-            ObjectStoreConfig::S3(S3Options {
-                region: Some(String::from("us-east-1")),
-                endpoint_url: None,
-                anonymous: true,
-                allow_http: false,
-                force_path_style: false,
-                network_stream_timeout_seconds: None,
-                requester_pays: false,
-            }),
+            ObjectStoreConfig::S3(
+                S3Options::default().with_region("us-east-1").with_anonymous(true),
+            ),
         )
         .unwrap(),
     ];
