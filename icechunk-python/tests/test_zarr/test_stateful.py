@@ -75,6 +75,12 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         # called by hypothesis in a random order
         note(f"Creating repository with spec_version={spec_version}, actor={self.actor}")
 
+        # spec_version=1 rejects rectilinear chunk grids. The package conftest
+        # globally enables `array.rectilinear_chunks`; turn it off for v1
+        # examples so zarr's strategies don't draw them here.
+        if "array.rectilinear_chunks" in zarr.config:
+            zarr.config.set({"array.rectilinear_chunks": spec_version != 1})
+
         # Create repository with the drawn spec version
         if Version(self.ic.__version__).major >= 2:
             self.repo = self.actor.create(self.storage, spec_version=spec_version)
@@ -196,6 +202,8 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         if not dry_run:
             assert self.repo.spec_version == 2
             self.model.spec_version = 2
+            if "array.rectilinear_chunks" in zarr.config:
+                zarr.config.set({"array.rectilinear_chunks": True})
 
     @rule(data=st.data(), num_moves=st.integers(min_value=1, max_value=5))
     @precondition(lambda self: self.model.spec_version >= 2)
@@ -256,7 +264,6 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         arr_model = zarr.open_array(self.model, path=array_path)
         arr_store = zarr.open_array(self.store, path=array_path)
         num_chunks = arr_model.cdata_shape
-        chunks = arr_model.chunks
 
         # Draw offset: negative shifts left, positive shifts right
         offset = data.draw(
@@ -268,9 +275,21 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         # - Without resize: data shifting beyond bounds is lost
         should_resize = data.draw(st.booleans())
         if should_resize and any(o > 0 for o in offset):
+            # read_chunk_sizes was added alongside rectilinear support; on older
+            # zarr it doesn't exist but grids are always regular, so synthesize
+            # the same tuple-of-tuples shape from the declared chunk size.
+            if hasattr(arr_model, "read_chunk_sizes"):
+                read_sizes = arr_model.read_chunk_sizes
+            else:
+                read_sizes = tuple(
+                    (c,) * n for c, n in zip(arr_model.chunks, num_chunks, strict=True)
+                )
+            # Shifting right by offset[i] pushes the last offset[i] chunks
+            # past the original extent; grow by their sizes so they fit.
             new_shape = tuple(
-                arr_model.shape[i] + max(0, offset[i]) * chunks[i]
-                for i in range(len(chunks))
+                arr_model.shape[i]
+                + (sum(read_sizes[i][-offset[i] :]) if offset[i] > 0 else 0)
+                for i in range(len(read_sizes))
             )
             note(f"resizing array '{array_path}' from {arr_model.shape} to {new_shape}")
             arr_model.resize(new_shape)
