@@ -2405,6 +2405,7 @@ version = "2.0.4"
 dependencies = [
  "async-stream",
  "async-trait",
+ "bytes",
  "chrono",
  "clap",
  "futures",
