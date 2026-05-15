@@ -284,6 +284,8 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
                 read_sizes = tuple(
                     (c,) * n for c, n in zip(arr_model.chunks, num_chunks, strict=True)
                 )
+            # Shifting right by offset[i] pushes the last offset[i] chunks
+            # past the original extent; grow by their sizes so they fit.
             new_shape = tuple(
                 arr_model.shape[i]
                 + (sum(read_sizes[i][-offset[i] :]) if offset[i] > 0 else 0)
