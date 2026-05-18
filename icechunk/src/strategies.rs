@@ -668,7 +668,9 @@ pub fn large_chunk_indices(dim: usize) -> impl Strategy<Value = ChunkIndices> {
 
 pub fn split_manifest()
 -> impl Strategy<Value = BTreeMap<ChunkIndices, Option<ChunkPayload>>> {
-    any::<u16>().prop_map(usize::from).prop_flat_map(|dim| {
+    // dim must be >= 1: a 0-dim ChunkIndices has only one possible value, so
+    // btree_map cannot reach its min size of 3 unique keys and proptest rejects.
+    (1usize..=5).prop_flat_map(|dim| {
         btree_map(large_chunk_indices(dim), option::of(chunk_payload()), 3..10)
     })
 }
