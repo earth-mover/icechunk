@@ -816,8 +816,10 @@ impl Session {
         self.asset_manager.fail_unless_spec_at_least(SpecVersionBin::V2).inject()?;
         // does the source node exist?
         let node = self.get_node(&from).await?;
-        // self-referential move: to == from or to is a descendant of from
-        if to.starts_with(&from) {
+        // self-referential move: to == from or to is a descendant of from.
+        // `Path::starts_with` is component-based and returns false for equal
+        // absolute paths, so check equality explicitly.
+        if to == from || to.starts_with(&from) {
             return Err(SessionError::capture(
                 SessionErrorKind::MoveIntoSelfOrDescendant { from, to },
             ));

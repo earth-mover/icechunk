@@ -440,7 +440,10 @@ def valid_and_invalid_moves(
                 src, dst, all_arrays, all_groups
             )
             all_nodes = all_arrays | (all_groups - {""})
-            # valid move mutated state; recompute eligibility
+            # name_pool feeds `exclude` in `invalid_move`; if it goes stale
+            # after a rename, generators can draw a name that now exists and
+            # produce a move that's no longer invalid for the intended reason.
+            name_pool = {path.split("/")[-1] for path in all_nodes}
             eligible_invalid_moves = _invalid_move_eligibility(all_nodes, all_arrays)
     return moves
 
