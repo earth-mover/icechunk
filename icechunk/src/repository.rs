@@ -210,6 +210,7 @@ impl Repository {
     ) -> RepositoryResult<Self> {
         debug!("Creating Repository");
         raise_if_cant_write(storage.as_ref(), "Cannot create repository").await?;
+        storage.create_location_if_needed().await.inject()?;
 
         let has_overriden_config = match config {
             Some(ref config) => config != &RepositoryConfig::default(),
@@ -3905,6 +3906,38 @@ mod tests {
         .await?;
         let repo = Repository::open(None, storage, Default::default()).await?;
         assert_eq!(repo.spec_version(), SpecVersionBin::V1);
+        Ok(())
+    }
+
+    #[cfg(feature = "object-store-fs")]
+    #[tokio::test]
+    async fn open_doesnt_create_dir() -> Result<(), Box<dyn Error>> {
+        use crate::new_local_filesystem_storage;
+
+        let repo_dir = TempDir::new()?;
+        let missing = repo_dir.path().join("should_not_exist");
+        let present = repo_dir.path().join("present");
+
+        let storage: Arc<dyn Storage + Send + Sync> =
+            new_local_filesystem_storage(&missing)
+                .await
+                .expect("Creating local storage failed");
+
+        let open_err = Repository::open(None, Arc::clone(&storage), HashMap::new()).await;
+        assert!(matches!(
+            open_err,
+            Err(RepositoryError { kind: RepositoryErrorKind::RepositoryDoesntExist, .. })
+        ));
+        assert!(!missing.exists());
+
+        let storage: Arc<dyn Storage + Send + Sync> =
+            new_local_filesystem_storage(&present)
+                .await
+                .expect("Creating local storage failed");
+        Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
+            .await?;
+        assert!(present.exists());
+
         Ok(())
     }
 
