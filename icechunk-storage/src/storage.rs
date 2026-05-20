@@ -598,9 +598,7 @@ pub trait Storage: fmt::Debug + Display + sealed::Sealed + Sync + Send {
                 Some(Ok(_)) => Ok(false),
                 Some(Err(err)) => Err(err),
             },
-            Err(StorageError { kind: StorageErrorKind::ObjectNotFound, .. }) => {
-                Ok(true)
-            }
+            Err(StorageError { kind: StorageErrorKind::ObjectNotFound, .. }) => Ok(true),
             Err(err) => Err(err),
         }
     }
