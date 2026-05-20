@@ -11,7 +11,9 @@ def test_earthdata_credentials_returns_refreshable() -> None:
 
 
 def test_earthdata_fetcher_pickle_roundtrip() -> None:
-    fetcher = _EarthdataCredentialFetcher("https://example.com/s3credentials", "host", "token")
+    fetcher = _EarthdataCredentialFetcher(
+        "https://example.com/s3credentials", "host", "token"
+    )
     unpickled = pickle.loads(pickle.dumps(fetcher))
     assert unpickled.credentials_url == fetcher.credentials_url
     assert unpickled.host == fetcher.host
