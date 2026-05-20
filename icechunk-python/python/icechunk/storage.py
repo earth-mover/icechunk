@@ -2,6 +2,7 @@ from collections.abc import Callable
 from datetime import datetime
 
 from icechunk._icechunk_python import (
+    ChecksumAlgorithm,
     ChunkType,
     GcsBearerCredential,
     ObjectStoreConfig,
@@ -21,6 +22,7 @@ from icechunk.credentials import (
 
 __all__ = [
     "AnyObjectStoreConfig",
+    "ChecksumAlgorithm",
     "ChunkType",
     "ObjectStoreConfig",
     "S3Options",
@@ -156,6 +158,7 @@ def s3_store(
     force_path_style: bool = False,
     network_stream_timeout_seconds: int = 60,
     requester_pays: bool = False,
+    checksum_algorithm: ChecksumAlgorithm | None = None,
 ) -> ObjectStoreConfig.S3Compatible | ObjectStoreConfig.S3:
     """Build an ObjectStoreConfig instance for S3 or S3 compatible object stores."""
 
@@ -167,6 +170,7 @@ def s3_store(
         network_stream_timeout_seconds=network_stream_timeout_seconds,
         requester_pays=requester_pays,
         anonymous=anonymous,
+        checksum_algorithm=checksum_algorithm,
     )
     return (
         ObjectStoreConfig.S3Compatible(options)
@@ -193,6 +197,7 @@ def s3_storage(
     force_path_style: bool = False,
     network_stream_timeout_seconds: int = 60,
     requester_pays: bool = False,
+    checksum_algorithm: ChecksumAlgorithm | None = None,
 ) -> Storage:
     """Create a Storage instance that saves data in S3 or S3 compatible object stores.
 
@@ -235,6 +240,11 @@ def s3_storage(
         If set to 0, timeout is disabled. Default: 60.
     requester_pays: bool
         Enable requester pays for S3 buckets
+    checksum_algorithm: ChecksumAlgorithm | None
+        Override the checksum algorithm used for write requests (PutObject,
+        UploadPart, DeleteObjects). When ``None`` (default) the AWS SDK picks
+        its own default. Set explicitly when targeting an S3-compatible service
+        that rejects the SDK's default.
     """
 
     credentials = s3_credentials(
@@ -255,6 +265,7 @@ def s3_storage(
         network_stream_timeout_seconds=network_stream_timeout_seconds,
         requester_pays=requester_pays,
         anonymous=anonymous or False,
+        checksum_algorithm=checksum_algorithm,
     )
     return Storage.new_s3(
         config=options,
@@ -320,6 +331,7 @@ def tigris_storage(
     get_credentials: Callable[[], S3StaticCredentials] | None = None,
     scatter_initial_credentials: bool = False,
     network_stream_timeout_seconds: int = 60,
+    checksum_algorithm: ChecksumAlgorithm | None = None,
 ) -> Storage:
     """Create a Storage instance that saves data in Tigris object store.
 
@@ -379,6 +391,7 @@ def tigris_storage(
         allow_http=allow_http,
         network_stream_timeout_seconds=network_stream_timeout_seconds,
         anonymous=anonymous or False,
+        checksum_algorithm=checksum_algorithm,
     )
     return Storage.new_tigris(
         config=options,
@@ -406,6 +419,7 @@ def r2_storage(
     get_credentials: Callable[[], S3StaticCredentials] | None = None,
     scatter_initial_credentials: bool = False,
     network_stream_timeout_seconds: int = 60,
+    checksum_algorithm: ChecksumAlgorithm | None = None,
 ) -> Storage:
     """Create a Storage instance that saves data in Tigris object store.
 
@@ -465,6 +479,7 @@ def r2_storage(
         allow_http=allow_http,
         network_stream_timeout_seconds=network_stream_timeout_seconds,
         anonymous=anonymous or False,
+        checksum_algorithm=checksum_algorithm,
     )
     return Storage.new_r2(
         config=options,

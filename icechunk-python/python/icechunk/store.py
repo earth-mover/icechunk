@@ -274,6 +274,59 @@ class IcechunkStore(Store, SyncMixin):
             key, location, offset, length, checksum, validate_container
         )
 
+    def array_chunk_iterator(
+        self,
+        array_path: str,
+        batch_size: int = 100_000,
+    ) -> AsyncIterator[
+        tuple[
+            "np.ndarray[tuple[int, int], np.dtype[np.uint32]]",  # coords (n, ndim)
+            "np.ndarray[tuple[int], np.dtype[np.uint8]]",  # kinds (n,)
+            list[str],  # paths
+            "np.ndarray[tuple[int], np.dtype[np.uint64]]",  # offsets (n,)
+            "np.ndarray[tuple[int], np.dtype[np.uint64]]",  # lengths (n,)
+            dict[int, bytes],  # inlined
+        ]
+    ]:
+        """Async generator yielding columnar batches of chunk references for one array.
+
+        Each batch is a 6-tuple; row ``i`` across the columns describes one
+        chunk (columns are aligned in lock-step)::
+
+            coords:   np.ndarray[uint32, (n, ndim)]  chunk grid coordinates
+            kinds:    np.ndarray[uint8]              values of icechunk.ChunkType
+                                                      (native=1, virtual=2, inline=3)
+            paths:    list[str]                      URL (virtual) | chunk_id (native) | "" (inline)
+            offsets:  np.ndarray[uint64]             byte offset within the source
+                                                      URL (virtual) or chunk file
+                                                      (native); 0 for inline
+            lengths:  np.ndarray[uint64]             byte length; equals
+                                                      ``len(bytes)`` for inline
+            inlined:  dict[int, bytes]               *Inline rows only*. Keyed by
+                                                      the row index ``i`` in this
+                                                      batch. Rows whose kind is
+                                                      virtual, native, or missing
+                                                      are NOT present in this dict.
+
+        Native and virtual rows share the same ``(path, offset, length)`` shape;
+        the only structural difference is that ``paths[i]`` holds a bare
+        ``chunk_id`` for native rows vs a fully-resolved URL for virtual rows.
+        Consumers can therefore treat both uniformly as virtual references
+        after prepending a URL prefix to the chunk_id.
+
+        Virtual locations are passed through the session's resolver before
+        yielding — relative ``vcc://name/path`` forms expand to absolute URLs;
+        absolute URLs pass through unchanged. Missing chunks are not yielded.
+
+        Parameters
+        ----------
+        array_path : str
+            Zarr path to the array (e.g. ``"a"`` or ``"/group/var"``).
+        batch_size : int
+            Maximum number of rows per batch.
+        """
+        return self._store.array_chunk_iterator(array_path, batch_size)
+
     async def set_virtual_ref_async(
         self,
         key: str,

@@ -166,6 +166,7 @@ icechunk._icechunk_python.S3Credentials.Static
 icechunk._icechunk_python.S3Credentials.Static.__match_args__
 icechunk._icechunk_python.S3Credentials.Static.__new__
 icechunk._icechunk_python.S3Options
+icechunk._icechunk_python.S3Options.checksum_algorithm
 icechunk._icechunk_python.S3Options.requester_pays
 icechunk._icechunk_python.S3StaticCredentials
 icechunk._icechunk_python.SessionMode

@@ -184,8 +184,6 @@ class _XarrayDatasetWriter:
         """
         Write lazy arrays (e.g. dask) to store.
         """
-        from icechunk.dask import session_merge_reduction
-
         if not self._initialized:
             raise ValueError("Please call `write_metadata` first.")
 
@@ -193,6 +191,8 @@ class _XarrayDatasetWriter:
             raise TypeError(
                 "Attempting to execute a write with dask but no dask arrays were detected."
             )
+
+        from icechunk.dask import session_merge_reduction
 
         chunkmanager_store_kwargs = chunkmanager_store_kwargs or {}
         chunkmanager_store_kwargs["load_stored"] = False

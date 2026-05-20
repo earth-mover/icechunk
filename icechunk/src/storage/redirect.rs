@@ -135,15 +135,7 @@ impl RedirectStorage {
 
                 // TODO: make more parameters configurable using the query
                 new_s3_storage(
-                    S3Options {
-                        region: Some(region),
-                        endpoint_url: None,
-                        anonymous: true,
-                        allow_http: false,
-                        force_path_style: false,
-                        network_stream_timeout_seconds: None,
-                        requester_pays: false,
-                    },
+                    S3Options::default().with_region(region).with_anonymous(true),
                     bucket,
                     Some(prefix),
                     Some(S3Credentials::Anonymous),
@@ -162,16 +154,12 @@ impl RedirectStorage {
                 let account_id = repo_account_id(&url)?;
                 debug!(bucket, prefix, region, "Creating R2 Storage from redirect");
                 // TODO: make more parameters configurable using the query
+                let mut opts = S3Options::default().with_anonymous(true);
+                if let Some(region) = region {
+                    opts = opts.with_region(region);
+                }
                 new_r2_storage(
-                    S3Options {
-                        region,
-                        endpoint_url: None,
-                        anonymous: true,
-                        allow_http: false,
-                        force_path_style: false,
-                        network_stream_timeout_seconds: None,
-                        requester_pays: false,
-                    },
+                    opts,
                     Some(bucket),
                     Some(prefix),
                     Some(account_id),
@@ -190,16 +178,12 @@ impl RedirectStorage {
                 let region = repo_region(&url).ok();
                 debug!(bucket, prefix, region, "Creating R2 Storage from redirect");
                 // TODO: make more parameters configurable using the query
+                let mut opts = S3Options::default().with_anonymous(true);
+                if let Some(region) = region {
+                    opts = opts.with_region(region);
+                }
                 new_tigris_storage(
-                    S3Options {
-                        region,
-                        endpoint_url: None,
-                        anonymous: true,
-                        allow_http: false,
-                        force_path_style: false,
-                        network_stream_timeout_seconds: None,
-                        requester_pays: false,
-                    },
+                    opts,
                     bucket,
                     Some(prefix),
                     Some(S3Credentials::Anonymous),

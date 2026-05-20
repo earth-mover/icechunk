@@ -5,6 +5,13 @@
 ### Features
 
 - Add `headers` parameter to `http_storage` and `http_store` to support static HTTP request headers (e.g. `Authorization`).
+- Add `Store.array_chunk_iterator` for batched, per-array enumeration of chunk references (used by the VirtualiZarr parser) ([#2124](https://github.com/earth-mover/icechunk/pull/2124)).
+- Add `checksum_algorithm` option (and `ChecksumAlgorithm` enum) on `S3Options` to override the AWS SDK's default `x-amz-checksum-*` header for S3-compatible providers that reject it ([#2115](https://github.com/earth-mover/icechunk/pull/2115)).
+
+### Fixes
+
+- Reject invalid `session.move` calls (moving a group inside itself, or moving a node under an array) with clearer errors ([#2102](https://github.com/earth-mover/icechunk/pull/2102)).
+- Defer `icechunk.dask` import in `_XarrayDatasetWriter.write_lazy` so it isn't required on early-exit paths ([#2133](https://github.com/earth-mover/icechunk/pull/2133)).
 
 ## Python Icechunk Library 2.0.4
 

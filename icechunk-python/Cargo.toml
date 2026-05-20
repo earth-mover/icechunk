@@ -1,6 +1,6 @@
 [package]
 name = "icechunk-python"
-version = "2.0.4"
+version = "2.0.5"
 description = "Transactional storage engine for Zarr designed for use on cloud object storage"
 readme = "README.md"
 repository = "https://github.com/earth-mover/icechunk"
@@ -23,6 +23,7 @@ icechunk = { workspace = true, features = ["logs"] }
 
 async-stream.workspace = true
 async-trait.workspace = true
+bytes.workspace = true
 chrono.workspace = true
 futures.workspace = true
 itertools.workspace = true

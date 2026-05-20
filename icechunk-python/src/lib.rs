@@ -18,14 +18,14 @@ use std::env;
 
 use config::{
     PyAzureCredentials, PyAzureRefreshableCredential, PyAzureStaticCredentials,
-    PyCachingConfig, PyCompressionAlgorithm, PyCompressionConfig, PyCredentials,
-    PyGcsBearerCredential, PyGcsCredentials, PyGcsStaticCredentials, PyLatencyStorage,
-    PyManifestConfig, PyManifestPreloadCondition, PyManifestPreloadConfig,
-    PyManifestVirtualChunkLocationCompressionConfig, PyObjectStoreConfig,
-    PyRepoUpdateRetryConfig, PyRepositoryConfig, PyS3Credentials, PyS3Options,
-    PyS3StaticCredentials, PyStorage, PyStorageConcurrencySettings, PyStorageObjectInfo,
-    PyStorageRetriesSettings, PyStorageSettings, PyStorageTimeoutSettings,
-    PyVirtualChunkContainer,
+    PyCachingConfig, PyChecksumAlgorithm, PyCompressionAlgorithm, PyCompressionConfig,
+    PyCredentials, PyGcsBearerCredential, PyGcsCredentials, PyGcsStaticCredentials,
+    PyLatencyStorage, PyManifestConfig, PyManifestPreloadCondition,
+    PyManifestPreloadConfig, PyManifestVirtualChunkLocationCompressionConfig,
+    PyObjectStoreConfig, PyRepoUpdateRetryConfig, PyRepositoryConfig, PyS3Credentials,
+    PyS3Options, PyS3StaticCredentials, PyStorage, PyStorageConcurrencySettings,
+    PyStorageObjectInfo, PyStorageRetriesSettings, PyStorageSettings,
+    PyStorageTimeoutSettings, PyVirtualChunkContainer,
 };
 use config::{
     PyManifestSplitCondition, PyManifestSplitDimCondition, PyManifestSplittingConfig,
@@ -200,6 +200,7 @@ fn _icechunk_python(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyAzureStaticCredentials>()?;
     m.add_class::<PyCredentials>()?;
     m.add_class::<PyS3Options>()?;
+    m.add_class::<PyChecksumAlgorithm>()?;
     m.add_class::<PyObjectStoreConfig>()?;
     m.add_class::<PyStorageObjectInfo>()?;
     m.add_class::<PyStorage>()?;
