@@ -41,7 +41,7 @@ pub use icechunk_arrow_object_store::object_store::gcp::GcpCredential;
 
 /// Configuration for the HTTP(S) object store backend.
 ///
-/// The `opts` field accepts `ClientConfigKey` names (in snake_case) as keys and is
+/// The `opts` field accepts `ClientConfigKey` names (in `snake_case`) as keys and is
 /// flattened in serde so that existing serialized configs that stored a plain
 /// `HashMap<String, String>` continue to deserialise correctly.
 ///

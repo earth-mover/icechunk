@@ -828,27 +828,26 @@ impl ObjectStoreBackend for HttpObjectStoreBackend {
         // Inject static headers via ClientOptions so they are sent on every request.
         // Note: if the URL is plain HTTP we must also carry allow_http=true into the
         // ClientOptions to avoid overriding the AllowHttp flag set above.
-        if let Some(hdrs) = &self.headers {
-            if !hdrs.is_empty() {
-                let mut header_map = HeaderMap::new();
-                for (k, v) in hdrs {
-                    let name = HeaderName::from_bytes(k.as_bytes()).map_err(|e| {
-                        other_error(format!("invalid HTTP header name {k:?}: {e}"))
-                    })?;
-                    let value = HeaderValue::from_str(v).map_err(|e| {
-                        other_error(format!("invalid HTTP header value for {k:?}: {e}"))
-                    })?;
-                    header_map.insert(name, value);
-                }
-                let mut client_opts =
-                    ClientOptions::new().with_default_headers(header_map);
-                if !config.contains_key(&ClientConfigKey::AllowHttp)
-                    && self.url.starts_with("http:")
-                {
-                    client_opts = client_opts.with_allow_http(true);
-                }
-                builder = builder.with_client_options(client_opts);
+        if let Some(hdrs) = &self.headers
+            && !hdrs.is_empty()
+        {
+            let mut header_map = HeaderMap::new();
+            for (k, v) in hdrs {
+                let name = HeaderName::from_bytes(k.as_bytes()).map_err(|e| {
+                    other_error(format!("invalid HTTP header name {k:?}: {e}"))
+                })?;
+                let value = HeaderValue::from_str(v).map_err(|e| {
+                    other_error(format!("invalid HTTP header value for {k:?}: {e}"))
+                })?;
+                header_map.insert(name, value);
             }
+            let mut client_opts = ClientOptions::new().with_default_headers(header_map);
+            if !config.contains_key(&ClientConfigKey::AllowHttp)
+                && self.url.starts_with("http:")
+            {
+                client_opts = client_opts.with_allow_http(true);
+            }
+            builder = builder.with_client_options(client_opts);
         }
 
         let builder = builder.with_retry(RetryConfig {
