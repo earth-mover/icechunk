@@ -16,7 +16,7 @@ classifiers = [
   "Programming Language :: Python :: 3.13",
   "Programming Language :: Python :: 3.14",
 ]
-readme = "../README.md"
+readme = "README.md"
 license = { file = "LICENSE" }
 dynamic = ["version"]
 authors = [{ name = "Earthmover", email = "info@earthmover.io" }]
@@ -118,7 +118,6 @@ dev = [
 features = ["pyo3/extension-module"]
 module-name = "icechunk._icechunk_python"
 python-source = "python"
-exclude = ["README.md"]
 
 [tool.uv]
 # Rebuild package when any Rust files change
