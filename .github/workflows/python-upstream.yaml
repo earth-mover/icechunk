@@ -37,7 +37,7 @@ jobs:
       || github.event_name == 'schedule'
       }}
     steps:
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
       - name: Install Just
         run: sudo snap install --edge --classic just
       - name: Stand up MinIO
@@ -63,7 +63,7 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Build wheels
-        uses: PyO3/maturin-action@423a6347767a8b16e65c2a7a7042e4a921528da8 # v1
+        uses: PyO3/maturin-action@db323e2cf5679b7feb8bcb561a36b27a0bc19e79 # v1
         with:
           working-directory: icechunk-python
           # target: ${{ matrix.platform.target }}
@@ -141,7 +141,7 @@ jobs:
       - name: Restore cached hypothesis directory
         id: restore-hypothesis-cache
         if: always()
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
           path: icechunk-python/.hypothesis/
           key: cache-hypothesis-${{ runner.os }}-${{ github.run_id }}
@@ -173,7 +173,7 @@ jobs:
       - name: Save cached hypothesis directory
         id: save-hypothesis-cache
         if: always()
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
           path: icechunk-python/.hypothesis/
           key: cache-hypothesis-${{ runner.os }}-${{ github.run_id }}
@@ -197,11 +197,11 @@ jobs:
       || github.event_name == 'schedule'
       }}
     steps:
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           path: "icechunk"
 
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           repository: "pydata/xarray"
           path: "xarray"
@@ -217,7 +217,7 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Build wheels
-        uses: PyO3/maturin-action@423a6347767a8b16e65c2a7a7042e4a921528da8 # v1
+        uses: PyO3/maturin-action@db323e2cf5679b7feb8bcb561a36b27a0bc19e79 # v1
         with:
           working-directory: icechunk/icechunk-python
           args: --release --out dist --find-interpreter
