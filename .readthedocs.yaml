@@ -11,6 +11,9 @@ build:
       - cd icechunk-python && maturin build && pip install "$(ls ../target/wheels/*.whl | head -n 1)" && pip install --group docs
       - mamba list
       - cd docs
+    build:
+      html:
+        - DISABLE_MKDOCS_2_WARNING=true mkdocs build --site-dir $READTHEDOCS_OUTPUT/html
 
 conda:
   environment: docs/doc-env.yml
