@@ -8,7 +8,7 @@ env:
   RUSTFLAGS: "-D warnings -W unreachable-pub -W bare-trait-objects"
   RUSTUP_MAX_RETRIES: 10
   # update RUST_CHANNEL and CARGO_DENY in sync
-  RUST_CHANNEL: '1.91.0'
+  RUST_CHANNEL: '1.91.1'
   CARGO_DENY_VERSION: '0.18.9'
 
 on:
@@ -20,7 +20,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
       - name: Stand up MinIO
         run: |
           docker compose up -d minio
@@ -44,7 +44,7 @@ jobs:
           rustup default ${{ env.RUST_CHANNEL }}
 
       - name: Cache Dependencies
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           # workspaces: "rust -> target"
           key: ${{ env.RUST_CHANNEL }}

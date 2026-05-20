@@ -29,12 +29,12 @@ jobs:
       #pull-requests: read
     env:
       #CC: deny_c
-      RUST_CHANNEL: '1.91.0'
+      RUST_CHANNEL: '1.91.1'
 
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           ref: ${{ github.event.pull_request.head.sha }}
 
@@ -45,7 +45,7 @@ jobs:
           rustup default ${{ env.RUST_CHANNEL }}
 
       - name: Cache Dependencies
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           # workspaces: "rust -> target"
           key: windows-${{ env.RUST_CHANNEL }}
