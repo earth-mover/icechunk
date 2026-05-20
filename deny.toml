@@ -10,6 +10,14 @@ ignore = [
   # Transitive dev-dependency: noxious-client -> noxious -> bmrng -> loom 0.4 -> generator 0.6
   # bmrng 0.4 pins loom ^0.4 which pins generator ^0.6; upstream hasn't updated
   "RUSTSEC-2020-0151",
+  # rustls-webpki 0.101.7 name constraint bugs: transitive dep via aws-smithy-http-client
+  # -> rustls 0.21. No upgrade path until AWS SDK drops rustls 0.21. Low impact: reachable
+  # only after signature verification and requires CA misissuance to exploit.
+  "RUSTSEC-2026-0098",
+  "RUSTSEC-2026-0099",
+  # rustls-webpki v0.101.7 has a panic related to certificate list revocation.
+  # we don't enable the `clr` feature that would trigger it.
+  "RUSTSEC-2026-0104",
 ]
 
 [licenses]
