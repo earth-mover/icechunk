@@ -37,7 +37,7 @@ jobs:
       || github.event_name == 'schedule'
       }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
       - name: Install Just
         run: sudo snap install --edge --classic just
       - name: Stand up MinIO
@@ -53,17 +53,17 @@ jobs:
               sleep 3
           done
           docker compose exec -T minio mc alias set minio http://minio:9000 minio123 minio123
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Build wheels
-        uses: PyO3/maturin-action@v1
+        uses: PyO3/maturin-action@423a6347767a8b16e65c2a7a7042e4a921528da8 # v1
         with:
           working-directory: icechunk-python
           # target: ${{ matrix.platform.target }}
@@ -141,7 +141,7 @@ jobs:
       - name: Restore cached hypothesis directory
         id: restore-hypothesis-cache
         if: always()
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: icechunk-python/.hypothesis/
           key: cache-hypothesis-${{ runner.os }}-${{ github.run_id }}
@@ -173,7 +173,7 @@ jobs:
       - name: Save cached hypothesis directory
         id: save-hypothesis-cache
         if: always()
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: icechunk-python/.hypothesis/
           key: cache-hypothesis-${{ runner.os }}-${{ github.run_id }}
@@ -184,7 +184,7 @@ jobs:
           && steps.pytest-icechunk.outcome == 'failure'
           && github.event_name == 'schedule'
           && github.repository_owner == 'earth-mover'
-        uses: xarray-contrib/issue-from-pytest-log@v1
+        uses: xarray-contrib/issue-from-pytest-log@8e905db353437cda1d6a773de245343fbfc940dd # v1
         with:
           log-path: icechunk-python/output-pytest-log.jsonl
 
@@ -197,27 +197,27 @@ jobs:
       || github.event_name == 'schedule'
       }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
           path: "icechunk"
 
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
           repository: "pydata/xarray"
           path: "xarray"
           fetch-depth: 0 # Fetch all history for all branches and tags.
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Build wheels
-        uses: PyO3/maturin-action@v1
+        uses: PyO3/maturin-action@423a6347767a8b16e65c2a7a7042e4a921528da8 # v1
         with:
           working-directory: icechunk/icechunk-python
           args: --release --out dist --find-interpreter
@@ -270,7 +270,7 @@ jobs:
           && steps.pytest-xarray-backends.outcome == 'failure'
           && github.event_name == 'schedule'
           && github.repository_owner == 'earth-mover'
-        uses: xarray-contrib/issue-from-pytest-log@v1
+        uses: xarray-contrib/issue-from-pytest-log@8e905db353437cda1d6a773de245343fbfc940dd # v1
         with:
           log-path: icechunk/icechunk-python/output-pytest-log.jsonl
           issue-title: "Nightly Xarray backends tests failed"
