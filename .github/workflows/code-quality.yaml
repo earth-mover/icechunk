@@ -71,8 +71,6 @@ jobs:
           uvx --with mypy --with zarr --with hypothesis --with xarray --with dask mypy python
 
       - name: Run pre-commit checks (skip Rust)
-        uses: pre-commit/action@2c7b3805fd2a0fd8c1884dcaebf91fc102a13ecd # v3.0.1
-        with:
-          extra_args: --all-files
-        env:
-          SKIP: rust-pre-commit-fast,rust-pre-commit,rust-pre-commit-ci
+        shell: bash
+        run: |
+          SKIP="rust-pre-commit-fast,rust-pre-commit,rust-pre-commit-ci" uvx prek==0.4.1 run --all-files
