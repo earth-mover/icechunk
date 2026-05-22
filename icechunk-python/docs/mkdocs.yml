@@ -255,7 +255,9 @@ nav:
   - Related Projects: related-projects.md
   - Blog: blog-posts.md
   - Reference:
-    - Spec: reference/spec.md
+    - Spec:
+      - v2 (current): reference/spec.md
+      - v1: reference/spec-v1.md
     - Version Policy: reference/version-policy.md
     - Python API Reference:
       - reference/index.md
