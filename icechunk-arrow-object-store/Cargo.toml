@@ -21,7 +21,7 @@ async-trait.workspace = true
 bytes.workspace = true
 chrono.workspace = true
 futures.workspace = true
-http = { workspace = true, optional = true }
+http.workspace = true
 object_store.workspace = true
 rand.workspace = true
 serde.workspace = true
@@ -44,7 +44,7 @@ default = ["s3", "gcs", "azure", "http", "fs"]
 s3 = ["object_store/aws"]
 gcs = ["object_store/gcp"]
 azure = ["object_store/azure"]
-http = ["object_store/http", "dep:http"]
+http = ["object_store/http"]
 fs = ["object_store/fs"]
 
 [lints]
