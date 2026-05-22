@@ -1,11 +1,5 @@
 # Changelog
 
-## Python Icechunk Library 2.0.6
-
-### Features
-
-- Add `headers` parameter to `http_storage` and `http_store` to support static HTTP request headers (e.g. `Authorization`).
-
 ## Python Icechunk Library 2.0.5
 
 ### Features
