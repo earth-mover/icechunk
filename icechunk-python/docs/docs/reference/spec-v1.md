@@ -4,7 +4,8 @@ title: Specification
 # Icechunk Specification, version 1
 
 !!! Note
-    See also [spec version 2](./spec.md).
+
+    This is the spec for the original Icechunk on-disk format (spec version 1), used by Icechunk 1.x. The current format is [spec version 2](./spec.md), used by Icechunk 2.x.
 
 !!! Note
 

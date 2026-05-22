@@ -2,7 +2,7 @@
 
 ## On-Disk Format
 
-The Icechunk on-disk format is defined by the format specification ("Icechunk Spec"), which is versioned by a single integer. The spec version increments if and only if there is an on-disk incompatible change, as defined by the [spec document](./spec.md).
+The Icechunk on-disk format is defined by the format specification ("Icechunk Spec"), which is versioned by a single integer. The spec version increments if and only if there is an on-disk incompatible change. The current spec is [version 2](./spec.md) (used by Icechunk 2.x); the previous format is documented in [version 1](./spec-v1.md) (used by Icechunk 1.x).
 
 ## Library Versions
 
