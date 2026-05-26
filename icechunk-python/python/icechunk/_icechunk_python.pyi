@@ -3496,6 +3496,15 @@ class ChunkStorageStats:
     def __add__(self, other: ChunkStorageStats, /) -> ChunkStorageStats: ...
 
 @final
+class CollisionPolicy(Enum):
+    """How to react when the destination already contains a key the
+    source wants to write."""
+
+    Fail = ...
+    Skip = ...
+    Overwrite = ...
+
+@final
 class IngestStats:
     """Counters returned after a `py_ingest_zarr` call."""
 
@@ -3529,13 +3538,11 @@ class IngestOutcome:
 
 def py_ingest_zarr(
     source: object,
-    source_prefix: str,
     repo: PyRepository,
     paths: list[str],
     branch: str,
     concurrency: int,
-    skip_existing: bool,
-    overwrite: bool,
+    on_collision: CollisionPolicy,
     checkpoint_every: int | None = None,
     message: str | None = None,
     progress: Callable[[int, int], None] | None = None,
@@ -3544,37 +3551,5 @@ def py_ingest_zarr(
 
     Drives a series of commits on ``branch``: skeleton + per-array
     chunk batches of at most ``checkpoint_every`` keys each.
-
-    Parameters
-    ----------
-    source:
-        An obstore-compatible ObjectStore object.
-    source_prefix:
-        Prefix within the source store to treat as the root.
-    repo:
-        Target icechunk repository.
-    paths:
-        List of paths (relative to `source_prefix`) to copy.
-    branch:
-        Target branch.
-    concurrency:
-        Maximum number of concurrent copy tasks per batch.
-    skip_existing:
-        Skip keys already present in the destination.
-    overwrite:
-        Overwrite keys that already exist in the destination.
-    checkpoint_every:
-        Maximum chunk keys per per-array commit. Defaults to 1000 if
-        ``None``.
-    message:
-        Commit message; a generic per-phase default is used if omitted.
-    progress:
-        Optional callback invoked periodically with ``(keys, bytes)``
-        running totals.
-
-    Returns
-    -------
-    IngestOutcome
-        Final snapshot id plus running counters.
     """
     ...

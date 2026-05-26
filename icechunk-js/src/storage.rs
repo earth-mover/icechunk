@@ -255,6 +255,10 @@ impl icechunk_storage::sealed::Sealed for JsCallbackStorage {}
 #[async_trait]
 #[typetag::serde(name = "js_callback_storage")]
 impl Storage for JsCallbackStorage {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
     fn storage_info(&self) -> StorageInfo {
         StorageInfo { backend_type: "JsCallback", fields: vec![] }
     }

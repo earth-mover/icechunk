@@ -51,6 +51,10 @@ impl sealed::Sealed for LoggingStorage {}
 #[async_trait]
 #[typetag::serde]
 impl Storage for LoggingStorage {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
     fn storage_info(&self) -> StorageInfo {
         self.backend.storage_info()
     }

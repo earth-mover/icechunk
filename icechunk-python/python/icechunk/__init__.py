@@ -71,7 +71,7 @@ from icechunk.credentials import (
     s3_refreshable_credentials,
     s3_static_credentials,
 )
-from icechunk.ingest import IngestResult, IngestStats, from_zarr
+from icechunk.ingest import CollisionPolicy, IngestResult, IngestStats, from_zarr
 from icechunk.ops import GCSummary, Update, UpdateType
 from icechunk.repository import Repository
 from icechunk.session import ForkSession, Session
@@ -125,6 +125,7 @@ __all__ = [
     "BasicConflictSolver",
     "CachingConfig",
     "ChunkType",
+    "CollisionPolicy",
     "CommitMethod",
     "CompressionAlgorithm",
     "CompressionConfig",

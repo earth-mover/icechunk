@@ -14,12 +14,14 @@ import icechunk
 import zarr
 import zarr.storage
 from icechunk.ingest import IngestResult
+from icechunk.testing.models import ArrayNode, GroupNode
 
 
 @pytest.fixture
-def src_store(tmp_path) -> zarr.storage.ObjectStore:  # type: ignore[no-untyped-def]
+def src_store(tmp_path) -> tuple[zarr.storage.ObjectStore, icechunk.Storage]:  # type: ignore[no-untyped-def]
     """A zarr 3.x store backed by an obstore LocalStore (cross-library
-    safe, unlike MemoryStore which can't be cloned across crates).
+    safe, unlike MemoryStore which can't be cloned across crates), paired
+    with an `icechunk.Storage` pointing at the same path for `from_zarr`.
     Builds one tiny array we can sanity-check after copy."""
     raw = obstore.store.LocalStore(str(tmp_path))
     src = zarr.storage.ObjectStore(raw)
@@ -31,16 +33,19 @@ def src_store(tmp_path) -> zarr.storage.ObjectStore:  # type: ignore[no-untyped-
         dtype="uint8",
     )
     arr[:] = np.arange(16, dtype="uint8").reshape(4, 4)
-    return src
+    return src, icechunk.local_filesystem_storage(str(tmp_path))
 
 
-def test_from_zarr_roundtrip(src_store: zarr.storage.ObjectStore) -> None:
+def test_from_zarr_roundtrip(
+    src_store: tuple[zarr.storage.ObjectStore, icechunk.Storage],
+) -> None:
+    _src, src_storage = src_store
     repo = icechunk.Repository.create(icechunk.in_memory_storage())
 
-    result = icechunk.from_zarr(src_store, repo, message="ingest test")
+    result = icechunk.from_zarr(src_storage, repo, message="ingest test")
 
     assert isinstance(result, IngestResult)
-    assert result.stats.keys >= 5  # root + array zarr.json + 4 chunks
+    assert result.stats.keys == 6  # root + array zarr.json + 4 chunks
     assert result.stats.bytes > 0
     assert result.snapshot_id
 
@@ -54,19 +59,28 @@ def test_from_zarr_roundtrip(src_store: zarr.storage.ObjectStore) -> None:
 
 def test_from_zarr_rejects_unsupported_source() -> None:
     repo = icechunk.Repository.create(icechunk.in_memory_storage())
-    bogus = zarr.storage.MemoryStore()
-    with pytest.raises(NotImplementedError):
-        icechunk.from_zarr(bogus, repo)
+    # Anything that is not an `icechunk.Storage` must be rejected.
+    with pytest.raises(TypeError):
+        icechunk.from_zarr(object(), repo)
 
 
-def _make_src(tmp_path_or_str: str, value: int) -> zarr.storage.ObjectStore:
-    """Build a tiny source store with a single 1-element array filled with `value`."""
+def make_src(tmp_path_or_str: str, value: int) -> icechunk.Storage:
+    """Build a tiny source store with a single 1-element array filled with `value`
+    and return an `icechunk.Storage` pointing at the same directory."""
     raw = obstore.store.LocalStore(tmp_path_or_str)
     src = zarr.storage.ObjectStore(raw)
-    root = zarr.create_group(store=src, overwrite=True)
-    arr = root.create_array(name="x", shape=(1,), chunks=(1,), dtype="uint8")
-    arr[:] = np.array([value], dtype="uint8")
-    return src
+    tree = GroupNode(
+        children={
+            "x": ArrayNode(
+                shape=(1,),
+                dtype=np.dtype("uint8"),
+                chunks=(1,),
+                data=np.array([value], dtype="uint8"),
+            ),
+        },
+    )
+    tree.materialize(src)
+    return icechunk.local_filesystem_storage(tmp_path_or_str)
 
 
 def test_overwrite_clobbers(tmp_path_factory: pytest.TempPathFactory) -> None:
@@ -74,16 +88,21 @@ def test_overwrite_clobbers(tmp_path_factory: pytest.TempPathFactory) -> None:
     src1_dir = tmp_path_factory.mktemp("src1")
     src2_dir = tmp_path_factory.mktemp("src2")
 
-    src1 = _make_src(str(src1_dir), value=42)
-    src2 = _make_src(str(src2_dir), value=99)
+    src1 = make_src(str(src1_dir), value=42)
+    src2 = make_src(str(src2_dir), value=99)
 
     repo = icechunk.Repository.create(icechunk.in_memory_storage())
 
     # First ingest — no collision yet
     icechunk.from_zarr(src1, repo, message="first")
 
-    # Second ingest with overwrite=True — should replace
-    result = icechunk.from_zarr(src2, repo, overwrite=True, message="overwrite")
+    # Second ingest with on_collision=Overwrite — should replace
+    result = icechunk.from_zarr(
+        src2,
+        repo,
+        on_collision=icechunk.CollisionPolicy.Overwrite,
+        message="overwrite",
+    )
 
     assert isinstance(result, IngestResult)
     sess = repo.readonly_session(branch="main")
@@ -93,27 +112,22 @@ def test_overwrite_clobbers(tmp_path_factory: pytest.TempPathFactory) -> None:
 
 
 def test_overwrite_collision_raises(tmp_path_factory: pytest.TempPathFactory) -> None:
-    """overwrite=False (default) raises ValueError when a key already exists."""
+    """The default Fail policy raises ValueError when a key already exists."""
     src1_dir = tmp_path_factory.mktemp("src1")
     src2_dir = tmp_path_factory.mktemp("src2")
 
-    src1 = _make_src(str(src1_dir), value=1)
-    src2 = _make_src(str(src2_dir), value=2)
+    src1 = make_src(str(src1_dir), value=1)
+    src2 = make_src(str(src2_dir), value=2)
 
     repo = icechunk.Repository.create(icechunk.in_memory_storage())
     icechunk.from_zarr(src1, repo, message="first")
 
     with pytest.raises(ValueError):
-        icechunk.from_zarr(src2, repo, overwrite=False, message="collision")
+        icechunk.from_zarr(src2, repo, message="collision")
 
 
 def test_session_sink_rejected(tmp_path: pytest.TempPathFactory) -> None:
-    """Session sinks were removed when the ingest core became resumable.
-
-    The resumable shape drives its own sessions and commits per batch,
-    so the only meaningful sink is a Repository. Passing a Session
-    should raise TypeError.
-    """
+    """Passing a Session as the sink must raise TypeError; only Repository is accepted."""
     raw = obstore.store.LocalStore(str(tmp_path))
     src = zarr.storage.ObjectStore(raw)
     root = zarr.create_group(store=src, overwrite=True)
@@ -123,8 +137,9 @@ def test_session_sink_rejected(tmp_path: pytest.TempPathFactory) -> None:
     repo = icechunk.Repository.create(icechunk.in_memory_storage())
     session = repo.writable_session("main")
 
+    src_storage = icechunk.local_filesystem_storage(str(tmp_path))
     with pytest.raises(TypeError):
-        icechunk.from_zarr(src, session, message="session sink test")
+        icechunk.from_zarr(src_storage, session, message="session sink test")
 
 
 def test_progress_callback_called(tmp_path: pytest.TempPathFactory) -> None:
@@ -144,10 +159,10 @@ def test_progress_callback_called(tmp_path: pytest.TempPathFactory) -> None:
     def cb(stats: IngestStats) -> None:
         calls.append(stats)
 
-    icechunk.from_zarr(src, repo, on_progress=cb, message="progress test")
+    src_storage = icechunk.local_filesystem_storage(str(tmp_path))
+    icechunk.from_zarr(src_storage, repo, on_progress=cb, message="progress test")
 
     assert len(calls) >= 1, "progress callback was never called"
-    # Keys should be non-decreasing across calls
     for i in range(1, len(calls)):
         assert calls[i].keys >= calls[i - 1].keys
         assert calls[i].bytes >= calls[i - 1].bytes
@@ -160,8 +175,9 @@ def test_empty_source(tmp_path: pytest.TempPathFactory) -> None:
     zarr.create_group(store=src, overwrite=True)
 
     repo = icechunk.Repository.create(icechunk.in_memory_storage())
-    result = icechunk.from_zarr(src, repo, message="empty source")
+    src_storage = icechunk.local_filesystem_storage(str(tmp_path))
+    result = icechunk.from_zarr(src_storage, repo, message="empty source")
 
     assert isinstance(result, IngestResult)
-    assert result.stats.keys >= 1  # at least the root zarr.json
+    assert result.stats.keys == 1  # root zarr.json
     assert result.snapshot_id

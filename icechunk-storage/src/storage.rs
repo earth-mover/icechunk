@@ -9,6 +9,7 @@ use futures::{
 use itertools::Itertools as _;
 use serde::{Deserialize, Serialize};
 use std::{
+    any::Any,
     cmp::{max, min},
     ffi::OsString,
     fmt::Display,
@@ -455,6 +456,17 @@ pub struct StorageInfo {
 #[async_trait]
 #[typetag::serde(tag = "type")]
 pub trait Storage: fmt::Debug + Display + sealed::Sealed + Sync + Send {
+    /// Runtime downcast escape hatch. Callers that need access to
+    /// concrete-impl-specific methods (e.g. ingest extracting an
+    /// `ObjectStoreBackend` from `ObjectStorage`) use this.
+    ///
+    /// The cleaner alternative — adding a typed method like
+    /// `fn object_store_backend(&self) -> Option<Arc<dyn ObjectStoreBackend>>`
+    /// — would force `icechunk-storage` to depend on the `object_store`
+    /// crate, breaking the I/O-agnostic design of this layer. See
+    /// `notes/ingest-roadmap.md` for the full rationale.
+    fn as_any(&self) -> &dyn Any;
+
     /// Return structured metadata about this storage backend for display/repr.
     fn storage_info(&self) -> StorageInfo;
 

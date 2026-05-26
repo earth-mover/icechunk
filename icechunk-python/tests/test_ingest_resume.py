@@ -18,30 +18,49 @@ import icechunk
 import zarr
 import zarr.storage
 from icechunk.ingest import IngestResult
+from icechunk.testing.models import ArrayNode, GroupNode
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
+# TODO(constants): expose from Rust
 PROP_PHASE = "icechunk.ingest.phase"
 PROP_CURSORS = "icechunk.ingest.cursors"
 CURSOR_DONE = "DONE"
 
 
-def _make_source(directory: str) -> zarr.storage.ObjectStore:
-    """Build a small multi-array source hierarchy."""
+def make_source(
+    directory: str,
+) -> tuple[zarr.storage.ObjectStore, icechunk.Storage]:
+    """Build a small multi-array source hierarchy.
+
+    Returns the zarr writer store (used by tests that introspect the source
+    via the zarr API) paired with an `icechunk.Storage` pointing at the same
+    directory (used as the `from_zarr` source).
+
+    Two arrays with several chunks each so the cursor map is non-trivial.
+    """
     raw = obstore.store.LocalStore(directory)
     src = zarr.storage.ObjectStore(raw)
-    root = zarr.create_group(store=src, overwrite=True)
-
-    # Two arrays with several chunks each so the cursor map is non-trivial.
-    arr_a = root.create_array("temperature", shape=(4, 4), chunks=(2, 2), dtype="f4")
-    arr_a[:] = np.arange(16, dtype="f4").reshape(4, 4)
-
-    arr_b = root.create_array("humidity", shape=(4,), chunks=(2,), dtype="f4")
-    arr_b[:] = np.array([10.0, 20.0, 30.0, 40.0], dtype="f4")
-
-    return src
+    tree = GroupNode(
+        children={
+            "temperature": ArrayNode(
+                shape=(4, 4),
+                dtype=np.dtype("f4"),
+                chunks=(2, 2),
+                data=np.arange(16, dtype="f4").reshape(4, 4),
+            ),
+            "humidity": ArrayNode(
+                shape=(4,),
+                dtype=np.dtype("f4"),
+                chunks=(2,),
+                data=np.array([10.0, 20.0, 30.0, 40.0], dtype="f4"),
+            ),
+        },
+    )
+    tree.materialize(src)
+    return src, icechunk.local_filesystem_storage(directory)
 
 
 # ---------------------------------------------------------------------------
@@ -55,7 +74,7 @@ def test_resume_state_visible_in_commit_properties(
     """After a successful ingest the latest commit's metadata must have
     phase='complete' and every array cursor set to DONE."""
     src_dir = tmp_path_factory.mktemp("src")
-    src = _make_source(str(src_dir))
+    _src_store, src = make_source(str(src_dir))
 
     repo = icechunk.Repository.create(icechunk.in_memory_storage())
 
@@ -102,15 +121,17 @@ def test_second_call_short_circuits_after_complete(
     """Calling from_zarr a second time with overwrite=True against an already
     complete repo should succeed and yield a new snapshot id."""
     src_dir = tmp_path_factory.mktemp("src")
-    src = _make_source(str(src_dir))
+    _src_store, src = make_source(str(src_dir))
 
     repo = icechunk.Repository.create(icechunk.in_memory_storage())
 
     first = icechunk.from_zarr(src, repo)
     assert isinstance(first, IngestResult)
 
-    # Second call — same source, same repo, overwrite=True.
-    second = icechunk.from_zarr(src, repo, overwrite=True)
+    # Second call — same source, same repo, on_collision=Overwrite.
+    second = icechunk.from_zarr(
+        src, repo, on_collision=icechunk.CollisionPolicy.Overwrite
+    )
     assert isinstance(second, IngestResult)
 
     # A new snapshot must have been created.
@@ -143,7 +164,7 @@ def test_resume_after_partial_skeleton(
     Then from_zarr is called and must complete the ingest successfully.
     """
     src_dir = tmp_path_factory.mktemp("src")
-    src = _make_source(str(src_dir))
+    src_store, src = make_source(str(src_dir))
 
     repo = icechunk.Repository.create(icechunk.in_memory_storage())
 
@@ -152,9 +173,9 @@ def test_resume_after_partial_skeleton(
     # This simulates what the Rust skeleton phase does before it commits.
     session = repo.writable_session("main")
 
-    # Collect zarr.json paths directly from the filesystem (avoids
-    # async obstore complexity in test setup).
-    zarr_json_keys = [str(p.relative_to(src_dir)) for p in src_dir.rglob("zarr.json")]
+    # zarr.json metadata keys: root plus one per non-root node.
+    src_tree = GroupNode.from_store(src_store)
+    zarr_json_keys = ["zarr.json"] + [f"{p}/zarr.json" for p in src_tree.nodes()]
 
     # Write each zarr.json into the icechunk session via the async store
     # interface. IcechunkStore.set() requires a zarr Buffer, not raw bytes.

@@ -1,34 +1,36 @@
 """User-facing entry point for byte-faithful ingest of a zarr v3 store
 into an icechunk repository.
 
-The Rust binding (`py_ingest_zarr`) drives the entire copy: it opens
-writable sessions on the target branch, copies keys batch-by-batch,
-commits between batches so progress is durable, and returns the final
-snapshot id. This module sniffs the Python `source` argument, unwraps
-it down to an obstore `ObjectStore` instance, and dispatches.
+The Rust binding (`py_ingest_zarr`) takes an `icechunk.Storage`
+(same type used to construct the destination `Repository`) and an
+`icechunk.Repository`, then drives the entire copy: opens writable
+sessions on the target branch, copies keys batch-by-batch, commits
+between batches so progress is durable, and returns the final
+snapshot id.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal
+from typing import Literal
 
-from icechunk._icechunk_python import py_ingest_zarr
+from icechunk._icechunk_python import CollisionPolicy, py_ingest_zarr
 from icechunk.repository import Repository
+from icechunk.storage import Storage
 
-if TYPE_CHECKING:
-    import zarr.abc.store
-
-__all__ = ["IngestResult", "IngestStats", "from_zarr"]
+__all__ = ["CollisionPolicy", "IngestResult", "IngestStats", "from_zarr"]
 
 
 @dataclass(frozen=True, slots=True)
 class IngestStats:
-    """Counters reported after an ingest."""
+    """Counters reported during and after an ingest. All fields
+    reflect state that is durable on the branch at the moment a
+    progress callback fires."""
 
     keys: int
     bytes: int
+    arrays_done: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,57 +41,19 @@ class IngestResult:
     stats: IngestStats
 
 
-def _unwrap_source(source: zarr.abc.store.Store) -> object:
-    """Return the underlying obstore `ObjectStore` for a supported zarr Store.
-
-    Raises `NotImplementedError` if `source` is not a recognised
-    obstore-backed zarr Store.
-    """
-    # Lazy imports: callers that don't use ingest shouldn't need obstore
-    # or zarr at import time.
-    try:
-        import zarr.storage
-    except ImportError as e:
-        raise ImportError(
-            "from_zarr requires zarr-python; install it with `pip install zarr`."
-        ) from e
-
-    # `zarr.storage.ObjectStore` is the experimental zarr 3.x wrapper
-    # around an obstore Store. Older zarr-python releases don't have it.
-    obj_store_cls = getattr(zarr.storage, "ObjectStore", None)
-    if obj_store_cls is not None and isinstance(source, obj_store_cls):
-        return source.store
-
-    if isinstance(source, zarr.storage.LocalStore):
-        try:
-            import obstore.store as _obstore_store
-        except ImportError as e:
-            raise ImportError(
-                "from_zarr with a zarr.storage.LocalStore source requires "
-                "obstore; install it with `pip install obstore`."
-            ) from e
-        return _obstore_store.LocalStore(str(source.root))
-
-    raise NotImplementedError(
-        "ingest source must be a zarr.storage.ObjectStore (wrapping an "
-        "obstore Store) or a zarr.storage.LocalStore; got "
-        f"{type(source).__name__}"
-    )
-
-
 def from_zarr(
-    source: zarr.abc.store.Store,
+    source: Storage,
     sink: Repository,
     *,
-    paths: Sequence[str] = ("",),
+    paths: Sequence[str] | None = None,
     branch: str = "main",
     message: str | None = None,
     concurrency: int = 32,
     on_progress: Callable[[IngestStats], None] | None = None,
-    skip_existing: bool = False,
-    overwrite: bool = False,
+    on_collision: CollisionPolicy = CollisionPolicy.Fail,
     mode: Literal["copy"] = "copy",
     checkpoint_every: int | None = None,
+    verify_source_unchanged: bool = True,
 ) -> IngestResult:
     """Byte-faithful, resumable ingest of a zarr v3 store into an
     icechunk repository.
@@ -104,21 +68,19 @@ def from_zarr(
     Parameters
     ----------
     source
-        A zarr-python Store. Currently supports
-        `zarr.storage.ObjectStore` (any obstore-backed Store) and
-        `zarr.storage.LocalStore`.
-
-        Any source-side prefix should be configured directly on the
-        underlying obstore Store (e.g.
-        ``obstore.store.S3Store(bucket=..., prefix="path/to/root")``).
-        There is no separate ``source_prefix`` kwarg — embed it in the
-        Store itself before wrapping with ``zarr.storage.ObjectStore``.
+        An `icechunk.Storage` pointing at the zarr v3 store to copy
+        from. Construct via the same helpers used for the destination
+        repo: `icechunk.s3_storage`, `icechunk.gcs_storage`,
+        `icechunk.azure_storage`, `icechunk.local_filesystem_storage`,
+        `icechunk.http_storage`, etc. Source-side path scoping goes
+        through the ``prefix=`` argument on those constructors.
     sink
         Target `Repository`. The ingest core opens its own writable
         sessions on ``branch`` and commits them — there is no need to
         pass a pre-opened Session.
     paths
-        Source-side paths to ingest. Defaults to the entire store.
+        Source-side paths to ingest. Defaults to the entire store
+        (equivalent to ``[""]``).
     branch
         Target branch.
     message
@@ -126,26 +88,25 @@ def from_zarr(
     concurrency
         Per-batch task count for the source→dest copy.
     on_progress
-        Optional callback invoked periodically with running
-        `IngestStats`.
-    skip_existing
-        Skip keys already present in the destination. Mutually
-        exclusive with `overwrite`.
-    overwrite
-        Allow clobbering existing destination keys. Re-runs an ingest
-        from scratch even if the target branch already holds a
-        completed ingest.
+        Optional callback invoked after every successful commit
+        (skeleton + each chunk batch + final close-out) with running
+        `IngestStats` that reflect what's durable on the branch.
+    on_collision
+        How to react when the destination already contains a key the
+        source wants to write. See `CollisionPolicy`. Defaults to
+        ``CollisionPolicy.Fail``.
     mode
         Copy mode. Only ``"copy"`` (byte-faithful) is supported today.
-        Anticipated future values include ``"virtual"`` (write virtual
-        references instead of copying chunk bytes) and
-        ``"same-bucket-copy"`` (use ObjectStore server-side copy ops
-        when source and sink share a bucket).
     checkpoint_every
         Maximum chunk keys copied between commits. Each per-array
         commit in the chunks phase processes at most this many chunks
         before recording a fresh cursor and starting a new session.
         Defaults to 1000 when omitted.
+    verify_source_unchanged
+        When resuming, compare the bytes of every skeleton
+        ``zarr.json`` between source and destination, not just the
+        set of paths. Defaults to True. Disable when the source is
+        provably stable and the extra GETs at resume matter.
 
     Returns
     -------
@@ -155,40 +116,46 @@ def from_zarr(
     if mode != "copy":
         raise ValueError(f"only mode='copy' is supported; got {mode!r}")
 
+    if not isinstance(source, Storage):
+        raise TypeError(
+            f"source must be an icechunk.Storage; got {type(source).__name__}. "
+            "Construct via icechunk.s3_storage, icechunk.local_filesystem_storage, "
+            "icechunk.gcs_storage, icechunk.azure_storage, icechunk.http_storage, etc."
+        )
+
     if not isinstance(sink, Repository):
         raise TypeError(
             f"sink must be a Repository; got {type(sink).__name__}. "
-            "Session sinks are no longer supported — pass a Repository "
-            "and the ingest will drive its own sessions/commits."
+            "Pass a Repository and the ingest will drive its own "
+            "sessions and commits."
         )
 
-    obstore_source = _unwrap_source(source)
-
-    progress_cb: Callable[[int, int], None] | None
+    progress_cb: Callable[[int, int, int], None] | None
     if on_progress is None:
         progress_cb = None
     else:
-        # Adapt the (keys, bytes) shape from the Rust binding into the
-        # public dataclass.
         cb = on_progress
 
-        def progress_cb(keys: int, nbytes: int) -> None:
-            cb(IngestStats(keys=keys, bytes=nbytes))
+        def progress_cb(keys: int, nbytes: int, arrays_done: int) -> None:
+            cb(IngestStats(keys=keys, bytes=nbytes, arrays_done=arrays_done))
 
     outcome = py_ingest_zarr(
-        obstore_source,
-        "",
+        source,
         sink._repository,
-        list(paths),
+        list(paths) if paths is not None else [""],
         str(branch),
         int(concurrency),
-        bool(skip_existing),
-        bool(overwrite),
+        on_collision,
+        bool(verify_source_unchanged),
         checkpoint_every,
         message,
         progress_cb,
     )
     return IngestResult(
         snapshot_id=outcome.snapshot_id,
-        stats=IngestStats(keys=outcome.stats.keys, bytes=outcome.stats.bytes),
+        stats=IngestStats(
+            keys=outcome.stats.keys,
+            bytes=outcome.stats.bytes,
+            arrays_done=outcome.stats.arrays_done,
+        ),
     )

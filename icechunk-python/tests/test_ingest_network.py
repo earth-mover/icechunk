@@ -52,10 +52,18 @@ def test_ingest_from_s3_public() -> None:
         skip_signature=True,
     )
     src = zarr.storage.ObjectStore(raw, read_only=True)
+    src_storage = icechunk.s3_storage(
+        bucket=BUCKET,
+        prefix=PREFIX,
+        endpoint_url=ENDPOINT,
+        anonymous=True,
+    )
 
     repo = icechunk.Repository.create(icechunk.in_memory_storage())
 
-    result = icechunk.from_zarr(src, repo, paths=INGEST_PATHS, message="network test")
+    result = icechunk.from_zarr(
+        src_storage, repo, paths=INGEST_PATHS, message="network test"
+    )
 
     assert isinstance(result, IngestResult)
     assert result.snapshot_id, "expected a non-empty snapshot id"

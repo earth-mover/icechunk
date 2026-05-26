@@ -282,6 +282,16 @@ impl ObjectStorage {
         self.backend.artificially_sort_refs_in_mem()
     }
 
+    /// Exposes the backend so callers can ask it to construct an
+    /// `Arc<dyn ObjectStore>` via `mk_object_store(&settings)`.
+    /// Used by ingest, which needs the raw object store to read from
+    /// a source `Storage`. Kept here (rather than as a `Storage`-trait
+    /// method) to avoid pulling the `object_store` crate into the
+    /// abstract `icechunk-storage` layer.
+    pub fn backend(&self) -> Arc<dyn ObjectStoreBackend> {
+        Arc::clone(&self.backend)
+    }
+
     /// Return all keys in the store
     ///
     /// Intended for testing and debugging purposes only.
@@ -354,6 +364,10 @@ impl sealed::Sealed for ObjectStorage {}
 #[async_trait]
 #[typetag::serde]
 impl Storage for ObjectStorage {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
     fn storage_info(&self) -> StorageInfo {
         self.backend.storage_info()
     }

@@ -167,6 +167,27 @@ def _array_node(draw: st.DrawFn) -> ArrayNode:
     dtype = draw(st.sampled_from(_FIXTURE_DTYPES))
     chunks = tuple(draw(st.integers(min_value=1, max_value=dim)) for dim in shape)
     attrs = draw(_attrs())
+    if dtype.kind in "fc":
+        fill = draw(
+            st.one_of(
+                st.none(),
+                st.floats(allow_nan=True, allow_infinity=True, width=32),
+            )
+        )
+    elif dtype.kind in "iu":
+        fill = draw(
+            st.one_of(
+                st.none(),
+                st.integers(
+                    min_value=int(np.iinfo(dtype).min),
+                    max_value=int(np.iinfo(dtype).max),
+                ),
+            )
+        )
+    elif dtype.kind == "b":
+        fill = draw(st.one_of(st.none(), st.booleans()))
+    else:
+        fill = None
     write_data = draw(st.booleans())
     data: np.ndarray | None
     if write_data:
@@ -176,7 +197,14 @@ def _array_node(draw: st.DrawFn) -> ArrayNode:
         data = np.arange(n, dtype=dtype).reshape(shape)
     else:
         data = None
-    return ArrayNode(shape=shape, dtype=dtype, chunks=chunks, attrs=attrs, data=data)
+    return ArrayNode(
+        shape=shape,
+        dtype=dtype,
+        chunks=chunks,
+        fill_value=fill,
+        attrs=attrs,
+        data=data,
+    )
 
 
 def skeletons(

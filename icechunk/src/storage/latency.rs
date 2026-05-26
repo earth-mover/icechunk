@@ -79,6 +79,10 @@ impl sealed::Sealed for LatencyStorage {}
 #[async_trait]
 #[typetag::serde]
 impl Storage for LatencyStorage {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
     fn storage_info(&self) -> StorageInfo {
         self.backend.storage_info()
     }

@@ -63,6 +63,10 @@ pub mod logging;
 /// Storage wrapper that adds artificial read/write latency (for testing).
 pub mod latency;
 
+/// `ObjectStore` wrapper that injects failures on the Nth get (for testing
+/// source-side resume paths).
+pub mod faulty;
+
 /// HTTP redirect-based storage for read-only access.
 #[cfg(feature = "redirect")]
 pub mod redirect;

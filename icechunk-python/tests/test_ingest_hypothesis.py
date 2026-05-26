@@ -18,7 +18,7 @@ from typing import cast
 import numpy as np
 import obstore.store
 import pytest
-from hypothesis import HealthCheck, given, settings
+from hypothesis import HealthCheck, assume, given, settings
 
 import icechunk
 import zarr
@@ -49,13 +49,21 @@ async def _key_bytes(store: zarr.abc.store.Store, key: str) -> bytes:
 def test_ingest_roundtrip(
     tmp_path_factory: pytest.TempPathFactory, tree: GroupNode
 ) -> None:
+    # Skip trees with case-collapsing sibling names (e.g. 'Q' + 'q'):
+    # tmp_path_factory lands on a case-insensitive FS on macOS where
+    # such pairs collide during materialize.
+    for _, node in tree.walk():
+        if isinstance(node, GroupNode):
+            lower = {name.casefold() for name in node.children}
+            assume(len(lower) == len(node.children))
     src_dir = tmp_path_factory.mktemp("ingest_src")
     src_raw = obstore.store.LocalStore(str(src_dir))
     src = zarr.storage.ObjectStore(src_raw)
     tree.materialize(src)
 
     repo = icechunk.Repository.create(icechunk.in_memory_storage())
-    icechunk.from_zarr(src, repo, message="hypothesis ingest")
+    src_storage = icechunk.local_filesystem_storage(str(src_dir))
+    icechunk.from_zarr(src_storage, repo, message="hypothesis ingest")
 
     sess = repo.readonly_session(branch="main")
     dst = sess.store
@@ -113,9 +121,11 @@ def _assert_zarr_api_matches(
 
 def _fill_eq(a: object, b: object) -> bool:
     """NaN-aware equality for fill_values."""
-    try:
-        if np.isnan(a) and np.isnan(b):  # type: ignore[arg-type]
+    a_arr = np.asarray(a)
+    b_arr = np.asarray(b)
+    if np.issubdtype(a_arr.dtype, np.floating) and np.issubdtype(
+        b_arr.dtype, np.floating
+    ):
+        if bool(np.isnan(a_arr)) and bool(np.isnan(b_arr)):
             return True
-    except (TypeError, ValueError):
-        pass
-    return a == b
+    return bool(a_arr == b_arr)

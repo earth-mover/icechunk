@@ -323,6 +323,10 @@ impl std::fmt::Display for RedirectStorage {
 #[async_trait]
 #[typetag::serde]
 impl Storage for RedirectStorage {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
     fn storage_info(&self) -> StorageInfo {
         StorageInfo {
             backend_type: "redirect",

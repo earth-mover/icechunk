@@ -48,6 +48,7 @@ test = [
   "rich",
   "flatbuffers",
   "zstandard",
+  "obstore>=0.9.5",
 ]
 benchmark = [
   "pytest-benchmark[histogram]",

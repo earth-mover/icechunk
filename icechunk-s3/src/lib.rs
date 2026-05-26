@@ -598,6 +598,10 @@ impl sealed::Sealed for S3Storage {}
 #[async_trait]
 #[typetag::serde]
 impl Storage for S3Storage {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
     fn storage_info(&self) -> StorageInfo {
         let mut fields = vec![("bucket", self.bucket.clone())];
         if !self.prefix.is_empty() {
