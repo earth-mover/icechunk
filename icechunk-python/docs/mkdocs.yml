@@ -250,6 +250,8 @@ nav:
     - Async Usage: guides/async.md
     - Icechunk for Git Users: guides/icechunk-for-git-users.md
     - Creating Icechunk Datasets:
+      - Overview: guides/ingestion/index.md
+      - Copying from a Zarr store: guides/ingestion/from-zarr.md
       - Global Raster Data cube: guides/ingestion/glad-ingest.ipynb
   - Sample Datasets: sample-datasets.md
   - Related Projects: related-projects.md
