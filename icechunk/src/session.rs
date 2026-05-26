@@ -60,6 +60,7 @@ use crate::{
     refs::{RefError, RefErrorKind, fetch_branch_tip_v1, update_branch},
     repository::{RepositoryError, RepositoryErrorKind, RepositoryResult},
     storage::{self, StorageErrorKind},
+    store::{ArrayMetadata, AxisForm, AxisLayout},
     virtual_chunks::{VirtualChunkContainer, VirtualChunkResolver},
 };
 use icechunk_types::{ICResultExt as _, error::ICResultCtxExt as _};
@@ -200,6 +201,8 @@ pub enum SessionErrorKind {
     InvalidByteRange { request: ByteRange, chunk_length: u64 },
     #[error("invalid commit configuration: {reason}")]
     InvalidCommitConfiguration { reason: &'static str },
+    #[error("bad chunk grid metadata: {0}")]
+    BadChunkGridMetadata(String),
     #[error("unknown error: {0}")]
     Other(#[from] Box<dyn std::error::Error + Send + Sync>),
 }
@@ -955,10 +958,17 @@ impl Session {
         Ok(())
     }
 
+    // see free functions below: compute_post_shift_layout, rebuild_user_data,
+    // make_remap_closure
+
     /// Shift all chunks in an array by the given chunk offset.
     ///
     /// Out-of-bounds chunks are discarded. To preserve them, resize the array first
     /// to make room. Vacated source positions are cleared (reset to fill value).
+    ///
+    /// For rectilinear chunk grids, the on-disk per-axis chunk sizes are rewritten
+    /// so surviving chunks keep their declared size and the vacated run collapses
+    /// into a single fill chunk.
     #[instrument(skip(self))]
     pub async fn shift_array(
         &mut self,
@@ -966,49 +976,78 @@ impl Session {
         chunk_offset: &[i64],
     ) -> SessionResult<()> {
         let node = self.get_array(array_path).await?;
-        let num_chunks: Vec<u32> = match &node.node_data {
-            NodeData::Array { shape, .. } => shape.num_chunks().collect(),
+        let (shape, dimension_names, user_data) = match &node.node_data {
+            NodeData::Array { shape, dimension_names, .. } => {
+                (shape.clone(), dimension_names.clone(), node.user_data.clone())
+            }
             _ => unreachable!("get_array returned non-array"),
         };
-
-        fn make_shift_closure(
-            chunk_offset: &[i64],
-            num_chunks: &[u32],
-        ) -> Box<dyn Fn(&ChunkIndices) -> ReindexOperationResult> {
-            let chunk_offset = chunk_offset.to_vec();
-
-            let num_chunks = num_chunks.to_vec();
-            Box::new(move |index: &ChunkIndices| {
-                let new_indices: Option<Vec<u32>> = index
-                    .0
-                    .iter()
-                    .enumerate()
-                    .map(|(dim, &idx)| {
-                        let n = num_chunks[dim] as i64;
-                        // On overflow, checked_add returns None, which ? propagates
-                        // to the map closure, causing .collect() to yield None and
-                        // discarding the chunk
-                        // So, we are setting the semantics of this to
-                        // automatically discard out of bounds chunks
-                        let new_idx = (idx as i64).checked_add(chunk_offset[dim])?;
-                        if new_idx < 0 || new_idx >= n {
-                            None
-                        } else {
-                            Some(new_idx as u32)
-                        }
-                    })
-                    .collect();
-                Ok(new_indices.map(ChunkIndices))
-            })
+        if chunk_offset.len() != shape.len() {
+            return Err(SessionError::capture(SessionErrorKind::BadChunkGridMetadata(
+                format!(
+                    "shift offset rank {} does not match array rank {}",
+                    chunk_offset.len(),
+                    shape.len()
+                ),
+            )));
         }
-        let negated_offset: Vec<i64> = chunk_offset.iter().map(|&o| -o).collect();
+        let dim_lengths: Vec<u64> = shape.iter().map(|d| d.array_length()).collect();
+        let num_chunks: Vec<u32> = shape.num_chunks().collect();
+
+        // Tests and internal callers may add arrays with empty user_data
+        // (no Zarr metadata). With no per-axis chunk sizes to consult, fall
+        // back to a regular-grid shift driven entirely by the source num_chunks.
+        let (per_axis, forms): (Vec<AxisPostShift>, Vec<AxisForm>) = if user_data
+            .is_empty()
+        {
+            let per_axis = chunk_offset
+                .iter()
+                .zip(num_chunks.iter())
+                .map(|(&offset, &nc)| AxisPostShift {
+                    new_sizes: None,
+                    new_num_chunks: nc,
+                    remap: AxisRemap::SimpleShift { offset, num_chunks: nc },
+                })
+                .collect();
+            (per_axis, vec![AxisForm::Flat; num_chunks.len()])
+        } else {
+            let meta: ArrayMetadata = serde_json::from_slice(&user_data).capture()?;
+            let layouts_and_forms = meta.parse_axis_layouts_with_form().map_err(|e| {
+                SessionError::capture(SessionErrorKind::BadChunkGridMetadata(
+                    e.to_string(),
+                ))
+            })?;
+            let (layouts, forms): (Vec<AxisLayout>, Vec<AxisForm>) =
+                layouts_and_forms.into_iter().unzip();
+            let per_axis =
+                compute_post_shift_layout(&layouts, chunk_offset, &dim_lengths)?;
+            (per_axis, forms)
+        };
+
+        let any_metadata_change = per_axis.iter().any(|a| a.new_sizes.is_some());
+        if any_metadata_change {
+            let new_user_data = rebuild_user_data(&user_data, &per_axis, &forms)?;
+            let new_shape = ArrayShape::new(
+                dim_lengths
+                    .iter()
+                    .zip(per_axis.iter())
+                    .map(|(&dlen, ax)| (dlen, ax.new_num_chunks)),
+            )
+            .ok_or_else(|| {
+                SessionError::capture(SessionErrorKind::BadChunkGridMetadata(
+                    "could not build shifted ArrayShape".into(),
+                ))
+            })?;
+            self.update_array(array_path, new_shape, dimension_names, new_user_data)
+                .await?;
+        }
+
+        let forward = make_remap_closure(per_axis.clone(), num_chunks.clone(), false);
+        let backward = make_remap_closure(per_axis, num_chunks, true);
 
         self.reindex_array(
             array_path,
-            ReindexMapping::ForwardBackward {
-                forward: make_shift_closure(chunk_offset, &num_chunks),
-                backward: make_shift_closure(&negated_offset, &num_chunks),
-            },
+            ReindexMapping::ForwardBackward { forward, backward },
         )
         .await
     }
@@ -1988,6 +2027,276 @@ impl Session {
                     .await
                     .inject()?;
                 Ok(res)
+            }
+        }
+    }
+}
+
+/// Per-axis result of computing the post-shift chunk layout for an array.
+#[derive(Debug, Clone)]
+struct AxisPostShift {
+    /// New per-chunk sizes for the axis, or `None` if the axis is unchanged.
+    new_sizes: Option<Vec<u64>>,
+    /// Number of chunks along the axis in the post-shift grid.
+    new_num_chunks: u32,
+    /// How to remap source chunk indices to destination chunk indices.
+    remap: AxisRemap,
+}
+
+#[derive(Debug, Clone)]
+enum AxisRemap {
+    /// Regular grid or zero-offset axis: `new = old + offset`, bounds-checked
+    /// against the source `num_chunks`.
+    SimpleShift { offset: i64, num_chunks: u32 },
+    /// Rectilinear axis with a non-zero offset: explicit lookup tables.
+    /// `forward[i]` gives the destination index for source chunk `i`;
+    /// `backward[j]` gives the source index for destination chunk `j`.
+    Lookup { forward: Vec<Option<u32>>, backward: Vec<Option<u32>> },
+}
+
+/// Compute the post-shift chunk layout per axis. See `Session::shift_array`
+/// for the metadata-only rectilinear shift semantics.
+fn compute_post_shift_layout(
+    layouts: &[AxisLayout],
+    offsets: &[i64],
+    dim_lengths: &[u64],
+) -> SessionResult<Vec<AxisPostShift>> {
+    if layouts.len() != offsets.len() || layouts.len() != dim_lengths.len() {
+        return Err(SessionError::capture(SessionErrorKind::BadChunkGridMetadata(
+            "rank mismatch when computing shifted layout".into(),
+        )));
+    }
+    layouts
+        .iter()
+        .zip(offsets.iter())
+        .zip(dim_lengths.iter())
+        .map(|((layout, &offset), &dim_length)| {
+            compute_axis_post_shift(layout, offset, dim_length)
+        })
+        .collect()
+}
+
+fn compute_axis_post_shift(
+    layout: &AxisLayout,
+    offset: i64,
+    dim_length: u64,
+) -> SessionResult<AxisPostShift> {
+    match layout {
+        AxisLayout::Regular { chunk_size } => {
+            let num_chunks = if *chunk_size == 0 {
+                0
+            } else {
+                dim_length.div_ceil(*chunk_size) as u32
+            };
+            Ok(AxisPostShift {
+                new_sizes: None,
+                new_num_chunks: num_chunks,
+                remap: AxisRemap::SimpleShift { offset, num_chunks },
+            })
+        }
+        AxisLayout::Rectilinear { sizes } => {
+            let n = sizes.len() as u32;
+            if offset == 0 {
+                return Ok(AxisPostShift {
+                    new_sizes: None,
+                    new_num_chunks: n,
+                    remap: AxisRemap::SimpleShift { offset: 0, num_chunks: n },
+                });
+            }
+            let k_abs = offset.unsigned_abs();
+            if k_abs >= n as u64 {
+                // Everything drops off the array: collapse to a single fill chunk.
+                let new_sizes = vec![dim_length];
+                let forward = vec![None; n as usize];
+                let backward = vec![None]; // single dest chunk has no source
+                return Ok(AxisPostShift {
+                    new_sizes: Some(new_sizes),
+                    new_num_chunks: 1,
+                    remap: AxisRemap::Lookup { forward, backward },
+                });
+            }
+            let k = k_abs as usize;
+            let (new_sizes, forward, backward) = if offset > 0 {
+                // Surviving source range [0, n - k): survivors land at dest
+                // indices [1, n - k + 1); dest 0 is the coalesced fill.
+                let survivors: Vec<u64> = sizes[..sizes.len() - k].to_vec();
+                let sum_survivors: u64 = survivors.iter().sum();
+                let vacated = dim_length.checked_sub(sum_survivors).ok_or_else(|| {
+                    SessionError::capture(SessionErrorKind::BadChunkGridMetadata(
+                        "surviving chunks exceed dim length".into(),
+                    ))
+                })?;
+                let mut new_sizes = Vec::with_capacity(survivors.len() + 1);
+                new_sizes.push(vacated);
+                new_sizes.extend(survivors.iter().copied());
+                let forward: Vec<Option<u32>> =
+                    (0..sizes.len())
+                        .map(|i| {
+                            if i + k < sizes.len() { Some((i + 1) as u32) } else { None }
+                        })
+                        .collect();
+                let mut backward: Vec<Option<u32>> = vec![None; new_sizes.len()];
+                for (src, dest) in forward.iter().enumerate() {
+                    if let Some(d) = dest {
+                        backward[*d as usize] = Some(src as u32);
+                    }
+                }
+                (new_sizes, forward, backward)
+            } else {
+                // offset < 0: surviving source range [k, n); land at dest
+                // indices [0, n - k); tail dest chunk is the coalesced fill.
+                let survivors: Vec<u64> = sizes[k..].to_vec();
+                let sum_survivors: u64 = survivors.iter().sum();
+                let vacated = dim_length.checked_sub(sum_survivors).ok_or_else(|| {
+                    SessionError::capture(SessionErrorKind::BadChunkGridMetadata(
+                        "surviving chunks exceed dim length".into(),
+                    ))
+                })?;
+                let mut new_sizes = Vec::with_capacity(survivors.len() + 1);
+                new_sizes.extend(survivors.iter().copied());
+                new_sizes.push(vacated);
+                let forward: Vec<Option<u32>> = (0..sizes.len())
+                    .map(|i| if i >= k { Some((i - k) as u32) } else { None })
+                    .collect();
+                let mut backward: Vec<Option<u32>> = vec![None; new_sizes.len()];
+                for (src, dest) in forward.iter().enumerate() {
+                    if let Some(d) = dest {
+                        backward[*d as usize] = Some(src as u32);
+                    }
+                }
+                (new_sizes, forward, backward)
+            };
+            debug_assert_eq!(new_sizes.iter().sum::<u64>(), dim_length);
+            Ok(AxisPostShift {
+                new_num_chunks: new_sizes.len() as u32,
+                new_sizes: Some(new_sizes),
+                remap: AxisRemap::Lookup { forward, backward },
+            })
+        }
+    }
+}
+
+/// Build a closure mapping source chunk coords to destination chunk coords
+/// (or vice versa if `inverse` is true). Out-of-range coordinates yield `None`,
+/// which the reindex loop treats as "drop this chunk" / "stale source".
+fn make_remap_closure(
+    per_axis: Vec<AxisPostShift>,
+    src_num_chunks: Vec<u32>,
+    inverse: bool,
+) -> Box<dyn Fn(&ChunkIndices) -> ReindexOperationResult> {
+    Box::new(move |index: &ChunkIndices| {
+        let new_coords: Option<Vec<u32>> = index
+            .0
+            .iter()
+            .enumerate()
+            .map(|(dim, &idx)| match &per_axis[dim].remap {
+                AxisRemap::SimpleShift { offset, num_chunks } => {
+                    let off = if inverse { -*offset } else { *offset };
+                    // For the inverse pass, bounds-check against the destination
+                    // axis size (which for regular axes equals the source).
+                    let bound = *num_chunks as i64;
+                    let new_idx = (idx as i64).checked_add(off)?;
+                    if new_idx < 0 || new_idx >= bound {
+                        None
+                    } else {
+                        Some(new_idx as u32)
+                    }
+                }
+                AxisRemap::Lookup { forward, backward } => {
+                    let table = if inverse { backward } else { forward };
+                    // The forward pass receives source coords (length =
+                    // src_num_chunks); the backward pass receives destination
+                    // coords (length = per_axis.new_num_chunks).
+                    let bound = if inverse {
+                        per_axis[dim].new_num_chunks as usize
+                    } else {
+                        src_num_chunks[dim] as usize
+                    };
+                    if (idx as usize) >= bound {
+                        None
+                    } else {
+                        table.get(idx as usize).copied().flatten()
+                    }
+                }
+            })
+            .collect();
+        Ok(new_coords.map(ChunkIndices))
+    })
+}
+
+/// Rewrite the `chunk_grid.configuration.chunk_shapes` JSON array so that
+/// axes with new per-chunk sizes are replaced, while untouched axes remain
+/// byte-identical.
+fn rebuild_user_data(
+    user_data: &Bytes,
+    per_axis: &[AxisPostShift],
+    forms: &[AxisForm],
+) -> SessionResult<Bytes> {
+    let mut value: serde_json::Value = serde_json::from_slice(user_data).capture()?;
+    let needs_rewrite = per_axis.iter().any(|a| a.new_sizes.is_some());
+    if !needs_rewrite {
+        return Ok(user_data.clone());
+    }
+    let chunk_shapes = value
+        .get_mut("chunk_grid")
+        .and_then(|cg| cg.get_mut("configuration"))
+        .and_then(|cfg| cfg.get_mut("chunk_shapes"))
+        .and_then(|cs| cs.as_array_mut())
+        .ok_or_else(|| {
+            SessionError::capture(SessionErrorKind::BadChunkGridMetadata(
+                "missing chunk_grid.configuration.chunk_shapes for rectilinear array"
+                    .into(),
+            ))
+        })?;
+    if chunk_shapes.len() != per_axis.len() {
+        return Err(SessionError::capture(SessionErrorKind::BadChunkGridMetadata(
+            format!(
+                "chunk_shapes axis count {} != array rank {}",
+                chunk_shapes.len(),
+                per_axis.len()
+            ),
+        )));
+    }
+    for (ax, axis_shift) in per_axis.iter().enumerate() {
+        if let Some(new_sizes) = &axis_shift.new_sizes {
+            chunk_shapes[ax] = axis_sizes_to_json(new_sizes, forms[ax]);
+        }
+    }
+    let bytes = serde_json::to_vec(&value).capture()?;
+    Ok(Bytes::from(bytes))
+}
+
+fn axis_sizes_to_json(sizes: &[u64], form: AxisForm) -> serde_json::Value {
+    let flat = || {
+        serde_json::Value::Array(
+            sizes.iter().map(|s| serde_json::Value::from(*s)).collect(),
+        )
+    };
+    match form {
+        AxisForm::Flat => flat(),
+        AxisForm::Rle => {
+            // Greedy run-length encode; fall back to flat if RLE would not
+            // be a strict improvement (avoids gratuitous [s, 1] singletons).
+            let mut runs: Vec<(u64, u64)> = Vec::new();
+            for &s in sizes {
+                match runs.last_mut() {
+                    Some(last) if last.0 == s => last.1 += 1,
+                    _ => runs.push((s, 1)),
+                }
+            }
+            if runs.len() >= sizes.len() {
+                flat()
+            } else {
+                serde_json::Value::Array(
+                    runs.into_iter()
+                        .map(|(s, c)| {
+                            serde_json::Value::Array(vec![
+                                serde_json::Value::from(s),
+                                serde_json::Value::from(c),
+                            ])
+                        })
+                        .collect(),
+                )
             }
         }
     }
@@ -5790,6 +6099,253 @@ mod tests {
         }
 
         assert_eq!(session.get_chunk_ref(&apath, &ChunkIndices(vec![9])).await?, None);
+        Ok(())
+    }
+
+    // Build a minimal Zarr `ArrayMetadata` JSON document for a rectilinear
+    // chunk grid, suitable for use as `user_data` in tests.
+    fn rectilinear_user_data(shape: &[u64], chunk_shapes: &[&str]) -> Bytes {
+        let shape_str = shape.iter().map(|s| s.to_string()).collect::<Vec<_>>().join(",");
+        let chunk_shapes_str = chunk_shapes.join(",");
+        let json = format!(
+            r#"{{"zarr_format":3,"node_type":"array","shape":[{shape_str}],"data_type":"int32","chunk_grid":{{"name":"rectilinear","configuration":{{"chunk_shapes":[{chunk_shapes_str}]}}}},"chunk_key_encoding":{{"name":"default","configuration":{{"separator":"/"}}}},"fill_value":0,"codecs":[]}}"#
+        );
+        Bytes::from(json)
+    }
+
+    // Read back chunk_shapes from a committed array's user_data, as a per-axis
+    // list of sizes (after expanding any RLE entries).
+    fn parse_chunk_shapes_sizes(user_data: &[u8]) -> Vec<Vec<u64>> {
+        let v: serde_json::Value = serde_json::from_slice(user_data).unwrap();
+        let axes = v["chunk_grid"]["configuration"]["chunk_shapes"].as_array().unwrap();
+        axes.iter()
+            .map(|axis| {
+                let mut out = Vec::new();
+                for el in axis.as_array().unwrap() {
+                    if let Some(n) = el.as_u64() {
+                        out.push(n);
+                    } else if let Some(pair) = el.as_array() {
+                        let size = pair[0].as_u64().unwrap();
+                        let count = pair[1].as_u64().unwrap();
+                        out.extend(std::iter::repeat_n(size, count as usize));
+                    }
+                }
+                out
+            })
+            .collect()
+    }
+
+    #[tokio_test]
+    async fn test_shift_array_rectilinear_positive_1d() -> Result<(), Box<dyn Error>> {
+        let storage = new_in_memory_storage().await?;
+        let storage: Arc<dyn Storage + Send + Sync> = Arc::clone(&storage);
+        let repo = Repository::create(None, storage, HashMap::new(), None, true).await?;
+        let mut session = repo.writable_session("main").await?;
+        let shape = ArrayShape::new(vec![(3, 2)]).unwrap();
+        session.add_group(Path::root(), Bytes::new()).await?;
+        let apath: Path = "/a".try_into()?;
+        let user_data = rectilinear_user_data(&[3], &["[1,2]"]);
+        session.add_array(apath.clone(), shape, None, user_data).await?;
+        session
+            .set_chunk_ref(
+                apath.clone(),
+                ChunkIndices(vec![0]),
+                Some(ChunkPayload::Inline("c0".into())),
+            )
+            .await?;
+        session
+            .set_chunk_ref(
+                apath.clone(),
+                ChunkIndices(vec![1]),
+                Some(ChunkPayload::Inline("c1".into())),
+            )
+            .await?;
+        session.commit("init").max_concurrent_nodes(8).execute().await?;
+
+        let mut session = repo.writable_session("main").await?;
+        session.shift_array(&apath, &[1]).await?;
+        // Source chunk 0 (size 1) lands at dest chunk 1; source chunk 1 falls off;
+        // dest chunk 0 is the coalesced fill of size 2.
+        assert_eq!(
+            session.get_chunk_ref(&apath, &ChunkIndices(vec![1])).await?,
+            Some(ChunkPayload::Inline("c0".into()))
+        );
+        assert_eq!(session.get_chunk_ref(&apath, &ChunkIndices(vec![0])).await?, None);
+
+        session.commit("shift").max_concurrent_nodes(8).execute().await?;
+        let session =
+            repo.readonly_session(&VersionInfo::BranchTipRef("main".into())).await?;
+        let node = session.get_array(&apath).await?;
+        let sizes = parse_chunk_shapes_sizes(&node.user_data);
+        assert_eq!(sizes, vec![vec![2u64, 1]]);
+        Ok(())
+    }
+
+    #[tokio_test]
+    async fn test_shift_array_rectilinear_negative_1d() -> Result<(), Box<dyn Error>> {
+        let storage = new_in_memory_storage().await?;
+        let storage: Arc<dyn Storage + Send + Sync> = Arc::clone(&storage);
+        let repo = Repository::create(None, storage, HashMap::new(), None, true).await?;
+        let mut session = repo.writable_session("main").await?;
+        let shape = ArrayShape::new(vec![(3, 2)]).unwrap();
+        session.add_group(Path::root(), Bytes::new()).await?;
+        let apath: Path = "/a".try_into()?;
+        let user_data = rectilinear_user_data(&[3], &["[2,1]"]);
+        session.add_array(apath.clone(), shape, None, user_data).await?;
+        session
+            .set_chunk_ref(
+                apath.clone(),
+                ChunkIndices(vec![0]),
+                Some(ChunkPayload::Inline("c0".into())),
+            )
+            .await?;
+        session
+            .set_chunk_ref(
+                apath.clone(),
+                ChunkIndices(vec![1]),
+                Some(ChunkPayload::Inline("c1".into())),
+            )
+            .await?;
+        session.commit("init").max_concurrent_nodes(8).execute().await?;
+
+        let mut session = repo.writable_session("main").await?;
+        session.shift_array(&apath, &[-1]).await?;
+        // Source chunk 1 (size 1) lands at dest 0; source 0 falls off;
+        // dest 1 is the coalesced fill of size 2.
+        assert_eq!(
+            session.get_chunk_ref(&apath, &ChunkIndices(vec![0])).await?,
+            Some(ChunkPayload::Inline("c1".into()))
+        );
+        assert_eq!(session.get_chunk_ref(&apath, &ChunkIndices(vec![1])).await?, None);
+
+        session.commit("shift").max_concurrent_nodes(8).execute().await?;
+        let session =
+            repo.readonly_session(&VersionInfo::BranchTipRef("main".into())).await?;
+        let node = session.get_array(&apath).await?;
+        let sizes = parse_chunk_shapes_sizes(&node.user_data);
+        assert_eq!(sizes, vec![vec![1u64, 2]]);
+        Ok(())
+    }
+
+    #[tokio_test]
+    async fn test_shift_array_rectilinear_drops_all() -> Result<(), Box<dyn Error>> {
+        let storage = new_in_memory_storage().await?;
+        let storage: Arc<dyn Storage + Send + Sync> = Arc::clone(&storage);
+        let repo = Repository::create(None, storage, HashMap::new(), None, true).await?;
+        let mut session = repo.writable_session("main").await?;
+        let shape = ArrayShape::new(vec![(3, 3)]).unwrap();
+        session.add_group(Path::root(), Bytes::new()).await?;
+        let apath: Path = "/a".try_into()?;
+        let user_data = rectilinear_user_data(&[3], &["[1,1,1]"]);
+        session.add_array(apath.clone(), shape, None, user_data).await?;
+        for i in 0..3u32 {
+            session
+                .set_chunk_ref(
+                    apath.clone(),
+                    ChunkIndices(vec![i]),
+                    Some(ChunkPayload::Inline(format!("c{i}").into())),
+                )
+                .await?;
+        }
+        session.commit("init").max_concurrent_nodes(8).execute().await?;
+
+        let mut session = repo.writable_session("main").await?;
+        session.shift_array(&apath, &[5]).await?;
+        session.commit("shift").max_concurrent_nodes(8).execute().await?;
+        let session =
+            repo.readonly_session(&VersionInfo::BranchTipRef("main".into())).await?;
+        let node = session.get_array(&apath).await?;
+        let sizes = parse_chunk_shapes_sizes(&node.user_data);
+        // Everything dropped: single chunk of size 3.
+        assert_eq!(sizes, vec![vec![3u64]]);
+        // No chunk refs survive in the single dest chunk.
+        assert_eq!(session.get_chunk_ref(&apath, &ChunkIndices(vec![0])).await?, None);
+        Ok(())
+    }
+
+    #[tokio_test]
+    async fn test_shift_array_rectilinear_zero_offset() -> Result<(), Box<dyn Error>> {
+        let storage = new_in_memory_storage().await?;
+        let storage: Arc<dyn Storage + Send + Sync> = Arc::clone(&storage);
+        let repo = Repository::create(None, storage, HashMap::new(), None, true).await?;
+        let mut session = repo.writable_session("main").await?;
+        let shape = ArrayShape::new(vec![(3, 2)]).unwrap();
+        session.add_group(Path::root(), Bytes::new()).await?;
+        let apath: Path = "/a".try_into()?;
+        let user_data = rectilinear_user_data(&[3], &["[1,2]"]);
+        session.add_array(apath.clone(), shape, None, user_data.clone()).await?;
+        session
+            .set_chunk_ref(
+                apath.clone(),
+                ChunkIndices(vec![0]),
+                Some(ChunkPayload::Inline("c0".into())),
+            )
+            .await?;
+        session.commit("init").max_concurrent_nodes(8).execute().await?;
+
+        let mut session = repo.writable_session("main").await?;
+        session.shift_array(&apath, &[0]).await?;
+        // No metadata change expected.
+        session.commit("shift").max_concurrent_nodes(8).execute().await?;
+        let session =
+            repo.readonly_session(&VersionInfo::BranchTipRef("main".into())).await?;
+        let node = session.get_array(&apath).await?;
+        assert_eq!(node.user_data, user_data);
+        assert_eq!(
+            session.get_chunk_ref(&apath, &ChunkIndices(vec![0])).await?,
+            Some(ChunkPayload::Inline("c0".into()))
+        );
+        Ok(())
+    }
+
+    #[tokio_test]
+    async fn test_shift_array_rectilinear_mixed_axes() -> Result<(), Box<dyn Error>> {
+        let storage = new_in_memory_storage().await?;
+        let storage: Arc<dyn Storage + Send + Sync> = Arc::clone(&storage);
+        let repo = Repository::create(None, storage, HashMap::new(), None, true).await?;
+        let mut session = repo.writable_session("main").await?;
+        // axis 0: regular chunk_size 2, dim 4 -> 2 chunks
+        // axis 1: rectilinear [1, 2], dim 3 -> 2 chunks
+        let shape = ArrayShape::new(vec![(4, 2), (3, 2)]).unwrap();
+        session.add_group(Path::root(), Bytes::new()).await?;
+        let apath: Path = "/a".try_into()?;
+        // Mixed grid not directly supported in a single chunk_grid spec; instead
+        // make axis 0 a flat rectilinear [2,2] (equivalent to regular size 2).
+        let user_data = rectilinear_user_data(&[4, 3], &["[2,2]", "[1,2]"]);
+        session.add_array(apath.clone(), shape, None, user_data).await?;
+        for i in 0..2u32 {
+            for j in 0..2u32 {
+                session
+                    .set_chunk_ref(
+                        apath.clone(),
+                        ChunkIndices(vec![i, j]),
+                        Some(ChunkPayload::Inline(format!("c{i}{j}").into())),
+                    )
+                    .await?;
+            }
+        }
+        session.commit("init").max_concurrent_nodes(8).execute().await?;
+
+        let mut session = repo.writable_session("main").await?;
+        session.shift_array(&apath, &[0, 1]).await?;
+        session.commit("shift").max_concurrent_nodes(8).execute().await?;
+        let session =
+            repo.readonly_session(&VersionInfo::BranchTipRef("main".into())).await?;
+        let node = session.get_array(&apath).await?;
+        let sizes = parse_chunk_shapes_sizes(&node.user_data);
+        // axis 0 had zero offset so it should be unchanged.
+        assert_eq!(sizes[0], vec![2u64, 2]);
+        // axis 1 with chunks [1,2] shifted +1 → new layout [2,1].
+        assert_eq!(sizes[1], vec![2u64, 1]);
+        // c00 was at (0,0) → now at (0,1); c10 at (1,0) → now at (1,1).
+        assert_eq!(
+            session.get_chunk_ref(&apath, &ChunkIndices(vec![0, 1])).await?,
+            Some(ChunkPayload::Inline("c00".into()))
+        );
+        assert_eq!(
+            session.get_chunk_ref(&apath, &ChunkIndices(vec![1, 1])).await?,
+            Some(ChunkPayload::Inline("c10".into()))
+        );
         Ok(())
     }
 

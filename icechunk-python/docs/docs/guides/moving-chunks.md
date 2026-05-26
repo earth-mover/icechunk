@@ -107,6 +107,39 @@ print("\nAfter shift (1, 0):")
 print(arr[:])
 ```
 
+### Rectilinear Chunk Grids
+
+`shift_array` also works on arrays whose chunk grid is rectilinear—each axis has its own sequence of chunk lengths instead of a single fixed chunk size. The chunks that survive the shift keep their per-axis lengths, and the vacated region (the leading end for positive offsets, the trailing end for negative offsets) collapses into a single fill chunk along the shifted axis. As a consequence, the array's chunk grid—the per-axis `chunk_shapes`—can be different after the shift. The operation is still metadata-only; no chunk payloads are read, decoded, or rewritten.
+
+To make the geometry concrete, take a 1-D array of shape `(3,)` with chunks `((1, 2),)` holding the values `[10, 20, 30]`. Chunk 0 has length 1 and covers index 0 (`[10]`); chunk 1 has length 2 and covers indices 1–2 (`[20, 30]`). Shifting by `(1,)` moves chunk 0 one slot to the right, where it now covers index 2 and still holds `[10]`. Chunk 1 would have moved past the end of the array, so it is dropped. The leading two cells (indices 0–1) are vacated and collapse into a single fill chunk of length 2. The result is chunks `((2, 1),)`—the chunk grid has changed even though the array shape has not. In general, the vacated chunk's length is `array_length - sum(surviving chunk lengths)` along that axis.
+
+```python
+import icechunk as ic
+import zarr
+from zarr.core.chunk_grids import RectilinearChunkGrid
+
+zarr.config.set({"array.rectilinear_chunks": True})
+
+repo = ic.Repository.create(ic.in_memory_storage())
+session = repo.writable_session("main")
+root = zarr.group(store=session.store)
+arr = root.create_array(
+    name="a",
+    shape=(3,),
+    dtype="int32",
+    chunks=RectilinearChunkGrid(chunk_shapes=((1, 2),)),
+    fill_value=-1,
+)
+arr[:] = [10, 20, 30]
+session.commit("write")
+
+session = repo.writable_session("main")
+session.shift_array("/a", (1,))  # chunks become ((2, 1),): [-1, -1, 10]
+session.commit("shift")
+```
+
+Negative offsets are symmetric: the trailing end collapses into a single fill chunk, and surviving chunks keep their lengths.
+
 ### Example: Rolling Time Window
 
 Imagine a sensor array storing the last 7 days of hourly readings—shape `(168,)` with one chunk per day `(24,)`. Each day, you want to discard the oldest day and make room for new data:

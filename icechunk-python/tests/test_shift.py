@@ -1,9 +1,19 @@
 from typing import Any, cast
 
 import numpy as np
+import pytest
 
 import icechunk as ic
 import zarr
+
+try:
+    from zarr.core.chunk_grids import (  # type: ignore[attr-defined, unused-ignore]
+        RectilinearChunkGrid,
+    )
+
+    _has_rectilinear = True
+except ImportError:
+    _has_rectilinear = False
 
 
 def test_shift_left() -> None:
@@ -241,3 +251,190 @@ def test_resize_then_shift_same_session() -> None:
     session.shift_array("/d", (-1,))
     arr = zarr.open_array(session.store, path="d")
     np.testing.assert_equal(arr[:], [2.0, -1.0])
+
+
+@pytest.mark.skipif(not _has_rectilinear, reason="RectilinearChunkGrid not available")
+def test_shift_rectilinear_chunks() -> None:
+    """Shift +1 on a rectilinear axis with chunk sizes (1, 2).
+
+    Source chunk 0 (size 1, data [10]) lands at destination chunk index 1.
+    Source chunk 1 ([20, 30]) falls off the end. To keep this consistent
+    with the chunk-index shift semantics, the destination grid must be
+    reshaped to ((2, 1),) so the surviving chunk's size matches its data.
+    Element-space result: [fill, fill, 10].
+    """
+    repo = ic.Repository.create(storage=ic.in_memory_storage())
+    session = repo.writable_session("main")
+    root = zarr.group(store=session.store)
+    arr = root.create_array(
+        name="a",
+        shape=(3,),
+        dtype="int32",
+        chunks=RectilinearChunkGrid(chunk_shapes=((1, 2),)),
+        fill_value=-1,
+    )
+    arr[:] = [10, 20, 30]
+    session.commit("write")
+
+    session = repo.writable_session("main")
+    session.shift_array("/a", (1,))
+    session.commit("shift")
+
+    session = repo.readonly_session("main")
+    arr = cast("zarr.Array[Any]", zarr.open_array(session.store, path="a"))
+    np.testing.assert_equal(arr[:], [-1, -1, 10])
+
+
+@pytest.mark.skipif(not _has_rectilinear, reason="RectilinearChunkGrid not available")
+def test_shift_rectilinear_negative_1d() -> None:
+    """Negative shift on a rectilinear axis must reshape the grid symmetrically
+    to the positive case: surviving chunk keeps its source size, vacated trailing
+    run collapses into a single fill chunk."""
+    repo = ic.Repository.create(storage=ic.in_memory_storage())
+    session = repo.writable_session("main")
+    root = zarr.group(store=session.store)
+    arr = root.create_array(
+        name="a",
+        shape=(3,),
+        dtype="int32",
+        chunks=RectilinearChunkGrid(chunk_shapes=((2, 1),)),
+        fill_value=-1,
+    )
+    arr[:] = [10, 20, 30]
+    session.commit("write")
+
+    session = repo.writable_session("main")
+    session.shift_array("/a", (-1,))
+    session.commit("shift")
+
+    session = repo.readonly_session("main")
+    arr = cast("zarr.Array[Any]", zarr.open_array(session.store, path="a"))
+    np.testing.assert_equal(arr[:], [30, -1, -1])
+    if hasattr(arr, "read_chunk_sizes"):
+        assert tuple(tuple(s) for s in arr.read_chunk_sizes) == ((1, 2),)
+
+
+@pytest.mark.skipif(not _has_rectilinear, reason="RectilinearChunkGrid not available")
+def test_shift_rectilinear_zero_offset() -> None:
+    """Zero offset on a rectilinear axis must be a no-op for both data and grid."""
+    repo = ic.Repository.create(storage=ic.in_memory_storage())
+    session = repo.writable_session("main")
+    root = zarr.group(store=session.store)
+    arr = root.create_array(
+        name="a",
+        shape=(3,),
+        dtype="int32",
+        chunks=RectilinearChunkGrid(chunk_shapes=((1, 2),)),
+        fill_value=-1,
+    )
+    arr[:] = [10, 20, 30]
+    session.commit("write")
+
+    session = repo.writable_session("main")
+    session.shift_array("/a", (0,))
+    session.commit("shift")
+
+    session = repo.readonly_session("main")
+    arr = cast("zarr.Array[Any]", zarr.open_array(session.store, path="a"))
+    np.testing.assert_equal(arr[:], [10, 20, 30])
+    if hasattr(arr, "read_chunk_sizes"):
+        assert tuple(tuple(s) for s in arr.read_chunk_sizes) == ((1, 2),)
+
+
+@pytest.mark.skipif(not _has_rectilinear, reason="RectilinearChunkGrid not available")
+def test_shift_rectilinear_drops_all() -> None:
+    """When the shift evicts every source chunk, the rectilinear grid must
+    collapse to a single fill chunk spanning the full dimension."""
+    repo = ic.Repository.create(storage=ic.in_memory_storage())
+    session = repo.writable_session("main")
+    root = zarr.group(store=session.store)
+    arr = root.create_array(
+        name="a",
+        shape=(3,),
+        dtype="int32",
+        chunks=RectilinearChunkGrid(chunk_shapes=((1, 1, 1),)),
+        fill_value=-1,
+    )
+    arr[:] = [10, 20, 30]
+    session.commit("write")
+
+    session = repo.writable_session("main")
+    session.shift_array("/a", (5,))
+    session.commit("shift")
+
+    session = repo.readonly_session("main")
+    arr = cast("zarr.Array[Any]", zarr.open_array(session.store, path="a"))
+    np.testing.assert_equal(arr[:], [-1, -1, -1])
+    if hasattr(arr, "read_chunk_sizes"):
+        assert tuple(tuple(s) for s in arr.read_chunk_sizes) == ((3,),)
+
+
+@pytest.mark.skipif(not _has_rectilinear, reason="RectilinearChunkGrid not available")
+def test_shift_rectilinear_mixed_axes() -> None:
+    """Shifting only the rectilinear axis must leave the regular axis untouched
+    and reshape only the shifted axis."""
+    repo = ic.Repository.create(storage=ic.in_memory_storage())
+    session = repo.writable_session("main")
+    root = zarr.group(store=session.store)
+    # zarr's RectilinearChunkGrid takes per-axis chunk shapes; encode the
+    # "regular" axis 0 as a uniform tuple (2, 2) so axis 0 stays regular-shaped
+    # while axis 1 carries the genuinely irregular (1, 2) layout.
+    arr = root.create_array(
+        name="a",
+        shape=(4, 3),
+        dtype="int32",
+        chunks=RectilinearChunkGrid(chunk_shapes=((2, 2), (1, 2))),
+        fill_value=-1,
+    )
+    arr[:] = np.arange(12, dtype="int32").reshape(4, 3)
+    session.commit("write")
+
+    session = repo.writable_session("main")
+    session.shift_array("/a", (0, 1))
+    session.commit("shift")
+
+    session = repo.readonly_session("main")
+    arr = cast("zarr.Array[Any]", zarr.open_array(session.store, path="a"))
+    expected = np.array(
+        [
+            [-1, -1, 0],
+            [-1, -1, 3],
+            [-1, -1, 6],
+            [-1, -1, 9],
+        ],
+        dtype="int32",
+    )
+    np.testing.assert_equal(arr[:], expected)
+    if hasattr(arr, "read_chunk_sizes"):
+        sizes = tuple(tuple(s) for s in arr.read_chunk_sizes)
+        assert sizes == ((2, 2), (2, 1))
+
+
+@pytest.mark.skipif(not _has_rectilinear, reason="RectilinearChunkGrid not available")
+def test_shift_rectilinear_persists_through_commit() -> None:
+    """Guards against stale manifest extents after the chunk count changes:
+    reopen the Repository from storage to force a full reload."""
+    storage = ic.in_memory_storage()
+    repo = ic.Repository.create(storage=storage)
+    session = repo.writable_session("main")
+    root = zarr.group(store=session.store)
+    arr = root.create_array(
+        name="a",
+        shape=(3,),
+        dtype="int32",
+        chunks=RectilinearChunkGrid(chunk_shapes=((1, 2),)),
+        fill_value=-1,
+    )
+    arr[:] = [10, 20, 30]
+    session.commit("write")
+
+    session = repo.writable_session("main")
+    session.shift_array("/a", (1,))
+    session.commit("shift")
+
+    reopened = ic.Repository.open(storage)
+    session = reopened.readonly_session("main")
+    arr = cast("zarr.Array[Any]", zarr.open_array(session.store, path="a"))
+    np.testing.assert_equal(arr[:], [-1, -1, 10])
+    if hasattr(arr, "read_chunk_sizes"):
+        assert tuple(tuple(s) for s in arr.read_chunk_sizes) == ((2, 1),)

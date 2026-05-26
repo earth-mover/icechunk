@@ -300,6 +300,12 @@ class Session:
         -----
         To shift right while preserving all data, first resize the array using zarr's
         array.resize(), then shift.
+
+        On a rectilinear chunk axis, the surviving chunks keep their per-axis lengths
+        and the vacated region (leading for positive offsets, trailing for negative)
+        collapses into a single fill chunk along that axis. As a result, the array's
+        chunk grid may differ after a shift on a rectilinear axis even though the
+        array shape is unchanged.
         """
         self._session.shift_array(array_path, list(chunk_offset))
 

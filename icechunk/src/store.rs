@@ -1136,6 +1136,21 @@ impl Display for Key {
     }
 }
 
+/// Per-axis chunk grid layout: either a single repeating size or an explicit list.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AxisLayout {
+    Regular { chunk_size: u64 },
+    Rectilinear { sizes: Vec<u64> },
+}
+
+/// Textual form an axis used in the on-disk `chunk_shapes` JSON. Preserved so
+/// that round-tripping rectilinear axes doesn't gratuitously change encoding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AxisForm {
+    Flat,
+    Rle,
+}
+
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub struct ArrayMetadata {
     pub shape: Vec<u64>,
@@ -1333,6 +1348,84 @@ impl ArrayMetadata {
                         .collect::<StoreResult<Vec<_>>>()
                 });
                 Ok(Box::new(iter))
+            }
+            _other => {
+                Err(StoreErrorKind::BadChunkGridMetadata(format!(
+                    "Unsupported chunk grid {_other}. Only 'regular' and 'rectilinear' chunk grids are supported.")))
+                    .capture()
+            }
+        }
+    }
+
+    /// Per-axis chunk layout extracted from the array's Zarr metadata.
+    pub fn parse_axis_layouts_with_form(
+        &self,
+    ) -> StoreResult<Vec<(AxisLayout, AxisForm)>> {
+        let serde_json::Value::Object(kvs) = &self.chunk_grid.configuration else {
+            return Err(StoreErrorKind::BadChunkGridMetadata(
+                "Unsupported chunk grid".into(),
+            ))
+            .capture();
+        };
+        match self.chunk_grid.name.as_str() {
+            "regular" => {
+                let values = kvs.get("chunk_shape").and_then(|v| v.as_array()).ok_or_else(|| StoreErrorKind::BadChunkGridMetadata(
+                        "cannot parse `chunk_shape` for regular chunk grid".into(),
+                    ),
+                ).capture()?;
+                let layouts = values
+                    .iter()
+                    .map(|c| c.as_u64().map(|chunk_size| (AxisLayout::Regular { chunk_size }, AxisForm::Flat)))
+                    .collect::<Option<Vec<_>>>()
+                    .ok_or_else(|| StoreErrorKind::BadChunkGridMetadata(
+                        "cannot parse `chunk_shape` for regular chunk grid".into(),
+                    )).capture()?;
+                Ok(layouts)
+            }
+            "rectilinear" => {
+                let values = kvs.get("chunk_shapes").and_then(|v| v.as_array()).ok_or_else(|| StoreErrorKind::BadChunkGridMetadata(
+                        "cannot parse `chunk_shapes` for rectilinear chunk grid".into(),
+                    ),
+                ).capture()?;
+                values
+                    .iter()
+                    .map(|v| {
+                        let arr = v.as_array().ok_or_else(|| {
+                            StoreErrorKind::BadChunkGridMetadata(
+                                "cannot parse `chunk_shapes` axis entry".into(),
+                            )
+                        }).capture()?;
+                        // Each axis is either fully flat ([s0, s1, ...]) or
+                        // contains at least one RLE pair ([[size, count], ...]).
+                        // Mixed forms are permitted (`[1, [2, 1], 3]`); we
+                        // classify as RLE if any element is an array.
+                        let mut sizes: Vec<u64> = Vec::with_capacity(arr.len());
+                        let mut has_rle = false;
+                        for inner in arr {
+                            if inner.is_number() {
+                                let n = inner.as_u64().ok_or_else(|| StoreErrorKind::BadChunkGridMetadata(
+                                    "cannot parse chunk size".into(),
+                                )).capture()?;
+                                sizes.push(n);
+                            } else if let Some(pair) = inner.as_array() {
+                                has_rle = true;
+                                let elem = pair.first().and_then(|v| v.as_u64()).ok_or_else(|| StoreErrorKind::BadChunkGridMetadata(
+                                    "cannot parse RLE chunk size".into(),
+                                )).capture()?;
+                                let count = pair.get(1).and_then(|v| v.as_u64()).ok_or_else(|| StoreErrorKind::BadChunkGridMetadata(
+                                    "cannot parse RLE chunk count".into(),
+                                )).capture()? as usize;
+                                sizes.extend(repeat_n(elem, count));
+                            } else {
+                                return Err(StoreErrorKind::BadChunkGridMetadata(
+                                    "cannot parse `chunk_shapes` for rectilinear chunk grid".into(),
+                                )).capture();
+                            }
+                        }
+                        let form = if has_rle { AxisForm::Rle } else { AxisForm::Flat };
+                        Ok((AxisLayout::Rectilinear { sizes }, form))
+                    })
+                    .collect::<StoreResult<Vec<_>>>()
             }
             _other => {
                 Err(StoreErrorKind::BadChunkGridMetadata(format!(
