@@ -32,6 +32,7 @@ tokio-util.workspace = true
 tracing.workspace = true
 typed-path.workspace = true
 typetag.workspace = true
+uuid.workspace = true
 
 [dev-dependencies]
 icechunk-macros.workspace = true

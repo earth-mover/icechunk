@@ -2375,6 +2375,7 @@ dependencies = [
  "tracing",
  "typetag",
  "url",
+ "uuid",
 ]
 
 [[package]]
@@ -2487,6 +2488,7 @@ dependencies = [
  "tracing",
  "typed-path",
  "typetag",
+ "uuid",
 ]
 
 [[package]]
