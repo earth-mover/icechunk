@@ -100,6 +100,7 @@ services:
       - '8474:8474'
       - '9002:9002'
       - '9003:9003'
+      - '9004:9004'
 
   azurite:
     image: mcr.microsoft.com/azure-storage/azurite:3.33.0
