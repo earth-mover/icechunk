@@ -13,12 +13,13 @@
 use std::{num::NonZeroU16, sync::Arc, time::Duration};
 
 use bytes::Bytes;
+use futures::TryStreamExt as _;
 use icechunk::{
     Storage,
     asset_manager::AssetManager,
     config::{S3Credentials, S3Options, S3StaticCredentials},
     format::{ChunkId, format_constants::SpecVersionBin},
-    storage::{RetriesSettings, S3Storage},
+    storage::{RetriesSettings, S3Storage, TimeoutSettings},
 };
 use noxious_client::{Client, StreamDirection, Toxic, ToxicKind};
 
@@ -292,6 +293,70 @@ async fn test_connection_reset() -> Result<(), Box<dyn std::error::Error>> {
         test_data.len(),
         "Should have recovered after toxic was removed (retries should handle connection reset)"
     );
+
+    client.proxy(&proxy_name).await?.delete().await?;
+    Ok(())
+}
+
+// ── Conditional PUT test ───────────────────────────────────────────────────
+
+#[icechunk_macros::tokio_test]
+async fn conditional_put() -> Result<(), Box<dyn std::error::Error>> {
+    let (client, proxy_name) = setup_toxiproxy("conditional-put-test", 9004).await?;
+
+    let storage = create_proxied_storage(9004, 3, "conditional-put-test")?;
+
+    // Truncates the downstream connection after 450 bytes -- enough for the
+    // small response payloads of the snapshot/transaction PUTs to fit, but
+    // cuts the response of the conditional repo_info PUT mid-flight.
+    let url = format!("http://localhost:8474/proxies/conditional-put-test/toxics");
+    let resp = reqwest::Client::new()
+        .post(&url)
+        .json(&serde_json::json!({
+            "name": "drop",
+            "type": "limit_data",
+            "stream": "downstream",
+            "toxicity": 1.0,
+            "attributes": { "bytes": 450 }
+        }))
+        .send()
+        .await?;
+    if !resp.status().is_success() {
+        let text = resp.text().await?;
+        return Err(format!("Failed to add limit_data toxic: {text}").into());
+    }
+
+    println!("Added limit_data toxic");
+
+    let settings = icechunk::storage::Settings {
+        retries: Some(RetriesSettings {
+            #[expect(clippy::unwrap_used)]
+            max_tries: Some(NonZeroU16::new(5).unwrap()),
+            initial_backoff_ms: Some(50),
+            max_backoff_ms: Some(500),
+        }),
+        timeouts: Some(TimeoutSettings {
+            #[expect(clippy::unwrap_used)]
+            read_timeout_ms: Some(2000),
+            operation_attempt_timeout_ms: Some(3000),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+
+    let err = icechunk::Repository::create(
+        Some(icechunk::RepositoryConfig {
+            storage: Some(settings),
+            ..Default::default()
+        }),
+        storage,
+        std::collections::HashMap::new(),
+        Some(SpecVersionBin::default()),
+        true,
+    )
+    .await;
+
+    dbg!(err);
 
     client.proxy(&proxy_name).await?.delete().await?;
     Ok(())
