@@ -306,18 +306,20 @@ async fn conditional_put() -> Result<(), Box<dyn std::error::Error>> {
 
     let storage = create_proxied_storage(9004, 3, "conditional-put-test")?;
 
-    // Truncates the downstream connection after 450 bytes -- enough for the
+    // Truncates the downstream connection after 300 bytes -- enough for the
     // small response payloads of the snapshot/transaction PUTs to fit, but
-    // cuts the response of the conditional repo_info PUT mid-flight.
+    // cuts the response of the conditional repo_info PUT mid-flight, so the AWS
+    // SDK retries it and trips the spurious-conflict bug.
+    let toxic_bytes: u64 = 300;
     let url = format!("http://localhost:8474/proxies/conditional-put-test/toxics");
     let resp = reqwest::Client::new()
         .post(&url)
         .json(&serde_json::json!({
-            "name": "drop",
+            "name": "conditional_put",
             "type": "limit_data",
             "stream": "downstream",
             "toxicity": 1.0,
-            "attributes": { "bytes": 450 }
+            "attributes": { "bytes": toxic_bytes }
         }))
         .send()
         .await?;
@@ -344,6 +346,10 @@ async fn conditional_put() -> Result<(), Box<dyn std::error::Error>> {
         ..Default::default()
     };
 
+    // Keep a handle to the storage so we can inspect what landed in the backend
+    // after the (expected) failure.
+    let storage_for_list = Arc::clone(&storage);
+
     let err = icechunk::Repository::create(
         Some(icechunk::RepositoryConfig {
             storage: Some(settings),
@@ -352,11 +358,51 @@ async fn conditional_put() -> Result<(), Box<dyn std::error::Error>> {
         storage,
         std::collections::HashMap::new(),
         Some(SpecVersionBin::default()),
-        true,
+        false,
     )
     .await;
 
-    dbg!(err);
+    // Remove the toxic so the listing below isn't itself truncated.
+    remove_toxic_via_api(&proxy_name, "conditional_put").await?;
+
+    // The conditional repo_info PUT actually succeeded on the server; only its
+    // response was lost. So all three init objects (snapshot, transaction log,
+    // repo info) should be present in storage.
+    let list_settings = storage_for_list.default_settings().await?;
+    let keys: Vec<String> = storage_for_list
+        .list_objects(&list_settings, "")
+        .await?
+        .map_ok(|li| li.id)
+        .try_collect()
+        .await?;
+    println!("keys committed to storage: {}/3", keys.len());
+    for k in &keys {
+        println!("  - {k}");
+    }
+
+    // The bug: despite all three PUTs landing, icechunk surfaces a spurious
+    // conflict error because the AWS SDK retried the conditional repo_info PUT
+    // after its response was lost, and the retry saw the object it had just
+    // written as a pre-existing conflict.
+    let err = err.expect_err("create should surface the spurious conflict bug");
+    let msg = format!("{err}");
+    println!("icechunk surfaced error: {msg}");
+    assert!(
+        [
+            "repo info object was updated",
+            "branch update conflict",
+            "config was updated by other session",
+            "expected parent",
+        ]
+        .iter()
+        .any(|marker| msg.contains(marker)),
+        "expected a spurious conflict error, got: {msg}"
+    );
+    assert_eq!(
+        keys.len(),
+        3,
+        "all three init objects should have landed in storage despite the error"
+    );
 
     client.proxy(&proxy_name).await?.delete().await?;
     Ok(())
