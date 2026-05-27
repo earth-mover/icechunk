@@ -233,6 +233,14 @@ pub struct Settings {
     #[serde(default)]
     pub unsafe_use_conditional_create: Option<bool>,
 
+    /// Whether to stamp object writes with user metadata. Defaults to `true`.
+    ///
+    /// Disabling this while leaving `unsafe_use_conditional_*` enabled
+    /// silently neutralises the lost-response recovery for conditional
+    /// PUTs: the conditional headers still go out, but with no write-id
+    /// stamped a transient PUT failure can surface as a spurious
+    /// `NotOnLatestVersion` even when the write landed. Only disable for
+    /// backends that genuinely don't support user metadata.
     #[serde(default)]
     pub unsafe_use_metadata: Option<bool>,
 
