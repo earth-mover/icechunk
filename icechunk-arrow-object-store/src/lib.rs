@@ -53,13 +53,40 @@ use std::{
     ops::Range,
     path::{Path as StdPath, PathBuf},
     pin::Pin,
-    sync::Arc,
+    sync::{Arc, OnceLock},
 };
 use tokio::sync::{OnceCell, RwLock};
 
 use tokio_util::io::StreamReader;
-use tracing::instrument;
+use tracing::{instrument, warn};
 use url::Url;
+use uuid::Uuid;
+
+/// Per-PUT token written into user metadata so the read-back can recognise
+/// our own retried write. Keep in sync with the same constant in `icechunk-s3`.
+const WRITE_ID_METADATA_KEY: &str = "icechunk-write-id";
+
+/// Only `Generic` PUT errors can hide a successful-but-ack-lost write
+/// reaching us as a transport failure; `Precondition` / `AlreadyExists`
+/// are handled by their own arm at the call site.
+fn is_readback_worthy(err: &object_store::Error) -> bool {
+    matches!(err, object_store::Error::Generic { .. })
+}
+
+static CONDITIONAL_WITHOUT_METADATA_WARNED: OnceLock<()> = OnceLock::new();
+
+fn warn_conditional_without_metadata_once() {
+    CONDITIONAL_WITHOUT_METADATA_WARNED.get_or_init(|| {
+        warn!(
+            "conditional PUT is enabled but `unsafe_use_metadata` is \
+             disabled — lost-response recovery for conditional writes \
+             requires user metadata to stamp write-ids; without it, \
+             transient PUT failures may surface as spurious conflicts \
+             even when the write actually landed. See \
+             icechunk_storage::Settings::unsafe_use_metadata."
+        );
+    });
+}
 
 // --- GCS credential types ---
 
@@ -392,6 +419,22 @@ impl Storage for ObjectStorage {
         };
 
         let mode = self.get_put_mode(settings, previous_version);
+        let is_conditional = !matches!(mode, PutMode::Overwrite);
+
+        let write_id = if is_conditional && settings.unsafe_use_metadata() {
+            let id = Uuid::new_v4().to_string();
+            attributes.insert(
+                Attribute::Metadata(std::borrow::Cow::Borrowed(WRITE_ID_METADATA_KEY)),
+                AttributeValue::from(id.clone()),
+            );
+            Some(id)
+        } else {
+            if is_conditional {
+                warn_conditional_without_metadata_once();
+            }
+            None
+        };
+
         let options = PutOptions { mode, attributes, ..PutOptions::default() };
         // FIXME: use multipart
         let res =
@@ -404,9 +447,46 @@ impl Storage for ObjectStorage {
                 };
                 Ok(VersionedUpdateResult::Updated { new_version })
             }
-            Err(object_store::Error::Precondition { .. })
-            | Err(object_store::Error::AlreadyExists { .. }) => {
-                Ok(VersionedUpdateResult::NotOnLatestVersion)
+            // A retried PUT after a lost response trips the conditional
+            // header against the object the first attempt wrote. Only
+            // positive evidence (`NotOurWrite`) maps to `NotOnLatestVersion`;
+            // `Inconclusive` propagates per the invariant doc on
+            // `icechunk_s3::S3Storage::resolve_precondition_conflict`.
+            Err(err @ object_store::Error::Precondition { .. })
+            | Err(err @ object_store::Error::AlreadyExists { .. }) => {
+                match self
+                    .try_resolve_via_readback(settings, &path, write_id.as_deref())
+                    .await
+                {
+                    ReadbackOutcome::OurWrite(new_version) => {
+                        Ok(VersionedUpdateResult::Updated { new_version })
+                    }
+                    ReadbackOutcome::NotOurWrite => {
+                        Ok(VersionedUpdateResult::NotOnLatestVersion)
+                    }
+                    ReadbackOutcome::Inconclusive => Err(StorageError::capture(
+                        StorageErrorKind::ObjectStore(Box::new(err)),
+                    )),
+                }
+            }
+            // If `object_store` gives up before seeing a clean 412 (every
+            // retry's response also cut), the lost-response signal lands
+            // here instead. Only `OurWrite` flips to success; everything
+            // else propagates the transport error truthfully.
+            Err(err) if is_readback_worthy(&err) => {
+                match self
+                    .try_resolve_via_readback(settings, &path, write_id.as_deref())
+                    .await
+                {
+                    ReadbackOutcome::OurWrite(new_version) => {
+                        Ok(VersionedUpdateResult::Updated { new_version })
+                    }
+                    ReadbackOutcome::NotOurWrite | ReadbackOutcome::Inconclusive => {
+                        Err(StorageError::capture(StorageErrorKind::ObjectStore(
+                            Box::new(err),
+                        )))
+                    }
+                }
             }
             Err(err) => {
                 Err(StorageError::capture(StorageErrorKind::ObjectStore(Box::new(err))))
@@ -574,7 +654,74 @@ impl Storage for ObjectStorage {
     }
 }
 
+/// Encodes the invariant on
+/// `icechunk_s3::S3Storage::resolve_precondition_conflict`: only
+/// `NotOurWrite` may map to `NotOnLatestVersion`; `Inconclusive` must
+/// propagate the original PUT error so we never mint a spurious conflict.
+enum ReadbackOutcome {
+    OurWrite(VersionInfo),
+    NotOurWrite,
+    Inconclusive,
+}
+
 impl ObjectStorage {
+    /// `get_opts` (no range) instead of `head` because `object_store::ObjectMeta`
+    /// doesn't expose user metadata; `GetResult::attributes` does, via the
+    /// `x-amz-meta-*` -> `Attribute::Metadata` mapping configured by the S3,
+    /// Azure, and GCS backends (see `object_store/src/client/get.rs`). The
+    /// response body stream is never polled.
+    async fn try_resolve_via_readback(
+        &self,
+        settings: &Settings,
+        path: &ObjectPath,
+        write_id: Option<&str>,
+    ) -> ReadbackOutcome {
+        let Some(write_id) = write_id else {
+            return ReadbackOutcome::Inconclusive;
+        };
+        let client = match self.get_client(settings).await {
+            Ok(c) => c,
+            Err(err) => {
+                warn!(
+                    %path,
+                    error = %err,
+                    "lost-response readback aborted: could not initialise client"
+                );
+                return ReadbackOutcome::Inconclusive;
+            }
+        };
+        let result = match client.get_opts(path, GetOptions::default()).await {
+            Ok(r) => r,
+            Err(err) => {
+                warn!(
+                    %path,
+                    error = %err,
+                    "lost-response readback GET failed; cannot disambiguate the PUT failure"
+                );
+                return ReadbackOutcome::Inconclusive;
+            }
+        };
+        let stored = result
+            .attributes
+            .get(&Attribute::Metadata(std::borrow::Cow::Borrowed(WRITE_ID_METADATA_KEY)))
+            .map(|v| v.as_ref());
+        if stored != Some(write_id) {
+            return ReadbackOutcome::NotOurWrite;
+        }
+        let new_version = VersionInfo {
+            etag: result.meta.e_tag.as_ref().cloned().map(ETag),
+            generation: result.meta.version.as_ref().cloned().map(Generation),
+        };
+        warn!(
+            path = %path,
+            write_id,
+            "conditional PUT reported failure, but the stored object carries \
+             the icechunk-write-id we just stamped; treating it as a retried \
+             PUT whose response was lost and reporting success"
+        );
+        ReadbackOutcome::OurWrite(new_version)
+    }
+
     async fn get_object_range_conditional(
         &self,
         settings: &Settings,

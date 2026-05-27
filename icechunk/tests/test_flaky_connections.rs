@@ -292,39 +292,70 @@ async fn test_connection_reset() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-// ── Conditional PUT test ───────────────────────────────────────────────────
+// ── Conditional PUT regression tests for issue #2099 ───────────────────────
+//
+// Model a lost-response on a conditional PUT: the body reaches the server but
+// the ack doesn't reach the client, so the underlying HTTP client retries
+// and the retry trips the conditional header against the just-written object.
+// Without the fix the spurious 412 surfaces as a `NotOnLatestVersion`
+// ("repo info object was updated..."); the `*_long_blip` variant additionally
+// covers the `object_store` case where every retry's response also gets cut
+// and the failure arrives on the generic-error arm instead of `Precondition`.
 
-#[icechunk_macros::tokio_test]
-async fn conditional_put() -> Result<(), Box<dyn std::error::Error>> {
-    let (client, proxy_name) = setup_toxiproxy("conditional-put-test", 9004).await?;
+#[derive(Clone, Copy)]
+enum ConditionalPutBackend {
+    IcechunkS3,
+    ArrowObjectStore,
+}
 
-    let storage = create_proxied_storage(9004, 3, "conditional-put-test")?;
+const LOST_RESPONSE_TOXIC_NAME: &str = "lost_response";
 
-    // Truncates the downstream connection after 300 bytes -- enough for the
-    // small response payloads of the snapshot/transaction PUTs to fit, but
-    // cuts the response of the conditional repo_info PUT mid-flight, so the AWS
-    // SDK retries it and trips the spurious-conflict bug.
-    let toxic_bytes: u64 = 300;
-    let url = format!("http://localhost:8474/proxies/conditional-put-test/toxics");
-    let resp = reqwest::Client::new()
-        .post(&url)
-        .json(&serde_json::json!({
-            "name": "conditional_put",
-            "type": "limit_data",
-            "stream": "downstream",
-            "toxicity": 1.0,
-            "attributes": { "bytes": toxic_bytes }
-        }))
-        .send()
-        .await?;
-    if !resp.status().is_success() {
-        let text = resp.text().await?;
-        return Err(format!("Failed to add limit_data toxic: {text}").into());
-    }
+async fn build_proxied_storage(
+    backend: ConditionalPutBackend,
+    proxy_label: &str,
+    port: u16,
+) -> Result<Arc<dyn Storage + Send + Sync>, Box<dyn std::error::Error>> {
+    let (access_key_id, secret_access_key) = Permission::Modify.keys();
+    let credentials = S3Credentials::Static(S3StaticCredentials {
+        access_key_id: access_key_id.into(),
+        secret_access_key: secret_access_key.into(),
+        session_token: None,
+        expires_after: None,
+    });
+    let s3_options = S3Options::default()
+        .with_region("us-east-1")
+        .with_endpoint_url(format!("http://localhost:{port}"))
+        .with_allow_http(true)
+        .with_force_path_style(true)
+        .with_network_stream_timeout_seconds(3);
+    let prefix = format!("{proxy_label}-{}", uuid::Uuid::new_v4());
+    Ok(match backend {
+        ConditionalPutBackend::IcechunkS3 => Arc::new(S3Storage::new(
+            s3_options,
+            "testbucket".to_string(),
+            Some(prefix),
+            credentials,
+            true,
+            Vec::new(),
+            Vec::new(),
+        )?),
+        ConditionalPutBackend::ArrowObjectStore => Arc::new(
+            icechunk::ObjectStorage::new_s3(
+                "testbucket".to_string(),
+                Some(prefix),
+                Some(credentials),
+                Some(s3_options),
+            )
+            .await?,
+        ),
+    })
+}
 
-    println!("Added limit_data toxic");
-
-    let settings = icechunk::storage::Settings {
+/// Retry/timeout knobs tight enough to keep the test under a second on a
+/// healthy machine, generous enough for the readback's retry budget to
+/// outlast the modelled blip.
+fn default_lost_response_settings() -> icechunk::storage::Settings {
+    icechunk::storage::Settings {
         retries: Some(RetriesSettings {
             #[expect(clippy::unwrap_used)]
             max_tries: Some(NonZeroU16::new(5).unwrap()),
@@ -332,72 +363,221 @@ async fn conditional_put() -> Result<(), Box<dyn std::error::Error>> {
             max_backoff_ms: Some(500),
         }),
         timeouts: Some(TimeoutSettings {
-            #[expect(clippy::unwrap_used)]
             read_timeout_ms: Some(2000),
             operation_attempt_timeout_ms: Some(3000),
             ..Default::default()
         }),
         ..Default::default()
-    };
-
-    // Keep a handle to the storage so we can inspect what landed in the backend
-    // after the (expected) failure.
-    let storage_for_list = Arc::clone(&storage);
-
-    let err = icechunk::Repository::create(
-        Some(icechunk::RepositoryConfig {
-            storage: Some(settings),
-            ..Default::default()
-        }),
-        storage,
-        std::collections::HashMap::new(),
-        Some(SpecVersionBin::default()),
-        false,
-    )
-    .await;
-
-    // Remove the toxic so the listing below isn't itself truncated.
-    remove_toxic_via_api(&proxy_name, "conditional_put").await?;
-
-    // The conditional repo_info PUT actually succeeded on the server; only its
-    // response was lost. So all three init objects (snapshot, transaction log,
-    // repo info) should be present in storage.
-    let list_settings = storage_for_list.default_settings().await?;
-    let keys: Vec<String> = storage_for_list
-        .list_objects(&list_settings, "")
-        .await?
-        .map_ok(|li| li.id)
-        .try_collect()
-        .await?;
-    println!("keys committed to storage: {}/3", keys.len());
-    for k in &keys {
-        println!("  - {k}");
     }
+}
 
-    // The bug: despite all three PUTs landing, icechunk surfaces a spurious
-    // conflict error because the AWS SDK retried the conditional repo_info PUT
-    // after its response was lost, and the retry saw the object it had just
-    // written as a pre-existing conflict.
-    let err = err.expect_err("create should surface the spurious conflict bug");
-    let msg = format!("{err}");
-    println!("icechunk surfaced error: {msg}");
-    assert!(
-        [
-            "repo info object was updated",
-            "branch update conflict",
-            "config was updated by other session",
-            "expected parent",
-        ]
-        .iter()
-        .any(|marker| msg.contains(marker)),
-        "expected a spurious conflict error, got: {msg}"
-    );
-    assert_eq!(
-        keys.len(),
-        3,
-        "all three init objects should have landed in storage despite the error"
-    );
+async fn install_limit_data_toxic(
+    proxy_label: &str,
+    toxic_name: &str,
+    bytes: u64,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let url = format!("http://localhost:8474/proxies/{proxy_label}/toxics");
+    let resp = reqwest::Client::new()
+        .post(&url)
+        .json(&serde_json::json!({
+            "name": toxic_name,
+            "type": "limit_data",
+            "stream": "downstream",
+            "toxicity": 1.0,
+            "attributes": { "bytes": bytes }
+        }))
+        .send()
+        .await?;
+    if !resp.status().is_success() {
+        let text = resp.text().await?;
+        return Err(format!("Failed to add limit_data toxic: {text}").into());
+    }
+    Ok(())
+}
+
+/// Sets up the toxic, then hands `(storage, settings, toxic_remover)` to
+/// `action`; the closure is responsible for `.await??`-ing the
+/// `toxic_remover` before any post-action storage ops that need the toxic
+/// cleared. The harness deletes the proxy on return either way.
+async fn with_lost_response_harness<F, Fut>(
+    backend: ConditionalPutBackend,
+    proxy_label: &str,
+    port: u16,
+    toxic_bytes: u64,
+    toxic_removal_delay_ms: u64,
+    action: F,
+) -> Result<(), Box<dyn std::error::Error>>
+where
+    F: FnOnce(
+        Arc<dyn Storage + Send + Sync>,
+        icechunk::storage::Settings,
+        tokio::task::JoinHandle<Result<(), String>>,
+    ) -> Fut,
+    Fut: Future<Output = Result<(), Box<dyn std::error::Error>>>,
+{
+    let (client, proxy_name) = setup_toxiproxy(proxy_label, port).await?;
+    let storage = build_proxied_storage(backend, proxy_label, port).await?;
+    install_limit_data_toxic(proxy_label, LOST_RESPONSE_TOXIC_NAME, toxic_bytes).await?;
+
+    let removal_proxy = proxy_name.clone();
+    let toxic_remover = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(toxic_removal_delay_ms)).await;
+        remove_toxic_via_api(&removal_proxy, LOST_RESPONSE_TOXIC_NAME)
+            .await
+            .map_err(|e| e.to_string())
+    });
+
+    let result =
+        action(Arc::clone(&storage), default_lost_response_settings(), toxic_remover)
+            .await;
 
     client.proxy(&proxy_name).await?.delete().await?;
-    Ok(())
+    result
+}
+
+async fn conditional_put_repro(
+    backend: ConditionalPutBackend,
+    proxy_label: &str,
+    port: u16,
+    toxic_removal_delay_ms: u64,
+) -> Result<(), Box<dyn std::error::Error>> {
+    // 300 bytes: snapshot/transaction PUT responses fit, repo_info doesn't.
+    with_lost_response_harness(
+        backend,
+        proxy_label,
+        port,
+        300,
+        toxic_removal_delay_ms,
+        |storage, settings, toxic_remover| async move {
+            let storage_for_list = Arc::clone(&storage);
+            let result = icechunk::Repository::create(
+                Some(icechunk::RepositoryConfig {
+                    storage: Some(settings),
+                    ..Default::default()
+                }),
+                storage,
+                std::collections::HashMap::new(),
+                Some(SpecVersionBin::default()),
+                false,
+            )
+            .await;
+
+            toxic_remover.await??;
+
+            let list_settings = storage_for_list.default_settings().await?;
+            let keys: Vec<String> = storage_for_list
+                .list_objects(&list_settings, "")
+                .await?
+                .map_ok(|li| li.id)
+                .try_collect()
+                .await?;
+            println!("keys committed to storage: {}/3", keys.len());
+            for k in &keys {
+                println!("  - {k}");
+            }
+
+            if let Err(err) = &result {
+                panic!(
+                    "create should succeed despite the lost conditional PUT response, got: {err}"
+                );
+            }
+            assert_eq!(
+                keys.len(),
+                3,
+                "all three init objects should have landed in storage"
+            );
+            Ok(())
+        },
+    )
+    .await
+}
+
+#[icechunk_macros::tokio_test]
+async fn conditional_put() -> Result<(), Box<dyn std::error::Error>> {
+    conditional_put_repro(
+        ConditionalPutBackend::IcechunkS3,
+        "conditional-put-test",
+        9004,
+        250,
+    )
+    .await
+}
+
+/// Short blip: `object_store`'s retry lands cleanly and surfaces a 412.
+#[icechunk_macros::tokio_test]
+async fn conditional_put_object_store_short_blip()
+-> Result<(), Box<dyn std::error::Error>> {
+    conditional_put_repro(
+        ConditionalPutBackend::ArrowObjectStore,
+        "conditional-put-object-store-short-blip",
+        9005,
+        50,
+    )
+    .await
+}
+
+/// Longer blip: `object_store` gives up retrying before observing a clean
+/// 412 (every retry's response is also cut), so the failure lands on the
+/// generic-error arm. The toxic clears before the readback's retry budget
+/// runs out, so the recovery still works.
+#[icechunk_macros::tokio_test]
+async fn conditional_put_object_store_long_blip() -> Result<(), Box<dyn std::error::Error>>
+{
+    conditional_put_repro(
+        ConditionalPutBackend::ArrowObjectStore,
+        "conditional-put-object-store-long-blip",
+        9006,
+        250,
+    )
+    .await
+}
+
+/// Regression for the 0-byte readback: `refs::delete_tag` PUTs
+/// `Bytes::new()` conditionally, so the readback must not use a 1-byte
+/// range (which 416s on empty objects). Exercises `put_object` directly
+/// with the same arguments — going through `Repository::delete_tag` adds
+/// two parallel GETs in `fetch_tag` and makes the toxic-timing window too
+/// narrow to test reliably.
+#[icechunk_macros::tokio_test]
+async fn zero_byte_conditional_put_lost_response()
+-> Result<(), Box<dyn std::error::Error>> {
+    // 80 bytes cuts even the empty-PUT response (a 300-byte budget would
+    // fit a single tiny response — the other tests need 300 because they
+    // accumulate the cost of three PUTs on the same connection).
+    with_lost_response_harness(
+        ConditionalPutBackend::ArrowObjectStore,
+        "zero-byte-conditional-put",
+        9007,
+        80,
+        50,
+        |storage, settings, toxic_remover| async move {
+            let result = storage
+                .put_object(
+                    &settings,
+                    "zero-byte-test",
+                    Bytes::new(),
+                    None,
+                    Default::default(),
+                    Some(&icechunk::storage::VersionInfo::for_creation()),
+                )
+                .await;
+            toxic_remover.await??;
+
+            match result {
+                Ok(icechunk::storage::VersionedUpdateResult::Updated { .. }) => Ok(()),
+                Ok(icechunk::storage::VersionedUpdateResult::NotOnLatestVersion) => {
+                    panic!(
+                        "0-byte conditional PUT readback failed: caller reports \
+                         NotOnLatestVersion for a write that landed. This is the \
+                         0-byte readback bug — readback's ranged GET returns 416 on \
+                         an empty object and the helper returns None."
+                    )
+                }
+                Err(err) => panic!(
+                    "conditional 0-byte PUT should succeed despite the lost response, got: {err}"
+                ),
+            }
+        },
+    )
+    .await
 }
