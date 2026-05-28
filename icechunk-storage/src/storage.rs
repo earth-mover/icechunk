@@ -464,6 +464,17 @@ pub trait Storage: fmt::Debug + Display + sealed::Sealed + Sync + Send {
 
     async fn can_write(&self) -> StorageResult<bool>;
 
+    /// Ensure the storage location is ready to receive writes.
+    ///
+    /// Called by [`Repository::create`] before any other I/O. The default
+    /// implementation is a no-op; backends that need to materialize the
+    /// location (e.g. the local filesystem creating the directory) override
+    /// this. Read paths like `open` never call it, so a missing location
+    /// stays missing.
+    async fn create_location_if_needed(&self) -> StorageResult<()> {
+        Ok(())
+    }
+
     async fn get_object(
         &self,
         settings: &Settings,
@@ -581,10 +592,14 @@ pub trait Storage: fmt::Debug + Display + sealed::Sealed + Sync + Send {
     }
 
     async fn root_is_clean(&self, settings: &Settings) -> StorageResult<bool> {
-        match self.list_objects(settings, "").await?.next().await {
-            None => Ok(true),
-            Some(Ok(_)) => Ok(false),
-            Some(Err(err)) => Err(err),
+        match self.list_objects(settings, "").await {
+            Ok(mut stream) => match stream.next().await {
+                None => Ok(true),
+                Some(Ok(_)) => Ok(false),
+                Some(Err(err)) => Err(err),
+            },
+            Err(StorageError { kind: StorageErrorKind::ObjectNotFound, .. }) => Ok(true),
+            Err(err) => Err(err),
         }
     }
 

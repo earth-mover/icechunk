@@ -2,6 +2,7 @@ import pickle
 import tempfile
 import time
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, cast
 
 import pytest
@@ -502,6 +503,19 @@ async def test_repo_status_readonly_blocks_rearrange_session_async() -> None:
     await repo.create_branch_async("not read-only anymore!", snapshot_id=new_snapshot_id)
     await repo.create_tag_async("an online tag", snapshot_id=new_snapshot_id)
     await repo.garbage_collect_async(datetime.now(UTC))
+
+
+def test_open_doesnt_create_dir() -> None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        missing = Path(tmpdir) / "should_not_exist"
+        present = Path(tmpdir) / "present"
+
+        with pytest.raises(IcechunkError, match=r"the repository doesn.t exist"):
+            Repository.open(local_filesystem_storage(str(missing)))
+        assert not missing.exists()
+
+        Repository.create(local_filesystem_storage(str(present)))
+        assert present.exists()
 
 
 async def test_repo_status_readonly_blocks_writable_session_async() -> None:
