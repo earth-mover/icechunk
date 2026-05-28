@@ -171,7 +171,9 @@ where
         ("azure_blob_slash", s4slash),
     ];
 
-    if env::var("AWS_BUCKET").is_ok() {
+    if let Ok(e) = env::var("AWS_BUCKET")
+        && !e.is_empty()
+    {
         let prefix = common::get_random_prefix("with_storage");
         let s = common::make_aws_integration_storage(prefix.clone())?;
         storages.push(("AWS", s));
@@ -180,7 +182,9 @@ where
         let s = common::make_aws_integration_storage(prefix.clone())?;
         storages.push(("AWS_slash", s));
     }
-    if env::var("R2_BUCKET").is_ok() {
+    if let Ok(e) = env::var("R2_BUCKET")
+        && !e.is_empty()
+    {
         let prefix = common::get_random_prefix("with_storage");
         let s = common::make_r2_integration_storage(prefix.clone())?;
         storages.push(("R2", s));
@@ -189,7 +193,7 @@ where
         let s = common::make_r2_integration_storage(prefix.clone())?;
         storages.push(("R2_slash", s));
     }
-    // if env::var("TIGRIS_BUCKET").is_ok() {
+    // if let Ok(e) = env::var("TIGRIS_BUCKET") && !e.is_empty() {
     //     let prefix = common::get_random_prefix("with_storage");
     //     let s = common::make_tigris_integration_storage(prefix.clone())?;
     //     storages.push(("Tigris", s));
