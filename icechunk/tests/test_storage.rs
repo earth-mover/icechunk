@@ -814,7 +814,10 @@ pub async fn test_write_config_can_overwrite_with_unsafe_config(
 
 #[tokio_test]
 pub async fn test_storage_classes() -> Result<(), Box<dyn std::error::Error>> {
-    if env::var("AWS_BUCKET").is_err() {
+    if let Ok(e) = env::var("AWS_BUCKET")
+        && !e.is_empty()
+    {
+    } else {
         return Ok(());
     }
     let prefix = common::get_random_prefix("test_storage_classes");
