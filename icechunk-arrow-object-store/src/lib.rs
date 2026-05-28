@@ -52,7 +52,6 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     fmt::{self, Debug, Display},
-    fs::create_dir_all,
     future::ready,
     num::{NonZeroU16, NonZeroU64},
     ops::Range,
@@ -270,15 +269,12 @@ impl ObjectStorage {
     /// client is not serializeable and must be initialized after deserialization. Under normal construction
     /// the original client is returned immediately.
     #[instrument(skip_all)]
-    async fn get_client(&self, settings: &Settings) -> &Arc<dyn ObjectStore> {
+    async fn get_client(
+        &self,
+        settings: &Settings,
+    ) -> StorageResult<&Arc<dyn ObjectStore>> {
         self.client
-            .get_or_init(|| async {
-                // TODO: handle error better?
-                #[expect(clippy::expect_used)]
-                self.backend
-                    .mk_object_store(settings)
-                    .expect("failed to create object store")
-            })
+            .get_or_try_init(|| async { self.backend.mk_object_store(settings) })
             .await
     }
 
@@ -293,7 +289,7 @@ impl ObjectStorage {
     /// Intended for testing and debugging purposes only.
     pub async fn all_keys(&self) -> StorageResult<Vec<String>> {
         self.get_client(&self.backend.default_settings())
-            .await
+            .await?
             .list(None)
             .map_ok(|obj| obj.location.to_string())
             .try_collect()
@@ -368,6 +364,10 @@ impl Storage for ObjectStorage {
         Ok(self.backend.can_write())
     }
 
+    async fn create_location_if_needed(&self) -> StorageResult<()> {
+        self.backend.create_location_if_needed()
+    }
+
     #[instrument(skip_all)]
     async fn default_settings(&self) -> StorageResult<Settings> {
         Ok(self.backend.default_settings())
@@ -400,7 +400,7 @@ impl Storage for ObjectStorage {
         let options = PutOptions { mode, attributes, ..PutOptions::default() };
         // FIXME: use multipart
         let res =
-            self.get_client(settings).await.put_opts(&path, bytes.into(), options).await;
+            self.get_client(settings).await?.put_opts(&path, bytes.into(), options).await;
         match res {
             Ok(res) => {
                 let new_version = VersionInfo {
@@ -437,7 +437,7 @@ impl Storage for ObjectStorage {
                 if_match: version.etag().map(|e| strip_quotes(e).into()),
                 ..Default::default()
             };
-            let result = self.get_client(settings).await.get_opts(&from, opts).await;
+            let result = self.get_client(settings).await?.get_opts(&from, opts).await;
             match result {
                 Ok(result) => {
                     let bytes = result
@@ -446,7 +446,7 @@ impl Storage for ObjectStorage {
                         .map_err(|e| StorageErrorKind::ObjectStore(Box::new(e)))
                         .capture()?;
                     self.get_client(settings)
-                        .await
+                        .await?
                         .put(&to, bytes.into())
                         .await
                         .map_err(|e| StorageErrorKind::ObjectStore(Box::new(e)))
@@ -460,7 +460,7 @@ impl Storage for ObjectStorage {
                 Err(err) => Err(obj_store_error(err)),
             }
         } else {
-            match self.get_client(settings).await.copy(&from, &to).await {
+            match self.get_client(settings).await?.copy(&from, &to).await {
                 Ok(_) => {
                     Ok(VersionedUpdateResult::Updated { new_version: version.clone() })
                 }
@@ -478,7 +478,7 @@ impl Storage for ObjectStorage {
     ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
         let prefix = ObjectPath::from(format!("{}/{}", self.backend.prefix(), prefix));
         let stream =
-            self.get_client(settings).await.list(Some(&prefix)).map(move |object| {
+            self.get_client(settings).await?.list(Some(&prefix)).map(move |object| {
                 let prefix = prefix.clone();
                 object
                     .map_err(obj_store_error)
@@ -502,7 +502,7 @@ impl Storage for ObjectStorage {
             sizes.insert(path, size);
         }
         let results =
-            self.get_client(settings).await.delete_stream(stream::iter(ids).boxed());
+            self.get_client(settings).await?.delete_stream(stream::iter(ids).boxed());
         let res = results
             .fold(DeleteObjectsResult::default(), |mut res, delete_result| {
                 if let Ok(deleted_path) = delete_result {
@@ -531,7 +531,7 @@ impl Storage for ObjectStorage {
         let path = self.prefixed_path(path);
         let res = self
             .get_client(settings)
-            .await
+            .await?
             .head(&path)
             .await
             .map_err(Box::new)
@@ -604,7 +604,7 @@ impl ObjectStorage {
                 .and_then(|v| v.etag().map(|e| strip_quotes(e).into())),
             ..Default::default()
         };
-        let res = self.get_client(settings).await.get_opts(&full_key, opts).await;
+        let res = self.get_client(settings).await?.get_opts(&full_key, opts).await;
 
         match res {
             Ok(result) => {
@@ -645,6 +645,10 @@ pub trait ObjectStoreBackend: Debug + Display + Sync + Send {
 
     fn can_write(&self) -> bool {
         true
+    }
+
+    fn create_location_if_needed(&self) -> Result<(), StorageError> {
+        Ok(())
     }
 }
 
@@ -723,8 +727,13 @@ impl ObjectStoreBackend for LocalFileSystemObjectStoreBackend {
         &self,
         _settings: &Settings,
     ) -> Result<Arc<dyn ObjectStore>, StorageError> {
-        create_dir_all(&self.path).capture()?;
-        let path = std::fs::canonicalize(&self.path).capture()?;
+        let path = std::fs::canonicalize(&self.path).map_err(|err| {
+            if err.kind() == std::io::ErrorKind::NotFound {
+                StorageError::capture(StorageErrorKind::ObjectNotFound)
+            } else {
+                StorageError::capture(StorageErrorKind::IOError(err))
+            }
+        })?;
         let fs = LocalFileSystem::new_with_prefix(path).capture_box()?;
         Ok(Arc::new(fs))
     }
@@ -756,6 +765,11 @@ impl ObjectStoreBackend for LocalFileSystemObjectStoreBackend {
             }),
             ..Default::default()
         }
+    }
+
+    fn create_location_if_needed(&self) -> Result<(), StorageError> {
+        std::fs::create_dir_all(&self.path).capture()?;
+        Ok(())
     }
 }
 
