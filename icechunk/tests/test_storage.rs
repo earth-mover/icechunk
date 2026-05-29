@@ -20,7 +20,7 @@ use icechunk::{
     repository::{RepositoryError, RepositoryErrorKind},
     storage::{
         self, ConcurrencySettings, ETag, Generation, RepositoryCreation, S3Storage,
-        StorageErrorKind, StorageResult, VersionInfo, mk_client, new_http_storage,
+        StorageErrorKind, StorageResult, VersionInfo, VersionedUpdateResult, mk_client, new_http_storage,
         new_in_memory_storage, new_redirect_storage, new_s3_storage, s3_storage,
     },
 };
@@ -619,6 +619,49 @@ async fn test_list_objects() -> Result<(), Box<dyn std::error::Error>> {
             );
         }
 
+        Ok(())
+    })
+    .await?;
+    Ok(())
+}
+
+#[tokio_test]
+pub async fn test_conditional_create_conflicts_with_existing()
+-> Result<(), Box<dyn std::error::Error>> {
+    // Exercises the readback's `NotOurWrite` branch (metadata-enabled
+    // backends) and the `NotStamped` branch (local_filesystem); both
+    // must surface as `NotOnLatestVersion`.
+    with_storage(Permission::Modify, |_, storage| async move {
+        let settings = storage.default_settings().await?;
+        let path = "conditional-create-conflict";
+
+        storage
+            .put_object(
+                &settings,
+                path,
+                Bytes::from_static(b"first"),
+                None,
+                Default::default(),
+                None,
+            )
+            .await?
+            .must_write()?;
+
+        let conditional_res = storage
+            .put_object(
+                &settings,
+                path,
+                Bytes::from_static(b"second"),
+                None,
+                Default::default(),
+                Some(&VersionInfo::for_creation()),
+            )
+            .await?;
+
+        assert!(matches!(
+            conditional_res,
+            VersionedUpdateResult::NotOnLatestVersion
+        ));
         Ok(())
     })
     .await?;
