@@ -731,9 +731,11 @@ pub enum Credentials {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "object-store-http")]
+    use crate::config::HttpConfig;
     use crate::{
         ObjectStoreConfig, RepositoryConfig,
-        config::{HttpConfig, S3Options},
+        config::S3Options,
         strategies::{repository_config, s3_static_credentials},
         virtual_chunks::VirtualChunkContainer,
     };
