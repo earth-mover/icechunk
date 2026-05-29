@@ -65,9 +65,9 @@ use tracing::{instrument, warn};
 use url::Url;
 use uuid::Uuid;
 
-/// Per-PUT token written into user metadata so the read-back can recognise
-/// our own retried write. Keep in sync with the same constant in `icechunk-s3`.
-const WRITE_ID_METADATA_KEY: &str = "icechunk-write-id";
+/// Per-PUT token marking conditional writes. Underscores so the key is
+/// portable to Azure (C# identifier rules). Keep in sync with `icechunk-s3`.
+const WRITE_ID_METADATA_KEY: &str = "icechunk_write_id";
 
 /// Only `Generic` PUT errors can hide a successful-but-ack-lost write
 /// reaching us as a transport failure; `Precondition` / `AlreadyExists`
@@ -633,10 +633,7 @@ impl Storage for ObjectStorage {
                 };
                 Ok(VersionedUpdateResult::Updated { new_version })
             }
-            // A retried PUT after a lost response trips the conditional
-            // header against the object the first attempt wrote. Only
-            // positive evidence (`NotOurWrite`) maps to `NotOnLatestVersion`;
-            // `Inconclusive` propagates per the invariant doc on
+            // See the invariant doc on
             // `icechunk_s3::S3Storage::resolve_precondition_conflict`.
             Err(err @ object_store::Error::Precondition { .. })
             | Err(err @ object_store::Error::AlreadyExists { .. }) => {
@@ -647,18 +644,16 @@ impl Storage for ObjectStorage {
                     ReadbackOutcome::OurWrite(new_version) => {
                         Ok(VersionedUpdateResult::Updated { new_version })
                     }
-                    ReadbackOutcome::NotOurWrite => {
+                    ReadbackOutcome::NotOurWrite | ReadbackOutcome::NotStamped => {
                         Ok(VersionedUpdateResult::NotOnLatestVersion)
                     }
-                    ReadbackOutcome::Inconclusive => Err(StorageError::capture(
+                    ReadbackOutcome::ReadbackFailed => Err(StorageError::capture(
                         StorageErrorKind::ObjectStore(Box::new(err)),
                     )),
                 }
             }
-            // If `object_store` gives up before seeing a clean 412 (every
-            // retry's response also cut), the lost-response signal lands
-            // here instead. Only `OurWrite` flips to success; everything
-            // else propagates the transport error truthfully.
+            // Transport-class failure: only `OurWrite` flips to success;
+            // everything else propagates the original error.
             Err(err) if is_readback_worthy(&err) => {
                 match self
                     .try_resolve_via_readback(settings, &path, write_id.as_deref())
@@ -667,7 +662,9 @@ impl Storage for ObjectStorage {
                     ReadbackOutcome::OurWrite(new_version) => {
                         Ok(VersionedUpdateResult::Updated { new_version })
                     }
-                    ReadbackOutcome::NotOurWrite | ReadbackOutcome::Inconclusive => {
+                    ReadbackOutcome::NotOurWrite
+                    | ReadbackOutcome::NotStamped
+                    | ReadbackOutcome::ReadbackFailed => {
                         Err(StorageError::capture(StorageErrorKind::ObjectStore(
                             Box::new(err),
                         )))
@@ -845,14 +842,15 @@ impl Storage for ObjectStorage {
     }
 }
 
-/// Encodes the invariant on
-/// `icechunk_s3::S3Storage::resolve_precondition_conflict`: only
-/// `NotOurWrite` may map to `NotOnLatestVersion`; `Inconclusive` must
-/// propagate the original PUT error so we never mint a spurious conflict.
+/// `NotOurWrite` and `NotStamped` may map to `NotOnLatestVersion`;
+/// `ReadbackFailed` must propagate (faking a conflict there would
+/// reintroduce the spurious-conflict surface this whole machinery
+/// exists to suppress).
 enum ReadbackOutcome {
     OurWrite(VersionInfo),
     NotOurWrite,
-    Inconclusive,
+    NotStamped,
+    ReadbackFailed,
 }
 
 impl ObjectStorage {
@@ -868,7 +866,7 @@ impl ObjectStorage {
         write_id: Option<&str>,
     ) -> ReadbackOutcome {
         let Some(write_id) = write_id else {
-            return ReadbackOutcome::Inconclusive;
+            return ReadbackOutcome::NotStamped;
         };
         let client = match self.get_client(settings).await {
             Ok(c) => c,
@@ -878,7 +876,7 @@ impl ObjectStorage {
                     error = %err,
                     "lost-response readback aborted: could not initialise client"
                 );
-                return ReadbackOutcome::Inconclusive;
+                return ReadbackOutcome::ReadbackFailed;
             }
         };
         let result = match client.get_opts(path, GetOptions::default()).await {
@@ -889,7 +887,7 @@ impl ObjectStorage {
                     error = %err,
                     "lost-response readback GET failed; cannot disambiguate the PUT failure"
                 );
-                return ReadbackOutcome::Inconclusive;
+                return ReadbackOutcome::ReadbackFailed;
             }
         };
         let stored = result
