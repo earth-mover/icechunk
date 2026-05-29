@@ -317,9 +317,10 @@ fn stream2stream(
     Box::pin(res)
 }
 
-/// Per-PUT token written into `x-amz-meta-icechunk-write-id` so the read-back
-/// in `resolve_precondition_conflict` can recognise our own retried write.
-const WRITE_ID_METADATA_KEY: &str = "icechunk-write-id";
+/// Per-PUT token marking conditional writes (sent as
+/// `x-amz-meta-icechunk_write_id`). Underscores so the key is portable to
+/// Azure (C# identifier rules). Keep in sync with `icechunk-arrow-object-store`.
+const WRITE_ID_METADATA_KEY: &str = "icechunk_write_id";
 
 static CONDITIONAL_WITHOUT_METADATA_WARNED: std::sync::OnceLock<()> =
     std::sync::OnceLock::new();
