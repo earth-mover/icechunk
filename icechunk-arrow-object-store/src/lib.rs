@@ -664,11 +664,9 @@ impl Storage for ObjectStorage {
                     }
                     ReadbackOutcome::NotOurWrite
                     | ReadbackOutcome::NotStamped
-                    | ReadbackOutcome::ReadbackFailed => {
-                        Err(StorageError::capture(StorageErrorKind::ObjectStore(
-                            Box::new(err),
-                        )))
-                    }
+                    | ReadbackOutcome::ReadbackFailed => Err(StorageError::capture(
+                        StorageErrorKind::ObjectStore(Box::new(err)),
+                    )),
                 }
             }
             Err(err) => {

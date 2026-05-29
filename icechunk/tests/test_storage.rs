@@ -658,10 +658,7 @@ pub async fn test_conditional_create_conflicts_with_existing()
             )
             .await?;
 
-        assert!(matches!(
-            conditional_res,
-            VersionedUpdateResult::NotOnLatestVersion
-        ));
+        assert!(matches!(conditional_res, VersionedUpdateResult::NotOnLatestVersion));
         Ok(())
     })
     .await?;
