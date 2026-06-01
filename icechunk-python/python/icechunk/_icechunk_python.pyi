@@ -61,23 +61,31 @@ class S3Options:
         ----------
         region: str | None
             Optional, the region to use for the storage backend.
+            Default: None
         endpoint_url: str | None
             Optional, the endpoint URL to use for the storage backend.
+            Default: None
         allow_http: bool
             Whether to allow HTTP requests to the storage backend.
+            Default: False
         anonymous: bool
             Whether to use anonymous credentials to the storage backend. When `True`, the s3 requests will not be signed.
+            Default: False
         force_path_style: bool
             Whether to force use of path-style addressing for buckets.
+            Default: False
         network_stream_timeout_seconds: int | None
             Timeout requests if no bytes can be transmitted during this period of time.
-            If set to 0, timeout is disabled. Default: 60.
+            If set to 0, timeout is disabled. When None, the AWS SDK default applies.
+            Default: None
         requester_pays: bool
-            Enable requester pays for S3 buckets
+            Enable requester pays for S3 buckets.
+            Default: False
         checksum_algorithm: ChecksumAlgorithm | None
-            Override the checksum algorithm used for write requests. Defaults to ``None``,
-            in which case the AWS SDK picks its own default. Set explicitly when
-            targeting an S3-compatible service that rejects the SDK's default.
+            Override the checksum algorithm used for write requests. When None,
+            the AWS SDK picks its own default. Set explicitly when targeting an
+            S3-compatible service that rejects the SDK's default.
+            Default: None
         """
 
     @property
@@ -508,6 +516,7 @@ class CachingConfig:
             The number of bytes of chunks to cache.
             Default: 0
         """
+        ...
     def __repr__(self, /) -> str: ...
     def __str__(self, /) -> str: ...
     def _repr_html_(self, /) -> str: ...
@@ -692,11 +701,17 @@ class ManifestPreloadConfig:
         ----------
         max_total_refs: int | None
             The maximum number of references to preload.
+            Default: 10,000
         preload_if: ManifestPreloadCondition | None
-            The condition under which manifests will be preloaded.
+            The condition under which manifests will be preloaded. When None,
+            preloads arrays whose name matches common axis/coordinate names
+            (e.g. ``time``, ``lat``, ``lon``, ``x``, ``y``, ``z``) and whose
+            manifest has at most 1,000 chunk references.
+            Default: None
         max_arrays_to_scan: int | None
             The maximum number of arrays to scan when looking for manifests to preload.
-            Default is 50. Increase for repositories with many nested groups.
+            Increase for repositories with many nested groups.
+            Default: 50
         """
         ...
     @property
@@ -875,7 +890,8 @@ class ManifestSplittingConfig:
         Parameters
         ----------
         split_sizes: tuple[tuple[ManifestSplitCondition, tuple[tuple[ManifestSplitDimCondition, int], ...]], ...]
-            The configuration for how Icechunk manifests will be preloaded.
+            The configuration for how Icechunk manifests will be split.
+            Default: None (a single rule matching every array with no splitting, i.e. one manifest per array)
 
         Examples
         --------
@@ -932,13 +948,17 @@ class ManifestVirtualChunkLocationCompressionConfig:
         Parameters
         ----------
         min_num_chunks: int | None
-            Minimum number of virtual chunks required to enable compression. Default: 1000.
+            Minimum number of virtual chunks required to enable compression.
+            Default: 1,000
         dictionary_max_training_samples: int | None
-            Maximum number of URL samples used to train the compression dictionary. Default: 100.
+            Maximum number of URL samples used to train the compression dictionary.
+            Default: 100
         dictionary_max_size_bytes: int | None
-            Maximum size of the trained compression dictionary in bytes. Default: 2048.
+            Maximum size of the trained compression dictionary in bytes.
+            Default: 2,048
         compression_level: int | None
-            Zstd compression level. Default: 3.
+            Zstd compression level.
+            Default: 3
         """
         ...
 
@@ -975,11 +995,17 @@ class ManifestConfig:
         Parameters
         ----------
         preload: ManifestPreloadConfig | None
-            The configuration for how Icechunk manifests will be preloaded.
+            The configuration for how Icechunk manifests will be preloaded. When
+            None, the default `ManifestPreloadConfig` is used.
+            Default: None
         splitting: ManifestSplittingConfig | None
-            The configuration for how Icechunk manifests will be split.
+            The configuration for how Icechunk manifests will be split. When
+            None, the default `ManifestSplittingConfig` is used.
+            Default: None
         virtual_chunk_location_compression: ManifestVirtualChunkLocationCompressionConfig | None
             The configuration for zstd compression of virtual chunk location URLs.
+            When None, the default `ManifestVirtualChunkLocationCompressionConfig` is used.
+            Default: None
         """
         ...
     @property
@@ -1175,12 +1201,16 @@ class StorageTimeoutSettings:
         ----------
         connect_timeout_ms: int | None
             The timeout for establishing a connection in milliseconds.
+            Default: None (AWS SDK default)
         read_timeout_ms: int | None
             The timeout for reading a response in milliseconds.
+            Default: None (AWS SDK default)
         operation_timeout_ms: int | None
             The timeout for the entire operation (including retries) in milliseconds.
+            Default: None (AWS SDK default)
         operation_attempt_timeout_ms: int | None
             The timeout for a single attempt of an operation in milliseconds.
+            Default: None (AWS SDK default)
         """
         ...
     @property
@@ -1288,10 +1318,14 @@ class StorageSettings:
         Parameters
         ----------
         concurrency: StorageConcurrencySettings | None
-            The configuration for how Icechunk uses its Storage instance.
+            The configuration for how Icechunk uses its Storage instance. When
+            None, the default `StorageConcurrencySettings` is used.
+            Default: None
 
         retries: StorageRetriesSettings | None
-            The configuration for how Icechunk retries failed requests.
+            The configuration for how Icechunk retries failed requests. When
+            None, the default `StorageRetriesSettings` is used.
+            Default: None
 
         unsafe_use_conditional_update: bool | None
             If set to False, Icechunk loses some of its consistency guarantees.
@@ -1312,27 +1346,30 @@ class StorageSettings:
             Default: True
 
         storage_class: str | None
-            Store all objects using this object store storage class
+            Store all objects using this object store storage class.
             If None the object store default will be used.
             Currently not supported in GCS.
             Example: STANDARD_IA
+            Default: None
 
         metadata_storage_class: str | None
             Store metadata objects using this object store storage class.
             Currently not supported in GCS.
-            Defaults to storage_class.
+            Default: None (falls back to `storage_class`)
 
         chunks_storage_class: str | None
             Store chunk objects using this object store storage class.
             Currently not supported in GCS.
-            Defaults to storage_class.
+            Default: None (falls back to `storage_class`)
 
         minimum_size_for_multipart_upload: int | None
             Use object store's multipart upload for objects larger than this size in bytes.
-            Default: 100 MB if None is passed.
+            Default: 104,857,600 (100 MB)
 
         timeouts: StorageTimeoutSettings | None
-            The configuration for AWS SDK timeout settings.
+            The configuration for AWS SDK timeout settings. When None, all
+            timeouts use the AWS SDK defaults.
+            Default: None
         """
         ...
     def __repr__(self, /) -> str: ...
@@ -1440,8 +1477,10 @@ class RepoUpdateRetryConfig:
         Parameters
         ----------
         default: StorageRetriesSettings | None
-            Default retry settings for all repo update operations.
-            Defaults: `max_tries`=100, `initial_backoff_ms`=50, `max_backoff_ms`=30,000
+            Default retry settings for all repo update operations. When None,
+            the effective defaults are `max_tries`=100, `initial_backoff_ms`=50,
+            `max_backoff_ms`=30,000.
+            Default: None
         """
         ...
     @property
@@ -1477,25 +1516,37 @@ class RepositoryConfig:
             The number of concurrent requests to make when getting partial values from storage.
             Default: 10
         compression: CompressionConfig | None
-            The compression configuration for the repository.
+            The compression configuration for the repository. When None, the
+            default `CompressionConfig` is used.
+            Default: None
         max_concurrent_requests: int | None
             The maximum number of concurrent HTTP requests Icechunk will do for this repo.
             Default: 256
         caching: CachingConfig | None
-            The caching configuration for the repository.
+            The caching configuration for the repository. When None, the default
+            `CachingConfig` is used.
+            Default: None
         storage: StorageSettings | None
-            The storage configuration for the repository.
+            The storage configuration for the repository. When None, the
+            storage backend's own default settings apply.
+            Default: None
         virtual_chunk_containers: dict[str, VirtualChunkContainer] | None
             The virtual chunk containers for the repository.
+            Default: None
         manifest: ManifestConfig | None
-            The manifest configuration for the repository.
+            The manifest configuration for the repository. When None, the
+            default `ManifestConfig` is used.
+            Default: None
         repo_update_retries: RepoUpdateRetryConfig | None
-            Retry configuration for repo info update operations.
+            Retry configuration for repo info update operations. When None,
+            the default `RepoUpdateRetryConfig` is used.
+            Default: None
         num_updates_per_repo_info_file: int | None
             Maximum number of updates stored in a single repo info file. When this
             limit is reached, a new repo info file is created. Lower values produce
             slightly smaller repo info files but require more object fetches to
-            reconstruct the ops log. Default: 1000
+            reconstruct the ops log.
+            Default: 1,000
         """
         ...
     def __repr__(self, /) -> str: ...
