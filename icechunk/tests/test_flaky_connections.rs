@@ -417,6 +417,12 @@ where
 {
     let (client, proxy_name) = setup_toxiproxy(proxy_label, port).await?;
     let storage = build_proxied_storage(backend, proxy_label, port).await?;
+    // Warm up credentials/identity-cache and the pooled connection before
+    // arming the toxic, so the byte budget is spent on the trigger path
+    // (PUT responses) and not on cold-start traffic.
+    let warmup_settings = storage.default_settings().await?;
+    let _: Vec<_> =
+        storage.list_objects(&warmup_settings, "").await?.try_collect().await?;
     install_limit_data_toxic(proxy_label, LOST_RESPONSE_TOXIC_NAME, toxic_bytes).await?;
 
     let removal_proxy = proxy_name.clone();
@@ -498,7 +504,7 @@ async fn conditional_put() -> Result<(), Box<dyn std::error::Error>> {
         ConditionalPutBackend::IcechunkS3,
         "conditional-put-test",
         9004,
-        250,
+        100,
     )
     .await
 }
