@@ -527,6 +527,91 @@ pub async fn test_conditional_create_conflicts_with_existing()
     Ok(())
 }
 
+/// Deterministic #2099 regression: a conditional create whose response was
+/// lost must recover via the write-id readback with a *fresh* etag. We model
+/// the retry by seeding the object with a known write-id, then forcing the
+/// create to reuse it.
+async fn assert_lost_response_recovers_with_fresh_etag(
+    label: &str,
+    multipart: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let storage =
+        mk_s3_storage(common::get_random_prefix(label).as_str(), &Permission::Modify)
+            .await?;
+    let mut settings = storage.default_settings().await?;
+    if multipart {
+        // Tiny threshold so small writes exercise the multipart path.
+        settings.minimum_size_for_multipart_upload = Some(1);
+    }
+    let key = "lost-response-create";
+    let forced = format!("forced-write-id-{label}");
+
+    // The first attempt that landed before its response was lost.
+    let seeded = storage
+        .put_object(
+            &settings,
+            key,
+            Bytes::from_static(b"v1"),
+            None,
+            vec![(
+                icechunk_s3::test_util::WRITE_ID_METADATA_KEY.to_string(),
+                forced.clone(),
+            )],
+            None,
+        )
+        .await?
+        .must_write()?;
+
+    // The retry: same write-id; conditional create 412s, readback recovers it.
+    icechunk_s3::test_util::force_next_write_id(forced);
+    let recovered = match storage
+        .put_object(
+            &settings,
+            key,
+            Bytes::from_static(b"v2"),
+            None,
+            Default::default(),
+            Some(&VersionInfo::for_creation()),
+        )
+        .await?
+    {
+        VersionedUpdateResult::Updated { new_version } => new_version,
+        VersionedUpdateResult::NotOnLatestVersion => {
+            panic!("{label}: lost-response create should recover, got NotOnLatestVersion")
+        }
+    };
+    assert_eq!(recovered.etag(), seeded.etag(), "{label}: recovered a stale etag");
+
+    // Freshness: a stale recovered etag would 412 the follow-on update.
+    let follow_on = storage
+        .put_object(
+            &settings,
+            key,
+            Bytes::from_static(b"v3"),
+            None,
+            Default::default(),
+            Some(&recovered),
+        )
+        .await?;
+    assert!(
+        matches!(follow_on, VersionedUpdateResult::Updated { .. }),
+        "{label}: recovered etag was stale; follow-on conditional update failed"
+    );
+    Ok(())
+}
+
+#[tokio_test]
+pub async fn test_lost_response_conditional_create_recovers_single()
+-> Result<(), Box<dyn std::error::Error>> {
+    assert_lost_response_recovers_with_fresh_etag("lost-response-single", false).await
+}
+
+#[tokio_test]
+pub async fn test_lost_response_conditional_create_recovers_multipart()
+-> Result<(), Box<dyn std::error::Error>> {
+    assert_lost_response_recovers_with_fresh_etag("lost-response-multipart", true).await
+}
+
 #[tokio_test]
 pub async fn test_delete_objects() -> Result<(), Box<dyn std::error::Error>> {
     with_storage(Permission::Modify, |_, storage| async move {

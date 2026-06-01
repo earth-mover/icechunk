@@ -661,11 +661,9 @@ enum ReadbackOutcome {
 }
 
 impl ObjectStorage {
-    /// `get_opts` (no range) instead of `head` because `object_store::ObjectMeta`
-    /// doesn't expose user metadata; `GetResult::attributes` does, via the
-    /// `x-amz-meta-*` -> `Attribute::Metadata` mapping configured by the S3,
-    /// Azure, and GCS backends (see `object_store/src/client/get.rs`). The
-    /// response body stream is never polled.
+    /// `head: true` issues a HEAD (no body) but still populates
+    /// `GetResult::attributes`; the bare `head()` returns `ObjectMeta`, which
+    /// drops user metadata.
     async fn try_resolve_via_readback(
         &self,
         settings: &Settings,
@@ -686,7 +684,8 @@ impl ObjectStorage {
                 return ReadbackOutcome::ReadbackFailed;
             }
         };
-        let result = match client.get_opts(path, GetOptions::default()).await {
+        let opts = GetOptions { head: true, ..Default::default() };
+        let result = match client.get_opts(path, opts).await {
             Ok(r) => r,
             Err(err) => {
                 warn!(
@@ -712,7 +711,7 @@ impl ObjectStorage {
             path = %path,
             write_id,
             "conditional PUT reported failure, but the stored object carries \
-             the icechunk-write-id we just stamped; treating it as a retried \
+             the icechunk_write_id we just stamped; treating it as a retried \
              PUT whose response was lost and reporting success"
         );
         ReadbackOutcome::OurWrite(new_version)
