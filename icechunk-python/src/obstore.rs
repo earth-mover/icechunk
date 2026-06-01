@@ -126,7 +126,8 @@ fn create_s3_credentials(
                     "Complex object_store credentials not currently supported",
                 ));
             }
-            _ => todo!(),
+            // Skip keys that don't have a clear mapping to PyS3Credentials
+            _ => (),
         }
     }
 
