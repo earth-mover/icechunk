@@ -3,6 +3,7 @@ use chrono::{DateTime, Datelike as _, TimeDelta, Timelike as _, Utc};
 use futures::TryStreamExt as _;
 use icechunk::storage::RetriesSettings;
 use itertools::Itertools as _;
+use pyo3::PyAny;
 use pyo3::exceptions::PyValueError;
 use serde::{Deserialize, Serialize};
 use std::hash::{Hash, Hasher as _};
@@ -41,6 +42,7 @@ use crate::display::{
     py_option_or_default, py_option_str,
 };
 use crate::errors::PyIcechunkStoreError;
+use crate::obstore::new_obstore;
 
 #[pyclass(name = "S3StaticCredentials")]
 #[derive(Clone, Debug)]
@@ -3042,6 +3044,15 @@ impl PyStorage {
                 Ok(PyStorage(storage))
             })
         })
+    }
+
+    #[classmethod]
+    pub(crate) fn new_obstore(
+        _cls: &Bound<'_, PyType>,
+        py: Python<'_>,
+        store: Bound<'_, PyAny>,
+    ) -> PyResult<Self> {
+        new_obstore(py, store)
     }
 
     #[classmethod]

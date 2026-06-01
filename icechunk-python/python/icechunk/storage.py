@@ -1,5 +1,8 @@
+from __future__ import annotations
+
 from collections.abc import Callable
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from icechunk._icechunk_python import (
     ChecksumAlgorithm,
@@ -19,6 +22,9 @@ from icechunk.credentials import (
     gcs_credentials,
     s3_credentials,
 )
+
+if TYPE_CHECKING:
+    from obstore.store import ObjectStore
 
 __all__ = [
     "AnyObjectStoreConfig",
@@ -98,6 +104,11 @@ def http_store(
         A dictionary of options for the HTTP object store. See https://docs.rs/object_store/latest/object_store/client/enum.ClientConfigKey.html#variants for a list of possible keys in snake case format.
     """
     return ObjectStoreConfig.Http(opts)
+
+
+def obstore_storage(store: ObjectStore) -> Storage:
+    """Create a Storage instance from an obstore store."""
+    return Storage.new_obstore(store)
 
 
 def redirect_storage(base_url: str) -> Storage:
