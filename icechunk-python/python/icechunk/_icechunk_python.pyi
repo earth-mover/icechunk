@@ -704,9 +704,11 @@ class ManifestPreloadConfig:
             Default: 10,000
         preload_if: ManifestPreloadCondition | None
             The condition under which manifests will be preloaded. When None,
-            preloads arrays whose name matches common axis/coordinate names
+            preloads arrays whose name matches CF-like coordinate names
             (e.g. ``time``, ``lat``, ``lon``, ``x``, ``y``, ``z``) and whose
-            manifest has at most 1,000 chunk references.
+            manifest has at most 1,000 chunk references. The name-matching
+            regexes are lifted from cf-xarray's coordinate-axis heuristics;
+            see https://cf-xarray.readthedocs.io/en/latest/generated/cf_xarray.accessor.CFAccessor.html#cf_xarray.accessor.CFAccessor.guess_coord_axis.
             Default: None
         max_arrays_to_scan: int | None
             The maximum number of arrays to scan when looking for manifests to preload.
