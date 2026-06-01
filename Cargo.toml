@@ -64,6 +64,7 @@ proptest-state-machine = "0.8.0"
 pyo3 = { version = "0.27.2", features = ["chrono", "experimental-async", "multiple-pymethods"] }
 pyo3-async-runtimes = { version = "0.27", features = ["tokio-runtime"] }
 pyo3-bytes = "0.5.0"
+pyo3-object_store = { git = "https://github.com/developmentseed/obstore", rev="e7384175cc605afd4a8333e87f053542d1d54d6b" }
 quick_cache = "0.6.21"
 quote = "1.0"
 rand = "0.10.1"

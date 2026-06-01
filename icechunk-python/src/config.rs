@@ -532,7 +532,7 @@ impl From<S3ChecksumAlgorithm> for PyChecksumAlgorithm {
 }
 
 #[pyclass(name = "S3Options", eq)]
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PyS3Options {
     #[pyo3(get, set)]
     pub region: Option<String>,
