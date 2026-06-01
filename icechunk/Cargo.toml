@@ -83,6 +83,8 @@ tokio = { workspace = true, features = [
 
 [dev-dependencies]
 icechunk-macros.workspace = true
+# test-util exposes write-id injection for the lost-response regression tests.
+icechunk-s3 = { workspace = true, features = ["test-util"] }
 
 assert_fs.workspace = true
 clap.workspace = true
