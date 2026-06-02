@@ -241,6 +241,10 @@ class Model:
         self.branch_heads: dict[str, str] = {}
         self.deleted_tags: set[str] = set()
 
+        # Mirror of each snapshot's `pruned_ancestor_tx_logs` repo field
+        # Keyed by snapshot id
+        self.pruned_ancestor_tx_logs: dict[str, list[str]] = {}
+
         self.ops_log: list[UpdateModel] = []
         self.migrated: bool = False
 
@@ -331,6 +335,12 @@ class Model:
         assert self.branch is not None
         prev_snap_id = self.branch_heads[self.branch]
         self._commit(snap)
+        # Amend replaces the previous tip, so the new snapshot inherits its
+        # pruned_ancestor_tx_logs
+        if prev_snap_id in self.pruned_ancestor_tx_logs:
+            self.pruned_ancestor_tx_logs[snap.id] = list(
+                self.pruned_ancestor_tx_logs[prev_snap_id]
+            )
         self.ops_log.append(CommitAmendedUpdateModel(self.branch, prev_snap_id, snap.id))
 
     def set_metadata(self, meta: dict[str, Any]) -> None:
@@ -462,6 +472,27 @@ class Model:
             if id not in ref_pointees:
                 self.commits.pop(id, None)
 
+        # A retained snapshot whose parent was released is
+        # re-parented to the root, dropping every ancestor between it and the
+        # root from its path; their tx logs (oldest first) are spliced into its
+        # pruned_ancestor_tx_logs.
+        # Must run before the re-parenting below rewrites the parents we walk here.
+        if self.spec_version >= 2:
+            for cid, c in self.commits.items():
+                if c.parent_id not in expired_snaps:
+                    continue
+                collapsed: list[str] = []
+                anc = c.parent_id
+                while anc is not None and anc != self.initial_snapshot_id:
+                    collapsed.append(anc)
+                    ancestor = self.ondisk_snaps.get(anc)
+                    anc = ancestor.parent_id if ancestor is not None else None
+                harvested: list[str] = []
+                for x in reversed(collapsed):
+                    harvested.extend(self.pruned_ancestor_tx_logs.get(x, []))
+                    harvested.append(x)
+                self.pruned_ancestor_tx_logs[cid] = harvested
+
         # we reparent to the initial snapshot for simplicity. This should be good enough to make
         # self.reachable_snapshots() accurate.
         for c in self.commits.values():
@@ -519,12 +550,37 @@ class Model:
         since GC deletes the files from storage.
         """
         reachable_snaps = self.reachable_snapshots()
-        deleted = set()
-        for k in set(self.ondisk_snaps) - reachable_snaps:
-            if created_at_by_id[k] < older_than:
-                self.commits.pop(k, None)
-                self.ondisk_snaps.pop(k, None)
-                deleted.add(k)
+        deleted = {
+            k
+            for k in set(self.ondisk_snaps) - reachable_snaps
+            if created_at_by_id[k] < older_than
+        }
+
+        if self.spec_version >= 2:
+            # GC re-parents a kept snapshot whose parent run was deleted to its
+            # nearest surviving ancestor, harvesting the deleted ancestors' tx
+            # logs (oldest first) into pruned_ancestor_tx_logs.
+            # Unlike expiration this collapses only the consecutive deleted run,
+            # leaving surviving ancestors on the path.
+            for cid, c in self.commits.items():
+                if cid in deleted or c.parent_id not in deleted:
+                    continue
+                collapsed: list[str] = []
+                anc = c.parent_id
+                while anc is not None and anc in deleted:
+                    collapsed.append(anc)
+                    ancestor = self.ondisk_snaps.get(anc)
+                    anc = ancestor.parent_id if ancestor is not None else None
+                harvested: list[str] = []
+                for x in reversed(collapsed):
+                    harvested.extend(self.pruned_ancestor_tx_logs.get(x, []))
+                    harvested.append(x)
+                self.pruned_ancestor_tx_logs[cid] = harvested
+
+        for k in deleted:
+            self.commits.pop(k, None)
+            self.ondisk_snaps.pop(k, None)
+            self.pruned_ancestor_tx_logs.pop(k, None)
 
         if self.spec_version >= 2:
             # V2's delete_snapshots_from_repo_info rewrites parent pointers
@@ -569,6 +625,9 @@ class Model:
         }
         self.commits = {k: v for k, v in self.commits.items() if k in on_disk}
         self.ondisk_snaps = {k: v for k, v in self.ondisk_snaps.items() if k in on_disk}
+        self.pruned_ancestor_tx_logs = {
+            k: v for k, v in self.pruned_ancestor_tx_logs.items() if k in on_disk
+        }
 
         # Reparent commits whose parent was deleted
         for c in self.commits.values():
@@ -1204,14 +1263,53 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         paths = set(path_and_bytes[0] for path_and_bytes in self.storage.list_objects())
 
         # This is complicated with repo upgrades
-        snapshots = [
+        snapshots = {
             p.removeprefix("snapshots/") for p in paths if p.startswith("snapshots/")
-        ]
-        transactions = [
+        }
+        transactions = {
             p.removeprefix("transactions/")
             for p in paths
             if p.startswith("transactions/")
-        ]
+        }
+
+        # The legitimate orphan tx logs are pruned ancestors of every snapshot
+        # whose *file* is still on disk.
+        pruned_extra: set[str] = set()
+        if self.model.spec_version >= 2:
+            referenced = {
+                tx
+                for sid in snapshots
+                for tx in self.model.pruned_ancestor_tx_logs.get(sid, ())
+            }
+            pruned_extra = referenced - snapshots
+
+            # GC must never delete a tx log still referenced by a snapshot that
+            # is still in the repo info. `inspect_transaction_log` surfaces, per
+            # such snapshot, any referenced pruned logs that are wrongly absent.
+            missing_pruned: set[str] = set()
+            for sid in snapshots:
+                try:
+                    tx_log = self.repo.inspect_transaction_log(sid)
+                except IcechunkError:
+                    # A snapshot with no own tx log (e.g. the initial commit of
+                    # a pre-upgrade V1 repo) carries no pruned logs.
+                    continue
+                composite = tx_log.get("synthetic_composite")
+                if composite is not None:
+                    missing_pruned |= set(composite["missing_tx_logs"])
+            assert not missing_pruned, (
+                f"pruned-ancestor tx logs referenced by surviving snapshots are missing: {missing_pruned}"
+            )
+
+        # The retained pruned-ancestor logs whose snapshot file was GC'd are the
+        # only legitimate tx logs without a matching snapshot. Everything else
+        # must satisfy the pre-feature invariants, so subtract them out first.
+        assert transactions - snapshots == pruned_extra, (
+            f"tx logs without a snapshot that are not retained pruned ancestors: "
+            f"{(transactions - snapshots) - pruned_extra}"
+        )
+        transactions_core = transactions - pruned_extra
+
         if self.model.initial_spec_version == 1:
             expired = any(
                 isinstance(op, ExpirationRanUpdateModel) for op in self.model.ops_log
@@ -1219,11 +1317,11 @@ class VersionControlStateMachine(RuleBasedStateMachine):
             if expired:
                 # V1 expire rewrites snapshot files without creating matching
                 # transaction logs, so we can only assert the weaker invariant.
-                assert set(transactions) <= set(snapshots) - {INITIAL_SNAPSHOT}
+                assert transactions_core <= snapshots - {INITIAL_SNAPSHOT}
             else:
-                assert set(snapshots) - {INITIAL_SNAPSHOT} == set(transactions)
+                assert snapshots - {INITIAL_SNAPSHOT} == transactions_core
         else:
-            assert set(snapshots) == set(transactions)
+            assert snapshots == transactions_core
 
         if self.model.spec_version >= 2:
             ops = list(self.repo.ops_log())

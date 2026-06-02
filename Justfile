@@ -36,9 +36,14 @@ build *args:
 build-release *args:
   cargo build --release "$@"
 
+[doc("Regenerate src/flatbuffers/all_generated.rs from the FlatBuffers schemas")]
+gen-flatbuffers:
+  cd icechunk-format/flatbuffers && flatc --rust -o ../src/flatbuffers/ --gen-all all.fbs
+  just format
+
 [doc("Prepare environment for development")]
 develop *args:
-  cd icechunk-python && maturin develop --uv --profile {{profile}} "$@"
+  cd icechunk-python && uv run maturin develop --uv --profile {{profile}} "$@"
 
 [doc("Install maturin import hook for more convenient development flow")]
 import-hook:
@@ -54,7 +59,7 @@ icechunk_features := "s3,object-store-s3,object-store-gcs,object-store-azure,obj
 
 [doc("Run clippy lints on all features")]
 lint *args:
-  cargo clippy --profile {{profile}} --all-features --exclude icechunk "$@"
+  cargo clippy --profile {{profile}} --all-features --workspace --exclude icechunk "$@"
   cargo clippy --profile {{profile}} -p icechunk --features {{icechunk_features}} "$@"
 
 [doc("Run check on all features")]
@@ -88,7 +93,7 @@ pre-commit $RUSTFLAGS="-D warnings":
   just compile-tests "--locked"
   just build
   just format
-  just lint "--workspace"
+  just lint "--workspace" "--all-targets"
   just check-deps
 
 [doc("Full Rust CI pre-commit: all checks including tests and examples (~5+min)")]
@@ -96,7 +101,7 @@ pre-commit-ci $RUSTFLAGS="-D warnings":
   just profile=ci compile-tests "--locked"
   just profile=ci build
   just format "--check"
-  just profile=ci lint "--workspace"
+  just profile=ci lint "--workspace" "--all-targets"
   just profile=ci doctest
   just profile=ci test
   just profile=ci run-all-examples
@@ -141,7 +146,12 @@ py-pre-commit $SKIP="rust-pre-commit-fast,rust-pre-commit,rust-pre-commit-ci" *a
 
 [doc("Run Python tests via pytest")]
 pytest *args:
-  cd icechunk-python && pytest "$@"
+  cd icechunk-python && uv run pytest "$@"
+
+[doc("Regenerate the post-expiration can_read_old fixtures (needs icechunk 1.1.21 + 2.0.5 wheels, installed via third-wheel)")]
+gen-expired-fixtures *args:
+  cd icechunk-python && uv run --with third-wheel third-wheel sync --rename "icechunk==1.1.21=icechunk_v1" --rename "icechunk==2.0.5=icechunk_v2"
+  cd icechunk-python && uv run python tests/data_generation/generate_expired_repos.py "$@"
 
 [doc("Start MkDocs dev server with live reload")]
 docs-serve *args:

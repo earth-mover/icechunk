@@ -19,7 +19,8 @@ use crate::{
     asset_manager::AssetManager,
     config::RepoUpdateRetryConfig,
     format::{
-        ChunkId, FileTypeTag, IcechunkFormatError, ManifestId, ObjectId, SnapshotId,
+        ChunkId, FileTypeTag, IcechunkFormatError, IcechunkResult, ManifestId, ObjectId,
+        SnapshotId,
         format_constants::SpecVersionBin,
         manifest::{ChunkPayload, Manifest},
         repo_info::{RepoAvailability, RepoInfo, UpdateInfo, UpdateType},
@@ -456,9 +457,10 @@ async fn garbage_collect_one_attempt(
     // work: we want to dolete snapshots before deleting chunks, etc
     let drop_snapshots = all_snaps.difference(&keep_snapshots).cloned().collect();
 
+    let mut written_repo_info: Option<Arc<RepoInfo>> = None;
     if config.deletes_snapshots() {
         if !config.dry_run && repo_info.is_some() {
-            delete_snapshots_from_repo_info(
+            written_repo_info = delete_snapshots_from_repo_info(
                 asset_manager.as_ref(),
                 &mut keep_snapshots,
                 &drop_snapshots,
@@ -474,8 +476,23 @@ async fn garbage_collect_one_attempt(
     drop(drop_snapshots);
     drop(all_snaps);
     if config.deletes_transaction_logs() {
+        // We need to retain tx logs of snapshots if any surviving
+        // snapshot still references them in pruned_ancestor_tx_logs.
+        // So keep_tx_logs is keep_snapshots plus those ids.
+        let mut keep_tx_logs = keep_snapshots;
+
+        // use the most up to date repo info available
+        let pruned_source = written_repo_info.as_ref().or(repo_info.as_ref());
+
+        if let Some(repo_info) = pruned_source {
+            let pruned = repo_info
+                .all_snapshots()?
+                .map_ok(|si| si.pruned_ancestor_tx_logs)
+                .flatten_ok();
+            itertools::process_results(pruned, |ids| keep_tx_logs.extend(ids))?;
+        }
         let res =
-            gc_transaction_logs(asset_manager.as_ref(), config, &keep_snapshots).await?;
+            gc_transaction_logs(asset_manager.as_ref(), config, &keep_tx_logs).await?;
         summary.transaction_logs_deleted = res.deleted_objects;
         summary.bytes_deleted += res.deleted_bytes;
     }
@@ -494,14 +511,33 @@ async fn garbage_collect_one_attempt(
     Ok(summary)
 }
 
-/// Updates the repo object eliminating snapshots
-/// Returns Ok(()) if the operation was successful, if it returns false, GC should be retried
+/// Updates the repo object eliminating snapshots.
+///
+/// On success, returns the `RepoInfo` that was actually written or
+/// `None` if no update was written.
 ///
 /// There are a few complex cases:
 ///
 /// 1. A `reset_branch` operation may generate a snapshot we want to retain (because it's new),
-///    with a parent (that is old) we want to drop. We avoid this issue by setting the parent
-///    to `INITIAL_SNAPSHOT_ID`
+///    with a parent (that is old) we want to drop. We re-parent it over the dropped run to its
+///    nearest retained ancestor (falling back to `INITIAL_SNAPSHOT_ID` if none survive)
+///    collecting the dropped ancestors' tx logs into its `pruned_ancestor_tx_logs`
+///    Example:
+///
+///      `INITIAL_SNAPHOT_ID` -> snap0 -> snap1 -> snap2 -> snap3 -> snap4 -> snap5 (main)
+///
+///      Then:
+///      - `reset_branch`("main", snap1) -> main now points at snap1; snap[2..5] are unreachable.
+///      - GC with cutoff before = `snap3.flushed_at`.
+///      - snap3, 4, and 5 are too new for GC so they are retained
+///      - snap0 and 1 are pointed, so they are retained too
+///      - snap2 is garbage collected (old and unreachable)
+///      - We are left with a dropped interior gap with a kept ancestor below it:
+///        snap1  (kept: reachable)
+///        snap2  (DROPPED)
+///        snap3  (kept: too new)
+///      - In this case the function will assign snap 1 as parent of snap 3
+///
 /// 2. There may be new snapshots in the repo info object since we started GC
 ///    a.  New snapshots with parents not in `drop_snapshots` can be retained (their manifests and
 ///    chunks are new so they won't be deleted)
@@ -518,8 +554,9 @@ async fn delete_snapshots_from_repo_info(
     keep_snapshots: &mut HashSet<SnapshotId>,
     drop_snapshots: &HashSet<SnapshotId>,
     num_updates_per_repo_info_file: u16,
-) -> GCResult<()> {
+) -> GCResult<Option<Arc<RepoInfo>>> {
     trace!("deleting snapshots from repo info");
+    let mut written_repo_info: Option<Arc<RepoInfo>> = None;
     let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str, _| {
         let mut final_snaps = HashSet::with_capacity(2 * keep_snapshots.len());
         for si in repo_info.all_snapshots().inject()? {
@@ -532,17 +569,21 @@ async fn delete_snapshots_from_repo_info(
                     if let Some(parent) = &si.parent_id
                         && drop_snapshots.contains(parent)
                     {
-                        // case 1 in the documentation
-                        // rewrite the parent if it is going to be GC-ed
-                        // this is necessary for the case where history was edited with reset_branch
-                        // See test_gc.rs::test_gc_reset_branch for an example
-                        // Note if a commit was left dangling by expire its parent will already have been rewritten.
-                        // (see &None branch below).
-                        // So here, we can either set None or INITIAL_SNAPSHOT_ID.
-                        // We *choose* to set INITIAL_SNAPSHOT_ID until we consistently support
-                        // anonymous snapshots throughout the codebase.
+                        // case 1 in the documentation: this kept snapshot's
+                        // parent is being GC-ed.
+                        // Re-parent it to its nearest retained ancestor,
+                        // harvesting the dropped ancestors' tx logs into pruned_ancestor_tx_logs.
+                        // If no ancestor survives we fall back to INITIAL_SNAPSHOT_ID.
+                        let (new_parent, pruned_ancestor_tx_logs) =
+                            reparent_and_prune(&repo_info, &si, |a| {
+                                keep_snapshots.contains(&a.id)
+                            })
+                            .inject()?;
                         final_snaps.insert(SnapshotInfo {
-                            parent_id: Some(Snapshot::INITIAL_SNAPSHOT_ID),
+                            parent_id: Some(
+                                new_parent.unwrap_or(Snapshot::INITIAL_SNAPSHOT_ID),
+                            ),
+                            pruned_ancestor_tx_logs,
                             ..si
                         });
                     } else {
@@ -614,7 +655,9 @@ async fn delete_snapshots_from_repo_info(
         )
         .inject()?;
 
-        Ok(Arc::new(new_repo_info))
+        let new_repo_info = Arc::new(new_repo_info);
+        written_repo_info = Some(Arc::clone(&new_repo_info));
+        Ok(new_repo_info)
     };
 
     let retry_settings = storage::RetriesSettings {
@@ -623,7 +666,7 @@ async fn delete_snapshots_from_repo_info(
     };
     let _ = asset_manager.update_repo_info(&retry_settings, do_update).await?;
 
-    Ok(())
+    Ok(written_repo_info)
 }
 
 async fn fake_delete_result<const SIZE: usize, T: FileTypeTag>(
@@ -895,6 +938,49 @@ pub async fn expire_v2(
         .await
 }
 
+/// Re-parent `edited` over a run of ancestors that are being expired,
+/// harvesting their tx logs so its delta from the new parent stays complete.
+///
+/// Returns `(new_parent, pruned)`. `new_parent` is the boundary ancestor, or
+/// `None` if the whole chain is collapsed (no ancestor satisfies `is_boundary`)
+/// `pruned` lists, oldest first, every collapsed ancestor's id with that ancestor's own
+/// `pruned_ancestor_tx_logs` spliced in.
+///
+/// A collapsed ancestor can itself carry a non-empty `pruned_ancestor_tx_logs`
+/// (it was a boundary in an earlier pass), and several can sit in one chain.
+/// Hitting one does not end the walk — only `is_boundary` does; its pruned chain
+/// is spliced in and the walk keeps going. E.g. with boundary `s1`:
+///
+///     INITIAL → s1 → s3 (pruned=[s2]) → s5 (pruned=[s4]) → edited
+///
+/// returns `new_parent = s1` and `pruned = [s2, s3, s4, s5]` (oldest first).
+fn reparent_and_prune(
+    repo_info: &RepoInfo,
+    edited: &SnapshotInfo,
+    is_boundary: impl Fn(&SnapshotInfo) -> bool,
+) -> IcechunkResult<(Option<SnapshotId>, Vec<SnapshotId>)> {
+    let mut new_parent = None;
+    let mut collapsed = Vec::new();
+    // ancestry() starts at `edited`. skip(1) drops it
+    for ancestor in repo_info.ancestry(&edited.id)?.skip(1) {
+        let ancestor = ancestor?;
+        if is_boundary(&ancestor) {
+            new_parent = Some(ancestor.id);
+            break;
+        }
+        collapsed.push((ancestor.id, ancestor.pruned_ancestor_tx_logs));
+    }
+    // Emit oldest first. `collapsed` is newest first, so walk it in reverse; an
+    // ancestor's own pruned logs (already oldest first) are older than it and so
+    // precede its id.
+    let mut pruned = Vec::new();
+    for (id, ancestor_pruned) in collapsed.into_iter().rev() {
+        pruned.extend(ancestor_pruned);
+        pruned.push(id);
+    }
+    Ok((new_parent, pruned))
+}
+
 #[instrument(skip(asset_manager))]
 async fn expire_v2_one_attempt(
     asset_manager: Arc<AssetManager>,
@@ -1020,7 +1106,24 @@ async fn expire_v2_one_attempt(
                     if released_snapshots.contains(parent_id) {
                         // parent is expired, so we change it to the root in that branch/tag
                         edited_snapshots.insert(si.id.clone());
-                        Some(Ok(SnapshotInfo { parent_id: new_parent(&si.id), ..si }))
+                        // Re-parenting to the root drops every ancestor below
+                        // si from its path. Those ancestors carry the tx logs
+                        // describing the deltas si now spans (root..si), so
+                        // harvest their ids into si.
+                        match reparent_and_prune(&repo_info, &si, |a| {
+                            // go all the way to the branch root
+                            a.parent_id.is_none()
+                        }) {
+                            Ok((_, pruned_ancestor_tx_logs)) => Some(Ok(SnapshotInfo {
+                                parent_id: Some(
+                                    new_parent(&si.id)
+                                        .unwrap_or(Snapshot::INITIAL_SNAPSHOT_ID),
+                                ),
+                                pruned_ancestor_tx_logs,
+                                ..si
+                            })),
+                            Err(e) => Some(Err(e)),
+                        }
                     } else {
                         // parent is retained, so we retain the snapshot as is
                         Some(Ok(si))

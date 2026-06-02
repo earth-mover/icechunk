@@ -845,7 +845,7 @@ impl AssetManager {
         snapshot_id: &SnapshotId,
     ) -> RepositoryResult<SnapshotInfo> {
         let snapshot = self.fetch_snapshot(snapshot_id).await?;
-        let info = snapshot.as_ref().try_into().inject()?;
+        let info = SnapshotInfo::from_snapshot_file(snapshot.as_ref()).inject()?;
         Ok(info)
     }
 
@@ -1971,7 +1971,7 @@ mod test {
         let initial = Snapshot::initial(SpecVersionBin::current()).unwrap();
         let repo_info = Arc::new(RepoInfo::initial(
             SpecVersionBin::current(),
-            (&initial).try_into()?,
+            SnapshotInfo::from_snapshot_file(&initial)?,
             100,
             None::<&()>,
             None,
@@ -2007,7 +2007,7 @@ mod test {
         let initial = Snapshot::initial(SpecVersionBin::current()).unwrap();
         let repo_info = Arc::new(RepoInfo::initial(
             SpecVersionBin::current(),
-            (&initial).try_into()?,
+            SnapshotInfo::from_snapshot_file(&initial)?,
             100,
             None::<&()>,
             None,

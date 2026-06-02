@@ -33,6 +33,12 @@ table SnapshotInfo {
 
     // Snapshot-level metadata.
     metadata: [MetadataItem];
+
+    // Tx-log ids of ancestor commits expiration removed from the repo,
+    // carried here (oldest first) so this snapshot's change from its
+    // rewritten parent stays complete. Always null when never
+    // expired; an empty vector is never written.
+    pruned_ancestor_tx_logs: [ObjectId12];
 }
 // --8<-- [end:snapshot_info]
 

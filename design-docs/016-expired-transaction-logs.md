@@ -54,8 +54,8 @@ table SnapshotInfo {
     message: string (required);
     metadata: [MetadataItem];
 
-    // NEW FIELD
-    expired_tx_logs: [ObjectId12];
+    // Tx-log ids of ancestor commits removed by expiration.
+    pruned_ancestor_tx_logs: [ObjectId12];
 }
 ```
 
@@ -66,28 +66,35 @@ We do not bump the spec version.
 
 ### Population at expiration time
 
-In expiration, when computing
-the rewritten `parent_id` for an edited snapshot D, also compute its
-`expired_tx_logs`:
+In expiration, when computing the rewritten `parent_id` for an edited
+snapshot D (whose old parent was released), also compute its
+`pruned_ancestor_tx_logs`:
 
 1. Walk D's ancestry in the **pre-expiration** `RepoInfo` from D's old
-   parent backwards.
-2. Collect, in ancestry order (oldest first), every snapshot id that is
-   being expired in this run on the path from D's new `RepoInfo` parent
-   (exclusive) to D (exclusive).
-3. If D already had an `expired_tx_logs` value (from a previous
-   expiration), prepend it to the collected list. The list grows
-   monotonically across repeated expirations.
-4. Set the new `SnapshotInfo` for D in the post-expiration `RepoInfo`
-   with this list.
+   parent backwards to (but excluding) the branch root, which becomes
+   D's new `RepoInfo` parent. Re-parenting D to the root drops every
+   snapshot X on this path from D's ancestry. Most are being released in
+   this run, but X may instead be *retained* (e.g. an old snapshot a tag
+   tip protects); either way its log must be carried, since X is no
+   longer on D's path.
+2. Build the list by concatenating, oldest first,
+   for each such X: `X.pruned_ancestor_tx_logs` followed by `X`'s own
+   id. Pulling in each ancestor's own list is what carries accumulation
+   across repeated expirations — a later expiration edits a *new*
+   boundary snapshot E, and the previously accumulated ids live on the
+   now-pruned D that sits on E's path, not on E itself.
+3. Set the new `SnapshotInfo` for D in the post-expiration `RepoInfo`
+   with this list. The list grows monotonically across repeated
+   expirations.
 
 ### GC retention rule
 
-GC will not delete tx logs that are present in expired_tx_logs. It can compute
-this by simply reading the repo info object.
+GC will not delete tx logs that are present in any snapshot's
+`pruned_ancestor_tx_logs`. It computes this by reading the repo info
+object and unioning those ids into the tx-log keep set.
 
-The corresponding **snapshot** files for the ids in `expired_tx_logs`
-are still eligible for deletion.
+The corresponding **snapshot** files for the ids in
+`pruned_ancestor_tx_logs` are still eligible for deletion.
 
 ### Internal consumers
 
@@ -96,45 +103,57 @@ are still eligible for deletion.
 When we fetch transaction logs
 expand each snapshot's
 contribution to fetch its own transaction log **plus** every id listed
-in its `expired_tx_logs`. Order within a single snapshot's
-contribution follows `expired_tx_logs` order (oldest first), then
-the snapshot's own log last.
+in its `pruned_ancestor_tx_logs`. Order within a single snapshot's
+contribution follows `pruned_ancestor_tx_logs` order (oldest first),
+then the snapshot's own log last.
+
+A tx log referenced by `pruned_ancestor_tx_logs` may be missing if an
+old GC binary deleted it (see Compatibility). For `diff` we **warn and
+skip** the missing log, producing a degraded (incomplete) diff rather
+than failing.
 
 #### Amend
 
 Amend fetches `previous_log` and merges it with `this_tx_log` to produce
 the tx_log of the amended snapshot D'. We do **not** absorb
-`expired_tx_logs` into this merge, instead the chain is copied.
+`pruned_ancestor_tx_logs` into this merge, instead the chain is copied
+onto D'.
 
 #### `Session::rebase`
 
 Rebase already loops over `commits_to_rebase` and calls `solver.solve`
 once per commit, threading the resulting `patched_changeset` into the
 next iteration. We extend the inner loop: for each commit, first call
-`solver.solve` for each id in its `expired_tx_logs` (oldest first), then
-call it for the commit's own tx_log. No `TransactionLog::merge` is
-needed, so no overflow risk.
+`solver.solve` for each id in its `pruned_ancestor_tx_logs` (oldest
+first), then call it for the commit's own tx_log. No
+`TransactionLog::merge` is needed, so no overflow risk.
 
-The solver's `session` argument for an expired_tx_log iteration is the
-edited snapshot's readonly session
+The solver's `session` argument for a pruned-ancestor-log iteration is
+the edited snapshot's readonly session.
+
+Because a missing log here would silently hide conflicts (a correctness
+hazard, not just a degraded view), rebase **errors** rather than skips
+if a referenced `pruned_ancestor_tx_logs` log is missing. This is
+infrequent since it would require rebasing over expired commits.
 
 #### `inspect`
 
 The `transaction_log_json` view of an edited snapshot should reflect
 the cumulative delta the user expects. The simplest implementation:
-when an inspected snapshot has a non-empty `expired_tx_logs`,
-fetch and merge them with the snapshot's own log before rendering.
+when an inspected snapshot has a non-empty `pruned_ancestor_tx_logs`,
+fetch and merge them with the snapshot's own log before rendering
+(warn and skip any missing log).
 
 A small UI hint indicating that the displayed log is a synthetic
 composite would be valuable.
 
 ## Bounded growth
 
-`expired_tx_logs` grows monotonically with repeated expirations on
-the same branch. Each entry is a 12-byte `ObjectId12`.
+`pruned_ancestor_tx_logs` grows monotonically with repeated expirations
+on the same branch. Each entry is a 12-byte `ObjectId12`.
 
 In the future we could implement **periodic compaction**: a separate operation can merge several
-  consecutive entries in `expired_tx_logs` into a single new
+  consecutive entries in `pruned_ancestor_tx_logs` into a single new
   transaction log object (so long as the merge stays under the
   flatbuffer ceiling), and rewrite the list accordingly
 
@@ -148,9 +167,10 @@ the degraded behavior of the current bug.
 No data is corrupted; reads and writes continue to function.
 
 An old icechunk binary running **GC** against a
-new repo doesn't know about `expired_tx_logs` and will delete
+new repo doesn't know about `pruned_ancestor_tx_logs` and will delete
 the transaction log files those ids reference, regressing the fix on
-that repo. We need to be careful and deal with the case where an `expired_tx_log` is not there.
+that repo. Consumers therefore handle a missing referenced log:
+`diff`/`inspect` warn and skip; `rebase` errors (see above).
 
 We accept this risk. The fix is shipped as a normal release; users on
 the new release benefit; users mixing old and new icechunk binaries
@@ -162,7 +182,7 @@ Repos that have already run `expire_v2` before this fix lands have lost
 the transaction logs of their expired ancestors (GC has run, or will
 run, and delete them). For those snapshots no migration can recover
 correctness; the data is gone. Going forward, every new expiration
-populates `expired_tx_logs` correctly.
+populates `pruned_ancestor_tx_logs` correctly.
 
 ## Out of scope
 
@@ -173,5 +193,5 @@ populates `expired_tx_logs` correctly.
   logs. This is a pre-existing issue independent of expiration; this
   document does not address it but the work here makes addressing it
   in a follow-up trivial (the necessary logs are now reachable).
-- Periodic compaction of `expired_tx_logs`. Punted until growth is
+- Periodic compaction of `pruned_ancestor_tx_logs`. Punted until growth is
   shown to be a real problem.
