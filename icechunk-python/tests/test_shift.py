@@ -343,8 +343,9 @@ def test_shift_rectilinear_zero_offset() -> None:
 
 @pytest.mark.skipif(not _has_rectilinear, reason="RectilinearChunkGrid not available")
 def test_shift_rectilinear_drops_all() -> None:
-    """When the shift evicts every source chunk, the rectilinear grid must
-    collapse to a single fill chunk spanning the full dimension."""
+    """When the shift evicts every source chunk, the chunk-size sequence still
+    rotates: the chunk count and per-axis sizes are preserved, only the data
+    is gone (everything becomes fill)."""
     repo = ic.Repository.create(storage=ic.in_memory_storage())
     session = repo.writable_session("main")
     root = zarr.group(store=session.store)
@@ -366,7 +367,67 @@ def test_shift_rectilinear_drops_all() -> None:
     arr = cast("zarr.Array[Any]", zarr.open_array(session.store, path="a"))
     np.testing.assert_equal(arr[:], [-1, -1, -1])
     if hasattr(arr, "read_chunk_sizes"):
-        assert tuple(tuple(s) for s in arr.read_chunk_sizes) == ((3,),)
+        assert tuple(tuple(s) for s in arr.read_chunk_sizes) == ((1, 1, 1),)
+
+
+@pytest.mark.skipif(not _has_rectilinear, reason="RectilinearChunkGrid not available")
+def test_shift_rectilinear_three_chunks_increasing() -> None:
+    """With chunks ((1, 2, 3),), shift +1 rotates the size sequence to
+    ((3, 1, 2),): src 0 lands in the size-1 dest slot, src 1 in the size-2
+    slot, src 2 drops, and the leading dest slot inherits the dropped chunk's
+    size 3 as fill."""
+    repo = ic.Repository.create(storage=ic.in_memory_storage())
+    session = repo.writable_session("main")
+    root = zarr.group(store=session.store)
+    arr = root.create_array(
+        name="a",
+        shape=(6,),
+        dtype="int32",
+        chunks=RectilinearChunkGrid(chunk_shapes=((1, 2, 3),)),
+        fill_value=-1,
+    )
+    arr[:] = [10, 20, 30, 40, 50, 60]
+    session.commit("write")
+
+    session = repo.writable_session("main")
+    session.shift_array("/a", (1,))
+    session.commit("shift")
+
+    session = repo.readonly_session("main")
+    arr = cast("zarr.Array[Any]", zarr.open_array(session.store, path="a"))
+    np.testing.assert_equal(arr[:], [-1, -1, -1, 10, 20, 30])
+    if hasattr(arr, "read_chunk_sizes"):
+        assert tuple(tuple(s) for s in arr.read_chunk_sizes) == ((3, 1, 2),)
+
+
+@pytest.mark.skipif(not _has_rectilinear, reason="RectilinearChunkGrid not available")
+def test_shift_rectilinear_three_chunks_decreasing() -> None:
+    """With chunks ((3, 1, 2),), shift +1 rotates the size sequence to
+    ((2, 3, 1),): src 0 lands in the size-3 dest slot, src 1 in the size-1
+    slot, src 2 drops, and the leading dest slot inherits the dropped chunk's
+    size 2 as fill."""
+    repo = ic.Repository.create(storage=ic.in_memory_storage())
+    session = repo.writable_session("main")
+    root = zarr.group(store=session.store)
+    arr = root.create_array(
+        name="a",
+        shape=(6,),
+        dtype="int32",
+        chunks=RectilinearChunkGrid(chunk_shapes=((3, 1, 2),)),
+        fill_value=-1,
+    )
+    arr[:] = [10, 20, 30, 40, 50, 60]
+    session.commit("write")
+
+    session = repo.writable_session("main")
+    session.shift_array("/a", (1,))
+    session.commit("shift")
+
+    session = repo.readonly_session("main")
+    arr = cast("zarr.Array[Any]", zarr.open_array(session.store, path="a"))
+    np.testing.assert_equal(arr[:], [-1, -1, 10, 20, 30, 40])
+    if hasattr(arr, "read_chunk_sizes"):
+        assert tuple(tuple(s) for s in arr.read_chunk_sizes) == ((2, 3, 1),)
 
 
 @pytest.mark.skipif(not _has_rectilinear, reason="RectilinearChunkGrid not available")

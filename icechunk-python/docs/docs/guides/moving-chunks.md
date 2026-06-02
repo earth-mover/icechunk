@@ -111,9 +111,11 @@ print(arr[:])
 
 See [Rectilinear chunk grids](zarr.md#rectilinear-chunk-grids) for an introduction to the feature itself; this section covers how `shift_array` interacts with such a grid.
 
-`shift_array` also works on arrays whose chunk grid is rectilinear—each axis has its own sequence of chunk lengths instead of a single fixed chunk size. The chunks that survive the shift keep their per-axis lengths, and the vacated region (the leading end for positive offsets, the trailing end for negative offsets) collapses into a single fill chunk along the shifted axis. As a consequence, the array's chunk grid—the per-axis `chunk_shapes`—can be different after the shift. The operation is still metadata-only; no chunk payloads are read, decoded, or rewritten.
+`shift_array` also works on arrays whose chunk grid is rectilinear—each axis has its own sequence of chunk lengths instead of a single fixed chunk size. On a rectilinear axis, a shift of `k` cyclically rotates the per-axis chunk-size sequence by `k`. Surviving chunks land in slots whose declared size matches their data; dropped chunks contribute their sizes (but not their data) at the vacated end of the axis, where the array now reads as fill. The array shape and chunk count are preserved, but the chunk-size sequence is rotated. The operation is still metadata-only; no chunk payloads are read, decoded, or rewritten.
 
-To make the geometry concrete, take a 1-D array of shape `(3,)` with chunks `((1, 2),)` holding the values `[10, 20, 30]`. Chunk 0 has length 1 and covers index 0 (`[10]`); chunk 1 has length 2 and covers indices 1–2 (`[20, 30]`). Shifting by `(1,)` moves chunk 0 one slot to the right, where it now covers index 2 and still holds `[10]`. Chunk 1 would have moved past the end of the array, so it is dropped. The leading two cells (indices 0–1) are vacated and collapse into a single fill chunk of length 2. The result is chunks `((2, 1),)`—the chunk grid has changed even though the array shape has not. In general, the vacated chunk's length is `array_length - sum(surviving chunk lengths)` along that axis.
+To make the geometry concrete, take a 1-D array of shape `(3,)` with chunks `((1, 2),)` holding the values `[10, 20, 30]`. Chunk 0 has length 1 and covers index 0 (`[10]`); chunk 1 has length 2 and covers indices 1–2 (`[20, 30]`). Shifting by `(1,)` rotates the size sequence to `(2, 1)`: the size-2 slot moves to the front (filled with fill values because the chunk that fell off contributed its size, not its data), and the surviving chunk 0 lands at the new size-1 slot at index 2. Chunk 1 has fallen off the end and is dropped. The resulting array reads as `[-1, -1, 10]` (with a fill value of `-1`). The chunk grid sequence has changed even though the array shape has not.
+
+For a clearer view of the rotation, take chunks `((1, 2, 3),)` over shape `(6,)`. A shift of `+1` rotates the size sequence one slot to the right, producing `((3, 1, 2),)`: source chunk 0 lands at the new size-1 slot, source chunk 1 at the size-2 slot, and source chunk 2 falls off the end—but its size `3` rotates into the leading slot, where it is filled with the fill value. With more than one chunk dropping (`((1, 1, 1),)` shifted by `+2`, for example), each dropped chunk contributes its size to a separate fill slot rather than coalescing into one.
 
 ```python
 import icechunk as ic
@@ -145,7 +147,7 @@ arr = zarr.open_array(session.store, path="a")
 print(arr.read_chunk_sizes)  # ((2, 1),)
 ```
 
-Negative offsets are symmetric: the trailing end collapses into a single fill chunk, and surviving chunks keep their lengths.
+Negative offsets are symmetric: the size sequence rotates the other way, dropped chunks contribute their sizes to the trailing end, and surviving chunks keep their lengths.
 
 ### Example: Rolling Time Window
 

@@ -438,71 +438,29 @@ fn compute_axis_post_shift(
             })
         }
         AxisLayout::Rectilinear { sizes } => {
-            let n = sizes.len() as u32;
-            if offset == 0 {
+            let n = sizes.len();
+            if offset == 0 || n == 0 {
                 return Ok(AxisPostShift {
                     new_sizes: None,
-                    remap: AxisRemap::SimpleShift { offset: 0, num_chunks: n },
+                    remap: AxisRemap::SimpleShift { offset: 0, num_chunks: n as u32 },
                 });
             }
-            let k_abs = offset.unsigned_abs();
-            if k_abs >= n as u64 {
-                // Everything drops off the array: collapse to a single fill chunk.
-                let new_sizes = vec![dim_length];
-                let forward = vec![None; n as usize];
-                let backward = vec![None];
-                return Ok(AxisPostShift {
-                    new_sizes: Some(new_sizes),
-                    remap: AxisRemap::Lookup { forward, backward },
-                });
+            let n_i = n as i64;
+            let k_mod = offset.rem_euclid(n_i) as usize;
+            let new_sizes: Vec<u64> =
+                (0..n).map(|i| sizes[(i + n - k_mod) % n]).collect();
+            let forward: Vec<Option<u32>> = (0..n)
+                .map(|src| {
+                    let dest = src as i64 + offset;
+                    (0..n_i).contains(&dest).then_some(dest as u32)
+                })
+                .collect();
+            let mut backward: Vec<Option<u32>> = vec![None; n];
+            for (src, dest) in forward.iter().enumerate() {
+                if let Some(d) = dest {
+                    backward[*d as usize] = Some(src as u32);
+                }
             }
-            let k = k_abs as usize;
-            let (new_sizes, forward, backward) = if offset > 0 {
-                // Surviving source range [0, n - k): survivors land at dest
-                // indices [1, n - k + 1); dest 0 is the coalesced fill.
-                let survivors = &sizes[..sizes.len() - k];
-                let sum_survivors: u64 = survivors.iter().sum();
-                let vacated = dim_length.checked_sub(sum_survivors).ok_or_else(|| {
-                    bad_chunk_grid("surviving chunks exceed dim length")
-                })?;
-                let mut new_sizes = Vec::with_capacity(survivors.len() + 1);
-                new_sizes.push(vacated);
-                new_sizes.extend_from_slice(survivors);
-                let forward: Vec<Option<u32>> =
-                    (0..sizes.len())
-                        .map(|i| {
-                            if i + k < sizes.len() { Some((i + 1) as u32) } else { None }
-                        })
-                        .collect();
-                let mut backward: Vec<Option<u32>> = vec![None; new_sizes.len()];
-                for (src, dest) in forward.iter().enumerate() {
-                    if let Some(d) = dest {
-                        backward[*d as usize] = Some(src as u32);
-                    }
-                }
-                (new_sizes, forward, backward)
-            } else {
-                // offset < 0: surviving source range [k, n); land at dest
-                // indices [0, n - k); tail dest chunk is the coalesced fill.
-                let survivors = &sizes[k..];
-                let sum_survivors: u64 = survivors.iter().sum();
-                let vacated = dim_length.checked_sub(sum_survivors).ok_or_else(|| {
-                    bad_chunk_grid("surviving chunks exceed dim length")
-                })?;
-                let mut new_sizes = Vec::with_capacity(survivors.len() + 1);
-                new_sizes.extend_from_slice(survivors);
-                new_sizes.push(vacated);
-                let forward: Vec<Option<u32>> = (0..sizes.len())
-                    .map(|i| if i >= k { Some((i - k) as u32) } else { None })
-                    .collect();
-                let mut backward: Vec<Option<u32>> = vec![None; new_sizes.len()];
-                for (src, dest) in forward.iter().enumerate() {
-                    if let Some(d) = dest {
-                        backward[*d as usize] = Some(src as u32);
-                    }
-                }
-                (new_sizes, forward, backward)
-            };
             debug_assert_eq!(new_sizes.iter().sum::<u64>(), dim_length);
             Ok(AxisPostShift {
                 new_sizes: Some(new_sizes),

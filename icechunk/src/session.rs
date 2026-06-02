@@ -5982,10 +5982,102 @@ mod tests {
             repo.readonly_session(&VersionInfo::BranchTipRef("main".into())).await?;
         let node = session.get_array(&apath).await?;
         let sizes = parse_chunk_shapes_sizes(&node.user_data);
-        // Everything dropped: single chunk of size 3.
-        assert_eq!(sizes, vec![vec![3u64]]);
-        // No chunk refs survive in the single dest chunk.
+        // Rotation by 5 over n=3 chunks is rotation by 2: sizes unchanged ([1,1,1]).
+        assert_eq!(sizes, vec![vec![1u64, 1, 1]]);
+        // No chunk refs survive.
+        for i in 0..3u32 {
+            assert_eq!(
+                session.get_chunk_ref(&apath, &ChunkIndices(vec![i])).await?,
+                None
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio_test]
+    async fn test_shift_array_rectilinear_three_chunks_increasing()
+    -> Result<(), Box<dyn Error>> {
+        let storage = new_in_memory_storage().await?;
+        let storage: Arc<dyn Storage + Send + Sync> = Arc::clone(&storage);
+        let repo = Repository::create(None, storage, HashMap::new(), None, true).await?;
+        let mut session = repo.writable_session("main").await?;
+        let shape = ArrayShape::new(vec![(6, 3)]).unwrap();
+        session.add_group(Path::root(), Bytes::new()).await?;
+        let apath: Path = "/a".try_into()?;
+        let user_data = rectilinear_user_data(&[6], &["[1,2,3]"]);
+        session.add_array(apath.clone(), shape, None, user_data).await?;
+        for i in 0..3u32 {
+            session
+                .set_chunk_ref(
+                    apath.clone(),
+                    ChunkIndices(vec![i]),
+                    Some(ChunkPayload::Inline(format!("c{i}").into())),
+                )
+                .await?;
+        }
+        session.commit("init").max_concurrent_nodes(8).execute().await?;
+
+        let mut session = repo.writable_session("main").await?;
+        session.shift_array(&apath, &[1]).await?;
+        // src 0 -> dest 1, src 1 -> dest 2, src 2 dropped.
         assert_eq!(session.get_chunk_ref(&apath, &ChunkIndices(vec![0])).await?, None);
+        assert_eq!(
+            session.get_chunk_ref(&apath, &ChunkIndices(vec![1])).await?,
+            Some(ChunkPayload::Inline("c0".into()))
+        );
+        assert_eq!(
+            session.get_chunk_ref(&apath, &ChunkIndices(vec![2])).await?,
+            Some(ChunkPayload::Inline("c1".into()))
+        );
+        session.commit("shift").max_concurrent_nodes(8).execute().await?;
+        let session =
+            repo.readonly_session(&VersionInfo::BranchTipRef("main".into())).await?;
+        let node = session.get_array(&apath).await?;
+        let sizes = parse_chunk_shapes_sizes(&node.user_data);
+        assert_eq!(sizes, vec![vec![3u64, 1, 2]]);
+        Ok(())
+    }
+
+    #[tokio_test]
+    async fn test_shift_array_rectilinear_three_chunks_decreasing()
+    -> Result<(), Box<dyn Error>> {
+        let storage = new_in_memory_storage().await?;
+        let storage: Arc<dyn Storage + Send + Sync> = Arc::clone(&storage);
+        let repo = Repository::create(None, storage, HashMap::new(), None, true).await?;
+        let mut session = repo.writable_session("main").await?;
+        let shape = ArrayShape::new(vec![(6, 3)]).unwrap();
+        session.add_group(Path::root(), Bytes::new()).await?;
+        let apath: Path = "/a".try_into()?;
+        let user_data = rectilinear_user_data(&[6], &["[3,1,2]"]);
+        session.add_array(apath.clone(), shape, None, user_data).await?;
+        for i in 0..3u32 {
+            session
+                .set_chunk_ref(
+                    apath.clone(),
+                    ChunkIndices(vec![i]),
+                    Some(ChunkPayload::Inline(format!("c{i}").into())),
+                )
+                .await?;
+        }
+        session.commit("init").max_concurrent_nodes(8).execute().await?;
+
+        let mut session = repo.writable_session("main").await?;
+        session.shift_array(&apath, &[1]).await?;
+        assert_eq!(session.get_chunk_ref(&apath, &ChunkIndices(vec![0])).await?, None);
+        assert_eq!(
+            session.get_chunk_ref(&apath, &ChunkIndices(vec![1])).await?,
+            Some(ChunkPayload::Inline("c0".into()))
+        );
+        assert_eq!(
+            session.get_chunk_ref(&apath, &ChunkIndices(vec![2])).await?,
+            Some(ChunkPayload::Inline("c1".into()))
+        );
+        session.commit("shift").max_concurrent_nodes(8).execute().await?;
+        let session =
+            repo.readonly_session(&VersionInfo::BranchTipRef("main".into())).await?;
+        let node = session.get_array(&apath).await?;
+        let sizes = parse_chunk_shapes_sizes(&node.user_data);
+        assert_eq!(sizes, vec![vec![2u64, 3, 1]]);
         Ok(())
     }
 
