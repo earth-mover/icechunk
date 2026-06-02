@@ -79,6 +79,17 @@ impl From<PyS3StaticCredentials> for S3StaticCredentials {
     }
 }
 
+impl From<S3StaticCredentials> for PyS3StaticCredentials {
+    fn from(credentials: S3StaticCredentials) -> Self {
+        PyS3StaticCredentials {
+            access_key_id: credentials.access_key_id,
+            secret_access_key: credentials.secret_access_key,
+            session_token: credentials.session_token,
+            expires_after: credentials.expires_after,
+        }
+    }
+}
+
 // Non-executable: contains secrets that should not be printed in full
 impl PyRepr for PyS3StaticCredentials {
     const EXECUTABLE: bool = false;

@@ -1,5 +1,6 @@
 //! Integration with Obstore, via pyo3-object_store
 
+use icechunk::config::S3StaticCredentials;
 use object_store::aws::AmazonS3ConfigKey;
 use pyo3::PyTypeInfo;
 use pyo3::exceptions::PyValueError;
@@ -7,9 +8,7 @@ use pyo3::prelude::*;
 use pyo3_object_store::aws::{PyAWSCredentialProvider, PyAmazonS3Config};
 use pyo3_object_store::{PyS3Store, PyTypedObjectStore};
 
-use crate::config::{
-    PyChecksumAlgorithm, PyS3Credentials, PyS3Options, PyS3StaticCredentials, PyStorage,
-};
+use crate::config::{PyChecksumAlgorithm, PyS3Credentials, PyS3Options, PyStorage};
 
 /// Top-level function to create a PyStorage from an obstore Store
 pub(crate) fn new_obstore(
@@ -71,18 +70,21 @@ struct S3StaticCredentialsBuilder {
 }
 
 impl S3StaticCredentialsBuilder {
-    pub fn build(self) -> PyS3Credentials {
+    fn build(self) -> PyS3Credentials {
         if self.access_key_id.is_none() && self.secret_access_key.is_none() {
             // If no credentials were provided, but skip_signature was not set, credentials are
             // inferred from the environment
             PyS3Credentials::FromEnv()
         } else {
-            PyS3Credentials::Static(PyS3StaticCredentials {
-                access_key_id: self.access_key_id.unwrap_or_default(),
-                secret_access_key: self.secret_access_key.unwrap_or_default(),
-                session_token: self.session_token,
-                expires_after: None,
-            })
+            PyS3Credentials::Static(
+                S3StaticCredentials {
+                    access_key_id: self.access_key_id.unwrap_or_default(),
+                    secret_access_key: self.secret_access_key.unwrap_or_default(),
+                    session_token: self.session_token,
+                    expires_after: None,
+                }
+                .into(),
+            )
         }
     }
 }
