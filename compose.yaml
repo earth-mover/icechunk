@@ -29,7 +29,7 @@ services:
 
   rustfs_init:
     container_name: icechunk_rustfs_init
-    image: rustfs/rc:v0.1.4
+    image: rustfs/rc:v0.1.19
     restart: "no"
     depends_on:
       rustfs:
