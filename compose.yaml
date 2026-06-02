@@ -5,7 +5,7 @@ volumes:
 services:
   rustfs:
     container_name: icechunk_rustfs
-    image: rustfs/rustfs:1.0.0-alpha.85
+    image: rustfs/rustfs:1.0.0-beta.6
     hostname: rustfs
     healthcheck:
       test: curl 127.0.0.1:9000/health
@@ -29,7 +29,7 @@ services:
 
   rustfs_init:
     container_name: icechunk_rustfs_init
-    image: rustfs/rc:v0.1.4
+    image: rustfs/rc:v0.1.19
     restart: "no"
     depends_on:
       rustfs:
