@@ -19,19 +19,19 @@ use std::{
 use async_stream::try_stream;
 use bytes::Bytes;
 use futures::{Stream, StreamExt as _, TryStreamExt as _};
-use itertools::{Either, Itertools as _, izip, repeat_n};
-use serde::{Deserialize, Serialize, de};
+use itertools::{Either, Itertools as _};
 use thiserror::Error;
 use tokio::sync::RwLock;
 use tracing::instrument;
 
 use crate::{
+    array_metadata::{ArrayMetadata, NodeMetadata},
     error::ICError,
     format::{
         ByteRange, ChunkIndices, ChunkOffset, Path, PathError,
         format_constants::SpecVersionBin,
         manifest::{ChunkPayload, VirtualChunkRef},
-        snapshot::{ArrayShape, DimensionName, NodeData, NodeSnapshot, NodeType},
+        snapshot::{NodeData, NodeSnapshot, NodeType},
     },
     refs::RefErrorKind,
     repository::RepositoryErrorKind,
@@ -849,14 +849,14 @@ async fn set_array_meta(
     session: &mut Session,
 ) -> StoreResult<()> {
     if !array_meta.is_regular() && session.spec_version() < SpecVersionBin::V2 {
-        return Err(StoreErrorKind::BadChunkGridMetadata(
+        return Err(crate::array_metadata::ArrayMetadataError::BadChunkGrid(
             "Non-regular chunk grids are not supported in icechunk format version 1. \
              Please use spec_version=2 or higher."
                 .into(),
         ))
         .capture();
     }
-    let shape = array_meta.shape()?;
+    let shape = array_meta.shape().inject()?;
     if let Ok(node) = session.get_array(&path).await {
         if let NodeData::Array { .. } = node.node_data
             && node.user_data != user_data
@@ -1136,389 +1136,6 @@ impl Display for Key {
     }
 }
 
-/// Per-axis chunk grid layout: either a single repeating size or an explicit list.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum AxisLayout {
-    Regular { chunk_size: u64 },
-    Rectilinear { sizes: Vec<u64> },
-}
-
-/// Textual form an axis used in the on-disk `chunk_shapes` JSON. Preserved so
-/// that round-tripping rectilinear axes doesn't gratuitously change encoding.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AxisForm {
-    Flat,
-    Rle,
-}
-
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
-pub struct ArrayMetadata {
-    pub shape: Vec<u64>,
-
-    #[serde(deserialize_with = "validate_array_node_type")]
-    node_type: String,
-
-    chunk_grid: ChunkGridSerializer,
-
-    pub dimension_names: Option<Vec<Option<String>>>,
-}
-
-impl ArrayMetadata {
-    fn dimension_names(&self) -> Option<Vec<DimensionName>> {
-        self.dimension_names
-            .as_ref()
-            .map(|ds| ds.iter().map(|d| d.as_ref().map(|s| s.as_str()).into()).collect())
-    }
-
-    fn is_regular(&self) -> bool {
-        self.chunk_grid.name == "regular"
-    }
-
-    fn num_chunks(&self) -> StoreResult<Vec<u32>> {
-        let serde_json::Value::Object(kvs) = &self.chunk_grid.configuration else {
-            return Err(StoreErrorKind::BadChunkGridMetadata(
-                "Unsupported chunk grid".into(),
-            ))
-            .capture();
-        };
-        match self.chunk_grid.name.as_str() {
-            "regular" => {
-                let values = kvs.get("chunk_shape").and_then(|v| v.as_array()).ok_or_else(|| StoreErrorKind::BadChunkGridMetadata(
-                        "cannot parse `chunk_shape` for regular chunk grid".into(),
-                    ),
-                ).capture()?;
-                let chunks =
-                    values.iter().map(|c| c.as_u64()).collect::<Option<Vec<_>>>().ok_or_else(|| StoreErrorKind::BadChunkGridMetadata(
-                            "cannot parse `chunk_shape` for regular chunk grid".into(),
-                        ),
-                    ).capture()?;
-                let num_chunks = chunks
-                    .iter()
-                    .zip(self.shape.iter())
-                    .map(|(c, s)| if *c == 0 { 0 } else {(*s).div_ceil(*c) as u32})
-                    .collect::<Vec<_>>();
-                Ok(num_chunks)
-            }
-            "rectilinear" => {
-                let values = kvs.get("chunk_shapes").and_then(|v| v.as_array()).ok_or_else(|| StoreErrorKind::BadChunkGridMetadata(
-                        "cannot parse `chunk_shapes` for rectilinear chunk grid".into(),
-                    ),
-                ).capture()?;
-                let num_chunks = values
-                    .iter()
-                    .map(|v| {
-                        let v = v.as_array()?;
-                        v.iter().try_fold(0u32, |acc, inner| {
-                            if inner.is_number() {
-                                // fully listed chunk sizes e.g. [2, 2, 2]
-                                Some(acc + 1)
-                            } else if let Some(vec) = inner.as_array() {
-                                // run length encoded e.g. [[2, 3]]
-                                let count = vec.get(1)?.as_u64()? as u32;
-                                Some(acc + count)
-                            } else {
-                                None
-                            }
-                        })
-                    })
-                    .collect::<Option<Vec<_>>>()
-                    .ok_or_else(|| StoreErrorKind::BadChunkGridMetadata(
-                        "cannot parse `chunk_shapes` for rectilinear chunk grid".into(),
-                    )).capture()?;
-                Ok(num_chunks)
-            }
-            _other => {
-                Err(StoreErrorKind::BadChunkGridMetadata(format!(
-                    "Unsupported chunk grid {_other}. Only 'regular' and 'rectilinear' chunk grids are supported.")))
-                    .capture()
-            }
-        }
-    }
-
-    /// Look up chunk size along each axis for a given chunk coordinate
-    pub fn get_chunk_shapes<'a>(
-        &self,
-        coords: impl Iterator<Item = &'a ChunkIndices> + 'a,
-    ) -> StoreResult<Box<dyn Iterator<Item = StoreResult<Vec<u32>>> + 'a>> {
-        let serde_json::Value::Object(kvs) = &self.chunk_grid.configuration else {
-            return Err(StoreErrorKind::BadChunkGridMetadata(
-                "Unsupported chunk grid".into(),
-            ))
-            .capture();
-        };
-        match self.chunk_grid.name.as_str() {
-            "regular" => {
-                let values = kvs.get("chunk_shape").and_then(|v| v.as_array()).ok_or_else(|| StoreErrorKind::BadChunkGridMetadata(
-                        "cannot parse `chunk_shape` for regular chunk grid".into(),
-                    ),
-                ).capture()?;
-                let chunks = values
-                    .iter()
-                    .map(|c| c.as_u64().map(|c| c as u32))
-                    .collect::<Option<Vec<_>>>()
-                    .ok_or_else(|| StoreErrorKind::BadChunkGridMetadata(
-                        "cannot parse `chunk_shape` for regular chunk grid".into(),
-                    )).capture()?;
-                let num_chunks = self.num_chunks()?;
-
-                let remainder: Vec<u32> = self
-                    .shape
-                    .iter()
-                    .zip(chunks.iter())
-                    .map(|(s, c)| (s % (*c as u64)) as u32)
-                    .collect();
-
-                let iter = coords.map(move |coord| {
-                    izip!(
-                        coord.0.iter().enumerate(),
-                        chunks.iter(),
-                        num_chunks.iter(),
-                        remainder.iter()
-                    )
-                    .map(|((axis, axcoord), chunksize, num_chunks, rem)| {
-                        if axcoord >= num_chunks {
-                            Err(StoreErrorKind::InvalidIndex {
-                                axis,
-                                coords: coord.clone(),
-                                num_chunks: *num_chunks,
-                            })
-                            .capture()
-                        } else {
-                            Ok(if *rem == 0 || axcoord < &(num_chunks - 1) {
-                                *chunksize
-                            } else {
-                                *rem
-                            })
-                        }
-                    })
-                    // needed to avoid lifetime errors
-                    .collect::<StoreResult<Vec<_>>>()
-                });
-                Ok(Box::new(iter))
-            }
-            "rectilinear" => {
-                let values = kvs.get("chunk_shapes").and_then(|v| v.as_array()).ok_or_else(|| StoreErrorKind::BadChunkGridMetadata(
-                        "cannot parse `chunk_shapes` for rectilinear chunk grid".into(),
-                    ),
-                ).capture()?;
-                let chunks = values
-                    .iter()
-                    .map(|v| {
-                        let v = v.as_array()?;
-                        v.iter().try_fold(Vec::<u32>::new(), |mut acc, inner| {
-                            if inner.is_number() {
-                                // fully listed chunk sizes e.g. [2, 2, 2]
-                                acc.push(inner.as_u64()? as u32);
-                                Some(acc)
-                            } else if let Some(vec) = inner.as_array() {
-                                // run length encoded e.g. [[2, 3]]
-                                let elem = vec.first()?.as_u64()? as u32;
-                                let count = vec.get(1)?.as_u64()? as usize;
-                                acc.extend(repeat_n(elem, count));
-                                Some(acc)
-                            } else {
-                                None
-                            }
-                        })
-                    })
-                    .collect::<Option<Vec<_>>>()
-                    .ok_or_else(|| StoreErrorKind::BadChunkGridMetadata(
-                        "cannot parse `chunk_shapes` for rectilinear chunk grid".into(),
-                    )).capture()?;
-
-                let iter = coords.map(move |coord: &ChunkIndices| {
-                    coord
-                        .0
-                        .iter()
-                        .enumerate()
-                        .zip(chunks.iter())
-                        .map(|((axis, chunkcoord), chunksizes)| {
-                            if chunkcoord >= &(chunksizes.len() as u32) {
-                                Err(StoreErrorKind::InvalidIndex {
-                                    coords: coord.clone(),
-                                    axis,
-                                    num_chunks: chunksizes.len() as u32,
-                                })
-                                .capture()
-                            } else {
-                                Ok(chunksizes[*chunkcoord as usize])
-                            }
-                        })
-                        // needed to avoid lifetime errors
-                        .collect::<StoreResult<Vec<_>>>()
-                });
-                Ok(Box::new(iter))
-            }
-            _other => {
-                Err(StoreErrorKind::BadChunkGridMetadata(format!(
-                    "Unsupported chunk grid {_other}. Only 'regular' and 'rectilinear' chunk grids are supported.")))
-                    .capture()
-            }
-        }
-    }
-
-    /// Per-axis chunk layout extracted from the array's Zarr metadata.
-    pub fn parse_axis_layouts_with_form(
-        &self,
-    ) -> StoreResult<Vec<(AxisLayout, AxisForm)>> {
-        let serde_json::Value::Object(kvs) = &self.chunk_grid.configuration else {
-            return Err(StoreErrorKind::BadChunkGridMetadata(
-                "Unsupported chunk grid".into(),
-            ))
-            .capture();
-        };
-        match self.chunk_grid.name.as_str() {
-            "regular" => {
-                let values = kvs.get("chunk_shape").and_then(|v| v.as_array()).ok_or_else(|| StoreErrorKind::BadChunkGridMetadata(
-                        "cannot parse `chunk_shape` for regular chunk grid".into(),
-                    ),
-                ).capture()?;
-                let layouts = values
-                    .iter()
-                    .map(|c| c.as_u64().map(|chunk_size| (AxisLayout::Regular { chunk_size }, AxisForm::Flat)))
-                    .collect::<Option<Vec<_>>>()
-                    .ok_or_else(|| StoreErrorKind::BadChunkGridMetadata(
-                        "cannot parse `chunk_shape` for regular chunk grid".into(),
-                    )).capture()?;
-                Ok(layouts)
-            }
-            "rectilinear" => {
-                let values = kvs.get("chunk_shapes").and_then(|v| v.as_array()).ok_or_else(|| StoreErrorKind::BadChunkGridMetadata(
-                        "cannot parse `chunk_shapes` for rectilinear chunk grid".into(),
-                    ),
-                ).capture()?;
-                values
-                    .iter()
-                    .map(|v| {
-                        let arr = v.as_array().ok_or_else(|| {
-                            StoreErrorKind::BadChunkGridMetadata(
-                                "cannot parse `chunk_shapes` axis entry".into(),
-                            )
-                        }).capture()?;
-                        // Each axis is either fully flat ([s0, s1, ...]) or
-                        // contains at least one RLE pair ([[size, count], ...]).
-                        // Mixed forms are permitted (`[1, [2, 1], 3]`); we
-                        // classify as RLE if any element is an array.
-                        let mut sizes: Vec<u64> = Vec::with_capacity(arr.len());
-                        let mut has_rle = false;
-                        for inner in arr {
-                            if inner.is_number() {
-                                let n = inner.as_u64().ok_or_else(|| StoreErrorKind::BadChunkGridMetadata(
-                                    "cannot parse chunk size".into(),
-                                )).capture()?;
-                                sizes.push(n);
-                            } else if let Some(pair) = inner.as_array() {
-                                has_rle = true;
-                                let elem = pair.first().and_then(|v| v.as_u64()).ok_or_else(|| StoreErrorKind::BadChunkGridMetadata(
-                                    "cannot parse RLE chunk size".into(),
-                                )).capture()?;
-                                let count = pair.get(1).and_then(|v| v.as_u64()).ok_or_else(|| StoreErrorKind::BadChunkGridMetadata(
-                                    "cannot parse RLE chunk count".into(),
-                                )).capture()? as usize;
-                                sizes.extend(repeat_n(elem, count));
-                            } else {
-                                return Err(StoreErrorKind::BadChunkGridMetadata(
-                                    "cannot parse `chunk_shapes` for rectilinear chunk grid".into(),
-                                )).capture();
-                            }
-                        }
-                        let form = if has_rle { AxisForm::Rle } else { AxisForm::Flat };
-                        Ok((AxisLayout::Rectilinear { sizes }, form))
-                    })
-                    .collect::<StoreResult<Vec<_>>>()
-            }
-            _other => {
-                Err(StoreErrorKind::BadChunkGridMetadata(format!(
-                    "Unsupported chunk grid {_other}. Only 'regular' and 'rectilinear' chunk grids are supported.")))
-                    .capture()
-            }
-        }
-    }
-
-    fn shape(&self) -> StoreResult<ArrayShape> {
-        let num_chunks = self.num_chunks()?;
-        if self.shape.len() != num_chunks.len() {
-            Err(StoreErrorKind::BadChunkGridMetadata(format!(
-                "Fewer dimensions on inferred number of chunks {} than shape {}",
-                self.shape.len(),
-                num_chunks.len()
-            )))
-            .capture()
-        } else {
-            ArrayShape::new(
-                self.shape.iter().zip(num_chunks.iter()).map(|(a, b)| (*a, *b)),
-            )
-            .ok_or_else(|| StoreErrorKind::BadChunkGridMetadata("invalid shape".into()))
-            .capture()
-        }
-    }
-}
-
-fn validate_array_node_type<'de, D>(d: D) -> Result<String, D::Error>
-where
-    D: de::Deserializer<'de>,
-{
-    let value = String::deserialize(d)?;
-
-    if value != "array" {
-        return Err(de::Error::invalid_value(
-            de::Unexpected::Str(value.as_str()),
-            &"the word 'array'",
-        ));
-    }
-
-    Ok(value)
-}
-
-#[derive(Debug, Deserialize)]
-struct NodeMetadata {
-    #[serde(deserialize_with = "validate_node_type")]
-    node_type: String,
-}
-
-fn validate_node_type<'de, D>(d: D) -> Result<String, D::Error>
-where
-    D: de::Deserializer<'de>,
-{
-    let value = String::deserialize(d)?;
-
-    if value != "array" && value != "group" {
-        return Err(de::Error::invalid_value(
-            de::Unexpected::Str(value.as_str()),
-            &"'array' or 'group'",
-        ));
-    }
-
-    Ok(value)
-}
-
-#[derive(Debug, Eq, PartialEq, Serialize, Deserialize)]
-struct ChunkGridSerializer {
-    name: String,
-    configuration: serde_json::Value,
-}
-
-#[cfg(test)]
-/// Used as a convenience method in the tests
-impl From<Vec<u64>> for ChunkGridSerializer {
-    fn from(value: Vec<u64>) -> Self {
-        let arr = serde_json::Value::Array(
-            value
-                .iter()
-                .map(|v| serde_json::Value::Number(serde_json::value::Number::from(*v)))
-                .collect(),
-        );
-        let kvs = serde_json::value::Map::from_iter(iter::once((
-            "chunk_shape".to_string(),
-            arr,
-        )));
-        Self {
-            name: "regular".to_string(),
-            configuration: serde_json::Value::Object(kvs),
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
 
@@ -1530,34 +1147,9 @@ mod tests {
     };
 
     use super::*;
-    use icechunk_format::roundtrip_serialization_tests;
     use icechunk_macros::tokio_test;
     use pretty_assertions::assert_eq;
-    use proptest::prelude::*;
-    use proptest::{collection::vec, option};
     use tempfile::TempDir;
-
-    prop_compose! {
-        fn array_metadata()
-        (shape in vec(any::<u64>(), 1..4),
-         node_type in Just("array".to_string()),
-            chunk_grid in vec(any::<u64>(), 1..4),
-            dimension_names in option::of(
-            vec(
-                option::of(any::<String>()),
-                2..4))) -> ArrayMetadata {
-            ArrayMetadata {
-                shape,
-                node_type,
-                chunk_grid: chunk_grid.into(),
-                dimension_names,
-            }
-        }
-    }
-
-    roundtrip_serialization_tests!(
-        serialize_and_deserialize_array_metadata - array_metadata
-    );
 
     async fn add_group(store: &Store, path: &str) -> StoreResult<()> {
         let bytes = Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group"}"#);
@@ -1739,52 +1331,6 @@ mod tests {
         );
     }
 
-    #[icechunk_macros::test]
-    fn test_metadata_serialization() {
-        assert!(
-            serde_json::from_str::<NodeMetadata>(
-                r#"{"zarr_format":3, "node_type":"group"}"#
-            )
-            .is_ok()
-        );
-        assert!(
-            serde_json::from_str::<NodeMetadata>(
-                r#"{"zarr_format":3, "node_type":"array"}"#
-            )
-            .is_ok()
-        );
-        assert!(
-            serde_json::from_str::<NodeMetadata>(
-                r#"{"zarr_format":3, "node_type":"zarr"}"#
-            )
-            .is_err()
-        );
-
-        assert!(serde_json::from_str::<ArrayMetadata>(
-                r#"{"zarr_format":3,"node_type":"array","shape":[2,2,2],"data_type":"int32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":0,"codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#
-            )
-            .is_ok());
-        assert!(serde_json::from_str::<ArrayMetadata>(
-                r#"{"zarr_format":3,"node_type":"group","shape":[2,2,2],"data_type":"int32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":0,"codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#
-            )
-            .is_err());
-
-        // deserialize with nan
-        assert_eq!(
-                serde_json::from_str::<ArrayMetadata>(
-                    r#"{"zarr_format":3,"node_type":"array","shape":[2,2,2],"data_type":"float16","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":"NaN","codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#
-                ).unwrap().dimension_names(),
-                Some(vec!["x".into(), "y".into(), "t".into()])
-
-            );
-        assert_eq!(
-                serde_json::from_str::<ArrayMetadata>(
-                    r#"{"zarr_format":3,"node_type":"array","shape":[2,3,4],"data_type":"float16","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,2,3]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":"NaN","codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#
-                ).unwrap().shape().unwrap(),
-                ArrayShape::new(vec![(2,2), (3,2), (4,2) ]).unwrap()
-            );
-    }
-
     #[tokio_test]
     async fn test_metadata_set_and_get() -> Result<(), Box<dyn std::error::Error>> {
         let repo = create_memory_store_repository().await;
@@ -1928,104 +1474,6 @@ mod tests {
             err.contains("Non-regular chunk grids are not supported"),
             "unexpected error: {err}"
         );
-        Ok(())
-    }
-
-    #[tokio_test]
-    async fn test_get_chunk_shapes_regular() -> Result<(), Box<dyn std::error::Error>> {
-        // all of these are valid ways of specifying chunk sizes for a dimension of size
-        let chunk_grid =
-            r#"{"name":"regular", "configuration": {"chunk_shape": [1, 2, 3, 4, 5, 6]}}"#;
-        let zarr_meta = Bytes::from(format!(
-            r#"{{"zarr_format":3,"node_type":"array","attributes":{{"foo":42}},"shape":[6,6,6,6,6,6],"data_type":"int32","chunk_grid":{chunk_grid},"chunk_key_encoding":{{"name":"default","configuration":{{"separator":"/"}}}},"fill_value":0,"codecs":[{{"name":"mycodec","configuration":{{"foo":42}}}}],"storage_transformers":[{{"name":"mytransformer","configuration":{{"bar":43}}}}],"dimension_names":["x","y","t"]}}"#
-        ));
-        let meta: ArrayMetadata = serde_json::from_slice(&zarr_meta)?;
-
-        // these should work
-        let actual = meta
-            .get_chunk_shapes(
-                [
-                    ChunkIndices(vec![0, 0, 0, 0, 0, 0]),
-                    ChunkIndices(vec![1, 1, 1, 0, 0, 0]),
-                    ChunkIndices(vec![0, 1, 1, 1, 1, 0]),
-                ]
-                .iter(),
-            )?
-            .collect::<StoreResult<Vec<_>>>()?;
-        let expected =
-            vec![vec![1, 2, 3, 4, 5, 6], vec![1, 2, 3, 4, 5, 6], vec![1, 2, 3, 2, 1, 6]];
-        assert_eq!(expected, actual);
-
-        // these should fail
-        let actual = meta
-            .get_chunk_shapes(
-                [
-                    ChunkIndices(vec![6, 0, 0, 0, 0, 0]),
-                    ChunkIndices(vec![0, 3, 0, 0, 0, 0]),
-                    ChunkIndices(vec![0, 0, 4, 0, 0, 0]),
-                    ChunkIndices(vec![0, 0, 0, 3, 0, 0]),
-                    ChunkIndices(vec![0, 0, 0, 0, 5, 0]),
-                    ChunkIndices(vec![0, 1, 2, 2, 3, 1]),
-                ]
-                .iter(),
-            )?
-            .collect::<Vec<_>>();
-        assert!(actual.iter().all(|x| x.is_err()));
-
-        Ok(())
-    }
-
-    #[tokio_test]
-    async fn test_get_chunk_shapes_rectilinear() -> Result<(), Box<dyn std::error::Error>>
-    {
-        // all of these are valid ways of specifying chunk sizes for a dimension of size
-        let chunk_grid = r#"{
-            "name":"rectilinear",
-            "configuration": {
-                "kind": "inline",
-                "chunk_shapes": [
-                        [2, 2, 2],
-                        [[2, 3]],
-                        [[1, 6]],
-                        [1, [2, 1], 3],
-                        [[1, 3], 3],
-                        [6]
-                ]
-            }}"#;
-        let zarr_meta = Bytes::from(format!(
-            r#"{{"zarr_format":3,"node_type":"array","attributes":{{"foo":42}},"shape":[6,6,6,6,6,6],"data_type":"int32","chunk_grid":{chunk_grid},"chunk_key_encoding":{{"name":"default","configuration":{{"separator":"/"}}}},"fill_value":0,"codecs":[{{"name":"mycodec","configuration":{{"foo":42}}}}],"storage_transformers":[{{"name":"mytransformer","configuration":{{"bar":43}}}}],"dimension_names":["x","y","t"]}}"#
-        ));
-        let meta: ArrayMetadata = serde_json::from_slice(&zarr_meta)?;
-
-        // these should work
-        let actual = meta
-            .get_chunk_shapes(
-                [
-                    ChunkIndices(vec![0, 0, 0, 0, 0, 0]),
-                    ChunkIndices(vec![0, 1, 2, 2, 3, 0]),
-                ]
-                .iter(),
-            )?
-            .collect::<StoreResult<Vec<_>>>()?;
-        let expected = vec![vec![2, 2, 1, 1, 1, 6], vec![2, 2, 1, 3, 3, 6]];
-        assert_eq!(expected, actual);
-
-        // these should fail
-        let actual = meta
-            .get_chunk_shapes(
-                [
-                    ChunkIndices(vec![3, 0, 0, 0, 0, 0]),
-                    ChunkIndices(vec![0, 3, 0, 0, 0, 0]),
-                    ChunkIndices(vec![0, 0, 6, 0, 0, 0]),
-                    ChunkIndices(vec![0, 0, 0, 3, 0, 0]),
-                    ChunkIndices(vec![0, 0, 0, 0, 5, 0]),
-                    ChunkIndices(vec![0, 1, 2, 2, 3, 1]),
-                ]
-                .iter(),
-            )?
-            .collect::<Vec<_>>();
-        assert!(actual.iter().all(|x| x.is_err()));
-
         Ok(())
     }
 

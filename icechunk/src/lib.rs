@@ -36,6 +36,7 @@
 #[cfg(feature = "shuttle")]
 extern crate shuttle_tokio as tokio;
 
+pub mod array_metadata;
 pub mod asset_manager;
 pub mod change_set;
 pub mod cli;
