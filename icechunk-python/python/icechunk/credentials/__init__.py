@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import pickle
 from collections.abc import Callable, Mapping
 from datetime import datetime
@@ -43,6 +45,7 @@ __all__ = [
     "gcs_static_credentials",
     "s3_anonymous_credentials",
     "s3_credentials",
+    "s3_earthdata_credentials",
     "s3_from_env_credentials",
     "s3_refreshable_credentials",
     "s3_static_credentials",
@@ -480,3 +483,9 @@ def containers_credentials(
         else:
             raise ValueError(f"Unknown credential type {type(cred)}")
     return res
+
+
+# Re-export from credentials.earthdata submodule
+from icechunk.credentials.earthdata import (
+    s3_earthdata_credentials,
+)
