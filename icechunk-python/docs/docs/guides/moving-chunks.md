@@ -109,6 +109,8 @@ print(arr[:])
 
 ### Rectilinear Chunk Grids
 
+See [Rectilinear chunk grids](zarr.md#rectilinear-chunk-grids) for an introduction to the feature itself; this section covers how `shift_array` interacts with such a grid.
+
 `shift_array` also works on arrays whose chunk grid is rectilinear—each axis has its own sequence of chunk lengths instead of a single fixed chunk size. The chunks that survive the shift keep their per-axis lengths, and the vacated region (the leading end for positive offsets, the trailing end for negative offsets) collapses into a single fill chunk along the shifted axis. As a consequence, the array's chunk grid—the per-axis `chunk_shapes`—can be different after the shift. The operation is still metadata-only; no chunk payloads are read, decoded, or rewritten.
 
 To make the geometry concrete, take a 1-D array of shape `(3,)` with chunks `((1, 2),)` holding the values `[10, 20, 30]`. Chunk 0 has length 1 and covers index 0 (`[10]`); chunk 1 has length 2 and covers indices 1–2 (`[20, 30]`). Shifting by `(1,)` moves chunk 0 one slot to the right, where it now covers index 2 and still holds `[10]`. Chunk 1 would have moved past the end of the array, so it is dropped. The leading two cells (indices 0–1) are vacated and collapse into a single fill chunk of length 2. The result is chunks `((2, 1),)`—the chunk grid has changed even though the array shape has not. In general, the vacated chunk's length is `array_length - sum(surviving chunk lengths)` along that axis.
@@ -136,6 +138,11 @@ session.commit("write")
 session = repo.writable_session("main")
 session.shift_array("/a", (1,))  # chunks become ((2, 1),): [-1, -1, 10]
 session.commit("shift")
+
+# Inspect the new chunk grid
+session = repo.readonly_session("main")
+arr = zarr.open_array(session.store, path="a")
+print(arr.read_chunk_sizes)  # ((2, 1),)
 ```
 
 Negative offsets are symmetric: the trailing end collapses into a single fill chunk, and surviving chunks keep their lengths.

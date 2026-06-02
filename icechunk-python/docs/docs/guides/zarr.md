@@ -43,6 +43,8 @@ which allows chunk sizes to vary along each dimension.
 This is useful when your data has a natural non-uniform partitioning
 (e.g. variable-length time intervals or irregular spatial tiles).
 
+Icechunk operations like [`shift_array`](moving-chunks.md#rectilinear-chunk-grids) work on rectilinear grids. Note that a shift along a rectilinear axis can change the per-axis chunk lengths—see the moving-chunks guide for details.
+
 !!! note
 
     Rectilinear chunk grids require an unreleased development version of zarr-python:
