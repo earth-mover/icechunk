@@ -31,6 +31,7 @@ __all__ = [
     "GcsStaticCredentials",
     "S3Credentials",
     "S3StaticCredentials",
+    "azure_anonymous_credentials",
     "azure_credentials",
     "azure_from_env_credentials",
     "azure_refreshable_credentials",
@@ -76,7 +77,10 @@ AnyAzureStaticCredential = (
 )
 
 AnyAzureCredential = (
-    AzureCredentials.FromEnv | AzureCredentials.Static | AzureCredentials.Refreshable
+    AzureCredentials.FromEnv
+    | AzureCredentials.Anonymous
+    | AzureCredentials.Static
+    | AzureCredentials.Refreshable
 )
 
 
@@ -381,12 +385,18 @@ def azure_from_env_credentials() -> AzureCredentials.FromEnv:
     return AzureCredentials.FromEnv()
 
 
+def azure_anonymous_credentials() -> AzureCredentials.Anonymous:
+    """Create anonymous credentials for Azure Blob Storage object store."""
+    return AzureCredentials.Anonymous()
+
+
 def azure_credentials(
     *,
     access_key: str | None = None,
     sas_token: str | None = None,
     bearer_token: str | None = None,
     from_env: bool | None = None,
+    anonymous: bool | None = None,
     get_credentials: Callable[[], AzureRefreshableCredential] | None = None,
     scatter_initial_credentials: bool = False,
 ) -> AnyAzureCredential:
@@ -394,6 +404,9 @@ def azure_credentials(
 
     If all arguments are None, credentials are fetched from the operative system environment.
     """
+    if anonymous is not None and anonymous:
+        return azure_anonymous_credentials()
+
     if get_credentials is not None:
         return azure_refreshable_credentials(
             get_credentials,
@@ -473,6 +486,7 @@ def containers_credentials(
             res[name] = Credentials.Gcs(cast(GcsCredentials, cred))
         elif (
             isinstance(cred, AzureCredentials.FromEnv)
+            or isinstance(cred, AzureCredentials.Anonymous)
             or isinstance(cred, AzureCredentials.Static)
             or isinstance(cred, AzureCredentials.Refreshable)
         ):

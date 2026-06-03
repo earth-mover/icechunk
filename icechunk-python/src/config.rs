@@ -453,6 +453,7 @@ impl From<PyAzureStaticCredentials> for AzureStaticCredentials {
 #[pyclass(name = "AzureCredentials")]
 #[derive(Clone, Debug)]
 pub enum PyAzureCredentials {
+    Anonymous(),
     FromEnv(),
     Static(PyAzureStaticCredentials),
     Refreshable {
@@ -472,6 +473,7 @@ pub enum PyCredentials {
 impl From<PyAzureCredentials> for AzureCredentials {
     fn from(value: PyAzureCredentials) -> Self {
         match value {
+            PyAzureCredentials::Anonymous() => AzureCredentials::Anonymous,
             PyAzureCredentials::FromEnv() => AzureCredentials::FromEnv,
             PyAzureCredentials::Static(creds) => AzureCredentials::Static(creds.into()),
             PyAzureCredentials::Refreshable { pickled_function, current } => {

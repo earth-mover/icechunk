@@ -3211,6 +3211,10 @@ class AzureCredentials:
 
     This can be used to authenticate with an azure storage backend.
     """
+    class Anonymous:
+        """Uses anonymous credentials"""
+        def __new__(cls) -> AzureCredentials.Anonymous: ...
+
     class FromEnv:
         """Uses credentials from environment variables"""
         def __new__(cls) -> AzureCredentials.FromEnv: ...
@@ -3233,7 +3237,10 @@ class AzureCredentials:
         ) -> AzureCredentials.Refreshable: ...
 
 _AnyAzureCredential = (
-    AzureCredentials.FromEnv | AzureCredentials.Static | AzureCredentials.Refreshable
+    AzureCredentials.Anonymous
+    | AzureCredentials.FromEnv
+    | AzureCredentials.Static
+    | AzureCredentials.Refreshable
 )
 
 class Credentials:
