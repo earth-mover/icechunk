@@ -401,6 +401,11 @@ async fn install_limit_data_toxic(
     Ok(())
 }
 
+/// Serializes the lost-response tests within one process (`cargo test`) so the
+/// concurrent load doesn't starve the toxic-removal timer they race. No-op
+/// under nextest (process-per-test) — `.config/nextest.toml` serializes there.
+static LOST_RESPONSE_SERIAL: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 /// Sets up the toxic, then hands `(storage, settings, toxic_remover)` to
 /// `action`; the closure is responsible for `.await??`-ing the
 /// `toxic_remover` before any post-action storage ops that need the toxic
@@ -421,6 +426,7 @@ where
     ) -> Fut,
     Fut: Future<Output = Result<(), Box<dyn std::error::Error>>>,
 {
+    let _serial = LOST_RESPONSE_SERIAL.lock().await;
     let (client, proxy_name) = setup_toxiproxy(proxy_label, port).await?;
     let storage = build_proxied_storage(backend, proxy_label, port).await?;
     // Warm up credentials/identity-cache and the pooled connection before
