@@ -1025,8 +1025,9 @@ fn binary_file_header(
     // magic numbers
     buffer.extend_from_slice(ICECHUNK_FORMAT_MAGIC_BYTES);
     // implementation name
-    let implementation = format!("{:<24}", &*ICECHUNK_CLIENT_NAME);
-    buffer.extend_from_slice(&implementation.as_bytes()[..24]);
+    let implementation =
+        format!("{:<width$}", &*ICECHUNK_CLIENT_NAME, width = ICECHUNK_IMPL_NAME_LEN);
+    buffer.extend_from_slice(&implementation.as_bytes()[..ICECHUNK_IMPL_NAME_LEN]);
     // spec version
     buffer.push(spec_version as u8);
     buffer.push(file_type as u8);
@@ -1036,6 +1037,9 @@ fn binary_file_header(
 }
 
 /// Caps concurrent CPU decodes so the blocking pool can't oversubscribe the cores.
+/// Absent under shuttle: a process-global semaphore would leak across shuttle
+/// executions, and the gate's core-oversubscription job is meaningless there.
+#[cfg(not(feature = "shuttle"))]
 fn decode_gate() -> &'static Semaphore {
     static GATE: LazyLock<Semaphore> = LazyLock::new(|| {
         let n = std::thread::available_parallelism().map_or(8, |n| n.get());
@@ -1044,29 +1048,24 @@ fn decode_gate() -> &'static Semaphore {
     &GATE
 }
 
-/// Binary header: magic(12) + implementation name(24) + spec(1) + file type(1) + compression(1).
-const FILE_HEADER_LEN: usize = 12 + 24 + 1 + 1 + 1;
-// check_header's buf[36/37/38] offsets assume a 12-byte magic
-const _: () = assert!(format_constants::ICECHUNK_FORMAT_MAGIC_BYTES.len() == 12);
-
 /// Cap preallocation so a forged size hint can't OOM us.
 const MAX_DECODE_PREALLOC: usize = 64 * 1024 * 1024;
 
-/// Sync header validation; returns (spec version, compression). Body at `FILE_HEADER_LEN`.
+/// Sync header validation; returns (spec version, compression). Body at `ICECHUNK_FILE_HEADER_LEN`.
 fn check_header(
     buf: &[u8],
     file_type: FileTypeBin,
 ) -> RepositoryResult<(SpecVersionBin, CompressionAlgorithmBin)> {
-    if buf.len() < FILE_HEADER_LEN
-        || !buf.starts_with(format_constants::ICECHUNK_FORMAT_MAGIC_BYTES)
+    use format_constants::*;
+    if buf.len() < ICECHUNK_FILE_HEADER_LEN
+        || !buf.starts_with(ICECHUNK_FORMAT_MAGIC_BYTES)
     {
         return Err(RepositoryErrorKind::FormatError(
             IcechunkFormatErrorKind::InvalidMagicNumbers,
         ))
         .capture();
     }
-    // 12..36 = impl name (ignored)
-    let spec_version_byte = buf[36];
+    let spec_version_byte = buf[ICECHUNK_SPEC_VERSION_OFFSET];
     let spec_version: SpecVersionBin = spec_version_byte
         .try_into()
         .map_err(|_| {
@@ -1079,7 +1078,7 @@ fn check_header(
         })
         .capture()?;
 
-    let file_type_byte = buf[37];
+    let file_type_byte = buf[ICECHUNK_FILE_TYPE_OFFSET];
     let actual_file_type: FileTypeBin = file_type_byte
         .try_into()
         .map_err(|_| {
@@ -1099,7 +1098,7 @@ fn check_header(
         .capture();
     }
 
-    let compression: CompressionAlgorithmBin = buf[38]
+    let compression: CompressionAlgorithmBin = buf[ICECHUNK_COMPRESSION_OFFSET]
         .try_into()
         .map_err(|_| {
             RepositoryErrorKind::FormatError(
@@ -1218,15 +1217,19 @@ where
     let (spec_version, compression) = check_header(&compressed, file_type)?;
     debug_assert_eq!(compression, CompressionAlgorithmBin::Zstd);
 
+    // gate concurrent CPU decodes; absent under shuttle (see decode_gate)
+    #[cfg(not(feature = "shuttle"))]
     let decode_permit = decode_gate().acquire().await.capture()?;
     // keep error span ancestry on the blocking thread
     let span = tracing::Span::current();
     tokio::task::spawn_blocking(move || -> RepositoryResult<T> {
         let _entered = span.entered();
         // release on decode completion, not on cancelled-future drop
+        #[cfg(not(feature = "shuttle"))]
         let _decode_permit = decode_permit;
         let mut decompressed =
-            zstd::decode_all(&compressed[FILE_HEADER_LEN..]).capture()?;
+            zstd::decode_all(&compressed[format_constants::ICECHUNK_FILE_HEADER_LEN..])
+                .capture()?;
         // trim decode_all's ≤2x slack before it's cached
         decompressed.shrink_to_fit();
         deserialize(spec_version, decompressed).inject()

@@ -514,6 +514,17 @@ pub mod format_constants {
     }
 
     pub const ICECHUNK_FORMAT_MAGIC_BYTES: &[u8] = "ICE🧊CHUNK".as_bytes();
+    // offsets assume a 12-byte magic
+    const _: () = assert!(ICECHUNK_FORMAT_MAGIC_BYTES.len() == 12);
+
+    // Binary file header layout: magic | impl name | spec version | file type | compression.
+    // Reader (check_header) and writer (binary_file_header) both derive offsets from these.
+    pub const ICECHUNK_IMPL_NAME_LEN: usize = 24;
+    pub const ICECHUNK_SPEC_VERSION_OFFSET: usize =
+        ICECHUNK_FORMAT_MAGIC_BYTES.len() + ICECHUNK_IMPL_NAME_LEN;
+    pub const ICECHUNK_FILE_TYPE_OFFSET: usize = ICECHUNK_SPEC_VERSION_OFFSET + 1;
+    pub const ICECHUNK_COMPRESSION_OFFSET: usize = ICECHUNK_FILE_TYPE_OFFSET + 1;
+    pub const ICECHUNK_FILE_HEADER_LEN: usize = ICECHUNK_COMPRESSION_OFFSET + 1;
 
     pub const LATEST_ICECHUNK_FORMAT_VERSION_METADATA_KEY: &str = "ic_spec_ver";
 
