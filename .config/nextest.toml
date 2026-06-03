@@ -1,0 +1,8 @@
+# Serialize the lost-response conditional-PUT tests: concurrent load starves
+# the toxic-removal timer they race. See icechunk/tests/test_flaky_connections.rs.
+[test-groups]
+lost-response = { max-threads = 1 }
+
+[[profile.default.overrides]]
+filter = 'test(conditional_put)'
+test-group = 'lost-response'

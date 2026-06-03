@@ -46,8 +46,13 @@ pub use icechunk_storage::s3_config::{
 use icechunk_storage::{
     DeleteObjectsResult, GetModifiedResult, ListInfo, Settings, Storage, StorageError,
     StorageErrorKind, StorageInfo, StorageResult, VersionInfo, VersionedUpdateResult,
-    obj_not_found_res, obj_store_error, obj_store_error_res, other_error, sealed,
-    split_in_multiple_equal_requests, strip_quotes,
+    obj_not_found_res, obj_store_error, obj_store_error_res, other_error,
+    readback::{
+        ReadbackFacts, ReadbackOutcome, WRITE_ID_METADATA_KEY, classify_readback,
+        finalize_lost_response, finalize_precondition,
+        warn_conditional_without_metadata_once,
+    },
+    sealed, split_in_multiple_equal_requests, strip_quotes,
 };
 use icechunk_types::ICResultExt as _;
 use serde::{Deserialize, Serialize};
@@ -317,11 +322,6 @@ fn stream2stream(
     Box::pin(res)
 }
 
-/// Per-PUT token marking conditional writes (sent as
-/// `x-amz-meta-icechunk_write_id`). Underscores so the key is portable to
-/// Azure (C# identifier rules). Keep in sync with `icechunk-arrow-object-store`.
-const WRITE_ID_METADATA_KEY: &str = "icechunk_write_id";
-
 /// `Uuid::new_v4` in production; tests force a value via [`test_util`].
 fn next_write_id() -> String {
     #[cfg(feature = "test-util")]
@@ -350,22 +350,6 @@ pub mod test_util {
     pub(crate) fn take_forced_write_id() -> Option<String> {
         FORCED_WRITE_ID.with(|c| c.borrow_mut().take())
     }
-}
-
-static CONDITIONAL_WITHOUT_METADATA_WARNED: std::sync::OnceLock<()> =
-    std::sync::OnceLock::new();
-
-fn warn_conditional_without_metadata_once() {
-    CONDITIONAL_WITHOUT_METADATA_WARNED.get_or_init(|| {
-        warn!(
-            "conditional PUT is enabled but `unsafe_use_metadata` is \
-             disabled — lost-response recovery for conditional writes \
-             requires user metadata to stamp write-ids; without it, \
-             transient PUT failures may surface as spurious conflicts \
-             even when the write actually landed. See \
-             icechunk_storage::Settings::unsafe_use_metadata."
-        );
-    });
 }
 
 /// Conditional header a PUT carries; shared by single-PUT and multipart.
@@ -534,8 +518,8 @@ impl S3Storage {
                             key,
                             write_id.as_deref(),
                         )
-                        .await?;
-                    map_precondition_outcome(outcome, key)
+                        .await;
+                    finalize_precondition(outcome, key)
                 } else {
                     obj_store_error_res(SdkError::<PutObjectError>::ServiceError(err))
                 }
@@ -551,8 +535,8 @@ impl S3Storage {
                             key,
                             write_id.as_deref(),
                         )
-                        .await?;
-                    map_precondition_outcome(outcome, key)
+                        .await;
+                    finalize_precondition(outcome, key)
                 } else {
                     obj_store_error_res(SdkError::<PutObjectError>::ResponseError(err))
                 }
@@ -705,11 +689,15 @@ impl S3Storage {
                             key,
                             write_id.as_deref(),
                         )
-                        .await?;
+                        .await;
                     if is_precondition {
-                        map_precondition_outcome(outcome, key)
+                        finalize_precondition(outcome, key)
                     } else {
-                        map_lost_upload_outcome(outcome, key, SdkError::ServiceError(err))
+                        finalize_lost_response(
+                            outcome,
+                            key,
+                            obj_store_error(SdkError::ServiceError(err)),
+                        )
                     }
                 } else {
                     obj_store_error_res(SdkError::ServiceError(err))
@@ -724,8 +712,8 @@ impl S3Storage {
                             key,
                             write_id.as_deref(),
                         )
-                        .await?;
-                    map_precondition_outcome(outcome, key)
+                        .await;
+                    finalize_precondition(outcome, key)
                 } else if status == 404 {
                     // NoSuchUpload surfaced as a raw HTTP status.
                     let outcome = self
@@ -734,11 +722,11 @@ impl S3Storage {
                             key,
                             write_id.as_deref(),
                         )
-                        .await?;
-                    map_lost_upload_outcome(
+                        .await;
+                    finalize_lost_response(
                         outcome,
                         key,
-                        SdkError::<PutObjectError>::ResponseError(err),
+                        obj_store_error(SdkError::<PutObjectError>::ResponseError(err)),
                     )
                 } else {
                     obj_store_error_res(SdkError::<PutObjectError>::ResponseError(err))
@@ -748,9 +736,8 @@ impl S3Storage {
         }
     }
 
-    /// HEAD `key` and classify it against our stamped write-id. `Err` only on
-    /// a transient HEAD failure — an inconclusive read-back must never fake a
-    /// conflict.
+    /// HEAD `key` and classify it against our write-id. `Err` only on a HEAD
+    /// failure.
     async fn read_back_after_conditional_failure(
         &self,
         settings: &Settings,
@@ -770,12 +757,16 @@ impl S3Storage {
             head = head.request_payer(aws_sdk_s3::types::RequestPayer::Requester);
         }
         let facts = match head.send().await {
-            Ok(out) => HeadFacts::Found {
+            Ok(out) => ReadbackFacts::Found {
                 stored_write_id: out
                     .metadata()
                     .and_then(|m| m.get(WRITE_ID_METADATA_KEY))
                     .cloned(),
-                etag: out.e_tag().map(str::to_string),
+                // S3 has no generation; etag is the only version identity.
+                version: out
+                    .e_tag()
+                    .map(|e| VersionInfo::from_etag_only(e.to_string()))
+                    .unwrap_or_else(VersionInfo::for_creation),
             },
             Err(sdk_err)
                 if sdk_err.as_service_error().is_some_and(|e| e.is_not_found())
@@ -783,7 +774,7 @@ impl S3Storage {
                         .raw_response()
                         .is_some_and(|r| r.status().as_u16() == 404) =>
             {
-                HeadFacts::Absent
+                ReadbackFacts::Absent
             }
             Err(sdk_err) => {
                 warn!(key, error = %sdk_err, "readback HEAD failed; propagating original error");
@@ -791,89 +782,6 @@ impl S3Storage {
             }
         };
         Ok(classify_readback(write_id, &facts))
-    }
-}
-
-/// Object facts read back after a conditional PUT reported a conflict.
-#[derive(Debug)]
-enum HeadFacts {
-    Found { stored_write_id: Option<String>, etag: Option<String> },
-    Absent,
-}
-
-/// Only `OurWrite` is universally success; the rest are mapped per-caller.
-#[derive(Debug, PartialEq, Eq)]
-enum ReadbackOutcome {
-    OurWrite { etag: String },
-    NotOurWrite,
-    NotStamped,
-    Absent,
-    MissingEtag,
-}
-
-/// Pure decision (unit-tested): does the read-back prove our own write landed?
-fn classify_readback(our_write_id: Option<&str>, facts: &HeadFacts) -> ReadbackOutcome {
-    let Some(our) = our_write_id else { return ReadbackOutcome::NotStamped };
-    match facts {
-        HeadFacts::Absent => ReadbackOutcome::Absent,
-        HeadFacts::Found { stored_write_id, etag } => {
-            if stored_write_id.as_deref() != Some(our) {
-                ReadbackOutcome::NotOurWrite
-            } else {
-                match etag {
-                    Some(etag) => ReadbackOutcome::OurWrite { etag: etag.clone() },
-                    None => ReadbackOutcome::MissingEtag,
-                }
-            }
-        }
-    }
-}
-
-/// 412/409 caller: an absent object is a genuine lost race.
-fn map_precondition_outcome(
-    outcome: ReadbackOutcome,
-    key: &str,
-) -> StorageResult<VersionedUpdateResult> {
-    match outcome {
-        ReadbackOutcome::OurWrite { etag } => {
-            warn!(
-                key,
-                "precondition failed but our write-id is stored; retried PUT, success"
-            );
-            Ok(VersionedUpdateResult::Updated {
-                new_version: VersionInfo::from_etag_only(etag),
-            })
-        }
-        ReadbackOutcome::NotOurWrite
-        | ReadbackOutcome::NotStamped
-        | ReadbackOutcome::Absent => Ok(VersionedUpdateResult::NotOnLatestVersion),
-        ReadbackOutcome::MissingEtag => {
-            Err(other_error("Object should have an etag".to_string()))
-        }
-    }
-}
-
-/// `NoSuchUpload`/404 caller: only our own landed write rescues it; absence
-/// means the upload failed, so everything else propagates the error.
-fn map_lost_upload_outcome<E>(
-    outcome: ReadbackOutcome,
-    key: &str,
-    original: SdkError<E>,
-) -> StorageResult<VersionedUpdateResult>
-where
-    E: std::error::Error + Send + Sync + 'static,
-{
-    match outcome {
-        ReadbackOutcome::OurWrite { etag } => {
-            warn!(
-                key,
-                "multipart completion response lost; our write-id is stored, success"
-            );
-            Ok(VersionedUpdateResult::Updated {
-                new_version: VersionInfo::from_etag_only(etag),
-            })
-        }
-        _ => obj_store_error_res(original),
     }
 }
 
@@ -1425,54 +1333,7 @@ mod tests {
 
     use super::*;
 
-    // Load-bearing: a write-id match returns the read-back object's own etag,
-    // not a clone of the previous version.
-    #[test]
-    fn classify_readback_match_returns_readback_etag() {
-        let facts = HeadFacts::Found {
-            stored_write_id: Some("W".to_string()),
-            etag: Some("E1".to_string()),
-        };
-        assert_eq!(
-            classify_readback(Some("W"), &facts),
-            ReadbackOutcome::OurWrite { etag: "E1".to_string() }
-        );
-    }
-
-    #[test]
-    fn classify_readback_branches() {
-        let other = HeadFacts::Found {
-            stored_write_id: Some("OTHER".to_string()),
-            etag: Some("E1".to_string()),
-        };
-        assert_eq!(classify_readback(Some("W"), &other), ReadbackOutcome::NotOurWrite);
-
-        let unstamped =
-            HeadFacts::Found { stored_write_id: None, etag: Some("E1".to_string()) };
-        assert_eq!(
-            classify_readback(Some("W"), &unstamped),
-            ReadbackOutcome::NotOurWrite
-        );
-
-        let ours_no_etag =
-            HeadFacts::Found { stored_write_id: Some("W".to_string()), etag: None };
-        assert_eq!(
-            classify_readback(Some("W"), &ours_no_etag),
-            ReadbackOutcome::MissingEtag
-        );
-
-        assert_eq!(
-            classify_readback(Some("W"), &HeadFacts::Absent),
-            ReadbackOutcome::Absent
-        );
-
-        // We never stamped one: can't disambiguate, regardless of facts.
-        let matching = HeadFacts::Found {
-            stored_write_id: Some("W".to_string()),
-            etag: Some("E1".to_string()),
-        };
-        assert_eq!(classify_readback(None, &matching), ReadbackOutcome::NotStamped);
-    }
+    // Readback classification is unit-tested in `icechunk_storage::readback`.
 
     #[tokio_test]
     async fn test_serialize_s3_storage() {
