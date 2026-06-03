@@ -575,6 +575,7 @@ def azure_storage(
     sas_token: str | None = None,
     bearer_token: str | None = None,
     from_env: bool | None = None,
+    anonymous: bool | None = None,
     config: dict[str, str] | None = None,
 ) -> Storage:
     """Create a Storage instance that saves data in Azure Blob Storage object store.
@@ -595,6 +596,8 @@ def azure_storage(
         Azure Blob Storage credential bearer token
     from_env: bool | None
         Fetch credentials from the operative system environment
+    anonymous: bool | None
+        Access a public container anonymously, without credentials
     config: dict[str, str] | None
         A dictionary of options for the Azure Blob Storage object store. See https://docs.rs/object_store/latest/object_store/azure/enum.AzureConfigKey.html#variants for a list of possible configuration keys.
     """
@@ -603,6 +606,7 @@ def azure_storage(
         sas_token=sas_token,
         bearer_token=bearer_token,
         from_env=from_env,
+        anonymous=anonymous,
     )
     return Storage.new_azure_blob(
         account=account,
