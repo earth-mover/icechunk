@@ -1,18 +1,16 @@
 from __future__ import annotations
 
-import json
 import pickle
 from pathlib import Path
 from typing import Any, TypeVar
 
 import pytest
 
-import zarr
 from icechunk import IcechunkError, IcechunkStore, local_filesystem_storage
 from icechunk.repository import Repository
 from zarr.abc.store import OffsetByteRequest, RangeByteRequest, Store, SuffixByteRequest
 from zarr.core.buffer import Buffer, cpu, default_buffer_prototype
-from zarr.core.sync import _collect_aiterator, collect_aiterator, sync
+from zarr.core.sync import _collect_aiterator, collect_aiterator
 from zarr.testing.store import StoreTests
 from zarr.testing.utils import assert_bytes_equal
 
