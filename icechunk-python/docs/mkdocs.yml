@@ -273,6 +273,7 @@ nav:
       - icechunk.dask: reference/dask.md
     - Icechunk JavaScript / TypeScript: reference/icechunk-js.md
     - Icechunk Rust: reference/icechunk-rust.md
+    - Changelog: reference/changelog.md
     - Contributing: reference/contributing.md
     - AI Usage Policy: reference/ai-policy.md
     - Migrate to 1.0: reference/migration.md
