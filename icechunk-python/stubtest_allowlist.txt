@@ -1,3 +1,5 @@
+icechunk._icechunk_python.AzureCredentials.Anonymous
+icechunk._icechunk_python.AzureCredentials.Anonymous.__match_args__
 icechunk._icechunk_python.AzureCredentials.FromEnv
 icechunk._icechunk_python.AzureCredentials.FromEnv.__match_args__
 icechunk._icechunk_python.AzureRefreshableCredential.AccessKey
