@@ -1048,8 +1048,9 @@ fn decode_gate() -> &'static Semaphore {
     &GATE
 }
 
-/// Cap preallocation so a forged size hint can't OOM us.
-const MAX_DECODE_PREALLOC: usize = 64 * 1024 * 1024;
+/// Starting buffer capacity for objects without a known size, to avoid a few
+/// initial reallocations while `read_to_end` grows the buffer.
+const DEFAULT_PREALLOC_HINT: usize = 8192;
 
 /// Sync header validation; returns (spec version, compression). Body at `ICECHUNK_FILE_HEADER_LEN`.
 fn check_header(
@@ -1057,9 +1058,16 @@ fn check_header(
     file_type: FileTypeBin,
 ) -> RepositoryResult<(SpecVersionBin, CompressionAlgorithmBin)> {
     use format_constants::*;
-    if buf.len() < ICECHUNK_FILE_HEADER_LEN
-        || !buf.starts_with(ICECHUNK_FORMAT_MAGIC_BYTES)
-    {
+    if buf.len() < ICECHUNK_FILE_HEADER_LEN {
+        return Err(RepositoryErrorKind::FormatError(
+            IcechunkFormatErrorKind::InvalidIcechunkHeaderSize {
+                found: buf.len(),
+                expected: ICECHUNK_FILE_HEADER_LEN,
+            },
+        ))
+        .capture();
+    }
+    if !buf.starts_with(ICECHUNK_FORMAT_MAGIC_BYTES) {
         return Err(RepositoryErrorKind::FormatError(
             IcechunkFormatErrorKind::InvalidMagicNumbers,
         ))
@@ -1208,9 +1216,7 @@ where
     T: Send + 'static,
     F: FnOnce(SpecVersionBin, Vec<u8>) -> Result<T, IcechunkFormatError> + Send + 'static,
 {
-    // hint can be unvalidated snapshot metadata; cap the preallocation
-    let mut compressed =
-        Vec::with_capacity((compressed_size_hint as usize).min(MAX_DECODE_PREALLOC));
+    let mut compressed = Vec::with_capacity(compressed_size_hint as usize);
     read.read_to_end(&mut compressed).await.capture()?;
 
     // on the async task: fail fast (no permit) and keep span ancestry on header errors
@@ -1322,9 +1328,12 @@ async fn fetch_snapshot(
     let path = format!("{SNAPSHOTS_FILE_PATH}/{snapshot_id}");
     let (read, _) =
         storage.get_object(storage_settings, path.as_str(), None).await.inject()?;
-    fetch_and_decode(read, 0, FileTypeBin::Snapshot, |spec_version, buffer| {
-        deserialize_snapshot(spec_version, buffer).map(Arc::new)
-    })
+    fetch_and_decode(
+        read,
+        DEFAULT_PREALLOC_HINT as u64,
+        FileTypeBin::Snapshot,
+        |spec_version, buffer| deserialize_snapshot(spec_version, buffer).map(Arc::new),
+    )
     .await
 }
 
@@ -1398,9 +1407,14 @@ async fn fetch_transaction_log(
     let _permit = semaphore.acquire().await.capture()?;
     let (read, _) =
         storage.get_object(storage_settings, path.as_str(), None).await.inject()?;
-    fetch_and_decode(read, 0, FileTypeBin::TransactionLog, |spec_version, buffer| {
-        deserialize_transaction_log(spec_version, buffer).map(Arc::new)
-    })
+    fetch_and_decode(
+        read,
+        DEFAULT_PREALLOC_HINT as u64,
+        FileTypeBin::TransactionLog,
+        |spec_version, buffer| {
+            deserialize_transaction_log(spec_version, buffer).map(Arc::new)
+        },
+    )
     .await
 }
 
@@ -1582,7 +1596,7 @@ pub async fn fetch_repo_info_from_path(
         Ok(GetModifiedResult::Modified { data, new_version }) => {
             let repo_info = fetch_and_decode(
                 data,
-                0,
+                DEFAULT_PREALLOC_HINT as u64,
                 FileTypeBin::RepoInfo,
                 |spec_version, buffer| {
                     deserialize_repo_info(spec_version, buffer).map(Arc::new)

@@ -340,6 +340,10 @@ pub enum IcechunkFormatErrorKind {
     ManifestInfoNotFound { manifest_id: ManifestId },
     #[error("invalid magic numbers in file")]
     InvalidMagicNumbers, // TODO: add more info
+    #[error(
+        "invalid icechunk header size, got {found} bytes, expected at least {expected}"
+    )]
+    InvalidIcechunkHeaderSize { found: usize, expected: usize },
     #[error("invalid node type {found}, max supported value is {max_supported}")]
     InvalidNodeType { found: u8, max_supported: u8 },
     #[error(
