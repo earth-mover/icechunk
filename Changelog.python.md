@@ -8,7 +8,7 @@
 
 ### Fixes
 
-- Don't create a local path when opening (rather than creating) a repository ([#2145](https://github.com/earth-mover/icechunk/pull/2145)).
+- Don't force creation of a directory when opening a repo in local file storage ([#2145](https://github.com/earth-mover/icechunk/pull/2145)).
 
 ## Python Icechunk Library 2.0.5
 
