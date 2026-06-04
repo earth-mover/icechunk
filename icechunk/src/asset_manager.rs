@@ -28,10 +28,7 @@ static RETRYABLE_ERROR: LazyLock<regex::Regex> = LazyLock::new(|| {
     )
     .unwrap()
 });
-use async_compression::{
-    Level,
-    tokio::bufread::{ZstdDecoder, ZstdEncoder},
-};
+use async_compression::{Level, tokio::bufread::ZstdEncoder};
 use tokio::{
     io::{AsyncBufRead, AsyncReadExt as _},
     sync::Semaphore,
@@ -44,7 +41,7 @@ use crate::{
     RepositoryConfig, Storage, StorageError,
     config::CachingConfig,
     format::{
-        CHUNKS_FILE_PATH, CONFIG_FILE_PATH, ChunkId, ChunkOffset,
+        CHUNKS_FILE_PATH, CONFIG_FILE_PATH, ChunkId, ChunkOffset, IcechunkFormatError,
         IcechunkFormatErrorKind, MANIFESTS_FILE_PATH, ManifestId, OVERWRITTEN_FILES_PATH,
         REPO_INFO_FILE_PATH, SNAPSHOTS_FILE_PATH, SnapshotId, TRANSACTION_LOGS_FILE_PATH,
         format_constants::{self, CompressionAlgorithmBin, FileTypeBin, SpecVersionBin},
@@ -1028,8 +1025,9 @@ fn binary_file_header(
     // magic numbers
     buffer.extend_from_slice(ICECHUNK_FORMAT_MAGIC_BYTES);
     // implementation name
-    let implementation = format!("{:<24}", &*ICECHUNK_CLIENT_NAME);
-    buffer.extend_from_slice(&implementation.as_bytes()[..24]);
+    let implementation =
+        format!("{:<width$}", &*ICECHUNK_CLIENT_NAME, width = ICECHUNK_IMPL_NAME_LEN);
+    buffer.extend_from_slice(&implementation.as_bytes()[..ICECHUNK_IMPL_NAME_LEN]);
     // spec version
     buffer.push(spec_version as u8);
     buffer.push(file_type as u8);
@@ -1038,66 +1036,77 @@ fn binary_file_header(
     buffer
 }
 
-async fn check_header(
-    read: &mut (dyn AsyncBufRead + Unpin + Send),
+/// Caps concurrent CPU decodes so the blocking pool can't oversubscribe the cores.
+/// Absent under shuttle: a process-global semaphore would leak across shuttle
+/// executions, and the gate's core-oversubscription job is meaningless there.
+#[cfg(not(feature = "shuttle"))]
+fn decode_gate() -> &'static Semaphore {
+    static GATE: LazyLock<Semaphore> = LazyLock::new(|| {
+        let n = std::thread::available_parallelism().map_or(8, |n| n.get());
+        Semaphore::new(n)
+    });
+    &GATE
+}
+
+/// Starting buffer capacity for objects without a known size, to avoid a few
+/// initial reallocations while `read_to_end` grows the buffer.
+const DEFAULT_PREALLOC_HINT: usize = 8192;
+
+/// Sync header validation; returns (spec version, compression). Body at `ICECHUNK_FILE_HEADER_LEN`.
+fn check_header(
+    buf: &[u8],
     file_type: FileTypeBin,
 ) -> RepositoryResult<(SpecVersionBin, CompressionAlgorithmBin)> {
-    let mut buf = [0; 12];
-    read.read_exact(&mut buf).await.capture()?;
-    // Magic numbers
-    if format_constants::ICECHUNK_FORMAT_MAGIC_BYTES != buf {
+    use format_constants::*;
+    if buf.len() < ICECHUNK_FILE_HEADER_LEN {
+        return Err(RepositoryErrorKind::FormatError(
+            IcechunkFormatErrorKind::InvalidIcechunkHeaderSize {
+                found: buf.len(),
+                expected: ICECHUNK_FILE_HEADER_LEN,
+            },
+        ))
+        .capture();
+    }
+    if !buf.starts_with(ICECHUNK_FORMAT_MAGIC_BYTES) {
         return Err(RepositoryErrorKind::FormatError(
             IcechunkFormatErrorKind::InvalidMagicNumbers,
         ))
         .capture();
     }
-
-    let mut buf = [0; 24];
-    // ignore implementation name
-    read.read_exact(&mut buf).await.capture()?;
-
-    let mut spec_version = 0;
-    read.read_exact(std::slice::from_mut(&mut spec_version)).await.capture()?;
-
-    let spec_version: SpecVersionBin = spec_version
+    let spec_version_byte = buf[ICECHUNK_SPEC_VERSION_OFFSET];
+    let spec_version: SpecVersionBin = spec_version_byte
         .try_into()
         .map_err(|_| {
             RepositoryErrorKind::FormatError(
                 IcechunkFormatErrorKind::InvalidSpecVersion {
-                    found: spec_version,
+                    found: spec_version_byte,
                     max_supported: SpecVersionBin::current() as u8,
                 },
             )
         })
         .capture()?;
 
-    let mut actual_file_type_int = 0;
-    read.read_exact(std::slice::from_mut(&mut actual_file_type_int)).await.capture()?;
-
-    let actual_file_type: FileTypeBin = actual_file_type_int
+    let file_type_byte = buf[ICECHUNK_FILE_TYPE_OFFSET];
+    let actual_file_type: FileTypeBin = file_type_byte
         .try_into()
         .map_err(|_| {
             RepositoryErrorKind::FormatError(IcechunkFormatErrorKind::InvalidFileType {
                 expected: file_type,
-                got: actual_file_type_int,
+                got: file_type_byte,
             })
         })
         .capture()?;
-
     if actual_file_type != file_type {
         return Err(RepositoryErrorKind::FormatError(
             IcechunkFormatErrorKind::InvalidFileType {
                 expected: file_type,
-                got: actual_file_type_int,
+                got: file_type_byte,
             },
         ))
         .capture();
     }
 
-    let mut compression = 0;
-    read.read_exact(std::slice::from_mut(&mut compression)).await.capture()?;
-
-    let compression = compression
+    let compression: CompressionAlgorithmBin = buf[ICECHUNK_COMPRESSION_OFFSET]
         .try_into()
         .map_err(|_| {
             RepositoryErrorKind::FormatError(
@@ -1187,22 +1196,52 @@ async fn fetch_manifest(
 
     let (read, _) =
         storage.get_object(storage_settings, path.as_str(), range).await.inject()?;
-    let (spec_version, buffer) =
-        check_and_decompress(read, FileTypeBin::Manifest).await?;
-    deserialize_manifest(spec_version, buffer).map(Arc::new).inject()
+    fetch_and_decode(
+        read,
+        manifest_size,
+        FileTypeBin::Manifest,
+        |spec_version, buffer| deserialize_manifest(spec_version, buffer).map(Arc::new),
+    )
+    .await
 }
 
-async fn check_and_decompress(
+/// Read compressed bytes (async IO), then decompress+deserialize on a gated blocking thread.
+async fn fetch_and_decode<T, F>(
     mut read: Pin<Box<dyn AsyncBufRead + Send>>,
+    compressed_size_hint: u64,
     file_type: FileTypeBin,
-) -> RepositoryResult<(SpecVersionBin, Vec<u8>)> {
-    let (spec_version, compression) = check_header(&mut read, file_type).await?;
+    deserialize: F,
+) -> RepositoryResult<T>
+where
+    T: Send + 'static,
+    F: FnOnce(SpecVersionBin, Vec<u8>) -> Result<T, IcechunkFormatError> + Send + 'static,
+{
+    let mut compressed = Vec::with_capacity(compressed_size_hint as usize);
+    read.read_to_end(&mut compressed).await.capture()?;
+
+    // on the async task: fail fast (no permit) and keep span ancestry on header errors
+    let (spec_version, compression) = check_header(&compressed, file_type)?;
     debug_assert_eq!(compression, CompressionAlgorithmBin::Zstd);
-    let mut decoder = ZstdDecoder::new(read);
-    let mut buffer = Vec::new();
-    decoder.read_to_end(&mut buffer).await.capture()?;
-    buffer.shrink_to_fit();
-    Ok((spec_version, buffer))
+
+    // gate concurrent CPU decodes; absent under shuttle (see decode_gate)
+    #[cfg(not(feature = "shuttle"))]
+    let decode_permit = decode_gate().acquire().await.capture()?;
+    // keep error span ancestry on the blocking thread
+    let span = tracing::Span::current();
+    tokio::task::spawn_blocking(move || -> RepositoryResult<T> {
+        let _entered = span.entered();
+        // release on decode completion, not on cancelled-future drop
+        #[cfg(not(feature = "shuttle"))]
+        let _decode_permit = decode_permit;
+        let mut decompressed =
+            zstd::decode_all(&compressed[format_constants::ICECHUNK_FILE_HEADER_LEN..])
+                .capture()?;
+        // trim decode_all's ≤2x slack before it's cached
+        decompressed.shrink_to_fit();
+        deserialize(spec_version, decompressed).inject()
+    })
+    .await
+    .capture()?
 }
 
 async fn compress_with_header(
@@ -1289,9 +1328,13 @@ async fn fetch_snapshot(
     let path = format!("{SNAPSHOTS_FILE_PATH}/{snapshot_id}");
     let (read, _) =
         storage.get_object(storage_settings, path.as_str(), None).await.inject()?;
-    let (spec_version, buffer) =
-        check_and_decompress(read, FileTypeBin::Snapshot).await?;
-    deserialize_snapshot(spec_version, buffer).map(Arc::new).inject()
+    fetch_and_decode(
+        read,
+        DEFAULT_PREALLOC_HINT as u64,
+        FileTypeBin::Snapshot,
+        |spec_version, buffer| deserialize_snapshot(spec_version, buffer).map(Arc::new),
+    )
+    .await
 }
 
 async fn write_new_tx_log(
@@ -1364,9 +1407,15 @@ async fn fetch_transaction_log(
     let _permit = semaphore.acquire().await.capture()?;
     let (read, _) =
         storage.get_object(storage_settings, path.as_str(), None).await.inject()?;
-    let (spec_version, buffer) =
-        check_and_decompress(read, FileTypeBin::TransactionLog).await?;
-    deserialize_transaction_log(spec_version, buffer).map(Arc::new).inject()
+    fetch_and_decode(
+        read,
+        DEFAULT_PREALLOC_HINT as u64,
+        FileTypeBin::TransactionLog,
+        |spec_version, buffer| {
+            deserialize_transaction_log(spec_version, buffer).map(Arc::new)
+        },
+    )
+    .await
 }
 
 async fn prepare_repo_info(
@@ -1545,11 +1594,16 @@ pub async fn fetch_repo_info_from_path(
     debug!("Downloading repo info");
     match storage.get_object_conditional(storage_settings, path, previous_version).await {
         Ok(GetModifiedResult::Modified { data, new_version }) => {
-            let (spec_version, buffer) =
-                check_and_decompress(data, FileTypeBin::RepoInfo).await?;
-            deserialize_repo_info(spec_version, buffer)
-                .map(|ri| Some((Arc::new(ri), new_version)))
-                .inject()
+            let repo_info = fetch_and_decode(
+                data,
+                DEFAULT_PREALLOC_HINT as u64,
+                FileTypeBin::RepoInfo,
+                |spec_version, buffer| {
+                    deserialize_repo_info(spec_version, buffer).map(Arc::new)
+                },
+            )
+            .await?;
+            Ok(Some((repo_info, new_version)))
         }
         Ok(GetModifiedResult::OnLatestVersion) => Ok(None),
         Err(StorageError { kind: StorageErrorKind::ObjectNotFound, .. }) => {
