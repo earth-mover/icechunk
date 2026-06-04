@@ -65,6 +65,7 @@ pub mod latency;
 
 /// `ObjectStore` wrapper that injects failures on the Nth get (for testing
 /// source-side resume paths).
+#[cfg(test)]
 pub mod faulty;
 
 /// HTTP redirect-based storage for read-only access.
