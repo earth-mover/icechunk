@@ -1,5 +1,15 @@
 # Changelog
 
+## Python Icechunk Library 2.0.6
+
+### Features
+
+- Add anonymous credential support for Azure Blob Storage ([#2168](https://github.com/earth-mover/icechunk/pull/2168)).
+
+### Fixes
+
+- Don't create a local path when opening (rather than creating) a repository ([#2145](https://github.com/earth-mover/icechunk/pull/2145)).
+
 ## Python Icechunk Library 2.0.5
 
 ### Features
