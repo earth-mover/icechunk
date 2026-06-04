@@ -9,6 +9,7 @@
 ### Fixes
 
 - Don't force creation of a directory when opening a repo in local file storage ([#2145](https://github.com/earth-mover/icechunk/pull/2145)).
+- Implement decompression and flatbuffer verification on spawn_blocking tasks ([#2164](https://github.com/earth-mover/icechunk/pull/2164)).
 
 ## Python Icechunk Library 2.0.5
 
