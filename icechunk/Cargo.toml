@@ -143,5 +143,8 @@ path = "tests/test_shuttle.rs"
 name = "main"
 harness = false
 
+[lib]
+bench = false
+
 [package.metadata.cargo-machete]
 ignored = ["serde_bytes"]
