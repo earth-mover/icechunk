@@ -658,6 +658,7 @@ mod native {
     /// Azure credentials
     #[napi(js_name = "AzureCredentials")]
     pub enum JsAzureCredentials {
+        Anonymous,
         FromEnv,
         Static(JsAzureStaticCredentials),
     }
@@ -666,6 +667,7 @@ mod native {
         fn from(creds: JsAzureCredentials) -> Self {
             use icechunk::config::AzureCredentials;
             match creds {
+                JsAzureCredentials::Anonymous => AzureCredentials::Anonymous,
                 JsAzureCredentials::FromEnv => AzureCredentials::FromEnv,
                 JsAzureCredentials::Static(c) => AzureCredentials::Static(c.into()),
             }

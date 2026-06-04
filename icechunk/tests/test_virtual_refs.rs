@@ -152,6 +152,14 @@ async fn create_local_repository(
             ObjectStoreConfig::Gcs(Default::default()),
         )
         .unwrap(),
+        VirtualChunkContainer::new(
+            "az://sea-surface-temp-whoi/".to_string(),
+            ObjectStoreConfig::Azure(HashMap::from([(
+                "account".to_string(),
+                "noaacdr".to_string(),
+            )])),
+        )
+        .unwrap(),
     ];
 
     let mut creds: HashMap<_, Option<Credentials>> = [
@@ -169,6 +177,10 @@ async fn create_local_repository(
         (
             "gcs://gcp-public-data-arco-era5".to_string(),
             Some(Credentials::Gcs(GcsCredentials::Anonymous)),
+        ),
+        (
+            "az://sea-surface-temp-whoi".to_string(),
+            Some(Credentials::Azure(AzureCredentials::Anonymous)),
         ),
     ]
     .into();
@@ -811,6 +823,48 @@ async fn test_zarr_store_virtual_refs_from_public_gcs(
 
     assert!(store.get("year/c/3", &ByteRange::ALL).await.is_err());
     assert!(store.get("year/c/4", &ByteRange::ALL).await.is_err());
+    Ok(())
+}
+
+#[tokio_test]
+#[apply(spec_version_cases)]
+async fn test_zarr_store_virtual_refs_from_public_azure(
+    #[case] spec_version: SpecVersionBin,
+) -> Result<(), Box<dyn Error>> {
+    let repo_dir = TempDir::new()?;
+    let repo = create_local_repository(repo_dir.path(), None, spec_version).await;
+    let ds = repo.writable_session("main").await.unwrap();
+
+    let store = Store::from_session(Arc::new(RwLock::new(ds))).await;
+
+    store
+        .set(
+            "zarr.json",
+            Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group"}"#),
+        )
+        .await
+        .unwrap();
+
+    let zarr_meta = Bytes::copy_from_slice(br#"{"zarr_format":3,"node_type":"array","attributes":{},"shape":[8],"data_type":"uint8","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[8]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value": 0,"codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[],"dimension_names":["x"]}"#);
+    store.set("magic/zarr.json", zarr_meta.clone()).await.unwrap();
+
+    // This is a permanent public dataset: the NOAA Sea Surface Temperature WHOI
+    // Climate Data Record, hosted anonymously on Azure Blob Storage. See
+    // https://planetarycomputer.microsoft.com/dataset/noaa-cdr-sea-surface-temperature-whoi
+    let public_ref = VirtualChunkRef {
+        location: VirtualChunkLocation::from_url(
+            "az://sea-surface-temp-whoi/data/1988/SEAFLUX-OSB-CDR_V02R00_SST_D19880101_C20160820.nc",
+        )?,
+        offset: 0,
+        length: 8,
+        checksum: None,
+    };
+
+    store.set_virtual_ref("magic/c/0", public_ref, false).await?;
+
+    let chunk = store.get("magic/c/0", &ByteRange::ALL).await.unwrap();
+    // The first 8 bytes of these netCDF4 files are the HDF5 magic signature.
+    assert_eq!(chunk.as_ref(), b"\x89HDF\r\n\x1a\n");
     Ok(())
 }
 

@@ -197,6 +197,10 @@ async fn do_test_gc(
     // Create 5 anonymous snapshots (detached, not on any branch)
     let mut anon_snaps = vec![];
     for i in 0..5 {
+        // gap so the cutoff lands clear of created_at(ms) vs flushed_at(µs) truncation
+        if i == 2 {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
         let mut session = repo.writable_session("main").await?;
         let bytes = Bytes::copy_from_slice(&(100i8 + i as i8).to_be_bytes());
         let payload = session.get_chunk_writer()?(bytes.clone()).await?;
@@ -207,8 +211,10 @@ async fn do_test_gc(
         anon_snaps.push(snap_id);
     }
 
-    // expire the first two
-    let cutoff = repo.lookup_snapshot(&anon_snaps[2]).await?.flushed_at;
+    // expire the first two: cutoff sits in the gap between anon[1] and anon[2]
+    let before = repo.lookup_snapshot(&anon_snaps[1]).await?.flushed_at;
+    let after = repo.lookup_snapshot(&anon_snaps[2]).await?.flushed_at;
+    let cutoff = before + (after - before) / 2;
     let gc_config = GCConfig::clean_all(
         cutoff,
         cutoff,

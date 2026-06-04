@@ -165,6 +165,7 @@ pub trait AzureCredentialsFetcher: Debug + Sync + Send {
 #[serde(rename_all = "snake_case")]
 pub enum AzureCredentials {
     FromEnv,
+    Anonymous,
     Static(AzureStaticCredentials),
     Refreshable(Arc<dyn AzureCredentialsFetcher>),
 }
@@ -1062,6 +1063,7 @@ impl ObjectStoreBackend for AzureObjectStoreBackend {
                     AzureRefreshableCredentialProvider::new(Arc::clone(fetcher));
                 builder.with_credentials(Arc::new(credential_provider))
             }
+            Some(AzureCredentials::Anonymous) => builder.with_skip_signature(true),
             None | Some(AzureCredentials::FromEnv) => MicrosoftAzureBuilder::from_env(),
         };
 
