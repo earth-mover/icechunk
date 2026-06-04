@@ -21,7 +21,8 @@ See <https://github.com/earth-mover/icechunk/issues/2151>
 
 The core of the bug is that the declared chunk sizes in the zarr metadata end up out of sync with the on-disk data sizes. So to fix this we need to either refuse to do chunk reindexing on rectilinear arrays, or update the chunk grid as part of the operation.
 
-Disallowing `shift_array` on rectilinear chunks is not a good solution, so we need to decide how to fill in the chunk space of the vacated slots.
+
+`shift_array` is a useful feature, as are rectilinear chunks. They also play well in combination as an exemplar use case of rectilinear chunks is months of the year havign different shapes. So for something like weather predictions over a year we might expect rectilinear chunks. Predictions rolling over a year is a also a good use case of `shift_array`. Therefore simply disallowing `shift_array` on rectilinear chunks is not a good solution. We need to decide on the strategy how to correctly and consistently fill in the chunk sizes of the vacated slots.
 
 #### Shift Array
 
