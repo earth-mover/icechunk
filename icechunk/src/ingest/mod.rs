@@ -245,11 +245,19 @@ pub enum IngestError {
     )]
     AlreadyComplete,
     #[error(
-        "resume requested but the source skeleton differs from the committed skeleton: {reason}"
+        "resume requested but the source skeleton differs from the committed skeleton: {reason}. This also happens when a resume call points at a different `paths`, `prefix`, or source than the original run — resume must repeat the original arguments"
     )]
     SkeletonMismatch { reason: String },
     #[error("unexpected ingest property shape: {0}")]
     BadProperties(String),
+    #[error(
+        "no zarr v3 metadata (zarr.json) found in the source under `{0}`; check that the storage prefix points at the zarr store root and that the store is zarr v3"
+    )]
+    NoMetadataFound(String),
+    #[error(
+        "array `{array}` uses an unsupported chunk_key_encoding ({detail}); icechunk addresses chunks only by the zarr v3 default encoding with the \"/\" separator"
+    )]
+    UnsupportedChunkKeyEncoding { array: String, detail: String },
 }
 
 pub type IngestResult<T> = Result<T, IngestError>;
@@ -451,21 +459,13 @@ async fn ingest_from_object_store(
     let skeleton_keys =
         list_metadata_keys(source.as_ref(), source_prefix, &options.paths).await?;
 
-    // Empty source: stamp `phase=complete` so a subsequent call short-circuits.
+    // A source with no `zarr.json` is almost always a misconfigured
+    // prefix (or a non-v3 store). Error instead of committing an empty
+    // `phase=complete`: a silent empty success would otherwise poison
+    // the branch, since the corrected re-run would then short-circuit
+    // with `AlreadyComplete`.
     if skeleton_keys.is_empty() {
-        let final_snap_id = commit_marker(
-            repo,
-            &options,
-            &stats,
-            &BTreeMap::new(),
-            PHASE_COMPLETE,
-            "empty source",
-        )
-        .await?;
-        return Ok(IngestOutcome {
-            stats: stats.snapshot(),
-            final_snapshot_id: final_snap_id,
-        });
+        return Err(IngestError::NoMetadataFound(source_prefix.to_string()));
     }
 
     match &resume_phase {
@@ -499,6 +499,12 @@ async fn ingest_from_object_store(
 
     let arrays = enumerate_arrays(repo, &options.branch, &options.paths).await?;
     debug!(num_arrays = arrays.len(), "enumerated target arrays");
+
+    // Fail fast before any chunk copy: icechunk addresses chunks only by
+    // the zarr v3 default `c/0/0` encoding, so an array declaring any
+    // other `chunk_key_encoding` would have its chunks listed under a
+    // prefix we never read — a silent partial copy. Reject it loudly.
+    validate_array_encodings(repo, &options.branch, &arrays).await?;
 
     for array_path in &arrays {
         copy_array_chunks(
@@ -873,6 +879,58 @@ async fn enumerate_arrays(
     Ok(out)
 }
 
+/// Error unless an array's `zarr.json` declares the one chunk-key layout
+/// icechunk can address: the zarr v3 `default` encoding with the `/`
+/// separator. A missing `chunk_key_encoding` is the v3 default and so is
+/// accepted. See [`IngestError::UnsupportedChunkKeyEncoding`].
+fn check_supported_chunk_key_encoding(array_path: &str, meta: &[u8]) -> IngestResult<()> {
+    let parsed: Value = serde_json::from_slice(meta).map_err(|e| {
+        IngestError::BadProperties(format!(
+            "array `{array_path}` has an unparsable zarr.json: {e}"
+        ))
+    })?;
+    let Some(encoding) = parsed.get("chunk_key_encoding") else {
+        return Ok(());
+    };
+    let name = encoding.get("name").and_then(Value::as_str).unwrap_or("default");
+    let separator = encoding
+        .get("configuration")
+        .and_then(|c| c.get("separator"))
+        .and_then(Value::as_str);
+    if name == "default" && matches!(separator, None | Some("/")) {
+        return Ok(());
+    }
+    Err(IngestError::UnsupportedChunkKeyEncoding {
+        array: array_path.to_string(),
+        detail: format!("name={name:?}, separator={separator:?}"),
+    })
+}
+
+/// Reject any array whose `chunk_key_encoding` icechunk can't address.
+/// Reads each `zarr.json` from the committed skeleton (byte-faithful, so it
+/// carries the source's original encoding), which keeps this off the
+/// source's I/O path. Runs before any chunk copy so an unsupported array
+/// fails the whole ingest up front rather than copying a partial store.
+async fn validate_array_encodings(
+    repo: &Repository,
+    branch: &str,
+    arrays: &[String],
+) -> IngestResult<()> {
+    let session = readonly_session_at_tip(repo, branch).await?;
+    let store = Store::from_session(Arc::new(RwLock::new(session))).await;
+    for array_path in arrays {
+        let rel = array_path.trim_start_matches('/');
+        let key = if rel.is_empty() {
+            "zarr.json".to_string()
+        } else {
+            format!("{rel}/zarr.json")
+        };
+        let meta = store.get(&key, &ByteRange::ALL).await?;
+        check_supported_chunk_key_encoding(array_path, &meta)?;
+    }
+    Ok(())
+}
+
 /// List every metadata key (`zarr.json` files) under the requested paths.
 async fn list_metadata_keys(
     source: &dyn ObjectStore,
@@ -1040,6 +1098,18 @@ mod tests {
         Bytes::from_static(br#"{"zarr_format":3,"node_type":"array","shape":[4],"data_type":"uint8","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":0,"codecs":[{"name":"bytes","configuration":{"endian":"little"}}],"attributes":{}}"#)
     }
 
+    /// 1D array metadata declaring the `default` encoding with a "."
+    /// separator — a valid zarr v3 array icechunk can't address.
+    fn array_meta_dot_separator() -> Bytes {
+        Bytes::from_static(br#"{"zarr_format":3,"node_type":"array","shape":[4],"data_type":"uint8","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"."}},"fill_value":0,"codecs":[{"name":"bytes","configuration":{"endian":"little"}}],"attributes":{}}"#)
+    }
+
+    /// 1D array metadata declaring the `v2` chunk-key encoding (no `c`
+    /// prefix) — not addressable by icechunk.
+    fn array_meta_v2_encoding() -> Bytes {
+        Bytes::from_static(br#"{"zarr_format":3,"node_type":"array","shape":[4],"data_type":"uint8","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1]}},"chunk_key_encoding":{"name":"v2","configuration":{"separator":"."}},"fill_value":0,"codecs":[{"name":"bytes","configuration":{"endian":"little"}}],"attributes":{}}"#)
+    }
+
     /// 4D array metadata: shape [2,2,2,2], chunk shape [1,1,1,1], 16 chunks.
     fn array_meta_4d() -> Bytes {
         Bytes::from_static(br#"{"zarr_format":3,"node_type":"array","shape":[2,2,2,2],"data_type":"uint8","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":0,"codecs":[{"name":"bytes","configuration":{"endian":"little"}}],"attributes":{}}"#)
@@ -1069,6 +1139,66 @@ mod tests {
             ("arr/c/1/0".to_string(), Bytes::from_static(&[3u8])),
             ("arr/c/1/1".to_string(), Bytes::from_static(&[4u8])),
         ]
+    }
+
+    #[tokio::test]
+    async fn empty_source_errors_instead_of_silently_completing() {
+        // A prefix with no `zarr.json` (wrong prefix, or a non-v3 store)
+        // must error rather than commit an empty `phase=complete` that
+        // would block the corrected re-run.
+        let (source, prefix) = materialize(&[]).await;
+        let repo = fresh_repo().await;
+
+        let err = ingest_from_object_store(source, &prefix, &repo, IngestOptions::new())
+            .await
+            .unwrap_err();
+        assert!(matches!(err, IngestError::NoMetadataFound(_)), "got {err:?}");
+
+        // The branch tip must NOT have been stamped complete.
+        let snap_id = repo.lookup_branch("main").await.unwrap();
+        let info = repo.lookup_snapshot(&snap_id).await.unwrap();
+        assert_eq!(info.metadata.get(PROP_PHASE), None);
+    }
+
+    #[tokio::test]
+    async fn dot_separator_chunk_key_encoding_errors() {
+        // A valid zarr v3 array with a "." separator must be rejected up
+        // front — icechunk addresses chunks only by the "/" separator, so
+        // copying it would silently drop every chunk.
+        let pairs = vec![
+            ("zarr.json".to_string(), group_meta()),
+            ("arr/zarr.json".to_string(), array_meta_dot_separator()),
+        ];
+        let (source, prefix) = materialize(&pairs).await;
+        let repo = fresh_repo().await;
+
+        let err = ingest_from_object_store(source, &prefix, &repo, IngestOptions::new())
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, IngestError::UnsupportedChunkKeyEncoding { .. }),
+            "got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn v2_chunk_key_encoding_errors() {
+        // The `v2` encoding (no `c` prefix) is not addressable by
+        // icechunk; ingest must reject it up front.
+        let pairs = vec![
+            ("zarr.json".to_string(), group_meta()),
+            ("arr/zarr.json".to_string(), array_meta_v2_encoding()),
+        ];
+        let (source, prefix) = materialize(&pairs).await;
+        let repo = fresh_repo().await;
+
+        let err = ingest_from_object_store(source, &prefix, &repo, IngestOptions::new())
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, IngestError::UnsupportedChunkKeyEncoding { .. }),
+            "got {err:?}"
+        );
     }
 
     #[tokio::test]
