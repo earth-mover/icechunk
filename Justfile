@@ -57,10 +57,10 @@ import-hook-remove:
 # which swaps tokio for shuttle-tokio and is incompatible with other crates.
 icechunk_features := "s3,object-store-s3,object-store-gcs,object-store-azure,object-store-http,object-store-fs,redirect,logs,cli,napi-send-contract"
 
-[doc("Run clippy lints on all features")]
+[doc("Run clippy lints on all features and targets")]
 lint *args:
-  cargo clippy --profile {{profile}} --all-features --workspace --exclude icechunk "$@"
-  cargo clippy --profile {{profile}} -p icechunk --features {{icechunk_features}} "$@"
+  cargo clippy --profile {{profile}} --all-features --all-targets --workspace --exclude icechunk "$@"
+  cargo clippy --profile {{profile}} --all-targets -p icechunk --features {{icechunk_features}} "$@"
 
 [doc("Run check on all features")]
 check *args:
@@ -83,17 +83,18 @@ check-deps *args:
 run-all-examples:
   for example in icechunk/examples/*.rs; do case "$example" in *limits_chunk_refs*|*large_manifests*) continue;; esac; cargo run --profile {{profile}} --example "$(basename "${example%.rs}")"; done
 
-[doc("Fast Rust pre-commit: format + lint (~3s)")]
+[doc("Fast Rust pre-commit: format + lint + doctest (~3s)")]
 pre-commit-fast:
   just format
-  just lint "--workspace" "--all-targets"
+  just lint
+  just doctest
 
 [doc("Medium Rust pre-commit: compile, build, format, lint, deps (~2-3min)")]
 pre-commit $RUSTFLAGS="-D warnings":
   just compile-tests "--locked"
   just build
   just format
-  just lint "--workspace" "--all-targets"
+  just lint
   just check-deps
 
 [doc("Full Rust CI pre-commit: all checks including tests and examples (~5+min)")]
@@ -101,7 +102,7 @@ pre-commit-ci $RUSTFLAGS="-D warnings":
   just profile=ci compile-tests "--locked"
   just profile=ci build
   just format "--check"
-  just profile=ci lint "--workspace" "--all-targets"
+  just profile=ci lint
   just profile=ci doctest
   just profile=ci test
   just profile=ci run-all-examples
@@ -110,7 +111,7 @@ pre-commit-ci $RUSTFLAGS="-D warnings":
 [doc("Rust format + lint for the icechunk-python crate only")]
 pre-commit-python:
   just format "-p icechunk-python"
-  just lint "-p icechunk-python"
+  cargo clippy --profile {{profile}} --all-features --all-targets -p icechunk-python
 
 [doc("Profile benchmarks with cargo-samply (tracing spans become profiler markers)")]
 samply *args:
