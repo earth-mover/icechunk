@@ -482,7 +482,7 @@ class Model:
                 if c.parent_id not in expired_snaps:
                     continue
                 collapsed: list[str] = []
-                anc = c.parent_id
+                anc: str | None = c.parent_id
                 while anc is not None and anc != self.initial_snapshot_id:
                     collapsed.append(anc)
                     ancestor = self.ondisk_snaps.get(anc)
@@ -566,7 +566,7 @@ class Model:
                 if cid in deleted or c.parent_id not in deleted:
                     continue
                 collapsed: list[str] = []
-                anc = c.parent_id
+                anc: str | None = c.parent_id
                 while anc is not None and anc in deleted:
                     collapsed.append(anc)
                     ancestor = self.ondisk_snaps.get(anc)
