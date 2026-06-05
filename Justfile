@@ -54,8 +54,8 @@ icechunk_features := "s3,object-store-s3,object-store-gcs,object-store-azure,obj
 
 [doc("Run clippy lints on all features")]
 lint *args:
-  cargo clippy --profile {{profile}} --all-features --exclude icechunk "$@"
-  cargo clippy --profile {{profile}} -p icechunk --features {{icechunk_features}} "$@"
+  cargo clippy --profile {{profile}} --workspace --all-features --exclude icechunk "$@"
+  cargo clippy --profile {{profile}} --workspace -p icechunk --features {{icechunk_features}} "$@"
 
 [doc("Run check on all features")]
 check *args:

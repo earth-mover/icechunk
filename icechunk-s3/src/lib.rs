@@ -46,15 +46,21 @@ pub use icechunk_storage::s3_config::{
 use icechunk_storage::{
     DeleteObjectsResult, GetModifiedResult, ListInfo, Settings, Storage, StorageError,
     StorageErrorKind, StorageInfo, StorageResult, VersionInfo, VersionedUpdateResult,
-    obj_not_found_res, obj_store_error, obj_store_error_res, other_error, sealed,
-    split_in_multiple_equal_requests, strip_quotes,
+    obj_not_found_res, obj_store_error, obj_store_error_res, other_error,
+    readback::{
+        ReadbackFacts, ReadbackOutcome, WRITE_ID_METADATA_KEY, classify_readback,
+        finalize_lost_response, finalize_precondition,
+        warn_conditional_without_metadata_once,
+    },
+    sealed, split_in_multiple_equal_requests, strip_quotes,
 };
 use icechunk_types::ICResultExt as _;
 use serde::{Deserialize, Serialize};
 use tokio::sync::OnceCell;
 use tokio_util::io::StreamReader;
-use tracing::{error, instrument, trace};
+use tracing::{error, instrument, trace, warn};
 use typed_path::Utf8UnixPath;
+use uuid::Uuid;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct S3Storage {
@@ -316,6 +322,58 @@ fn stream2stream(
     Box::pin(res)
 }
 
+/// `Uuid::new_v4` in production; tests force a value via [`test_util`].
+fn next_write_id() -> String {
+    #[cfg(feature = "test-util")]
+    if let Some(forced) = test_util::take_forced_write_id() {
+        return forced;
+    }
+    Uuid::new_v4().to_string()
+}
+
+/// Test-only write-id injection. Thread-local, consumed once.
+#[cfg(feature = "test-util")]
+pub mod test_util {
+    use std::cell::RefCell;
+
+    pub const WRITE_ID_METADATA_KEY: &str = super::WRITE_ID_METADATA_KEY;
+
+    thread_local! {
+        static FORCED_WRITE_ID: RefCell<Option<String>> = const { RefCell::new(None) };
+    }
+
+    /// Make the next conditional PUT on this thread stamp `id`.
+    pub fn force_next_write_id(id: impl Into<String>) {
+        FORCED_WRITE_ID.with(|c| *c.borrow_mut() = Some(id.into()));
+    }
+
+    pub(crate) fn take_forced_write_id() -> Option<String> {
+        FORCED_WRITE_ID.with(|c| c.borrow_mut().take())
+    }
+}
+
+/// Conditional header a PUT carries; shared by single-PUT and multipart.
+enum Conditional<'a> {
+    IfNoneMatch,
+    IfMatch(&'a str),
+}
+
+fn conditional_for<'a>(
+    previous_version: Option<&'a VersionInfo>,
+    settings: &Settings,
+) -> Option<Conditional<'a>> {
+    let pv = previous_version?;
+    match (
+        pv.etag(),
+        settings.unsafe_use_conditional_create(),
+        settings.unsafe_use_conditional_update(),
+    ) {
+        (None, true, _) => Some(Conditional::IfNoneMatch),
+        (Some(etag), _, true) => Some(Conditional::IfMatch(etag)),
+        (_, _, _) => None,
+    }
+}
+
 impl S3Storage {
     pub fn new(
         config: S3Options,
@@ -414,17 +472,28 @@ impl S3Storage {
             req = req.storage_class(klass);
         }
 
-        if let Some(previous_version) = previous_version.as_ref() {
-            match (
-                previous_version.etag(),
-                settings.unsafe_use_conditional_create(),
-                settings.unsafe_use_conditional_update(),
-            ) {
-                (None, true, _) => req = req.if_none_match("*"),
-                (Some(etag), _, true) => req = req.if_match(strip_quotes(etag)),
-                (_, _, _) => {}
+        let conditional_applied = match conditional_for(previous_version, settings) {
+            Some(Conditional::IfNoneMatch) => {
+                req = req.if_none_match("*");
+                true
             }
-        }
+            Some(Conditional::IfMatch(etag)) => {
+                req = req.if_match(strip_quotes(etag));
+                true
+            }
+            None => false,
+        };
+
+        let write_id = if conditional_applied && settings.unsafe_use_metadata() {
+            let id = next_write_id();
+            req = req.metadata(WRITE_ID_METADATA_KEY, &id);
+            Some(id)
+        } else {
+            if conditional_applied {
+                warn_conditional_without_metadata_once();
+            }
+            None
+        };
 
         match req.send().await {
             Ok(out) => {
@@ -443,7 +512,14 @@ impl S3Storage {
                     // ConcurrentModification sent by Ceph Object Gateway
                     || code == "ConcurrentModification"
                 {
-                    Ok(VersionedUpdateResult::NotOnLatestVersion)
+                    let outcome = self
+                        .read_back_after_conditional_failure(
+                            settings,
+                            key,
+                            write_id.as_deref(),
+                        )
+                        .await;
+                    finalize_precondition(outcome, key)
                 } else {
                     obj_store_error_res(SdkError::<PutObjectError>::ServiceError(err))
                 }
@@ -453,7 +529,14 @@ impl S3Storage {
                 let status = err.raw().status().as_u16();
                 // see https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutObject.html#API_PutObject_RequestSyntax
                 if status == 409 || status == 412 {
-                    Ok(VersionedUpdateResult::NotOnLatestVersion)
+                    let outcome = self
+                        .read_back_after_conditional_failure(
+                            settings,
+                            key,
+                            write_id.as_deref(),
+                        )
+                        .await;
+                    finalize_precondition(outcome, key)
                 } else {
                     obj_store_error_res(SdkError::<PutObjectError>::ResponseError(err))
                 }
@@ -483,12 +566,27 @@ impl S3Storage {
             .bucket(self.bucket.clone())
             .key(key);
 
+        // Write-id rides as metadata on `create_multipart_upload`, so decide
+        // here whether the later `complete` will carry a condition.
+        let will_apply_condition = conditional_for(previous_version, settings).is_some();
+        let write_id = if will_apply_condition && settings.unsafe_use_metadata() {
+            Some(next_write_id())
+        } else {
+            if will_apply_condition {
+                warn_conditional_without_metadata_once();
+            }
+            None
+        };
+
         if settings.unsafe_use_metadata() {
             if let Some(ct) = content_type {
                 multi = multi.content_type(ct);
             };
             for (k, v) in metadata {
                 multi = multi.metadata(k, v);
+            }
+            if let Some(id) = write_id.as_deref() {
+                multi = multi.metadata(WRITE_ID_METADATA_KEY, id);
             }
         }
 
@@ -560,16 +658,10 @@ impl S3Storage {
             //.checksum_type(aws_sdk_s3::types::ChecksumType::FullObject)
             .multipart_upload(completed_parts);
 
-        if let Some(previous_version) = previous_version.as_ref() {
-            match (
-                previous_version.etag(),
-                settings.unsafe_use_conditional_create(),
-                settings.unsafe_use_conditional_update(),
-            ) {
-                (None, true, _) => req = req.if_none_match("*"),
-                (Some(etag), _, true) => req = req.if_match(strip_quotes(etag)),
-                (_, _, _) => {}
-            }
+        match conditional_for(previous_version, settings) {
+            Some(Conditional::IfNoneMatch) => req = req.if_none_match("*"),
+            Some(Conditional::IfMatch(etag)) => req = req.if_match(strip_quotes(etag)),
+            None => {}
         }
 
         match req.send().await {
@@ -581,31 +673,115 @@ impl S3Storage {
                 let new_version = VersionInfo::from_etag_only(new_etag);
                 Ok(VersionedUpdateResult::Updated { new_version })
             }
-            // minio returns this
             Err(SdkError::ServiceError(err)) => {
                 let code = err.err().meta().code().unwrap_or_default();
-                if code == "PreconditionFailed"
+                // `ConcurrentModification` is Ceph. `NoSuchUpload` = SDK-retried
+                // complete after a lost response, or a failed upload; readback
+                // tells them apart.
+                let is_precondition = code == "PreconditionFailed"
                     || code == "ConditionalRequestConflict"
-                    // ConcurrentModification sent by Ceph Object Gateway
-                    || code == "ConcurrentModification"
-                {
-                    Ok(VersionedUpdateResult::NotOnLatestVersion)
+                    || code == "ConcurrentModification";
+                let is_lost_upload = code == "NoSuchUpload";
+                if is_precondition || is_lost_upload {
+                    let outcome = self
+                        .read_back_after_conditional_failure(
+                            settings,
+                            key,
+                            write_id.as_deref(),
+                        )
+                        .await;
+                    if is_precondition {
+                        finalize_precondition(outcome, key)
+                    } else {
+                        finalize_lost_response(
+                            outcome,
+                            key,
+                            obj_store_error(SdkError::ServiceError(err)),
+                        )
+                    }
                 } else {
                     obj_store_error_res(SdkError::ServiceError(err))
                 }
             }
-            // S3 API documents this
             Err(SdkError::ResponseError(err)) => {
                 let status = err.raw().status().as_u16();
-                // see https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutObject.html#API_PutObject_RequestSyntax
                 if status == 409 || status == 412 {
-                    Ok(VersionedUpdateResult::NotOnLatestVersion)
+                    let outcome = self
+                        .read_back_after_conditional_failure(
+                            settings,
+                            key,
+                            write_id.as_deref(),
+                        )
+                        .await;
+                    finalize_precondition(outcome, key)
+                } else if status == 404 {
+                    // NoSuchUpload surfaced as a raw HTTP status.
+                    let outcome = self
+                        .read_back_after_conditional_failure(
+                            settings,
+                            key,
+                            write_id.as_deref(),
+                        )
+                        .await;
+                    finalize_lost_response(
+                        outcome,
+                        key,
+                        obj_store_error(SdkError::<PutObjectError>::ResponseError(err)),
+                    )
                 } else {
                     obj_store_error_res(SdkError::<PutObjectError>::ResponseError(err))
                 }
             }
             Err(err) => obj_store_error_res(err),
         }
+    }
+
+    /// HEAD `key` and classify it against our write-id. `Err` only on a HEAD
+    /// failure.
+    async fn read_back_after_conditional_failure(
+        &self,
+        settings: &Settings,
+        key: &str,
+        write_id: Option<&str>,
+    ) -> StorageResult<ReadbackOutcome> {
+        if write_id.is_none() {
+            return Ok(ReadbackOutcome::NotStamped);
+        }
+        let mut head = self
+            .get_client(settings)
+            .await
+            .head_object()
+            .bucket(self.bucket.clone())
+            .key(key);
+        if self.config.requester_pays {
+            head = head.request_payer(aws_sdk_s3::types::RequestPayer::Requester);
+        }
+        let facts = match head.send().await {
+            Ok(out) => ReadbackFacts::Found {
+                stored_write_id: out
+                    .metadata()
+                    .and_then(|m| m.get(WRITE_ID_METADATA_KEY))
+                    .cloned(),
+                // S3 has no generation; etag is the only version identity.
+                version: out
+                    .e_tag()
+                    .map(|e| VersionInfo::from_etag_only(e.to_string()))
+                    .unwrap_or_else(VersionInfo::for_creation),
+            },
+            Err(sdk_err)
+                if sdk_err.as_service_error().is_some_and(|e| e.is_not_found())
+                    || sdk_err
+                        .raw_response()
+                        .is_some_and(|r| r.status().as_u16() == 404) =>
+            {
+                ReadbackFacts::Absent
+            }
+            Err(sdk_err) => {
+                warn!(key, error = %sdk_err, "readback HEAD failed; propagating original error");
+                return obj_store_error_res(sdk_err);
+            }
+        };
+        Ok(classify_readback(write_id, &facts))
     }
 }
 
@@ -1156,6 +1332,8 @@ mod tests {
     use icechunk_macros::tokio_test;
 
     use super::*;
+
+    // Readback classification is unit-tested in `icechunk_storage::readback`.
 
     #[tokio_test]
     async fn test_serialize_s3_storage() {

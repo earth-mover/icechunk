@@ -18,7 +18,13 @@ use icechunk_storage::{
     ConcurrencySettings, DeleteObjectsResult, ETag, Generation, GetModifiedResult,
     ListInfo, RetriesSettings, Settings, Storage, StorageError, StorageErrorKind,
     StorageInfo, StorageResult, VersionInfo, VersionedUpdateResult, obj_not_found_res,
-    obj_store_error, obj_store_error_res, other_error, sealed,
+    obj_store_error, obj_store_error_res, other_error,
+    readback::{
+        ReadbackFacts, ReadbackOutcome, WRITE_ID_METADATA_KEY, classify_readback,
+        finalize_lost_response, finalize_precondition,
+        warn_conditional_without_metadata_once,
+    },
+    sealed,
 };
 use icechunk_types::ICResultExt as _;
 #[cfg(any(feature = "s3", feature = "gcs", feature = "azure", feature = "http"))]
@@ -58,8 +64,16 @@ use std::{
 use tokio::sync::{OnceCell, RwLock};
 
 use tokio_util::io::StreamReader;
-use tracing::instrument;
+use tracing::{instrument, warn};
 use url::Url;
+use uuid::Uuid;
+
+/// Only `Generic` PUT errors can hide a successful-but-ack-lost write
+/// reaching us as a transport failure; `Precondition` / `AlreadyExists`
+/// are handled by their own arm at the call site.
+fn is_readback_worthy(err: &object_store::Error) -> bool {
+    matches!(err, object_store::Error::Generic { .. })
+}
 
 // --- GCS credential types ---
 
@@ -392,6 +406,22 @@ impl Storage for ObjectStorage {
         };
 
         let mode = self.get_put_mode(settings, previous_version);
+        let is_conditional = !matches!(mode, PutMode::Overwrite);
+
+        let write_id = if is_conditional && settings.unsafe_use_metadata() {
+            let id = Uuid::new_v4().to_string();
+            attributes.insert(
+                Attribute::Metadata(std::borrow::Cow::Borrowed(WRITE_ID_METADATA_KEY)),
+                AttributeValue::from(id.clone()),
+            );
+            Some(id)
+        } else {
+            if is_conditional {
+                warn_conditional_without_metadata_once();
+            }
+            None
+        };
+
         let options = PutOptions { mode, attributes, ..PutOptions::default() };
         // FIXME: use multipart
         let res =
@@ -406,11 +436,28 @@ impl Storage for ObjectStorage {
             }
             Err(object_store::Error::Precondition { .. })
             | Err(object_store::Error::AlreadyExists { .. }) => {
-                Ok(VersionedUpdateResult::NotOnLatestVersion)
+                let outcome = self
+                    .read_back_after_conditional_failure(
+                        settings,
+                        &path,
+                        write_id.as_deref(),
+                    )
+                    .await;
+                finalize_precondition(outcome, path.as_ref())
             }
-            Err(err) => {
-                Err(StorageError::capture(StorageErrorKind::ObjectStore(Box::new(err))))
+            // Transport-class failure: only `OurWrite` flips to success;
+            // everything else propagates the original error.
+            Err(err) if is_readback_worthy(&err) => {
+                let outcome = self
+                    .read_back_after_conditional_failure(
+                        settings,
+                        &path,
+                        write_id.as_deref(),
+                    )
+                    .await;
+                finalize_lost_response(outcome, path.as_ref(), obj_store_error(err))
             }
+            Err(err) => Err(obj_store_error(err)),
         }
     }
 
@@ -575,6 +622,47 @@ impl Storage for ObjectStorage {
 }
 
 impl ObjectStorage {
+    /// HEAD `path` and classify it against our write-id. `Err` only on a HEAD
+    /// failure. `head: true` keeps `GetResult::attributes`; bare `head()` drops
+    /// user metadata.
+    async fn read_back_after_conditional_failure(
+        &self,
+        settings: &Settings,
+        path: &ObjectPath,
+        write_id: Option<&str>,
+    ) -> StorageResult<ReadbackOutcome> {
+        if write_id.is_none() {
+            return Ok(ReadbackOutcome::NotStamped);
+        }
+        let client = self.get_client(settings).await?;
+        let opts = GetOptions { head: true, ..Default::default() };
+        let facts = match client.get_opts(path, opts).await {
+            Ok(result) => ReadbackFacts::Found {
+                stored_write_id: result
+                    .attributes
+                    .get(&Attribute::Metadata(std::borrow::Cow::Borrowed(
+                        WRITE_ID_METADATA_KEY,
+                    )))
+                    .map(|v| v.as_ref().to_string()),
+                version: VersionInfo {
+                    etag: result.meta.e_tag.as_ref().cloned().map(ETag),
+                    generation: result.meta.version.as_ref().cloned().map(Generation),
+                },
+            },
+            // Absent is conclusive (not a failed read-back): our write didn't land.
+            Err(object_store::Error::NotFound { .. }) => ReadbackFacts::Absent,
+            Err(err) => {
+                warn!(
+                    %path,
+                    error = %err,
+                    "readback HEAD failed; propagating original error"
+                );
+                return Err(obj_store_error(err));
+            }
+        };
+        Ok(classify_readback(write_id, &facts))
+    }
+
     async fn get_object_range_conditional(
         &self,
         settings: &Settings,
