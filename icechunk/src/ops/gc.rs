@@ -951,7 +951,9 @@ pub async fn expire_v2(
 /// Hitting one does not end the walk — only `is_boundary` does; its pruned chain
 /// is spliced in and the walk keeps going. E.g. with boundary `s1`:
 ///
-///     INITIAL → s1 → s3 (pruned=[s2]) → s5 (pruned=[s4]) → edited
+/// ```text
+/// INITIAL → s1 → s3 (pruned=[s2]) → s5 (pruned=[s4]) → edited
+/// ```
 ///
 /// returns `new_parent = s1` and `pruned = [s2, s3, s4, s5]` (oldest first).
 fn reparent_and_prune(

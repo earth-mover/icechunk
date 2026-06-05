@@ -1835,7 +1835,7 @@ impl Repository {
         // Each snapshot contributes the transaction logs of the ancestors
         // expiration pruned from under it (oldest first) followed by its own
         // log.
-        // For each snap need to keep track of wether they are pruned, because
+        // For each snap need to keep track of whether they are pruned, because
         // the tx log may be missing if an older GC implementation deleted it.
         // `true` marks a pruned-ancestor log
         let to_fetch = all_snaps.iter().flat_map(|snap_info| {
