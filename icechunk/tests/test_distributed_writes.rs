@@ -63,11 +63,8 @@ async fn write_chunks(
         for y in ys.clone() {
             let fx = x as f64;
             let fy = y as f64;
-            let bytes: Vec<u8> = fx
-                .to_le_bytes()
-                .into_iter()
-                .chain(fy.to_le_bytes().into_iter())
-                .collect();
+            let bytes: Vec<u8> =
+                fx.to_le_bytes().into_iter().chain(fy.to_le_bytes()).collect();
             let payload =
                 ds.get_chunk_writer()?(Bytes::copy_from_slice(bytes.as_slice())).await?;
             ds.set_chunk_ref(
