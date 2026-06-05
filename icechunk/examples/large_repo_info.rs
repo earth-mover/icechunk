@@ -171,7 +171,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // with intact parent chains.
     let mut ids: Vec<SnapshotId> =
         (0..NUM_SNAPSHOTS).map(|_| SnapshotId::random()).collect();
-    ids.sort_by(|a, b| a.0.cmp(&b.0));
+    ids.sort_by_key(|a| a.0);
 
     let mut snapshots: Vec<SnapshotInfo> = Vec::with_capacity(NUM_SNAPSHOTS);
     for (i, id) in ids.into_iter().enumerate() {
