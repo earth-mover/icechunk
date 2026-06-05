@@ -355,8 +355,8 @@ async fn test_expire_and_garbage_collect_in_minio()
 
 #[tokio_test]
 #[ignore = "needs credentials from env"]
-async fn test_expire_and_garbage_collect_in_aws()
--> Result<(), Box<dyn std::error::Error>> {
+async fn test_expire_and_garbage_collect_in_aws() -> Result<(), Box<dyn std::error::Error>>
+{
     let prefix =
         format!("test_expire_and_garbage_collect_{}", Utc::now().timestamp_millis());
     let storage: Arc<dyn Storage + Send + Sync> =
@@ -366,8 +366,8 @@ async fn test_expire_and_garbage_collect_in_aws()
 
 #[tokio_test]
 #[ignore = "needs credentials from env"]
-async fn test_expire_and_garbage_collect_in_r2()
--> Result<(), Box<dyn std::error::Error>> {
+async fn test_expire_and_garbage_collect_in_r2() -> Result<(), Box<dyn std::error::Error>>
+{
     let prefix =
         format!("test_expire_and_garbage_collect_{}", Utc::now().timestamp_millis());
     let storage: Arc<dyn Storage + Send + Sync> =
