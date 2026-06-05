@@ -13,6 +13,7 @@ from functools import total_ordering
 from typing import Any, final
 
 import numpy as np
+from obstore.store import ObjectStore
 
 from icechunk.types import CommitMethod
 
@@ -3396,6 +3397,8 @@ class Storage:
         base_url: str,
         config: dict[str, str] | None = None,
     ) -> Storage: ...
+    @classmethod
+    def new_obstore(cls, store: ObjectStore) -> Storage: ...
     @classmethod
     def new_redirect(
         cls,

@@ -3,6 +3,7 @@ use chrono::{DateTime, Datelike as _, TimeDelta, Timelike as _, Utc};
 use futures::TryStreamExt as _;
 use icechunk::storage::RetriesSettings;
 use itertools::Itertools as _;
+use pyo3::PyAny;
 use pyo3::exceptions::PyValueError;
 use serde::{Deserialize, Serialize};
 use std::hash::{Hash, Hasher as _};
@@ -41,6 +42,7 @@ use crate::display::{
     py_option_or_default, py_option_str,
 };
 use crate::errors::PyIcechunkStoreError;
+use crate::obstore::new_obstore;
 
 #[pyclass(name = "S3StaticCredentials")]
 #[derive(Clone, Debug)]
@@ -69,6 +71,17 @@ impl From<&PyS3StaticCredentials> for S3StaticCredentials {
 impl From<PyS3StaticCredentials> for S3StaticCredentials {
     fn from(credentials: PyS3StaticCredentials) -> Self {
         S3StaticCredentials {
+            access_key_id: credentials.access_key_id,
+            secret_access_key: credentials.secret_access_key,
+            session_token: credentials.session_token,
+            expires_after: credentials.expires_after,
+        }
+    }
+}
+
+impl From<S3StaticCredentials> for PyS3StaticCredentials {
+    fn from(credentials: S3StaticCredentials) -> Self {
+        PyS3StaticCredentials {
             access_key_id: credentials.access_key_id,
             secret_access_key: credentials.secret_access_key,
             session_token: credentials.session_token,
@@ -534,7 +547,7 @@ impl From<S3ChecksumAlgorithm> for PyChecksumAlgorithm {
 }
 
 #[pyclass(name = "S3Options", eq)]
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PyS3Options {
     #[pyo3(get, set)]
     pub region: Option<String>,
@@ -3044,6 +3057,15 @@ impl PyStorage {
                 Ok(PyStorage(storage))
             })
         })
+    }
+
+    #[classmethod]
+    pub(crate) fn new_obstore(
+        _cls: &Bound<'_, PyType>,
+        py: Python<'_>,
+        store: Bound<'_, PyAny>,
+    ) -> PyResult<Self> {
+        new_obstore(py, store)
     }
 
     #[classmethod]

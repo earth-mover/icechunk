@@ -6,6 +6,7 @@ mod config;
 mod conflicts;
 mod display;
 mod errors;
+mod obstore;
 mod pickle;
 mod repository;
 mod session;
