@@ -43,7 +43,7 @@ gen-flatbuffers:
 
 [doc("Prepare environment for development")]
 develop *args:
-  cd icechunk-python && uv run maturin develop --uv --profile {{profile}} "$@"
+  cd icechunk-python && maturin develop --uv --profile {{profile}} "$@"
 
 [doc("Install maturin import hook for more convenient development flow")]
 import-hook:
