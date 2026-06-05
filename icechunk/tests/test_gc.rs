@@ -31,14 +31,14 @@ use crate::common;
 use crate::common::Permission;
 
 #[tokio_test]
-pub async fn test_gc_in_minio_spec_v1() -> Result<(), Box<dyn std::error::Error>> {
+async fn test_gc_in_minio_spec_v1() -> Result<(), Box<dyn std::error::Error>> {
     let prefix = format!("test_gc_v1_{}", Utc::now().timestamp_millis());
     let storage = common::make_minio_integration_storage(prefix, &Permission::Modify)?;
     do_test_gc(storage, Some(SpecVersionBin::V1)).await
 }
 
 #[tokio_test]
-pub async fn test_gc_in_minio_spec_v2() -> Result<(), Box<dyn std::error::Error>> {
+async fn test_gc_in_minio_spec_v2() -> Result<(), Box<dyn std::error::Error>> {
     let prefix = format!("test_gc_v2_{}", Utc::now().timestamp_millis());
     let storage = common::make_minio_integration_storage(prefix, &Permission::Modify)?;
     do_test_gc(storage, Some(SpecVersionBin::V2)).await
@@ -46,7 +46,7 @@ pub async fn test_gc_in_minio_spec_v2() -> Result<(), Box<dyn std::error::Error>
 
 #[tokio_test]
 #[ignore = "needs credentials from env"]
-pub async fn test_gc_in_aws() -> Result<(), Box<dyn std::error::Error>> {
+async fn test_gc_in_aws() -> Result<(), Box<dyn std::error::Error>> {
     let prefix = format!("test_gc_{}", Utc::now().timestamp_millis());
     let storage = common::make_aws_integration_storage(prefix)?;
     do_test_gc(storage, None).await
@@ -54,7 +54,7 @@ pub async fn test_gc_in_aws() -> Result<(), Box<dyn std::error::Error>> {
 
 #[tokio_test]
 #[ignore = "needs credentials from env"]
-pub async fn test_gc_in_r2() -> Result<(), Box<dyn std::error::Error>> {
+async fn test_gc_in_r2() -> Result<(), Box<dyn std::error::Error>> {
     let prefix = format!("test_gc_{}", Utc::now().timestamp_millis());
     let storage = common::make_r2_integration_storage(prefix)?;
     do_test_gc(storage, None).await
@@ -62,7 +62,7 @@ pub async fn test_gc_in_r2() -> Result<(), Box<dyn std::error::Error>> {
 
 #[tokio_test]
 #[ignore = "needs credentials from env"]
-pub async fn test_gc_in_tigris() -> Result<(), Box<dyn std::error::Error>> {
+async fn test_gc_in_tigris() -> Result<(), Box<dyn std::error::Error>> {
     let prefix = format!("test_gc_{}", Utc::now().timestamp_millis());
     let storage = common::make_tigris_integration_storage(prefix)?;
     do_test_gc(storage, None).await
@@ -337,14 +337,14 @@ async fn make_design_doc_repo(
 }
 
 #[tokio_test]
-pub async fn test_expire_and_garbage_collect_in_memory()
+async fn test_expire_and_garbage_collect_in_memory()
 -> Result<(), Box<dyn std::error::Error>> {
     let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
     do_test_expire_and_garbage_collect(storage).await
 }
 
 #[tokio_test]
-pub async fn test_expire_and_garbage_collect_in_minio()
+async fn test_expire_and_garbage_collect_in_minio()
 -> Result<(), Box<dyn std::error::Error>> {
     let prefix =
         format!("test_expire_and_garbage_collect_{}", Utc::now().timestamp_millis());
@@ -355,8 +355,8 @@ pub async fn test_expire_and_garbage_collect_in_minio()
 
 #[tokio_test]
 #[ignore = "needs credentials from env"]
-pub async fn test_expire_and_garbage_collect_in_aws()
--> Result<(), Box<dyn std::error::Error>> {
+async fn test_expire_and_garbage_collect_in_aws() -> Result<(), Box<dyn std::error::Error>>
+{
     let prefix =
         format!("test_expire_and_garbage_collect_{}", Utc::now().timestamp_millis());
     let storage: Arc<dyn Storage + Send + Sync> =
@@ -366,8 +366,8 @@ pub async fn test_expire_and_garbage_collect_in_aws()
 
 #[tokio_test]
 #[ignore = "needs credentials from env"]
-pub async fn test_expire_and_garbage_collect_in_r2()
--> Result<(), Box<dyn std::error::Error>> {
+async fn test_expire_and_garbage_collect_in_r2() -> Result<(), Box<dyn std::error::Error>>
+{
     let prefix =
         format!("test_expire_and_garbage_collect_{}", Utc::now().timestamp_millis());
     let storage: Arc<dyn Storage + Send + Sync> =
@@ -377,7 +377,7 @@ pub async fn test_expire_and_garbage_collect_in_r2()
 
 #[tokio_test]
 #[ignore = "needs credentials from env"]
-pub async fn test_expire_and_garbage_collect_in_tigris()
+async fn test_expire_and_garbage_collect_in_tigris()
 -> Result<(), Box<dyn std::error::Error>> {
     let prefix =
         format!("test_expire_and_garbage_collect_{}", Utc::now().timestamp_millis());
@@ -506,7 +506,7 @@ async fn do_test_expire_and_garbage_collect(
 ///
 /// We then, expire old snapshots and garbage collect. We verify we end up
 /// with what is expected according to the design document.
-pub async fn test_expire_and_garbage_collect_deleting_expired_refs()
+async fn test_expire_and_garbage_collect_deleting_expired_refs()
 -> Result<(), Box<dyn std::error::Error>> {
     let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
     let storage_settings = storage.default_settings().await?;
@@ -658,7 +658,7 @@ async fn test_gc_reset_branch() -> Result<(), Box<dyn std::error::Error>> {
 /// When two branches point to the same old commit, expire with
 /// `delete_expired_branches` should still delete the non-main branch.
 #[tokio_test]
-pub async fn test_expire_deletes_branch_sharing_tip_with_main()
+async fn test_expire_deletes_branch_sharing_tip_with_main()
 -> Result<(), Box<dyn std::error::Error>> {
     let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
     let storage_settings = storage.default_settings().await?;
