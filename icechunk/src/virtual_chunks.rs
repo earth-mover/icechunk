@@ -559,7 +559,7 @@ impl VirtualChunkResolver {
                 };
 
                 let bucket_name = if let Some(host) = chunk_location.host_str() {
-                    urlencoding::decode(host)?.into_owned()
+                    urlencoding::decode(host).capture()?.into_owned()
                 } else {
                     Err(VirtualReferenceErrorKind::CannotParseBucketName(
                         "No bucket name found".to_string(),
