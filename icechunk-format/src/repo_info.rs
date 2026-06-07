@@ -222,7 +222,7 @@ impl RepoInfo {
         status: &RepoStatus,
     ) -> IcechunkResult<Self> {
         let mut snapshots: Vec<_> = snapshots.into_iter().collect();
-        snapshots.sort_by(|a, b| a.id.0.cmp(&b.id.0));
+        snapshots.sort_by_key(|a| a.id.0);
         let tags = resolve_ref_iter(&snapshots, tags)?;
         let branches = resolve_ref_iter(&snapshots, branches)?;
         let mut deleted_tags: Vec<_> = deleted_tags.into_iter().collect();
@@ -865,7 +865,7 @@ impl RepoInfo {
             Some(snap_idx) => {
                 let mut branches: Vec<_> = self.all_branches()?.collect();
                 branches.push((name, snap_idx as u32));
-                branches.sort_by(|(name1, _), (name2, _)| name1.cmp(name2));
+                branches.sort_by_key(|(name1, _)| *name1);
                 let snaps: Vec<_> = self.all_snapshots()?.try_collect()?;
                 let latest_updates = self.latest_updates()?;
                 let rbu = self.repo_before_updates()?;
@@ -1037,7 +1037,7 @@ impl RepoInfo {
             Some(snap_idx) => {
                 let mut tags: Vec<_> = self.all_tags()?.collect();
                 tags.push((name, snap_idx as u32));
-                tags.sort_by(|(name1, _), (name2, _)| name1.cmp(name2));
+                tags.sort_by_key(|(name1, _)| *name1);
                 let snaps: Vec<_> = self.all_snapshots()?.try_collect()?;
                 let latest_updates = self.latest_updates()?;
                 let rbu = self.repo_before_updates()?;
@@ -1567,7 +1567,7 @@ fn resolve_ref_iter<'a>(
             Ok::<_, IcechunkFormatError>((name, idx))
         })
         .try_collect()?;
-    res.sort_by(|(name1, _), (name2, _)| name1.cmp(name2));
+    res.sort_by_key(|(name1, _)| *name1);
     Ok(res)
 }
 

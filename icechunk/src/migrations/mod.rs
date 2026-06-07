@@ -370,7 +370,7 @@ pub async fn migrate_1_to_2(
                             return;
                         }
                     };
-                    snap_infos.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+                    snap_infos.sort_by_key(|b| std::cmp::Reverse(b.created_at));
                     info!(
                         "Snapshot prefetch: warming cache for {} snapshots with concurrency {}",
                         snap_infos.len(),

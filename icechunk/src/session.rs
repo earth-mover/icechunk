@@ -2653,7 +2653,7 @@ async fn flush_existing_node(
                     );
                     result.manifest_files.push(mf);
                 }
-                result.manifest_refs.extend(array_refs.into_iter());
+                result.manifest_refs.extend(array_refs);
                 Ok(Some(result))
             }
             NodeData::Group => Ok(None),

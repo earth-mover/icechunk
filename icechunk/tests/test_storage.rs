@@ -221,7 +221,7 @@ async fn async_read_to_bytes(
 }
 
 #[tokio_test]
-pub async fn test_object_write_read() -> Result<(), Box<dyn std::error::Error>> {
+async fn test_object_write_read() -> Result<(), Box<dyn std::error::Error>> {
     with_storage(Permission::Modify, |_, storage| async move {
         let storage_settings = storage.default_settings().await?;
         let id = SnapshotId::random();
@@ -277,7 +277,7 @@ pub async fn test_object_write_read() -> Result<(), Box<dyn std::error::Error>> 
 
 #[tokio_test]
 #[apply(spec_version_cases)]
-pub async fn test_tag_write_get(
+async fn test_tag_write_get(
     #[case] spec_version: SpecVersionBin,
 ) -> Result<(), Box<dyn std::error::Error>> {
     with_storage(Permission::Modify, |_, storage| async move {
@@ -300,7 +300,7 @@ pub async fn test_tag_write_get(
 
 #[tokio_test]
 #[apply(spec_version_cases)]
-pub async fn test_fetch_non_existing_tag(
+async fn test_fetch_non_existing_tag(
     #[case] spec_version: SpecVersionBin,
 ) -> Result<(), Box<dyn std::error::Error>> {
     with_storage(Permission::Modify, |_, storage| async move {
@@ -323,7 +323,7 @@ pub async fn test_fetch_non_existing_tag(
 
 #[tokio_test]
 #[apply(spec_version_cases)]
-pub async fn test_create_existing_tag(
+async fn test_create_existing_tag(
     #[case] spec_version: SpecVersionBin,
 ) -> Result<(), Box<dyn std::error::Error>> {
     with_storage(Permission::Modify, |_, storage| async move {
@@ -344,7 +344,7 @@ pub async fn test_create_existing_tag(
 }
 
 #[tokio_test]
-pub async fn check_clean_repo() -> Result<(), Box<dyn std::error::Error>> {
+async fn check_clean_repo() -> Result<(), Box<dyn std::error::Error>> {
     with_storage(Permission::Modify, |_, storage| async move {
         let _repo = Repository::create(
             None,
@@ -388,7 +388,7 @@ pub async fn check_clean_repo() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[tokio_test]
-pub async fn test_list_objects() -> Result<(), Box<dyn std::error::Error>> {
+async fn test_list_objects() -> Result<(), Box<dyn std::error::Error>> {
     with_storage(Permission::Modify, |_, storage| async move {
         let settings = storage.default_settings().await?;
         storage
@@ -488,7 +488,7 @@ pub async fn test_list_objects() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[tokio_test]
-pub async fn test_delete_objects() -> Result<(), Box<dyn std::error::Error>> {
+async fn test_delete_objects() -> Result<(), Box<dyn std::error::Error>> {
     with_storage(Permission::Modify, |_, storage| async move {
         let settings = storage.default_settings().await?;
         storage
@@ -590,7 +590,7 @@ pub async fn test_delete_objects() -> Result<(), Box<dyn std::error::Error>> {
 
 #[tokio_test]
 #[apply(spec_version_cases)]
-pub async fn test_fetch_non_existing_branch(
+async fn test_fetch_non_existing_branch(
     #[case] spec_version: SpecVersionBin,
 ) -> Result<(), Box<dyn std::error::Error>> {
     with_storage(Permission::Modify, |_, storage| async move {
@@ -611,7 +611,7 @@ pub async fn test_fetch_non_existing_branch(
 
 #[tokio_test]
 #[apply(spec_version_cases)]
-pub async fn test_write_config_on_empty(
+async fn test_write_config_on_empty(
     #[case] spec_version: SpecVersionBin,
 ) -> Result<(), Box<dyn std::error::Error>> {
     with_storage(Permission::Modify, |_, storage| async move {
@@ -647,7 +647,7 @@ pub async fn test_write_config_on_empty(
 
 #[tokio_test]
 #[apply(spec_version_cases)]
-pub async fn test_write_config_on_existing(
+async fn test_write_config_on_existing(
     #[case] spec_version: SpecVersionBin,
 ) -> Result<(), Box<dyn std::error::Error>> {
     with_storage(Permission::Modify, |_, storage| async move {
@@ -683,7 +683,7 @@ pub async fn test_write_config_on_existing(
 
 #[tokio_test]
 #[apply(spec_version_cases)]
-pub async fn test_write_config_fails_on_bad_version_when_non_existing(
+async fn test_write_config_fails_on_bad_version_when_non_existing(
     #[case] spec_version: SpecVersionBin,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // FIXME: this test fails in MinIO but seems to work on S3
@@ -716,7 +716,7 @@ pub async fn test_write_config_fails_on_bad_version_when_non_existing(
 
 #[tokio_test]
 #[apply(spec_version_cases)]
-pub async fn test_write_config_fails_on_bad_version_when_existing(
+async fn test_write_config_fails_on_bad_version_when_existing(
     #[case] spec_version: SpecVersionBin,
 ) -> Result<(), Box<dyn std::error::Error>> {
     with_storage(Permission::Modify, |storage_type, storage| async move {
@@ -770,7 +770,7 @@ pub async fn test_write_config_fails_on_bad_version_when_existing(
 
 #[tokio_test]
 #[apply(spec_version_cases)]
-pub async fn test_write_config_can_overwrite_with_unsafe_config(
+async fn test_write_config_can_overwrite_with_unsafe_config(
     #[case] spec_version: SpecVersionBin,
 ) -> Result<(), Box<dyn std::error::Error>> {
     with_storage(Permission::Modify, |_, storage| async move {
@@ -813,7 +813,7 @@ pub async fn test_write_config_can_overwrite_with_unsafe_config(
 }
 
 #[tokio_test]
-pub async fn test_storage_classes() -> Result<(), Box<dyn std::error::Error>> {
+async fn test_storage_classes() -> Result<(), Box<dyn std::error::Error>> {
     if let Ok(e) = env::var("AWS_BUCKET")
         && !e.is_empty()
     {
@@ -930,7 +930,7 @@ async fn test_write_object_larger_than_multipart_threshold()
 }
 
 #[tokio_test]
-pub async fn test_get_object_conditional() -> Result<(), Box<dyn std::error::Error>> {
+async fn test_get_object_conditional() -> Result<(), Box<dyn std::error::Error>> {
     with_storage(Permission::Modify, |_, storage| async move {
         let storage_settings = storage.default_settings().await?;
         let id = SnapshotId::random();
@@ -1104,7 +1104,7 @@ async fn test_redirect_storage() -> Result<(), Box<dyn std::error::Error>> {
 
 #[tokio_test]
 #[apply(spec_version_cases)]
-pub async fn test_basic_repo_ops(
+async fn test_basic_repo_ops(
     #[case] spec_version: SpecVersionBin,
 ) -> Result<(), Box<dyn std::error::Error>> {
     with_storage(Permission::Modify, |_, storage| async move {
