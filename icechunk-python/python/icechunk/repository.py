@@ -107,8 +107,12 @@ class Repository:
         authorize_virtual_chunk_access : dict[str, AnyCredential | None], optional
             Authorize Icechunk to access virtual chunks in these containers. A mapping
             from container url_prefix to the credentials to use to access chunks in
-            that container. If credential is `None`, they will be fetched from the
-            environment, or anonymous credentials will be used if the container allows it.
+            that container. Each value should be an explicit credential or no-auth
+            sentinel: e.g. ``S3Credentials.FromEnv()`` / ``s3_anonymous_credentials()``
+            for S3, or ``LocalFilesystemAccess`` / ``HttpAccess`` for ``file://`` and
+            ``http(s)://`` containers. Passing ``None`` is deprecated and will be
+            unsupported in a future release: it silently reads credentials from the
+            environment (or uses anonymous access), which can expose private credentials.
             As a security measure, Icechunk will block access to virtual chunks if the
             container is not authorized using this argument.
         spec_version : SpecVersion, optional
@@ -157,8 +161,12 @@ class Repository:
         authorize_virtual_chunk_access : dict[str, AnyCredential | None], optional
             Authorize Icechunk to access virtual chunks in these containers. A mapping
             from container url_prefix to the credentials to use to access chunks in
-            that container. If credential is `None`, they will be fetched from the
-            environment, or anonymous credentials will be used if the container allows it.
+            that container. Each value should be an explicit credential or no-auth
+            sentinel: e.g. ``S3Credentials.FromEnv()`` / ``s3_anonymous_credentials()``
+            for S3, or ``LocalFilesystemAccess`` / ``HttpAccess`` for ``file://`` and
+            ``http(s)://`` containers. Passing ``None`` is deprecated and will be
+            unsupported in a future release: it silently reads credentials from the
+            environment (or uses anonymous access), which can expose private credentials.
             As a security measure, Icechunk will block access to virtual chunks if the
             container is not authorized using this argument.
         spec_version : SpecVersion, optional
@@ -207,8 +215,12 @@ class Repository:
         authorize_virtual_chunk_access : dict[str, AnyCredential | None], optional
             Authorize Icechunk to access virtual chunks in these containers. A mapping
             from container url_prefix to the credentials to use to access chunks in
-            that container. If credential is `None`, they will be fetched from the
-            environment, or anonymous credentials will be used if the container allows it.
+            that container. Each value should be an explicit credential or no-auth
+            sentinel: e.g. ``S3Credentials.FromEnv()`` / ``s3_anonymous_credentials()``
+            for S3, or ``LocalFilesystemAccess`` / ``HttpAccess`` for ``file://`` and
+            ``http(s)://`` containers. Passing ``None`` is deprecated and will be
+            unsupported in a future release: it silently reads credentials from the
+            environment (or uses anonymous access), which can expose private credentials.
             As a security measure, Icechunk will block access to virtual chunks if the
             container is not authorized using this argument.
 
@@ -252,8 +264,12 @@ class Repository:
         authorize_virtual_chunk_access : dict[str, AnyCredential | None], optional
             Authorize Icechunk to access virtual chunks in these containers. A mapping
             from container url_prefix to the credentials to use to access chunks in
-            that container. If credential is `None`, they will be fetched from the
-            environment, or anonymous credentials will be used if the container allows it.
+            that container. Each value should be an explicit credential or no-auth
+            sentinel: e.g. ``S3Credentials.FromEnv()`` / ``s3_anonymous_credentials()``
+            for S3, or ``LocalFilesystemAccess`` / ``HttpAccess`` for ``file://`` and
+            ``http(s)://`` containers. Passing ``None`` is deprecated and will be
+            unsupported in a future release: it silently reads credentials from the
+            environment (or uses anonymous access), which can expose private credentials.
             As a security measure, Icechunk will block access to virtual chunks if the
             container is not authorized using this argument.
 
@@ -300,8 +316,12 @@ class Repository:
         authorize_virtual_chunk_access : dict[str, AnyCredential | None], optional
             Authorize Icechunk to access virtual chunks in these containers. A mapping
             from container url_prefix to the credentials to use to access chunks in
-            that container. If credential is `None`, they will be fetched from the
-            environment, or anonymous credentials will be used if the container allows it.
+            that container. Each value should be an explicit credential or no-auth
+            sentinel: e.g. ``S3Credentials.FromEnv()`` / ``s3_anonymous_credentials()``
+            for S3, or ``LocalFilesystemAccess`` / ``HttpAccess`` for ``file://`` and
+            ``http(s)://`` containers. Passing ``None`` is deprecated and will be
+            unsupported in a future release: it silently reads credentials from the
+            environment (or uses anonymous access), which can expose private credentials.
             As a security measure, Icechunk will block access to virtual chunks if the
             container is not authorized using this argument.
         create_version : SpecVersion, optional
@@ -355,8 +375,12 @@ class Repository:
         authorize_virtual_chunk_access : dict[str, AnyCredential | None], optional
             Authorize Icechunk to access virtual chunks in these containers. A mapping
             from container url_prefix to the credentials to use to access chunks in
-            that container. If credential is `None`, they will be fetched from the
-            environment, or anonymous credentials will be used if the container allows it.
+            that container. Each value should be an explicit credential or no-auth
+            sentinel: e.g. ``S3Credentials.FromEnv()`` / ``s3_anonymous_credentials()``
+            for S3, or ``LocalFilesystemAccess`` / ``HttpAccess`` for ``file://`` and
+            ``http(s)://`` containers. Passing ``None`` is deprecated and will be
+            unsupported in a future release: it silently reads credentials from the
+            environment (or uses anonymous access), which can expose private credentials.
             As a security measure, Icechunk will block access to virtual chunks if the
             container is not authorized using this argument.
         create_version : SpecVersion, optional

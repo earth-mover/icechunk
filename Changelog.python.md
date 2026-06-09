@@ -4,7 +4,12 @@
 
 ### Features
 
+- Add explicit `LocalFilesystemAccess` and `HttpAccess` credential sentinels for authorizing virtual chunk containers that need no credentials ([#2194](https://github.com/earth-mover/icechunk/issues/2194)).
 - Add anonymous credential support for Azure Blob Storage ([#2168](https://github.com/earth-mover/icechunk/pull/2168)).
+
+### Deprecations
+
+- Passing `None` as a value in `authorize_virtual_chunk_access` is deprecated and now emits a `DeprecationWarning`; it will be unsupported in a future release. Pass an explicit credential (e.g. `S3Credentials.FromEnv()`, `s3_anonymous_credentials()`) or the `LocalFilesystemAccess` / `HttpAccess` sentinel instead ([#2194](https://github.com/earth-mover/icechunk/issues/2194)).
 
 ### Fixes
 

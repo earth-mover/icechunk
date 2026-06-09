@@ -465,8 +465,11 @@ def containers_credentials(
 
     Parameters
     ----------
-    m: Mapping[str, AnyS3Credential | AnyGcsCredential | AnyAzureCredential ]
-        A mapping from container url prefixes to credentials.
+    m: Mapping[str, AnyS3Credential | AnyGcsCredential | AnyAzureCredential | Credentials.LocalFileSystem | Credentials.Http | None]
+        A mapping from container url prefixes to credentials. For backends that need
+        no authentication, use the explicit ``LocalFilesystemAccess`` (``file://``) or
+        ``HttpAccess`` (``http(s)://``) sentinels. Passing ``None`` is deprecated and
+        will be unsupported in a future release.
 
     Examples
     --------
