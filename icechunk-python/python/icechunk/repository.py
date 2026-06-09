@@ -33,18 +33,18 @@ def _none_credential_guidance(scheme: str) -> tuple[str | None, str]:
     (including S3-compatible), `gs://`/`gcs://` GCS, etc.
     """
     if scheme in ("s3", "tigris"):
-        # FromEnv preserves the current `None` behaviour; use s3_anonymous_credentials()
+        # FromEnv preserves the current `None` behaviour; use ic.s3_anonymous_credentials()
         # for public buckets instead.
-        return "Credentials.S3(S3Credentials.FromEnv())", (
+        return "ic.Credentials.S3(ic.S3Credentials.FromEnv())", (
             " Note that `None` currently reads credentials from your environment "
             "(or uses anonymous access), which can expose private credentials."
         )
     if scheme in ("gs", "gcs"):
-        return "Credentials.Gcs(GcsCredentials.Anonymous())", ""
+        return "ic.Credentials.Gcs(ic.GcsCredentials.Anonymous())", ""
     if scheme == "file":
-        return "LocalFileSystemAccess", ""
+        return "ic.LocalFileSystemAccess", ""
     if scheme in ("http", "https"):
-        return "HttpAccess", ""
+        return "ic.HttpAccess", ""
     return None, ""
 
 
