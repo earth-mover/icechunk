@@ -42,7 +42,7 @@ and `compute=False`, this will NOT write any chunked array data, but will write 
 in-memory arrays (only `time` in this case).
 
 ```python exec="on" session="parallel" source="material-block"
-ds.to_zarr(session.store, compute=False, encoding={"Tair": {"chunks": chunks}}, mode="w", consolidated=False)
+ds.to_zarr(session.store, compute=False, encoding={"Tair": {"chunks": chunks}}, mode="w")
 # this commit is optional, but may be useful in your workflow
 print(session.commit("initialize store"))
 ```
@@ -56,7 +56,7 @@ def write_timestamp(*, itime: int, session: ic.session.Session) -> None:
     # pass a list to isel to preserve the time dimension
     ds = xr.tutorial.open_dataset("rasm").isel(time=[itime])
     # region="auto" tells Xarray to infer which "region" of the output arrays to write to.
-    ds.to_zarr(session.store, region="auto", consolidated=False)
+    ds.to_zarr(session.store, region="auto")
 ```
 
 Now execute the writes.
@@ -77,7 +77,7 @@ print(session.commit("finished writes"))
 Verify that the writes worked as expected:
 
 ```python exec="on" session="parallel" source="material-block" result="code"
-ondisk = xr.open_zarr(repo.readonly_session("main").store, consolidated=False)
+ondisk = xr.open_zarr(repo.readonly_session("main").store)
 xr.testing.assert_identical(ds, ondisk)
 ```
 
@@ -119,7 +119,7 @@ def write_timestamp(*, itime: int, session: ic.session.ForkSession) -> ic.sessio
     # pass a list to isel to preserve the time dimension
     ds = xr.tutorial.open_dataset("rasm").isel(time=[itime])
     # region="auto" tells Xarray to infer which "region" of the output arrays to write to.
-    ds.to_zarr(session.store, region="auto", consolidated=False)
+    ds.to_zarr(session.store, region="auto")
     return session
 ```
 
@@ -153,7 +153,7 @@ print(session.commit("finished writes"))
 Verify that the writes worked as expected:
 
 ```python
-ondisk = xr.open_zarr(repo.readonly_session("main").store, consolidated=False)
+ondisk = xr.open_zarr(repo.readonly_session("main").store)
 xr.testing.assert_identical(ds, ondisk)
 ```
 

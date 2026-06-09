@@ -28,7 +28,7 @@ rng = np.random.default_rng(seed=123)
 
 type Store = Literal["s3", "gcs", "az", "tigris"]
 PUBLIC_DATA_BUCKET = "icechunk-public-data"
-ZARR_KWARGS = dict(zarr_format=3, consolidated=False)
+ZARR_KWARGS = dict(zarr_format=3)
 
 CONSTRUCTORS = {
     "s3": ic.s3_storage,
@@ -346,7 +346,7 @@ def setup_era5_single(dataset: Dataset):
     }
     logger.info("Writing data...")
     ds.to_zarr(
-        session.store, mode="w", zarr_format=3, consolidated=False, encoding=encoding
+        session.store, mode="w", zarr_format=3, encoding=encoding
     )
     logger.info(f"Wrote data in {time.time() - tic} seconds")
     session.commit(f"wrote data at {datetime.datetime.now(datetime.UTC)}")
