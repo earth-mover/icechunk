@@ -709,11 +709,11 @@ pub enum Credentials {
     /// Explicit sentinel authorizing access to a local-filesystem virtual chunk
     /// container, which requires no credentials. This is the explicit replacement
     /// for passing `None` for a `file://` container.
-    LocalFileSystem,
+    LocalFileSystemAccess,
     /// Explicit sentinel authorizing access to an HTTP(S) virtual chunk container,
     /// which requires no credentials. This is the explicit replacement for passing
     /// `None` for an `http://`/`https://` container.
-    Http,
+    HttpAccess,
 }
 
 #[cfg(test)]

@@ -86,7 +86,7 @@ credentials = containers_credentials(
     {
         # we identify for which container we are passing credentials
         # by using its url_prefx. Pass an explicit credential (or, for backends that
-        # need no authentication, the LocalFilesystemAccess / HttpAccess sentinel);
+        # need no authentication, the LocalFileSystemAccess / HttpAccess sentinel);
         # passing None is deprecated.
         "s3://testbucket": s3_credentials(
             access_key_id="abcd", secret_access_key="0123"

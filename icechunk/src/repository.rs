@@ -2166,8 +2166,12 @@ fn warn_deprecated_none_credential(url_prefix: &str) {
         "gcs" | "gs" => {
             "Pass an explicit `Credentials::Gcs(GcsCredentials::Anonymous)` instead."
         }
-        "file" => "Pass the explicit `Credentials::LocalFileSystem` sentinel instead.",
-        "http" | "https" => "Pass the explicit `Credentials::Http` sentinel instead.",
+        "file" => {
+            "Pass the explicit `Credentials::LocalFileSystemAccess` sentinel instead."
+        }
+        "http" | "https" => {
+            "Pass the explicit `Credentials::HttpAccess` sentinel instead."
+        }
         // Azure already rejects `None`; any other scheme has no permissive `None` path.
         _ => return,
     };

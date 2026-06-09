@@ -30,7 +30,7 @@ __all__ = [
     "GcsCredentials",
     "GcsStaticCredentials",
     "HttpAccess",
-    "LocalFilesystemAccess",
+    "LocalFileSystemAccess",
     "S3Credentials",
     "S3StaticCredentials",
     "azure_anonymous_credentials",
@@ -90,19 +90,19 @@ AnyCredential = (
     Credentials.S3
     | Credentials.Gcs
     | Credentials.Azure
-    | Credentials.LocalFileSystem
-    | Credentials.Http
+    | Credentials.LocalFileSystemAccess
+    | Credentials.HttpAccess
 )
 
 #: Explicit sentinel authorizing access to a ``file://`` virtual chunk container,
 #: which requires no credentials. Use this instead of ``None`` for local-filesystem
 #: containers.
-LocalFilesystemAccess = Credentials.LocalFileSystem()
+LocalFileSystemAccess = Credentials.LocalFileSystemAccess()
 
 #: Explicit sentinel authorizing access to an ``http://``/``https://`` virtual chunk
 #: container, which requires no credentials. Use this instead of ``None`` for HTTP
 #: containers.
-HttpAccess = Credentials.Http()
+HttpAccess = Credentials.HttpAccess()
 
 
 def s3_refreshable_credentials(
@@ -456,8 +456,8 @@ def containers_credentials(
         AnyS3Credential
         | AnyGcsCredential
         | AnyAzureCredential
-        | Credentials.LocalFileSystem
-        | Credentials.Http
+        | Credentials.LocalFileSystemAccess
+        | Credentials.HttpAccess
         | None,
     ],
 ) -> dict[str, AnyCredential | None]:
@@ -465,9 +465,9 @@ def containers_credentials(
 
     Parameters
     ----------
-    m: Mapping[str, AnyS3Credential | AnyGcsCredential | AnyAzureCredential | Credentials.LocalFileSystem | Credentials.Http | None]
+    m: Mapping[str, AnyS3Credential | AnyGcsCredential | AnyAzureCredential | Credentials.LocalFileSystemAccess | Credentials.HttpAccess | None]
         A mapping from container url prefixes to credentials. For backends that need
-        no authentication, use the explicit ``LocalFilesystemAccess`` (``file://``) or
+        no authentication, use the explicit ``LocalFileSystemAccess`` (``file://``) or
         ``HttpAccess`` (``http(s)://``) sentinels. Passing ``None`` is deprecated and
         will be unsupported in a future release.
 
@@ -504,7 +504,7 @@ def containers_credentials(
     for name, cred in m.items():
         if cred is None:
             res[name] = None
-        elif isinstance(cred, Credentials.LocalFileSystem | Credentials.Http):
+        elif isinstance(cred, Credentials.LocalFileSystemAccess | Credentials.HttpAccess):
             res[name] = cred
         elif isinstance(cred, AnyS3Credential):
             res[name] = Credentials.S3(cred)

@@ -28,7 +28,7 @@ from icechunk import (
 from icechunk.credentials import (
     Credentials,
     HttpAccess,
-    LocalFilesystemAccess,
+    LocalFileSystemAccess,
     s3_anonymous_credentials,
 )
 from icechunk.repository import Repository
@@ -474,7 +474,7 @@ def test_error_on_non_authorized_virtual_chunk_container(
 def test_no_auth_sentinels_authorize_local_filesystem(
     any_spec_version: int | None,
 ) -> None:
-    # icechunk#2194: the explicit `LocalFilesystemAccess` sentinel replaces `None` for
+    # icechunk#2194: the explicit `LocalFileSystemAccess` sentinel replaces `None` for
     # file:// containers. `None` still works but warns; the sentinel works silently.
     store_config = local_filesystem_store("/foo")
     container = VirtualChunkContainer("file:///foo/", store_config)
@@ -496,15 +496,15 @@ def test_no_auth_sentinels_authorize_local_filesystem(
     # Explicit sentinel is accepted and does not warn.
     with warnings.catch_warnings():
         warnings.simplefilter("error", DeprecationWarning)
-        open_repo(LocalFilesystemAccess)
+        open_repo(LocalFileSystemAccess)
 
 
 def test_containers_credentials_passes_through_no_auth_sentinels() -> None:
     result = containers_credentials(
-        {"file:///foo/": LocalFilesystemAccess, "http://example.com/": HttpAccess}
+        {"file:///foo/": LocalFileSystemAccess, "http://example.com/": HttpAccess}
     )
     assert result == {
-        "file:///foo/": LocalFilesystemAccess,
+        "file:///foo/": LocalFileSystemAccess,
         "http://example.com/": HttpAccess,
     }
 
