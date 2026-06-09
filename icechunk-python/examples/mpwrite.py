@@ -28,7 +28,7 @@ def write_timestamp(*, itime: int, session: Session) -> Session:
     # and index out the right time value
     ds = make_dataset().isel(time=[itime])
     # region="auto" tells Xarray to infer which "region" of the output arrays to write to.
-    ds.to_zarr(session.store, region="auto", consolidated=False)
+    ds.to_zarr(session.store, region="auto")
     return session
 
 
@@ -44,7 +44,6 @@ if __name__ == "__main__":
         compute=False,
         encoding={"Tair": {"chunks": chunks}},
         mode="w",
-        consolidated=False,
     )
     # this commit is optional, but may be useful in your workflow
     session.commit("initialize store")
@@ -65,5 +64,5 @@ if __name__ == "__main__":
     session.merge(*fork_sessions)
     session.commit("finished writes")
 
-    ondisk = xr.open_zarr(repo.readonly_session("main").store, consolidated=False)
+    ondisk = xr.open_zarr(repo.readonly_session("main").store)
     xr.testing.assert_identical(ds, ondisk)

@@ -100,7 +100,7 @@ icechunk.xarray.to_icechunk(dataset, session, mode="w")
 # remember you must commit before executing a distributed read.
 print(session.commit("wrote an Xarray dataset!"))
 
-roundtripped = xr.open_zarr(session.store, consolidated=False)
+roundtripped = xr.open_zarr(session.store)
 print(dataset.identical(roundtripped))
 ```
 

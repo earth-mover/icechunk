@@ -137,13 +137,13 @@ For more depth, see [Xarray](../guides/xarray.md), [Parallel writes](../understa
 ### Write an in-memory Xarray Dataset
 
 ```python
-ds.to_zarr(session.store, group="my-group", zarr_format=3, consolidated=False)
+ds.to_zarr(session.store, group="my-group", zarr_format=3)
 ```
 
 ### Append to an existing datast
 
 ```python
-ds.to_zarr(session.store, group="my-group", append_dim='time', consolidated=False)
+ds.to_zarr(session.store, group="my-group", append_dim='time')
 ```
 
 ### Write an Xarray dataset with Dask
@@ -162,7 +162,7 @@ Reading can be done with a read-only session.
 
 ```python
 session = repo.readonly_session("main")
-ds = xr.open_zarr(session.store, group="my-group", zarr_format=3, consolidated=False)
+ds = xr.open_zarr(session.store, group="my-group", zarr_format=3)
 ```
 
 ## Transactions and Version Control
