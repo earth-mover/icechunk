@@ -23,6 +23,47 @@ from icechunk.store import IcechunkStore
 from icechunk.types import CommitMethod
 
 
+def _suggest_explicit_credential(url_prefix: str) -> str:
+    """Suggest the explicit replacement for a deprecated `None` credential, based on the
+    container's url prefix scheme (icechunk#2194)."""
+    scheme = url_prefix.split("://", 1)[0]
+    if scheme in ("s3", "tigris"):
+        return (
+            "Pass an explicit credential such as `S3Credentials.FromEnv()` or "
+            "`s3_anonymous_credentials()` instead. Note that `None` currently reads "
+            "credentials from your environment (or uses anonymous access), which can "
+            "expose private credentials."
+        )
+    if scheme in ("gs", "gcs"):
+        return "Pass an explicit credential such as `GcsCredentials.Anonymous()` instead."
+    if scheme == "file":
+        return "Pass the explicit `LocalFilesystemAccess` sentinel instead."
+    if scheme in ("http", "https"):
+        return "Pass the explicit `HttpAccess` sentinel instead."
+    return "Pass an explicit credential instead."
+
+
+def _warn_on_none_virtual_chunk_credentials(
+    authorize_virtual_chunk_access: dict[str, "AnyCredential | None"] | None,
+) -> None:
+    """Emit a deprecation warning for any `None` credential in the authorization map.
+
+    `None` is overloaded and silently permissive (icechunk#2194); it is being replaced by
+    explicit per-backend sentinels and will be rejected in a future release.
+    """
+    if not authorize_virtual_chunk_access:
+        return
+    for url_prefix, cred in authorize_virtual_chunk_access.items():
+        if cred is None:
+            warnings.warn(
+                f"Passing `None` in `authorize_virtual_chunk_access` for container "
+                f"`{url_prefix}` is deprecated and will be unsupported in a future "
+                f"release. {_suggest_explicit_credential(url_prefix)}",
+                DeprecationWarning,
+                stacklevel=3,
+            )
+
+
 class Repository:
     """An Icechunk repository."""
 
@@ -79,6 +120,7 @@ class Repository:
         Self
             An instance of the Repository class.
         """
+        _warn_on_none_virtual_chunk_credentials(authorize_virtual_chunk_access)
         return cls(
             PyRepository.create(
                 storage,
@@ -128,6 +170,7 @@ class Repository:
         Self
             An instance of the Repository class.
         """
+        _warn_on_none_virtual_chunk_credentials(authorize_virtual_chunk_access)
         return cls(
             await PyRepository.create_async(
                 storage,
@@ -174,6 +217,7 @@ class Repository:
         Self
             An instance of the Repository class.
         """
+        _warn_on_none_virtual_chunk_credentials(authorize_virtual_chunk_access)
         return cls(
             PyRepository.open(
                 storage,
@@ -218,6 +262,7 @@ class Repository:
         Self
             An instance of the Repository class.
         """
+        _warn_on_none_virtual_chunk_credentials(authorize_virtual_chunk_access)
         return cls(
             await PyRepository.open_async(
                 storage,
@@ -270,6 +315,7 @@ class Repository:
         Self
             An instance of the Repository class.
         """
+        _warn_on_none_virtual_chunk_credentials(authorize_virtual_chunk_access)
         return cls(
             PyRepository.open_or_create(
                 storage,
@@ -323,6 +369,7 @@ class Repository:
         Self
             An instance of the Repository class.
         """
+        _warn_on_none_virtual_chunk_credentials(authorize_virtual_chunk_access)
         return cls(
             await PyRepository.open_or_create_async(
                 storage,
@@ -549,6 +596,7 @@ class Repository:
         Self
             A new Repository instance with the updated configuration.
         """
+        _warn_on_none_virtual_chunk_credentials(authorize_virtual_chunk_access)
         return self.__class__(
             self._repository.reopen(
                 config=config,
@@ -576,6 +624,7 @@ class Repository:
         Self
             A new Repository instance with the updated configuration.
         """
+        _warn_on_none_virtual_chunk_credentials(authorize_virtual_chunk_access)
         return self.__class__(
             await self._repository.reopen_async(
                 config=config,

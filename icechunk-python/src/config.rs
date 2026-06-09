@@ -468,6 +468,11 @@ pub enum PyCredentials {
     S3(PyS3Credentials),
     Gcs(PyGcsCredentials),
     Azure(PyAzureCredentials),
+    // Explicit "no credentials required" sentinels for backends that need no
+    // authentication. Surfaced in Python as `LocalFilesystemAccess` / `HttpAccess`,
+    // the explicit replacements for passing `None`.
+    LocalFileSystem(),
+    Http(),
 }
 
 impl From<PyAzureCredentials> for AzureCredentials {
@@ -495,6 +500,8 @@ impl From<PyCredentials> for Credentials {
             PyCredentials::S3(cred) => Credentials::S3(cred.into()),
             PyCredentials::Gcs(cred) => Credentials::Gcs(cred.into()),
             PyCredentials::Azure(cred) => Credentials::Azure(cred.into()),
+            PyCredentials::LocalFileSystem() => Credentials::LocalFileSystem,
+            PyCredentials::Http() => Credentials::Http,
         }
     }
 }

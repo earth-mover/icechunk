@@ -3253,7 +3253,26 @@ class Credentials:
     class Azure:
         def __new__(cls, credentials: AzureCredentials) -> Credentials.Azure: ...
 
-_AnyCredential = Credentials.S3 | Credentials.Gcs | Credentials.Azure
+    class LocalFileSystem:
+        """Sentinel authorizing access to a local-filesystem (``file://``) virtual
+        chunk container, which requires no credentials. Surfaced as
+        ``LocalFilesystemAccess``."""
+
+        def __new__(cls) -> Credentials.LocalFileSystem: ...
+
+    class Http:
+        """Sentinel authorizing access to an HTTP(S) virtual chunk container, which
+        requires no credentials. Surfaced as ``HttpAccess``."""
+
+        def __new__(cls) -> Credentials.Http: ...
+
+_AnyCredential = (
+    Credentials.S3
+    | Credentials.Gcs
+    | Credentials.Azure
+    | Credentials.LocalFileSystem
+    | Credentials.Http
+)
 
 @final
 class LatencyStorage(Storage):

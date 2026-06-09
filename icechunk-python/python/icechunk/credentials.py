@@ -29,6 +29,8 @@ __all__ = [
     "GcsBearerCredential",
     "GcsCredentials",
     "GcsStaticCredentials",
+    "HttpAccess",
+    "LocalFilesystemAccess",
     "S3Credentials",
     "S3StaticCredentials",
     "azure_anonymous_credentials",
@@ -84,7 +86,23 @@ AnyAzureCredential = (
 )
 
 
-AnyCredential = Credentials.S3 | Credentials.Gcs | Credentials.Azure
+AnyCredential = (
+    Credentials.S3
+    | Credentials.Gcs
+    | Credentials.Azure
+    | Credentials.LocalFileSystem
+    | Credentials.Http
+)
+
+#: Explicit sentinel authorizing access to a ``file://`` virtual chunk container,
+#: which requires no credentials. Use this instead of ``None`` for local-filesystem
+#: containers.
+LocalFilesystemAccess = Credentials.LocalFileSystem()
+
+#: Explicit sentinel authorizing access to an ``http://``/``https://`` virtual chunk
+#: container, which requires no credentials. Use this instead of ``None`` for HTTP
+#: containers.
+HttpAccess = Credentials.Http()
 
 
 def s3_refreshable_credentials(
@@ -433,7 +451,15 @@ def azure_credentials(
 
 
 def containers_credentials(
-    m: Mapping[str, AnyS3Credential | AnyGcsCredential | AnyAzureCredential | None],
+    m: Mapping[
+        str,
+        AnyS3Credential
+        | AnyGcsCredential
+        | AnyAzureCredential
+        | Credentials.LocalFileSystem
+        | Credentials.Http
+        | None,
+    ],
 ) -> dict[str, AnyCredential | None]:
     """Build a map of credentials for virtual chunk containers.
 
@@ -475,6 +501,8 @@ def containers_credentials(
     for name, cred in m.items():
         if cred is None:
             res[name] = None
+        elif isinstance(cred, Credentials.LocalFileSystem | Credentials.Http):
+            res[name] = cred
         elif isinstance(cred, AnyS3Credential):
             res[name] = Credentials.S3(cred)
         elif (
