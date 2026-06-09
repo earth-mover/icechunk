@@ -345,9 +345,7 @@ def setup_era5_single(dataset: Dataset):
         "PV": {"compressors": [zarr.codecs.ZstdCodec()], "chunks": (1, 1, 721, 1440)}
     }
     logger.info("Writing data...")
-    ds.to_zarr(
-        session.store, mode="w", zarr_format=3, encoding=encoding
-    )
+    ds.to_zarr(session.store, mode="w", zarr_format=3, encoding=encoding)
     logger.info(f"Wrote data in {time.time() - tic} seconds")
     session.commit(f"wrote data at {datetime.datetime.now(datetime.UTC)}")
 
