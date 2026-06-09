@@ -1293,6 +1293,8 @@ class VersionControlStateMachine(RuleBasedStateMachine):
                 except IcechunkError:
                     # A snapshot with no own tx log (e.g. the initial commit of
                     # a pre-upgrade V1 repo) carries no pruned logs.
+                    assert self.model.initial_spec_version == 1
+                    assert self.mode.migrated
                     continue
                 composite = tx_log.get("synthetic_composite")
                 if composite is not None:
