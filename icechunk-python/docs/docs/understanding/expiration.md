@@ -68,6 +68,15 @@ This prints out the set of snapshots that were expired.
 !!! note
     The first snapshot is never expired!
 
+!!! note "The cutoff is exclusive"
+    `older_than` is an exclusive bound: a snapshot is expired only if its
+    `written_at` is strictly earlier than the cutoff. A snapshot whose
+    `written_at` equals the cutoff is kept. The same holds for
+    `garbage_collect`: an object is deleted only if it was created strictly
+    before the cutoff *and* no surviving snapshot references it. This means you
+    can pass a snapshot's own `written_at` as the cutoff to expire everything
+    older than it while keeping that snapshot itself.
+
 
 Confirm that these are the right snapshots (remember that ancestry list commits in decreasing order of `written_at` time):
 

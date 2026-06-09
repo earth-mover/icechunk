@@ -1647,11 +1647,16 @@ class Repository:
         Parameters
         ----------
         older_than: datetime.datetime
-            Expire snapshots older than this time.
+            Expire snapshots older than this time. The bound is exclusive: a
+            snapshot whose ``written_at`` equals ``older_than`` is kept. The root
+            snapshot and the main branch tip are never expired. Other branch and
+            tag tips are kept unless ``delete_expired_branches`` /
+            ``delete_expired_tags`` are True.
         delete_expired_branches: bool, optional
-            Whether to delete any branches that now have only expired snapshots.
+            Whether to delete branches whose tip points at an expired snapshot.
+            The main branch is never deleted.
         delete_expired_tags: bool, optional
-            Whether to delete any tags associated with expired snapshots
+            Whether to delete tags whose tip points at an expired snapshot.
 
         Returns
         -------
@@ -1694,11 +1699,16 @@ class Repository:
         Parameters
         ----------
         older_than: datetime.datetime
-            Expire snapshots older than this time.
+            Expire snapshots older than this time. The bound is exclusive: a
+            snapshot whose ``written_at`` equals ``older_than`` is kept. The root
+            snapshot and the main branch tip are never expired. Other branch and
+            tag tips are kept unless ``delete_expired_branches`` /
+            ``delete_expired_tags`` are True.
         delete_expired_branches: bool, optional
-            Whether to delete any branches that now have only expired snapshots.
+            Whether to delete branches whose tip points at an expired snapshot.
+            The main branch is never deleted.
         delete_expired_tags: bool, optional
-            Whether to delete any tags associated with expired snapshots
+            Whether to delete tags whose tip points at an expired snapshot.
 
         Returns
         -------
@@ -1815,7 +1825,9 @@ class Repository:
         Parameters
         ----------
         delete_object_older_than: datetime.datetime
-            Delete objects older than this time.
+            Delete objects older than this time. The bound is exclusive. An
+            object is deleted only if it is also not referenced by any surviving
+            (non-expired) snapshot.
         dry_run: bool : bool
             Report results but don't delete any objects
         max_snapshots_in_memory : int
@@ -1860,7 +1872,9 @@ class Repository:
         Parameters
         ----------
         delete_object_older_than: datetime.datetime
-            Delete objects older than this time.
+            Delete objects older than this time. The bound is exclusive. An
+            object is deleted only if it is also not referenced by any surviving
+            (non-expired) snapshot.
         dry_run: bool : bool
             Report results but don't delete any objects
         max_snapshots_in_memory : int
