@@ -26,6 +26,7 @@ from icechunk import (
     s3_store,
 )
 from icechunk.credentials import (
+    AnyCredential,
     Credentials,
     HttpAccess,
     LocalFileSystemAccess,
@@ -263,7 +264,7 @@ async def test_public_virtual_refs(
     container_type: str,
     url_prefix: str,
     store_config: ObjectStoreConfig.S3 | ObjectStoreConfig.Http,
-    explicit_credentials: object,
+    explicit_credentials: AnyCredential,
     authorize_with_none: bool,
     use_async: bool,
     any_spec_version: int | None,
@@ -481,7 +482,7 @@ def test_no_auth_sentinels_authorize_local_filesystem(
     config = RepositoryConfig.default()
     config.set_virtual_chunk_container(container)
 
-    def open_repo(creds: object) -> Repository:
+    def open_repo(creds: AnyCredential | None) -> Repository:
         return Repository.open_or_create(
             storage=in_memory_storage(),
             config=config,
