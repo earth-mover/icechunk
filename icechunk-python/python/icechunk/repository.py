@@ -42,9 +42,9 @@ def _none_credential_guidance(scheme: str) -> tuple[str | None, str]:
     if scheme in ("gs", "gcs"):
         return "ic.Credentials.Gcs(ic.GcsCredentials.Anonymous())", ""
     if scheme == "file":
-        return "ic.LocalFileSystemAccess", ""
+        return "ic.credentials.LocalFileSystemAccess", ""
     if scheme in ("http", "https"):
-        return "ic.HttpAccess", ""
+        return "ic.credentials.HttpAccess", ""
     return None, ""
 
 
@@ -126,7 +126,8 @@ class Repository:
             from container url_prefix to the credentials to use to access chunks in
             that container. Each value should be an explicit credential or no-auth
             sentinel: e.g. ``S3Credentials.FromEnv()`` / ``s3_anonymous_credentials()``
-            for S3, or ``LocalFileSystemAccess`` / ``HttpAccess`` for ``file://`` and
+            for S3, or the ``icechunk.credentials.LocalFileSystemAccess`` /
+            ``icechunk.credentials.HttpAccess`` sentinels for ``file://`` and
             ``http(s)://`` containers. Passing ``None`` is deprecated and will be
             unsupported in a future release: it silently reads credentials from the
             environment (or uses anonymous access), which can expose private credentials.
@@ -180,7 +181,8 @@ class Repository:
             from container url_prefix to the credentials to use to access chunks in
             that container. Each value should be an explicit credential or no-auth
             sentinel: e.g. ``S3Credentials.FromEnv()`` / ``s3_anonymous_credentials()``
-            for S3, or ``LocalFileSystemAccess`` / ``HttpAccess`` for ``file://`` and
+            for S3, or the ``icechunk.credentials.LocalFileSystemAccess`` /
+            ``icechunk.credentials.HttpAccess`` sentinels for ``file://`` and
             ``http(s)://`` containers. Passing ``None`` is deprecated and will be
             unsupported in a future release: it silently reads credentials from the
             environment (or uses anonymous access), which can expose private credentials.
@@ -234,7 +236,8 @@ class Repository:
             from container url_prefix to the credentials to use to access chunks in
             that container. Each value should be an explicit credential or no-auth
             sentinel: e.g. ``S3Credentials.FromEnv()`` / ``s3_anonymous_credentials()``
-            for S3, or ``LocalFileSystemAccess`` / ``HttpAccess`` for ``file://`` and
+            for S3, or the ``icechunk.credentials.LocalFileSystemAccess`` /
+            ``icechunk.credentials.HttpAccess`` sentinels for ``file://`` and
             ``http(s)://`` containers. Passing ``None`` is deprecated and will be
             unsupported in a future release: it silently reads credentials from the
             environment (or uses anonymous access), which can expose private credentials.
@@ -283,7 +286,8 @@ class Repository:
             from container url_prefix to the credentials to use to access chunks in
             that container. Each value should be an explicit credential or no-auth
             sentinel: e.g. ``S3Credentials.FromEnv()`` / ``s3_anonymous_credentials()``
-            for S3, or ``LocalFileSystemAccess`` / ``HttpAccess`` for ``file://`` and
+            for S3, or the ``icechunk.credentials.LocalFileSystemAccess`` /
+            ``icechunk.credentials.HttpAccess`` sentinels for ``file://`` and
             ``http(s)://`` containers. Passing ``None`` is deprecated and will be
             unsupported in a future release: it silently reads credentials from the
             environment (or uses anonymous access), which can expose private credentials.
@@ -335,7 +339,8 @@ class Repository:
             from container url_prefix to the credentials to use to access chunks in
             that container. Each value should be an explicit credential or no-auth
             sentinel: e.g. ``S3Credentials.FromEnv()`` / ``s3_anonymous_credentials()``
-            for S3, or ``LocalFileSystemAccess`` / ``HttpAccess`` for ``file://`` and
+            for S3, or the ``icechunk.credentials.LocalFileSystemAccess`` /
+            ``icechunk.credentials.HttpAccess`` sentinels for ``file://`` and
             ``http(s)://`` containers. Passing ``None`` is deprecated and will be
             unsupported in a future release: it silently reads credentials from the
             environment (or uses anonymous access), which can expose private credentials.
@@ -394,7 +399,8 @@ class Repository:
             from container url_prefix to the credentials to use to access chunks in
             that container. Each value should be an explicit credential or no-auth
             sentinel: e.g. ``S3Credentials.FromEnv()`` / ``s3_anonymous_credentials()``
-            for S3, or ``LocalFileSystemAccess`` / ``HttpAccess`` for ``file://`` and
+            for S3, or the ``icechunk.credentials.LocalFileSystemAccess`` /
+            ``icechunk.credentials.HttpAccess`` sentinels for ``file://`` and
             ``http(s)://`` containers. Passing ``None`` is deprecated and will be
             unsupported in a future release: it silently reads credentials from the
             environment (or uses anonymous access), which can expose private credentials.
