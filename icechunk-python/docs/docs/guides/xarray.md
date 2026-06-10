@@ -23,9 +23,7 @@ and `icechunk.xarray.to_icechunk` methods.
     See [these docs on orchestrating parallel writes](../understanding/parallel.md) and [these docs on dask.array with distributed](./dask.md#icechunk-dask-xarray)
     for more.
 
-    If using `to_zarr`, remember to set `zarr_format=3, consolidated=False`. Consolidated metadata
-    is unnecessary (and unsupported) in Icechunk. Icechunk already organizes the dataset metadata
-    in a way that makes it very fast to fetch from storage.
+    If using `to_zarr`, remember to set `zarr_format=3` to avoid an extra check for the zarr format.
 
 
 In this example, we'll explain how to create a new Icechunk repo, write some sample data
@@ -127,7 +125,7 @@ print(session.commit("append more data"))
 
 ```python exec="on" session="xarray" source="material-block" result="code"
 xr.set_options(display_style="text")
-print(xr.open_zarr(session.store, consolidated=False))
+print(xr.open_zarr(session.store))
 ```
 
 We can also read data from previous snapshots by checking out prior versions:
@@ -135,7 +133,7 @@ We can also read data from previous snapshots by checking out prior versions:
 ```python exec="on" session="xarray" source="material-block" result="code"
 session = repo.readonly_session(snapshot_id=first_snapshot)
 
-print(xr.open_zarr(session.store, consolidated=False))
+print(xr.open_zarr(session.store))
 ```
 
 Notice that this second `xarray.Dataset` has a time dimension of length 18 whereas the
