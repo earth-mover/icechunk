@@ -257,8 +257,44 @@ def try_import(name: str) -> Any | None:
         return None
 
 
-def describe(ic_wc: Any, dirname: str, path: str) -> None:
-    """Print the observed post-expiration state, read by the working copy."""
+# Invariant post-expiration state, identical across every fixture. The
+# per-fixture tx-log-tracking differences are pinned by the reader test
+# do_read_expired_repo in test_can_read_old.py; keep these mirrored with it.
+# After two rounds each surviving tip is re-parented onto the initial commit,
+# so every ancestry is just [tip, initial].
+EXPIRED_MAIN_HISTORY = [MSG_J, "Repository initialized"]
+EXPIRED_FEATURE_HISTORY = [MSG_FEAT_S2, "Repository initialized"]
+EXPIRED_PROTECT_B_HISTORY = [MSG_B, "Repository initialized"]
+
+
+def assert_expected_state(state: dict[str, Any]) -> None:
+    """Fail loudly at generation time if the shared DAG didn't expire as
+    designed. Covers only the invariants common to every fixture, so it runs
+    identically for all library versions; the reader test pins the rest."""
+    assert "main" in state["branches"], state["branches"]
+    assert "feature" in state["branches"], state["branches"]
+    assert "doomed1" not in state["branches"], state["branches"]
+    assert "doomed2" not in state["branches"], state["branches"]
+    assert "protect-b" in state["tags"], state["tags"]
+
+    assert state["main"] == EXPIRED_MAIN_HISTORY, state["main"]
+    assert state["feature"] == EXPIRED_FEATURE_HISTORY, state["feature"]
+    assert state["protect_b"] == EXPIRED_PROTECT_B_HISTORY, state["protect_b"]
+
+    # j churned row 0 to 99; a..i churned rows 1..8 to their index; 9..11 stay 0.
+    data = state["data"]
+    assert data[0][0] == 99, data[0][0]
+    assert data[5][0] == 5, data[5][0]
+    assert data[8][0] == 8, data[8][0]
+    assert data[11][0] == 0, data[11][0]
+    assert all(v == 0 for v in state["small"]), state["small"]
+
+
+def describe(ic_wc: Any, dirname: str, path: str) -> dict[str, Any]:
+    """Print the observed post-expiration state, read by the working copy.
+
+    Returns the ``read_state`` dict so the caller can assert on it without
+    re-opening the repo."""
     repo = ic_wc.Repository.open(storage=ic_wc.local_filesystem_storage(path))
     main_tip = repo.lookup_branch("main")
     state = read_state(ic_wc, path)
@@ -284,6 +320,8 @@ def describe(ic_wc: Any, dirname: str, path: str) -> None:
             f"merged={composite['merged_pruned_ancestor_tx_logs']} "
             f"missing={composite['missing_tx_logs']}"
         )
+
+    return state
 
 
 def main() -> None:
@@ -313,7 +351,8 @@ def main() -> None:
 
         print(f"Building {dirname} (spec_version={spec_version}) ...")
         build_expired_repo(module, path, spec_version)
-        describe(ic_wc, dirname, path)
+        state = describe(ic_wc, dirname, path)
+        assert_expected_state(state)
 
         if is_v1:
             if icechunk_v1 is None:
