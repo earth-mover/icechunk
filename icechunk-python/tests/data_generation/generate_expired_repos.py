@@ -127,10 +127,20 @@ def commit_marker(repo: Any, branch: str, name: str, msg: str) -> str:
 def build_expired_repo(ic: Any, path: str, spec_version: int | None) -> None:
     """Build the shared DAG and run two rounds of expiration + GC.
 
-    DAG (main line, oldest first)::
+    Main line, oldest -> newest. The two ``|`` are the expiration boundaries:
+    ``t1`` sits between ``e`` and ``g``, ``t2`` between ``i`` and ``j``. The first
+    node past each boundary (``g``, then ``j``) is the survivor tip that gets
+    re-parented over the snapshots expired just before it. Forks hang below the
+    node they branch from::
 
-        init -> root -> a -> b -> c -> d -> e -> g -> h -> i -> j(tip)
-                             ^tag      ^feat ^doomed1   ^doomed2
+                                              t1              t2
+                                               |               |
+        init -> root -> a -> b -> c -> d -> e  |  g -> h -> i  |  j  (main tip)
+                             |    |    |               |
+                             |    |    |               +---- doomed2  : branch off h, +doomed2_work  -> DELETED round 2
+                             |    |    +---- doomed1  : branch off d, +doomed1_work  -> DELETED round 1
+                             |    +---- feature  : branch off c, +feat_pre/feat_s1/feat_s2  (survives)
+                             +---- protect-b: TAG on b  (keeps b reachable past expiry)
 
     Round 1 expires everything up to and including ``e`` (boundary ``g`` is
     re-parented over them); ``doomed1`` is deleted; ``b`` survives via the tag
