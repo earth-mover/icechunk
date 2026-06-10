@@ -563,7 +563,7 @@ async def test_read_expired_repo_v2_by_2_0_5() -> None:
 @pytest.mark.filterwarnings("ignore:datetime.datetime.utcnow")
 async def test_read_expired_repo_v1_by_working_copy() -> None:
     await do_read_expired_repo(
-        "./tests/data/expire-repo-v1-by-2.0.5-with-ancestor-tx-log-tracking",
+        "./tests/data/expire-repo-v1-by-working-copy",
         tracks_tx_logs=False,
     )
 
@@ -571,7 +571,7 @@ async def test_read_expired_repo_v1_by_working_copy() -> None:
 @pytest.mark.filterwarnings("ignore:datetime.datetime.utcnow")
 async def test_read_expired_repo_v2_by_working_copy() -> None:
     await do_read_expired_repo(
-        "./tests/data/expire-repo-v2-by-2.0.5-with-ancestor-tx-log-tracking",
+        "./tests/data/expire-repo-v2-by-working-copy",
         tracks_tx_logs=True,
     )
 

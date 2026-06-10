@@ -38,8 +38,8 @@ The fixture matrix (5 repos under ``tests/data/``):
  1   expire-repo-v1-by-1.1.21                                     1.1.21  v1
  2   expire-repo-v1-by-2.0.5                                      2.0.5   v1
  3   expire-repo-v2-by-2.0.5                                      2.0.5   v2
- 4   expire-repo-v1-by-2.0.5-with-ancestor-tx-log-tracking        wc      v1
- 5   expire-repo-v2-by-2.0.5-with-ancestor-tx-log-tracking        wc      v2
+ 4   expire-repo-v1-by-working-copy                               wc      v1
+ 5   expire-repo-v2-by-working-copy                               wc      v2
 ==== ============================================================ ======= ====
 
 Only #5 (a v2 repo expired by a library that populates ``pruned_ancestor_tx_logs``)
@@ -352,8 +352,8 @@ def main() -> None:
         ("expire-repo-v1-by-1.1.21", icechunk_v1, None, "v1"),
         ("expire-repo-v1-by-2.0.5", icechunk_v2, 1, "v1"),
         ("expire-repo-v2-by-2.0.5", icechunk_v2, 2, "wc"),
-        ("expire-repo-v1-by-2.0.5-with-ancestor-tx-log-tracking", ic_wc, 1, "v1"),
-        ("expire-repo-v2-by-2.0.5-with-ancestor-tx-log-tracking", ic_wc, 2, "v2"),
+        ("expire-repo-v1-by-working-copy", ic_wc, 1, "v1"),
+        ("expire-repo-v2-by-working-copy", ic_wc, 2, "v2"),
     ]
 
     for dirname, module, spec_version, cross_reader in fixtures:
