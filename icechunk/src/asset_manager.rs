@@ -264,6 +264,14 @@ impl AssetManager {
         self.chunk_cache.clear();
     }
 
+    pub fn clear_manifest_cache(&self) {
+        self.manifest_cache.clear();
+    }
+
+    pub fn clear_snapshot_cache(&self) {
+        self.snapshot_cache.clear();
+    }
+
     #[instrument(skip_all)]
     pub async fn fetch_config(
         &self,
