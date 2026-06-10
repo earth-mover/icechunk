@@ -989,8 +989,14 @@ class VersionControlStateMachine(RuleBasedStateMachine):
     @rule(branch=branches, commit=commits)
     def reset_branch(self, branch: str, commit: str) -> None:
         # V1 expired snapshots stay on disk so reset_branch would succeed,
-        # but modelling that divergence isn't worthwhile — just skip.
-        assume(not (self.model.spec_version == 1 and commit not in self.model.commits))
+        # but modelling that divergence isn't worthwhile — just skip. This also
+        # covers resetting to a commit whose ancestry *reaches* an expired-but-
+        # on-disk snapshot: the real ancestry resurrects it while the model has
+        # popped it, so skip unless the whole chain is still modelled.
+        if self.model.spec_version == 1:
+            assume(commit in self.model.commits)
+            ancestry = {s.id for s in self.repo.ancestry(snapshot_id=commit)}
+            assume(ancestry <= set(self.model.commits))
         if branch not in self.model.branch_heads or commit not in self.model.commits:
             note(f"resetting branch {branch}, expecting error.")
             with pytest.raises(IcechunkError):
