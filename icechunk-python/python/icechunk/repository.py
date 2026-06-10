@@ -2211,6 +2211,15 @@ class Repository:
             Keys: ``new_groups``, ``new_arrays``, ``deleted_groups``,
             ``deleted_arrays``, ``updated_groups``, ``updated_arrays``,
             ``updated_chunks``, ``moved_nodes``.
+
+            When the snapshot's ancestry was collapsed by expiration, an
+            additional ``synthetic_composite`` key is present. It shows
+            the transaction log is not a single on-disk file but a
+            synthetic merge. Keys: ``note`` (a field text explanation),
+            ``merged_pruned_ancestor_tx_logs`` (the pruned-ancestor
+            transaction logs merged into this one, oldest first), and
+            ``missing_tx_logs`` (referenced pruned-ancestor logs absent from
+            storage, expected only when an older GC deleted them).
         """
         result: dict[str, Any] = json.loads(
             self._repository.inspect_transaction_log(snapshot_id, pretty=False)
@@ -2238,6 +2247,15 @@ class Repository:
             Keys: ``new_groups``, ``new_arrays``, ``deleted_groups``,
             ``deleted_arrays``, ``updated_groups``, ``updated_arrays``,
             ``updated_chunks``, ``moved_nodes``.
+
+            When the snapshot's ancestry was collapsed by expiration, an
+            additional ``synthetic_composite`` key is present. It shows
+            the transaction log is not a single on-disk file but a
+            synthetic merge. Keys: ``note`` (a field text explanation),
+            ``merged_pruned_ancestor_tx_logs`` (the pruned-ancestor
+            transaction logs merged into this one, oldest first), and
+            ``missing_tx_logs`` (referenced pruned-ancestor logs absent from
+            storage, expected only when an older GC deleted them).
         """
         raw = await self._repository.inspect_transaction_log_async(
             snapshot_id, pretty=False
