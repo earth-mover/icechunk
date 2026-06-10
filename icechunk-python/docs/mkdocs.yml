@@ -226,7 +226,6 @@ markdown_extensions:
 nav:
   - Home: index.md
   - Overview: overview.md
-  - Roadmap: roadmap.md
   - Getting Started:
     - Quickstart: getting-started/quickstart.md
     - How To: getting-started/howto.md
