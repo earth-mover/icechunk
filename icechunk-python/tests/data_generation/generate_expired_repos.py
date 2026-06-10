@@ -296,8 +296,10 @@ def main() -> None:
     for dirname, module, spec_version, is_v1 in fixtures:
         path = str(data_dir / dirname)
         if module is None:
-            print(f"SKIP {dirname}: writer module not importable")
-            continue
+            raise RuntimeError(
+                f"Cannot build {dirname}: writer module not importable. Run via "
+                "`just gen-expired-fixtures` so third-wheel installs the renamed wheels."
+            )
 
         print(f"Building {dirname} (spec_version={spec_version}) ...")
         build_expired_repo(module, path, spec_version)
