@@ -228,8 +228,9 @@ def read_state(ic: Any, path: str) -> dict[str, Any]:
 
 
 def cross_validate(writer_ic: Any, reader_ic: Any, path: str) -> None:
-    """Open a v1 fixture with both the writer library and genuine 1.x, and
-    assert they see identical history and data. Raises on any mismatch so
+    """Read ``path`` with both the writer library and a second ``reader_ic``
+    library and assert they see identical surviving history and data. Used to
+    pin forward/backward spec compat across versions; raises on any mismatch so
     regenerating fails loudly on a compat regression."""
     writer = read_state(writer_ic, path)
     reader = read_state(reader_ic, path)
@@ -244,7 +245,8 @@ def cross_validate(writer_ic: Any, reader_ic: Any, path: str) -> None:
     assert "doomed1" not in reader["branches"], reader["branches"]
     assert "doomed2" not in reader["branches"], reader["branches"]
 
-    # A diff across the expiration boundary must not crash (degraded is fine for v1).
+    # A diff across the expiration boundary must not crash (a degraded diff is
+    # fine for a reader that predates the pruned_ancestor_tx_logs feature).
     repo = reader_ic.Repository.open(storage=reader_ic.local_filesystem_storage(path))
     ancestry = list(repo.ancestry(branch="main"))
     repo.diff(from_snapshot_id=ancestry[-1].id, to_snapshot_id=ancestry[0].id)
@@ -331,17 +333,30 @@ def main() -> None:
 
     data_dir = Path(__file__).resolve().parent.parent / "data"
 
-    # (dirname, writer module, spec_version, is_v1). v1 fixtures are cross-read
-    # with genuine 1.x; only the v2-by-working-copy fixture tracks tx logs.
+    # (dirname, writer module, spec_version, cross_reader). cross_reader names a
+    # second library that must read the fixture identically to its writer, which
+    # pins forward/backward spec compat:
+    #   v1 fixtures         -> genuine 1.1.21 reads the v1 format;
+    #   v2-by-2.0.5         -> the working copy reads an old 2.0.5-written v2 repo
+    #                          (backward: new code reads old data);
+    #   v2-by-working-copy  -> 2.0.5 reads a repo carrying the new
+    #                          pruned_ancestor_tx_logs field (forward: proving it
+    #                          is additive -- spec_version stays 2, old reader works).
+    # Only the v2-by-working-copy fixture tracks tx logs.
+    readers = {
+        "v1": (icechunk_v1, "icechunk 1.1.21"),
+        "v2": (icechunk_v2, "icechunk 2.0.5"),
+        "wc": (ic_wc, "working copy"),
+    }
     fixtures = [
-        ("expire-repo-v1-by-1.1.21", icechunk_v1, None, True),
-        ("expire-repo-v1-by-2.0.5", icechunk_v2, 1, True),
-        ("expire-repo-v2-by-2.0.5", icechunk_v2, 2, False),
-        ("expire-repo-v1-by-2.0.5-with-ancestor-tx-log-tracking", ic_wc, 1, True),
-        ("expire-repo-v2-by-2.0.5-with-ancestor-tx-log-tracking", ic_wc, 2, False),
+        ("expire-repo-v1-by-1.1.21", icechunk_v1, None, "v1"),
+        ("expire-repo-v1-by-2.0.5", icechunk_v2, 1, "v1"),
+        ("expire-repo-v2-by-2.0.5", icechunk_v2, 2, "wc"),
+        ("expire-repo-v1-by-2.0.5-with-ancestor-tx-log-tracking", ic_wc, 1, "v1"),
+        ("expire-repo-v2-by-2.0.5-with-ancestor-tx-log-tracking", ic_wc, 2, "v2"),
     ]
 
-    for dirname, module, spec_version, is_v1 in fixtures:
+    for dirname, module, spec_version, cross_reader in fixtures:
         path = str(data_dir / dirname)
         if module is None:
             raise RuntimeError(
@@ -354,15 +369,15 @@ def main() -> None:
         state = describe(ic_wc, dirname, path)
         assert_expected_state(state)
 
-        if is_v1:
-            if icechunk_v1 is None:
-                raise RuntimeError(
-                    f"{dirname} is a v1 fixture but icechunk_v1 (1.1.21) is not "
-                    "importable; run via `just gen-expired-fixtures` so third-wheel "
-                    "installs the renamed wheels."
-                )
-            cross_validate(module, icechunk_v1, path)
-            print("  cross-validated against genuine icechunk 1.1.21 OK")
+        reader_module, reader_label = readers[cross_reader]
+        if reader_module is None:
+            raise RuntimeError(
+                f"{dirname} must be cross-read with {reader_label}, which is not "
+                "importable; run via `just gen-expired-fixtures` so third-wheel "
+                "installs the renamed wheels."
+            )
+        cross_validate(module, reader_module, path)
+        print(f"  cross-validated: writer vs {reader_label} OK")
 
     print("\nAll fixtures generated.")
 
