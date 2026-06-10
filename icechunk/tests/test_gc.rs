@@ -861,6 +861,84 @@ async fn test_repeated_expiration_accumulates_pruned_logs()
     Ok(())
 }
 
+/// Re-parenting a snapshot that already carries `pruned_ancestor_tx_logs` must
+/// accumulate, not overwrite. Regression test for
+/// <https://github.com/earth-mover/icechunk/pull/2184#pullrequestreview-4461588063>
+#[tokio_test]
+async fn test_reparent_accumulates_existing_pruned_logs()
+-> Result<(), Box<dyn std::error::Error>> {
+    let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+    let repo = Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
+        .await?;
+    let am = Arc::clone(repo.asset_manager());
+
+    let initial_id = repo
+        .readonly_session(&VersionInfo::BranchTipRef("main".to_string()))
+        .await?
+        .snapshot_id()
+        .clone();
+
+    // init -> a -> b -> c
+    let a = commit_group(&repo, "main", "/a").await?;
+    let b = commit_group(&repo, "main", "/b").await?;
+    let gc_threshold = threshold_between_commits().await;
+    let c = commit_group(&repo, "main", "/c").await?;
+
+    // Reset to /a, then GC between /b and /c: /b is dropped, /c is kept (too new)
+    // and re-parented onto /a, seeding pruned_ancestor_tx_logs = [b].
+    repo.reset_branch("main", &a, None).await?;
+    let gc_config = GCConfig::clean_all(
+        gc_threshold,
+        gc_threshold,
+        None,
+        NonZeroU16::new(50).unwrap(),
+        NonZeroUsize::new(512 * 1024 * 1024).unwrap(),
+        NonZeroU16::new(500).unwrap(),
+        false,
+    );
+    garbage_collect(Arc::clone(&am), &gc_config, None, 100).await?;
+
+    let (written, _) = am.fetch_repo_info().await?;
+    let edited = written.find_snapshot(&c)?;
+    assert_eq!(edited.parent_id.as_ref(), Some(&a));
+    assert_eq!(edited.pruned_ancestor_tx_logs, vec![b.clone()]);
+
+    // Point main back at /c and expire /a. /c must accumulate /a before its
+    // existing [b], not overwrite it.
+    repo.reset_branch("main", &c, None).await?;
+    let expire_threshold = threshold_between_commits().await;
+    expire(
+        Arc::clone(&am),
+        expire_threshold,
+        ExpiredRefAction::Ignore,
+        ExpiredRefAction::Ignore,
+        None,
+        100,
+    )
+    .await?;
+
+    let c_ancestry = repo
+        .ancestry(&VersionInfo::SnapshotId(c.clone()))
+        .await?
+        .try_collect::<Vec<_>>()
+        .await?;
+    assert_eq!(c_ancestry[0].id, c);
+    assert_eq!(c_ancestry[0].pruned_ancestor_tx_logs, vec![a.clone(), b.clone()]);
+
+    // Diff from the initial commit still sees every group after GC.
+    garbage_collect(Arc::clone(&am), &clean_all_now(), None, 100).await?;
+    let diff = repo
+        .diff(
+            &VersionInfo::SnapshotId(initial_id),
+            &VersionInfo::BranchTipRef("main".to_string()),
+        )
+        .await?;
+    let expected: std::collections::BTreeSet<Path> =
+        ["/a", "/b", "/c"].into_iter().map(|p| Path::try_from(p).unwrap()).collect();
+    assert_eq!(diff.new_groups, expected);
+    Ok(())
+}
+
 /// Amending the boundary commit must copy its `pruned_ancestor_tx_logs` onto
 /// the amended snapshot, so diff stays complete afterward.
 #[tokio_test]

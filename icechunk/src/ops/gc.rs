@@ -944,7 +944,8 @@ pub async fn expire_v2(
 /// Returns `(new_parent, pruned)`. `new_parent` is the boundary ancestor, or
 /// `None` if the whole chain is collapsed (no ancestor satisfies `is_boundary`)
 /// `pruned` lists, oldest first, every collapsed ancestor's id with that ancestor's own
-/// `pruned_ancestor_tx_logs` spliced in.
+/// `pruned_ancestor_tx_logs` spliced in, then `edited`'s own existing
+/// `pruned_ancestor_tx_logs` (newer than the collapsed run) appended last.
 ///
 /// A collapsed ancestor can itself carry a non-empty `pruned_ancestor_tx_logs`
 /// (it was a boundary in an earlier pass), and several can sit in one chain.
@@ -980,6 +981,8 @@ fn reparent_and_prune(
         pruned.extend(ancestor_pruned);
         pruned.push(id);
     }
+    // `edited`'s own pruned logs are newer than the collapsed run, so append last.
+    pruned.extend(edited.pruned_ancestor_tx_logs.iter().cloned());
     Ok((new_parent, pruned))
 }
 
