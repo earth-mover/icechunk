@@ -1862,9 +1862,11 @@ impl Repository {
                         }) if is_pruned => {
                             tracing::warn!(
                                 snapshot_id = %id,
-                                "Transaction log of an expiration-pruned ancestor is \
-                                 missing (likely deleted by an older Icechunk GC); the \
-                                 diff will be incomplete"
+                                "A Transaction log of an expiration-pruned ancestor is \
+                                 missing, likely deleted by an Icechunk older than 2.1.0 \
+                                 running garbage collection. This diff will be incomplete. \
+                                 Upgrade all clients that run garbage_collect to Icechunk \
+                                 2.1.0 or later. Already-deleted logs cannot be recovered."
                             );
                             Ok(None)
                         }
