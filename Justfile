@@ -43,7 +43,14 @@ gen-flatbuffers:
 
 [doc("Prepare environment for development")]
 develop *args:
-  cd icechunk-python && maturin develop --uv --profile {{profile}} "$@"
+  #!/usr/bin/env bash
+  set -euo pipefail
+  cd icechunk-python
+  if [[ -n "${CONDA_PREFIX:-}" ]]; then
+    export VIRTUAL_ENV="$CONDA_PREFIX"
+    export UV_NO_SYNC=1
+  fi
+  uv run --active maturin develop --uv --profile {{profile}} "$@"
 
 [doc("Install maturin import hook for more convenient development flow")]
 import-hook:
@@ -147,7 +154,14 @@ py-pre-commit $SKIP="rust-pre-commit-fast,rust-pre-commit,rust-pre-commit-ci" *a
 
 [doc("Run Python tests via pytest")]
 pytest *args:
-  cd icechunk-python && uv run pytest "$@"
+  #!/usr/bin/env bash
+  set -euo pipefail
+  cd icechunk-python
+  if [[ -n "${CONDA_PREFIX:-}" ]]; then
+    export VIRTUAL_ENV="$CONDA_PREFIX"
+    export UV_NO_SYNC=1
+  fi
+  uv run --active pytest "$@"
 
 [doc("Regenerate the post-expiration can_read_old fixtures (needs icechunk 1.1.21 + 2.0.5 wheels, installed via third-wheel)")]
 gen-expired-fixtures *args:
