@@ -50,7 +50,7 @@ develop *args:
     export VIRTUAL_ENV="$CONDA_PREFIX"
     export UV_NO_SYNC=1
   fi
-  exec uv run --active maturin develop --uv --profile {{profile}} "$@"
+  uv run --active maturin develop --uv --profile {{profile}} "$@"
 
 [doc("Install maturin import hook for more convenient development flow")]
 import-hook:
@@ -161,7 +161,7 @@ pytest *args:
     export VIRTUAL_ENV="$CONDA_PREFIX"
     export UV_NO_SYNC=1
   fi
-  exec uv run --active pytest "$@"
+  uv run --active pytest "$@"
 
 [doc("Regenerate the post-expiration can_read_old fixtures (needs icechunk 1.1.21 + 2.0.5 wheels, installed via third-wheel)")]
 gen-expired-fixtures *args:
