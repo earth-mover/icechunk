@@ -133,6 +133,10 @@ async def test_expire_and_gc(use_async: bool, any_spec_version: int | None) -> N
 
     space_before = space_used()
 
+    # On V2 repos the surviving tip carries their tx-log ids in pruned_ancestor_tx_logs,
+    # so GC retains those logs. V1 has no such mechanism and deletes them
+    expected_tx_logs_deleted = 21 if any_spec_version == 1 else 0
+
     # let's run GC using dry_run = True
     if use_async:
         gc_result = await repo.garbage_collect_async(old, dry_run=True)
@@ -149,8 +153,7 @@ async def test_expire_and_gc(use_async: bool, any_spec_version: int | None) -> N
     assert gc_result.manifests_deleted == 20
     # not implemented yet
     assert gc_result.attributes_deleted == 0
-    # same number as snapshots
-    assert gc_result.transaction_logs_deleted == 21
+    assert gc_result.transaction_logs_deleted == expected_tx_logs_deleted
 
     # now let's run real GC, no dry_run.
     if use_async:
@@ -169,8 +172,7 @@ async def test_expire_and_gc(use_async: bool, any_spec_version: int | None) -> N
     assert gc_result.manifests_deleted == 20
     # not implemented yet
     assert gc_result.attributes_deleted == 0
-    # same number as snapshots
-    assert gc_result.transaction_logs_deleted == 21
+    assert gc_result.transaction_logs_deleted == expected_tx_logs_deleted
 
     assert (
         len(
@@ -196,8 +198,10 @@ async def test_expire_and_gc(use_async: bool, any_spec_version: int | None) -> N
         )
         == 1
     )
-    # V2 repos keep the initial snapshot's transaction log
-    expected_remaining_tx_logs = 2 if any_spec_version != 1 else 1
+    # On V2 repos the surviving tip carries their tx-log ids in pruned_ancestor_tx_logs:
+    # initial + tip + 21 expired ancestors = 23.
+    # V1 has no such mechanism and deletes them
+    expected_remaining_tx_logs = 1 if any_spec_version == 1 else 23
     assert (
         len(
             client.list_objects(Bucket="testbucket", Prefix=f"{prefix}/transactions")[
@@ -215,3 +219,76 @@ async def test_expire_and_gc(use_async: bool, any_spec_version: int | None) -> N
     assert array[999] == 0
     for i in range(20):
         assert array[i] == i
+
+
+@pytest.mark.filterwarnings("ignore:datetime.datetime.utcnow")
+@pytest.mark.parametrize("use_async", [True, False])
+async def test_gc_deletes_only_unreferenced_expired_tx_logs(use_async: bool) -> None:
+    """GC must discriminate among expired transaction logs: a released snapshot
+    whose log is referenced by a survivor's pruned_ancestor_tx_logs is retained,
+    while a released snapshot with no surviving descendant has its log deleted.
+    test_expire_and_gc only covers the "everything referenced" case (0 deleted);
+    here a doomed side branch forces the mixed case. V2-only: V1 has no
+    pruned-ancestor mechanism.
+    """
+    prefix, repo = mk_repo(ic.SpecVersion.v2)
+    client = get_minio_client()
+
+    def commit_group(branch: str, name: str) -> str:
+        session = repo.writable_session(branch)
+        zarr.open_group(store=session.store).create_group(name)
+        return session.commit(f"add {name} on {branch}")
+
+    def transaction_count() -> int:
+        resp = client.list_objects(Bucket="testbucket", Prefix=f"{prefix}/transactions")
+        return len(resp.get("Contents", []))
+
+    # main: root group -> /a -> /b -> /c, threshold just before /c. /a and /b are
+    # released but referenced by the re-parented /c, so their logs survive.
+    session = repo.writable_session("main")
+    zarr.group(store=session.store, overwrite=True)
+    session.commit("root group")
+    commit_group("main", "a")
+    snap_b = commit_group("main", "b")
+
+    # A doomed branch off /b, fully pre-threshold, deleted at expiration. Its
+    # unique commits have no surviving descendant, so nobody references their
+    # logs and GC deletes them.
+    repo.create_branch("doomed", snap_b)
+    commit_group("doomed", "d")
+    commit_group("doomed", "e")
+
+    # Bracket the threshold with gaps so prior commits land strictly before it
+    # and /c strictly after, clear of created_at (ms) vs flushed_at truncation.
+    time.sleep(0.05)
+    threshold = datetime.now(UTC)
+    time.sleep(0.05)
+
+    commit_group("main", "c")  # survives, re-parented to root
+
+    # initial snapshot + root group + /a + /b + /d + /e + /c
+    assert transaction_count() == 7
+
+    if use_async:
+        expired = await repo.expire_snapshots_async(
+            threshold, delete_expired_branches=True
+        )
+    else:
+        expired = repo.expire_snapshots(threshold, delete_expired_branches=True)
+    # root group, /a, /b on main + /d, /e on doomed
+    assert len(expired) == 5
+    assert "doomed" not in repo.list_branches()
+
+    if use_async:
+        gc_result = await repo.garbage_collect_async(threshold)
+    else:
+        gc_result = repo.garbage_collect(threshold)
+
+    # All 5 released snapshot files are deleted...
+    assert gc_result.snapshots_deleted == 5
+    # ...but only the two unreferenced logs (doomed's /d, /e). /a and /b are
+    # retained via /c's pruned_ancestor_tx_logs.
+    assert gc_result.transaction_logs_deleted == 2
+
+    # initial + root group + /a + /b + /c remain
+    assert transaction_count() == 5
