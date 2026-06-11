@@ -13,7 +13,8 @@ use serde::{Deserialize, Serialize};
 use crate::{
     asset_manager::AssetManager,
     format::{
-        ManifestId, SnapshotId,
+        IcechunkFormatError, IcechunkFormatErrorKind, ManifestId, SnapshotId,
+        format_constants::SpecVersionBin,
         manifest::{ChunkPayload, ManifestRef},
         repo_info::UpdateType,
         snapshot::{
@@ -21,7 +22,8 @@ use crate::{
         },
         transaction_log::TransactionLog,
     },
-    repository::{RepositoryErrorKind, RepositoryResult},
+    repository::{RepositoryError, RepositoryErrorKind, RepositoryResult},
+    storage::StorageErrorKind,
 };
 use icechunk_types::{ICResultExt as _, error::ICResultCtxExt as _};
 
@@ -442,6 +444,18 @@ struct UpdatedChunksInspect {
     chunks: Vec<Vec<u32>>,
 }
 
+/// Marks a [`TransactionLogInspect`] that is not a single on-disk log but a
+/// synthetic merge, because the snapshot's ancestry was collapsed by expiration.
+#[derive(Debug, Serialize, Deserialize)]
+struct SyntheticCompositeInspect {
+    note: String,
+    /// Pruned-ancestor transaction logs merged into this view, oldest first.
+    merged_pruned_ancestor_tx_logs: Vec<String>,
+    /// Referenced pruned-ancestor logs absent from storage, so skipped. Expected
+    /// only when an older GC (predating pruned-log retention) deleted them.
+    missing_tx_logs: Vec<String>,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 struct TransactionLogInspect {
     new_groups: Vec<String>,
@@ -452,8 +466,11 @@ struct TransactionLogInspect {
     updated_arrays: Vec<String>,
     updated_chunks: Vec<UpdatedChunksInspect>,
     moved_nodes: Vec<MoveInspect>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    synthetic_composite: Option<SyntheticCompositeInspect>,
 }
 
+/// Pure transform of a single transaction log into its inspect representation.
 fn inspect_transaction_log(
     tx: &TransactionLog,
 ) -> RepositoryResult<TransactionLogInspect> {
@@ -478,7 +495,82 @@ fn inspect_transaction_log(
                 Ok(MoveInspect { from: m.from.to_string(), to: m.to.to_string() })
             })
             .try_collect()?,
+        synthetic_composite: None,
     })
+}
+
+/// The transaction-log ids of ancestors expiration pruned from under `id`.
+/// Returns empty if the snapshot id is not found, because it means it was
+/// itself expired, so its transaction log has no pruned children
+/// (they were moved already)
+async fn pruned_ancestor_tx_logs(
+    asset_manager: &AssetManager,
+    id: &SnapshotId,
+) -> RepositoryResult<Vec<SnapshotId>> {
+    if asset_manager.spec_version() <= SpecVersionBin::V1 {
+        return Ok(Vec::new());
+    }
+    let (repo_info, _) = asset_manager.fetch_repo_info().await?;
+    match repo_info.find_snapshot(id) {
+        Ok(si) => Ok(si.pruned_ancestor_tx_logs),
+        Err(IcechunkFormatError {
+            kind: IcechunkFormatErrorKind::SnapshotIdNotFound { .. },
+            ..
+        }) => Ok(Vec::new()),
+        Err(e) => Err(e.inject()),
+    }
+}
+
+async fn inspect_snapshot_tx_logs(
+    asset_manager: &AssetManager,
+    id: &SnapshotId,
+) -> RepositoryResult<TransactionLogInspect> {
+    let own = asset_manager.fetch_transaction_log(id).await?;
+    let pruned_ids = pruned_ancestor_tx_logs(asset_manager, id).await?;
+    if pruned_ids.is_empty() {
+        return inspect_transaction_log(&own);
+    }
+
+    let mut pruned_logs = Vec::with_capacity(pruned_ids.len());
+    let mut merged_ids = Vec::new();
+    let mut missing = Vec::new();
+    // TODO: performance, concurrency opportunity here, we are fetching sequentially
+    for pruned_id in &pruned_ids {
+        match asset_manager.fetch_transaction_log(pruned_id).await {
+            Ok(log) => {
+                pruned_logs.push(log);
+                merged_ids.push(pruned_id.to_string());
+            }
+            Err(RepositoryError {
+                kind: RepositoryErrorKind::StorageError(StorageErrorKind::ObjectNotFound),
+                ..
+            }) => {
+                tracing::warn!(
+                    snapshot_id = %pruned_id,
+                    "Transaction log of an expiration-pruned ancestor is missing \
+                     (likely deleted by an older Icechunk GC); the composite log view \
+                     will be incomplete"
+                );
+                missing.push(pruned_id.to_string());
+            }
+            Err(e) => return Err(e),
+        }
+    }
+
+    // pruned logs oldest first, then this snapshot's own log
+    let to_merge = pruned_logs.iter().map(Arc::as_ref).chain([own.as_ref()]);
+    // FIXME: this can (and will for large repos with expiration) blow the tx log buffer limit
+    let merged = TransactionLog::merge(id, to_merge).inject()?;
+    let mut info = inspect_transaction_log(&merged)?;
+    info.synthetic_composite = Some(SyntheticCompositeInspect {
+        note: "Synthetic composite: this snapshot's ancestry was collapsed by \
+               expiration; the log below merges its pruned-ancestor logs with its \
+               own log."
+            .to_string(),
+        merged_pruned_ancestor_tx_logs: merged_ids,
+        missing_tx_logs: missing,
+    });
+    Ok(info)
 }
 
 pub async fn transaction_log_json(
@@ -486,8 +578,7 @@ pub async fn transaction_log_json(
     id: &SnapshotId,
     pretty: bool,
 ) -> RepositoryResult<String> {
-    let tx = asset_manager.fetch_transaction_log(id).await?;
-    let info = inspect_transaction_log(&tx)?;
+    let info = inspect_snapshot_tx_logs(asset_manager, id).await?;
     let res = if pretty {
         serde_json::to_string_pretty(&info)
     } else {

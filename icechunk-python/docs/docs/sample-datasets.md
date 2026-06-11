@@ -32,7 +32,7 @@ A subset of the Weatherbench2 copy of the ERA5 reanalysis dataset.
     repo = ic.Repository.open(storage=storage)
     session = repo.readonly_session("main")
     ds = xr.open_dataset(
-        session.store, group="1x721x1440", engine="zarr", chunks=None, consolidated=False
+        session.store, group="1x721x1440", engine="zarr", chunks=None
     )
     ```
 
@@ -69,7 +69,7 @@ A subset of the Weatherbench2 copy of the ERA5 reanalysis dataset.
     repo = ic.Repository.open(storage=storage)
     session = repo.readonly_session("main")
     ds = xr.open_dataset(
-        session.store, group="1x721x1440", engine="zarr", chunks=None, consolidated=False
+        session.store, group="1x721x1440", engine="zarr", chunks=None
     )
     ```
 
@@ -139,7 +139,7 @@ See [source](https://storage.googleapis.com/earthenginepartners-hansen/GLCLU2000
     repo = ic.Repository.open(storage=storage)
     session = repo.readonly_session("main")
     ds = xr.open_dataset(
-        session.store, chunks=None, consolidated=False, engine="zarr"
+        session.store, chunks=None, engine="zarr"
     )
     ```
 
