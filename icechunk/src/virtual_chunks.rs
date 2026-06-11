@@ -650,7 +650,7 @@ impl VirtualChunkResolver {
                 ))
             }
             #[cfg(feature = "object-store-http")]
-            ObjectStoreConfig::Http(opts) => {
+            ObjectStoreConfig::Http(http_config) => {
                 match self.credentials.get(&cont.url_prefix) {
                     // FIXME: support http auth
                     Some(None) => {}
@@ -678,7 +678,15 @@ impl VirtualChunkResolver {
                 };
 
                 let root_url = format!("{}://{}", chunk_location.scheme(), hostname);
-                Ok(Arc::new(ObjectStoreFetcher::new_http(&root_url, opts, self.settings.clone()).await?))
+                Ok(Arc::new(
+                    ObjectStoreFetcher::new_http(
+                        &root_url,
+                        &http_config.opts,
+                        &http_config.headers,
+                        self.settings.clone(),
+                    )
+                    .await?,
+                ))
             }
             #[cfg(feature = "object-store-azure")]
             ObjectStoreConfig::Azure(config) => {
@@ -952,6 +960,7 @@ impl ObjectStoreFetcher {
     pub async fn new_http(
         url: &str,
         opts: &HashMap<String, String>,
+        headers: &HashMap<String, String>,
         settings: storage::Settings,
     ) -> Result<Self, VirtualReferenceError> {
         let config = opts
@@ -960,8 +969,11 @@ impl ObjectStoreFetcher {
                 ClientConfigKey::from_str(k).ok().map(|key| (key, v.clone()))
             })
             .collect();
-        let backend =
-            HttpObjectStoreBackend { url: url.to_string(), config: Some(config) };
+        let backend = HttpObjectStoreBackend {
+            url: url.to_string(),
+            config: Some(config),
+            headers: if headers.is_empty() { None } else { Some(headers.clone()) },
+        };
         let client = backend
             .mk_object_store(&settings)
             .map_err(|e| VirtualReferenceErrorKind::OtherError(Box::new(e)))

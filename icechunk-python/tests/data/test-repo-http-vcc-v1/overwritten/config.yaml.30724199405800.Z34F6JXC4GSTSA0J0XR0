@@ -1,0 +1,31 @@
+inline_chunk_threshold_bytes: null
+get_partial_values_concurrency: null
+compression: null
+max_concurrent_requests: null
+caching: null
+storage:
+  concurrency:
+    max_concurrent_requests_for_object: 5
+    ideal_concurrent_request_size: 4096
+  retries:
+    max_tries: 1
+    initial_backoff_ms: 0
+    max_backoff_ms: 0
+  timeouts: null
+  unsafe_use_conditional_update: false
+  unsafe_use_conditional_create: null
+  unsafe_use_metadata: false
+  storage_class: null
+  metadata_storage_class: null
+  chunks_storage_class: null
+  minimum_size_for_multipart_upload: null
+virtual_chunk_containers:
+  http://example.com/:
+    name: null
+    url_prefix: http://example.com/
+    store: !http
+      allow_http: 'true'
+manifest: null
+previous_file: null
+repo_update_retries: null
+num_updates_per_repo_info_file: null

@@ -212,7 +212,7 @@ impl RedirectStorage {
                 base_url
                     .set_scheme(new_scheme.as_str())
                     .expect("Internal error, cannot set url scheme");
-                new_http_storage(base_url.to_string().as_str(), None)
+                new_http_storage(base_url.to_string().as_str(), None, None)
             }
             #[cfg(not(feature = "object-store-http"))]
             "http+icechunk" | "http+ic" | "https+icechunk" | "https+ic" => Err(

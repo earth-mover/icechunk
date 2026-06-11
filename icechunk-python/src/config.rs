@@ -667,7 +667,7 @@ pub enum PyObjectStoreConfig {
     Gcs(Option<HashMap<String, String>>),
     Azure(Option<HashMap<String, String>>),
     Tigris(PyS3Options),
-    Http(Option<HashMap<String, String>>),
+    Http(Option<HashMap<String, String>>, Option<HashMap<String, String>>),
 }
 
 impl From<&PyObjectStoreConfig> for ObjectStoreConfig {
@@ -688,8 +688,11 @@ impl From<&PyObjectStoreConfig> for ObjectStoreConfig {
                 ObjectStoreConfig::Azure(config.clone().unwrap_or_default())
             }
             PyObjectStoreConfig::Tigris(opts) => ObjectStoreConfig::Tigris(opts.into()),
-            PyObjectStoreConfig::Http(opts) => {
-                ObjectStoreConfig::Http(opts.clone().unwrap_or_default())
+            PyObjectStoreConfig::Http(opts, headers) => {
+                ObjectStoreConfig::Http(icechunk::config::HttpConfig {
+                    opts: opts.clone().unwrap_or_default(),
+                    headers: headers.clone().unwrap_or_default(),
+                })
             }
         }
     }
@@ -707,7 +710,7 @@ impl PyObjectStoreConfig {
             Self::Gcs(_) => "icechunk.config.ObjectStoreConfig.Gcs",
             Self::Azure(_) => "icechunk.config.ObjectStoreConfig.Azure",
             Self::Tigris(_) => "icechunk.config.ObjectStoreConfig.Tigris",
-            Self::Http(_) => "icechunk.config.ObjectStoreConfig.Http",
+            Self::Http(_, _) => "icechunk.config.ObjectStoreConfig.Http",
         }
     }
 
@@ -723,7 +726,9 @@ impl PyObjectStoreConfig {
             }
             Self::Gcs(opts) => vec![("config", format!("{opts:?}"))],
             Self::Azure(config) => vec![("config", format!("{config:?}"))],
-            Self::Http(opts) => vec![("config", format!("{opts:?}"))],
+            Self::Http(opts, headers) => {
+                vec![("opts", format!("{opts:?}")), ("headers", format!("{headers:?}"))]
+            }
         }
     }
 
@@ -744,7 +749,9 @@ impl PyObjectStoreConfig {
                     }
                     Self::Gcs(opts) => format!("{cls}({opts:?})"),
                     Self::Azure(config) => format!("{cls}({config:?})"),
-                    Self::Http(opts) => format!("{cls}({opts:?})"),
+                    Self::Http(opts, headers) => {
+                        format!("{cls}({opts:?}, {headers:?})")
+                    }
                 }
             }
             ReprMode::Str | ReprMode::Html => {
@@ -790,7 +797,11 @@ impl From<ObjectStoreConfig> for PyObjectStoreConfig {
             ObjectStoreConfig::Gcs(opts) => PyObjectStoreConfig::Gcs(Some(opts)),
             ObjectStoreConfig::Azure(config) => PyObjectStoreConfig::Azure(Some(config)),
             ObjectStoreConfig::Tigris(opts) => PyObjectStoreConfig::Tigris(opts.into()),
-            ObjectStoreConfig::Http(opts) => PyObjectStoreConfig::Http(Some(opts)),
+            ObjectStoreConfig::Http(config) => {
+                let headers =
+                    if config.headers.is_empty() { None } else { Some(config.headers) };
+                PyObjectStoreConfig::Http(Some(config.opts), headers)
+            }
         }
     }
 }
@@ -3029,16 +3040,17 @@ impl PyStorage {
     }
 
     #[classmethod]
-    #[pyo3(signature = (base_url, config=None))]
+    #[pyo3(signature = (base_url, config=None, headers=None))]
     pub(crate) fn new_http(
         _cls: &Bound<'_, PyType>,
         py: Python<'_>,
         base_url: &str,
         config: Option<HashMap<String, String>>,
+        headers: Option<HashMap<String, String>>,
     ) -> PyResult<Self> {
         py.detach(move || {
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
-                let storage = storage::new_http_storage(base_url, config)
+                let storage = storage::new_http_storage(base_url, config, headers)
                     .map_err(PyIcechunkStoreError::StorageError)?;
 
                 Ok(PyStorage(storage))

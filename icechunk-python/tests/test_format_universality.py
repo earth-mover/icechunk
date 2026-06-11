@@ -574,7 +574,6 @@ def _rebuild_transaction_log(payload: bytes, mod: Any) -> bytes:
 def _rebuild_snapshot(
     payload: bytes, mod: Any, manifest_sizes: dict[bytes, int] | None = None
 ) -> bytes:
-
     snap = mod.Snapshot.GetRootAs(payload)
     B = fb.Builder(4096)
 
@@ -725,7 +724,6 @@ def _rebuild_snapshot(
 
 
 def _rebuild_manifest(payload: bytes, mod: Any) -> bytes:
-
     manifest = mod.Manifest.GetRootAs(payload)
     B = fb.Builder(8192)
 

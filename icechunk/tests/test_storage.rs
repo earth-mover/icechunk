@@ -1007,8 +1007,8 @@ async fn test_http_storage() -> Result<(), Box<dyn std::error::Error>> {
     let join = tokio::task::spawn(server.run());
 
     let url = format!("http://127.0.0.1:{port}");
-    let storage1 = new_http_storage(url.as_str(), None)?;
-    let storage2 = new_http_storage(url.as_str(), None)?;
+    let storage1 = new_http_storage(url.as_str(), None, None)?;
+    let storage2 = new_http_storage(url.as_str(), None, None)?;
     for storage in [storage1, storage2] {
         assert!(!storage.can_write().await?);
 
@@ -1046,6 +1046,59 @@ async fn test_http_storage() -> Result<(), Box<dyn std::error::Error>> {
         let lm = storage.get_object_last_modified("repo", &settings).await?;
         assert!(lm < Utc::now());
     }
+
+    // stop the server
+    stop.send(()).unwrap();
+    join.await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+/// Start an HTTP server that requires an Authorization header to serve files.
+/// Verify that http storage configured with the matching header can read objects,
+/// and that storage without the header is rejected.
+async fn test_http_storage_with_auth_header() -> Result<(), Box<dyn std::error::Error>> {
+    const EXPECTED_TOKEN: &str = "Bearer test-token";
+
+    let repo_path =
+        env::current_dir()?.join("../icechunk-python/tests/data/test-repo-v2");
+
+    // Warp filter: require Authorization header, then serve files
+    let route = warp::header::exact("authorization", EXPECTED_TOKEN)
+        .and(warp::fs::dir(repo_path.clone()));
+
+    let (stop, wait) = oneshot::channel();
+    let port = port_check::free_local_ipv4_port_in_range(8000..65000).unwrap();
+    let server = warp::serve(route).bind(([127, 0, 0, 1], port)).await.graceful(async {
+        let _ = wait.await;
+    });
+    let join = tokio::task::spawn(server.run());
+
+    let url = format!("http://127.0.0.1:{port}");
+
+    // With the correct Authorization header – reads should succeed
+    let headers =
+        HashMap::from([("authorization".to_string(), EXPECTED_TOKEN.to_string())]);
+    let storage_with_auth = new_http_storage(url.as_str(), None, Some(headers))?;
+    assert!(!storage_with_auth.can_write().await?);
+    let settings = storage_with_auth.default_settings().await?;
+    let mut data = Vec::with_capacity(1_024);
+    storage_with_auth
+        .get_object(&settings, "repo", None)
+        .await?
+        .0
+        .read_to_end(&mut data)
+        .await?;
+    let expected_len = std::fs::metadata(repo_path.join("repo"))?.len();
+    assert_eq!(expected_len, data.len() as u64);
+
+    // Without the Authorization header – the server should reject the request
+    let storage_no_auth = new_http_storage(url.as_str(), None, None)?;
+    assert!(
+        storage_no_auth.get_object(&settings, "repo", None).await.is_err(),
+        "expected an error when no Authorization header is provided"
+    );
 
     // stop the server
     stop.send(()).unwrap();
