@@ -169,9 +169,9 @@
           # This means that any changes done to your local files do not require a rebuild.
           #
           # Note: Editable package support is still unstable and subject to change.
-          
 
-        
+
+
         uv2nix = let
             # Create an overlay enabling editable mode for all local dependencies.
             editableOverlay = workspace.mkEditablePyprojectOverlay {
