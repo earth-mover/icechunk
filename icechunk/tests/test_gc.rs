@@ -552,10 +552,715 @@ async fn test_expire_and_garbage_collect_deleting_expired_refs()
         garbage_collect(Arc::clone(&asset_manager), &gc_config, None, 100).await?;
 
     assert_eq!(summary.snapshots_deleted, 7);
-    assert_eq!(summary.transaction_logs_deleted, 7);
+    // The 7 released snapshots' files are deleted, but their transaction logs
+    // are all retained: each is referenced by some edited snapshot's
+    // pruned_ancestor_tx_logs
+    assert_eq!(summary.transaction_logs_deleted, 0);
 
     // only the non expired snapshots left
     assert_eq!(repo.asset_manager().list_snapshots().await?.count().await, 8);
+    Ok(())
+}
+
+/// After expiration collapses a branch's history and GC deletes the expired
+/// snapshot files, `diff(root, tip)` must still report every change, because
+/// the expired commits' transaction logs are retained via the edited tip's
+/// `pruned_ancestor_tx_logs`.
+#[tokio_test]
+async fn test_diff_complete_after_expire_and_gc() -> Result<(), Box<dyn std::error::Error>>
+{
+    let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+    let storage_settings = storage.default_settings().await?;
+    let repo = Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
+        .await?;
+
+    // The initial (root) snapshot, which survives expiration and becomes the
+    // new parent of the boundary commit.
+    let initial_id = repo
+        .readonly_session(&VersionInfo::BranchTipRef("main".to_string()))
+        .await?
+        .snapshot_id()
+        .clone();
+
+    let user_data = Bytes::new();
+    // Three commits that will be expired (root group, /a, /b)...
+    let mut session = repo.writable_session("main").await?;
+    session.add_group(Path::root(), user_data.clone()).await?;
+    session.commit("root group").execute().await?;
+    for name in ["/a", "/b"] {
+        let mut session = repo.writable_session("main").await?;
+        session.add_group(Path::try_from(name).unwrap(), user_data.clone()).await?;
+        session.commit(name).execute().await?;
+    }
+
+    let expire_older_than = Utc::now();
+
+    // ...and one that survives, becoming the boundary re-parented to root.
+    let mut session = repo.writable_session("main").await?;
+    session.add_group(Path::try_from("/c").unwrap(), user_data.clone()).await?;
+    session.commit("/c").execute().await?;
+
+    let asset_manager = Arc::new(AssetManager::new_no_cache(
+        Arc::clone(&storage),
+        storage_settings.clone(),
+        SpecVersionBin::current(),
+        1,
+        DEFAULT_MAX_CONCURRENT_REQUESTS,
+    ));
+    let result = expire(
+        Arc::clone(&asset_manager),
+        expire_older_than,
+        ExpiredRefAction::Ignore,
+        ExpiredRefAction::Ignore,
+        None,
+        100,
+    )
+    .await?;
+    assert_eq!(result.released_snapshots.len(), 3); // root group, /a, /b
+    assert_eq!(result.edited_snapshots.len(), 1); // /c re-parented to root
+
+    let now = Utc::now();
+    let gc_config = GCConfig::clean_all(
+        now,
+        now,
+        None,
+        NonZeroU16::new(50).unwrap(),
+        NonZeroUsize::new(512 * 1024 * 1024).unwrap(),
+        NonZeroU16::new(500).unwrap(),
+        false,
+    );
+    let summary =
+        garbage_collect(Arc::clone(&asset_manager), &gc_config, None, 100).await?;
+    // the 3 expired snapshot files are deleted, but their transaction logs are
+    // all retained: /c's pruned_ancestor_tx_logs references them.
+    assert_eq!(summary.snapshots_deleted, 3);
+    assert_eq!(summary.transaction_logs_deleted, 0);
+
+    // Reopen for a fresh view of storage, then diff root -> tip.
+    let repo = Repository::open(None, Arc::clone(&storage), HashMap::new()).await?;
+    let diff = repo
+        .diff(
+            &VersionInfo::SnapshotId(initial_id),
+            &VersionInfo::BranchTipRef("main".to_string()),
+        )
+        .await?;
+
+    // Without tracking pruned tx logs this would only report "/c"; with it, the whole history.
+    let expected: std::collections::BTreeSet<Path> = [
+        Path::root(),
+        Path::try_from("/a").unwrap(),
+        Path::try_from("/b").unwrap(),
+        Path::try_from("/c").unwrap(),
+    ]
+    .into_iter()
+    .collect();
+    assert_eq!(diff.new_groups, expected);
+    Ok(())
+}
+
+/// GC must *discriminate* among expired tx logs: a released snapshot whose log is
+/// referenced by a survivor's `pruned_ancestor_tx_logs` is retained, while a
+/// released snapshot with no surviving descendant has its log deleted.
+///
+/// Topology: `main` is `root group -> /a -> /b -> /c`, with the threshold just
+/// before `/c`. `/a` and `/b` are released but referenced by the re-parented
+/// `/c`, so their logs survive. A `doomed` branch off `/a` (`/d -> /e`, both
+/// pre-threshold) is deleted at expiration; `/d` and `/e` have no surviving
+/// descendant, so nobody references their logs and GC deletes them.
+#[tokio_test]
+async fn test_gc_deletes_only_unreferenced_expired_tx_logs()
+-> Result<(), Box<dyn std::error::Error>> {
+    let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+    let storage_settings = storage.default_settings().await?;
+    let repo = Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
+        .await?;
+
+    commit_group(&repo, "main", "/").await?;
+    let a = commit_group(&repo, "main", "/a").await?;
+    let b = commit_group(&repo, "main", "/b").await?;
+
+    repo.create_branch("doomed", &a).await?;
+    let d = commit_group(&repo, "doomed", "/d").await?;
+    let e = commit_group(&repo, "doomed", "/e").await?;
+
+    let expire_older_than = threshold_between_commits().await;
+
+    // main tip survives, becoming the boundary re-parented to root.
+    commit_group(&repo, "main", "/c").await?;
+
+    let asset_manager = Arc::new(AssetManager::new_no_cache(
+        Arc::clone(&storage),
+        storage_settings.clone(),
+        SpecVersionBin::current(),
+        1,
+        DEFAULT_MAX_CONCURRENT_REQUESTS,
+    ));
+    let result = expire(
+        Arc::clone(&asset_manager),
+        expire_older_than,
+        ExpiredRefAction::Delete,
+        ExpiredRefAction::Ignore,
+        None,
+        100,
+    )
+    .await?;
+    // root group, /a, /b on main + /d, /e on doomed
+    assert_eq!(result.released_snapshots.len(), 5);
+    assert_eq!(result.edited_snapshots.len(), 1); // /c re-parented to root
+    assert!(result.deleted_refs.iter().any(|r| r.name() == "doomed"));
+
+    let now = Utc::now();
+    let gc_config = GCConfig::clean_all(
+        now,
+        now,
+        None,
+        NonZeroU16::new(50).unwrap(),
+        NonZeroUsize::new(512 * 1024 * 1024).unwrap(),
+        NonZeroU16::new(500).unwrap(),
+        false,
+    );
+    let summary =
+        garbage_collect(Arc::clone(&asset_manager), &gc_config, None, 100).await?;
+
+    // All 5 released snapshot files are deleted...
+    assert_eq!(summary.snapshots_deleted, 5);
+    // ...but only the two unreferenced logs (doomed's /d, /e): /a and /b are
+    // retained via /c's pruned_ancestor_tx_logs.
+    assert_eq!(summary.transaction_logs_deleted, 2);
+
+    // The referenced logs survive and stay fetchable...
+    asset_manager.fetch_transaction_log(&a).await?;
+    asset_manager.fetch_transaction_log(&b).await?;
+    // ...while the unreferenced ones are gone.
+    assert!(asset_manager.fetch_transaction_log(&d).await.is_err());
+    assert!(asset_manager.fetch_transaction_log(&e).await.is_err());
+    Ok(())
+}
+
+/// Commit a single new group on `branch` and return the new snapshot id.
+async fn commit_group(
+    repo: &Repository,
+    branch: &str,
+    path: &str,
+) -> Result<icechunk::format::SnapshotId, Box<dyn std::error::Error>> {
+    let mut session = repo.writable_session(branch).await?;
+    let path = if path == "/" { Path::root() } else { Path::try_from(path).unwrap() };
+    session.add_group(path, Bytes::new()).await?;
+    Ok(session.commit(branch).execute().await?)
+}
+
+/// Capture an expiration threshold cleanly separated from the surrounding
+/// commits. The `flushed_at < older_than` gate in expiration is strict, and on a
+/// fast machine the previous commit's `flushed_at` and a bare `Utc::now()` read
+/// can share a microsecond. Bracketing the read with gaps guarantees prior
+/// commits land strictly before the threshold and later commits strictly after.
+/// `flushed_at` is microsecond-precision here (no `created_at` truncation, since
+/// this is in-memory), so a 1ms gap — which `sleep` always overshoots — is ample.
+async fn threshold_between_commits() -> DateTime<Utc> {
+    tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+    let t = Utc::now();
+    tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+    t
+}
+
+fn clean_all_now() -> GCConfig {
+    let now = Utc::now();
+    GCConfig::clean_all(
+        now,
+        now,
+        None,
+        NonZeroU16::new(50).unwrap(),
+        NonZeroUsize::new(512 * 1024 * 1024).unwrap(),
+        NonZeroU16::new(500).unwrap(),
+        false,
+    )
+}
+
+/// Expiring the same branch repeatedly must grow `pruned_ancestor_tx_logs`
+/// monotonically: a later run edits a *new* boundary, and the ids accumulated
+/// by the previous run live on the now-pruned old boundary, which the walk
+/// splices in. Diff must stay complete across rounds.
+#[tokio_test]
+async fn test_repeated_expiration_accumulates_pruned_logs()
+-> Result<(), Box<dyn std::error::Error>> {
+    let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+    let repo = Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
+        .await?;
+    // Run expiration/GC on the repo's own asset manager so its caches stay
+    // coherent and we can keep committing without reopening.
+    let am = Arc::clone(repo.asset_manager());
+
+    let initial_id = repo
+        .readonly_session(&VersionInfo::BranchTipRef("main".to_string()))
+        .await?
+        .snapshot_id()
+        .clone();
+
+    // Round 1 victims, then the round-1 boundary /c.
+    let g0 = commit_group(&repo, "main", "/").await?;
+    let a = commit_group(&repo, "main", "/a").await?;
+    let b = commit_group(&repo, "main", "/b").await?;
+    let threshold1 = threshold_between_commits().await;
+    let c = commit_group(&repo, "main", "/c").await?;
+
+    let r1 = expire(
+        Arc::clone(&am),
+        threshold1,
+        ExpiredRefAction::Ignore,
+        ExpiredRefAction::Ignore,
+        None,
+        100,
+    )
+    .await?;
+    assert_eq!(r1.released_snapshots.len(), 3); // g0, a, b
+    assert!(r1.edited_snapshots.contains(&c));
+
+    // Round 2: /c becomes a victim, /d the new boundary.
+    let threshold2 = threshold_between_commits().await;
+    let d = commit_group(&repo, "main", "/d").await?;
+    let _e = commit_group(&repo, "main", "/e").await?;
+
+    let r2 = expire(
+        Arc::clone(&am),
+        threshold2,
+        ExpiredRefAction::Ignore,
+        ExpiredRefAction::Ignore,
+        None,
+        100,
+    )
+    .await?;
+    assert_eq!(r2.released_snapshots.len(), 1); // c
+    assert!(r2.edited_snapshots.contains(&d));
+
+    // /d accumulated the whole collapsed run, oldest first: [g0, a, b, c].
+    let d_ancestry = repo
+        .ancestry(&VersionInfo::SnapshotId(d.clone()))
+        .await?
+        .try_collect::<Vec<_>>()
+        .await?;
+    assert_eq!(d_ancestry[0].id, d);
+    assert_eq!(
+        d_ancestry[0].pruned_ancestor_tx_logs,
+        vec![g0.clone(), a.clone(), b.clone(), c.clone()]
+    );
+
+    garbage_collect(Arc::clone(&am), &clean_all_now(), None, 100).await?;
+
+    // Diff still reports every group despite two rounds of collapse + GC.
+    let diff = repo
+        .diff(
+            &VersionInfo::SnapshotId(initial_id),
+            &VersionInfo::BranchTipRef("main".to_string()),
+        )
+        .await?;
+    let expected: std::collections::BTreeSet<Path> = ["/", "/a", "/b", "/c", "/d", "/e"]
+        .into_iter()
+        .map(|p| if p == "/" { Path::root() } else { Path::try_from(p).unwrap() })
+        .collect();
+    assert_eq!(diff.new_groups, expected);
+    Ok(())
+}
+
+/// Re-parenting a snapshot that already carries `pruned_ancestor_tx_logs` must
+/// accumulate, not overwrite. Regression test for
+/// <https://github.com/earth-mover/icechunk/pull/2184#pullrequestreview-4461588063>
+#[tokio_test]
+async fn test_reparent_accumulates_existing_pruned_logs()
+-> Result<(), Box<dyn std::error::Error>> {
+    let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+    let repo = Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
+        .await?;
+    let am = Arc::clone(repo.asset_manager());
+
+    let initial_id = repo
+        .readonly_session(&VersionInfo::BranchTipRef("main".to_string()))
+        .await?
+        .snapshot_id()
+        .clone();
+
+    // init -> a -> b -> c
+    let a = commit_group(&repo, "main", "/a").await?;
+    let b = commit_group(&repo, "main", "/b").await?;
+    let gc_threshold = threshold_between_commits().await;
+    let c = commit_group(&repo, "main", "/c").await?;
+
+    // Reset to /a, then GC between /b and /c: /b is dropped, /c is kept (too new)
+    // and re-parented onto /a, seeding pruned_ancestor_tx_logs = [b].
+    repo.reset_branch("main", &a, None).await?;
+    let gc_config = GCConfig::clean_all(
+        gc_threshold,
+        gc_threshold,
+        None,
+        NonZeroU16::new(50).unwrap(),
+        NonZeroUsize::new(512 * 1024 * 1024).unwrap(),
+        NonZeroU16::new(500).unwrap(),
+        false,
+    );
+    garbage_collect(Arc::clone(&am), &gc_config, None, 100).await?;
+
+    let (written, _) = am.fetch_repo_info().await?;
+    let edited = written.find_snapshot(&c)?;
+    assert_eq!(edited.parent_id.as_ref(), Some(&a));
+    assert_eq!(edited.pruned_ancestor_tx_logs, vec![b.clone()]);
+
+    // Point main back at /c and expire /a. /c must accumulate /a before its
+    // existing [b], not overwrite it.
+    repo.reset_branch("main", &c, None).await?;
+    let expire_threshold = threshold_between_commits().await;
+    expire(
+        Arc::clone(&am),
+        expire_threshold,
+        ExpiredRefAction::Ignore,
+        ExpiredRefAction::Ignore,
+        None,
+        100,
+    )
+    .await?;
+
+    let c_ancestry = repo
+        .ancestry(&VersionInfo::SnapshotId(c.clone()))
+        .await?
+        .try_collect::<Vec<_>>()
+        .await?;
+    assert_eq!(c_ancestry[0].id, c);
+    assert_eq!(c_ancestry[0].pruned_ancestor_tx_logs, vec![a.clone(), b.clone()]);
+
+    // Diff from the initial commit still sees every group after GC.
+    garbage_collect(Arc::clone(&am), &clean_all_now(), None, 100).await?;
+    let diff = repo
+        .diff(
+            &VersionInfo::SnapshotId(initial_id),
+            &VersionInfo::BranchTipRef("main".to_string()),
+        )
+        .await?;
+    let expected: std::collections::BTreeSet<Path> =
+        ["/a", "/b", "/c"].into_iter().map(|p| Path::try_from(p).unwrap()).collect();
+    assert_eq!(diff.new_groups, expected);
+    Ok(())
+}
+
+/// Amending the boundary commit must copy its `pruned_ancestor_tx_logs` onto
+/// the amended snapshot, so diff stays complete afterward.
+#[tokio_test]
+async fn test_amend_preserves_pruned_logs() -> Result<(), Box<dyn std::error::Error>> {
+    let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+    let repo = Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
+        .await?;
+    let am = Arc::clone(repo.asset_manager());
+
+    let initial_id = repo
+        .readonly_session(&VersionInfo::BranchTipRef("main".to_string()))
+        .await?
+        .snapshot_id()
+        .clone();
+
+    let g0 = commit_group(&repo, "main", "/").await?;
+    let a = commit_group(&repo, "main", "/a").await?;
+    let b = commit_group(&repo, "main", "/b").await?;
+    let threshold = threshold_between_commits().await;
+    let c = commit_group(&repo, "main", "/c").await?;
+
+    let r = expire(
+        Arc::clone(&am),
+        threshold,
+        ExpiredRefAction::Ignore,
+        ExpiredRefAction::Ignore,
+        None,
+        100,
+    )
+    .await?;
+    assert!(r.edited_snapshots.contains(&c));
+
+    // Amend the boundary /c, adding /c_extra.
+    let mut session = repo.writable_session("main").await?;
+    session.add_group(Path::try_from("/c_extra").unwrap(), Bytes::new()).await?;
+    let amended = session.commit("c amended").amend().execute().await?;
+    assert_ne!(amended, c);
+
+    // The amended snapshot inherits /c's pruned-ancestor chain.
+    let amended_ancestry = repo
+        .ancestry(&VersionInfo::SnapshotId(amended.clone()))
+        .await?
+        .try_collect::<Vec<_>>()
+        .await?;
+    assert_eq!(
+        amended_ancestry[0].pruned_ancestor_tx_logs,
+        vec![g0.clone(), a.clone(), b.clone()]
+    );
+
+    garbage_collect(Arc::clone(&am), &clean_all_now(), None, 100).await?;
+
+    let diff = repo
+        .diff(
+            &VersionInfo::SnapshotId(initial_id),
+            &VersionInfo::BranchTipRef("main".to_string()),
+        )
+        .await?;
+    let expected: std::collections::BTreeSet<Path> = ["/", "/a", "/b", "/c", "/c_extra"]
+        .into_iter()
+        .map(|p| if p == "/" { Path::root() } else { Path::try_from(p).unwrap() })
+        .collect();
+    assert_eq!(diff.new_groups, expected);
+    Ok(())
+}
+
+/// A conflict that lives only in an expiration-pruned ancestor's transaction
+/// log must still be detected during rebase; otherwise expiration would
+/// silently hide conflicts (a correctness hazard). This is design doc 016's
+/// rebase case.
+#[tokio_test]
+async fn test_rebase_detects_conflict_in_pruned_ancestor()
+-> Result<(), Box<dyn std::error::Error>> {
+    use icechunk::conflicts::{Conflict, detector::ConflictDetector};
+    use icechunk::session::{SessionError, SessionErrorKind};
+
+    let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+    let repo = Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
+        .await?;
+    let am = Arc::clone(repo.asset_manager());
+
+    let conflict_path: Path = "/conflict".try_into().unwrap();
+
+    // Session forked at the initial (root) snapshot, adding an *array* at
+    // /conflict. Kept pending across the expiration below.
+    let mut conflicting = repo.writable_session("main").await?;
+    conflicting
+        .add_array(
+            conflict_path.clone(),
+            ArrayShape::new(vec![(5, 5)]).unwrap(),
+            None,
+            Bytes::new(),
+        )
+        .await?;
+
+    // On main: a commit adding a *group* at /conflict (will be expired), then a
+    // later commit so the group commit becomes a pruned ancestor of the tip.
+    let mut session = repo.writable_session("main").await?;
+    session.add_group(conflict_path.clone(), Bytes::new()).await?;
+    let x = session.commit("add /conflict group").execute().await?;
+
+    let threshold = threshold_between_commits().await;
+
+    let mut session = repo.writable_session("main").await?;
+    session.add_group(Path::try_from("/other").unwrap(), Bytes::new()).await?;
+    session.commit("add /other").execute().await?;
+
+    let r = expire(
+        Arc::clone(&am),
+        threshold,
+        ExpiredRefAction::Ignore,
+        ExpiredRefAction::Ignore,
+        None,
+        100,
+    )
+    .await?;
+    assert!(r.released_snapshots.contains(&x));
+
+    garbage_collect(Arc::clone(&am), &clean_all_now(), None, 100).await?;
+
+    // The conflict exists only in pruned ancestor X's log; the tip's own log
+    // (/other) does not conflict. Rebase must still surface it.
+    match conflicting.rebase(&ConflictDetector).await {
+        Err(SessionError {
+            kind: SessionErrorKind::RebaseFailed { conflicts, .. },
+            ..
+        }) => {
+            assert!(
+                conflicts.contains(&Conflict::NewNodeConflictsWithExistingNode(
+                    conflict_path.clone()
+                )),
+                "expected a conflict at {conflict_path:?}, got {conflicts:?}"
+            );
+        }
+        other => panic!("expected a rebase conflict, got {other:?}"),
+    }
+    Ok(())
+}
+
+/// If a pruned-ancestor log is missing (e.g. an older GC deleted it), rebase
+/// must error rather than silently skip it and hide conflicts.
+#[tokio_test]
+async fn test_rebase_errors_on_missing_pruned_ancestor_log()
+-> Result<(), Box<dyn std::error::Error>> {
+    use futures::stream;
+    use icechunk::conflicts::detector::ConflictDetector;
+    use icechunk::session::{SessionError, SessionErrorKind};
+
+    let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+    let repo = Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
+        .await?;
+    let am = Arc::clone(repo.asset_manager());
+
+    let conflict_path: Path = "/conflict".try_into().unwrap();
+    let mut conflicting = repo.writable_session("main").await?;
+    conflicting
+        .add_array(
+            conflict_path.clone(),
+            ArrayShape::new(vec![(5, 5)]).unwrap(),
+            None,
+            Bytes::new(),
+        )
+        .await?;
+
+    let mut session = repo.writable_session("main").await?;
+    session.add_group(conflict_path.clone(), Bytes::new()).await?;
+    let x = session.commit("add /conflict group").execute().await?;
+    let threshold = threshold_between_commits().await;
+    let mut session = repo.writable_session("main").await?;
+    session.add_group(Path::try_from("/other").unwrap(), Bytes::new()).await?;
+    session.commit("add /other").execute().await?;
+
+    expire(
+        Arc::clone(&am),
+        threshold,
+        ExpiredRefAction::Ignore,
+        ExpiredRefAction::Ignore,
+        None,
+        100,
+    )
+    .await?;
+    garbage_collect(Arc::clone(&am), &clean_all_now(), None, 100).await?;
+
+    // Simulate an older GC having deleted the pruned ancestor's tx log.
+    am.delete_transaction_logs(stream::once(async { (x.clone(), 0u64) }).boxed()).await?;
+    am.remove_cached_tx_log(&x);
+
+    match conflicting.rebase(&ConflictDetector).await {
+        Err(SessionError {
+            kind: SessionErrorKind::MissingPrunedAncestorTxLog { tx_log, .. },
+            ..
+        }) => {
+            assert_eq!(tx_log, x);
+        }
+        other => panic!("expected MissingPrunedAncestorTxLog, got {other:?}"),
+    }
+    Ok(())
+}
+
+/// If a pruned-ancestor log is missing, diff degrades gracefully: it warns and
+/// skips that log, producing an incomplete diff rather than failing.
+#[tokio_test]
+async fn test_diff_skips_missing_pruned_log() -> Result<(), Box<dyn std::error::Error>> {
+    use futures::stream;
+
+    let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+    let repo = Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
+        .await?;
+    let am = Arc::clone(repo.asset_manager());
+
+    let initial_id = repo
+        .readonly_session(&VersionInfo::BranchTipRef("main".to_string()))
+        .await?
+        .snapshot_id()
+        .clone();
+
+    commit_group(&repo, "main", "/").await?;
+    let a = commit_group(&repo, "main", "/a").await?;
+    commit_group(&repo, "main", "/b").await?;
+    let threshold = threshold_between_commits().await;
+    commit_group(&repo, "main", "/c").await?;
+
+    expire(
+        Arc::clone(&am),
+        threshold,
+        ExpiredRefAction::Ignore,
+        ExpiredRefAction::Ignore,
+        None,
+        100,
+    )
+    .await?;
+    garbage_collect(Arc::clone(&am), &clean_all_now(), None, 100).await?;
+
+    // Delete /a's pruned-ancestor tx log, then diff: it should still succeed.
+    am.delete_transaction_logs(stream::once(async { (a.clone(), 0u64) }).boxed()).await?;
+    am.remove_cached_tx_log(&a);
+
+    let diff = repo
+        .diff(
+            &VersionInfo::SnapshotId(initial_id),
+            &VersionInfo::BranchTipRef("main".to_string()),
+        )
+        .await?;
+    // /a is missing from the diff because its log was skipped.
+    let expected: std::collections::BTreeSet<Path> = ["/", "/b", "/c"]
+        .into_iter()
+        .map(|p| if p == "/" { Path::root() } else { Path::try_from(p).unwrap() })
+        .collect();
+    assert_eq!(diff.new_groups, expected);
+    Ok(())
+}
+
+/// Inspecting the transaction log of an expiration-edited snapshot returns the
+/// synthetic composite (its pruned-ancestor logs merged with its own), flagged
+/// as such — and when an older GC has deleted one of those pruned logs, the
+/// missing log is flagged and its content dropped rather than silently omitted.
+#[tokio_test]
+async fn test_inspect_shows_synthetic_composite() -> Result<(), Box<dyn std::error::Error>>
+{
+    let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+    let repo = Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
+        .await?;
+    let am = Arc::clone(repo.asset_manager());
+
+    let g0 = commit_group(&repo, "main", "/").await?;
+    let a = commit_group(&repo, "main", "/a").await?;
+    let b = commit_group(&repo, "main", "/b").await?;
+    let threshold = threshold_between_commits().await;
+    let c = commit_group(&repo, "main", "/c").await?;
+
+    // Node ids of the groups each commit created. The composite renders new
+    // groups by node id, so these let us assert it actually *merges* the pruned
+    // logs' content, not merely lists their ids. /a and /b live only in the
+    // pruned-ancestor logs (a, b); /c in c's own log.
+    let tip =
+        repo.readonly_session(&VersionInfo::BranchTipRef("main".to_string())).await?;
+    let a_node = tip.get_node(&Path::try_from("/a").unwrap()).await?.id.to_string();
+    let b_node = tip.get_node(&Path::try_from("/b").unwrap()).await?.id.to_string();
+    let c_node = tip.get_node(&Path::try_from("/c").unwrap()).await?.id.to_string();
+
+    let r = expire(
+        Arc::clone(&am),
+        threshold,
+        ExpiredRefAction::Ignore,
+        ExpiredRefAction::Ignore,
+        None,
+        100,
+    )
+    .await?;
+    assert!(r.edited_snapshots.contains(&c));
+
+    // Inspecting the edited boundary returns the synthetic composite, naming
+    // the pruned-ancestor logs it merged in...
+    let json = icechunk::inspect::transaction_log_json(am.as_ref(), &c, true).await?;
+    assert!(json.contains("synthetic_composite"));
+    assert!(json.contains(&g0.to_string()));
+    assert!(json.contains(&a.to_string()));
+    assert!(json.contains(&b.to_string()));
+    // ...and the merged content: /a and /b (from the pruned logs) plus /c (its
+    // own) all appear as new groups.
+    assert!(json.contains(&a_node));
+    assert!(json.contains(&b_node));
+    assert!(json.contains(&c_node));
+
+    // An unedited snapshot's log is rendered as-is, with no composite flag.
+    let json_g0 = icechunk::inspect::transaction_log_json(am.as_ref(), &g0, true).await?;
+    assert!(!json_g0.contains("synthetic_composite"));
+
+    // GC retains the pruned-ancestor logs (c references them), so the composite
+    // stays complete. Now simulate an older GC having deleted one of them.
+    use futures::stream;
+    garbage_collect(Arc::clone(&am), &clean_all_now(), None, 100).await?;
+    am.delete_transaction_logs(stream::once(async { (a.clone(), 0u64) }).boxed()).await?;
+    am.remove_cached_tx_log(&a);
+
+    // The composite now flags `a` as missing and drops its content (/a), while
+    // still merging the surviving logs (/b from b, /c from c's own).
+    let json = icechunk::inspect::transaction_log_json(am.as_ref(), &c, true).await?;
+    assert!(json.contains("missing_tx_logs"));
+    assert!(json.contains(&a.to_string()));
+    assert!(!json.contains(&a_node));
+    assert!(json.contains(&b_node));
+    assert!(json.contains(&c_node));
     Ok(())
 }
 
@@ -630,6 +1335,23 @@ async fn test_gc_reset_branch() -> Result<(), Box<dyn std::error::Error>> {
     let summary =
         garbage_collect(Arc::clone(&asset_manager), &gc_config, None, 100).await?;
     assert_eq!(summary.snapshots_deleted, 1);
+
+    // snaps[2] is the dropped ancestor sitting between the retained
+    // main tip (snaps[1]) and the retained-because-new snaps[3]. The re-parented
+    // snaps[3] must (a) re-parent to its nearest *retained* ancestor snaps[1] —
+    // not collapse to the initial id — so the ancestry chain stays contiguous
+    // back to the initial commit, and (b) carry snaps[2] in its
+    // pruned_ancestor_tx_logs so the dropped ancestor's tx log is preserved and
+    // its delta stays reconstructable.
+    let (written, _) = asset_manager.fetch_repo_info().await?;
+    let edited = written.find_snapshot(&snaps[3])?;
+    assert_eq!(edited.parent_id.as_ref(), Some(&snaps[1]));
+    assert_eq!(edited.pruned_ancestor_tx_logs, vec![snaps[2].clone()]);
+
+    // snaps[2]'s snapshot was deleted, but its transaction log must survive
+    // because snaps[3] now references it; otherwise diff/rebase over snaps[3]
+    // would be incomplete.
+    asset_manager.fetch_transaction_log(&snaps[2]).await?;
 
     // make sure ancestry works
     repo.create_tag("foo", &snaps[3]).await?;

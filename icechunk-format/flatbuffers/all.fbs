@@ -1,4 +1,6 @@
-// run this command in the directory icechunk/flatbuffers
+// Prefer `just gen-flatbuffers` from the repo root, which runs the steps below.
+//
+// Or run manually from the directory icechunk-format/flatbuffers:
 //
 // flatc --rust -o ../src/flatbuffers/ --gen-all all.fbs
 //
