@@ -1,4 +1,5 @@
 import uuid
+import warnings
 from collections.abc import Sized
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -23,6 +24,13 @@ from icechunk import (
     local_filesystem_store,
     s3_credentials,
     s3_store,
+)
+from icechunk.credentials import (
+    AnyCredential,
+    Credentials,
+    HttpAccess,
+    LocalFileSystemAccess,
+    s3_anonymous_credentials,
 )
 from icechunk.repository import Repository
 from tests.conftest import Permission, write_chunks_to_minio
@@ -231,26 +239,33 @@ async def test_write_minio_virtual_refs(
 
 
 @pytest.mark.parametrize(
-    "container_type,url_prefix,store_config",
+    "container_type,url_prefix,store_config,explicit_credentials",
     [
         (
             "s3",
             "s3://earthmover-sample-data/",
             ObjectStoreConfig.S3(S3Options(region="us-east-1", anonymous=True)),
+            Credentials.S3(s3_anonymous_credentials()),
         ),
         (
             "http",
             "https://earthmover-sample-data.s3.amazonaws.com/",
             http_store(),
+            HttpAccess,
         ),
     ],
 )
+# `None` is the deprecated way to authorize; the explicit sentinel/credential is the
+# replacement. Both must keep working during the deprecation cycle (icechunk#2194).
+@pytest.mark.parametrize("authorize_with_none", [True, False])
 @pytest.mark.parametrize("use_async", [True, False])
 async def test_public_virtual_refs(
     tmpdir: Path,
     container_type: str,
     url_prefix: str,
     store_config: ObjectStoreConfig.S3 | ObjectStoreConfig.Http,
+    explicit_credentials: AnyCredential,
+    authorize_with_none: bool,
     use_async: bool,
     any_spec_version: int | None,
 ) -> None:
@@ -258,12 +273,25 @@ async def test_public_virtual_refs(
     container = VirtualChunkContainer(url_prefix, store_config)
     config.set_virtual_chunk_container(container)
 
-    repo = Repository.open_or_create(
-        storage=local_filesystem_storage(f"{tmpdir}/virtual-{container_type}"),
-        config=config,
-        authorize_virtual_chunk_access={url_prefix: None},
-        create_version=any_spec_version,
-    )
+    credentials = None if authorize_with_none else explicit_credentials
+
+    def open_repo() -> Repository:
+        return Repository.open_or_create(
+            storage=local_filesystem_storage(f"{tmpdir}/virtual-{container_type}"),
+            config=config,
+            authorize_virtual_chunk_access={url_prefix: credentials},
+            create_version=any_spec_version,
+        )
+
+    if authorize_with_none:
+        # Deprecated: passing `None` must warn, pointing at the explicit replacement.
+        with pytest.warns(DeprecationWarning, match="authorize_virtual_chunk_access"):
+            repo = open_repo()
+    else:
+        # Explicit sentinel/credential: must not warn.
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", DeprecationWarning)
+            repo = open_repo()
     session = repo.writable_session("main")
     store = session.store
 
@@ -442,6 +470,44 @@ def test_error_on_non_authorized_virtual_chunk_container(
 
     with pytest.raises(IcechunkError, match=r"file:///foo.*authorize"):
         array[0]
+
+
+def test_no_auth_sentinels_authorize_local_filesystem(
+    any_spec_version: int | None,
+) -> None:
+    # icechunk#2194: the explicit `LocalFileSystemAccess` sentinel replaces `None` for
+    # file:// containers. `None` still works but warns; the sentinel works silently.
+    store_config = local_filesystem_store("/foo")
+    container = VirtualChunkContainer("file:///foo/", store_config)
+    config = RepositoryConfig.default()
+    config.set_virtual_chunk_container(container)
+
+    def open_repo(creds: AnyCredential | None) -> Repository:
+        return Repository.open_or_create(
+            storage=in_memory_storage(),
+            config=config,
+            authorize_virtual_chunk_access={"file:///foo/": creds},
+            create_version=any_spec_version,
+        )
+
+    # Deprecated `None` warns at open.
+    with pytest.warns(DeprecationWarning, match="authorize_virtual_chunk_access"):
+        open_repo(None)
+
+    # Explicit sentinel is accepted and does not warn.
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", DeprecationWarning)
+        open_repo(LocalFileSystemAccess)
+
+
+def test_containers_credentials_passes_through_no_auth_sentinels() -> None:
+    result = containers_credentials(
+        {"file:///foo/": LocalFileSystemAccess, "http://example.com/": HttpAccess}
+    )
+    assert result == {
+        "file:///foo/": LocalFileSystemAccess,
+        "http://example.com/": HttpAccess,
+    }
 
 
 def test_cannot_write_invalid_urls(any_spec_version: int | None) -> None:

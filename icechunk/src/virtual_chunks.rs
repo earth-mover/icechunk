@@ -229,9 +229,12 @@ impl VirtualChunkContainer {
             (ObjectStoreConfig::Tigris(_), Some(Credentials::S3(_)) | None) => Ok(()),
             (ObjectStoreConfig::InMemory, None) => Ok(()),
             #[cfg(feature = "object-store-fs")]
-            (ObjectStoreConfig::LocalFileSystem(_), None) => Ok(()),
+            (
+                ObjectStoreConfig::LocalFileSystem(_),
+                Some(Credentials::LocalFileSystemAccess) | None,
+            ) => Ok(()),
             #[cfg(feature = "object-store-http")]
-            (ObjectStoreConfig::Http(_), None) => Ok(()),
+            (ObjectStoreConfig::Http(_), Some(Credentials::HttpAccess) | None) => Ok(()),
 
             (ObjectStoreConfig::InMemory, Some(_)) => {
                 Err("in memory storage does not accept credentials".to_string())
@@ -593,7 +596,7 @@ impl VirtualChunkResolver {
             #[cfg(feature = "object-store-fs")]
             ObjectStoreConfig::LocalFileSystem { .. } => {
                 match self.credentials.get(&cont.url_prefix) {
-                    Some(None) => Ok(Arc::new(ObjectStoreFetcher::new_local(self.settings.clone()))),
+                    Some(None) | Some(Some(Credentials::LocalFileSystemAccess)) => Ok(Arc::new(ObjectStoreFetcher::new_local(self.settings.clone()))),
                     Some(Some(_)) => {
                         Err(VirtualReferenceErrorKind::InvalidCredentials(
                             "file".to_string(),
@@ -653,7 +656,7 @@ impl VirtualChunkResolver {
             ObjectStoreConfig::Http(opts) => {
                 match self.credentials.get(&cont.url_prefix) {
                     // FIXME: support http auth
-                    Some(None) => {}
+                    Some(None) | Some(Some(Credentials::HttpAccess)) => {}
                     Some(Some(_)) => {
                         Err(VirtualReferenceErrorKind::InvalidCredentials(
                             "HTTP".to_string(),
@@ -1235,6 +1238,47 @@ mod tests {
 
     fn s3_store_config() -> ObjectStoreConfig {
         ObjectStoreConfig::S3(S3Options::default().with_region("us-east-1"))
+    }
+
+    #[cfg(all(feature = "object-store-fs", feature = "object-store-http"))]
+    #[test]
+    fn test_no_auth_sentinels_validate_per_backend() {
+        use crate::config::Credentials;
+        use std::collections::HashMap;
+
+        let fs = VirtualChunkContainer::new(
+            "file:///example/".to_string(),
+            ObjectStoreConfig::LocalFileSystem("/example".into()),
+        )
+        .unwrap();
+        let http = VirtualChunkContainer::new(
+            "http://example.com/".to_string(),
+            ObjectStoreConfig::Http(HashMap::new()),
+        )
+        .unwrap();
+        let s3 =
+            VirtualChunkContainer::new("s3://bucket/".to_string(), s3_store_config())
+                .unwrap();
+
+        // None still validates (deprecated path, still supported in phase 1)
+        assert!(fs.validate_credentials(None).is_ok());
+        assert!(http.validate_credentials(None).is_ok());
+
+        // The matching explicit sentinel validates
+        assert!(
+            fs.validate_credentials(Some(&Credentials::LocalFileSystemAccess)).is_ok()
+        );
+        assert!(http.validate_credentials(Some(&Credentials::HttpAccess)).is_ok());
+
+        // A sentinel for the wrong backend is rejected
+        assert!(fs.validate_credentials(Some(&Credentials::HttpAccess)).is_err());
+        assert!(
+            http.validate_credentials(Some(&Credentials::LocalFileSystemAccess)).is_err()
+        );
+        assert!(
+            s3.validate_credentials(Some(&Credentials::LocalFileSystemAccess)).is_err()
+        );
+        assert!(s3.validate_credentials(Some(&Credentials::HttpAccess)).is_err());
     }
 
     #[test]

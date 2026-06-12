@@ -26,7 +26,7 @@ use regex::bytes::Regex;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::{join, sync::AcquireError, task::JoinError, try_join};
-use tracing::{Instrument as _, debug, error, instrument, trace};
+use tracing::{Instrument as _, debug, error, instrument, trace, warn};
 
 use crate::{
     Storage,
@@ -2170,15 +2170,51 @@ fn validate_credentials(
     creds: &HashMap<String, Option<Credentials>>,
 ) -> RepositoryResult<()> {
     for (url_prefix, cred) in creds {
-        if let Some(cont) = config.get_virtual_chunk_container(url_prefix)
-            && let Err(error) = cont.validate_credentials(cred.as_ref())
-        {
-            return Err(RepositoryError::capture(RepositoryErrorKind::StorageError(
-                StorageErrorKind::Other(error),
-            )));
+        if let Some(cont) = config.get_virtual_chunk_container(url_prefix) {
+            // Phase 1 deprecation (icechunk#2194): a `None` credential is overloaded and
+            // silently permissive. Warn and point at the explicit sentinel; `None` will be
+            // rejected in a future release.
+            if cred.is_none() {
+                warn_deprecated_none_credential(url_prefix);
+            }
+            if let Err(error) = cont.validate_credentials(cred.as_ref()) {
+                return Err(RepositoryError::capture(RepositoryErrorKind::StorageError(
+                    StorageErrorKind::Other(error),
+                )));
+            }
         }
     }
     Ok(())
+}
+
+/// Emit a phase-1 deprecation warning for a `None` virtual-chunk credential, naming the
+/// explicit replacement for the container's backend (inferred from the url prefix scheme).
+fn warn_deprecated_none_credential(url_prefix: &str) {
+    let scheme = url_prefix.split_once("://").map(|(s, _)| s).unwrap_or(url_prefix);
+    let suggestion = match scheme {
+        "s3" | "tigris" => {
+            "Passing `None` here silently authorizes Icechunk to read credentials from \
+             the environment (or use anonymous access), which can expose private \
+             credentials. Pass an explicit `Credentials::S3(S3Credentials::FromEnv)` \
+             (or `S3Credentials::Anonymous`) instead."
+        }
+        "gcs" | "gs" => {
+            "Pass an explicit `Credentials::Gcs(GcsCredentials::Anonymous)` instead."
+        }
+        "file" => {
+            "Pass the explicit `Credentials::LocalFileSystemAccess` sentinel instead."
+        }
+        "http" | "https" => {
+            "Pass the explicit `Credentials::HttpAccess` sentinel instead."
+        }
+        // Azure already rejects `None`; any other scheme has no permissive `None` path.
+        _ => return,
+    };
+    warn!(
+        url_prefix,
+        "DEPRECATED: passing `None` to authorize virtual chunk access for container \
+         `{url_prefix}` is deprecated and will be rejected in a future release. {suggestion}"
+    );
 }
 
 async fn raise_if_invalid_snapshot_id_v1(

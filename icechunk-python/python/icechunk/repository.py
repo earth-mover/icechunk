@@ -23,6 +23,64 @@ from icechunk.store import IcechunkStore
 from icechunk.types import CommitMethod
 
 
+def _none_credential_guidance(scheme: str) -> tuple[str | None, str]:
+    """Guidance for replacing a deprecated `None` credential, keyed by the container's
+    url prefix scheme. Returns ``(replacement_expression, security_note)``; the
+    replacement is ``None`` for unrecognized schemes.
+
+    Scheme matching is reliable because icechunk enforces scheme/store correspondence
+    when containers are created: `s3://`/`tigris://` are exactly the S3-family stores
+    (including S3-compatible), `gs://`/`gcs://` GCS, etc.
+    """
+    if scheme in ("s3", "tigris"):
+        # FromEnv preserves the current `None` behaviour; use ic.s3_anonymous_credentials()
+        # for public buckets instead.
+        return "ic.Credentials.S3(ic.S3Credentials.FromEnv())", (
+            " Note that `None` currently reads credentials from your environment "
+            "(or uses anonymous access), which can expose private credentials."
+        )
+    if scheme in ("gs", "gcs"):
+        return "ic.Credentials.Gcs(ic.GcsCredentials.Anonymous())", ""
+    if scheme == "file":
+        return "ic.credentials.LocalFileSystemAccess", ""
+    if scheme in ("http", "https"):
+        return "ic.credentials.HttpAccess", ""
+    return None, ""
+
+
+def _warn_on_none_virtual_chunk_credentials(
+    authorize_virtual_chunk_access: dict[str, "AnyCredential | None"] | None,
+) -> None:
+    """Emit a deprecation warning for any `None` credential in the authorization map.
+
+    `None` is overloaded and silently permissive (icechunk#2194); it is being replaced by
+    explicit per-backend sentinels and will be rejected in a future release.
+    """
+    if not authorize_virtual_chunk_access:
+        return
+    issue = "https://github.com/earth-mover/icechunk/issues/2194"
+    for url_prefix, cred in authorize_virtual_chunk_access.items():
+        if cred is not None:
+            continue
+        scheme = url_prefix.split("://", 1)[0]
+        replacement, security_note = _none_credential_guidance(scheme)
+        if replacement is not None:
+            example = (
+                'authorize_virtual_chunk_access={"' + url_prefix + '": ' + replacement + "}"
+            )
+            snippet = f" For example:\n    {example}"
+        else:
+            snippet = ""
+        warnings.warn(
+            f"Passing `None` in `authorize_virtual_chunk_access` for container "
+            f"`{url_prefix}` is deprecated and will be unsupported in a future release; "
+            f"pass an explicit credential or no-auth sentinel instead.{snippet}"
+            f"{security_note} See {issue} for details.",
+            DeprecationWarning,
+            stacklevel=3,
+        )
+
+
 class Repository:
     """An Icechunk repository."""
 
@@ -66,8 +124,13 @@ class Repository:
         authorize_virtual_chunk_access : dict[str, AnyCredential | None], optional
             Authorize Icechunk to access virtual chunks in these containers. A mapping
             from container url_prefix to the credentials to use to access chunks in
-            that container. If credential is `None`, they will be fetched from the
-            environment, or anonymous credentials will be used if the container allows it.
+            that container. Each value should be an explicit credential or no-auth
+            sentinel: e.g. ``S3Credentials.FromEnv()`` / ``s3_anonymous_credentials()``
+            for S3, or the ``icechunk.credentials.LocalFileSystemAccess`` /
+            ``icechunk.credentials.HttpAccess`` sentinels for ``file://`` and
+            ``http(s)://`` containers. Passing ``None`` is deprecated and will be
+            unsupported in a future release: it silently reads credentials from the
+            environment (or uses anonymous access), which can expose private credentials.
             As a security measure, Icechunk will block access to virtual chunks if the
             container is not authorized using this argument.
         spec_version : SpecVersion, optional
@@ -79,6 +142,7 @@ class Repository:
         Self
             An instance of the Repository class.
         """
+        _warn_on_none_virtual_chunk_credentials(authorize_virtual_chunk_access)
         return cls(
             PyRepository.create(
                 storage,
@@ -115,8 +179,13 @@ class Repository:
         authorize_virtual_chunk_access : dict[str, AnyCredential | None], optional
             Authorize Icechunk to access virtual chunks in these containers. A mapping
             from container url_prefix to the credentials to use to access chunks in
-            that container. If credential is `None`, they will be fetched from the
-            environment, or anonymous credentials will be used if the container allows it.
+            that container. Each value should be an explicit credential or no-auth
+            sentinel: e.g. ``S3Credentials.FromEnv()`` / ``s3_anonymous_credentials()``
+            for S3, or the ``icechunk.credentials.LocalFileSystemAccess`` /
+            ``icechunk.credentials.HttpAccess`` sentinels for ``file://`` and
+            ``http(s)://`` containers. Passing ``None`` is deprecated and will be
+            unsupported in a future release: it silently reads credentials from the
+            environment (or uses anonymous access), which can expose private credentials.
             As a security measure, Icechunk will block access to virtual chunks if the
             container is not authorized using this argument.
         spec_version : SpecVersion, optional
@@ -128,6 +197,7 @@ class Repository:
         Self
             An instance of the Repository class.
         """
+        _warn_on_none_virtual_chunk_credentials(authorize_virtual_chunk_access)
         return cls(
             await PyRepository.create_async(
                 storage,
@@ -164,8 +234,13 @@ class Repository:
         authorize_virtual_chunk_access : dict[str, AnyCredential | None], optional
             Authorize Icechunk to access virtual chunks in these containers. A mapping
             from container url_prefix to the credentials to use to access chunks in
-            that container. If credential is `None`, they will be fetched from the
-            environment, or anonymous credentials will be used if the container allows it.
+            that container. Each value should be an explicit credential or no-auth
+            sentinel: e.g. ``S3Credentials.FromEnv()`` / ``s3_anonymous_credentials()``
+            for S3, or the ``icechunk.credentials.LocalFileSystemAccess`` /
+            ``icechunk.credentials.HttpAccess`` sentinels for ``file://`` and
+            ``http(s)://`` containers. Passing ``None`` is deprecated and will be
+            unsupported in a future release: it silently reads credentials from the
+            environment (or uses anonymous access), which can expose private credentials.
             As a security measure, Icechunk will block access to virtual chunks if the
             container is not authorized using this argument.
 
@@ -174,6 +249,7 @@ class Repository:
         Self
             An instance of the Repository class.
         """
+        _warn_on_none_virtual_chunk_credentials(authorize_virtual_chunk_access)
         return cls(
             PyRepository.open(
                 storage,
@@ -208,8 +284,13 @@ class Repository:
         authorize_virtual_chunk_access : dict[str, AnyCredential | None], optional
             Authorize Icechunk to access virtual chunks in these containers. A mapping
             from container url_prefix to the credentials to use to access chunks in
-            that container. If credential is `None`, they will be fetched from the
-            environment, or anonymous credentials will be used if the container allows it.
+            that container. Each value should be an explicit credential or no-auth
+            sentinel: e.g. ``S3Credentials.FromEnv()`` / ``s3_anonymous_credentials()``
+            for S3, or the ``icechunk.credentials.LocalFileSystemAccess`` /
+            ``icechunk.credentials.HttpAccess`` sentinels for ``file://`` and
+            ``http(s)://`` containers. Passing ``None`` is deprecated and will be
+            unsupported in a future release: it silently reads credentials from the
+            environment (or uses anonymous access), which can expose private credentials.
             As a security measure, Icechunk will block access to virtual chunks if the
             container is not authorized using this argument.
 
@@ -218,6 +299,7 @@ class Repository:
         Self
             An instance of the Repository class.
         """
+        _warn_on_none_virtual_chunk_credentials(authorize_virtual_chunk_access)
         return cls(
             await PyRepository.open_async(
                 storage,
@@ -255,8 +337,13 @@ class Repository:
         authorize_virtual_chunk_access : dict[str, AnyCredential | None], optional
             Authorize Icechunk to access virtual chunks in these containers. A mapping
             from container url_prefix to the credentials to use to access chunks in
-            that container. If credential is `None`, they will be fetched from the
-            environment, or anonymous credentials will be used if the container allows it.
+            that container. Each value should be an explicit credential or no-auth
+            sentinel: e.g. ``S3Credentials.FromEnv()`` / ``s3_anonymous_credentials()``
+            for S3, or the ``icechunk.credentials.LocalFileSystemAccess`` /
+            ``icechunk.credentials.HttpAccess`` sentinels for ``file://`` and
+            ``http(s)://`` containers. Passing ``None`` is deprecated and will be
+            unsupported in a future release: it silently reads credentials from the
+            environment (or uses anonymous access), which can expose private credentials.
             As a security measure, Icechunk will block access to virtual chunks if the
             container is not authorized using this argument.
         create_version : SpecVersion, optional
@@ -270,6 +357,7 @@ class Repository:
         Self
             An instance of the Repository class.
         """
+        _warn_on_none_virtual_chunk_credentials(authorize_virtual_chunk_access)
         return cls(
             PyRepository.open_or_create(
                 storage,
@@ -309,8 +397,13 @@ class Repository:
         authorize_virtual_chunk_access : dict[str, AnyCredential | None], optional
             Authorize Icechunk to access virtual chunks in these containers. A mapping
             from container url_prefix to the credentials to use to access chunks in
-            that container. If credential is `None`, they will be fetched from the
-            environment, or anonymous credentials will be used if the container allows it.
+            that container. Each value should be an explicit credential or no-auth
+            sentinel: e.g. ``S3Credentials.FromEnv()`` / ``s3_anonymous_credentials()``
+            for S3, or the ``icechunk.credentials.LocalFileSystemAccess`` /
+            ``icechunk.credentials.HttpAccess`` sentinels for ``file://`` and
+            ``http(s)://`` containers. Passing ``None`` is deprecated and will be
+            unsupported in a future release: it silently reads credentials from the
+            environment (or uses anonymous access), which can expose private credentials.
             As a security measure, Icechunk will block access to virtual chunks if the
             container is not authorized using this argument.
         create_version : SpecVersion, optional
@@ -323,6 +416,7 @@ class Repository:
         Self
             An instance of the Repository class.
         """
+        _warn_on_none_virtual_chunk_credentials(authorize_virtual_chunk_access)
         return cls(
             await PyRepository.open_or_create_async(
                 storage,
@@ -549,6 +643,7 @@ class Repository:
         Self
             A new Repository instance with the updated configuration.
         """
+        _warn_on_none_virtual_chunk_credentials(authorize_virtual_chunk_access)
         return self.__class__(
             self._repository.reopen(
                 config=config,
@@ -576,6 +671,7 @@ class Repository:
         Self
             A new Repository instance with the updated configuration.
         """
+        _warn_on_none_virtual_chunk_credentials(authorize_virtual_chunk_access)
         return self.__class__(
             await self._repository.reopen_async(
                 config=config,
