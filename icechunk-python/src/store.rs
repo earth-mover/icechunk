@@ -70,7 +70,7 @@ impl From<ChecksumArgument> for Checksum {
     }
 }
 
-#[pyclass]
+#[pyclass(from_py_object)]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct VirtualChunkSpec {
     #[pyo3(get)]
@@ -116,7 +116,7 @@ impl VirtualChunkSpec {
 
 impl_pickle!(VirtualChunkSpec);
 
-#[pyclass(name = "PyStore")]
+#[pyclass(skip_from_py_object, name = "PyStore")]
 #[derive(Clone, Debug)]
 pub struct PyStore(pub Arc<Store>);
 
