@@ -248,6 +248,7 @@ nav:
     - Flaky Networks: guides/flaky-networks.md
     - Virtual Datasets: guides/virtual.md
     - Async Usage: guides/async.md
+    - Storing Sensitive Data: guides/sensitive-data.md
     - Icechunk for Git Users: guides/icechunk-for-git-users.md
     - Creating Icechunk Datasets:
       - Global Raster Data cube: guides/ingestion/glad-ingest.ipynb
