@@ -27,7 +27,7 @@ use crate::{
     streams::PyAsyncGenerator,
 };
 
-#[pyclass]
+#[pyclass(skip_from_py_object)]
 #[derive(Clone, Debug)]
 pub struct PySession(pub Arc<RwLock<Session>>);
 
@@ -54,7 +54,13 @@ impl From<&ChunkPayload> for ChunkType {
 }
 
 /// The mode of a session, determining what operations are allowed.
-#[pyclass(name = "SessionMode", module = "icechunk", eq, rename_all = "snake_case")]
+#[pyclass(
+    skip_from_py_object,
+    name = "SessionMode",
+    module = "icechunk",
+    eq,
+    rename_all = "snake_case"
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PySessionMode {
     Readonly,
