@@ -33,7 +33,7 @@ dev = [
 test = [
   "boto3",
   "coverage",
-  "pytest",
+  "pytest==9.0.3",
   "pytest-cov",
   "pytest-asyncio",
   "pytest-xdist",
