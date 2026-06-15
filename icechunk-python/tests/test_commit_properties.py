@@ -51,5 +51,5 @@ def test_invalid_property_types(any_spec_version: int | None) -> None:
     zarr.group(store=store, overwrite=True)
     props = {"foo": NoJson()}
 
-    with pytest.raises(TypeError, match="object cannot be cast"):
+    with pytest.raises(TypeError, match="metadata"):
         session.commit("some commit", props)
