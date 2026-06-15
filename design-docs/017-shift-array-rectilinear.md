@@ -26,23 +26,19 @@ The core of the bug is that the declared chunk sizes in the zarr metadata end up
 
 #### Shift Array
 
-For a chunk grid of `[1, 1, 2, 3]` shifted right by 1 chunk, there are four options that preserve the array shape.
+For a chunk grid of `[1, 1, 2, 3]` shifted right by 2 chunks, there are four options that preserve the array shape.
 
-1. Periodic boundary - `[3, 1, 1, 2]`
-2. One fill chunk that takes up all empty space `[3, 1, 1, 2]`
+1. Periodic boundary - `[2, 3, 1, 1]`
+2. One fill chunk that takes up all empty space `[5, 1, 1]`
 3. Fill with size 1 - `[1,1,1,1,1,2]`
-4. Rechunk to include the empty part in the existing chunk. So the first chunk would become (3+1) `4,1,2`
+4. Rechunk to include the empty part in the existing chunk. So the first chunk would become (1+3+2) `[6, 1]`
 
 
 Option 3 will not work because a chunk with size 1 is far too small for real-world applications. Option 4 has the potential to be computationally intensive as it might end up rechunking real data to combine it with empty chunks.
 
-That leaves Options 1 and 2, which are always equivalent for a shift of magnitude 1. They differ with a shift of magnitude 2 or greater. For a shift by 2 with our example grid of `[1, 1, 2, 3]` they give:
+That leaves Options 1 and 2.  which are always equivalent for a shift (in chunk space) of magnitude 1. They differ with a shift of magnitude 2 or greater.
 
-1. `[2, 3, 1, 1]`
-2. `[5, 1, 1]`
-
-
-For any periodic data, like chunks of months, Option 1 is more sensible than creating a large empty chunk that may not fit well with writing workflows.
+For any periodic data, like chunks of months, Option 1 is more sensible than creating a large empty chunk that may not fit well with writing workflows. Additionally there is current no mechanism for a user to rechunk the combined large empty chunk (`5`) into smaller chunks. Icechunk could provide this metadata only rechunking as a new feature, but that is out of scope here.
 
 That leaves Option 1, which does have the downside that it may be slightly confusing that chunk sizes are shifted around the periodic boundary while values are **not** shifted to the other side of the boundary. However, it seems to be the only strategy that gives generally usable results.
 
@@ -73,7 +69,8 @@ The simplest approach here is to have the user provide a function that determine
    ```
 
    `forward(idx)` returns `(new_idx_or_None, chunk_shape_at_idx)` where `chunk_shape_at_idx` is the chunk shape at source position `idx`. `chunk_shape_at_idx` can also be `None` to indicate to leave the shape the same as a convenience for regular grids.
-2. Require two extra functions for chunk shapes (one per grid direction), leaving `forward`/`backward` unchanged.
+2.
+3. Require two extra functions for chunk shapes (one per grid direction), leaving `forward`/`backward` unchanged.
 
    ```python
    forward(idx: list[int])              -> list[int] | None
@@ -103,6 +100,21 @@ Option 2, doing validation, has a lot of potential for complexity and we may acc
 
 
 ### Array Metadata implementation location
+
+Array metadata is stored in two forms, with a parser translating between them:
+
+1. **Verbatim `zarr.json`** — the raw bytes, stored opaquely. This is the only place the actual chunk sizes (e.g. rectilinear `[1, 1, 2, 3]`) live.
+   - `user_data: Bytes` field on `NodeSnapshot` — `icechunk-format/src/snapshot.rs:148`
+2. **Structured projection** — the typed subset icechunk operates on (shape, dimension names, chunk *count* per dimension). Lossy for rectilinear grids: it records the count, not the sizes. Part of the on-disk format.
+   - `NodeData::Array { shape, dimension_names, manifests }` — `icechunk-format/src/snapshot.rs:135`
+   - `ArrayShape` / `DimensionShape { dim_length, num_chunks }` — `icechunk-format/src/snapshot.rs:46` / `:28`
+
+Translating between the two is a **parser** — code, not stored data. It reads the grid out of `zarr.json` and projects it down to the structured form. Read-only today, and lives in `store.rs`.
+
+- `ArrayMetadata` (+ `ChunkGridSerializer`) — `icechunk/src/store.rs:1140` / `:1403`
+- `num_chunks()`, `get_chunk_shapes()`, `shape()` — `icechunk/src/store.rs:1162`, `:1224`, `:1345`
+
+The existing write path the Session can reuse to rewrite the verbatim form: `Session::update_array(path, shape, dimension_names, user_data)` — `icechunk/src/session.rs:754` (already called by the store's `set_array_meta`, `icechunk/src/store.rs:865`).
 
 Any fix for the chunk grid necessarily will need access to `ArrayMetadata` and related structs which currently live in `store.rs`. However `shift_array` and `reindex_array` are in `session.rs`. So to fix the chunk grid issues we will need to import from store into session which inverts their current import relationship. While Rust can handle this, it's a sign that a new abstraction around metadata would be helpful.
 
