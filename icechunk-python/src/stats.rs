@@ -4,7 +4,7 @@ use crate::display::{PyRepr, ReprMode};
 use icechunk::ops::stats::ChunkStorageStats;
 
 /// Statistics about chunk storage across different chunk types.
-#[pyclass(name = "ChunkStorageStats")]
+#[pyclass(skip_from_py_object, name = "ChunkStorageStats")]
 #[derive(Clone, Debug)]
 pub(crate) struct PyChunkStorageStats {
     inner: ChunkStorageStats,

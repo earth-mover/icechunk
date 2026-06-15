@@ -1,6 +1,6 @@
 {
   "name": "@earthmover/icechunk",
-  "version": "2.0.5",
+  "version": "2.0.6",
   "description": "JavaScript/TypeScript bindings for Icechunk",
   "main": "index.js",
   "repository": {
@@ -79,8 +79,8 @@
     "ava": "^8.0.0",
     "chalk": "^5.6.2",
     "husky": "^9.1.7",
-    "lint-staged": "^16.1.6",
-    "npm-run-all2": "^8.0.4",
+    "lint-staged": "^17.0.5",
+    "npm-run-all2": "^9.0.0",
     "oxlint": "^1.14.0",
     "prettier": "^3.6.2",
     "tinybench": "^6.0.0",

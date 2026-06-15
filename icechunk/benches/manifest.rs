@@ -10,17 +10,19 @@
 //     Requires `docker compose up -d`.
 
 use std::cell::OnceCell;
+use std::sync::Arc;
 
 use criterion::{
     BatchSize, BenchmarkId, Criterion, SamplingMode, Throughput, criterion_group,
 };
 use futures::{StreamExt as _, stream};
+use icechunk::asset_manager::AssetManager;
 use icechunk::config::{ManifestConfig, ManifestSplittingConfig, RepositoryConfig};
 use icechunk::conflicts::detector::ConflictDetector;
 use icechunk::format::snapshot::ArrayShape;
 use icechunk::format::{ByteRange, ChunkIndices, Path};
 use icechunk::repository::VersionInfo;
-use icechunk::session::get_chunk;
+use icechunk::session::{Session, get_chunk};
 use tokio::runtime::Runtime;
 
 use crate::helpers::{
@@ -87,10 +89,75 @@ fn benchmark_set_chunks(c: &mut Criterion) {
     group.finish();
 }
 
+/// Shared setup for the `get_chunks*` benchmarks: build a repo with `num_chunks`
+/// chunks of the given `kind`, split across `num_manifests` manifests, and return
+/// a read-only session plus a handle to its `AssetManager` (for cache control).
+async fn setup_get_chunks_repo(
+    path: &Path,
+    num_chunks: u32,
+    num_manifests: u32,
+    kind: ChunkKind,
+    storage_kind: StorageKind,
+) -> (Session, Arc<AssetManager>) {
+    let split_config =
+        ManifestSplittingConfig::with_size(num_chunks.div_ceil(num_manifests));
+
+    // Create repo and write all chunks (no splitting).
+    let shape = ArrayShape::new(vec![(num_chunks.into(), num_chunks)]).unwrap();
+    let (repo, _tmpdir) =
+        setup_repo(path.clone(), shape, None, None, storage_kind).await.unwrap();
+    let mut session = repo.writable_session("main").await.unwrap();
+    set_chunks(path.clone(), &mut session, 0..num_chunks, kind, storage_kind)
+        .await
+        .unwrap();
+    session.commit("data").max_concurrent_nodes(8).execute().await.unwrap();
+
+    // Re-open with the splitting config and rewrite manifests.
+    // Using reopen() preserves VCC auth.
+    let man_config =
+        ManifestConfig { splitting: Some(split_config), ..Default::default() };
+    let config =
+        RepositoryConfig { manifest: Some(man_config), ..RepositoryConfig::default() };
+    let repo = repo.reopen(Some(config), None).await.unwrap();
+    if num_manifests > 1 {
+        let mut session = repo.writable_session("main").await.unwrap();
+        session
+            .commit("rewrite")
+            .max_concurrent_nodes(8)
+            .rewrite_manifests()
+            .amend()
+            .execute()
+            .await
+            .unwrap();
+    }
+    let asset_manager = Arc::clone(repo.asset_manager());
+    let session =
+        repo.readonly_session(&VersionInfo::BranchTipRef("main".into())).await.unwrap();
+    (session, asset_manager)
+}
+
+/// Draw `nget` chunk indices: always the first and last chunk, the rest sampled
+/// uniformly at random from a repo of `num_chunks` chunks.
+fn sample_chunk_indices(num_chunks: u32, nget: usize) -> Vec<usize> {
+    let mut rng = rand::rng();
+    let mut get_chunks: Vec<usize> = Vec::with_capacity(nget);
+    get_chunks.push(0);
+    get_chunks.append(
+        &mut rand::seq::index::sample(&mut rng, (num_chunks - 1) as usize, nget - 2)
+            .into_vec(),
+    );
+    get_chunks.push((num_chunks - 1) as usize);
+    get_chunks
+}
+
 /// Benchmarks getting of a random sequence of `nget` = 500 chunks
 /// from a million chunks split across 1 or 500 manifests, for both native,
 /// virtual, and virtual-with-prefixes chunk kinds.
 /// We always get the first and last chunk; the rest are randomly sampled.
+///
+/// Chunks are fetched sequentially against a warm cache, so this measures
+/// per-chunk lookup + fetch latency. See `benchmark_get_chunks_concurrent` for
+/// the concurrent, cold-cache variant that stresses manifest decode.
 ///
 /// Each benchmark variant creates its own repo independently inside
 /// `bench_with_input`, so setup only runs for benchmarks that match
@@ -117,74 +184,14 @@ fn benchmark_get_chunks(c: &mut Criterion) {
                     &num_manifests,
                     |b, _| {
                         // Lazy setup: only runs if criterion's filter matches.
-                        let session = session_cell.get_or_init(|| {
-                            let split_config = ManifestSplittingConfig::with_size(
-                                num_chunks.div_ceil(num_manifests),
-                            );
-
-                            rt.block_on(async {
-                                // Create repo and write all chunks (no splitting).
-                                let shape = ArrayShape::new(vec![(
-                                    num_chunks.into(),
-                                    num_chunks,
-                                )])
-                                .unwrap();
-                                let (repo, _tmpdir) = setup_repo(
-                                    path.clone(),
-                                    shape,
-                                    None,
-                                    None,
-                                    storage_kind,
-                                )
-                                .await
-                                .unwrap();
-                                let mut session =
-                                    repo.writable_session("main").await.unwrap();
-                                set_chunks(
-                                    path.clone(),
-                                    &mut session,
-                                    0..num_chunks,
-                                    kind,
-                                    storage_kind,
-                                )
-                                .await
-                                .unwrap();
-                                session
-                                    .commit("data")
-                                    .max_concurrent_nodes(8)
-                                    .execute()
-                                    .await
-                                    .unwrap();
-
-                                // Re-open with the splitting config and rewrite
-                                // manifests. Using reopen() preserves VCC auth.
-                                let man_config = ManifestConfig {
-                                    splitting: Some(split_config),
-                                    ..Default::default()
-                                };
-                                let config = RepositoryConfig {
-                                    manifest: Some(man_config),
-                                    ..RepositoryConfig::default()
-                                };
-                                let repo = repo.reopen(Some(config), None).await.unwrap();
-                                if num_manifests > 1 {
-                                    let mut session =
-                                        repo.writable_session("main").await.unwrap();
-                                    session
-                                        .commit("rewrite")
-                                        .max_concurrent_nodes(8)
-                                        .rewrite_manifests()
-                                        .amend()
-                                        .execute()
-                                        .await
-                                        .unwrap();
-                                }
-                                repo.readonly_session(&VersionInfo::BranchTipRef(
-                                    "main".into(),
-                                ))
-                                .await
-                                .unwrap()
-                            })
+                        let (session, _asset_manager) = session_cell.get_or_init(|| {
+                            rt.block_on(setup_get_chunks_repo(
+                                &path,
+                                num_chunks,
+                                num_manifests,
+                                kind,
+                                storage_kind,
+                            ))
                         });
 
                         // Enable the latency toxic only around the timed iterations.
@@ -193,25 +200,10 @@ fn benchmark_get_chunks(c: &mut Criterion) {
                         }
 
                         b.iter_batched(
-                            || {
-                                // Generate a fresh random sample per iteration
-                                let mut rng = rand::rng();
-                                let mut get_chunks: Vec<usize> = Vec::with_capacity(nget);
-                                get_chunks.push(0);
-                                get_chunks.append(
-                                    &mut rand::seq::index::sample(
-                                        &mut rng,
-                                        (num_chunks - 1) as usize,
-                                        nget - 2,
-                                    )
-                                    .into_vec(),
-                                );
-                                get_chunks.push((num_chunks - 1) as usize);
-                                get_chunks
-                            },
+                            || sample_chunk_indices(num_chunks, nget),
                             |get_chunks| {
                                 rt.block_on(async {
-                                    stream::iter(get_chunks.into_iter())
+                                    stream::iter(get_chunks)
                                         .for_each(|idx| {
                                             let session = session.clone();
                                             let path = path.clone();
@@ -231,6 +223,94 @@ fn benchmark_get_chunks(c: &mut Criterion) {
                                 });
                             },
                             BatchSize::SmallInput,
+                        );
+
+                        if toxiproxy_latency_ms().is_some() {
+                            rt.block_on(remove_latency_toxic()).unwrap();
+                        }
+                    },
+                );
+            }
+        }
+    }
+    group.finish();
+}
+
+/// Like `benchmark_get_chunks`, but fetches the `nget` chunks concurrently and
+/// drops the manifest + snapshot caches before every timed iteration. Each run
+/// therefore re-fetches and re-decodes (concurrently) every manifest the random
+/// sample touches, so this is the variant that exercises the manifest-decode
+/// path and the `decode_gate`.
+fn benchmark_get_chunks_concurrent(c: &mut Criterion) {
+    let mut group = c.benchmark_group("get_chunks_concurrent");
+    group.sample_size(10).sampling_mode(SamplingMode::Flat);
+
+    let path: Path = "/temperature".try_into().unwrap();
+    let rt = Runtime::new().unwrap();
+
+    let nget = 500;
+    let num_chunks: u32 = 1_000_000;
+
+    for storage_kind in [StorageKind::InMemory, StorageKind::Rustfs] {
+        for kind in
+            [ChunkKind::Native, ChunkKind::Virtual, ChunkKind::VirtualWithPrefixes]
+        {
+            for num_manifests in [1u32, 500] {
+                let session_cell: OnceCell<_> = OnceCell::new();
+
+                group.bench_with_input(
+                    BenchmarkId::new(format!("{storage_kind}/{kind}"), num_manifests),
+                    &num_manifests,
+                    |b, _| {
+                        // Lazy setup: only runs if criterion's filter matches.
+                        let (session, asset_manager) = session_cell.get_or_init(|| {
+                            rt.block_on(setup_get_chunks_repo(
+                                &path,
+                                num_chunks,
+                                num_manifests,
+                                kind,
+                                storage_kind,
+                            ))
+                        });
+
+                        // Enable the latency toxic only around the timed iterations.
+                        if let Some(ms) = toxiproxy_latency_ms() {
+                            rt.block_on(add_latency_toxic(ms)).unwrap();
+                        }
+
+                        b.iter_batched(
+                            || {
+                                // Cold caches per iteration so each timed run
+                                // re-fetches and re-decodes the manifests (and
+                                // snapshot) the sample touches. PerIteration
+                                // (below) is required so the clear actually
+                                // precedes every timed run rather than the batch.
+                                asset_manager.clear_manifest_cache();
+                                asset_manager.clear_snapshot_cache();
+                                sample_chunk_indices(num_chunks, nget)
+                            },
+                            |get_chunks| {
+                                rt.block_on(async {
+                                    stream::iter(get_chunks.into_iter())
+                                        .for_each_concurrent(None, |idx| {
+                                            let session = session.clone();
+                                            let path = path.clone();
+                                            async move {
+                                                let reader = session
+                                                    .get_chunk_reader(
+                                                        &path,
+                                                        &ChunkIndices(vec![idx as u32]),
+                                                        &ByteRange::ALL,
+                                                    )
+                                                    .await
+                                                    .unwrap();
+                                                get_chunk(reader).await.unwrap().unwrap();
+                                            }
+                                        })
+                                        .await;
+                                });
+                            },
+                            BatchSize::PerIteration,
                         );
 
                         if toxiproxy_latency_ms().is_some() {
@@ -484,6 +564,7 @@ criterion_group!(
     benchmark_commit_rebase_split_manifests,
     benchmark_set_chunks,
     benchmark_get_chunks,
+    benchmark_get_chunks_concurrent,
 );
 
 // TODO: open repo with large number of snapshots
