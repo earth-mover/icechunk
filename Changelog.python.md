@@ -1,5 +1,22 @@
 # Changelog
 
+## Python Icechunk Library 2.1.0 [unreleased]
+
+This release introduces on-disk spec version 2.1, an additive change that is forward- and backward-compatible with spec 2.0.
+
+### Features
+
+- Build Python wheels with the `abi3-py312` stable ABI, greatly reducing the number of published wheels. The minimum supported Python version remains 3.12 ([#2213](https://github.com/earth-mover/icechunk/pull/2213)).
+
+### Fixes
+
+- Expiration now records the full ancestry of pruned transaction logs in a new optional `pruned_ancestor_tx_logs` field on `SnapshotInfo`, so `diff`, `amend`, `rebase`, and `inspect` produce correct results after expiration ([#2184](https://github.com/earth-mover/icechunk/pull/2184)).
+
+### Documentation
+
+- Add a guide on handling sensitive data ([#2195](https://github.com/earth-mover/icechunk/pull/2195)).
+- Update the Virtual Datasets guide to cover reading netCDF files with `h5py` ([#2207](https://github.com/earth-mover/icechunk/pull/2207)).
+
 ## Python Icechunk Library 2.0.6
 
 ### Features

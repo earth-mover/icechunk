@@ -257,7 +257,8 @@ nav:
   - Blog: blog-posts.md
   - Reference:
     - Spec:
-      - v2 (current): reference/spec.md
+      - v2.1 (current): reference/spec.md
+      - v2: reference/spec-v2.md
       - v1: reference/spec-v1.md
     - Version Policy: reference/version-policy.md
     - Python API Reference:

@@ -46,7 +46,7 @@ All flatbuffer files (except chunks) have a 39-byte header:
 
 Bytes 0-11:  Magic bytes "ICE🧊CHUNK" (12 bytes: "ICE"=3, 🧊=4 UTF-8, "CHUNK"=5)
 Bytes 12-35: Implementation name, padded to 24 bytes (e.g., "ic-0.1.0")
-Byte 36:     Spec version (1=V1.0, 2=V2.0)
+Byte 36:     Spec version (1=V1.x, 2=V2.x)
 Byte 37:     File type (1=Snapshot, 2=Manifest, 3=Attributes,
                         4=TransactionLog, 5=Chunk, 6=RepoInfo)
 Byte 38:     Compression (0=None, 1=Zstd)

@@ -1,11 +1,11 @@
 ---
 title: Specification
 ---
-# Icechunk Specification, version 2.1
+# Icechunk Specification, version 2
 
 !!! Note
 
-    This is the current Icechunk specification (spec version 2.1), used by Icechunk 2.1.0 and higher. For the previous on-disk formats, see [spec version 2](./spec-v2.md), and [spec version 1](./spec-v1.md). See [Changes from spec version 2 to 2.1](#changes-from-spec-version-2-to-21) for a summary of what changed.
+    This is the Icechunk specification (spec version 2), used by Icechunk 2.0.x. For the previous on-disk format, see [spec version 1](./spec-v1.md). See [Changes from spec version 1 to 2](#changes-from-spec-version-1-to-2) for a summary of what changed.
 
 !!! Note
 
@@ -62,7 +62,7 @@ The storage system is not required to support random-access writes. Once written
 ### Consistency and Optimistic Concurrency
 
 Icechunk achieves transactional consistency using only the limited consistency guarantees offered by object storage.
-Icechunk V2+ does this entirely via careful management of creation and conditional updating of the `RepoInfo` object.
+Icechunk V2 does this entirely via careful management of creation and conditional updating of the `RepoInfo` object.
 (The exact contents of the `RepoInfo` object are defined in the format specification section below.)
 
 When a client attempts to make a change to the repository, it fetches the latest version of the repo info object and applies its changes in memory first.
@@ -171,20 +171,20 @@ All data and metadata files MUST be stored within a root directory using the fol
 
 ### Common Types
 
-The following types are defined in [`common.fbs`](https://github.com/earth-mover/icechunk/tree/main/icechunk-format/flatbuffers/common.fbs) and used throughout all flatbuffers files.
+The following types are defined in [`common.fbs`](https://github.com/earth-mover/icechunk/blob/3f422af67bc9e176f286ce7a78a465b82dd068d4/icechunk-format/flatbuffers/common.fbs) and used throughout all flatbuffers files.
 
 ```protobuf
---8<-- "icechunk-format/flatbuffers/common.fbs:object_id_12"
+--8<-- "icechunk-python/docs/docs/reference/flatbuffers-v2/common.fbs:object_id_12"
 ```
 
 ```protobuf
---8<-- "icechunk-format/flatbuffers/common.fbs:object_id_8"
+--8<-- "icechunk-python/docs/docs/reference/flatbuffers-v2/common.fbs:object_id_8"
 ```
 
 When used in file names and storage paths, object ids MUST be encoded using [Crockford Base32](https://www.crockford.com/base32.html), uppercase, with no padding characters. When the input bits are not a multiple of 5, zero bits are appended on the right before encoding. An `ObjectId12` (96 bits) produces 20 characters; an `ObjectId8` (64 bits) produces 13 characters. For example, the 12 bytes `0b 1c c8 d6 78 75 80 f0 e3 3a 65 34` encode to `1CECHNKREP0F1RSTCMT0`.
 
 ```protobuf
---8<-- "icechunk-format/flatbuffers/common.fbs:metadata_item"
+--8<-- "icechunk-python/docs/docs/reference/flatbuffers-v2/common.fbs:metadata_item"
 ```
 
 #### Node Paths
@@ -192,7 +192,7 @@ When used in file names and storage paths, object ids MUST be encoded using [Cro
 Node paths identify a node's position in the repository hierarchy. They are stored as flatbuffers `string` fields.
 
 ```protobuf
---8<-- "icechunk-format/flatbuffers/common.fbs:node_path"
+--8<-- "icechunk-python/docs/docs/reference/flatbuffers-v2/common.fbs:node_path"
 ```
 
 ### Binary File Format
@@ -205,7 +205,7 @@ The header contains the following fields, in order:
 |-------|------|-------------|
 | Magic bytes | 12 bytes | The UTF-8 encoding of `ICE🧊CHUNK` (`49 43 45 F0 9F A7 8A 43 48 55 4E 4B`). |
 | Implementation name | 24 bytes | A left-aligned, right-space-padded UTF-8 string identifying the writing client. |
-| Spec version | 1 byte | `1` for spec version 1, `2` for spec version 2.x. |
+| Spec version | 1 byte | `1` for spec version 1, `2` for spec version 2. |
 | File type | 1 byte | `1` = Snapshot, `2` = Manifest, `4` = TransactionLog, `6` = RepoInfo. |
 | Compression algorithm | 1 byte | `0` = none, `1` = zstd. |
 
@@ -213,20 +213,20 @@ The remainder of the file is the flatbuffers payload, compressed with the algori
 
 ### File Formats
 
-With the exception of chunk files, each type of file is encoded using [flatbuffers](https://github.com/google/flatbuffers). Chunk files have their encoding defined by the [Zarr specification](https://zarr-specs.readthedocs.io/en/latest/v3/core/index.html#chunk-encoding). Common type definitions shared across all flatbuffers files are in [`common.fbs`](https://github.com/earth-mover/icechunk/tree/main/icechunk-format/flatbuffers/common.fbs).
+With the exception of chunk files, each type of file is encoded using [flatbuffers](https://github.com/google/flatbuffers). Chunk files have their encoding defined by the [Zarr specification](https://zarr-specs.readthedocs.io/en/latest/v3/core/index.html#chunk-encoding). Common type definitions shared across all flatbuffers files are in [`common.fbs`](https://github.com/earth-mover/icechunk/blob/3f422af67bc9e176f286ce7a78a465b82dd068d4/icechunk-format/flatbuffers/common.fbs).
 
 #### Repo Info File
 
-The repo info file is the single entry point for an Icechunk repository and the only mutable object in a V2+ repo. It MUST be stored at `$ROOT/repo`. Every read operation starts by fetching this file. Every update to the repository (commits, tag creation, configuration changes) is a conditional write on this file.
+The repo info file is the single entry point for an Icechunk repository and the only mutable object in a V2 repo. It MUST be stored at `$ROOT/repo`. Every read operation starts by fetching this file. Every update to the repository (commits, tag creation, configuration changes) is a conditional write on this file.
 
 The repo info file MUST use the standard [binary file format](#binary-file-format) with file type `RepoInfo`.
 
-The full flatbuffers schema can be found in [`repo.fbs`](https://github.com/earth-mover/icechunk/tree/main/icechunk-format/flatbuffers/repo.fbs).
+The full flatbuffers schema can be found in [`repo.fbs`](https://github.com/earth-mover/icechunk/blob/3f422af67bc9e176f286ce7a78a465b82dd068d4/icechunk-format/flatbuffers/repo.fbs).
 
 The `Repo` table is the root type:
 
 ```protobuf
---8<-- "icechunk-format/flatbuffers/repo.fbs:repo_table"
+--8<-- "icechunk-python/docs/docs/reference/flatbuffers-v2/repo.fbs:repo_table"
 ```
 
 ##### `Ref`
@@ -234,7 +234,7 @@ The `Repo` table is the root type:
 Branches and tags are both stored as `Ref` entries. The `snapshot_index` is an index into the `Repo.snapshots` list.
 
 ```protobuf
---8<-- "icechunk-format/flatbuffers/repo.fbs:ref"
+--8<-- "icechunk-python/docs/docs/reference/flatbuffers-v2/repo.fbs:ref"
 ```
 
 ##### `SnapshotInfo`
@@ -242,37 +242,33 @@ Branches and tags are both stored as `Ref` entries. The `snapshot_index` is an i
 Each snapshot in the repository has a `SnapshotInfo` entry in the repo info file. The `parent_offset` field encodes the parent relationship as an offset within the `snapshots` list (-1 for the initial snapshot).
 
 ```protobuf
---8<-- "icechunk-format/flatbuffers/repo.fbs:snapshot_info"
+--8<-- "icechunk-python/docs/docs/reference/flatbuffers-v2/repo.fbs:snapshot_info"
 ```
-
-Version 2.1 of the spec added the `pruned_ancestor_tx_logs: [ObjectId12]` field. Expiration uses this field to keep track of the full ancestry of transaction logs that generated this snapshot but were later expired. The list is ordered by ancestry, oldest first. Implementations MUST treat the concatenation of all these transaction logs, followed by the snapshot's own transaction log, as the full transaction history for the commit.
-
-Some implementations MAY compact these transaction logs to shorten the list, so readers MUST NOT assume that each entry corresponds to a real commit.
 
 ##### `Update`
 
 The `latest_updates` list is the repository ops log — a record of every operation performed on the repository. When the list exceeds its size limit, older entries are accessible via the `repo_before_updates` linked list of previous repo info files stored under `overwritten/`.
 
 ```protobuf
---8<-- "icechunk-format/flatbuffers/repo.fbs:update"
+--8<-- "icechunk-python/docs/docs/reference/flatbuffers-v2/repo.fbs:update"
 ```
 
 ```protobuf
---8<-- "icechunk-format/flatbuffers/repo.fbs:update_type_union"
+--8<-- "icechunk-python/docs/docs/reference/flatbuffers-v2/repo.fbs:update_type_union"
 ```
 
 ```protobuf
---8<-- "icechunk-format/flatbuffers/repo.fbs:update_types"
+--8<-- "icechunk-python/docs/docs/reference/flatbuffers-v2/repo.fbs:update_types"
 ```
 
 ##### `RepoStatus`
 
 ```protobuf
---8<-- "icechunk-format/flatbuffers/repo.fbs:repo_status"
+--8<-- "icechunk-python/docs/docs/reference/flatbuffers-v2/repo.fbs:repo_status"
 ```
 
 ```protobuf
---8<-- "icechunk-format/flatbuffers/repo.fbs:repo_availability"
+--8<-- "icechunk-python/docs/docs/reference/flatbuffers-v2/repo.fbs:repo_availability"
 ```
 
 ##### Updates to the repo info file
@@ -299,22 +295,22 @@ A snapshot file fully describes the state of a repository at a given commit — 
 
 The snapshot file MUST use the standard [binary file format](#binary-file-format) with file type `Snapshot`.
 
-The full flatbuffers schema can be found in [`snapshot.fbs`](https://github.com/earth-mover/icechunk/tree/main/icechunk-format/flatbuffers/snapshot.fbs).
+The full flatbuffers schema can be found in [`snapshot.fbs`](https://github.com/earth-mover/icechunk/blob/3f422af67bc9e176f286ce7a78a465b82dd068d4/icechunk-format/flatbuffers/snapshot.fbs).
 
 The `Snapshot` table is the root type:
 
 ```protobuf
---8<-- "icechunk-format/flatbuffers/snapshot.fbs:snapshot_table"
+--8<-- "icechunk-python/docs/docs/reference/flatbuffers-v2/snapshot.fbs:snapshot_table"
 ```
 
 ##### `NodeSnapshot`
 
 ```protobuf
---8<-- "icechunk-format/flatbuffers/snapshot.fbs:node_snapshot"
+--8<-- "icechunk-python/docs/docs/reference/flatbuffers-v2/snapshot.fbs:node_snapshot"
 ```
 
 ```protobuf
---8<-- "icechunk-format/flatbuffers/snapshot.fbs:node_data"
+--8<-- "icechunk-python/docs/docs/reference/flatbuffers-v2/snapshot.fbs:node_data"
 ```
 
 ##### `ArrayNodeData`
@@ -322,19 +318,19 @@ The `Snapshot` table is the root type:
 Array nodes carry shape information and pointers to their chunk manifests. The `manifests` list connects a snapshot to the manifest files that hold the array's chunk references.
 
 ```protobuf
---8<-- "icechunk-format/flatbuffers/snapshot.fbs:array_node_data"
+--8<-- "icechunk-python/docs/docs/reference/flatbuffers-v2/snapshot.fbs:array_node_data"
 ```
 
 ```protobuf
---8<-- "icechunk-format/flatbuffers/snapshot.fbs:dimension_shape"
+--8<-- "icechunk-python/docs/docs/reference/flatbuffers-v2/snapshot.fbs:dimension_shape"
 ```
 
 ```protobuf
---8<-- "icechunk-format/flatbuffers/snapshot.fbs:dimension_shape_v2"
+--8<-- "icechunk-python/docs/docs/reference/flatbuffers-v2/snapshot.fbs:dimension_shape_v2"
 ```
 
 ```protobuf
---8<-- "icechunk-format/flatbuffers/snapshot.fbs:dimension_name"
+--8<-- "icechunk-python/docs/docs/reference/flatbuffers-v2/snapshot.fbs:dimension_name"
 ```
 
 ##### `ManifestRef`
@@ -342,23 +338,23 @@ Array nodes carry shape information and pointers to their chunk manifests. The `
 Each `ManifestRef` identifies a manifest file and the region of the array's chunk grid it covers. Together, the `manifests` list on an `ArrayNodeData` forms a complete map of where all chunk references for that array can be found.
 
 ```protobuf
---8<-- "icechunk-format/flatbuffers/snapshot.fbs:chunk_index_range"
+--8<-- "icechunk-python/docs/docs/reference/flatbuffers-v2/snapshot.fbs:chunk_index_range"
 ```
 
 ```protobuf
---8<-- "icechunk-format/flatbuffers/snapshot.fbs:manifest_ref"
+--8<-- "icechunk-python/docs/docs/reference/flatbuffers-v2/snapshot.fbs:manifest_ref"
 ```
 
 ##### `ManifestFileInfo`
 
-The snapshot's `manifest_files` / `manifest_files_v2` lists provide summary metadata about every manifest file referenced by the snapshot. These are separate from the per-array `ManifestRef` pointers — they describe the manifest files themselves rather than which chunks they cover. V2+ repositories write their manifests using `ManifestFileInfoV2`; IC1 repositories use `ManifestFileInfo`.
+The snapshot's `manifest_files` / `manifest_files_v2` lists provide summary metadata about every manifest file referenced by the snapshot. These are separate from the per-array `ManifestRef` pointers — they describe the manifest files themselves rather than which chunks they cover. V2 repositories write their manifests using `ManifestFileInfoV2`; IC1 repositories use `ManifestFileInfo`.
 
 ```protobuf
---8<-- "icechunk-format/flatbuffers/snapshot.fbs:manifest_file_info"
+--8<-- "icechunk-python/docs/docs/reference/flatbuffers-v2/snapshot.fbs:manifest_file_info"
 ```
 
 ```protobuf
---8<-- "icechunk-format/flatbuffers/snapshot.fbs:manifest_file_info_v2"
+--8<-- "icechunk-python/docs/docs/reference/flatbuffers-v2/snapshot.fbs:manifest_file_info_v2"
 ```
 
 #### Chunk Manifest Files
@@ -367,18 +363,18 @@ A chunk manifest file stores chunk references — mappings from a chunk's coordi
 
 The manifest file MUST use the standard [binary file format](#binary-file-format) with file type `Manifest`.
 
-The full flatbuffers schema can be found in [`manifest.fbs`](https://github.com/earth-mover/icechunk/tree/main/icechunk-format/flatbuffers/manifest.fbs).
+The full flatbuffers schema can be found in [`manifest.fbs`](https://github.com/earth-mover/icechunk/blob/3f422af67bc9e176f286ce7a78a465b82dd068d4/icechunk-format/flatbuffers/manifest.fbs).
 
 The `Manifest` table is the root type:
 
 ```protobuf
---8<-- "icechunk-format/flatbuffers/manifest.fbs:manifest_table"
+--8<-- "icechunk-python/docs/docs/reference/flatbuffers-v2/manifest.fbs:manifest_table"
 ```
 
 ##### `ArrayManifest`
 
 ```protobuf
---8<-- "icechunk-format/flatbuffers/manifest.fbs:array_manifest"
+--8<-- "icechunk-python/docs/docs/reference/flatbuffers-v2/manifest.fbs:array_manifest"
 ```
 
 ##### `ChunkRef`
@@ -390,7 +386,7 @@ Chunk references come in three types, encoded in the same flatbuffers table usin
 - **Virtual** — points to a region of a file outside the repository (e.g. a chunk inside a NetCDF file), identified by `location` (or `compressed_location`) plus `offset` and `length`.
 
 ```protobuf
---8<-- "icechunk-format/flatbuffers/manifest.fbs:chunk_ref"
+--8<-- "icechunk-python/docs/docs/reference/flatbuffers-v2/manifest.fbs:chunk_ref"
 ```
 
 When virtual chunk locations are compressed, a zstd dictionary is computed globally across the whole manifest. Individual locations are stored in the `compressed_location` field of each `ChunkRef`, and the dictionary is stored in the manifest's `location_dictionary` field.
@@ -420,12 +416,12 @@ The transaction log file MUST use the standard [binary file format](#binary-file
     conflict detection during rebase and to compute diffs between commits.
     A read-only implementation can safely omit transaction log support.
 
-The full flatbuffers schema can be found in [`transaction_log.fbs`](https://github.com/earth-mover/icechunk/tree/main/icechunk-format/flatbuffers/transaction_log.fbs).
+The full flatbuffers schema can be found in [`transaction_log.fbs`](https://github.com/earth-mover/icechunk/blob/3f422af67bc9e176f286ce7a78a465b82dd068d4/icechunk-format/flatbuffers/transaction_log.fbs).
 
 The `TransactionLog` table is the root type:
 
 ```protobuf
---8<-- "icechunk-format/flatbuffers/transaction_log.fbs:transaction_log"
+--8<-- "icechunk-python/docs/docs/reference/flatbuffers-v2/transaction_log.fbs:transaction_log"
 ```
 
 !!! tip "For implementers"
@@ -436,17 +432,17 @@ The `TransactionLog` table is the root type:
 ##### `ArrayUpdatedChunks`
 
 ```protobuf
---8<-- "icechunk-format/flatbuffers/transaction_log.fbs:chunk_indices"
+--8<-- "icechunk-python/docs/docs/reference/flatbuffers-v2/transaction_log.fbs:chunk_indices"
 ```
 
 ```protobuf
---8<-- "icechunk-format/flatbuffers/transaction_log.fbs:array_updated_chunks"
+--8<-- "icechunk-python/docs/docs/reference/flatbuffers-v2/transaction_log.fbs:array_updated_chunks"
 ```
 
 ##### `MoveOperation`
 
 ```protobuf
---8<-- "icechunk-format/flatbuffers/transaction_log.fbs:move_operation"
+--8<-- "icechunk-python/docs/docs/reference/flatbuffers-v2/transaction_log.fbs:move_operation"
 ```
 
 ## Algorithms
@@ -508,13 +504,6 @@ A tag can be created from any snapshot.
     1. If successful, the update succeeded and the tag is created.
     1. If unsuccessful because there was some previous update, read the file again and retry
     1. If unsuccessful because the snapshot doesn't exist, fail the update
-
-## Changes from spec version 2 to 2.1
-
-- Added the optional `pruned_ancestor_tx_logs` field to the `SnapshotInfo` table in the `repo` flatbuffer file.
-- `pruned_ancestor_tx_logs` is populated during expiration, recording the transaction logs of ancestor commits that were removed from the repository.
-- The change is backwards and forwards compatible. `pruned_ancestor_tx_logs` is an optional flatbuffers field, so a 2.0.x reader simply ignores it and a 2.1 reader treats its absence as "never expired". Because of this, Icechunk libraries in the 2.0.x series can still read and write repositories that use spec version 2.1; in that case expiration is degraded to the 2.0.x behavior.
-- The on-disk format flags repositories as version `2` for both spec 2 and spec 2.1.
 
 ## Changes from spec version 1 to 2
 
