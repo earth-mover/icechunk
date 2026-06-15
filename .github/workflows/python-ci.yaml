@@ -141,9 +141,6 @@ jobs:
           - runner: ubuntu-latest
             target: aarch64
             manylinux: 2_28
-          - runner: ubuntu-latest
-            target: armv7
-            manylinux: 2_28
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
@@ -193,11 +190,7 @@ jobs:
           - runner: ubuntu-latest
             target: x86_64
           - runner: ubuntu-latest
-            target: x86
-          - runner: ubuntu-latest
             target: aarch64
-          - runner: ubuntu-latest
-            target: armv7
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
