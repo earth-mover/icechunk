@@ -140,13 +140,13 @@ jobs:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
         with:
-          python-version: "3.13t"
+          python-version: "3.14t"
 
       - name: Build wheels
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1
         with:
           working-directory: icechunk-python
-          args: --release --out dist -i python3.13t
+          args: --release --out dist -i python3.14t
           sccache: true
           manylinux: auto
 
@@ -175,7 +175,7 @@ jobs:
         uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
         with:
           enable-cache: true
-          python-version: "3.13t"
+          python-version: "3.14t"
 
       - name: Install dependencies
         shell: bash
@@ -185,7 +185,7 @@ jobs:
           uv venv
           source .venv/bin/activate
           python --version
-          WHEEL=$(ls dist/*-cp313t-*.whl)
+          WHEEL=$(ls dist/*-cp314t-*.whl)
           uv pip install "$WHEEL" --group test
 
       - name: Wait for RustFS to be ready
