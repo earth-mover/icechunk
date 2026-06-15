@@ -1,2 +1,10 @@
 [target.x86_64-pc-windows-msvc]
 rustflags = ["-C", "target-feature=+crt-static"]
+
+# Release-profile tuning for the napi cdylib. Lives here rather than in
+# Cargo.toml because workspace members can't set profiles (Cargo ignores them
+# and warns); a config-file profile is discovered when `napi build` runs from
+# this directory and merges over the workspace-root release profile.
+[profile.release]
+lto = "fat"
+strip = "symbols"

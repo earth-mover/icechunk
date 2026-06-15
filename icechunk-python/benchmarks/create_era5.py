@@ -27,7 +27,7 @@ from icechunk.xarray import to_icechunk
 logger = helpers.setup_logger()
 
 ICECHUNK_FORMAT = f"v{ic.spec_version():d}"
-ZARR_KWARGS = dict(zarr_format=3, consolidated=False)
+ZARR_KWARGS = dict(zarr_format=3)
 
 
 class Mode(StrEnum):
@@ -58,7 +58,7 @@ def verify(dataset: Dataset, *, ingest: IngestDataset, seed: int | None = None):
     repo = ic.Repository.open(dataset.storage)
     session = repo.readonly_session(branch="main")
     instore = xr.open_dataset(
-        session.store, group=dataset.group, engine="zarr", chunks=None, consolidated=False
+        session.store, group=dataset.group, engine="zarr", chunks=None
     )
     time = pd.Timestamp(random.choice(instore.time.data.tolist()))
     logger.info(f"Verifying {ingest.name} for {seed=!r}, {time=!r}")

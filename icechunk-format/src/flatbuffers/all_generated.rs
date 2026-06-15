@@ -4544,6 +4544,7 @@ pub mod generated {
         pub const VT_FLUSHED_AT: ::flatbuffers::VOffsetT = 8;
         pub const VT_MESSAGE: ::flatbuffers::VOffsetT = 10;
         pub const VT_METADATA: ::flatbuffers::VOffsetT = 12;
+        pub const VT_PRUNED_ANCESTOR_TX_LOGS: ::flatbuffers::VOffsetT = 14;
 
         #[inline]
         pub unsafe fn init_from_table(table: ::flatbuffers::Table<'a>) -> Self {
@@ -4561,6 +4562,9 @@ pub mod generated {
         ) -> ::flatbuffers::WIPOffset<SnapshotInfo<'bldr>> {
             let mut builder = SnapshotInfoBuilder::new(_fbb);
             builder.add_flushed_at(args.flushed_at);
+            if let Some(x) = args.pruned_ancestor_tx_logs {
+                builder.add_pruned_ancestor_tx_logs(x);
+            }
             if let Some(x) = args.metadata {
                 builder.add_metadata(x);
             }
@@ -4629,6 +4633,19 @@ pub mod generated {
                 >>(SnapshotInfo::VT_METADATA, None)
             }
         }
+        #[inline]
+        pub fn pruned_ancestor_tx_logs(
+            &self,
+        ) -> Option<::flatbuffers::Vector<'a, ObjectId12>> {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab.get::<::flatbuffers::ForwardsUOffset<
+                    ::flatbuffers::Vector<'a, ObjectId12>,
+                >>(SnapshotInfo::VT_PRUNED_ANCESTOR_TX_LOGS, None)
+            }
+        }
     }
 
     impl ::flatbuffers::Verifiable for SnapshotInfo<'_> {
@@ -4638,21 +4655,13 @@ pub mod generated {
             pos: usize,
         ) -> Result<(), ::flatbuffers::InvalidFlatbuffer> {
             v.visit_table(pos)?
-                .visit_field::<ObjectId12>("id", Self::VT_ID, true)?
-                .visit_field::<i32>("parent_offset", Self::VT_PARENT_OFFSET, false)?
-                .visit_field::<u64>("flushed_at", Self::VT_FLUSHED_AT, false)?
-                .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
-                    "message",
-                    Self::VT_MESSAGE,
-                    true,
-                )?
-                .visit_field::<::flatbuffers::ForwardsUOffset<
-                    ::flatbuffers::Vector<
-                        '_,
-                        ::flatbuffers::ForwardsUOffset<MetadataItem>,
-                    >,
-                >>("metadata", Self::VT_METADATA, false)?
-                .finish();
+     .visit_field::<ObjectId12>("id", Self::VT_ID, true)?
+     .visit_field::<i32>("parent_offset", Self::VT_PARENT_OFFSET, false)?
+     .visit_field::<u64>("flushed_at", Self::VT_FLUSHED_AT, false)?
+     .visit_field::<::flatbuffers::ForwardsUOffset<&str>>("message", Self::VT_MESSAGE, true)?
+     .visit_field::<::flatbuffers::ForwardsUOffset<::flatbuffers::Vector<'_, ::flatbuffers::ForwardsUOffset<MetadataItem>>>>("metadata", Self::VT_METADATA, false)?
+     .visit_field::<::flatbuffers::ForwardsUOffset<::flatbuffers::Vector<'_, ObjectId12>>>("pruned_ancestor_tx_logs", Self::VT_PRUNED_ANCESTOR_TX_LOGS, false)?
+     .finish();
             Ok(())
         }
     }
@@ -4669,6 +4678,8 @@ pub mod generated {
                 >,
             >,
         >,
+        pub pruned_ancestor_tx_logs:
+            Option<::flatbuffers::WIPOffset<::flatbuffers::Vector<'a, ObjectId12>>>,
     }
     impl<'a> Default for SnapshotInfoArgs<'a> {
         #[inline]
@@ -4679,6 +4690,7 @@ pub mod generated {
                 flushed_at: 0,
                 message: None, // required field
                 metadata: None,
+                pruned_ancestor_tx_logs: None,
             }
         }
     }
@@ -4723,6 +4735,18 @@ pub mod generated {
             );
         }
         #[inline]
+        pub fn add_pruned_ancestor_tx_logs(
+            &mut self,
+            pruned_ancestor_tx_logs: ::flatbuffers::WIPOffset<
+                ::flatbuffers::Vector<'b, ObjectId12>,
+            >,
+        ) {
+            self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(
+                SnapshotInfo::VT_PRUNED_ANCESTOR_TX_LOGS,
+                pruned_ancestor_tx_logs,
+            );
+        }
+        #[inline]
         pub fn new(
             _fbb: &'b mut ::flatbuffers::FlatBufferBuilder<'a, A>,
         ) -> SnapshotInfoBuilder<'a, 'b, A> {
@@ -4746,6 +4770,7 @@ pub mod generated {
             ds.field("flushed_at", &self.flushed_at());
             ds.field("message", &self.message());
             ds.field("metadata", &self.metadata());
+            ds.field("pruned_ancestor_tx_logs", &self.pruned_ancestor_tx_logs());
             ds.finish()
         }
     }

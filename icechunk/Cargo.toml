@@ -1,6 +1,6 @@
 [package]
 name = "icechunk"
-version = "2.0.5"
+version = "2.0.6"
 description = "Transactional storage engine for Zarr designed for use on cloud object storage"
 readme = "README.md"
 repository = "https://github.com/earth-mover/icechunk"
@@ -142,6 +142,9 @@ path = "tests/test_shuttle.rs"
 [[bench]]
 name = "main"
 harness = false
+
+[lib]
+bench = false
 
 [package.metadata.cargo-machete]
 ignored = ["serde_bytes"]

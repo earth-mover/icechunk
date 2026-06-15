@@ -141,8 +141,10 @@ mod tests {
     use crate::{
         Repository, Storage,
         format::{
-            IcechunkFormatError, format_constants::SpecVersionBin, repo_info::UpdateType,
-            snapshot::Snapshot,
+            IcechunkFormatError,
+            format_constants::SpecVersionBin,
+            repo_info::UpdateType,
+            snapshot::{Snapshot, SnapshotInfo},
         },
         new_in_memory_storage,
         repository::{RepositoryError, RepositoryErrorKind},
@@ -192,7 +194,7 @@ mod tests {
         let initial = Snapshot::initial(SpecVersionBin::current()).unwrap();
         let ri = RepoInfo::initial(
             SpecVersionBin::current(),
-            (&initial).try_into().unwrap(),
+            SnapshotInfo::from_snapshot_file(&initial).unwrap(),
             100,
             None::<&()>,
             None,

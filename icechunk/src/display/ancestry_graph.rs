@@ -120,7 +120,7 @@ impl AncestryGraph {
         }
 
         let mut nodes: Vec<AncestryNode> = node_map.into_values().collect();
-        nodes.sort_by(|a, b| b.info.flushed_at.cmp(&a.info.flushed_at));
+        nodes.sort_by_key(|b| std::cmp::Reverse(b.info.flushed_at));
 
         let total_snapshots = nodes.len();
         if total_snapshots > MAX_DISPLAY_NODES {
@@ -326,6 +326,7 @@ mod tests {
             flushed_at: base + Duration::minutes(id_byte as i64),
             message: format!("Commit {id_byte}"),
             metadata: BTreeMap::new(),
+            pruned_ancestor_tx_logs: vec![],
         }
     }
 
