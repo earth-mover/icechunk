@@ -62,7 +62,7 @@ The storage system is not required to support random-access writes. Once written
 ### Consistency and Optimistic Concurrency
 
 Icechunk achieves transactional consistency using only the limited consistency guarantees offered by object storage.
-Icechunk V2+ does this entirely via careful management of creation and conditional updating of the `RepoInfo` object.
+Icechunk V2.x does this entirely via careful management of creation and conditional updating of the `RepoInfo` object.
 (The exact contents of the `RepoInfo` object are defined in the format specification section below.)
 
 When a client attempts to make a change to the repository, it fetches the latest version of the repo info object and applies its changes in memory first.
@@ -217,7 +217,7 @@ With the exception of chunk files, each type of file is encoded using [flatbuffe
 
 #### Repo Info File
 
-The repo info file is the single entry point for an Icechunk repository and the only mutable object in a V2+ repo. It MUST be stored at `$ROOT/repo`. Every read operation starts by fetching this file. Every update to the repository (commits, tag creation, configuration changes) is a conditional write on this file.
+The repo info file is the single entry point for an Icechunk repository and the only mutable object in a V2.x repo. It MUST be stored at `$ROOT/repo`. Every read operation starts by fetching this file. Every update to the repository (commits, tag creation, configuration changes) is a conditional write on this file.
 
 The repo info file MUST use the standard [binary file format](#binary-file-format) with file type `RepoInfo`.
 
@@ -245,7 +245,7 @@ Each snapshot in the repository has a `SnapshotInfo` entry in the repo info file
 --8<-- "icechunk-format/flatbuffers/repo.fbs:snapshot_info"
 ```
 
-Version 2.1 of the spec added the `pruned_ancestor_tx_logs: [ObjectId12]` field. Expiration uses this field to keep track of the full ancestry of transaction logs that generated this snapshot but were later expired. The list is ordered by ancestry, oldest first. Implementations MUST treat the concatenation of all these transaction logs, followed by the snapshot's own transaction log, as the full transaction history for the commit.
+Version 2.1 of the spec added the `pruned_ancestor_tx_logs: [ObjectId12]` field. Expiration uses this field to keep track of the full ancestry of transaction logs that generated this snapshot but were later expired. The list is ordered by ancestry, oldest first. Implementations MUST treat the concatenation of all these transaction logs, followed by the snapshot's own transaction log, as the full transaction history for the snapshot.
 
 Some implementations MAY compact these transaction logs to shorten the list, so readers MUST NOT assume that each entry corresponds to a real commit.
 
@@ -351,7 +351,7 @@ Each `ManifestRef` identifies a manifest file and the region of the array's chun
 
 ##### `ManifestFileInfo`
 
-The snapshot's `manifest_files` / `manifest_files_v2` lists provide summary metadata about every manifest file referenced by the snapshot. These are separate from the per-array `ManifestRef` pointers — they describe the manifest files themselves rather than which chunks they cover. V2+ repositories write their manifests using `ManifestFileInfoV2`; IC1 repositories use `ManifestFileInfo`.
+The snapshot's `manifest_files` / `manifest_files_v2` lists provide summary metadata about every manifest file referenced by the snapshot. These are separate from the per-array `ManifestRef` pointers — they describe the manifest files themselves rather than which chunks they cover. V2.x repositories write their manifests using `ManifestFileInfoV2`; IC1 repositories use `ManifestFileInfo`.
 
 ```protobuf
 --8<-- "icechunk-format/flatbuffers/snapshot.fbs:manifest_file_info"
