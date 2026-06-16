@@ -8,7 +8,7 @@ The major version increments only on an on-disk incompatible change, one that ol
 
 Every metadata file records a single-byte on-disk format version in its header. This byte equals the spec major version only, and is `2` for both spec 2.0 and spec 2.1. Minor spec versions are not encoded in the header; instead, minor-version features are detected at read time.
 
-The current spec is [version 2.1](./spec.md), introduced in Icechunk 2.1.0. All Icechunk 2.x libraries can read and write both spec 2.0 and 2.1 repositories (see [Compatibility](#compatibility)). Earlier formats are documented in [version 2](./spec-v2.md) (introduced in Icechunk 2.0.0) and [version 1](./spec-v1.md) (used by Icechunk 1.x).
+The current spec is [version 2.1](./spec-v2-1.md), introduced in Icechunk 2.1.0. All Icechunk 2.x libraries can read and write both spec 2.0 and 2.1 repositories (see [Compatibility](#compatibility)). Earlier formats are documented in [version 2](./spec-v2.md) (introduced in Icechunk 2.0.0) and [version 1](./spec-v1.md) (used by Icechunk 1.x).
 
 ## Library Versions
 
