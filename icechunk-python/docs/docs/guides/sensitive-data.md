@@ -18,7 +18,7 @@ However, not all (meta)data stored in Icechunk are permanently deletable. This i
 ### Not Deletable
 
 - Branch and tag names, commit messages, commit metadata, and the operation log are not removed by garbage collection. They live in the repo info file and its backups.
-- [Transaction logs](../reference/spec.md#transaction-log-files) cannot be fully removed if they are part of the branch's history ([design doc 16](https://github.com/earth-mover/icechunk/blob/main/design-docs/016-expired-transaction-logs.md)), so any [`move`](moving-nodes.md) operation can result in node path names being permanently persisted in storage.
+- [Transaction logs](../reference/spec-v2-1.md#transaction-log-files) cannot be fully removed if they are part of the branch's history ([design doc 16](https://github.com/earth-mover/icechunk/blob/main/design-docs/016-expired-transaction-logs.md)), so any [`move`](moving-nodes.md) operation can result in node path names being permanently persisted in storage.
 
 ## What to do
 
