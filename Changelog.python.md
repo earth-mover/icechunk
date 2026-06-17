@@ -7,6 +7,7 @@ This release introduces on-disk [spec version 2.1](https://icechunk.io/en/stable
 ### Features
 
 - Build Python wheels with the `abi3-py312` stable ABI, greatly reducing the number of published wheels. The minimum supported Python version remains 3.12 ([#2213](https://github.com/earth-mover/icechunk/pull/2213)).
+- Add a read-only Rust API to inspect metadata file headers ([#2216](https://github.com/earth-mover/icechunk/pull/2216)).
 
 ### Fixes
 

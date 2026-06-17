@@ -291,7 +291,7 @@ fn benchmark_get_chunks_concurrent(c: &mut Criterion) {
                             },
                             |get_chunks| {
                                 rt.block_on(async {
-                                    stream::iter(get_chunks.into_iter())
+                                    stream::iter(get_chunks)
                                         .for_each_concurrent(None, |idx| {
                                             let session = session.clone();
                                             let path = path.clone();
