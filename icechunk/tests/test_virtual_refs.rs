@@ -455,6 +455,92 @@ async fn test_file_virtual_ref_rejects_encoded_dotdot_traversal()
     .await
 }
 
+// A `file://` ref with an empty (`//`) path segment matches its container, but
+// the object_store local-FS backend cannot address such a key. The GET must
+// fail with a clear `UnsupportedObjectKeyForBackend`, not a cryptic error.
+#[tokio_test]
+async fn test_file_virtual_ref_empty_segment_unsupported_on_read()
+-> Result<(), Box<dyn Error>> {
+    let (repo, allowed, _legit, _secret, _parent, _repo_dir) =
+        setup_file_traversal_repo().await;
+    let mut ds = repo.writable_session("main").await?;
+    let path: Path = "/a".try_into().unwrap();
+    ds.add_array(
+        path.clone(),
+        ArrayShape::new(vec![(1, 1)]).unwrap(),
+        None,
+        Bytes::new(),
+    )
+    .await?;
+    let location = format!("file://{}/sub//chunk.bin", allowed.to_str().unwrap());
+    ds.set_chunk_ref(
+        path.clone(),
+        ChunkIndices(vec![0]),
+        Some(ChunkPayload::Virtual(VirtualChunkRef {
+            location: VirtualChunkLocation::from_url(&location)?,
+            offset: 0,
+            length: 4,
+            checksum: None,
+        })),
+    )
+    .await?;
+    let reader =
+        ds.get_chunk_reader(&path, &ChunkIndices(vec![0]), &ByteRange::ALL).await;
+    let read = match reader {
+        Ok(reader) => get_chunk(reader).await,
+        Err(e) => Err(e),
+    };
+    assert!(
+        matches!(
+            &read,
+            Err(SessionError {
+                kind: SessionErrorKind::VirtualReferenceError(
+                    VirtualReferenceErrorKind::UnsupportedObjectKeyForBackend(_)
+                ),
+                ..
+            })
+        ),
+        "a // key must fail with UnsupportedObjectKeyForBackend, got: {read:?}"
+    );
+    Ok(())
+}
+
+// Validating the container at write time rejects a `file://` key that the
+// local-FS object_store backend cannot address, before it is ever stored.
+#[tokio_test]
+async fn test_file_virtual_ref_empty_segment_rejected_at_write()
+-> Result<(), Box<dyn Error>> {
+    let (repo, allowed, _legit, _secret, _parent, _repo_dir) =
+        setup_file_traversal_repo().await;
+    let session = repo.writable_session("main").await?;
+    let store = Store::from_session(Arc::new(RwLock::new(session))).await;
+    let location = format!("file://{}/sub//chunk.bin", allowed.to_str().unwrap());
+    let reference = VirtualChunkRef {
+        location: VirtualChunkLocation::from_url(&location)?,
+        offset: 0,
+        length: 4,
+        checksum: None,
+    };
+    // Container validation runs before the ref is stored, so the array need not
+    // exist: the unsupported key is what makes this fail.
+    let res = store.set_virtual_ref("a/c/0", reference, true).await;
+    assert!(
+        matches!(
+            &res,
+            Err(StoreError {
+                kind: StoreErrorKind::SessionError(
+                    SessionErrorKind::VirtualReferenceError(
+                        VirtualReferenceErrorKind::UnsupportedObjectKeyForBackend(_)
+                    )
+                ),
+                ..
+            })
+        ),
+        "a validated write of a // key must be rejected, got: {res:?}"
+    );
+    Ok(())
+}
+
 #[tokio_test]
 #[apply(spec_version_cases)]
 async fn test_repository_with_local_virtual_refs(
@@ -1255,7 +1341,9 @@ async fn test_zarr_store_with_multiple_virtual_chunk_containers(
         [
             "s3://earthmover-sample-data/netcdf/oscar_vel2018.nc".to_string(),
             "s3://testbucket/path/to/chunk-1".to_string(),
-            "s3://testbucket/path%20with%20spaces/to/chunk-2".to_string(),
+            // Stored verbatim now: the literal space is no longer re-encoded to
+            // `%20` by `url::Url::parse` (object keys are opaque).
+            "s3://testbucket/path with spaces/to/chunk-2".to_string(),
             "s3://testbucket/path/to/chunk-3".to_string(),
             format!("file://{}", local_chunks[0].0),
             format!("file://{}", local_chunks[1].0),
@@ -1402,5 +1490,82 @@ async fn test_virtual_refs_with_vcc_relative_urls(
         .into()
     );
 
+    Ok(())
+}
+
+// A `vcc://` ref resolving to a `file://` container must not escape it via `..`.
+// The relative path is stored verbatim (it is an opaque key suffix), so the only
+// place that can enforce confinement is READ: once the location is expanded and
+// WHATWG-normalized, the escaped path no longer matches the container prefix.
+#[tokio_test]
+async fn test_vcc_relative_ref_rejects_file_traversal() -> Result<(), Box<dyn Error>> {
+    let parent = TempDir::new()?;
+    let allowed = parent.path().join("allowed");
+    std::fs::create_dir_all(&allowed)?;
+    let secret = Bytes::copy_from_slice(b"TOP-SECRET-CONTENTS");
+    std::fs::write(parent.path().join("secret.bin"), &secret)?;
+
+    let repo_dir = TempDir::new()?;
+    let storage: Arc<dyn Storage + Send + Sync> = Arc::new(
+        ObjectStorage::new_local_filesystem(repo_dir.path())
+            .await
+            .expect("Creating local storage failed"),
+    );
+    let prefix = format!("file://{}/", allowed.to_str().unwrap());
+    let container = VirtualChunkContainer::new_named(
+        "local-data".to_string(),
+        prefix.clone(),
+        ObjectStoreConfig::LocalFileSystem(PathBuf::new()),
+    )?;
+    let mut config = RepositoryConfig::default();
+    config.set_virtual_chunk_container(container)?;
+    let creds: HashMap<String, Option<Credentials>> = [(prefix, None)].into();
+    let repo =
+        Repository::create(Some(config), storage, creds, Some(SpecVersionBin::V2), true)
+            .await?;
+
+    let mut ds = repo.writable_session("main").await?;
+    let path: Path = "/a".try_into().unwrap();
+    ds.add_array(
+        path.clone(),
+        ArrayShape::new(vec![(1, 1)]).unwrap(),
+        None,
+        Bytes::new(),
+    )
+    .await?;
+
+    // The vcc relative path escapes the container via `..`; it is stored verbatim.
+    let location = VirtualChunkLocation::from_url("vcc://local-data/../secret.bin")?;
+    assert!(location.is_relative());
+    ds.set_chunk_ref(
+        path.clone(),
+        ChunkIndices(vec![0]),
+        Some(ChunkPayload::Virtual(VirtualChunkRef {
+            location,
+            offset: 0,
+            length: secret.len() as u64,
+            checksum: None,
+        })),
+    )
+    .await?;
+
+    let reader =
+        ds.get_chunk_reader(&path, &ChunkIndices(vec![0]), &ByteRange::ALL).await;
+    let read = match reader {
+        Ok(reader) => get_chunk(reader).await,
+        Err(e) => Err(e),
+    };
+    assert!(
+        matches!(
+            &read,
+            Err(SessionError {
+                kind: SessionErrorKind::VirtualReferenceError(
+                    VirtualReferenceErrorKind::NoContainerForUrl(_)
+                ),
+                ..
+            })
+        ),
+        "vcc://->file traversal must be rejected with NoContainerForUrl, got: {read:?}"
+    );
     Ok(())
 }

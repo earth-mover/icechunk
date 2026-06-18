@@ -47,7 +47,8 @@ use crate::{
         manifest::{
             ChunkInfo, ChunkPayload, ChunkRef, LocationCompressionConfig, Manifest,
             ManifestExtents, ManifestRef, ManifestSplits, Overlap, VirtualChunkLocation,
-            VirtualChunkRef, VirtualReferenceErrorKind, uniform_manifest_split_edges,
+            VirtualChunkRef, VirtualReferenceError, VirtualReferenceErrorKind,
+            uniform_manifest_split_edges,
         },
         repo_info::{RepoInfo, UpdateType},
         snapshot::{
@@ -603,6 +604,13 @@ impl Session {
         chunk_location: &VirtualChunkLocation,
     ) -> Option<&VirtualChunkContainer> {
         self.virtual_resolver.matching_container(chunk_location)
+    }
+
+    pub fn validate_virtual_chunk_location(
+        &self,
+        chunk_location: &VirtualChunkLocation,
+    ) -> Result<(), VirtualReferenceError> {
+        self.virtual_resolver.validate_virtual_chunk_location(chunk_location)
     }
 
     /// Create a "forked" [`Session`] from a "base" [`Session`]
@@ -1438,7 +1446,7 @@ impl Session {
     pub fn resolve_virtual_location(
         &self,
         location: &VirtualChunkLocation,
-    ) -> Result<String, icechunk_format::manifest::VirtualReferenceError> {
+    ) -> Result<String, VirtualReferenceError> {
         self.virtual_resolver.expand_location(location.url())
     }
 
