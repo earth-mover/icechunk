@@ -1,8 +1,12 @@
 # Changelog
 
-## Python Icechunk Library 2.1.0 [unreleased]
+## Python Icechunk Library 2.1.0
 
 This release introduces on-disk [spec version 2.1](https://icechunk.io/en/stable/reference/spec-v2-1/), an additive change that is forward- and backward-compatible with spec 2.0.
+
+### Breaking Changes
+
+- Stop publishing 32-bit wheels: `musllinux` for `i686` and `armv7l`, and `manylinux_2_28` for `armv7l`. Users on these platforms must now build from source ([#2214](https://github.com/earth-mover/icechunk/pull/2214)).
 
 ### Features
 

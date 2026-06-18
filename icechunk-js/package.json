@@ -1,6 +1,6 @@
 {
   "name": "@earthmover/icechunk",
-  "version": "2.0.6",
+  "version": "2.1.0",
   "description": "JavaScript/TypeScript bindings for Icechunk",
   "main": "index.js",
   "repository": {
