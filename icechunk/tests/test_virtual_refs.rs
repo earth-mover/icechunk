@@ -15,7 +15,7 @@ use icechunk::{
         snapshot::ArrayShape,
     },
     repository::VersionInfo,
-    session::{SessionErrorKind, get_chunk},
+    session::{SessionError, SessionErrorKind, get_chunk},
     storage::{
         self, ConcurrencySettings, ETag, ObjectStorage, mk_client, new_s3_storage,
     },
@@ -325,6 +325,136 @@ async fn write_chunks_to_azure(
     }
 }
 
+// Sets up a repository whose only authorized `file://` container is an
+// `allowed/` directory. A legit chunk `allowed/real.bin` lives INSIDE the
+// prefix, and a secret file lives OUTSIDE it (in the parent). Used to verify
+// that path traversal cannot read the secret while in-prefix refs still work.
+// The returned `TempDir`s must be kept alive for the duration of the test.
+async fn setup_file_traversal_repo()
+-> (Repository, PathBuf, Bytes, Bytes, TempDir, TempDir) {
+    let parent = TempDir::new().unwrap();
+    let allowed = parent.path().join("allowed");
+    std::fs::create_dir_all(&allowed).unwrap();
+    let legit = Bytes::copy_from_slice(b"legit-chunk-data");
+    std::fs::write(allowed.join("real.bin"), &legit).unwrap();
+    let secret = Bytes::copy_from_slice(b"TOP-SECRET-CONTENTS");
+    std::fs::write(parent.path().join("secret.bin"), &secret).unwrap();
+
+    let repo_dir = TempDir::new().unwrap();
+    let repo =
+        create_local_repository(repo_dir.path(), Some(&allowed), SpecVersionBin::V2)
+            .await;
+    (repo, allowed, legit, secret, parent, repo_dir)
+}
+
+// Proves the `file://` container at `allowed/` is live and authorized (an
+// in-prefix ref reads back `legit`), then asserts that a `malicious_location`
+// escaping the prefix is rejected with `NoContainerForUrl` — not silently read.
+async fn assert_traversal_rejected_but_legit_works(
+    repo: &Repository,
+    allowed: &StdPath,
+    legit: &Bytes,
+    secret_len: u64,
+    malicious_location: &str,
+) -> Result<(), Box<dyn Error>> {
+    let mut ds = repo.writable_session("main").await?;
+    let shape = || ArrayShape::new(vec![(1, 1)]).unwrap();
+
+    // Positive control: a ref INSIDE the authorized prefix reads back fine, so
+    // a later rejection cannot be blamed on a missing/unauthorized container.
+    let legit_path: Path = "/legit".try_into().unwrap();
+    ds.add_array(legit_path.clone(), shape(), None, Bytes::new()).await?;
+    let legit_location = format!("file://{}/real.bin", allowed.to_str().unwrap());
+    ds.set_chunk_ref(
+        legit_path.clone(),
+        ChunkIndices(vec![0]),
+        Some(ChunkPayload::Virtual(VirtualChunkRef {
+            location: VirtualChunkLocation::from_url(&legit_location)?,
+            offset: 0,
+            length: legit.len() as u64,
+            checksum: None,
+        })),
+    )
+    .await?;
+    let got = get_chunk(
+        ds.get_chunk_reader(&legit_path, &ChunkIndices(vec![0]), &ByteRange::ALL).await?,
+    )
+    .await?;
+    assert_eq!(
+        got.as_ref(),
+        Some(legit),
+        "in-prefix file:// ref must read back; the container must be live"
+    );
+
+    // The traversal ref escaping the prefix must be rejected.
+    let attack_path: Path = "/attack".try_into().unwrap();
+    ds.add_array(attack_path.clone(), shape(), None, Bytes::new()).await?;
+    ds.set_chunk_ref(
+        attack_path.clone(),
+        ChunkIndices(vec![0]),
+        Some(ChunkPayload::Virtual(VirtualChunkRef {
+            location: VirtualChunkLocation::from_url(malicious_location)?,
+            offset: 0,
+            length: secret_len,
+            checksum: None,
+        })),
+    )
+    .await?;
+    let reader =
+        ds.get_chunk_reader(&attack_path, &ChunkIndices(vec![0]), &ByteRange::ALL).await;
+    let read = match reader {
+        Ok(reader) => get_chunk(reader).await,
+        Err(e) => Err(e),
+    };
+    assert!(
+        matches!(
+            &read,
+            Err(SessionError {
+                kind: SessionErrorKind::VirtualReferenceError(
+                    VirtualReferenceErrorKind::NoContainerForUrl(_)
+                ),
+                ..
+            })
+        ),
+        "file:// traversal must be rejected with NoContainerForUrl for \
+         {malicious_location}, got: {read:?}"
+    );
+    Ok(())
+}
+
+// A plain `../` virtual ref cannot escape the authorized container prefix.
+#[tokio_test]
+async fn test_file_virtual_ref_rejects_dotdot_traversal() -> Result<(), Box<dyn Error>> {
+    let (repo, allowed, legit, secret, _parent, _repo_dir) =
+        setup_file_traversal_repo().await;
+    let location = format!("file://{}/../secret.bin", allowed.to_str().unwrap());
+    assert_traversal_rejected_but_legit_works(
+        &repo,
+        &allowed,
+        &legit,
+        secret.len() as u64,
+        &location,
+    )
+    .await
+}
+
+// A percent-encoded `..` (`%2e%2e`) must not bypass the canonicalization.
+#[tokio_test]
+async fn test_file_virtual_ref_rejects_encoded_dotdot_traversal()
+-> Result<(), Box<dyn Error>> {
+    let (repo, allowed, legit, secret, _parent, _repo_dir) =
+        setup_file_traversal_repo().await;
+    let location = format!("file://{}/%2e%2e/secret.bin", allowed.to_str().unwrap());
+    assert_traversal_rejected_but_legit_works(
+        &repo,
+        &allowed,
+        &legit,
+        secret.len() as u64,
+        &location,
+    )
+    .await
+}
+
 #[tokio_test]
 #[apply(spec_version_cases)]
 async fn test_repository_with_local_virtual_refs(
@@ -446,8 +576,7 @@ async fn test_repository_with_minio_virtual_refs(
     let user_data = Bytes::new();
     let payload1 = ChunkPayload::Virtual(VirtualChunkRef {
         location: VirtualChunkLocation::from_url(&format!(
-            // intentional extra '/'
-            "s3://testbucket///{}",
+            "s3://testbucket{}",
             chunks[0].0
         ))?,
         offset: 0,
@@ -456,7 +585,7 @@ async fn test_repository_with_minio_virtual_refs(
     });
     let payload2 = ChunkPayload::Virtual(VirtualChunkRef {
         location: VirtualChunkLocation::from_url(&format!(
-            "s3://testbucket/{}",
+            "s3://testbucket{}",
             chunks[1].0,
         ))?,
         offset: 1,
@@ -598,8 +727,7 @@ async fn test_zarr_store_virtual_refs_minio_set_and_get(
 
     let ref1 = VirtualChunkRef {
         location: VirtualChunkLocation::from_url(&format!(
-            // intentional extra '/'
-            "s3://testbucket///{}",
+            "s3://testbucket{}",
             chunks[0].0
         ))?,
         offset: 0,
@@ -608,7 +736,7 @@ async fn test_zarr_store_virtual_refs_minio_set_and_get(
     };
     let ref2 = VirtualChunkRef {
         location: VirtualChunkLocation::from_url(&format!(
-            "s3://testbucket/{}",
+            "s3://testbucket{}",
             chunks[1].0
         ))?,
         offset: 1,
@@ -968,8 +1096,7 @@ async fn test_zarr_store_with_multiple_virtual_chunk_containers(
     // set virtual refs in minio
     let ref1 = VirtualChunkRef {
         location: VirtualChunkLocation::from_url(&format!(
-            // intentional extra '/'
-            "s3://testbucket///{}",
+            "s3://testbucket{}",
             chunks[0].0
         ))?,
         offset: 0,
@@ -978,7 +1105,7 @@ async fn test_zarr_store_with_multiple_virtual_chunk_containers(
     };
     let ref2 = VirtualChunkRef {
         location: VirtualChunkLocation::from_url(&format!(
-            "s3://testbucket/{}",
+            "s3://testbucket{}",
             chunks[1].0
         ))?,
         offset: 1,
@@ -987,7 +1114,7 @@ async fn test_zarr_store_with_multiple_virtual_chunk_containers(
     };
     let ref3 = VirtualChunkRef {
         location: VirtualChunkLocation::from_url(&format!(
-            "s3://testbucket/{}",
+            "s3://testbucket{}",
             chunks[2].0
         ))?,
         offset: 1,

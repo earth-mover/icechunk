@@ -272,7 +272,7 @@ async def test_public_virtual_refs(
         name="year", shape=((72,)), chunks=((72,)), dtype="float32", compressors=None
     )
 
-    file_path = f"{url_prefix}/netcdf/oscar_vel2018.nc"
+    file_path = f"{url_prefix}netcdf/oscar_vel2018.nc"
     if use_async:
         await store.set_virtual_ref_async(
             "year/c/0",
@@ -517,6 +517,32 @@ def test_set_virtual_refs_arr_skips_empty_paths() -> None:
     # Only the two non-empty chunks should have been written
     locations = session.all_virtual_chunk_locations()
     assert sorted(locations) == ["s3://bucket/a.nc", "s3://bucket/c.nc"]
+
+
+def test_set_virtual_refs_preserves_url_parts() -> None:
+    """Regression test for https://github.com/earth-mover/icechunk/issues/2218
+
+    Virtual chunk locations used to drop userinfo, port, query and fragment from
+    the URL. They are now preserved; only the URL's path is normalized (``/b/../``
+    collapses while a repeated ``//`` is kept).
+    """
+    location = "https://user:pass@host.com:8443/a//b/../c.bin?versionId=42#frag"
+    expected = "https://user:pass@host.com:8443/a//c.bin?versionId=42#frag"
+
+    repo = Repository.create(storage=in_memory_storage())
+    session = repo.writable_session("main")
+    store = session.store
+
+    array = zarr.create_array(
+        store, shape=(10,), chunks=(10,), dtype="float32", compressors=None
+    )
+    store.set_virtual_refs(
+        array_path=array.path,
+        chunks=[VirtualChunkSpec(index=[0], location=location, offset=0, length=40)],
+        validate_containers=False,
+    )
+
+    assert next(iter(session.all_virtual_chunk_locations())) == expected
 
 
 @pytest.mark.filterwarnings("ignore:datetime.datetime.utcnow")

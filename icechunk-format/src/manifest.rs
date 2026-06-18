@@ -345,38 +345,32 @@ impl VirtualChunkLocation {
             })
             .capture()?;
         let scheme = url.scheme();
-        let segments = url
-            .path_segments()
+        // cannot-be-a-base URLs (e.g. `mailto:foo`) have no path segments and
+        // cannot name an object in a store.
+        url.path_segments()
             .ok_or_else(|| VirtualReferenceErrorKind::NoPathSegments(path.into()))
             .capture()?;
 
-        let host = if let Some(host) = url.host_str() {
-            host
-        } else if scheme == "file" {
-            ""
-        } else if scheme == "vcc" {
-            return Err(VirtualReferenceError::capture(
-                VirtualReferenceErrorKind::NoContainerForName(path.into()),
-            ));
-        } else {
-            return Err(VirtualReferenceError::capture(
-                VirtualReferenceErrorKind::CannotParseBucketName(path.into()),
-            ));
-        };
-
-        let mut result = String::with_capacity(path.len());
-        result.push_str(scheme);
-        result.push_str("://");
-        result.push_str(host);
-        result.push('/');
-        let mut sep = "";
-        for segment in segments.filter(|x| !x.is_empty()) {
-            result.push_str(sep);
-            result.push_str(segment);
-            sep = "/";
+        if url.host_str().is_none() {
+            match scheme {
+                "file" => {}
+                "vcc" => {
+                    return Err(VirtualReferenceError::capture(
+                        VirtualReferenceErrorKind::NoContainerForName(path.into()),
+                    ));
+                }
+                _ => {
+                    return Err(VirtualReferenceError::capture(
+                        VirtualReferenceErrorKind::CannotParseBucketName(path.into()),
+                    ));
+                }
+            }
         }
 
-        Ok(VirtualChunkLocation(result))
+        // The `url` crate already normalizes the URL (collapsing `/../` and `/./`
+        // path segments) while preserving every part that identifies the object:
+        // userinfo, port, query and fragment. Store that normalized form verbatim.
+        Ok(VirtualChunkLocation(url.as_str().to_string()))
     }
 }
 
@@ -1125,6 +1119,21 @@ mod tests {
             ),
         );
         prop_assert_eq!(extent2.overlap_with(&extent1), Overlap::Partial);
+    }
+
+    // Regression test for https://github.com/earth-mover/icechunk/issues/2218
+    // VirtualChunkLocation::from_url used to drop userinfo, port, query and
+    // fragment from the URL. It now preserves them, only applying the `url`
+    // crate's path normalization (`/b/../` collapses, but repeated `//` stays).
+    #[icechunk_macros::test]
+    fn test_from_url_preserves_all_url_parts() -> Result<(), Box<dyn Error>> {
+        let input = "https://user:pass@host.com:8443/a//b/../c.bin?versionId=42#frag";
+        let stored = VirtualChunkLocation::from_url(input)?;
+        assert_eq!(
+            stored.url(),
+            "https://user:pass@host.com:8443/a//c.bin?versionId=42#frag"
+        );
+        Ok(())
     }
 
     #[icechunk_macros::test]
