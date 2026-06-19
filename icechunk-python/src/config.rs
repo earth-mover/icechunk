@@ -31,7 +31,8 @@ use icechunk::{
     virtual_chunks::VirtualChunkContainer,
 };
 use pyo3::{
-    Bound, FromPyObject, Py, PyErr, PyResult, Python, pyclass, pymethods,
+    Bound, FromPyObject, Py, PyClassInitializer, PyErr, PyResult, Python, pyclass,
+    pymethods,
     types::{PyAnyMethods as _, PyModule, PyType},
 };
 
@@ -42,7 +43,7 @@ use crate::display::{
 };
 use crate::errors::PyIcechunkStoreError;
 
-#[pyclass(name = "S3StaticCredentials")]
+#[pyclass(from_py_object, name = "S3StaticCredentials")]
 #[derive(Clone, Debug)]
 pub struct PyS3StaticCredentials {
     #[pyo3(get, set)]
@@ -269,7 +270,7 @@ impl GcsCredentialsFetcher for PythonCredentialsFetcher<GcsBearerCredential> {
     }
 }
 
-#[pyclass(name = "S3Credentials")]
+#[pyclass(from_py_object, name = "S3Credentials")]
 #[derive(Clone, Debug)]
 pub enum PyS3Credentials {
     FromEnv(),
@@ -297,7 +298,7 @@ impl From<PyS3Credentials> for S3Credentials {
     }
 }
 
-#[pyclass(name = "GcsStaticCredentials")]
+#[pyclass(from_py_object, name = "GcsStaticCredentials")]
 #[derive(Clone, Debug)]
 pub enum PyGcsStaticCredentials {
     ServiceAccount(String),
@@ -328,7 +329,7 @@ impl From<PyGcsStaticCredentials> for GcsStaticCredentials {
     }
 }
 
-#[pyclass(name = "GcsBearerCredential")]
+#[pyclass(from_py_object, name = "GcsBearerCredential")]
 #[derive(Clone, Debug)]
 pub struct PyGcsBearerCredential {
     #[pyo3(get)]
@@ -358,7 +359,7 @@ impl From<GcsBearerCredential> for PyGcsBearerCredential {
     }
 }
 
-#[pyclass(name = "GcsCredentials")]
+#[pyclass(from_py_object, name = "GcsCredentials")]
 #[derive(Clone, Debug)]
 pub enum PyGcsCredentials {
     Anonymous(),
@@ -386,7 +387,7 @@ impl From<PyGcsCredentials> for GcsCredentials {
     }
 }
 
-#[pyclass(name = "AzureRefreshableCredential")]
+#[pyclass(from_py_object, name = "AzureRefreshableCredential")]
 #[derive(Clone, Debug)]
 pub enum PyAzureRefreshableCredential {
     AccessKey { key: String, expires_after: Option<DateTime<Utc>> },
@@ -426,7 +427,7 @@ impl From<AzureRefreshableCredential> for PyAzureRefreshableCredential {
     }
 }
 
-#[pyclass(name = "AzureStaticCredentials")]
+#[pyclass(from_py_object, name = "AzureStaticCredentials")]
 #[derive(Clone, Debug)]
 pub enum PyAzureStaticCredentials {
     AccessKey(String),
@@ -450,7 +451,7 @@ impl From<PyAzureStaticCredentials> for AzureStaticCredentials {
     }
 }
 
-#[pyclass(name = "AzureCredentials")]
+#[pyclass(from_py_object, name = "AzureCredentials")]
 #[derive(Clone, Debug)]
 pub enum PyAzureCredentials {
     Anonymous(),
@@ -462,7 +463,7 @@ pub enum PyAzureCredentials {
     },
 }
 
-#[pyclass(name = "Credentials")]
+#[pyclass(from_py_object, name = "Credentials")]
 #[derive(Clone, Debug)]
 pub enum PyCredentials {
     S3(PyS3Credentials),
@@ -499,7 +500,7 @@ impl From<PyCredentials> for Credentials {
     }
 }
 
-#[pyclass(name = "ChecksumAlgorithm", eq, eq_int)]
+#[pyclass(from_py_object, name = "ChecksumAlgorithm", eq, eq_int)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PyChecksumAlgorithm {
     Crc32,
@@ -533,7 +534,7 @@ impl From<S3ChecksumAlgorithm> for PyChecksumAlgorithm {
     }
 }
 
-#[pyclass(name = "S3Options", eq)]
+#[pyclass(from_py_object, name = "S3Options", eq)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PyS3Options {
     #[pyo3(get, set)]
@@ -657,7 +658,7 @@ impl From<S3Options> for PyS3Options {
     }
 }
 
-#[pyclass(name = "ObjectStoreConfig", eq)]
+#[pyclass(from_py_object, name = "ObjectStoreConfig", eq)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PyObjectStoreConfig {
     InMemory(),
@@ -806,7 +807,7 @@ impl From<ObjectStoreConfig> for PyObjectStoreConfig {
     }
 }
 
-#[pyclass(name = "VirtualChunkContainer", eq)]
+#[pyclass(from_py_object, name = "VirtualChunkContainer", eq)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PyVirtualChunkContainer {
     #[pyo3(get, set)]
@@ -875,7 +876,7 @@ impl From<VirtualChunkContainer> for PyVirtualChunkContainer {
     }
 }
 
-#[pyclass(name = "CompressionAlgorithm", eq, eq_int)]
+#[pyclass(from_py_object, name = "CompressionAlgorithm", eq, eq_int)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PyCompressionAlgorithm {
     Zstd,
@@ -911,7 +912,7 @@ impl From<PyCompressionAlgorithm> for CompressionAlgorithm {
     }
 }
 
-#[pyclass(name = "CompressionConfig", eq)]
+#[pyclass(skip_from_py_object, name = "CompressionConfig", eq)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PyCompressionConfig {
     #[pyo3(get, set)]
@@ -987,7 +988,7 @@ impl From<&PyCompressionConfig> for CompressionConfig {
     }
 }
 
-#[pyclass(name = "CachingConfig", eq)]
+#[pyclass(skip_from_py_object, name = "CachingConfig", eq)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PyCachingConfig {
     #[pyo3(get, set)]
@@ -1119,7 +1120,7 @@ impl From<CachingConfig> for PyCachingConfig {
     }
 }
 
-#[pyclass(name = "StorageRetriesSettings", eq)]
+#[pyclass(skip_from_py_object, name = "StorageRetriesSettings", eq)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PyStorageRetriesSettings {
     #[pyo3(get, set)]
@@ -1205,7 +1206,7 @@ impl PyStorageRetriesSettings {
     }
 }
 
-#[pyclass(name = "StorageTimeoutSettings", eq)]
+#[pyclass(skip_from_py_object, name = "StorageTimeoutSettings", eq)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PyStorageTimeoutSettings {
     #[pyo3(get, set)]
@@ -1356,7 +1357,7 @@ impl PyRepoUpdateRetryConfig {
     }
 }
 
-#[pyclass(name = "StorageConcurrencySettings", eq)]
+#[pyclass(skip_from_py_object, name = "StorageConcurrencySettings", eq)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PyStorageConcurrencySettings {
     #[pyo3(get, set)]
@@ -1617,7 +1618,7 @@ impl PyStorageSettings {
     }
 }
 
-#[pyclass(name = "ManifestPreloadCondition", eq)]
+#[pyclass(from_py_object, name = "ManifestPreloadCondition", eq)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PyManifestPreloadCondition {
     Or(Vec<PyManifestPreloadCondition>),
@@ -1875,7 +1876,7 @@ impl From<ManifestPreloadConfig> for PyManifestPreloadConfig {
     }
 }
 
-#[pyclass(name = "ManifestSplitCondition", eq)]
+#[pyclass(from_py_object, name = "ManifestSplitCondition", eq)]
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub enum PyManifestSplitCondition {
     Or(Vec<PyManifestSplitCondition>),
@@ -1991,7 +1992,7 @@ impl From<ManifestSplitCondition> for PyManifestSplitCondition {
     }
 }
 
-#[pyclass(name = "ManifestSplitDimCondition")]
+#[pyclass(from_py_object, name = "ManifestSplitDimCondition")]
 #[derive(Clone, Debug, Hash)]
 pub enum PyManifestSplitDimCondition {
     Axis(usize),
@@ -2732,7 +2733,7 @@ impl PyRepositoryConfig {
 }
 
 /// Metadata for an object in storage.
-#[pyclass(name = "StorageObjectInfo", frozen, eq)]
+#[pyclass(skip_from_py_object, name = "StorageObjectInfo", frozen, eq)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PyStorageObjectInfo {
     #[pyo3(get)]
@@ -2770,7 +2771,7 @@ impl PyStorageObjectInfo {
     }
 }
 
-#[pyclass(name = "Storage", subclass)]
+#[pyclass(from_py_object, name = "Storage", subclass)]
 #[derive(Clone, Debug)]
 pub(crate) struct PyStorage(pub Arc<dyn Storage + Send + Sync>);
 
@@ -2810,7 +2811,7 @@ impl PyRepr for PyStorage {
 /// >>> storage = LatencyStorage(ic.in_memory_storage(), write_latency_ms=15)
 /// >>> repo = ic.Repository.create(storage=storage, ...)
 /// >>> storage.write_latency_ms = 50  # adjust at runtime
-#[pyclass(name = "LatencyStorage", extends = PyStorage)]
+#[pyclass(skip_from_py_object, name = "LatencyStorage", extends = PyStorage)]
 #[derive(Clone, Debug)]
 pub(crate) struct PyLatencyStorage {
     latency: Arc<storage::latency::LatencyStorage>,
@@ -2824,14 +2825,14 @@ impl PyLatencyStorage {
         inner: PyStorage,
         write_latency_ms: u64,
         read_latency_ms: u64,
-    ) -> (Self, PyStorage) {
+    ) -> PyClassInitializer<Self> {
         let latency = Arc::new(storage::latency::LatencyStorage::new(
             inner.0,
             write_latency_ms,
             read_latency_ms,
         ));
         let base = PyStorage(Arc::clone(&latency) as Arc<dyn Storage + Send + Sync>);
-        (Self { latency }, base)
+        PyClassInitializer::from(base).add_subclass(Self { latency })
     }
 
     #[getter]

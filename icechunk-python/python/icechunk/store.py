@@ -260,7 +260,8 @@ class IcechunkStore(Store, SyncMixin):
         key : str
             The chunk to store the reference under. This is the fully qualified zarr key eg: 'array/c/0/0/0'
         location : str
-            The location of the chunk in storage. This is absolute path to the chunk in storage eg: 's3://bucket/path/to/file.nc'
+            The location of the chunk in storage, as a URL. This is the absolute path to the chunk in storage eg: 's3://bucket/path/to/file.nc'.
+            The object key is the URL path, used verbatim (``//`` and ``.``/``..`` are preserved). Characters reserved in a URL that are part of the key must be percent-encoded, in particular ``?`` -> ``%3F``, ``#`` -> ``%23`` and ``%`` -> ``%25``.
         offset : int
             The offset in bytes from the start of the file location in storage the chunk starts at
         length : int
@@ -344,7 +345,8 @@ class IcechunkStore(Store, SyncMixin):
         key : str
             The chunk to store the reference under. This is the fully qualified zarr key eg: 'array/c/0/0/0'
         location : str
-            The location of the chunk in storage. This is absolute path to the chunk in storage eg: 's3://bucket/path/to/file.nc'
+            The location of the chunk in storage, as a URL. This is the absolute path to the chunk in storage eg: 's3://bucket/path/to/file.nc'.
+            The object key is the URL path, used verbatim (``//`` and ``.``/``..`` are preserved). Characters reserved in a URL that are part of the key must be percent-encoded, in particular ``?`` -> ``%3F``, ``#`` -> ``%23`` and ``%`` -> ``%25``.
         offset : int
             The offset in bytes from the start of the file location in storage the chunk starts at
         length : int
@@ -448,6 +450,10 @@ class IcechunkStore(Store, SyncMixin):
             URLs to external files containing chunk data. Empty strings
             represent missing chunks and are silently skipped.
             Example: ["s3://bucket/file1.nc", "s3://bucket/file2.nc"]
+            Each is a URL; the object key is its path, used verbatim (``//`` and
+            ``.``/``..`` are preserved). Characters reserved in a URL that are part
+            of the key must be percent-encoded (``?`` -> ``%3F``, ``#`` -> ``%23``,
+            ``%`` -> ``%25``).
         offsets : np.ndarray
             1-D uint64 array of byte offsets within each file.
         lengths : np.ndarray
@@ -514,6 +520,10 @@ class IcechunkStore(Store, SyncMixin):
             URLs to external files containing chunk data. Empty strings
             represent missing chunks and are silently skipped.
             Example: ["s3://bucket/file1.nc", "s3://bucket/file2.nc"]
+            Each is a URL; the object key is its path, used verbatim (``//`` and
+            ``.``/``..`` are preserved). Characters reserved in a URL that are part
+            of the key must be percent-encoded (``?`` -> ``%3F``, ``#`` -> ``%23``,
+            ``%`` -> ``%25``).
         offsets : np.ndarray
             1-D uint64 array of byte offsets within each file.
         lengths : np.ndarray

@@ -240,6 +240,10 @@ pub enum VirtualReferenceErrorKind {
     UnsupportedScheme(String),
     #[error("error parsing bucket name from virtual ref URL {0}")]
     CannotParseBucketName(String),
+    #[error(
+        "object store backend cannot address key {0:?}: it contains empty (//), '.' or '..' path segments. If you need support for keys like this, please reach out to the Icechunk team by opening an issue describing your situation at https://github.com/earth-mover/icechunk/issues"
+    )]
+    UnsupportedObjectKeyForBackend(String),
     #[error("error fetching virtual reference")]
     FetchError(#[source] Box<dyn std::error::Error + Send + Sync>),
     #[error("the checksum of the object owning the virtual chunk has changed ({0})")]
@@ -326,18 +330,76 @@ impl VirtualChunkLocation {
         Ok(VirtualChunkLocation(result))
     }
 
-    /// Parse a location that may be either `vcc://` relative or an absolute URL.
+    /// Parse a virtual chunk location from a URL string.
+    ///
+    /// `path` is a URL: an absolute location (`s3://`, `gs://`, `file://`,
+    /// `https://`, …) or a `vcc://name/relative` reference into a named container.
+    ///
+    /// For object-store schemes the object key is the URL's path and is kept
+    /// **verbatim** — repeated slashes (`//`) and `.`/`..` segments are preserved,
+    /// not normalized, so the reference always addresses the exact object. Because
+    /// the input is a URL, any character that is reserved in a URL and is meant to
+    /// be part of the key must be percent-encoded. In particular `?` and `#` start
+    /// the URL query and fragment, so a key that literally contains them (or a
+    /// literal `%`) must be encoded: the key `a?b#c` is the URL
+    /// `s3://bucket/a%3Fb%23c`, and a literal `%` is written `%25`. A query or
+    /// fragment, if present, is preserved in the stored location but is not part
+    /// of the object key.
+    ///
+    /// `file://` is the exception: its path is WHATWG-normalized (resolving
+    /// `.`/`..`), which is required so a reference cannot escape its container.
     pub fn from_url(path: &str) -> Result<VirtualChunkLocation, VirtualReferenceError> {
-        // vcc:// URLs are valid URL scheme, so from_absolute_path handles both
-        // absolute (s3://, gcs://, file://) and relative (vcc://) URLs correctly.
+        // vcc:// is a valid URL scheme, so from_absolute_path handles absolute
+        // (s3://, gcs://, file://, …) and relative (vcc://) URLs alike.
         Self::from_absolute_path(path)
     }
 
     fn from_absolute_path(
         path: &str,
     ) -> Result<VirtualChunkLocation, VirtualReferenceError> {
-        // make sure we can parse the provided URL before creating the enum
-        // TODO: consider other validation here.
+        match path.split_once("://") {
+            // Object-store and `vcc://` schemes use the verbatim path as location
+            Some((scheme, after_scheme)) if !scheme.eq_ignore_ascii_case("file") => {
+                Self::from_verbatim_url(path, scheme, after_scheme)
+            }
+            // `file://` is a security boundary: there `..` is a path traversal
+            // and must be normalized away.
+            // Anything without a clean `scheme://` (like `mailto:foo`,
+            // single-slash forms like `s3:/x`, or malformed input) is rare and
+            // goes through the parser too for normalization and good errors
+            _ => Self::from_normalized_url(path),
+        }
+    }
+
+    /// Cheap validation for virtual chunk locations in object stores or vcc schemes
+    fn from_verbatim_url(
+        path: &str,
+        scheme: &str,
+        after_scheme: &str,
+    ) -> Result<VirtualChunkLocation, VirtualReferenceError> {
+        // Authority is the substring between "://" and the first '/', '?' or '#'.
+        // It must be non-empty: a bucket/host, or a `vcc://` container name.
+        let authority_len =
+            after_scheme.find(['/', '?', '#']).unwrap_or(after_scheme.len());
+        if authority_len == 0 {
+            let kind = if scheme.eq_ignore_ascii_case("vcc") {
+                VirtualReferenceErrorKind::NoContainerForName(path.to_string())
+            } else {
+                VirtualReferenceErrorKind::CannotParseBucketName(path.to_string())
+            };
+            return Err(VirtualReferenceError::capture(kind));
+        }
+
+        // We normalize scheme that is not part of the actual object store key
+        let mut location = path.to_string();
+        location[..scheme.len()].make_ascii_lowercase();
+        Ok(VirtualChunkLocation(location))
+    }
+
+    /// Normalize the full url, including the filesystem "key"
+    fn from_normalized_url(
+        path: &str,
+    ) -> Result<VirtualChunkLocation, VirtualReferenceError> {
         let url = url::Url::parse(path)
             .map_err(|e| VirtualReferenceErrorKind::CannotParseUrl {
                 cause: e,
@@ -345,38 +407,29 @@ impl VirtualChunkLocation {
             })
             .capture()?;
         let scheme = url.scheme();
-        let segments = url
-            .path_segments()
+        // cannot-be-a-base URLs (e.g. `mailto:foo`) have no path segments and
+        // cannot name an object in a store.
+        url.path_segments()
             .ok_or_else(|| VirtualReferenceErrorKind::NoPathSegments(path.into()))
             .capture()?;
 
-        let host = if let Some(host) = url.host_str() {
-            host
-        } else if scheme == "file" {
-            ""
-        } else if scheme == "vcc" {
-            return Err(VirtualReferenceError::capture(
-                VirtualReferenceErrorKind::NoContainerForName(path.into()),
-            ));
-        } else {
-            return Err(VirtualReferenceError::capture(
-                VirtualReferenceErrorKind::CannotParseBucketName(path.into()),
-            ));
-        };
-
-        let mut result = String::with_capacity(path.len());
-        result.push_str(scheme);
-        result.push_str("://");
-        result.push_str(host);
-        result.push('/');
-        let mut sep = "";
-        for segment in segments.filter(|x| !x.is_empty()) {
-            result.push_str(sep);
-            result.push_str(segment);
-            sep = "/";
+        if url.host_str().is_none() {
+            match scheme {
+                "file" => {}
+                "vcc" => {
+                    return Err(VirtualReferenceError::capture(
+                        VirtualReferenceErrorKind::NoContainerForName(path.into()),
+                    ));
+                }
+                _ => {
+                    return Err(VirtualReferenceError::capture(
+                        VirtualReferenceErrorKind::CannotParseBucketName(path.into()),
+                    ));
+                }
+            }
         }
 
-        Ok(VirtualChunkLocation(result))
+        Ok(VirtualChunkLocation(url.as_str().to_string()))
     }
 }
 
@@ -1125,6 +1178,101 @@ mod tests {
             ),
         );
         prop_assert_eq!(extent2.overlap_with(&extent1), Overlap::Partial);
+    }
+
+    // Regression test for https://github.com/earth-mover/icechunk/issues/2218
+    // VirtualChunkLocation::from_url used to drop userinfo, port, query and
+    // fragment from the URL, which corrupts opaque object keys.
+    // Non-`file://` locations are now stored verbatim: every URL part,
+    // including repeated `//` and literal `..`, is preserved exactly.
+    #[icechunk_macros::test]
+    fn test_from_url_preserves_all_url_parts() -> Result<(), Box<dyn Error>> {
+        let input = "https://user:pass@host.com:8443/a//b/../c.bin?versionId=42#frag";
+        let stored = VirtualChunkLocation::from_url(input)?;
+        assert_eq!(stored.url(), input);
+        Ok(())
+    }
+
+    // Object-store keys are opaque: `//`, `.` and `..` are literal bytes that
+    // must survive verbatim, never collapsed by URL normalization.
+    #[icechunk_macros::test]
+    fn test_from_url_object_store_keys_are_verbatim() -> Result<(), Box<dyn Error>> {
+        for input in [
+            "s3://foo/bar//../baz",
+            "gcs://b/a//b",
+            "s3://bucket/key.with.dots/../sibling",
+            "az://container/a/./b//c",
+            "tigris://bucket/x//y",
+            "https://host/a//b/../c.bin?v=1#frag",
+        ] {
+            assert_eq!(VirtualChunkLocation::from_url(input)?.url(), input);
+        }
+        // userinfo, port, query and fragment all survive untouched too.
+        let with_parts = "s3://user:pass@host:9000/a//b/../c?x=1#f";
+        assert_eq!(VirtualChunkLocation::from_url(with_parts)?.url(), with_parts);
+        Ok(())
+    }
+
+    // `vcc://` relative locations are opaque key suffixes too, so they are also
+    // stored verbatim (their `//`/`..` must not be normalized before expansion).
+    #[icechunk_macros::test]
+    fn test_from_url_vcc_is_verbatim() -> Result<(), Box<dyn Error>> {
+        let input = "vcc://name/a//b/../c";
+        assert_eq!(VirtualChunkLocation::from_url(input)?.url(), input);
+        Ok(())
+    }
+
+    // `file://` is a security boundary: it's processed via normalization, so
+    // `/../` and `%2e%2e` are resolved away
+    #[icechunk_macros::test]
+    fn test_from_url_file_is_normalized() -> Result<(), Box<dyn Error>> {
+        assert_eq!(
+            VirtualChunkLocation::from_url("file:///a/b/../c")?.url(),
+            "file:///a/c"
+        );
+        assert_eq!(
+            VirtualChunkLocation::from_url("file:///authorized/%2e%2e/secret")?.url(),
+            "file:///secret"
+        );
+        Ok(())
+    }
+
+    // Scheme casing is normalized (it is not part of the key), so container
+    // matching stays stable, but the key bytes are untouched.
+    #[icechunk_macros::test]
+    fn test_from_url_lowercases_scheme_only() -> Result<(), Box<dyn Error>> {
+        assert_eq!(
+            VirtualChunkLocation::from_url("S3://Bucket/Key//..")?.url(),
+            "s3://Bucket/Key//.."
+        );
+        Ok(())
+    }
+
+    #[icechunk_macros::test]
+    fn test_from_url_rejects_bad_input() {
+        use VirtualReferenceErrorKind::*;
+        let kind =
+            |s: &str| VirtualChunkLocation::from_url(s).map(|_| ()).unwrap_err().kind;
+
+        // Not a URL at all: a precise parse error.
+        assert!(matches!(kind("not-a-url"), CannotParseUrl { .. }));
+        assert!(matches!(kind(""), CannotParseUrl { .. }));
+        // cannot-be-a-base URLs (no authority, no path segments).
+        assert!(matches!(kind("mailto:foo"), NoPathSegments(_)));
+        // Has a scheme and an authority slot, but the authority is empty.
+        assert!(matches!(kind("s3:///key"), CannotParseBucketName(_)));
+        assert!(matches!(kind("vcc:///rel"), NoContainerForName(_)));
+        // Single-slash forms parse with a path but no authority/bucket: the
+        // error must reflect the missing bucket
+        assert!(matches!(kind("s3:/bucket/key"), CannotParseBucketName(_)));
+    }
+
+    // `file:/x` (single slash, no authority) is accepted and normalized to
+    // `file:///x`
+    #[icechunk_macros::test]
+    fn test_from_url_file_single_slash_accepted() -> Result<(), Box<dyn Error>> {
+        assert_eq!(VirtualChunkLocation::from_url("file:/x")?.url(), "file:///x");
+        Ok(())
     }
 
     #[icechunk_macros::test]

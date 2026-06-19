@@ -354,6 +354,8 @@ pub enum IcechunkFormatErrorKind {
     UnsupportedOperationForVersion { version: u8 },
     #[error("Icechunk cannot read this file type, expected {expected:?} got {got}")]
     InvalidFileType { expected: FileTypeBin, got: u8 }, // TODO: add more info
+    #[error("Icechunk encountered an unknown file type code {got}")]
+    UnknownFileType { got: u8 },
     #[error("Icechunk cannot read file, invalid compression algorithm")]
     InvalidCompressionAlgorithm, // TODO: add more info
     #[error("Invalid Icechunk metadata file")]
@@ -406,9 +408,10 @@ pub type IcechunkResult<T> = Result<T, IcechunkFormatError>;
 pub mod format_constants {
     use std::sync::LazyLock;
 
+    use icechunk_types::ICResultExt as _;
     use serde::{Deserialize, Serialize};
 
-    use super::IcechunkFormatErrorKind;
+    use super::{IcechunkFormatError, IcechunkFormatErrorKind};
 
     /// Binary file type identifier in the file header.
     #[repr(u8)]
@@ -546,6 +549,74 @@ pub mod format_constants {
 
     pub const ICECHUNK_COMPRESSION_METADATA_KEY: &str = "ic_comp_alg";
     pub const ICECHUNK_COMPRESSION_ZSTD: &str = "zstd";
+
+    /// Decoded contents of a metadata file's binary header.
+    ///
+    /// Parsing of `impl_name` and `app_name` is best effort only.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct FileHeader {
+        /// Raw, trimmed implementation/client string, e.g. `"ic-2.1.0"`.
+        pub impl_name: String,
+        /// Best-effort app name: `impl_name` before the first `'-'` (e.g. `"ic"`).
+        pub app_name: String,
+        /// Best-effort version: `impl_name` after the first `'-'` (e.g. `"2.1.0"`);
+        /// `None` if there is no `'-'`.
+        pub app_version: Option<String>,
+        pub spec_version: SpecVersionBin,
+        pub file_type: FileTypeBin,
+        pub compression: CompressionAlgorithmBin,
+    }
+
+    /// Parse a file header from the first [`ICECHUNK_FILE_HEADER_LEN`] bytes of any
+    /// metadata file.
+    ///
+    /// Discovers (does not assert) the file type, so it works for every metadata
+    /// file kind. Tolerant about the impl-name string content.
+    pub fn parse_file_header(buf: &[u8]) -> Result<FileHeader, IcechunkFormatError> {
+        use IcechunkFormatErrorKind as K;
+
+        if buf.len() < ICECHUNK_FILE_HEADER_LEN {
+            return Err(K::InvalidIcechunkHeaderSize {
+                found: buf.len(),
+                expected: ICECHUNK_FILE_HEADER_LEN,
+            })
+            .capture();
+        }
+        if !buf.starts_with(ICECHUNK_FORMAT_MAGIC_BYTES) {
+            return Err(K::InvalidMagicNumbers).capture();
+        }
+
+        let impl_bytes =
+            &buf[ICECHUNK_FORMAT_MAGIC_BYTES.len()..ICECHUNK_SPEC_VERSION_OFFSET];
+        let impl_name =
+            String::from_utf8_lossy(impl_bytes).trim_end_matches([' ', '\0']).to_string();
+        let (app_name, app_version) = match impl_name.split_once('-') {
+            Some((name, version)) => (name.to_string(), Some(version.to_string())),
+            None => (impl_name.clone(), None),
+        };
+
+        let spec_version =
+            SpecVersionBin::try_from(buf[ICECHUNK_SPEC_VERSION_OFFSET]).capture()?;
+
+        let file_type_byte = buf[ICECHUNK_FILE_TYPE_OFFSET];
+        let file_type = FileTypeBin::try_from(file_type_byte)
+            .map_err(|_| K::UnknownFileType { got: file_type_byte })
+            .capture()?;
+
+        let compression =
+            CompressionAlgorithmBin::try_from(buf[ICECHUNK_COMPRESSION_OFFSET])
+                .map_err(|_| K::InvalidCompressionAlgorithm)
+                .capture()?;
+
+        Ok(FileHeader {
+            impl_name,
+            app_name,
+            app_version,
+            spec_version,
+            file_type,
+            compression,
+        })
+    }
 }
 
 #[inline(always)]
@@ -656,5 +727,147 @@ mod tests {
             msg.contains("upgrade the icechunk library"),
             "Error should suggest upgrading: {msg}"
         );
+    }
+
+    /// Build a binary file header with an arbitrary impl string (right-padded to
+    /// `ICECHUNK_IMPL_NAME_LEN`, mirroring `binary_file_header` in the `icechunk`
+    /// crate), so tests can exercise `parse_file_header` directly.
+    fn make_header(impl_name: &str, spec: u8, file_type: u8, compression: u8) -> Vec<u8> {
+        use format_constants::*;
+        let mut buf = Vec::with_capacity(ICECHUNK_FILE_HEADER_LEN);
+        buf.extend_from_slice(ICECHUNK_FORMAT_MAGIC_BYTES);
+        let padded = format!("{impl_name:<ICECHUNK_IMPL_NAME_LEN$}");
+        buf.extend_from_slice(&padded.as_bytes()[..ICECHUNK_IMPL_NAME_LEN]);
+        buf.push(spec);
+        buf.push(file_type);
+        buf.push(compression);
+        buf
+    }
+
+    #[icechunk_macros::test]
+    fn test_parse_file_header_roundtrip() {
+        use format_constants::*;
+        let mut buf = make_header(
+            ICECHUNK_CLIENT_NAME.as_str(),
+            SpecVersionBin::V2 as u8,
+            FileTypeBin::Snapshot as u8,
+            CompressionAlgorithmBin::Zstd as u8,
+        );
+        // body bytes after the header must be ignored
+        buf.extend_from_slice(b"a compressed body would go here");
+
+        let header = parse_file_header(&buf).unwrap();
+        assert_eq!(header.impl_name, *ICECHUNK_CLIENT_NAME);
+        assert_eq!(header.app_name, "ic");
+        assert_eq!(header.app_version.as_deref(), Some(ICECHUNK_LIB_VERSION));
+        assert_eq!(header.spec_version, SpecVersionBin::V2);
+        assert_eq!(header.file_type, FileTypeBin::Snapshot);
+        assert_eq!(header.compression, CompressionAlgorithmBin::Zstd);
+    }
+
+    #[icechunk_macros::test]
+    fn test_parse_file_header_trims_padding() {
+        use format_constants::*;
+        // exactly the header, no body: the 24-byte impl field is space-padded
+        let buf = make_header(
+            "ic-9.9.9",
+            SpecVersionBin::V1 as u8,
+            FileTypeBin::Manifest as u8,
+            CompressionAlgorithmBin::None as u8,
+        );
+        let header = parse_file_header(&buf).unwrap();
+        assert_eq!(header.impl_name, "ic-9.9.9");
+        assert_eq!(header.app_name, "ic");
+        assert_eq!(header.app_version.as_deref(), Some("9.9.9"));
+        assert_eq!(header.spec_version, SpecVersionBin::V1);
+        assert_eq!(header.file_type, FileTypeBin::Manifest);
+        assert_eq!(header.compression, CompressionAlgorithmBin::None);
+    }
+
+    #[icechunk_macros::test]
+    fn test_parse_file_header_splits_on_first_dash() {
+        use format_constants::*;
+        let buf = make_header(
+            "ic-2.0.0-alpha.4",
+            SpecVersionBin::V2 as u8,
+            FileTypeBin::RepoInfo as u8,
+            CompressionAlgorithmBin::Zstd as u8,
+        );
+        let header = parse_file_header(&buf).unwrap();
+        assert_eq!(header.impl_name, "ic-2.0.0-alpha.4");
+        assert_eq!(header.app_name, "ic");
+        assert_eq!(header.app_version.as_deref(), Some("2.0.0-alpha.4"));
+    }
+
+    #[icechunk_macros::test]
+    fn test_parse_file_header_no_dash_fallback() {
+        use format_constants::*;
+        let buf = make_header(
+            "icjs",
+            SpecVersionBin::V2 as u8,
+            FileTypeBin::TransactionLog as u8,
+            CompressionAlgorithmBin::Zstd as u8,
+        );
+        let header = parse_file_header(&buf).unwrap();
+        assert_eq!(header.impl_name, "icjs");
+        assert_eq!(header.app_name, "icjs");
+        assert_eq!(header.app_version, None);
+    }
+
+    #[icechunk_macros::test]
+    fn test_parse_file_header_bad_magic() {
+        use format_constants::*;
+        let mut buf = make_header(
+            "ic-1.0.0",
+            SpecVersionBin::V2 as u8,
+            FileTypeBin::Snapshot as u8,
+            CompressionAlgorithmBin::Zstd as u8,
+        );
+        buf[0] = b'X';
+        let err = parse_file_header(&buf).unwrap_err();
+        assert!(matches!(err.kind(), IcechunkFormatErrorKind::InvalidMagicNumbers));
+    }
+
+    #[icechunk_macros::test]
+    fn test_parse_file_header_too_short() {
+        use format_constants::*;
+        let buf = vec![0u8; ICECHUNK_FILE_HEADER_LEN - 1];
+        let err = parse_file_header(&buf).unwrap_err();
+        assert!(matches!(
+            err.kind(),
+            IcechunkFormatErrorKind::InvalidIcechunkHeaderSize { .. }
+        ));
+    }
+
+    #[icechunk_macros::test]
+    fn test_parse_file_header_unknown_file_type() {
+        use format_constants::*;
+        let buf = make_header(
+            "ic-1.0.0",
+            SpecVersionBin::V2 as u8,
+            99,
+            CompressionAlgorithmBin::Zstd as u8,
+        );
+        let err = parse_file_header(&buf).unwrap_err();
+        assert!(matches!(
+            err.kind(),
+            IcechunkFormatErrorKind::UnknownFileType { got: 99 }
+        ));
+    }
+
+    #[icechunk_macros::test]
+    fn test_parse_file_header_bad_spec_version() {
+        use format_constants::*;
+        let buf = make_header(
+            "ic-1.0.0",
+            99,
+            FileTypeBin::Snapshot as u8,
+            CompressionAlgorithmBin::Zstd as u8,
+        );
+        let err = parse_file_header(&buf).unwrap_err();
+        assert!(matches!(
+            err.kind(),
+            IcechunkFormatErrorKind::InvalidSpecVersion { found: 99, .. }
+        ));
     }
 }

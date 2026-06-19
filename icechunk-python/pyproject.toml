@@ -96,7 +96,7 @@ docs = [
 ]
 
 [tool.maturin]
-features = ["pyo3/extension-module"]
+features = ["pyo3/abi3-py312"]
 module-name = "icechunk._icechunk_python"
 python-source = "python"
 editable-profile = "dev"
