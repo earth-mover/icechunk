@@ -4,23 +4,26 @@
 
 This release introduces on-disk [spec version 2.1](https://icechunk.io/en/stable/reference/spec-v2-1/), an additive change that is forward- and backward-compatible with spec 2.0.
 
-### Breaking Changes
-
-- Stop publishing 32-bit wheels: `musllinux` for `i686` and `armv7l`, and `manylinux_2_28` for `armv7l`. Users on these platforms must now build from source ([#2214](https://github.com/earth-mover/icechunk/pull/2214)).
-
 ### Features
 
 - Build Python wheels with the `abi3-py312` stable ABI, greatly reducing the number of published wheels. The minimum supported Python version remains 3.12 ([#2213](https://github.com/earth-mover/icechunk/pull/2213)).
 - Add a read-only Rust API to inspect metadata file headers ([#2216](https://github.com/earth-mover/icechunk/pull/2216)).
+- Add a `headers` argument to `http_storage` (and `ObjectStoreConfig.Http`) to inject static HTTP headers, such as an `authorization` bearer token, into every request ([#2143](https://github.com/earth-mover/icechunk/pull/2143)).
 
 ### Fixes
 
 - Expiration now records the full ancestry of pruned transaction logs in a new optional `pruned_ancestor_tx_logs` field on `SnapshotInfo`, so `diff`, `amend`, `rebase`, and `inspect` produce correct results after expiration ([#2184](https://github.com/earth-mover/icechunk/pull/2184)).
+- Preserve all URL parts (userinfo, port, query, fragment, and empty path segments) when storing virtual chunk locations ([#2219](https://github.com/earth-mover/icechunk/pull/2219)).
+
+### Breaking Changes
+
+- Stop publishing 32-bit wheels: `musllinux` for `i686` and `armv7l`, and `manylinux_2_28` for `armv7l`. Users on these platforms must now build from source ([#2214](https://github.com/earth-mover/icechunk/pull/2214)).
 
 ### Documentation
 
 - Add a guide on handling sensitive data ([#2195](https://github.com/earth-mover/icechunk/pull/2195)).
 - Update the Virtual Datasets guide to cover reading netCDF files with `h5py` ([#2207](https://github.com/earth-mover/icechunk/pull/2207)).
+- Document that GDAL can now read Icechunk repositories ([#2222](https://github.com/earth-mover/icechunk/pull/2222)).
 
 ## Python Icechunk Library 2.0.6
 

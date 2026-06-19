@@ -289,7 +289,13 @@ pub fn object_store_config() -> BoxedStrategy<ObjectStoreConfig> {
     #[cfg(feature = "object-store-gcs")]
     strategies.push(any::<HashMap<String, String>>().prop_map(Gcs).boxed());
     #[cfg(feature = "object-store-http")]
-    strategies.push(any::<HashMap<String, String>>().prop_map(Http).boxed());
+    strategies.push(
+        any::<HashMap<String, String>>()
+            .prop_map(|opts| {
+                Http(crate::config::HttpConfig { opts, ..Default::default() })
+            })
+            .boxed(),
+    );
     #[cfg(feature = "object-store-azure")]
     strategies.push(azure_options().prop_map(Azure).boxed());
     proptest::strategy::Union::new(strategies).boxed()
