@@ -5,6 +5,7 @@
 //! copying data, chunks store references to byte ranges in external files.
 
 use std::{
+    borrow::Cow,
     collections::HashMap,
     num::{NonZeroU16, NonZeroU64},
     ops::Range,
@@ -258,9 +259,12 @@ pub trait ChunkFetcher: std::fmt::Debug + private::Sealed + Send + Sync {
     fn ideal_concurrent_request_size(&self) -> NonZeroU64;
     fn max_concurrent_requests_for_object(&self) -> NonZeroU16;
 
+    /// `key` is the resolved, percent-decoded object key (see `raw_object_key`).
+    /// `chunk_location` is kept for the scheme/host/port and error messages.
     async fn fetch_part(
         &self,
         chunk_location: &Url,
+        key: &str,
         range: Range<ChunkOffset>,
         checksum: Option<&Checksum>,
     ) -> Result<Box<dyn Buf + Unpin + Send>, VirtualReferenceError>;
@@ -268,6 +272,7 @@ pub trait ChunkFetcher: std::fmt::Debug + private::Sealed + Send + Sync {
     async fn fetch_chunk(
         &self,
         chunk_location: &Url,
+        key: &str,
         range: &Range<ChunkOffset>,
         checksum: Option<&Checksum>,
     ) -> Result<Bytes, VirtualReferenceError> {
@@ -276,7 +281,7 @@ pub trait ChunkFetcher: std::fmt::Debug + private::Sealed + Send + Sync {
             self.ideal_concurrent_request_size().get(),
             self.max_concurrent_requests_for_object().get(),
         )
-        .map(|range| self.fetch_part(chunk_location, range, checksum))
+        .map(|range| self.fetch_part(chunk_location, key, range, checksum))
         .collect::<FuturesOrdered<_>>();
 
         let init: Box<dyn Buf + Unpin + Send> = Box::new(&[][..]);
@@ -450,15 +455,47 @@ impl VirtualChunkResolver {
     ) -> Result<Bytes, VirtualReferenceError> {
         let location = self.expand_location(chunk_location)?;
 
-        // this resolves things like /../
+        // The parsed `url` is used only for the scheme/host/port and for matching
+        // a container.
+        // For `file://` that normalization also resolves `/../`, which is what keeps
+        // prefix confinement working; for object stores the key is taken verbatim
+        // from `location` so opaque `//`, `.` and `..` reach the backend intact.
         let url = Url::parse(&location)
             .map_err(|e| VirtualReferenceErrorKind::CannotParseUrl {
                 cause: e,
                 url: location.clone(),
             })
             .capture()?;
+        let key = resolved_object_key(&location)?;
         let fetcher = self.get_fetcher(&url).await?;
-        fetcher.fetch_chunk(&url, range, checksum).await
+        fetcher.fetch_chunk(&url, &key, range, checksum).await
+    }
+
+    /// Validate that a virtual chunk location can be written: a container must
+    /// match it, and if that container's backend addresses objects through
+    /// `object_store::path::Path`, the resolved key must not contain empty
+    /// (`//`), `.` or `..` segments (which that backend cannot represent). The
+    /// native S3 backend accepts such keys, so it is never rejected here.
+    pub fn validate_virtual_chunk_location(
+        &self,
+        location: &VirtualChunkLocation,
+    ) -> Result<(), VirtualReferenceError> {
+        let cont = self
+            .matching_container(location)
+            .ok_or_else(|| {
+                VirtualReferenceErrorKind::NoContainerForUrl(location.url().to_string())
+            })
+            .capture()?;
+        if backend_uses_object_store_path(&cont.store) {
+            let resolved = self.expand_location(location.url())?;
+            let key = resolved_object_key(&resolved)?;
+            if object_store_path_rejects(&key) {
+                return Err(VirtualReferenceError::capture(
+                    VirtualReferenceErrorKind::UnsupportedObjectKeyForBackend(key),
+                ));
+            }
+        }
+        Ok(())
     }
 
     async fn mk_fetcher_for(
@@ -732,6 +769,80 @@ impl VirtualChunkResolver {
     }
 }
 
+/// Extract the object key from a verbatim absolute URL string
+fn raw_object_key(absolute_url: &str) -> Result<Cow<'_, str>, VirtualReferenceError> {
+    let after_scheme = absolute_url
+        .split_once("://")
+        .map(|(_, rest)| rest)
+        .ok_or_else(|| {
+            VirtualReferenceErrorKind::NoPathSegments(absolute_url.to_string())
+        })
+        .capture()?;
+    // userinfo, host and port cannot contain an unescaped '/', so the first '/'
+    // after the authority reliably starts the path. A missing path means root.
+    let path_and_rest = match after_scheme.find('/') {
+        Some(i) => &after_scheme[i..],
+        None => "/",
+    };
+    let path = path_and_rest.split(['?', '#']).next().unwrap_or("/");
+    urlencoding::decode(path).capture()
+}
+
+/// The object key a fetcher will use for an already-resolved (absolute) location.
+/// `file://` keys are WHATWG-normalized at write time.
+/// Every other scheme keeps its verbatim, percent-decoded opaque key.
+fn resolved_object_key(absolute_url: &str) -> Result<String, VirtualReferenceError> {
+    let is_file = absolute_url
+        .split_once("://")
+        .is_some_and(|(scheme, _)| scheme.eq_ignore_ascii_case("file"));
+    if is_file {
+        let url = Url::parse(absolute_url)
+            .map_err(|e| VirtualReferenceErrorKind::CannotParseUrl {
+                cause: e,
+                url: absolute_url.to_string(),
+            })
+            .capture()?;
+        Ok(urlencoding::decode(url.path()).capture()?.into_owned())
+    } else {
+        Ok(raw_object_key(absolute_url)?.into_owned())
+    }
+}
+
+/// Predicts whether `object_store::path::Path::parse` would reject this decoded
+/// key. Such backends cannot represent empty (`//`), `.` or `..` segments.
+/// (`object_store` also rejects ASCII control chars; those are rare and left to
+/// `Path::parse` itself to report.)
+/// Important for builds that don't include `object_store` crate.
+fn object_store_path_rejects(decoded_key: &str) -> bool {
+    let s = decoded_key.strip_prefix('/').unwrap_or(decoded_key);
+    if s.is_empty() {
+        return false;
+    }
+    let s = s.strip_suffix('/').unwrap_or(s);
+    s.split('/').any(|seg| seg.is_empty() || seg == "." || seg == "..")
+}
+
+/// Whether a backend addresses objects through `object_store::path::Path`, which
+/// cannot represent keys with empty (`//`), `.` or `..` segments. The native S3
+/// fetcher (feature `s3`) passes keys opaquely, so it is NOT included here.
+fn backend_uses_object_store_path(store: &ObjectStoreConfig) -> bool {
+    match store {
+        #[cfg(all(not(feature = "s3"), feature = "object-store-s3"))]
+        ObjectStoreConfig::S3(_)
+        | ObjectStoreConfig::S3Compatible(_)
+        | ObjectStoreConfig::Tigris(_) => true,
+        #[cfg(feature = "object-store-gcs")]
+        ObjectStoreConfig::Gcs(_) => true,
+        #[cfg(feature = "object-store-http")]
+        ObjectStoreConfig::Http(_) => true,
+        #[cfg(feature = "object-store-azure")]
+        ObjectStoreConfig::Azure(_) => true,
+        #[cfg(feature = "object-store-fs")]
+        ObjectStoreConfig::LocalFileSystem(_) => true,
+        _ => false,
+    }
+}
+
 fn is_fetcher_bucket_constrained(store: &ObjectStoreConfig) -> bool {
     match store {
         // When using the native S3Fetcher (feature = "s3"), the client handles any
@@ -808,6 +919,7 @@ impl ChunkFetcher for S3Fetcher {
     async fn fetch_part(
         &self,
         chunk_location: &Url,
+        key: &str,
         range: Range<ChunkOffset>,
         checksum: Option<&Checksum>,
     ) -> Result<Box<dyn Buf + Unpin + Send>, VirtualReferenceError> {
@@ -820,8 +932,9 @@ impl ChunkFetcher for S3Fetcher {
             .capture()?
         };
 
-        let key = urlencoding::decode(chunk_location.path()).capture()?;
-        let key = key.strip_prefix('/').unwrap_or(key.as_ref());
+        // `key` is already percent-decoded and verbatim, so opaque `//`/`..` keys
+        // are passed to S3 unchanged. Strip the leading '/' from the path form.
+        let key = key.strip_prefix('/').unwrap_or(key);
 
         let mut b = self
             .client
@@ -1044,6 +1157,7 @@ impl ChunkFetcher for ObjectStoreFetcher {
     async fn fetch_part(
         &self,
         chunk_location: &Url,
+        key: &str,
         range: Range<ChunkOffset>,
         checksum: Option<&Checksum>,
     ) -> Result<Box<dyn Buf + Unpin + Send>, VirtualReferenceError> {
@@ -1065,7 +1179,17 @@ impl ChunkFetcher for ObjectStoreFetcher {
             None => {}
         }
 
-        let path = Path::parse(urlencoding::decode(chunk_location.path()).capture()?)
+        // `object_store::path::Path` cannot represent empty (`//`), `.` or `..`
+        // segments. Detect those up front and return a clear error rather than
+        // the cryptic `EmptySegment` that `Path::parse` would produce.
+        if object_store_path_rejects(key) {
+            return Err(VirtualReferenceError::capture(
+                VirtualReferenceErrorKind::UnsupportedObjectKeyForBackend(
+                    key.to_string(),
+                ),
+            ));
+        }
+        let path = Path::parse(key)
             .map_err(|e| VirtualReferenceErrorKind::OtherError(Box::new(e)))
             .capture()?;
 
@@ -1094,6 +1218,10 @@ impl ChunkFetcher for ObjectStoreFetcher {
 #[cfg(test)]
 mod tests {
 
+    use super::{
+        backend_uses_object_store_path, object_store_path_rejects, raw_object_key,
+        resolved_object_key,
+    };
     use crate::{
         ObjectStoreConfig,
         config::S3Options,
@@ -1102,6 +1230,101 @@ mod tests {
         },
         virtual_chunks::{VirtualChunkContainer, VirtualChunkResolver},
     };
+
+    // The object key reaching a fetcher must be the verbatim, percent-decoded
+    // path: `//`, `.` and `..` are literal bytes of an opaque key.
+    #[test]
+    fn test_raw_object_key_is_verbatim() -> Result<(), VirtualReferenceError> {
+        assert_eq!(raw_object_key("s3://bucket/a//b/../c")?.as_ref(), "/a//b/../c");
+        // An *unescaped* `?`/`#` is a URL query/fragment delimiter, so it ends
+        // the key (matching `Url::path()`). This is what versioned-object URLs
+        // like `…/key?versionId=7` rely on: the key is `key`, not `key?versionId=7`.
+        assert_eq!(raw_object_key("gcs://b/x//y?versionId=7#frag")?.as_ref(), "/x//y");
+        // A key that genuinely contains `?`/`#` must be percent-encoded in the
+        // URL (as any URL requires); it then round-trips back to the literal key.
+        assert_eq!(
+            raw_object_key("s3://b/weird%3Fkey%23v2/chunk")?.as_ref(),
+            "/weird?key#v2/chunk"
+        );
+        // userinfo and port do not confuse where the path starts.
+        assert_eq!(
+            raw_object_key("s3://user:pass@host:9000/k//e/y")?.as_ref(),
+            "/k//e/y"
+        );
+        // percent-escapes are decoded exactly once.
+        assert_eq!(raw_object_key("s3://b/a%20b")?.as_ref(), "/a b");
+        // a missing path is the root.
+        assert_eq!(raw_object_key("s3://bucket")?.as_ref(), "/");
+        Ok(())
+    }
+
+    // Only `file://` keys are WHATWG-normalized (confinement); all other schemes
+    // keep their verbatim opaque key.
+    #[test]
+    fn test_resolved_object_key_normalizes_only_file() -> Result<(), VirtualReferenceError>
+    {
+        assert_eq!(resolved_object_key("file:///dir/a/../b")?, "/dir/b");
+        assert_eq!(resolved_object_key("s3://bucket/a/../b")?, "/a/../b");
+        assert_eq!(resolved_object_key("s3://bucket/a//b")?, "/a//b");
+        Ok(())
+    }
+
+    // Predicate mirroring `object_store::path::Path::parse` rejection rules.
+    #[test]
+    fn test_object_store_path_rejects() {
+        assert!(object_store_path_rejects("/a//b")); // empty segment
+        assert!(object_store_path_rejects("a/../b")); // ..
+        assert!(object_store_path_rejects("/a/./b")); // .
+        assert!(object_store_path_rejects("/.."));
+        assert!(!object_store_path_rejects("/a/b/c")); // clean
+        assert!(!object_store_path_rejects("/")); // root
+        assert!(!object_store_path_rejects("")); // empty
+        assert!(!object_store_path_rejects("/trailing/")); // one trailing slash is ok
+        assert!(!object_store_path_rejects("/a..b/c")); // dots within a segment are fine
+    }
+
+    #[cfg(feature = "object-store-fs")]
+    #[test]
+    fn test_localfs_backend_uses_object_store_path() {
+        assert!(backend_uses_object_store_path(&ObjectStoreConfig::LocalFileSystem(
+            std::path::PathBuf::new()
+        )));
+    }
+
+    #[cfg(feature = "s3")]
+    #[test]
+    fn test_native_s3_backend_is_opaque() {
+        // The native S3 fetcher addresses keys opaquely, so it is NOT routed
+        // through object_store::path::Path and accepts `//`/`..` keys.
+        assert!(!backend_uses_object_store_path(&ObjectStoreConfig::S3(
+            S3Options::default()
+        )));
+    }
+
+    // The reason `from_url` lower-cases the scheme: container matching is a
+    // case-sensitive prefix check, so an uppercase-scheme ref must canonicalize
+    // to match a container registered with a (lower-case) prefix.
+    #[test]
+    fn test_uppercase_scheme_ref_matches_lowercase_container() {
+        let container = VirtualChunkContainer::new(
+            "s3://testbucket/".to_string(),
+            ObjectStoreConfig::S3(S3Options::default()),
+        )
+        .unwrap();
+        let resolver = VirtualChunkResolver::new(
+            [container].into_iter(),
+            Default::default(),
+            Default::default(),
+        );
+
+        let upper = VirtualChunkLocation::from_url("S3://testbucket/some//key").unwrap();
+        // `from_url` lower-cased only the scheme; the key (incl. `//`) is intact.
+        assert_eq!(upper.url(), "s3://testbucket/some//key");
+        assert!(
+            resolver.matching_container(&upper).is_some(),
+            "an uppercase-scheme ref must match its lower-case-prefixed container"
+        );
+    }
 
     #[test]
     fn cannot_create_container_without_prefix() {
