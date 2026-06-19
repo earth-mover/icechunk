@@ -24,3 +24,7 @@ This page lists community and ecosystem projects that integrate with Icechunk.
 ## Zarrs.jl
 
 [Zarrs.jl](https://github.com/earth-mover/Zarrs.jl) brings Icechunk support to the Julia language via zarrs. This enables Julia users to read and write Icechunk repositories using the zarrs storage backend.
+
+## GDAL
+
+[GDAL](https://gdal.org) has, in its master branch (future GDAL 3.14), a read-only [driver](https://gdal.org/en/latest/drivers/raster/icechunk.html) for Icechunk repositories, designed for use with its own [Zarr](https://gdal.org/en/latest/drivers/raster/zarr.html) driver.
