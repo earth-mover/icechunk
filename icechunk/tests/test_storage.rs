@@ -1095,9 +1095,23 @@ async fn test_http_storage_with_auth_header() -> Result<(), Box<dyn std::error::
 
     // Without the Authorization header – the server should reject the request
     let storage_no_auth = new_http_storage(url.as_str(), None, None)?;
+    let err = match storage_no_auth.get_object(&settings, "repo", None).await {
+        Ok(_) => panic!("expected an error when no Authorization header is provided"),
+        Err(err) => err,
+    };
+    // The request reached the server and was rejected at the HTTP layer (an
+    // object store error), as opposed to a missing file (`ObjectNotFound`) or
+    // a configuration/parse error.
     assert!(
-        storage_no_auth.get_object(&settings, "repo", None).await.is_err(),
-        "expected an error when no Authorization header is provided"
+        matches!(err.kind, StorageErrorKind::ObjectStore(_)),
+        "expected an object store error from the rejected request, got: {err:?}"
+    );
+    // ...and the rejection is the server refusing the missing-header request,
+    // not a transport-level failure.
+    let msg = err.to_string();
+    assert!(
+        msg.contains("non-2xx") && msg.contains("authorization"),
+        "expected a non-2xx rejection mentioning the authorization header, got: {err}"
     );
 
     // stop the server
