@@ -60,8 +60,6 @@ pub mod strategies;
 mod stream_utils;
 pub mod virtual_chunks;
 
-#[cfg(feature = "object-store-http")]
-pub use config::HttpConfig;
 pub use config::{ObjectStoreConfig, RepositoryConfig};
 pub use repository::Repository;
 #[cfg(feature = "object-store-fs")]
