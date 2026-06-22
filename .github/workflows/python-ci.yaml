@@ -126,6 +126,9 @@ jobs:
     runs-on: ${{ matrix.platform.runner }}
     needs: version
     strategy:
+      # Don't cancel the other branch/platform builds when one fails, so we can
+      # still publish the wheels that did build (see the `nightly` job).
+      fail-fast: false
       matrix:
         # Dynamic branch selection:
         # - schedule: Build both main and support/v1.x for nightly releases
@@ -184,6 +187,9 @@ jobs:
     runs-on: ${{ matrix.platform.runner }}
     needs: version
     strategy:
+      # Don't cancel the other branch/platform builds when one fails, so we can
+      # still publish the wheels that did build (see the `nightly` job).
+      fail-fast: false
       matrix:
         branch: ${{ github.event_name == 'schedule' && fromJSON('["main", "support/v1.x"]') || fromJSON(format('["{0}"]', inputs.branch)) }}
         platform:
@@ -222,7 +228,19 @@ jobs:
   windows:
     runs-on: ${{ matrix.platform.runner }}
     needs: version
+    # VS2026 (MSVC v18 / toolset 14.51+) ships vcruntime_c11_stdatomic.h which emits
+    # "#error: C atomics require C11 or later" when compiled without /experimental:c11atomics.
+    # aws-lc-sys's build-script feature probe compiles c11.c with -WX (warnings-as-errors),
+    # turning that diagnostic into a hard error and breaking the whole cargo build.
+    # AWS_LC_SYS_CFLAGS is read by aws-lc-sys's build script and scoped only to its own
+    # C compilations, so it's safer than setting CFLAGS globally.
+    # See: https://github.com/aws/aws-lc-rs/issues/961
+    env:
+      AWS_LC_SYS_CFLAGS: "-std:c11 -experimental:c11atomics"
     strategy:
+      # Don't cancel the other branch/platform builds when one fails, so we can
+      # still publish the wheels that did build (see the `nightly` job).
+      fail-fast: false
       matrix:
         branch: ${{ github.event_name == 'schedule' && fromJSON('["main", "support/v1.x"]') || fromJSON(format('["{0}"]', inputs.branch)) }}
         platform:
@@ -261,6 +279,9 @@ jobs:
     runs-on: ${{ matrix.platform.runner }}
     needs: version
     strategy:
+      # Don't cancel the other branch/platform builds when one fails, so we can
+      # still publish the wheels that did build (see the `nightly` job).
+      fail-fast: false
       matrix:
         branch: ${{ github.event_name == 'schedule' && fromJSON('["main", "support/v1.x"]') || fromJSON(format('["{0}"]', inputs.branch)) }}
         platform:
@@ -299,6 +320,9 @@ jobs:
     runs-on: ubuntu-latest
     needs: version
     strategy:
+      # Don't cancel the other branch/platform builds when one fails, so we can
+      # still publish the wheels that did build (see the `nightly` job).
+      fail-fast: false
       matrix:
         branch: ${{ github.event_name == 'schedule' && fromJSON('["main", "support/v1.x"]') || fromJSON(format('["{0}"]', inputs.branch)) }}
     steps:
@@ -343,16 +367,93 @@ jobs:
   nightly:
     name: Upload nightly wheels
     runs-on: ubuntu-latest
-    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+    # Run even if some platform builds failed (always()), so we still publish the
+    # wheels that did build. fail-fast: false on the build matrices keeps the
+    # successful branch/platform combinations from being cancelled.
+    if: ${{ always() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
     needs: [linux, musllinux, windows, macos, sdist]
+    defaults:
+      run:
+        working-directory: .
     steps:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           path: dist
           merge-multiple: true
 
+      - name: Warn about failed build jobs
+        if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}
+        run: |
+          echo "::warning title=Incomplete nightly build::Some wheel build jobs failed; uploading only the wheels that built successfully. linux=${{ needs.linux.result }} musllinux=${{ needs.musllinux.result }} windows=${{ needs.windows.result }} macos=${{ needs.macos.result }} sdist=${{ needs.sdist.result }}"
+
+      - name: Ensure there is something to upload
+        run: |
+          if [ -z "$(ls -A dist 2>/dev/null)" ]; then
+            echo "::error title=Nothing to upload::No wheels were built by any job."
+            exit 1
+          fi
+          echo "Wheels/sdists to upload:"
+          ls -R dist
+
       - name: Upload nightly wheels
         uses: scientific-python/upload-nightly-action@e76cfec8a4611fd02808a801b0ff5a7d7c1b2d99
         with:
           artifacts_path: dist
           anaconda_nightly_upload_token: ${{ secrets.ANACONDA_ORG_UPLOAD_TOKEN }}
+
+  report-failure:
+    name: Open issue on nightly failure
+    runs-on: ubuntu-latest
+    needs: [version, linux, musllinux, windows, macos, sdist, nightly]
+    # Only for scheduled nightly runs, and only when something actually failed.
+    if: ${{ always() && github.event_name == 'schedule' && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) }}
+    permissions:
+      contents: read
+      issues: write
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - name: Open or update tracking issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          R_VERSION: ${{ needs.version.result }}
+          R_LINUX: ${{ needs.linux.result }}
+          R_MUSL: ${{ needs.musllinux.result }}
+          R_WIN: ${{ needs.windows.result }}
+          R_MAC: ${{ needs.macos.result }}
+          R_SDIST: ${{ needs.sdist.result }}
+          R_NIGHTLY: ${{ needs.nightly.result }}
+        run: |
+          set -euo pipefail
+          title="Nightly wheel build failed"
+          body=$(cat <<EOF
+          The scheduled nightly wheel build failed.
+
+          **Run:** $RUN_URL
+
+          | Job | Result |
+          | --- | --- |
+          | version | $R_VERSION |
+          | linux | $R_LINUX |
+          | musllinux | $R_MUSL |
+          | windows | $R_WIN |
+          | macos | $R_MAC |
+          | sdist | $R_SDIST |
+          | nightly upload | $R_NIGHTLY |
+
+          This issue is updated automatically by the nightly workflow. Close it once the build is green again.
+          EOF
+          )
+          # Idempotent label so issue creation doesn't fail if it doesn't exist yet.
+          gh label create nightly-failure --color B60205 --description "Nightly wheel build failures" --force || true
+          existing=$(gh issue list --state open --label nightly-failure --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            echo "Commenting on existing issue #$existing"
+            gh issue comment "$existing" --body "$body"
+          else
+            echo "Creating new tracking issue"
+            gh issue create --title "$title" --label nightly-failure --body "$body"
+          fi
