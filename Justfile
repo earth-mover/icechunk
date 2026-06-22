@@ -264,8 +264,7 @@ python-upstream-setup:
   python3 -m venv .venv
   source .venv/bin/activate
   python --version
-  PY_TAG="cp${PYTHON_VERSION//./}"
-  WHEEL=$(ls dist/*-"${PY_TAG}"-*.whl)
+  WHEEL=$(ls dist/*-abi3-*.whl)
   export UV_INDEX="https://pypi.anaconda.org/scientific-python-nightly-wheels/simple/"
   export UV_PRERELEASE=allow
   uv pip install "$WHEEL" --group dev \
@@ -316,8 +315,7 @@ xarray-upstream-setup:
   python3 -m venv .venv
   source .venv/bin/activate
   python --version
-  PY_TAG="cp${PYTHON_VERSION//./}"
-  WHEEL=$(ls dist/*-"${PY_TAG}"-*.whl)
+  WHEEL=$(ls dist/*-abi3-*.whl)
   export UV_INDEX="https://pypi.anaconda.org/scientific-python-nightly-wheels/simple/"
   export UV_PRERELEASE=allow
   uv pip install "$WHEEL" --group test pytest-mypy-plugins \
