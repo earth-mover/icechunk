@@ -228,13 +228,11 @@ jobs:
   windows:
     runs-on: ${{ matrix.platform.runner }}
     needs: version
-    # VS2026 (MSVC v18 / toolset 14.51+) ships vcruntime_c11_stdatomic.h which emits
-    # "#error: C atomics require C11 or later" when compiled without /experimental:c11atomics.
-    # aws-lc-sys's build-script feature probe compiles c11.c with -WX (warnings-as-errors),
-    # turning that diagnostic into a hard error and breaking the whole cargo build.
-    # AWS_LC_SYS_CFLAGS is read by aws-lc-sys's build script and scoped only to its own
-    # C compilations, so it's safer than setting CFLAGS globally.
-    # See: https://github.com/aws/aws-lc-rs/issues/961
+    # aws-lc-sys compiles AWS-LC's C source, which uses C11 atomics. MSVC only enables
+    # those under /experimental:c11atomics; without it <stdatomic.h> #errors out, which
+    # VS2026 turned into a hard build failure. Pass the flag via aws-lc-sys's own CFLAGS
+    # var (scoped to its compiles, unlike a global CFLAGS).
+    # https://github.com/aws/aws-lc-rs/issues/961
     env:
       AWS_LC_SYS_CFLAGS: "-std:c11 -experimental:c11atomics"
     strategy:
