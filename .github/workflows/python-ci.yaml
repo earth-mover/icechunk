@@ -37,7 +37,7 @@ permissions:
   contents: read
 
 env:
-  PYTHON_INTERPRETERS: "python3.12 python3.13 python3.14"
+  PYTHON_INTERPRETER: "python3.12"
 
 defaults:
   run:
@@ -65,7 +65,7 @@ jobs:
       # Checkout main branch (skip if only building support/v1.x)
       - name: Checkout main
         if: ${{ github.event_name == 'schedule' || inputs.branch != 'support/v1.x' }}
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           ref: main
           fetch-depth: 0
@@ -95,7 +95,7 @@ jobs:
       # Checkout support/v1.x branch (skip if only building main)
       - name: Checkout support/v1.x
         if: ${{ github.event_name == 'schedule' || inputs.branch == 'support/v1.x' }}
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           ref: support/v1.x
           fetch-depth: 0
@@ -141,11 +141,8 @@ jobs:
           - runner: ubuntu-latest
             target: aarch64
             manylinux: 2_28
-          - runner: ubuntu-latest
-            target: armv7
-            manylinux: 2_28
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           ref: ${{ matrix.branch }}
           fetch-depth: 0
@@ -162,7 +159,7 @@ jobs:
           done
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
         with:
-          python-version: '3.11'
+          python-version: '3.12'
       - name: Update version in Cargo.toml
         if: ${{ github.event_name == 'schedule' || inputs.use_git_version == true }}
         run: |
@@ -174,7 +171,7 @@ jobs:
         with:
           working-directory: icechunk-python
           target: ${{ matrix.platform.target }}
-          args: --release --sdist --out dist -i ${{ env.PYTHON_INTERPRETERS }}
+          args: --release --sdist --out dist -i ${{ env.PYTHON_INTERPRETER }}
           rust-toolchain: stable
           manylinux: ${{ matrix.platform.manylinux }} # https://github.com/PyO3/maturin-action/issues/245
       - name: Upload wheels
@@ -193,13 +190,9 @@ jobs:
           - runner: ubuntu-latest
             target: x86_64
           - runner: ubuntu-latest
-            target: x86
-          - runner: ubuntu-latest
             target: aarch64
-          - runner: ubuntu-latest
-            target: armv7
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           ref: ${{ matrix.branch }}
           fetch-depth: 0
@@ -217,7 +210,7 @@ jobs:
         with:
           working-directory: icechunk-python
           target: ${{ matrix.platform.target }}
-          args: --release --out dist -i ${{ env.PYTHON_INTERPRETERS }}
+          args: --release --out dist -i ${{ env.PYTHON_INTERPRETER }}
           rust-toolchain: stable
           manylinux: musllinux_1_2
       - name: Upload wheels
@@ -236,7 +229,7 @@ jobs:
           - runner: windows-latest
             target: x64
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           ref: ${{ matrix.branch }}
           fetch-depth: 0
@@ -256,7 +249,7 @@ jobs:
         with:
           working-directory: icechunk-python
           target: ${{ matrix.platform.target }}
-          args: --release --out dist -i ${{ env.PYTHON_INTERPRETERS }}
+          args: --release --out dist -i ${{ env.PYTHON_INTERPRETER }}
           rust-toolchain: stable
       - name: Upload wheels
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -276,7 +269,7 @@ jobs:
           - runner: macos-14
             target: aarch64
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           ref: ${{ matrix.branch }}
           fetch-depth: 0
@@ -294,7 +287,7 @@ jobs:
         with:
           working-directory: icechunk-python
           target: ${{ matrix.platform.target }}
-          args: --release --out dist -i ${{ env.PYTHON_INTERPRETERS }}
+          args: --release --out dist -i ${{ env.PYTHON_INTERPRETER }}
           rust-toolchain: stable
       - name: Upload wheels
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -309,7 +302,7 @@ jobs:
       matrix:
         branch: ${{ github.event_name == 'schedule' && fromJSON('["main", "support/v1.x"]') || fromJSON(format('["{0}"]', inputs.branch)) }}
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           ref: ${{ matrix.branch }}
           fetch-depth: 0

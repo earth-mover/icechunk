@@ -30,7 +30,7 @@ use crate::{
     format::{
         ByteRange, ChunkIndices, ChunkOffset, Path, PathError,
         format_constants::SpecVersionBin,
-        manifest::{ChunkPayload, VirtualChunkRef},
+        manifest::{ChunkPayload, VirtualChunkRef, VirtualReferenceErrorKind},
         snapshot::{ArrayShape, DimensionName, NodeData, NodeSnapshot, NodeType},
     },
     refs::RefErrorKind,
@@ -371,10 +371,18 @@ impl Store {
             Key::Chunk { node_path, coords } => {
                 let mut session = self.session.write().await;
                 if validate_container
-                    && session.matching_container(&reference.location).is_none()
+                    && let Err(err) =
+                        session.validate_virtual_chunk_location(&reference.location)
                 {
-                    return Err(StoreErrorKind::InvalidVirtualChunkContainer {
-                        chunk_location: reference.location.url().to_string(),
+                    return Err(match err.kind {
+                        kind @ VirtualReferenceErrorKind::UnsupportedObjectKeyForBackend(
+                            _,
+                        ) => StoreErrorKind::SessionError(
+                            SessionErrorKind::VirtualReferenceError(kind),
+                        ),
+                        _ => StoreErrorKind::InvalidVirtualChunkContainer {
+                            chunk_location: reference.location.url().to_string(),
+                        },
                     })
                     .capture();
                 }
@@ -414,7 +422,7 @@ impl Store {
         let mut failed = Vec::new();
         for (index, reference) in references.into_iter() {
             if validate_container
-                && session.matching_container(&reference.location).is_none()
+                && session.validate_virtual_chunk_location(&reference.location).is_err()
             {
                 failed.push(index);
             } else {

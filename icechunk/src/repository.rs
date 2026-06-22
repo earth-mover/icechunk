@@ -260,7 +260,8 @@ impl Repository {
                     &Snapshot::INITIAL_SNAPSHOT_ID,
                     &ChangeSet::for_edits(),
                 );
-                let snap_info = new_snapshot.as_ref().try_into().inject()?;
+                let snap_info =
+                    SnapshotInfo::from_snapshot_file(new_snapshot.as_ref()).inject()?;
                 let config_to_store =
                     if has_overriden_config { Some(config_ref) } else { None };
                 let repo_info = Arc::new(RepoInfo::initial(
@@ -935,7 +936,7 @@ impl Repository {
     {
         let res =
             self.snapshot_ancestry_v1(snapshot_id).await?.and_then(|snap| async move {
-                let info = snap.as_ref().try_into().inject()?;
+                let info = SnapshotInfo::from_snapshot_file(snap.as_ref()).inject()?;
                 Ok(info)
             });
         Ok(res)
@@ -1828,28 +1829,62 @@ impl Repository {
             return Err(SessionError::capture(SessionErrorKind::BadSnapshotChainForDiff));
         }
 
-        // we don't include the changes in from
-        let fut: FuturesOrdered<_> = all_snaps
-            .iter()
-            .filter_map(|snap_info| {
-                // v1 repos don't have transaction logs for initial snapshots
-                if self.spec_version == SpecVersionBin::V1 && snap_info.is_initial() {
-                    None
-                } else {
-                    Some(
-                        self.asset_manager
-                            .fetch_transaction_log(&snap_info.id)
-                            .in_current_span(),
-                    )
+        let am = &self.asset_manager;
+
+        // we don't include the changes in from.
+        // Each snapshot contributes the transaction logs of the ancestors
+        // expiration pruned from under it (oldest first) followed by its own
+        // log.
+        // For each snap need to keep track of whether they are pruned, because
+        // the tx log may be missing if an older GC implementation deleted it.
+        // `true` marks a pruned-ancestor log
+        let to_fetch = all_snaps.iter().flat_map(|snap_info| {
+            let pruned =
+                snap_info.pruned_ancestor_tx_logs.iter().map(|id| (id.clone(), true));
+            // v1 repos don't have transaction logs for initial snapshots
+            let own = (!(self.spec_version == SpecVersionBin::V1
+                && snap_info.is_initial()))
+            .then(|| (snap_info.id.clone(), false));
+            pruned.chain(own)
+        });
+
+        let fut: FuturesOrdered<_> = to_fetch
+            .map(|(id, is_pruned)| {
+                async move {
+                    match am.fetch_transaction_log(&id).await {
+                        Ok(log) => Ok(Some(log)),
+                        Err(RepositoryError {
+                            kind:
+                                RepositoryErrorKind::StorageError(
+                                    StorageErrorKind::ObjectNotFound,
+                                ),
+                            ..
+                        }) if is_pruned => {
+                            tracing::warn!(
+                                snapshot_id = %id,
+                                "A Transaction log of an expiration-pruned ancestor is \
+                                 missing, likely deleted by an Icechunk older than 2.1.0 \
+                                 running garbage collection. This diff will be incomplete. \
+                                 Upgrade all clients that run garbage_collect to Icechunk \
+                                 2.1.0 or later. Already-deleted logs cannot be recovered."
+                            );
+                            Ok(None)
+                        }
+                        Err(e) => Err(e),
+                    }
                 }
+                .in_current_span()
             })
             .collect();
 
         let builder = fut
-            .try_fold(DiffBuilder::default(), |mut res, log| {
-                ready(match res.add_changes(log.as_ref()) {
-                    Ok(_) => Ok(res),
-                    Err(e) => Err(RepositoryError::capture(e.kind)),
+            .try_fold(DiffBuilder::default(), |mut res, maybe_log| {
+                ready(match maybe_log {
+                    Some(log) => match res.add_changes(log.as_ref()) {
+                        Ok(_) => Ok(res),
+                        Err(e) => Err(RepositoryError::capture(e.kind)),
+                    },
+                    None => Ok(res),
                 })
             })
             .await

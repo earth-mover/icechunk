@@ -182,6 +182,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             flushed_at: next_time(),
             message: random_message(&mut rng),
             metadata: Default::default(),
+            pruned_ancestor_tx_logs: vec![],
         });
     }
     // Sorted IDs matching the sorted snapshots order — used for refs and ops

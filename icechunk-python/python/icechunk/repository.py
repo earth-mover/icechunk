@@ -1647,11 +1647,16 @@ class Repository:
         Parameters
         ----------
         older_than: datetime.datetime
-            Expire snapshots older than this time.
+            Expire snapshots older than this time. The bound is exclusive: a
+            snapshot whose ``written_at`` equals ``older_than`` is kept. The root
+            snapshot and the main branch tip are never expired. Other branch and
+            tag tips are kept unless ``delete_expired_branches`` /
+            ``delete_expired_tags`` are True.
         delete_expired_branches: bool, optional
-            Whether to delete any branches that now have only expired snapshots.
+            Whether to delete branches whose tip points at an expired snapshot.
+            The main branch is never deleted.
         delete_expired_tags: bool, optional
-            Whether to delete any tags associated with expired snapshots
+            Whether to delete tags whose tip points at an expired snapshot.
 
         Returns
         -------
@@ -1694,11 +1699,16 @@ class Repository:
         Parameters
         ----------
         older_than: datetime.datetime
-            Expire snapshots older than this time.
+            Expire snapshots older than this time. The bound is exclusive: a
+            snapshot whose ``written_at`` equals ``older_than`` is kept. The root
+            snapshot and the main branch tip are never expired. Other branch and
+            tag tips are kept unless ``delete_expired_branches`` /
+            ``delete_expired_tags`` are True.
         delete_expired_branches: bool, optional
-            Whether to delete any branches that now have only expired snapshots.
+            Whether to delete branches whose tip points at an expired snapshot.
+            The main branch is never deleted.
         delete_expired_tags: bool, optional
-            Whether to delete any tags associated with expired snapshots
+            Whether to delete tags whose tip points at an expired snapshot.
 
         Returns
         -------
@@ -1815,7 +1825,9 @@ class Repository:
         Parameters
         ----------
         delete_object_older_than: datetime.datetime
-            Delete objects older than this time.
+            Delete objects older than this time. The bound is exclusive. An
+            object is deleted only if it is also not referenced by any surviving
+            (non-expired) snapshot.
         dry_run: bool : bool
             Report results but don't delete any objects
         max_snapshots_in_memory : int
@@ -1860,7 +1872,9 @@ class Repository:
         Parameters
         ----------
         delete_object_older_than: datetime.datetime
-            Delete objects older than this time.
+            Delete objects older than this time. The bound is exclusive. An
+            object is deleted only if it is also not referenced by any surviving
+            (non-expired) snapshot.
         dry_run: bool : bool
             Report results but don't delete any objects
         max_snapshots_in_memory : int
@@ -2211,6 +2225,15 @@ class Repository:
             Keys: ``new_groups``, ``new_arrays``, ``deleted_groups``,
             ``deleted_arrays``, ``updated_groups``, ``updated_arrays``,
             ``updated_chunks``, ``moved_nodes``.
+
+            When the snapshot's ancestry was collapsed by expiration, an
+            additional ``synthetic_composite`` key is present. It shows
+            the transaction log is not a single on-disk file but a
+            synthetic merge. Keys: ``note`` (a field text explanation),
+            ``merged_pruned_ancestor_tx_logs`` (the pruned-ancestor
+            transaction logs merged into this one, oldest first), and
+            ``missing_tx_logs`` (referenced pruned-ancestor logs absent from
+            storage, expected only when an older GC deleted them).
         """
         result: dict[str, Any] = json.loads(
             self._repository.inspect_transaction_log(snapshot_id, pretty=False)
@@ -2238,6 +2261,15 @@ class Repository:
             Keys: ``new_groups``, ``new_arrays``, ``deleted_groups``,
             ``deleted_arrays``, ``updated_groups``, ``updated_arrays``,
             ``updated_chunks``, ``moved_nodes``.
+
+            When the snapshot's ancestry was collapsed by expiration, an
+            additional ``synthetic_composite`` key is present. It shows
+            the transaction log is not a single on-disk file but a
+            synthetic merge. Keys: ``note`` (a field text explanation),
+            ``merged_pruned_ancestor_tx_logs`` (the pruned-ancestor
+            transaction logs merged into this one, oldest first), and
+            ``missing_tx_logs`` (referenced pruned-ancestor logs absent from
+            storage, expected only when an older GC deleted them).
         """
         raw = await self._repository.inspect_transaction_log_async(
             snapshot_id, pretty=False

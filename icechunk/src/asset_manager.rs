@@ -44,7 +44,10 @@ use crate::{
         CHUNKS_FILE_PATH, CONFIG_FILE_PATH, ChunkId, ChunkOffset, IcechunkFormatError,
         IcechunkFormatErrorKind, MANIFESTS_FILE_PATH, ManifestId, OVERWRITTEN_FILES_PATH,
         REPO_INFO_FILE_PATH, SNAPSHOTS_FILE_PATH, SnapshotId, TRANSACTION_LOGS_FILE_PATH,
-        format_constants::{self, CompressionAlgorithmBin, FileTypeBin, SpecVersionBin},
+        format_constants::{
+            self, CompressionAlgorithmBin, FileHeader, FileTypeBin, SpecVersionBin,
+            parse_file_header,
+        },
         manifest::Manifest,
         repo_info::RepoInfo,
         serializers::{
@@ -264,6 +267,14 @@ impl AssetManager {
         self.chunk_cache.clear();
     }
 
+    pub fn clear_manifest_cache(&self) {
+        self.manifest_cache.clear();
+    }
+
+    pub fn clear_snapshot_cache(&self) {
+        self.snapshot_cache.clear();
+    }
+
     #[instrument(skip_all)]
     pub async fn fetch_config(
         &self,
@@ -353,7 +364,7 @@ impl AssetManager {
         match self.manifest_cache.get_value_or_guard_async(manifest_id).await {
             Ok(manifest) => Ok(manifest),
             Err(guard) => {
-                let manifest = fetch_manifest(
+                let (manifest, _header) = fetch_manifest(
                     manifest_id,
                     manifest_size,
                     self.storage.as_ref(),
@@ -432,7 +443,7 @@ impl AssetManager {
         match self.snapshot_cache.get_value_or_guard_async(snapshot_id).await {
             Ok(snapshot) => Ok(snapshot),
             Err(guard) => {
-                let snapshot = fetch_snapshot(
+                let (snapshot, _header) = fetch_snapshot(
                     snapshot_id,
                     self.storage.as_ref(),
                     &self.storage_settings,
@@ -474,7 +485,7 @@ impl AssetManager {
         match self.transactions_cache.get_value_or_guard_async(transaction_id).await {
             Ok(transaction) => Ok(transaction),
             Err(guard) => {
-                let transaction = fetch_transaction_log(
+                let (transaction, _header) = fetch_transaction_log(
                     transaction_id,
                     self.storage.as_ref(),
                     &self.storage_settings,
@@ -517,7 +528,7 @@ impl AssetManager {
         )
         .await
         {
-            Ok(Some((repo_info, version_info))) => {
+            Ok(Some((repo_info, version_info, _header))) => {
                 if self.use_repo_info_cache {
                     trace!(
                         "Repo info cache wasn't latest, updating from {} to {}",
@@ -578,6 +589,157 @@ impl AssetManager {
     ) -> RepositoryResult<(Arc<RepoInfo>, VersionInfo)> {
         fetch_repo_info_backup(self.storage.as_ref(), &self.storage_settings, file_name)
             .await
+    }
+
+    /// Read-only inspection: fetch just the [`FileHeader`] of the metadata file at
+    /// `path` with a cheap range GET of the first few bytes.
+    ///
+    /// This is a pure inspection primitive: it reports whatever file type it finds
+    /// in the header and does **not** assert that the type matches the path. The
+    /// per-type wrappers ([`Self::fetch_snapshot_header`] etc.) only build the path.
+    #[instrument(skip(self))]
+    pub async fn fetch_header(&self, path: &str) -> RepositoryResult<FileHeader> {
+        let len = format_constants::ICECHUNK_FILE_HEADER_LEN;
+        let range = 0u64..(len as u64);
+        let _permit = self.request_semaphore.acquire().await.capture()?;
+        let (read, _) = self
+            .storage
+            .get_object(&self.storage_settings, path, Some(&range))
+            .await
+            .inject()?;
+        let bytes = async_reader_to_bytes(read, len).await.capture()?;
+        parse_file_header(&bytes).inject()
+    }
+
+    pub async fn fetch_repo_info_header(&self) -> RepositoryResult<FileHeader> {
+        self.fetch_header(REPO_INFO_FILE_PATH).await
+    }
+
+    pub async fn fetch_repo_info_backup_header(
+        &self,
+        file_name: &str,
+    ) -> RepositoryResult<FileHeader> {
+        self.fetch_header(&format!("{OVERWRITTEN_FILES_PATH}/{file_name}")).await
+    }
+
+    pub async fn fetch_snapshot_header(
+        &self,
+        snapshot_id: &SnapshotId,
+    ) -> RepositoryResult<FileHeader> {
+        self.fetch_header(&format!("{SNAPSHOTS_FILE_PATH}/{snapshot_id}")).await
+    }
+
+    pub async fn fetch_manifest_header(
+        &self,
+        manifest_id: &ManifestId,
+    ) -> RepositoryResult<FileHeader> {
+        self.fetch_header(&format!("{MANIFESTS_FILE_PATH}/{manifest_id}")).await
+    }
+
+    pub async fn fetch_transaction_log_header(
+        &self,
+        transaction_id: &SnapshotId,
+    ) -> RepositoryResult<FileHeader> {
+        self.fetch_header(&format!("{TRANSACTION_LOGS_FILE_PATH}/{transaction_id}")).await
+    }
+
+    /// Fetch a snapshot together with its [`FileHeader`].
+    ///
+    /// Notice that unlike [`Self::fetch_snapshot`], this bypasses the value cache
+    /// and always performs a fresh download+decode.
+    pub async fn fetch_snapshot_with_header(
+        &self,
+        snapshot_id: &SnapshotId,
+    ) -> RepositoryResult<(Arc<Snapshot>, FileHeader)> {
+        // TODO: widen the cache to store the FileHeader so we can serve from cache
+        fetch_snapshot(
+            snapshot_id,
+            self.storage.as_ref(),
+            &self.storage_settings,
+            &self.request_semaphore,
+        )
+        .await
+    }
+
+    /// Fetch a manifest together with its [`FileHeader`].
+    ///
+    /// Notice that unlike [`Self::fetch_manifest`], this bypasses the value cache
+    /// and always performs a fresh download+decode.
+    pub async fn fetch_manifest_with_header(
+        &self,
+        manifest_id: &ManifestId,
+        manifest_size: u64,
+    ) -> RepositoryResult<(Arc<Manifest>, FileHeader)> {
+        // TODO: widen the cache to store the FileHeader so we can serve from cache
+        fetch_manifest(
+            manifest_id,
+            manifest_size,
+            self.storage.as_ref(),
+            &self.storage_settings,
+            &self.request_semaphore,
+        )
+        .await
+    }
+
+    /// Fetch a transaction log together with its [`FileHeader`].
+    ///
+    /// Notice that unlike [`Self::fetch_transaction_log`], this bypasses the value
+    /// cache and always performs a fresh download+decode.
+    pub async fn fetch_transaction_log_with_header(
+        &self,
+        transaction_id: &SnapshotId,
+    ) -> RepositoryResult<(Arc<TransactionLog>, FileHeader)> {
+        // TODO: widen the cache to store the FileHeader so we can serve from cache
+        fetch_transaction_log(
+            transaction_id,
+            self.storage.as_ref(),
+            &self.storage_settings,
+            &self.request_semaphore,
+        )
+        .await
+    }
+
+    /// Fetch the repo info together with its [`FileHeader`].
+    ///
+    /// Notice that unlike [`Self::fetch_repo_info`], this bypasses the repo info
+    /// cache and always performs a fresh download+decode.
+    pub async fn fetch_repo_info_with_header(
+        &self,
+    ) -> RepositoryResult<(Arc<RepoInfo>, VersionInfo, FileHeader)> {
+        self.fail_unless_spec_at_least(SpecVersionBin::V2)?;
+        // TODO: widen the cache to store the FileHeader so we can serve from cache
+        let fetched = fetch_repo_info_from_path(
+            self.storage.as_ref(),
+            &self.storage_settings,
+            REPO_INFO_FILE_PATH,
+            None,
+        )
+        .await?;
+        // unreachable: we get either the object or a not-found error above.
+        #[expect(clippy::expect_used)]
+        Ok(fetched
+            .expect("repo info must be present when fetched with no previous version"))
+    }
+
+    /// Fetch a repo info backup together with its [`FileHeader`].
+    ///
+    /// Like [`Self::fetch_repo_info_backup`], this is uncached and always performs
+    /// a fresh download+decode.
+    pub async fn fetch_repo_info_backup_with_header(
+        &self,
+        file_name: &str,
+    ) -> RepositoryResult<(Arc<RepoInfo>, VersionInfo, FileHeader)> {
+        let fetched = fetch_repo_info_from_path(
+            self.storage.as_ref(),
+            &self.storage_settings,
+            format!("{OVERWRITTEN_FILES_PATH}/{file_name}").as_str(),
+            None,
+        )
+        .await?;
+        // unreachable: we get either the object or a not-found error above.
+        #[expect(clippy::expect_used)]
+        Ok(fetched
+            .expect("repo info must be present when fetched with no previous version"))
     }
 
     pub async fn write_repo_info(
@@ -845,7 +1007,7 @@ impl AssetManager {
         snapshot_id: &SnapshotId,
     ) -> RepositoryResult<SnapshotInfo> {
         let snapshot = self.fetch_snapshot(snapshot_id).await?;
-        let info = snapshot.as_ref().try_into().inject()?;
+        let info = SnapshotInfo::from_snapshot_file(snapshot.as_ref()).inject()?;
         Ok(info)
     }
 
@@ -1052,70 +1214,18 @@ fn decode_gate() -> &'static Semaphore {
 /// initial reallocations while `read_to_end` grows the buffer.
 const DEFAULT_PREALLOC_HINT: usize = 8192;
 
-/// Sync header validation; returns (spec version, compression). Body at `ICECHUNK_FILE_HEADER_LEN`.
-fn check_header(
-    buf: &[u8],
-    file_type: FileTypeBin,
-) -> RepositoryResult<(SpecVersionBin, CompressionAlgorithmBin)> {
-    use format_constants::*;
-    if buf.len() < ICECHUNK_FILE_HEADER_LEN {
-        return Err(RepositoryErrorKind::FormatError(
-            IcechunkFormatErrorKind::InvalidIcechunkHeaderSize {
-                found: buf.len(),
-                expected: ICECHUNK_FILE_HEADER_LEN,
-            },
-        ))
-        .capture();
-    }
-    if !buf.starts_with(ICECHUNK_FORMAT_MAGIC_BYTES) {
-        return Err(RepositoryErrorKind::FormatError(
-            IcechunkFormatErrorKind::InvalidMagicNumbers,
-        ))
-        .capture();
-    }
-    let spec_version_byte = buf[ICECHUNK_SPEC_VERSION_OFFSET];
-    let spec_version: SpecVersionBin = spec_version_byte
-        .try_into()
-        .map_err(|_| {
-            RepositoryErrorKind::FormatError(
-                IcechunkFormatErrorKind::InvalidSpecVersion {
-                    found: spec_version_byte,
-                    max_supported: SpecVersionBin::current() as u8,
-                },
-            )
-        })
-        .capture()?;
-
-    let file_type_byte = buf[ICECHUNK_FILE_TYPE_OFFSET];
-    let actual_file_type: FileTypeBin = file_type_byte
-        .try_into()
-        .map_err(|_| {
-            RepositoryErrorKind::FormatError(IcechunkFormatErrorKind::InvalidFileType {
-                expected: file_type,
-                got: file_type_byte,
-            })
-        })
-        .capture()?;
-    if actual_file_type != file_type {
+/// Validates that `header.file_type` matches the expected `file_type`.
+fn check_file_type(header: &FileHeader, file_type: FileTypeBin) -> RepositoryResult<()> {
+    if header.file_type != file_type {
         return Err(RepositoryErrorKind::FormatError(
             IcechunkFormatErrorKind::InvalidFileType {
                 expected: file_type,
-                got: file_type_byte,
+                got: header.file_type as u8,
             },
         ))
         .capture();
     }
-
-    let compression: CompressionAlgorithmBin = buf[ICECHUNK_COMPRESSION_OFFSET]
-        .try_into()
-        .map_err(|_| {
-            RepositoryErrorKind::FormatError(
-                IcechunkFormatErrorKind::InvalidCompressionAlgorithm,
-            )
-        })
-        .capture()?;
-
-    Ok((spec_version, compression))
+    Ok(())
 }
 
 async fn write_new_manifest(
@@ -1186,7 +1296,7 @@ async fn fetch_manifest(
     storage: &(dyn Storage + Send),
     storage_settings: &storage::Settings,
     semaphore: &Semaphore,
-) -> RepositoryResult<Arc<Manifest>> {
+) -> RepositoryResult<(Arc<Manifest>, FileHeader)> {
     debug!(%manifest_id, "Downloading manifest");
 
     let path = format!("{MANIFESTS_FILE_PATH}/{manifest_id}");
@@ -1206,12 +1316,14 @@ async fn fetch_manifest(
 }
 
 /// Read compressed bytes (async IO), then decompress+deserialize on a gated blocking thread.
+///
+/// Returns the deserialized value together with the parsed [`FileHeader`].
 async fn fetch_and_decode<T, F>(
     mut read: Pin<Box<dyn AsyncBufRead + Send>>,
     compressed_size_hint: u64,
     file_type: FileTypeBin,
     deserialize: F,
-) -> RepositoryResult<T>
+) -> RepositoryResult<(T, FileHeader)>
 where
     T: Send + 'static,
     F: FnOnce(SpecVersionBin, Vec<u8>) -> Result<T, IcechunkFormatError> + Send + 'static,
@@ -1220,15 +1332,23 @@ where
     read.read_to_end(&mut compressed).await.capture()?;
 
     // on the async task: fail fast (no permit) and keep span ancestry on header errors
-    let (spec_version, compression) = check_header(&compressed, file_type)?;
-    debug_assert_eq!(compression, CompressionAlgorithmBin::Zstd);
+    let header = parse_file_header(&compressed).inject()?;
+    check_file_type(&header, file_type)?;
+    // the decode path below only knows how to undo Zstd
+    if header.compression != CompressionAlgorithmBin::Zstd {
+        return Err(RepositoryErrorKind::FormatError(
+            IcechunkFormatErrorKind::InvalidCompressionAlgorithm,
+        ))
+        .capture();
+    }
+    let spec_version = header.spec_version;
 
     // gate concurrent CPU decodes; absent under shuttle (see decode_gate)
     #[cfg(not(feature = "shuttle"))]
     let decode_permit = decode_gate().acquire().await.capture()?;
     // keep error span ancestry on the blocking thread
     let span = tracing::Span::current();
-    tokio::task::spawn_blocking(move || -> RepositoryResult<T> {
+    tokio::task::spawn_blocking(move || -> RepositoryResult<(T, FileHeader)> {
         let _entered = span.entered();
         // release on decode completion, not on cancelled-future drop
         #[cfg(not(feature = "shuttle"))]
@@ -1238,7 +1358,8 @@ where
                 .capture()?;
         // trim decode_all's ≤2x slack before it's cached
         decompressed.shrink_to_fit();
-        deserialize(spec_version, decompressed).inject()
+        let value = deserialize(spec_version, decompressed).inject()?;
+        Ok((value, header))
     })
     .await
     .capture()?
@@ -1321,7 +1442,7 @@ async fn fetch_snapshot(
     storage: &(dyn Storage + Send + Sync),
     storage_settings: &storage::Settings,
     semaphore: &Semaphore,
-) -> RepositoryResult<Arc<Snapshot>> {
+) -> RepositoryResult<(Arc<Snapshot>, FileHeader)> {
     debug!(%snapshot_id, "Downloading snapshot");
     let _permit = semaphore.acquire().await.capture()?;
 
@@ -1401,7 +1522,7 @@ async fn fetch_transaction_log(
     storage: &(dyn Storage + Send + Sync),
     storage_settings: &storage::Settings,
     semaphore: &Semaphore,
-) -> RepositoryResult<Arc<TransactionLog>> {
+) -> RepositoryResult<(Arc<TransactionLog>, FileHeader)> {
     debug!(%transaction_id, "Downloading transaction log");
     let path = format!("{TRANSACTION_LOGS_FILE_PATH}/{transaction_id}");
     let _permit = semaphore.acquire().await.capture()?;
@@ -1557,10 +1678,12 @@ pub async fn fetch_repo_info(
 ) -> RepositoryResult<(Arc<RepoInfo>, VersionInfo)> {
     fetch_repo_info_from_path(storage, storage_settings, REPO_INFO_FILE_PATH, None)
         .await
-        .map(|repo| {
+        .map(|fetched| {
             // Since we didn't give a previous version, there must be a result here
             #[expect(clippy::expect_used)]
-            repo.expect("Logic bug, must have a repo_info here")
+            let (info, version, _header) =
+                fetched.expect("Logic bug, must have a repo_info here");
+            (info, version)
         })
 }
 
@@ -1577,10 +1700,12 @@ async fn fetch_repo_info_backup(
         None,
     )
     .await
-    .map(|repo| {
+    .map(|fetched| {
         // Since we didn't give a previous version, there must be a result here
         #[expect(clippy::expect_used)]
-        repo.expect("Logic bug, must have a repo_info here")
+        let (info, version, _header) =
+            fetched.expect("Logic bug, must have a repo_info here");
+        (info, version)
     })
 }
 
@@ -1590,11 +1715,11 @@ pub async fn fetch_repo_info_from_path(
     storage_settings: &storage::Settings,
     path: &str,
     previous_version: Option<&VersionInfo>,
-) -> RepositoryResult<Option<(Arc<RepoInfo>, VersionInfo)>> {
+) -> RepositoryResult<Option<(Arc<RepoInfo>, VersionInfo, FileHeader)>> {
     debug!("Downloading repo info");
     match storage.get_object_conditional(storage_settings, path, previous_version).await {
         Ok(GetModifiedResult::Modified { data, new_version }) => {
-            let repo_info = fetch_and_decode(
+            let (repo_info, header) = fetch_and_decode(
                 data,
                 DEFAULT_PREALLOC_HINT as u64,
                 FileTypeBin::RepoInfo,
@@ -1603,7 +1728,7 @@ pub async fn fetch_repo_info_from_path(
                 },
             )
             .await?;
-            Ok(Some((repo_info, new_version)))
+            Ok(Some((repo_info, new_version, header)))
         }
         Ok(GetModifiedResult::OnLatestVersion) => Ok(None),
         Err(StorageError { kind: StorageErrorKind::ObjectNotFound, .. }) => {
@@ -1691,13 +1816,16 @@ mod test {
 
     use super::*;
     use crate::{
+        Repository,
         config::ManifestVirtualChunkLocationCompressionConfig,
         format::{
-            ChunkIndices, NodeId,
+            ChunkIndices, NodeId, Path,
             manifest::{ChunkInfo, ChunkPayload, LocationCompressionConfig},
+            snapshot::ArrayShape,
         },
         storage::{Storage, logging::LoggingStorage, new_in_memory_storage},
     };
+    use std::collections::HashMap;
 
     #[tokio_test]
     async fn test_caching_caches() -> Result<(), Box<dyn std::error::Error>> {
@@ -1971,7 +2099,7 @@ mod test {
         let initial = Snapshot::initial(SpecVersionBin::current()).unwrap();
         let repo_info = Arc::new(RepoInfo::initial(
             SpecVersionBin::current(),
-            (&initial).try_into()?,
+            SnapshotInfo::from_snapshot_file(&initial)?,
             100,
             None::<&()>,
             None,
@@ -2007,7 +2135,7 @@ mod test {
         let initial = Snapshot::initial(SpecVersionBin::current()).unwrap();
         let repo_info = Arc::new(RepoInfo::initial(
             SpecVersionBin::current(),
-            (&initial).try_into()?,
+            SnapshotInfo::from_snapshot_file(&initial)?,
             100,
             None::<&()>,
             None,
@@ -2026,6 +2154,121 @@ mod test {
 
         assert_eq!(Arc::clone(&repo_info), fetched_repo_info);
         assert_eq!(new_version, version);
+
+        Ok(())
+    }
+
+    /// Every metadata file written by this library carries the same `ic-<version>`
+    /// client string in its header; assert the parsed header reflects that.
+    fn assert_current_ic_header(header: &FileHeader, file_type: FileTypeBin) {
+        use format_constants::*;
+        assert_eq!(header.app_name, "ic");
+        assert_eq!(header.app_version.as_deref(), Some(ICECHUNK_LIB_VERSION));
+        assert_eq!(header.impl_name, *ICECHUNK_CLIENT_NAME);
+        assert_eq!(header.file_type, file_type);
+        assert_eq!(header.spec_version, SpecVersionBin::current());
+        assert_eq!(header.compression, CompressionAlgorithmBin::Zstd);
+    }
+
+    /// Make an in-memory repo so every metadata file kind exists on storage,
+    /// then exercise the `AssetManager` header-inspection API against them.
+    #[tokio_test]
+    async fn test_header_methods() -> Result<(), Box<dyn std::error::Error>> {
+        let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+        let repo = Repository::create(
+            Some(RepositoryConfig {
+                // force a non-inline chunk so a manifest file is written
+                inline_chunk_threshold_bytes: Some(0),
+                // tiny batch size so a couple commits leave a repo-info backup chain
+                num_updates_per_repo_info_file: Some(1),
+                ..Default::default()
+            }),
+            Arc::clone(&storage),
+            HashMap::new(),
+            Some(SpecVersionBin::current()),
+            true,
+        )
+        .await?;
+
+        // First commit: group + array + a chunk, producing a manifest.
+        let mut session = repo.writable_session("main").await?;
+        session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
+        let array_path: Path = "/array".to_string().try_into().unwrap();
+        let shape = ArrayShape::new(vec![(4, 4)]).unwrap();
+        session
+            .add_array(
+                array_path.clone(),
+                shape,
+                Some(vec!["t".into()]),
+                Bytes::from_static(br#"{"this":"array"}"#),
+            )
+            .await?;
+        let payload =
+            session.get_chunk_writer()?(Bytes::copy_from_slice(&42i8.to_be_bytes()))
+                .await?;
+        session
+            .set_chunk_ref(array_path.clone(), ChunkIndices(vec![0]), Some(payload))
+            .await?;
+        let snap_id =
+            session.commit("first commit").max_concurrent_nodes(8).execute().await?;
+
+        // A couple more commits so the repo-info file overflows and leaves a backup
+        // reachable through `repo_before_updates`.
+        for (i, group) in ["/g2", "/g3"].iter().enumerate() {
+            let mut session = repo.writable_session("main").await?;
+            let path: Path = group.to_string().try_into().unwrap();
+            session.add_group(path, Bytes::copy_from_slice(b"")).await?;
+            session
+                .commit(format!("commit {i}"))
+                .max_concurrent_nodes(8)
+                .execute()
+                .await?;
+        }
+
+        let am = repo.asset_manager();
+
+        // --- snapshot ---
+        let header = am.fetch_snapshot_header(&snap_id).await?;
+        assert_current_ic_header(&header, FileTypeBin::Snapshot);
+        let (snapshot, with_header) = am.fetch_snapshot_with_header(&snap_id).await?;
+        assert_eq!(with_header, header);
+        assert_eq!(snapshot.id(), snap_id);
+
+        let raw = am.fetch_header(&format!("{SNAPSHOTS_FILE_PATH}/{snap_id}")).await?;
+        assert_eq!(raw.file_type, FileTypeBin::Snapshot);
+
+        // --- manifest ---
+        let manifest_info =
+            snapshot.manifest_files().next().expect("commit must write a manifest")?;
+        let header = am.fetch_manifest_header(&manifest_info.id).await?;
+        assert_current_ic_header(&header, FileTypeBin::Manifest);
+        let (manifest, with_header) = am
+            .fetch_manifest_with_header(&manifest_info.id, manifest_info.size_bytes)
+            .await?;
+        assert_eq!(with_header, header);
+        assert_eq!(manifest.id(), manifest_info.id);
+
+        // --- transaction log ---
+        let header = am.fetch_transaction_log_header(&snap_id).await?;
+        assert_current_ic_header(&header, FileTypeBin::TransactionLog);
+        let (_tx, with_header) = am.fetch_transaction_log_with_header(&snap_id).await?;
+        assert_eq!(with_header, header);
+
+        // --- repo info ---
+        let header = am.fetch_repo_info_header().await?;
+        assert_current_ic_header(&header, FileTypeBin::RepoInfo);
+        let (info, _version, with_header) = am.fetch_repo_info_with_header().await?;
+        assert_eq!(with_header, header);
+
+        // --- repo info backup ---
+        let backup_name = info
+            .repo_before_updates()?
+            .expect("multiple commits should leave a repo-info backup");
+        let header = am.fetch_repo_info_backup_header(backup_name).await?;
+        assert_current_ic_header(&header, FileTypeBin::RepoInfo);
+        let (_backup_info, _v, with_header) =
+            am.fetch_repo_info_backup_with_header(backup_name).await?;
+        assert_eq!(with_header, header);
 
         Ok(())
     }

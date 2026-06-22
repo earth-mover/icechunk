@@ -692,13 +692,23 @@ mod native {
         }
     }
 
+    /// HTTP object store configuration carrying transport options and static auth headers.
+    #[napi(object, js_name = "HttpConfig")]
+    #[derive(Clone, Debug, Default)]
+    pub struct JsHttpConfig {
+        /// Generic transport options (`ClientConfigKey` names → values).
+        pub opts: HashMap<String, String>,
+        /// Static HTTP headers injected into every request (e.g. `"authorization": "Bearer …"`).
+        pub headers: HashMap<String, String>,
+    }
+
     /// Object store configuration for virtual chunk containers
     #[napi(js_name = "ObjectStoreConfig")]
     #[derive(Clone, Debug)]
     pub enum JsObjectStoreConfig {
         InMemory,
         LocalFileSystem(String),
-        Http(HashMap<String, String>),
+        Http(JsHttpConfig),
         S3Compatible(JsS3Options),
         S3(JsS3Options),
         Gcs(HashMap<String, String>),
@@ -713,8 +723,11 @@ mod native {
                 JsObjectStoreConfig::LocalFileSystem(path) => {
                     icechunk::ObjectStoreConfig::LocalFileSystem(path.into())
                 }
-                JsObjectStoreConfig::Http(opts) => {
-                    icechunk::ObjectStoreConfig::Http(opts)
+                JsObjectStoreConfig::Http(js_config) => {
+                    icechunk::ObjectStoreConfig::Http(icechunk::config::HttpConfig {
+                        opts: js_config.opts,
+                        headers: js_config.headers,
+                    })
                 }
                 JsObjectStoreConfig::S3Compatible(opts) => {
                     icechunk::ObjectStoreConfig::S3Compatible(opts.into())
@@ -1054,9 +1067,10 @@ impl JsStorage {
     pub fn new_http(
         base_url: String,
         config: Option<HashMap<String, String>>,
+        headers: Option<HashMap<String, String>>,
     ) -> napi::Result<JsStorage> {
-        let storage =
-            icechunk::storage::new_http_storage(&base_url, config).map_napi_err()?;
+        let storage = icechunk::storage::new_http_storage(&base_url, config, headers)
+            .map_napi_err()?;
         Ok(JsStorage(storage))
     }
 

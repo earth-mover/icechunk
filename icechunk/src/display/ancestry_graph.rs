@@ -326,6 +326,7 @@ mod tests {
             flushed_at: base + Duration::minutes(id_byte as i64),
             message: format!("Commit {id_byte}"),
             metadata: BTreeMap::new(),
+            pruned_ancestor_tx_logs: vec![],
         }
     }
 
