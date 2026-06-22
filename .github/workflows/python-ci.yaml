@@ -402,22 +402,69 @@ jobs:
           anaconda_nightly_upload_token: ${{ secrets.ANACONDA_ORG_UPLOAD_TOKEN }}
 
   report-failure:
-    name: Open issue on nightly failure
+    name: nightly-wheel-report
     runs-on: ubuntu-latest
+    continue-on-error: true
     needs: [version, linux, musllinux, windows, macos, sdist, nightly]
-    # Only for scheduled nightly runs, and only when something actually failed.
-    if: ${{ always() && github.event_name == 'schedule' && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) }}
     permissions:
-      contents: read
-      issues: write
+      issues: write # needed to create/update issues on nightly failures
+    # Only for scheduled nightly runs on the main repo, and only when something failed.
+    if: |
+      always()
+      && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled'))
+      && github.event_name == 'schedule'
+      && github.repository_owner == 'earth-mover'
     defaults:
       run:
         working-directory: .
     steps:
-      - name: Open or update tracking issue
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+
+      - name: Create or update nightly wheel failure issue
+        shell: bash
+        run: |
+          # Build the per-job results table rows.
+          results=$(cat <<EOF
+          | version | $R_VERSION |
+          | linux | $R_LINUX |
+          | musllinux | $R_MUSL |
+          | windows | $R_WIN |
+          | macos | $R_MAC |
+          | sdist | $R_SDIST |
+          | nightly upload | $R_NIGHTLY |
+          EOF
+          )
+
+          # Read the template and replace placeholders.
+          template=$(cat .github/nightly-wheel-failure-template.md)
+          issue_body="${template//\{\{WORKFLOW\}\}/$WORKFLOW_NAME}"
+          issue_body="${issue_body//\{\{RUN_ID\}\}/$RUN_ID}"
+          issue_body="${issue_body//\{\{RUN_URL\}\}/$RUN_URL}"
+          issue_body="${issue_body//\{\{DATE\}\}/$(date -u)}"
+          issue_body="${issue_body//\{\{RESULTS\}\}/$results}"
+
+          # Check for an existing open issue with the same title.
+          issue_title="Nightly wheel build failed"
+          existing_issue=$(gh issue list --state open --label "CI" --search "\"$issue_title\" in:title" --json number --jq '.[0].number // empty')
+
+          if [ -n "$existing_issue" ]; then
+            echo "Found existing open issue #$existing_issue, updating it..."
+            echo "$issue_body" | gh issue edit "$existing_issue" --body-file -
+            echo "Updated existing issue #$existing_issue"
+          else
+            echo "No existing open issue found, creating new one..."
+            echo "$issue_body" | gh issue create \
+              --title "$issue_title" \
+              --body-file - \
+              --label "CI"
+            echo "Created new issue"
+          fi
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+          WORKFLOW_NAME: ${{ github.workflow }}
+          RUN_ID: ${{ github.run_id }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           R_VERSION: ${{ needs.version.result }}
           R_LINUX: ${{ needs.linux.result }}
@@ -426,34 +473,3 @@ jobs:
           R_MAC: ${{ needs.macos.result }}
           R_SDIST: ${{ needs.sdist.result }}
           R_NIGHTLY: ${{ needs.nightly.result }}
-        run: |
-          set -euo pipefail
-          title="Nightly wheel build failed"
-          body=$(cat <<EOF
-          The scheduled nightly wheel build failed.
-
-          **Run:** $RUN_URL
-
-          | Job | Result |
-          | --- | --- |
-          | version | $R_VERSION |
-          | linux | $R_LINUX |
-          | musllinux | $R_MUSL |
-          | windows | $R_WIN |
-          | macos | $R_MAC |
-          | sdist | $R_SDIST |
-          | nightly upload | $R_NIGHTLY |
-
-          This issue is updated automatically by the nightly workflow. Close it once the build is green again.
-          EOF
-          )
-          # Idempotent label so issue creation doesn't fail if it doesn't exist yet.
-          gh label create nightly-failure --color B60205 --description "Nightly wheel build failures" --force || true
-          existing=$(gh issue list --state open --label nightly-failure --json number --jq '.[0].number // empty')
-          if [ -n "$existing" ]; then
-            echo "Commenting on existing issue #$existing"
-            gh issue comment "$existing" --body "$body"
-          else
-            echo "Creating new tracking issue"
-            gh issue create --title "$title" --label nightly-failure --body "$body"
-          fi
