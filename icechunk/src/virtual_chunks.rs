@@ -705,16 +705,13 @@ impl VirtualChunkResolver {
                         .capture()?;
                     }
                 };
-                let hostname = if let Some(host) = chunk_location.host_str() {
-                    host.to_string()
-                } else {
-                    Err(VirtualReferenceErrorKind::CannotParseBucketName(
-                        "No hostname found for HTTP store".to_string(),
-                    ))
-                    .capture()?
-                };
-
-                let root_url = format!("{}://{}", chunk_location.scheme(), hostname);
+                let root_url = scheme_host_port(chunk_location).ok_or_else(|| {
+                    VirtualReferenceError::capture(
+                        VirtualReferenceErrorKind::CannotParseBucketName(
+                            "No hostname found for HTTP store".to_string(),
+                        ),
+                    )
+                })?;
                 Ok(Arc::new(
                     ObjectStoreFetcher::new_http(
                         &root_url,
@@ -870,21 +867,27 @@ fn is_fetcher_bucket_constrained(store: &ObjectStoreConfig) -> bool {
     }
 }
 
+/// `scheme://host[:port]` for `url`, preserving an explicit non-default port
+/// Returns `None` when the URL has no host.
+fn scheme_host_port(url: &Url) -> Option<String> {
+    let host = url.host_str()?;
+    Some(match url.port() {
+        Some(port) => format!("{}://{}:{}", url.scheme(), host, port),
+        None => format!("{}://{}", url.scheme(), host),
+    })
+}
+
 fn fetcher_cache_key(
     cont: &VirtualChunkContainer,
     location: &Url,
 ) -> Result<(String, Option<String>), VirtualReferenceError> {
     if is_fetcher_bucket_constrained(&cont.store) {
-        if let Some(host) = location.host_str() {
-            Ok((
-                cont.url_prefix.clone(),
-                Some(format!("{}://{}", location.scheme(), host)),
-            ))
-        } else {
-            Err(VirtualReferenceErrorKind::CannotParseBucketName(
+        match scheme_host_port(location) {
+            Some(authority) => Ok((cont.url_prefix.clone(), Some(authority))),
+            None => Err(VirtualReferenceErrorKind::CannotParseBucketName(
                 "No bucket name found".to_string(),
             ))
-            .capture()
+            .capture(),
         }
     } else {
         Ok((cont.url_prefix.clone(), None))
@@ -1231,8 +1234,8 @@ impl ChunkFetcher for ObjectStoreFetcher {
 mod tests {
 
     use super::{
-        backend_uses_object_store_path, object_store_path_rejects, raw_object_key,
-        resolved_object_key,
+        backend_uses_object_store_path, fetcher_cache_key, object_store_path_rejects,
+        raw_object_key, resolved_object_key, scheme_host_port,
     };
     use crate::{
         ObjectStoreConfig,
@@ -1279,6 +1282,65 @@ mod tests {
         assert_eq!(resolved_object_key("s3://bucket/a/../b")?, "/a/../b");
         assert_eq!(resolved_object_key("s3://bucket/a//b")?, "/a//b");
         Ok(())
+    }
+
+    // The authority used to root an HTTP client / key a fetcher must carry the
+    // port: a virtual chunk at `http://host:8080/...` must be fetched from 8080.
+    #[test]
+    fn test_scheme_host_port_preserves_port() {
+        use url::Url;
+
+        let url = Url::parse("http://localhost:8080/path/to/chunk").unwrap();
+        assert_eq!(scheme_host_port(&url).as_deref(), Some("http://localhost:8080"));
+
+        // No port given.
+        let url = Url::parse("http://localhost/path").unwrap();
+        assert_eq!(scheme_host_port(&url).as_deref(), Some("http://localhost"));
+
+        // The scheme's default port is normalized away by the url crate, so it
+        // is never re-added (object_store assumes the scheme default anyway).
+        let url = Url::parse("http://localhost:80/path").unwrap();
+        assert_eq!(scheme_host_port(&url).as_deref(), Some("http://localhost"));
+        let url = Url::parse("https://example.com:443/path").unwrap();
+        assert_eq!(scheme_host_port(&url).as_deref(), Some("https://example.com"));
+
+        // A non-default explicit port is preserved.
+        let url = Url::parse("https://example.com:8443/path").unwrap();
+        assert_eq!(scheme_host_port(&url).as_deref(), Some("https://example.com:8443"));
+
+        // Bucket-style URLs have no port to preserve.
+        let url = Url::parse("s3://bucket/key").unwrap();
+        assert_eq!(scheme_host_port(&url).as_deref(), Some("s3://bucket"));
+    }
+
+    // Two HTTP containers on the same host but different ports must not share a
+    // fetcher, so their cache keys must differ by the port.
+    #[cfg(feature = "object-store-http")]
+    #[test]
+    fn test_fetcher_cache_key_distinguishes_port() {
+        use crate::config::HttpConfig;
+        use url::Url;
+
+        let cont_a = VirtualChunkContainer::new(
+            "http://localhost:8080/".to_string(),
+            ObjectStoreConfig::Http(HttpConfig::default()),
+        )
+        .unwrap();
+        let cont_b = VirtualChunkContainer::new(
+            "http://localhost:9090/".to_string(),
+            ObjectStoreConfig::Http(HttpConfig::default()),
+        )
+        .unwrap();
+
+        let url_a = Url::parse("http://localhost:8080/data/chunk").unwrap();
+        let url_b = Url::parse("http://localhost:9090/data/chunk").unwrap();
+
+        let key_a = fetcher_cache_key(&cont_a, &url_a).unwrap();
+        let key_b = fetcher_cache_key(&cont_b, &url_b).unwrap();
+
+        assert_ne!(key_a, key_b);
+        assert_eq!(key_a.1.as_deref(), Some("http://localhost:8080"));
+        assert_eq!(key_b.1.as_deref(), Some("http://localhost:9090"));
     }
 
     // Predicate mirroring `object_store::path::Path::parse` rejection rules.
