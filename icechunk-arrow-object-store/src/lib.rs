@@ -77,13 +77,6 @@ use tracing::{instrument, warn};
 use url::Url;
 use uuid::Uuid;
 
-/// Only `Generic` PUT errors can hide a successful-but-ack-lost write
-/// reaching us as a transport failure; `Precondition` / `AlreadyExists`
-/// are handled by their own arm at the call site.
-fn is_readback_worthy(err: &object_store::Error) -> bool {
-    matches!(err, object_store::Error::Generic { .. })
-}
-
 /// Whether a storage operation reads from or writes to the object store.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Role {
@@ -637,9 +630,10 @@ impl Storage for ObjectStorage {
                     .await;
                 finalize_precondition(outcome, path.as_ref())
             }
-            // Transport-class failure: only `OurWrite` flips to success;
-            // everything else propagates the original error.
-            Err(err) if is_readback_worthy(&err) => {
+            // Only `Generic` can hide a landed-but-ack-lost write as a transport
+            // failure; `Precondition`/`AlreadyExists` have their own arm above.
+            // Then only `OurWrite` flips to success; the rest propagate.
+            Err(err) if matches!(err, object_store::Error::Generic { .. }) => {
                 let outcome = self
                     .read_back_after_conditional_failure(
                         settings,
@@ -828,9 +822,7 @@ impl ObjectStorage {
         path: &ObjectPath,
         write_id: Option<&str>,
     ) -> StorageResult<ReadbackOutcome> {
-        if write_id.is_none() {
-            return Ok(ReadbackOutcome::NotStamped);
-        }
+        let Some(write_id) = write_id else { return Ok(ReadbackOutcome::NotOurs) };
         let client = self.get_client(settings).await?;
         let opts = GetOptions { head: true, ..Default::default() };
         let facts = match client.get_opts(path, opts).await {

@@ -7,7 +7,7 @@
 //! builds [`ReadbackFacts`], calls [`classify_readback`], then a `finalize_*`
 //! fn maps the outcome to a [`VersionedUpdateResult`].
 
-use std::sync::OnceLock;
+use std::sync::Once;
 
 use tracing::warn;
 
@@ -19,11 +19,11 @@ use crate::storage::{
 /// to Azure (C# identifier rules).
 pub const WRITE_ID_METADATA_KEY: &str = "icechunk_write_id";
 
-static CONDITIONAL_WITHOUT_METADATA_WARNED: OnceLock<()> = OnceLock::new();
+static CONDITIONAL_WITHOUT_METADATA_WARNED: Once = Once::new();
 
 /// Warn once: conditional writes on but metadata off → no lost-response recovery.
 pub fn warn_conditional_without_metadata_once() {
-    CONDITIONAL_WITHOUT_METADATA_WARNED.get_or_init(|| {
+    CONDITIONAL_WITHOUT_METADATA_WARNED.call_once(|| {
         warn!(
             "conditional PUT is enabled but `unsafe_use_metadata` is \
              disabled — lost-response recovery for conditional writes \
@@ -46,25 +46,21 @@ pub enum ReadbackFacts {
 #[derive(Debug, PartialEq, Eq)]
 pub enum ReadbackOutcome {
     OurWrite(VersionInfo),
-    NotOurWrite,
-    NotStamped,
-    Absent,
+    /// The landed object isn't (provably) ours: a different write-id, no
+    /// write-id, or no object at all. All map identically per-caller.
+    NotOurs,
     /// Our id matched but the object has no usable version identity.
     MissingVersion,
 }
 
 /// Classify a successful read-back. A failed read-back is inconclusive and
 /// never reaches here — the backend returns the HEAD error instead.
-pub fn classify_readback(
-    our_write_id: Option<&str>,
-    facts: &ReadbackFacts,
-) -> ReadbackOutcome {
-    let Some(our) = our_write_id else { return ReadbackOutcome::NotStamped };
+pub fn classify_readback(our: &str, facts: &ReadbackFacts) -> ReadbackOutcome {
     match facts {
-        ReadbackFacts::Absent => ReadbackOutcome::Absent,
+        ReadbackFacts::Absent => ReadbackOutcome::NotOurs,
         ReadbackFacts::Found { stored_write_id, version } => {
             if stored_write_id.as_deref() != Some(our) {
-                ReadbackOutcome::NotOurWrite
+                ReadbackOutcome::NotOurs
             } else if version.is_create() {
                 ReadbackOutcome::MissingVersion
             } else {
@@ -89,9 +85,7 @@ pub fn finalize_precondition(
             );
             Ok(VersionedUpdateResult::Updated { new_version })
         }
-        ReadbackOutcome::NotOurWrite
-        | ReadbackOutcome::NotStamped
-        | ReadbackOutcome::Absent => Ok(VersionedUpdateResult::NotOnLatestVersion),
+        ReadbackOutcome::NotOurs => Ok(VersionedUpdateResult::NotOnLatestVersion),
         ReadbackOutcome::MissingVersion => {
             Err(other_error("readback object is missing a version identity"))
         }
@@ -137,33 +131,30 @@ mod tests {
     fn classify_match_returns_readback_version() {
         // A match returns the read-back object's own version, not the previous one.
         assert_eq!(
-            classify_readback(Some("W"), &found(Some("W"), Some("E1"))),
+            classify_readback("W", &found(Some("W"), Some("E1"))),
             ReadbackOutcome::OurWrite(VersionInfo::from_etag_only("E1".to_string()))
         );
     }
 
     #[test]
     fn classify_branches() {
+        // A different write-id, no write-id, or no object all collapse to NotOurs.
         assert_eq!(
-            classify_readback(Some("W"), &found(Some("OTHER"), Some("E1"))),
-            ReadbackOutcome::NotOurWrite
+            classify_readback("W", &found(Some("OTHER"), Some("E1"))),
+            ReadbackOutcome::NotOurs
         );
         assert_eq!(
-            classify_readback(Some("W"), &found(None, Some("E1"))),
-            ReadbackOutcome::NotOurWrite
+            classify_readback("W", &found(None, Some("E1"))),
+            ReadbackOutcome::NotOurs
         );
         assert_eq!(
-            classify_readback(Some("W"), &found(Some("W"), None)),
+            classify_readback("W", &ReadbackFacts::Absent),
+            ReadbackOutcome::NotOurs
+        );
+        // Our id matched but no version identity.
+        assert_eq!(
+            classify_readback("W", &found(Some("W"), None)),
             ReadbackOutcome::MissingVersion
-        );
-        assert_eq!(
-            classify_readback(Some("W"), &ReadbackFacts::Absent),
-            ReadbackOutcome::Absent
-        );
-        // We never stamped one: can't disambiguate, regardless of facts.
-        assert_eq!(
-            classify_readback(None, &found(Some("W"), Some("E1"))),
-            ReadbackOutcome::NotStamped
         );
     }
 
@@ -171,7 +162,7 @@ mod tests {
     fn precondition_absent_is_conflict_not_error() {
         // Regression: absent is a genuine race → NotOnLatestVersion, not an error.
         assert_eq!(
-            finalize_precondition(Ok(ReadbackOutcome::Absent), "k").unwrap(),
+            finalize_precondition(Ok(ReadbackOutcome::NotOurs), "k").unwrap(),
             VersionedUpdateResult::NotOnLatestVersion
         );
     }
@@ -199,7 +190,7 @@ mod tests {
     #[test]
     fn lost_response_non_ours_propagates_original() {
         let err = finalize_lost_response(
-            Ok(ReadbackOutcome::Absent),
+            Ok(ReadbackOutcome::NotOurs),
             "k",
             other_error("original put error"),
         )
