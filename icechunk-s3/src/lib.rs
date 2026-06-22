@@ -915,9 +915,7 @@ impl S3Storage {
         key: &str,
         write_id: Option<&str>,
     ) -> StorageResult<ReadbackOutcome> {
-        if write_id.is_none() {
-            return Ok(ReadbackOutcome::NotStamped);
-        }
+        let Some(write_id) = write_id else { return Ok(ReadbackOutcome::NotOurs) };
         let mut head = self
             .get_client(settings)
             .await
