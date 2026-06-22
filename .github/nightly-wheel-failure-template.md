@@ -16,5 +16,5 @@ partial failure unless the table below shows everything failing.
 | --- | --- |
 {{RESULTS}}
 
-This issue is updated automatically by the nightly wheel workflow. Close it once
-the build is green again.
+This issue is updated automatically by the nightly wheel workflow, and closes
+automatically once the nightly build passes again.
