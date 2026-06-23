@@ -3,7 +3,9 @@
 Icechunk is instrumented with the Rust [`tracing`](https://docs.rs/tracing) framework. The same instrumentation drives two independent outputs:
 
 - **Console logs** — human-readable logs printed to stdout, controlled by `ICECHUNK_LOG`. Enabled by default at the `warn` level.
-- **OpenTelemetry trace export** *(experimental)* — structured spans exported over OTLP/gRPC to a collector. Off by default, opt-in.
+- **OpenTelemetry trace export** *(experimental)* — structured spans and traces are exported over OTLP/gRPC to a collector or service. Off by default, opt-in.
+  Telemetry can be configured with an endpoint to use any OpenTelemetry compatible collector or service. If no endpoint is set
+  by the user, there is zero exporter overhead and no spans are exported.
 
 The two are configured separately and don't affect each other.
 
