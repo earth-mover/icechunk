@@ -1,12 +1,13 @@
 import datetime
 import json
 import warnings
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any, Self, cast
 
 from icechunk._icechunk_python import (
     AncestryGraph,
+    AsyncCloseableIterator,
     ChunkStorageStats,
     PyRepository,
     RepoStatus,
@@ -891,7 +892,7 @@ class Repository:
         branch: str | None = None,
         tag: str | None = None,
         snapshot_id: str | None = None,
-    ) -> AsyncIterator[SnapshotInfo]:
+    ) -> AsyncCloseableIterator[SnapshotInfo]:
         """
         Get the ancestry of a snapshot.
 
@@ -980,7 +981,7 @@ class Repository:
         )
         return res
 
-    def ops_log_async(self) -> AsyncIterator[Update]:
+    def ops_log_async(self) -> AsyncCloseableIterator[Update]:
         """
         Get a summary of changes to the repository
         """

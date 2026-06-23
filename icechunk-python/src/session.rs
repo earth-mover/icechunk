@@ -24,7 +24,7 @@ use crate::{
     errors::{PyIcechunkStoreError, PyIcechunkStoreResult},
     repository::{PyDiff, PySnapshotProperties},
     store::PyStore,
-    streams::PyAsyncGenerator,
+    streams::PyAsyncCloseableIterator,
 };
 
 #[pyclass(skip_from_py_object)]
@@ -445,7 +445,7 @@ impl PySession {
         &self,
         array_path: String,
         batch_size: u32,
-    ) -> PyResult<PyAsyncGenerator> {
+    ) -> PyResult<PyAsyncCloseableIterator> {
         // This is blocking function, we need to release the Gil
         let session = Arc::clone(&self.0);
         let res = try_stream! {
@@ -483,7 +483,7 @@ impl PySession {
         };
 
         let prepared_list = Arc::new(Mutex::new(res.boxed()));
-        Ok(PyAsyncGenerator::new(prepared_list))
+        Ok(PyAsyncCloseableIterator::new(prepared_list))
     }
 
     pub fn chunk_type(

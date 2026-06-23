@@ -34,7 +34,7 @@ use crate::{
     errors::{PyIcechunkStoreError, PyIcechunkStoreResult},
     impl_pickle,
     session::{ChunkType, PySession},
-    streams::PyAsyncGenerator,
+    streams::PyAsyncCloseableIterator,
     virtualrefs::{build_vrefs_from_arrays, do_set_virtual_refs, vrefs_result_to_py},
 };
 
@@ -607,7 +607,7 @@ impl PyStore {
         )
     }
 
-    /// Async generator yielding columnar batches of chunk references for one array.
+    /// Async iterator yielding columnar batches of chunk references for one array.
     ///
     /// Each batch is a 6-tuple; row `i` across the columns describes one
     /// chunk (columns are aligned in lock-step):
@@ -642,7 +642,7 @@ impl PyStore {
         &self,
         array_path: String,
         batch_size: u32,
-    ) -> PyResult<PyAsyncGenerator> {
+    ) -> PyResult<PyAsyncCloseableIterator> {
         let store = Arc::clone(&self.0);
         let res = try_stream! {
             let session_lock = store.session();
@@ -741,7 +741,7 @@ impl PyStore {
             }
         };
         let prepared = Arc::new(Mutex::new(res.boxed()));
-        Ok(PyAsyncGenerator::new(prepared))
+        Ok(PyAsyncCloseableIterator::new(prepared))
     }
 
     fn delete<'py>(
@@ -818,7 +818,7 @@ impl PyStore {
         Ok(supports_listing)
     }
 
-    fn list(&self, py: Python<'_>) -> PyIcechunkStoreResult<PyAsyncGenerator> {
+    fn list(&self, py: Python<'_>) -> PyIcechunkStoreResult<PyAsyncCloseableIterator> {
         // This is blocking function, we need to release the Gil
         py.detach(move || {
             let store = Arc::clone(&self.0);
@@ -834,7 +834,7 @@ impl PyStore {
                 .err_into();
 
             let prepared_list = Arc::new(Mutex::new(list.boxed()));
-            Ok(PyAsyncGenerator::new(prepared_list))
+            Ok(PyAsyncCloseableIterator::new(prepared_list))
         })
     }
 
@@ -842,7 +842,7 @@ impl PyStore {
         &self,
         py: Python<'_>,
         prefix: String,
-    ) -> PyIcechunkStoreResult<PyAsyncGenerator> {
+    ) -> PyIcechunkStoreResult<PyAsyncCloseableIterator> {
         // This is blocking function, we need to release the Gil
         py.detach(move || {
             let store = Arc::clone(&self.0);
@@ -857,7 +857,7 @@ impl PyStore {
                 })
                 .err_into();
             let prepared_list = Arc::new(Mutex::new(list.boxed()));
-            Ok(PyAsyncGenerator::new(prepared_list))
+            Ok(PyAsyncCloseableIterator::new(prepared_list))
         })
     }
 
@@ -865,7 +865,7 @@ impl PyStore {
         &self,
         py: Python<'_>,
         prefix: String,
-    ) -> PyIcechunkStoreResult<PyAsyncGenerator> {
+    ) -> PyIcechunkStoreResult<PyAsyncCloseableIterator> {
         // This is blocking function, we need to release the Gil
         py.detach(move || {
             let store = Arc::clone(&self.0);
@@ -880,7 +880,7 @@ impl PyStore {
                 })
                 .err_into();
             let prepared_list = Arc::new(Mutex::new(list.boxed()));
-            Ok(PyAsyncGenerator::new(prepared_list))
+            Ok(PyAsyncCloseableIterator::new(prepared_list))
         })
     }
 
