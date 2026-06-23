@@ -117,6 +117,19 @@ services:
     volumes:
       - azurite-data:/workspace
 
+  # Local OpenTelemetry trace collector + UI for the `otel` feature.
+  # Profiled so it is NOT started by `docker compose up -d` / `just contup`;
+  # use `just jaeger-up` to start it on demand. Jaeger v2 accepts OTLP out of
+  # the box (gRPC on 4317, HTTP on 4318) and serves its UI on 16686.
+  jaeger:
+    container_name: icechunk_jaeger
+    image: jaegertracing/jaeger:2.19.0
+    profiles: ["jaeger"]
+    ports:
+      - "16686:16686" # Jaeger UI
+      - "4317:4317" # OTLP gRPC (ICECHUNK_OTLP_ENDPOINT=http://localhost:4317)
+      - "4318:4318" # OTLP HTTP
+
   azurite-init:
     image: mcr.microsoft.com/azure-storage/azurite:3.33.0
     container_name: azurite_init
