@@ -23,14 +23,14 @@ from icechunk.store import IcechunkStore
 from icechunk.types import CommitMethod
 
 
-def _none_credential_guidance(scheme: str) -> tuple[str | None, str]:
-    """Guidance for replacing a deprecated `None` credential, keyed by the container's
-    url prefix scheme. Returns ``(replacement_expression, security_note)``; the
-    replacement is ``None`` for unrecognized schemes.
+def _none_credential_guidance(scheme: str) -> tuple[str, str]:
+    """The explicit replacement expression and (for S3) a security note for a deprecated
+    `None` credential, keyed by the container's url prefix scheme.
 
     Scheme matching is reliable because icechunk enforces scheme/store correspondence
     when containers are created: `s3://`/`tigris://` are exactly the S3-family stores
-    (including S3-compatible), `gs://`/`gcs://` GCS, etc.
+    (including S3-compatible), `gs://`/`gcs://` GCS, `az://`/`azure://`/`abfs://` Azure,
+    `http(s)://` HTTP, and `file://` local.
     """
     if scheme in ("s3", "tigris"):
         # FromEnv preserves the current `None` behaviour; use ic.s3_anonymous_credentials()
@@ -41,11 +41,14 @@ def _none_credential_guidance(scheme: str) -> tuple[str | None, str]:
         )
     if scheme in ("gs", "gcs"):
         return "ic.Credentials.Gcs(ic.GcsCredentials.Anonymous())", ""
+    if scheme in ("az", "azure", "abfs"):
+        return "ic.Credentials.Azure(ic.AzureCredentials.FromEnv())", ""
     if scheme == "file":
         return "ic.credentials.LocalFileSystemAccess", ""
     if scheme in ("http", "https"):
         return "ic.credentials.HttpAccess", ""
-    return None, ""
+    # Not a supported virtual-chunk container scheme; `...` is a placeholder.
+    return "...", ""
 
 
 def _warn_on_none_virtual_chunk_credentials(
@@ -64,22 +67,14 @@ def _warn_on_none_virtual_chunk_credentials(
             continue
         scheme = url_prefix.split("://", 1)[0]
         replacement, security_note = _none_credential_guidance(scheme)
-        if replacement is not None:
-            example = (
-                'authorize_virtual_chunk_access={"'
-                + url_prefix
-                + '": '
-                + replacement
-                + "}"
-            )
-            snippet = f" For example:\n    {example}"
-        else:
-            snippet = ""
+        example = (
+            'authorize_virtual_chunk_access={"' + url_prefix + '": ' + replacement + "}"
+        )
         warnings.warn(
             f"Passing `None` in `authorize_virtual_chunk_access` for container "
             f"`{url_prefix}` is deprecated and will be unsupported in a future release; "
-            f"pass an explicit credential or no-auth sentinel instead.{snippet}"
-            f"{security_note} See {issue} for details.",
+            f"pass an explicit credential or no-auth sentinel instead. For example:\n"
+            f"    {example}{security_note} See {issue} for details.",
             DeprecationWarning,
             stacklevel=3,
         )
