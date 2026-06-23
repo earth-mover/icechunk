@@ -46,7 +46,8 @@ clap = { workspace = true, optional = true }
 
 [features]
 cli = ["clap", "icechunk/cli"]
-default = ["cli"]
+otel = ["icechunk/otel"]
+default = ["cli", "otel"]
 
 [lints]
 workspace = true

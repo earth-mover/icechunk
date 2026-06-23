@@ -111,6 +111,91 @@ static LOG_FILTER: std::sync::LazyLock<
     >,
 > = std::sync::LazyLock::new(|| std::sync::Mutex::new(None));
 
+/// Holds the OTLP tracer provider so spans can be flushed at shutdown.
+#[cfg(feature = "otel")]
+static TRACER_PROVIDER: std::sync::OnceLock<opentelemetry_sdk::trace::SdkTracerProvider> =
+    std::sync::OnceLock::new();
+
+/// Set once `shutdown_telemetry` has run, so repeated calls are a no-op.
+#[cfg(feature = "otel")]
+static TELEMETRY_SHUTDOWN: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Build the OTLP span exporter and tracer when an endpoint is configured.
+///
+/// Returns `None` when no endpoint env var is set (export disabled) or when the
+/// exporter fails to build. The icechunk-specific `ICECHUNK_OTLP_ENDPOINT` takes
+/// precedence over the standard `OTEL_EXPORTER_OTLP_ENDPOINT`, so a global
+/// collector can be overridden just for icechunk.
+///
+/// Must be called from within a Tokio runtime context: the tonic channel spawns
+/// a background driver task on the current runtime, which must stay alive for
+/// spans to be exported and flushed.
+#[cfg(feature = "otel")]
+fn build_otel_tracer() -> Option<opentelemetry_sdk::trace::SdkTracer> {
+    use opentelemetry::trace::TracerProvider as _;
+    use opentelemetry_otlp::{SpanExporter, WithExportConfig as _};
+    use opentelemetry_sdk::{Resource, trace::SdkTracerProvider};
+
+    let endpoint = std::env::var("ICECHUNK_OTLP_ENDPOINT")
+        .or_else(|_| std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT"))
+        .ok()?;
+
+    let exporter =
+        match SpanExporter::builder().with_tonic().with_endpoint(endpoint).build() {
+            Ok(exporter) => exporter,
+            Err(err) => {
+                eprintln!("Error building OpenTelemetry exporter: {err}");
+                return None;
+            }
+        };
+
+    let service_name = std::env::var("ICECHUNK_OTEL_SERVICE_NAME")
+        .or_else(|_| std::env::var("OTEL_SERVICE_NAME"))
+        .unwrap_or_else(|_| "icechunk".to_string());
+    let resource = Resource::builder().with_service_name(service_name).build();
+    let provider = SdkTracerProvider::builder()
+        .with_resource(resource)
+        .with_batch_exporter(exporter)
+        .build();
+
+    let tracer = provider.tracer("icechunk");
+    // Keep the provider alive so `shutdown_telemetry` can flush it.
+    let _ = TRACER_PROVIDER.set(provider);
+    Some(tracer)
+}
+
+/// The filter controlling which spans are exported over OTLP. Fixed at startup.
+#[cfg(feature = "otel")]
+fn otel_export_filter() -> tracing_subscriber::EnvFilter {
+    // TODO: allow changing this at runtime
+    std::env::var("ICECHUNK_OTEL_FILTER")
+        .ok()
+        .map(tracing_subscriber::EnvFilter::new)
+        .unwrap_or_else(|| tracing_subscriber::EnvFilter::new("icechunk=info"))
+}
+
+/// Flush and shut down the OpenTelemetry exporter, if one is active.
+///
+/// Call before process exit so the final batch of spans is exported. Idempotent,
+/// and a no-op when the `otel` feature is disabled or no exporter was started.
+#[cfg(feature = "otel")]
+pub fn shutdown_telemetry() {
+    use std::sync::atomic::Ordering;
+    if TELEMETRY_SHUTDOWN.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    if let Some(provider) = TRACER_PROVIDER.get()
+        && let Err(err) = provider.shutdown()
+    {
+        eprintln!("Error shutting down telemetry: {err}");
+    }
+}
+
+/// No-op operation for callers with otel feature disabled
+#[cfg(not(feature = "otel"))]
+pub fn shutdown_telemetry() {}
+
 #[cfg(feature = "logs")]
 pub fn initialize_tracing(log_filter_directive: Option<&str>) {
     use tracing::Level;
@@ -130,7 +215,7 @@ pub fn initialize_tracing(log_filter_directive: Option<&str>) {
         Ok(mut guard) => match guard.as_ref() {
             Some(handle) => {
                 if let Err(err) = handle.reload(filter) {
-                    println!("Error reloading log settings: {err}");
+                    eprintln!("Error reloading log settings: {err}");
                 }
             }
             None => {
@@ -141,17 +226,31 @@ pub fn initialize_tracing(log_filter_directive: Option<&str>) {
 
                 let error_span_layer = ErrorLayer::default();
 
+                // Appended last so the console filter's `S` type — and thus the
+                // `LOG_FILTER` reload handle stored above — is unchanged. A `None`
+                // layer is a no-op, so "OTel disabled" needs no separate path.
+                #[cfg(feature = "otel")]
+                let otel_layer = build_otel_tracer().map(|tracer| {
+                    tracing_opentelemetry::OpenTelemetryLayer::new(tracer)
+                        .with_filter(otel_export_filter())
+                });
+                #[cfg(not(feature = "otel"))]
+                let otel_layer: Option<
+                    tracing_subscriber::layer::Identity,
+                > = None;
+
                 if let Err(err) = Registry::default()
                     .with(error_span_layer)
                     .with(stdout_layer)
+                    .with(otel_layer)
                     .try_init()
                 {
-                    println!("Error initializing logs: {err}");
+                    eprintln!("Error initializing logs: {err}");
                 }
             }
         },
         Err(err) => {
-            println!("Error setting up logs: {err}");
+            eprintln!("Error setting up logs: {err}");
         }
     }
 }

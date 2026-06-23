@@ -97,7 +97,12 @@ table TransactionLog {
   updated_chunks: [ArrayUpdatedChunks] (required);
 
   // Nodes moved in this transaction.
-  // MUST be sorted by the `to` field (see node path sort order in common.fbs).
+  // MUST be sorted by the `to` path so that each node is immediately followed
+  // by all of its descendants, with no unrelated path in between. Paths are
+  // compared segment-wise: split on `/` and compare segments left to right by
+  // raw UTF-8 bytes; when one path runs out of segments, it sorts first. For
+  // example: /a < /a/b < /a-b < /aa < /ab < /b. This is NOT the raw byte order
+  // used for snapshot nodes (see common.fbs), where /a-b precedes /a/b.
   // MUST be fully collapsed: if a node was moved multiple times
   // (e.g. A -> B, then B -> C), only the net result (A -> C) is recorded.
   // Every moved node MUST have its own entry. When a group is moved,

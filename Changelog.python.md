@@ -6,14 +6,16 @@ This release introduces on-disk [spec version 2.1](https://icechunk.io/en/stable
 
 ### Features
 
-- Build Python wheels with the `abi3-py312` stable ABI, greatly reducing the number of published wheels. The minimum supported Python version remains 3.12 ([#2213](https://github.com/earth-mover/icechunk/pull/2213)).
 - Add a read-only Rust API to inspect metadata file headers ([#2216](https://github.com/earth-mover/icechunk/pull/2216)).
 - Add a `headers` argument to `http_storage` (and `ObjectStoreConfig.Http`) to inject static HTTP headers, such as an `authorization` bearer token, into every request ([#2143](https://github.com/earth-mover/icechunk/pull/2143)).
+- Add optional, experimental [OpenTelemetry export](https://icechunk.io/en/stable/guides/observability/): when `ICECHUNK_OTLP_ENDPOINT` or `OTEL_EXPORTER_OTLP_ENDPOINT` are set, tracing spans are exported over OTLP/gRPC. Off by default for Rust library builds via the new `otel` Cargo feature ([#2234](https://github.com/earth-mover/icechunk/pull/2234)).
+- Build Python wheels with the `abi3-py312` stable ABI, greatly reducing the number of published wheels. The minimum supported Python version remains 3.12 ([#2213](https://github.com/earth-mover/icechunk/pull/2213)).
 
 ### Fixes
 
 - Expiration now records the full ancestry of pruned transaction logs in a new optional `pruned_ancestor_tx_logs` field on `SnapshotInfo`, so `diff`, `amend`, `rebase`, and `inspect` produce correct results after expiration ([#2184](https://github.com/earth-mover/icechunk/pull/2184)).
 - Preserve all URL parts (userinfo, port, query, fragment, and empty path segments) when storing virtual chunk locations ([#2219](https://github.com/earth-mover/icechunk/pull/2219)).
+- Honor the port when reading virtual chunks from HTTP stores, so a reference like `http://host:8080/...` is fetched from the correct port ([#2223](https://github.com/earth-mover/icechunk/issues/2223)).
 
 ### Breaking Changes
 

@@ -54,7 +54,11 @@ anyhow = { workspace = true, optional = true }
 clap = { workspace = true, optional = true }
 dialoguer = { workspace = true, optional = true }
 dirs = { workspace = true, optional = true }
+opentelemetry = { workspace = true, optional = true }
+opentelemetry-otlp = { workspace = true, optional = true }
+opentelemetry_sdk = { workspace = true, optional = true }
 reqwest = { workspace = true, optional = true }
+tracing-opentelemetry = { workspace = true, optional = true }
 tracing-subscriber = { workspace = true, optional = true }
 shuttle-tokio = { workspace = true, optional = true }
 
@@ -123,6 +127,13 @@ object-store-http = ["icechunk-arrow-object-store/http"]
 object-store-fs = ["icechunk-arrow-object-store/fs"]
 redirect = ["dep:reqwest"]
 logs = ["dep:tracing-subscriber"]
+otel = [
+  "logs",
+  "dep:opentelemetry",
+  "dep:opentelemetry_sdk",
+  "dep:opentelemetry-otlp",
+  "dep:tracing-opentelemetry",
+]
 cli = ["dep:clap", "dep:anyhow", "dep:dialoguer", "dep:dirs"]
 shuttle = ["dep:shuttle-tokio", "shuttle-tokio/shuttle"]
 
