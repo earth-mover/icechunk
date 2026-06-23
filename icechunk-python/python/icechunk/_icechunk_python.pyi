@@ -3273,7 +3273,7 @@ class Credentials:
 
     class HttpAccess:
         """Sentinel authorizing access to an HTTP(S) virtual chunk container, which
-        requires no credentials. Surfaced as ``HttpAccess``."""
+        requires no credentials."""
 
         def __new__(cls) -> Credentials.HttpAccess: ...
 
