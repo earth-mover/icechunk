@@ -98,8 +98,7 @@ jobs:
           uv venv
           source .venv/bin/activate
           python --version
-          PYTHON_TAG="cp$(echo ${{ env.PYTHON_VERSION }} | tr -d '.')"
-          WHEEL=$(ls dist/*-${PYTHON_TAG}-*.whl)
+          WHEEL=$(ls dist/*-abi3-*.whl)
           uv pip install "$WHEEL" --group test
           # Install specific versions based on matrix
           if [ "${{ matrix.deps-version.name }}" = "minimum" ]; then
@@ -248,8 +247,7 @@ jobs:
           uv venv
           source .venv/bin/activate
           python --version
-          PYTHON_TAG="cp$(echo ${{ env.PYTHON_VERSION }} | tr -d '.')"
-          WHEEL=$(ls dist/*-${PYTHON_TAG}-*.whl)
+          WHEEL=$(ls dist/*-abi3-*.whl)
           uv pip install "$WHEEL" --group test
           uv pip install pytest-shard
 
@@ -313,8 +311,7 @@ jobs:
           set -e
           uv venv
           source .venv/bin/activate
-          PYTHON_TAG="cp$(echo ${{ env.PYTHON_VERSION }} | tr -d '.')"
-          WHEEL=$(ls dist/*-${PYTHON_TAG}-*.whl)
+          WHEEL=$(ls dist/*-abi3-*.whl)
           uv pip install "$WHEEL" --group test
           uv run third-wheel sync -v
 
@@ -370,8 +367,7 @@ jobs:
           uv venv
           source .venv/bin/activate
           python --version
-          PYTHON_TAG="cp$(echo ${{ env.PYTHON_VERSION }} | tr -d '.')"
-          WHEEL=$(ls dist/*-${PYTHON_TAG}-*.whl)
+          WHEEL=$(ls dist/*-abi3-*.whl)
           uv pip install "$WHEEL" --group test
           uv pip install "pytest-mypy-plugins<4"
           # Install specific xarray version based on matrix
@@ -452,8 +448,7 @@ jobs:
           set -e
           uv venv
           source .venv/bin/activate
-          PYTHON_TAG="cp$(echo ${{ env.PYTHON_VERSION }} | tr -d '.')"
-          WHEEL=$(ls dist/*-${PYTHON_TAG}-*.whl)
+          WHEEL=$(ls dist/*-abi3-*.whl)
           uv pip install "$WHEEL" --group dev
           python -m mypy.stubtest --ignore-disjoint-bases icechunk._icechunk_python --allowlist stubtest_allowlist.txt
 

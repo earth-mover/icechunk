@@ -1,11 +1,11 @@
 ---
 title: Specification
 ---
-# Icechunk Specification, version 2
+# Icechunk Specification, version 2.1
 
 !!! Note
 
-    This is the current Icechunk specification (spec version 2), used by Icechunk 2.x. For the previous on-disk format, see [spec version 1](./spec-v1.md). See [Changes from spec version 1](#changes-from-spec-version-1) for a summary of what changed.
+    This is the current Icechunk specification (spec version 2.1), used by Icechunk 2.1.0 and higher. For the previous on-disk formats, see [spec version 2](./spec-v2.md), and [spec version 1](./spec-v1.md). See [Changes from spec version 2 to 2.1](#changes-from-spec-version-2-to-21) for a summary of what changed.
 
 !!! Note
 
@@ -62,7 +62,7 @@ The storage system is not required to support random-access writes. Once written
 ### Consistency and Optimistic Concurrency
 
 Icechunk achieves transactional consistency using only the limited consistency guarantees offered by object storage.
-Icechunk V2 does this entirely via careful management of creation and conditional updating of the `RepoInfo` object.
+Icechunk V2.x does this entirely via careful management of creation and conditional updating of the `RepoInfo` object.
 (The exact contents of the `RepoInfo` object are defined in the format specification section below.)
 
 When a client attempts to make a change to the repository, it fetches the latest version of the repo info object and applies its changes in memory first.
@@ -205,7 +205,7 @@ The header contains the following fields, in order:
 |-------|------|-------------|
 | Magic bytes | 12 bytes | The UTF-8 encoding of `ICE🧊CHUNK` (`49 43 45 F0 9F A7 8A 43 48 55 4E 4B`). |
 | Implementation name | 24 bytes | A left-aligned, right-space-padded UTF-8 string identifying the writing client. |
-| Spec version | 1 byte | `1` for spec version 1, `2` for spec version 2. |
+| Spec version | 1 byte | `1` for spec version 1, `2` for spec version 2.x. |
 | File type | 1 byte | `1` = Snapshot, `2` = Manifest, `4` = TransactionLog, `6` = RepoInfo. |
 | Compression algorithm | 1 byte | `0` = none, `1` = zstd. |
 
@@ -217,7 +217,7 @@ With the exception of chunk files, each type of file is encoded using [flatbuffe
 
 #### Repo Info File
 
-The repo info file is the single entry point for an Icechunk repository and the only mutable object in a V2 repo. It MUST be stored at `$ROOT/repo`. Every read operation starts by fetching this file. Every update to the repository (commits, tag creation, configuration changes) is a conditional write on this file.
+The repo info file is the single entry point for an Icechunk repository and the only mutable object in a V2.x repo. It MUST be stored at `$ROOT/repo`. Every read operation starts by fetching this file. Every update to the repository (commits, tag creation, configuration changes) is a conditional write on this file.
 
 The repo info file MUST use the standard [binary file format](#binary-file-format) with file type `RepoInfo`.
 
@@ -244,6 +244,10 @@ Each snapshot in the repository has a `SnapshotInfo` entry in the repo info file
 ```protobuf
 --8<-- "icechunk-format/flatbuffers/repo.fbs:snapshot_info"
 ```
+
+Version 2.1 of the spec added the `pruned_ancestor_tx_logs: [ObjectId12]` field. Expiration uses this field to keep track of the full ancestry of transaction logs that generated this snapshot but were later expired. The list is ordered by ancestry, oldest first. Implementations MUST treat the concatenation of all these transaction logs, followed by the snapshot's own transaction log, as the full transaction history for the snapshot.
+
+Some implementations MAY compact these transaction logs to shorten the list, so readers MUST NOT assume that each entry corresponds to a real commit.
 
 ##### `Update`
 
@@ -347,7 +351,7 @@ Each `ManifestRef` identifies a manifest file and the region of the array's chun
 
 ##### `ManifestFileInfo`
 
-The snapshot's `manifest_files` / `manifest_files_v2` lists provide summary metadata about every manifest file referenced by the snapshot. These are separate from the per-array `ManifestRef` pointers — they describe the manifest files themselves rather than which chunks they cover. V2 repositories write their manifests using `ManifestFileInfoV2`; IC1 repositories use `ManifestFileInfo`.
+The snapshot's `manifest_files` / `manifest_files_v2` lists provide summary metadata about every manifest file referenced by the snapshot. These are separate from the per-array `ManifestRef` pointers — they describe the manifest files themselves rather than which chunks they cover. V2.x repositories write their manifests using `ManifestFileInfoV2`; IC1 repositories use `ManifestFileInfo`.
 
 ```protobuf
 --8<-- "icechunk-format/flatbuffers/snapshot.fbs:manifest_file_info"
@@ -505,7 +509,14 @@ A tag can be created from any snapshot.
     1. If unsuccessful because there was some previous update, read the file again and retry
     1. If unsuccessful because the snapshot doesn't exist, fail the update
 
-## Changes from spec version 1
+## Changes from spec version 2 to 2.1
+
+- Added the optional `pruned_ancestor_tx_logs` field to the `SnapshotInfo` table in the `repo` flatbuffer file.
+- `pruned_ancestor_tx_logs` is populated during expiration, recording the transaction logs of ancestor commits that were removed from the repository.
+- The change is backwards and forwards compatible. `pruned_ancestor_tx_logs` is an optional flatbuffers field, so a 2.0.x reader simply ignores it and a 2.1 reader treats its absence as "never expired". Because of this, Icechunk libraries in the 2.0.x series can still read and write repositories that use spec version 2.1; in that case expiration is degraded to the 2.0.x behavior.
+- The on-disk format flags repositories as version `2` for both spec 2 and spec 2.1.
+
+## Changes from spec version 1 to 2
 
 - The repo info object was introduced as a single point of consistency and atomicity. This file is in the `repo` path, inside the repository tree. Many new fields are introduced in this object, such as feature flags, status, spec version and others.
 - There is now a single mutable object: `repo`. Updates to this file first backup the original contents in the new `overwritten/` prefix.

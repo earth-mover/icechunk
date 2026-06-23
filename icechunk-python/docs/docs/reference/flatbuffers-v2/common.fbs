@@ -13,10 +13,11 @@ namespace generated;
 //
 // The root path is `/`. Example paths: `/`, `/foo`, `/foo/bar`.
 //
-// When comparing paths for sort order, comparison is by the raw UTF-8 bytes
-// of the full path string, including the `/` separators.
-// For example: /a < /a-b < /a/b < /ab < /b, because `-` (0x2D) sorts before
-// `/` (0x2F)
+// When comparing paths for sort order, comparison is component-wise
+// lexicographic: split on `/`, then compare segments left to right.
+// For example: /a < /a/b < /ab < /b.
+// Note: this differs from raw byte comparison. For instance,
+// /a/b < /a-b in component-wise order, but /a-b < /a/b in byte order.
 // --8<-- [end:node_path]
 
 // --8<-- [start:object_id_12]
