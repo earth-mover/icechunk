@@ -151,6 +151,8 @@ plugins:
   - markdown-exec
   - redirects:
       redirect_maps:
+        # Permalink: /reference/spec -> latest spec version
+        'reference/spec.md': 'reference/spec-v2-1.md'
         # Redirects from icechunk-python subdirectory (legacy URLs)
         'icechunk-python/quickstart/index.md': 'getting-started/quickstart.md'
         'icechunk-python/async/index.md': 'guides/async.md'
@@ -185,7 +187,7 @@ plugins:
         'virtual.md': 'guides/virtual.md'
         'async.md': 'guides/async.md'
         'icechunk-for-git-users.md': 'guides/icechunk-for-git-users.md'
-        'spec.md': 'reference/spec.md'
+        'spec.md': 'reference/spec-v2-1.md'
         'version-policy.md': 'reference/version-policy.md'
         'icechunk-js.md': 'reference/icechunk-js.md'
         'icechunk-rust.md': 'reference/icechunk-rust.md'
@@ -248,6 +250,7 @@ nav:
     - Flaky Networks: guides/flaky-networks.md
     - Virtual Datasets: guides/virtual.md
     - Async Usage: guides/async.md
+    - Storing Sensitive Data: guides/sensitive-data.md
     - Icechunk for Git Users: guides/icechunk-for-git-users.md
     - Creating Icechunk Datasets:
       - Global Raster Data cube: guides/ingestion/glad-ingest.ipynb
@@ -256,7 +259,8 @@ nav:
   - Blog: blog-posts.md
   - Reference:
     - Spec:
-      - v2 (current): reference/spec.md
+      - v2.1 (current): reference/spec-v2-1.md
+      - v2: reference/spec-v2.md
       - v1: reference/spec-v1.md
     - Version Policy: reference/version-policy.md
     - Python API Reference:

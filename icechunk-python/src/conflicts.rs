@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::impl_pickle;
 
-#[pyclass(name = "ConflictType", module = "icechunk", eq)]
+#[pyclass(from_py_object, name = "ConflictType", module = "icechunk", eq)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) enum PyConflictType {
     NewNodeConflictsWithExistingNode = 1,
@@ -112,7 +112,7 @@ impl PyConflictType {
 
 impl_pickle!(PyConflictType);
 
-#[pyclass(name = "Conflict", module = "icechunk")]
+#[pyclass(from_py_object, name = "Conflict", module = "icechunk")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct PyConflict {
     #[pyo3(get)]
@@ -250,7 +250,7 @@ impl From<&Conflict> for PyConflict {
     }
 }
 
-#[pyclass(name = "VersionSelection", eq)]
+#[pyclass(from_py_object, name = "VersionSelection", eq)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PyVersionSelection {
     Fail = 0,
@@ -270,7 +270,7 @@ impl From<PyVersionSelection> for VersionSelection {
 
 impl_pickle!(PyVersionSelection);
 
-#[pyclass(subclass, name = "ConflictSolver")]
+#[pyclass(from_py_object, subclass, name = "ConflictSolver")]
 #[derive(Clone)]
 pub struct PyConflictSolver(Arc<dyn ConflictSolver + Send + Sync>);
 
@@ -286,7 +286,7 @@ impl<'a> AsRef<dyn ConflictSolver + 'a + Send + Sync> for PyConflictSolver {
     }
 }
 
-#[pyclass(name = "BasicConflictSolver", extends=PyConflictSolver)]
+#[pyclass(skip_from_py_object, name = "BasicConflictSolver", extends=PyConflictSolver)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct PyBasicConflictSolver;
 
@@ -298,29 +298,28 @@ impl PyBasicConflictSolver {
         on_chunk_conflict: PyVersionSelection,
         fail_on_delete_of_updated_array: bool,
         fail_on_delete_of_updated_group: bool,
-    ) -> (Self, PyConflictSolver) {
-        (
-            Self,
-            PyConflictSolver(Arc::new(BasicConflictSolver {
-                on_chunk_conflict: on_chunk_conflict.into(),
-                fail_on_delete_of_updated_array,
-                fail_on_delete_of_updated_group,
-            })),
-        )
+    ) -> PyClassInitializer<Self> {
+        PyClassInitializer::from(PyConflictSolver(Arc::new(BasicConflictSolver {
+            on_chunk_conflict: on_chunk_conflict.into(),
+            fail_on_delete_of_updated_array,
+            fail_on_delete_of_updated_group,
+        })))
+        .add_subclass(Self)
     }
 }
 
 impl_pickle!(PyBasicConflictSolver);
 
-#[pyclass(name = "ConflictDetector", extends=PyConflictSolver)]
+#[pyclass(skip_from_py_object, name = "ConflictDetector", extends=PyConflictSolver)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct PyConflictDetector;
 
 #[pymethods]
 impl PyConflictDetector {
     #[new]
-    fn new() -> (Self, PyConflictSolver) {
-        (Self, PyConflictSolver(Arc::new(ConflictDetector)))
+    fn new() -> PyClassInitializer<Self> {
+        PyClassInitializer::from(PyConflictSolver(Arc::new(ConflictDetector)))
+            .add_subclass(Self)
     }
 }
 

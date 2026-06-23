@@ -574,7 +574,6 @@ def _rebuild_transaction_log(payload: bytes, mod: Any) -> bytes:
 def _rebuild_snapshot(
     payload: bytes, mod: Any, manifest_sizes: dict[bytes, int] | None = None
 ) -> bytes:
-
     snap = mod.Snapshot.GetRootAs(payload)
     B = fb.Builder(4096)
 
@@ -725,7 +724,6 @@ def _rebuild_snapshot(
 
 
 def _rebuild_manifest(payload: bytes, mod: Any) -> bytes:
-
     manifest = mod.Manifest.GetRootAs(payload)
     B = fb.Builder(8192)
 
@@ -1008,3 +1006,52 @@ def test_extra_fields_forward_compatibility(
             new_tag_session.store, path="group1/big_chunks", mode="r"
         )[:]
         np.testing.assert_array_equal(new_tag_big, orig_tag_big)
+
+
+def test_snapshot_nodes_sorted_by_bytes(tmp_path: Path, flatbuf_mod: ModuleType) -> None:
+    repo = ic.Repository.create(ic.local_filesystem_storage(str(tmp_path)))
+    with repo.transaction("main", message="create nodes") as store:
+        root = zarr.group(store)
+        root.create_group("a").create_group("b")
+        root.create_group("a-b")
+        root.create_group("aa")
+        root.create_group("ab")
+        root.create_group("b")
+
+    snapshot_id = repo.lookup_branch("main")
+    data = (tmp_path / "snapshots" / snapshot_id).read_bytes()
+    snap = flatbuf_mod.Snapshot.GetRootAs(assert_valid_header(data, FileType.Snapshot))
+
+    expected = ["/", "/a", "/a-b", "/a/b", "/aa", "/ab", "/b"]
+    assert [n["path"] for n in repo.inspect_snapshot(snapshot_id)["nodes"]] == expected
+    assert [snap.Nodes(i).Path().decode() for i in range(snap.NodesLength())] == expected
+
+
+def test_moved_nodes_sorted_segment_wise(tmp_path: Path, flatbuf_mod: ModuleType) -> None:
+    repo = ic.Repository.create(ic.local_filesystem_storage(str(tmp_path)))
+    with repo.transaction("main", message="create sources") as store:
+        root = zarr.group(store)
+        for name in ("src0", "src1", "src2", "src3", "src4", "src5"):
+            root.create_group(name)
+
+    rs = repo.rearrange_session("main")
+    rs.move("/src0", "/a")
+    rs.move("/src1", "/a/b")
+    rs.move("/src2", "/a-b")
+    rs.move("/src3", "/aa")
+    rs.move("/src4", "/ab")
+    rs.move("/src5", "/b")
+    move_id = rs.commit("move nodes")
+
+    data = (tmp_path / "transactions" / move_id).read_bytes()
+    txn = flatbuf_mod.TransactionLog.GetRootAs(
+        assert_valid_header(data, FileType.TransactionLog)
+    )
+
+    expected = ["/a", "/a/b", "/a-b", "/aa", "/ab", "/b"]
+    assert [
+        m["to"] for m in repo.inspect_transaction_log(move_id)["moved_nodes"]
+    ] == expected
+    assert [
+        txn.MovedNodes(i).To().decode() for i in range(txn.MovedNodesLength())
+    ] == expected

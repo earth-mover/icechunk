@@ -37,7 +37,7 @@ permissions:
   contents: read
 
 env:
-  PYTHON_INTERPRETERS: "python3.12 python3.13 python3.14"
+  PYTHON_INTERPRETER: "python3.12"
 
 defaults:
   run:
@@ -65,7 +65,7 @@ jobs:
       # Checkout main branch (skip if only building support/v1.x)
       - name: Checkout main
         if: ${{ github.event_name == 'schedule' || inputs.branch != 'support/v1.x' }}
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           ref: main
           fetch-depth: 0
@@ -95,7 +95,7 @@ jobs:
       # Checkout support/v1.x branch (skip if only building main)
       - name: Checkout support/v1.x
         if: ${{ github.event_name == 'schedule' || inputs.branch == 'support/v1.x' }}
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           ref: support/v1.x
           fetch-depth: 0
@@ -126,6 +126,9 @@ jobs:
     runs-on: ${{ matrix.platform.runner }}
     needs: version
     strategy:
+      # Don't cancel the other branch/platform builds when one fails, so we can
+      # still publish the wheels that did build (see the `nightly` job).
+      fail-fast: false
       matrix:
         # Dynamic branch selection:
         # - schedule: Build both main and support/v1.x for nightly releases
@@ -141,11 +144,8 @@ jobs:
           - runner: ubuntu-latest
             target: aarch64
             manylinux: 2_28
-          - runner: ubuntu-latest
-            target: armv7
-            manylinux: 2_28
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           ref: ${{ matrix.branch }}
           fetch-depth: 0
@@ -162,7 +162,7 @@ jobs:
           done
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
         with:
-          python-version: '3.11'
+          python-version: '3.12'
       - name: Update version in Cargo.toml
         if: ${{ github.event_name == 'schedule' || inputs.use_git_version == true }}
         run: |
@@ -174,7 +174,7 @@ jobs:
         with:
           working-directory: icechunk-python
           target: ${{ matrix.platform.target }}
-          args: --release --sdist --out dist -i ${{ env.PYTHON_INTERPRETERS }}
+          args: --release --sdist --out dist -i ${{ env.PYTHON_INTERPRETER }}
           rust-toolchain: stable
           manylinux: ${{ matrix.platform.manylinux }} # https://github.com/PyO3/maturin-action/issues/245
       - name: Upload wheels
@@ -187,19 +187,18 @@ jobs:
     runs-on: ${{ matrix.platform.runner }}
     needs: version
     strategy:
+      # Don't cancel the other branch/platform builds when one fails, so we can
+      # still publish the wheels that did build (see the `nightly` job).
+      fail-fast: false
       matrix:
         branch: ${{ github.event_name == 'schedule' && fromJSON('["main", "support/v1.x"]') || fromJSON(format('["{0}"]', inputs.branch)) }}
         platform:
           - runner: ubuntu-latest
             target: x86_64
           - runner: ubuntu-latest
-            target: x86
-          - runner: ubuntu-latest
             target: aarch64
-          - runner: ubuntu-latest
-            target: armv7
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           ref: ${{ matrix.branch }}
           fetch-depth: 0
@@ -217,7 +216,7 @@ jobs:
         with:
           working-directory: icechunk-python
           target: ${{ matrix.platform.target }}
-          args: --release --out dist -i ${{ env.PYTHON_INTERPRETERS }}
+          args: --release --out dist -i ${{ env.PYTHON_INTERPRETER }}
           rust-toolchain: stable
           manylinux: musllinux_1_2
       - name: Upload wheels
@@ -229,14 +228,24 @@ jobs:
   windows:
     runs-on: ${{ matrix.platform.runner }}
     needs: version
+    # aws-lc-sys compiles AWS-LC's C source, which uses C11 atomics. MSVC only enables
+    # those under /experimental:c11atomics; without it <stdatomic.h> #errors out, which
+    # VS2026 turned into a hard build failure. Pass the flag via aws-lc-sys's own CFLAGS
+    # var (scoped to its compiles, unlike a global CFLAGS).
+    # https://github.com/aws/aws-lc-rs/issues/961
+    env:
+      AWS_LC_SYS_CFLAGS: "-std:c11 -experimental:c11atomics"
     strategy:
+      # Don't cancel the other branch/platform builds when one fails, so we can
+      # still publish the wheels that did build (see the `nightly` job).
+      fail-fast: false
       matrix:
         branch: ${{ github.event_name == 'schedule' && fromJSON('["main", "support/v1.x"]') || fromJSON(format('["{0}"]', inputs.branch)) }}
         platform:
           - runner: windows-latest
             target: x64
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           ref: ${{ matrix.branch }}
           fetch-depth: 0
@@ -256,7 +265,7 @@ jobs:
         with:
           working-directory: icechunk-python
           target: ${{ matrix.platform.target }}
-          args: --release --out dist -i ${{ env.PYTHON_INTERPRETERS }}
+          args: --release --out dist -i ${{ env.PYTHON_INTERPRETER }}
           rust-toolchain: stable
       - name: Upload wheels
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -268,6 +277,9 @@ jobs:
     runs-on: ${{ matrix.platform.runner }}
     needs: version
     strategy:
+      # Don't cancel the other branch/platform builds when one fails, so we can
+      # still publish the wheels that did build (see the `nightly` job).
+      fail-fast: false
       matrix:
         branch: ${{ github.event_name == 'schedule' && fromJSON('["main", "support/v1.x"]') || fromJSON(format('["{0}"]', inputs.branch)) }}
         platform:
@@ -276,7 +288,7 @@ jobs:
           - runner: macos-14
             target: aarch64
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           ref: ${{ matrix.branch }}
           fetch-depth: 0
@@ -294,7 +306,7 @@ jobs:
         with:
           working-directory: icechunk-python
           target: ${{ matrix.platform.target }}
-          args: --release --out dist -i ${{ env.PYTHON_INTERPRETERS }}
+          args: --release --out dist -i ${{ env.PYTHON_INTERPRETER }}
           rust-toolchain: stable
       - name: Upload wheels
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -306,10 +318,13 @@ jobs:
     runs-on: ubuntu-latest
     needs: version
     strategy:
+      # Don't cancel the other branch/platform builds when one fails, so we can
+      # still publish the wheels that did build (see the `nightly` job).
+      fail-fast: false
       matrix:
         branch: ${{ github.event_name == 'schedule' && fromJSON('["main", "support/v1.x"]') || fromJSON(format('["{0}"]', inputs.branch)) }}
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           ref: ${{ matrix.branch }}
           fetch-depth: 0
@@ -350,16 +365,145 @@ jobs:
   nightly:
     name: Upload nightly wheels
     runs-on: ubuntu-latest
-    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+    # Run even if some platform builds failed (always()), so we still publish the
+    # wheels that did build. fail-fast: false on the build matrices keeps the
+    # successful branch/platform combinations from being cancelled.
+    if: ${{ always() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
     needs: [linux, musllinux, windows, macos, sdist]
+    defaults:
+      run:
+        working-directory: .
     steps:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           path: dist
           merge-multiple: true
 
+      - name: Warn about failed build jobs
+        if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}
+        run: |
+          echo "::warning title=Incomplete nightly build::Some wheel build jobs failed; uploading only the wheels that built successfully. linux=${{ needs.linux.result }} musllinux=${{ needs.musllinux.result }} windows=${{ needs.windows.result }} macos=${{ needs.macos.result }} sdist=${{ needs.sdist.result }}"
+
+      - name: Ensure there is something to upload
+        run: |
+          if [ -z "$(ls -A dist 2>/dev/null)" ]; then
+            echo "::error title=Nothing to upload::No wheels were built by any job."
+            exit 1
+          fi
+          echo "Wheels/sdists to upload:"
+          ls -R dist
+
       - name: Upload nightly wheels
         uses: scientific-python/upload-nightly-action@e76cfec8a4611fd02808a801b0ff5a7d7c1b2d99
         with:
           artifacts_path: dist
           anaconda_nightly_upload_token: ${{ secrets.ANACONDA_ORG_UPLOAD_TOKEN }}
+
+  report-failure:
+    name: nightly-wheel-report
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    needs: [version, linux, musllinux, windows, macos, sdist, nightly]
+    permissions:
+      issues: write # needed to create/update issues on nightly failures
+    # Only for scheduled nightly runs on the main repo, and only when something failed.
+    if: |
+      always()
+      && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled'))
+      && github.event_name == 'schedule'
+      && github.repository_owner == 'earth-mover'
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+
+      - name: Create or update nightly wheel failure issue
+        shell: bash
+        run: |
+          # Build the per-job results table rows.
+          results=$(cat <<EOF
+          | version | $R_VERSION |
+          | linux | $R_LINUX |
+          | musllinux | $R_MUSL |
+          | windows | $R_WIN |
+          | macos | $R_MAC |
+          | sdist | $R_SDIST |
+          | nightly upload | $R_NIGHTLY |
+          EOF
+          )
+
+          # Read the template and replace placeholders.
+          template=$(cat .github/nightly-wheel-failure-template.md)
+          issue_body="${template//\{\{WORKFLOW\}\}/$WORKFLOW_NAME}"
+          issue_body="${issue_body//\{\{RUN_ID\}\}/$RUN_ID}"
+          issue_body="${issue_body//\{\{RUN_URL\}\}/$RUN_URL}"
+          issue_body="${issue_body//\{\{DATE\}\}/$(date -u)}"
+          issue_body="${issue_body//\{\{RESULTS\}\}/$results}"
+
+          # Check for an existing open issue with the same title.
+          issue_title="Nightly wheel build failed"
+          existing_issue=$(gh issue list --state open --label "CI" --search "\"$issue_title\" in:title" --json number --jq '.[0].number // empty')
+
+          if [ -n "$existing_issue" ]; then
+            echo "Found existing open issue #$existing_issue, updating it..."
+            echo "$issue_body" | gh issue edit "$existing_issue" --body-file -
+            echo "Updated existing issue #$existing_issue"
+          else
+            echo "No existing open issue found, creating new one..."
+            echo "$issue_body" | gh issue create \
+              --title "$issue_title" \
+              --body-file - \
+              --label "CI"
+            echo "Created new issue"
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WORKFLOW_NAME: ${{ github.workflow }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          R_VERSION: ${{ needs.version.result }}
+          R_LINUX: ${{ needs.linux.result }}
+          R_MUSL: ${{ needs.musllinux.result }}
+          R_WIN: ${{ needs.windows.result }}
+          R_MAC: ${{ needs.macos.result }}
+          R_SDIST: ${{ needs.sdist.result }}
+          R_NIGHTLY: ${{ needs.nightly.result }}
+
+  report-success:
+    name: nightly-wheel-report-close
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    needs: [version, linux, musllinux, windows, macos, sdist, nightly]
+    permissions:
+      issues: write # needed to close the tracking issue once the build is green
+    # Only on scheduled runs on the main repo, and only when nothing failed/cancelled.
+    if: |
+      always()
+      && !contains(needs.*.result, 'failure')
+      && !contains(needs.*.result, 'cancelled')
+      && github.event_name == 'schedule'
+      && github.repository_owner == 'earth-mover'
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - name: Close the nightly wheel failure issue if open
+        shell: bash
+        run: |
+          issue_title="Nightly wheel build failed"
+          existing_issue=$(gh issue list --state open --label "CI" --search "\"$issue_title\" in:title" --json number --jq '.[0].number // empty')
+          if [ -n "$existing_issue" ]; then
+            echo "Build is green; closing issue #$existing_issue"
+            gh issue close "$existing_issue" \
+              --comment "Nightly wheel build is green again ([run $RUN_ID]($RUN_URL)); closing automatically."
+          else
+            echo "No open nightly wheel failure issue to close"
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}

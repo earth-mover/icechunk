@@ -354,3 +354,38 @@ def test_clear_virtual_chunk_containers_persists_through_reopen() -> None:
     assert reopened_vccs == {}, (
         f"Expected no VCCs after reopen, got: {list(reopened_vccs.keys())}"
     )
+
+
+def test_http_vcc_config_persistence(any_spec_version: int | None) -> None:
+    """Test that an HTTP VCC with opts survives a save_config/reopen roundtrip.
+
+    Covers both spec v1 (YAML path) and v2 (FlexBuffers path) via any_spec_version.
+    """
+    storage = icechunk.in_memory_storage()
+    config = icechunk.RepositoryConfig.default()
+
+    store_config = icechunk.http_store(opts={"allow_http": "true"})
+    container = icechunk.VirtualChunkContainer("http://example.com/", store_config)
+    config.set_virtual_chunk_container(container)
+
+    repo = icechunk.Repository.create(
+        storage=storage,
+        config=config,
+        spec_version=any_spec_version,
+    )
+    repo.save_config()
+
+    # Reopen with no in-memory config override — must load persisted config from storage
+    repo2 = icechunk.Repository.open(storage=storage)
+    vccs = repo2.config.virtual_chunk_containers or {}
+
+    assert "http://example.com/" in vccs, (
+        f"Expected 'http://example.com/' in VCCs, got: {list(vccs.keys())}"
+    )
+    vcc = vccs["http://example.com/"]
+    assert isinstance(vcc.store, icechunk.config.ObjectStoreConfig.Http), (
+        f"Expected ObjectStoreConfig.Http, got: {type(vcc.store)}"
+    )
+    assert "allow_http" in repr(vcc.store), (
+        f"Expected 'allow_http' in repr of Http store, got: {vcc.store!r}"
+    )

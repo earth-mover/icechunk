@@ -1,0 +1,8 @@
+inline_chunk_threshold_bytes: 12
+get_partial_values_concurrency: null
+compression: null
+max_concurrent_requests: null
+caching: null
+storage: null
+virtual_chunk_containers: null
+manifest: null

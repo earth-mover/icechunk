@@ -39,6 +39,27 @@ pub use crate::storage::{
 #[cfg(feature = "object-store-gcs")]
 pub use icechunk_arrow_object_store::object_store::gcp::GcpCredential;
 
+/// Configuration for the HTTP(S) object store backend.
+///
+/// The `opts` field accepts `ClientConfigKey` names (in `snake_case`) as keys and is
+/// flattened in serde so that existing serialized configs that stored a plain
+/// `HashMap<String, String>` continue to deserialise correctly.
+///
+/// The `headers` field carries static HTTP headers that are injected into every
+/// request made by the underlying HTTP client (e.g. `"authorization": "Bearer …"`).
+/// Header values are **not** included in `Debug`/`Display` output to avoid leaking
+/// credentials in logs.
+#[cfg(feature = "object-store-http")]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct HttpConfig {
+    /// Generic transport options (`ClientConfigKey` names → values).
+    #[serde(default, flatten)]
+    pub opts: HashMap<String, String>,
+    /// Static HTTP headers injected into every request.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub headers: HashMap<String, String>,
+}
+
 /// Storage backend configuration.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -47,7 +68,7 @@ pub enum ObjectStoreConfig {
     #[cfg(feature = "object-store-fs")]
     LocalFileSystem(PathBuf),
     #[cfg(feature = "object-store-http")]
-    Http(HashMap<String, String>),
+    Http(HttpConfig),
     S3Compatible(S3Options),
     S3(S3Options),
     #[cfg(feature = "object-store-gcs")]
@@ -718,6 +739,8 @@ pub enum Credentials {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "object-store-http")]
+    use crate::config::HttpConfig;
     use crate::{
         ObjectStoreConfig, RepositoryConfig,
         config::S3Options,
@@ -847,7 +870,8 @@ virtual_chunk_containers:
   https://example.com/data/:
     name: null
     url_prefix: https://example.com/data/
-    store: !http {}"#
+    store: !http
+      allow_http: "true""#
                 .to_string(),
         );
 
@@ -891,7 +915,16 @@ virtual_chunk_containers:
             expected_len += 1;
             let http = &vccs["https://example.com/data/"];
             assert_eq!(http.url_prefix(), "https://example.com/data/");
-            assert!(matches!(http.store, ObjectStoreConfig::Http(_)));
+            match &http.store {
+                ObjectStoreConfig::Http(cfg) => {
+                    assert_eq!(
+                        cfg.opts.get("allow_http").map(String::as_str),
+                        Some("true")
+                    );
+                    assert!(cfg.headers.is_empty());
+                }
+                other => panic!("Expected Http, got {other:?}"),
+            }
         }
 
         // GCS container
@@ -967,5 +1000,104 @@ virtual_chunk_containers:
                 .unwrap(),
             )
             .unwrap();
+    }
+
+    /// Verify that repositories written by icechunk 2.0.5 (which used
+    /// `ObjectStoreConfig::Http(HashMap<String,String>)`) can still be read
+    /// after this PR changed the type to `Http(HttpConfig)`.
+    /// This test pins that behavior so a serde or dependency
+    /// change cannot silently break existing repositories.
+    #[icechunk_macros::test]
+    #[cfg(feature = "object-store-http")]
+    fn test_http_vcc_backward_compat_yaml() {
+        // Exact YAML that icechunk 2.0.5 would write to disk for a
+        // RepositoryConfig with an HTTP VCC that has allow_http=true.
+        let old_yaml = r#"
+virtual_chunk_containers:
+  https://example.com/:
+    name: null
+    url_prefix: https://example.com/
+    store: !http
+      allow_http: "true"
+manifest: null
+"#;
+        let config: RepositoryConfig = serde_yaml_ng::from_str(old_yaml)
+            .expect("old 2.0.5 YAML must deserialize cleanly with new HttpConfig type");
+
+        let vccs = config.virtual_chunk_containers.as_ref().unwrap();
+        match &vccs["https://example.com/"].store {
+            ObjectStoreConfig::Http(HttpConfig { opts, headers }) => {
+                assert_eq!(
+                    opts.get("allow_http").map(String::as_str),
+                    Some("true"),
+                    "opts must be preserved when reading old on-disk format"
+                );
+                assert!(
+                    headers.is_empty(),
+                    "headers must be empty when reading old on-disk format"
+                );
+            }
+            other => panic!("Expected Http, got {other:?}"),
+        }
+    }
+
+    /// Round-trip: a `RepositoryConfig` with an HTTP VCC that has headers
+    /// serializes to YAML and deserializes back with headers intact.
+    #[icechunk_macros::test]
+    #[cfg(feature = "object-store-http")]
+    fn test_http_vcc_yaml_roundtrip_with_headers() {
+        use std::collections::HashMap;
+
+        use crate::config::{HttpConfig, ObjectStoreConfig, VirtualChunkContainer};
+
+        let mut headers = HashMap::new();
+        headers.insert("Authorization".to_string(), "Bearer secret".to_string());
+        headers.insert("X-Custom-Header".to_string(), "value".to_string());
+
+        let mut opts = HashMap::new();
+        opts.insert("allow_http".to_string(), "true".to_string());
+
+        let container = VirtualChunkContainer::new(
+            "https://example.com/".to_string(),
+            ObjectStoreConfig::Http(HttpConfig { opts, headers }),
+        )
+        .expect("valid VirtualChunkContainer");
+
+        let mut vccs = HashMap::new();
+        vccs.insert("https://example.com/".to_string(), container);
+
+        let original = RepositoryConfig {
+            virtual_chunk_containers: Some(vccs),
+            ..Default::default()
+        };
+
+        let yaml = serde_yaml_ng::to_string(&original)
+            .expect("RepositoryConfig with HTTP headers must serialize to YAML");
+
+        let roundtripped: RepositoryConfig = serde_yaml_ng::from_str(&yaml)
+            .expect("serialized YAML must deserialize back cleanly");
+
+        let vccs = roundtripped.virtual_chunk_containers.as_ref().unwrap();
+        match &vccs["https://example.com/"].store {
+            ObjectStoreConfig::Http(HttpConfig { opts, headers }) => {
+                assert_eq!(
+                    opts.get("allow_http").map(String::as_str),
+                    Some("true"),
+                    "opts must survive YAML round-trip"
+                );
+                assert_eq!(
+                    headers.get("Authorization").map(String::as_str),
+                    Some("Bearer secret"),
+                    "Authorization header must survive YAML round-trip"
+                );
+                assert_eq!(
+                    headers.get("X-Custom-Header").map(String::as_str),
+                    Some("value"),
+                    "X-Custom-Header must survive YAML round-trip"
+                );
+                assert_eq!(headers.len(), 2, "no extra headers should appear");
+            }
+            other => panic!("Expected Http, got {other:?}"),
+        }
     }
 }

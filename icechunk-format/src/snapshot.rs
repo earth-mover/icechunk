@@ -381,24 +381,32 @@ pub struct SnapshotInfo {
     pub flushed_at: DateTime<Utc>,
     pub message: String,
     pub metadata: SnapshotProperties,
-}
-
-impl TryFrom<&Snapshot> for SnapshotInfo {
-    type Error = IcechunkFormatError;
-
-    fn try_from(value: &Snapshot) -> Result<Self, Self::Error> {
-        #[expect(deprecated)]
-        Ok(Self {
-            id: value.id().clone(),
-            parent_id: value.parent_id().clone(),
-            flushed_at: value.flushed_at()?,
-            message: value.message().clone(),
-            metadata: value.metadata()?.clone(),
-        })
-    }
+    /// Tx-log ids of ancestor commits expiration removed, oldest first.
+    /// Empty unless this snapshot was edited by expiration.
+    /// Notice: icechunk V1 and older versions of icechunk V2
+    /// didn't generate this field, so those repositories will
+    /// have [] until expiration is ran using a version > 2.0.6
+    pub pruned_ancestor_tx_logs: Vec<SnapshotId>,
 }
 
 impl SnapshotInfo {
+    /// Partial constructor: the snapshot file doesn't store
+    /// `pruned_ancestor_tx_logs` (it lives on `RepoInfo`), so it's left empty.
+    /// Only valid for V1 or fresh snapshots; V2 reads must use
+    /// `RepoInfo::find_snapshot` instead.
+    pub fn from_snapshot_file(snapshot: &Snapshot) -> Result<Self, IcechunkFormatError> {
+        #[expect(deprecated)]
+        Ok(Self {
+            id: snapshot.id().clone(),
+            parent_id: snapshot.parent_id().clone(),
+            flushed_at: snapshot.flushed_at()?,
+            message: snapshot.message().clone(),
+            metadata: snapshot.metadata()?.clone(),
+            // Left empty on purpose: not stored in the snapshot file.
+            pruned_ancestor_tx_logs: Vec::new(),
+        })
+    }
+
     pub fn is_initial(&self) -> bool {
         self.id == Snapshot::INITIAL_SNAPSHOT_ID
     }

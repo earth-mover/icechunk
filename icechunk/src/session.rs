@@ -47,7 +47,8 @@ use crate::{
         manifest::{
             ChunkInfo, ChunkPayload, ChunkRef, LocationCompressionConfig, Manifest,
             ManifestExtents, ManifestRef, ManifestSplits, Overlap, VirtualChunkLocation,
-            VirtualChunkRef, VirtualReferenceErrorKind, uniform_manifest_split_edges,
+            VirtualChunkRef, VirtualReferenceError, VirtualReferenceErrorKind,
+            uniform_manifest_split_edges,
         },
         repo_info::{RepoInfo, UpdateType},
         snapshot::{
@@ -166,6 +167,12 @@ pub enum SessionErrorKind {
     Conflict { expected_parent: Option<SnapshotId>, actual_parent: Option<SnapshotId> },
     #[error("cannot rebase snapshot {snapshot} on top of the branch")]
     RebaseFailed { snapshot: SnapshotId, conflicts: Vec<Conflict> },
+    #[error(
+        "cannot rebase: transaction log {tx_log} of an expiration-pruned ancestor of \
+         {snapshot} is missing (likely deleted by an older Icechunk GC), so conflicts \
+         against it cannot be checked"
+    )]
+    MissingPrunedAncestorTxLog { snapshot: SnapshotId, tx_log: SnapshotId },
     #[error("error in serializing config to JSON")]
     JsonSerializationError(#[from] serde_json::Error),
     #[error("error in session serialization")]
@@ -597,6 +604,13 @@ impl Session {
         chunk_location: &VirtualChunkLocation,
     ) -> Option<&VirtualChunkContainer> {
         self.virtual_resolver.matching_container(chunk_location)
+    }
+
+    pub fn validate_virtual_chunk_location(
+        &self,
+        chunk_location: &VirtualChunkLocation,
+    ) -> Result<(), VirtualReferenceError> {
+        self.virtual_resolver.validate_virtual_chunk_location(chunk_location)
     }
 
     /// Create a "forked" [`Session`] from a "base" [`Session`]
@@ -1432,7 +1446,7 @@ impl Session {
     pub fn resolve_virtual_location(
         &self,
         location: &VirtualChunkLocation,
-    ) -> Result<String, icechunk_format::manifest::VirtualReferenceError> {
+    ) -> Result<String, VirtualReferenceError> {
         self.virtual_resolver.expand_location(location.url())
     }
 
@@ -1499,7 +1513,7 @@ impl Session {
             }
             let new_snapshot_info = SnapshotInfo {
                 parent_id: Some(self.snapshot_id().clone()),
-                ..new_snap.as_ref().try_into().inject()?
+                ..SnapshotInfo::from_snapshot_file(new_snap.as_ref()).inject()?
             };
             Ok(Arc::new(
                 repo_info
@@ -1767,6 +1781,41 @@ impl Session {
         .await
     }
 
+    /// Apply one transaction log during a rebase: diff the current change set
+    /// against `previous_change` using `solver` (with `previous_repo` as the
+    /// read-only session it belongs to) and replace this session's change set
+    /// with the patched result. Does not advance `snapshot_id`; the caller does
+    /// that once a commit's whole chain of logs has been applied. Returns
+    /// `RebaseFailed` (tagged with `failed_snapshot`) if the conflicts can't be
+    /// resolved.
+    async fn rebase_one_log(
+        &mut self,
+        previous_change: &TransactionLog,
+        previous_repo: &Session,
+        solver: &(dyn ConflictSolver + Send + Sync),
+        failed_snapshot: &SnapshotId,
+    ) -> SessionResult<()> {
+        let mut fresh = self.change_set().fresh();
+        std::mem::swap(self.change_set_mut()?, &mut fresh);
+        let change_set = fresh;
+        // TODO: this should probably execute in a worker thread
+        match solver.solve(previous_change, previous_repo, change_set, self).await? {
+            ConflictResolution::Patched(patched_changeset) => {
+                trace!("Snapshot rebased");
+                self.change_set = patched_changeset;
+                Ok(())
+            }
+            ConflictResolution::Unsolvable { reason, unmodified } => {
+                warn!("Snapshot cannot be rebased. Aborting rebase.");
+                self.change_set = unmodified;
+                Err(SessionError::capture(SessionErrorKind::RebaseFailed {
+                    snapshot: failed_snapshot.clone(),
+                    conflicts: reason,
+                }))
+            }
+        }
+    }
+
     /// Detect and optionally fix conflicts between the current [`ChangeSet`] (or session) and
     /// the tip of the branch.
     ///
@@ -1841,9 +1890,18 @@ impl Session {
 
         debug!("Rebase started");
 
-        let new_commits = match self.spec_version() {
-            SpecVersionBin::V1 => self.commits_to_rebase_v1(branch_name.as_str()).await?,
-            SpecVersionBin::V2 => self.commits_to_rebase_v2(branch_name.as_str()).await?,
+        // A single repo info read serves both computing the commits to rebase
+        // over and resolving each commit's pruned-ancestor logs, so both see one
+        // consistent snapshot. V1 repos have no repo info / pruned-ancestor logs.
+        let (new_commits, repo_info) = match self.spec_version() {
+            SpecVersionBin::V1 => {
+                (self.commits_to_rebase_v1(branch_name.as_str()).await?, None)
+            }
+            SpecVersionBin::V2 => {
+                let (commits, repo_info) =
+                    self.commits_to_rebase_v2(branch_name.as_str()).await?;
+                (commits, Some(repo_info))
+            }
         };
 
         trace!("Found {} commits to rebase over", new_commits.len());
@@ -1872,25 +1930,44 @@ impl Session {
                 snap_id.clone(),
             );
 
-            let mut fresh = self.change_set().fresh();
-            std::mem::swap(self.change_set_mut()?, &mut fresh);
-            let change_set = fresh;
-            // TODO: this should probably execute in a worker thread
-            match solver.solve(&tx_log, &session, change_set, self).await? {
-                ConflictResolution::Patched(patched_changeset) => {
-                    trace!("Snapshot rebased");
-                    self.change_set = patched_changeset;
-                    self.snapshot_id = snap_id;
-                }
-                ConflictResolution::Unsolvable { reason, unmodified } => {
-                    warn!("Snapshot cannot be rebased. Aborting rebase.");
-                    self.change_set = unmodified;
-                    return Err(SessionError::capture(SessionErrorKind::RebaseFailed {
-                        snapshot: snap_id,
-                        conflicts: reason,
-                    }));
-                }
+            // Replay, oldest first, the transaction logs of ancestors that
+            // expiration pruned from under this commit, then the commit's own
+            // log. A missing pruned log would silently hide conflicts, so we abort the
+            // rebase rather than skip it. The previous_repo for the pruned logs
+            // is this commit's read-only session, as the pruned snapshots no
+            // longer exist.
+            let pruned_ids = match repo_info.as_ref() {
+                Some(ri) => ri.find_snapshot(&snap_id).inject()?.pruned_ancestor_tx_logs,
+                // V1 repos have no pruned-ancestor logs.
+                None => Vec::new(),
+            };
+            for pruned_id in &pruned_ids {
+                // FIXME: concurrency
+                let pruned_log =
+                    match self.asset_manager.fetch_transaction_log(pruned_id).await {
+                        Ok(log) => log,
+                        Err(e)
+                            if matches!(
+                                e.kind,
+                                RepositoryErrorKind::StorageError(
+                                    StorageErrorKind::ObjectNotFound
+                                )
+                            ) =>
+                        {
+                            return Err(SessionError::capture(
+                                SessionErrorKind::MissingPrunedAncestorTxLog {
+                                    snapshot: snap_id.clone(),
+                                    tx_log: pruned_id.clone(),
+                                },
+                            ));
+                        }
+                        Err(e) => return Err(e).inject(),
+                    };
+                self.rebase_one_log(&pruned_log, &session, solver, &snap_id).await?;
             }
+
+            self.rebase_one_log(&tx_log, &session, solver, &snap_id).await?;
+            self.snapshot_id = snap_id;
         }
         debug!("Rebase done");
         Ok(())
@@ -1949,11 +2026,11 @@ impl Session {
     async fn commits_to_rebase_v2(
         &self,
         branch_name: &str,
-    ) -> SessionResult<Vec<SnapshotId>> {
+    ) -> SessionResult<(Vec<SnapshotId>, Arc<RepoInfo>)> {
         let (latest_repo_info, _) =
             self.asset_manager.fetch_repo_info().await.inject()?;
 
-        match latest_repo_info.resolve_branch(branch_name) {
+        let commits = match latest_repo_info.resolve_branch(branch_name) {
             Err(IcechunkFormatError {
                 kind: IcechunkFormatErrorKind::BranchNotFound { .. },
                 ..
@@ -1964,16 +2041,16 @@ impl Session {
                     branch = &self.branch_name,
                     "No rebase is needed, the branch was deleted. Aborting rebase."
                 );
-                Ok(Vec::new())
+                Vec::new()
             }
-            Err(err) => Err(err.inject()),
+            Err(err) => return Err(err.inject()),
             Ok(current_snapshot_id) if current_snapshot_id == self.snapshot_id => {
                 // nothing to do, commit should work without rebasing
                 warn!(
                     branch = &self.branch_name,
                     "No rebase is needed, parent snapshot is at the top of the branch. Aborting rebase."
                 );
-                Ok(Vec::new())
+                Vec::new()
             }
             Ok(current_snapshot_id) => {
                 let ancestry = stream::iter(
@@ -1982,14 +2059,14 @@ impl Session {
                         .inject()?
                         .map_ok(|snap| snap.id),
                 );
-                let res = ancestry
+                ancestry
                     .try_take_while(|snap_id| ready(Ok(snap_id != &self.snapshot_id)))
                     .try_collect()
                     .await
-                    .inject()?;
-                Ok(res)
+                    .inject()?
             }
-        }
+        };
+        Ok((commits, latest_repo_info))
     }
 }
 
@@ -3242,7 +3319,14 @@ async fn do_commit_v2(
         debug!(branch_name, %new_snapshot_id, %parent_id, attempt, "Generating new repo info object");
         let new_snapshot_info = SnapshotInfo {
             parent_id: Some(parent_id.clone()),
-            ..new_snapshot.as_ref().try_into().inject()?
+            // Amend replaces parent_snapshot, so the new snapshot inherits any
+            // pruned-ancestor logs it carried (the chain is copied, not merged
+            // in). A brand-new commit has none.
+            pruned_ancestor_tx_logs: match commit_method {
+                CommitMethod::Amend => parent_snapshot.pruned_ancestor_tx_logs.clone(),
+                CommitMethod::NewCommit => Vec::new(),
+            },
+            ..SnapshotInfo::from_snapshot_file(new_snapshot.as_ref()).inject()?
         };
 
         let update_type = match commit_method {
@@ -3926,14 +4010,14 @@ mod tests {
         .await?;
         let repo_info = RepoInfo::initial(
             SpecVersionBin::current(),
-            (&initial).try_into()?,
+            SnapshotInfo::from_snapshot_file(&initial)?,
             100,
             None::<&()>,
             None,
         )
         .add_snapshot(
             SpecVersionBin::current(),
-            snapshot.as_ref().try_into()?,
+            SnapshotInfo::from_snapshot_file(snapshot.as_ref())?,
             Some("main"),
             UpdateType::NewCommitUpdate {
                 branch: "main".to_string(),

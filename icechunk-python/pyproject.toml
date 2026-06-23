@@ -33,7 +33,7 @@ dev = [
 test = [
   "boto3",
   "coverage",
-  "pytest",
+  "pytest==9.0.3",
   "pytest-cov",
   "pytest-asyncio",
   "pytest-xdist",
@@ -96,7 +96,7 @@ docs = [
 ]
 
 [tool.maturin]
-features = ["pyo3/extension-module"]
+features = ["pyo3/abi3-py312"]
 module-name = "icechunk._icechunk_python"
 python-source = "python"
 editable-profile = "dev"
@@ -136,6 +136,9 @@ filterwarnings = [
   "ignore::ResourceWarning",
   "ignore:Unused async fixture loop scope:pytest.PytestWarning",
   "ignore:.*does not have a Zarr V3 specification.*",
+  # Recent NumPy deprecates the 'generic' timedelta unit; raised transitively at
+  # collection. Remove once upstream deps stop using bare-int timedelta.
+  "ignore:The 'generic' unit for NumPy timedelta is deprecated:DeprecationWarning",
 ]
 
 [tool.mypy]
@@ -143,6 +146,10 @@ python_version = "3.12"
 strict = true
 warn_unreachable = true
 enable_error_code = ["ignore-without-code", "redundant-expr", "truthy-bool"]
+# This fixture generator drives several icechunk versions (installed under
+# renamed packages via third-wheel; see `just gen-expired-fixtures`) through one
+# Any-typed API, so it can't be meaningfully type-checked.
+exclude = ["tests/data_generation/generate_expired_repos.py"]
 
 [tool.ruff]
 target-version = "py312"

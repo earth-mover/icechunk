@@ -359,12 +359,33 @@ impl RepoInfo {
                     .try_collect()?;
 
                 let metadata = builder.create_vector(metadata_items.as_slice());
+
+                // Absent vector when empty, so unexpired snapshots stay
+                // byte-identical to the pre-feature encoding.
+                let pruned_ancestor_tx_logs = if snap.pruned_ancestor_tx_logs.is_empty() {
+                    None
+                } else {
+                    let ids: Vec<_> = snap
+                        .pruned_ancestor_tx_logs
+                        .iter()
+                        .map(|id| generated::ObjectId12::new(&id.0))
+                        .collect();
+                    Some(builder.create_vector(ids.as_slice()))
+                };
+                debug_assert_eq!(
+                    pruned_ancestor_tx_logs.is_none(),
+                    snap.pruned_ancestor_tx_logs.is_empty(),
+                    "empty pruned_ancestor_tx_logs must serialize as a null vector, \
+                     not a present empty one"
+                );
+
                 let args = generated::SnapshotInfoArgs {
                     id: Some(&id),
                     parent_offset,
                     flushed_at: snap.flushed_at.timestamp_micros() as u64,
                     message: Some(builder.create_string(snap.message.as_str())),
                     metadata: Some(metadata),
+                    pruned_ancestor_tx_logs,
                 };
                 Ok::<_, IcechunkFormatError>(generated::SnapshotInfo::create(
                     &mut builder,
@@ -1608,12 +1629,18 @@ fn mk_snapshot_info(
         .transpose()?
         .unwrap_or_default();
 
+    let pruned_ancestor_tx_logs = snap
+        .pruned_ancestor_tx_logs()
+        .map(|ids| ids.iter().map(|oid| SnapshotId::new(oid.0)).collect())
+        .unwrap_or_default();
+
     Ok(SnapshotInfo {
         id: SnapshotId::new(snap.id().0),
         flushed_at,
         message: snap.message().to_string(),
         metadata,
         parent_id: parent_id.map(|buf| SnapshotId::new(buf.0)),
+        pruned_ancestor_tx_logs,
     })
 }
 
@@ -1840,6 +1867,7 @@ mod tests {
             flushed_at: DateTime::from_timestamp_micros(1_000_000).unwrap(),
             message: "snap 1".to_string(),
             metadata: Default::default(),
+            pruned_ancestor_tx_logs: vec![],
         };
         let repo = RepoInfo::initial(
             SpecVersionBin::current(),
@@ -1923,6 +1951,61 @@ mod tests {
     }
 
     #[test]
+    fn test_pruned_ancestor_tx_logs_roundtrip() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let root_id = SnapshotId::random();
+        let root = SnapshotInfo {
+            id: root_id.clone(),
+            parent_id: None,
+            flushed_at: DateTime::from_timestamp_micros(1_000_000).unwrap(),
+            message: "root".to_string(),
+            metadata: Default::default(),
+            pruned_ancestor_tx_logs: vec![],
+        };
+        let repo = RepoInfo::initial(
+            SpecVersionBin::current(),
+            root.clone(),
+            100,
+            None::<&()>,
+            None,
+        );
+
+        // an edited snapshot carrying a non-empty list
+        let pruned =
+            vec![SnapshotId::random(), SnapshotId::random(), SnapshotId::random()];
+        let tip_id = SnapshotId::random();
+        let tip = SnapshotInfo {
+            id: tip_id.clone(),
+            parent_id: Some(root_id.clone()),
+            flushed_at: DateTime::from_timestamp_micros(2_000_000).unwrap(),
+            message: "tip".to_string(),
+            metadata: Default::default(),
+            pruned_ancestor_tx_logs: pruned.clone(),
+        };
+        let repo = repo.add_snapshot(
+            SpecVersionBin::current(),
+            tip.clone(),
+            Some("main"),
+            UpdateType::NewCommitUpdate {
+                branch: "main".to_string(),
+                new_snap_id: tip_id.clone(),
+            },
+            None,
+            "foo",
+            100,
+        )?;
+
+        // the list survives serialization verbatim, order preserved
+        let read_tip = repo.find_snapshot(&tip_id)?;
+        assert_eq!(read_tip.pruned_ancestor_tx_logs, pruned);
+
+        // an unedited snapshot reads back as empty (absent vector)
+        let read_root = repo.find_snapshot(&root_id)?;
+        assert!(read_root.pruned_ancestor_tx_logs.is_empty());
+        Ok(())
+    }
+
+    #[test]
     fn test_tags_and_branches() -> Result<(), Box<dyn std::error::Error>> {
         let id1 = SnapshotId::random();
         let snap1 = SnapshotInfo {
@@ -1932,6 +2015,7 @@ mod tests {
             flushed_at: DateTime::from_timestamp_micros(1_000_000).unwrap(),
             message: "snap 1".to_string(),
             metadata: Default::default(),
+            pruned_ancestor_tx_logs: vec![],
         };
         let repo = RepoInfo::initial(
             SpecVersionBin::current(),
@@ -2067,6 +2151,7 @@ mod tests {
             flushed_at: DateTime::from_timestamp_micros(1_000_000).unwrap(),
             message: "snap 1".to_string(),
             metadata: Default::default(),
+            pruned_ancestor_tx_logs: vec![],
         };
 
         let num_updates_per_file: u16 = 10;
@@ -2170,6 +2255,7 @@ mod tests {
             flushed_at,
             message: "snap 1".to_string(),
             metadata: Default::default(),
+            pruned_ancestor_tx_logs: vec![],
         };
         let repo = RepoInfo::initial(
             SpecVersionBin::current(),
@@ -2188,6 +2274,7 @@ mod tests {
             flushed_at: DateTime::from_timestamp_micros(1_000_000).unwrap(),
             message: "snap 2".to_string(),
             metadata: Default::default(),
+            pruned_ancestor_tx_logs: vec![],
         };
         let result = repo.add_snapshot(
             SpecVersionBin::current(),
@@ -2219,6 +2306,7 @@ mod tests {
             flushed_at,
             message: "snap 3".to_string(),
             metadata: Default::default(),
+            pruned_ancestor_tx_logs: vec![],
         };
         let result = repo.add_snapshot(
             SpecVersionBin::current(),
@@ -2249,6 +2337,7 @@ mod tests {
             flushed_at,
             message: "snap 4".to_string(),
             metadata: Default::default(),
+            pruned_ancestor_tx_logs: vec![],
         };
         let result = repo.add_snapshot(
             SpecVersionBin::current(),
@@ -2278,6 +2367,7 @@ mod tests {
             flushed_at: DateTime::from_timestamp_micros(1_000_000).unwrap(),
             message: "snap 1".to_string(),
             metadata: Default::default(),
+            pruned_ancestor_tx_logs: vec![],
         };
 
         let repo =

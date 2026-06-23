@@ -293,7 +293,9 @@ class ObjectStoreConfig:
 
     class Http:
         def __new__(
-            cls, opts: Mapping[str, str] | None = None
+            cls,
+            opts: Mapping[str, str] | None = None,
+            headers: Mapping[str, str] | None = None,
         ) -> ObjectStoreConfig.Http: ...
         def __repr__(self) -> str: ...
         def __str__(self) -> str: ...
@@ -364,7 +366,16 @@ class VirtualChunkSpec:
         ...
     @property
     def location(self) -> str:
-        """The URL to the virtual chunk data, something like 's3://bucket/foo.nc'"""
+        """The URL to the virtual chunk data, something like 's3://bucket/foo.nc'.
+
+        The location is a URL and the object key is its path, used verbatim:
+        repeated slashes (``//``) and ``.``/``..`` segments are preserved, not
+        normalized. Because it is a URL, any character that is reserved in a URL
+        but is part of the key must be percent-encoded -- in particular ``?`` and
+        ``#`` (an unescaped one starts the query/fragment and is dropped from the
+        key) and a literal ``%``. For example, the key ``a?b#c`` must be written
+        ``s3://bucket/a%3Fb%23c`` (and ``%`` as ``%25``).
+        """
         ...
     @property
     def offset(self) -> int:
@@ -3414,6 +3425,7 @@ class Storage:
         cls,
         base_url: str,
         config: dict[str, str] | None = None,
+        headers: dict[str, str] | None = None,
     ) -> Storage: ...
     @classmethod
     def new_redirect(

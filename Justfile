@@ -36,9 +36,21 @@ build *args:
 build-release *args:
   cargo build --release "$@"
 
+[doc("Regenerate src/flatbuffers/all_generated.rs from the FlatBuffers schemas")]
+gen-flatbuffers:
+  cd icechunk-format/flatbuffers && flatc --rust -o ../src/flatbuffers/ --gen-all all.fbs
+  just format
+
 [doc("Prepare environment for development")]
 develop *args:
-  cd icechunk-python && maturin develop --uv --profile {{profile}} "$@"
+  #!/usr/bin/env bash
+  set -euo pipefail
+  cd icechunk-python
+  if [[ -n "${CONDA_PREFIX:-}" ]]; then
+    export VIRTUAL_ENV="$CONDA_PREFIX"
+    export UV_NO_SYNC=1
+  fi
+  uv run --active maturin develop --uv --profile {{profile}} "$@"
 
 [doc("Install maturin import hook for more convenient development flow")]
 import-hook:
@@ -52,10 +64,10 @@ import-hook-remove:
 # which swaps tokio for shuttle-tokio and is incompatible with other crates.
 icechunk_features := "s3,object-store-s3,object-store-gcs,object-store-azure,object-store-http,object-store-fs,redirect,logs,cli,napi-send-contract"
 
-[doc("Run clippy lints on all features")]
+[doc("Run clippy lints on all features and targets")]
 lint *args:
-  cargo clippy --profile {{profile}} --all-features --exclude icechunk "$@"
-  cargo clippy --profile {{profile}} -p icechunk --features {{icechunk_features}} "$@"
+  cargo clippy --profile {{profile}} --all-features --all-targets --workspace --exclude icechunk "$@"
+  cargo clippy --profile {{profile}} --all-targets -p icechunk --features {{icechunk_features}} "$@"
 
 [doc("Run check on all features")]
 check *args:
@@ -78,17 +90,18 @@ check-deps *args:
 run-all-examples:
   for example in icechunk/examples/*.rs; do case "$example" in *limits_chunk_refs*|*large_manifests*) continue;; esac; cargo run --profile {{profile}} --example "$(basename "${example%.rs}")"; done
 
-[doc("Fast Rust pre-commit: format + lint (~3s)")]
+[doc("Fast Rust pre-commit: format + lint + doctest (~3s)")]
 pre-commit-fast:
   just format
-  just lint "--workspace" "--all-targets"
+  just lint
+  just doctest
 
 [doc("Medium Rust pre-commit: compile, build, format, lint, deps (~2-3min)")]
 pre-commit $RUSTFLAGS="-D warnings":
   just compile-tests "--locked"
   just build
   just format
-  just lint "--workspace"
+  just lint
   just check-deps
 
 [doc("Full Rust CI pre-commit: all checks including tests and examples (~5+min)")]
@@ -96,7 +109,7 @@ pre-commit-ci $RUSTFLAGS="-D warnings":
   just profile=ci compile-tests "--locked"
   just profile=ci build
   just format "--check"
-  just profile=ci lint "--workspace"
+  just profile=ci lint
   just profile=ci doctest
   just profile=ci test
   just profile=ci run-all-examples
@@ -105,7 +118,7 @@ pre-commit-ci $RUSTFLAGS="-D warnings":
 [doc("Rust format + lint for the icechunk-python crate only")]
 pre-commit-python:
   just format "-p icechunk-python"
-  just lint "-p icechunk-python"
+  cargo clippy --profile {{profile}} --all-features --all-targets -p icechunk-python
 
 [doc("Profile benchmarks with cargo-samply (tracing spans become profiler markers)")]
 samply *args:
@@ -141,7 +154,19 @@ py-pre-commit $SKIP="rust-pre-commit-fast,rust-pre-commit,rust-pre-commit-ci" *a
 
 [doc("Run Python tests via pytest")]
 pytest *args:
-  cd icechunk-python && pytest "$@"
+  #!/usr/bin/env bash
+  set -euo pipefail
+  cd icechunk-python
+  if [[ -n "${CONDA_PREFIX:-}" ]]; then
+    export VIRTUAL_ENV="$CONDA_PREFIX"
+    export UV_NO_SYNC=1
+  fi
+  uv run --active pytest "$@"
+
+[doc("Regenerate the post-expiration can_read_old fixtures (needs icechunk 1.1.21 + 2.0.5 wheels, installed via third-wheel)")]
+gen-expired-fixtures *args:
+  cd icechunk-python && uv run --with third-wheel third-wheel sync --rename "icechunk==1.1.21=icechunk_v1" --rename "icechunk==2.0.5=icechunk_v2"
+  cd icechunk-python && uv run python tests/data_generation/generate_expired_repos.py "$@"
 
 [doc("Start MkDocs dev server with live reload")]
 docs-serve *args:
@@ -239,8 +264,7 @@ python-upstream-setup:
   python3 -m venv .venv
   source .venv/bin/activate
   python --version
-  PY_TAG="cp${PYTHON_VERSION//./}"
-  WHEEL=$(ls dist/*-"${PY_TAG}"-*.whl)
+  WHEEL=$(ls dist/*-abi3-*.whl)
   export UV_INDEX="https://pypi.anaconda.org/scientific-python-nightly-wheels/simple/"
   export UV_PRERELEASE=allow
   uv pip install "$WHEEL" --group dev \
@@ -291,8 +315,7 @@ xarray-upstream-setup:
   python3 -m venv .venv
   source .venv/bin/activate
   python --version
-  PY_TAG="cp${PYTHON_VERSION//./}"
-  WHEEL=$(ls dist/*-"${PY_TAG}"-*.whl)
+  WHEEL=$(ls dist/*-abi3-*.whl)
   export UV_INDEX="https://pypi.anaconda.org/scientific-python-nightly-wheels/simple/"
   export UV_PRERELEASE=allow
   uv pip install "$WHEEL" --group test pytest-mypy-plugins \
