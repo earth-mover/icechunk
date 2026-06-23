@@ -197,7 +197,7 @@ async fn do_test_gc(
     // Create 5 anonymous snapshots (detached, not on any branch)
     let mut anon_snaps = vec![];
     for i in 0..5 {
-        // gap so the cutoff lands clear of created_at(ms) vs flushed_at(µs) truncation
+        // gap so anon[1]/anon[2] get distinct timestamps, clear margin on both clocks
         if i == 2 {
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }
@@ -211,9 +211,19 @@ async fn do_test_gc(
         anon_snaps.push(snap_id);
     }
 
-    // expire the first two: cutoff sits in the gap between anon[1] and anon[2]
-    let before = repo.lookup_snapshot(&anon_snaps[1]).await?.flushed_at;
-    let after = repo.lookup_snapshot(&anon_snaps[2]).await?.flushed_at;
+    // Cutoff between anon[1]/anon[2], read from the clock GC actually compares:
+    // V1 = storage LastModified, V2 = flushed_at (host).
+    let (before, after) = if spec_version == Some(SpecVersionBin::V1) {
+        (
+            repo.asset_manager().get_snapshot_last_modified(&anon_snaps[1]).await?,
+            repo.asset_manager().get_snapshot_last_modified(&anon_snaps[2]).await?,
+        )
+    } else {
+        (
+            repo.lookup_snapshot(&anon_snaps[1]).await?.flushed_at,
+            repo.lookup_snapshot(&anon_snaps[2]).await?.flushed_at,
+        )
+    };
     let cutoff = before + (after - before) / 2;
     let gc_config = GCConfig::clean_all(
         cutoff,
