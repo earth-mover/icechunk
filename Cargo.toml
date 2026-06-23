@@ -58,6 +58,9 @@ miette = { version = "7.6.0", features = ["fancy"] }
 noxious-client = "1.0"
 numpy = "0.29.0"
 object_store = { version = "0.13.2", default-features = false }
+opentelemetry = { version = "0.32", default-features = false, features = ["trace"] }
+opentelemetry-otlp = { version = "0.32", default-features = false, features = ["grpc-tonic", "trace"] }
+opentelemetry_sdk = { version = "0.32", default-features = false, features = ["trace"] }
 port_check = "0.3.0"
 pretty_assertions = "1.4.1"
 proptest = "1.11.0"
@@ -91,6 +94,7 @@ tokio-util = { version = "0.7.18", features = ["io-util"] }
 tracing = "0.1.44"
 tracing-chrome = "0.7"
 tracing-error = "0.2.1"
+tracing-opentelemetry = { version = "0.33", default-features = false }
 tracing-samply = "0.1.5"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 typed-path = "0.12.3"
