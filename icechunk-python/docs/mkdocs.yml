@@ -248,6 +248,7 @@ nav:
     - Zarr: guides/zarr.md
     - Tuning Performance: guides/performance.md
     - Flaky Networks: guides/flaky-networks.md
+    - Observability: guides/observability.md
     - Virtual Datasets: guides/virtual.md
     - Async Usage: guides/async.md
     - Storing Sensitive Data: guides/sensitive-data.md

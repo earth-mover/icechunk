@@ -31,6 +31,7 @@ from icechunk.config import (
     RepositoryConfig,
     initialize_logs,
     set_logs_filter,
+    shutdown_telemetry,
 )
 from icechunk.conflicts import (
     BasicConflictSolver,
@@ -207,6 +208,7 @@ __all__ = [
     "s3_storage",
     "s3_store",
     "set_logs_filter",
+    "shutdown_telemetry",
     "spec_version",
     "tigris_storage",
     "user_agent",
