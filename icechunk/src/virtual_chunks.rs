@@ -1540,8 +1540,7 @@ mod tests {
     #[cfg(all(feature = "object-store-fs", feature = "object-store-http"))]
     #[test]
     fn test_no_auth_sentinels_validate_per_backend() {
-        use crate::config::Credentials;
-        use std::collections::HashMap;
+        use crate::config::{Credentials, HttpConfig};
 
         let fs = VirtualChunkContainer::new(
             "file:///example/".to_string(),
@@ -1550,7 +1549,7 @@ mod tests {
         .unwrap();
         let http = VirtualChunkContainer::new(
             "http://example.com/".to_string(),
-            ObjectStoreConfig::Http(HashMap::new()),
+            ObjectStoreConfig::Http(HttpConfig::default()),
         )
         .unwrap();
         let s3 =
