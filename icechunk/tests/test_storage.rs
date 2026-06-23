@@ -626,7 +626,7 @@ async fn test_list_objects() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[tokio_test]
-pub async fn test_conditional_create_conflicts_with_existing()
+async fn conditional_create_conflicts_with_existing()
 -> Result<(), Box<dyn std::error::Error>> {
     // Exercises the readback's `NotOurWrite` branch (metadata-enabled
     // backends) and the `NotStamped` branch (local_filesystem); both
@@ -739,13 +739,13 @@ async fn assert_lost_response_recovers_with_fresh_etag(
 }
 
 #[tokio_test]
-pub async fn test_lost_response_conditional_create_recovers_single()
+async fn lost_response_conditional_create_recovers_single()
 -> Result<(), Box<dyn std::error::Error>> {
     assert_lost_response_recovers_with_fresh_etag("lost-response-single", false).await
 }
 
 #[tokio_test]
-pub async fn test_lost_response_conditional_create_recovers_multipart()
+async fn lost_response_conditional_create_recovers_multipart()
 -> Result<(), Box<dyn std::error::Error>> {
     assert_lost_response_recovers_with_fresh_etag("lost-response-multipart", true).await
 }
