@@ -29,6 +29,8 @@ __all__ = [
     "GcsBearerCredential",
     "GcsCredentials",
     "GcsStaticCredentials",
+    "HttpAccess",
+    "LocalFileSystemAccess",
     "S3Credentials",
     "S3StaticCredentials",
     "azure_anonymous_credentials",
@@ -84,7 +86,23 @@ AnyAzureCredential = (
 )
 
 
-AnyCredential = Credentials.S3 | Credentials.Gcs | Credentials.Azure
+AnyCredential = (
+    Credentials.S3
+    | Credentials.Gcs
+    | Credentials.Azure
+    | Credentials.LocalFileSystemAccess
+    | Credentials.HttpAccess
+)
+
+#: Explicit sentinel authorizing access to a ``file://`` virtual chunk container,
+#: which requires no credentials. Use this instead of ``None`` for local-filesystem
+#: containers.
+LocalFileSystemAccess = Credentials.LocalFileSystemAccess()
+
+#: Explicit sentinel authorizing access to an ``http://``/``https://`` virtual chunk
+#: container, which requires no credentials. Use this instead of ``None`` for HTTP
+#: containers.
+HttpAccess = Credentials.HttpAccess()
 
 
 def s3_refreshable_credentials(
@@ -433,14 +451,25 @@ def azure_credentials(
 
 
 def containers_credentials(
-    m: Mapping[str, AnyS3Credential | AnyGcsCredential | AnyAzureCredential | None],
+    m: Mapping[
+        str,
+        AnyS3Credential
+        | AnyGcsCredential
+        | AnyAzureCredential
+        | Credentials.LocalFileSystemAccess
+        | Credentials.HttpAccess
+        | None,
+    ],
 ) -> dict[str, AnyCredential | None]:
     """Build a map of credentials for virtual chunk containers.
 
     Parameters
     ----------
-    m: Mapping[str, AnyS3Credential | AnyGcsCredential | AnyAzureCredential ]
-        A mapping from container url prefixes to credentials.
+    m: Mapping[str, AnyS3Credential | AnyGcsCredential | AnyAzureCredential | Credentials.LocalFileSystemAccess | Credentials.HttpAccess | None]
+        A mapping from container url prefixes to credentials. For backends that need
+        no authentication, use the explicit ``LocalFileSystemAccess`` (``file://``) or
+        ``HttpAccess`` (``http(s)://``) sentinels. Passing ``None`` is deprecated and
+        will be unsupported in a future release.
 
     Examples
     --------
@@ -475,6 +504,8 @@ def containers_credentials(
     for name, cred in m.items():
         if cred is None:
             res[name] = None
+        elif isinstance(cred, Credentials.LocalFileSystemAccess | Credentials.HttpAccess):
+            res[name] = cred
         elif isinstance(cred, AnyS3Credential):
             res[name] = Credentials.S3(cred)
         elif (

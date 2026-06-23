@@ -186,7 +186,9 @@ You can also write to a specific region of an existing store using `to_icechunk`
 
 !!! note
 
-    Users of the repo will need to enable the virtual chunk container by passing the `credentials` argument to `Repository.open`. This way, the repo user, flags the container as authorized. `credentials` argument must be a dict using url prefixes as keys and optional credentials as values. If the container requires no credentials, `None` can be used as the value in the map. Failing to authorize a container, will generate an error when a chunk is fetched from it.
+    Users of the repo will need to enable the virtual chunk container by passing the `authorize_virtual_chunk_access` argument to `Repository.open`. This way, the repo user flags the container as authorized. The argument must be a dict using url prefixes as keys and explicit credentials as values. If the container requires no credentials, use the `icechunk.credentials.LocalFileSystemAccess` (`file://`) or `icechunk.credentials.HttpAccess` (`http(s)://`) sentinel as the value. Failing to authorize a container will generate an error when a chunk is fetched from it.
+
+    Passing `None` as the value is deprecated and will be unsupported in a future release; use an explicit credential or no-auth sentinel instead.
 
 ## Relative Virtual Chunk Containers
 
@@ -277,6 +279,15 @@ session = repo.writable_session("main")
 session.store.set_virtual_ref('c/0', 'https://myserver/my/data/file.nc', offset=1000, length=200)
 ```
 
+To read these references back, a repo user authorizes the container with the `icechunk.credentials.HttpAccess` sentinel (HTTP containers need no credentials):
+
+```python
+repo = ic.Repository.open(
+    storage,
+    authorize_virtual_chunk_access={"https://myserver/my/data/": ic.credentials.HttpAccess},
+)
+```
+
 #### Local Filesystem
 
 References to files accessible via local filesystem. This requires any file paths to be **absolute** at this time.
@@ -293,7 +304,14 @@ session = repo.writable_session("main")
 session.store.set_virtual_ref('c/0', 'file:///path/to/my/file.nc', offset=20, length=100)
 ```
 
-No extra configuration is necessary for local filesystem references.
+No extra configuration is necessary for local filesystem references. To read these references back, a repo user authorizes the container with the `icechunk.credentials.LocalFileSystemAccess` sentinel (local-filesystem containers need no credentials):
+
+```python
+repo = ic.Repository.open(
+    storage,
+    authorize_virtual_chunk_access={"file:///path/to/my/": ic.credentials.LocalFileSystemAccess},
+)
+```
 
 ### Virtual Reference File Format Support
 
