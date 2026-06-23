@@ -66,7 +66,11 @@ def _warn_on_none_virtual_chunk_credentials(
         replacement, security_note = _none_credential_guidance(scheme)
         if replacement is not None:
             example = (
-                'authorize_virtual_chunk_access={"' + url_prefix + '": ' + replacement + "}"
+                'authorize_virtual_chunk_access={"'
+                + url_prefix
+                + '": '
+                + replacement
+                + "}"
             )
             snippet = f" For example:\n    {example}"
         else:
