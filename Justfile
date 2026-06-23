@@ -62,7 +62,7 @@ import-hook-remove:
 
 # Use --all-features for the workspace but skip icechunk's `shuttle` feature,
 # which swaps tokio for shuttle-tokio and is incompatible with other crates.
-icechunk_features := "s3,object-store-s3,object-store-gcs,object-store-azure,object-store-http,object-store-fs,redirect,logs,cli,napi-send-contract"
+icechunk_features := "s3,object-store-s3,object-store-gcs,object-store-azure,object-store-http,object-store-fs,redirect,logs,otel,cli,napi-send-contract"
 
 [doc("Run clippy lints on all features and targets")]
 lint *args:
@@ -163,6 +163,17 @@ pytest *args:
   fi
   uv run --active pytest "$@"
 
+[doc("Run the Python tests with OpenTelemetry export to local Jaeger (starts Jaeger; traces at http://localhost:16686)")]
+pytest-otel *args: jaeger-up
+  #!/usr/bin/env bash
+  set -euo pipefail
+  export ICECHUNK_OTLP_ENDPOINT="${ICECHUNK_OTLP_ENDPOINT:-http://localhost:4317}"
+  echo "Exporting traces to $ICECHUNK_OTLP_ENDPOINT (filter ${ICECHUNK_OTEL_FILTER:-icechunk=info}) — view at http://localhost:16686"
+  # test_logs.py asserts on exact console output, which races with the background
+  # OTLP export: its gRPC transport (h2/tonic) emits debug logs into the same
+  # tracing subscriber. Those tests are meaningless under telemetry, so skip them.
+  just pytest --ignore=tests/test_logs.py "$@"
+
 [doc("Regenerate the post-expiration can_read_old fixtures (needs icechunk 1.1.21 + 2.0.5 wheels, installed via third-wheel)")]
 gen-expired-fixtures *args:
   cd icechunk-python && uv run --with third-wheel third-wheel sync --rename "icechunk==1.1.21=icechunk_v1" --rename "icechunk==2.0.5=icechunk_v2"
@@ -243,6 +254,15 @@ azurite-wait:
 
 [doc("Wait for all docker compose services to be ready")]
 contwait: rustfs-wait azurite-wait
+
+[doc("Start Jaeger for local OpenTelemetry tracing (UI http://localhost:16686, OTLP gRPC localhost:4317)")]
+jaeger-up:
+  docker compose up -d jaeger
+  @echo "Jaeger UI: http://localhost:16686 — set ICECHUNK_OTLP_ENDPOINT=http://localhost:4317 to export traces"
+
+[doc("Stop and remove the Jaeger container")]
+jaeger-down:
+  docker compose rm --force --stop --volumes jaeger
 
 [doc("Publish workspace crates to crates.io via cargo-release")]
 publish-crates:

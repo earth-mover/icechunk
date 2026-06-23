@@ -3738,6 +3738,30 @@ def set_logs_filter(log_filter_directive: str | None) -> None:
     """
     ...
 
+def shutdown_telemetry() -> None:
+    """
+    Flush and shut down OpenTelemetry trace export.
+
+    Experimental: OpenTelemetry export and its configuration may change in future
+    releases.
+
+    Registered with `atexit` on `import icechunk`, so the final batch of spans is
+    exported before the interpreter exits. Idempotent, and a no-op unless the
+    library was built with the `otel` feature and an OTLP endpoint was configured.
+
+    Trace export is opt-in and off by default. It is configured at `import icechunk`
+    through these environment variables (each Icechunk-specific variable falls back
+    to the standard OpenTelemetry one):
+
+    - ICECHUNK_OTLP_ENDPOINT (else OTEL_EXPORTER_OTLP_ENDPOINT): OTLP/gRPC endpoint of
+      the collector. Setting it enables export; with neither set, nothing is exported.
+    - ICECHUNK_OTEL_SERVICE_NAME (else OTEL_SERVICE_NAME): the `service.name` reported
+      to the collector. Defaults to "icechunk".
+    - ICECHUNK_OTEL_FILTER: which spans are exported, in `tracing-subscriber` filter
+      syntax. Defaults to "icechunk=info".
+    """
+    ...
+
 def spec_version() -> SpecVersion:
     """
     The version of the Icechunk specification that the library is compatible with.

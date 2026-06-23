@@ -14,6 +14,7 @@ from icechunk._icechunk_python import (
     RepositoryConfig,
     initialize_logs,
     set_logs_filter,
+    shutdown_telemetry,
 )
 
 __all__ = [
@@ -32,6 +33,7 @@ __all__ = [
     "RepositoryConfig",
     "initialize_logs",
     "set_logs_filter",
+    "shutdown_telemetry",
 ]
 
 
