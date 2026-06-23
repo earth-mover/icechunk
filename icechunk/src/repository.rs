@@ -2196,7 +2196,7 @@ fn warn_deprecated_none_credential(url_prefix: &str) {
             "Passing `None` here silently authorizes Icechunk to read credentials from \
              the environment (or use anonymous access), which can expose private \
              credentials. Pass an explicit `Credentials::S3(S3Credentials::FromEnv)` \
-             (or `S3Credentials::Anonymous`) instead."
+             or `S3Credentials::Anonymous` instead."
         }
         "gcs" | "gs" => {
             "Pass an explicit `Credentials::Gcs(GcsCredentials::Anonymous)` instead."
