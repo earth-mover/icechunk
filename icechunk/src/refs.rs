@@ -503,6 +503,29 @@ mod tests {
 
     roundtrip_serialization_tests!(serialize_and_deserialize_ref_data - ref_data);
 
+    /// Drift guard: `icechunk-s3` cannot depend on `icechunk-format`, so its
+    /// layout-detection anchors are hardcoded literals. Assert they still match
+    /// the real format path constants and ref-key helper, so a future rename of
+    /// those constants cannot silently break S3 legacy-layout detection.
+    #[cfg(feature = "s3")]
+    #[test]
+    fn s3_layout_anchors_match_format_constants() {
+        use icechunk_format::REPO_INFO_FILE_PATH;
+        let anchors = icechunk_s3::DEFAULT_LAYOUT_ANCHORS;
+        // V2 anchor: the repo-info file.
+        assert!(
+            anchors.contains(&REPO_INFO_FILE_PATH),
+            "{anchors:?} missing REPO_INFO_FILE_PATH {REPO_INFO_FILE_PATH:?}"
+        );
+        // V1 anchor: the default-branch ref, built from the real (private) helper.
+        let v1_default_branch_ref =
+            format!("{V1_REFS_FILE_PATH}/{}", branch_key(Ref::DEFAULT_BRANCH).unwrap());
+        assert!(
+            anchors.contains(&v1_default_branch_ref.as_str()),
+            "{anchors:?} missing V1 default-branch ref {v1_default_branch_ref:?}"
+        );
+    }
+
     /// Execute the passed block with all test implementations of Storage.
     ///
     /// Currently this function executes against the in-memory and local filesystem `object_store`

@@ -19,6 +19,7 @@ This release introduces on-disk [spec version 2.1](https://icechunk.io/en/stable
 ### Fixes
 
 - Expiration now records the full ancestry of pruned transaction logs in a new optional `pruned_ancestor_tx_logs` field on `SnapshotInfo`, so `diff`, `amend`, `rebase`, and `inspect` produce correct results after expiration ([#2184](https://github.com/earth-mover/icechunk/pull/2184)).
+- The native S3 backend used to write every object under a leading slash (`/chunks/...`) when `prefix` was empty, which made repositories unreadable by external tools and could cause garbage collection to silently orphan objects. New empty-prefix repositories now use clean keys, and pre-existing "rooted" repositories are detected and handled automatically ([#2239](https://github.com/earth-mover/icechunk/issues/2239)).
 - Preserve all URL parts (userinfo, port, query, fragment, and empty path segments) when storing virtual chunk locations ([#2219](https://github.com/earth-mover/icechunk/pull/2219)).
 - Honor the port when reading virtual chunks from HTTP stores, so a reference like `http://host:8080/...` is fetched from the correct port ([#2223](https://github.com/earth-mover/icechunk/issues/2223)).
 

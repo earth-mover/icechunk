@@ -153,6 +153,7 @@ async fn get_storage(
                 location.bucket.clone(),
                 location.prefix.clone(),
                 Some(credentials.clone()),
+                None, // auto-detect key layout
             )
             .context("Failed to create S3 storage")?;
             Ok(storage)
@@ -169,6 +170,7 @@ async fn get_storage(
                 location.prefix.clone(),
                 Some(credentials.clone()),
                 false,
+                None, // auto-detect key layout
             )
             .context("Failed to create Tigris storage")?;
             Ok(storage)

@@ -139,6 +139,7 @@ impl RedirectStorage {
                     bucket,
                     Some(prefix),
                     Some(S3Credentials::Anonymous),
+                    None, // auto-detect key layout
                 )
             }
             #[cfg(not(feature = "s3"))]
@@ -164,6 +165,7 @@ impl RedirectStorage {
                     Some(prefix),
                     Some(account_id),
                     Some(S3Credentials::Anonymous),
+                    None, // auto-detect key layout
                 )
             }
             #[cfg(not(feature = "s3"))]
@@ -188,6 +190,7 @@ impl RedirectStorage {
                     Some(prefix),
                     Some(S3Credentials::Anonymous),
                     true,
+                    None, // auto-detect key layout
                 )
             }
             #[cfg(not(feature = "s3"))]

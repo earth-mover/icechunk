@@ -73,6 +73,24 @@ When using Icechunk with s3 compatible storage systems, credentials must be prov
     )
     ```
 
+!!! note "Empty prefix and legacy repositories"
+
+    When `prefix` is empty (`None` or `""`) the repository lives at the bucket
+    root and objects are stored with clean keys (`chunks/...`). Repositories
+    created before [#2239](https://github.com/earth-mover/icechunk/issues/2239)
+    instead stored empty-prefix objects under a leading slash (`/chunks/...`);
+    Icechunk detects that layout automatically when opening such a repository, so
+    no action is needed to keep reading and writing it.
+
+    The `legacy_rooted_keys` parameter overrides that detection:
+
+    - `None` (default) — auto-detect the layout by probing storage. Use this
+      unless you have a specific reason not to.
+    - `True` — force the legacy leading-slash layout, skipping the probe (for
+      example, for a write-only worker that cannot probe storage). Only valid
+      with an empty prefix.
+    - `False` — force the standard layout, skipping the probe.
+
 #### Tigris
 
 [Tigris](https://www.tigrisdata.com/) is available as a storage backend for Icechunk. Icechunk provides a helper function specifically for [creating Tigris storage configurations](../reference/storage.md#icechunk.storage.tigris_storage).
