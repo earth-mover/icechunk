@@ -3714,6 +3714,9 @@ def initialize_logs() -> None:
 
     Reads the value of the environment variable ICECHUNK_LOG to obtain the filters.
     This is autamtically called on `import icechunk`.
+
+    Logs are written to stderr by default. Set ICECHUNK_LOG_TO_STDOUT (to any value)
+    before importing icechunk to write them to stdout instead.
     """
     ...
 

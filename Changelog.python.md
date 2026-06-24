@@ -25,6 +25,7 @@ This release introduces on-disk [spec version 2.1](https://icechunk.io/en/stable
 ### Breaking Changes
 
 - Stop publishing 32-bit wheels: `musllinux` for `i686` and `armv7l`, and `manylinux_2_28` for `armv7l`. Users on these platforms must now build from source ([#2214](https://github.com/earth-mover/icechunk/pull/2214)).
+- Console logs now go to stderr instead of stdout, so they no longer corrupt a host program's output. Set `ICECHUNK_LOG_TO_STDOUT` to any value before importing `icechunk` to restore the previous behavior.
 
 ### Documentation
 
