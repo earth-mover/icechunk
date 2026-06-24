@@ -412,11 +412,29 @@ async fn garbage_collect_one_attempt(
     let mut all_snaps = HashSet::new();
     let repo_info = if asset_manager.spec_version() > SpecVersionBin::V1 {
         let (ri, _) = asset_manager.fetch_repo_info().await?;
+        // GC deletes snapshot objects by storage `created_at` (`must_delete_snapshot`),
+        // so the repo-info keep/drop decision must use the same clock; `flushed_at`
+        // can disagree under skew and strand or dangle a snapshot.
+        let created_at_by_id: HashMap<SnapshotId, DateTime<Utc>> =
+            if config.deletes_snapshots() {
+                asset_manager
+                    .list_snapshots()
+                    .await?
+                    .map_ok(|li| (li.id, li.created_at))
+                    .try_collect()
+                    .await?
+            } else {
+                HashMap::new()
+            };
         non_pointed_but_new = ri
             .all_snapshots()?
             .filter_map_ok(|si| {
                 all_snaps.insert(si.id.clone());
-                if si.flushed_at >= snap_deadline { Some(si.id) } else { None }
+                match created_at_by_id.get(&si.id) {
+                    Some(created_at) if *created_at < snap_deadline => None,
+                    // new, or no object in storage to delete → keep
+                    _ => Some(si.id),
+                }
             })
             .try_collect()?;
 

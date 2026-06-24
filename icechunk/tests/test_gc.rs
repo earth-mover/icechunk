@@ -197,7 +197,7 @@ async fn do_test_gc(
     // Create 5 anonymous snapshots (detached, not on any branch)
     let mut anon_snaps = vec![];
     for i in 0..5 {
-        // gap so anon[1]/anon[2] get distinct timestamps, clear margin on both clocks
+        // gap so anon[1]/anon[2] get distinct timestamps on the LIST clock GC uses
         if i == 2 {
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }
@@ -211,19 +211,23 @@ async fn do_test_gc(
         anon_snaps.push(snap_id);
     }
 
-    // Cutoff between anon[1]/anon[2], read from the clock GC actually compares:
-    // V1 = storage LastModified, V2 = flushed_at (host).
-    let (before, after) = if spec_version == Some(SpecVersionBin::V1) {
-        (
-            repo.asset_manager().get_snapshot_last_modified(&anon_snaps[1]).await?,
-            repo.asset_manager().get_snapshot_last_modified(&anon_snaps[2]).await?,
-        )
-    } else {
-        (
-            repo.lookup_snapshot(&anon_snaps[1]).await?.flushed_at,
-            repo.lookup_snapshot(&anon_snaps[2]).await?.flushed_at,
-        )
-    };
+    // gc_snapshots gates deletion on the object store's LIST timestamp
+    // (ListInfo::created_at) for every spec version, so read the cutoff from that
+    // same clock. flushed_at (host) and HEAD (second-truncated) skew against it.
+    let list_times: HashMap<_, _> = repo
+        .asset_manager()
+        .list_snapshots()
+        .await?
+        .map_ok(|li| (li.id, li.created_at))
+        .try_collect()
+        .await?;
+    let before = list_times[&anon_snaps[1]];
+    let after = list_times[&anon_snaps[2]];
+    // the 50ms gap must have separated them on the LIST clock; fail loud otherwise
+    assert!(
+        before < after,
+        "anon[1]/anon[2] LIST timestamps not ordered: {before} >= {after}"
+    );
     let cutoff = before + (after - before) / 2;
     let gc_config = GCConfig::clean_all(
         cutoff,
