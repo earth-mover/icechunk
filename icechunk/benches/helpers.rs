@@ -234,6 +234,7 @@ pub(crate) fn make_s3_storage(
         "testbucket".to_string(),
         Some(format!("bench-{}", uuid::Uuid::new_v4())),
         Some(rustfs_credentials()),
+        false,
     )?;
     Ok(storage)
 }

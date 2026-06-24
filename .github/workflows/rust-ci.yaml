@@ -10,6 +10,8 @@ on:
   schedule:
     # three times a day to run the integration tests that take a long time
     - cron:  '33 3,10,15 * * *'
+  # allow running the real-object-store integration tests on demand from the UI
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -80,6 +82,12 @@ jobs:
               fi
               sleep 1
           done
+          for _ in {1..60}; do
+              if curl --silent --fail "http://localhost:4202/minio/health/live"; then
+              break
+              fi
+              sleep 1
+          done
 
       - name: Cache Dependencies
         uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
@@ -137,7 +145,7 @@ jobs:
           just profile=ci unit-test
 
       - name: Run integration tests against object stores
-        if: github.event_name == 'cron'
+        if: github.event_name == 'cron' || github.event_name == 'workflow_dispatch'
         env:
           R2_BUCKET: ${{ secrets.R2_BUCKET }}
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}

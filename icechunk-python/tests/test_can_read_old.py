@@ -9,6 +9,12 @@ test will fail and we can avoid breaking user data.
 When new features that impact the stored info are added, or when the on-disk format is
 intentionally changed, the repository files must be regenerated. For that, run the current
 file as a python script: `python ./tests/test_can_read_old.py`.
+
+Note: backward compatibility for the empty-`prefix` S3 key layout (#2239) is *not*
+covered here. These fixtures are local-filesystem/object_store repos, whose backend
+normalizes away leading slashes and so cannot represent a native-S3 `/chunks/...`
+("rooted") repository. That layout is S3-only and is covered by synthesizing it at
+test time: see `tests/test_key_layout.py` and `icechunk/tests/test_key_layout.rs`.
 """
 
 import shutil

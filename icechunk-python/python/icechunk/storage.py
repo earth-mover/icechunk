@@ -198,6 +198,7 @@ def s3_storage(
     network_stream_timeout_seconds: int = 60,
     requester_pays: bool = False,
     checksum_algorithm: ChecksumAlgorithm | None = None,
+    legacy_rooted_keys: bool = False,
 ) -> Storage:
     """Create a Storage instance that saves data in S3 or S3 compatible object stores.
 
@@ -206,7 +207,13 @@ def s3_storage(
     bucket: str
         The bucket where the repository will store its data
     prefix: str | None
-        The prefix within the bucket that is the root directory of the repository
+        The prefix within the bucket that is the root directory of the repository.
+        When empty (``None`` or ``""``) the repository lives at the bucket root,
+        and objects are stored with clean keys (``chunks/...``). Repositories
+        created before the fix for
+        https://github.com/earth-mover/icechunk/issues/2239 stored empty-prefix
+        objects under a leading slash (``/chunks/...``); those are detected
+        automatically on open, so no action is required to keep reading them.
     region: str | None
         The region to use in the object store, if `None` a default region will be used
     endpoint_url: str | None
@@ -245,6 +252,12 @@ def s3_storage(
         UploadPart, DeleteObjects). When ``None`` (default) the AWS SDK picks
         its own default. Set explicitly when targeting an S3-compatible service
         that rejects the SDK's default.
+    legacy_rooted_keys: bool
+        Force the legacy leading-slash key layout (``/chunks/...``) for an
+        empty-prefix repository, skipping auto-detection. Only needed as an
+        escape hatch, e.g. for a write-only worker that cannot probe storage.
+        Only valid with an empty prefix. See
+        https://github.com/earth-mover/icechunk/issues/2239.
     """
 
     credentials = s3_credentials(
@@ -272,6 +285,7 @@ def s3_storage(
         bucket=bucket,
         prefix=prefix,
         credentials=credentials,
+        legacy_rooted_keys=legacy_rooted_keys,
     )
 
 
@@ -332,6 +346,7 @@ def tigris_storage(
     scatter_initial_credentials: bool = False,
     network_stream_timeout_seconds: int = 60,
     checksum_algorithm: ChecksumAlgorithm | None = None,
+    legacy_rooted_keys: bool = False,
 ) -> Storage:
     """Create a Storage instance that saves data in Tigris object store.
 
@@ -374,6 +389,10 @@ def tigris_storage(
     network_stream_timeout_seconds: int
         Timeout requests if no bytes can be transmitted during this period of time.
         If set to 0, timeout is disabled. Default: 60.
+    legacy_rooted_keys: bool
+        Force the legacy leading-slash key layout for an empty-prefix repository,
+        skipping auto-detection. Escape hatch only; valid only with an empty
+        prefix. See https://github.com/earth-mover/icechunk/issues/2239.
     """
     credentials = s3_credentials(
         access_key_id=access_key_id,
@@ -399,6 +418,7 @@ def tigris_storage(
         prefix=prefix,
         use_weak_consistency=use_weak_consistency,
         credentials=credentials,
+        legacy_rooted_keys=legacy_rooted_keys,
     )
 
 
@@ -420,8 +440,9 @@ def r2_storage(
     scatter_initial_credentials: bool = False,
     network_stream_timeout_seconds: int = 60,
     checksum_algorithm: ChecksumAlgorithm | None = None,
+    legacy_rooted_keys: bool = False,
 ) -> Storage:
-    """Create a Storage instance that saves data in Tigris object store.
+    """Create a Storage instance that saves data in R2 object store.
 
     Parameters
     ----------
@@ -462,6 +483,12 @@ def r2_storage(
     network_stream_timeout_seconds: int
         Timeout requests if no bytes can be transmitted during this period of time.
         If set to 0, timeout is disabled. Default: 60.
+    legacy_rooted_keys: bool
+        Force the legacy leading-slash key layout for an empty-prefix repository,
+        skipping auto-detection. Escape hatch only; valid only with an empty
+        prefix. R2 empty-prefix repositories are easy to create accidentally (a
+        ``prefix`` with no ``/`` is treated as a bucket name). See
+        https://github.com/earth-mover/icechunk/issues/2239.
     """
     credentials = s3_credentials(
         access_key_id=access_key_id,
@@ -487,6 +514,7 @@ def r2_storage(
         prefix=prefix,
         account_id=account_id,
         credentials=credentials,
+        legacy_rooted_keys=legacy_rooted_keys,
     )
 
 

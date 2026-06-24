@@ -49,6 +49,7 @@ fn create_proxied_storage(
         true,
         Vec::new(),
         Vec::new(),
+        false,
     )?;
 
     Ok(Arc::new(storage))
