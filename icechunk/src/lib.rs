@@ -201,12 +201,13 @@ pub fn initialize_tracing(log_filter_directive: Option<&str>) {
     use tracing::Level;
     use tracing_error::ErrorLayer;
     use tracing_subscriber::{
-        EnvFilter, Layer as _, Registry, layer::SubscriberExt as _, reload,
-        util::SubscriberInitExt as _,
+        EnvFilter, Layer as _, Registry, fmt::writer::BoxMakeWriter,
+        layer::SubscriberExt as _, reload, util::SubscriberInitExt as _,
     };
 
     // We have two Layers. One keeps track of the spans to feed the ICError instances.
-    // The other is the one spitting logs to stdout. Filtering only applies to the second Layer.
+    // The other writes human-readable logs to the console (stderr by default, or
+    // stdout if ICECHUNK_LOG_TO_STDOUT is set). Filtering only applies to the second Layer.
 
     let filter = log_filter_directive.map(EnvFilter::new).unwrap_or_else(|| {
         EnvFilter::from_env("ICECHUNK_LOG").add_directive(Level::WARN.into())
@@ -221,8 +222,16 @@ pub fn initialize_tracing(log_filter_directive: Option<&str>) {
             None => {
                 let (filter, handle) = reload::Layer::new(filter);
                 *guard = Some(handle);
-                let stdout_layer =
-                    tracing_subscriber::fmt::layer().pretty().with_filter(filter);
+
+                let writer = if std::env::var("ICECHUNK_LOG_TO_STDOUT").is_ok() {
+                    BoxMakeWriter::new(std::io::stdout)
+                } else {
+                    BoxMakeWriter::new(std::io::stderr)
+                };
+                let console_layer = tracing_subscriber::fmt::layer()
+                    .pretty()
+                    .with_writer(writer)
+                    .with_filter(filter);
 
                 let error_span_layer = ErrorLayer::default();
 
@@ -241,7 +250,7 @@ pub fn initialize_tracing(log_filter_directive: Option<&str>) {
 
                 if let Err(err) = Registry::default()
                     .with(error_span_layer)
-                    .with(stdout_layer)
+                    .with(console_layer)
                     .with(otel_layer)
                     .try_init()
                 {

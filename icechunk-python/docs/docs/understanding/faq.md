@@ -389,7 +389,7 @@ This is set automatically and cannot be overridden.
 
 ## Does `icechunk-python` include logging?
 
-Yes, Icechunk logs to stdout, controlled by the `ICECHUNK_LOG` environment variable (or by `set_logs_filter` at runtime). See the [Observability guide](../guides/observability.md#logging) for levels, filter syntax, and runtime control.
+Yes, Icechunk logs to stderr, controlled by the `ICECHUNK_LOG` environment variable (or by `set_logs_filter` at runtime). See the [Observability guide](../guides/observability.md#logging) for levels, filter syntax, and runtime control.
 
 ## Does Icechunk support tracing?
 
