@@ -727,6 +727,14 @@ pub enum Credentials {
     Gcs(GcsCredentials),
     #[cfg(feature = "object-store-azure")]
     Azure(AzureCredentials),
+    /// Explicit sentinel authorizing access to a local-filesystem virtual chunk
+    /// container, which requires no credentials. This is the explicit replacement
+    /// for passing `None` for a `file://` container.
+    LocalFileSystemAccess,
+    /// Explicit sentinel authorizing access to an HTTP(S) virtual chunk container,
+    /// which requires no credentials. This is the explicit replacement for passing
+    /// `None` for an `http://`/`https://` container.
+    HttpAccess,
 }
 
 #[cfg(test)]

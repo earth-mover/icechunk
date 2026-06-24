@@ -48,7 +48,6 @@ As with all things in technology, the benefits of Icechunk come with some tradeo
 - The on-disk format is less transparent than regular Zarr.
 - The process for distributed writes is more complex to coordinate.
 
-
 ## What is Icechunk's relationship to Zarr?
 
 The Zarr format and protocol is agnostic to the underlying storage system ("store" in Zarr terminology)
@@ -68,7 +67,7 @@ Icechunk figures out how to materialize these keys based on its [storage schema]
 
 <div class="grid cards" markdown>
 
--   __Standard Zarr + Fsspec__
+- __Standard Zarr + Fsspec__
 
     ---
 
@@ -81,7 +80,7 @@ Icechunk figures out how to materialize these keys based on its [storage schema]
         icechunk <-- key / value --> storage[(Object Storage)]
     ```
 
--   __Zarr + Icechunk__
+- __Zarr + Icechunk__
 
     ---
 
@@ -95,7 +94,6 @@ Icechunk figures out how to materialize these keys based on its [storage schema]
     ```
 
 </div>
-
 
 Implementing Icechunk this way allows Icechunk's specification to evolve independently from Zarr's,
 maintaining interoperability while enabling rapid iteration and promoting innovation on the I/O layer.
@@ -158,7 +156,7 @@ HDF is widely used in high-performance computing.
 
 <div class="grid cards" markdown>
 
--   __Similarities__
+- __Similarities__
 
     ---
 
@@ -167,7 +165,7 @@ HDF is widely used in high-performance computing.
 
     Both Icechunk and HDF5 use the concept of "chunking" to split large arrays into smaller storage units.
 
--   __Differences__
+- __Differences__
 
     ---
 
@@ -231,15 +229,15 @@ However, there are a number of difference, enumerated below.
 
 The following table compares Zarr + Icechunk with TileDB Embedded in a few key areas
 
-| feature | **Zarr + Icechunk** | **TileDB Embedded** | Comment |
+| feature | __Zarr + Icechunk__ | __TileDB Embedded__ | Comment |
 |---------|---------------------|---------------------|---------|
-| *atomicity* | atomic updates can span multiple arrays and groups | _array fragments_ limited to a single array  |  Icechunk's model allows a writer to stage many updates across interrelated arrays into a single transaction. |
-| *concurrency and isolation* | serializable isolation of transactions | [eventual consistency](https://docs.tiledb.com/main/background/internal-mechanics/consistency) | While both formats enable lock-free concurrent reading and writing, Icechunk can catch (and potentially reject) inconsistent, out-of order updates. |
-| *versioning* | snapshots, branches, tags | linear version history | Icechunk's data versioning model is closer to Git's. |
-| *unit of storage* | chunk | tile | (basically the same thing) |
-| *minimum write* | chunk | cell | TileDB allows atomic updates to individual cells, while Zarr requires writing an entire chunk. |
-| *sparse arrays* | :material-close: | :material-check: | Zarr + Icechunk do not currently support sparse arrays. |
-| *virtual chunk references* |  :material-check: |  :material-close: | Icechunk enables references to chunks in other file formats (HDF5, NetCDF, GRIB, etc.), while TileDB does not. |
+| _atomicity_ | atomic updates can span multiple arrays and groups | _array fragments_ limited to a single array  |  Icechunk's model allows a writer to stage many updates across interrelated arrays into a single transaction. |
+| _concurrency and isolation_ | serializable isolation of transactions | [eventual consistency](https://docs.tiledb.com/main/background/internal-mechanics/consistency) | While both formats enable lock-free concurrent reading and writing, Icechunk can catch (and potentially reject) inconsistent, out-of order updates. |
+| _versioning_ | snapshots, branches, tags | linear version history | Icechunk's data versioning model is closer to Git's. |
+| _unit of storage_ | chunk | tile | (basically the same thing) |
+| _minimum write_ | chunk | cell | TileDB allows atomic updates to individual cells, while Zarr requires writing an entire chunk. |
+| _sparse arrays_ | :material-close: | :material-check: | Zarr + Icechunk do not currently support sparse arrays. |
+| _virtual chunk references_ |  :material-check: |  :material-close: | Icechunk enables references to chunks in other file formats (HDF5, NetCDF, GRIB, etc.), while TileDB does not. |
 
 Beyond this list, there are numerous differences in the design, file layout, and implementation of Icechunk and TileDB embedded
 which may lead to differences in suitability and performance for different workfloads.
@@ -371,7 +369,6 @@ TensorStore implements an [ocdbt](https://google.github.io/tensorstore/kvstore/o
 Ocdbt implements a transactional, versioned key-value store suitable for storing Zarr data, thereby supporting some of the same features as Icechunk.
 Unlike Icechunk, the ocdbt key-value store is not specialized to Zarr, does not differentiate between chunk or metadata keys, and does not store any metadata about chunks.
 
-
 ## Why do I have to fork a Session for parallel writes?**
 
 Icechunk is different from normal Zarr stores because it is stateful. In a distributed setting, you have to be careful to communicate back the Session objects from remote write tasks, merge them appropriately, and then execute the commit. The explicit use of a `fork` allows Icechunk to hint to the user that they need to be sure about what they are doing.
@@ -392,16 +389,11 @@ This is set automatically and cannot be overridden.
 
 ## Does `icechunk-python` include logging?
 
-Yes! Set the environment variable `ICECHUNK_LOG=icechunk=debug` to print debug logs to stdout. Available "levels" in order of increasing verbosity are `error`, `warn`, `info`, `debug`, `trace`. The default level is `error`. The Rust library uses `tracing-subscriber` crate. The `ICECHUNK_LOG` variable can be used to filter logging following that crate's [documentation](https://docs.rs/tracing-subscriber/latest/tracing_subscriber/filter/struct.EnvFilter.html#directives). For example, `ICECHUNK_LOG=trace` will set both icechunk and it's dependencies' log levels to `trace` while `ICECHUNK_LOG=icechunk=trace` will enable the `trace` level for icechunk only. For more complex control `ICECHUNK_LOG=debug,icechunk=trace,rustls=info,h2=info,hyper=info` will set `trace` for `icechunk`, `info` for `rustls`,`hyper`, and `h2` crates, and `debug` for every other crate.
+Yes, Icechunk logs to stderr, controlled by the `ICECHUNK_LOG` environment variable (or by `set_logs_filter` at runtime). See the [Observability guide](../guides/observability.md#logging) for levels, filter syntax, and runtime control.
 
-You can also use Python's `os.environ` to set or change the value of the variable. If you change the environment variable after `icechunk` was
-imported, you will need to call `icechunk.set_logs_filter(None)` for changes to take effect.
+## Does Icechunk support tracing?
 
-This function also accepts the filter directive. If you prefer not to use environment variables, you can do:
-
-```python
-icechunk.set_logs_filter("debug,icechunk=trace")
-```
+Yes, optionally, and it is off by default. Once you set a collector endpoint, Icechunk can export its `tracing` spans over OTLP/gRPC to any OpenTelemetry-compatible backend, like Jaeger, Grafana Tempo, Datadog, Honeycomb, etc. See the [Observability guide](../guides/observability.md#opentelemetry-tracing) for setup and configuration.
 
 ## How to get a read-only Icechunk store?
 
@@ -409,7 +401,6 @@ Zarr has a few mechanisms to define read-only zarr stores. These don't always wo
 because Icechunk has a more advanced session model. The safest way to make sure you don't write to
 an Icechunk repo is to use `Repository.readonly_session` to create the session. It doesn't matter what
 you do to the Zarr store, a read-only session cannot do writes.
-
 
 ## Does Icechunk work with Zarr sharding?
 

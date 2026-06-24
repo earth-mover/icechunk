@@ -6,19 +6,33 @@ This release introduces on-disk [spec version 2.1](https://icechunk.io/en/stable
 
 ### Features
 
-- Build Python wheels with the `abi3-py312` stable ABI, greatly reducing the number of published wheels. The minimum supported Python version remains 3.12 ([#2213](https://github.com/earth-mover/icechunk/pull/2213)).
 - Add a read-only Rust API to inspect metadata file headers ([#2216](https://github.com/earth-mover/icechunk/pull/2216)).
+- Add a `headers` argument to `http_storage` (and `ObjectStoreConfig.Http`) to inject static HTTP headers, such as an `authorization` bearer token, into every request ([#2143](https://github.com/earth-mover/icechunk/pull/2143)).
+- Add optional, experimental [OpenTelemetry export](https://icechunk.io/en/stable/guides/observability/): when `ICECHUNK_OTLP_ENDPOINT` or `OTEL_EXPORTER_OTLP_ENDPOINT` are set, tracing spans are exported over OTLP/gRPC. Off by default for Rust library builds via the new `otel` Cargo feature ([#2234](https://github.com/earth-mover/icechunk/pull/2234)).
+- Add explicit `icechunk.credentials.LocalFileSystemAccess` and `icechunk.credentials.HttpAccess` credential sentinels for authorizing virtual chunk containers that need no credentials ([#2194](https://github.com/earth-mover/icechunk/issues/2194)).
+- Build Python wheels with the `abi3-py312` stable ABI, greatly reducing the number of published wheels. The minimum supported Python version remains 3.12 ([#2213](https://github.com/earth-mover/icechunk/pull/2213)).
+
+### Deprecations
+
+- Passing `None` as a value in `authorize_virtual_chunk_access` is deprecated and now emits a `DeprecationWarning`; it will be unsupported in a future release. Pass an explicit credential (e.g. `S3Credentials.FromEnv()`, `s3_anonymous_credentials()`) or the `icechunk.credentials.LocalFileSystemAccess` / `icechunk.credentials.HttpAccess` sentinel instead ([#2194](https://github.com/earth-mover/icechunk/issues/2194)).
 
 ### Fixes
 
 - Expiration now records the full ancestry of pruned transaction logs in a new optional `pruned_ancestor_tx_logs` field on `SnapshotInfo`, so `diff`, `amend`, `rebase`, and `inspect` produce correct results after expiration ([#2184](https://github.com/earth-mover/icechunk/pull/2184)).
+- Preserve all URL parts (userinfo, port, query, fragment, and empty path segments) when storing virtual chunk locations ([#2219](https://github.com/earth-mover/icechunk/pull/2219)).
 - Honor the port when reading virtual chunks from HTTP stores, so a reference like `http://host:8080/...` is fetched from the correct port ([#2223](https://github.com/earth-mover/icechunk/issues/2223)).
 - The objects returned by the async iteration APIs (`Store.list`/`list_prefix`/`list_dir`/`array_chunk_iterator`, `Repository.async_ancestry`/`ops_log_async`) are now correctly typed and named as async iterators (`AsyncCloseableIterator`) rather than the misleading `PyAsyncGenerator`, and gained an `aclose()` method so `contextlib.aclosing(...)` and deterministic early-exit cleanup work ([#XXXX](https://github.com/earth-mover/icechunk/pull/XXXX)).
+
+### Breaking Changes
+
+- Stop publishing 32-bit wheels: `musllinux` for `i686` and `armv7l`, and `manylinux_2_28` for `armv7l`. Users on these platforms must now build from source ([#2214](https://github.com/earth-mover/icechunk/pull/2214)).
+- Console logs now go to stderr instead of stdout, so they no longer corrupt a host program's output. Set `ICECHUNK_LOG_TO_STDOUT` to any value before importing `icechunk` to restore the previous behavior.
 
 ### Documentation
 
 - Add a guide on handling sensitive data ([#2195](https://github.com/earth-mover/icechunk/pull/2195)).
 - Update the Virtual Datasets guide to cover reading netCDF files with `h5py` ([#2207](https://github.com/earth-mover/icechunk/pull/2207)).
+- Document that GDAL can now read Icechunk repositories ([#2222](https://github.com/earth-mover/icechunk/pull/2222)).
 
 ## Python Icechunk Library 2.0.6
 

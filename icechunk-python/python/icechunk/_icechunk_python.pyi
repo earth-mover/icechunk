@@ -3270,7 +3270,26 @@ class Credentials:
     class Azure:
         def __new__(cls, credentials: AzureCredentials) -> Credentials.Azure: ...
 
-_AnyCredential = Credentials.S3 | Credentials.Gcs | Credentials.Azure
+    class LocalFileSystemAccess:
+        """Sentinel authorizing access to a local-filesystem (``file://``) virtual
+        chunk container, which requires no credentials. Surfaced as
+        ``LocalFileSystemAccess``."""
+
+        def __new__(cls) -> Credentials.LocalFileSystemAccess: ...
+
+    class HttpAccess:
+        """Sentinel authorizing access to an HTTP(S) virtual chunk container, which
+        requires no credentials."""
+
+        def __new__(cls) -> Credentials.HttpAccess: ...
+
+_AnyCredential = (
+    Credentials.S3
+    | Credentials.Gcs
+    | Credentials.Azure
+    | Credentials.LocalFileSystemAccess
+    | Credentials.HttpAccess
+)
 
 @final
 class LatencyStorage(Storage):
@@ -3701,6 +3720,9 @@ def initialize_logs() -> None:
 
     Reads the value of the environment variable ICECHUNK_LOG to obtain the filters.
     This is autamtically called on `import icechunk`.
+
+    Logs are written to stderr by default. Set ICECHUNK_LOG_TO_STDOUT (to any value)
+    before importing icechunk to write them to stdout instead.
     """
     ...
 
@@ -3722,6 +3744,30 @@ def set_logs_filter(log_filter_directive: str | None) -> None:
         The comma separated list of directives for modules and log levels.
         If None, the directive will be read from the environment variable
         ICECHUNK_LOG
+    """
+    ...
+
+def shutdown_telemetry() -> None:
+    """
+    Flush and shut down OpenTelemetry trace export.
+
+    Experimental: OpenTelemetry export and its configuration may change in future
+    releases.
+
+    Registered with `atexit` on `import icechunk`, so the final batch of spans is
+    exported before the interpreter exits. Idempotent, and a no-op unless the
+    library was built with the `otel` feature and an OTLP endpoint was configured.
+
+    Trace export is opt-in and off by default. It is configured at `import icechunk`
+    through these environment variables (each Icechunk-specific variable falls back
+    to the standard OpenTelemetry one):
+
+    - ICECHUNK_OTLP_ENDPOINT (else OTEL_EXPORTER_OTLP_ENDPOINT): OTLP/gRPC endpoint of
+      the collector. Setting it enables export; with neither set, nothing is exported.
+    - ICECHUNK_OTEL_SERVICE_NAME (else OTEL_SERVICE_NAME): the `service.name` reported
+      to the collector. Defaults to "icechunk".
+    - ICECHUNK_OTEL_FILTER: which spans are exported, in `tracing-subscriber` filter
+      syntax. Defaults to "icechunk=info".
     """
     ...
 

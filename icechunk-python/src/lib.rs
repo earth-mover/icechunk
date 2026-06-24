@@ -98,8 +98,29 @@ fn log_filters_from_env(py: Python<'_>) -> PyResult<Option<String>> {
 fn initialize_logs(py: Python<'_>) -> PyResult<()> {
     if env::var("ICECHUNK_NO_LOGS").is_err() {
         let log_filter_directive = log_filters_from_env(py)?;
+        // The OTLP exporter must be built inside a Tokio runtime
+        // Bind it to Icechunk's long-lived global runtime so it lives for the life of the process
+        // and can flush the last spans on shutdown
+        let _rt_guard = pyo3_async_runtimes::tokio::get_runtime().enter();
         initialize_tracing(log_filter_directive.as_deref());
+
+        // The final span batch must be flushed before process shutdown
+        register_telemetry_shutdown(py)?;
     }
+    Ok(())
+}
+
+/// Flush and shut down OpenTelemetry trace export. A no-op unless the library
+/// was built with the `otel` feature and an OTLP endpoint was configured.
+#[pyfunction]
+fn shutdown_telemetry() {
+    icechunk::shutdown_telemetry();
+}
+
+fn register_telemetry_shutdown(py: Python<'_>) -> PyResult<()> {
+    let atexit = py.import("atexit")?;
+    let shutdown = wrap_pyfunction!(shutdown_telemetry, py)?;
+    atexit.call_method1("register", (shutdown,))?;
     Ok(())
 }
 
@@ -233,6 +254,7 @@ fn _icechunk_python(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<VirtualChunkSpec>()?;
     m.add_function(wrap_pyfunction!(initialize_logs, m)?)?;
     m.add_function(wrap_pyfunction!(set_logs_filter, m)?)?;
+    m.add_function(wrap_pyfunction!(shutdown_telemetry, m)?)?;
     m.add_function(wrap_pyfunction!(spec_version, m)?)?;
     m.add_function(wrap_pyfunction!(user_agent, m)?)?;
     m.add_function(wrap_pyfunction!(cli_entrypoint, m)?)?;
