@@ -250,7 +250,9 @@ publish-crates:
 
 [doc("Build Python wheels with maturin")]
 build-wheels *args:
-  cd icechunk-python && maturin build --release --out dist -i $PYTHON_VERSION "$@"
+  (cd icechunk-python && maturin build --release --out dist -i "python3.12" --features "pyo3/abi3-py312" $@)
+  (cd icechunk-python && maturin build --release --out dist -i "python3.14t" $@)
+  (cd icechunk-python && maturin build --release --out dist -i "python3.15t" --features "pyo3/abi3t-py315" $@)
 
 [doc("Run Python checks with upstream nightly dependencies")]
 python-upstream: build-wheels python-upstream-setup python-upstream-mypy python-upstream-describe python-upstream-pytest
