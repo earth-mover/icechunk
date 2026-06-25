@@ -178,7 +178,10 @@ jobs:
           rc=0
           # Most real-store ignored tests use unique prefixes, so they're safe to
           # run on every matrix OS in parallel.
-          cargo test --profile ci --workspace --all-targets -- --ignored --skip rooted_roundtrip || rc=1
+          # Use --tests (not --all-targets): benchmarks use criterion's harness,
+          # which rejects libtest's --skip flag. --workspace --tests still covers
+          # lib/bin/integration tests across every crate (current and future).
+          cargo test --profile ci --workspace --tests -- --ignored --skip rooted_roundtrip || rc=1
           # The rooted-layout tests operate at the bucket root (empty prefix, no
           # unique prefix), so concurrent matrix jobs would race on the same keys:
           # run them on a single runner.
