@@ -137,6 +137,12 @@ async fn do_test_gc(
     assert_eq!(repo.asset_manager().list_manifests().await?.count().await, 111);
 
     // verify doing gc without dangling objects doesn't change the repo
+
+    // GC compares the cutoff against each object's `created_at`, which on a real
+    // store is its second-precision, server-clock `LastModified`. Sleep so the
+    // cutoff clears second-truncation and clock skew (in-memory needs only 1ms;
+    // see `threshold_between_commits`).
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
     let now = Utc::now();
     let gc_config = GCConfig::clean_all(
         now,
