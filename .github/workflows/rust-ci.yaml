@@ -169,7 +169,15 @@ jobs:
           TIGRIS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
 
         run: |
-          cargo test --profile ci --workspace --all-targets -- --ignored
+          # All real-store ignored tests except the rooted-layout ones. These use
+          # unique prefixes, so they are safe to run on every matrix OS in parallel.
+          cargo test --profile ci --workspace --all-targets -- --ignored --skip rooted_roundtrip
+          # The rooted-layout tests operate at the bucket root (empty prefix, no
+          # unique prefix), so concurrent matrix jobs would race on the same keys.
+          # Run them on a single runner.
+          if [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
+            cargo test --profile ci -p icechunk --test main rooted_roundtrip -- --ignored
+          fi
 
   shuttle:
     name: Shuttle concurrency tests

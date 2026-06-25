@@ -911,7 +911,7 @@ impl Storage for S3Storage {
         let mut sizes = HashMap::new();
         let mut ids = Vec::new();
         for (id, size) in batch.into_iter() {
-            let key = self.key_for(layout, &format!("{prefix}/{id}"));
+            let key = self.key_for(layout, &join_prefix_id(prefix, &id));
             if let Ok(ident) = ObjectIdentifier::builder().key(key.clone()).build() {
                 ids.push(ident);
                 sizes.insert(key, size);
@@ -1137,6 +1137,20 @@ fn layout_from_anchor_etags(
         }
     }
     decide_layout(clean_seen, rooted_seen, bucket)
+}
+
+/// Join a delete `prefix` and object `id` into a repository-relative path,
+/// matching the historical `PathBuf`-based join: an empty prefix is dropped, and a
+/// single separator joins the rest (so a caller-supplied trailing slash does not
+/// produce a doubled separator that non-normalizing stores like S3 would treat as
+/// a distinct, non-existent key). Only the join boundary is normalized; any `//`
+/// inside `prefix` or `id` is left untouched.
+fn join_prefix_id(prefix: &str, id: &str) -> String {
+    if prefix.is_empty() {
+        id.to_string()
+    } else {
+        format!("{}/{}", prefix.trim_end_matches('/'), id)
+    }
 }
 
 /// `bucket` is only used to build the mixed-layout error.
@@ -1448,6 +1462,18 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.to_string().contains("empty prefix"), "got: {err}");
+    }
+
+    /// The delete-key join must not produce a doubled separator when the caller
+    /// passes a prefix with a trailing slash, nor a leading slash for an empty
+    /// prefix — otherwise non-normalizing stores (AWS, R2) delete the wrong key.
+    #[test]
+    fn test_join_prefix_id() {
+        assert_eq!(join_prefix_id("foo/bar", "1"), "foo/bar/1");
+        assert_eq!(join_prefix_id("foo/bar/", "2"), "foo/bar/2");
+        assert_eq!(join_prefix_id("", "foo/3"), "foo/3");
+        // a `//` inside the prefix itself is intentionally preserved
+        assert_eq!(join_prefix_id("foo//bar", "4"), "foo//bar/4");
     }
 
     #[test]
