@@ -83,9 +83,7 @@ def test_empty_prefix_writes_clean_keys(fresh_bucket: str) -> None:
     # threshold 0 forces chunks to be written as separate `chunks/...` objects
     config = ic.RepositoryConfig.default()
     config.inline_chunk_threshold_bytes = 0
-    repo = ic.Repository.create(
-        storage=empty_prefix_storage(fresh_bucket), config=config
-    )
+    repo = ic.Repository.create(storage=empty_prefix_storage(fresh_bucket), config=config)
     write_array(repo, 42)
 
     keys = bucket_keys(fresh_bucket)
