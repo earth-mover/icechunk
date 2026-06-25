@@ -33,7 +33,10 @@ env:
 jobs:
   rust:
     name: Rust CI
-    timeout-minutes: 20
+    # Headroom for the slow macos-15-intel runner: cold workspace compile + unit
+    # tests already approach 20 min there, and the integration suite (run on
+    # nightly / dispatch / `run-integration-tests`-labeled PRs) adds ~10 min more.
+    timeout-minutes: 45
     runs-on: ${{ matrix.os }}
     defaults:
       run:
@@ -181,7 +184,11 @@ jobs:
           # Use --tests (not --all-targets): benchmarks use criterion's harness,
           # which rejects libtest's --skip flag. --workspace --tests still covers
           # lib/bin/integration tests across every crate (current and future).
-          cargo test --profile ci --workspace --tests -- --ignored --skip rooted_roundtrip || rc=1
+          # Exclude icechunk-python: it has no Rust tests, but its PyO3 lib-test
+          # binary aborts at launch trying to load libpython (this step runs cargo
+          # directly, without the DYLD/LD path that `just` sets); its tests are
+          # pytest, run in python-check.yaml.
+          cargo test --profile ci --workspace --exclude icechunk-python --tests -- --ignored --skip rooted_roundtrip || rc=1
           # The rooted-layout tests operate at the bucket root (empty prefix, no
           # unique prefix), so concurrent matrix jobs would race on the same keys:
           # run them on a single runner.
