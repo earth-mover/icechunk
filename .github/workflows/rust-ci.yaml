@@ -144,8 +144,14 @@ jobs:
         run: |
           just profile=ci unit-test
 
+      # Runs nightly, on manual dispatch, or on any PR labeled
+      # `run-integration-tests` (so real-object-store tests can be exercised
+      # before merging, since `workflow_dispatch` only works on the default branch).
       - name: Run integration tests against object stores
-        if: github.event_name == 'cron' || github.event_name == 'workflow_dispatch'
+        if: >-
+          github.event_name == 'cron'
+          || github.event_name == 'workflow_dispatch'
+          || contains(github.event.pull_request.labels.*.name, 'run-integration-tests')
         env:
           R2_BUCKET: ${{ secrets.R2_BUCKET }}
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
