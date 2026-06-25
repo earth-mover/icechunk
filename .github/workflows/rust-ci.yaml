@@ -168,21 +168,21 @@ jobs:
           TIGRIS_ACCESS_KEY_ID: ${{ secrets.TIGRIS_ACCESS_KEY_ID }}
           TIGRIS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
 
+          # passed via env rather than interpolated into the shell below, to
+          # satisfy zizmor's template-injection audit
+          MATRIX_OS: ${{ matrix.os }}
+
         run: |
           # Don't let a failure (or flake) in one group hide the other.
           set +e
           rc=0
-          # The full real-store suite is slow and only runs on cron / manual
-          # dispatch. A labeled PR runs just the (fast) rooted-layout tests below,
-          # so contributors get a focused signal without the whole suite.
-          if [ "${{ github.event_name }}" = "cron" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            # These use unique prefixes, so they're safe across the matrix in parallel.
-            cargo test --profile ci --workspace --all-targets -- --ignored --skip rooted_roundtrip || rc=1
-          fi
+          # Most real-store ignored tests use unique prefixes, so they're safe to
+          # run on every matrix OS in parallel.
+          cargo test --profile ci --workspace --all-targets -- --ignored --skip rooted_roundtrip || rc=1
           # The rooted-layout tests operate at the bucket root (empty prefix, no
           # unique prefix), so concurrent matrix jobs would race on the same keys:
           # run them on a single runner.
-          if [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
+          if [ "$MATRIX_OS" = "ubuntu-latest" ]; then
             cargo test --profile ci -p icechunk --test main rooted_roundtrip -- --ignored || rc=1
           fi
           exit $rc
