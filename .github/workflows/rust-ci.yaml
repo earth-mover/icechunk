@@ -169,15 +169,23 @@ jobs:
           TIGRIS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
 
         run: |
-          # All real-store ignored tests except the rooted-layout ones. These use
-          # unique prefixes, so they are safe to run on every matrix OS in parallel.
-          cargo test --profile ci --workspace --all-targets -- --ignored --skip rooted_roundtrip
-          # The rooted-layout tests operate at the bucket root (empty prefix, no
-          # unique prefix), so concurrent matrix jobs would race on the same keys.
-          # Run them on a single runner.
-          if [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
-            cargo test --profile ci -p icechunk --test main rooted_roundtrip -- --ignored
+          # Don't let a failure (or flake) in one group hide the other.
+          set +e
+          rc=0
+          # The full real-store suite is slow and only runs on cron / manual
+          # dispatch. A labeled PR runs just the (fast) rooted-layout tests below,
+          # so contributors get a focused signal without the whole suite.
+          if [ "${{ github.event_name }}" = "cron" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            # These use unique prefixes, so they're safe across the matrix in parallel.
+            cargo test --profile ci --workspace --all-targets -- --ignored --skip rooted_roundtrip || rc=1
           fi
+          # The rooted-layout tests operate at the bucket root (empty prefix, no
+          # unique prefix), so concurrent matrix jobs would race on the same keys:
+          # run them on a single runner.
+          if [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
+            cargo test --profile ci -p icechunk --test main rooted_roundtrip -- --ignored || rc=1
+          fi
+          exit $rc
 
   shuttle:
     name: Shuttle concurrency tests
