@@ -18,9 +18,9 @@ use icechunk_storage::s3_config::{S3Credentials, S3Options};
 use icechunk_storage::strip_quotes;
 use icechunk_storage::{
     ConcurrencySettings, DeleteObjectsResult, ETag, Generation, GetModifiedResult,
-    ListInfo, RetriesSettings, Settings, Storage, StorageError, StorageErrorKind,
-    StorageInfo, StorageResult, VersionInfo, VersionedUpdateResult, obj_not_found_res,
-    obj_store_error, obj_store_error_res, other_error, sealed,
+    ListInfo, RepositoryCreation, RetriesSettings, Settings, Storage, StorageError,
+    StorageErrorKind, StorageInfo, StorageResult, VersionInfo, VersionedUpdateResult,
+    obj_not_found_res, obj_store_error, obj_store_error_res, other_error, sealed,
 };
 use icechunk_types::ICResultExt as _;
 #[cfg(any(feature = "s3", feature = "gcs", feature = "azure", feature = "http"))]
@@ -173,6 +173,10 @@ pub enum AzureCredentials {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ObjectStorage {
     backend: Arc<dyn ObjectStoreBackend>,
+    /// Test/internal escape hatch permitting repository creation at an empty
+    /// prefix.
+    #[serde(skip)]
+    allow_empty_prefix_creation: bool,
     #[serde(skip)]
     /// We need to use `OnceCell` to allow async initialization, because serde
     /// does not support async cfunction calls from deserialization. This gives
@@ -181,12 +185,28 @@ pub struct ObjectStorage {
 }
 
 impl ObjectStorage {
+    fn from_backend(backend: Arc<dyn ObjectStoreBackend>) -> ObjectStorage {
+        ObjectStorage {
+            backend,
+            allow_empty_prefix_creation: false,
+            client: OnceCell::new(),
+        }
+    }
+
+    /// Test/internal escape hatch: permit creating a new repository at an empty
+    /// prefix (the bucket root) on a cloud object store, which
+    /// [`Storage::can_create_repository`] would otherwise refuse.
+    pub fn unsafe_allow_empty_prefix_creation(mut self) -> Self {
+        self.allow_empty_prefix_creation = true;
+        self
+    }
+
     /// Create an in memory Storage implementation
     ///
     /// This implementation should not be used in production code.
     pub async fn new_in_memory() -> Result<ObjectStorage, StorageError> {
         let backend = Arc::new(InMemoryObjectStoreBackend);
-        let storage = ObjectStorage { backend, client: OnceCell::new() };
+        let storage = ObjectStorage::from_backend(backend);
         Ok(storage)
     }
 
@@ -202,7 +222,7 @@ impl ObjectStorage {
         );
         let backend =
             Arc::new(LocalFileSystemObjectStoreBackend { path: prefix.to_path_buf() });
-        let storage = ObjectStorage { backend, client: OnceCell::new() };
+        let storage = ObjectStorage::from_backend(backend);
         Ok(storage)
     }
 
@@ -215,7 +235,7 @@ impl ObjectStorage {
     ) -> Result<ObjectStorage, StorageError> {
         let backend =
             Arc::new(S3ObjectStoreBackend { bucket, prefix, credentials, config });
-        let storage = ObjectStorage { backend, client: OnceCell::new() };
+        let storage = ObjectStorage::from_backend(backend);
 
         Ok(storage)
     }
@@ -235,7 +255,7 @@ impl ObjectStorage {
             credentials,
             config,
         });
-        let storage = ObjectStorage { backend, client: OnceCell::new() };
+        let storage = ObjectStorage::from_backend(backend);
 
         Ok(storage)
     }
@@ -249,7 +269,7 @@ impl ObjectStorage {
     ) -> Result<ObjectStorage, StorageError> {
         let backend =
             Arc::new(GcsObjectStoreBackend { bucket, prefix, credentials, config });
-        let storage = ObjectStorage { backend, client: OnceCell::new() };
+        let storage = ObjectStorage::from_backend(backend);
 
         Ok(storage)
     }
@@ -262,7 +282,7 @@ impl ObjectStorage {
     ) -> Result<ObjectStorage, StorageError> {
         let backend =
             Arc::new(HttpObjectStoreBackend { url: url.to_string(), config, headers });
-        let storage = ObjectStorage { backend, client: OnceCell::new() };
+        let storage = ObjectStorage::from_backend(backend);
         Ok(storage)
     }
 
@@ -363,6 +383,17 @@ impl Storage for ObjectStorage {
 
     async fn can_write(&self) -> StorageResult<bool> {
         Ok(self.backend.can_write())
+    }
+
+    async fn can_create_repository(&self) -> StorageResult<RepositoryCreation> {
+        if self.backend.prefix().is_empty()
+            && !self.allow_empty_prefix_creation
+            && self.backend.restricts_empty_prefix_creation()
+        {
+            Ok(RepositoryCreation::RefusedEmptyPrefix)
+        } else {
+            Ok(RepositoryCreation::Allowed)
+        }
     }
 
     async fn create_location_if_needed(&self) -> StorageResult<()> {
@@ -646,6 +677,12 @@ pub trait ObjectStoreBackend: Debug + Display + Sync + Send {
 
     fn can_write(&self) -> bool {
         true
+    }
+
+    /// Whether this backend should refuse creating a new repository at an empty
+    /// prefix (the bucket root).
+    fn restricts_empty_prefix_creation(&self) -> bool {
+        false
     }
 
     fn create_location_if_needed(&self) -> Result<(), StorageError> {
@@ -1000,6 +1037,10 @@ impl ObjectStoreBackend for S3ObjectStoreBackend {
         self.prefix.clone().unwrap_or("".to_string())
     }
 
+    fn restricts_empty_prefix_creation(&self) -> bool {
+        true
+    }
+
     fn default_settings(&self) -> Settings {
         Default::default()
     }
@@ -1104,6 +1145,10 @@ impl ObjectStoreBackend for AzureObjectStoreBackend {
 
     fn prefix(&self) -> String {
         self.prefix.clone().unwrap_or("".to_string())
+    }
+
+    fn restricts_empty_prefix_creation(&self) -> bool {
+        true
     }
 
     fn default_settings(&self) -> Settings {
@@ -1212,6 +1257,10 @@ impl ObjectStoreBackend for GcsObjectStoreBackend {
 
     fn prefix(&self) -> String {
         self.prefix.clone().unwrap_or("".to_string())
+    }
+
+    fn restricts_empty_prefix_creation(&self) -> bool {
+        true
     }
 
     fn default_settings(&self) -> Settings {

@@ -44,10 +44,10 @@ pub use icechunk_storage::s3_config::{
     S3StaticCredentials,
 };
 use icechunk_storage::{
-    DeleteObjectsResult, GetModifiedResult, ListInfo, Settings, Storage, StorageError,
-    StorageErrorKind, StorageInfo, StorageResult, VersionInfo, VersionedUpdateResult,
-    obj_not_found_res, obj_store_error, obj_store_error_res, other_error, sealed,
-    split_in_multiple_equal_requests, strip_quotes,
+    DeleteObjectsResult, GetModifiedResult, ListInfo, RepositoryCreation, Settings,
+    Storage, StorageError, StorageErrorKind, StorageInfo, StorageResult, VersionInfo,
+    VersionedUpdateResult, obj_not_found_res, obj_store_error, obj_store_error_res,
+    other_error, sealed, split_in_multiple_equal_requests, strip_quotes,
 };
 use icechunk_types::ICResultExt as _;
 use serde::{Deserialize, Serialize};
@@ -114,6 +114,10 @@ pub struct S3Storage {
     extra_write_headers: Vec<(String, String)>,
     #[serde(default, with = "layout_cell_serde")]
     key_layout: OnceCell<KeyLayout>,
+    /// Test/internal escape hatch permitting repository creation at an empty
+    /// prefix.
+    #[serde(skip)]
+    allow_empty_prefix_creation: bool,
     #[serde(skip)]
     /// We need to use `OnceCell` to allow async initialization, because serde
     /// does not support async function calls from deserialization. This gives
@@ -412,7 +416,16 @@ impl S3Storage {
             extra_read_headers,
             extra_write_headers,
             key_layout,
+            allow_empty_prefix_creation: false,
         })
+    }
+
+    /// Test/internal escape hatch: permit creating a new repository at an empty
+    /// prefix (the bucket root), which [`Storage::can_create_repository`] would
+    /// otherwise refuse.
+    pub fn unsafe_allow_empty_prefix_creation(mut self) -> Self {
+        self.allow_empty_prefix_creation = true;
+        self
     }
 
     /// Get the client, initializing it if it hasn't been initialized yet. This is necessary because the
@@ -778,6 +791,14 @@ impl Storage for S3Storage {
 
     async fn can_write(&self) -> StorageResult<bool> {
         Ok(self.can_write)
+    }
+
+    async fn can_create_repository(&self) -> StorageResult<RepositoryCreation> {
+        if self.prefix.is_empty() && !self.allow_empty_prefix_creation {
+            Ok(RepositoryCreation::RefusedEmptyPrefix)
+        } else {
+            Ok(RepositoryCreation::Allowed)
+        }
     }
 
     async fn put_object(
@@ -1261,6 +1282,21 @@ pub fn new_s3_storage(
     credentials: Option<S3Credentials>,
     legacy_rooted_keys: Option<bool>,
 ) -> StorageResult<Arc<dyn Storage + Send + Sync>> {
+    Ok(Arc::new(s3_storage(config, bucket, prefix, credentials, legacy_rooted_keys)?))
+}
+
+/// Build storage for an S3 (or S3-compatible, non-Tigris) bucket.
+///
+/// For `legacy_rooted_keys`, see [`S3Storage::new`]: `None` auto-detects the key
+/// layout (the usual choice), `Some(true)` forces the legacy leading-slash layout,
+/// and `Some(false)` forces the standard layout.
+pub fn s3_storage(
+    config: S3Options,
+    bucket: String,
+    prefix: Option<String>,
+    credentials: Option<S3Credentials>,
+    legacy_rooted_keys: Option<bool>,
+) -> StorageResult<S3Storage> {
     if let Some(endpoint) = &config.endpoint_url
         && (endpoint.contains("fly.storage.tigris.dev")
             || endpoint.contains("t3.storage.dev"))
@@ -1271,7 +1307,7 @@ pub fn new_s3_storage(
         ));
     }
 
-    let st = S3Storage::new(
+    S3Storage::new(
         config,
         bucket,
         prefix,
@@ -1280,8 +1316,7 @@ pub fn new_s3_storage(
         Vec::new(),
         Vec::new(),
         legacy_rooted_keys,
-    )?;
-    Ok(Arc::new(st))
+    )
 }
 
 /// Build storage for a Cloudflare R2 bucket.
@@ -1297,6 +1332,29 @@ pub fn new_r2_storage(
     credentials: Option<S3Credentials>,
     legacy_rooted_keys: Option<bool>,
 ) -> StorageResult<Arc<dyn Storage + Send + Sync>> {
+    Ok(Arc::new(r2_storage(
+        config,
+        bucket,
+        prefix,
+        account_id,
+        credentials,
+        legacy_rooted_keys,
+    )?))
+}
+
+/// Build storage for a Cloudflare R2 bucket.
+///
+/// For `legacy_rooted_keys`, see [`S3Storage::new`]: `None` auto-detects the key
+/// layout (the usual choice), `Some(true)` forces the legacy leading-slash layout,
+/// and `Some(false)` forces the standard layout.
+pub fn r2_storage(
+    config: S3Options,
+    bucket: Option<String>,
+    prefix: Option<String>,
+    account_id: Option<String>,
+    credentials: Option<S3Credentials>,
+    legacy_rooted_keys: Option<bool>,
+) -> StorageResult<S3Storage> {
     let (bucket, prefix) = match (bucket, prefix) {
         (Some(bucket), Some(prefix)) => (bucket, Some(prefix)),
         (None, Some(prefix)) => match prefix.split_once("/") {
@@ -1328,7 +1386,7 @@ pub fn new_r2_storage(
             account_id.map(|x| format!("https://{x}.r2.cloudflarestorage.com"));
     }
     config.force_path_style = true;
-    let st = S3Storage::new(
+    S3Storage::new(
         config,
         bucket,
         prefix,
@@ -1337,8 +1395,7 @@ pub fn new_r2_storage(
         Vec::new(),
         Vec::new(),
         legacy_rooted_keys,
-    )?;
-    Ok(Arc::new(st))
+    )
 }
 
 /// Build storage for a Tigris bucket.
@@ -1354,6 +1411,29 @@ pub fn new_tigris_storage(
     use_weak_consistency: bool,
     legacy_rooted_keys: Option<bool>,
 ) -> StorageResult<Arc<dyn Storage + Send + Sync>> {
+    Ok(Arc::new(tigris_storage(
+        config,
+        bucket,
+        prefix,
+        credentials,
+        use_weak_consistency,
+        legacy_rooted_keys,
+    )?))
+}
+
+/// Build storage for a Tigris bucket.
+///
+/// For `legacy_rooted_keys`, see [`S3Storage::new`]: `None` auto-detects the key
+/// layout (the usual choice), `Some(true)` forces the legacy leading-slash layout,
+/// and `Some(false)` forces the standard layout.
+pub fn tigris_storage(
+    config: S3Options,
+    bucket: String,
+    prefix: Option<String>,
+    credentials: Option<S3Credentials>,
+    use_weak_consistency: bool,
+    legacy_rooted_keys: Option<bool>,
+) -> StorageResult<S3Storage> {
     let mut config = config;
     if config.endpoint_url.is_none() {
         config.endpoint_url = Some("https://t3.storage.dev".to_string());
@@ -1378,7 +1458,7 @@ pub fn new_tigris_storage(
             return Err(other_error("Tigris storage requires a region to provide full consistency. Either set the region for the bucket or use the read-only, eventually consistent storage by passing `use_weak_consistency=True` (experts only)".to_string()));
         }
     }
-    let st = S3Storage::new(
+    S3Storage::new(
         config,
         bucket,
         prefix,
@@ -1387,8 +1467,7 @@ pub fn new_tigris_storage(
         extra_read_headers,
         extra_write_headers,
         legacy_rooted_keys,
-    )?;
-    Ok(Arc::new(st))
+    )
 }
 
 #[cfg(test)]

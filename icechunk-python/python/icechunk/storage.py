@@ -207,7 +207,11 @@ def s3_storage(
     bucket: str
         The bucket where the repository will store its data
     prefix: str | None
-        The prefix within the bucket that is the root directory of the repository
+        The prefix within the bucket that is the root directory of the repository.
+        An empty or ``None`` prefix points at the bucket root. Creating a
+        repository at the bucket root is not supported in modern Icechunk
+        versions; existing bucket-root repositories can still be opened and
+        updated.
     region: str | None
         The region to use in the object store, if `None` a default region will be used
     endpoint_url: str | None
@@ -348,7 +352,11 @@ def tigris_storage(
     bucket: str
         The bucket where the repository will store its data
     prefix: str | None
-        The prefix within the bucket that is the root directory of the repository
+        The prefix within the bucket that is the root directory of the repository.
+        An empty or ``None`` prefix points at the bucket root. Creating a
+        repository at the bucket root is not supported in modern Icechunk
+        versions; existing bucket-root repositories can still be opened and
+        updated.
     region: str | None
         The region to use in the object store, if `None` a default region will be used
     endpoint_url: str | None
@@ -443,7 +451,11 @@ def r2_storage(
     bucket: str | None
         The bucket name
     prefix: str | None
-        The prefix within the bucket that is the root directory of the repository
+        The prefix within the bucket that is the root directory of the repository.
+        An empty or ``None`` prefix points at the bucket root. Creating a
+        repository at the bucket root is not supported in modern Icechunk
+        versions; existing bucket-root repositories can still be opened and
+        updated.
     account_id: str | None
         Cloudflare account ID. When provided, a default endpoint URL is constructed as
         `https://<ACCOUNT_ID>.r2.cloudflarestorage.com`. If not provided, `endpoint_url`
@@ -545,7 +557,11 @@ def gcs_storage(
     bucket: str
         The bucket where the repository will store its data
     prefix: str | None
-        The prefix within the bucket that is the root directory of the repository
+        The prefix within the bucket that is the root directory of the repository.
+        An empty or ``None`` prefix points at the bucket root. Creating a
+        repository at the bucket root is not supported in modern Icechunk
+        versions; existing bucket-root repositories can still be opened and
+        updated.
     service_account_file: str | None
         The path to the service account file
     service_account_key: str | None
@@ -625,7 +641,10 @@ def azure_storage(
     container: str
         The container where the repository will store its data
     prefix: str
-        The prefix within the container that is the root directory of the repository
+        The prefix within the container that is the root directory of the repository.
+        An empty prefix points at the container root. Creating a repository at the
+        container root is not supported in modern Icechunk versions; existing
+        container-root repositories can still be opened and updated.
     access_key: str | None
         Azure Blob Storage credential access key
     sas_token: str | None

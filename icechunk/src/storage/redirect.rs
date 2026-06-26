@@ -28,8 +28,9 @@ use icechunk_storage::sealed;
 use icechunk_types::ICResultExt as _;
 
 use super::{
-    DeleteObjectsResult, GetModifiedResult, ListInfo, Settings, Storage, StorageError,
-    StorageInfo, StorageResult, VersionInfo, VersionedUpdateResult,
+    DeleteObjectsResult, GetModifiedResult, ListInfo, RepositoryCreation, Settings,
+    Storage, StorageError, StorageInfo, StorageResult, VersionInfo,
+    VersionedUpdateResult,
 };
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -319,6 +320,10 @@ impl Storage for RedirectStorage {
 
     async fn can_write(&self) -> StorageResult<bool> {
         self.backend().await?.can_write().await
+    }
+
+    async fn can_create_repository(&self) -> StorageResult<RepositoryCreation> {
+        self.backend().await?.can_create_repository().await
     }
 
     async fn default_settings(&self) -> StorageResult<Settings> {

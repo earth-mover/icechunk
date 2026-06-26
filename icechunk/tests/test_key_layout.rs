@@ -22,11 +22,10 @@ use icechunk::{
         ByteRange, ChunkIndices, Path, format_constants::SpecVersionBin,
         snapshot::ArrayShape,
     },
-    new_s3_storage,
     ops::gc::{GCConfig, garbage_collect},
     repository::{RepositoryError, RepositoryErrorKind, VersionInfo},
     session::get_chunk,
-    storage::{Settings, mk_client},
+    storage::{Settings, mk_client, s3_storage},
 };
 use icechunk_macros::tokio_test;
 
@@ -61,14 +60,19 @@ fn root_storage(
     prefix: Option<&str>,
     legacy_rooted_keys: bool,
 ) -> Arc<dyn Storage + Send + Sync> {
-    new_s3_storage(
-        rustfs_options(),
-        bucket.to_string(),
-        prefix.map(str::to_string),
-        Some(root_credentials()),
-        legacy_rooted_keys.then_some(true),
+    // These tests deliberately create empty-prefix (bucket-root) repos, which is
+    // normally refused, so apply the escape hatch before erasing the type.
+    Arc::new(
+        s3_storage(
+            rustfs_options(),
+            bucket.to_string(),
+            prefix.map(str::to_string),
+            Some(root_credentials()),
+            legacy_rooted_keys.then_some(true),
+        )
+        .unwrap()
+        .unsafe_allow_empty_prefix_creation(),
     )
-    .unwrap()
 }
 
 const MINIO_ENDPOINT: &str = "http://localhost:4202";
@@ -86,14 +90,19 @@ fn minio_credentials() -> S3Credentials {
 }
 
 fn minio_storage(bucket: &str, prefix: Option<&str>) -> Arc<dyn Storage + Send + Sync> {
-    new_s3_storage(
-        minio_options(),
-        bucket.to_string(),
-        prefix.map(str::to_string),
-        Some(minio_credentials()),
-        None,
+    // These tests deliberately create empty-prefix (bucket-root) repos, which is
+    // normally refused, so apply the escape hatch before erasing the type.
+    Arc::new(
+        s3_storage(
+            minio_options(),
+            bucket.to_string(),
+            prefix.map(str::to_string),
+            Some(minio_credentials()),
+            None,
+        )
+        .unwrap()
+        .unsafe_allow_empty_prefix_creation(),
     )
-    .unwrap()
 }
 
 /// Create a fresh, uniquely named bucket and return its name.

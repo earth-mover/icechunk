@@ -129,6 +129,10 @@ pub enum RepositoryErrorKind {
     Tag(String),
     #[error("repositories can only be created in clean prefixes")]
     ParentDirectoryNotClean,
+    #[error(
+        "creating a repository at an empty prefix (the object store bucket root) is not supported in modern Icechunk versions; use a non-empty prefix. Existing empty-prefix repositories can still be opened and updated."
+    )]
+    EmptyPrefixCreation,
     #[error("the repository doesn't exist")]
     RepositoryDoesntExist,
     #[error("error in repository serialization")]
@@ -210,6 +214,13 @@ impl Repository {
     ) -> RepositoryResult<Self> {
         debug!("Creating Repository");
         raise_if_cant_write(storage.as_ref(), "Cannot create repository").await?;
+        if storage.can_create_repository().await.inject()?
+            == storage::RepositoryCreation::RefusedEmptyPrefix
+        {
+            return Err(RepositoryError::capture(
+                RepositoryErrorKind::EmptyPrefixCreation,
+            ));
+        }
         storage.create_location_if_needed().await.inject()?;
 
         let has_overriden_config = match config {
