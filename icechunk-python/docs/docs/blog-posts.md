@@ -9,6 +9,36 @@ A curated list of blog posts about Icechunk.
 
 <div class="grid cards" markdown>
 
+-   [![Icechunk Adopted by the National Weather Service](https://earthmover.io/images/blog/covers/icechunk-at-nws-cirrus.jpg){ loading=lazy }](https://www.earthmover.io/blog/icechunk-at-nws-cirrus)
+
+    **[Icechunk Adopted by the National Weather Service: Earthmover Joins Booz Allen on NWS CIRRUS](https://www.earthmover.io/blog/icechunk-at-nws-cirrus)**
+
+    *June 4, 2026* — Icechunk will serve as a core data format for NWS CIRRUS, NOAA's new cloud-based operational data platform for the National Weather Service.
+
+-   [![Old format, no problem!](https://earthmover.io/images/blog/covers/virtual-zarr.jpg){ loading=lazy }](https://www.earthmover.io/blog/virtual-zarr)
+
+    **[Old format, no problem! Cloud-optimizing the GOES-16 archive as Virtual Zarr](https://www.earthmover.io/blog/virtual-zarr)**
+
+    *June 2, 2026* — Using VirtualiZarr and Icechunk to expose a massive archive of GOES-16 satellite imagery as a single cloud-optimized Zarr store, without copying any data.
+
+-   [![Ship fast, break nothing, part 3](https://earthmover.io/images/blog/covers/icechunk-rigor-compat.png){ loading=lazy }](https://www.earthmover.io/blog/engineering-rigor-in-icechunk-part-3)
+
+    **[Ship fast, break nothing: Engineering rigor in Icechunk with cross-version stateful compatibility testing](https://www.earthmover.io/blog/engineering-rigor-in-icechunk-part-3)**
+
+    *May 21, 2026* — Using `third-wheel` and Hypothesis to interleave Icechunk 1.x and 2.x in a single stateful test, and the bugs that fell out.
+
+-   [![Variable length chunks in Zarr](https://earthmover.io/images/blog/covers/zarr-variable-length-chunks.svg){ loading=lazy }](https://www.earthmover.io/blog/zarr-variable-length-chunks)
+
+    **[Variable length chunks in Zarr](https://www.earthmover.io/blog/zarr-variable-length-chunks)**
+
+    *May 5, 2026* — A new Zarr extension, the rectilinear chunk grid, lets you align chunk boundaries with the natural structure of your data instead of forcing a regular grid.
+
+-   [![Ship fast, break nothing, part 2](https://earthmover.io/images/blog/covers/icechunk-toxiproxy.png){ loading=lazy }](https://www.earthmover.io/blog/engineering-rigor-in-icechunk-concurrency-fault-injection)
+
+    **[Ship fast, break nothing: Engineering rigor in Icechunk with concurrency & fault injection testing](https://www.earthmover.io/blog/engineering-rigor-in-icechunk-concurrency-fault-injection)**
+
+    *April 28, 2026* — Concurrency permutation testing with `shuttle` and fault injection with `toxiproxy` to harden Icechunk 2.
+
 -   [![Designing a data pipeline for our highest-resolution dataset yet](./assets/blog/carbonplan-producing-ocr-data.png){ loading=lazy }](https://carbonplan.org/blog/producing-ocr-data)
 
     **[Designing a data pipeline for our highest-resolution dataset yet](https://carbonplan.org/blog/producing-ocr-data)**
