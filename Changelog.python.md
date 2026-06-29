@@ -1,6 +1,6 @@
 # Changelog
 
-## Python Icechunk Library 2.1.0 [unreleased]
+## Python Icechunk Library 2.1.0
 
 This release introduces on-disk [spec version 2.1](https://icechunk.io/en/stable/reference/spec-v2-1/), an additive change that is forward- and backward-compatible with spec 2.0.
 
