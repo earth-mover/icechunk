@@ -211,7 +211,7 @@ impl RealStore {
     }
 }
 
-/// `None` when the AWS env vars are not set (so the caller can skip).
+/// `None` when the AWS env vars are not set.
 pub(crate) fn aws_real_store() -> Option<RealStore> {
     let bucket = env::var("AWS_BUCKET").ok().filter(|s| !s.is_empty())?;
     Some(RealStore {

@@ -4,11 +4,6 @@
 //! object under a leading slash (`/chunks/...`); external tools 404'd and GC
 //! silently orphaned objects (delete used a different join than write). These
 //! tests verify the fix against local rustfs.
-//!
-//! ## Why no live `LegacyRoot` round-trip here
-//!
-//! Empty-prefix repositories live at the bucket root, so each test uses its own
-//! freshly created bucket (via rustfs root credentials) for isolation.
 
 use std::{
     collections::HashMap,
@@ -137,6 +132,7 @@ async fn raw_keys(bucket: &str) -> Vec<String> {
         &Settings::default(),
     )
     .await;
+    // we have only a few objects, first page of results is enough
     let resp =
         client.list_objects_v2().bucket(bucket).send().await.expect("list_objects_v2");
     resp.contents().iter().filter_map(|o| o.key().map(str::to_string)).collect()
@@ -273,34 +269,37 @@ async fn empty_prefix_roundtrips_on_normalizing_store()
     Ok(())
 }
 
-/// `create` over a bucket that already holds an empty-prefix repo must refuse.
+/// `create` over a bucket that already holds an empty-prefix repo must refuse,
+/// across every combination of the existing and new repo's spec versions.
 #[tokio_test]
 async fn empty_prefix_create_refuses_over_existing_repo()
 -> Result<(), Box<dyn std::error::Error>> {
-    let bucket = fresh_bucket().await;
-    create_repo_with_one_chunk(
-        root_storage(&bucket, Some(""), false),
-        SpecVersionBin::V2,
-        1,
-    )
-    .await?;
+    use SpecVersionBin::{V1, V2};
+    for (existing, new) in [(V1, V1), (V1, V2), (V2, V1), (V2, V2)] {
+        let bucket = fresh_bucket().await;
+        create_repo_with_one_chunk(root_storage(&bucket, Some(""), false), existing, 1)
+            .await?;
 
-    let err = Repository::create(
-        None,
-        root_storage(&bucket, Some(""), false),
-        HashMap::new(),
-        Some(SpecVersionBin::V2),
-        true,
-    )
-    .await
-    .unwrap_err();
-    assert!(
-        matches!(
-            err,
-            RepositoryError { kind: RepositoryErrorKind::ParentDirectoryNotClean, .. }
-        ),
-        "expected ParentDirectoryNotClean, got {err:?}"
-    );
+        let err = Repository::create(
+            None,
+            root_storage(&bucket, Some(""), false),
+            HashMap::new(),
+            Some(new),
+            true,
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(
+                err,
+                RepositoryError {
+                    kind: RepositoryErrorKind::ParentDirectoryNotClean,
+                    ..
+                }
+            ),
+            "expected ParentDirectoryNotClean for {existing:?} -> {new:?}, got {err:?}"
+        );
+    }
     Ok(())
 }
 
@@ -443,28 +442,22 @@ async fn rooted_roundtrip_body(
 #[tokio_test]
 #[ignore = "needs credentials from env"]
 async fn rooted_roundtrip_in_aws() -> Result<(), Box<dyn std::error::Error>> {
-    if let Some(store) = common::aws_real_store() {
-        do_rooted_roundtrip(store).await?;
-    }
-    Ok(())
+    let store = common::aws_real_store().expect("AWS_* env vars must be set");
+    do_rooted_roundtrip(store).await
 }
 
 #[tokio_test]
 #[ignore = "needs credentials from env"]
 async fn rooted_roundtrip_in_r2() -> Result<(), Box<dyn std::error::Error>> {
-    if let Some(store) = common::r2_real_store() {
-        do_rooted_roundtrip(store).await?;
-    }
-    Ok(())
+    let store = common::r2_real_store().expect("R2_* env vars must be set");
+    do_rooted_roundtrip(store).await
 }
 
 #[tokio_test]
 #[ignore = "needs credentials from env"]
 async fn rooted_roundtrip_in_tigris() -> Result<(), Box<dyn std::error::Error>> {
-    if let Some(store) = common::tigris_real_store() {
-        do_rooted_roundtrip(store).await?;
-    }
-    Ok(())
+    let store = common::tigris_real_store().expect("TIGRIS_* env vars must be set");
+    do_rooted_roundtrip(store).await
 }
 
 // These run only against real S3/R2/Tigris (hence `#[ignore]` + credentials), never

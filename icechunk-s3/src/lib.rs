@@ -79,7 +79,7 @@ pub enum KeyLayout {
 ///
 /// It's awful to have to have this tacit dependency here, this is icechunk-format stuff.
 /// But... reality hits you hard. I don't want an explicit dependency between the crates
-/// but there are some tests that verify these strings are "right".
+/// but there are some tests in `icechunk/src/refs.rs` that verify these strings are "right".
 pub const DEFAULT_LAYOUT_ANCHORS: &[&str] = &["repo", "refs/branch.main/ref.json"];
 
 /// Serializes the resolved [`KeyLayout`] as `Option<KeyLayout>`.
@@ -445,6 +445,13 @@ impl S3Storage {
             KeyLayout::Standard if self.prefix.is_empty() => relpath.to_string(),
             KeyLayout::Standard => format!("{}/{}", self.prefix, relpath),
         }
+    }
+
+    /// Key prefix to list. Strips one leading `/` from the relpath so it
+    /// doesn't double against the join (S3 matches `//` literally).
+    /// An interior `//` is left intact.
+    fn list_prefix(&self, layout: KeyLayout, relpath: &str) -> String {
+        self.key_for(layout, relpath.strip_prefix('/').unwrap_or(relpath))
     }
 
     /// Resolve this repository's [`KeyLayout`], probing storage at most once.
@@ -888,12 +895,7 @@ impl Storage for S3Storage {
         prefix: &str,
     ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
         let layout = self.layout(settings).await?;
-        // The caller-supplied prefix can carry a leading `/` — e.g. someone
-        // inspecting a legacy rooted repo (whose raw keys look like `/chunks/...`)
-        // through the public `list_objects` API. `key_for` then doubles it against
-        // LegacyRoot's synthesized `/` or Standard's `{prefix}/{relpath}` join, and
-        // S3 matches `//` literally (so the listing would hit nothing). Collapse it.
-        let prefix = self.key_for(layout, prefix).replace("//", "/");
+        let prefix = self.list_prefix(layout, prefix);
         let mut req = self
             .get_client(settings)
             .await
@@ -1480,6 +1482,27 @@ mod tests {
                 from_empty.key_for(KeyLayout::Standard, relpath),
             );
         }
+    }
+
+    /// A leading slash on the relpath is collapsed at the join, but an interior
+    /// `//` is preserved
+    #[test]
+    fn test_list_prefix() {
+        // leading slash stripped for each layout
+        let s = storage_with_prefix(Some("foo"), false);
+        assert_eq!(s.list_prefix(KeyLayout::Standard, "/chunks"), "foo/chunks");
+        let s = storage_with_prefix(Some(""), false);
+        assert_eq!(s.list_prefix(KeyLayout::Standard, "/chunks"), "chunks");
+        let s = storage_with_prefix(Some(""), true);
+        assert_eq!(s.list_prefix(KeyLayout::LegacyRoot, "/chunks"), "/chunks");
+
+        // interior `//` is preserved, matching `key_for`
+        let s = storage_with_prefix(Some("a//b"), false);
+        assert_eq!(s.list_prefix(KeyLayout::Standard, "chunks/x"), "a//b/chunks/x");
+        assert_eq!(
+            s.list_prefix(KeyLayout::Standard, "chunks/x"),
+            s.key_for(KeyLayout::Standard, "chunks/x"),
+        );
     }
 
     /// `LegacyRoot` reproduces the exact pre-#2239 buggy layout, so we can keep
