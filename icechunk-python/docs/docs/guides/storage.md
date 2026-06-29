@@ -397,3 +397,15 @@ While it should never be used for production data, Icechunk can also be used wit
 ```python
 icechunk.in_memory_storage()
 ```
+
+### Empty prefix and legacy repositories
+
+Creating a repository at an empty `prefix` (`None` or `""`) — i.e. at the bucket root — is not supported on object stores since Icechunk v2.1.0 and raises an error; use a non-empty `prefix`. In-memory and local-filesystem storage are unaffected.
+
+Existing empty-prefix repositories can still be **opened and updated**: Icechunk detects their on-disk layout automatically, so no action is needed to keep using them.
+
+When opening, the `legacy_rooted_keys` parameter overrides that detection:
+
+- `None` (default) — auto-detect the layout by probing storage. Use this unless you have a specific reason not to.
+- `True` — force the legacy leading-slash layout, skipping the probe (for example, for a write-only worker that cannot probe storage). Only valid with an empty prefix.
+- `False` — force the standard layout, skipping the probe. Users shouldn't need to pass this value.

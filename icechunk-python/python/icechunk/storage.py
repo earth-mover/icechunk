@@ -198,6 +198,7 @@ def s3_storage(
     network_stream_timeout_seconds: int = 60,
     requester_pays: bool = False,
     checksum_algorithm: ChecksumAlgorithm | None = None,
+    legacy_rooted_keys: bool | None = None,
 ) -> Storage:
     """Create a Storage instance that saves data in S3 or S3 compatible object stores.
 
@@ -206,7 +207,11 @@ def s3_storage(
     bucket: str
         The bucket where the repository will store its data
     prefix: str | None
-        The prefix within the bucket that is the root directory of the repository
+        The prefix within the bucket that is the root directory of the repository.
+        An empty or ``None`` prefix points at the bucket root. Creating a
+        repository at the bucket root is not supported in modern Icechunk
+        versions; existing bucket-root repositories can still be opened and
+        updated.
     region: str | None
         The region to use in the object store, if `None` a default region will be used
     endpoint_url: str | None
@@ -245,6 +250,11 @@ def s3_storage(
         UploadPart, DeleteObjects). When ``None`` (default) the AWS SDK picks
         its own default. Set explicitly when targeting an S3-compatible service
         that rejects the SDK's default.
+    legacy_rooted_keys: bool | None
+        The object key layout. ``None`` (default) detects it automatically and is
+        what most users will want; only set it explicitly if you have a special
+        situation and know what you're doing. ``True`` forces the old leading-slash
+        layout (empty prefix only); ``False`` forces the standard one.
     """
 
     credentials = s3_credentials(
@@ -272,6 +282,7 @@ def s3_storage(
         bucket=bucket,
         prefix=prefix,
         credentials=credentials,
+        legacy_rooted_keys=legacy_rooted_keys,
     )
 
 
@@ -332,6 +343,7 @@ def tigris_storage(
     scatter_initial_credentials: bool = False,
     network_stream_timeout_seconds: int = 60,
     checksum_algorithm: ChecksumAlgorithm | None = None,
+    legacy_rooted_keys: bool | None = None,
 ) -> Storage:
     """Create a Storage instance that saves data in Tigris object store.
 
@@ -340,7 +352,11 @@ def tigris_storage(
     bucket: str
         The bucket where the repository will store its data
     prefix: str | None
-        The prefix within the bucket that is the root directory of the repository
+        The prefix within the bucket that is the root directory of the repository.
+        An empty or ``None`` prefix points at the bucket root. Creating a
+        repository at the bucket root is not supported in modern Icechunk
+        versions; existing bucket-root repositories can still be opened and
+        updated.
     region: str | None
         The region to use in the object store, if `None` a default region will be used
     endpoint_url: str | None
@@ -374,6 +390,11 @@ def tigris_storage(
     network_stream_timeout_seconds: int
         Timeout requests if no bytes can be transmitted during this period of time.
         If set to 0, timeout is disabled. Default: 60.
+    legacy_rooted_keys: bool | None
+        The object key layout. ``None`` (default) detects it automatically and is
+        what most users will want; only set it explicitly if you have a special
+        situation and know what you're doing. ``True`` forces the old leading-slash
+        layout (empty prefix only); ``False`` forces the standard one.
     """
     credentials = s3_credentials(
         access_key_id=access_key_id,
@@ -399,6 +420,7 @@ def tigris_storage(
         prefix=prefix,
         use_weak_consistency=use_weak_consistency,
         credentials=credentials,
+        legacy_rooted_keys=legacy_rooted_keys,
     )
 
 
@@ -420,15 +442,20 @@ def r2_storage(
     scatter_initial_credentials: bool = False,
     network_stream_timeout_seconds: int = 60,
     checksum_algorithm: ChecksumAlgorithm | None = None,
+    legacy_rooted_keys: bool | None = None,
 ) -> Storage:
-    """Create a Storage instance that saves data in Tigris object store.
+    """Create a Storage instance that saves data in R2 object store.
 
     Parameters
     ----------
     bucket: str | None
         The bucket name
     prefix: str | None
-        The prefix within the bucket that is the root directory of the repository
+        The prefix within the bucket that is the root directory of the repository.
+        An empty or ``None`` prefix points at the bucket root. Creating a
+        repository at the bucket root is not supported in modern Icechunk
+        versions; existing bucket-root repositories can still be opened and
+        updated.
     account_id: str | None
         Cloudflare account ID. When provided, a default endpoint URL is constructed as
         `https://<ACCOUNT_ID>.r2.cloudflarestorage.com`. If not provided, `endpoint_url`
@@ -462,6 +489,11 @@ def r2_storage(
     network_stream_timeout_seconds: int
         Timeout requests if no bytes can be transmitted during this period of time.
         If set to 0, timeout is disabled. Default: 60.
+    legacy_rooted_keys: bool | None
+        The object key layout. ``None`` (default) detects it automatically and is
+        what most users will want; only set it explicitly if you have a special
+        situation and know what you're doing. ``True`` forces the old leading-slash
+        layout (empty prefix only); ``False`` forces the standard one.
     """
     credentials = s3_credentials(
         access_key_id=access_key_id,
@@ -487,6 +519,7 @@ def r2_storage(
         prefix=prefix,
         account_id=account_id,
         credentials=credentials,
+        legacy_rooted_keys=legacy_rooted_keys,
     )
 
 
@@ -524,7 +557,11 @@ def gcs_storage(
     bucket: str
         The bucket where the repository will store its data
     prefix: str | None
-        The prefix within the bucket that is the root directory of the repository
+        The prefix within the bucket that is the root directory of the repository.
+        An empty or ``None`` prefix points at the bucket root. Creating a
+        repository at the bucket root is not supported in modern Icechunk
+        versions; existing bucket-root repositories can still be opened and
+        updated.
     service_account_file: str | None
         The path to the service account file
     service_account_key: str | None
@@ -604,7 +641,10 @@ def azure_storage(
     container: str
         The container where the repository will store its data
     prefix: str
-        The prefix within the container that is the root directory of the repository
+        The prefix within the container that is the root directory of the repository.
+        An empty prefix points at the container root. Creating a repository at the
+        container root is not supported in modern Icechunk versions; existing
+        container-root repositories can still be opened and updated.
     access_key: str | None
         Azure Blob Storage credential access key
     sas_token: str | None

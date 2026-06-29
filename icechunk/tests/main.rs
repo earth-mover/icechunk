@@ -10,6 +10,7 @@ mod test_concurrency;
 mod test_distributed_writes;
 mod test_flaky_connections;
 mod test_gc;
+mod test_key_layout;
 #[cfg(feature = "shuttle")]
 mod test_shuttle;
 mod test_stats;

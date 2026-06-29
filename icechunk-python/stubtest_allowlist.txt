@@ -63,6 +63,10 @@ icechunk._icechunk_python.Credentials.Azure.__new__
 icechunk._icechunk_python.Credentials.Gcs
 icechunk._icechunk_python.Credentials.Gcs.__match_args__
 icechunk._icechunk_python.Credentials.Gcs.__new__
+icechunk._icechunk_python.Credentials.HttpAccess
+icechunk._icechunk_python.Credentials.HttpAccess.__match_args__
+icechunk._icechunk_python.Credentials.LocalFileSystemAccess
+icechunk._icechunk_python.Credentials.LocalFileSystemAccess.__match_args__
 icechunk._icechunk_python.Credentials.S3
 icechunk._icechunk_python.Credentials.S3.__match_args__
 icechunk._icechunk_python.Credentials.S3.__new__

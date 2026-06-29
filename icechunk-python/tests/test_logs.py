@@ -1,5 +1,7 @@
 import os
 import re
+import subprocess
+import sys
 from unittest import mock
 
 from pytest import CaptureFixture
@@ -17,7 +19,9 @@ def test_debug_logs_from_environment(
         storage=ic.in_memory_storage(),
         spec_version=any_spec_version,
     )
-    assert "Creating Repository" in capfd.readouterr().out
+    captured = capfd.readouterr()
+    assert "Creating Repository" in captured.err
+    assert "Creating Repository" not in captured.out
 
 
 @mock.patch.dict(os.environ, clear=True)
@@ -29,7 +33,7 @@ def test_no_logs_from_environment(
         storage=ic.in_memory_storage(),
         spec_version=any_spec_version,
     )
-    assert capfd.readouterr().out == ""
+    assert capfd.readouterr().err == ""
 
 
 @mock.patch.dict(os.environ, clear=True)
@@ -42,7 +46,7 @@ def test_change_log_levels_from_env(
         storage=ic.in_memory_storage(),
         spec_version=any_spec_version,
     )
-    assert capfd.readouterr().out == ""
+    assert capfd.readouterr().err == ""
 
     # now with logs enabled
     with mock.patch.dict(os.environ, {"ICECHUNK_LOG": "debug"}, clear=True):
@@ -51,7 +55,7 @@ def test_change_log_levels_from_env(
             storage=ic.in_memory_storage(),
             spec_version=any_spec_version,
         )
-        assert "Creating Repository" in capfd.readouterr().out
+        assert "Creating Repository" in capfd.readouterr().err
 
 
 def test_debug_logs_from_argument(
@@ -62,7 +66,7 @@ def test_debug_logs_from_argument(
         storage=ic.in_memory_storage(),
         spec_version=any_spec_version,
     )
-    assert "Creating Repository" in capfd.readouterr().out
+    assert "Creating Repository" in capfd.readouterr().err
     ic.set_logs_filter(None)
 
 
@@ -75,7 +79,7 @@ def test_no_logs_from_argument(
         storage=ic.in_memory_storage(),
         spec_version=any_spec_version,
     )
-    assert capfd.readouterr().out == ""
+    assert capfd.readouterr().err == ""
     ic.set_logs_filter(None)
 
 
@@ -88,7 +92,7 @@ def test_change_log_levels_from_argument(
         storage=ic.in_memory_storage(),
         spec_version=any_spec_version,
     )
-    assert capfd.readouterr().out == ""
+    assert capfd.readouterr().err == ""
 
     # now with logs enabled
     ic.set_logs_filter("debug")
@@ -96,8 +100,40 @@ def test_change_log_levels_from_argument(
         storage=ic.in_memory_storage(),
         spec_version=any_spec_version,
     )
-    assert "Creating Repository" in capfd.readouterr().out
+    assert "Creating Repository" in capfd.readouterr().err
     ic.set_logs_filter(None)
+
+
+# The console writer is fixed when logging is first initialized (at `import
+# icechunk`), so the stdout/stderr routing can only be exercised in a fresh
+# interpreter with the environment set before the import.
+LOG_SNIPPET = (
+    "import icechunk as ic\nic.Repository.create(storage=ic.in_memory_storage())\n"
+)
+
+
+def run_logging_subprocess(
+    extra_env: dict[str, str],
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, "-c", LOG_SNIPPET],
+        capture_output=True,
+        text=True,
+        env={**os.environ, "ICECHUNK_LOG": "debug", **extra_env},
+        check=True,
+    )
+
+
+def test_logs_go_to_stderr_by_default() -> None:
+    result = run_logging_subprocess({})
+    assert "Creating Repository" in result.stderr
+    assert "Creating Repository" not in result.stdout
+
+
+def test_logs_go_to_stdout_when_requested() -> None:
+    result = run_logging_subprocess({"ICECHUNK_LOG_TO_STDOUT": "1"})
+    assert "Creating Repository" in result.stdout
+    assert "Creating Repository" not in result.stderr
 
 
 def test_warn_on_small_caches(
@@ -137,14 +173,14 @@ def test_warn_on_small_caches(
     array2[:] = 42
     session.commit("msg")
 
-    out = capfd.readouterr().out
+    err = capfd.readouterr().err
     # we only warn once for manifests and once for snapshots
-    assert len(re.findall("WARN", out)) == 2
+    assert len(re.findall("WARN", err)) == 2
 
-    assert re.search("5 chunk references", out)
-    assert re.search("keep 0 references", out)
-    assert re.search("3 nodes", out)
-    assert re.search("keep 0 nodes", out)
+    assert re.search("5 chunk references", err)
+    assert re.search("keep 0 references", err)
+    assert re.search("3 nodes", err)
+    assert re.search("keep 0 nodes", err)
     ic.set_logs_filter(None)
 
 

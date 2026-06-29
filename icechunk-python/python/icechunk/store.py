@@ -1,10 +1,10 @@
-from collections.abc import AsyncIterator, Iterable
+from collections.abc import Iterable
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
 
-from icechunk._icechunk_python import PyStore, VirtualChunkSpec
+from icechunk._icechunk_python import AsyncCloseableIterator, PyStore, VirtualChunkSpec
 
 __all__ = [
     "IcechunkStore",
@@ -279,7 +279,7 @@ class IcechunkStore(Store, SyncMixin):
         self,
         array_path: str,
         batch_size: int = 100_000,
-    ) -> AsyncIterator[
+    ) -> AsyncCloseableIterator[
         tuple[
             "np.ndarray[tuple[int, int], np.dtype[np.uint32]]",  # coords (n, ndim)
             "np.ndarray[tuple[int], np.dtype[np.uint8]]",  # kinds (n,)
@@ -289,7 +289,7 @@ class IcechunkStore(Store, SyncMixin):
             dict[int, bytes],  # inlined
         ]
     ]:
-        """Async generator yielding columnar batches of chunk references for one array.
+        """Async iterator yielding columnar batches of chunk references for one array.
 
         Each batch is a 6-tuple; row ``i`` across the columns describes one
         chunk (columns are aligned in lock-step)::
@@ -614,12 +614,12 @@ class IcechunkStore(Store, SyncMixin):
     def supports_deletes(self) -> bool:
         return self._store.supports_deletes
 
-    def list(self) -> AsyncIterator[str]:
+    def list(self) -> AsyncCloseableIterator[str]:
         """Retrieve all keys in the store.
 
         Returns
         -------
-        AsyncIterator[str, None]
+        AsyncCloseableIterator[str]
         """
         # This method should be async, like overridden methods in child classes.
         # However, that's not straightforward:
@@ -630,7 +630,7 @@ class IcechunkStore(Store, SyncMixin):
         # wrap the async method in a sync method.
         return self._store.list()
 
-    def list_prefix(self, prefix: str) -> AsyncIterator[str]:
+    def list_prefix(self, prefix: str) -> AsyncCloseableIterator[str]:
         """Retrieve all keys in the store that begin with a given prefix. Keys are returned relative
         to the root of the store.
 
@@ -640,14 +640,14 @@ class IcechunkStore(Store, SyncMixin):
 
         Returns
         -------
-        AsyncIterator[str, None]
+        AsyncCloseableIterator[str]
         """
         # The zarr spec specefies that that this and other
         # listing methods should not be async, so we need to
         # wrap the async method in a sync method.
         return self._store.list_prefix(prefix)
 
-    def list_dir(self, prefix: str) -> AsyncIterator[str]:
+    def list_dir(self, prefix: str) -> AsyncCloseableIterator[str]:
         """
         Retrieve all keys and prefixes with a given prefix and which do not contain the character
         “/” after the given prefix.
@@ -658,7 +658,7 @@ class IcechunkStore(Store, SyncMixin):
 
         Returns
         -------
-        AsyncIterator[str, None]
+        AsyncCloseableIterator[str]
         """
         # The zarr spec specefies that that this and other
         # listing methods should not be async, so we need to

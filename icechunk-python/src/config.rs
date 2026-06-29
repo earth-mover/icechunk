@@ -469,6 +469,11 @@ pub enum PyCredentials {
     S3(PyS3Credentials),
     Gcs(PyGcsCredentials),
     Azure(PyAzureCredentials),
+    // Explicit "no credentials required" sentinels for backends that need no
+    // authentication. Surfaced in Python as `LocalFileSystemAccess` / `HttpAccess`,
+    // the explicit replacements for passing `None`.
+    LocalFileSystemAccess(),
+    HttpAccess(),
 }
 
 impl From<PyAzureCredentials> for AzureCredentials {
@@ -496,6 +501,8 @@ impl From<PyCredentials> for Credentials {
             PyCredentials::S3(cred) => Credentials::S3(cred.into()),
             PyCredentials::Gcs(cred) => Credentials::Gcs(cred.into()),
             PyCredentials::Azure(cred) => Credentials::Azure(cred.into()),
+            PyCredentials::LocalFileSystemAccess() => Credentials::LocalFileSystemAccess,
+            PyCredentials::HttpAccess() => Credentials::HttpAccess,
         }
     }
 }
@@ -2866,7 +2873,7 @@ impl PyLatencyStorage {
 
 #[pymethods]
 impl PyStorage {
-    #[pyo3(signature = ( config, bucket, prefix, credentials=None))]
+    #[pyo3(signature = ( config, bucket, prefix, credentials=None, legacy_rooted_keys=None))]
     #[classmethod]
     pub(crate) fn new_s3(
         _cls: &Bound<'_, PyType>,
@@ -2874,12 +2881,14 @@ impl PyStorage {
         bucket: String,
         prefix: Option<String>,
         credentials: Option<PyS3Credentials>,
+        legacy_rooted_keys: Option<bool>,
     ) -> PyResult<Self> {
         let storage = storage::new_s3_storage(
             config.into(),
             bucket,
             prefix,
             credentials.map(|cred| cred.into()),
+            legacy_rooted_keys,
         )
         .map_err(PyIcechunkStoreError::StorageError)?;
 
@@ -2912,7 +2921,7 @@ impl PyStorage {
         })
     }
 
-    #[pyo3(signature = ( config, bucket, prefix, use_weak_consistency, credentials=None))]
+    #[pyo3(signature = ( config, bucket, prefix, use_weak_consistency, credentials=None, legacy_rooted_keys=None))]
     #[classmethod]
     pub(crate) fn new_tigris(
         _cls: &Bound<'_, PyType>,
@@ -2921,6 +2930,7 @@ impl PyStorage {
         prefix: Option<String>,
         use_weak_consistency: bool,
         credentials: Option<PyS3Credentials>,
+        legacy_rooted_keys: Option<bool>,
     ) -> PyResult<Self> {
         let storage = storage::new_tigris_storage(
             config.into(),
@@ -2928,13 +2938,14 @@ impl PyStorage {
             prefix,
             credentials.map(|cred| cred.into()),
             use_weak_consistency,
+            legacy_rooted_keys,
         )
         .map_err(PyIcechunkStoreError::StorageError)?;
 
         Ok(PyStorage(storage))
     }
 
-    #[pyo3(signature = ( config, bucket=None, prefix=None, account_id=None, credentials=None))]
+    #[pyo3(signature = ( config, bucket=None, prefix=None, account_id=None, credentials=None, legacy_rooted_keys=None))]
     #[classmethod]
     pub(crate) fn new_r2(
         _cls: &Bound<'_, PyType>,
@@ -2943,6 +2954,7 @@ impl PyStorage {
         prefix: Option<String>,
         account_id: Option<String>,
         credentials: Option<PyS3Credentials>,
+        legacy_rooted_keys: Option<bool>,
     ) -> PyResult<Self> {
         let storage = storage::new_r2_storage(
             config.into(),
@@ -2950,6 +2962,7 @@ impl PyStorage {
             prefix,
             account_id,
             credentials.map(|cred| cred.into()),
+            legacy_rooted_keys,
         )
         .map_err(PyIcechunkStoreError::StorageError)?;
 

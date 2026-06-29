@@ -282,7 +282,11 @@ The next time this repo is opened, the persisted config will be loaded by defaul
 
 ## Virtual Chunk Credentials
 
-When using virtual chunk containers, the containers must be authorized by the repo user, and the credentials for the storage backend must be specified. This is done using the [`authorize_virtual_chunk_access`](../reference/index.md#icechunk.Repository.open) parameter when creating or opening the repo. Credentials are specified as a dictionary of container url prefixes mapping to credential objects or `None`. A `None` credential will fetch credentials from the process environment or it will use anonymous credentials if the container allows it. A helper function, [`containers_credentials`](../reference/credentials.md#icechunk.credentials.containers_credentials), is provided to make it easier to specify credentials for multiple containers.
+When using virtual chunk containers, the containers must be authorized by the repo user, and the credentials for the storage backend must be specified. This is done using the [`authorize_virtual_chunk_access`](../reference/index.md#icechunk.Repository.open) parameter when creating or opening the repo. Credentials are specified as a dictionary of container url prefixes mapping to explicit credential objects. For cloud backends use the credential types (e.g. `S3Credentials.FromEnv()`, `s3_anonymous_credentials()`, `GcsCredentials.Anonymous()`); for backends that need no authentication use the `icechunk.credentials.LocalFileSystemAccess` (`file://`) and `icechunk.credentials.HttpAccess` (`http(s)://`) sentinels. A helper function, [`containers_credentials`](../reference/credentials.md#icechunk.credentials.containers_credentials), is provided to make it easier to specify credentials for multiple containers.
+
+!!! warning
+
+    Passing `None` as a credential is deprecated and will be unsupported in a future release. For S3 it silently reads credentials from the process environment (or uses anonymous access if the container allows it), which can expose private credentials. Pass an explicit credential or no-auth sentinel instead.
 
 ### Example
 

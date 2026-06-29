@@ -203,6 +203,7 @@ fn _icechunk_python(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<ChunkType>()?;
     m.add_class::<PySessionMode>()?;
     m.add_class::<PyStore>()?;
+    m.add_class::<streams::PyAsyncCloseableIterator>()?;
     m.add_class::<PySnapshotInfo>()?;
     m.add_class::<PyAncestryGraph>()?;
     m.add_class::<PyManifestFileInfo>()?;
