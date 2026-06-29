@@ -23,6 +23,7 @@ This release introduces on-disk [spec version 2.1](https://icechunk.io/en/stable
 not migrated into a new format, so external tools may still have some issues with those repos, but Icechunk 2.1.0 knows how to read and write to rooted and non-rooted repos ([#2239](https://github.com/earth-mover/icechunk/issues/2239)).
 - Preserve all URL parts (userinfo, port, query, fragment, and empty path segments) when storing virtual chunk locations ([#2219](https://github.com/earth-mover/icechunk/pull/2219)).
 - Honor the port when reading virtual chunks from HTTP stores, so a reference like `http://host:8080/...` is fetched from the correct port ([#2223](https://github.com/earth-mover/icechunk/issues/2223)).
+- The objects returned by the async iteration APIs (`Store.list`/`list_prefix`/`list_dir`/`array_chunk_iterator`, `Repository.async_ancestry`/`ops_log_async`) are now correctly typed and named as async iterators (`AsyncCloseableIterator`) rather than the misleading `PyAsyncGenerator`, and gained an `aclose()` method so `contextlib.aclosing(...)` and deterministic early-exit cleanup work ([#2240](https://github.com/earth-mover/icechunk/pull/2240)).
 
 ### Breaking Changes
 

@@ -48,7 +48,7 @@ use crate::{
     impl_pickle,
     session::PySession,
     stats::PyChunkStorageStats,
-    streams::PyAsyncGenerator,
+    streams::PyAsyncCloseableIterator,
 };
 
 fn parse_commit_method(method: &str) -> PyResult<icechunk::session::CommitMethod> {
@@ -1964,7 +1964,7 @@ impl PyRepository {
         branch: Option<String>,
         tag: Option<String>,
         snapshot_id: Option<String>,
-    ) -> PyResult<PyAsyncGenerator> {
+    ) -> PyResult<PyAsyncCloseableIterator> {
         // This function calls block_on, so we need to allow other thread python to make progress
         py.detach(move || {
             let version = args_to_version_info(branch, tag, snapshot_id, None)?;
@@ -1984,7 +1984,7 @@ impl PyRepository {
             });
 
             let prepared_list = Arc::new(Mutex::new(parents.err_into().boxed()));
-            Ok(PyAsyncGenerator::new(prepared_list))
+            Ok(PyAsyncCloseableIterator::new(prepared_list))
         })
     }
 
@@ -2033,7 +2033,10 @@ impl PyRepository {
         })
     }
 
-    pub(crate) fn async_ops_log(&self, py: Python<'_>) -> PyResult<PyAsyncGenerator> {
+    pub(crate) fn async_ops_log(
+        &self,
+        py: Python<'_>,
+    ) -> PyResult<PyAsyncCloseableIterator> {
         // This function calls block_on, so we need to allow other thread python to make progress
         py.detach(move || {
             let ops = pyo3_async_runtimes::tokio::get_runtime()
@@ -2048,7 +2051,7 @@ impl PyRepository {
                 });
 
             let prepared_list = Arc::new(Mutex::new(ops.err_into().boxed()));
-            Ok(PyAsyncGenerator::new(prepared_list))
+            Ok(PyAsyncCloseableIterator::new(prepared_list))
         })
     }
 
