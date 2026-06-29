@@ -5,7 +5,10 @@ use icechunk::{
     Storage,
     config::{S3Credentials, S3Options, S3StaticCredentials},
     new_s3_storage,
-    storage::{Settings, mk_client, new_r2_storage, new_tigris_storage},
+    storage::{
+        Settings, mk_client, new_r2_storage, new_tigris_storage, r2_storage, s3_storage,
+        tigris_storage,
+    },
 };
 
 pub(crate) enum Permission {
@@ -152,6 +155,9 @@ pub(crate) enum RealStoreKind {
 impl RealStore {
     /// Native-S3 storage at the bucket root (empty prefix), optionally forcing the
     /// legacy leading-slash layout. Goes through each store's real constructor.
+    ///
+    /// Empty-prefix creation is normally refused; these tests deliberately need it,
+    /// so the escape hatch is applied before erasing the concrete storage type.
     pub(crate) fn rooted_storage(
         &self,
         legacy_rooted_keys: bool,
@@ -159,29 +165,38 @@ impl RealStore {
         let prefix = Some(String::new());
         let creds = Some(self.credentials.clone());
         let storage: Arc<dyn Storage + Send + Sync> = match self.kind {
-            RealStoreKind::Aws => new_s3_storage(
-                self.options.clone(),
-                self.bucket.clone(),
-                prefix,
-                creds,
-                legacy_rooted_keys.then_some(true),
-            )?,
-            RealStoreKind::R2 => new_r2_storage(
-                self.options.clone(),
-                Some(self.bucket.clone()),
-                prefix,
-                None, // endpoint already resolved into options
-                creds,
-                legacy_rooted_keys.then_some(true),
-            )?,
-            RealStoreKind::Tigris => new_tigris_storage(
-                self.options.clone(),
-                self.bucket.clone(),
-                prefix,
-                creds,
-                false,
-                legacy_rooted_keys.then_some(true),
-            )?,
+            RealStoreKind::Aws => Arc::new(
+                s3_storage(
+                    self.options.clone(),
+                    self.bucket.clone(),
+                    prefix,
+                    creds,
+                    legacy_rooted_keys.then_some(true),
+                )?
+                .unsafe_allow_empty_prefix_creation(),
+            ),
+            RealStoreKind::R2 => Arc::new(
+                r2_storage(
+                    self.options.clone(),
+                    Some(self.bucket.clone()),
+                    prefix,
+                    None, // endpoint already resolved into options
+                    creds,
+                    legacy_rooted_keys.then_some(true),
+                )?
+                .unsafe_allow_empty_prefix_creation(),
+            ),
+            RealStoreKind::Tigris => Arc::new(
+                tigris_storage(
+                    self.options.clone(),
+                    self.bucket.clone(),
+                    prefix,
+                    creds,
+                    false,
+                    legacy_rooted_keys.then_some(true),
+                )?
+                .unsafe_allow_empty_prefix_creation(),
+            ),
         };
         Ok(storage)
     }

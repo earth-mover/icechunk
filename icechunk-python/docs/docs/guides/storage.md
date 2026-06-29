@@ -400,9 +400,11 @@ icechunk.in_memory_storage()
 
 ### Empty prefix and legacy repositories
 
-When `prefix` is empty (`None` or `""`) the repository lives at the bucket root and objects are stored with clean keys (`chunks/...`). Repositories created before Icechunk version 2.1.0 stored empty-prefix objects under a leading slash (`/chunks/...`); Icechunk detects that layout automatically when opening such a repository, so no action is needed to keep reading and writing it.
+Creating a repository at an empty `prefix` (`None` or `""`) — i.e. at the bucket root — is not supported on object stores since Icechunk v2.1.0 and raises an error; use a non-empty `prefix`. In-memory and local-filesystem storage are unaffected.
 
-The `legacy_rooted_keys` parameter overrides that detection:
+Existing empty-prefix repositories can still be **opened and updated**: Icechunk detects their on-disk layout automatically, so no action is needed to keep using them.
+
+When opening, the `legacy_rooted_keys` parameter overrides that detection:
 
 - `None` (default) — auto-detect the layout by probing storage. Use this unless you have a specific reason not to.
 - `True` — force the legacy leading-slash layout, skipping the probe (for example, for a write-only worker that cannot probe storage). Only valid with an empty prefix.

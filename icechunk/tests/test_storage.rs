@@ -19,9 +19,9 @@ use icechunk::{
     refs::{RefData, RefErrorKind},
     repository::{RepositoryError, RepositoryErrorKind},
     storage::{
-        self, ConcurrencySettings, ETag, Generation, StorageErrorKind, StorageResult,
-        VersionInfo, mk_client, new_http_storage, new_in_memory_storage,
-        new_redirect_storage, new_s3_storage,
+        self, ConcurrencySettings, ETag, Generation, RepositoryCreation, S3Storage,
+        StorageErrorKind, StorageResult, VersionInfo, mk_client, new_http_storage,
+        new_in_memory_storage, new_redirect_storage, new_s3_storage, s3_storage,
     },
 };
 use icechunk_arrow_object_store::object_store::azure::AzureConfigKey;
@@ -416,6 +416,100 @@ async fn check_clean_repo() -> Result<(), Box<dyn std::error::Error>> {
         Ok(())
     })
     .await?;
+    Ok(())
+}
+
+/// Creating a repository at an empty prefix (the bucket/container root) is refused on
+/// every cloud object-store backend — native S3 and the `object_store`-based S3,
+/// Azure, and GCS — but allowed on in-memory and local-filesystem storage, and via
+/// the test-only escape hatch. The gate runs before any network I/O, so this needs
+/// no live servers (constructing each backend is lazy and does not connect).
+#[tokio_test]
+async fn create_refuses_empty_prefix_on_object_store()
+-> Result<(), Box<dyn std::error::Error>> {
+    fn s3_creds() -> S3Credentials {
+        S3Credentials::Static(S3StaticCredentials {
+            access_key_id: "key".into(),
+            secret_access_key: "secret".into(),
+            session_token: None,
+            expires_after: None,
+        })
+    }
+    fn native_s3(prefix: &str) -> StorageResult<S3Storage> {
+        s3_storage(
+            S3Options::default().with_region("us-east-1"),
+            "testbucket".to_string(),
+            Some(prefix.to_string()),
+            Some(s3_creds()),
+            None,
+        )
+    }
+
+    // Every create-capable cloud object-store backend, addressed at the bucket /
+    // container root. Both `can_create_repository` and the `Repository::create` gate
+    // run before any I/O, so none of these need a live server.
+    let refused: Vec<(&str, Arc<dyn Storage + Send + Sync>)> = vec![
+        ("native_s3", Arc::new(native_s3("")?)),
+        ("object_store_s3", mk_s3_object_store_storage("", &Permission::Modify).await?),
+        ("object_store_azure", mk_azure_blob_storage("").await?),
+        (
+            "object_store_gcs",
+            Arc::new(ObjectStorage::new_gcs(
+                "testbucket".to_string(),
+                Some(String::new()),
+                None,
+                None,
+            )?),
+        ),
+    ];
+    for (name, storage) in refused {
+        assert_eq!(
+            storage.can_create_repository().await?,
+            RepositoryCreation::RefusedEmptyPrefix,
+            "{name}: empty-prefix creation should be refused at the storage level",
+        );
+        assert!(
+            matches!(
+                Repository::create(None, storage, Default::default(), None, true).await,
+                Err(ICError { kind: RepositoryErrorKind::EmptyPrefixCreation, .. })
+            ),
+            "{name}: Repository::create should fail with EmptyPrefixCreation",
+        );
+    }
+
+    // Allowed: a non-empty prefix, the escape hatch (on both the native and the
+    // object_store backends), and the non-cloud backends even at an empty prefix.
+    let dir = tempdir()?;
+    let allowed: Vec<(&str, Arc<dyn Storage + Send + Sync>)> = vec![
+        ("native_s3_nonempty", Arc::new(native_s3("some/prefix")?)),
+        (
+            "native_s3_empty_with_hatch",
+            Arc::new(native_s3("")?.unsafe_allow_empty_prefix_creation()),
+        ),
+        (
+            "object_store_s3_empty_with_hatch",
+            Arc::new(
+                ObjectStorage::new_s3(
+                    "testbucket".to_string(),
+                    Some(String::new()),
+                    Some(s3_creds()),
+                    Some(S3Options::default().with_region("us-east-1")),
+                )
+                .await?
+                .unsafe_allow_empty_prefix_creation(),
+            ),
+        ),
+        ("in_memory", new_in_memory_storage().await?),
+        ("local_filesystem", new_local_filesystem_storage(dir.path()).await?),
+    ];
+    for (name, storage) in allowed {
+        assert_eq!(
+            storage.can_create_repository().await?,
+            RepositoryCreation::Allowed,
+            "{name}: creation should be allowed",
+        );
+    }
+
     Ok(())
 }
 

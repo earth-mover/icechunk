@@ -18,8 +18,9 @@ use futures::{Stream, stream::BoxStream};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    DeleteObjectsResult, GetModifiedResult, ListInfo, Settings, Storage, StorageError,
-    StorageInfo, StorageResult, VersionInfo, VersionedUpdateResult,
+    DeleteObjectsResult, GetModifiedResult, ListInfo, RepositoryCreation, Settings,
+    Storage, StorageError, StorageInfo, StorageResult, VersionInfo,
+    VersionedUpdateResult,
 };
 use icechunk_storage::sealed;
 
@@ -89,6 +90,10 @@ impl Storage for LatencyStorage {
 
     async fn can_write(&self) -> StorageResult<bool> {
         self.backend.can_write().await
+    }
+
+    async fn can_create_repository(&self) -> StorageResult<RepositoryCreation> {
+        self.backend.can_create_repository().await
     }
 
     async fn put_object(
