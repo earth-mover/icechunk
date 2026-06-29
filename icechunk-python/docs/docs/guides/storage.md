@@ -400,7 +400,7 @@ icechunk.in_memory_storage()
 
 ### Empty prefix and legacy repositories
 
-Creating a repository at an empty `prefix` (`None` or `""`) — i.e. at the bucket root — is not supported on object stores in modern Icechunk versions and raises an error; use a non-empty `prefix`. In-memory and local-filesystem storage are unaffected.
+Creating a repository at an empty `prefix` (`None` or `""`) — i.e. at the bucket root — is not supported on object stores since Icechunk v2.1.0 and raises an error; use a non-empty `prefix`. In-memory and local-filesystem storage are unaffected.
 
 Existing empty-prefix repositories can still be **opened and updated**: Icechunk detects their on-disk layout automatically, so no action is needed to keep using them.
 

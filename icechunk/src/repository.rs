@@ -130,7 +130,7 @@ pub enum RepositoryErrorKind {
     #[error("repositories can only be created in clean prefixes")]
     ParentDirectoryNotClean,
     #[error(
-        "creating a repository at an empty prefix (the object store bucket root) is not supported in modern Icechunk versions; use a non-empty prefix. Existing empty-prefix repositories can still be opened and updated."
+        "creating a repository at an empty prefix (the object store bucket root) is not supported since Icechunk v2.1.0; use a non-empty prefix. Existing empty-prefix repositories can still be opened and updated."
     )]
     EmptyPrefixCreation,
     #[error("the repository doesn't exist")]
