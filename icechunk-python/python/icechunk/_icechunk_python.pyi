@@ -3370,6 +3370,7 @@ class Storage:
         bucket: str,
         prefix: str | None,
         credentials: _AnyS3Credential | None = None,
+        legacy_rooted_keys: bool | None = None,
     ) -> Storage: ...
     @classmethod
     def new_s3_object_store(
@@ -3387,6 +3388,7 @@ class Storage:
         prefix: str | None,
         use_weak_consistency: bool,
         credentials: _AnyS3Credential | None = None,
+        legacy_rooted_keys: bool | None = None,
     ) -> Storage: ...
     @classmethod
     def new_in_memory(cls) -> Storage: ...
@@ -3409,6 +3411,7 @@ class Storage:
         prefix: str | None = None,
         account_id: str | None = None,
         credentials: _AnyS3Credential | None = None,
+        legacy_rooted_keys: bool | None = None,
     ) -> Storage: ...
     @classmethod
     def new_azure_blob(

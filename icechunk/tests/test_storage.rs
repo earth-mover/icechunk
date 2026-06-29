@@ -66,6 +66,7 @@ async fn mk_s3_storage(
             session_token: None,
             expires_after: None,
         })),
+        None,
     )
     .expect("Creating minio storage failed");
 
@@ -119,6 +120,30 @@ async fn mk_azure_blob_storage(
     Ok(storage)
 }
 
+/// We use `MinIO` in addition to our main `RustFS` because it's a
+/// *normalizing* store: it maps leading-slash keys `"/x"` to `"x"`,
+/// unlike rustfs which rejects them
+async fn mk_minio_storage(prefix: &str) -> StorageResult<Arc<dyn Storage + Send + Sync>> {
+    let options = S3Options::default()
+        .with_region("us-east-1")
+        .with_endpoint_url("http://localhost:4202")
+        .with_allow_http(true)
+        .with_force_path_style(true);
+    let credentials = S3Credentials::Static(S3StaticCredentials {
+        access_key_id: "minioadmin".into(),
+        secret_access_key: "minioadmin".into(),
+        session_token: None,
+        expires_after: None,
+    });
+    new_s3_storage(
+        options,
+        "testbucket".to_string(),
+        Some(prefix.to_string()),
+        Some(credentials),
+        None,
+    )
+}
+
 #[expect(clippy::expect_used)]
 async fn with_storage<F, Fut>(
     permission: Permission,
@@ -155,6 +180,11 @@ where
         format!("{}/", common::get_random_prefix("with_storage")).as_str(),
     )
     .await?;
+    let s6 = mk_minio_storage(common::get_random_prefix("with_storage").as_str()).await?;
+    let s6slash = mk_minio_storage(
+        format!("{}/", common::get_random_prefix("with_storage")).as_str(),
+    )
+    .await?;
     let dir = tempdir().expect("cannot create temp dir");
     let s5 = new_local_filesystem_storage(dir.path())
         .await
@@ -169,6 +199,8 @@ where
         ("s3_object_store_slash", s3slash),
         ("azure_blob", s4),
         ("azure_blob_slash", s4slash),
+        ("minio", s6),
+        ("minio_slash", s6slash),
     ];
 
     if let Ok(e) = env::var("AWS_BUCKET")

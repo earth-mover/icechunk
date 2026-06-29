@@ -10,6 +10,7 @@ on:
   schedule:
     # three times a day to run the integration tests that take a long time
     - cron:  '33 3,10,15 * * *'
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -31,7 +32,8 @@ env:
 jobs:
   rust:
     name: Rust CI
-    timeout-minutes: 20
+    # Headroom for the slow macos-15-intel runner
+    timeout-minutes: 45
     runs-on: ${{ matrix.os }}
     defaults:
       run:
@@ -76,6 +78,12 @@ jobs:
           done
           for _ in {1..60}; do
               if curl --silent --fail "http://localhost:10000/devstoreaccount1/testcontainer?sv=2023-01-03&ss=btqf&srt=sco&spr=https%2Chttp&st=2025-01-06T14%3A53%3A30Z&se=2035-01-07T14%3A53%3A00Z&sp=rwdftlacup&sig=jclETGilOzONYp4Y0iK9SpVRLGyehaS5lg5booJ9VYA%3D&restype=container"; then
+              break
+              fi
+              sleep 1
+          done
+          for _ in {1..60}; do
+              if curl --silent --fail "http://localhost:4202/minio/health/live"; then
               break
               fi
               sleep 1
@@ -136,8 +144,13 @@ jobs:
         run: |
           just profile=ci unit-test
 
+      # Runs nightly, on manual dispatch, or on any PR labeled
+      # `run-integration-tests`
       - name: Run integration tests against object stores
-        if: github.event_name == 'cron'
+        if: >-
+          github.event_name == 'schedule'
+          || github.event_name == 'workflow_dispatch'
+          || contains(github.event.pull_request.labels.*.name, 'run-integration-tests')
         env:
           R2_BUCKET: ${{ secrets.R2_BUCKET }}
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
@@ -154,8 +167,26 @@ jobs:
           TIGRIS_ACCESS_KEY_ID: ${{ secrets.TIGRIS_ACCESS_KEY_ID }}
           TIGRIS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
 
+          # passed via env rather than interpolated into the shell below, to
+          # satisfy zizmor's template-injection audit
+          MATRIX_OS: ${{ matrix.os }}
+
         run: |
-          cargo test --profile ci --workspace --all-targets -- --ignored
+          # Don't let a failure (or flake) in one group hide the other.
+          set +e
+          rc=0
+          # Most real-store ignored tests use unique prefixes, so they're safe to
+          # run on every matrix OS in parallel.
+          # Exclude icechunk-python: it has no Rust tests, but its PyO3 lib-test
+          # binary aborts at launch trying to load libpython
+          cargo test --profile ci --workspace --exclude icechunk-python --tests -- --ignored --skip rooted_roundtrip || rc=1
+          # The rooted-layout tests operate at the bucket root (empty prefix, no
+          # unique prefix), so concurrent matrix jobs would race on the same keys:
+          # run them on a single runner.
+          if [ "$MATRIX_OS" = "ubuntu-latest" ]; then
+            cargo test --profile ci -p icechunk --test main rooted_roundtrip -- --ignored || rc=1
+          fi
+          exit $rc
 
   shuttle:
     name: Shuttle concurrency tests

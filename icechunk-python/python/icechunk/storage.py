@@ -198,6 +198,7 @@ def s3_storage(
     network_stream_timeout_seconds: int = 60,
     requester_pays: bool = False,
     checksum_algorithm: ChecksumAlgorithm | None = None,
+    legacy_rooted_keys: bool | None = None,
 ) -> Storage:
     """Create a Storage instance that saves data in S3 or S3 compatible object stores.
 
@@ -245,6 +246,11 @@ def s3_storage(
         UploadPart, DeleteObjects). When ``None`` (default) the AWS SDK picks
         its own default. Set explicitly when targeting an S3-compatible service
         that rejects the SDK's default.
+    legacy_rooted_keys: bool | None
+        The object key layout. ``None`` (default) detects it automatically and is
+        what most users will want; only set it explicitly if you have a special
+        situation and know what you're doing. ``True`` forces the old leading-slash
+        layout (empty prefix only); ``False`` forces the standard one.
     """
 
     credentials = s3_credentials(
@@ -272,6 +278,7 @@ def s3_storage(
         bucket=bucket,
         prefix=prefix,
         credentials=credentials,
+        legacy_rooted_keys=legacy_rooted_keys,
     )
 
 
@@ -332,6 +339,7 @@ def tigris_storage(
     scatter_initial_credentials: bool = False,
     network_stream_timeout_seconds: int = 60,
     checksum_algorithm: ChecksumAlgorithm | None = None,
+    legacy_rooted_keys: bool | None = None,
 ) -> Storage:
     """Create a Storage instance that saves data in Tigris object store.
 
@@ -374,6 +382,11 @@ def tigris_storage(
     network_stream_timeout_seconds: int
         Timeout requests if no bytes can be transmitted during this period of time.
         If set to 0, timeout is disabled. Default: 60.
+    legacy_rooted_keys: bool | None
+        The object key layout. ``None`` (default) detects it automatically and is
+        what most users will want; only set it explicitly if you have a special
+        situation and know what you're doing. ``True`` forces the old leading-slash
+        layout (empty prefix only); ``False`` forces the standard one.
     """
     credentials = s3_credentials(
         access_key_id=access_key_id,
@@ -399,6 +412,7 @@ def tigris_storage(
         prefix=prefix,
         use_weak_consistency=use_weak_consistency,
         credentials=credentials,
+        legacy_rooted_keys=legacy_rooted_keys,
     )
 
 
@@ -420,8 +434,9 @@ def r2_storage(
     scatter_initial_credentials: bool = False,
     network_stream_timeout_seconds: int = 60,
     checksum_algorithm: ChecksumAlgorithm | None = None,
+    legacy_rooted_keys: bool | None = None,
 ) -> Storage:
-    """Create a Storage instance that saves data in Tigris object store.
+    """Create a Storage instance that saves data in R2 object store.
 
     Parameters
     ----------
@@ -462,6 +477,11 @@ def r2_storage(
     network_stream_timeout_seconds: int
         Timeout requests if no bytes can be transmitted during this period of time.
         If set to 0, timeout is disabled. Default: 60.
+    legacy_rooted_keys: bool | None
+        The object key layout. ``None`` (default) detects it automatically and is
+        what most users will want; only set it explicitly if you have a special
+        situation and know what you're doing. ``True`` forces the old leading-slash
+        layout (empty prefix only); ``False`` forces the standard one.
     """
     credentials = s3_credentials(
         access_key_id=access_key_id,
@@ -487,6 +507,7 @@ def r2_storage(
         prefix=prefix,
         account_id=account_id,
         credentials=credentials,
+        legacy_rooted_keys=legacy_rooted_keys,
     )
 
 

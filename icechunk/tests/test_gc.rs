@@ -137,6 +137,12 @@ async fn do_test_gc(
     assert_eq!(repo.asset_manager().list_manifests().await?.count().await, 111);
 
     // verify doing gc without dangling objects doesn't change the repo
+
+    // GC compares the cutoff against each object's `created_at`, which on a real
+    // store is its second-precision, server-clock `LastModified`. Sleep so the
+    // cutoff clears second-truncation and clock skew (in-memory needs only 1ms;
+    // see `threshold_between_commits`).
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
     let now = Utc::now();
     let gc_config = GCConfig::clean_all(
         now,
@@ -194,12 +200,16 @@ async fn do_test_gc(
         assert_eq!(&42i8.to_be_bytes(), bytes.as_ref());
     }
 
-    // Create 5 anonymous snapshots (detached, not on any branch)
+    // Create 5 anonymous snapshots (detached, not on any branch). The first two
+    // are expired, the last three kept. Take the cutoff between the groups from
+    // `Utc::now()` after a sleep so it clears the second-truncation + clock skew
+    // of the server-side `created_at` (`LastModified`) that GC deletes by
     let mut anon_snaps = vec![];
+    let mut cutoff = None;
     for i in 0..5 {
-        // gap so the cutoff lands clear of created_at(ms) vs flushed_at(µs) truncation
         if i == 2 {
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            cutoff = Some(Utc::now());
         }
         let mut session = repo.writable_session("main").await?;
         let bytes = Bytes::copy_from_slice(&(100i8 + i as i8).to_be_bytes());
@@ -211,10 +221,8 @@ async fn do_test_gc(
         anon_snaps.push(snap_id);
     }
 
-    // expire the first two: cutoff sits in the gap between anon[1] and anon[2]
-    let before = repo.lookup_snapshot(&anon_snaps[1]).await?.flushed_at;
-    let after = repo.lookup_snapshot(&anon_snaps[2]).await?.flushed_at;
-    let cutoff = before + (after - before) / 2;
+    // anon[0..2] were created before the cutoff, anon[2..5] after it.
+    let cutoff = cutoff.expect("cutoff set at i == 2");
     let gc_config = GCConfig::clean_all(
         cutoff,
         cutoff,

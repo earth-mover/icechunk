@@ -974,8 +974,11 @@ impl JsStorage {
     ) -> napi::Result<JsStorage> {
         let creds = credentials.map(|c| c.into());
         let opts = options.map(|o| o.into()).unwrap_or_default();
-        let storage = icechunk::storage::new_s3_storage(opts, bucket, prefix, creds)
-            .map_napi_err()?;
+        // legacy_rooted_keys is not exposed to JS: pre-fix empty-prefix repos are
+        // handled transparently by auto-detection in the storage backend.
+        let storage =
+            icechunk::storage::new_s3_storage(opts, bucket, prefix, creds, None)
+                .map_napi_err()?;
         Ok(JsStorage(storage))
     }
 
@@ -989,9 +992,10 @@ impl JsStorage {
     ) -> napi::Result<JsStorage> {
         let creds = credentials.map(|c| c.into());
         let opts = options.map(|o| o.into()).unwrap_or_default();
-        let storage =
-            icechunk::storage::new_r2_storage(opts, bucket, prefix, account_id, creds)
-                .map_napi_err()?;
+        let storage = icechunk::storage::new_r2_storage(
+            opts, bucket, prefix, account_id, creds, None,
+        )
+        .map_napi_err()?;
         Ok(JsStorage(storage))
     }
 
@@ -1012,6 +1016,7 @@ impl JsStorage {
             prefix,
             creds,
             weak_consistency,
+            None,
         )
         .map_napi_err()?;
         Ok(JsStorage(storage))
@@ -1098,7 +1103,7 @@ impl JsStorage {
             icechunk::config::S3Credentials::Refreshable(std::sync::Arc::new(fetcher));
         let opts = options.map(|o| o.into()).unwrap_or(default_s3_options());
         let storage =
-            icechunk::storage::new_s3_storage(opts, bucket, prefix, Some(creds))
+            icechunk::storage::new_s3_storage(opts, bucket, prefix, Some(creds), None)
                 .map_napi_err()?;
         Ok(JsStorage(storage))
     }
@@ -1131,6 +1136,7 @@ impl JsStorage {
             prefix,
             account_id,
             Some(creds),
+            None,
         )
         .map_napi_err()?;
         Ok(JsStorage(storage))
@@ -1165,6 +1171,7 @@ impl JsStorage {
             prefix,
             Some(creds),
             weak_consistency,
+            None,
         )
         .map_napi_err()?;
         Ok(JsStorage(storage))
