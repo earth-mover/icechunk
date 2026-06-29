@@ -23,7 +23,7 @@ use std::{
     sync::Arc,
 };
 use thiserror::Error;
-use tokio::task::JoinError;
+use tokio::{io::AsyncRead, task::JoinError};
 use tracing::{Instrument as _, Span, debug, info, instrument, trace, warn};
 
 use crate::{
@@ -1271,6 +1271,52 @@ impl Session {
             }
             Some(_) => Ok(None),
             None => Ok(None),
+        }
+    }
+
+    /// Like [`get_chunk_reader`] but returns a live streaming `AsyncRead` instead of a `Future<Bytes>`.
+    ///
+    /// Ref chunks return a reader backed by a live HTTP connection — the storage semaphore is
+    /// released after connection setup, so the caller's token bucket governs drain concurrency.
+    /// Inline and Virtual chunks return a cursor over the already-materialized bytes.
+    /// Returns `Ok(None)` if the chunk is not found.
+    #[instrument(skip(self))]
+    pub async fn get_chunk_stream(
+        &self,
+        path: &Path,
+        coords: &ChunkIndices,
+        byte_range: &ByteRange,
+    ) -> SessionResult<Option<Box<dyn AsyncRead + Unpin + Send>>> {
+        match self.get_chunk_ref(path, coords).await? {
+            Some(ChunkPayload::Ref(ChunkRef { id, offset, length })) => {
+                let byte_range = construct_valid_byte_range(byte_range, offset, length)?;
+                let reader =
+                    self.asset_manager.stream_chunk(&id, &byte_range).await.inject()?;
+                Ok(Some(reader))
+            }
+            Some(ChunkPayload::Inline(bytes)) => {
+                let byte_range =
+                    construct_valid_byte_range(byte_range, 0, bytes.len() as u64)?;
+                let slice =
+                    bytes.slice(byte_range.start as usize..byte_range.end as usize);
+                Ok(Some(Box::new(std::io::Cursor::new(slice))))
+            }
+            Some(ChunkPayload::Virtual(VirtualChunkRef {
+                location,
+                offset,
+                length,
+                checksum,
+            })) => {
+                // Materialize virtual chunks — streaming is a future enhancement.
+                let byte_range = construct_valid_byte_range(byte_range, offset, length)?;
+                let bytes = self
+                    .virtual_resolver
+                    .fetch_chunk(location.url(), &byte_range, checksum.as_ref())
+                    .await
+                    .inject()?;
+                Ok(Some(Box::new(std::io::Cursor::new(bytes))))
+            }
+            _ => Ok(None),
         }
     }
 

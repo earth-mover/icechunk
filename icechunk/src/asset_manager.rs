@@ -30,7 +30,7 @@ static RETRYABLE_ERROR: LazyLock<regex::Regex> = LazyLock::new(|| {
 });
 use async_compression::{Level, tokio::bufread::ZstdEncoder};
 use tokio::{
-    io::{AsyncBufRead, AsyncReadExt as _},
+    io::{AsyncBufRead, AsyncRead, AsyncReadExt as _},
     sync::Semaphore,
 };
 use tracing::{debug, instrument, trace, warn};
@@ -985,6 +985,37 @@ impl AssetManager {
                 Ok(chunk)
             }
         }
+    }
+
+    /// Fetch a chunk as a live streaming reader, bypassing the intermediate Bytes buffer.
+    ///
+    /// Acquires the concurrency semaphore only for the duration of HTTP connection setup,
+    /// then releases it before the caller drains the body. Cache hits are returned as a
+    /// `Cursor` without any network I/O. Cache misses are NOT populated — streaming reads
+    /// are single-use; caching would waste memory.
+    #[instrument(skip(self))]
+    pub async fn stream_chunk(
+        &self,
+        chunk_id: &ChunkId,
+        range: &Range<ChunkOffset>,
+    ) -> RepositoryResult<Box<dyn AsyncRead + Unpin + Send>> {
+        let key = (chunk_id.clone(), range.clone());
+        // Return cached bytes as a cursor (no network I/O).
+        if let Ok(bytes) = self.chunk_cache.get_value_or_guard_async(&key).await {
+            return Ok(Box::new(std::io::Cursor::new(bytes)));
+        }
+        trace!(%chunk_id, ?range, "Streaming chunk");
+        let path = format!("{CHUNKS_FILE_PATH}/{chunk_id}");
+        // Hold the semaphore only for connection setup, not for the full drain.
+        // The caller's token bucket governs total concurrent in-flight drains.
+        let permit = self.request_semaphore.acquire().await.capture()?;
+        let (reader, _version) = self
+            .storage
+            .get_object(&self.storage_settings, &path, Some(range))
+            .await
+            .inject()?;
+        drop(permit);
+        Ok(Box::new(reader))
     }
 
     #[instrument(skip(self))]

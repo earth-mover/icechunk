@@ -28,7 +28,7 @@ pub enum S3ChecksumAlgorithm {
     Sha256,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct S3Options {
     pub region: Option<String>,
@@ -43,6 +43,33 @@ pub struct S3Options {
     pub requester_pays: bool,
     #[serde(default)]
     pub checksum_algorithm: Option<S3ChecksumAlgorithm>,
+}
+
+impl S3Options {
+    pub fn with_region(mut self, region: impl Into<String>) -> Self {
+        self.region = Some(region.into());
+        self
+    }
+
+    pub fn with_anonymous(mut self, anonymous: bool) -> Self {
+        self.anonymous = anonymous;
+        self
+    }
+
+    pub fn with_endpoint_url(mut self, url: impl Into<String>) -> Self {
+        self.endpoint_url = Some(url.into());
+        self
+    }
+
+    pub fn with_allow_http(mut self, allow_http: bool) -> Self {
+        self.allow_http = allow_http;
+        self
+    }
+
+    pub fn with_force_path_style(mut self, force_path_style: bool) -> Self {
+        self.force_path_style = force_path_style;
+        self
+    }
 }
 
 fn default_force_path_style() -> bool {

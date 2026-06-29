@@ -1033,6 +1033,15 @@ async fn exists(key: &str, session: &Session) -> StoreResult<bool> {
     }
 }
 
+/// Parse a Zarr v3 store key to (array path, chunk coordinates).
+/// Returns `None` for metadata keys (`zarr.json`), Zarr v2 keys, or unrecognised keys.
+pub fn parse_chunk_store_key(key: &str) -> Option<(Path, ChunkIndices)> {
+    match Key::parse(key).ok()? {
+        Key::Chunk { node_path, coords } => Some((node_path, coords)),
+        _ => None,
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Key {
     Metadata { node_path: Path },
