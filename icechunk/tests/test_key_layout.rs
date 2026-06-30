@@ -68,6 +68,8 @@ fn root_storage(
             bucket.to_string(),
             prefix.map(str::to_string),
             Some(root_credentials()),
+            Vec::new(),
+            Vec::new(),
             legacy_rooted_keys.then_some(true),
         )
         .unwrap()
@@ -98,6 +100,8 @@ fn minio_storage(bucket: &str, prefix: Option<&str>) -> Arc<dyn Storage + Send +
             bucket.to_string(),
             prefix.map(str::to_string),
             Some(minio_credentials()),
+            Vec::new(),
+            Vec::new(),
             None,
         )
         .unwrap()

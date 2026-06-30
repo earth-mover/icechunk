@@ -208,6 +208,8 @@ async fn create_minio_repository(spec_version: SpecVersionBin) -> Repository {
         "testbucket".to_string(),
         Some(prefix),
         Some(credentials),
+        Vec::new(),
+        Vec::new(),
         None,
     )
     .expect("Creating minio storage failed");
@@ -1171,6 +1173,8 @@ async fn test_zarr_store_with_multiple_virtual_chunk_containers(
         "testbucket".to_string(),
         Some(prefix),
         Some(credentials),
+        Vec::new(),
+        Vec::new(),
         None,
     )
     .expect("Creating minio storage failed");

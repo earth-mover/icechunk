@@ -27,7 +27,9 @@ pub use icechunk_s3::{
 };
 
 // Re-export from icechunk-arrow-object-store
-pub use icechunk_arrow_object_store::{ObjectStorage, new_in_memory_storage};
+pub use icechunk_arrow_object_store::{
+    ObjectStorage, new_in_memory_storage, validate_extra_headers,
+};
 
 #[cfg(feature = "object-store-fs")]
 pub use icechunk_arrow_object_store::new_local_filesystem_storage;
@@ -55,7 +57,7 @@ pub use icechunk_arrow_object_store::{
 #[cfg(feature = "object-store-http")]
 pub use icechunk_arrow_object_store::HttpObjectStoreBackend;
 
-pub use icechunk_arrow_object_store::ObjectStoreBackend;
+pub use icechunk_arrow_object_store::{ObjectStoreBackend, Role};
 
 #[cfg(test)]
 pub mod logging;
@@ -128,6 +130,8 @@ mod tests {
                 },
             ))),
             None,
+            Vec::new(),
+            Vec::new(),
         )
         .unwrap();
         let bytes = rmp_serde::to_vec(&storage).unwrap();

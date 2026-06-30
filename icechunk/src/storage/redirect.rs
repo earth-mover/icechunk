@@ -140,6 +140,8 @@ impl RedirectStorage {
                     bucket,
                     Some(prefix),
                     Some(S3Credentials::Anonymous),
+                    Vec::new(),
+                    Vec::new(),
                     None, // auto-detect key layout
                 )
             }
@@ -166,6 +168,8 @@ impl RedirectStorage {
                     Some(prefix),
                     Some(account_id),
                     Some(S3Credentials::Anonymous),
+                    Vec::new(),
+                    Vec::new(),
                     None, // auto-detect key layout
                 )
             }
@@ -191,6 +195,8 @@ impl RedirectStorage {
                     Some(prefix),
                     Some(S3Credentials::Anonymous),
                     true,
+                    Vec::new(),
+                    Vec::new(),
                     None, // auto-detect key layout
                 )
             }
@@ -233,6 +239,8 @@ impl RedirectStorage {
                     Some(prefix),
                     Some(GcsCredentials::Anonymous),
                     None,
+                    Vec::new(),
+                    Vec::new(),
                 )
             }
             #[cfg(not(feature = "object-store-gcs"))]

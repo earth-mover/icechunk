@@ -976,9 +976,16 @@ impl JsStorage {
         let opts = options.map(|o| o.into()).unwrap_or_default();
         // legacy_rooted_keys is not exposed to JS: pre-fix empty-prefix repos are
         // handled transparently by auto-detection in the storage backend.
-        let storage =
-            icechunk::storage::new_s3_storage(opts, bucket, prefix, creds, None)
-                .map_napi_err()?;
+        let storage = icechunk::storage::new_s3_storage(
+            opts,
+            bucket,
+            prefix,
+            creds,
+            Vec::new(),
+            Vec::new(),
+            None,
+        )
+        .map_napi_err()?;
         Ok(JsStorage(storage))
     }
 
@@ -993,7 +1000,14 @@ impl JsStorage {
         let creds = credentials.map(|c| c.into());
         let opts = options.map(|o| o.into()).unwrap_or_default();
         let storage = icechunk::storage::new_r2_storage(
-            opts, bucket, prefix, account_id, creds, None,
+            opts,
+            bucket,
+            prefix,
+            account_id,
+            creds,
+            Vec::new(),
+            Vec::new(),
+            None,
         )
         .map_napi_err()?;
         Ok(JsStorage(storage))
@@ -1016,6 +1030,8 @@ impl JsStorage {
             prefix,
             creds,
             weak_consistency,
+            Vec::new(),
+            Vec::new(),
             None,
         )
         .map_napi_err()?;
@@ -1031,10 +1047,16 @@ impl JsStorage {
     ) -> napi::Result<JsStorage> {
         let creds = credentials.map(|c| c.into());
         let opts = options.map(|o| o.into()).unwrap_or_default();
-        let storage =
-            icechunk::storage::new_s3_object_store_storage(opts, bucket, prefix, creds)
-                .await
-                .map_napi_err()?;
+        let storage = icechunk::storage::new_s3_object_store_storage(
+            opts,
+            bucket,
+            prefix,
+            creds,
+            Vec::new(),
+            Vec::new(),
+        )
+        .await
+        .map_napi_err()?;
         Ok(JsStorage(storage))
     }
 
@@ -1046,8 +1068,15 @@ impl JsStorage {
         config: Option<HashMap<String, String>>,
     ) -> napi::Result<JsStorage> {
         let creds = credentials.map(|c| c.into());
-        let storage = icechunk::storage::new_gcs_storage(bucket, prefix, creds, config)
-            .map_napi_err()?;
+        let storage = icechunk::storage::new_gcs_storage(
+            bucket,
+            prefix,
+            creds,
+            config,
+            Vec::new(),
+            Vec::new(),
+        )
+        .map_napi_err()?;
         Ok(JsStorage(storage))
     }
 
@@ -1102,9 +1131,16 @@ impl JsStorage {
         let creds =
             icechunk::config::S3Credentials::Refreshable(std::sync::Arc::new(fetcher));
         let opts = options.map(|o| o.into()).unwrap_or(default_s3_options());
-        let storage =
-            icechunk::storage::new_s3_storage(opts, bucket, prefix, Some(creds), None)
-                .map_napi_err()?;
+        let storage = icechunk::storage::new_s3_storage(
+            opts,
+            bucket,
+            prefix,
+            Some(creds),
+            Vec::new(),
+            Vec::new(),
+            None,
+        )
+        .map_napi_err()?;
         Ok(JsStorage(storage))
     }
 
@@ -1136,6 +1172,8 @@ impl JsStorage {
             prefix,
             account_id,
             Some(creds),
+            Vec::new(),
+            Vec::new(),
             None,
         )
         .map_napi_err()?;
@@ -1171,6 +1209,8 @@ impl JsStorage {
             prefix,
             Some(creds),
             weak_consistency,
+            Vec::new(),
+            Vec::new(),
             None,
         )
         .map_napi_err()?;
@@ -1203,6 +1243,8 @@ impl JsStorage {
             bucket,
             prefix,
             Some(creds),
+            Vec::new(),
+            Vec::new(),
         )
         .await
         .map_napi_err()?;
@@ -1229,9 +1271,15 @@ impl JsStorage {
         };
         let creds =
             icechunk::config::GcsCredentials::Refreshable(std::sync::Arc::new(fetcher));
-        let storage =
-            icechunk::storage::new_gcs_storage(bucket, prefix, Some(creds), config)
-                .map_napi_err()?;
+        let storage = icechunk::storage::new_gcs_storage(
+            bucket,
+            prefix,
+            Some(creds),
+            config,
+            Vec::new(),
+            Vec::new(),
+        )
+        .map_napi_err()?;
         Ok(JsStorage(storage))
     }
 }

@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Features
+
+- Add `read_headers`, `write_headers`, and `headers` arguments to `s3_storage`, `s3_object_store_storage`, `tigris_storage`, `r2_storage`, and `gcs_storage` to attach custom HTTP headers to object-store requests ([#2246](https://github.com/earth-mover/icechunk/issues/2246)).
+
 ## Python Icechunk Library 2.1.0
 
 This release introduces on-disk [spec version 2.1](https://icechunk.io/en/stable/reference/spec-v2-1/), an additive change that is forward- and backward-compatible with spec 2.0.
