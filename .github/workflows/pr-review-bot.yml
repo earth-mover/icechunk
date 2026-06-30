@@ -1,0 +1,37 @@
+name: PR Review Bot
+
+# Thin caller: all logic lives in earth-mover/pr-review-bot. Drop this file at
+# .github/workflows/pr-review-bot.yml in earth-mover/icechunk.
+
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review, review_requested, review_request_removed, synchronize, closed]
+  pull_request_review:
+    types: [submitted, dismissed]
+  pull_request_review_comment:
+    types: [created]
+  issue_comment:
+    types: [created]
+  schedule:
+    - cron: "0 13-23 * * 1-5"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: pr-review-bot
+  cancel-in-progress: true
+
+jobs:
+  run:
+    if: ${{ github.event_name != 'issue_comment' || github.event.issue.pull_request }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: earth-mover/pr-review-bot@main
+        with:
+          target: icechunk
+          slack-token: ${{ secrets.SLACK_APP_TOKEN }}
+          claude-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          gh-token: ${{ secrets.GITHUB_TOKEN }}
