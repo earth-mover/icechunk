@@ -29,7 +29,7 @@ jobs:
     if: ${{ github.event_name != 'issue_comment' || github.event.issue.pull_request }}
     runs-on: ubuntu-latest
     steps:
-      - uses: earth-mover/pr-review-bot@51743beaacd59d4ef807c2dea2d5160492066485 # main
+      - uses: earth-mover/pr-review-bot@df22b2c37b6e96dc92b133e9cb9d1929a888d0e3 # main
         with:
           target: icechunk
           slack-token: ${{ secrets.SLACK_APP_TOKEN }}
