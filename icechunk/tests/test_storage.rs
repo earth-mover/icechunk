@@ -20,8 +20,9 @@ use icechunk::{
     repository::{RepositoryError, RepositoryErrorKind},
     storage::{
         self, ConcurrencySettings, ETag, Generation, RepositoryCreation, S3Storage,
-        StorageErrorKind, StorageResult, VersionInfo, VersionedUpdateResult, mk_client, new_http_storage,
-        new_in_memory_storage, new_redirect_storage, new_s3_storage, s3_storage,
+        StorageErrorKind, StorageResult, VersionInfo, VersionedUpdateResult, mk_client,
+        new_http_storage, new_in_memory_storage, new_redirect_storage, new_s3_storage,
+        s3_storage,
     },
 };
 use icechunk_arrow_object_store::object_store::azure::AzureConfigKey;
@@ -692,7 +693,7 @@ async fn assert_lost_response_recovers_with_fresh_etag(
             Bytes::from_static(b"v1"),
             None,
             vec![(
-                icechunk_s3::test_util::WRITE_ID_METADATA_KEY.to_string(),
+                icechunk_storage::readback::WRITE_ID_METADATA_KEY.to_string(),
                 forced.clone(),
             )],
             None,
