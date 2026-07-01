@@ -2725,6 +2725,13 @@ class PySession:
             position is checked to determine whether it should be cleared — if
             ``backward`` returns ``None`` (out of bounds) or points to a position
             with no chunk, that position is reset to the fill value.
+
+        Raises
+        ------
+        IcechunkError
+            If the array uses a non-regular chunk grid (e.g. rectilinear).
+            Chunks on such grids have position-dependent sizes, so moving them
+            would corrupt the array.
         """
         ...
     def shift_array(self, array_path: str, chunk_offset: Iterable[int]) -> None: ...

@@ -273,6 +273,18 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
             st.tuples(*[st.integers(min_value=-n, max_value=n) for n in num_chunks])
         )
 
+        # icechunk rejects chunk moves on non-regular grids (issue #2151): payloads
+        # would land in slots expecting different sizes, corrupting the array.
+        # zarr v2 metadata has no chunk_grid attribute; those arrays are always regular.
+        # The class is RegularChunkGridMetadata or RegularChunkGrid depending on the
+        # zarr version, so match on the prefix.
+        chunk_grid = getattr(arr_store.metadata, "chunk_grid", None)
+        if chunk_grid is not None and not type(chunk_grid).__name__.startswith("Regular"):
+            note(f"shift on non-regular chunk grid of '{array_path}' must be rejected")
+            with pytest.raises(ic.IcechunkError, match="chunk grid"):
+                self.store.session.shift_array(f"/{array_path}", offset)
+            return
+
         # Optionally resize before shift to make room (mimics real user behavior)
         # - With resize: preserves data that would otherwise go out of bounds
         # - Without resize: data shifting beyond bounds is lost

@@ -275,6 +275,13 @@ class Session:
             position is checked to determine whether it should be cleared — if
             ``backward`` returns ``None`` (out of bounds) or points to a position
             with no chunk, that position is reset to the fill value.
+
+        Raises
+        ------
+        IcechunkError
+            If the array uses a non-regular chunk grid (e.g. rectilinear).
+            Chunks on such grids have position-dependent sizes, so moving them
+            would corrupt the array.
         """
         return self._session.reindex_array(array_path, forward, backward)
 
@@ -295,6 +302,13 @@ class Session:
         chunk_offset : Iterable[int]
             The number of chunks to shift by in each dimension. Positive values
             shift right/down, negative values shift left/up.
+
+        Raises
+        ------
+        IcechunkError
+            If the array uses a non-regular chunk grid (e.g. rectilinear).
+            Chunks on such grids have position-dependent sizes, so moving them
+            would corrupt the array.
 
         Notes
         -----

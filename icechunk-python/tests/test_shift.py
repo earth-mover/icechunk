@@ -1,9 +1,16 @@
 from typing import Any, cast
 
 import numpy as np
+import pytest
 
 import icechunk as ic
 import zarr
+
+# zarr gates rectilinear chunk grids behind a config flag (enabled by the package
+# conftest when available). The grid class name and location vary across zarr
+# versions, so detect support via the flag and create arrays with the
+# tuple-of-tuples chunks form instead of a grid class.
+_has_rectilinear = "array.rectilinear_chunks" in zarr.config
 
 
 def test_shift_left() -> None:
@@ -241,3 +248,32 @@ def test_resize_then_shift_same_session() -> None:
     session.shift_array("/d", (-1,))
     arr = zarr.open_array(session.store, path="d")
     np.testing.assert_equal(arr[:], [2.0, -1.0])
+
+
+@pytest.mark.skipif(
+    not _has_rectilinear, reason="zarr lacks rectilinear chunk grid support"
+)
+def test_shift_and_reindex_rejected_on_rectilinear_grid() -> None:
+    """Shifting a rectilinear array would corrupt it, so it must fail (issue #2151)."""
+    repo = ic.Repository.create(storage=ic.in_memory_storage())
+    session = repo.writable_session("main")
+    root = zarr.group(store=session.store, overwrite=True)
+    arr = root.create_array(
+        name="a",
+        shape=(3,),
+        dtype="int32",
+        chunks=((1, 2),),
+    )
+    arr[:] = [10, 20, 30]
+    session.commit("write")
+
+    session = repo.writable_session("main")
+    with pytest.raises(ic.IcechunkError, match="rectilinear"):
+        session.shift_array("/a", (1,))
+    with pytest.raises(ic.IcechunkError, match="rectilinear"):
+        session.reindex_array("/a", lambda index: index)
+
+    # the rejected operations staged nothing, and the array reads back intact
+    assert not session.has_uncommitted_changes
+    arr = zarr.open_array(session.store, path="a")
+    np.testing.assert_equal(arr[:], [10, 20, 30])
