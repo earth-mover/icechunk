@@ -47,16 +47,10 @@ use icechunk_storage::{
     DeleteObjectsResult, GetModifiedResult, ListInfo, RepositoryCreation, Settings,
     Storage, StorageError, StorageErrorKind, StorageInfo, StorageResult, VersionInfo,
     VersionedUpdateResult, obj_not_found_res, obj_store_error, obj_store_error_res,
-    other_error, sealed, split_in_multiple_equal_requests, strip_quotes,
-};
-use icechunk_storage::{
-    DeleteObjectsResult, GetModifiedResult, ListInfo, Settings, Storage, StorageError,
-    StorageErrorKind, StorageInfo, StorageResult, VersionInfo, VersionedUpdateResult,
-    obj_not_found_res, obj_store_error, obj_store_error_res, other_error,
+    other_error,
     readback::{
-        ReadbackFacts, ReadbackOutcome, WRITE_ID_METADATA_KEY, classify_readback,
-        finalize_lost_response, finalize_precondition,
-        warn_conditional_without_metadata_once,
+        ReadbackOutcome, WRITE_ID_METADATA_KEY, classify_readback, resolve_lost_response,
+        resolve_precondition, write_id_for,
     },
     sealed, split_in_multiple_equal_requests, strip_quotes,
 };
@@ -393,8 +387,6 @@ fn next_write_id() -> String {
 pub mod test_util {
     use std::cell::RefCell;
 
-    pub const WRITE_ID_METADATA_KEY: &str = super::WRITE_ID_METADATA_KEY;
-
     thread_local! {
         static FORCED_WRITE_ID: RefCell<Option<String>> = const { RefCell::new(None) };
     }
@@ -655,16 +647,10 @@ impl S3Storage {
             None => false,
         };
 
-        let write_id = if conditional_applied && settings.unsafe_use_metadata() {
-            let id = next_write_id();
-            req = req.metadata(WRITE_ID_METADATA_KEY, &id);
-            Some(id)
-        } else {
-            if conditional_applied {
-                warn_conditional_without_metadata_once();
-            }
-            None
-        };
+        let write_id = write_id_for(settings, conditional_applied, next_write_id);
+        if let Some(id) = write_id.as_deref() {
+            req = req.metadata(WRITE_ID_METADATA_KEY, id);
+        }
 
         match req.send().await {
             Ok(out) => {
@@ -690,7 +676,7 @@ impl S3Storage {
                             write_id.as_deref(),
                         )
                         .await;
-                    finalize_precondition(outcome, key)
+                    resolve_precondition(outcome, key)
                 } else {
                     obj_store_error_res(SdkError::<PutObjectError>::ServiceError(err))
                 }
@@ -707,7 +693,7 @@ impl S3Storage {
                             write_id.as_deref(),
                         )
                         .await;
-                    finalize_precondition(outcome, key)
+                    resolve_precondition(outcome, key)
                 } else {
                     obj_store_error_res(SdkError::<PutObjectError>::ResponseError(err))
                 }
@@ -740,14 +726,7 @@ impl S3Storage {
         // Write-id rides as metadata on `create_multipart_upload`, so decide
         // here whether the later `complete` will carry a condition.
         let will_apply_condition = conditional_for(previous_version, settings).is_some();
-        let write_id = if will_apply_condition && settings.unsafe_use_metadata() {
-            Some(next_write_id())
-        } else {
-            if will_apply_condition {
-                warn_conditional_without_metadata_once();
-            }
-            None
-        };
+        let write_id = write_id_for(settings, will_apply_condition, next_write_id);
 
         if settings.unsafe_use_metadata() {
             if let Some(ct) = content_type {
@@ -862,9 +841,9 @@ impl S3Storage {
                         )
                         .await;
                     if is_precondition {
-                        finalize_precondition(outcome, key)
+                        resolve_precondition(outcome, key)
                     } else {
-                        finalize_lost_response(
+                        resolve_lost_response(
                             outcome,
                             key,
                             obj_store_error(SdkError::ServiceError(err)),
@@ -884,7 +863,7 @@ impl S3Storage {
                             write_id.as_deref(),
                         )
                         .await;
-                    finalize_precondition(outcome, key)
+                    resolve_precondition(outcome, key)
                 } else if status == 404 {
                     // NoSuchUpload surfaced as a raw HTTP status.
                     let outcome = self
@@ -894,7 +873,7 @@ impl S3Storage {
                             write_id.as_deref(),
                         )
                         .await;
-                    finalize_lost_response(
+                    resolve_lost_response(
                         outcome,
                         key,
                         obj_store_error(SdkError::<PutObjectError>::ResponseError(err)),
@@ -925,32 +904,29 @@ impl S3Storage {
         if self.config.requester_pays {
             head = head.request_payer(aws_sdk_s3::types::RequestPayer::Requester);
         }
-        let facts = match head.send().await {
-            Ok(out) => ReadbackFacts::Found {
-                stored_write_id: out
-                    .metadata()
-                    .and_then(|m| m.get(WRITE_ID_METADATA_KEY))
-                    .cloned(),
+        let (stored_write_id, version) = match head.send().await {
+            Ok(out) => (
+                out.metadata().and_then(|m| m.get(WRITE_ID_METADATA_KEY)).cloned(),
                 // S3 has no generation; etag is the only version identity.
-                version: out
-                    .e_tag()
+                out.e_tag()
                     .map(|e| VersionInfo::from_etag_only(e.to_string()))
                     .unwrap_or_else(VersionInfo::for_creation),
-            },
+            ),
+            // Absent is conclusive (not a failed read-back): our write didn't land.
             Err(sdk_err)
                 if sdk_err.as_service_error().is_some_and(|e| e.is_not_found())
                     || sdk_err
                         .raw_response()
                         .is_some_and(|r| r.status().as_u16() == 404) =>
             {
-                ReadbackFacts::Absent
+                return Ok(ReadbackOutcome::NotOurs);
             }
             Err(sdk_err) => {
                 warn!(key, error = %sdk_err, "readback HEAD failed; propagating original error");
                 return obj_store_error_res(sdk_err);
             }
         };
-        Ok(classify_readback(write_id, &facts))
+        Ok(classify_readback(write_id, stored_write_id.as_deref(), &version))
     }
 }
 

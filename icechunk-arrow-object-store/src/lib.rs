@@ -19,17 +19,10 @@ use icechunk_storage::{
     ConcurrencySettings, DeleteObjectsResult, ETag, Generation, GetModifiedResult,
     ListInfo, RepositoryCreation, RetriesSettings, Settings, Storage, StorageError,
     StorageErrorKind, StorageInfo, StorageResult, VersionInfo, VersionedUpdateResult,
-    obj_not_found_res, obj_store_error, obj_store_error_res, other_error, sealed,
-};
-use icechunk_storage::{
-    ConcurrencySettings, DeleteObjectsResult, ETag, Generation, GetModifiedResult,
-    ListInfo, RetriesSettings, Settings, Storage, StorageError, StorageErrorKind,
-    StorageInfo, StorageResult, VersionInfo, VersionedUpdateResult, obj_not_found_res,
-    obj_store_error, obj_store_error_res, other_error,
+    obj_not_found_res, obj_store_error, obj_store_error_res, other_error,
     readback::{
-        ReadbackFacts, ReadbackOutcome, WRITE_ID_METADATA_KEY, classify_readback,
-        finalize_lost_response, finalize_precondition,
-        warn_conditional_without_metadata_once,
+        ReadbackOutcome, WRITE_ID_METADATA_KEY, classify_readback, resolve_lost_response,
+        resolve_precondition, write_id_for,
     },
     sealed,
 };
@@ -589,20 +582,14 @@ impl Storage for ObjectStorage {
 
         let mode = self.get_put_mode(settings, previous_version);
         let is_conditional = !matches!(mode, PutMode::Overwrite);
-
-        let write_id = if is_conditional && settings.unsafe_use_metadata() {
-            let id = Uuid::new_v4().to_string();
+        let write_id =
+            write_id_for(settings, is_conditional, || Uuid::new_v4().to_string());
+        if let Some(id) = &write_id {
             attributes.insert(
                 Attribute::Metadata(std::borrow::Cow::Borrowed(WRITE_ID_METADATA_KEY)),
                 AttributeValue::from(id.clone()),
             );
-            Some(id)
-        } else {
-            if is_conditional {
-                warn_conditional_without_metadata_once();
-            }
-            None
-        };
+        }
 
         let options = PutOptions { mode, attributes, ..PutOptions::default() };
         // FIXME: use multipart
@@ -628,7 +615,7 @@ impl Storage for ObjectStorage {
                         write_id.as_deref(),
                     )
                     .await;
-                finalize_precondition(outcome, path.as_ref())
+                resolve_precondition(outcome, path.as_ref())
             }
             // Only `Generic` can hide a landed-but-ack-lost write as a transport
             // failure; `Precondition`/`AlreadyExists` have their own arm above.
@@ -641,7 +628,7 @@ impl Storage for ObjectStorage {
                         write_id.as_deref(),
                     )
                     .await;
-                finalize_lost_response(outcome, path.as_ref(), obj_store_error(err))
+                resolve_lost_response(outcome, path.as_ref(), obj_store_error(err))
             }
             Err(err) => Err(obj_store_error(err)),
         }
@@ -825,21 +812,23 @@ impl ObjectStorage {
         let Some(write_id) = write_id else { return Ok(ReadbackOutcome::NotOurs) };
         let client = self.get_client(settings).await?;
         let opts = GetOptions { head: true, ..Default::default() };
-        let facts = match client.get_opts(path, opts).await {
-            Ok(result) => ReadbackFacts::Found {
-                stored_write_id: result
+        let (stored_write_id, version) = match client.get_opts(path, opts).await {
+            Ok(result) => (
+                result
                     .attributes
                     .get(&Attribute::Metadata(std::borrow::Cow::Borrowed(
                         WRITE_ID_METADATA_KEY,
                     )))
                     .map(|v| v.as_ref().to_string()),
-                version: VersionInfo {
+                VersionInfo {
                     etag: result.meta.e_tag.as_ref().cloned().map(ETag),
                     generation: result.meta.version.as_ref().cloned().map(Generation),
                 },
-            },
+            ),
             // Absent is conclusive (not a failed read-back): our write didn't land.
-            Err(object_store::Error::NotFound { .. }) => ReadbackFacts::Absent,
+            Err(object_store::Error::NotFound { .. }) => {
+                return Ok(ReadbackOutcome::NotOurs);
+            }
             Err(err) => {
                 warn!(
                     %path,
@@ -849,7 +838,7 @@ impl ObjectStorage {
                 return Err(obj_store_error(err));
             }
         };
-        Ok(classify_readback(write_id, &facts))
+        Ok(classify_readback(write_id, stored_write_id.as_deref(), &version))
     }
 
     async fn get_object_range_conditional(

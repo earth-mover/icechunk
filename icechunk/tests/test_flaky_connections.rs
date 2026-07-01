@@ -344,6 +344,7 @@ async fn build_proxied_storage(
             true,
             Vec::new(),
             Vec::new(),
+            None,
         )?),
         ConditionalPutBackend::ArrowObjectStore => Arc::new(
             icechunk::ObjectStorage::new_s3(
@@ -489,20 +490,13 @@ async fn conditional_put_repro(
                 .map_ok(|li| li.id)
                 .try_collect()
                 .await?;
-            println!("keys committed to storage: {}/3", keys.len());
-            for k in &keys {
-                println!("  - {k}");
-            }
-
-            if let Err(err) = &result {
-                panic!(
-                    "create should succeed despite the lost conditional PUT response, got: {err}"
-                );
-            }
+            result.expect(
+                "create should succeed despite the lost conditional PUT response",
+            );
             assert_eq!(
                 keys.len(),
                 3,
-                "all three init objects should have landed in storage"
+                "all three init objects should have landed in storage, got {keys:?}"
             );
             Ok(())
         },

@@ -3,16 +3,17 @@
 //! A conditional PUT can land while its ack is lost; the client's retry then
 //! trips the condition against the object we just wrote, faking a conflict.
 //! Each conditional PUT stamps a unique [`WRITE_ID_METADATA_KEY`]; on conflict
-//! the backend HEADs the object and checks whether the stored id is ours. It
-//! builds [`ReadbackFacts`], calls [`classify_readback`], then a `finalize_*`
-//! fn maps the outcome to a [`VersionedUpdateResult`].
+//! the backend HEADs the object, classifies the result with
+//! [`classify_readback`], then a `resolve_*` fn maps the outcome to a
+//! [`VersionedUpdateResult`].
 
 use std::sync::Once;
 
 use tracing::warn;
 
 use crate::storage::{
-    StorageError, StorageResult, VersionInfo, VersionedUpdateResult, other_error,
+    Settings, StorageError, StorageResult, VersionInfo, VersionedUpdateResult,
+    other_error,
 };
 
 /// Per-PUT token stamped on conditional writes; underscores keep it portable
@@ -22,7 +23,7 @@ pub const WRITE_ID_METADATA_KEY: &str = "icechunk_write_id";
 static CONDITIONAL_WITHOUT_METADATA_WARNED: Once = Once::new();
 
 /// Warn once: conditional writes on but metadata off → no lost-response recovery.
-pub fn warn_conditional_without_metadata_once() {
+fn warn_conditional_without_metadata_once() {
     CONDITIONAL_WITHOUT_METADATA_WARNED.call_once(|| {
         warn!(
             "conditional PUT is enabled but `unsafe_use_metadata` is \
@@ -35,11 +36,21 @@ pub fn warn_conditional_without_metadata_once() {
     });
 }
 
-/// Backend-neutral facts from a HEAD issued after a conditional PUT conflict.
-#[derive(Debug)]
-pub enum ReadbackFacts {
-    Absent,
-    Found { stored_write_id: Option<String>, version: VersionInfo },
+/// Write-id for a conditional PUT: `None` for unconditional PUTs, `None`
+/// (with a one-time warning) when metadata is off.
+pub fn write_id_for(
+    settings: &Settings,
+    conditional: bool,
+    mk: impl FnOnce() -> String,
+) -> Option<String> {
+    if !conditional {
+        None
+    } else if settings.unsafe_use_metadata() {
+        Some(mk())
+    } else {
+        warn_conditional_without_metadata_once();
+        None
+    }
 }
 
 /// `OurWrite` is universally success; the rest are mapped per-caller.
@@ -53,27 +64,27 @@ pub enum ReadbackOutcome {
     MissingVersion,
 }
 
-/// Classify a successful read-back. A failed read-back is inconclusive and
-/// never reaches here — the backend returns the HEAD error instead.
-pub fn classify_readback(our: &str, facts: &ReadbackFacts) -> ReadbackOutcome {
-    match facts {
-        ReadbackFacts::Absent => ReadbackOutcome::NotOurs,
-        ReadbackFacts::Found { stored_write_id, version } => {
-            if stored_write_id.as_deref() != Some(our) {
-                ReadbackOutcome::NotOurs
-            } else if version.is_create() {
-                ReadbackOutcome::MissingVersion
-            } else {
-                ReadbackOutcome::OurWrite(version.clone())
-            }
-        }
+/// Classify a successful read-back of a found object. A failed read-back is
+/// inconclusive and never reaches here — the backend returns the HEAD error
+/// instead; an absent object is conclusively `NotOurs` at the backend.
+pub fn classify_readback(
+    our: &str,
+    stored_write_id: Option<&str>,
+    version: &VersionInfo,
+) -> ReadbackOutcome {
+    if stored_write_id != Some(our) {
+        ReadbackOutcome::NotOurs
+    } else if version.is_create() {
+        ReadbackOutcome::MissingVersion
+    } else {
+        ReadbackOutcome::OurWrite(version.clone())
     }
 }
 
-/// Finalize a precondition (412/409) conflict. Absent → genuine race
+/// Resolve a precondition (412/409) conflict. Absent → genuine race
 /// (`NotOnLatestVersion`); inconclusive read-back (`Err`) propagates — faking a
 /// conflict would reintroduce the spurious-conflict bug.
-pub fn finalize_precondition(
+pub fn resolve_precondition(
     readback: StorageResult<ReadbackOutcome>,
     key: &str,
 ) -> StorageResult<VersionedUpdateResult> {
@@ -92,10 +103,10 @@ pub fn finalize_precondition(
     }
 }
 
-/// Finalize a failure only our own landed write can rescue (S3 multipart
+/// Resolve a failure only our own landed write can rescue (S3 multipart
 /// `NoSuchUpload`/404, or an `object_store` generic transport error). Anything
 /// but `OurWrite` propagates `original`; a failed read-back propagates its error.
-pub fn finalize_lost_response(
+pub fn resolve_lost_response(
     readback: StorageResult<ReadbackOutcome>,
     key: &str,
     original: StorageError,
@@ -117,43 +128,33 @@ mod tests {
     use super::*;
     use crate::storage::{ETag, StorageErrorKind};
 
-    fn found(write_id: Option<&str>, etag: Option<&str>) -> ReadbackFacts {
-        ReadbackFacts::Found {
-            stored_write_id: write_id.map(str::to_string),
-            version: VersionInfo {
-                etag: etag.map(|e| ETag(e.to_string())),
-                generation: None,
-            },
-        }
+    fn version(etag: Option<&str>) -> VersionInfo {
+        VersionInfo { etag: etag.map(|e| ETag(e.to_string())), generation: None }
     }
 
     #[test]
     fn classify_match_returns_readback_version() {
         // A match returns the read-back object's own version, not the previous one.
         assert_eq!(
-            classify_readback("W", &found(Some("W"), Some("E1"))),
+            classify_readback("W", Some("W"), &version(Some("E1"))),
             ReadbackOutcome::OurWrite(VersionInfo::from_etag_only("E1".to_string()))
         );
     }
 
     #[test]
     fn classify_branches() {
-        // A different write-id, no write-id, or no object all collapse to NotOurs.
+        // A different write-id or no write-id collapse to NotOurs.
         assert_eq!(
-            classify_readback("W", &found(Some("OTHER"), Some("E1"))),
+            classify_readback("W", Some("OTHER"), &version(Some("E1"))),
             ReadbackOutcome::NotOurs
         );
         assert_eq!(
-            classify_readback("W", &found(None, Some("E1"))),
-            ReadbackOutcome::NotOurs
-        );
-        assert_eq!(
-            classify_readback("W", &ReadbackFacts::Absent),
+            classify_readback("W", None, &version(Some("E1"))),
             ReadbackOutcome::NotOurs
         );
         // Our id matched but no version identity.
         assert_eq!(
-            classify_readback("W", &found(Some("W"), None)),
+            classify_readback("W", Some("W"), &version(None)),
             ReadbackOutcome::MissingVersion
         );
     }
@@ -162,7 +163,7 @@ mod tests {
     fn precondition_absent_is_conflict_not_error() {
         // Regression: absent is a genuine race → NotOnLatestVersion, not an error.
         assert_eq!(
-            finalize_precondition(Ok(ReadbackOutcome::NotOurs), "k").unwrap(),
+            resolve_precondition(Ok(ReadbackOutcome::NotOurs), "k").unwrap(),
             VersionedUpdateResult::NotOnLatestVersion
         );
     }
@@ -171,14 +172,14 @@ mod tests {
     fn precondition_inconclusive_readback_propagates() {
         // Regression: inconclusive read-back must Err, never fake a conflict —
         // else a lost-response write retries into a spurious conflict.
-        let err = finalize_precondition(Err(other_error("head failed")), "k")
+        let err = resolve_precondition(Err(other_error("head failed")), "k")
             .expect_err("inconclusive readback must propagate");
         assert!(matches!(err.kind, StorageErrorKind::Other(_)));
     }
 
     #[test]
     fn lost_response_inconclusive_propagates_head_error() {
-        let err = finalize_lost_response(
+        let err = resolve_lost_response(
             Err(other_error("head failed")),
             "k",
             other_error("original put error"),
@@ -189,7 +190,7 @@ mod tests {
 
     #[test]
     fn lost_response_non_ours_propagates_original() {
-        let err = finalize_lost_response(
+        let err = resolve_lost_response(
             Ok(ReadbackOutcome::NotOurs),
             "k",
             other_error("original put error"),
