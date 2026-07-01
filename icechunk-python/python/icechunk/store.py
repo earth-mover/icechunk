@@ -1,4 +1,4 @@
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -327,6 +327,153 @@ class IcechunkStore(Store, SyncMixin):
             Maximum number of rows per batch.
         """
         return self._store.array_chunk_iterator(array_path, batch_size)
+
+    def resolve_chunk_refs(
+        self,
+        array_path: str,
+        coords: Iterable[Sequence[int]],
+    ) -> tuple[
+        "np.ndarray[tuple[int], np.dtype[np.uint8]]",  # kinds (n,)
+        list[str],  # paths
+        "np.ndarray[tuple[int], np.dtype[np.uint64]]",  # offsets (n,)
+        "np.ndarray[tuple[int], np.dtype[np.uint64]]",  # lengths (n,)
+        dict[int, bytes],  # inlined
+    ]:
+        """Resolve specific chunks to their references without scanning the manifest.
+
+        Unlike ``array_chunk_iterator``, which walks the entire array manifest,
+        this reads only the manifest pages the requested coordinates fall in,
+        reusing the same lazy per-key lookup the read path uses. The cost is
+        proportional to the number of coordinates and touched pages rather than
+        the size of the array's manifest. Lookups are fanned out concurrently
+        (bounded by the repo's ``get_partial_values_concurrency``).
+
+        The result is a columnar 5-tuple whose columns are aligned with the
+        input coords — row ``i`` describes ``coords[i]``. This is the same
+        layout ``array_chunk_iterator`` yields, minus the coords column (the
+        caller already has them, in order)::
+
+            kinds:    np.ndarray[uint8]    values of icechunk.ChunkType
+                                            (0 = uninitialized/missing)
+            paths:    list[str]            URL (virtual) | chunk_id (native) | "" otherwise
+            offsets:  np.ndarray[uint64]
+            lengths:  np.ndarray[uint64]
+            inlined:  dict[int, bytes]     inline rows only, keyed by row index
+
+        Parameters
+        ----------
+        array_path : str
+            Zarr path to the array (e.g. ``"a"`` or ``"/group/var"``).
+        coords : Iterable[Sequence[int]]
+            Chunk-grid coordinates, one sequence of integers per chunk, in the
+            same form ``Session.chunk_coordinates`` yields. Example:
+            ``[(0, 0, 0), (0, 1, 5)]``.
+        """
+        return self._store.resolve_chunk_refs(
+            array_path, [list(coord) for coord in coords]
+        )
+
+    async def resolve_chunk_refs_async(
+        self,
+        array_path: str,
+        coords: Iterable[Sequence[int]],
+    ) -> tuple[
+        "np.ndarray[tuple[int], np.dtype[np.uint8]]",
+        list[str],
+        "np.ndarray[tuple[int], np.dtype[np.uint64]]",
+        "np.ndarray[tuple[int], np.dtype[np.uint64]]",
+        dict[int, bytes],
+    ]:
+        """Resolve specific chunks to their references without scanning the manifest.
+
+        Async variant of :meth:`resolve_chunk_refs`; see it for the columnar
+        result layout.
+        """
+        return await self._store.resolve_chunk_refs_async(
+            array_path, [list(coord) for coord in coords]
+        )
+
+    def get_many_chunks(
+        self,
+        requests: Iterable[tuple[str, Sequence[int]]],
+        *,
+        max_gap: int = 256 * 1024,
+        max_coalesced_bytes: int | None = None,
+    ) -> AsyncCloseableIterator[tuple[int, bytes | None]]:
+        """Bulk-read many chunks with read coalescing, streamed in completion order.
+
+        Requested chunks are grouped by the manifest that holds them; each
+        manifest is fetched once (there is no partial-manifest read, so that
+        resolves every ref in the page at once), its chunks are coalesced —
+        nearby byte ranges in the same backing object merged into a few large
+        range GETs — and those spans are fetched through Icechunk's own fetchers
+        (bounded by ``get_partial_values_concurrency``). Manifests are pipelined:
+        one manifest's spans download while the next manifest still loads.
+
+        Coalescing is scoped to a manifest, so chunks from different arrays (which
+        live in different manifests) are not merged together, but are still
+        fetched and returned correctly. All kinds are handled: virtual and native
+        chunks are fetched (and coalesced when they share a backing object);
+        inline chunks are returned directly.
+
+        Each yielded item is one chunk, in span-completion order::
+
+            (request_index, data)
+
+        where ``request_index`` is the chunk's position in ``requests`` and
+        ``data`` is that chunk's exact bytes — byte-identical to ``get`` — as a
+        zero-copy view of its coalesced span. ``data`` is ``None`` when the chunk
+        is uninitialized/missing (map straight to a fill value).
+
+        Parameters
+        ----------
+        requests : Iterable[tuple[str, Sequence[int]]]
+            ``(array_path, coords)`` pairs. May span multiple arrays.
+        max_gap : int
+            Max unwanted bytes tolerated between two chunks before merging them
+            into one GET. ``0`` merges only strictly adjacent chunks (zero
+            over-read); larger trades over-read for fewer round-trips.
+        max_coalesced_bytes : int | None
+            Hard cap on a single span's size, so a pathological run can't produce
+            one giant request. ``None`` means no cap.
+        """
+        return self._store.get_many_chunks(
+            [(array_path, list(coords)) for array_path, coords in requests],
+            max_gap,
+            max_coalesced_bytes,
+        )
+
+    def coalescing_report(
+        self,
+        requests: Iterable[tuple[str, Sequence[int]]],
+        *,
+        max_gap: int = 256 * 1024,
+        max_coalesced_bytes: int | None = None,
+    ) -> dict[str, int]:
+        """Resolve ``requests`` and plan coalesced spans **without fetching**.
+
+        A diagnostic for whether coalescing actually helps a given access
+        pattern: it reports how many spans the chunks collapse into and how much
+        over-read a ``max_gap`` costs, before you pay to download anything.
+        Timing this call also isolates the resolve phase (no download) from the
+        total ``get_many_chunks`` wall.
+
+        Returns a dict with: ``requested``, ``virtual_chunks``, ``native_chunks``,
+        ``inline_chunks``, ``missing_chunks``, ``spans``, ``fetched_spans``,
+        ``useful_bytes``, ``over_read_bytes``, ``max_span_bytes``, ``concurrency``.
+        ``spans`` and the byte counts describe the pure coalescing plan (the merge
+        opportunity): a ``spans`` count close to the coalescable chunk count means
+        coalescing isn't merging for this pattern, ``spans`` ≪ chunks means it is.
+        ``fetched_spans`` is the number of GETs ``get_many_chunks`` actually issues
+        after applying its parallelism floor, which splits merged spans back apart
+        to keep ``≈ concurrency`` requests in flight (free at ``max_gap=0``), so
+        ``fetched_spans >= spans``.
+        """
+        return self._store.coalescing_report(
+            [(array_path, list(coords)) for array_path, coords in requests],
+            max_gap,
+            max_coalesced_bytes,
+        )
 
     async def set_virtual_ref_async(
         self,
