@@ -471,17 +471,6 @@ struct ManifestGrouping {
     groups: Vec<ManifestWork>,
 }
 
-impl ManifestGrouping {
-    /// Per-batch span target for the parallelism floor. Each manifest group is a
-    /// batch, plus one for the change set if it holds any chunks; dividing the
-    /// concurrency budget across them keeps the total span count near `conc` so
-    /// coalescing never drops below the backend's request parallelism.
-    fn target_per_batch(&self, conc: usize) -> usize {
-        let num_batches = self.groups.len() + usize::from(!self.changeset.is_empty());
-        conc.div_ceil(num_batches.max(1))
-    }
-}
-
 /// One completed unit of work driven by [`Session::get_many_chunks`]'s shared
 /// `FuturesUnordered`. A `Resolved` manifest fans out into `Fetched` span GETs,
 /// so both kinds share one queue and manifest-resolve overlaps span-download.
@@ -1768,10 +1757,15 @@ impl Session {
         // manifest the natural coalescing + pipelining unit.
         let grouping = self.group_by_manifest(requests).await?;
 
-        // Per-batch parallelism target so the total span count across all
-        // batches stays near `conc`, never below stock's per-request
-        // parallelism. Known up front because grouping is eager.
-        let target_per_batch = grouping.target_per_batch(conc);
+        // Each batch keeps at least `conc` spans (or all singletons) so a batch
+        // whose chunks coalesced below the concurrency budget is re-split to
+        // saturate it. A batch can't split past its member count, so it never
+        // exceeds stock's per-batch request count — total fetched spans stay
+        // between `conc`-per-non-trivial-batch and the stock chunk count. Not
+        // divided across batches: the semaphore, not this target, bounds the
+        // in-flight GETs, so over-supplying ready spans only improves pool
+        // utilization.
+        let target_per_batch = conc;
 
         // A single `FuturesUnordered` drives both manifest-resolve and span-fetch
         // futures. Resolving a manifest fans out into its span GETs, pushed onto
@@ -1947,7 +1941,7 @@ impl Session {
         let mut max_span_bytes = 0u64;
 
         // Same floor `get_many_chunks` applies, so `fetched_spans` matches it.
-        let target_per_batch = grouping.target_per_batch(conc);
+        let target_per_batch = conc;
 
         let mut batches = Vec::with_capacity(grouping.groups.len() + 1);
         if !grouping.changeset.is_empty() {
