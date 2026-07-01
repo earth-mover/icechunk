@@ -64,6 +64,13 @@ use crate::storage::HttpObjectStoreBackend;
     feature = "object-store-http"
 ))]
 use crate::storage::ObjectStoreBackend as _;
+#[cfg(any(
+    feature = "object-store-s3",
+    feature = "object-store-gcs",
+    feature = "object-store-azure",
+    feature = "object-store-http"
+))]
+use crate::storage::Role;
 #[cfg(feature = "object-store-s3")]
 use crate::storage::S3ObjectStoreBackend;
 use crate::{
@@ -1067,9 +1074,16 @@ impl ObjectStoreFetcher {
         config: Option<S3Options>,
         settings: storage::Settings,
     ) -> Result<Self, VirtualReferenceError> {
-        let backend = S3ObjectStoreBackend { bucket, prefix, credentials, config };
+        let backend = S3ObjectStoreBackend {
+            bucket,
+            prefix,
+            credentials,
+            config,
+            extra_read_headers: Vec::new(),
+            extra_write_headers: Vec::new(),
+        };
         let client = backend
-            .mk_object_store(&settings)
+            .mk_object_store(&settings, Role::Read)
             .map_err(|e| VirtualReferenceErrorKind::OtherError(Box::new(e)))
             .capture()?;
         Ok(ObjectStoreFetcher { client, settings })
@@ -1094,7 +1108,7 @@ impl ObjectStoreFetcher {
             headers: if headers.is_empty() { None } else { Some(headers.clone()) },
         };
         let client = backend
-            .mk_object_store(&settings)
+            .mk_object_store(&settings, Role::Read)
             .map_err(|e| VirtualReferenceErrorKind::OtherError(Box::new(e)))
             .capture()?;
         Ok(ObjectStoreFetcher { client, settings })
@@ -1114,10 +1128,16 @@ impl ObjectStoreFetcher {
                 GoogleConfigKey::from_str(&k).ok().map(|key| (key, v.clone()))
             })
             .collect();
-        let backend =
-            GcsObjectStoreBackend { bucket, prefix, credentials, config: Some(config) };
+        let backend = GcsObjectStoreBackend {
+            bucket,
+            prefix,
+            credentials,
+            config: Some(config),
+            extra_read_headers: Vec::new(),
+            extra_write_headers: Vec::new(),
+        };
         let client = backend
-            .mk_object_store(&settings)
+            .mk_object_store(&settings, Role::Read)
             .map_err(|e| VirtualReferenceErrorKind::OtherError(Box::new(e)))
             .capture()?;
 
@@ -1148,7 +1168,7 @@ impl ObjectStoreFetcher {
         };
 
         let client = backend
-            .mk_object_store(&settings)
+            .mk_object_store(&settings, Role::Read)
             .map_err(|e| VirtualReferenceErrorKind::OtherError(Box::new(e)))
             .capture()?;
 

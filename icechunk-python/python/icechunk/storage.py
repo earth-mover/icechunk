@@ -199,6 +199,9 @@ def s3_storage(
     requester_pays: bool = False,
     checksum_algorithm: ChecksumAlgorithm | None = None,
     legacy_rooted_keys: bool | None = None,
+    read_headers: dict[str, str] | None = None,
+    write_headers: dict[str, str] | None = None,
+    headers: dict[str, str] | None = None,
 ) -> Storage:
     """Create a Storage instance that saves data in S3 or S3 compatible object stores.
 
@@ -255,6 +258,15 @@ def s3_storage(
         what most users will want; only set it explicitly if you have a special
         situation and know what you're doing. ``True`` forces the old leading-slash
         layout (empty prefix only); ``False`` forces the standard one.
+    read_headers: dict[str, str] | None
+        Extra HTTP headers to attach to every read request to the object store.
+    write_headers: dict[str, str] | None
+        Extra HTTP headers to attach to every write request to the object store,
+        for example ``{"x-amz-acl": "bucket-owner-full-control"}``.
+    headers: dict[str, str] | None
+        Extra HTTP headers to attach to both read and write requests. They are
+        merged with ``read_headers``/``write_headers``, which take precedence per
+        role on a key conflict.
     """
 
     credentials = s3_credentials(
@@ -283,6 +295,9 @@ def s3_storage(
         prefix=prefix,
         credentials=credentials,
         legacy_rooted_keys=legacy_rooted_keys,
+        read_headers=read_headers,
+        write_headers=write_headers,
+        headers=headers,
     )
 
 
@@ -300,6 +315,9 @@ def s3_object_store_storage(
     anonymous: bool | None = None,
     from_env: bool | None = None,
     force_path_style: bool = False,
+    read_headers: dict[str, str] | None = None,
+    write_headers: dict[str, str] | None = None,
+    headers: dict[str, str] | None = None,
 ) -> Storage:
     credentials = s3_credentials(
         access_key_id=access_key_id,
@@ -322,6 +340,9 @@ def s3_object_store_storage(
         bucket=bucket,
         prefix=prefix,
         credentials=credentials,
+        read_headers=read_headers,
+        write_headers=write_headers,
+        headers=headers,
     )
 
 
@@ -344,6 +365,9 @@ def tigris_storage(
     network_stream_timeout_seconds: int = 60,
     checksum_algorithm: ChecksumAlgorithm | None = None,
     legacy_rooted_keys: bool | None = None,
+    read_headers: dict[str, str] | None = None,
+    write_headers: dict[str, str] | None = None,
+    headers: dict[str, str] | None = None,
 ) -> Storage:
     """Create a Storage instance that saves data in Tigris object store.
 
@@ -395,6 +419,15 @@ def tigris_storage(
         what most users will want; only set it explicitly if you have a special
         situation and know what you're doing. ``True`` forces the old leading-slash
         layout (empty prefix only); ``False`` forces the standard one.
+    read_headers: dict[str, str] | None
+        Extra HTTP headers to attach to every read request to the object store.
+    write_headers: dict[str, str] | None
+        Extra HTTP headers to attach to every write request to the object store,
+        for example ``{"x-amz-acl": "bucket-owner-full-control"}``.
+    headers: dict[str, str] | None
+        Extra HTTP headers to attach to both read and write requests. They are
+        merged with ``read_headers``/``write_headers``, which take precedence per
+        role on a key conflict.
     """
     credentials = s3_credentials(
         access_key_id=access_key_id,
@@ -421,6 +454,9 @@ def tigris_storage(
         use_weak_consistency=use_weak_consistency,
         credentials=credentials,
         legacy_rooted_keys=legacy_rooted_keys,
+        read_headers=read_headers,
+        write_headers=write_headers,
+        headers=headers,
     )
 
 
@@ -443,6 +479,9 @@ def r2_storage(
     network_stream_timeout_seconds: int = 60,
     checksum_algorithm: ChecksumAlgorithm | None = None,
     legacy_rooted_keys: bool | None = None,
+    read_headers: dict[str, str] | None = None,
+    write_headers: dict[str, str] | None = None,
+    headers: dict[str, str] | None = None,
 ) -> Storage:
     """Create a Storage instance that saves data in R2 object store.
 
@@ -494,6 +533,15 @@ def r2_storage(
         what most users will want; only set it explicitly if you have a special
         situation and know what you're doing. ``True`` forces the old leading-slash
         layout (empty prefix only); ``False`` forces the standard one.
+    read_headers: dict[str, str] | None
+        Extra HTTP headers to attach to every read request to the object store.
+    write_headers: dict[str, str] | None
+        Extra HTTP headers to attach to every write request to the object store,
+        for example ``{"x-amz-acl": "bucket-owner-full-control"}``.
+    headers: dict[str, str] | None
+        Extra HTTP headers to attach to both read and write requests. They are
+        merged with ``read_headers``/``write_headers``, which take precedence per
+        role on a key conflict.
     """
     credentials = s3_credentials(
         access_key_id=access_key_id,
@@ -520,6 +568,9 @@ def r2_storage(
         account_id=account_id,
         credentials=credentials,
         legacy_rooted_keys=legacy_rooted_keys,
+        read_headers=read_headers,
+        write_headers=write_headers,
+        headers=headers,
     )
 
 
@@ -549,6 +600,9 @@ def gcs_storage(
     config: dict[str, str] | None = None,
     get_credentials: Callable[[], GcsBearerCredential] | None = None,
     scatter_initial_credentials: bool = False,
+    read_headers: dict[str, str] | None = None,
+    write_headers: dict[str, str] | None = None,
+    headers: dict[str, str] | None = None,
 ) -> Storage:
     """Create a Storage instance that saves data in Google Cloud Storage object store.
 
@@ -584,6 +638,15 @@ def gcs_storage(
         ensure all those copies don't need to call get_credentials immediately. After the initial
         set of credentials has expired, the cached value is no longer used. Notice that credentials
         obtained are stored, and they can be sent over the network if you pickle the session/repo.
+    read_headers: dict[str, str] | None
+        Extra HTTP headers to attach to every read request to the object store.
+    write_headers: dict[str, str] | None
+        Extra HTTP headers to attach to every write request to the object store,
+        for example ``{"x-goog-acl": "bucket-owner-full-control"}``.
+    headers: dict[str, str] | None
+        Extra HTTP headers to attach to both read and write requests. They are
+        merged with ``read_headers``/``write_headers``, which take precedence per
+        role on a key conflict.
     """
     credentials = gcs_credentials(
         service_account_file=service_account_file,
@@ -600,6 +663,9 @@ def gcs_storage(
         prefix=prefix,
         credentials=credentials,
         config=config,
+        read_headers=read_headers,
+        write_headers=write_headers,
+        headers=headers,
     )
 
 

@@ -11,8 +11,7 @@ use futures::{
     Stream, StreamExt as _, TryStreamExt as _,
     stream::{self, BoxStream},
 };
-#[cfg(feature = "http")]
-use http::header::HeaderName;
+use http::header::{HeaderName, HeaderValue};
 #[cfg(feature = "s3")]
 use icechunk_storage::s3_config::{S3Credentials, S3Options};
 use icechunk_storage::strip_quotes;
@@ -44,8 +43,8 @@ use object_store::{
 };
 #[cfg(any(feature = "s3", feature = "gcs", feature = "azure", feature = "http"))]
 use object_store::{BackoffConfig, RetryConfig};
-#[cfg(feature = "http")]
-use object_store::{ClientOptions, HeaderMap, HeaderValue};
+#[cfg(any(feature = "s3", feature = "gcs", feature = "http"))]
+use object_store::{ClientOptions, HeaderMap};
 #[cfg(any(feature = "gcs", feature = "azure"))]
 use object_store::{CredentialProvider, StaticCredentialProvider};
 use serde::{Deserialize, Serialize};
@@ -64,6 +63,103 @@ use tokio::sync::{OnceCell, RwLock};
 use tokio_util::io::StreamReader;
 use tracing::instrument;
 use url::Url;
+
+/// Whether a storage operation reads from or writes to the object store.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Role {
+    Read,
+    Write,
+}
+
+fn parse_header(k: &str, v: &str) -> Result<(HeaderName, HeaderValue), StorageError> {
+    let name = k
+        .parse::<HeaderName>()
+        .map_err(|e| other_error(format!("invalid HTTP header name {k:?}: {e}")))?;
+    let value = HeaderValue::from_str(v)
+        .map_err(|e| other_error(format!("invalid HTTP header value for {k:?}: {e}")))?;
+    Ok((name, value))
+}
+
+/// Validate that each name/value parses as a well-formed HTTP header, so invalid
+/// input fails early (at storage construction) with a clear error rather than
+/// surfacing mid-request. Used by the bindings layer before threading
+/// user-supplied headers into a backend.
+pub fn validate_extra_headers(headers: &[(String, String)]) -> Result<(), StorageError> {
+    for (k, v) in headers {
+        parse_header(k, v)?;
+    }
+    Ok(())
+}
+
+/// All [`ClientConfigKey`]s. The enum has no iterator, so this must be
+/// kept in sync with `object_store`; a missing entry only means a newly-added
+/// client option wouldn't be preserved when custom headers are set, so, not terrible
+#[cfg(any(feature = "s3", feature = "gcs"))]
+const CLIENT_CONFIG_KEYS: &[ClientConfigKey] = &[
+    ClientConfigKey::AllowHttp,
+    ClientConfigKey::AllowInvalidCertificates,
+    ClientConfigKey::ConnectTimeout,
+    ClientConfigKey::DefaultContentType,
+    ClientConfigKey::Http1Only,
+    ClientConfigKey::Http2KeepAliveInterval,
+    ClientConfigKey::Http2KeepAliveTimeout,
+    ClientConfigKey::Http2KeepAliveWhileIdle,
+    ClientConfigKey::Http2MaxFrameSize,
+    ClientConfigKey::Http2Only,
+    ClientConfigKey::PoolIdleTimeout,
+    ClientConfigKey::PoolMaxIdlePerHost,
+    ClientConfigKey::ProxyUrl,
+    ClientConfigKey::ProxyCaCertificate,
+    ClientConfigKey::ProxyExcludes,
+    ClientConfigKey::RandomizeAddresses,
+    ClientConfigKey::Timeout,
+    ClientConfigKey::UserAgent,
+];
+
+/// Build a [`HeaderMap`] from name/value pairs, failing on invalid input so
+/// the error surfaces at construction rather than mid-request.
+#[cfg(any(feature = "s3", feature = "gcs", feature = "http"))]
+fn headers_to_header_map(
+    headers: &[(String, String)],
+) -> Result<HeaderMap, StorageError> {
+    let mut map = HeaderMap::with_capacity(headers.len());
+    for (k, v) in headers {
+        let (name, value) = parse_header(k, v)?;
+        map.insert(name, value);
+    }
+    Ok(map)
+}
+
+/// Build a [`ClientOptions`] carrying `header_map` as default headers, while
+/// preserving the client options already resolved on a builder.
+///
+/// `object_store`'s only way to set default headers is
+/// [`ClientOptions::with_default_headers`], and applying it via
+/// `with_client_options` *replaces* the builder's whole [`ClientOptions`] (no
+/// merge, no getter). To avoid dropping env- or config-derived client options
+/// (e.g. a proxy set through `AWS_*`), we read each known [`ClientConfigKey`]
+/// back through `read_config` and re-apply it alongside the headers.
+#[cfg(any(feature = "s3", feature = "gcs"))]
+fn client_options_with_headers<F>(header_map: HeaderMap, read_config: F) -> ClientOptions
+where
+    F: Fn(ClientConfigKey) -> Option<String>,
+{
+    let mut opts = ClientOptions::new().with_default_headers(header_map);
+    for &key in CLIENT_CONFIG_KEYS {
+        if let Some(value) = read_config(key) {
+            opts = opts.with_config(key, value);
+        }
+    }
+    opts
+}
+
+/// Sort headers so equal sets compare equal regardless of order (see
+/// `read_write_headers_differ`).
+#[cfg(any(feature = "s3", feature = "gcs"))]
+fn sorted_headers(mut headers: Vec<(String, String)>) -> Vec<(String, String)> {
+    headers.sort_unstable();
+    headers
+}
 
 // --- GCS credential types ---
 
@@ -177,11 +273,18 @@ pub struct ObjectStorage {
     /// prefix.
     #[serde(skip)]
     allow_empty_prefix_creation: bool,
+    /// Lazily-built client for read operations. We use `OnceCell` to allow async
+    /// initialization, because serde does not support async function calls from
+    /// deserialization.
+    ///
+    /// When the backend's read and write header sets are equal (the common case,
+    /// including no custom headers at all) this single client serves both roles
+    /// and `write_client` stays empty — preserving the single-connection-pool
+    /// behavior. The two cells diverge only when read and write headers differ.
     #[serde(skip)]
-    /// We need to use `OnceCell` to allow async initialization, because serde
-    /// does not support async cfunction calls from deserialization. This gives
-    /// us a way to lazily initialize the client.
-    client: OnceCell<Arc<dyn ObjectStore>>,
+    read_client: OnceCell<Arc<dyn ObjectStore>>,
+    #[serde(skip)]
+    write_client: OnceCell<Arc<dyn ObjectStore>>,
 }
 
 impl ObjectStorage {
@@ -189,7 +292,8 @@ impl ObjectStorage {
         ObjectStorage {
             backend,
             allow_empty_prefix_creation: false,
-            client: OnceCell::new(),
+            read_client: OnceCell::new(),
+            write_client: OnceCell::new(),
         }
     }
 
@@ -232,9 +336,17 @@ impl ObjectStorage {
         prefix: Option<String>,
         credentials: Option<S3Credentials>,
         config: Option<S3Options>,
+        extra_read_headers: Vec<(String, String)>,
+        extra_write_headers: Vec<(String, String)>,
     ) -> Result<ObjectStorage, StorageError> {
-        let backend =
-            Arc::new(S3ObjectStoreBackend { bucket, prefix, credentials, config });
+        let backend = Arc::new(S3ObjectStoreBackend {
+            bucket,
+            prefix,
+            credentials,
+            config,
+            extra_read_headers: sorted_headers(extra_read_headers),
+            extra_write_headers: sorted_headers(extra_write_headers),
+        });
         let storage = ObjectStorage::from_backend(backend);
 
         Ok(storage)
@@ -266,9 +378,17 @@ impl ObjectStorage {
         prefix: Option<String>,
         credentials: Option<GcsCredentials>,
         config: Option<HashMap<GoogleConfigKey, String>>,
+        extra_read_headers: Vec<(String, String)>,
+        extra_write_headers: Vec<(String, String)>,
     ) -> Result<ObjectStorage, StorageError> {
-        let backend =
-            Arc::new(GcsObjectStoreBackend { bucket, prefix, credentials, config });
+        let backend = Arc::new(GcsObjectStoreBackend {
+            bucket,
+            prefix,
+            credentials,
+            config,
+            extra_read_headers: sorted_headers(extra_read_headers),
+            extra_write_headers: sorted_headers(extra_write_headers),
+        });
         let storage = ObjectStorage::from_backend(backend);
 
         Ok(storage)
@@ -293,10 +413,36 @@ impl ObjectStorage {
     async fn get_client(
         &self,
         settings: &Settings,
+        role: Role,
     ) -> StorageResult<&Arc<dyn ObjectStore>> {
-        self.client
-            .get_or_try_init(|| async { self.backend.mk_object_store(settings) })
-            .await
+        // When read and write headers are equal (the default, and the
+        // no-custom-headers case), a single client serves both roles so we keep
+        // exactly one connection pool. Only when they differ do we build a
+        // second, role-specific client.
+        if self.backend.read_write_headers_differ() {
+            match role {
+                Role::Read => {
+                    self.read_client
+                        .get_or_try_init(|| async {
+                            self.backend.mk_object_store(settings, Role::Read)
+                        })
+                        .await
+                }
+                Role::Write => {
+                    self.write_client
+                        .get_or_try_init(|| async {
+                            self.backend.mk_object_store(settings, Role::Write)
+                        })
+                        .await
+                }
+            }
+        } else {
+            self.read_client
+                .get_or_try_init(|| async {
+                    self.backend.mk_object_store(settings, Role::Read)
+                })
+                .await
+        }
     }
 
     /// We need this because `object_store`'s local file implementation doesn't sort refs. Since this
@@ -309,7 +455,7 @@ impl ObjectStorage {
     ///
     /// Intended for testing and debugging purposes only.
     pub async fn all_keys(&self) -> StorageResult<Vec<String>> {
-        self.get_client(&self.backend.default_settings())
+        self.get_client(&self.backend.default_settings(), Role::Read)
             .await?
             .list(None)
             .map_ok(|obj| obj.location.to_string())
@@ -431,8 +577,11 @@ impl Storage for ObjectStorage {
         let mode = self.get_put_mode(settings, previous_version);
         let options = PutOptions { mode, attributes, ..PutOptions::default() };
         // FIXME: use multipart
-        let res =
-            self.get_client(settings).await?.put_opts(&path, bytes.into(), options).await;
+        let res = self
+            .get_client(settings, Role::Write)
+            .await?
+            .put_opts(&path, bytes.into(), options)
+            .await;
         match res {
             Ok(res) => {
                 let new_version = VersionInfo {
@@ -469,7 +618,8 @@ impl Storage for ObjectStorage {
                 if_match: version.etag().map(|e| strip_quotes(e).into()),
                 ..Default::default()
             };
-            let result = self.get_client(settings).await?.get_opts(&from, opts).await;
+            let result =
+                self.get_client(settings, Role::Write).await?.get_opts(&from, opts).await;
             match result {
                 Ok(result) => {
                     let bytes = result
@@ -477,7 +627,7 @@ impl Storage for ObjectStorage {
                         .await
                         .map_err(|e| StorageErrorKind::ObjectStore(Box::new(e)))
                         .capture()?;
-                    self.get_client(settings)
+                    self.get_client(settings, Role::Write)
                         .await?
                         .put(&to, bytes.into())
                         .await
@@ -492,7 +642,7 @@ impl Storage for ObjectStorage {
                 Err(err) => Err(obj_store_error(err)),
             }
         } else {
-            match self.get_client(settings).await?.copy(&from, &to).await {
+            match self.get_client(settings, Role::Write).await?.copy(&from, &to).await {
                 Ok(_) => {
                     Ok(VersionedUpdateResult::Updated { new_version: version.clone() })
                 }
@@ -510,12 +660,14 @@ impl Storage for ObjectStorage {
     ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
         let prefix = ObjectPath::from(format!("{}/{}", self.backend.prefix(), prefix));
         let stream =
-            self.get_client(settings).await?.list(Some(&prefix)).map(move |object| {
-                let prefix = prefix.clone();
-                object
-                    .map_err(obj_store_error)
-                    .and_then(|object| object_to_list_info(&prefix, &object))
-            });
+            self.get_client(settings, Role::Read).await?.list(Some(&prefix)).map(
+                move |object| {
+                    let prefix = prefix.clone();
+                    object
+                        .map_err(obj_store_error)
+                        .and_then(|object| object_to_list_info(&prefix, &object))
+                },
+            );
         Ok(stream.boxed())
     }
 
@@ -533,8 +685,10 @@ impl Storage for ObjectStorage {
             ids.push(Ok(path.clone()));
             sizes.insert(path, size);
         }
-        let results =
-            self.get_client(settings).await?.delete_stream(stream::iter(ids).boxed());
+        let results = self
+            .get_client(settings, Role::Write)
+            .await?
+            .delete_stream(stream::iter(ids).boxed());
         let res = results
             .fold(DeleteObjectsResult::default(), |mut res, delete_result| {
                 if let Ok(deleted_path) = delete_result {
@@ -562,7 +716,7 @@ impl Storage for ObjectStorage {
     ) -> StorageResult<DateTime<Utc>> {
         let path = self.prefixed_path(path);
         let res = self
-            .get_client(settings)
+            .get_client(settings, Role::Read)
             .await?
             .head(&path)
             .await
@@ -636,7 +790,8 @@ impl ObjectStorage {
                 .and_then(|v| v.etag().map(|e| strip_quotes(e).into())),
             ..Default::default()
         };
-        let res = self.get_client(settings).await?.get_opts(&full_key, opts).await;
+        let res =
+            self.get_client(settings, Role::Read).await?.get_opts(&full_key, opts).await;
 
         match res {
             Ok(result) => {
@@ -656,10 +811,24 @@ impl ObjectStorage {
 
 #[typetag::serde(tag = "object_store_provider_type")]
 pub trait ObjectStoreBackend: Debug + Display + Sync + Send {
+    /// Build the underlying `object_store` client for the given `role`.
+    ///
+    /// `role` selects which custom-header set (read vs write) the client carries.
+    /// Backends without per-role headers (or without an HTTP layer) ignore it.
     fn mk_object_store(
         &self,
         settings: &Settings,
+        role: Role,
     ) -> Result<Arc<dyn ObjectStore>, StorageError>;
+
+    /// Whether this backend's read and write header sets differ.
+    ///
+    /// When `false` (the default, and always the case with no custom headers),
+    /// [`ObjectStorage`] uses a single shared client for both roles. When `true`,
+    /// it builds two role-specific clients.
+    fn read_write_headers_differ(&self) -> bool {
+        false
+    }
 
     /// The prefix for the object store.
     fn prefix(&self) -> String;
@@ -708,6 +877,7 @@ impl ObjectStoreBackend for InMemoryObjectStoreBackend {
     fn mk_object_store(
         &self,
         _settings: &Settings,
+        _role: Role,
     ) -> Result<Arc<dyn ObjectStore>, StorageError> {
         Ok(Arc::new(InMemory::new()))
     }
@@ -764,6 +934,7 @@ impl ObjectStoreBackend for LocalFileSystemObjectStoreBackend {
     fn mk_object_store(
         &self,
         _settings: &Settings,
+        _role: Role,
     ) -> Result<Arc<dyn ObjectStore>, StorageError> {
         let path = std::fs::canonicalize(&self.path).map_err(|err| {
             if err.kind() == std::io::ErrorKind::NotFound {
@@ -855,6 +1026,8 @@ impl ObjectStoreBackend for HttpObjectStoreBackend {
     fn mk_object_store(
         &self,
         settings: &Settings,
+        // HTTP storage is read-only; its `headers` apply to every (read) request.
+        _role: Role,
     ) -> Result<Arc<dyn ObjectStore>, StorageError> {
         let empty = HashMap::new();
         let config = self.config.as_ref().unwrap_or(&empty);
@@ -934,6 +1107,12 @@ pub struct S3ObjectStoreBackend {
     pub prefix: Option<String>,
     pub credentials: Option<S3Credentials>,
     pub config: Option<S3Options>,
+    /// Extra HTTP headers sent on read requests.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub extra_read_headers: Vec<(String, String)>,
+    /// Extra HTTP headers sent on write requests.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub extra_write_headers: Vec<(String, String)>,
 }
 
 #[cfg(feature = "s3")]
@@ -966,6 +1145,7 @@ impl ObjectStoreBackend for S3ObjectStoreBackend {
     fn mk_object_store(
         &self,
         settings: &Settings,
+        role: Role,
     ) -> Result<Arc<dyn ObjectStore>, StorageError> {
         let builder = AmazonS3Builder::new();
 
@@ -1029,8 +1209,31 @@ impl ObjectStoreBackend for S3ObjectStoreBackend {
             retry_timeout: core::time::Duration::from_secs(5 * 60),
         });
 
+        // Apply custom headers last: read every resolved client option back out
+        // and re-pack it with the headers, so the replacing `with_client_options`
+        // doesn't drop env/config-derived options.
+        let headers = match role {
+            Role::Read => &self.extra_read_headers,
+            Role::Write => &self.extra_write_headers,
+        };
+        let builder = if headers.is_empty() {
+            builder
+        } else {
+            let header_map = headers_to_header_map(headers)?;
+            let opts = client_options_with_headers(header_map, |key| {
+                builder
+                    .get_config_value(&object_store::aws::AmazonS3ConfigKey::Client(key))
+            });
+            builder.with_client_options(opts)
+        };
+
         let store = builder.build().capture_box()?;
         Ok(Arc::new(store))
+    }
+
+    // Headers are stored sorted (see `new_s3`/`new_gcs`), so this is order-insensitive.
+    fn read_write_headers_differ(&self) -> bool {
+        self.extra_read_headers != self.extra_write_headers
     }
 
     fn prefix(&self) -> String {
@@ -1086,6 +1289,8 @@ impl ObjectStoreBackend for AzureObjectStoreBackend {
     fn mk_object_store(
         &self,
         settings: &Settings,
+        // TODO: Azure custom-header support
+        _role: Role,
     ) -> Result<Arc<dyn ObjectStore>, StorageError> {
         let builder = MicrosoftAzureBuilder::new();
 
@@ -1163,6 +1368,15 @@ pub struct GcsObjectStoreBackend {
     pub prefix: Option<String>,
     pub credentials: Option<GcsCredentials>,
     pub config: Option<HashMap<GoogleConfigKey, String>>,
+    /// Extra HTTP headers sent on read requests. Runtime-only: serialized on the
+    /// struct (so they travel with pickled repos) but never persisted in the
+    /// repository config. `skip_serializing_if` keeps the serialized form
+    /// unchanged when unused, for back-compat with existing blobs.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub extra_read_headers: Vec<(String, String)>,
+    /// Extra HTTP headers sent on write requests. See [`Self::extra_read_headers`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub extra_write_headers: Vec<(String, String)>,
 }
 
 #[cfg(feature = "gcs")]
@@ -1191,6 +1405,7 @@ impl ObjectStoreBackend for GcsObjectStoreBackend {
     fn mk_object_store(
         &self,
         settings: &Settings,
+        role: Role,
     ) -> Result<Arc<dyn ObjectStore>, StorageError> {
         let builder = GoogleCloudStorageBuilder::new();
 
@@ -1251,8 +1466,30 @@ impl ObjectStoreBackend for GcsObjectStoreBackend {
             max_retries: settings.retries().max_tries().get() as usize - 1,
             retry_timeout: core::time::Duration::from_secs(5 * 60),
         });
+
+        // Apply custom headers last, preserving resolved client options. See the
+        // matching block in `S3ObjectStoreBackend::mk_object_store` for rationale.
+        let headers = match role {
+            Role::Read => &self.extra_read_headers,
+            Role::Write => &self.extra_write_headers,
+        };
+        let builder = if headers.is_empty() {
+            builder
+        } else {
+            let header_map = headers_to_header_map(headers)?;
+            let opts = client_options_with_headers(header_map, |key| {
+                builder.get_config_value(&GoogleConfigKey::Client(key))
+            });
+            builder.with_client_options(opts)
+        };
+
         let store = builder.build().capture_box()?;
         Ok(Arc::new(store))
+    }
+
+    // Headers are stored sorted (see `new_s3`/`new_gcs`), so this is order-insensitive.
+    fn read_write_headers_differ(&self) -> bool {
+        self.extra_read_headers != self.extra_write_headers
     }
 
     fn prefix(&self) -> String {
@@ -1506,6 +1743,8 @@ pub async fn new_s3_object_store_storage(
     bucket: String,
     prefix: Option<String>,
     credentials: Option<S3Credentials>,
+    extra_read_headers: Vec<(String, String)>,
+    extra_write_headers: Vec<(String, String)>,
 ) -> StorageResult<Arc<dyn Storage + Send + Sync>> {
     if let Some(endpoint) = &config.endpoint_url
         && (endpoint.contains("fly.storage.tigris.dev")
@@ -1516,8 +1755,15 @@ pub async fn new_s3_object_store_storage(
                 .to_string(),
         )));
     }
-    let storage =
-        ObjectStorage::new_s3(bucket, prefix, credentials, Some(config)).await?;
+    let storage = ObjectStorage::new_s3(
+        bucket,
+        prefix,
+        credentials,
+        Some(config),
+        extra_read_headers,
+        extra_write_headers,
+    )
+    .await?;
     Ok(Arc::new(storage))
 }
 
@@ -1547,6 +1793,8 @@ pub fn new_gcs_storage(
     prefix: Option<String>,
     credentials: Option<GcsCredentials>,
     config: Option<HashMap<String, String>>,
+    extra_read_headers: Vec<(String, String)>,
+    extra_write_headers: Vec<(String, String)>,
 ) -> StorageResult<Arc<dyn Storage + Send + Sync>> {
     use object_store::gcp::GoogleConfigKey;
     let config = config
@@ -1556,8 +1804,137 @@ pub fn new_gcs_storage(
             key.parse::<GoogleConfigKey>().map(|k| (k, value)).ok()
         })
         .collect();
-    let storage = ObjectStorage::new_gcs(bucket, prefix, credentials, Some(config))?;
+    let storage = ObjectStorage::new_gcs(
+        bucket,
+        prefix,
+        credentials,
+        Some(config),
+        extra_read_headers,
+        extra_write_headers,
+    )?;
     Ok(Arc::new(storage))
+}
+
+#[cfg(all(test, feature = "s3"))]
+mod s3_header_tests {
+    use std::sync::Arc;
+
+    use icechunk_macros::tokio_test;
+    use icechunk_storage::{Settings, s3_config::S3Options};
+
+    use super::{ObjectStorage, ObjectStoreBackend as _, Role, S3ObjectStoreBackend};
+
+    fn backend(read: &[(&str, &str)], write: &[(&str, &str)]) -> S3ObjectStoreBackend {
+        let to_vec = |hs: &[(&str, &str)]| {
+            hs.iter().map(|(k, v)| ((*k).to_string(), (*v).to_string())).collect()
+        };
+        S3ObjectStoreBackend {
+            bucket: "testbucket".to_string(),
+            prefix: Some("p".to_string()),
+            credentials: None,
+            config: Some(S3Options::default().with_region("us-east-1")),
+            extra_read_headers: to_vec(read),
+            extra_write_headers: to_vec(write),
+        }
+    }
+
+    /// Whether the read-role and write-role clients are the *same* `Arc`. Goes
+    /// through `new_s3` so the construction-time header sort is exercised.
+    #[expect(clippy::unwrap_used)]
+    async fn read_and_write_share_client(
+        read: &[(&str, &str)],
+        write: &[(&str, &str)],
+    ) -> bool {
+        let to_vec = |hs: &[(&str, &str)]| {
+            hs.iter().map(|(k, v)| ((*k).to_string(), (*v).to_string())).collect()
+        };
+        let storage = ObjectStorage::new_s3(
+            "testbucket".to_string(),
+            Some("p".to_string()),
+            None,
+            Some(S3Options::default().with_region("us-east-1")),
+            to_vec(read),
+            to_vec(write),
+        )
+        .await
+        .unwrap();
+        let settings = Settings::default();
+        let read_client = storage.get_client(&settings, Role::Read).await.unwrap();
+        let write_client = storage.get_client(&settings, Role::Write).await.unwrap();
+        Arc::ptr_eq(read_client, write_client)
+    }
+
+    /// No headers, or equal read/write sets (in any order) -> a single shared
+    /// client serves both roles (one connection pool).
+    #[tokio_test]
+    async fn test_equal_headers_share_one_client() {
+        assert!(read_and_write_share_client(&[], &[]).await);
+        let same = &[("x-amz-meta-a", "1")];
+        assert!(read_and_write_share_client(same, same).await);
+        // Same set, different order -> still one client (headers stored sorted).
+        assert!(
+            read_and_write_share_client(
+                &[("x-amz-meta-a", "1"), ("x-amz-meta-b", "2")],
+                &[("x-amz-meta-b", "2"), ("x-amz-meta-a", "1")],
+            )
+            .await
+        );
+    }
+
+    /// Differing read/write sets -> two distinct, role-specific clients.
+    #[tokio_test]
+    async fn test_differing_headers_use_two_clients() {
+        assert!(
+            !read_and_write_share_client(
+                &[],
+                &[("x-amz-acl", "bucket-owner-full-control")]
+            )
+            .await
+        );
+        assert!(
+            !read_and_write_share_client(
+                &[("x-amz-meta-r", "1")],
+                &[("x-amz-meta-w", "1")]
+            )
+            .await
+        );
+    }
+
+    /// Building the client succeeds for each role when headers are set: this
+    /// exercises the read-back + `with_client_options` path.
+    #[test]
+    fn test_mk_object_store_with_headers_builds() {
+        let b = backend(
+            &[("x-amz-meta-reader", "r")],
+            &[("x-amz-acl", "bucket-owner-full-control")],
+        );
+        assert!(b.mk_object_store(&Settings::default(), Role::Read).is_ok());
+        assert!(b.mk_object_store(&Settings::default(), Role::Write).is_ok());
+    }
+
+    /// An invalid header name surfaces as an error at client-build time.
+    #[test]
+    fn test_mk_object_store_invalid_header_errs() {
+        let b = backend(&[], &[("bad header", "v")]);
+        assert!(b.mk_object_store(&Settings::default(), Role::Write).is_err());
+    }
+
+    /// Headers round-trip through serde, and `skip_serializing_if` keeps the
+    /// serialized form unchanged when they are empty (back-compat).
+    #[test]
+    fn test_headers_serde_roundtrip() {
+        let empty = backend(&[], &[]);
+        let json = serde_json::to_string(&empty).unwrap();
+        assert!(!json.contains("extra_read_headers"), "got: {json}");
+        assert!(!json.contains("extra_write_headers"), "got: {json}");
+
+        let with = backend(&[], &[("x-amz-acl", "bucket-owner-full-control")]);
+        let json = serde_json::to_string(&with).unwrap();
+        assert!(json.contains("x-amz-acl"), "got: {json}");
+        let back: S3ObjectStoreBackend = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.extra_write_headers, with.extra_write_headers);
+        assert!(back.extra_read_headers.is_empty());
+    }
 }
 
 #[cfg(all(test, feature = "http"))]
@@ -1592,14 +1969,14 @@ mod http_tests {
     #[test]
     fn test_mk_object_store_opts_only() {
         let b = backend(&[("allow_http", "true")], &[]);
-        assert!(b.mk_object_store(&Settings::default()).is_ok());
+        assert!(b.mk_object_store(&Settings::default(), super::Role::Read).is_ok());
     }
 
     /// Store builds with headers only (no opts).
     #[test]
     fn test_mk_object_store_headers_only() {
         let b = backend(&[], &[("Authorization", "Bearer token123")]);
-        assert!(b.mk_object_store(&Settings::default()).is_ok());
+        assert!(b.mk_object_store(&Settings::default(), super::Role::Read).is_ok());
     }
 
     /// Store builds when both opts and headers are present — the opts-clobber
@@ -1608,20 +1985,20 @@ mod http_tests {
     fn test_mk_object_store_opts_and_headers() {
         let b =
             backend(&[("allow_http", "true")], &[("Authorization", "Bearer token123")]);
-        assert!(b.mk_object_store(&Settings::default()).is_ok());
+        assert!(b.mk_object_store(&Settings::default(), super::Role::Read).is_ok());
     }
 
     /// A header name containing a space is invalid and must return Err.
     #[test]
     fn test_mk_object_store_invalid_header_name() {
         let b = backend(&[], &[("bad header", "value")]);
-        assert!(b.mk_object_store(&Settings::default()).is_err());
+        assert!(b.mk_object_store(&Settings::default(), super::Role::Read).is_err());
     }
 
     /// A header value containing a newline is invalid and must return Err.
     #[test]
     fn test_mk_object_store_invalid_header_value() {
         let b = backend(&[], &[("X-Custom", "val\nue")]);
-        assert!(b.mk_object_store(&Settings::default()).is_err());
+        assert!(b.mk_object_store(&Settings::default(), super::Role::Read).is_err());
     }
 }

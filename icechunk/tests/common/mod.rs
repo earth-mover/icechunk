@@ -46,6 +46,8 @@ pub(crate) fn make_minio_integration_storage(
             session_token: None,
             expires_after: None,
         })),
+        Vec::new(),
+        Vec::new(),
         None,
     )?;
     Ok(storage)
@@ -69,6 +71,8 @@ pub(crate) fn make_tigris_integration_storage(
         Some(prefix),
         Some(credentials),
         false,
+        Vec::new(),
+        Vec::new(),
         None,
     )?;
     Ok(storage)
@@ -91,6 +95,8 @@ pub(crate) fn make_r2_integration_storage(
         Some(prefix),
         Some(env::var("R2_ACCOUNT_ID")?),
         Some(credentials),
+        Vec::new(),
+        Vec::new(),
         None,
     )?;
     Ok(storage)
@@ -129,6 +135,8 @@ pub(crate) fn make_aws_integration_storage(
         get_aws_integration_bucket()?,
         Some(prefix),
         Some(get_aws_integration_credentials()?),
+        Vec::new(),
+        Vec::new(),
         None,
     )?;
     Ok(storage)
@@ -171,6 +179,8 @@ impl RealStore {
                     self.bucket.clone(),
                     prefix,
                     creds,
+                    Vec::new(),
+                    Vec::new(),
                     legacy_rooted_keys.then_some(true),
                 )?
                 .unsafe_allow_empty_prefix_creation(),
@@ -182,6 +192,8 @@ impl RealStore {
                     prefix,
                     None, // endpoint already resolved into options
                     creds,
+                    Vec::new(),
+                    Vec::new(),
                     legacy_rooted_keys.then_some(true),
                 )?
                 .unsafe_allow_empty_prefix_creation(),
@@ -193,10 +205,67 @@ impl RealStore {
                     prefix,
                     creds,
                     false,
+                    Vec::new(),
+                    Vec::new(),
                     legacy_rooted_keys.then_some(true),
                 )?
                 .unsafe_allow_empty_prefix_creation(),
             ),
+        };
+        Ok(storage)
+    }
+
+    pub(crate) fn options(&self) -> &S3Options {
+        &self.options
+    }
+
+    pub(crate) fn credentials(&self) -> &S3Credentials {
+        &self.credentials
+    }
+
+    pub(crate) fn bucket(&self) -> &str {
+        &self.bucket
+    }
+
+    /// Native-S3 storage at `prefix` carrying the given write headers, through
+    /// each store's real constructor. Used by the header round-trip tests.
+    pub(crate) fn write_header_storage(
+        &self,
+        prefix: String,
+        write_headers: Vec<(String, String)>,
+    ) -> Result<Arc<dyn Storage + Send + Sync>, Box<dyn std::error::Error>> {
+        let creds = Some(self.credentials.clone());
+        let prefix = Some(prefix);
+        let storage: Arc<dyn Storage + Send + Sync> = match self.kind {
+            RealStoreKind::Aws => new_s3_storage(
+                self.options.clone(),
+                self.bucket.clone(),
+                prefix,
+                creds,
+                Vec::new(),
+                write_headers,
+                None,
+            )?,
+            RealStoreKind::R2 => new_r2_storage(
+                self.options.clone(),
+                Some(self.bucket.clone()),
+                prefix,
+                None, // endpoint already resolved into options
+                creds,
+                Vec::new(),
+                write_headers,
+                None,
+            )?,
+            RealStoreKind::Tigris => new_tigris_storage(
+                self.options.clone(),
+                self.bucket.clone(),
+                prefix,
+                creds,
+                false,
+                Vec::new(),
+                write_headers,
+                None,
+            )?,
         };
         Ok(storage)
     }

@@ -3378,6 +3378,10 @@ class Storage:
         prefix: str | None,
         credentials: _AnyS3Credential | None = None,
         legacy_rooted_keys: bool | None = None,
+        *,
+        read_headers: dict[str, str] | None = None,
+        write_headers: dict[str, str] | None = None,
+        headers: dict[str, str] | None = None,
     ) -> Storage: ...
     @classmethod
     def new_s3_object_store(
@@ -3386,6 +3390,10 @@ class Storage:
         bucket: str,
         prefix: str | None,
         credentials: _AnyS3Credential | None = None,
+        *,
+        read_headers: dict[str, str] | None = None,
+        write_headers: dict[str, str] | None = None,
+        headers: dict[str, str] | None = None,
     ) -> Storage: ...
     @classmethod
     def new_tigris(
@@ -3396,6 +3404,10 @@ class Storage:
         use_weak_consistency: bool,
         credentials: _AnyS3Credential | None = None,
         legacy_rooted_keys: bool | None = None,
+        *,
+        read_headers: dict[str, str] | None = None,
+        write_headers: dict[str, str] | None = None,
+        headers: dict[str, str] | None = None,
     ) -> Storage: ...
     @classmethod
     def new_in_memory(cls) -> Storage: ...
@@ -3409,6 +3421,9 @@ class Storage:
         credentials: _AnyGcsCredential | None = None,
         *,
         config: dict[str, str] | None = None,
+        read_headers: dict[str, str] | None = None,
+        write_headers: dict[str, str] | None = None,
+        headers: dict[str, str] | None = None,
     ) -> Storage: ...
     @classmethod
     def new_r2(
@@ -3419,6 +3434,10 @@ class Storage:
         account_id: str | None = None,
         credentials: _AnyS3Credential | None = None,
         legacy_rooted_keys: bool | None = None,
+        *,
+        read_headers: dict[str, str] | None = None,
+        write_headers: dict[str, str] | None = None,
+        headers: dict[str, str] | None = None,
     ) -> Storage: ...
     @classmethod
     def new_azure_blob(
