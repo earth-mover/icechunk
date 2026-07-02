@@ -262,7 +262,8 @@ def test_shift_and_reindex_rejected_on_rectilinear_grid() -> None:
         name="a",
         shape=(3,),
         dtype="int32",
-        chunks=((1, 2),),
+        # rectilinear grids are typed only in newer zarr versions
+        chunks=((1, 2),),  # type: ignore[arg-type, unused-ignore]
     )
     arr[:] = [10, 20, 30]
     session.commit("write")
