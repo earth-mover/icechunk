@@ -922,7 +922,7 @@ impl S3Storage {
                 return Ok(ReadbackOutcome::NotOurs);
             }
             Err(sdk_err) => {
-                warn!(key, error = %sdk_err, "readback HEAD failed; propagating original error");
+                warn!(key, error = %sdk_err, "readback HEAD failed; propagating the HEAD error");
                 return obj_store_error_res(sdk_err);
             }
         };

@@ -810,7 +810,7 @@ impl ObjectStorage {
         write_id: Option<&str>,
     ) -> StorageResult<ReadbackOutcome> {
         let Some(write_id) = write_id else { return Ok(ReadbackOutcome::NotOurs) };
-        let client = self.get_client(settings).await?;
+        let client = self.get_client(settings, Role::Write).await?;
         let opts = GetOptions { head: true, ..Default::default() };
         let (stored_write_id, version) = match client.get_opts(path, opts).await {
             Ok(result) => (
@@ -833,7 +833,7 @@ impl ObjectStorage {
                 warn!(
                     %path,
                     error = %err,
-                    "readback HEAD failed; propagating original error"
+                    "readback HEAD failed; propagating the HEAD error"
                 );
                 return Err(obj_store_error(err));
             }
