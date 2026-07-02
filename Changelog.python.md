@@ -1,5 +1,11 @@
 # Changelog
 
+## Python Icechunk Library 2.2.0 [unreleased]
+
+### Fixes
+
+- `shift_array` and `reindex_array` on an array with a rectilinear chunk grid used to silently corrupt the array: chunk indices were relabeled without updating the chunk grid, leaving chunk payloads that no longer matched the sizes of their new grid positions. These operations now fail up front unless the array's metadata declares a regular chunk grid ([#2151](https://github.com/earth-mover/icechunk/issues/2151)).
+
 ## Python Icechunk Library 2.1.0
 
 This release introduces on-disk [spec version 2.1](https://icechunk.io/en/stable/reference/spec-v2-1/), an additive change that is forward- and backward-compatible with spec 2.0.
