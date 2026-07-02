@@ -67,8 +67,9 @@ triggered the read-back. There are two rules:
 1. **Lost-response-shaped failures** — our write may or may not have
    landed: `NoSuchUpload` (or a raw 404) from a multipart complete, and
    generic transport errors from `object_store`. Only a provably-ours
-   object rescues the operation; anything else propagates the original
-   error so the caller can retry.
+   object rescues the operation; "not ours" propagates the original
+   error so the caller can retry, and a failed read-back propagates
+   the HEAD error as above.
 
 Rule 1 may convert the failure into an answer either way; rule 2 must
 never convert a real failure into a conflict or a success it can't

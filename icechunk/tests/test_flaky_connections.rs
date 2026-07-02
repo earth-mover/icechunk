@@ -352,6 +352,8 @@ async fn build_proxied_storage(
                 Some(prefix),
                 Some(credentials),
                 Some(s3_options),
+                Vec::new(),
+                Vec::new(),
             )
             .await?,
         ),
