@@ -56,14 +56,16 @@ any reindex of a rectilinear array can corrupt it the same way.
 ### Option A: reject the operation (implemented first)
 
 Add a guard at the top of `reindex_array` (which `shift_array` goes through)
-that inspects the node's `user_data`: if it parses as zarr array metadata and
-the chunk grid is not `regular`, fail with a clear error before any chunk refs
-are touched.
+that inspects the node's `user_data`: unless it parses as zarr array metadata
+declaring a `regular` chunk grid, fail with a clear error before any chunk
+refs are touched.
 
-* The check is fail-open: `user_data` that doesn't parse as zarr metadata
-  (e.g. arrays created through the Rust API with non-zarr metadata) is not
-  rejected. Icechunk core otherwise treats `user_data` as opaque; the guard
-  only interprets it when it can.
+* The check fails closed: reindexing is only allowed when we know for a fact
+  the grid is regular. `user_data` that doesn't parse as zarr array metadata
+  (e.g. arrays created through the Rust API with non-zarr metadata) is
+  rejected too. The parsing is as minimal as possible — only the chunk grid
+  name is read — to defend against changes in the rest of the metadata
+  document.
 * No format change, no read-path change. The only behavior change is that an
   operation which previously corrupted data silently now errors.
 * Cheap, low risk, and reversible: the error can later be replaced by the

@@ -276,12 +276,11 @@ class Session:
             ``backward`` returns ``None`` (out of bounds) or points to a position
             with no chunk, that position is reset to the fill value.
 
-        Raises
-        ------
-        IcechunkError
-            If the array uses a non-regular chunk grid (e.g. rectilinear).
-            Chunks on such grids have position-dependent sizes, so moving them
-            would corrupt the array.
+        Notes
+        -----
+        Only arrays with regular chunk grids can be reindexed. Chunks on other
+        grids (e.g. rectilinear) have position-dependent sizes, so moving them
+        would corrupt the array.
         """
         return self._session.reindex_array(array_path, forward, backward)
 
@@ -303,17 +302,14 @@ class Session:
             The number of chunks to shift by in each dimension. Positive values
             shift right/down, negative values shift left/up.
 
-        Raises
-        ------
-        IcechunkError
-            If the array uses a non-regular chunk grid (e.g. rectilinear).
-            Chunks on such grids have position-dependent sizes, so moving them
-            would corrupt the array.
-
         Notes
         -----
         To shift right while preserving all data, first resize the array using zarr's
         array.resize(), then shift.
+
+        Only arrays with regular chunk grids can be shifted. Chunks on other
+        grids (e.g. rectilinear) have position-dependent sizes, so moving them
+        would corrupt the array.
         """
         self._session.shift_array(array_path, list(chunk_offset))
 
