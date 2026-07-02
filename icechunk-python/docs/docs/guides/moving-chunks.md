@@ -20,9 +20,13 @@ This enables **rolling time windows**—continuously updating datasets like fore
 
 !!! warning "Regular chunk grids only"
     Both methods require the array to use a regular chunk grid, and raise an
-    `IcechunkError` otherwise. On a rectilinear grid each chunk's size depends
-    on its position, so relabeling chunk indices would leave chunk data that no
-    longer matches the expected size at its new position.
+    `IcechunkError` otherwise. On a
+    [rectilinear chunk grid](https://github.com/zarr-developers/zarr-extensions/tree/main/chunk-grids/rectilinear)
+    the chunk size varies from position to position along a dimension, so
+    relabeling chunk indices would leave chunk data that no longer matches the
+    expected size at its new position. Note that a regular grid may still use a
+    different chunk size for each dimension — a grid is rectilinear only when
+    sizes vary *within* a dimension.
 
 ## Offsets Are in Chunks, Not Elements
 

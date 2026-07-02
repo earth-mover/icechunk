@@ -188,7 +188,7 @@ pub enum SessionErrorKind {
     )]
     InvalidIndex { coords: ChunkIndices, path: Path },
     #[error(
-        "cannot reindex chunks of the array at `{path}`: only arrays whose metadata declares a `regular` chunk grid can be reindexed, found `{grid_type}`. \
+        "cannot shift or reindex chunks of the array at `{path}`: `shift_array` and `reindex_array` require an array whose metadata declares a `regular` chunk grid, found `{grid_type}`. \
          Reindexing chunks on a non-regular grid would corrupt the array, because chunk payloads would no longer match \
          the sizes of their new grid positions. See https://github.com/earth-mover/icechunk/issues/2151"
     )]
