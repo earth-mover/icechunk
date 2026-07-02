@@ -1,3 +1,4 @@
+pub mod readback;
 pub mod s3_config;
 mod storage;
 

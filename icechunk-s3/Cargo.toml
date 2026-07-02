@@ -13,6 +13,10 @@ edition.workspace = true
 publish = true
 rust-version.workspace = true
 
+[features]
+# Exposes `test_util` for cross-crate integration tests
+test-util = []
+
 [dependencies]
 icechunk-storage.workspace = true
 icechunk-types.workspace = true
@@ -32,6 +36,7 @@ tokio-util.workspace = true
 tracing.workspace = true
 typed-path.workspace = true
 typetag.workspace = true
+uuid.workspace = true
 
 [dev-dependencies]
 icechunk-macros.workspace = true
