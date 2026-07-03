@@ -91,6 +91,26 @@
         # Use Python 3.12 from nixpkgs
         python = pkgs.python312;
 
+        # Coverage report viewer; not packaged in nixpkgs.
+        octocov = pkgs.buildGoModule rec {
+          pname = "octocov";
+          version = "0.75.8";
+          src = pkgs.fetchFromGitHub {
+            owner = "k1LoW";
+            repo = "octocov";
+            tag = "v${version}";
+            hash = "sha256-OTNCTGHwoKkMIJnjUjT8Lf9/B/rMmZEQhNwZOTc0cck=";
+          };
+          vendorHash = "sha256-SghD8aeJ0b7GuEfnPW1nu7qUOc9YJkyGNbaCwk3cYvs=";
+          subPackages = ["."];
+          ldflags = [
+            "-s"
+            "-w"
+          ];
+          # Tests talk to the GitHub API.
+          doCheck = false;
+        };
+
         # Construct package set (only consumed by the uv2nix shell below)
         pythonSet =
           # Use base package set from pyproject.nix builders
@@ -130,7 +150,8 @@
                   pkgs.cargo-edit
                   pkgs.cargo-msrv
                   pkgs.cargo-machete
-                pkgs.cargo-llvm-cov
+                  pkgs.cargo-llvm-cov
+                  octocov
 
                   pkgs.taplo # toml lsp server
                   pkgs.awscli2
@@ -171,9 +192,7 @@
           #
           # Note: Editable package support is still unstable and subject to change.
 
-
-
-        uv2nix = let
+          uv2nix = let
             # Create an overlay enabling editable mode for all local dependencies.
             editableOverlay = workspace.mkEditablePyprojectOverlay {
               # Use environment variable

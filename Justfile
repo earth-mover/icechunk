@@ -406,6 +406,10 @@ coverage-report *args:
   cargo llvm-cov report --profile {{ profile }} --lcov --output-path coverage_rust.lcov
   echo "Coverage report: coverage_rust.lcov (Rust, unified FFI + native)"
 
+[doc("View per-file coverage from the coverage-report output with octocov")]
+coverage-view *args:
+  octocov ls-files --report coverage_rust.lcov "$@" | grep -v '<WORKSPACE>'
+
 coverage-clean *args:
   find . -iname "*.profraw" -delete
   -rm coverage_rust.lcov coverage.lcov coverage.xml
