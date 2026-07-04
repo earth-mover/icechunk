@@ -4,19 +4,25 @@ profile := "dev"
 # Enable coverage instrumentation: override with `just coverage=true build-wheels` (default: false)
 coverage := "false"
 
-# Shell function injected into recipes that need coverage instrumentation env.
-# Call `setup_coverage_env` after pasting `{{coverage_env}}` into a bash recipe.
-coverage_env := '''
-setup_coverage_env() {
-  if [ "''' + coverage + '''" = "true" ]; then
-    export DYLD_LIBRARY_PATH="${CONDA_PREFIX:-}/lib"
-    source <(cargo llvm-cov show-env --sh --profile ''' + profile + ''')
-    export CARGO_TARGET_DIR=$CARGO_LLVM_COV_TARGET_DIR
-  fi
-}
-'''
+# Settings can't interpolate variables, so the interpreter preamble below
+# reads these through exported env vars.
+export JUST_COVERAGE := coverage
+export JUST_PROFILE := profile
 
-set script-interpreter := ["bash", "-euo", "pipefail"]
+# pytest-cov flags for `just pytest`, active only when coverage=true
+pytest_cov_args := if coverage == "true" { "--cov=icechunk" } else { "" }
+
+# Env preamble for every [script] recipe: conda lib path, plus llvm-cov
+# instrumentation when coverage=true. Runs in-shell so macOS SIP can't
+# strip DYLD_*.
+set script-interpreter := ["bash", "-euo", "pipefail", "-c", '''
+export DYLD_LIBRARY_PATH="${CONDA_PREFIX:-}/lib"
+if [ "$JUST_COVERAGE" = "true" ]; then
+  source <(cargo llvm-cov show-env --sh --profile "$JUST_PROFILE")
+  export CARGO_TARGET_DIR=$CARGO_LLVM_COV_TARGET_DIR
+fi
+source "$0"
+''']
 
 set positional-arguments
 
@@ -24,52 +30,40 @@ alias fmt := format
 alias pre := pre-commit
 
 export PYTHON_VERSION := "3.14"
-export DYLD_LIBRARY_PATH := "${CONDA_PREFIX:-}/lib"
 
 [script]
 [doc("Run all Rust tests via cargo-nextest")]
 test *args:
-  {{coverage_env}}
-  setup_coverage_env
   cargo nextest run --no-fail-fast --cargo-profile {{profile}} --workspace --lib --bins --tests --examples "$@"
 
 [script]
 [doc("Run integration tests against object stores")]
 test-integration *args:
-  {{coverage_env}}
-  setup_coverage_env
   cargo nextest run --no-fail-fast --cargo-profile {{profile}} --workspace --tests --lib "$@" -- --ignored
 
+[script]
 [doc("Run all Rust lib tests via cargo-nextest")]
 unit-test *args:
-  export DYLD_LIBRARY_PATH="${CONDA_PREFIX:-}/lib" && cargo nextest run --no-fail-fast --cargo-profile {{profile}} --lib "$@"
+  cargo nextest run --no-fail-fast --cargo-profile {{profile}} --lib "$@"
 
 [script]
 [doc("Run Rust doc tests only")]
 doctest *args:
-  {{coverage_env}}
-  setup_coverage_env
   cargo test --workspace --profile {{profile}} --doc "$@"
 
 [script]
 [doc("Run all Rust tests with RUST_LOG enabled (e.g. `just test-logs debug`)")]
 test-logs level *args:
-  {{coverage_env}}
-  setup_coverage_env
   shift && RUST_LOG=icechunk={{level}} cargo nextest run --no-fail-fast --cargo-profile {{profile}} --workspace --lib --bins --tests --examples --nocapture "$@"
 
 [script]
 [doc("Compile tests without running them")]
 compile-tests *args:
-  {{coverage_env}}
-  setup_coverage_env
   cargo nextest run --no-run --cargo-profile {{profile}} --workspace --all-targets "$@"
 
 [script]
 [doc("Build the Rust workspace (dev by default, override with `just profile=ci build`)")]
 build *args:
-  {{coverage_env}}
-  setup_coverage_env
   cargo build --profile {{profile}} "$@"
 
 [doc("Build the Rust workspace in release mode")]
@@ -84,8 +78,6 @@ gen-flatbuffers:
 [script]
 [doc("Prepare environment for development")]
 develop *args:
-  {{coverage_env}}
-  setup_coverage_env
   cd icechunk-python
   if [[ -n "${CONDA_PREFIX:-}" ]]; then
     export VIRTUAL_ENV="$CONDA_PREFIX"
@@ -130,9 +122,6 @@ check-deps *args:
 [script]
 [doc("Run all Rust examples (skips limits_chunk_refs, large_manifests)")]
 run-all-examples:
-  {{coverage_env}}
-  setup_coverage_env
-
   # Allow failing examples, fix in the future
   set +e
 
@@ -201,16 +190,14 @@ py-pre-commit $SKIP="rust-pre-commit-fast,rust-pre-commit,rust-pre-commit-ci" *a
   prek run --all-files
 
 [script]
-[doc("Run Python tests via pytest")]
+[doc("Run Python tests via pytest (coverage=true also collects Python + FFI coverage)")]
 pytest *args:
-  {{coverage_env}}
-  setup_coverage_env
   cd icechunk-python
   if [[ -n "${CONDA_PREFIX:-}" ]]; then
     export VIRTUAL_ENV="$CONDA_PREFIX"
     export UV_NO_SYNC=1
   fi
-  uv run --active pytest "$@"
+  uv run --active pytest {{pytest_cov_args}} "$@"
 
 [doc("Run the Python tests with OpenTelemetry export to local Jaeger (starts Jaeger; traces at http://localhost:16686)")]
 pytest-otel *args: jaeger-up
@@ -315,8 +302,6 @@ publish-crates:
 [script]
 [doc("Build Python wheels with maturin (set coverage=true for coverage instrumentation)")]
 build-wheels *args:
-  {{coverage_env}}
-  setup_coverage_env
   cd icechunk-python && maturin build --release --out dist -i $PYTHON_VERSION "$@"
 
 [doc("Run Python checks with upstream nightly dependencies")]
@@ -356,8 +341,6 @@ python-upstream-describe: python-upstream-setup
 [script]
 [doc("Run pytest with Python upstream nightly dependencies (set coverage=true to capture FFI coverage)")]
 python-upstream-pytest *args: python-upstream-setup
-  {{coverage_env}}
-  setup_coverage_env
   cd icechunk-python
   source .venv/bin/activate
   pytest -n 4 --hypothesis-profile=nightly --report-log output-pytest-log.jsonl "$@"
@@ -390,8 +373,6 @@ xarray-upstream-setup:
 [script]
 [doc("Run xarray backend tests against local icechunk (set coverage=true to capture FFI coverage)")]
 xarray-upstream-pytest xarray_dir="../xarray": xarray-upstream-clone xarray-upstream-setup
-  {{coverage_env}}
-  setup_coverage_env
   xarray_abs=$(realpath "{{xarray_dir}}")
   cd icechunk-python
   source .venv/bin/activate
@@ -399,20 +380,26 @@ xarray-upstream-pytest xarray_dir="../xarray": xarray-upstream-clone xarray-upst
   pytest -c="$xarray_abs/pyproject.toml" -W ignore tests/run_xarray_backends_tests.py --report-log output-pytest-log.jsonl
 
 [script]
-[doc("code coverage report generation (for Rust + FFI)")]
+[doc("code coverage report generation (Rust + FFI + Python)")]
 coverage-report *args:
-  {{coverage_env}}
-  setup_coverage_env
   cargo llvm-cov report --profile {{ profile }} --lcov --output-path coverage_rust.lcov
   echo "Coverage report: coverage_rust.lcov (Rust, unified FFI + native)"
+  if [ -f icechunk-python/.coverage ]; then
+    coverage lcov --data-file=icechunk-python/.coverage -o coverage_python.lcov
+    echo "Coverage report: coverage_python.lcov (Python)"
+  fi
 
+[script]
 [doc("View per-file coverage from the coverage-report output with octocov")]
 coverage-view *args:
   octocov ls-files --report coverage_rust.lcov "$@" | grep -v '<WORKSPACE>'
+  if [ -f coverage_python.lcov ]; then
+    octocov ls-files --report coverage_python.lcov "$@"
+  fi
 
-coverage-clean *args:
+coverage-clean:
   find . -iname "*.profraw" -delete
-  -rm coverage_rust.lcov coverage.lcov coverage.xml
+  rm -f coverage_rust.lcov coverage_python.lcov icechunk-python/.coverage*
 
 [doc("Run all Python and Rust checks")]
 all-checks:

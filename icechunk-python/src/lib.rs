@@ -193,8 +193,6 @@ fn pep440_version() -> String {
     cargo_version.replace("-rc.", "rc").replace("-alpha.", "a").replace("-beta.", "b")
 }
 
-
-
 /// The icechunk Python module implemented in Rust.
 #[pymodule]
 fn _icechunk_python(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
