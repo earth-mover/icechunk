@@ -209,20 +209,15 @@ impl RedirectStorage {
 
             #[cfg(feature = "object-store-http")]
             "http+icechunk" | "http+ic" | "https+icechunk" | "https+ic" => {
-                let mut base_url = url.clone();
-                // we can expect here because the scheme is already matched as http[s]
-                #[expect(clippy::expect_used)]
-                let new_scheme = base_url
-                    .scheme()
-                    .split_once('+')
-                    .map(|(x, _)| x)
-                    .expect("Internal error, bad url scheme")
-                    .to_string();
-                #[expect(clippy::expect_used)]
-                base_url
-                    .set_scheme(new_scheme.as_str())
-                    .expect("Internal error, cannot set url scheme");
-                new_http_storage(base_url.to_string().as_str(), None, None)
+                // `Url::set_scheme` refuses conversions between "special"
+                // (http/https) and non-special (http+icechunk) schemes, so we
+                // can't mutate the scheme in place. Rebuild the URL string with
+                // the `+icechunk`/`+ic` tag stripped from the scheme instead.
+                let scheme = url.scheme();
+                let base_scheme =
+                    scheme.split_once('+').map_or(scheme, |(base, _)| base);
+                let http_url = [base_scheme, &url.as_str()[scheme.len()..]].concat();
+                new_http_storage(http_url.as_str(), None, None)
             }
             #[cfg(not(feature = "object-store-http"))]
             "http+icechunk" | "http+ic" | "https+icechunk" | "https+ic" => Err(
@@ -411,5 +406,36 @@ impl Storage for RedirectStorage {
             .await?
             .get_object_conditional(settings, path, previous_version)
             .await
+    }
+}
+
+#[cfg(all(test, feature = "object-store-http"))]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_mk_storage_strips_icechunk_scheme_tag() {
+        let redirect =
+            RedirectStorage::new(Url::parse("http://redirect.example.com/").unwrap());
+        for (tagged, expected) in [
+            ("http+icechunk", "http"),
+            ("http+ic", "http"),
+            ("https+icechunk", "https"),
+            ("https+ic", "https"),
+        ] {
+            let target = format!("{tagged}://storage.example.com/repo/prefix");
+            let storage = redirect
+                .mk_storage(&target)
+                .await
+                .unwrap_or_else(|e| panic!("mk_storage failed for {tagged}: {e:?}"));
+            let info = storage.storage_info();
+            assert_eq!(info.backend_type, "HTTP");
+            let url = info
+                .fields
+                .iter()
+                .find_map(|(k, v)| (*k == "url").then_some(v))
+                .expect("HTTP storage_info must expose a url field");
+            assert_eq!(url, &format!("{expected}://storage.example.com/repo/prefix"));
+        }
     }
 }
