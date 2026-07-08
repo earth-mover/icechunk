@@ -1,10 +1,14 @@
 # Changelog
 
-## Unreleased
+## Python Icechunk Library 2.1.1
 
 ### Features
 
 - Add `read_headers`, `write_headers`, and `headers` arguments to `s3_storage`, `s3_object_store_storage`, `tigris_storage`, `r2_storage`, and `gcs_storage` to attach custom HTTP headers to object-store requests ([#2246](https://github.com/earth-mover/icechunk/issues/2246)).
+
+### Fixes
+
+- Fix redirect storage failing to resolve HTTP backends: URLs with `http+icechunk`, `http+ic`, `https+icechunk`, or `https+ic` schemes are now correctly stripped to plain `http`/`https` targets ([#2262](https://github.com/earth-mover/icechunk/pull/2262)).
 
 ## Python Icechunk Library 2.1.0
 
