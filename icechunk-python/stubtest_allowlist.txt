@@ -43,8 +43,6 @@ icechunk._icechunk_python.CompressionAlgorithm
 icechunk._icechunk_python.CompressionConfig
 icechunk._icechunk_python.Conflict
 icechunk._icechunk_python.ConflictDetector
-icechunk._icechunk_python.ConflictError
-icechunk._icechunk_python.ConflictError.__new__
 icechunk._icechunk_python.ConflictType
 icechunk._icechunk_python.ConflictType.ChunkDoubleUpdate
 icechunk._icechunk_python.ConflictType.ChunksUpdatedInDeletedArray
@@ -98,7 +96,6 @@ icechunk._icechunk_python.GcsStaticCredentials.ServiceAccount.__new__
 icechunk._icechunk_python.GcsStaticCredentials.ServiceAccountKey
 icechunk._icechunk_python.GcsStaticCredentials.ServiceAccountKey.__match_args__
 icechunk._icechunk_python.GcsStaticCredentials.ServiceAccountKey.__new__
-icechunk._icechunk_python.IcechunkError.__new__
 icechunk._icechunk_python.ManifestConfig
 icechunk._icechunk_python.ManifestVirtualChunkLocationCompressionConfig
 icechunk._icechunk_python.ManifestFileInfo

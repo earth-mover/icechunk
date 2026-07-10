@@ -10,6 +10,7 @@
 
 ### Features
 
+- Add an exception tree: all Icechunk errors now derive from `IcechunkError` and are grouped into catchable categories. Every exception carries a stable machine-readable `kind` code (see the new `icechunk.ErrorKind` enum), and the full diagnostic report is attached as a PEP 678 note (#xxx).
 - Add `read_headers`, `write_headers`, and `headers` arguments to `s3_storage`, `s3_object_store_storage`, `tigris_storage`, `r2_storage`, and `gcs_storage` to attach custom HTTP headers to object-store requests ([#2246](https://github.com/earth-mover/icechunk/issues/2246)).
 
 ### Fixes
