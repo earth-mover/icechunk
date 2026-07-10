@@ -6,7 +6,7 @@ env:
   CI: 1
   RUST_BACKTRACE: short
   RUSTFLAGS: "-D warnings"
-  PIXI_VERSION: "v0.63.2"
+  PIXI_VERSION: "v0.72.0"
 
 on:
   workflow_dispatch:

@@ -23,7 +23,7 @@ env:
   RUST_BACKTRACE: short
   RUSTFLAGS: "-D warnings"
   RUSTUP_MAX_RETRIES: 10
-  PIXI_VERSION: "v0.63.2"
+  PIXI_VERSION: "v0.72.0"
 
 jobs:
   code-quality:
