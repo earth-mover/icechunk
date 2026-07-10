@@ -29,7 +29,7 @@ set positional-arguments
 alias fmt := format
 alias pre := pre-commit
 
-export PYTHON_VERSION := "3.14"
+export PYTHON_VERSION := env("PYTHON_VERSION", "3.12")
 
 [script]
 [doc("Run all Rust tests via cargo-nextest")]
