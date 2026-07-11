@@ -48,7 +48,7 @@ jobs:
       #- name: Cache Dependencies
       #  uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
       #  with:
-      #    prefix-key: "rust-py314"
+      #    prefix-key: "rust-py312"
       #    shared-key: "rust"
 
       - name: Check
