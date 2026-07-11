@@ -20,7 +20,6 @@ permissions:
   contents: read
 
 env:
-  
   PIXI_VERSION: "v0.72.0"
 
 jobs:
