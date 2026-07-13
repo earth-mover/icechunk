@@ -18,7 +18,8 @@ pytest_cov_args := if coverage == "true" { "--cov=icechunk" } else { "" }
 set script-interpreter := ["bash", "-euo", "pipefail", "-c", '''
 export DYLD_LIBRARY_PATH="${CONDA_PREFIX:-}/lib"
 if [ "$JUST_COVERAGE" = "true" ]; then
-  source <(cargo llvm-cov show-env --sh --profile "$JUST_PROFILE")
+  # eval, not `source <(...)`: macOS /bin/bash 3.2 silently sources nothing from process substitution
+  eval "$(cargo llvm-cov show-env --sh --profile "$JUST_PROFILE")"
   export CARGO_TARGET_DIR=$CARGO_LLVM_COV_TARGET_DIR
 fi
 source "$0"
@@ -340,10 +341,17 @@ jaeger-down:
 publish-crates:
   cargo release --workspace --unpublished --no-confirm --no-tag --no-push --execute
 
+# wheels default to release; an explicit profile (e.g. `just profile=ci build-wheels`) wins
+wheel_profile := if profile == "dev" { "release" } else { profile }
+
 [script]
-[doc("Build Python wheels with maturin (set coverage=true for coverage instrumentation)")]
+[doc("Build Python wheels with maturin (coverage=true needs an explicit profile, e.g. profile=ci)")]
 build-wheels *args:
-  cd icechunk-python && maturin build --release --out dist -i $PYTHON_VERSION "$@"
+  if [ "$JUST_COVERAGE" = "true" ] && [ "{{profile}}" = "dev" ]; then
+    echo "ERROR: coverage=true build-wheels needs an explicit profile (e.g. profile=ci) so coverage-report can find the instrumented artifacts" >&2
+    exit 1
+  fi
+  cd icechunk-python && maturin build --profile {{wheel_profile}} --out dist -i $PYTHON_VERSION "$@"
 
 [script]
 [doc("Install built wheel and test dependencies into a venv")]

@@ -1,0 +1,2 @@
+# octocov posts the PR coverage comment; codecov stays dashboard-only
+comment: false
