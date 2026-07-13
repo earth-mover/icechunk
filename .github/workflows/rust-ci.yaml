@@ -143,17 +143,12 @@ jobs:
           TIGRIS_ACCESS_KEY_ID: ${{ secrets.TIGRIS_ACCESS_KEY_ID }}
           TIGRIS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
 
-          # passed via env rather than interpolated into the shell below, to
-          # satisfy zizmor's template-injection audit
-          MATRIX_OS: ${{ matrix.os }}
-
-        run: |
           # The rooted-layout tests operate at the bucket root (empty prefix, no
           # unique prefix), so concurrent matrix jobs would race on the same keys:
           # run them on a single runner.
-          rooted=false
-          if [ "$MATRIX_OS" = "ubuntu-latest" ]; then rooted=true; fi
-          just profile=ci test-integration "$rooted"
+          ROOTED: ${{ matrix.os == 'ubuntu-latest' }}
+
+        run: just profile=ci test-integration "$ROOTED"
 
       - name: Prepare coverage for upload
         if: ${{ matrix.os == 'ubuntu-latest' }}

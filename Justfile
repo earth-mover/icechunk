@@ -312,31 +312,21 @@ rustfs-wait:
   exit 1
 
 [script]
-[doc("Wait for Azurite container to be ready")]
-azurite-wait:
+[doc("Poll a URL until it responds successfully")]
+wait-http name url:
   for _ in {1..60}; do
-    if curl --silent --fail "http://localhost:10000/devstoreaccount1/testcontainer?sv=2023-01-03&ss=btqf&srt=sco&spr=https%2Chttp&st=2025-01-06T14%3A53%3A30Z&se=2035-01-07T14%3A53%3A00Z&sp=rwdftlacup&sig=jclETGilOzONYp4Y0iK9SpVRLGyehaS5lg5booJ9VYA%3D&restype=container"; then
+    if curl --silent --fail "{{url}}"; then
       exit 0
     fi
     sleep 1
   done
-  echo "ERROR: Azurite did not become ready in time" >&2
-  exit 1
-
-[script]
-[doc("Wait for MinIO container to be ready")]
-minio-wait:
-  for _ in {1..60}; do
-    if curl --silent --fail "http://localhost:4202/minio/health/live"; then
-      exit 0
-    fi
-    sleep 1
-  done
-  echo "ERROR: MinIO did not become ready in time" >&2
+  echo "ERROR: {{name}} did not become ready in time" >&2
   exit 1
 
 [doc("Wait for all docker compose services to be ready")]
-contwait: rustfs-wait azurite-wait minio-wait
+contwait: rustfs-wait \
+  (wait-http "Azurite" "http://localhost:10000/devstoreaccount1/testcontainer?sv=2023-01-03&ss=btqf&srt=sco&spr=https%2Chttp&st=2025-01-06T14%3A53%3A30Z&se=2035-01-07T14%3A53%3A00Z&sp=rwdftlacup&sig=jclETGilOzONYp4Y0iK9SpVRLGyehaS5lg5booJ9VYA%3D&restype=container") \
+  (wait-http "MinIO" "http://localhost:4202/minio/health/live")
 
 [doc("Start Jaeger for local OpenTelemetry tracing (UI http://localhost:16686, OTLP gRPC localhost:4317)")]
 jaeger-up:
@@ -364,7 +354,6 @@ install-test-wheel group="test" *args:
   cd icechunk-python
   uv venv --python=${PYTHON_VERSION}
   source .venv/bin/activate
-  python --version
   PY_TAG="cp${PYTHON_VERSION//./}"
   WHEEL=$(ls dist/*-"${PY_TAG}"-*.whl)
   uv pip install "$WHEEL" --group "{{group}}" "$@"
@@ -377,21 +366,13 @@ install-ic-v1:
   # --installer uv: auto-detect targets the pixi env via CONDA_PREFIX, not .venv
   uv run third-wheel sync -v --installer uv
 
-[doc("Run pytest from the test venv")]
-pytest-venv *args:
+[doc("Run a command inside the icechunk-python test venv")]
+venv-run *args:
   #!/usr/bin/env bash
   set -euo pipefail
   cd icechunk-python
   source .venv/bin/activate
-  python -m pytest "$@"
-
-[doc("Run stubtest from the test venv")]
-stubtest-venv *args:
-  #!/usr/bin/env bash
-  set -euo pipefail
-  cd icechunk-python
-  source .venv/bin/activate
-  just stubtest "$@"
+  "$@"
 
 [doc("Run Python checks with upstream nightly dependencies")]
 python-upstream: build-wheels python-upstream-setup python-upstream-mypy python-upstream-describe python-upstream-pytest
