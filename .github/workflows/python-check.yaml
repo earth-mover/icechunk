@@ -96,19 +96,15 @@ jobs:
             cache-hypothesis-
 
       - name: Install dependencies - ${{ matrix.deps-version.name }}
-        shell: bash
         run: |
-          set -e
-          uv venv
-          source .venv/bin/activate
-          python --version
-          WHEEL=$(ls dist/*-abi3-*.whl)
-          uv pip install "$WHEEL" --group test
-          # Install specific versions based on matrix
           if [ "${{ matrix.deps-version.name }}" = "minimum" ]; then
-            echo "Installing minimum versions:"
-            cd icechunk-python && source .venv/bin/activate
-            uv pip install --upgrade 'xarray==${{ matrix.deps-version.xarray }}' 'dask==${{ matrix.deps-version.dask }}' 'distributed==${{ matrix.deps-version.distributed }}' 'zarr==${{ matrix.deps-version.zarr }}'
+            just install-test-wheel test \
+              'xarray==${{ matrix.deps-version.xarray }}' \
+              'dask==${{ matrix.deps-version.dask }}' \
+              'distributed==${{ matrix.deps-version.distributed }}' \
+              'zarr==${{ matrix.deps-version.zarr }}'
+          else
+            just install-test-wheel test
           fi
           cd icechunk-python && source .venv/bin/activate
           echo "Installed package versions:"
@@ -230,7 +226,7 @@ jobs:
             cache-hypothesis-${{ runner.os }}-shard${{ matrix.shard-id }}-
 
       - name: Install dependencies
-        run: just install-test-wheel pytest-shard
+        run: just install-test-wheel test pytest-shard
 
       - name: Run hypothesis tests (shard ${{ matrix.shard-id }}/3)
         env:
@@ -283,14 +279,9 @@ jobs:
           path: icechunk-python/dist
 
       - name: Install icechunk + deps + icechunk_v1
-        shell: bash
         run: |
-          set -e
-          uv venv
-          source .venv/bin/activate
-          WHEEL=$(ls dist/*-abi3-*.whl)
-          uv pip install "$WHEEL" --group test
-          uv run third-wheel sync -v
+          just install-test-wheel test
+          just install-ic-v1
 
       - name: Run cross-version stateful tests
         run: just pytest-venv tests/test_stateful_compat.py -v
@@ -417,14 +408,12 @@ jobs:
           path: icechunk-python/dist
 
       - name: Install dependencies
-        run: just install-test-wheel group=dev
+        run: just install-test-wheel dev
 
       - name: Run stubtest
         working-directory: icechunk-python
         run: |
           source .venv/bin/activate
-          WHEEL=$(ls dist/*-abi3-*.whl)
-          uv pip install "$WHEEL" --group dev
           python -m mypy.stubtest --ignore-disjoint-bases icechunk._icechunk_python --allowlist stubtest_allowlist.txt
 
   check-xarray-docs:

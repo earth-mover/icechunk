@@ -317,6 +317,14 @@ install-test-wheel group="test" *args:
   WHEEL=$(ls dist/*-"${PY_TAG}"-*.whl)
   uv pip install "$WHEEL" --group "{{group}}" "$@"
 
+[doc("Install icechunk_v1 via third-wheel into the test venv")]
+install-ic-v1:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  cd icechunk-python && source .venv/bin/activate
+  # --installer uv: auto-detect targets the pixi env via CONDA_PREFIX, not .venv
+  uv run third-wheel sync -v --installer uv
+
 [doc("Run pytest from the test venv")]
 pytest-venv *args:
   #!/usr/bin/env bash
