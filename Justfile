@@ -101,6 +101,8 @@ wasm-build:
 [script]
 [doc("Run icechunk lib tests with no default features (wasm feature-set proxy)")]
 wasm-proxy-test *args:
+  # don't fail on existing warnings in no-default-features wasm cfgs
+  export RUSTFLAGS=""
   cargo test --profile {{profile}} -p icechunk --no-default-features --lib "$@"
 
 [doc("Regenerate src/flatbuffers/all_generated.rs from the FlatBuffers schemas")]
