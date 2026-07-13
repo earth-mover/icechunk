@@ -101,15 +101,11 @@ jobs:
           DISTRIBUTED_VERSION: ${{ matrix.deps-version.distributed }}
           ZARR_VERSION: ${{ matrix.deps-version.zarr }}
         run: |
+          pins=""
           if [ "$DEPS_NAME" = "minimum" ]; then
-            just install-test-wheel test \
-              "xarray==$XARRAY_VERSION" \
-              "dask==$DASK_VERSION" \
-              "distributed==$DISTRIBUTED_VERSION" \
-              "zarr==$ZARR_VERSION"
-          else
-            just install-test-wheel test
+            pins="xarray==$XARRAY_VERSION dask==$DASK_VERSION distributed==$DISTRIBUTED_VERSION zarr==$ZARR_VERSION"
           fi
+          just install-test-wheel test $pins
 
       # this is here instead of earlier to give RustFS more time to get up and running
       # checking and waiting only right before we need it
@@ -326,14 +322,11 @@ jobs:
           XARRAY_MATRIX_VERSION: ${{ matrix.xarray-version.version }}
           ZARR_MATRIX_VERSION: ${{ matrix.xarray-version.zarr }}
         run: |
-          just install-test-wheel test "pytest-mypy-plugins<4"
+          pins=""
+          [ "$XARRAY_MATRIX_VERSION" = "latest-release" ] || pins="xarray==$XARRAY_MATRIX_VERSION"
+          [ "$ZARR_MATRIX_VERSION" = "latest-release" ] || pins="$pins zarr==$ZARR_MATRIX_VERSION"
+          just install-test-wheel test "pytest-mypy-plugins<4" $pins
           source .venv/bin/activate
-          if [ "$XARRAY_MATRIX_VERSION" != "latest-release" ]; then
-            uv pip install --upgrade "xarray==$XARRAY_MATRIX_VERSION"
-          fi
-          if [ "$ZARR_MATRIX_VERSION" != "latest-release" ]; then
-            uv pip install --upgrade "zarr==$ZARR_MATRIX_VERSION"
-          fi
           echo "Installed package versions:"
           python -c "import xarray; import zarr; print(f'xarray: {xarray.__version__}'); print(f'zarr: {zarr.__version__}')"
 

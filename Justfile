@@ -92,10 +92,8 @@ wasm-build:
   export RUSTFLAGS=""
   export WASI_SYSROOT="${WASI_SYSROOT:-/usr}"
   export CC_wasm32_wasip1_threads=clang CXX_wasm32_wasip1_threads=clang++ AR_wasm32_wasip1_threads=llvm-ar
-  export CC_wasm32_wasi=clang CXX_wasm32_wasi=clang++ AR_wasm32_wasi=llvm-ar
   wasm_cflags="--sysroot=$WASI_SYSROOT -isystem $WASI_SYSROOT/include/wasm32-wasi"
   export CFLAGS_wasm32_wasip1_threads="$wasm_cflags" CXXFLAGS_wasm32_wasip1_threads="$wasm_cflags"
-  export CFLAGS_wasm32_wasi="$wasm_cflags" CXXFLAGS_wasm32_wasi="$wasm_cflags"
   cargo build -p icechunk --no-default-features --target wasm32-wasip1-threads
 
 [script]
@@ -464,11 +462,10 @@ xarray-upstream-pytest xarray_dir="../xarray": xarray-upstream-clone xarray-upst
 
 [script]
 [doc("Check to_icechunk docstrings stay in sync with xarray's to_zarr (CI: check-xarray-docs)")]
-check-xarray-docs xarray_dir="../xarray" *args: (xarray-upstream-clone xarray_dir)
-  shift
+check-xarray-docs xarray_dir="../xarray": (xarray-upstream-clone xarray_dir)
   xarray_abs=$(realpath "{{xarray_dir}}")
   cd icechunk-python
-  XARRAY_DIR="$xarray_abs" uv run scripts/check_xarray_docs_sync.py "$@"
+  XARRAY_DIR="$xarray_abs" uv run scripts/check_xarray_docs_sync.py
 
 [script]
 [doc("Clone xarray at the tag matching the version installed in the test venv")]
