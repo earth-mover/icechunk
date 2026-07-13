@@ -30,14 +30,12 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: prefix-dev/setup-pixi@5185adfbffb4bd703da3010310260805d89ebb11 # v0.9.6
+      - uses: prefix-dev/setup-pixi@a09b6247153796b190642a2b53fac4241043cf6f # v0.10.0
         with:
           pixi-version: ${{ env.PIXI_VERSION }}
           cache: true
           activate-environment: true
           manifest-path: icechunk-python/pyproject.toml
-          environments: >-
-            py312
 
       - name: Build wheels
         run: just build-wheels
@@ -70,14 +68,12 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: prefix-dev/setup-pixi@5185adfbffb4bd703da3010310260805d89ebb11 # v0.9.6
+      - uses: prefix-dev/setup-pixi@a09b6247153796b190642a2b53fac4241043cf6f # v0.10.0
         with:
           pixi-version: ${{ env.PIXI_VERSION }}
           cache: true
           activate-environment: true
           manifest-path: icechunk-python/pyproject.toml
-          environments: >-
-            py312
 
       - name: Stand up RustFS
         run: just rustfs-up
@@ -134,14 +130,13 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: prefix-dev/setup-pixi@5185adfbffb4bd703da3010310260805d89ebb11 # v0.9.6
+      - uses: prefix-dev/setup-pixi@a09b6247153796b190642a2b53fac4241043cf6f # v0.10.0
         with:
           pixi-version: ${{ env.PIXI_VERSION }}
           cache: true
           activate-environment: true
           manifest-path: icechunk-python/pyproject.toml
-          environments: >-
-            py314t
+          environments: py314t
 
       - name: Build wheels
         working-directory: icechunk-python
@@ -164,14 +159,13 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: prefix-dev/setup-pixi@5185adfbffb4bd703da3010310260805d89ebb11 # v0.9.6
+      - uses: prefix-dev/setup-pixi@a09b6247153796b190642a2b53fac4241043cf6f # v0.10.0
         with:
           pixi-version: ${{ env.PIXI_VERSION }}
           cache: true
           activate-environment: true
           manifest-path: icechunk-python/pyproject.toml
-          environments: >-
-            py314t
+          environments: py314t
 
       - name: Stand up RustFS
         run: just rustfs-up
@@ -183,15 +177,9 @@ jobs:
           path: icechunk-python/dist
 
       - name: Install dependencies
-        shell: bash
-        working-directory: icechunk-python
-        run: |
-          set -e
-          uv venv --python 3.14t
-          source .venv/bin/activate
-          python --version
-          WHEEL=$(ls dist/*-cp314t-*.whl)
-          uv pip install "$WHEEL" --group test
+        env:
+          PYTHON_VERSION: "3.14t"
+        run: just install-test-wheel test
 
       - name: Wait for RustFS to be ready
         run: just rustfs-wait
@@ -212,14 +200,12 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: prefix-dev/setup-pixi@5185adfbffb4bd703da3010310260805d89ebb11 # v0.9.6
+      - uses: prefix-dev/setup-pixi@a09b6247153796b190642a2b53fac4241043cf6f # v0.10.0
         with:
           pixi-version: ${{ env.PIXI_VERSION }}
           cache: true
           activate-environment: true
           manifest-path: icechunk-python/pyproject.toml
-          environments: >-
-            py312
 
       - name: Download wheels
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -279,14 +265,12 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: prefix-dev/setup-pixi@5185adfbffb4bd703da3010310260805d89ebb11 # v0.9.6
+      - uses: prefix-dev/setup-pixi@a09b6247153796b190642a2b53fac4241043cf6f # v0.10.0
         with:
           pixi-version: ${{ env.PIXI_VERSION }}
           cache: true
           activate-environment: true
           manifest-path: icechunk-python/pyproject.toml
-          environments: >-
-            py312
 
       - name: Download wheels
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -321,14 +305,12 @@ jobs:
           path: "icechunk"
           persist-credentials: false
 
-      - uses: prefix-dev/setup-pixi@5185adfbffb4bd703da3010310260805d89ebb11 # v0.9.6
+      - uses: prefix-dev/setup-pixi@a09b6247153796b190642a2b53fac4241043cf6f # v0.10.0
         with:
           pixi-version: ${{ env.PIXI_VERSION }}
           cache: true
           activate-environment: true
           manifest-path: icechunk/icechunk-python/pyproject.toml
-          environments: >-
-            py312
 
       - name: Stand up RustFS
         working-directory: icechunk
@@ -348,21 +330,12 @@ jobs:
           XARRAY_MATRIX_VERSION: ${{ matrix.xarray-version.version }}
           ZARR_MATRIX_VERSION: ${{ matrix.xarray-version.zarr }}
         run: |
-          set -e
-          uv venv
+          just install-test-wheel test "pytest-mypy-plugins<4"
           source .venv/bin/activate
-          python --version
-          WHEEL=$(ls dist/*-abi3-*.whl)
-          uv pip install "$WHEEL" --group test
-          uv pip install "pytest-mypy-plugins<4"
-          # Install specific xarray version based on matrix
           if [ "$XARRAY_MATRIX_VERSION" != "latest-release" ]; then
-            echo "Installing xarray $XARRAY_MATRIX_VERSION"
             uv pip install --upgrade "xarray==$XARRAY_MATRIX_VERSION"
           fi
-          # Install specific zarr version based on matrix
           if [ "$ZARR_MATRIX_VERSION" != "latest-release" ]; then
-            echo "Installing zarr $ZARR_MATRIX_VERSION"
             uv pip install --upgrade "zarr==$ZARR_MATRIX_VERSION"
           fi
           echo "Installed package versions:"
@@ -412,14 +385,12 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: prefix-dev/setup-pixi@5185adfbffb4bd703da3010310260805d89ebb11 # v0.9.6
+      - uses: prefix-dev/setup-pixi@a09b6247153796b190642a2b53fac4241043cf6f # v0.10.0
         with:
           pixi-version: ${{ env.PIXI_VERSION }}
           cache: true
           activate-environment: true
           manifest-path: icechunk-python/pyproject.toml
-          environments: >-
-            py312
 
       - name: Download wheels
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -442,27 +413,14 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          path: "icechunk"
           persist-credentials: false
 
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          repository: "pydata/xarray"
-          path: "xarray"
-          fetch-depth: 0
-          persist-credentials: false
-
-      - uses: prefix-dev/setup-pixi@5185adfbffb4bd703da3010310260805d89ebb11 # v0.9.6
+      - uses: prefix-dev/setup-pixi@a09b6247153796b190642a2b53fac4241043cf6f # v0.10.0
         with:
           pixi-version: ${{ env.PIXI_VERSION }}
           cache: true
           activate-environment: true
-          manifest-path: icechunk/icechunk-python/pyproject.toml
-          environments: >-
-            py312
+          manifest-path: icechunk-python/pyproject.toml
 
       - name: Check xarray documentation consistency
-        working-directory: icechunk/icechunk-python
-        env:
-          XARRAY_DIR: ../../xarray
-        run: uv run scripts/check_xarray_docs_sync.py
+        run: just check-xarray-docs

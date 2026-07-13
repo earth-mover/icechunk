@@ -409,6 +409,14 @@ xarray-upstream-pytest xarray_dir="../xarray": xarray-upstream-clone xarray-upst
   pytest -c="$xarray_abs/pyproject.toml" -W ignore tests/run_xarray_backends_tests.py --report-log output-pytest-log.jsonl
 
 [script]
+[doc("Check to_icechunk docstrings stay in sync with xarray's to_zarr (CI: check-xarray-docs)")]
+check-xarray-docs xarray_dir="../xarray" *args: (xarray-upstream-clone xarray_dir)
+  shift
+  xarray_abs=$(realpath "{{xarray_dir}}")
+  cd icechunk-python
+  XARRAY_DIR="$xarray_abs" uv run scripts/check_xarray_docs_sync.py "$@"
+
+[script]
 [doc("code coverage report generation (Rust + FFI + Python)")]
 coverage-report *args:
   cargo llvm-cov report --profile {{ profile }} --lcov --output-path coverage_rust.lcov
