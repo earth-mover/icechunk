@@ -247,7 +247,7 @@ sysroot_linux-aarch64 = ">=2.34"
 
 [tool.pixi.environments]
 default = { features = [
-  "py314",
+  "py312",
   "build",
   "dev",
   "docs",
