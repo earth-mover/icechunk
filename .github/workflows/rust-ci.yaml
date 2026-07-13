@@ -61,11 +61,7 @@ jobs:
           manifest-path: icechunk-python/pyproject.toml
 
       - name: Check if MSRV is up to date
-        run: |
-          set -e
-          grep "rust-version = \"${MSRV}\"" Cargo.toml
-          # shellcheck disable=SC2016
-          grep "The current MSRV is \`${MSRV}\`" icechunk-python/docs/docs/reference/contributing.md
+        run: just check-msrv "$MSRV"
 
       - name: Stand up docker services
         if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm'
@@ -74,25 +70,7 @@ jobs:
 
       - name: Wait for containers to be ready
         if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm'
-        run: |
-          for _ in {1..30}; do
-              if docker compose ps --status exited --filter status==0 | grep rustfs ; then
-              break
-              fi
-              sleep 1
-          done
-          for _ in {1..60}; do
-              if curl --silent --fail "http://localhost:10000/devstoreaccount1/testcontainer?sv=2023-01-03&ss=btqf&srt=sco&spr=https%2Chttp&st=2025-01-06T14%3A53%3A30Z&se=2035-01-07T14%3A53%3A00Z&sp=rwdftlacup&sig=jclETGilOzONYp4Y0iK9SpVRLGyehaS5lg5booJ9VYA%3D&restype=container"; then
-              break
-              fi
-              sleep 1
-          done
-          for _ in {1..60}; do
-              if curl --silent --fail "http://localhost:4202/minio/health/live"; then
-              break
-              fi
-              sleep 1
-          done
+        run: just contwait
 
       - name: Cache Dependencies
         uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
@@ -170,21 +148,12 @@ jobs:
           MATRIX_OS: ${{ matrix.os }}
 
         run: |
-          # Don't let a failure (or flake) in one group hide the other.
-          set +e
-          rc=0
-          # Most real-store ignored tests use unique prefixes, so they're safe to
-          # run on every matrix OS in parallel.
-          # Exclude icechunk-python: it has no Rust tests, but its PyO3 lib-test
-          # binary aborts at launch trying to load libpython
-          cargo test --profile ci --workspace --exclude icechunk-python --tests -- --ignored --skip rooted_roundtrip || rc=1
           # The rooted-layout tests operate at the bucket root (empty prefix, no
           # unique prefix), so concurrent matrix jobs would race on the same keys:
           # run them on a single runner.
-          if [ "$MATRIX_OS" = "ubuntu-latest" ]; then
-            cargo test --profile ci -p icechunk --test main rooted_roundtrip -- --ignored || rc=1
-          fi
-          exit $rc
+          rooted=false
+          if [ "$MATRIX_OS" = "ubuntu-latest" ]; then rooted=true; fi
+          just profile=ci test-integration "$rooted"
 
       - name: Prepare coverage for upload
         if: ${{ matrix.os == 'ubuntu-latest' }}
@@ -230,10 +199,10 @@ jobs:
           manifest-path: icechunk-python/pyproject.toml
 
       - name: Compile shuttle tests
-        run: cargo test -p icechunk --features shuttle --test test_shuttle --no-run
+        run: just shuttle-test --no-run
 
       - name: Run shuttle tests
-        run: cargo test -p icechunk --features shuttle --test test_shuttle -- --nocapture
+        run: just shuttle-test -- --nocapture
 
   wasm-build:
     name: WASM Build
@@ -242,17 +211,19 @@ jobs:
     defaults:
       run:
         working-directory: ./
-    env:
-      # Keep this as a compile smoke test; avoid failing on existing warnings in
-      # no-default-features wasm cfg combinations.
-      RUSTFLAGS: ""
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
+
+      - name: Install just
+        uses: taiki-e/install-action@4684b8405694ae9dd42c9f39ba901a70ae83f4a3 # v2
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        with:
+          tool: just
 
       - name: Install Rust toolchain
         run: |
@@ -279,21 +250,7 @@ jobs:
           key: wasm-${{ env.MSRV }}
 
       - name: Run wasm build check
-        env:
-          CC_wasm32_wasip1_threads: clang
-          CXX_wasm32_wasip1_threads: clang++
-          AR_wasm32_wasip1_threads: llvm-ar
-          CC_wasm32_wasi: clang
-          CXX_wasm32_wasi: clang++
-          AR_wasm32_wasi: llvm-ar
-          WASI_SYSROOT: /usr
-          CFLAGS_wasm32_wasip1_threads: --sysroot=/usr -isystem /usr/include/wasm32-wasi
-          CXXFLAGS_wasm32_wasip1_threads: --sysroot=/usr -isystem /usr/include/wasm32-wasi
-          CFLAGS_wasm32_wasi: --sysroot=/usr -isystem /usr/include/wasm32-wasi
-          CXXFLAGS_wasm32_wasi: --sysroot=/usr -isystem /usr/include/wasm32-wasi
-        run: |
-          cargo build -p icechunk --no-default-features --target wasm32-wasip1-threads
+        run: just wasm-build
 
       - name: Run no-default-features lib tests (proxy for wasm feature set)
-        run: |
-          cargo test -p icechunk --no-default-features --lib
+        run: just wasm-proxy-test

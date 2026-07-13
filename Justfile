@@ -37,9 +37,18 @@ test *args:
   cargo nextest run --no-fail-fast --cargo-profile {{profile}} --workspace --lib --bins --tests --examples "$@"
 
 [script]
-[doc("Run integration tests against object stores")]
-test-integration *args:
-  cargo nextest run --no-fail-fast --cargo-profile {{profile}} --workspace --tests --lib "$@" -- --ignored
+[doc("Run integration tests against object stores (rooted=false skips the bucket-root rooted_roundtrip tests, which race across concurrent runs)")]
+test-integration rooted="true" *args:
+  shift
+  # don't let a failure (or flake) in one group hide the other
+  set +e
+  rc=0
+  # exclude icechunk-python: no Rust tests, but its PyO3 lib-test binary aborts loading libpython
+  cargo test --profile {{profile}} --workspace --exclude icechunk-python --tests "$@" -- --ignored --skip rooted_roundtrip || rc=1
+  if [ "{{rooted}}" = "true" ]; then
+    cargo test --profile {{profile}} -p icechunk --test main rooted_roundtrip -- --ignored || rc=1
+  fi
+  exit $rc
 
 [script]
 [doc("Run all Rust lib tests via cargo-nextest")]
@@ -62,6 +71,11 @@ compile-tests *args:
   cargo nextest run --no-run --cargo-profile {{profile}} --workspace --all-targets "$@"
 
 [script]
+[doc("Run shuttle concurrency tests (pass --no-run to compile only)")]
+shuttle-test *args:
+  cargo test --profile {{profile}} -p icechunk --features shuttle --test test_shuttle "$@"
+
+[script]
 [doc("Build the Rust workspace (dev by default, override with `just profile=ci build`)")]
 build *args:
   cargo build --profile {{profile}} "$@"
@@ -69,6 +83,24 @@ build *args:
 [doc("Build the Rust workspace in release mode")]
 build-release *args:
   cargo build --release "$@"
+
+[script]
+[doc("Compile-check icechunk for wasm (needs clang/llvm + wasi-libc; override sysroot with WASI_SYSROOT)")]
+wasm-build:
+  # compile smoke test: don't fail on existing warnings in no-default-features wasm cfgs
+  export RUSTFLAGS=""
+  export WASI_SYSROOT="${WASI_SYSROOT:-/usr}"
+  export CC_wasm32_wasip1_threads=clang CXX_wasm32_wasip1_threads=clang++ AR_wasm32_wasip1_threads=llvm-ar
+  export CC_wasm32_wasi=clang CXX_wasm32_wasi=clang++ AR_wasm32_wasi=llvm-ar
+  wasm_cflags="--sysroot=$WASI_SYSROOT -isystem $WASI_SYSROOT/include/wasm32-wasi"
+  export CFLAGS_wasm32_wasip1_threads="$wasm_cflags" CXXFLAGS_wasm32_wasip1_threads="$wasm_cflags"
+  export CFLAGS_wasm32_wasi="$wasm_cflags" CXXFLAGS_wasm32_wasi="$wasm_cflags"
+  cargo build -p icechunk --no-default-features --target wasm32-wasip1-threads
+
+[script]
+[doc("Run icechunk lib tests with no default features (wasm feature-set proxy)")]
+wasm-proxy-test *args:
+  cargo test --profile {{profile}} -p icechunk --no-default-features --lib "$@"
 
 [doc("Regenerate src/flatbuffers/all_generated.rs from the FlatBuffers schemas")]
 gen-flatbuffers:
@@ -106,6 +138,14 @@ lint *args:
 check *args:
   cargo check --profile {{profile}} --all-features --workspace --exclude icechunk "$@"
   cargo check --profile {{profile}} -p icechunk --features {{icechunk_features}} "$@"
+
+[script]
+[doc("Check Cargo.toml rust-version matches the contributing docs (pass an expected MSRV to pin it)")]
+check-msrv expected="":
+  msrv=$(sed -n 's/^rust-version = "\(.*\)"$/\1/p' Cargo.toml)
+  test -n "$msrv"
+  test -z "{{expected}}" || test "$msrv" = "{{expected}}"
+  grep -F "The current MSRV is \`$msrv\`" icechunk-python/docs/docs/reference/contributing.md
 
 [doc("Format all Rust files (pass `--check` to verify only)")]
 format *args:
@@ -283,8 +323,20 @@ azurite-wait:
   echo "ERROR: Azurite did not become ready in time" >&2
   exit 1
 
+[script]
+[doc("Wait for MinIO container to be ready")]
+minio-wait:
+  for _ in {1..60}; do
+    if curl --silent --fail "http://localhost:4202/minio/health/live"; then
+      exit 0
+    fi
+    sleep 1
+  done
+  echo "ERROR: MinIO did not become ready in time" >&2
+  exit 1
+
 [doc("Wait for all docker compose services to be ready")]
-contwait: rustfs-wait azurite-wait
+contwait: rustfs-wait azurite-wait minio-wait
 
 [doc("Start Jaeger for local OpenTelemetry tracing (UI http://localhost:16686, OTLP gRPC localhost:4317)")]
 jaeger-up:
@@ -332,6 +384,14 @@ pytest-venv *args:
   cd icechunk-python
   source .venv/bin/activate
   python -m pytest "$@"
+
+[doc("Run stubtest from the test venv")]
+stubtest-venv *args:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  cd icechunk-python
+  source .venv/bin/activate
+  just stubtest "$@"
 
 [doc("Run Python checks with upstream nightly dependencies")]
 python-upstream: build-wheels python-upstream-setup python-upstream-mypy python-upstream-describe python-upstream-pytest
@@ -415,6 +475,28 @@ check-xarray-docs xarray_dir="../xarray" *args: (xarray-upstream-clone xarray_di
   xarray_abs=$(realpath "{{xarray_dir}}")
   cd icechunk-python
   XARRAY_DIR="$xarray_abs" uv run scripts/check_xarray_docs_sync.py "$@"
+
+[script]
+[doc("Clone xarray at the tag matching the version installed in the test venv")]
+xarray-clone-installed xarray_dir="../xarray":
+  cd icechunk-python
+  source .venv/bin/activate
+  # zero-pad the month: 2025.1.2 -> v2025.01.2
+  tag=$(python -c "import xarray; p = xarray.__version__.split('.'); print(f'v{p[0]}.{p[1].zfill(2)}.{p[2]}')")
+  echo "Checking out xarray $tag"
+  cd ..
+  rm -rf "{{xarray_dir}}"
+  git clone --depth 1 --branch "$tag" https://github.com/pydata/xarray.git "{{xarray_dir}}"
+
+[script]
+[doc("Run xarray backends tests from the test venv against a pinned xarray checkout (CI: python-check xarray-backends)")]
+xarray-backends-pytest xarray_dir="../xarray":
+  xarray_abs=$(realpath "{{xarray_dir}}")
+  cd icechunk-python
+  source .venv/bin/activate
+  export ICECHUNK_XARRAY_BACKENDS_TESTS=1
+  # xarray's pyproject.toml so pytest finds the `flaky` fixture
+  python -m pytest -c="$xarray_abs/pyproject.toml" -W ignore --override-ini="strict_markers=false" tests/run_xarray_backends_tests.py
 
 [script]
 [doc("code coverage report generation (Rust + FFI + Python)")]

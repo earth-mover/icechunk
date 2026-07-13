@@ -342,39 +342,16 @@ jobs:
           python -c "import xarray; import zarr; print(f'xarray: {xarray.__version__}'); print(f'zarr: {zarr.__version__}')"
 
       - name: Checkout xarray at installed version
-        shell: bash
-        working-directory: icechunk/icechunk-python
-        run: |
-          set -e
-          source .venv/bin/activate
-          XARRAY_VERSION=$(python -c "import xarray; print(xarray.__version__)")
-          # Convert version to tag format (e.g., 2025.1.2 -> v2025.01.2)
-          XARRAY_TAG=$(python -c "
-          import xarray
-          v = xarray.__version__
-          parts = v.split('.')
-          # Zero-pad month to 2 digits
-          tag = f'v{parts[0]}.{parts[1].zfill(2)}.{parts[2]}'
-          print(tag)
-          ")
-          echo "Checking out xarray ${XARRAY_TAG} (version ${XARRAY_VERSION})"
-          cd ../../
-          git clone --depth 1 --branch "${XARRAY_TAG}" https://github.com/pydata/xarray.git xarray
+        working-directory: icechunk
+        run: just xarray-clone-installed
 
       - name: Wait for RustFS to be ready
         working-directory: icechunk
         run: just rustfs-wait
 
       - name: Run xarray backends tests
-        shell: bash
-        working-directory: icechunk/icechunk-python
-        env:
-          ICECHUNK_XARRAY_BACKENDS_TESTS: 1
-        run: |
-          set -e
-          # pass xarray's pyproject.toml so that pytest can find the `flaky` fixture
-          source .venv/bin/activate
-          python -m pytest -c=../../xarray/pyproject.toml -W ignore --override-ini="strict_markers=false" tests/run_xarray_backends_tests.py
+        working-directory: icechunk
+        run: just xarray-backends-pytest
 
   stubtest:
     name: stubtest
@@ -402,10 +379,7 @@ jobs:
         run: just install-test-wheel dev
 
       - name: Run stubtest
-        working-directory: icechunk-python
-        run: |
-          source .venv/bin/activate
-          python -m mypy.stubtest --ignore-disjoint-bases icechunk._icechunk_python --allowlist stubtest_allowlist.txt
+        run: just stubtest-venv
 
   check-xarray-docs:
     name: check-xarray-docs
