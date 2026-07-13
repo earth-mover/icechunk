@@ -23,6 +23,7 @@ env:
 
 jobs:
   build-wheels:
+    name: build-wheels
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -48,6 +49,7 @@ jobs:
           path: icechunk-python/dist
 
   test:
+    name: test (${{ matrix.deps-version.name }}, ${{ matrix.deps-version.xarray }}, ${{ matrix.deps-version.dask }}, ${{ matrix.deps-version.distributed }}, ${{ matrix.deps-version.zarr }})
     runs-on: ubuntu-latest
     needs: [build-wheels]
     strategy:
@@ -96,13 +98,19 @@ jobs:
             cache-hypothesis-
 
       - name: Install dependencies - ${{ matrix.deps-version.name }}
+        env:
+          DEPS_NAME: ${{ matrix.deps-version.name }}
+          XARRAY_VERSION: ${{ matrix.deps-version.xarray }}
+          DASK_VERSION: ${{ matrix.deps-version.dask }}
+          DISTRIBUTED_VERSION: ${{ matrix.deps-version.distributed }}
+          ZARR_VERSION: ${{ matrix.deps-version.zarr }}
         run: |
-          if [ "${{ matrix.deps-version.name }}" = "minimum" ]; then
+          if [ "$DEPS_NAME" = "minimum" ]; then
             just install-test-wheel test \
-              'xarray==${{ matrix.deps-version.xarray }}' \
-              'dask==${{ matrix.deps-version.dask }}' \
-              'distributed==${{ matrix.deps-version.distributed }}' \
-              'zarr==${{ matrix.deps-version.zarr }}'
+              "xarray==$XARRAY_VERSION" \
+              "dask==$DASK_VERSION" \
+              "distributed==$DISTRIBUTED_VERSION" \
+              "zarr==$ZARR_VERSION"
           else
             just install-test-wheel test
           fi
@@ -119,6 +127,7 @@ jobs:
         run: just pytest-venv -n 4 -m "not hypothesis"
 
   build-wheels-free-threaded:
+    name: build-wheels-free-threaded
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -147,6 +156,7 @@ jobs:
           path: icechunk-python/dist
 
   test-free-threaded:
+    name: test-free-threaded
     runs-on: ubuntu-latest
     needs: [build-wheels-free-threaded]
     steps:
@@ -190,6 +200,7 @@ jobs:
         run: just pytest-venv -n 4 -m "not hypothesis"
 
   test-hypothesis-shard:
+    name: test-hypothesis-shard (${{ matrix.shard-id }})
     runs-on: ubuntu-latest
     needs: [build-wheels]
     strategy:
@@ -232,7 +243,8 @@ jobs:
         env:
           HYPOTHESIS_EXPERIMENTAL_OBSERVABILITY: "1"
           NOCOLOR: 1
-        run: just pytest-venv -m hypothesis --num-shards=3 --shard-id=${{ matrix.shard-id }}
+          SHARD_ID: ${{ matrix.shard-id }}
+        run: just pytest-venv -m hypothesis --num-shards=3 --shard-id="$SHARD_ID"
 
       - name: Save cached hypothesis directory
         id: save-hypothesis-cache
@@ -244,18 +256,22 @@ jobs:
 
         # Aggregation job preserves the required "test-hypothesis" check name
   test-hypothesis:
+    name: test-hypothesis
     if: always()
     needs: [test-hypothesis-shard]
     runs-on: ubuntu-latest
     steps:
       - name: Verify all shards passed
+        env:
+          SHARDS_RESULT: ${{ needs.test-hypothesis-shard.result }}
         run: |
-          if [ "${{ needs.test-hypothesis-shard.result }}" != "success" ]; then
+          if [ "$SHARDS_RESULT" != "success" ]; then
             echo "::error::One or more hypothesis test shards failed"
             exit 1
           fi
 
   compat-stateful:
+    name: compat-stateful
     runs-on: ubuntu-latest
     needs: [build-wheels]
     steps:
@@ -287,6 +303,7 @@ jobs:
         run: just pytest-venv tests/test_stateful_compat.py -v
 
   xarray-backends:
+    name: xarray-backends (${{ matrix.xarray-version.name }}, ${{ matrix.xarray-version.version }}, ${{ matrix.xarray-version.zarr }})
     runs-on: ubuntu-latest
     needs: [build-wheels]
     strategy:
@@ -328,6 +345,8 @@ jobs:
         working-directory: icechunk/icechunk-python
         env:
           ICECHUNK_XARRAY_BACKENDS_TESTS: 1
+          XARRAY_MATRIX_VERSION: ${{ matrix.xarray-version.version }}
+          ZARR_MATRIX_VERSION: ${{ matrix.xarray-version.zarr }}
         run: |
           set -e
           uv venv
@@ -337,14 +356,14 @@ jobs:
           uv pip install "$WHEEL" --group test
           uv pip install "pytest-mypy-plugins<4"
           # Install specific xarray version based on matrix
-          if [ "${{ matrix.xarray-version.version }}" != "latest-release" ]; then
-            echo "Installing xarray ${{ matrix.xarray-version.version }}"
-            uv pip install --upgrade 'xarray==${{ matrix.xarray-version.version }}'
+          if [ "$XARRAY_MATRIX_VERSION" != "latest-release" ]; then
+            echo "Installing xarray $XARRAY_MATRIX_VERSION"
+            uv pip install --upgrade "xarray==$XARRAY_MATRIX_VERSION"
           fi
           # Install specific zarr version based on matrix
-          if [ "${{ matrix.xarray-version.zarr }}" != "latest-release" ]; then
-            echo "Installing zarr ${{ matrix.xarray-version.zarr }}"
-            uv pip install --upgrade 'zarr==${{ matrix.xarray-version.zarr }}'
+          if [ "$ZARR_MATRIX_VERSION" != "latest-release" ]; then
+            echo "Installing zarr $ZARR_MATRIX_VERSION"
+            uv pip install --upgrade "zarr==$ZARR_MATRIX_VERSION"
           fi
           echo "Installed package versions:"
           python -c "import xarray; import zarr; print(f'xarray: {xarray.__version__}'); print(f'zarr: {zarr.__version__}')"
@@ -385,6 +404,7 @@ jobs:
           python -m pytest -c=../../xarray/pyproject.toml -W ignore --override-ini="strict_markers=false" tests/run_xarray_backends_tests.py
 
   stubtest:
+    name: stubtest
     runs-on: ubuntu-latest
     needs: [build-wheels]
     steps:
@@ -417,6 +437,7 @@ jobs:
           python -m mypy.stubtest --ignore-disjoint-bases icechunk._icechunk_python --allowlist stubtest_allowlist.txt
 
   check-xarray-docs:
+    name: check-xarray-docs
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
