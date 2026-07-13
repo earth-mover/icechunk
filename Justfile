@@ -239,10 +239,9 @@ pytest *args:
   fi
   uv run --active pytest {{pytest_cov_args}} "$@"
 
+[script]
 [doc("Run the Python tests with OpenTelemetry export to local Jaeger (starts Jaeger; traces at http://localhost:16686)")]
 pytest-otel *args: jaeger-up
-  #!/usr/bin/env bash
-  set -euo pipefail
   export ICECHUNK_OTLP_ENDPOINT="${ICECHUNK_OTLP_ENDPOINT:-http://localhost:4317}"
   echo "Exporting traces to $ICECHUNK_OTLP_ENDPOINT (filter ${ICECHUNK_OTEL_FILTER:-icechunk=info}) — view at http://localhost:16686"
   # test_logs.py asserts on exact console output, which races with the background
@@ -346,10 +345,9 @@ publish-crates:
 build-wheels *args:
   cd icechunk-python && maturin build --release --out dist -i $PYTHON_VERSION "$@"
 
+[script]
 [doc("Install built wheel and test dependencies into a venv")]
 install-test-wheel group="test" *args:
-  #!/usr/bin/env bash
-  set -euo pipefail
   shift
   cd icechunk-python
   uv venv --python=${PYTHON_VERSION}
@@ -358,21 +356,26 @@ install-test-wheel group="test" *args:
   WHEEL=$(ls dist/*-"${PY_TAG}"-*.whl)
   uv pip install "$WHEEL" --group "{{group}}" "$@"
 
+[script]
 [doc("Install icechunk_v1 via third-wheel into the test venv")]
 install-ic-v1:
-  #!/usr/bin/env bash
-  set -euo pipefail
   cd icechunk-python && source .venv/bin/activate
   # --installer uv: auto-detect targets the pixi env via CONDA_PREFIX, not .venv
   uv run third-wheel sync -v --installer uv
 
+[script]
 [doc("Run a command inside the icechunk-python test venv")]
 venv-run *args:
-  #!/usr/bin/env bash
-  set -euo pipefail
   cd icechunk-python
   source .venv/bin/activate
   "$@"
+
+[script]
+[doc("Run pytest from the test venv (coverage=true also collects Python + FFI coverage)")]
+pytest-venv *args:
+  cd icechunk-python
+  source .venv/bin/activate
+  python -m pytest {{pytest_cov_args}} "$@"
 
 [doc("Run Python checks with upstream nightly dependencies")]
 python-upstream: build-wheels python-upstream-setup python-upstream-mypy python-upstream-describe python-upstream-pytest

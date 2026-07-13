@@ -117,7 +117,7 @@ jobs:
         run: just rustfs-wait
 
       - name: Run pytest (non-hypothesis)
-        run: just venv-run python -m pytest -n 4 -m "not hypothesis"
+        run: just pytest-venv -n 4 -m "not hypothesis"
 
   build-wheels-free-threaded:
     name: build-wheels-free-threaded
@@ -181,7 +181,7 @@ jobs:
         run: just rustfs-wait
 
       - name: Run pytest (non-hypothesis)
-        run: just venv-run python -m pytest -n 4 -m "not hypothesis"
+        run: just pytest-venv -n 4 -m "not hypothesis"
 
   test-hypothesis-shard:
     name: test-hypothesis-shard (${{ matrix.shard-id }})
@@ -226,7 +226,7 @@ jobs:
           HYPOTHESIS_EXPERIMENTAL_OBSERVABILITY: "1"
           NOCOLOR: 1
           SHARD_ID: ${{ matrix.shard-id }}
-        run: just venv-run python -m pytest -m hypothesis --num-shards=3 --shard-id="$SHARD_ID"
+        run: just pytest-venv -m hypothesis --num-shards=3 --shard-id="$SHARD_ID"
 
       - name: Save cached hypothesis directory
         id: save-hypothesis-cache
@@ -280,7 +280,7 @@ jobs:
           just install-ic-v1
 
       - name: Run cross-version stateful tests
-        run: just venv-run python -m pytest tests/test_stateful_compat.py -v
+        run: just pytest-venv tests/test_stateful_compat.py -v
 
   xarray-backends:
     name: xarray-backends (${{ matrix.xarray-version.name }}, ${{ matrix.xarray-version.version }}, ${{ matrix.xarray-version.zarr }})
