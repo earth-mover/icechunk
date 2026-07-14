@@ -320,8 +320,6 @@ jobs:
           path: icechunk-python/dist
 
       - name: Install dependencies
-        shell: bash
-        working-directory: icechunk-python
         env:
           XARRAY_MATRIX_VERSION: ${{ matrix.xarray-version.version }}
           ZARR_MATRIX_VERSION: ${{ matrix.xarray-version.zarr }}
@@ -330,9 +328,6 @@ jobs:
           [ "$XARRAY_MATRIX_VERSION" = "latest-release" ] || pins="xarray==$XARRAY_MATRIX_VERSION"
           [ "$ZARR_MATRIX_VERSION" = "latest-release" ] || pins="$pins zarr==$ZARR_MATRIX_VERSION"
           just install-test-wheel test "pytest-mypy-plugins<4" $pins
-          source .venv/bin/activate
-          echo "Installed package versions:"
-          python -c "import xarray; import zarr; print(f'xarray: {xarray.__version__}'); print(f'zarr: {zarr.__version__}')"
 
       - name: Checkout xarray at installed version
         run: just xarray-clone-installed

@@ -100,9 +100,6 @@ all-checks:
   just pytest
   just py-pre-commit
   just mypy
-  just ruff
-  just ruff-format
-  just pre-commit-python
   just pre-commit-ci
 
 [group('test')]
