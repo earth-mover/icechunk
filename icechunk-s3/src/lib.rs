@@ -423,6 +423,16 @@ fn conditional_for<'a>(
     }
 }
 
+/// Error codes meaning the conditional header tripped. `PreconditionFailed`
+/// is minio, `ConditionalRequestConflict` is S3, `ConcurrentModification` is
+/// Ceph Object Gateway.
+fn is_precondition_code(code: &str) -> bool {
+    matches!(
+        code,
+        "PreconditionFailed" | "ConditionalRequestConflict" | "ConcurrentModification"
+    )
+}
+
 impl S3Storage {
     /// Build an [`S3Storage`].
     ///
@@ -664,19 +674,8 @@ impl S3Storage {
             // minio returns this
             Err(SdkError::ServiceError(err)) => {
                 let code = err.err().meta().code().unwrap_or_default();
-                if code == "PreconditionFailed"
-                    || code == "ConditionalRequestConflict"
-                    // ConcurrentModification sent by Ceph Object Gateway
-                    || code == "ConcurrentModification"
-                {
-                    let outcome = self
-                        .read_back_after_conditional_failure(
-                            settings,
-                            key,
-                            write_id.as_deref(),
-                        )
-                        .await;
-                    resolve_precondition(outcome, key)
+                if is_precondition_code(code) {
+                    self.recover_precondition(settings, key, write_id.as_deref()).await
                 } else {
                     obj_store_error_res(SdkError::<PutObjectError>::ServiceError(err))
                 }
@@ -686,14 +685,7 @@ impl S3Storage {
                 let status = err.raw().status().as_u16();
                 // see https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutObject.html#API_PutObject_RequestSyntax
                 if status == 409 || status == 412 {
-                    let outcome = self
-                        .read_back_after_conditional_failure(
-                            settings,
-                            key,
-                            write_id.as_deref(),
-                        )
-                        .await;
-                    resolve_precondition(outcome, key)
+                    self.recover_precondition(settings, key, write_id.as_deref()).await
                 } else {
                     obj_store_error_res(SdkError::<PutObjectError>::ResponseError(err))
                 }
@@ -825,30 +817,18 @@ impl S3Storage {
             }
             Err(SdkError::ServiceError(err)) => {
                 let code = err.err().meta().code().unwrap_or_default();
-                // `ConcurrentModification` is Ceph. `NoSuchUpload` = SDK-retried
-                // complete after a lost response, or a failed upload; readback
-                // tells them apart.
-                let is_precondition = code == "PreconditionFailed"
-                    || code == "ConditionalRequestConflict"
-                    || code == "ConcurrentModification";
-                let is_lost_upload = code == "NoSuchUpload";
-                if is_precondition || is_lost_upload {
-                    let outcome = self
-                        .read_back_after_conditional_failure(
-                            settings,
-                            key,
-                            write_id.as_deref(),
-                        )
-                        .await;
-                    if is_precondition {
-                        resolve_precondition(outcome, key)
-                    } else {
-                        resolve_lost_response(
-                            outcome,
-                            key,
-                            obj_store_error(SdkError::ServiceError(err)),
-                        )
-                    }
+                // `NoSuchUpload` = SDK-retried complete after a lost response,
+                // or a failed upload; readback tells them apart.
+                if is_precondition_code(code) {
+                    self.recover_precondition(settings, key, write_id.as_deref()).await
+                } else if code == "NoSuchUpload" {
+                    self.recover_lost_response(
+                        settings,
+                        key,
+                        write_id.as_deref(),
+                        obj_store_error(SdkError::ServiceError(err)),
+                    )
+                    .await
                 } else {
                     obj_store_error_res(SdkError::ServiceError(err))
                 }
@@ -856,34 +836,48 @@ impl S3Storage {
             Err(SdkError::ResponseError(err)) => {
                 let status = err.raw().status().as_u16();
                 if status == 409 || status == 412 {
-                    let outcome = self
-                        .read_back_after_conditional_failure(
-                            settings,
-                            key,
-                            write_id.as_deref(),
-                        )
-                        .await;
-                    resolve_precondition(outcome, key)
+                    self.recover_precondition(settings, key, write_id.as_deref()).await
                 } else if status == 404 {
                     // NoSuchUpload surfaced as a raw HTTP status.
-                    let outcome = self
-                        .read_back_after_conditional_failure(
-                            settings,
-                            key,
-                            write_id.as_deref(),
-                        )
-                        .await;
-                    resolve_lost_response(
-                        outcome,
+                    self.recover_lost_response(
+                        settings,
                         key,
+                        write_id.as_deref(),
                         obj_store_error(SdkError::<PutObjectError>::ResponseError(err)),
                     )
+                    .await
                 } else {
                     obj_store_error_res(SdkError::<PutObjectError>::ResponseError(err))
                 }
             }
             Err(err) => obj_store_error_res(err),
         }
+    }
+
+    /// Readback + resolve for a tripped conditional (precondition code or
+    /// 409/412 status).
+    async fn recover_precondition(
+        &self,
+        settings: &Settings,
+        key: &str,
+        write_id: Option<&str>,
+    ) -> StorageResult<VersionedUpdateResult> {
+        let outcome =
+            self.read_back_after_conditional_failure(settings, key, write_id).await;
+        resolve_precondition(outcome, key)
+    }
+
+    /// Readback + resolve for a failure only our own landed write can rescue.
+    async fn recover_lost_response(
+        &self,
+        settings: &Settings,
+        key: &str,
+        write_id: Option<&str>,
+        original: StorageError,
+    ) -> StorageResult<VersionedUpdateResult> {
+        let outcome =
+            self.read_back_after_conditional_failure(settings, key, write_id).await;
+        resolve_lost_response(outcome, key, original)
     }
 
     /// HEAD `key` and classify it against our write-id. `Err` only on a HEAD
@@ -1700,6 +1694,17 @@ mod tests {
     use super::*;
 
     // Readback classification is unit-tested in `icechunk_storage::readback`.
+
+    #[test]
+    fn precondition_codes() {
+        for code in
+            ["PreconditionFailed", "ConditionalRequestConflict", "ConcurrentModification"]
+        {
+            assert!(is_precondition_code(code), "{code} must count as a precondition");
+        }
+        assert!(!is_precondition_code("NoSuchUpload"));
+        assert!(!is_precondition_code(""));
+    }
 
     #[tokio_test]
     async fn test_serialize_s3_storage() {

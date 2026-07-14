@@ -1722,7 +1722,9 @@ mod tests {
     use icechunk_macros::tokio_test;
     use tempfile::TempDir;
 
-    use super::ObjectStorage;
+    #[cfg(feature = "http")]
+    use super::{NonZeroU16, RetriesSettings, Url};
+    use super::{ObjectPath, ObjectStorage, ReadbackOutcome, Settings};
 
     #[tokio_test]
     async fn test_serialize_object_store() {
@@ -1770,6 +1772,50 @@ mod tests {
         let store =
             ObjectStorage::new_local_filesystem(PathBuf::from(&rel_path).as_path()).await;
         assert!(store.is_ok());
+    }
+
+    #[tokio_test]
+    async fn readback_of_absent_object_is_not_ours() {
+        // Absent is conclusive: our write didn't land.
+        let store = ObjectStorage::new_in_memory().await.unwrap();
+        let outcome = store
+            .read_back_after_conditional_failure(
+                &Settings::default(),
+                &ObjectPath::from("missing"),
+                Some("some-write-id"),
+            )
+            .await
+            .unwrap();
+        assert_eq!(outcome, ReadbackOutcome::NotOurs);
+    }
+
+    #[cfg(feature = "http")]
+    #[tokio_test]
+    async fn readback_head_failure_propagates() {
+        // Unreachable endpoint: the readback HEAD fails with a non-NotFound
+        // error, which must propagate instead of faking a conflict.
+        let store = ObjectStorage::new_http(
+            &Url::parse("http://127.0.0.1:9").unwrap(),
+            None,
+            None,
+        )
+        .unwrap();
+        let settings = Settings {
+            retries: Some(RetriesSettings {
+                max_tries: Some(NonZeroU16::new(1).unwrap()),
+                initial_backoff_ms: Some(1),
+                max_backoff_ms: Some(1),
+            }),
+            ..Default::default()
+        };
+        store
+            .read_back_after_conditional_failure(
+                &settings,
+                &ObjectPath::from("missing"),
+                Some("some-write-id"),
+            )
+            .await
+            .expect_err("HEAD against an unreachable endpoint must fail");
     }
 }
 

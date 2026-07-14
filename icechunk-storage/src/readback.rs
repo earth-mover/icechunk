@@ -200,4 +200,27 @@ mod tests {
             matches!(err.kind, StorageErrorKind::Other(s) if s == "original put error")
         );
     }
+
+    #[test]
+    fn precondition_missing_version_is_error() {
+        // Our write landed but has no version identity to hand back.
+        let err = resolve_precondition(Ok(ReadbackOutcome::MissingVersion), "k")
+            .expect_err("a landed write without a version identity cannot succeed");
+        assert!(matches!(err.kind, StorageErrorKind::Other(_)));
+    }
+
+    #[test]
+    fn lost_response_our_write_recovers_readback_version() {
+        assert_eq!(
+            resolve_lost_response(
+                Ok(ReadbackOutcome::OurWrite(version(Some("E1")))),
+                "k",
+                other_error("original put error"),
+            )
+            .unwrap(),
+            VersionedUpdateResult::Updated {
+                new_version: VersionInfo::from_etag_only("E1".to_string())
+            }
+        );
+    }
 }

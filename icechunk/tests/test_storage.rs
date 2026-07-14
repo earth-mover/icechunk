@@ -673,10 +673,30 @@ async fn conditional_create_conflicts_with_existing()
 async fn assert_lost_response_recovers_with_fresh_etag(
     label: &str,
     multipart: bool,
+    requester_pays: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let storage =
-        mk_s3_storage(common::get_random_prefix(label).as_str(), &Permission::Modify)
-            .await?;
+    // minio ignores the requester-pays header; setting it only exercises the
+    // requester-pays branch of the readback HEAD.
+    let (access_key_id, secret_access_key) = Permission::Modify.keys();
+    let storage = new_s3_storage(
+        S3Options::default()
+            .with_region("us-east-1")
+            .with_endpoint_url("http://localhost:4200")
+            .with_allow_http(true)
+            .with_force_path_style(true)
+            .with_requester_pays(requester_pays),
+        "testbucket".to_string(),
+        Some(common::get_random_prefix(label)),
+        Some(S3Credentials::Static(S3StaticCredentials {
+            access_key_id: access_key_id.into(),
+            secret_access_key: secret_access_key.into(),
+            session_token: None,
+            expires_after: None,
+        })),
+        Vec::new(),
+        Vec::new(),
+        None,
+    )?;
     let mut settings = storage.default_settings().await?;
     if multipart {
         // Tiny threshold so small writes exercise the multipart path.
@@ -742,13 +762,26 @@ async fn assert_lost_response_recovers_with_fresh_etag(
 #[tokio_test]
 async fn lost_response_conditional_create_recovers_single()
 -> Result<(), Box<dyn std::error::Error>> {
-    assert_lost_response_recovers_with_fresh_etag("lost-response-single", false).await
+    assert_lost_response_recovers_with_fresh_etag("lost-response-single", false, false)
+        .await
 }
 
 #[tokio_test]
 async fn lost_response_conditional_create_recovers_multipart()
 -> Result<(), Box<dyn std::error::Error>> {
-    assert_lost_response_recovers_with_fresh_etag("lost-response-multipart", true).await
+    assert_lost_response_recovers_with_fresh_etag("lost-response-multipart", true, false)
+        .await
+}
+
+#[tokio_test]
+async fn lost_response_conditional_create_recovers_requester_pays()
+-> Result<(), Box<dyn std::error::Error>> {
+    assert_lost_response_recovers_with_fresh_etag(
+        "lost-response-requester-pays",
+        false,
+        true,
+    )
+    .await
 }
 
 #[tokio_test]
