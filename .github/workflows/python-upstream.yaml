@@ -45,6 +45,7 @@ jobs:
         with:
           pixi-version: ${{ env.PIXI_VERSION }}
           cache: true
+          cache-write: ${{ github.ref == 'refs/heads/main' }}
           activate-environment: true
           manifest-path: icechunk-python/pyproject.toml
 
@@ -248,6 +249,7 @@ jobs:
         with:
           pixi-version: ${{ env.PIXI_VERSION }}
           cache: true
+          cache-write: ${{ github.ref == 'refs/heads/main' }}
           activate-environment: true
           manifest-path: icechunk/icechunk-python/pyproject.toml
 
