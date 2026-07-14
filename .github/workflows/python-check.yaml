@@ -300,7 +300,6 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          path: "icechunk"
           persist-credentials: false
 
       - uses: prefix-dev/setup-pixi@a09b6247153796b190642a2b53fac4241043cf6f # v0.10.0
@@ -309,21 +308,20 @@ jobs:
           cache: true
           cache-write: ${{ github.ref == 'refs/heads/main' }}
           activate-environment: true
-          manifest-path: icechunk/icechunk-python/pyproject.toml
+          manifest-path: icechunk-python/pyproject.toml
 
       - name: Stand up RustFS
-        working-directory: icechunk
         run: just rustfs-up
 
       - name: Download wheels
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: test-wheels
-          path: icechunk/icechunk-python/dist
+          path: icechunk-python/dist
 
       - name: Install dependencies
         shell: bash
-        working-directory: icechunk/icechunk-python
+        working-directory: icechunk-python
         env:
           XARRAY_MATRIX_VERSION: ${{ matrix.xarray-version.version }}
           ZARR_MATRIX_VERSION: ${{ matrix.xarray-version.zarr }}
@@ -337,15 +335,12 @@ jobs:
           python -c "import xarray; import zarr; print(f'xarray: {xarray.__version__}'); print(f'zarr: {zarr.__version__}')"
 
       - name: Checkout xarray at installed version
-        working-directory: icechunk
         run: just xarray-clone-installed
 
       - name: Wait for RustFS to be ready
-        working-directory: icechunk
         run: just rustfs-wait
 
       - name: Run xarray backends tests
-        working-directory: icechunk
         run: just xarray-backends-pytest
 
   stubtest:

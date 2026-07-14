@@ -43,7 +43,6 @@ jobs:
       - name: Checkout icechunk
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          path: "icechunk"
           persist-credentials: false
 
       - name: Cache Dependencies
@@ -59,28 +58,24 @@ jobs:
           cache: true
           cache-write: ${{ github.ref == 'refs/heads/main' }}
           activate-environment: true
-          manifest-path: icechunk/icechunk-python/pyproject.toml
+          manifest-path: icechunk-python/pyproject.toml
 
       - name: clone zarrs_icechunk
-        working-directory: icechunk
         run: |
           just zarrs-upstream-clone
 
       - name: Patch zarrs_icechunk to use local icechunk
-        working-directory: icechunk
         run: |
           just zarrs-upstream-patch
 
       - name: Build zarrs_icechunk
         id: build
-        working-directory: icechunk
         run: |
           just zarrs-upstream-build
 
       - name: Test zarrs_icechunk
         id: test
         if: steps.build.outcome == 'success'
-        working-directory: icechunk
         run: |
           just zarrs-upstream-test
 

@@ -235,14 +235,6 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          path: "icechunk"
-          persist-credentials: false
-
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          repository: "pydata/xarray"
-          path: "xarray"
-          fetch-depth: 0 # Fetch all history for all branches and tags.
           persist-credentials: false
 
       - uses: prefix-dev/setup-pixi@a09b6247153796b190642a2b53fac4241043cf6f # v0.10.0
@@ -251,28 +243,23 @@ jobs:
           cache: true
           cache-write: ${{ github.ref == 'refs/heads/main' }}
           activate-environment: true
-          manifest-path: icechunk/icechunk-python/pyproject.toml
+          manifest-path: icechunk-python/pyproject.toml
 
       - name: Build wheels
-        working-directory: icechunk
         run: just build-wheels
 
       - name: setup
-        working-directory: icechunk
         run: |
           just xarray-upstream-setup
 
       - name: Stand up RustFS
-        working-directory: icechunk
         run: just rustfs-up
 
       - name: Wait for RustFS to be ready
-        working-directory: icechunk
         run: just rustfs-wait
 
       - name: pytest
         id: pytest-xarray-backends
-        working-directory: icechunk
         env:
           ICECHUNK_XARRAY_BACKENDS_TESTS: 1
         run: |
@@ -283,7 +270,7 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: xarray-backends-logs
-          path: icechunk/icechunk-python/output-pytest-log.jsonl
+          path: icechunk-python/output-pytest-log.jsonl
           if-no-files-found: ignore
 
   xarray-report:
