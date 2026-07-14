@@ -111,6 +111,26 @@
           doCheck = false;
         };
 
+        # Rust toolchain plus the wasm32-wasip1-threads std for `just wasm-build`.
+        rustToolchain = fenix.packages.${system}.combine [
+          fenix.packages.${system}.stable.toolchain
+          fenix.packages.${system}.targets.wasm32-wasip1-threads.stable.rust-std
+        ];
+
+        # Official wasi-sdk sysroot; nixpkgs' wasilibc (single-threaded,
+        # split outputs) can't serve as a --sysroot.
+        wasiSysroot = pkgs.fetchzip {
+          url = "https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-27/wasi-sysroot-27.0.tar.gz";
+          hash = "sha256-EAvyfHyT+mcyHilyqrjg3I1eih5dZyfXynDafTP4p3g=";
+        };
+
+        # Free-threaded CPython for the py314t wheel build.
+        # link only python3.14t so the package's bin/python3 doesn't shadow python312.
+        python314t = pkgs.runCommand "python314t-bin" {} ''
+          mkdir -p $out/bin
+          ln -s ${pkgs.python314FreeThreading}/bin/python3.14t $out/bin/python3.14t
+        '';
+
         # Construct package set (only consumed by the uv2nix shell below)
         pythonSet =
           # Use base package set from pyproject.nix builders
@@ -144,7 +164,7 @@
                   pkgs.uv
                   pkgs.ruff
 
-                  fenix.packages.${system}.stable.toolchain
+                  rustToolchain
                   pkgs.cargo-nextest # test runner
                   pkgs.cargo-deny
                   pkgs.cargo-edit
@@ -160,6 +180,11 @@
                   pkgs.alejandra # nix code formatter
                   pkgs.markdownlint-cli2
                   pkgs.flatbuffers
+                  pkgs.prek # pre-commit runner (`just py-pre-commit`)
+                  pkgs.cairo # mkdocs-material social plugin dlopens libcairo
+                  pkgs.nodejs_22 # icechunk-js
+                  pkgs.corepack_22 # provisions yarn per package.json packageManager
+                  python314t
 
                   # necessary for reqwest
                   pkgs.openssl
@@ -173,14 +198,39 @@
                   UV_PYTHON_DOWNLOADS = "never";
 
                   RUSTFLAGS = "-W unreachable-pub -W bare-trait-objects";
+
+                  # `just wasm-build`: absolute paths to unwrapped clang; wrapped
+                  # and Apple clang inject host flags that break the wasm32 build.
+                  WASI_SYSROOT = "${wasiSysroot}";
+                  CC_wasm32_wasip1_threads = "${pkgs.llvmPackages.clang-unwrapped}/bin/clang";
+                  CXX_wasm32_wasip1_threads = "${pkgs.llvmPackages.clang-unwrapped}/bin/clang++";
+                  AR_wasm32_wasip1_threads = "${pkgs.llvmPackages.llvm}/bin/llvm-ar";
                 }
                 // lib.optionalAttrs pkgs.stdenv.isLinux {
                   # Python libraries often load native shared objects using dlopen(3).
                   # Setting LD_LIBRARY_PATH makes the dynamic library loader aware of libraries without using RPATH for lookup.
-                  LD_LIBRARY_PATH = "${pkgs.stdenv.cc.cc.lib}/lib";
+                  # libpython is needed by the pyo3 lib-test binary (no build.rs, so no rpath).
+                  LD_LIBRARY_PATH = lib.makeLibraryPath [
+                    pkgs.stdenv.cc.cc
+                    python
+                    pkgs.cairo
+                  ];
+                }
+                // lib.optionalAttrs pkgs.stdenv.isDarwin {
+                  # For dlopen'd libcairo and the rpath-less pyo3 lib-test's
+                  # libpython; tail keeps the system defaults this var replaces.
+                  DYLD_FALLBACK_LIBRARY_PATH = "${
+                    lib.makeLibraryPath [
+                      pkgs.cairo
+                      python
+                    ]
+                  }:/usr/local/lib:/usr/lib";
                 };
               shellHook = ''
                 unset PYTHONPATH
+                # a leaked pixi env (e.g. via direnv) flips Justfile recipes
+                # into their conda branches and taints library paths
+                unset CONDA_PREFIX
               '';
             };
         }

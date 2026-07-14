@@ -91,8 +91,13 @@ wasm-build:
   # compile smoke test: don't fail on existing warnings in no-default-features wasm cfgs
   export RUSTFLAGS=""
   export WASI_SYSROOT="${WASI_SYSROOT:-/usr}"
-  export CC_wasm32_wasip1_threads=clang CXX_wasm32_wasip1_threads=clang++ AR_wasm32_wasip1_threads=llvm-ar
-  wasm_cflags="--sysroot=$WASI_SYSROOT -isystem $WASI_SYSROOT/include/wasm32-wasi"
+  export CC_wasm32_wasip1_threads="${CC_wasm32_wasip1_threads:-clang}" CXX_wasm32_wasip1_threads="${CXX_wasm32_wasip1_threads:-clang++}" AR_wasm32_wasip1_threads="${AR_wasm32_wasip1_threads:-llvm-ar}"
+  # wasi-sdk sysroots have a per-target include dir; Debian's wasi-libc doesn't
+  if [ -d "$WASI_SYSROOT/include/wasm32-wasip1-threads" ]; then
+    wasm_cflags="--sysroot=$WASI_SYSROOT -isystem $WASI_SYSROOT/include/wasm32-wasip1-threads"
+  else
+    wasm_cflags="--sysroot=$WASI_SYSROOT -isystem $WASI_SYSROOT/include/wasm32-wasi"
+  fi
   export CFLAGS_wasm32_wasip1_threads="$wasm_cflags" CXXFLAGS_wasm32_wasip1_threads="$wasm_cflags"
   cargo build -p icechunk --no-default-features --target wasm32-wasip1-threads
 
@@ -218,9 +223,15 @@ ruff-format *args:
 ruff *args:
   ruff check --show-fixes icechunk-python/ "$@"
 
+[script]
 [doc("Run mypy type checking on Python code")]
 mypy *args:
-  cd icechunk-python && mypy python tests "$@"
+  cd icechunk-python
+  if [[ -n "${CONDA_PREFIX:-}" ]]; then
+    export VIRTUAL_ENV="$CONDA_PREFIX"
+    export UV_NO_SYNC=1
+  fi
+  uv run --active mypy python tests "$@"
 
 [doc("Run mypy stub checking on type stubs")]
 stubtest *args:
@@ -255,13 +266,25 @@ gen-expired-fixtures *args:
   cd icechunk-python && uv run --with third-wheel third-wheel sync --rename "icechunk==1.1.21=icechunk_v1" --rename "icechunk==2.0.5=icechunk_v2"
   cd icechunk-python && uv run python tests/data_generation/generate_expired_repos.py "$@"
 
+[script]
 [doc("Start MkDocs dev server with live reload")]
 docs-serve *args:
-  mkdocs serve -f icechunk-python/docs/mkdocs.yml --livereload "$@"
+  cd icechunk-python
+  if [[ -n "${CONDA_PREFIX:-}" ]]; then
+    export VIRTUAL_ENV="$CONDA_PREFIX"
+    export UV_NO_SYNC=1
+  fi
+  uv run --active --group docs mkdocs serve -f docs/mkdocs.yml --livereload "$@"
 
+[script]
 [doc("Build MkDocs static site")]
 docs-build *args:
-  mkdocs build -f icechunk-python/docs/mkdocs.yml "$@"
+  cd icechunk-python
+  if [[ -n "${CONDA_PREFIX:-}" ]]; then
+    export VIRTUAL_ENV="$CONDA_PREFIX"
+    export UV_NO_SYNC=1
+  fi
+  uv run --active --group docs mkdocs build -f docs/mkdocs.yml "$@"
 
 [doc("Check compatibility with zarrs_icechunk")]
 zarrs-upstream zarrs_dir="../zarrs_icechunk": zarrs-upstream-clone zarrs-upstream-patch zarrs-upstream-build zarrs-upstream-test
@@ -358,7 +381,7 @@ build-wheels *args:
 install-test-wheel group="test" *args:
   shift
   cd icechunk-python
-  uv venv --python=${PYTHON_VERSION}
+  uv venv --clear --python=${PYTHON_VERSION}
   source .venv/bin/activate
   PY_TAG="cp${PYTHON_VERSION//./}"
   WHEEL=$(ls dist/*-"${PY_TAG}"-*.whl)
