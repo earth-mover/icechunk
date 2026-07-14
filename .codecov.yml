@@ -9,7 +9,9 @@ coverage:
         threshold: 1%
     patch:
       default:
-        target: 80%
+        target: auto
+        threshold: 0%
+        base: auto
 
 ignore:
   - "icechunk-python/tests/"
