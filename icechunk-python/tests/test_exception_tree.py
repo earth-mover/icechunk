@@ -161,9 +161,7 @@ def test_ref_not_found(repo: ic.Repository) -> None:
 @pytest.mark.parametrize("spec_version", [1, ic.SpecVersion.v2], ids=["v1", "v2"])
 def test_readonly_session_ref_not_found(spec_version: ic.SpecVersion | int) -> None:
     # v1 and v2 resolve refs through different Rust paths; both must classify
-    repo = ic.Repository.create(
-        storage=ic.in_memory_storage(), spec_version=spec_version
-    )
+    repo = ic.Repository.create(storage=ic.in_memory_storage(), spec_version=spec_version)
 
     with pytest.raises(ic.RefNotFoundError) as excinfo:
         repo.readonly_session(branch="does-not-exist")
