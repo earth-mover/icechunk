@@ -534,6 +534,101 @@ coverage-clean:
   find . -iname "*.profraw" -delete
   rm -f coverage_rust.lcov coverage_python.lcov icechunk-python/.coverage*
 
+# corepack provisions yarn@4.12.0 per packageManager; suppress its download prompt
+export COREPACK_ENABLE_DOWNLOAD_PROMPT := env("COREPACK_ENABLE_DOWNLOAD_PROMPT", "0")
+
+[doc("Install icechunk-js dependencies with yarn")]
+js-install:
+  # conda-forge nodejs ships corepack without yarn shims
+  command -v yarn >/dev/null || corepack enable
+  cd icechunk-js && yarn install
+
+[doc("Build icechunk-js native bindings, release profile (pass --target <triple> to cross-compile)")]
+js-build *args: js-install
+  cd icechunk-js && yarn build "$@"
+
+[doc("Build icechunk-js native bindings, debug profile (faster)")]
+js-build-debug *args: js-install
+  cd icechunk-js && yarn build:debug "$@"
+
+[doc("Run icechunk-js tests with ava (build with js-build/js-build-debug first)")]
+js-test *args: js-install
+  cd icechunk-js && yarn test "$@"
+
+[script]
+[doc("Build icechunk-js for wasm32-wasip1-threads (same toolchain fallbacks as wasm-build)")]
+js-build-wasi *args: js-install
+  export WASI_SYSROOT="${WASI_SYSROOT:-/usr}"
+  export CC_wasm32_wasip1_threads="${CC_wasm32_wasip1_threads:-clang}" CXX_wasm32_wasip1_threads="${CXX_wasm32_wasip1_threads:-clang++}" AR_wasm32_wasip1_threads="${AR_wasm32_wasip1_threads:-llvm-ar}"
+  # wasi-sdk sysroots have a per-target include dir; Debian's wasi-libc doesn't
+  if [ -d "$WASI_SYSROOT/include/wasm32-wasip1-threads" ]; then
+    wasm_cflags="--sysroot=$WASI_SYSROOT -isystem $WASI_SYSROOT/include/wasm32-wasip1-threads"
+  else
+    wasm_cflags="--sysroot=$WASI_SYSROOT -isystem $WASI_SYSROOT/include/wasm32-wasi"
+  fi
+  export CFLAGS_wasm32_wasip1_threads="$wasm_cflags" CXXFLAGS_wasm32_wasip1_threads="$wasm_cflags"
+  cd icechunk-js
+  yarn build --target wasm32-wasip1-threads "$@"
+
+[script]
+[doc("Run icechunk-js tests under WASI like CI's test-wasi lane (needs js-build-wasi)")]
+js-test-wasi *args:
+  cd icechunk-js
+  # `yarn config set` writes .yarnrc.yml; restore host setup on exit
+  yarn config set supportedArchitectures.cpu "wasm32"
+  trap 'yarn config unset supportedArchitectures.cpu; yarn install' EXIT
+  yarn install
+  NAPI_RS_FORCE_WASI=1 yarn test "$@"
+
+# One recipe per GitHub workflow, chaining the same `just` steps CI runs.
+# Bodies re-invoke `just profile=ci ...` because recipe deps can't carry
+# variable overrides (same pattern as pre-commit-ci).
+
+[doc("Reproduce rust-ci.yaml's rust job (Linux lane); needs docker. Other jobs: shuttle-test, wasm-build + wasm-proxy-test")]
+ci-rust $RUSTFLAGS="-D warnings":
+  just check-msrv
+  just contup
+  just contwait
+  just profile=ci coverage={{coverage}} compile-tests "--locked"
+  just profile=ci coverage={{coverage}} test
+  just profile=ci coverage={{coverage}} doctest
+  just profile=ci coverage={{coverage}} run-all-examples
+  just profile=ci coverage={{coverage}} develop
+  just profile=ci coverage={{coverage}} pytest -n 4 -m "not hypothesis"
+  [ "{{coverage}}" != "true" ] || just profile=ci coverage=true coverage-report
+
+[doc("Reproduce python-check.yaml: wheel build + all test lanes (latest deps; free-threaded and hypothesis sharding excluded)")]
+ci-python-check:
+  just profile={{profile}} build-wheels
+  just rustfs-up
+  just install-test-wheel test
+  just rustfs-wait
+  just pytest-venv -n 4 -m "not hypothesis"
+  just pytest-venv -m hypothesis
+  just install-ic-v1
+  just pytest-venv tests/test_stateful_compat.py -v
+  just install-test-wheel test "pytest-mypy-plugins<4"
+  just xarray-clone-installed
+  just xarray-backends-pytest
+  just install-test-wheel dev
+  just venv-run just stubtest
+  just check-xarray-docs
+
+[doc("Reproduce code-quality.yaml: develop, format check, clippy, doctests, mypy, pre-commit")]
+ci-code-quality $RUSTFLAGS="-D warnings":
+  just profile=ci develop
+  just format "--check"
+  just profile=ci lint
+  just profile=ci doctest
+  just mypy
+  just py-pre-commit
+
+[doc("Reproduce js-ci.yaml for the host target (WASI lane: js-build-wasi + js-test-wasi)")]
+ci-js:
+  just js-install
+  just js-build
+  just js-test
+
 [doc("Run all Python and Rust checks")]
 all-checks:
   just pytest

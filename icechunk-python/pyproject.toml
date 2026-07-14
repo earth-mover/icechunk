@@ -235,6 +235,7 @@ samply = ">=0.13.1,<0.14"
 cargo-release = ">=1.1.2,<2"
 cargo-llvm-cov = ">=0.8.4,<0.9"
 octocov = ">=0.75.8,<0.76"
+nodejs = ">=22.23.1,<23"
 
 [tool.pixi.feature.build.target.linux-64.dependencies]
 sysroot_linux-64 = ">=2.34"
