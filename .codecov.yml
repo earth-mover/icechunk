@@ -22,6 +22,5 @@ ignore:
   - "**/*test*.rs"
   - "design-docs/"
 
-comment:
-  layout: "reach,diff,flags,tree"
-  behavior: default
+# octocov posts the PR coverage comment; codecov stays dashboard-only
+comment: false

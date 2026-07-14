@@ -12,11 +12,15 @@ export JUST_PROFILE := profile
 # pytest-cov flags for `just pytest`, active only when coverage=true
 pytest_cov_args := if coverage == "true" { "--cov=icechunk" } else { "" }
 
-# Env preamble for every [script] recipe: conda lib path, plus llvm-cov
-# instrumentation when coverage=true. Runs in-shell so macOS SIP can't
-# strip DYLD_*.
+# Env preamble for every [script] recipe: conda lib path, uv-targets-pixi-env,
+# plus llvm-cov instrumentation when coverage=true. Runs in-shell so macOS SIP
+# can't strip DYLD_*.
 set script-interpreter := ["bash", "-euo", "pipefail", "-c", '''
 export DYLD_LIBRARY_PATH="${CONDA_PREFIX:-}/lib"
+if [ -n "${CONDA_PREFIX:-}" ]; then
+  # make uv target the active pixi env instead of syncing a project venv
+  export VIRTUAL_ENV="$CONDA_PREFIX" UV_NO_SYNC=1
+fi
 if [ "$JUST_COVERAGE" = "true" ]; then
   # eval, not `source <(...)`: macOS /bin/bash 3.2 silently sources nothing from process substitution
   eval "$(cargo llvm-cov show-env --sh --profile "$JUST_PROFILE")"
@@ -85,20 +89,21 @@ build *args:
 build-release *args:
   cargo build --release "$@"
 
+# WASI toolchain for wasm-build / js-build-wasi; inert for other targets.
+# wasi-sdk sysroots have a per-target include dir; Debian's wasi-libc doesn't.
+export WASI_SYSROOT := env("WASI_SYSROOT", "/usr")
+export CC_wasm32_wasip1_threads := env("CC_wasm32_wasip1_threads", "clang")
+export CXX_wasm32_wasip1_threads := env("CXX_wasm32_wasip1_threads", "clang++")
+export AR_wasm32_wasip1_threads := env("AR_wasm32_wasip1_threads", "llvm-ar")
+wasi_include := if path_exists(WASI_SYSROOT / "include/wasm32-wasip1-threads") == "true" { WASI_SYSROOT / "include/wasm32-wasip1-threads" } else { WASI_SYSROOT / "include/wasm32-wasi" }
+export CFLAGS_wasm32_wasip1_threads := "--sysroot=" + WASI_SYSROOT + " -isystem " + wasi_include
+export CXXFLAGS_wasm32_wasip1_threads := CFLAGS_wasm32_wasip1_threads
+
 [script]
 [doc("Compile-check icechunk for wasm (needs clang/llvm + wasi-libc; override sysroot with WASI_SYSROOT)")]
 wasm-build:
   # compile smoke test: don't fail on existing warnings in no-default-features wasm cfgs
   export RUSTFLAGS=""
-  export WASI_SYSROOT="${WASI_SYSROOT:-/usr}"
-  export CC_wasm32_wasip1_threads="${CC_wasm32_wasip1_threads:-clang}" CXX_wasm32_wasip1_threads="${CXX_wasm32_wasip1_threads:-clang++}" AR_wasm32_wasip1_threads="${AR_wasm32_wasip1_threads:-llvm-ar}"
-  # wasi-sdk sysroots have a per-target include dir; Debian's wasi-libc doesn't
-  if [ -d "$WASI_SYSROOT/include/wasm32-wasip1-threads" ]; then
-    wasm_cflags="--sysroot=$WASI_SYSROOT -isystem $WASI_SYSROOT/include/wasm32-wasip1-threads"
-  else
-    wasm_cflags="--sysroot=$WASI_SYSROOT -isystem $WASI_SYSROOT/include/wasm32-wasi"
-  fi
-  export CFLAGS_wasm32_wasip1_threads="$wasm_cflags" CXXFLAGS_wasm32_wasip1_threads="$wasm_cflags"
   cargo build -p icechunk --no-default-features --target wasm32-wasip1-threads
 
 [script]
@@ -117,16 +122,14 @@ gen-flatbuffers:
 [doc("Prepare environment for development")]
 develop *args:
   cd icechunk-python
-  if [[ -n "${CONDA_PREFIX:-}" ]]; then
-    export VIRTUAL_ENV="$CONDA_PREFIX"
-    export UV_NO_SYNC=1
-  fi
   uv run --active maturin develop --uv --profile {{profile}} "$@"
 
+[script]
 [doc("Install maturin import hook for more convenient development flow")]
 import-hook:
   cd icechunk-python && python -m maturin_import_hook site install
 
+[script]
 [doc("Uninstall maturin import hook")]
 import-hook-remove:
   cd icechunk-python && python -m maturin_import_hook site uninstall
@@ -227,12 +230,9 @@ ruff *args:
 [doc("Run mypy type checking on Python code")]
 mypy *args:
   cd icechunk-python
-  if [[ -n "${CONDA_PREFIX:-}" ]]; then
-    export VIRTUAL_ENV="$CONDA_PREFIX"
-    export UV_NO_SYNC=1
-  fi
   uv run --active mypy python tests "$@"
 
+[script]
 [doc("Run mypy stub checking on type stubs")]
 stubtest *args:
   cd icechunk-python && python -m mypy.stubtest --ignore-disjoint-bases icechunk._icechunk_python --allowlist stubtest_allowlist.txt "$@"
@@ -245,10 +245,6 @@ py-pre-commit $SKIP="rust-pre-commit-fast,rust-pre-commit,rust-pre-commit-ci" *a
 [doc("Run Python tests via pytest (coverage=true also collects Python + FFI coverage)")]
 pytest *args:
   cd icechunk-python
-  if [[ -n "${CONDA_PREFIX:-}" ]]; then
-    export VIRTUAL_ENV="$CONDA_PREFIX"
-    export UV_NO_SYNC=1
-  fi
   uv run --active pytest {{pytest_cov_args}} "$@"
 
 [script]
@@ -261,29 +257,23 @@ pytest-otel *args: jaeger-up
   # tracing subscriber. Those tests are meaningless under telemetry, so skip them.
   just pytest --ignore=tests/test_logs.py "$@"
 
+[script]
 [doc("Regenerate the post-expiration can_read_old fixtures (needs icechunk 1.1.21 + 2.0.5 wheels, installed via third-wheel)")]
 gen-expired-fixtures *args:
-  cd icechunk-python && uv run --with third-wheel third-wheel sync --rename "icechunk==1.1.21=icechunk_v1" --rename "icechunk==2.0.5=icechunk_v2"
-  cd icechunk-python && uv run python tests/data_generation/generate_expired_repos.py "$@"
+  cd icechunk-python
+  uv run --with third-wheel third-wheel sync --rename "icechunk==1.1.21=icechunk_v1" --rename "icechunk==2.0.5=icechunk_v2"
+  uv run python tests/data_generation/generate_expired_repos.py "$@"
 
 [script]
 [doc("Start MkDocs dev server with live reload")]
 docs-serve *args:
   cd icechunk-python
-  if [[ -n "${CONDA_PREFIX:-}" ]]; then
-    export VIRTUAL_ENV="$CONDA_PREFIX"
-    export UV_NO_SYNC=1
-  fi
   uv run --active --group docs mkdocs serve -f docs/mkdocs.yml --livereload "$@"
 
 [script]
 [doc("Build MkDocs static site")]
 docs-build *args:
   cd icechunk-python
-  if [[ -n "${CONDA_PREFIX:-}" ]]; then
-    export VIRTUAL_ENV="$CONDA_PREFIX"
-    export UV_NO_SYNC=1
-  fi
   uv run --active --group docs mkdocs build -f docs/mkdocs.yml "$@"
 
 [doc("Check compatibility with zarrs_icechunk")]
@@ -556,17 +546,8 @@ js-test *args: js-install
   cd icechunk-js && yarn test "$@"
 
 [script]
-[doc("Build icechunk-js for wasm32-wasip1-threads (same toolchain fallbacks as wasm-build)")]
+[doc("Build icechunk-js for wasm32-wasip1-threads (same WASI toolchain env as wasm-build)")]
 js-build-wasi *args: js-install
-  export WASI_SYSROOT="${WASI_SYSROOT:-/usr}"
-  export CC_wasm32_wasip1_threads="${CC_wasm32_wasip1_threads:-clang}" CXX_wasm32_wasip1_threads="${CXX_wasm32_wasip1_threads:-clang++}" AR_wasm32_wasip1_threads="${AR_wasm32_wasip1_threads:-llvm-ar}"
-  # wasi-sdk sysroots have a per-target include dir; Debian's wasi-libc doesn't
-  if [ -d "$WASI_SYSROOT/include/wasm32-wasip1-threads" ]; then
-    wasm_cflags="--sysroot=$WASI_SYSROOT -isystem $WASI_SYSROOT/include/wasm32-wasip1-threads"
-  else
-    wasm_cflags="--sysroot=$WASI_SYSROOT -isystem $WASI_SYSROOT/include/wasm32-wasi"
-  fi
-  export CFLAGS_wasm32_wasip1_threads="$wasm_cflags" CXXFLAGS_wasm32_wasip1_threads="$wasm_cflags"
   cd icechunk-js
   yarn build --target wasm32-wasip1-threads "$@"
 

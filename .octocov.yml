@@ -2,23 +2,6 @@ coverage:
   paths:
     - coverage_rust.lcov
     - coverage_python.lcov
-codeToTestRatio:
-  # approximate: Rust in-source #[cfg(test)] modules count as code
-  code:
-    - '**/*.rs'
-    - '!target/**'
-    - '!**/.pixi/**'
-    - '!**/tests/**'
-    - 'icechunk-python/python/**/*.py'
-  test:
-    - '**/tests/**/*.rs'
-    - 'icechunk-python/tests/**/*.py'
-testExecutionTime:
-  steps:
-    - Run tests with Docker services
-    - Run doc tests
-    - Run examples
-    - Run Python tests for coverage
 diff:
   datastores:
     - artifact://${GITHUB_REPOSITORY}

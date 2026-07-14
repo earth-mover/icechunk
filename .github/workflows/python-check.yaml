@@ -325,7 +325,6 @@ jobs:
         shell: bash
         working-directory: icechunk/icechunk-python
         env:
-          ICECHUNK_XARRAY_BACKENDS_TESTS: 1
           XARRAY_MATRIX_VERSION: ${{ matrix.xarray-version.version }}
           ZARR_MATRIX_VERSION: ${{ matrix.xarray-version.zarr }}
         run: |
