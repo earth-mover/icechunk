@@ -141,6 +141,13 @@ filterwarnings = [
   "ignore:The 'generic' unit for NumPy timedelta is deprecated:DeprecationWarning",
 ]
 
+# remap wheel-venv site-packages paths to the source tree; applied on `coverage combine`
+[tool.coverage.paths]
+icechunk = [
+  "icechunk-python/python/icechunk",
+  "*/site-packages/icechunk",
+]
+
 [tool.mypy]
 python_version = "3.12"
 strict = true

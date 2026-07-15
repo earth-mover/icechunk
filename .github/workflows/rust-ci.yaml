@@ -178,16 +178,6 @@ jobs:
           name: rust-coverage
           fail_ci_if_error: false
 
-      - name: Upload Python coverage to Codecov
-        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v5
-        if: ${{ matrix.os == 'ubuntu-latest' }}
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          files: coverage_python.lcov
-          flags: python
-          name: python-coverage
-          fail_ci_if_error: false
-
       # skipped on fork PRs: the read-only token can't post the PR comment
       - name: Report coverage with octocov
         if: ${{ matrix.os == 'ubuntu-latest' && (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) }}

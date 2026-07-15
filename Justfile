@@ -16,7 +16,10 @@ pytest_cov_args := if coverage == "true" { "--cov=icechunk" } else { "" }
 # plus llvm-cov instrumentation when coverage=true. Runs in-shell so macOS SIP
 # can't strip DYLD_*.
 set script-interpreter := ["bash", "-euo", "pipefail", "-c", '''
-export DYLD_LIBRARY_PATH="${CONDA_PREFIX:-}/lib"
+# fallback, not DYLD_LIBRARY_PATH: only otherwise-unresolvable libs (e.g. the
+# rpath-less pyo3 lib-test's libpython) may come from conda; the venv numpy's
+# BLAS must not be shadowed. Tail keeps the system defaults this var replaces.
+export DYLD_FALLBACK_LIBRARY_PATH="${CONDA_PREFIX:-}/lib:/usr/local/lib:/usr/lib"
 if [ -n "${CONDA_PREFIX:-}" ]; then
   # make uv target the active pixi env instead of syncing a project venv
   export VIRTUAL_ENV="$CONDA_PREFIX" UV_NO_SYNC=1
@@ -66,7 +69,8 @@ ci-python-check:
   just rustfs-up
   just install-test-wheel test
   just rustfs-wait
-  just pytest-venv -n 4 -m "not hypothesis"
+  just coverage={{coverage}} pytest-venv -n 4 -m "not hypothesis"
+  [ "{{coverage}}" != "true" ] || just coverage=true coverage-report-python
   just pytest-venv -m hypothesis
   just install-ic-v1
   just pytest-venv tests/test_stateful_compat.py -v
@@ -647,6 +651,16 @@ coverage-report *args:
     coverage lcov --data-file=icechunk-python/.coverage -o coverage_python.lcov
     echo "Coverage report: coverage_python.lcov (Python)"
   fi
+
+[group('coverage')]
+[script]
+[doc("Python-line coverage lcov from a wheel-venv pytest run (remaps site-packages paths to the source tree)")]
+coverage-report-python:
+  source icechunk-python/.venv/bin/activate
+  mv icechunk-python/.coverage icechunk-python/.coverage.wheel
+  coverage combine --rcfile=icechunk-python/pyproject.toml --data-file=icechunk-python/.coverage icechunk-python/.coverage.wheel
+  coverage lcov --data-file=icechunk-python/.coverage -o coverage_python.lcov
+  echo "Coverage report: coverage_python.lcov (Python, wheel venv)"
 
 [group('coverage')]
 [script]

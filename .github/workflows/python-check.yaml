@@ -114,8 +114,26 @@ jobs:
       - name: Wait for RustFS to be ready
         run: just rustfs-wait
 
+      # Python-line coverage is measured here, against the shipped wheel;
+      # Rust+FFI coverage stays in rust-ci where the instrumented build is shared
       - name: Run pytest (non-hypothesis)
-        run: just pytest-venv -n 4 -m "not hypothesis"
+        env:
+          coverage: ${{ matrix.deps-version.name == 'latest' }}
+        run: just coverage=${coverage} pytest-venv -n 4 -m "not hypothesis"
+
+      - name: Prepare coverage for upload
+        if: ${{ matrix.deps-version.name == 'latest' }}
+        run: just coverage=true coverage-report-python
+
+      - name: Upload Python coverage to Codecov
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v5
+        if: ${{ matrix.deps-version.name == 'latest' }}
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: coverage_python.lcov
+          flags: python
+          name: python-coverage
+          fail_ci_if_error: false
 
   build-wheels-free-threaded:
     name: build-wheels-free-threaded
