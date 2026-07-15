@@ -121,19 +121,17 @@ jobs:
           coverage: ${{ matrix.deps-version.name == 'latest' }}
         run: just coverage=${coverage} pytest-venv -n 4 -m "not hypothesis"
 
-      - name: Prepare coverage for upload
+      - name: Stash coverage data for aggregation
         if: ${{ matrix.deps-version.name == 'latest' }}
-        run: just coverage=true coverage-report-python
+        run: just coverage-stash test-latest
 
-      - name: Upload Python coverage to Codecov
-        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v5
+      - name: Upload coverage data
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         if: ${{ matrix.deps-version.name == 'latest' }}
         with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          files: coverage_python.lcov
-          flags: python
-          name: python-coverage
-          fail_ci_if_error: false
+          name: python-coverage-data-test-latest
+          path: icechunk-python/.coverage-fragments/.coverage.test-latest
+          include-hidden-files: true
 
   build-wheels-free-threaded:
     name: build-wheels-free-threaded
@@ -245,7 +243,21 @@ jobs:
           HYPOTHESIS_EXPERIMENTAL_OBSERVABILITY: "1"
           NOCOLOR: 1
           SHARD_ID: ${{ matrix.shard-id }}
-        run: just pytest-venv -m hypothesis --num-shards=3 --shard-id="$SHARD_ID"
+          # sysmon core: coverage's default C tracer slows hypothesis workloads badly
+          COVERAGE_CORE: sysmon
+        run: just coverage=true pytest-venv -m hypothesis --num-shards=3 --shard-id="$SHARD_ID"
+
+      - name: Stash coverage data for aggregation
+        env:
+          SHARD_ID: ${{ matrix.shard-id }}
+        run: just coverage-stash "hypothesis-$SHARD_ID"
+
+      - name: Upload coverage data
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: python-coverage-data-hypothesis-${{ matrix.shard-id }}
+          path: icechunk-python/.coverage-fragments/.coverage.hypothesis-${{ matrix.shard-id }}
+          include-hidden-files: true
 
       - name: Save cached hypothesis directory
         id: save-hypothesis-cache
@@ -270,6 +282,59 @@ jobs:
             echo "::error::One or more hypothesis test shards failed"
             exit 1
           fi
+
+  # Combines the .coverage fragments from test (latest) and the hypothesis
+  # shards into one lcov for codecov and the python octocov PR comment
+  python-coverage:
+    name: python-coverage
+    runs-on: ubuntu-latest
+    needs: [test, test-hypothesis-shard]
+    permissions:
+      contents: read
+      pull-requests: write # octocov posts the python coverage PR comment
+      actions: read # octocov reads the artifact-datastore coverage baseline
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - uses: prefix-dev/setup-pixi@a09b6247153796b190642a2b53fac4241043cf6f # v0.10.0
+        with:
+          pixi-version: ${{ env.PIXI_VERSION }}
+          cache: true
+          cache-write: ${{ github.ref == 'refs/heads/main' }}
+          activate-environment: true
+          manifest-path: icechunk-python/pyproject.toml
+
+      - name: Download coverage data
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: python-coverage-data-*
+          merge-multiple: true
+          path: icechunk-python/.coverage-fragments
+
+      - name: Combine coverage and generate lcov
+        run: just coverage-report-python
+
+      - name: Upload Python coverage to Codecov
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: coverage_python.lcov
+          flags: python
+          name: python-coverage
+          fail_ci_if_error: false
+
+      # skipped on fork PRs: the read-only token can't post the PR comment
+      - name: Report coverage with octocov
+        if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork }}
+        uses: k1LoW/octocov-action@b3b6ee60482a667950f87553abf1df63217235d9 # v1.5.1
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          # expanded into comment.message in .octocov.python.yml
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        with:
+          config: .octocov.python.yml
 
   compat-stateful:
     name: compat-stateful

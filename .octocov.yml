@@ -1,7 +1,8 @@
+# rust-only; python coverage is aggregated and reported from python-check
+# (see .octocov.python.yml)
 coverage:
   paths:
     - coverage_rust.lcov
-    - coverage_python.lcov
 diff:
   datastores:
     - artifact://${GITHUB_REPOSITORY}

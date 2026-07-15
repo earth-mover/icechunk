@@ -70,8 +70,10 @@ ci-python-check:
   just install-test-wheel test
   just rustfs-wait
   just coverage={{coverage}} pytest-venv -n 4 -m "not hypothesis"
-  [ "{{coverage}}" != "true" ] || just coverage=true coverage-report-python
-  just pytest-venv -m hypothesis
+  [ "{{coverage}}" != "true" ] || just coverage-stash unit
+  just coverage={{coverage}} pytest-venv -m hypothesis
+  [ "{{coverage}}" != "true" ] || just coverage-stash hypothesis
+  [ "{{coverage}}" != "true" ] || just coverage-report-python
   just install-ic-v1
   just pytest-venv tests/test_stateful_compat.py -v
   just install-test-wheel test "pytest-mypy-plugins<4"
@@ -658,13 +660,22 @@ coverage-report *args:
 
 [group('coverage')]
 [script]
-[doc("Python-line coverage lcov from a wheel-venv pytest run (remaps site-packages paths to the source tree)")]
+[doc("Python-line coverage lcov from .coverage fragments (remaps site-packages paths to the source tree)")]
 coverage-report-python:
-  source icechunk-python/.venv/bin/activate
-  mv icechunk-python/.coverage icechunk-python/.coverage.wheel
-  coverage combine --rcfile=icechunk-python/pyproject.toml --data-file=icechunk-python/.coverage icechunk-python/.coverage.wheel
+  [ ! -f icechunk-python/.venv/bin/activate ] || source icechunk-python/.venv/bin/activate
+  mkdir -p icechunk-python/.coverage-fragments
+  [ ! -f icechunk-python/.coverage ] || mv icechunk-python/.coverage icechunk-python/.coverage-fragments/.coverage.wheel
+  coverage combine --rcfile=icechunk-python/pyproject.toml --data-file=icechunk-python/.coverage icechunk-python/.coverage-fragments
   coverage lcov --data-file=icechunk-python/.coverage -o coverage_python.lcov
-  echo "Coverage report: coverage_python.lcov (Python, wheel venv)"
+  echo "Coverage report: coverage_python.lcov (Python)"
+
+# fragments live in a subdir because pytest-cov's session-start erase
+# deletes any sibling .coverage.* files
+[group('coverage')]
+[doc("Stash .coverage as a named fragment so later runs don't erase it (combined by coverage-report-python)")]
+coverage-stash name:
+  mkdir -p icechunk-python/.coverage-fragments
+  mv icechunk-python/.coverage icechunk-python/.coverage-fragments/.coverage.{{name}}
 
 [group('coverage')]
 [script]
@@ -679,7 +690,8 @@ coverage-view *args:
 [doc("Delete coverage artifacts (profraw, lcov, .coverage)")]
 coverage-clean:
   find . -iname "*.profraw" -delete
-  rm -f coverage_rust.lcov coverage_python.lcov icechunk-python/.coverage*
+  rm -f coverage_rust.lcov coverage_python.lcov icechunk-python/.coverage
+  rm -rf icechunk-python/.coverage-fragments
 
 # corepack provisions yarn@4.12.0 per packageManager; suppress its download prompt
 export COREPACK_ENABLE_DOWNLOAD_PROMPT := env("COREPACK_ENABLE_DOWNLOAD_PROMPT", "0")
