@@ -36,6 +36,14 @@ async fn test_concurrency_in_memory() -> Result<(), Box<dyn std::error::Error>> 
 }
 
 #[tokio_test]
+async fn test_concurrency_local_filesystem() -> Result<(), Box<dyn std::error::Error>> {
+    let dir = tempfile::tempdir()?;
+    let storage: Arc<dyn Storage + Send + Sync> =
+        icechunk::storage::new_local_filesystem_storage(dir.path()).await?;
+    do_test_concurrency(storage).await
+}
+
+#[tokio_test]
 #[ignore = "needs credentials from env"]
 async fn test_concurrency_in_r2() -> Result<(), Box<dyn std::error::Error>> {
     let prefix = format!("test_concurrency_{}", Utc::now().timestamp_millis());

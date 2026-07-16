@@ -16,7 +16,10 @@ use icechunk::{
         snapshot::Snapshot,
     },
     new_local_filesystem_storage,
-    refs::{RefData, RefErrorKind},
+    refs::{
+        RefData, RefErrorKind, create_tag, fetch_branch_tip_v1, fetch_tag, list_branches,
+        list_tags, update_branch,
+    },
     repository::{RepositoryError, RepositoryErrorKind},
     storage::{
         self, ConcurrencySettings, ETag, Generation, RepositoryCreation, S3Storage,
@@ -196,9 +199,21 @@ where
         .await
         .expect("Cannot create local Storage");
 
+    // `local_filesystem` (s5) exercises the native backend that users now get
+    // by default; s7 keeps conformance coverage of the legacy object_store local
+    // backend, which remains only for reading repositories written before that
+    // default.
+    let object_store_fs_dir = tempdir().expect("cannot create temp dir");
+    let s7: Arc<dyn Storage + Send + Sync> = Arc::new(
+        ObjectStorage::new_local_filesystem(object_store_fs_dir.path())
+            .await
+            .expect("Cannot create object_store filesystem Storage"),
+    );
+
     let mut storages: Vec<(&'static str, Arc<dyn Storage + Send + Sync>)> = vec![
         ("in_memory", s2),
         ("local_filesystem", s5),
+        ("local_filesystem_object_store", s7),
         ("s3_native", s1),
         ("s3_native_slash", s1slash),
         ("s3_object_store", s3),
@@ -378,6 +393,66 @@ async fn test_create_existing_tag(
         Ok(())
     })
     .await?;
+    Ok(())
+}
+
+// The native backend writes an object key to disk verbatim (matching object
+// stores, where a key is opaque bytes), while the legacy object_store backend
+// percent-encoded some bytes of a filename (`%`, non-ASCII, ...). To keep repos
+// written by the old backend usable, the native backend reads and lists through a
+// legacy-encoded fallback. This checks refs written by the legacy backend remain
+// readable, listable, and updatable via the native one, on the same directory.
+#[tokio_test]
+async fn test_native_reads_legacy_encoded_refs() -> Result<(), Box<dyn std::error::Error>>
+{
+    let dir = tempdir()?;
+    let native = new_local_filesystem_storage(dir.path()).await?;
+    let legacy: Arc<dyn Storage + Send + Sync> =
+        Arc::new(ObjectStorage::new_local_filesystem(dir.path()).await?);
+    let native_settings = native.default_settings().await?;
+    let legacy_settings = legacy.default_settings().await?;
+
+    // A legacy-written tag whose name the old backend percent-encoded on disk is
+    // still found and listed under its true name by the native backend.
+    let tag = "sale-fifty%off-\u{fc}ber";
+    let tag_snapshot = SnapshotId::random();
+    create_tag(legacy.as_ref(), &legacy_settings, tag, tag_snapshot.clone()).await?;
+    assert_eq!(
+        fetch_tag(native.as_ref(), &native_settings, tag).await?,
+        RefData { snapshot: tag_snapshot }
+    );
+    assert!(list_tags(native.as_ref(), &native_settings).await?.contains(tag));
+
+    // A legacy-written branch is readable, listable, and updatable via the native
+    // backend's compare-and-swap: the CAS reads the legacy-encoded file, writes
+    // the new tip under the raw name, and the raw name then wins on read.
+    let branch = "feature \u{fc}ber%2";
+    let snap1 = SnapshotId::random();
+    let snap2 = SnapshotId::random();
+    update_branch(legacy.as_ref(), &legacy_settings, branch, snap1.clone(), None).await?;
+    assert_eq!(
+        fetch_branch_tip_v1(native.as_ref(), &native_settings, branch).await?,
+        RefData { snapshot: snap1.clone() }
+    );
+    assert!(list_branches(native.as_ref(), &native_settings).await?.contains(branch));
+    update_branch(native.as_ref(), &native_settings, branch, snap2.clone(), Some(&snap1))
+        .await?;
+    assert_eq!(
+        fetch_branch_tip_v1(native.as_ref(), &native_settings, branch).await?,
+        RefData { snapshot: snap2 }
+    );
+
+    // One-directional: a name the old backend would have encoded, written raw by
+    // the native backend, is NOT found by the old backend (which looks for the
+    // encoded spelling). Such repos must be read with a current icechunk.
+    let native_only = "native-only-\u{fc}ber";
+    create_tag(native.as_ref(), &native_settings, native_only, SnapshotId::random())
+        .await?;
+    assert!(matches!(
+        fetch_tag(legacy.as_ref(), &legacy_settings, native_only).await,
+        Err(ICError { kind: RefErrorKind::RefNotFound(_), .. })
+    ));
+
     Ok(())
 }
 
@@ -857,8 +932,12 @@ async fn test_write_config_fails_on_bad_version_when_non_existing(
 async fn test_write_config_fails_on_bad_version_when_existing(
     #[case] spec_version: SpecVersionBin,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    with_storage(Permission::Modify, |storage_type, storage| async move {
+    with_storage(Permission::Modify, |_, storage| async move {
         let storage_settings = storage.default_settings().await?;
+        // Some backends (the legacy object_store local one) degrade conditional
+        // updates to blind overwrites; branch on that capability rather than the
+        // backend's name.
+        let conditional_update = storage_settings.unsafe_use_conditional_update();
         let am = Arc::new(AssetManager::new_no_cache(
             storage,
             storage_settings,
@@ -884,21 +963,19 @@ async fn test_write_config_fails_on_bad_version_when_existing(
             )
             .await?;
 
-        if storage_type == "local_filesystem" {
-            // FIXME: local file system doesn't have conditional updates yet
-            assert!(update_res.is_some());
-        } else {
+        if conditional_update {
             assert!(update_res.is_none());
+        } else {
+            // A stale-version update still wins when the backend can't compare.
+            assert!(update_res.is_some());
         }
 
         let (fetched_config, fetched_version) = am.fetch_config().await?.unwrap();
-        if storage_type == "local_filesystem" {
-            // FIXME: local file system doesn't have conditional updates yet
-            assert_ne!(fetched_version, version);
-            assert_eq!(fetched_config, config1);
-        } else {
+        assert_eq!(fetched_config, config1);
+        if conditional_update {
             assert_eq!(fetched_version, version);
-            assert_eq!(fetched_config, config1);
+        } else {
+            assert_ne!(fetched_version, version);
         }
         Ok(())
     })
