@@ -10,6 +10,7 @@ on:
   schedule:
     # three times a day to run the integration tests that take a long time
     - cron:  '33 3,10,15 * * *'
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -26,20 +27,19 @@ env:
   RUSTFLAGS: "-D warnings"
   RUSTUP_MAX_RETRIES: 10
   MSRV: '1.91.1'
-  PIXI_VERSION: "v0.63.2"
+  PIXI_VERSION: "v0.72.0"
 
 jobs:
   rust:
     name: Rust CI
-    timeout-minutes: 20
+    # Headroom for the slow macos-15-intel runner
+    timeout-minutes: 45
     runs-on: ${{ matrix.os }}
+    env:
+      coverage: ${{ matrix.os == 'ubuntu-latest' }}
     defaults:
       run:
         working-directory: ./
-    #permissions:
-      #contents: read
-      #actions: read
-      #pull-requests: read
 
     strategy:
       fail-fast: false
@@ -48,10 +48,17 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
+
+      - uses: prefix-dev/setup-pixi@a09b6247153796b190642a2b53fac4241043cf6f # v0.10.0
+        with:
+          pixi-version: ${{ env.PIXI_VERSION }}
+          cache: true
+          activate-environment: true
+          manifest-path: icechunk-python/pyproject.toml
 
       - name: Check if MSRV is up to date
         run: |
@@ -63,7 +70,7 @@ jobs:
       - name: Stand up docker services
         if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm'
         run: |
-          docker compose up -d
+          just contup
 
       - name: Wait for containers to be ready
         if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm'
@@ -80,23 +87,22 @@ jobs:
               fi
               sleep 1
           done
+          for _ in {1..60}; do
+              if curl --silent --fail "http://localhost:4202/minio/health/live"; then
+              break
+              fi
+              sleep 1
+          done
 
       - name: Cache Dependencies
         uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           # The rust cache includes a dep on the Python version (when building icechunk-python)
           # so we need to bump the version here whenever Python version is updated
-          # Currently: 3.14
-          prefix-key: "rust-py314"
+          # Currently: 3.12
+          prefix-key: "rust-py312"
           shared-key: "rust"
           save-if: ${{ github.ref == 'refs/heads/main' }}
-
-      - uses: prefix-dev/setup-pixi@5185adfbffb4bd703da3010310260805d89ebb11 # v0.9.6
-        with:
-          pixi-version: ${{ env.PIXI_VERSION }}
-          cache: true
-          activate-environment: true
-          manifest-path: icechunk-python/pyproject.toml
 
       - name: Run tests with Docker services
         if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm'
@@ -118,26 +124,31 @@ jobs:
           TIGRIS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
 
         run: |
-          just profile=ci compile-tests "--locked"
-          just profile=ci test
+          just profile=ci coverage=${coverage} compile-tests "--locked"
+          just profile=ci coverage=${coverage} test
 
       - name: Run doc tests
         if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm'
         run: |
-          just profile=ci doctest
+          just profile=ci coverage=${coverage} doctest
 
       - name: Run examples
         if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm'
         run: |
-          just profile=ci run-all-examples
+          just profile=ci coverage=${coverage} run-all-examples
 
       - name: Run unit tests only
         if: matrix.os != 'ubuntu-latest' && matrix.os != 'ubuntu-24.04-arm'
         run: |
           just profile=ci unit-test
 
+      # Runs nightly, on manual dispatch, or on any PR labeled
+      # `run-integration-tests`
       - name: Run integration tests against object stores
-        if: github.event_name == 'cron'
+        if: >-
+          github.event_name == 'schedule'
+          || github.event_name == 'workflow_dispatch'
+          || contains(github.event.pull_request.labels.*.name, 'run-integration-tests')
         env:
           R2_BUCKET: ${{ secrets.R2_BUCKET }}
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
@@ -154,8 +165,41 @@ jobs:
           TIGRIS_ACCESS_KEY_ID: ${{ secrets.TIGRIS_ACCESS_KEY_ID }}
           TIGRIS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
 
+          # passed via env rather than interpolated into the shell below, to
+          # satisfy zizmor's template-injection audit
+          MATRIX_OS: ${{ matrix.os }}
+
         run: |
-          cargo test --profile ci --workspace --all-targets -- --ignored
+          # Don't let a failure (or flake) in one group hide the other.
+          set +e
+          rc=0
+          # Most real-store ignored tests use unique prefixes, so they're safe to
+          # run on every matrix OS in parallel.
+          # Exclude icechunk-python: it has no Rust tests, but its PyO3 lib-test
+          # binary aborts at launch trying to load libpython
+          cargo test --profile ci --workspace --exclude icechunk-python --tests -- --ignored --skip rooted_roundtrip || rc=1
+          # The rooted-layout tests operate at the bucket root (empty prefix, no
+          # unique prefix), so concurrent matrix jobs would race on the same keys:
+          # run them on a single runner.
+          if [ "$MATRIX_OS" = "ubuntu-latest" ]; then
+            cargo test --profile ci -p icechunk --test main rooted_roundtrip -- --ignored || rc=1
+          fi
+          exit $rc
+
+      - name: Prepare coverage for upload
+        if: ${{ matrix.os == 'ubuntu-latest' }}
+        run: |
+          just profile=ci coverage=${coverage} coverage-report
+
+      - name: Upload Rust coverage to Codecov
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v5
+        if: ${{ matrix.os == 'ubuntu-latest' }}
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: coverage_rust.lcov
+          flags: rust
+          name: rust-coverage
+          fail_ci_if_error: false
 
   shuttle:
     name: Shuttle concurrency tests
@@ -163,7 +207,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
@@ -173,12 +217,12 @@ jobs:
         with:
           # The rust cache includes a dep on the Python version (when building icechunk-python)
           # so we need to bump the version here whenever Python version is updated
-          # Currently: 3.14
-          prefix-key: "rust-py314"
+          # Currently: 3.12
+          prefix-key: "rust-py312"
           shared-key: "rust"
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      - uses: prefix-dev/setup-pixi@5185adfbffb4bd703da3010310260805d89ebb11 # v0.9.6
+      - uses: prefix-dev/setup-pixi@a09b6247153796b190642a2b53fac4241043cf6f # v0.10.0
         with:
           pixi-version: ${{ env.PIXI_VERSION }}
           cache: true
@@ -205,7 +249,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false

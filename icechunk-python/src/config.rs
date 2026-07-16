@@ -469,6 +469,11 @@ pub enum PyCredentials {
     S3(PyS3Credentials),
     Gcs(PyGcsCredentials),
     Azure(PyAzureCredentials),
+    // Explicit "no credentials required" sentinels for backends that need no
+    // authentication. Surfaced in Python as `LocalFileSystemAccess` / `HttpAccess`,
+    // the explicit replacements for passing `None`.
+    LocalFileSystemAccess(),
+    HttpAccess(),
 }
 
 impl From<PyAzureCredentials> for AzureCredentials {
@@ -496,6 +501,8 @@ impl From<PyCredentials> for Credentials {
             PyCredentials::S3(cred) => Credentials::S3(cred.into()),
             PyCredentials::Gcs(cred) => Credentials::Gcs(cred.into()),
             PyCredentials::Azure(cred) => Credentials::Azure(cred.into()),
+            PyCredentials::LocalFileSystemAccess() => Credentials::LocalFileSystemAccess,
+            PyCredentials::HttpAccess() => Credentials::HttpAccess,
         }
     }
 }
@@ -2864,30 +2871,73 @@ impl PyLatencyStorage {
     }
 }
 
+/// Effective `(read, write)` extra-header vecs.
+type RoleHeaders = (Vec<(String, String)>, Vec<(String, String)>);
+
+/// Combine the convenience `headers` map (applied to both roles) with the
+/// role-specific `read_headers`/`write_headers` maps and validate the result.
+///
+/// The merge follows `{**(headers or {}), **(role or {})}`: the role-specific
+/// map wins on a key conflict.
+fn resolve_request_headers(
+    headers: Option<HashMap<String, String>>,
+    read_headers: Option<HashMap<String, String>>,
+    write_headers: Option<HashMap<String, String>>,
+) -> PyResult<RoleHeaders> {
+    fn merge(
+        base: &HashMap<String, String>,
+        overrides: Option<HashMap<String, String>>,
+    ) -> Vec<(String, String)> {
+        let mut merged = base.clone();
+        if let Some(overrides) = overrides {
+            merged.extend(overrides);
+        }
+        merged.into_iter().collect()
+    }
+    let base = headers.unwrap_or_default();
+    let read = merge(&base, read_headers);
+    let write = merge(&base, write_headers);
+    storage::validate_extra_headers(&read)
+        .and_then(|()| storage::validate_extra_headers(&write))
+        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    Ok((read, write))
+}
+
 #[pymethods]
 impl PyStorage {
-    #[pyo3(signature = ( config, bucket, prefix, credentials=None))]
+    #[pyo3(signature = ( config, bucket, prefix, credentials=None, legacy_rooted_keys=None, *, read_headers=None, write_headers=None, headers=None))]
     #[classmethod]
+    #[expect(clippy::too_many_arguments)]
     pub(crate) fn new_s3(
         _cls: &Bound<'_, PyType>,
         config: &PyS3Options,
         bucket: String,
         prefix: Option<String>,
         credentials: Option<PyS3Credentials>,
+        legacy_rooted_keys: Option<bool>,
+        read_headers: Option<HashMap<String, String>>,
+        write_headers: Option<HashMap<String, String>>,
+        headers: Option<HashMap<String, String>>,
     ) -> PyResult<Self> {
+        let (read_headers, write_headers) =
+            resolve_request_headers(headers, read_headers, write_headers)?;
         let storage = storage::new_s3_storage(
             config.into(),
             bucket,
             prefix,
             credentials.map(|cred| cred.into()),
+            read_headers,
+            write_headers,
+            legacy_rooted_keys,
         )
         .map_err(PyIcechunkStoreError::StorageError)?;
 
         Ok(PyStorage(storage))
     }
 
-    #[pyo3(signature = ( config, bucket, prefix, credentials=None))]
+    #[pyo3(signature = ( config, bucket, prefix, credentials=None, *, read_headers=None, write_headers=None, headers=None))]
     #[classmethod]
+    #[expect(clippy::too_many_arguments)]
     pub(crate) fn new_s3_object_store(
         _cls: &Bound<'_, PyType>,
         py: Python<'_>,
@@ -2895,7 +2945,12 @@ impl PyStorage {
         bucket: String,
         prefix: Option<String>,
         credentials: Option<PyS3Credentials>,
+        read_headers: Option<HashMap<String, String>>,
+        write_headers: Option<HashMap<String, String>>,
+        headers: Option<HashMap<String, String>>,
     ) -> PyResult<Self> {
+        let (read_headers, write_headers) =
+            resolve_request_headers(headers, read_headers, write_headers)?;
         py.detach(move || {
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
                 let storage = storage::new_s3_object_store_storage(
@@ -2903,6 +2958,8 @@ impl PyStorage {
                     bucket,
                     prefix,
                     credentials.map(|cred| cred.into()),
+                    read_headers,
+                    write_headers,
                 )
                 .await
                 .map_err(PyIcechunkStoreError::StorageError)?;
@@ -2912,8 +2969,9 @@ impl PyStorage {
         })
     }
 
-    #[pyo3(signature = ( config, bucket, prefix, use_weak_consistency, credentials=None))]
+    #[pyo3(signature = ( config, bucket, prefix, use_weak_consistency, credentials=None, legacy_rooted_keys=None, *, read_headers=None, write_headers=None, headers=None))]
     #[classmethod]
+    #[expect(clippy::too_many_arguments)]
     pub(crate) fn new_tigris(
         _cls: &Bound<'_, PyType>,
         config: &PyS3Options,
@@ -2921,21 +2979,31 @@ impl PyStorage {
         prefix: Option<String>,
         use_weak_consistency: bool,
         credentials: Option<PyS3Credentials>,
+        legacy_rooted_keys: Option<bool>,
+        read_headers: Option<HashMap<String, String>>,
+        write_headers: Option<HashMap<String, String>>,
+        headers: Option<HashMap<String, String>>,
     ) -> PyResult<Self> {
+        let (read_headers, write_headers) =
+            resolve_request_headers(headers, read_headers, write_headers)?;
         let storage = storage::new_tigris_storage(
             config.into(),
             bucket,
             prefix,
             credentials.map(|cred| cred.into()),
             use_weak_consistency,
+            read_headers,
+            write_headers,
+            legacy_rooted_keys,
         )
         .map_err(PyIcechunkStoreError::StorageError)?;
 
         Ok(PyStorage(storage))
     }
 
-    #[pyo3(signature = ( config, bucket=None, prefix=None, account_id=None, credentials=None))]
+    #[pyo3(signature = ( config, bucket=None, prefix=None, account_id=None, credentials=None, legacy_rooted_keys=None, *, read_headers=None, write_headers=None, headers=None))]
     #[classmethod]
+    #[expect(clippy::too_many_arguments)]
     pub(crate) fn new_r2(
         _cls: &Bound<'_, PyType>,
         config: &PyS3Options,
@@ -2943,13 +3011,22 @@ impl PyStorage {
         prefix: Option<String>,
         account_id: Option<String>,
         credentials: Option<PyS3Credentials>,
+        legacy_rooted_keys: Option<bool>,
+        read_headers: Option<HashMap<String, String>>,
+        write_headers: Option<HashMap<String, String>>,
+        headers: Option<HashMap<String, String>>,
     ) -> PyResult<Self> {
+        let (read_headers, write_headers) =
+            resolve_request_headers(headers, read_headers, write_headers)?;
         let storage = storage::new_r2_storage(
             config.into(),
             bucket,
             prefix,
             account_id,
             credentials.map(|cred| cred.into()),
+            read_headers,
+            write_headers,
+            legacy_rooted_keys,
         )
         .map_err(PyIcechunkStoreError::StorageError)?;
 
@@ -2990,7 +3067,8 @@ impl PyStorage {
     }
 
     #[classmethod]
-    #[pyo3(signature = (bucket, prefix, credentials=None, *, config=None))]
+    #[pyo3(signature = (bucket, prefix, credentials=None, *, config=None, read_headers=None, write_headers=None, headers=None))]
+    #[expect(clippy::too_many_arguments)]
     pub(crate) fn new_gcs(
         _cls: &Bound<'_, PyType>,
         py: Python<'_>,
@@ -2998,13 +3076,20 @@ impl PyStorage {
         prefix: Option<String>,
         credentials: Option<PyGcsCredentials>,
         config: Option<HashMap<String, String>>,
+        read_headers: Option<HashMap<String, String>>,
+        write_headers: Option<HashMap<String, String>>,
+        headers: Option<HashMap<String, String>>,
     ) -> PyResult<Self> {
+        let (read_headers, write_headers) =
+            resolve_request_headers(headers, read_headers, write_headers)?;
         py.detach(move || {
             let storage = storage::new_gcs_storage(
                 bucket,
                 prefix,
                 credentials.map(|cred| cred.into()),
                 config,
+                read_headers,
+                write_headers,
             )
             .map_err(PyIcechunkStoreError::StorageError)?;
 

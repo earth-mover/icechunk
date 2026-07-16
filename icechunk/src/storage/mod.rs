@@ -12,9 +12,9 @@ use crate::storage::redirect::RedirectStorage;
 // Re-export everything from icechunk-storage
 pub use icechunk_storage::{
     ConcurrencySettings, DeleteObjectsResult, ETag, Generation, GetModifiedResult,
-    ICError, ListInfo, RetriesSettings, Settings, Storage, StorageError,
-    StorageErrorKind, StorageInfo, StorageResult, TimeoutSettings, VersionInfo,
-    VersionedUpdateResult,
+    ICError, ListInfo, RepositoryCreation, RetriesSettings, Settings, Storage,
+    StorageError, StorageErrorKind, StorageInfo, StorageResult, TimeoutSettings,
+    VersionInfo, VersionedUpdateResult,
     s3_config::{S3Credentials, S3CredentialsFetcher, S3Options, S3StaticCredentials},
     split_in_multiple_equal_requests, split_in_multiple_requests, strip_quotes,
 };
@@ -22,12 +22,14 @@ pub use icechunk_storage::{
 // Re-export from icechunk-s3
 #[cfg(feature = "s3")]
 pub use icechunk_s3::{
-    S3Storage, mk_client, new_r2_storage, new_s3_storage, new_tigris_storage,
-    range_to_header,
+    S3Storage, mk_client, new_r2_storage, new_s3_storage, new_tigris_storage, r2_storage,
+    range_to_header, s3_storage, tigris_storage,
 };
 
 // Re-export from icechunk-arrow-object-store
-pub use icechunk_arrow_object_store::{ObjectStorage, new_in_memory_storage};
+pub use icechunk_arrow_object_store::{
+    ObjectStorage, new_in_memory_storage, validate_extra_headers,
+};
 
 #[cfg(feature = "object-store-fs")]
 pub use icechunk_arrow_object_store::new_local_filesystem_storage;
@@ -55,7 +57,7 @@ pub use icechunk_arrow_object_store::{
 #[cfg(feature = "object-store-http")]
 pub use icechunk_arrow_object_store::HttpObjectStoreBackend;
 
-pub use icechunk_arrow_object_store::ObjectStoreBackend;
+pub use icechunk_arrow_object_store::{ObjectStoreBackend, Role};
 
 #[cfg(test)]
 pub mod logging;
@@ -128,6 +130,8 @@ mod tests {
                 },
             ))),
             None,
+            Vec::new(),
+            Vec::new(),
         )
         .unwrap();
         let bytes = rmp_serde::to_vec(&storage).unwrap();

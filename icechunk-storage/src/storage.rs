@@ -451,6 +451,17 @@ pub struct StorageInfo {
     pub fields: Vec<(&'static str, String)>,
 }
 
+/// Whether a repository may be created at a storage location.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RepositoryCreation {
+    /// A new repository may be created here.
+    Allowed,
+    /// Refused: this is a cloud object store addressed at an empty prefix (the
+    /// bucket root). New empty-prefix repositories are no longer supported,
+    /// pre-existing ones can still be opened and updated.
+    RefusedEmptyPrefix,
+}
+
 /// Implementations are free to assume files are never overwritten.
 #[async_trait]
 #[typetag::serde(tag = "type")]
@@ -463,6 +474,11 @@ pub trait Storage: fmt::Debug + Display + sealed::Sealed + Sync + Send {
     }
 
     async fn can_write(&self) -> StorageResult<bool>;
+
+    /// Whether a repository may be created at this storage location.
+    async fn can_create_repository(&self) -> StorageResult<RepositoryCreation> {
+        Ok(RepositoryCreation::Allowed)
+    }
 
     /// Ensure the storage location is ready to receive writes.
     ///

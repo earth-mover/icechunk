@@ -2,7 +2,7 @@
 
 Icechunk is instrumented with the Rust [`tracing`](https://docs.rs/tracing) framework. The same instrumentation drives two independent outputs:
 
-- **Console logs** — human-readable logs printed to stdout, controlled by `ICECHUNK_LOG`. Enabled by default at the `warn` level.
+- **Console logs** — human-readable logs printed to stderr, controlled by `ICECHUNK_LOG`. Enabled by default at the `warn` level.
 - **OpenTelemetry trace export** *(experimental)* — structured spans and traces are exported over OTLP/gRPC to a collector or service. Off by default, opt-in.
   Telemetry can be configured with an endpoint to use any OpenTelemetry compatible collector or service. If no endpoint is set
   by the user, there is zero exporter overhead and no spans are exported.
@@ -11,7 +11,7 @@ The two are configured separately and don't affect each other.
 
 ## Logging
 
-Icechunk prints logs to stdout. Set the verbosity with the `ICECHUNK_LOG` environment variable before importing `icechunk`:
+Icechunk prints logs to stderr, so they don't interfere with your program's own output on stdout. Set the verbosity with the `ICECHUNK_LOG` environment variable before importing `icechunk`:
 
 ```bash
 export ICECHUNK_LOG=icechunk=info
@@ -36,6 +36,8 @@ icechunk.set_logs_filter("debug,icechunk=trace")
 ```
 
 To skip logging setup entirely, set `ICECHUNK_NO_LOGS` (to any value) before importing `icechunk`.
+
+To send logs to stdout instead of stderr, set `ICECHUNK_LOG_TO_STDOUT` (to any value) before importing `icechunk`. The destination is fixed when logging is first initialized at import, so this variable has no effect if set afterwards; `set_logs_filter` only changes the verbosity, not the destination.
 
 ## OpenTelemetry tracing
 

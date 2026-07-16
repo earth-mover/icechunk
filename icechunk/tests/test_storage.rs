@@ -19,9 +19,9 @@ use icechunk::{
     refs::{RefData, RefErrorKind},
     repository::{RepositoryError, RepositoryErrorKind},
     storage::{
-        self, ConcurrencySettings, ETag, Generation, StorageErrorKind, StorageResult,
-        VersionInfo, mk_client, new_http_storage, new_in_memory_storage,
-        new_redirect_storage, new_s3_storage,
+        self, ConcurrencySettings, ETag, Generation, RepositoryCreation, S3Storage,
+        StorageErrorKind, StorageResult, VersionInfo, mk_client, new_http_storage,
+        new_in_memory_storage, new_redirect_storage, new_s3_storage, s3_storage,
     },
 };
 use icechunk_arrow_object_store::object_store::azure::AzureConfigKey;
@@ -66,6 +66,9 @@ async fn mk_s3_storage(
             session_token: None,
             expires_after: None,
         })),
+        Vec::new(),
+        Vec::new(),
+        None,
     )
     .expect("Creating minio storage failed");
 
@@ -95,6 +98,8 @@ async fn mk_s3_object_store_storage(
                     .with_allow_http(true)
                     .with_force_path_style(true),
             ),
+            Vec::new(),
+            Vec::new(),
         )
         .await?,
     );
@@ -117,6 +122,32 @@ async fn mk_azure_blob_storage(
     );
 
     Ok(storage)
+}
+
+/// We use `MinIO` in addition to our main `RustFS` because it's a
+/// *normalizing* store: it maps leading-slash keys `"/x"` to `"x"`,
+/// unlike rustfs which rejects them
+async fn mk_minio_storage(prefix: &str) -> StorageResult<Arc<dyn Storage + Send + Sync>> {
+    let options = S3Options::default()
+        .with_region("us-east-1")
+        .with_endpoint_url("http://localhost:4202")
+        .with_allow_http(true)
+        .with_force_path_style(true);
+    let credentials = S3Credentials::Static(S3StaticCredentials {
+        access_key_id: "minioadmin".into(),
+        secret_access_key: "minioadmin".into(),
+        session_token: None,
+        expires_after: None,
+    });
+    new_s3_storage(
+        options,
+        "testbucket".to_string(),
+        Some(prefix.to_string()),
+        Some(credentials),
+        Vec::new(),
+        Vec::new(),
+        None,
+    )
 }
 
 #[expect(clippy::expect_used)]
@@ -155,6 +186,11 @@ where
         format!("{}/", common::get_random_prefix("with_storage")).as_str(),
     )
     .await?;
+    let s6 = mk_minio_storage(common::get_random_prefix("with_storage").as_str()).await?;
+    let s6slash = mk_minio_storage(
+        format!("{}/", common::get_random_prefix("with_storage")).as_str(),
+    )
+    .await?;
     let dir = tempdir().expect("cannot create temp dir");
     let s5 = new_local_filesystem_storage(dir.path())
         .await
@@ -169,6 +205,8 @@ where
         ("s3_object_store_slash", s3slash),
         ("azure_blob", s4),
         ("azure_blob_slash", s4slash),
+        ("minio", s6),
+        ("minio_slash", s6slash),
     ];
 
     if let Ok(e) = env::var("AWS_BUCKET")
@@ -384,6 +422,106 @@ async fn check_clean_repo() -> Result<(), Box<dyn std::error::Error>> {
         Ok(())
     })
     .await?;
+    Ok(())
+}
+
+/// Creating a repository at an empty prefix (the bucket/container root) is refused on
+/// every cloud object-store backend — native S3 and the `object_store`-based S3,
+/// Azure, and GCS — but allowed on in-memory and local-filesystem storage, and via
+/// the test-only escape hatch. The gate runs before any network I/O, so this needs
+/// no live servers (constructing each backend is lazy and does not connect).
+#[tokio_test]
+async fn create_refuses_empty_prefix_on_object_store()
+-> Result<(), Box<dyn std::error::Error>> {
+    fn s3_creds() -> S3Credentials {
+        S3Credentials::Static(S3StaticCredentials {
+            access_key_id: "key".into(),
+            secret_access_key: "secret".into(),
+            session_token: None,
+            expires_after: None,
+        })
+    }
+    fn native_s3(prefix: &str) -> StorageResult<S3Storage> {
+        s3_storage(
+            S3Options::default().with_region("us-east-1"),
+            "testbucket".to_string(),
+            Some(prefix.to_string()),
+            Some(s3_creds()),
+            Vec::new(),
+            Vec::new(),
+            None,
+        )
+    }
+
+    // Every create-capable cloud object-store backend, addressed at the bucket /
+    // container root. Both `can_create_repository` and the `Repository::create` gate
+    // run before any I/O, so none of these need a live server.
+    let refused: Vec<(&str, Arc<dyn Storage + Send + Sync>)> = vec![
+        ("native_s3", Arc::new(native_s3("")?)),
+        ("object_store_s3", mk_s3_object_store_storage("", &Permission::Modify).await?),
+        ("object_store_azure", mk_azure_blob_storage("").await?),
+        (
+            "object_store_gcs",
+            Arc::new(ObjectStorage::new_gcs(
+                "testbucket".to_string(),
+                Some(String::new()),
+                None,
+                None,
+                Vec::new(),
+                Vec::new(),
+            )?),
+        ),
+    ];
+    for (name, storage) in refused {
+        assert_eq!(
+            storage.can_create_repository().await?,
+            RepositoryCreation::RefusedEmptyPrefix,
+            "{name}: empty-prefix creation should be refused at the storage level",
+        );
+        assert!(
+            matches!(
+                Repository::create(None, storage, Default::default(), None, true).await,
+                Err(ICError { kind: RepositoryErrorKind::EmptyPrefixCreation, .. })
+            ),
+            "{name}: Repository::create should fail with EmptyPrefixCreation",
+        );
+    }
+
+    // Allowed: a non-empty prefix, the escape hatch (on both the native and the
+    // object_store backends), and the non-cloud backends even at an empty prefix.
+    let dir = tempdir()?;
+    let allowed: Vec<(&str, Arc<dyn Storage + Send + Sync>)> = vec![
+        ("native_s3_nonempty", Arc::new(native_s3("some/prefix")?)),
+        (
+            "native_s3_empty_with_hatch",
+            Arc::new(native_s3("")?.unsafe_allow_empty_prefix_creation()),
+        ),
+        (
+            "object_store_s3_empty_with_hatch",
+            Arc::new(
+                ObjectStorage::new_s3(
+                    "testbucket".to_string(),
+                    Some(String::new()),
+                    Some(s3_creds()),
+                    Some(S3Options::default().with_region("us-east-1")),
+                    Vec::new(),
+                    Vec::new(),
+                )
+                .await?
+                .unsafe_allow_empty_prefix_creation(),
+            ),
+        ),
+        ("in_memory", new_in_memory_storage().await?),
+        ("local_filesystem", new_local_filesystem_storage(dir.path()).await?),
+    ];
+    for (name, storage) in allowed {
+        assert_eq!(
+            storage.can_create_repository().await?,
+            RepositoryCreation::Allowed,
+            "{name}: creation should be allowed",
+        );
+    }
+
     Ok(())
 }
 
@@ -1209,5 +1347,244 @@ async fn test_basic_repo_ops(
         Ok(())
     })
     .await?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Custom request headers tests.
+//
+// We tag every write with a custom user-metadata header (`x-amz-meta-...`) via
+// the storage's `write_headers`, then read the object back with a *raw* S3
+// client and assert the metadata is present.
+
+const WRITE_HEADER_NAME: &str = "x-amz-meta-icechunk-write-header-test";
+/// S3 strips the `x-amz-meta-` prefix and lowercases the remainder.
+const WRITE_HEADER_META_KEY: &str = "icechunk-write-header-test";
+const WRITE_HEADER_VALUE: &str = "present";
+
+fn write_header() -> Vec<(String, String)> {
+    vec![(WRITE_HEADER_NAME.to_string(), WRITE_HEADER_VALUE.to_string())]
+}
+
+/// Write one object and return its repo-relative key.
+async fn put_probe_object(
+    storage: &Arc<dyn Storage + Send + Sync>,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let settings = storage.default_settings().await?;
+    let key = format!("{CHUNKS_FILE_PATH}/{}", ChunkId::random());
+    storage
+        .put_object(
+            &settings,
+            &key,
+            Bytes::from_static(b"hello write headers"),
+            None,
+            vec![],
+            None,
+        )
+        .await?;
+    Ok(key)
+}
+
+/// HEAD `{prefix}/{rel_key}` with a raw S3 client and assert our write header
+/// survived as object metadata.
+async fn assert_write_header_round_trips(
+    label: &str,
+    options: &S3Options,
+    credentials: S3Credentials,
+    bucket: &str,
+    prefix: &str,
+    rel_key: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let client =
+        mk_client(options, credentials, vec![], vec![], &storage::Settings::default())
+            .await;
+    let full_key = format!("{prefix}/{rel_key}");
+    let head = client.head_object().bucket(bucket).key(&full_key).send().await?;
+    let got =
+        head.metadata().and_then(|m| m.get(WRITE_HEADER_META_KEY)).map(String::as_str);
+    assert_eq!(
+        got,
+        Some(WRITE_HEADER_VALUE),
+        "{label}: write header did not round-trip (key={full_key})"
+    );
+    Ok(())
+}
+
+#[tokio_test]
+async fn test_write_headers_reach_s3_compatible_storage()
+-> Result<(), Box<dyn std::error::Error>> {
+    // (label, endpoint, access_key, secret_key); these are the root credentials
+    // of each local emulator and have full access to `testbucket`.
+    let emulators = [
+        ("rustfs", "http://localhost:4200", "test123", "test123"),
+        ("minio", "http://localhost:4202", "minioadmin", "minioadmin"),
+    ];
+
+    for (name, endpoint, access_key_id, secret_access_key) in emulators {
+        let options = S3Options::default()
+            .with_region("us-east-1")
+            .with_endpoint_url(endpoint)
+            .with_allow_http(true)
+            .with_force_path_style(true);
+        let credentials = S3Credentials::Static(S3StaticCredentials {
+            access_key_id: access_key_id.into(),
+            secret_access_key: secret_access_key.into(),
+            session_token: None,
+            expires_after: None,
+        });
+
+        // native S3
+        let prefix = common::get_random_prefix("write_headers_native");
+        let native = new_s3_storage(
+            options.clone(),
+            "testbucket".to_string(),
+            Some(prefix.clone()),
+            Some(credentials.clone()),
+            Vec::new(),
+            write_header(),
+            None,
+        )?;
+        let key = put_probe_object(&native).await?;
+        assert_write_header_round_trips(
+            &format!("{name}/native"),
+            &options,
+            credentials.clone(),
+            "testbucket",
+            &prefix,
+            &key,
+        )
+        .await?;
+
+        // object_store S3
+        let prefix = common::get_random_prefix("write_headers_object_store");
+        let object_store: Arc<dyn Storage + Send + Sync> = Arc::new(
+            ObjectStorage::new_s3(
+                "testbucket".to_string(),
+                Some(prefix.clone()),
+                Some(credentials.clone()),
+                Some(options.clone()),
+                Vec::new(),
+                write_header(),
+            )
+            .await?,
+        );
+        let key = put_probe_object(&object_store).await?;
+        assert_write_header_round_trips(
+            &format!("{name}/object_store"),
+            &options,
+            credentials.clone(),
+            "testbucket",
+            &prefix,
+            &key,
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+/// Native-S3 header round-trip against a real store, reused by the per-cloud
+/// `#[ignore]` tests below.
+async fn real_store_write_header_check(
+    store: &common::RealStore,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let prefix = common::get_random_prefix("write_headers_real");
+    let storage = store.write_header_storage(prefix.clone(), write_header())?;
+    let key = put_probe_object(&storage).await?;
+    assert_write_header_round_trips(
+        "real",
+        store.options(),
+        store.credentials().clone(),
+        store.bucket(),
+        &prefix,
+        &key,
+    )
+    .await
+}
+
+#[tokio_test]
+#[ignore = "needs credentials from env"]
+async fn test_write_headers_reach_aws() -> Result<(), Box<dyn std::error::Error>> {
+    let store = common::aws_real_store().expect("AWS_* env vars must be set");
+    // native S3
+    real_store_write_header_check(&store).await?;
+
+    // object_store S3 (AWS is the only real S3-compatible store with an
+    // object_store constructor exposed)
+    let prefix = common::get_random_prefix("write_headers_real_object_store");
+    let object_store: Arc<dyn Storage + Send + Sync> = Arc::new(
+        ObjectStorage::new_s3(
+            store.bucket().to_string(),
+            Some(prefix.clone()),
+            Some(store.credentials().clone()),
+            Some(store.options().clone()),
+            Vec::new(),
+            write_header(),
+        )
+        .await?,
+    );
+    let key = put_probe_object(&object_store).await?;
+    assert_write_header_round_trips(
+        "aws/object_store",
+        store.options(),
+        store.credentials().clone(),
+        store.bucket(),
+        &prefix,
+        &key,
+    )
+    .await
+}
+
+#[tokio_test]
+#[ignore = "needs credentials from env"]
+async fn test_write_headers_reach_r2() -> Result<(), Box<dyn std::error::Error>> {
+    let store = common::r2_real_store().expect("R2_* env vars must be set");
+    real_store_write_header_check(&store).await
+}
+
+#[tokio_test]
+#[ignore = "needs credentials from env"]
+async fn test_write_headers_reach_tigris() -> Result<(), Box<dyn std::error::Error>> {
+    // Also verifies a user x-amz-meta-* header coexists with the injected
+    // X-Tigris-* consistency headers.
+    let store = common::tigris_real_store().expect("TIGRIS_* env vars must be set");
+    real_store_write_header_check(&store).await
+}
+
+/// A malformed native-S3 header must fail the operation cleanly
+#[tokio_test]
+async fn test_invalid_native_s3_header_errors_not_panics()
+-> Result<(), Box<dyn std::error::Error>> {
+    let options = S3Options::default()
+        .with_region("us-east-1")
+        .with_endpoint_url("http://localhost:4200")
+        .with_allow_http(true)
+        .with_force_path_style(true);
+    let credentials = S3Credentials::Static(S3StaticCredentials {
+        access_key_id: "test123".into(),
+        secret_access_key: "test123".into(),
+        session_token: None,
+        expires_after: None,
+    });
+    let storage = new_s3_storage(
+        options,
+        "testbucket".to_string(),
+        Some(common::get_random_prefix("invalid_header")),
+        Some(credentials),
+        Vec::new(),
+        vec![("bad header name".to_string(), "v".to_string())],
+        None,
+    )?;
+    let settings = storage.default_settings().await?;
+    let result = storage
+        .put_object(
+            &settings,
+            "chunks/x",
+            Bytes::from_static(b"data"),
+            None,
+            vec![],
+            None,
+        )
+        .await;
+    assert!(result.is_err(), "invalid header should fail the write, not panic");
     Ok(())
 }

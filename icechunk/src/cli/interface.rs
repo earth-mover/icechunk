@@ -153,6 +153,9 @@ async fn get_storage(
                 location.bucket.clone(),
                 location.prefix.clone(),
                 Some(credentials.clone()),
+                Vec::new(),
+                Vec::new(),
+                None, // auto-detect key layout
             )
             .context("Failed to create S3 storage")?;
             Ok(storage)
@@ -169,6 +172,9 @@ async fn get_storage(
                 location.prefix.clone(),
                 Some(credentials.clone()),
                 false,
+                Vec::new(),
+                Vec::new(),
+                None, // auto-detect key layout
             )
             .context("Failed to create Tigris storage")?;
             Ok(storage)
@@ -181,6 +187,8 @@ async fn get_storage(
                 location.prefix.clone(),
                 Some(credentials.clone()),
                 Some(object_store_config.clone()),
+                Vec::new(),
+                Vec::new(),
             )
             .context("Failed to create GCS storage")?;
             Ok(storage)
