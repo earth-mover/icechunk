@@ -47,3 +47,9 @@ If something goes wrong at any step, the repository is left in a working state.
 ### After migration
 
 The original `repo` object is **invalidated** after migration. Any attempt to use it will raise a `RuntimeError`. Always use the new [`Repository`](./index.md#icechunk.Repository) object returned by [`upgrade_icechunk_repository()`](./index.md#icechunk.upgrade_icechunk_repository).
+
+!!! note
+    Sessions serialized under 1.x (via pickle or `Session.as_bytes()`) cannot be deserialized by 2.0; the attempt fails with an unrelated-looking error. Re-create any such session from a freshly opened repository after upgrading.
+
+!!! note
+    Local filesystem repositories now use a native backend that stores object keys verbatim, like the object stores do. Repositories written by 1.x remain fully readable, including branch or tag names containing `%` or non-ASCII characters. The change is one-directional: refs written with such names by a current icechunk are stored verbatim and are not visible to 1.x on local storage, so read those repositories with a current icechunk.

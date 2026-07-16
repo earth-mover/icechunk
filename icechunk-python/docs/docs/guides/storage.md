@@ -297,10 +297,19 @@ Icechunk can also be used on a [local filesystem](../reference/storage.md#icechu
     icechunk.local_filesystem_storage("/path/to/my/dataset")
     ```
 
-#### Limitations
+#### Concurrent commits
+
+Filesystem storage supports safe concurrent commits. A branch-tip update is a compare-and-swap serialized through a lock file next to the ref, so two sessions committing at the same time can no longer silently lose one of the commits.
 
 !!! warning
-    File system Storage is not safe in the presence of concurrent commits. If two sessions are trying to commit at the same time, both operations may return successfully but one of the commits can be lost. Don't use file system storage in production if there is the possibility of concurrent commits.
+    Safety relies on the filesystem providing atomic exclusive file creation and atomic rename. This holds on local disks and on properly configured network filesystems, but not universally:
+
+    - On Lustre, `flock`/`fcntl` locks are node-local unless the filesystem is mounted with `-o flock`. Icechunk does not rely on those locks, but multi-node concurrent commits still require a filesystem whose exclusive-create and rename are atomic across nodes.
+    - Very old NFS (NFSv2) has unreliable `O_EXCL`; prefer a modern NFS version for concurrent commits.
+
+    When in doubt on a shared/HPC filesystem, use a cloud object store for concurrent-writer workloads.
+
+#### Limitations
 
 - Icechunk currently does not work with a local filesystem storage backend on Windows. See [this issue](https://github.com/earth-mover/icechunk/issues/665) for more discussion. To work around, try using [WSL](https://learn.microsoft.com/en-us/windows/wsl/about) or a cloud storage backend.
 
