@@ -26,13 +26,19 @@ pub use icechunk_s3::{
     range_to_header, s3_storage, tigris_storage,
 };
 
+// Re-export the native local filesystem backend from icechunk-fs. It relies on
+// tokio fs/rt/spawn_blocking, so it is unavailable on wasm32. The legacy
+// `object_store` local backend stays behind the `object-store-fs` feature so it
+// remains compiled and typetag-registered for deserializing older repositories.
+#[cfg(not(target_family = "wasm"))]
+pub use icechunk_fs::{
+    FilesystemStorage, new_filesystem_storage, new_local_filesystem_storage,
+};
+
 // Re-export from icechunk-arrow-object-store
 pub use icechunk_arrow_object_store::{
     ObjectStorage, new_in_memory_storage, validate_extra_headers,
 };
-
-#[cfg(feature = "object-store-fs")]
-pub use icechunk_arrow_object_store::new_local_filesystem_storage;
 
 #[cfg(feature = "object-store-http")]
 pub use icechunk_arrow_object_store::new_http_storage;
@@ -112,6 +118,26 @@ mod tests {
             PathBuf::from_iter([repo_dir.path().as_os_str().to_str().unwrap(), "foo"]);
         let s = new_local_filesystem_storage(&inside_existing).await.unwrap();
         assert!(s.root_is_clean(&Settings::default()).await.unwrap());
+    }
+
+    /// A repository serialized before the native backend became the default
+    /// carries the `object_store` local backend's typetag discriminant, which
+    /// must still deserialize into a working `Storage`.
+    #[cfg(feature = "object-store-fs")]
+    #[icechunk_macros::tokio_test]
+    async fn test_old_object_store_local_backend_deserializes() {
+        use tempfile::TempDir;
+
+        let repo_dir = TempDir::new().unwrap();
+        let old: Arc<dyn Storage + Send + Sync> =
+            Arc::new(ObjectStorage::new_local_filesystem(repo_dir.path()).await.unwrap());
+
+        let bytes = rmp_serde::to_vec(&old).unwrap();
+        let restored: Arc<dyn Storage + Send + Sync> =
+            rmp_serde::from_slice(&bytes).unwrap();
+
+        assert_eq!(restored.storage_info().backend_type, "local filesystem");
+        assert!(restored.root_is_clean(&Settings::default()).await.unwrap());
     }
 
     #[cfg(feature = "object-store-gcs")]

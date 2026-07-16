@@ -69,7 +69,9 @@ def in_memory_storage() -> Storage:
 def local_filesystem_storage(path: str) -> Storage:
     """Create a Storage instance that saves data in the local file system.
 
-    This Storage instance is not recommended for production data
+    This backend supports safe concurrent commits. On shared network
+    filesystems (NFS, Lustre) that guarantee requires atomic exclusive file
+    creation and rename; see the storage guide for caveats.
     """
     return Storage.new_local_filesystem(path)
 

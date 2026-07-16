@@ -62,7 +62,7 @@ pub mod virtual_chunks;
 
 pub use config::{ObjectStoreConfig, RepositoryConfig};
 pub use repository::Repository;
-#[cfg(feature = "object-store-fs")]
+#[cfg(not(target_family = "wasm"))]
 pub use storage::new_local_filesystem_storage;
 #[cfg(feature = "object-store-s3")]
 pub use storage::new_s3_object_store_storage;

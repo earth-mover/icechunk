@@ -19,7 +19,8 @@ use icechunk_storage::{
     ConcurrencySettings, DeleteObjectsResult, ETag, Generation, GetModifiedResult,
     ListInfo, RepositoryCreation, RetriesSettings, Settings, Storage, StorageError,
     StorageErrorKind, StorageInfo, StorageResult, VersionInfo, VersionedUpdateResult,
-    obj_not_found_res, obj_store_error, obj_store_error_res, other_error, sealed,
+    io_error, obj_not_found_res, obj_store_error, obj_store_error_res, other_error,
+    sealed,
 };
 use icechunk_types::ICResultExt as _;
 #[cfg(any(feature = "s3", feature = "gcs", feature = "azure", feature = "http"))]
@@ -936,13 +937,7 @@ impl ObjectStoreBackend for LocalFileSystemObjectStoreBackend {
         _settings: &Settings,
         _role: Role,
     ) -> Result<Arc<dyn ObjectStore>, StorageError> {
-        let path = std::fs::canonicalize(&self.path).map_err(|err| {
-            if err.kind() == std::io::ErrorKind::NotFound {
-                StorageError::capture(StorageErrorKind::ObjectNotFound)
-            } else {
-                StorageError::capture(StorageErrorKind::IOError(err))
-            }
-        })?;
+        let path = std::fs::canonicalize(&self.path).map_err(io_error)?;
         let fs = LocalFileSystem::new_with_prefix(path).capture_box()?;
         Ok(Arc::new(fs))
     }
