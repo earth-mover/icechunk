@@ -20,13 +20,13 @@ readme = "README.md"
 
 [workspace.dependencies]
 # Internal crates
-icechunk = { path = "icechunk", version = "2.1.0" }
-icechunk-arrow-object-store = { path = "icechunk-arrow-object-store", version = "2.1.0", default-features = false }
-icechunk-format = { path = "icechunk-format", version = "2.1.0" }
-icechunk-macros = { path = "icechunk-macros", version = "2.1.0" }
-icechunk-s3 = { path = "icechunk-s3", version = "2.1.0" }
-icechunk-storage = { path = "icechunk-storage", version = "2.1.0" }
-icechunk-types = { path = "icechunk-types", version = "2.1.0" }
+icechunk = { path = "icechunk", version = "2.1.1" }
+icechunk-arrow-object-store = { path = "icechunk-arrow-object-store", version = "2.1.1", default-features = false }
+icechunk-format = { path = "icechunk-format", version = "2.1.1" }
+icechunk-macros = { path = "icechunk-macros", version = "2.1.1" }
+icechunk-s3 = { path = "icechunk-s3", version = "2.1.1" }
+icechunk-storage = { path = "icechunk-storage", version = "2.1.1" }
+icechunk-types = { path = "icechunk-types", version = "2.1.1" }
 
 # External dependencies
 anyhow = "1.0.102"
@@ -57,7 +57,7 @@ itertools = "0.15.0"
 miette = { version = "7.6.0", features = ["fancy"] }
 noxious-client = "1.0"
 numpy = "0.29.0"
-object_store = { version = "0.13.2", default-features = false }
+object_store = { version = "0.14.0", default-features = false }
 opentelemetry = { version = "0.32", default-features = false, features = ["trace"] }
 opentelemetry-otlp = { version = "0.32", default-features = false, features = ["grpc-tonic", "trace"] }
 opentelemetry_sdk = { version = "0.32", default-features = false, features = ["trace"] }
@@ -68,7 +68,7 @@ proptest-state-machine = "0.8.0"
 pyo3 = { version = "0.29.0", features = ["chrono", "experimental-async", "multiple-pymethods"] }
 pyo3-async-runtimes = { version = "0.29.0", features = ["tokio-runtime"] }
 pyo3-bytes = "0.7.0"
-quick_cache = "0.6.22"
+quick_cache = "0.7.0"
 quote = "1.0"
 rand = "0.10.1"
 regex = "1.12.3"

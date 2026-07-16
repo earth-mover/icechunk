@@ -398,6 +398,30 @@ While it should never be used for production data, Icechunk can also be used wit
 icechunk.in_memory_storage()
 ```
 
+### Custom request headers
+
+You can attach arbitrary HTTP headers to the object-store requests Icechunk makes.
+A common use is forcing an ACL on every write:
+
+```python
+storage = icechunk.s3_storage(
+    bucket="b",
+    prefix="p",
+    region="us-east-1",
+    write_headers={"x-amz-acl": "bucket-owner-full-control"},
+)
+```
+
+Three keyword arguments are available on `s3_storage`, `s3_object_store_storage`,
+`tigris_storage`, `r2_storage`, and `gcs_storage`:
+
+- `read_headers` — sent on read requests (GET/HEAD/list).
+- `write_headers` — sent on write requests (PUT/POST/DELETE/copy).
+- `headers` — sent on both; merged with the role-specific maps, which take
+  precedence per role on a name conflict:
+  `effective_read = {**headers, **read_headers}`,
+  `effective_write = {**headers, **write_headers}`.
+
 ### Empty prefix and legacy repositories
 
 Creating a repository at an empty `prefix` (`None` or `""`) — i.e. at the bucket root — is not supported on object stores since Icechunk v2.1.0 and raises an error; use a non-empty `prefix`. In-memory and local-filesystem storage are unaffected.

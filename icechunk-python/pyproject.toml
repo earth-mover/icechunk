@@ -25,7 +25,7 @@ dependencies = ["zarr>=3.1.0"]
 dev = [
   { include-group = "test" },
   "mypy",
-  "ruff==0.15.3",
+  "ruff==0.15.14",
   "maturin>=1.7,<2.0",
   "maturin-import-hook>=0.3.0",
   "third-wheel",
@@ -202,26 +202,34 @@ icechunk = "icechunk._icechunk_python:cli_entrypoint"
 
 [tool.pixi.workspace]
 channels = ["conda-forge", "https://prefix.dev/github-releases"]
-platforms = ["osx-arm64", "linux-64", "linux-aarch64", "win-64", "osx-64"]
+platforms = [
+  "osx-arm64",
+  { platform = "linux-64", glibc = "2.34" },
+  { platform = "linux-aarch64", glibc = "2.34" },
+  "win-64",
+  "osx-64",
+]
 
 [tool.pixi.feature.docs.dependencies]
 cairo = ">=1.18.4,<2"
 
 [tool.pixi.feature.build.dependencies]
-python = "~=3.14"
-rust = "~=1.94.0"
-just = ">=1.46.0,<2"
+python = "~=3.12.0"
+rust = "~=1.96.0"
+just = ">=1.51.0,<2"
 compilers = ">=1.11.0,<2"
-uv = ">=0.10.4,<0.11"
-openssl = ">=3.6.1,<4"
+uv = ">=0.11.17,<0.12"
+openssl = ">=3.6.2,<4"
 pkgconfig = ">=1.5.5,<2"
-cargo-deny = ">=0.19.0,<0.20"
+cargo-deny = ">=0.19.7,<0.20"
 prek = ">=0.3.3,<0.4"
 netcdf4 = ">=1.7.4,<2"
-cargo-nextest = ">=0.9.106,<0.10"
-flatbuffers = "*"
+cargo-nextest = ">=0.9.137,<0.10"
+flatbuffers = ">=25.12.19,<26"
 samply = ">=0.13.1,<0.14"
 cargo-release = ">=1.1.2,<2"
+cargo-llvm-cov = ">=0.8.4,<0.9"
+octocov = ">=0.75.8,<0.76"
 
 [tool.pixi.feature.build.target.linux-64.dependencies]
 sysroot_linux-64 = ">=2.34"
@@ -237,6 +245,3 @@ default = { features = [
   "test",
 ], solve-group = "default" }
 benchmark = { features = ["benchmark"], solve-group = "default" }
-
-[tool.pixi.system-requirements]
-libc   = { family = "glibc", version = "2.34" }

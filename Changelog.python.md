@@ -1,10 +1,20 @@
 # Changelog
 
-## Python Icechunk Library 2.2.0 [unreleased]
+## Python Icechunk Library [unreleased]
 
 ### Fixes
 
 - `shift_array` and `reindex_array` on an array with a rectilinear chunk grid used to silently corrupt the array: chunk indices were relabeled without updating the chunk grid, leaving chunk payloads that no longer matched the sizes of their new grid positions. These operations now fail up front unless the array's metadata declares a regular chunk grid ([#2151](https://github.com/earth-mover/icechunk/issues/2151)).
+
+## Python Icechunk Library 2.1.1
+
+### Features
+
+- Add `read_headers`, `write_headers`, and `headers` arguments to `s3_storage`, `s3_object_store_storage`, `tigris_storage`, `r2_storage`, and `gcs_storage` to attach custom HTTP headers to object-store requests ([#2246](https://github.com/earth-mover/icechunk/issues/2246)).
+
+### Fixes
+
+- Fix redirect storage failing to resolve HTTP backends: URLs with `http+icechunk`, `http+ic`, `https+icechunk`, or `https+ic` schemes are now correctly stripped to plain `http`/`https` targets ([#2262](https://github.com/earth-mover/icechunk/pull/2262)).
 
 ## Python Icechunk Library 2.1.0
 

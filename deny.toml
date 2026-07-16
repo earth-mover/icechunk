@@ -24,6 +24,14 @@ ignore = [
   # rustls-webpki v0.101.7 has a panic related to certificate list revocation.
   # we don't enable the `clr` feature that would trigger it.
   "RUSTSEC-2026-0104",
+  # quick-xml < 0.41.0 DoS advisories (quadratic attribute check / unbounded
+  # namespace allocation): transitive dep via object_store, used only to parse
+  # XML LIST/multipart responses from the S3/GCS/Azure endpoint. No upgrade path
+  # until object_store releases with quick-xml 0.41 (already on their main
+  # branch, unreleased as of 0.14.0). DoS-only (CVSS C:N/I:N/A:H), reachable
+  # only by a malicious/compromised object-store endpoint.
+  "RUSTSEC-2026-0194",
+  "RUSTSEC-2026-0195",
 ]
 
 [licenses]
@@ -41,7 +49,6 @@ allow = [
   "MPL-2.0",
   "ISC",
   "OpenSSL",
-  "Unicode-DFS-2016",
   "CC0-1.0",
   "Unicode-3.0",
   "Zlib",

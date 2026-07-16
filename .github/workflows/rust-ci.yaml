@@ -27,7 +27,7 @@ env:
   RUSTFLAGS: "-D warnings"
   RUSTUP_MAX_RETRIES: 10
   MSRV: '1.91.1'
-  PIXI_VERSION: "v0.63.2"
+  PIXI_VERSION: "v0.72.0"
 
 jobs:
   rust:
@@ -35,13 +35,11 @@ jobs:
     # Headroom for the slow macos-15-intel runner
     timeout-minutes: 45
     runs-on: ${{ matrix.os }}
+    env:
+      coverage: ${{ matrix.os == 'ubuntu-latest' }}
     defaults:
       run:
         working-directory: ./
-    #permissions:
-      #contents: read
-      #actions: read
-      #pull-requests: read
 
     strategy:
       fail-fast: false
@@ -55,6 +53,13 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
+      - uses: prefix-dev/setup-pixi@a09b6247153796b190642a2b53fac4241043cf6f # v0.10.0
+        with:
+          pixi-version: ${{ env.PIXI_VERSION }}
+          cache: true
+          activate-environment: true
+          manifest-path: icechunk-python/pyproject.toml
+
       - name: Check if MSRV is up to date
         run: |
           set -e
@@ -65,7 +70,7 @@ jobs:
       - name: Stand up docker services
         if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm'
         run: |
-          docker compose up -d
+          just contup
 
       - name: Wait for containers to be ready
         if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm'
@@ -94,17 +99,10 @@ jobs:
         with:
           # The rust cache includes a dep on the Python version (when building icechunk-python)
           # so we need to bump the version here whenever Python version is updated
-          # Currently: 3.14
-          prefix-key: "rust-py314"
+          # Currently: 3.12
+          prefix-key: "rust-py312"
           shared-key: "rust"
           save-if: ${{ github.ref == 'refs/heads/main' }}
-
-      - uses: prefix-dev/setup-pixi@5185adfbffb4bd703da3010310260805d89ebb11 # v0.9.6
-        with:
-          pixi-version: ${{ env.PIXI_VERSION }}
-          cache: true
-          activate-environment: true
-          manifest-path: icechunk-python/pyproject.toml
 
       - name: Run tests with Docker services
         if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm'
@@ -126,18 +124,18 @@ jobs:
           TIGRIS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
 
         run: |
-          just profile=ci compile-tests "--locked"
-          just profile=ci test
+          just profile=ci coverage=${coverage} compile-tests "--locked"
+          just profile=ci coverage=${coverage} test
 
       - name: Run doc tests
         if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm'
         run: |
-          just profile=ci doctest
+          just profile=ci coverage=${coverage} doctest
 
       - name: Run examples
         if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm'
         run: |
-          just profile=ci run-all-examples
+          just profile=ci coverage=${coverage} run-all-examples
 
       - name: Run unit tests only
         if: matrix.os != 'ubuntu-latest' && matrix.os != 'ubuntu-24.04-arm'
@@ -188,6 +186,21 @@ jobs:
           fi
           exit $rc
 
+      - name: Prepare coverage for upload
+        if: ${{ matrix.os == 'ubuntu-latest' }}
+        run: |
+          just profile=ci coverage=${coverage} coverage-report
+
+      - name: Upload Rust coverage to Codecov
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v5
+        if: ${{ matrix.os == 'ubuntu-latest' }}
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: coverage_rust.lcov
+          flags: rust
+          name: rust-coverage
+          fail_ci_if_error: false
+
   shuttle:
     name: Shuttle concurrency tests
     timeout-minutes: 30
@@ -204,12 +217,12 @@ jobs:
         with:
           # The rust cache includes a dep on the Python version (when building icechunk-python)
           # so we need to bump the version here whenever Python version is updated
-          # Currently: 3.14
-          prefix-key: "rust-py314"
+          # Currently: 3.12
+          prefix-key: "rust-py312"
           shared-key: "rust"
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      - uses: prefix-dev/setup-pixi@5185adfbffb4bd703da3010310260805d89ebb11 # v0.9.6
+      - uses: prefix-dev/setup-pixi@a09b6247153796b190642a2b53fac4241043cf6f # v0.10.0
         with:
           pixi-version: ${{ env.PIXI_VERSION }}
           cache: true
