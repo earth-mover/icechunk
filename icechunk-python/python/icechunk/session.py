@@ -275,6 +275,12 @@ class Session:
             position is checked to determine whether it should be cleared — if
             ``backward`` returns ``None`` (out of bounds) or points to a position
             with no chunk, that position is reset to the fill value.
+
+        Notes
+        -----
+        Only arrays with regular chunk grids can be reindexed. Chunks on other
+        grids (e.g. rectilinear) have position-dependent sizes, so moving them
+        would corrupt the array.
         """
         return self._session.reindex_array(array_path, forward, backward)
 
@@ -300,6 +306,10 @@ class Session:
         -----
         To shift right while preserving all data, first resize the array using zarr's
         array.resize(), then shift.
+
+        Only arrays with regular chunk grids can be shifted. Chunks on other
+        grids (e.g. rectilinear) have position-dependent sizes, so moving them
+        would corrupt the array.
         """
         self._session.shift_array(array_path, list(chunk_offset))
 

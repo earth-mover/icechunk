@@ -187,6 +187,12 @@ pub enum SessionErrorKind {
         "invalid chunk index: coordinates {coords:?} are not valid for array at {path}"
     )]
     InvalidIndex { coords: ChunkIndices, path: Path },
+    #[error(
+        "cannot shift or reindex chunks of the array at `{path}`: `shift_array` and `reindex_array` require an array whose metadata declares a `regular` chunk grid, found `{grid_type}`. \
+         Reindexing chunks on a non-regular grid would corrupt the array, because chunk payloads would no longer match \
+         the sizes of their new grid positions. See https://github.com/earth-mover/icechunk/issues/2151"
+    )]
+    UnsupportedChunkGridForReindex { path: Path, grid_type: String },
     #[error("invalid chunk index for splitting manifests: {coords:?}")]
     InvalidIndexForSplitManifests { coords: ChunkIndices },
     #[error("`to` snapshot ancestry doesn't include `from`")]
@@ -220,6 +226,26 @@ pub enum ReindexMapping<'a> {
         forward: Box<dyn Fn(&ChunkIndices) -> ReindexOperationResult + 'a>,
         backward: Box<dyn Fn(&ChunkIndices) -> ReindexOperationResult + 'a>,
     },
+}
+
+/// Extracts the chunk grid name from zarr array metadata bytes.
+///
+/// The parsing is intentionally as minimal as possible — only the chunk grid
+/// name is read — to defend against changes in the rest of the metadata
+/// document. Returns None if the bytes don't parse as zarr array metadata.
+fn chunk_grid_name(user_data: &[u8]) -> Option<String> {
+    #[derive(Deserialize)]
+    struct ChunkGridName {
+        name: String,
+    }
+    #[derive(Deserialize)]
+    struct PartialArrayMetadata {
+        chunk_grid: ChunkGridName,
+    }
+
+    serde_json::from_slice::<PartialArrayMetadata>(user_data)
+        .ok()
+        .map(|meta| meta.chunk_grid.name)
 }
 
 impl std::fmt::Debug for ReindexMapping<'_> {
@@ -909,6 +935,19 @@ impl Session {
         calculate_new_index: ReindexMapping<'a>,
     ) -> SessionResult<()> {
         let node = self.get_array(array_path).await?;
+        // Only reindex when the metadata positively declares a regular chunk grid.
+        // Chunks on other grids have position-dependent sizes, so relabeling their
+        // indices corrupts the array (issue #2151). We fail safely by also
+        // rejecting metadata we cannot parse.
+        let grid_type = chunk_grid_name(&node.user_data);
+        if grid_type.as_deref() != Some("regular") {
+            return Err(SessionError::capture(
+                SessionErrorKind::UnsupportedChunkGridForReindex {
+                    path: node.path.clone(),
+                    grid_type: grid_type.unwrap_or_else(|| "unknown".to_string()),
+                },
+            ));
+        }
         #[expect(clippy::panic)]
         let NodeData::Array { shape, .. } = node.node_data else {
             // we know it's an array because get_array succeeded
@@ -5844,7 +5883,11 @@ mod tests {
         let shape = ArrayShape::new(vec![(20, 10)]).unwrap();
         session.add_group(Path::root(), Bytes::new()).await?;
         let apath: Path = "/array".try_into()?;
-        session.add_array(apath.clone(), shape, None, Bytes::new()).await?;
+        // reindexing requires metadata that declares a regular chunk grid
+        let user_data = Bytes::copy_from_slice(
+            br#"{"zarr_format":3,"node_type":"array","shape":[20],"data_type":"int32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[2]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":0,"codecs":[{"name":"bytes","configuration":{"endian":"little"}}]}"#,
+        );
+        session.add_array(apath.clone(), shape, None, user_data).await?;
 
         for chunk_index in 0..10 {
             session
@@ -5874,6 +5917,106 @@ mod tests {
         }
 
         assert_eq!(session.get_chunk_ref(&apath, &ChunkIndices(vec![9])).await?, None);
+        Ok(())
+    }
+
+    #[tokio_test]
+    #[apply(spec_version_cases)]
+    async fn test_shift_and_reindex_reject_non_regular_chunk_grids(
+        #[case] spec_version: SpecVersionBin,
+    ) -> Result<(), Box<dyn Error>> {
+        let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+        let repo = Repository::create(
+            None,
+            Arc::clone(&storage),
+            HashMap::new(),
+            Some(spec_version),
+            true,
+        )
+        .await?;
+        let mut session = repo.writable_session("main").await?;
+        session.add_group(Path::root(), Bytes::new()).await?;
+
+        // 3 elements in 2 chunks of sizes 1 and 2
+        let rectilinear_meta = Bytes::copy_from_slice(
+            br#"{"zarr_format":3,"node_type":"array","shape":[3],"data_type":"int32","chunk_grid":{"name":"rectilinear","configuration":{"chunk_shapes":[[1,2]]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":0,"codecs":[{"name":"bytes","configuration":{"endian":"little"}}]}"#,
+        );
+        let apath: Path = "/rectilinear".try_into()?;
+        let shape = ArrayShape::new(vec![(3, 2)]).unwrap();
+        session.add_array(apath.clone(), shape, None, rectilinear_meta).await?;
+        session
+            .set_chunk_ref(
+                apath.clone(),
+                ChunkIndices(vec![0]),
+                Some(ChunkPayload::Inline("hello".into())),
+            )
+            .await?;
+
+        fn expect_rejected(
+            result: SessionResult<()>,
+            expected_path: &Path,
+            expected_grid: &str,
+        ) {
+            match result {
+                Err(SessionError {
+                    kind:
+                        SessionErrorKind::UnsupportedChunkGridForReindex { path, grid_type },
+                    ..
+                }) => {
+                    assert_eq!(&path, expected_path);
+                    assert_eq!(grid_type, expected_grid);
+                }
+                other => {
+                    panic!("Expected UnsupportedChunkGridForReindex, got {other:?}")
+                }
+            }
+        }
+
+        expect_rejected(session.shift_array(&apath, &[1]).await, &apath, "rectilinear");
+        expect_rejected(
+            session
+                .reindex_array(
+                    &apath,
+                    ReindexMapping::ForwardOnly(Box::new(|index| {
+                        Ok(Some(index.clone()))
+                    })),
+                )
+                .await,
+            &apath,
+            "rectilinear",
+        );
+        // the rejected operations left no changes behind
+        assert_eq!(
+            session.get_chunk_ref(&apath, &ChunkIndices(vec![0])).await?,
+            Some(ChunkPayload::Inline("hello".into()))
+        );
+
+        // an explicitly regular grid is still allowed
+        let regular_meta = Bytes::copy_from_slice(
+            br#"{"zarr_format":3,"node_type":"array","shape":[4],"data_type":"int32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[2]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":0,"codecs":[{"name":"bytes","configuration":{"endian":"little"}}]}"#,
+        );
+        let rpath: Path = "/regular".try_into()?;
+        let shape = ArrayShape::new(vec![(4, 2)]).unwrap();
+        session.add_array(rpath.clone(), shape, None, regular_meta).await?;
+        session
+            .set_chunk_ref(
+                rpath.clone(),
+                ChunkIndices(vec![0]),
+                Some(ChunkPayload::Inline("hello".into())),
+            )
+            .await?;
+        session.shift_array(&rpath, &[1]).await?;
+        assert_eq!(
+            session.get_chunk_ref(&rpath, &ChunkIndices(vec![1])).await?,
+            Some(ChunkPayload::Inline("hello".into()))
+        );
+
+        // metadata that doesn't parse as zarr array metadata fails safely
+        let opath: Path = "/opaque".try_into()?;
+        let shape = ArrayShape::new(vec![(4, 2)]).unwrap();
+        session.add_array(opath.clone(), shape, None, Bytes::new()).await?;
+        expect_rejected(session.shift_array(&opath, &[1]).await, &opath, "unknown");
+
         Ok(())
     }
 

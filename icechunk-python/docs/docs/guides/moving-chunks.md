@@ -18,6 +18,16 @@ This enables **rolling time windows**—continuously updating datasets like fore
 | [`shift_array`][icechunk.session.Session.shift_array] | Uniform shifts | Simple—just specify offset |
 | [`reindex_array`][icechunk.session.Session.reindex_array] | Custom transformations | Maximum—you control every chunk |
 
+!!! warning "Regular chunk grids only"
+    Both methods require the array to use a regular chunk grid, and raise an
+    `IcechunkError` otherwise. On a
+    [rectilinear chunk grid](https://github.com/zarr-developers/zarr-extensions/tree/main/chunk-grids/rectilinear)
+    the chunk size varies from position to position along a dimension, so
+    relabeling chunk indices would leave chunk data that no longer matches the
+    expected size at its new position. Note that a regular grid may still use a
+    different chunk size for each dimension — a grid is rectilinear only when
+    sizes vary *within* a dimension.
+
 ## Offsets Are in Chunks, Not Elements
 
 Both methods work with **chunk indices**, not array indices. If your array has `chunk_size=2`, then an offset of `(-1,)` shifts by 1 chunk, which is 2 elements:
