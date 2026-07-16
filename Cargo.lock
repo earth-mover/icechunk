@@ -2305,6 +2305,7 @@ dependencies = [
  "futures",
  "icechunk-arrow-object-store",
  "icechunk-format",
+ "icechunk-fs",
  "icechunk-macros",
  "icechunk-s3",
  "icechunk-storage",
@@ -2406,6 +2407,28 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "zstd",
+]
+
+[[package]]
+name = "icechunk-fs"
+version = "2.1.1"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "chrono",
+ "futures",
+ "icechunk-macros",
+ "icechunk-storage",
+ "icechunk-types",
+ "percent-encoding",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "test-log",
+ "tokio",
+ "tracing",
+ "typetag",
 ]
 
 [[package]]

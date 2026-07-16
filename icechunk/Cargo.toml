@@ -63,6 +63,9 @@ tracing-subscriber = { workspace = true, optional = true }
 shuttle-tokio = { workspace = true, optional = true }
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
+# The native filesystem backend relies on tokio fs/rt/spawn_blocking, which are
+# unavailable on wasm32.
+icechunk-fs.workspace = true
 tokio = { workspace = true, features = [
   "rt-multi-thread",
   "macros",

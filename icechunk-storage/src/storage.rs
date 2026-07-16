@@ -77,6 +77,16 @@ pub fn other_error(s: impl Into<String>) -> StorageError {
     StorageError::capture(StorageErrorKind::Other(s.into()))
 }
 
+/// Map a filesystem I/O error to a storage error, treating a missing file as
+/// [`StorageErrorKind::ObjectNotFound`].
+pub fn io_error(err: std::io::Error) -> StorageError {
+    if err.kind() == std::io::ErrorKind::NotFound {
+        StorageError::capture(StorageErrorKind::ObjectNotFound)
+    } else {
+        StorageError::capture(StorageErrorKind::IOError(err))
+    }
+}
+
 #[derive(Debug)]
 pub struct ListInfo<A> {
     pub id: A,

@@ -1,0 +1,40 @@
+[package]
+name = "icechunk-fs"
+version = "2.1.1"
+description = "Native local filesystem storage backend for icechunk"
+readme = "../README.md"
+repository = "https://github.com/earth-mover/icechunk"
+homepage = "https://icechunk.io"
+license = "Apache-2.0"
+keywords = ["zarr", "xarray", "database"]
+categories = ["database", "science", "science::geo"]
+authors = ["Earthmover PBC"]
+edition.workspace = true
+publish = true
+rust-version.workspace = true
+
+[dependencies]
+icechunk-storage.workspace = true
+icechunk-types.workspace = true
+
+async-trait.workspace = true
+bytes.workspace = true
+chrono.workspace = true
+futures.workspace = true
+percent-encoding.workspace = true
+serde.workspace = true
+sha2.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["fs", "io-util", "rt", "time", "sync"] }
+tracing.workspace = true
+typetag.workspace = true
+
+[dev-dependencies]
+icechunk-macros.workspace = true
+
+serde_json.workspace = true
+test-log.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+
+[lints]
+workspace = true
