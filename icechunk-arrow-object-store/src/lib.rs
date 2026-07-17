@@ -21,7 +21,7 @@ use icechunk_storage::{
     StorageErrorKind, StorageInfo, StorageResult, VersionInfo, VersionedUpdateResult,
     obj_not_found_res, obj_store_error, obj_store_error_res, other_error,
     readback::{
-        ReadbackOutcome, WRITE_ID_METADATA_KEY, classify_readback, resolve_lost_response,
+        ReadbackOutcome, WRITE_ID_METADATA_KEY, resolve_lost_response,
         resolve_precondition, write_id_for,
     },
     sealed,
@@ -838,7 +838,7 @@ impl ObjectStorage {
                 return Err(obj_store_error(err));
             }
         };
-        Ok(classify_readback(write_id, stored_write_id.as_deref(), &version))
+        Ok(ReadbackOutcome::classify(write_id, stored_write_id.as_deref(), &version))
     }
 
     async fn get_object_range_conditional(

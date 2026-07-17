@@ -233,7 +233,7 @@ pub struct Settings {
     #[serde(default)]
     pub unsafe_use_conditional_create: Option<bool>,
 
-    /// Whether to stamp object writes with user metadata. Defaults to `true`.
+    /// Whether to stamp objects with user metadata. Defaults to `true`.
     ///
     /// Disabling this while leaving `unsafe_use_conditional_*` enabled
     /// silently neutralises the lost-response recovery for conditional

@@ -4,12 +4,12 @@
 //! trips the condition against the object we just wrote, faking a conflict.
 //! Each conditional PUT stamps a unique [`WRITE_ID_METADATA_KEY`]; on conflict
 //! the backend HEADs the object, classifies the result with
-//! [`classify_readback`], then a `resolve_*` fn maps the outcome to a
+//! [`ReadbackOutcome::classify`], then a `resolve_*` fn maps the outcome to a
 //! [`VersionedUpdateResult`].
 
 use std::sync::Once;
 
-use tracing::warn;
+use tracing::{trace, warn};
 
 use crate::storage::{
     Settings, StorageError, StorageResult, VersionInfo, VersionedUpdateResult,
@@ -64,20 +64,22 @@ pub enum ReadbackOutcome {
     MissingVersion,
 }
 
-/// Classify a successful read-back of a found object. A failed read-back is
-/// inconclusive and never reaches here — the backend returns the HEAD error
-/// instead; an absent object is conclusively `NotOurs` at the backend.
-pub fn classify_readback(
-    our: &str,
-    stored_write_id: Option<&str>,
-    version: &VersionInfo,
-) -> ReadbackOutcome {
-    if stored_write_id != Some(our) {
-        ReadbackOutcome::NotOurs
-    } else if version.is_create() {
-        ReadbackOutcome::MissingVersion
-    } else {
-        ReadbackOutcome::OurWrite(version.clone())
+impl ReadbackOutcome {
+    /// Classify a successful read-back of a found object. A failed read-back is
+    /// inconclusive and never reaches here — the backend returns the HEAD error
+    /// instead; an absent object is conclusively `NotOurs` at the backend.
+    pub fn classify(
+        our: &str,
+        stored_write_id: Option<&str>,
+        version: &VersionInfo,
+    ) -> ReadbackOutcome {
+        if stored_write_id != Some(our) {
+            ReadbackOutcome::NotOurs
+        } else if version.is_create() {
+            ReadbackOutcome::MissingVersion
+        } else {
+            ReadbackOutcome::OurWrite(version.clone())
+        }
     }
 }
 
@@ -90,7 +92,7 @@ pub fn resolve_precondition(
 ) -> StorageResult<VersionedUpdateResult> {
     match readback? {
         ReadbackOutcome::OurWrite(new_version) => {
-            warn!(
+            trace!(
                 key,
                 "precondition failed but our write-id is stored; retried PUT, success"
             );
@@ -113,7 +115,7 @@ pub fn resolve_lost_response(
 ) -> StorageResult<VersionedUpdateResult> {
     match readback? {
         ReadbackOutcome::OurWrite(new_version) => {
-            warn!(
+            trace!(
                 key,
                 "PUT response lost but our write-id is stored; treating as success"
             );
@@ -136,7 +138,7 @@ mod tests {
     fn classify_match_returns_readback_version() {
         // A match returns the read-back object's own version, not the previous one.
         assert_eq!(
-            classify_readback("W", Some("W"), &version(Some("E1"))),
+            ReadbackOutcome::classify("W", Some("W"), &version(Some("E1"))),
             ReadbackOutcome::OurWrite(VersionInfo::from_etag_only("E1".to_string()))
         );
     }
@@ -145,16 +147,16 @@ mod tests {
     fn classify_branches() {
         // A different write-id or no write-id collapse to NotOurs.
         assert_eq!(
-            classify_readback("W", Some("OTHER"), &version(Some("E1"))),
+            ReadbackOutcome::classify("W", Some("OTHER"), &version(Some("E1"))),
             ReadbackOutcome::NotOurs
         );
         assert_eq!(
-            classify_readback("W", None, &version(Some("E1"))),
+            ReadbackOutcome::classify("W", None, &version(Some("E1"))),
             ReadbackOutcome::NotOurs
         );
         // Our id matched but no version identity.
         assert_eq!(
-            classify_readback("W", Some("W"), &version(None)),
+            ReadbackOutcome::classify("W", Some("W"), &version(None)),
             ReadbackOutcome::MissingVersion
         );
     }

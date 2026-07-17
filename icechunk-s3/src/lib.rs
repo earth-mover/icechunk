@@ -49,7 +49,7 @@ use icechunk_storage::{
     VersionedUpdateResult, obj_not_found_res, obj_store_error, obj_store_error_res,
     other_error,
     readback::{
-        ReadbackOutcome, WRITE_ID_METADATA_KEY, classify_readback, resolve_lost_response,
+        ReadbackOutcome, WRITE_ID_METADATA_KEY, resolve_lost_response,
         resolve_precondition, write_id_for,
     },
     sealed, split_in_multiple_equal_requests, strip_quotes,
@@ -382,7 +382,12 @@ fn next_write_id() -> String {
     Uuid::new_v4().to_string()
 }
 
-/// Test-only write-id injection. Thread-local, consumed once.
+/// Test-only write-id injection for the #2099 lost-response tests. Feature-gated
+/// `pub` (not `#[cfg(test)]`) because the consumers are in the `icechunk` crate;
+/// the forced id is thread-local and consumed by a single PUT.
+///
+/// This approach avoids exposing a new argument to pass an explicit write-id
+/// where needed, and it should be an implementation detail anyway.
 #[cfg(feature = "test-util")]
 pub mod test_util {
     use std::cell::RefCell;
@@ -920,7 +925,7 @@ impl S3Storage {
                 return obj_store_error_res(sdk_err);
             }
         };
-        Ok(classify_readback(write_id, stored_write_id.as_deref(), &version))
+        Ok(ReadbackOutcome::classify(write_id, stored_write_id.as_deref(), &version))
     }
 }
 
