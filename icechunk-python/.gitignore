@@ -38,6 +38,7 @@ pip-selfcheck.json
 htmlcov/
 .tox/
 .coverage
+.coverage-fragments/
 .cache
 nosetests.xml
 coverage.xml

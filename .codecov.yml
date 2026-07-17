@@ -9,7 +9,9 @@ coverage:
         threshold: 1%
     patch:
       default:
-        target: 80%
+        target: auto
+        threshold: 0%
+        base: auto
 
 ignore:
   - "icechunk-python/tests/"
@@ -21,5 +23,7 @@ ignore:
   - "design-docs/"
 
 comment:
-  layout: "reach,diff,flags,tree"
+  # flags surfaces the rust/python split; diff shows patch coverage
+  layout: "condensed_header, diff, flags, condensed_files"
   behavior: default
+  require_changes: false

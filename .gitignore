@@ -35,3 +35,7 @@ coverage.xml
 .coverage
 htmlcov/
 *.profraw
+
+# upstream-check clones (just zarrs-upstream / xarray-upstream)
+/zarrs_icechunk/
+/xarray/

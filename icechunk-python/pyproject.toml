@@ -141,6 +141,13 @@ filterwarnings = [
   "ignore:The 'generic' unit for NumPy timedelta is deprecated:DeprecationWarning",
 ]
 
+# remap wheel-venv site-packages paths to the source tree; applied on `coverage combine`
+[tool.coverage.paths]
+icechunk = [
+  "icechunk-python/python/icechunk",
+  "*/site-packages/icechunk",
+]
+
 [tool.mypy]
 python_version = "3.12"
 strict = true
@@ -213,8 +220,13 @@ platforms = [
 [tool.pixi.feature.docs.dependencies]
 cairo = ">=1.18.4,<2"
 
-[tool.pixi.feature.build.dependencies]
+[tool.pixi.feature.py312.dependencies]
 python = "~=3.12.0"
+
+[tool.pixi.feature.py314t.dependencies]
+python-freethreading = "~=3.14.0"
+
+[tool.pixi.feature.build.dependencies]
 rust = "~=1.96.0"
 just = ">=1.51.0,<2"
 compilers = ">=1.11.0,<2"
@@ -229,7 +241,7 @@ flatbuffers = ">=25.12.19,<26"
 samply = ">=0.13.1,<0.14"
 cargo-release = ">=1.1.2,<2"
 cargo-llvm-cov = ">=0.8.4,<0.9"
-octocov = ">=0.75.8,<0.76"
+nodejs = ">=22.23.1,<23"
 
 [tool.pixi.feature.build.target.linux-64.dependencies]
 sysroot_linux-64 = ">=2.34"
@@ -239,9 +251,16 @@ sysroot_linux-aarch64 = ">=2.34"
 
 [tool.pixi.environments]
 default = { features = [
+  "py312",
   "build",
   "dev",
   "docs",
   "test",
 ], solve-group = "default" }
 benchmark = { features = ["benchmark"], solve-group = "default" }
+py314t = { features = [
+  "py314t",
+  "build",
+  "dev",
+  "test",
+]}
