@@ -21,7 +21,6 @@ async-trait.workspace = true
 bytes.workspace = true
 chrono.workspace = true
 futures.workspace = true
-percent-encoding.workspace = true
 serde.workspace = true
 sha2.workspace = true
 tempfile.workspace = true

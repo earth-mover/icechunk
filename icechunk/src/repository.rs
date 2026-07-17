@@ -177,6 +177,10 @@ pub enum RepositoryErrorKind {
     BadRepoVersion { minimum_spec_version: SpecVersionBin },
     #[error("concurrency error, lock could not be acquired")]
     PoisonLock,
+    #[error(
+        "this build cannot open the spec version 1 local filesystem repository at `{0}`: the legacy object_store filesystem backend (Cargo feature `object-store-fs`) is disabled in this build. Rebuild with that feature enabled, or migrate the repository to spec version 2."
+    )]
+    UnsupportedLegacyLocalFilesystem(String),
     #[error("unexpected error: {0}")]
     Other(String),
 }
@@ -203,6 +207,44 @@ pub struct Repository {
     default_commit_metadata: SnapshotProperties,
 }
 
+/// Route a spec-v1 local filesystem repository to the legacy `object_store`
+/// backend over the same directory. The native `FilesystemStorage` deliberately
+/// knows nothing about the v1 percent-encoded ref layout, so v1 repositories are
+/// served by the backend that wrote them; concurrent-commit safety is a v2-only
+/// feature. Non-v1 versions, and any storage that is not a native local
+/// filesystem, are returned unchanged.
+async fn storage_for_spec_version(
+    storage: Arc<dyn Storage + Send + Sync>,
+    spec_version: SpecVersionBin,
+) -> RepositoryResult<Arc<dyn Storage + Send + Sync>> {
+    if spec_version >= SpecVersionBin::V2 {
+        return Ok(storage);
+    }
+    let Some(root) = storage.local_filesystem_root() else {
+        return Ok(storage);
+    };
+    let root = root.to_path_buf();
+    #[cfg(feature = "object-store-fs")]
+    {
+        warn!(
+            path = %root.display(),
+            "spec version 1 local filesystem repositories are not safe for concurrent commits; migrate to spec version 2 for safe concurrent commits"
+        );
+        let legacy = storage::ObjectStorage::new_local_filesystem(root.as_path())
+            .await
+            .inject()?;
+        Ok(Arc::new(legacy))
+    }
+    #[cfg(not(feature = "object-store-fs"))]
+    {
+        Err(RepositoryError::capture(
+            RepositoryErrorKind::UnsupportedLegacyLocalFilesystem(
+                root.display().to_string(),
+            ),
+        ))
+    }
+}
+
 impl Repository {
     #[instrument(skip_all)]
     pub async fn create(
@@ -213,6 +255,7 @@ impl Repository {
         check_clean_root: bool,
     ) -> RepositoryResult<Self> {
         debug!("Creating Repository");
+        let spec_version = spec_version.unwrap_or_default();
         raise_if_cant_write(storage.as_ref(), "Cannot create repository").await?;
         if storage.can_create_repository().await.inject()?
             == storage::RepositoryCreation::RefusedEmptyPrefix
@@ -222,6 +265,9 @@ impl Repository {
             ));
         }
         storage.create_location_if_needed().await.inject()?;
+        // A spec-v1 local filesystem repository is served by the legacy
+        // object_store backend; the native backend never handles v1 layouts.
+        let storage = storage_for_spec_version(storage, spec_version).await?;
 
         let has_overriden_config = match config {
             Some(ref config) => config != &RepositoryConfig::default(),
@@ -238,8 +284,6 @@ impl Repository {
         };
         let config =
             RepositoryConfig { storage: Some(storage_settings.clone()), ..config };
-
-        let spec_version = spec_version.unwrap_or_default();
 
         let asset_manager = Arc::new(AssetManager::new_with_config(
             Arc::clone(&storage),
@@ -403,6 +447,24 @@ impl Repository {
         }?;
         let spec_version = detected.spec_version();
         trace!(%spec_version, "Repository version found");
+
+        // A spec-v1 local filesystem repository is served by the legacy
+        // object_store backend. Detection above ran on the native backend (the v1
+        // layout keys it reads are plain ASCII); the repository itself uses the
+        // legacy backend and its settings, which degrade the branch-tip CAS as a
+        // v1 local filesystem always has.
+        let is_v1_local = spec_version < SpecVersionBin::V2
+            && storage.local_filesystem_root().is_some();
+        let storage = storage_for_spec_version(storage, spec_version).await?;
+        let settings = if is_v1_local {
+            let defaults = storage.default_settings().await.inject()?;
+            match config.as_ref().and_then(|c| c.storage().cloned()) {
+                Some(user_storage) => defaults.merge(user_storage),
+                None => defaults,
+            }
+        } else {
+            settings
+        };
 
         let (persisted_config, config_version) = match detected {
             DetectedSpecVersion::V2Plus { repo_info, .. } => {

@@ -14,6 +14,7 @@ from icechunk import (
     Repository,
     RepositoryConfig,
     S3StaticCredentials,
+    SpecVersion,
     local_filesystem_storage,
     s3_storage,
 )
@@ -38,18 +39,20 @@ def tmp_repo(tmpdir: Path, any_spec_version: int | None) -> Repository:
     return repo
 
 
-def test_pickle_repository(tmpdir: Path, tmp_repo: Repository) -> None:
+def test_pickle_repository(
+    tmpdir: Path, tmp_repo: Repository, any_spec_version: SpecVersion | int | None
+) -> None:
     pickled = pickle.dumps(tmp_repo)
     roundtripped = pickle.loads(pickled)
     assert tmp_repo.list_branches() == roundtripped.list_branches()
     assert tmp_repo.default_commit_metadata() == roundtripped.default_commit_metadata()
     assert tmp_repo.default_commit_metadata() == {"author": "test"}
 
-    storage = tmp_repo.storage
-    assert (
-        repr(storage)
-        == f"<icechunk.Storage>\ntype: local filesystem (native)\npath: {tmpdir}\n"
-    )
+    # Spec version 1 local repositories are served by the legacy object_store
+    # backend; spec version 2 repositories use the native backend.
+    backend = "local filesystem" if any_spec_version == 1 else "local filesystem (native)"
+    for storage in (tmp_repo.storage, roundtripped.storage):
+        assert repr(storage) == f"<icechunk.Storage>\ntype: {backend}\npath: {tmpdir}\n"
 
 
 def test_pickle_read_only(tmp_repo: Repository) -> None:

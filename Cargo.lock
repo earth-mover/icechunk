@@ -2420,7 +2420,6 @@ dependencies = [
  "icechunk-macros",
  "icechunk-storage",
  "icechunk-types",
- "percent-encoding",
  "serde",
  "serde_json",
  "sha2",

@@ -15,6 +15,7 @@ use std::{
     iter,
     num::{NonZeroU16, NonZeroU64},
     ops::Range,
+    path::Path,
     pin::Pin,
     sync::{Arc, Mutex, OnceLock},
 };
@@ -478,6 +479,14 @@ pub enum RepositoryCreation {
 pub trait Storage: fmt::Debug + Display + sealed::Sealed + Sync + Send {
     /// Return structured metadata about this storage backend for display/repr.
     fn storage_info(&self) -> StorageInfo;
+
+    /// The on-disk root when this is a native local filesystem backend, else
+    /// `None`. Repository construction uses it to route spec-v1 local repositories
+    /// to the legacy `object_store` backend over the same directory, since the
+    /// native backend knows nothing about the v1 percent-encoded ref layout.
+    fn local_filesystem_root(&self) -> Option<&Path> {
+        None
+    }
 
     async fn default_settings(&self) -> StorageResult<Settings> {
         Ok(Default::default())

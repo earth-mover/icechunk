@@ -57,42 +57,17 @@
 //!   timeout is deliberately generous (5 minutes) to absorb ordinary skew, since
 //!   a commit holds the lock for milliseconds.
 //!
-//! # Legacy on-disk compatibility
+//! # Spec version and on-disk keys
 //!
 //! This backend writes an object key straight to disk as its filename, matching
-//! how object stores treat a key as opaque bytes. The `object_store`
-//! `LocalFileSystem` backend it replaces instead percent-encoded some bytes of a
-//! filename (its path escape set, plus every non-ASCII byte), so a ref named,
-//! say, `über` was stored on disk as `%C3%BCber`. To keep repositories written by
-//! that backend fully usable, reads and listings fall back to the encoded
-//! spelling:
-//!
-//! - Reads (get, conditional get, last-modified, copy source) and the read half
-//!   of the branch-tip CAS try the raw filename first and, on a miss, retry the
-//!   `object_store`-encoded one.
-//! - Listings decode encoded filenames back to their true key, so legacy refs
-//!   appear under their real names.
-//! - Writes are always raw. Updating a legacy-encoded ref therefore writes the
-//!   new value under the raw name and leaves the stale encoded file behind; since
-//!   reads and the CAS prefer the raw spelling, the encoded file is dead. Deletes
-//!   remove both spellings so garbage collection frees the key. The CAS locks on
-//!   the raw path regardless of which spelling it read, so concurrent updates of
-//!   the same key still serialize.
-//! - When both spellings exist for one key, the raw (native-written) one wins
-//!   deterministically on every path.
-//!
-//! The compatibility is one-directional: a key with characters the old backend
-//! encoded (`%`, non-ASCII, ...) written by this backend is stored raw and is not
-//! found by the old `object_store` backend, which would look for the encoded
-//! name. A repository that used such names must be read with a current icechunk.
-//! A native key that merely embeds a valid percent sequence (a literal `%20`) is
-//! listed under its true raw name, not a decoded one: a filename is only treated
-//! as legacy-encoded when re-encoding its decoded form reproduces the filename
-//! exactly, which `%20` (decoding to a space, which the old backend never encoded)
-//! does not.
+//! how object stores treat a key as opaque bytes. Spec-v2 keys (the consolidated
+//! `repo` file and hex/base32 ids) never contain bytes an object store would
+//! percent-encode, so no encoding knowledge is needed here. Spec-v1 repositories,
+//! which the old `object_store` local backend wrote with percent-encoded ref
+//! filenames, are served by that legacy backend via Repository-level dispatch and
+//! never reach this type.
 
 use std::{
-    collections::HashMap,
     fmt,
     io::{Cursor, SeekFrom, Write as _},
     ops::Range,
@@ -118,7 +93,6 @@ use icechunk_storage::{
     other_error, sealed, strip_quotes,
 };
 use icechunk_types::ICResultExt as _;
-use percent_encoding::{AsciiSet, CONTROLS, percent_decode_str, utf8_percent_encode};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use tempfile::Builder as TempFileBuilder;
@@ -194,113 +168,6 @@ impl FilesystemStorage {
             path.push(component);
         }
         path
-    }
-
-    /// Filesystem path the replaced `object_store` backend would have used for
-    /// `relpath`, percent-encoding each component. `None` when no byte of the key
-    /// is one that backend encoded, i.e. the encoded and raw spellings are
-    /// identical and only the raw path can exist. Content-addressed keys (hex ids)
-    /// take this cheap `None` path with no allocation. See the module docs.
-    fn encoded_object_path(&self, relpath: &str) -> Option<PathBuf> {
-        if !relpath.bytes().any(byte_is_legacy_encoded) {
-            return None;
-        }
-        let mut path = self.root.clone();
-        for component in relpath.split('/').filter(|c| is_key_component(c)) {
-            path.push(utf8_percent_encode(component, LEGACY_ENCODE_SET).to_string());
-        }
-        Some(path)
-    }
-
-    /// Path to read for `relpath`: the raw (native) spelling when it exists,
-    /// otherwise the legacy percent-encoded spelling. Falls back to the raw path
-    /// (so a miss reports the native key) when neither exists or the key has no
-    /// encodable characters.
-    async fn resolve_read_path(&self, relpath: &str) -> PathBuf {
-        let raw = self.object_path(relpath);
-        let Some(encoded) = self.encoded_object_path(relpath) else {
-            return raw;
-        };
-        if fs::try_exists(&raw).await.unwrap_or(false) {
-            raw
-        } else if fs::try_exists(&encoded).await.unwrap_or(false) {
-            encoded
-        } else {
-            raw
-        }
-    }
-}
-
-/// Characters the `object_store` `LocalFileSystem` backend percent-encoded in an
-/// on-disk filename. Matches that backend's path escape set; `utf8_percent_encode`
-/// additionally encodes every non-ASCII byte. Replicated here so this backend can
-/// still locate refs written before it replaced that one.
-const LEGACY_ENCODE_SET: &AsciiSet = &CONTROLS
-    .add(b'/')
-    .add(b'\\')
-    .add(b'{')
-    .add(b'^')
-    .add(b'}')
-    .add(b'%')
-    .add(b'`')
-    .add(b']')
-    .add(b'"')
-    .add(b'>')
-    .add(b'[')
-    .add(b'~')
-    .add(b'<')
-    .add(b'#')
-    .add(b'|')
-    .add(b'\r')
-    .add(b'\n')
-    .add(b'*')
-    .add(b'?');
-
-/// Whether `byte` is one the legacy backend percent-encoded within a filename.
-/// Mirrors membership of [`LEGACY_ENCODE_SET`] (plus every non-ASCII byte, which
-/// `utf8_percent_encode` always encodes), since the set's own `contains` is not
-/// public. The `/` key separator is excluded: it delimits components (both
-/// backends split on it before encoding) rather than appearing inside one.
-fn byte_is_legacy_encoded(byte: u8) -> bool {
-    if byte == b'/' {
-        return false;
-    }
-    !byte.is_ascii()
-        || byte.is_ascii_control()
-        || matches!(
-            byte,
-            b'\\'
-                | b'{'
-                | b'^'
-                | b'}'
-                | b'%'
-                | b'`'
-                | b']'
-                | b'"'
-                | b'>'
-                | b'['
-                | b'~'
-                | b'<'
-                | b'#'
-                | b'|'
-                | b'*'
-                | b'?'
-        )
-}
-
-/// Decode a percent-encoded on-disk filename back to its true key component, but
-/// only when it is a *canonical* legacy encoding — i.e. re-encoding the decoded
-/// form reproduces the exact filename. This rejects a native key that merely
-/// contains a valid percent sequence (e.g. `exp%201`, which decodes to `exp 1`
-/// but re-encodes back to `exp 1`, not `exp%201`): such a name is left raw so it
-/// lists, and deletes, under its true on-disk spelling. Non-encoded names (hex
-/// ids, native keys) pass through unchanged.
-fn legacy_decode_component(component: &str) -> String {
-    let decoded = percent_decode_str(component).decode_utf8_lossy().into_owned();
-    if utf8_percent_encode(&decoded, LEGACY_ENCODE_SET).to_string() == component {
-        decoded
-    } else {
-        component.to_string()
     }
 }
 
@@ -498,13 +365,8 @@ impl FilesystemStorage {
     /// Compare-and-swap: replace the object at `path` only if its current content
     /// still hashes to `previous_etag`, serialized through an exclusive lock file.
     ///
-    /// Writes and the lock are always keyed to the raw spelling of `path`, while
-    /// the current value is read from whichever spelling exists, resolved *after*
-    /// acquiring the lock (raw preferred). Resolving under the lock is what makes
-    /// concurrent updates of a legacy-encoded-only ref safe: once one commit
-    /// writes the raw file, the next holder re-resolves to it and sees the new
-    /// value rather than the frozen encoded one. Updating a legacy ref commits
-    /// under the raw name and leaves the encoded one stale; see the module docs.
+    /// The current value is read under the lock, so once one commit writes the
+    /// target the next holder sees the new value and loses the CAS.
     async fn conditional_update(
         &self,
         path: &str,
@@ -522,8 +384,7 @@ impl FilesystemStorage {
         }
 
         let outcome = async {
-            let read_path = self.resolve_read_path(path).await;
-            let current = match fs::read(&read_path).await {
+            let current = match fs::read(&target).await {
                 Ok(bytes) => Some(bytes),
                 Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
                 Err(err) => return Err(io_error(err)),
@@ -729,6 +590,10 @@ impl Storage for FilesystemStorage {
         }
     }
 
+    fn local_filesystem_root(&self) -> Option<&Path> {
+        Some(&self.root)
+    }
+
     async fn can_write(&self) -> StorageResult<bool> {
         Ok(true)
     }
@@ -769,7 +634,7 @@ impl Storage for FilesystemStorage {
         Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>,
         VersionInfo,
     )> {
-        let target = self.resolve_read_path(path).await;
+        let target = self.object_path(path);
         let data = read_object(&target, range).await?;
         // A full read returns the object's content-hash etag; the Storage contract
         // requires that version to round-trip through `get_object_conditional`
@@ -813,13 +678,6 @@ impl Storage for FilesystemStorage {
                     new_version: VersionInfo::from_etag_only(new_etag),
                 };
                 if settings.unsafe_use_conditional_create() {
-                    // A pre-existing legacy-encoded object counts as present even
-                    // though we only ever create under the raw spelling.
-                    if let Some(encoded) = self.encoded_object_path(path)
-                        && fs::try_exists(&encoded).await.unwrap_or(false)
-                    {
-                        return Ok(VersionedUpdateResult::NotOnLatestVersion);
-                    }
                     if self.create_exclusive(&target, bytes).await? {
                         Ok(updated)
                     } else {
@@ -855,7 +713,7 @@ impl Storage for FilesystemStorage {
         _content_type: Option<&str>,
         version: &VersionInfo,
     ) -> StorageResult<VersionedUpdateResult> {
-        let from = self.resolve_read_path(from).await;
+        let from = self.object_path(from);
         let to = self.object_path(to);
         let data = fs::read(&from).await.map_err(io_error)?;
 
@@ -895,22 +753,15 @@ impl Storage for FilesystemStorage {
                 } else {
                     format!("{}/{}", prefix.trim_end_matches('/'), id)
                 };
-                // Remove both spellings so a key stored under the legacy encoding is
-                // actually freed and never resurfaces through the read fallback.
-                let mut removed = false;
-                let mut targets = vec![self.object_path(&relpath)];
-                if let Some(encoded) = self.encoded_object_path(&relpath) {
-                    targets.push(encoded);
-                }
-                for target in targets {
-                    match fs::remove_file(&target).await {
-                        Ok(()) => removed = true,
-                        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-                        Err(err) => {
-                            tracing::error!(error = ?err, path = %target.display(), "Error deleting object");
-                        }
+                let target = self.object_path(&relpath);
+                let removed = match fs::remove_file(&target).await {
+                    Ok(()) => true,
+                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => false,
+                    Err(err) => {
+                        tracing::error!(error = ?err, path = %target.display(), "Error deleting object");
+                        false
                     }
-                }
+                };
                 (removed, size)
             })
             .buffer_unordered(16)
@@ -931,7 +782,7 @@ impl Storage for FilesystemStorage {
         path: &str,
         _settings: &Settings,
     ) -> StorageResult<DateTime<Utc>> {
-        let target = self.resolve_read_path(path).await;
+        let target = self.object_path(path);
         let modified =
             fs::metadata(&target).await.and_then(|m| m.modified()).map_err(io_error)?;
         Ok(DateTime::<Utc>::from(modified))
@@ -944,7 +795,7 @@ impl Storage for FilesystemStorage {
         path: &str,
         previous_version: Option<&VersionInfo>,
     ) -> StorageResult<GetModifiedResult> {
-        let target = self.resolve_read_path(path).await;
+        let target = self.object_path(path);
         let data = fs::read(&target).await.map_err(io_error)?;
         let etag = hash_hex(&data);
 
@@ -965,16 +816,10 @@ impl Storage for FilesystemStorage {
 /// Recursively list every object file under `base`, returning ids relative to
 /// `base` with `/` separators, sorted by id. Lock and temp files are skipped.
 ///
-/// Legacy percent-encoded filenames are decoded back to their true key, so a ref
-/// written by the old backend lists under its real name. When a key exists under
-/// both the raw and the encoded spelling, the raw one is reported (module docs).
-///
 /// The full listing is materialized and sorted because directory read order is
 /// arbitrary and callers (e.g. ref listing) rely on a stable order.
 async fn collect_list(base: &Path) -> StorageResult<Vec<ListInfo<String>>> {
-    // Keyed by decoded id; the value tracks whether the on-disk name was already
-    // in raw form so a raw entry always wins over an encoded duplicate.
-    let mut by_id: HashMap<String, (bool, ListInfo<String>)> = HashMap::new();
+    let mut out: Vec<ListInfo<String>> = Vec::new();
     match fs::metadata(base).await {
         Ok(meta) if meta.is_dir() => {}
         Ok(_) => return Ok(Vec::new()),
@@ -1005,35 +850,18 @@ async fn collect_list(base: &Path) -> StorageResult<Vec<ListInfo<String>>> {
             let Ok(rel) = path.strip_prefix(base) else {
                 continue;
             };
-            let raw_components: Vec<String> = rel
+            let id = rel
                 .components()
-                .map(|c| c.as_os_str().to_string_lossy().into_owned())
-                .collect();
-            // Only a name containing '%' can be a legacy percent-encoding; skip the
-            // decode (and its allocation) for the common raw key, e.g. a hex id.
-            let (id, is_raw) = if raw_components.iter().any(|c| c.contains('%')) {
-                let decoded: Vec<String> =
-                    raw_components.iter().map(|c| legacy_decode_component(c)).collect();
-                let is_raw = decoded == raw_components;
-                (decoded.join("/"), is_raw)
-            } else {
-                (raw_components.join("/"), true)
-            };
+                .map(|c| c.as_os_str().to_string_lossy())
+                .collect::<Vec<_>>()
+                .join("/");
             let meta = entry.metadata().await.capture()?;
             let created_at =
                 meta.modified().map(DateTime::<Utc>::from).unwrap_or_else(|_| Utc::now());
-            let info = ListInfo { id: id.clone(), created_at, size_bytes: meta.len() };
-            match by_id.get(&id) {
-                Some((existing_is_raw, _)) if *existing_is_raw && !is_raw => {}
-                _ => {
-                    by_id.insert(id, (is_raw, info));
-                }
-            }
+            out.push(ListInfo { id, created_at, size_bytes: meta.len() });
         }
     }
 
-    let mut out: Vec<ListInfo<String>> =
-        by_id.into_values().map(|(_, info)| info).collect();
     out.sort_by(|a, b| a.id.cmp(&b.id));
     Ok(out)
 }
@@ -1359,258 +1187,6 @@ mod tests {
         let restored: Arc<dyn Storage + Send + Sync> =
             serde_json::from_str(&json).expect("deserialize");
         assert!(restored.to_string().contains("FilesystemStorage"));
-    }
-
-    /// A key whose name the old backend percent-encoded on disk.
-    const LEGACY_KEY: &str = "refs/tag.\u{fc}ber%off/ref.json";
-
-    /// Write `content` under the percent-encoded on-disk name the replaced
-    /// `object_store` backend would have used, simulating a pre-existing repo.
-    async fn write_legacy_encoded(
-        storage: &FilesystemStorage,
-        key: &str,
-        content: &[u8],
-    ) {
-        let encoded = storage.encoded_object_path(key).expect("key has encodable chars");
-        fs::create_dir_all(encoded.parent().expect("parent")).await.expect("mkdir");
-        fs::write(&encoded, content).await.expect("write legacy object");
-    }
-
-    async fn drain(
-        mut stream: Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>,
-    ) -> Vec<u8> {
-        let mut out = Vec::new();
-        while let Some(chunk) = stream.next().await {
-            out.extend_from_slice(&chunk.expect("chunk"));
-        }
-        out
-    }
-
-    async fn list_ids(storage: &FilesystemStorage, prefix: &str) -> Vec<String> {
-        collect_list(&storage.object_path(prefix))
-            .await
-            .expect("list")
-            .into_iter()
-            .map(|li| li.id)
-            .collect()
-    }
-
-    /// A legacy percent-encoded object is read through the fallback and listed
-    /// under its decoded (true) key.
-    #[tokio_test]
-    async fn test_reads_and_lists_legacy_encoded_object() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let storage = FilesystemStorage::new(dir.path());
-        let settings = storage.default_settings().await.expect("settings");
-        write_legacy_encoded(&storage, LEGACY_KEY, b"legacy").await;
-
-        let (stream, _) =
-            storage.get_object_range(&settings, LEGACY_KEY, None).await.expect("get");
-        assert_eq!(drain(stream).await, b"legacy");
-        assert_eq!(list_ids(&storage, "refs").await, vec!["tag.\u{fc}ber%off/ref.json"]);
-    }
-
-    /// When both spellings exist, reads and listings resolve the raw one.
-    #[tokio_test]
-    async fn test_prefers_raw_over_legacy_encoded() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let storage = FilesystemStorage::new(dir.path());
-        let settings = storage.default_settings().await.expect("settings");
-        write_legacy_encoded(&storage, LEGACY_KEY, b"legacy").await;
-        seed(&storage, &settings, LEGACY_KEY, b"native").await;
-
-        let (stream, _) =
-            storage.get_object_range(&settings, LEGACY_KEY, None).await.expect("get");
-        assert_eq!(drain(stream).await, b"native");
-        assert_eq!(list_ids(&storage, "refs").await, vec!["tag.\u{fc}ber%off/ref.json"]);
-    }
-
-    /// A conditional update of a legacy-encoded object commits under the raw name
-    /// (which then wins on read), leaving the encoded file behind but dead.
-    #[tokio_test]
-    async fn test_conditional_update_of_legacy_encoded_object() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let storage = FilesystemStorage::new(dir.path());
-        let settings = storage.default_settings().await.expect("settings");
-        write_legacy_encoded(&storage, LEGACY_KEY, b"v0").await;
-
-        let previous = VersionInfo::from_etag_only(hash_hex(b"v0"));
-        let result = storage
-            .put_object(
-                &settings,
-                LEGACY_KEY,
-                Bytes::from_static(b"v1"),
-                None,
-                vec![],
-                Some(&previous),
-            )
-            .await
-            .expect("update");
-        assert!(matches!(result, VersionedUpdateResult::Updated { .. }));
-
-        let (stream, _) =
-            storage.get_object_range(&settings, LEGACY_KEY, None).await.expect("get");
-        assert_eq!(drain(stream).await, b"v1");
-        let encoded = storage.encoded_object_path(LEGACY_KEY).expect("encoded");
-        assert_eq!(fs::read(&encoded).await.expect("read encoded"), b"v0");
-    }
-
-    /// A conditional create fails when only the legacy-encoded spelling exists.
-    #[tokio_test]
-    async fn test_conditional_create_conflicts_with_legacy_encoded() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let storage = FilesystemStorage::new(dir.path());
-        let settings = storage.default_settings().await.expect("settings");
-        write_legacy_encoded(&storage, LEGACY_KEY, b"legacy").await;
-
-        let result = storage
-            .put_object(
-                &settings,
-                LEGACY_KEY,
-                Bytes::from_static(b"new"),
-                None,
-                vec![],
-                Some(&VersionInfo::for_creation()),
-            )
-            .await
-            .expect("create");
-        assert!(matches!(result, VersionedUpdateResult::NotOnLatestVersion));
-    }
-
-    /// Delete removes both spellings so the key is actually freed.
-    #[tokio_test]
-    async fn test_delete_removes_both_spellings() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let storage = FilesystemStorage::new(dir.path());
-        let settings = storage.default_settings().await.expect("settings");
-        write_legacy_encoded(&storage, LEGACY_KEY, b"legacy").await;
-        seed(&storage, &settings, LEGACY_KEY, b"native").await;
-
-        storage
-            .delete_batch(
-                &settings,
-                "refs",
-                vec![("tag.\u{fc}ber%off/ref.json".to_string(), 6)],
-            )
-            .await
-            .expect("delete");
-
-        let raw = storage.object_path(LEGACY_KEY);
-        let encoded = storage.encoded_object_path(LEGACY_KEY).expect("encoded");
-        assert!(!fs::try_exists(&raw).await.unwrap_or(true));
-        assert!(!fs::try_exists(&encoded).await.unwrap_or(true));
-    }
-
-    /// The predicate and the encode set must agree on every byte, so the read
-    /// fallback covers exactly the names the old backend would have encoded.
-    #[test]
-    fn test_legacy_encode_set_matches_predicate() {
-        for b in 0u8..=255 {
-            // `/` is the component separator, excluded from the predicate by design.
-            if b == b'/' {
-                continue;
-            }
-            let predicted = byte_is_legacy_encoded(b);
-            let actual = if b < 0x80 {
-                let s = (b as char).to_string();
-                utf8_percent_encode(&s, LEGACY_ENCODE_SET).to_string() != s
-            } else {
-                // `utf8_percent_encode` always encodes non-ASCII bytes.
-                true
-            };
-            assert_eq!(predicted, actual, "disagreement on byte {b:#04x}");
-        }
-    }
-
-    /// `*` and `?` are in the old backend's encode set, so legacy refs named with
-    /// them are found through the fallback and listed under their true names.
-    #[tokio_test]
-    async fn test_star_question_legacy_ref_names() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let storage = FilesystemStorage::new(dir.path());
-        let settings = storage.default_settings().await.expect("settings");
-        let key = "refs/tag.a*b?c/ref.json";
-        write_legacy_encoded(&storage, key, b"legacy").await;
-
-        let (stream, _) =
-            storage.get_object_range(&settings, key, None).await.expect("get");
-        assert_eq!(drain(stream).await, b"legacy");
-        assert_eq!(list_ids(&storage, "refs").await, vec!["tag.a*b?c/ref.json"]);
-    }
-
-    /// Concurrent conditional updates of a ref that exists only under the legacy
-    /// percent-encoded spelling: the read path must be resolved under the lock,
-    /// so once one racer commits the raw file the rest see the new value and lose.
-    #[tokio_test]
-    async fn test_concurrent_update_of_legacy_encoded_single_winner() {
-        const RACERS: u32 = 4;
-        const ITERATIONS: u32 = 10;
-        let path = "refs/branch.\u{fc}ber/ref.json";
-
-        for iteration in 0..ITERATIONS {
-            let dir = tempfile::tempdir().expect("tempdir");
-            let storage = Arc::new(FilesystemStorage::new(dir.path()));
-            let settings = storage.default_settings().await.expect("settings");
-            write_legacy_encoded(&storage, path, b"v0").await;
-            let (_, base) = storage
-                .get_object_range(&settings, path, None)
-                .await
-                .expect("read seeded legacy object");
-
-            let mut set = tokio::task::JoinSet::new();
-            for racer in 0..RACERS {
-                let storage = Arc::clone(&storage);
-                let settings = settings.clone();
-                let base = base.clone();
-                set.spawn(async move {
-                    storage
-                        .put_object(
-                            &settings,
-                            path,
-                            Bytes::from(format!("winner-{racer}")),
-                            None,
-                            vec![],
-                            Some(&base),
-                        )
-                        .await
-                        .expect("put should not error")
-                });
-            }
-
-            let updated = set
-                .join_all()
-                .await
-                .into_iter()
-                .filter(|r| matches!(r, VersionedUpdateResult::Updated { .. }))
-                .count();
-            assert_eq!(
-                updated, 1,
-                "iteration {iteration}: exactly one racer must win, got {updated}"
-            );
-        }
-    }
-
-    /// A native key that merely embeds a valid percent sequence is not a
-    /// canonical legacy encoding: it must list under its raw name, and a delete
-    /// by that listed id must remove the real file.
-    #[tokio_test]
-    async fn test_native_percent_sequence_key_lists_raw_and_deletes() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let storage = FilesystemStorage::new(dir.path());
-        let settings = storage.default_settings().await.expect("settings");
-        let key = "refs/branch.exp%201/ref.json";
-        seed(&storage, &settings, key, b"v0").await;
-
-        let ids = list_ids(&storage, "refs").await;
-        assert_eq!(ids, vec!["branch.exp%201/ref.json".to_string()]);
-
-        let listed_key = format!("refs/{}", ids[0]);
-        let result = storage
-            .delete_batch(&settings, "", vec![(listed_key, 2)])
-            .await
-            .expect("delete");
-        assert_eq!(result.deleted_objects, 1);
-        assert!(list_ids(&storage, "refs").await.is_empty());
     }
 
     /// A relative root is pinned to an absolute path at construction, so later

@@ -16,10 +16,7 @@ use icechunk::{
         snapshot::Snapshot,
     },
     new_local_filesystem_storage,
-    refs::{
-        RefData, RefErrorKind, create_tag, fetch_branch_tip_v1, fetch_tag, list_branches,
-        list_tags, update_branch,
-    },
+    refs::{RefData, RefErrorKind},
     repository::{RepositoryError, RepositoryErrorKind},
     storage::{
         self, ConcurrencySettings, ETag, Generation, RepositoryCreation, S3Storage,
@@ -396,62 +393,68 @@ async fn test_create_existing_tag(
     Ok(())
 }
 
-// The native backend writes an object key to disk verbatim (matching object
-// stores, where a key is opaque bytes), while the legacy object_store backend
-// percent-encoded some bytes of a filename (`%`, non-ASCII, ...). To keep repos
-// written by the old backend usable, the native backend reads and lists through a
-// legacy-encoded fallback. This checks refs written by the legacy backend remain
-// readable, listable, and updatable via the native one, on the same directory.
+// A spec-v1 local filesystem repository is routed to the legacy object_store
+// backend at the Repository level, since the native backend knows nothing about
+// the v1 percent-encoded ref layout. A spec-v2 repository stays on the native
+// backend, which is safe for concurrent commits. This checks both the create and
+// the open path, and that reopening a v1 layout keeps routing to the legacy
+// backend.
 #[tokio_test]
-async fn test_native_reads_legacy_encoded_refs() -> Result<(), Box<dyn std::error::Error>>
-{
-    let dir = tempdir()?;
-    let native = new_local_filesystem_storage(dir.path()).await?;
-    let legacy: Arc<dyn Storage + Send + Sync> =
-        Arc::new(ObjectStorage::new_local_filesystem(dir.path()).await?);
-    let native_settings = native.default_settings().await?;
-    let legacy_settings = legacy.default_settings().await?;
+async fn test_v1_local_repo_routes_to_legacy_backend()
+-> Result<(), Box<dyn std::error::Error>> {
+    // Creating a spec-v1 repo on native local storage swaps to the legacy backend.
+    let v1_dir = tempdir()?;
+    let v1_native = new_local_filesystem_storage(v1_dir.path()).await?;
+    let v1_repo = Repository::create(
+        None,
+        Arc::clone(&v1_native),
+        Default::default(),
+        Some(SpecVersionBin::V1),
+        false,
+    )
+    .await?;
+    assert_eq!(v1_repo.spec_version(), SpecVersionBin::V1);
+    assert_eq!(v1_repo.storage().storage_info().backend_type, "local filesystem");
 
-    // A legacy-written tag whose name the old backend percent-encoded on disk is
-    // still found and listed under its true name by the native backend.
-    let tag = "sale-fifty%off-\u{fc}ber";
-    let tag_snapshot = SnapshotId::random();
-    create_tag(legacy.as_ref(), &legacy_settings, tag, tag_snapshot.clone()).await?;
-    assert_eq!(
-        fetch_tag(native.as_ref(), &native_settings, tag).await?,
-        RefData { snapshot: tag_snapshot }
-    );
-    assert!(list_tags(native.as_ref(), &native_settings).await?.contains(tag));
+    // Reopening the same on-disk v1 layout through native storage detects v1 and
+    // performs the same swap.
+    let reopened = Repository::open(
+        None,
+        new_local_filesystem_storage(v1_dir.path()).await?,
+        Default::default(),
+    )
+    .await?;
+    assert_eq!(reopened.spec_version(), SpecVersionBin::V1);
+    assert_eq!(reopened.storage().storage_info().backend_type, "local filesystem");
 
-    // A legacy-written branch is readable, listable, and updatable via the native
-    // backend's compare-and-swap: the CAS reads the legacy-encoded file, writes
-    // the new tip under the raw name, and the raw name then wins on read.
-    let branch = "feature \u{fc}ber%2";
-    let snap1 = SnapshotId::random();
-    let snap2 = SnapshotId::random();
-    update_branch(legacy.as_ref(), &legacy_settings, branch, snap1.clone(), None).await?;
+    // A spec-v2 repo stays on the native backend.
+    let v2_dir = tempdir()?;
+    let v2_native = new_local_filesystem_storage(v2_dir.path()).await?;
+    let v2_repo = Repository::create(
+        None,
+        Arc::clone(&v2_native),
+        Default::default(),
+        Some(SpecVersionBin::V2),
+        false,
+    )
+    .await?;
+    assert_eq!(v2_repo.spec_version(), SpecVersionBin::V2);
     assert_eq!(
-        fetch_branch_tip_v1(native.as_ref(), &native_settings, branch).await?,
-        RefData { snapshot: snap1.clone() }
-    );
-    assert!(list_branches(native.as_ref(), &native_settings).await?.contains(branch));
-    update_branch(native.as_ref(), &native_settings, branch, snap2.clone(), Some(&snap1))
-        .await?;
-    assert_eq!(
-        fetch_branch_tip_v1(native.as_ref(), &native_settings, branch).await?,
-        RefData { snapshot: snap2 }
+        v2_repo.storage().storage_info().backend_type,
+        "local filesystem (native)"
     );
 
-    // One-directional: a name the old backend would have encoded, written raw by
-    // the native backend, is NOT found by the old backend (which looks for the
-    // encoded spelling). Such repos must be read with a current icechunk.
-    let native_only = "native-only-\u{fc}ber";
-    create_tag(native.as_ref(), &native_settings, native_only, SnapshotId::random())
-        .await?;
-    assert!(matches!(
-        fetch_tag(legacy.as_ref(), &legacy_settings, native_only).await,
-        Err(ICError { kind: RefErrorKind::RefNotFound(_), .. })
-    ));
+    let v2_reopened = Repository::open(
+        None,
+        new_local_filesystem_storage(v2_dir.path()).await?,
+        Default::default(),
+    )
+    .await?;
+    assert_eq!(v2_reopened.spec_version(), SpecVersionBin::V2);
+    assert_eq!(
+        v2_reopened.storage().storage_info().backend_type,
+        "local filesystem (native)"
+    );
 
     Ok(())
 }

@@ -53,8 +53,9 @@ def write_array(store: Any, values: list[int]) -> None:
 
 
 def test_dev_native_reads_and_extends_v1_repo(tmp_path: Path) -> None:
-    """A repo written by icechunk 1.x opens under the native backend, and the
-    dev version can read it and commit on top of its history."""
+    """A repo written by icechunk 1.x is spec version 1, so the dev version
+    routes it to the legacy object_store backend, reads it, and commits on top
+    of its history. The native backend serves spec version 2 repositories only."""
     path = str(tmp_path)
 
     v1_repo = ic_v1.Repository.create(storage=ic_v1.local_filesystem_storage(path))
@@ -65,7 +66,7 @@ def test_dev_native_reads_and_extends_v1_repo(tmp_path: Path) -> None:
     session.commit("v1 commit")
 
     dev_repo = ic.Repository.open(ic.local_filesystem_storage(path))
-    assert repr(dev_repo.storage).splitlines()[1] == "type: local filesystem (native)"
+    assert repr(dev_repo.storage).splitlines()[1] == "type: local filesystem"
 
     assert read_array(dev_repo.readonly_session("main").store) == [1, 2, 3, 4]
 
@@ -81,10 +82,9 @@ def test_dev_native_reads_and_extends_v1_repo(tmp_path: Path) -> None:
 
 
 def test_v1_reads_and_extends_dev_native_repo(tmp_path: Path) -> None:
-    """A repo written by the dev native backend opens under icechunk 1.x, which
-    can read it and commit on top; the dev version then reads 1.x's commit.
-
-    This proves the native backend writes a spec-compatible on-disk layout.
+    """The dev version creating a spec version 1 repo routes to the legacy
+    object_store backend, which writes the v1 on-disk layout. icechunk 1.x opens
+    it, reads it, and commits on top; the dev version then reads 1.x's commit.
     """
     path = str(tmp_path)
 

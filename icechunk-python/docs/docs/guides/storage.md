@@ -299,7 +299,9 @@ Icechunk can also be used on a [local filesystem](../reference/storage.md#icechu
 
 #### Concurrent commits
 
-Filesystem storage supports safe concurrent commits. A branch-tip update is a compare-and-swap serialized through a lock file next to the ref, so two sessions committing at the same time can no longer silently lose one of the commits.
+Spec version 2 filesystem repositories support safe concurrent commits. A branch-tip update is a compare-and-swap serialized through a lock file next to the ref, so two sessions committing at the same time can no longer silently lose one of the commits.
+
+Spec version 1 repositories on a local filesystem keep the previous limitation: they are served by the older `object_store` backend and are **not** safe for concurrent commits — if two sessions commit at the same time, one commit can be silently lost. Migrating the repository to spec version 2 enables safe concurrent commits.
 
 !!! warning
     Safety relies on the filesystem providing atomic exclusive file creation and atomic rename. This holds on local disks and on properly configured network filesystems, but not universally:
