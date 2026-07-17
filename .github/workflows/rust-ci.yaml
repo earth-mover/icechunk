@@ -37,8 +37,6 @@ jobs:
     runs-on: ${{ matrix.os }}
     permissions:
       contents: read
-      pull-requests: write # octocov posts the PR coverage comment
-      actions: read # octocov reads the artifact-datastore coverage baseline
     env:
       coverage: ${{ matrix.os == 'ubuntu-latest' }}
     defaults:
@@ -177,15 +175,6 @@ jobs:
           flags: rust
           name: rust-coverage
           fail_ci_if_error: false
-
-      # skipped on fork PRs: the read-only token can't post the PR comment
-      - name: Report coverage with octocov
-        if: ${{ matrix.os == 'ubuntu-latest' && (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) }}
-        uses: k1LoW/octocov-action@b3b6ee60482a667950f87553abf1df63217235d9 # v1.5.1
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-          # expanded into comment.message in .octocov.yml
-          PR_NUMBER: ${{ github.event.pull_request.number }}
 
   shuttle:
     name: Shuttle concurrency tests

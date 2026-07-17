@@ -91,26 +91,6 @@
         # Use Python 3.12 from nixpkgs
         python = pkgs.python312;
 
-        # Coverage report viewer; not packaged in nixpkgs.
-        octocov = pkgs.buildGoModule rec {
-          pname = "octocov";
-          version = "0.75.8";
-          src = pkgs.fetchFromGitHub {
-            owner = "k1LoW";
-            repo = "octocov";
-            tag = "v${version}";
-            hash = "sha256-OTNCTGHwoKkMIJnjUjT8Lf9/B/rMmZEQhNwZOTc0cck=";
-          };
-          vendorHash = "sha256-SghD8aeJ0b7GuEfnPW1nu7qUOc9YJkyGNbaCwk3cYvs=";
-          subPackages = ["."];
-          ldflags = [
-            "-s"
-            "-w"
-          ];
-          # Tests talk to the GitHub API.
-          doCheck = false;
-        };
-
         # Rust toolchain plus the wasm32-wasip1-threads std for `just wasm-build`.
         rustToolchain = fenix.packages.${system}.combine [
           fenix.packages.${system}.stable.toolchain
@@ -171,7 +151,6 @@
                   pkgs.cargo-msrv
                   pkgs.cargo-machete
                   pkgs.cargo-llvm-cov
-                  octocov
 
                   pkgs.taplo # toml lsp server
                   pkgs.awscli2

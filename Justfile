@@ -678,15 +678,6 @@ coverage-stash name:
   mv icechunk-python/.coverage icechunk-python/.coverage-fragments/.coverage.{{name}}
 
 [group('coverage')]
-[script]
-[doc("View per-file coverage from the coverage-report output with octocov")]
-coverage-view *args:
-  octocov ls-files --report coverage_rust.lcov "$@" | grep -v '<WORKSPACE>'
-  if [ -f coverage_python.lcov ]; then
-    octocov ls-files --report coverage_python.lcov "$@"
-  fi
-
-[group('coverage')]
 [doc("Delete coverage artifacts (profraw, lcov, .coverage)")]
 coverage-clean:
   find . -iname "*.profraw" -delete

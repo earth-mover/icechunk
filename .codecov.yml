@@ -22,5 +22,8 @@ ignore:
   - "**/*test*.rs"
   - "design-docs/"
 
-# octocov posts the PR coverage comment; codecov stays dashboard-only
-comment: false
+comment:
+  # flags surfaces the rust/python split; diff shows patch coverage
+  layout: "condensed_header, diff, flags, condensed_files"
+  behavior: default
+  require_changes: false

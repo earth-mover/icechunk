@@ -956,7 +956,6 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zlib-1.3.2-hbb4bfdb_2.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zstd-1.5.7-h3eecb57_6.conda
       - conda: https://prefix.dev/github-releases/osx-64/cargo-release-1.1.2-h0dc7051_0.conda
-      - conda: https://prefix.dev/github-releases/osx-64/octocov-0.75.9-h0dc7051_0.conda
       - pypi: git+https://github.com/ianhi/hypothesis.git?subdirectory=hypothesis-python&rev=flaky-feedback#441e096b6a170148630466f7837faeaaa2c51106
       - pypi: https://files.pythonhosted.org/packages/00/c0/8f5d070730d7836adc9c9b6408dec68c6ced86b304a9b26a14df072a6e8c/traitlets-5.14.3-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/02/10/5da547df7a391dcde17f59520a231527b8571e6f46fc8efb02ccb370ab12/docutils-0.22.4-py3-none-any.whl
@@ -1284,7 +1283,6 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zlib-1.3.2-h8088a28_2.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-hbf9d68e_6.conda
       - conda: https://prefix.dev/github-releases/osx-arm64/cargo-release-1.1.2-h60d57d3_0.conda
-      - conda: https://prefix.dev/github-releases/osx-arm64/octocov-0.75.9-h60d57d3_0.conda
       - pypi: git+https://github.com/ianhi/hypothesis.git?subdirectory=hypothesis-python&rev=flaky-feedback#441e096b6a170148630466f7837faeaaa2c51106
       - pypi: https://files.pythonhosted.org/packages/00/c0/8f5d070730d7836adc9c9b6408dec68c6ced86b304a9b26a14df072a6e8c/traitlets-5.14.3-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/02/10/5da547df7a391dcde17f59520a231527b8571e6f46fc8efb02ccb370ab12/docutils-0.22.4-py3-none-any.whl
@@ -1612,7 +1610,6 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/sysroot_linux-64-2.34-h087de78_3.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/tzdata-2025c-hc9c84f9_1.conda
       - conda: https://prefix.dev/github-releases/linux-64/cargo-release-1.1.2-hb0f4dca_0.conda
-      - conda: https://prefix.dev/github-releases/linux-64/octocov-0.75.9-hb0f4dca_0.conda
       - pypi: git+https://github.com/ianhi/hypothesis.git?subdirectory=hypothesis-python&rev=flaky-feedback#441e096b6a170148630466f7837faeaaa2c51106
       - pypi: https://files.pythonhosted.org/packages/00/94/69391af5396c6aab723932240803f49e5f3de3dd7c57d32f02d237a0ce32/maturin-1.13.1-py3-none-manylinux_2_12_x86_64.manylinux2010_x86_64.musllinux_1_1_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/00/c0/8f5d070730d7836adc9c9b6408dec68c6ced86b304a9b26a14df072a6e8c/traitlets-5.14.3-py3-none-any.whl
@@ -1940,7 +1937,6 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/sysroot_linux-aarch64-2.34-h96c1060_3.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/tzdata-2025c-hc9c84f9_1.conda
       - conda: https://prefix.dev/github-releases/linux-aarch64/cargo-release-1.1.2-he8cfe8b_0.conda
-      - conda: https://prefix.dev/github-releases/linux-aarch64/octocov-0.75.9-he8cfe8b_0.conda
       - pypi: git+https://github.com/ianhi/hypothesis.git?subdirectory=hypothesis-python&rev=flaky-feedback#441e096b6a170148630466f7837faeaaa2c51106
       - pypi: https://files.pythonhosted.org/packages/00/c0/8f5d070730d7836adc9c9b6408dec68c6ced86b304a9b26a14df072a6e8c/traitlets-5.14.3-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/02/10/5da547df7a391dcde17f59520a231527b8571e6f46fc8efb02ccb370ab12/docutils-0.22.4-py3-none-any.whl
@@ -2242,7 +2238,6 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/win-64/vs2022_win-64-19.44.35207-ha74f236_34.conda
       - conda: https://conda.anaconda.org/conda-forge/win-64/zstd-1.5.7-h534d264_6.conda
       - conda: https://prefix.dev/github-releases/win-64/cargo-release-1.1.2-h9490d1a_0.conda
-      - conda: https://prefix.dev/github-releases/win-64/octocov-0.75.9-h9490d1a_0.conda
       - pypi: git+https://github.com/ianhi/hypothesis.git?subdirectory=hypothesis-python&rev=flaky-feedback#441e096b6a170148630466f7837faeaaa2c51106
       - pypi: https://files.pythonhosted.org/packages/00/c0/8f5d070730d7836adc9c9b6408dec68c6ced86b304a9b26a14df072a6e8c/traitlets-5.14.3-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/02/10/5da547df7a391dcde17f59520a231527b8571e6f46fc8efb02ccb370ab12/docutils-0.22.4-py3-none-any.whl
@@ -2561,7 +2556,6 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zlib-1.3.2-hbb4bfdb_2.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zstd-1.5.7-h3eecb57_6.conda
       - conda: https://prefix.dev/github-releases/osx-64/cargo-release-1.1.2-h0dc7051_0.conda
-      - conda: https://prefix.dev/github-releases/osx-64/octocov-0.75.9-h0dc7051_0.conda
       - pypi: git+https://github.com/ianhi/hypothesis.git?subdirectory=hypothesis-python&rev=flaky-feedback#441e096b6a170148630466f7837faeaaa2c51106
       - pypi: https://files.pythonhosted.org/packages/00/5e/17398df3a139985ba9d11ed072531986f408c8fca952835ef1ab1820c02b/charset_normalizer-3.4.9-cp314-cp314t-macosx_10_15_universal2.whl
       - pypi: https://files.pythonhosted.org/packages/02/be/5d2d47b1fb58943194fb59dcf222f7c4e35122ec0ffe8c36e18b5d728f0b/tblib-3.2.2-py3-none-any.whl
@@ -2749,7 +2743,6 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zlib-1.3.2-h8088a28_2.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-hbf9d68e_6.conda
       - conda: https://prefix.dev/github-releases/osx-arm64/cargo-release-1.1.2-h60d57d3_0.conda
-      - conda: https://prefix.dev/github-releases/osx-arm64/octocov-0.75.9-h60d57d3_0.conda
       - pypi: git+https://github.com/ianhi/hypothesis.git?subdirectory=hypothesis-python&rev=flaky-feedback#441e096b6a170148630466f7837faeaaa2c51106
       - pypi: https://files.pythonhosted.org/packages/00/5e/17398df3a139985ba9d11ed072531986f408c8fca952835ef1ab1820c02b/charset_normalizer-3.4.9-cp314-cp314t-macosx_10_15_universal2.whl
       - pypi: https://files.pythonhosted.org/packages/02/be/5d2d47b1fb58943194fb59dcf222f7c4e35122ec0ffe8c36e18b5d728f0b/tblib-3.2.2-py3-none-any.whl
@@ -2933,7 +2926,6 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/sysroot_linux-64-2.34-h087de78_3.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/tzdata-2025c-hc9c84f9_1.conda
       - conda: https://prefix.dev/github-releases/linux-64/cargo-release-1.1.2-hb0f4dca_0.conda
-      - conda: https://prefix.dev/github-releases/linux-64/octocov-0.75.9-hb0f4dca_0.conda
       - pypi: git+https://github.com/ianhi/hypothesis.git?subdirectory=hypothesis-python&rev=flaky-feedback#441e096b6a170148630466f7837faeaaa2c51106
       - pypi: https://files.pythonhosted.org/packages/02/be/5d2d47b1fb58943194fb59dcf222f7c4e35122ec0ffe8c36e18b5d728f0b/tblib-3.2.2-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/03/41/4b9c02f99e4c5fb477122cd5437403b552873f014616ac1d19ac8221a58d/google_crc32c-1.8.0.tar.gz
@@ -3119,7 +3111,6 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/sysroot_linux-aarch64-2.34-h96c1060_3.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/tzdata-2025c-hc9c84f9_1.conda
       - conda: https://prefix.dev/github-releases/linux-aarch64/cargo-release-1.1.2-he8cfe8b_0.conda
-      - conda: https://prefix.dev/github-releases/linux-aarch64/octocov-0.75.9-he8cfe8b_0.conda
       - pypi: git+https://github.com/ianhi/hypothesis.git?subdirectory=hypothesis-python&rev=flaky-feedback#441e096b6a170148630466f7837faeaaa2c51106
       - pypi: https://files.pythonhosted.org/packages/00/69/950cf404de7b8782cf95e5c1237e25e2aa46177b287f39f9eeddf481fd6f/ast_serialize-0.6.0-cp314-cp314t-manylinux_2_17_aarch64.manylinux2014_aarch64.whl
       - pypi: https://files.pythonhosted.org/packages/02/be/5d2d47b1fb58943194fb59dcf222f7c4e35122ec0ffe8c36e18b5d728f0b/tblib-3.2.2-py3-none-any.whl
@@ -3292,7 +3283,6 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/win-64/vs2022_win-64-19.44.35207-ha74f236_39.conda
       - conda: https://conda.anaconda.org/conda-forge/win-64/zstd-1.5.7-h534d264_6.conda
       - conda: https://prefix.dev/github-releases/win-64/cargo-release-1.1.2-h9490d1a_0.conda
-      - conda: https://prefix.dev/github-releases/win-64/octocov-0.75.9-h9490d1a_0.conda
       - pypi: git+https://github.com/ianhi/hypothesis.git?subdirectory=hypothesis-python&rev=flaky-feedback#441e096b6a170148630466f7837faeaaa2c51106
       - pypi: https://files.pythonhosted.org/packages/02/be/5d2d47b1fb58943194fb59dcf222f7c4e35122ec0ffe8c36e18b5d728f0b/tblib-3.2.2-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/03/41/4b9c02f99e4c5fb477122cd5437403b552873f014616ac1d19ac8221a58d/google_crc32c-1.8.0.tar.gz
@@ -14724,12 +14714,6 @@ packages:
   run_exports: {}
   size: 3287139
   timestamp: 1774451364182
-- conda: https://prefix.dev/github-releases/linux-64/octocov-0.75.9-hb0f4dca_0.conda
-  sha256: 8242603a7da290fbfd8195d2440b1c26b2e2c0942e4fa30bb854cfab69cf64e9
-  md5: f2107997b2c76374c79ad1a3bbbe4f03
-  run_exports: {}
-  size: 19004769
-  timestamp: 1783569828363
 - conda: https://prefix.dev/github-releases/linux-aarch64/cargo-release-1.1.2-he8cfe8b_0.conda
   sha256: 81bd4bc36fa7589b85626ba5668aa35e4596ff18c2f2bc8bf892f963b2172853
   md5: c8ac5d0027844aea48abde34b78641f3
@@ -14737,12 +14721,6 @@ packages:
   run_exports: {}
   size: 3202801
   timestamp: 1774451372832
-- conda: https://prefix.dev/github-releases/linux-aarch64/octocov-0.75.9-he8cfe8b_0.conda
-  sha256: 7103349355fb71d021792bbb2a1869e1c3badb0465a1b08c291c0b33ecec1fab
-  md5: 0ba8f54ca5debd3793fe23281defa851
-  run_exports: {}
-  size: 17254585
-  timestamp: 1783569804687
 - conda: https://prefix.dev/github-releases/osx-64/cargo-release-1.1.2-h0dc7051_0.conda
   sha256: 85b9f170de072e5b6783dce93c608502cb6121f674f51427f4be93fb4dfc56a9
   md5: 2e65921478f6bada59b567278f84d5c2
@@ -14750,12 +14728,6 @@ packages:
   run_exports: {}
   size: 2910405
   timestamp: 1774451387418
-- conda: https://prefix.dev/github-releases/osx-64/octocov-0.75.9-h0dc7051_0.conda
-  sha256: b964763a128cd7ff1af811d8c88b6bb2aed7296f58e6865cf8189500efb51593
-  md5: 95e585646511e57dc17a8b1d21db3b42
-  run_exports: {}
-  size: 19203686
-  timestamp: 1783569778475
 - conda: https://prefix.dev/github-releases/osx-arm64/cargo-release-1.1.2-h60d57d3_0.conda
   sha256: e43b3e7fc755f284ecf73dd68a2c6278ff075c7455b0885d8ebb3eec1b744075
   md5: bdc5b269647759710f5977c1e36cf2dc
@@ -14763,12 +14735,6 @@ packages:
   run_exports: {}
   size: 2712307
   timestamp: 1774451350005
-- conda: https://prefix.dev/github-releases/osx-arm64/octocov-0.75.9-h60d57d3_0.conda
-  sha256: ddb4f9a76dbdf013ce79b06b52ac36f63c48cbd6aa5235fad7fb9198cdbe1601
-  md5: 7162a3c718ccef72d95c1fe4033c06ab
-  run_exports: {}
-  size: 18080219
-  timestamp: 1783569792555
 - conda: https://prefix.dev/github-releases/win-64/cargo-release-1.1.2-h9490d1a_0.conda
   sha256: d9c392c55de54b3b8068fcec84ab5b122c58b5135e0ed7ab2a65dbf4fffa7281
   md5: 671accfc3adcb00a0fa84fce7b2fb0b5
@@ -14776,12 +14742,6 @@ packages:
   run_exports: {}
   size: 3077528
   timestamp: 1774451380025
-- conda: https://prefix.dev/github-releases/win-64/octocov-0.75.9-h9490d1a_0.conda
-  sha256: 464678aaf4e6b9d800d85d3947428009a308151cb0ad5884e0ab75c422ae657a
-  md5: 136cd41a0e4e2580495c37512c14e9c4
-  run_exports: {}
-  size: 19062212
-  timestamp: 1783569841153
 - pypi: git+https://github.com/ianhi/hypothesis.git?subdirectory=hypothesis-python&rev=flaky-feedback#441e096b6a170148630466f7837faeaaa2c51106
   name: hypothesis
   version: 6.151.9
