@@ -399,6 +399,16 @@ async fn garbage_collect_one_attempt(
         return Ok(GCSummary::default());
     }
 
+    // Reclaim transient files (staging/lock leftovers from interrupted writers).
+    // A no-op on object stores; best-effort, so a failure here never fails GC.
+    if let Err(err) = asset_manager
+        .storage()
+        .sweep_transient_files(asset_manager.storage_settings())
+        .await
+    {
+        tracing::warn!(error = %err, "sweeping transient files failed; continuing GC");
+    }
+
     info!("Finding GC roots");
     let snap_deadline =
         if let Action::DeleteIfCreatedBefore(date_time) = config.dangling_snapshots {

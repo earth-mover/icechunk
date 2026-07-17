@@ -501,6 +501,15 @@ pub trait Storage: fmt::Debug + Display + sealed::Sealed + Sync + Send {
         Ok(())
     }
 
+    /// Remove transient files left behind by interrupted writers (e.g. the
+    /// staging and lock files a local filesystem backend writes next to objects).
+    /// Called opportunistically during garbage collection. Object stores have no
+    /// such files — a put is atomic and leaves nothing partial — so the default
+    /// is a no-op.
+    async fn sweep_transient_files(&self, _settings: &Settings) -> StorageResult<()> {
+        Ok(())
+    }
+
     async fn get_object(
         &self,
         settings: &Settings,
