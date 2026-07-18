@@ -12,6 +12,7 @@ use futures::{
     stream::{self, BoxStream},
 };
 use http::header::{HeaderName, HeaderValue};
+use icechunk_storage::fast_list::{self, ListPageFetcher};
 #[cfg(feature = "s3")]
 use icechunk_storage::s3_config::{S3Credentials, S3Options};
 use icechunk_storage::strip_quotes;
@@ -63,6 +64,9 @@ use tokio::sync::{OnceCell, RwLock};
 use tokio_util::io::StreamReader;
 use tracing::instrument;
 use url::Url;
+
+#[cfg(feature = "gcs")]
+mod gcs_fast_list;
 
 /// Whether a storage operation reads from or writes to the object store.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -671,6 +675,44 @@ impl Storage for ObjectStorage {
         Ok(stream.boxed())
     }
 
+    /// The portable default drains [`Self::list_objects`]; when the backend
+    /// vends a raw-prefix fast lister, delegate to the shared engine over the
+    /// exact key set the portable path would list. `object_store` evaluates a
+    /// list prefix on a path-segment basis (it sends the raw prefix
+    /// `{path}/`), so the non-shardable call passes the trailing slash itself,
+    /// while the shardable probe and fan-out append it inside the engine. An
+    /// empty path would need "list everything" semantics the engine's probe
+    /// does not have, so it stays on the portable path.
+    #[instrument(skip(self, settings))]
+    async fn sum_object_sizes(
+        &self,
+        settings: &Settings,
+        prefix: &str,
+        shardable: bool,
+    ) -> StorageResult<u64> {
+        let path = ObjectPath::from(format!("{}/{}", self.backend.prefix(), prefix));
+        let key_prefix = path.as_ref();
+        if !key_prefix.is_empty()
+            && let Some(fetcher) = self.backend.fast_list_fetcher().await?
+        {
+            let base_prefix =
+                if shardable { key_prefix.to_string() } else { format!("{key_prefix}/") };
+            return fast_list::sum(
+                fetcher,
+                &base_prefix,
+                shardable,
+                u32::from(settings.retries().max_tries().get()),
+            )
+            .await;
+        }
+        let mut objects = self.list_objects(settings, prefix).await?;
+        let mut sum = 0u64;
+        while let Some(info) = objects.next().await {
+            sum = sum.saturating_add(info?.size_bytes);
+        }
+        Ok(sum)
+    }
+
     #[instrument(skip(self, batch))]
     async fn delete_batch(
         &self,
@@ -809,6 +851,7 @@ impl ObjectStorage {
     }
 }
 
+#[async_trait]
 #[typetag::serde(tag = "object_store_provider_type")]
 pub trait ObjectStoreBackend: Debug + Display + Sync + Send {
     /// Build the underlying `object_store` client for the given `role`.
@@ -820,6 +863,16 @@ pub trait ObjectStoreBackend: Debug + Display + Sync + Send {
         settings: &Settings,
         role: Role,
     ) -> Result<Arc<dyn ObjectStore>, StorageError>;
+
+    /// Experimental: a raw-prefix list-page fetcher for the
+    /// [`Storage::sum_object_sizes`] fast path, when this backend's current
+    /// configuration supports one exactly. `None` (the default) keeps the
+    /// portable `list_objects` drain. Credentials are resolved afresh on every
+    /// call so token rotation keeps working.
+    #[doc(hidden)]
+    async fn fast_list_fetcher(&self) -> StorageResult<Option<Arc<dyn ListPageFetcher>>> {
+        Ok(None)
+    }
 
     /// Whether this backend's read and write header sets differ.
     ///
@@ -1392,8 +1445,47 @@ impl Display for GcsObjectStoreBackend {
 }
 
 #[cfg(feature = "gcs")]
+#[async_trait]
 #[typetag::serde(name = "gcs_object_store_provider")]
 impl ObjectStoreBackend for GcsObjectStoreBackend {
+    /// Engage the JSON-API fast lister only for configurations it can honor
+    /// exactly: anonymous or bearer-token credentials (static or refreshable,
+    /// the latter re-fetched here per call like icechunk-s3's
+    /// `resolve_list_credentials`), a config that is empty or carries only a
+    /// mappable custom endpoint (plus `AllowHttp`, which `reqwest` already
+    /// permits), and no extra read headers. `FromEnv` and service-account
+    /// credentials would require minting OAuth tokens, so they fall back to
+    /// the portable listing.
+    async fn fast_list_fetcher(&self) -> StorageResult<Option<Arc<dyn ListPageFetcher>>> {
+        if !self.extra_read_headers.is_empty() {
+            return Ok(None);
+        }
+        let mut endpoint: Option<&str> = None;
+        for (key, value) in self.config.iter().flatten() {
+            match key {
+                GoogleConfigKey::BaseUrl => endpoint = Some(value),
+                GoogleConfigKey::Client(ClientConfigKey::AllowHttp) => {}
+                _ => return Ok(None),
+            }
+        }
+        let bearer = match &self.credentials {
+            Some(GcsCredentials::Anonymous) => None,
+            Some(GcsCredentials::Static(GcsStaticCredentials::BearerToken(cred))) => {
+                Some(cred.bearer.clone())
+            }
+            Some(GcsCredentials::Refreshable(fetcher)) => {
+                let cred = fetcher.get().await.map_err(|e| {
+                    other_error(format!("fetching refreshable GCS credentials: {e}"))
+                })?;
+                Some(cred.bearer)
+            }
+            None | Some(GcsCredentials::FromEnv | GcsCredentials::Static(_)) => {
+                return Ok(None);
+            }
+        };
+        gcs_fast_list::make_fetcher(endpoint, &self.bucket, bearer).map(Some)
+    }
+
     fn storage_info(&self) -> StorageInfo {
         let mut fields = vec![("bucket", self.bucket.clone())];
         if let Some(prefix) = &self.prefix {
@@ -1934,6 +2026,123 @@ mod s3_header_tests {
         let back: S3ObjectStoreBackend = serde_json::from_str(&json).unwrap();
         assert_eq!(back.extra_write_headers, with.extra_write_headers);
         assert!(back.extra_read_headers.is_empty());
+    }
+}
+
+#[cfg(all(test, feature = "gcs"))]
+mod gcs_fast_path_tests {
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    use async_trait::async_trait;
+    use icechunk_macros::tokio_test;
+    use object_store::{ClientConfigKey, gcp::GoogleConfigKey};
+
+    use super::{
+        GcsBearerCredential, GcsCredentials, GcsCredentialsFetcher,
+        GcsObjectStoreBackend, GcsStaticCredentials, ObjectStoreBackend as _,
+    };
+
+    #[derive(Debug, serde::Serialize, serde::Deserialize)]
+    struct FixedFetcher;
+
+    #[async_trait]
+    #[typetag::serde]
+    impl GcsCredentialsFetcher for FixedFetcher {
+        async fn get(&self) -> Result<GcsBearerCredential, String> {
+            Ok(GcsBearerCredential { bearer: "tok".to_string(), expires_after: None })
+        }
+    }
+
+    fn backend(
+        credentials: Option<GcsCredentials>,
+        config: Option<HashMap<GoogleConfigKey, String>>,
+    ) -> GcsObjectStoreBackend {
+        GcsObjectStoreBackend {
+            bucket: "b".to_string(),
+            prefix: Some("p".to_string()),
+            credentials,
+            config,
+            extra_read_headers: vec![],
+            extra_write_headers: vec![],
+        }
+    }
+
+    async fn engages(b: &GcsObjectStoreBackend) -> bool {
+        #[expect(clippy::expect_used)]
+        b.fast_list_fetcher().await.expect("must not error").is_some()
+    }
+
+    #[tokio_test]
+    async fn test_fast_lister_engages_for_supported_credentials() {
+        let bearer = GcsCredentials::Static(GcsStaticCredentials::BearerToken(
+            GcsBearerCredential { bearer: "tok".to_string(), expires_after: None },
+        ));
+        assert!(engages(&backend(Some(bearer), None)).await);
+        assert!(engages(&backend(Some(GcsCredentials::Anonymous), None)).await);
+        assert!(
+            engages(&backend(
+                Some(GcsCredentials::Refreshable(Arc::new(FixedFetcher))),
+                None
+            ))
+            .await
+        );
+    }
+
+    #[tokio_test]
+    async fn test_fast_lister_falls_back_for_oauth_credentials() {
+        assert!(!engages(&backend(None, None)).await);
+        assert!(!engages(&backend(Some(GcsCredentials::FromEnv), None)).await);
+        assert!(
+            !engages(&backend(
+                Some(GcsCredentials::Static(GcsStaticCredentials::ServiceAccountKey(
+                    "k".to_string()
+                ))),
+                None
+            ))
+            .await
+        );
+    }
+
+    #[tokio_test]
+    async fn test_fast_lister_honors_endpoint_and_rejects_unknown_config() {
+        let anon = || Some(GcsCredentials::Anonymous);
+        let cfg = |entries: &[(GoogleConfigKey, &str)]| {
+            Some(
+                entries
+                    .iter()
+                    .map(|(k, v)| (*k, (*v).to_string()))
+                    .collect::<HashMap<_, _>>(),
+            )
+        };
+        assert!(
+            engages(&backend(
+                anon(),
+                cfg(&[
+                    (GoogleConfigKey::BaseUrl, "http://localhost:4443"),
+                    (GoogleConfigKey::Client(ClientConfigKey::AllowHttp), "true"),
+                ])
+            ))
+            .await
+        );
+        assert!(
+            !engages(&backend(anon(), cfg(&[(GoogleConfigKey::SkipSignature, "true")])))
+                .await
+        );
+        assert!(
+            !engages(&backend(
+                anon(),
+                cfg(&[(GoogleConfigKey::Client(ClientConfigKey::ProxyUrl), "http://p")])
+            ))
+            .await
+        );
+    }
+
+    #[tokio_test]
+    async fn test_fast_lister_falls_back_on_extra_read_headers() {
+        let mut b = backend(Some(GcsCredentials::Anonymous), None);
+        b.extra_read_headers = vec![("x-goog-meta-a".to_string(), "1".to_string())];
+        assert!(!engages(&b).await);
     }
 }
 

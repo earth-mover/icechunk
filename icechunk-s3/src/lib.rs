@@ -471,13 +471,7 @@ impl S3Storage {
             .or_else(|| self.config.region.clone())
             .unwrap_or_else(|| "us-east-1".to_string());
         let creds = self.resolve_list_credentials().await?;
-        SignedLister::new(
-            &self.config,
-            &self.bucket,
-            region,
-            creds,
-            settings.retries().max_tries().get() as u32,
-        )
+        SignedLister::new(&self.config, &self.bucket, region, creds)
     }
 
     async fn resolve_list_credentials(
@@ -1032,7 +1026,13 @@ impl Storage for S3Storage {
         let layout = self.layout(settings).await?;
         let base_prefix = self.list_prefix(layout, prefix);
         let lister = Arc::new(self.make_signed_lister(settings).await?);
-        lister.sum(&base_prefix, shardable).await
+        icechunk_storage::fast_list::sum(
+            lister,
+            &base_prefix,
+            shardable,
+            u32::from(settings.retries().max_tries().get()),
+        )
+        .await
     }
 
     #[instrument(skip(self, batch))]

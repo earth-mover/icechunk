@@ -1,3 +1,5 @@
+#[doc(hidden)]
+pub mod fast_list;
 pub mod s3_config;
 mod storage;
 
