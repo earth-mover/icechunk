@@ -2929,6 +2929,7 @@ mod tests {
 
     #[tokio_test]
     #[apply(spec_version_cases)]
+    // ic[verify manifest.content]
     async fn tests_manifest_splitting_simple(
         #[case] spec_version: SpecVersionBin,
     ) -> Result<(), Box<dyn Error>> {
@@ -3756,6 +3757,7 @@ mod tests {
     /// than what we allow for preload (via config).
     ///
     /// We verify only the correct two arrays are preloaded
+    // ic[verify repo.entry-point]
     async fn test_manifest_preload_known_manifests(
         #[case] spec_version: SpecVersionBin,
     ) -> Result<(), Box<dyn Error>> {

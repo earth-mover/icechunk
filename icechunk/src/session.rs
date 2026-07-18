@@ -4259,6 +4259,7 @@ mod tests {
     // ic[verify repo.update.backup]
     // ic[verify algo.read.from-snapshot]
     // ic[verify algo.read.from-branch]
+    // ic[verify snapshot.describes-state]
     async fn test_repository_with_updates_and_writes(
         #[case] spec_version: SpecVersionBin,
     ) -> Result<(), Box<dyn Error>> {

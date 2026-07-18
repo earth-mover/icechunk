@@ -213,6 +213,8 @@ async fn read_chunk0(repo: &Repository) -> Result<i8, Box<dyn std::error::Error>
 /// Direct fix for #2239: an empty-prefix repository must write clean keys, never
 /// a leading slash.
 #[tokio_test]
+// ic[verify layout.root]
+// ic[verify repo.path]
 async fn empty_prefix_writes_clean_keys() -> Result<(), Box<dyn std::error::Error>> {
     // Run against both spec versions: they write different anchor files (V2 `repo`,
     // V1 `refs/...`), which are the keys the layout probe detects.

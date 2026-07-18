@@ -29,6 +29,10 @@ def mk_repo(spec_version: int | None) -> tuple[str, ic.Repository]:
     return (prefix, repo)
 
 
+# ic[verify layout.root]
+# ic[verify layout.paths]
+# ic[verify algo.write.steps]
+# ic[verify storage.ops.deletes]
 @pytest.mark.filterwarnings("ignore:datetime.datetime.utcnow")
 @pytest.mark.parametrize("use_async", [True, False])
 async def test_expire_and_gc(use_async: bool, any_spec_version: int | None) -> None:

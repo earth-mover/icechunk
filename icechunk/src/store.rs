@@ -1987,6 +1987,7 @@ mod tests {
     }
 
     #[tokio_test]
+    // ic[verify chunks.encoding]
     async fn test_chunk_set_and_get() -> Result<(), Box<dyn std::error::Error>> {
         // TODO: turn this test into pure Store operations once we support writes through Zarr
         let repo = create_memory_store_repository().await;

@@ -550,6 +550,7 @@ async fn test_file_virtual_ref_empty_segment_rejected_at_write()
 
 #[tokio_test]
 #[apply(spec_version_cases)]
+// ic[verify chunks.arrangements]
 async fn test_repository_with_local_virtual_refs(
     #[case] spec_version: SpecVersionBin,
 ) -> Result<(), Box<dyn Error>> {

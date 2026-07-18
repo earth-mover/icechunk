@@ -977,6 +977,7 @@ mod tests {
     );
 
     // ic[verify snapshot.describes-state]
+    // ic[verify snapshot.manifest-ref.coverage] per-array manifests list (id + extents) roundtrips
     #[icechunk_macros::test]
     fn test_get_node() -> Result<(), Box<dyn std::error::Error>> {
         let shape1 = ArrayShape::new(vec![(10u64, 3), (20, 2), (30, 1)]).unwrap();

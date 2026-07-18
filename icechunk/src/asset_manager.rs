@@ -1846,6 +1846,8 @@ mod test {
     use std::collections::HashMap;
 
     #[tokio_test]
+    // ic[verify manifest.path]
+    // ic[verify manifest.content]
     async fn test_caching_caches() -> Result<(), Box<dyn std::error::Error>> {
         let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
         let settings = storage::Settings::default();
@@ -2191,6 +2193,11 @@ mod test {
     /// Make an in-memory repo so every metadata file kind exists on storage,
     /// then exercise the `AssetManager` header-inspection API against them.
     #[tokio_test]
+    // ic[verify snapshot.path]
+    // ic[verify snapshot.format]
+    // ic[verify manifest.format]
+    // ic[verify txlog.format]
+    // ic[verify algo.write.steps]
     async fn test_header_methods() -> Result<(), Box<dyn std::error::Error>> {
         let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
         let repo = Repository::create(
@@ -2287,6 +2294,146 @@ mod test {
         let (_backup_info, _v, with_header) =
             am.fetch_repo_info_backup_with_header(backup_name).await?;
         assert_eq!(with_header, header);
+
+        Ok(())
+    }
+
+    // ic[verify repo.update.backup-path]
+    #[test]
+    fn test_backup_destination_naming() {
+        let first = backup_destination(REPO_INFO_FILE_PATH);
+
+        // `repo.` literal, then the reversed timestamp, then the random suffix
+        let parts: Vec<&str> = first.splitn(3, '.').collect();
+        assert_eq!(parts.len(), 3, "unexpected backup name {first}");
+        assert_eq!(parts[0], REPO_INFO_FILE_PATH);
+
+        // 3000-01-01T00:00:00 in unix millis, minus the current time
+        let anchor: u64 = 32503680000000;
+        let time_index: u64 = parts[1].parse().expect("timestamp segment not numeric");
+        let expected = anchor - Utc::now().timestamp_millis() as u64;
+        assert!(
+            time_index >= expected && time_index - expected < 60_000,
+            "timestamp segment {time_index} not near {expected}"
+        );
+
+        // 12 random bytes encoded as Crockford base 32: 20 chars, restricted alphabet
+        assert_eq!(parts[2].len(), 20, "random segment in {first}");
+        assert!(
+            parts[2].chars().all(|c| "0123456789ABCDEFGHJKMNPQRSTVWXYZ".contains(c)),
+            "random segment {} is not uppercase Crockford base 32",
+            parts[2]
+        );
+
+        // "last one first": later backups sort lexicographically before earlier ones
+        std::thread::sleep(Duration::from_millis(5));
+        let second = backup_destination(REPO_INFO_FILE_PATH);
+        assert!(
+            second.as_str() < first.as_str(),
+            "later backup {second} does not sort before earlier {first}"
+        );
+    }
+
+    // ic[verify storage.immutability] only the repo info file is ever written twice
+    // ic[verify repo.update.only-mutable]
+    // ic[verify layout.paths] every written key falls under the specced structure
+    #[tokio_test]
+    async fn test_only_repo_info_is_overwritten() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+        let logging = Arc::new(LoggingStorage::new(Arc::clone(&backend)));
+        let storage: Arc<dyn Storage + Send + Sync> = Arc::clone(&logging) as _;
+        let repo = Repository::create(
+            Some(RepositoryConfig {
+                // force chunk files and a short ops log so backups happen
+                inline_chunk_threshold_bytes: Some(0),
+                num_updates_per_repo_info_file: Some(1),
+                ..Default::default()
+            }),
+            storage,
+            HashMap::new(),
+            Some(SpecVersionBin::current()),
+            true,
+        )
+        .await?;
+
+        // A workflow that writes every metadata file type: three commits with
+        // real chunk files, plus a tag (a commit-less repo info update).
+        let mut session = repo.writable_session("main").await?;
+        session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
+        let array_path: Path = "/array".to_string().try_into().unwrap();
+        let shape = ArrayShape::new(vec![(4, 4)]).unwrap();
+        session
+            .add_array(
+                array_path.clone(),
+                shape,
+                Some(vec!["t".into()]),
+                Bytes::from_static(b"{}"),
+            )
+            .await?;
+        let mut snap_id = None;
+        for i in 0i8..3 {
+            let payload =
+                session.get_chunk_writer()?(Bytes::copy_from_slice(&i.to_be_bytes()))
+                    .await?;
+            session
+                .set_chunk_ref(array_path.clone(), ChunkIndices(vec![0]), Some(payload))
+                .await?;
+            snap_id = Some(
+                session
+                    .commit(format!("commit {i}"))
+                    .max_concurrent_nodes(8)
+                    .execute()
+                    .await?,
+            );
+            session = repo.writable_session("main").await?;
+        }
+        repo.create_tag("v1", &snap_id.expect("committed")).await?;
+
+        let puts: Vec<String> = logging
+            .fetch_operations()
+            .into_iter()
+            .filter(|(op, _)| op == "put_object")
+            .map(|(_, path)| path)
+            .collect();
+
+        // Immutability: the repo info file is the only object written more than
+        // once; every other object is written exactly once and never modified.
+        let mut counts: HashMap<&str, usize> = HashMap::new();
+        for path in &puts {
+            *counts.entry(path.as_str()).or_default() += 1;
+        }
+        let repo_info_writes = counts.remove(REPO_INFO_FILE_PATH).unwrap_or(0);
+        assert!(
+            repo_info_writes >= 4,
+            "expected create + 3 commits + tag to rewrite `repo`, saw {repo_info_writes}"
+        );
+        for (path, count) in counts {
+            assert_eq!(count, 1, "immutable object {path} was written {count} times");
+        }
+
+        // Layout: every key is the repo info file or lives under a specced prefix.
+        let prefixes = [
+            format!("{SNAPSHOTS_FILE_PATH}/"),
+            format!("{MANIFESTS_FILE_PATH}/"),
+            format!("{TRANSACTION_LOGS_FILE_PATH}/"),
+            format!("{CHUNKS_FILE_PATH}/"),
+            format!("{OVERWRITTEN_FILES_PATH}/"),
+        ];
+        for path in &puts {
+            assert!(
+                path == REPO_INFO_FILE_PATH
+                    || prefixes.iter().any(|p| path.starts_with(p.as_str())),
+                "key {path} written outside the required directory structure"
+            );
+        }
+        // ... and the workflow exercised each metadata prefix.
+        for prefix in &prefixes[..4] {
+            assert!(
+                puts.iter().any(|p| p.starts_with(prefix.as_str())),
+                "no object written under {prefix}"
+            );
+        }
 
         Ok(())
     }

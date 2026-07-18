@@ -1494,6 +1494,9 @@ mod tests {
         Ok(())
     }
 
+    // ic[verify manifest.chunk-ref.native] chunk_id + offset + length payload roundtrips
+    // ic[verify manifest.chunk-ref.inline] inline payload roundtrips
+    // ic[verify manifest.content] coordinate → chunk-ref mapping across all payload variants
     #[tokio_test]
     async fn test_compression_mixed_payloads() -> Result<(), Box<dyn Error>> {
         // Mix of virtual, inline, and ref payloads with compression
@@ -1543,6 +1546,7 @@ mod tests {
         Ok(())
     }
 
+    // ic[verify manifest.content] serialized buffer preserves coordinate → chunk-ref mapping
     #[tokio_test]
     async fn test_compression_buffer_round_trip() -> Result<(), Box<dyn Error>> {
         // bytes() → from_buffer() round-trip
@@ -1589,6 +1593,7 @@ mod tests {
         Ok(())
     }
 
+    // ic[verify manifest.chunk-ref.virtual] location + offset + length identify the external region
     #[tokio_test]
     async fn test_ic1_compat_no_compression() -> Result<(), Box<dyn Error>> {
         // compress=false → locations in `location` field, no compressed_location, no dictionary
@@ -1622,6 +1627,7 @@ mod tests {
         Ok(())
     }
 
+    // ic[verify manifest.chunk-ref.virtual] compressed_location variant
     #[tokio_test]
     async fn test_ic2_compression_fields() -> Result<(), Box<dyn Error>> {
         // compress=true with enough virtual chunks → compressed_location, dictionary present

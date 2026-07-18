@@ -260,6 +260,8 @@ async fn async_read_to_bytes(
 }
 
 #[tokio_test]
+// ic[verify storage.ops.write]
+// ic[verify storage.ops.range-reads]
 async fn test_object_write_read() -> Result<(), Box<dyn std::error::Error>> {
     with_storage(Permission::Modify, |_, storage| async move {
         let storage_settings = storage.default_settings().await?;
@@ -386,6 +388,7 @@ async fn test_create_existing_tag(
 }
 
 #[tokio_test]
+// ic[verify algo.init.atomic]
 async fn check_clean_repo() -> Result<(), Box<dyn std::error::Error>> {
     with_storage(Permission::Modify, |_, storage| async move {
         let _repo = Repository::create(
@@ -788,6 +791,7 @@ async fn lost_response_conditional_create_recovers_requester_pays()
 }
 
 #[tokio_test]
+// ic[verify storage.ops.deletes]
 async fn test_delete_objects() -> Result<(), Box<dyn std::error::Error>> {
     with_storage(Permission::Modify, |_, storage| async move {
         let settings = storage.default_settings().await?;
@@ -947,6 +951,7 @@ async fn test_write_config_on_empty(
 
 #[tokio_test]
 #[apply(spec_version_cases)]
+// ic[verify storage.ops.conditional-update]
 async fn test_write_config_on_existing(
     #[case] spec_version: SpecVersionBin,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -1016,6 +1021,7 @@ async fn test_write_config_fails_on_bad_version_when_non_existing(
 
 #[tokio_test]
 #[apply(spec_version_cases)]
+// ic[verify storage.ops.conditional-update]
 async fn test_write_config_fails_on_bad_version_when_existing(
     #[case] spec_version: SpecVersionBin,
 ) -> Result<(), Box<dyn std::error::Error>> {

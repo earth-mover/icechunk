@@ -888,4 +888,144 @@ mod tests {
             IcechunkFormatErrorKind::InvalidSpecVersion { found: 99, .. }
         ));
     }
+
+    // ic[verify layout.paths]
+    // ic[verify repo.path]
+    // ic[verify chunks.path]
+    // ic[verify manifest.path]
+    // ic[verify snapshot.path]
+    // ic[verify txlog.required] path construction
+    #[icechunk_macros::test]
+    fn test_storage_paths_match_spec() {
+        use crate::snapshot::Snapshot;
+
+        assert_eq!(REPO_INFO_FILE_PATH, "repo");
+        assert_eq!(CHUNKS_FILE_PATH, "chunks");
+        assert_eq!(MANIFESTS_FILE_PATH, "manifests");
+        assert_eq!(SNAPSHOTS_FILE_PATH, "snapshots");
+        assert_eq!(TRANSACTION_LOGS_FILE_PATH, "transactions");
+        assert_eq!(OVERWRITTEN_FILES_PATH, "overwritten");
+
+        // The spec's worked example: the initial snapshot is stored at
+        // snapshots/1CECHNKREP0F1RSTCMT0, and its transaction log shares
+        // the same file name under transactions/.
+        let file_name = String::from(&Snapshot::INITIAL_SNAPSHOT_ID);
+        assert_eq!(
+            format!("{SNAPSHOTS_FILE_PATH}/{file_name}"),
+            "snapshots/1CECHNKREP0F1RSTCMT0"
+        );
+        assert_eq!(
+            format!("{TRANSACTION_LOGS_FILE_PATH}/{file_name}"),
+            "transactions/1CECHNKREP0F1RSTCMT0"
+        );
+    }
+
+    // ic[verify format.binary-file]
+    // ic[verify repo.format]
+    // ic[verify snapshot.format]
+    // ic[verify manifest.format]
+    // ic[verify txlog.format]
+    #[icechunk_macros::test]
+    fn test_binary_container_roundtrip_all_file_types()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use bytes::Bytes;
+        use chrono::DateTime;
+        use format_constants::*;
+
+        use crate::{
+            manifest::{ChunkInfo, ChunkPayload, Manifest},
+            repo_info::RepoInfo,
+            serializers::{
+                deserialize_manifest, deserialize_repo_info, deserialize_snapshot,
+                deserialize_transaction_log, serialize_manifest, serialize_repo_info,
+                serialize_snapshot, serialize_transaction_log,
+            },
+            snapshot::{Snapshot, SnapshotInfo},
+            transaction_log::TransactionLog,
+        };
+
+        let spec = SpecVersionBin::V2;
+
+        // Mirror the file assembly done in the icechunk crate: the standard
+        // binary header followed by the zstd-compressed flatbuffers payload.
+        let to_file =
+            |file_type: FileTypeBin, payload: &[u8]| -> Result<Vec<u8>, std::io::Error> {
+                let mut buf = make_header(
+                    ICECHUNK_CLIENT_NAME.as_str(),
+                    SpecVersionBin::V2 as u8,
+                    file_type as u8,
+                    CompressionAlgorithmBin::Zstd as u8,
+                );
+                buf.extend_from_slice(&zstd::encode_all(payload, 1)?);
+                Ok(buf)
+            };
+        let from_file = |buf: &[u8],
+                         expected: FileTypeBin|
+         -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+            let header = parse_file_header(buf)?;
+            assert_eq!(header.spec_version, SpecVersionBin::V2);
+            assert_eq!(header.file_type, expected);
+            assert_eq!(header.compression, CompressionAlgorithmBin::Zstd);
+            Ok(zstd::decode_all(&buf[ICECHUNK_FILE_HEADER_LEN..])?)
+        };
+
+        let snapshot = Snapshot::initial(spec)?;
+        let mut payload = Vec::new();
+        serialize_snapshot(&snapshot, spec, &mut payload)?;
+        let file = to_file(FileTypeBin::Snapshot, &payload)?;
+        let back = deserialize_snapshot(spec, from_file(&file, FileTypeBin::Snapshot)?)?;
+        assert_eq!(back.bytes(), snapshot.bytes());
+
+        let chunk = ChunkInfo {
+            node: NodeId::random(),
+            coord: ChunkIndices(vec![0]),
+            payload: ChunkPayload::Inline(Bytes::from_static(b"container test")),
+        };
+        let manifest =
+            Manifest::from_sorted_vec(&ManifestId::random(), vec![chunk], None)?
+                .expect("non-empty manifest");
+        let mut payload = Vec::new();
+        serialize_manifest(&manifest, spec, &mut payload)?;
+        let file = to_file(FileTypeBin::Manifest, &payload)?;
+        let back = deserialize_manifest(spec, from_file(&file, FileTypeBin::Manifest)?)?;
+        assert_eq!(back.bytes(), manifest.bytes());
+
+        let tx = TransactionLog::new_from_parts(
+            &Snapshot::INITIAL_SNAPSHOT_ID,
+            std::iter::empty::<NodeId>(),
+            std::iter::empty::<NodeId>(),
+            std::iter::empty::<NodeId>(),
+            std::iter::empty::<NodeId>(),
+            std::iter::empty::<NodeId>(),
+            std::iter::empty::<NodeId>(),
+            std::iter::empty::<(NodeId, std::iter::Empty<ChunkIndices>)>(),
+            std::iter::empty(),
+        );
+        let mut payload = Vec::new();
+        serialize_transaction_log(&tx, spec, &mut payload)?;
+        let file = to_file(FileTypeBin::TransactionLog, &payload)?;
+        let back = deserialize_transaction_log(
+            spec,
+            from_file(&file, FileTypeBin::TransactionLog)?,
+        )?;
+        assert_eq!(back.bytes(), tx.bytes());
+
+        let snap_info = SnapshotInfo {
+            id: Snapshot::INITIAL_SNAPSHOT_ID,
+            parent_id: None,
+            flushed_at: DateTime::from_timestamp_micros(1_000_000)
+                .expect("valid timestamp"),
+            message: "initial".to_string(),
+            metadata: Default::default(),
+            pruned_ancestor_tx_logs: vec![],
+        };
+        let repo = RepoInfo::initial(spec, snap_info, 100, None::<&()>, None);
+        let mut payload = Vec::new();
+        serialize_repo_info(&repo, spec, &mut payload)?;
+        let file = to_file(FileTypeBin::RepoInfo, &payload)?;
+        let back = deserialize_repo_info(spec, from_file(&file, FileTypeBin::RepoInfo)?)?;
+        assert_eq!(back.bytes(), repo.bytes());
+
+        Ok(())
+    }
 }

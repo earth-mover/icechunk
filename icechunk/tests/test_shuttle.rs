@@ -403,6 +403,8 @@ async fn execute_concurrent_actions(
 
 proptest! {
     #[test]
+    // ic[verify algo.tag.conditional-update]
+    // ic[verify algo.tag.retry]
     fn concurrent_actions(acts in actions(3..=5)) {
         let acts = acts.clone();
         check_pct(move || {

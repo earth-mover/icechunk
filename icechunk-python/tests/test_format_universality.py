@@ -253,6 +253,7 @@ def repo_path() -> Generator[str]:
 
 # ic[verify repo.path]
 # ic[verify repo.format]
+# ic[verify repo.entry-point]
 # ic[verify refs.branch.default-name]
 def test_repo_info_file(repo_path: str, flatbuf_mod: ModuleType) -> None:
     """Read the repo info file, verify header + flatbuffer content."""
@@ -432,6 +433,7 @@ def test_all_transaction_logs(repo_path: str, flatbuf_mod: ModuleType) -> None:
 
 
 # ic[verify chunks.path]
+# ic[verify chunks.encoding]
 def test_chunks_are_valid_zstd(repo_path: str) -> None:
     """Verify all chunk files are valid zstd-compressed data."""
     chunks_dir = Path(repo_path, "chunks")
@@ -938,6 +940,8 @@ def _rebuild_repo(payload: bytes, mod: Any) -> bytes:
     return bytes(B.Output())
 
 
+# ic[verify layout.root]
+# ic[verify layout.paths]
 def test_extra_fields_forward_compatibility(
     repo_path: str, flatbuf_mod: ModuleType
 ) -> None:
