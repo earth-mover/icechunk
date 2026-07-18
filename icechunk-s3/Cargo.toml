@@ -21,17 +21,25 @@ async-trait.workspace = true
 aws-config.workspace = true
 aws-credential-types.workspace = true
 aws-sdk-s3.workspace = true
+aws-sigv4.workspace = true
 aws-smithy-runtime.workspace = true
+aws-smithy-runtime-api.workspace = true
 aws-smithy-types-convert.workspace = true
 bytes.workspace = true
 chrono.workspace = true
 futures.workspace = true
+http.workspace = true
+memchr.workspace = true
+percent-encoding.workspace = true
+rand.workspace = true
+reqwest.workspace = true
 serde.workspace = true
-tokio = { workspace = true, features = ["sync"] }
+tokio = { workspace = true, features = ["sync", "time"] }
 tokio-util.workspace = true
 tracing.workspace = true
 typed-path.workspace = true
 typetag.workspace = true
+url.workspace = true
 
 [dev-dependencies]
 icechunk-macros.workspace = true

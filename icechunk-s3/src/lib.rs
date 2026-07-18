@@ -56,6 +56,9 @@ use tokio_util::io::StreamReader;
 use tracing::{error, instrument, trace};
 use typed_path::Utf8UnixPath;
 
+mod fast_list;
+use fast_list::SignedLister;
+
 /// How object keys are laid out inside the bucket for a given repository.
 ///
 /// Native-S3 repositories written before the fix for
@@ -450,6 +453,71 @@ impl S3Storage {
                 )
             })
             .await
+    }
+
+    /// Build a signed-`ListObjectsV2` lister sharing this backend's resolved
+    /// region and credentials. Refreshable credentials are re-fetched here (not
+    /// cached), so token rotation keeps working across calls.
+    async fn make_signed_lister(
+        &self,
+        settings: &Settings,
+        concurrency: usize,
+    ) -> StorageResult<SignedLister> {
+        let region = self
+            .get_client(settings)
+            .await
+            .config()
+            .region()
+            .map(|r| r.to_string())
+            .or_else(|| self.config.region.clone())
+            .unwrap_or_else(|| "us-east-1".to_string());
+        let creds = self.resolve_list_credentials().await?;
+        SignedLister::new(
+            &self.config,
+            &self.bucket,
+            region,
+            creds,
+            settings.retries().max_tries().get() as u32,
+            concurrency,
+        )
+    }
+
+    async fn resolve_list_credentials(
+        &self,
+    ) -> StorageResult<Option<aws_credential_types::Credentials>> {
+        if self.config.anonymous {
+            return Ok(None);
+        }
+        match &self.credentials {
+            S3Credentials::Anonymous => Ok(None),
+            S3Credentials::Static(c) => Ok(Some(aws_credential_types::Credentials::new(
+                c.access_key_id.clone(),
+                c.secret_access_key.clone(),
+                c.session_token.clone(),
+                c.expires_after.map(|e| e.into()),
+                "icechunk-static",
+            ))),
+            S3Credentials::Refreshable(fetcher) => {
+                let c = fetcher.get().await.map_err(|e| {
+                    other_error(format!("fetching refreshable S3 credentials: {e}"))
+                })?;
+                Ok(Some(aws_credential_types::Credentials::new(
+                    c.access_key_id,
+                    c.secret_access_key,
+                    c.session_token,
+                    c.expires_after.map(|e| e.into()),
+                    "icechunk-refreshable",
+                )))
+            }
+            S3Credentials::FromEnv => {
+                let provider =
+                    aws_config::default_provider::credentials::default_provider().await;
+                let c = provider.provide_credentials().await.map_err(|e| {
+                    other_error(format!("resolving default S3 credentials: {e}"))
+                })?;
+                Ok(Some(c))
+            }
+        }
     }
 
     /// Build the object key for a repository-relative path under the given layout.
@@ -946,6 +1014,29 @@ impl Storage for S3Storage {
                 ready(object_to_list_info(prefix.as_str(), &object))
             });
         Ok(stream.boxed())
+    }
+
+    #[instrument(skip(self, settings))]
+    async fn sum_object_sizes(
+        &self,
+        settings: &Settings,
+        prefix: &str,
+        shardable: bool,
+    ) -> StorageResult<u64> {
+        if self.config.requester_pays {
+            let mut objects = self.list_objects(settings, prefix).await?;
+            let mut sum = 0u64;
+            while let Some(info) = objects.next().await {
+                sum = sum.saturating_add(info?.size_bytes);
+            }
+            return Ok(sum);
+        }
+        let layout = self.layout(settings).await?;
+        let base_prefix = self.list_prefix(layout, prefix);
+        let lister = self
+            .make_signed_lister(settings, fast_list::DEFAULT_LIST_CONCURRENCY)
+            .await?;
+        lister.sum(&base_prefix, shardable).await
     }
 
     #[instrument(skip(self, batch))]

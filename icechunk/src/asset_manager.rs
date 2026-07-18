@@ -9,7 +9,9 @@ use async_stream::try_stream;
 use backon::{BackoffBuilder as _, ConstantBuilder, ExponentialBuilder, Retryable as _};
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
-use futures::{Stream, StreamExt as _, TryStreamExt as _, stream::BoxStream};
+use futures::{
+    Stream, StreamExt as _, TryStreamExt as _, future::ready, stream, stream::BoxStream,
+};
 use icechunk_types::{ICResultExt as _, error::ICResultCtxExt as _};
 use quick_cache::{Weighter, sync::Cache};
 use serde::{Deserialize, Serialize};
@@ -44,6 +46,7 @@ use crate::{
         CHUNKS_FILE_PATH, CONFIG_FILE_PATH, ChunkId, ChunkOffset, IcechunkFormatError,
         IcechunkFormatErrorKind, MANIFESTS_FILE_PATH, ManifestId, OVERWRITTEN_FILES_PATH,
         REPO_INFO_FILE_PATH, SNAPSHOTS_FILE_PATH, SnapshotId, TRANSACTION_LOGS_FILE_PATH,
+        V1_REFS_FILE_PATH,
         format_constants::{
             self, CompressionAlgorithmBin, FileHeader, FileTypeBin, SpecVersionBin,
             parse_file_header,
@@ -1063,6 +1066,55 @@ impl AssetManager {
         ))
     }
 
+    /// **Experimental / internal — not part of the stable API.**
+    ///
+    /// Physical, listing-only approximation of the repository's non-virtual
+    /// size (cf. [`crate::ops::stats::ChunkStorageStats::non_virtual_bytes`]).
+    /// Where [`crate::ops::stats::repo_chunks_storage`] computes the exact,
+    /// graph-deduplicated figure by fetching and decompressing every reachable
+    /// manifest and iterating its chunk payloads, this sums the on-store byte
+    /// sizes of the objects icechunk physically writes under the repo root.
+    /// It reads no manifests and holds nothing in memory, so it is far cheaper
+    /// and near-constant-memory on large repos — at the cost of being an
+    /// approximation: it counts on-store (compressed) manifest, snapshot,
+    /// transaction and ref bytes alongside native chunk bytes, and does not
+    /// deduplicate across the logical graph. Virtual chunks are never counted;
+    /// they are references stored inside manifests, not objects under the root.
+    ///
+    /// The six top-level object prefixes are summed concurrently through
+    /// [`Storage::sum_object_sizes`]. The Crockford-base32 prefixes (`chunks`,
+    /// `manifests`, `snapshots`, `transactions`) are passed `shardable = true`,
+    /// letting the native S3 backend fan each one out across its 32 leading-id
+    /// characters as concurrent raw-prefix listings; `refs` and `overwritten`
+    /// hold arbitrary names and are summed as a single stream. Backends without a
+    /// raw-prefix fast path use the portable default (one `list_objects` drain
+    /// per prefix), so the result is identical across S3 and object_store
+    /// backends. The small root metadata files (`repo`, `config.yaml`) are
+    /// excluded — negligible next to chunk data.
+    #[doc(hidden)]
+    #[instrument(skip(self))]
+    pub async fn _total_nonvirtual_size(&self) -> RepositoryResult<u64> {
+        const PREFIXES: [(&str, bool); 6] = [
+            (CHUNKS_FILE_PATH, true),
+            (MANIFESTS_FILE_PATH, true),
+            (SNAPSHOTS_FILE_PATH, true),
+            (TRANSACTION_LOGS_FILE_PATH, true),
+            (V1_REFS_FILE_PATH, false),
+            (OVERWRITTEN_FILES_PATH, false),
+        ];
+
+        stream::iter(PREFIXES)
+            .map(|(prefix, shardable)| async move {
+                self.storage
+                    .sum_object_sizes(&self.storage_settings, prefix, shardable)
+                    .await
+                    .inject()
+            })
+            .buffer_unordered(PREFIXES.len())
+            .try_fold(0u64, |acc, partial| ready(Ok(acc.saturating_add(partial))))
+            .await
+    }
+
     pub async fn delete_chunks(
         &self,
         chunks: BoxStream<'_, (ChunkId, u64)>,
@@ -1826,6 +1878,53 @@ mod test {
         storage::{Storage, logging::LoggingStorage, new_in_memory_storage},
     };
     use std::collections::HashMap;
+
+    #[tokio_test]
+    async fn test_total_nonvirtual_size() -> Result<(), Box<dyn std::error::Error>> {
+        let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+        let settings = storage::Settings::default();
+        let manager = AssetManager::new_no_cache(
+            Arc::clone(&backend),
+            settings.clone(),
+            SpecVersionBin::default(),
+            1,
+            100,
+        );
+
+        // Empty repo lists to zero.
+        assert_eq!(manager._total_nonvirtual_size().await?, 0);
+
+        // Write native chunks (their ids span several Crockford leading chars,
+        // exercising the shard fan-out) plus a compressed manifest.
+        for bytes in [b"aaaa".as_slice(), b"bb", b"cccccc", b"d", b"eeeee"] {
+            manager.write_chunk(ChunkId::random(), Bytes::copy_from_slice(bytes)).await?;
+        }
+        let ci = ChunkInfo {
+            node: NodeId::random(),
+            coord: ChunkIndices(vec![0]),
+            payload: ChunkPayload::Inline(Bytes::copy_from_slice(b"inline")),
+        };
+        let manifest = Arc::new(
+            Manifest::from_iter(&ManifestId::random(), vec![ci].into_iter(), None)
+                .await?
+                .unwrap(),
+        );
+        manager.write_manifest(manifest).await?;
+
+        // Invariant: the prefix-sharded fan-out sums to exactly the same bytes
+        // as a naive single-stream listing of the whole repo root — no gaps
+        // between shards, no double-counting. Cross-checking against the naive
+        // sum keeps the test independent of per-object on-store (compressed)
+        // sizes.
+        let mut naive = 0u64;
+        let mut all = backend.list_objects(&settings, "").await?;
+        while let Some(info) = all.next().await {
+            naive = naive.saturating_add(info?.size_bytes);
+        }
+        assert!(naive > 0);
+        assert_eq!(manager._total_nonvirtual_size().await?, naive);
+        Ok(())
+    }
 
     #[tokio_test]
     async fn test_caching_caches() -> Result<(), Box<dyn std::error::Error>> {

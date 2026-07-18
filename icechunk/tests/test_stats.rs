@@ -87,6 +87,71 @@ async fn test_repo_chunks_storage_in_r2(
     do_test_repo_chunks_storage(storage, spec_version).await
 }
 
+#[tokio_test]
+async fn test_total_nonvirtual_size_in_minio() -> Result<(), Box<dyn std::error::Error>> {
+    use futures::{StreamExt as _, TryStreamExt as _};
+    use icechunk::format::{
+        ChunkId, ManifestId, NodeId,
+        manifest::{ChunkInfo, Manifest},
+    };
+
+    let prefix = format!("test_nvsize_{}", Utc::now().timestamp_millis());
+    let storage = common::make_minio_integration_storage(prefix, &Permission::Modify)?;
+    let settings = storage.default_settings().await?;
+    let manager = AssetManager::new_no_cache(
+        Arc::clone(&storage),
+        settings.clone(),
+        SpecVersionBin::default(),
+        1,
+        100,
+    );
+
+    // More than one page (1000 keys) of chunks, so the single-page probe sees a
+    // truncated listing and the two-character shard fan-out actually runs; the
+    // random ids span many shards.
+    futures::stream::iter(0..1100u32)
+        .map(|i| {
+            let manager = &manager;
+            async move {
+                manager
+                    .write_chunk(
+                        ChunkId::random(),
+                        Bytes::from(vec![
+                            u8::try_from(i % 251).unwrap_or(0);
+                            (i % 7 + 1) as usize
+                        ]),
+                    )
+                    .await
+            }
+        })
+        .buffer_unordered(64)
+        .try_collect::<Vec<_>>()
+        .await?;
+    let ci = ChunkInfo {
+        node: NodeId::random(),
+        coord: ChunkIndices(vec![0]),
+        payload: ChunkPayload::Inline(Bytes::copy_from_slice(b"inline")),
+    };
+    let manifest = Arc::new(
+        Manifest::from_iter(&ManifestId::random(), vec![ci].into_iter(), None)
+            .await?
+            .unwrap(),
+    );
+    manager.write_manifest(manifest).await?;
+
+    // The prefix-sharded S3 fast path must equal a naive single-stream listing of
+    // the whole repo root: no gaps between shards, no double counting. This holds
+    // only against real raw-prefix S3 semantics, which rustfs/MinIO provide.
+    let mut naive = 0u64;
+    let mut all = storage.list_objects(&settings, "").await?;
+    while let Some(info) = all.next().await {
+        naive = naive.saturating_add(info?.size_bytes);
+    }
+    assert!(naive > 0);
+    assert_eq!(manager._total_nonvirtual_size().await?, naive);
+    Ok(())
+}
+
 async fn do_test_repo_chunks_storage(
     storage: Arc<dyn Storage + Send + Sync>,
     spec_version: SpecVersionBin,
