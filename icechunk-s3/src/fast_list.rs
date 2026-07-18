@@ -13,28 +13,42 @@
 //! page attempt ([`ListPageFetcher`]): `SigV4` signing, URL building, and
 //! streaming the response body through [`PageScan`].
 
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 use std::time::{Duration, SystemTime};
 
 use async_trait::async_trait;
+use aws_config::default_provider::credentials::default_provider;
 use aws_credential_types::Credentials;
+use aws_credential_types::provider::ProvideCredentials;
 use aws_sigv4::http_request::{
     PayloadChecksumKind, PercentEncodingMode, SignableBody, SignableRequest,
     SigningSettings, UriPathNormalizationMode, sign,
 };
 use aws_sigv4::sign::v4;
 use aws_smithy_runtime_api::client::identity::Identity;
-use icechunk_storage::fast_list::{CONCURRENCY_CAP, ListPageFetcher, PageAttempt};
-use icechunk_storage::{StorageResult, other_error, s3_config::S3Options};
+use chrono::{DateTime, Utc};
+use icechunk_storage::fast_list::{
+    CONCURRENCY_CAP, ListPageFetcher, PageAttempt, is_transient_status,
+};
+use icechunk_storage::s3_config::{S3Credentials, S3CredentialsFetcher};
+use icechunk_storage::{Settings, StorageResult, other_error, s3_config::S3Options};
 use memchr::memmem;
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
+use tokio::sync::{Mutex, OnceCell};
 use url::Url;
 
 const UNRESERVED: &AsciiSet =
     &NON_ALPHANUMERIC.remove(b'-').remove(b'_').remove(b'.').remove(b'~');
 
 const MAX_KEYS: usize = 1000;
-const TIMEOUT_SECS: u64 = 120;
+
+/// Fallback whole-request timeout when [`Settings::timeouts`] carries no
+/// per-attempt bound.
+const DEFAULT_TIMEOUT_SECS: u64 = 120;
+
+/// Re-fetch refreshable credentials this long before their stated expiry so a
+/// page is never signed with an identity about to lapse in flight.
+const CRED_REFRESH_MARGIN: Duration = Duration::from_secs(30);
 
 #[derive(Debug)]
 pub(crate) struct SignedLister {
@@ -44,9 +58,7 @@ pub(crate) struct SignedLister {
     key_path_prefix: String,
     host_header: String,
     region: String,
-    /// Pre-converted once: building an [`Identity`] clones the credential
-    /// strings (an STS session token is ~1KB), which is pure waste per request.
-    identity: Option<Identity>,
+    signer: Signer,
 }
 
 impl SignedLister {
@@ -54,57 +66,34 @@ impl SignedLister {
         config: &S3Options,
         bucket: &str,
         region: String,
-        creds: Option<Credentials>,
+        credentials: &S3Credentials,
+        settings: &Settings,
     ) -> StorageResult<Self> {
-        let http = reqwest::Client::builder()
-            .pool_max_idle_per_host(CONCURRENCY_CAP)
-            .timeout(Duration::from_secs(TIMEOUT_SECS))
-            .build()
-            .map_err(|e| other_error(format!("building reqwest client: {e}")))?;
+        let http = build_http_client(settings)?;
+        let endpoint = resolve_endpoint(config, &region)?;
 
-        let (scheme, endpoint_host) = match config.endpoint_url.as_deref() {
-            Some(ep) => {
-                let u = Url::parse(ep).map_err(|e| {
-                    other_error(format!("parsing endpoint_url {ep:?}: {e}"))
-                })?;
-                let host = u.host_str().ok_or_else(|| {
-                    other_error(format!("endpoint_url {ep:?} has no host"))
-                })?;
-                let host = match u.port() {
-                    Some(p) => format!("{host}:{p}"),
-                    None => host.to_string(),
-                };
-                (u.scheme().to_string(), host)
-            }
-            None => ("https".to_string(), format!("s3.{region}.amazonaws.com")),
-        };
-
-        let (authority, key_path_prefix) = if config.force_path_style {
-            (endpoint_host, format!("/{bucket}"))
+        // The AWS SDK addresses buckets that are not virtual-hostable over TLS
+        // (dotted names break the `*.s3.<region>.amazonaws.com` wildcard cert)
+        // path-style; the fast path must match or it hits a cert mismatch and
+        // retry-storms.
+        let use_path_style =
+            config.force_path_style || !bucket_is_virtual_host_safe(bucket);
+        let (authority, bucket_path) = if use_path_style {
+            (endpoint.host, format!("/{bucket}"))
         } else {
-            (format!("{bucket}.{endpoint_host}"), String::new())
+            (format!("{bucket}.{}", endpoint.host), String::new())
         };
+        let key_path_prefix = format!("{}{bucket_path}", endpoint.base_path);
 
         Ok(Self {
             http,
-            scheme,
+            scheme: endpoint.scheme,
             host_header: authority.clone(),
             authority,
             key_path_prefix,
             region,
-            identity: creds.map(Into::into),
+            signer: Signer::new(config, credentials),
         })
-    }
-
-    async fn send_once(
-        &self,
-        url: &str,
-    ) -> StorageResult<reqwest::Result<reqwest::Response>> {
-        let mut rb = self.http.get(url);
-        if self.identity.is_some() {
-            rb = rb.headers(self.sign_headers(url)?);
-        }
-        Ok(rb.send().await)
     }
 
     fn build_url(&self, list_prefix: &str, token: Option<&str>) -> String {
@@ -126,12 +115,11 @@ impl SignedLister {
         format!("{}://{}{}?{}", self.scheme, self.authority, self.key_path_prefix, q)
     }
 
-    fn sign_headers(&self, url: &str) -> StorageResult<http::HeaderMap> {
-        let identity = self
-            .identity
-            .as_ref()
-            .ok_or_else(|| other_error("sign_headers called without credentials"))?;
-
+    fn sign_headers(
+        &self,
+        url: &str,
+        identity: &Identity,
+    ) -> StorageResult<http::HeaderMap> {
         let mut settings = SigningSettings::default();
         settings.payload_checksum_kind = PayloadChecksumKind::XAmzSha256;
         settings.percent_encoding_mode = PercentEncodingMode::Single;
@@ -181,41 +169,373 @@ impl SignedLister {
 impl ListPageFetcher for SignedLister {
     async fn attempt_page(&self, list_prefix: &str, token: Option<&str>) -> PageAttempt {
         let url = self.build_url(list_prefix, token);
-        match self.send_once(&url).await {
-            Ok(Ok(mut resp)) => {
-                let status = resp.status().as_u16();
-                match status {
-                    200 => match read_page_body(&mut resp).await {
-                        Ok((bytes, next_token)) => {
-                            PageAttempt::Page { bytes, next_token }
-                        }
-                        Err(e) => PageAttempt::Retryable(other_error(format!(
-                            "S3 list body read error for {}: {e}",
-                            redact(&url)
-                        ))),
-                    },
-                    503 | 429 | 500 | 502 | 504 => PageAttempt::Retryable(other_error(
-                        format!("S3 list HTTP {status} for {}", redact(&url)),
-                    )),
-                    other => PageAttempt::Fatal(other_error(format!(
-                        "S3 list HTTP {other} for {}",
-                        redact(&url)
-                    ))),
-                }
+        // A transient failure resolving refreshable credentials (STS/IMDS blip)
+        // is retryable, matching the SDK path that re-resolves transparently.
+        let identity = match self.signer.identity().await {
+            Ok(identity) => identity,
+            Err(e) => return PageAttempt::Retryable(e),
+        };
+        let generation = identity.as_ref().map(|(_, generation)| *generation);
+
+        let mut rb = self.http.get(&url);
+        if let Some((identity, _)) = &identity {
+            match self.sign_headers(&url, identity) {
+                Ok(headers) => rb = rb.headers(headers),
+                Err(e) => return PageAttempt::Fatal(e),
             }
-            Ok(Err(e)) if e.is_timeout() || e.is_connect() || e.is_request() => {
+        }
+
+        match rb.send().await {
+            Ok(resp) => self.classify_response(resp, &url, generation).await,
+            Err(e) if e.is_timeout() || e.is_connect() || e.is_request() => {
                 PageAttempt::Retryable(other_error(format!(
                     "S3 list transport error for {}: {e}",
                     redact(&url)
                 )))
             }
-            Ok(Err(e)) => PageAttempt::Fatal(other_error(format!(
+            Err(e) => PageAttempt::Fatal(other_error(format!(
                 "S3 list request error for {}: {e}",
                 redact(&url)
             ))),
-            Err(e) => PageAttempt::Fatal(e),
         }
     }
+}
+
+impl SignedLister {
+    async fn classify_response(
+        &self,
+        mut resp: reqwest::Response,
+        url: &str,
+        generation: Option<u64>,
+    ) -> PageAttempt {
+        let status = resp.status().as_u16();
+        if status == 200 {
+            return match read_page_body(&mut resp).await {
+                Ok(PageEnd::Framed { bytes, next_token }) => {
+                    PageAttempt::Page { bytes, next_token }
+                }
+                Ok(PageEnd::TruncatedWithoutToken { cause, .. }) => {
+                    PageAttempt::Retryable(other_error(format!(
+                        "S3 list {cause} for {}",
+                        redact(url)
+                    )))
+                }
+                Err(e) => PageAttempt::Retryable(other_error(format!(
+                    "S3 list body read error for {}: {e}",
+                    redact(url)
+                ))),
+            };
+        }
+        if is_transient_status(status) {
+            return PageAttempt::Retryable(other_error(format!(
+                "S3 list HTTP {status} for {}",
+                redact(url)
+            )));
+        }
+        // A signed request whose credentials expired mid-run comes back as a
+        // 400 `ExpiredToken` (or a 403 expired-signature). Force a single-flight
+        // refresh and retry, rather than aborting the whole sum.
+        if self.signer.can_refresh()
+            && is_auth_expiry_status(status)
+            && let Some(generation) = generation
+            && body_signals_expiry(resp).await
+        {
+            self.signer.invalidate(generation).await;
+            return PageAttempt::Retryable(other_error(format!(
+                "S3 list credential expiry (HTTP {status}) for {}",
+                redact(url)
+            )));
+        }
+        PageAttempt::Fatal(other_error(format!(
+            "S3 list HTTP {status} for {}",
+            redact(url)
+        )))
+    }
+}
+
+/// HTTP statuses under which an expired session token / signature surfaces.
+fn is_auth_expiry_status(status: u16) -> bool {
+    status == 400 || status == 403
+}
+
+/// S3 error `<Code>`s that mean the request credentials have expired and a
+/// refresh is worth retrying with. `ExpiredToken` also matches the
+/// `ExpiredTokenException` some S3-compatible stores return.
+const EXPIRY_CODES: [&str; 2] = ["ExpiredToken", "TokenRefreshRequired"];
+
+async fn body_signals_expiry(resp: reqwest::Response) -> bool {
+    match resp.text().await {
+        Ok(body) => EXPIRY_CODES.iter().any(|code| body.contains(code)),
+        Err(_) => false,
+    }
+}
+
+/// Signs [`SignedLister`] requests, holding whatever credential source the
+/// backend was configured with. Static and anonymous requests sign from a fixed
+/// identity; refreshable and environment credentials are cached with
+/// single-flight refresh so a mid-run expiry re-fetches instead of failing the
+/// sum ([`DynamicSigner`]).
+#[derive(Debug)]
+enum Signer {
+    Unsigned,
+    /// Static keys: an `expires_after` is informational only — there is nothing
+    /// to re-fetch — so it is signed from one fixed identity, as the SDK does.
+    Fixed(Identity),
+    Dynamic(DynamicSigner),
+}
+
+impl Signer {
+    fn new(config: &S3Options, credentials: &S3Credentials) -> Self {
+        if config.anonymous {
+            return Signer::Unsigned;
+        }
+        match credentials {
+            S3Credentials::Anonymous => Signer::Unsigned,
+            S3Credentials::Static(c) => Signer::Fixed(static_identity(
+                c.access_key_id.clone(),
+                c.secret_access_key.clone(),
+                c.session_token.clone(),
+                c.expires_after,
+                "icechunk-static",
+            )),
+            S3Credentials::Refreshable(fetcher) => Signer::Dynamic(DynamicSigner::new(
+                CredentialSource::Fetcher(Arc::clone(fetcher)),
+            )),
+            S3Credentials::FromEnv => Signer::Dynamic(DynamicSigner::new(
+                CredentialSource::Env(OnceCell::new()),
+            )),
+        }
+    }
+
+    fn can_refresh(&self) -> bool {
+        matches!(self, Signer::Dynamic(_))
+    }
+
+    /// The identity to sign the next request with, paired with the cache
+    /// generation it came from (for [`Self::invalidate`]). `None` is unsigned.
+    async fn identity(&self) -> StorageResult<Option<(Identity, u64)>> {
+        match self {
+            Signer::Unsigned => Ok(None),
+            Signer::Fixed(identity) => Ok(Some((identity.clone(), 0))),
+            Signer::Dynamic(dynamic) => dynamic.identity().await.map(Some),
+        }
+    }
+
+    async fn invalidate(&self, generation: u64) {
+        if let Signer::Dynamic(dynamic) = self {
+            dynamic.invalidate(generation).await;
+        }
+    }
+}
+
+#[derive(Debug)]
+struct DynamicSigner {
+    source: CredentialSource,
+    cache: Mutex<CredCache>,
+}
+
+#[derive(Debug, Default)]
+struct CredCache {
+    identity: Option<Identity>,
+    generation: u64,
+}
+
+#[derive(Debug)]
+enum CredentialSource {
+    Fetcher(Arc<dyn S3CredentialsFetcher>),
+    Env(OnceCell<Box<dyn ProvideCredentials>>),
+}
+
+impl DynamicSigner {
+    fn new(source: CredentialSource) -> Self {
+        Self { source, cache: Mutex::new(CredCache::default()) }
+    }
+
+    /// Return a live identity, re-fetching under the cache lock if the cached
+    /// one is absent or within [`CRED_REFRESH_MARGIN`] of expiry. Holding the
+    /// async lock across the fetch is the single-flight: concurrent workers
+    /// block on it and reuse whatever the winner fetched instead of stampeding
+    /// the credential source.
+    async fn identity(&self) -> StorageResult<(Identity, u64)> {
+        let mut cache = self.cache.lock().await;
+        if let Some(identity) = &cache.identity
+            && !expired(identity)
+        {
+            return Ok((identity.clone(), cache.generation));
+        }
+        let identity = self.source.fetch().await?;
+        cache.generation += 1;
+        cache.identity = Some(identity.clone());
+        Ok((identity, cache.generation))
+    }
+
+    /// Drop the cached identity after an auth-expiry error so the next
+    /// [`Self::identity`] re-fetches — but only if no other worker has already
+    /// rotated past `used_generation`, so a burst of expiry errors triggers one
+    /// refresh, not one per worker.
+    async fn invalidate(&self, used_generation: u64) {
+        let mut cache = self.cache.lock().await;
+        if cache.generation == used_generation {
+            cache.identity = None;
+        }
+    }
+}
+
+impl CredentialSource {
+    async fn fetch(&self) -> StorageResult<Identity> {
+        match self {
+            CredentialSource::Fetcher(fetcher) => {
+                let c = fetcher.get().await.map_err(|e| {
+                    other_error(format!("fetching refreshable S3 credentials: {e}"))
+                })?;
+                Ok(static_identity(
+                    c.access_key_id,
+                    c.secret_access_key,
+                    c.session_token,
+                    c.expires_after,
+                    "icechunk-refreshable",
+                ))
+            }
+            CredentialSource::Env(cell) => {
+                let provider = cell
+                    .get_or_init(|| async {
+                        Box::new(default_provider().await) as Box<dyn ProvideCredentials>
+                    })
+                    .await;
+                let creds = provider.provide_credentials().await.map_err(|e| {
+                    other_error(format!("resolving default S3 credentials: {e}"))
+                })?;
+                Ok(creds.into())
+            }
+        }
+    }
+}
+
+fn static_identity(
+    access_key_id: String,
+    secret_access_key: String,
+    session_token: Option<String>,
+    expires_after: Option<DateTime<Utc>>,
+    provider_name: &'static str,
+) -> Identity {
+    Credentials::new(
+        access_key_id,
+        secret_access_key,
+        session_token,
+        expires_after.map(Into::into),
+        provider_name,
+    )
+    .into()
+}
+
+fn expired(identity: &Identity) -> bool {
+    identity
+        .expiration()
+        .is_some_and(|exp| exp <= SystemTime::now() + CRED_REFRESH_MARGIN)
+}
+
+/// The resolved list endpoint: transport, host authority, and any base path
+/// carried by a path-prefixed endpoint (`https://gateway.example.com/minio`).
+struct Endpoint {
+    scheme: String,
+    host: String,
+    base_path: String,
+}
+
+fn resolve_endpoint(config: &S3Options, region: &str) -> StorageResult<Endpoint> {
+    match endpoint_override(config) {
+        Some(ep) => {
+            let u = Url::parse(&ep)
+                .map_err(|e| other_error(format!("parsing endpoint_url {ep:?}: {e}")))?;
+            let host = u
+                .host_str()
+                .ok_or_else(|| other_error(format!("endpoint_url {ep:?} has no host")))?;
+            let host = match u.port() {
+                Some(p) => format!("{host}:{p}"),
+                None => host.to_string(),
+            };
+            Ok(Endpoint {
+                scheme: u.scheme().to_string(),
+                host,
+                base_path: u.path().trim_end_matches('/').to_string(),
+            })
+        }
+        None => Ok(Endpoint {
+            scheme: "https".to_string(),
+            host: format!("s3.{region}.amazonaws.com"),
+            base_path: String::new(),
+        }),
+    }
+}
+
+/// The endpoint the SDK client would use: an explicit `endpoint_url`, else the
+/// `AWS_ENDPOINT_URL_S3`/`AWS_ENDPOINT_URL` env vars the SDK also honors. Without
+/// this the fast path would list `s3.<region>.amazonaws.com` while every other
+/// operation went to the env-configured host (MinIO/LocalStack/gov-cloud).
+fn endpoint_override(config: &S3Options) -> Option<String> {
+    config.endpoint_url.clone().or_else(env_endpoint)
+}
+
+fn env_endpoint() -> Option<String> {
+    ["AWS_ENDPOINT_URL_S3", "AWS_ENDPOINT_URL"]
+        .into_iter()
+        .find_map(|k| std::env::var(k).ok().filter(|v| !v.is_empty()))
+}
+
+/// Whether the signed-lister fast path can faithfully reproduce the SDK's
+/// endpoint for `config`. The SDK also resolves FIPS/dualstack hosts from
+/// `AWS_USE_FIPS_ENDPOINT`/`AWS_USE_DUALSTACK_ENDPOINT`, which the fast path does
+/// not replicate; when either is requested and no explicit endpoint overrides
+/// them, fall back to the portable listing path rather than list the wrong host.
+pub(crate) fn signed_list_supported(config: &S3Options) -> bool {
+    if endpoint_override(config).is_some() {
+        return true;
+    }
+    !(env_flag_enabled("AWS_USE_FIPS_ENDPOINT")
+        || env_flag_enabled("AWS_USE_DUALSTACK_ENDPOINT"))
+}
+
+fn env_flag_enabled(key: &str) -> bool {
+    std::env::var(key)
+        .ok()
+        .is_some_and(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "true" | "1"))
+}
+
+/// Whether `bucket` can be addressed virtual-host style over TLS. A dot is the
+/// dominant disqualifier (it breaks the `*.s3.<region>.amazonaws.com` wildcard
+/// certificate); the remaining checks are the S3 DNS-compatible bucket rules.
+fn bucket_is_virtual_host_safe(bucket: &str) -> bool {
+    !bucket.contains('.')
+        && (3..=63).contains(&bucket.len())
+        && bucket
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+        && !bucket.starts_with('-')
+        && !bucket.ends_with('-')
+}
+
+fn build_http_client(settings: &Settings) -> StorageResult<reqwest::Client> {
+    let mut builder = reqwest::Client::builder().pool_max_idle_per_host(CONCURRENCY_CAP);
+    let mut per_attempt = Duration::from_secs(DEFAULT_TIMEOUT_SECS);
+    if let Some(timeouts) = settings.timeouts() {
+        if let Some(ms) = timeouts.connect_timeout_ms {
+            builder = builder.connect_timeout(Duration::from_millis(u64::from(ms)));
+        }
+        if let Some(ms) = timeouts.read_timeout_ms {
+            builder = builder.read_timeout(Duration::from_millis(u64::from(ms)));
+        }
+        // The engine owns per-page retries, so a single reqwest request is one
+        // attempt: the whole-request timeout maps to the per-attempt knob.
+        // `operation_timeout_ms` (whole operation across retries) has no reqwest
+        // equivalent here and is intentionally not applied.
+        if let Some(ms) = timeouts.operation_attempt_timeout_ms {
+            per_attempt = Duration::from_millis(u64::from(ms));
+        }
+    }
+    builder
+        .timeout(per_attempt)
+        .build()
+        .map_err(|e| other_error(format!("building reqwest client: {e}")))
 }
 
 const SIZE_OPEN: &[u8] = b"<Size>";
@@ -294,20 +614,45 @@ impl PageScan {
         self.push_tail(chunk);
     }
 
-    /// Digits still open at end of body are flushed (same as the whole-page
-    /// scan folding to end of buffer); a token capture still open is malformed
-    /// and treated as absent.
-    fn finish(self) -> (u64, Option<String>) {
-        let mut total = self.total;
-        if let Mode::Digits(value) = self.mode {
-            total = total.saturating_add(value);
-        }
-        let token = if self.truncated {
-            self.token.map(|t| String::from_utf8_lossy(&t).into_owned())
-        } else {
-            None
+    /// Resolve the scanned page. Digits still open at end of body are flushed
+    /// (same as the whole-page scan folding to end of buffer).
+    ///
+    /// A page claiming truncation (`IsTruncated=true`) but carrying no usable
+    /// continuation token is reported as [`PageEnd::TruncatedWithoutToken`], not
+    /// silently completed: returning `next_token=None` there would make the
+    /// engine treat the shard as finished and under-report the sum. The token is
+    /// unusable when it was never seen, abandoned by the [`TOKEN_MAX`] guard, or
+    /// still being captured at a cleanly-framed EOF.
+    fn finish(self) -> PageEnd {
+        let bytes = match &self.mode {
+            Mode::Digits(value) => self.total.saturating_add(*value),
+            _ => self.total,
         };
-        (total, token)
+        if !self.truncated {
+            return PageEnd::Framed { bytes, next_token: None };
+        }
+        if self.token_given_up {
+            return PageEnd::TruncatedWithoutToken {
+                bytes,
+                cause: "truncated page with an oversized continuation token",
+            };
+        }
+        if matches!(self.mode, Mode::Token(_)) {
+            return PageEnd::TruncatedWithoutToken {
+                bytes,
+                cause: "truncated page with an unterminated continuation token",
+            };
+        }
+        match self.token {
+            Some(token) => PageEnd::Framed {
+                bytes,
+                next_token: Some(String::from_utf8_lossy(&token).into_owned()),
+            },
+            None => PageEnd::TruncatedWithoutToken {
+                bytes,
+                cause: "truncated page without a continuation token",
+            },
+        }
     }
 
     /// Seam handling on entering a chunk in `Normal` mode: dispatch the match
@@ -445,12 +790,22 @@ impl PageScan {
     }
 }
 
+/// How a scanned `ListObjectsV2` page ended.
+#[derive(Debug, PartialEq, Eq)]
+enum PageEnd {
+    /// The page framed cleanly. `next_token` is `Some` only when the page was
+    /// truncated and carried a usable continuation token.
+    Framed { bytes: u64, next_token: Option<String> },
+    /// `IsTruncated=true` but the continuation token was missing, abandoned, or
+    /// unterminated. Surfaced as retryable so the sum fails loudly instead of
+    /// silently under-reporting.
+    TruncatedWithoutToken { bytes: u64, cause: &'static str },
+}
+
 /// Reads a 200 response body to completion, scanning each chunk as it arrives.
 /// A mid-body error surfaces as `Err` so the attempt can be classified as
 /// retryable.
-async fn read_page_body(
-    resp: &mut reqwest::Response,
-) -> reqwest::Result<(u64, Option<String>)> {
+async fn read_page_body(resp: &mut reqwest::Response) -> reqwest::Result<PageEnd> {
     let mut scan = PageScan::default();
     while let Some(chunk) = resp.chunk().await? {
         scan.feed(&chunk);
@@ -467,9 +822,18 @@ fn redact(url: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Mutex as StdMutex, MutexGuard};
+
+    use icechunk_storage::TimeoutSettings;
+    use icechunk_storage::fast_list::sum;
+    use icechunk_storage::s3_config::S3StaticCredentials;
+    use serde::{Deserialize, Serialize};
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
     use super::*;
 
-    fn scan_parts(parts: &[&[u8]]) -> (u64, Option<String>) {
+    fn scan_parts(parts: &[&[u8]]) -> PageEnd {
         let mut scan = PageScan::default();
         for part in parts {
             scan.feed(part);
@@ -477,8 +841,12 @@ mod tests {
         scan.finish()
     }
 
-    fn scan_whole(doc: &[u8]) -> (u64, Option<String>) {
+    fn scan_whole(doc: &[u8]) -> PageEnd {
         scan_parts(&[doc])
+    }
+
+    fn framed(bytes: u64, token: Option<&str>) -> PageEnd {
+        PageEnd::Framed { bytes, next_token: token.map(str::to_string) }
     }
 
     const REALISTIC_PAGE: &[u8] = b"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
@@ -540,29 +908,28 @@ mod tests {
 
     const OPEN_DIGITS_AT_EOF_PAGE: &[u8] = b"<Contents><Size>123";
 
-    const OPEN_TOKEN_AT_EOF_PAGE: &[u8] =
-        b"<IsTruncated>true</IsTruncated><NextContinuationToken>abc";
-
-    fn fixtures() -> Vec<(&'static [u8], u64, Option<&'static str>)> {
+    fn fixtures() -> Vec<(&'static [u8], PageEnd)> {
         vec![
-            (REALISTIC_PAGE, 1234 + 987_654_321, None),
-            (TRUNCATED_PAGE, 46, Some("1ueGcxLPRx1Tr/XYExHnhbYLgveDs2J/wm36Hy4vbOwM=")),
-            (TOKEN_NOT_TRUNCATED_PAGE, 11, None),
-            (TOKEN_BEFORE_CONTENTS_PAGE, 16, Some("opaque+token/123==")),
-            (ENDS_AT_SIZE_CLOSE_PAGE, 77, None),
-            (EXTREME_SIZES_PAGE, u64::MAX, None),
-            (SMALL_PAGE, 42, Some("tok+7/=")),
-            (OPEN_DIGITS_AT_EOF_PAGE, 123, None),
-            (OPEN_TOKEN_AT_EOF_PAGE, 0, None),
+            (REALISTIC_PAGE, framed(1234 + 987_654_321, None)),
+            (
+                TRUNCATED_PAGE,
+                framed(46, Some("1ueGcxLPRx1Tr/XYExHnhbYLgveDs2J/wm36Hy4vbOwM=")),
+            ),
+            (TOKEN_NOT_TRUNCATED_PAGE, framed(11, None)),
+            (TOKEN_BEFORE_CONTENTS_PAGE, framed(16, Some("opaque+token/123=="))),
+            (ENDS_AT_SIZE_CLOSE_PAGE, framed(77, None)),
+            (EXTREME_SIZES_PAGE, framed(u64::MAX, None)),
+            (SMALL_PAGE, framed(42, Some("tok+7/="))),
+            (OPEN_DIGITS_AT_EOF_PAGE, framed(123, None)),
         ]
     }
 
     #[test]
     fn page_scan_reference_documents() {
-        for (doc, bytes, token) in fixtures() {
+        for (doc, expected) in fixtures() {
             assert_eq!(
                 scan_whole(doc),
-                (bytes, token.map(str::to_string)),
+                expected,
                 "fixture: {}",
                 String::from_utf8_lossy(doc)
             );
@@ -571,8 +938,7 @@ mod tests {
 
     #[test]
     fn page_scan_survives_every_two_way_split() {
-        for (doc, bytes, token) in fixtures() {
-            let expected = (bytes, token.map(str::to_string));
+        for (doc, expected) in fixtures() {
             for i in 0..=doc.len() {
                 assert_eq!(
                     scan_parts(&[&doc[..i], &doc[i..]]),
@@ -589,7 +955,7 @@ mod tests {
     #[test]
     fn page_scan_survives_every_three_way_split() {
         let expected = scan_whole(SMALL_PAGE);
-        assert_eq!(expected, (42, Some("tok+7/=".to_string())));
+        assert_eq!(expected, framed(42, Some("tok+7/=")));
         for i in 0..=SMALL_PAGE.len() {
             for j in i..=SMALL_PAGE.len() {
                 assert_eq!(
@@ -608,18 +974,18 @@ mod tests {
             <Contents><Key>chunks/B2</Key><Size>6</Size></Contents>
             <Contents><Key>chunks/C3</Key><Size>1</Size></Contents>
         </ListBucketResult>"#;
-        assert_eq!(scan_whole(xml), (11, None));
+        assert_eq!(scan_whole(xml), framed(11, None));
     }
 
     #[test]
     fn page_scan_token_only_when_truncated() {
         let truncated = br#"<ListBucketResult><IsTruncated>true</IsTruncated>
             <NextContinuationToken>abc123</NextContinuationToken></ListBucketResult>"#;
-        assert_eq!(scan_whole(truncated).1.as_deref(), Some("abc123"));
+        assert_eq!(scan_whole(truncated), framed(0, Some("abc123")));
 
         let done = br#"<ListBucketResult><IsTruncated>false</IsTruncated>
             <NextContinuationToken>abc123</NextContinuationToken></ListBucketResult>"#;
-        assert_eq!(scan_whole(done).1, None);
+        assert_eq!(scan_whole(done), framed(0, None));
     }
 
     #[test]
@@ -632,20 +998,417 @@ mod tests {
             doc
         };
         let at_cap = build(TOKEN_MAX);
-        assert_eq!(scan_whole(&at_cap), (0, Some("a".repeat(TOKEN_MAX))));
+        assert_eq!(scan_whole(&at_cap), framed(0, Some(&"a".repeat(TOKEN_MAX))));
 
+        // Beyond the cap the token is abandoned; a truncated page then has no
+        // usable token and must be flagged rather than reported complete.
         let over_cap = build(TOKEN_MAX + 1);
-        assert_eq!(scan_whole(&over_cap), (0, None));
+        assert!(matches!(scan_whole(&over_cap), PageEnd::TruncatedWithoutToken { .. }));
         let parts: Vec<&[u8]> = over_cap.chunks(97).collect();
-        assert_eq!(scan_parts(&parts), (0, None));
+        assert!(matches!(scan_parts(&parts), PageEnd::TruncatedWithoutToken { .. }));
     }
 
     #[test]
-    fn page_scan_end_of_body_flushes_digits_and_drops_open_token() {
-        assert_eq!(scan_whole(b"<Contents><Size>123"), (123, None));
-        assert_eq!(
-            scan_whole(b"<IsTruncated>true</IsTruncated><NextContinuationToken>abc"),
-            (0, None)
+    fn page_scan_flushes_open_digits_at_eof() {
+        assert_eq!(scan_whole(b"<Contents><Size>123"), framed(123, None));
+    }
+
+    #[test]
+    fn truncated_page_without_usable_token_is_flagged() {
+        // IsTruncated=true with a continuation token that is missing entirely,
+        // abandoned by the size guard, or unterminated at EOF must surface as an
+        // inconsistency across every chunk split — never as a completed page,
+        // which would silently under-report the sum.
+        let missing =
+            b"<IsTruncated>true</IsTruncated><Contents><Size>5</Size></Contents>"
+                .to_vec();
+        let unterminated =
+            b"<IsTruncated>true</IsTruncated><NextContinuationToken>abc".to_vec();
+        let mut abandoned =
+            b"<IsTruncated>true</IsTruncated><NextContinuationToken>".to_vec();
+        abandoned.extend(std::iter::repeat_n(b'a', TOKEN_MAX + 1));
+        abandoned.extend_from_slice(b"</NextContinuationToken>");
+
+        for doc in [&missing, &unterminated, &abandoned] {
+            assert!(
+                matches!(scan_whole(doc), PageEnd::TruncatedWithoutToken { .. }),
+                "whole: {}",
+                String::from_utf8_lossy(doc)
+            );
+            for i in 0..=doc.len() {
+                assert!(
+                    matches!(
+                        scan_parts(&[&doc[..i], &doc[i..]]),
+                        PageEnd::TruncatedWithoutToken { .. }
+                    ),
+                    "split {i}: {}",
+                    String::from_utf8_lossy(doc)
+                );
+            }
+        }
+    }
+
+    fn lister_for(
+        base: &str,
+        credentials: &S3Credentials,
+        settings: &Settings,
+    ) -> SignedLister {
+        let config = S3Options::default()
+            .with_endpoint_url(base)
+            .with_region("us-east-1")
+            .with_allow_http(true)
+            .with_force_path_style(true);
+        SignedLister::new(
+            &config,
+            "test-bucket",
+            "us-east-1".to_string(),
+            credentials,
+            settings,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn dotted_bucket_uses_path_style() {
+        let config = S3Options::default()
+            .with_endpoint_url("https://s3.us-east-1.amazonaws.com")
+            .with_region("us-east-1");
+        let creds = S3Credentials::Anonymous;
+
+        let dotted = SignedLister::new(
+            &config,
+            "my.dotted.bucket",
+            "us-east-1".into(),
+            &creds,
+            &Settings::default(),
+        )
+        .unwrap();
+        let url = dotted.build_url("chunks/", None);
+        assert!(
+            url.contains("s3.us-east-1.amazonaws.com/my.dotted.bucket"),
+            "url: {url}"
+        );
+        assert!(!url.contains("my.dotted.bucket.s3"), "url: {url}");
+
+        let plain = SignedLister::new(
+            &config,
+            "plainbucket",
+            "us-east-1".into(),
+            &creds,
+            &Settings::default(),
+        )
+        .unwrap();
+        let url = plain.build_url("chunks/", None);
+        assert!(url.contains("plainbucket.s3.us-east-1.amazonaws.com"), "url: {url}");
+    }
+
+    #[test]
+    fn endpoint_path_prefix_is_preserved_in_requests() {
+        let config = S3Options::default()
+            .with_endpoint_url("http://gateway.example.com/minio")
+            .with_region("us-east-1");
+        let creds = S3Credentials::Anonymous;
+
+        let path_style = SignedLister::new(
+            &config.clone().with_force_path_style(true),
+            "test-bucket",
+            "us-east-1".into(),
+            &creds,
+            &Settings::default(),
+        )
+        .unwrap();
+        let url = path_style.build_url("chunks/", None);
+        assert!(url.contains("gateway.example.com/minio/test-bucket?"), "url: {url}");
+
+        let vhost = SignedLister::new(
+            &config,
+            "test-bucket",
+            "us-east-1".into(),
+            &creds,
+            &Settings::default(),
+        )
+        .unwrap();
+        let url = vhost.build_url("chunks/", None);
+        assert!(url.contains("test-bucket.gateway.example.com/minio?"), "url: {url}");
+    }
+
+    #[test]
+    fn signature_covers_the_endpoint_path() {
+        // SigV4 signs the canonical URI, so signing two URLs that differ only in
+        // path must produce different signatures — proof the base path is signed.
+        let lister = lister_for(
+            "http://gateway.example.com/minio",
+            &S3Credentials::Anonymous,
+            &Settings::default(),
+        );
+        let identity = static_identity(
+            "AKIDEXAMPLE".to_string(),
+            "SECRETKEY".to_string(),
+            None,
+            None,
+            "test",
+        );
+        let with_path = lister
+            .sign_headers(
+                "http://gateway.example.com/minio/test-bucket?list-type=2",
+                &identity,
+            )
+            .unwrap();
+        let without_path = lister
+            .sign_headers("http://gateway.example.com/test-bucket?list-type=2", &identity)
+            .unwrap();
+        assert_ne!(with_path.get("authorization"), without_path.get("authorization"));
+    }
+
+    #[test]
+    fn bucket_virtual_host_rules() {
+        for ok in ["plainbucket", "a-b-c", "abc", "bucket123"] {
+            assert!(bucket_is_virtual_host_safe(ok), "{ok} should be vhost-safe");
+        }
+        for bad in ["has.dot", "ab", "-lead", "trail-", "UPPER", "under_score"] {
+            assert!(!bucket_is_virtual_host_safe(bad), "{bad} should not be vhost-safe");
+        }
+    }
+
+    static ENV_LOCK: StdMutex<()> = StdMutex::new(());
+
+    fn env_lock() -> MutexGuard<'static, ()> {
+        ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Overwrite `key` (or remove it when `value` is `None`).
+    #[expect(
+        unsafe_code,
+        reason = "env mutation is unsafe in edition 2024; all env-mutating \
+                  tests are serialized behind ENV_LOCK so no concurrent env \
+                  access races this"
+    )]
+    fn write_env(key: &str, value: Option<&str>) {
+        match value {
+            // SAFETY: serialized by ENV_LOCK; no other thread touches the env.
+            Some(v) => unsafe { std::env::set_var(key, v) },
+            // SAFETY: serialized by ENV_LOCK; no other thread touches the env.
+            None => unsafe { std::env::remove_var(key) },
+        }
+    }
+
+    struct EnvVarGuard {
+        key: String,
+        prev: Option<String>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &str, value: &str) -> Self {
+            let prev = std::env::var(key).ok();
+            write_env(key, Some(value));
+            Self { key: key.to_string(), prev }
+        }
+
+        fn remove(key: &str) -> Self {
+            let prev = std::env::var(key).ok();
+            write_env(key, None);
+            Self { key: key.to_string(), prev }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            write_env(&self.key, self.prev.as_deref());
+        }
+    }
+
+    #[test]
+    fn env_endpoint_override_is_honored() {
+        let _lock = env_lock();
+        let _e = EnvVarGuard::set("AWS_ENDPOINT_URL_S3", "https://minio.internal:9000");
+        let _e2 = EnvVarGuard::remove("AWS_ENDPOINT_URL");
+
+        let config = S3Options::default().with_region("us-east-1");
+        let lister = SignedLister::new(
+            &config,
+            "test-bucket",
+            "us-east-1".into(),
+            &S3Credentials::Anonymous,
+            &Settings::default(),
+        )
+        .unwrap();
+        let url = lister.build_url("chunks/", None);
+        assert!(url.contains("minio.internal:9000"), "url: {url}");
+        assert!(!url.contains("amazonaws.com"), "url: {url}");
+    }
+
+    #[test]
+    fn signed_list_supported_falls_back_for_fips_and_dualstack() {
+        let _lock = env_lock();
+        let _clear_ep = EnvVarGuard::remove("AWS_ENDPOINT_URL_S3");
+        let _clear_ep2 = EnvVarGuard::remove("AWS_ENDPOINT_URL");
+        let _clear_fips = EnvVarGuard::remove("AWS_USE_FIPS_ENDPOINT");
+        let _clear_dual = EnvVarGuard::remove("AWS_USE_DUALSTACK_ENDPOINT");
+
+        let config = S3Options::default().with_region("us-east-1");
+        assert!(signed_list_supported(&config));
+
+        {
+            let _f = EnvVarGuard::set("AWS_USE_FIPS_ENDPOINT", "true");
+            assert!(!signed_list_supported(&config));
+        }
+        {
+            let _d = EnvVarGuard::set("AWS_USE_DUALSTACK_ENDPOINT", "1");
+            assert!(!signed_list_supported(&config));
+        }
+        // An explicit endpoint overrides FIPS/dualstack, as the SDK resolver does.
+        {
+            let _f = EnvVarGuard::set("AWS_USE_FIPS_ENDPOINT", "true");
+            let with_endpoint = S3Options::default()
+                .with_endpoint_url("https://s3.example.com")
+                .with_region("us-east-1");
+            assert!(signed_list_supported(&with_endpoint));
+        }
+    }
+
+    const EXPIRED_TOKEN_BODY: &str = "<?xml version=\"1.0\"?><Error>\
+        <Code>ExpiredToken</Code><Message>The token has expired.</Message></Error>";
+
+    fn ok_page(size: u64) -> String {
+        format!(
+            "<ListBucketResult><IsTruncated>false</IsTruncated>\
+             <Contents><Size>{size}</Size></Contents></ListBucketResult>"
+        )
+    }
+
+    /// Drain one HTTP/1.1 request head off `sock` (up to the blank line), so the
+    /// client's send completes before the response is written. Returns whether a
+    /// request was seen.
+    async fn drain_request(sock: &mut tokio::net::TcpStream) -> bool {
+        let mut buf = Vec::new();
+        let mut tmp = [0u8; 2048];
+        loop {
+            let Ok(n) = sock.read(&mut tmp).await else { return false };
+            if n == 0 {
+                break;
+            }
+            buf.extend_from_slice(&tmp[..n]);
+            if buf.windows(4).any(|w| w == b"\r\n\r\n") || buf.len() > 64 * 1024 {
+                break;
+            }
+        }
+        !buf.is_empty()
+    }
+
+    /// Minimal HTTP/1.1 server for the fast-list fetcher. `handler` produces each
+    /// response as `(status, body)`; `delay` is applied before writing so timeout
+    /// behavior is testable. Returns the base URL.
+    fn spawn_fake_s3<H>(delay: Duration, handler: H) -> String
+    where
+        H: Fn() -> (u16, String) + Send + Sync + 'static,
+    {
+        let std_listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        std_listener.set_nonblocking(true).unwrap();
+        let addr = std_listener.local_addr().unwrap();
+        let listener = tokio::net::TcpListener::from_std(std_listener).unwrap();
+        let handler = Arc::new(handler);
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut sock, _)) = listener.accept().await else { break };
+                let handler = Arc::clone(&handler);
+                tokio::spawn(async move {
+                    if !drain_request(&mut sock).await {
+                        return;
+                    }
+                    let (status, body) = handler();
+                    if !delay.is_zero() {
+                        tokio::time::sleep(delay).await;
+                    }
+                    let resp = format!(
+                        "HTTP/1.1 {status} S\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    let _ = sock.write_all(resp.as_bytes()).await;
+                    let _ = sock.shutdown().await;
+                });
+            }
+        });
+        format!("http://{addr}")
+    }
+
+    static REFRESH_FETCHES: AtomicUsize = AtomicUsize::new(0);
+
+    #[derive(Debug, Serialize, Deserialize)]
+    struct CountingFetcher;
+
+    #[async_trait]
+    #[typetag::serde(name = "icechunk-s3-fastlist-test-fetcher")]
+    impl S3CredentialsFetcher for CountingFetcher {
+        async fn get(&self) -> Result<S3StaticCredentials, String> {
+            REFRESH_FETCHES.fetch_add(1, Ordering::SeqCst);
+            Ok(S3StaticCredentials {
+                access_key_id: "AKIDEXAMPLE".to_string(),
+                secret_access_key: "SECRETKEY".to_string(),
+                session_token: Some("SESSIONTOKEN".to_string()),
+                expires_after: None,
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn refreshable_credentials_survive_mid_run_expiry() {
+        REFRESH_FETCHES.store(0, Ordering::SeqCst);
+        let seen = Arc::new(AtomicUsize::new(0));
+        let handler_seen = Arc::clone(&seen);
+        let base = spawn_fake_s3(Duration::ZERO, move || {
+            if handler_seen.fetch_add(1, Ordering::SeqCst) == 0 {
+                (400, EXPIRED_TOKEN_BODY.to_string())
+            } else {
+                (200, ok_page(42))
+            }
+        });
+
+        let creds = S3Credentials::Refreshable(Arc::new(CountingFetcher));
+        let lister = lister_for(&base, &creds, &Settings::default());
+        let total =
+            sum(Arc::new(lister) as Arc<dyn ListPageFetcher>, "chunks", false, 3).await;
+
+        assert_eq!(total.ok(), Some(42));
+        // Once to sign the doomed first attempt, once after the expiry forces a
+        // refresh: not once per attempt.
+        assert_eq!(REFRESH_FETCHES.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn transient_507_is_retried_then_succeeds() {
+        let seen = Arc::new(AtomicUsize::new(0));
+        let handler_seen = Arc::clone(&seen);
+        let base = spawn_fake_s3(Duration::ZERO, move || {
+            if handler_seen.fetch_add(1, Ordering::SeqCst) == 0 {
+                (507, "<Error><Code>InsufficientStorage</Code></Error>".to_string())
+            } else {
+                (200, ok_page(9))
+            }
+        });
+
+        let lister = lister_for(&base, &S3Credentials::Anonymous, &Settings::default());
+        let total =
+            sum(Arc::new(lister) as Arc<dyn ListPageFetcher>, "chunks", false, 3).await;
+
+        assert_eq!(total.ok(), Some(9));
+        assert!(seen.load(Ordering::SeqCst) >= 2, "the 507 must have been retried");
+    }
+
+    #[tokio::test]
+    async fn configured_attempt_timeout_is_applied() {
+        let base = spawn_fake_s3(Duration::from_secs(30), || (200, ok_page(1)));
+        let settings = Settings {
+            timeouts: Some(TimeoutSettings {
+                operation_attempt_timeout_ms: Some(50),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let lister = lister_for(&base, &S3Credentials::Anonymous, &settings);
+        let attempt = lister.attempt_page("chunks/", None).await;
+        assert!(
+            matches!(attempt, PageAttempt::Retryable(_)),
+            "a 50ms per-attempt timeout against a 30s-slow server must trip: {attempt:?}"
         );
     }
 }

@@ -456,8 +456,9 @@ impl S3Storage {
     }
 
     /// Build a signed-`ListObjectsV2` lister sharing this backend's resolved
-    /// region and credentials. Refreshable credentials are re-fetched here (not
-    /// cached), so token rotation keeps working across calls.
+    /// region and credentials. The lister owns the credential source and
+    /// refreshes it on demand (see [`fast_list`]), so a long run survives a
+    /// mid-run token rotation instead of signing every page from one snapshot.
     async fn make_signed_lister(
         &self,
         settings: &Settings,
@@ -470,46 +471,7 @@ impl S3Storage {
             .map(|r| r.to_string())
             .or_else(|| self.config.region.clone())
             .unwrap_or_else(|| "us-east-1".to_string());
-        let creds = self.resolve_list_credentials().await?;
-        SignedLister::new(&self.config, &self.bucket, region, creds)
-    }
-
-    async fn resolve_list_credentials(
-        &self,
-    ) -> StorageResult<Option<aws_credential_types::Credentials>> {
-        if self.config.anonymous {
-            return Ok(None);
-        }
-        match &self.credentials {
-            S3Credentials::Anonymous => Ok(None),
-            S3Credentials::Static(c) => Ok(Some(aws_credential_types::Credentials::new(
-                c.access_key_id.clone(),
-                c.secret_access_key.clone(),
-                c.session_token.clone(),
-                c.expires_after.map(|e| e.into()),
-                "icechunk-static",
-            ))),
-            S3Credentials::Refreshable(fetcher) => {
-                let c = fetcher.get().await.map_err(|e| {
-                    other_error(format!("fetching refreshable S3 credentials: {e}"))
-                })?;
-                Ok(Some(aws_credential_types::Credentials::new(
-                    c.access_key_id,
-                    c.secret_access_key,
-                    c.session_token,
-                    c.expires_after.map(|e| e.into()),
-                    "icechunk-refreshable",
-                )))
-            }
-            S3Credentials::FromEnv => {
-                let provider =
-                    aws_config::default_provider::credentials::default_provider().await;
-                let c = provider.provide_credentials().await.map_err(|e| {
-                    other_error(format!("resolving default S3 credentials: {e}"))
-                })?;
-                Ok(Some(c))
-            }
-        }
+        SignedLister::new(&self.config, &self.bucket, region, &self.credentials, settings)
     }
 
     /// Build the object key for a repository-relative path under the given layout.
@@ -1015,7 +977,14 @@ impl Storage for S3Storage {
         prefix: &str,
         shardable: bool,
     ) -> StorageResult<u64> {
-        if self.config.requester_pays {
+        // The signed fast path replicates only a subset of the SDK's request
+        // shaping: requester-pays and extra read headers need request features
+        // the bare signer does not carry, and FIPS/dualstack resolve a different
+        // host than the fast path lists. Fall back to the portable path there.
+        if self.config.requester_pays
+            || !self.extra_read_headers.is_empty()
+            || !fast_list::signed_list_supported(&self.config)
+        {
             let mut objects = self.list_objects(settings, prefix).await?;
             let mut sum = 0u64;
             while let Some(info) = objects.next().await {
