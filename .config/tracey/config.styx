@@ -1,0 +1,25 @@
+specs (
+  {
+    name icechunk
+    include (icechunk-python/docs/docs/reference/spec-v2-1.md)
+    impls (
+      {
+        name rust-format
+        include (icechunk-format/src/**/*.rs)
+        exclude (icechunk-format/src/strategies.rs)
+      }
+      {
+        name rust-core
+        include (
+          icechunk/src/**/*.rs
+          icechunk-storage/src/**/*.rs
+          icechunk-types/src/**/*.rs
+        )
+      }
+      {
+        name python
+        include (icechunk-python/python/icechunk/**/*.py)
+      }
+    )
+  }
+)

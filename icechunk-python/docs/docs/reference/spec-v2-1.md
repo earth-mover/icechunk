@@ -50,14 +50,22 @@ The spec is not designed to enable fine-grained access restrictions (e.g. only r
 
 Icechunk requires that the storage system support the following operations:
 
-- **In-place write** — the storage system MUST provide strong read-after-write consistency. Files are not moved or altered once written.
-- **Conditional update** — the storage system MUST support atomically updating a file only if the current version is known to the writer.
-- **Range reads** — the storage system SHOULD support reading a byte range within a file, required for reading chunks stored at an offset within a larger file.
-- **Deletes** — the storage system SHOULD support deleting files, required for garbage collection.
+> ic[storage.ops.write]
+> **In-place write** — the storage system MUST provide strong read-after-write consistency. Files are not moved or altered once written.
+
+> ic[storage.ops.conditional-update]
+> **Conditional update** — the storage system MUST support atomically updating a file only if the current version is known to the writer.
+
+> ic[storage.ops.range-reads]
+> **Range reads** — the storage system SHOULD support reading a byte range within a file, required for reading chunks stored at an offset within a larger file.
+
+> ic[storage.ops.deletes]
+> **Deletes** — the storage system SHOULD support deleting files, required for garbage collection.
 
 These requirements are compatible with object stores, like S3, as well as with filesystems.
 
-The storage system is not required to support random-access writes. Once written, all files are immutable until deleted, with one exception: the repo info file at `$ROOT/repo`, which is updated via conditional writes.
+> ic[storage.immutability]
+> The storage system is not required to support random-access writes. Once written, all files are immutable until deleted, with one exception: the repo info file at `$ROOT/repo`, which is updated via conditional writes.
 
 ### Consistency and Optimistic Concurrency
 
@@ -67,7 +75,10 @@ Icechunk V2.x does this entirely via careful management of creation and conditio
 
 When a client attempts to make a change to the repository, it fetches the latest version of the repo info object and applies its changes in memory first.
 The repo info object is small, so holding it in memory is inexpensive; the window of potential conflict is also very small and unrelated to the duration of the write session.
-However, when updating the object in storage, the client MUST detect whether a _different session_ has updated the repo info in the interim, possibly retrying or failing the update if so.
+
+> ic[consistency.detect-concurrent-update]
+> However, when updating the object in storage, the client MUST detect whether a _different session_ has updated the repo info in the interim, possibly retrying or failing the update if so.
+
 This is an "optimistic concurrency" strategy; retries may be needed, but conflicts are expected to be infrequent.
 
 All major object stores support a "conditional update" operation.
@@ -90,13 +101,24 @@ Similar to Git, Icechunk supports the concept of _branches_ and _tags_.
 These references point to a specific snapshot of the repository.
 Each snapshot records its parent snapshot id, and these parent links form the snapshot history tree.
 
-- **Branches** are _mutable_ references to a snapshot.
-  A repository MAY have one or more branches.
-  A repository MUST always have a `main` branch. The default branch name SHOULD be `main`.
-  After creation, branches MAY be updated to point to a different snapshot.
-- **Tags** are _immutable_ references to a snapshot.
-  A repository MAY contain zero or more tags.
-  After creation, tags MUST NOT be updated. Tag deletion is allowed, but a new tag with the name of a deleted one MUST NOT be created.
+> ic[refs.branch.required]
+> A repository MUST always have a `main` branch.
+
+> ic[refs.branch.default-name]
+> The default branch name SHOULD be `main`.
+
+> ic[refs.branch.mutable]
+> **Branches** are _mutable_ references to a snapshot.
+> A repository MAY have one or more branches.
+> After creation, branches MAY be updated to point to a different snapshot.
+
+> ic[refs.tag.immutable]
+> **Tags** are _immutable_ references to a snapshot.
+> A repository MAY contain zero or more tags.
+> After creation, tags MUST NOT be updated.
+
+> ic[refs.tag.no-recreate]
+> Tag deletion is allowed, but a new tag with the name of a deleted one MUST NOT be created.
 
 ## Specification
 
@@ -159,7 +181,11 @@ flowchart TD
 
 ### File Layout
 
+ic[layout.root]
 All data and metadata files MUST be stored within a root directory using the following directory structure.
+
+ic[layout.paths]
+The required directory structure is:
 
 - `$ROOT` base URI (s3, gcs, local directory, etc.)
 - `$ROOT/repo` repo info file, entry point for all operations
@@ -181,7 +207,8 @@ The following types are defined in [`common.fbs`](https://github.com/earth-mover
 --8<-- "icechunk-format/flatbuffers/common.fbs:object_id_8"
 ```
 
-When used in file names and storage paths, object ids MUST be encoded using [Crockford Base32](https://www.crockford.com/base32.html), uppercase, with no padding characters. When the input bits are not a multiple of 5, zero bits are appended on the right before encoding. An `ObjectId12` (96 bits) produces 20 characters; an `ObjectId8` (64 bits) produces 13 characters. For example, the 12 bytes `0b 1c c8 d6 78 75 80 f0 e3 3a 65 34` encode to `1CECHNKREP0F1RSTCMT0`.
+> ic[types.object-id.encoding]
+> When used in file names and storage paths, object ids MUST be encoded using [Crockford Base32](https://www.crockford.com/base32.html), uppercase, with no padding characters. When the input bits are not a multiple of 5, zero bits are appended on the right before encoding. An `ObjectId12` (96 bits) produces 20 characters; an `ObjectId8` (64 bits) produces 13 characters. For example, the 12 bytes `0b 1c c8 d6 78 75 80 f0 e3 3a 65 34` encode to `1CECHNKREP0F1RSTCMT0`.
 
 ```protobuf
 --8<-- "icechunk-format/flatbuffers/common.fbs:metadata_item"
@@ -197,8 +224,10 @@ Node paths identify a node's position in the repository hierarchy. They are stor
 
 ### Binary File Format
 
-All Icechunk metadata files (repo info, snapshots, manifests, and transaction logs) share a common on-disk format. Each file consists of a binary header followed by a zstd-compressed [flatbuffers](https://github.com/google/flatbuffers) payload.
+> ic[format.binary-file]
+> All Icechunk metadata files (repo info, snapshots, manifests, and transaction logs) share a common on-disk format. Each file consists of a binary header followed by a zstd-compressed [flatbuffers](https://github.com/google/flatbuffers) payload.
 
+ic[format.header]
 The header contains the following fields, in order:
 
 | Field | Size | Description |
@@ -217,9 +246,16 @@ With the exception of chunk files, each type of file is encoded using [flatbuffe
 
 #### Repo Info File
 
-The repo info file is the single entry point for an Icechunk repository and the only mutable object in a V2.x repo. It MUST be stored at `$ROOT/repo`. Every read operation starts by fetching this file. Every update to the repository (commits, tag creation, configuration changes) is a conditional write on this file.
+> ic[repo.entry-point]
+> The repo info file is the single entry point for an Icechunk repository and the only mutable object in a V2.x repo.
 
-The repo info file MUST use the standard [binary file format](#binary-file-format) with file type `RepoInfo`.
+> ic[repo.path]
+> It MUST be stored at `$ROOT/repo`.
+
+Every read operation starts by fetching this file. Every update to the repository (commits, tag creation, configuration changes) is a conditional write on this file.
+
+> ic[repo.format]
+> The repo info file MUST use the standard [binary file format](#binary-file-format) with file type `RepoInfo`.
 
 The full flatbuffers schema can be found in [`repo.fbs`](https://github.com/earth-mover/icechunk/tree/main/icechunk-format/flatbuffers/repo.fbs).
 
@@ -245,9 +281,13 @@ Each snapshot in the repository has a `SnapshotInfo` entry in the repo info file
 --8<-- "icechunk-format/flatbuffers/repo.fbs:snapshot_info"
 ```
 
-Version 2.1 of the spec added the `pruned_ancestor_tx_logs: [ObjectId12]` field. Expiration uses this field to keep track of the full ancestry of transaction logs that generated this snapshot but were later expired. The list is ordered by ancestry, oldest first. Implementations MUST treat the concatenation of all these transaction logs, followed by the snapshot's own transaction log, as the full transaction history for the snapshot.
+Version 2.1 of the spec added the `pruned_ancestor_tx_logs: [ObjectId12]` field. Expiration uses this field to keep track of the full ancestry of transaction logs that generated this snapshot but were later expired.
 
-Some implementations MAY compact these transaction logs to shorten the list, so readers MUST NOT assume that each entry corresponds to a real commit.
+> ic[repo.pruned-tx-logs.full-history]
+> The list is ordered by ancestry, oldest first. Implementations MUST treat the concatenation of all these transaction logs, followed by the snapshot's own transaction log, as the full transaction history for the snapshot.
+
+> ic[repo.pruned-tx-logs.compaction]
+> Some implementations MAY compact these transaction logs to shorten the list, so readers MUST NOT assume that each entry corresponds to a real commit.
 
 ##### `Update`
 
@@ -277,27 +317,40 @@ The `latest_updates` list is the repository ops log — a record of every operat
 
 ##### Updates to the repo info file
 
-The repo info object is the only mutable object in an Icechunk repo. Before a client attempts to overwrite it they MUST copy it to the `overwritten` prefix in the repo. The copy MUST be stored with a path composed of:
+> ic[repo.update.only-mutable]
+> The repo info object is the only mutable object in an Icechunk repo.
 
-- The literal `repo.`
-- The current Unix timestamp in milliseconds subtracted from the timestamp
-in milliseconds corresponding to the timestamp `3000-01-01T00:00:00`. This gives a "last one first" ordering when
-listing the prefix, but Icechunk itself doesn't depend on this property.
-- 12 random bytes encoded as Crockford base 32.
+> ic[repo.update.backup]
+> Before a client attempts to overwrite it they MUST copy it to the `overwritten` prefix in the repo.
 
-for example:
+> ic[repo.update.backup-path]
+> The copy MUST be stored with a path composed of:
+>
+> - The literal `repo.`
+> - The current Unix timestamp in milliseconds subtracted from the timestamp
+> in milliseconds corresponding to the timestamp `3000-01-01T00:00:00`. This gives a "last one first" ordering when
+> listing the prefix, but Icechunk itself doesn't depend on this property.
+> - 12 random bytes encoded as Crockford base 32.
+>
+> for example:
+>
+> ```
+> repo.30729294865234.S0CHS5WSF158RN937BP0
+> ```
 
-```
-repo.30729294865234.S0CHS5WSF158RN937BP0
-```
-
-These backups serve two purposes: recovery from failed updates, and the ops log. The `Repo.latest_updates` list holds recent operations, but its size is bounded (default: 1,000 entries). When the list overflows, older entries are dropped from the current repo info file. The `Repo.repo_before_updates` field points to the previous backup file (in `overwritten/`), which itself contains an older `latest_updates` list and its own `repo_before_updates` pointer, forming a linked list of repo info files that together contain the complete ops log history.
+> ic[repo.update.ops-log]
+> These backups serve two purposes: recovery from failed updates, and the ops log. The `Repo.latest_updates` list holds recent operations, but its size is bounded (default: 1,000 entries). When the list overflows, older entries are dropped from the current repo info file. The `Repo.repo_before_updates` field points to the previous backup file (in `overwritten/`), which itself contains an older `latest_updates` list and its own `repo_before_updates` pointer, forming a linked list of repo info files that together contain the complete ops log history.
 
 #### Snapshot Files
 
-A snapshot file fully describes the state of a repository at a given commit — all arrays, groups, and their metadata. The file name is the Crockford base 32 encoding of the snapshot's 12-byte id, stored under the `snapshots/` prefix. For example, the initial snapshot has id bytes `0b 1c c8 d6 78 75 80 f0 e3 3a 65 34` and is stored at `snapshots/1CECHNKREP0F1RSTCMT0`.
+> ic[snapshot.describes-state]
+> A snapshot file fully describes the state of a repository at a given commit — all arrays, groups, and their metadata.
 
-The snapshot file MUST use the standard [binary file format](#binary-file-format) with file type `Snapshot`.
+> ic[snapshot.path]
+> The file name is the Crockford base 32 encoding of the snapshot's 12-byte id, stored under the `snapshots/` prefix. For example, the initial snapshot has id bytes `0b 1c c8 d6 78 75 80 f0 e3 3a 65 34` and is stored at `snapshots/1CECHNKREP0F1RSTCMT0`.
+
+> ic[snapshot.format]
+> The snapshot file MUST use the standard [binary file format](#binary-file-format) with file type `Snapshot`.
 
 The full flatbuffers schema can be found in [`snapshot.fbs`](https://github.com/earth-mover/icechunk/tree/main/icechunk-format/flatbuffers/snapshot.fbs).
 
@@ -339,7 +392,8 @@ Array nodes carry shape information and pointers to their chunk manifests. The `
 
 ##### `ManifestRef`
 
-Each `ManifestRef` identifies a manifest file and the region of the array's chunk grid it covers. Together, the `manifests` list on an `ArrayNodeData` forms a complete map of where all chunk references for that array can be found.
+> ic[snapshot.manifest-ref.coverage]
+> Each `ManifestRef` identifies a manifest file and the region of the array's chunk grid it covers. Together, the `manifests` list on an `ArrayNodeData` forms a complete map of where all chunk references for that array can be found.
 
 ```protobuf
 --8<-- "icechunk-format/flatbuffers/snapshot.fbs:chunk_index_range"
@@ -363,9 +417,14 @@ The snapshot's `manifest_files` / `manifest_files_v2` lists provide summary meta
 
 #### Chunk Manifest Files
 
-A chunk manifest file stores chunk references — mappings from a chunk's coordinates in an array's chunk grid to the location of the chunk's data. Chunk references from multiple arrays can be stored in the same manifest, and a single array's chunks can be spread across multiple manifests. The file name is the Crockford base 32 encoding of the manifest's 12-byte id, stored under the `manifests/` prefix.
+> ic[manifest.content]
+> A chunk manifest file stores chunk references — mappings from a chunk's coordinates in an array's chunk grid to the location of the chunk's data. Chunk references from multiple arrays can be stored in the same manifest, and a single array's chunks can be spread across multiple manifests.
 
-The manifest file MUST use the standard [binary file format](#binary-file-format) with file type `Manifest`.
+> ic[manifest.path]
+> The file name is the Crockford base 32 encoding of the manifest's 12-byte id, stored under the `manifests/` prefix.
+
+> ic[manifest.format]
+> The manifest file MUST use the standard [binary file format](#binary-file-format) with file type `Manifest`.
 
 The full flatbuffers schema can be found in [`manifest.fbs`](https://github.com/earth-mover/icechunk/tree/main/icechunk-format/flatbuffers/manifest.fbs).
 
@@ -385,20 +444,31 @@ The `Manifest` table is the root type:
 
 Chunk references come in three types, encoded in the same flatbuffers table using optional fields:
 
-- **Native** — points to a chunk file within the repository's storage, identified by `chunk_id`. The `offset` and `length` fields locate the chunk within the file.
-- **Inline** — the chunk data is embedded directly in the `inline` field. Used for very small chunks (e.g. coordinate arrays).
-- **Virtual** — points to a region of a file outside the repository (e.g. a chunk inside a NetCDF file), identified by `location` (or `compressed_location`) plus `offset` and `length`.
+> ic[manifest.chunk-ref.native]
+> **Native** — points to a chunk file within the repository's storage, identified by `chunk_id`. The `offset` and `length` fields locate the chunk within the file.
+
+> ic[manifest.chunk-ref.inline]
+> **Inline** — the chunk data is embedded directly in the `inline` field. Used for very small chunks (e.g. coordinate arrays).
+
+> ic[manifest.chunk-ref.virtual]
+> **Virtual** — points to a region of a file outside the repository (e.g. a chunk inside a NetCDF file), identified by `location` (or `compressed_location`) plus `offset` and `length`.
 
 ```protobuf
 --8<-- "icechunk-format/flatbuffers/manifest.fbs:chunk_ref"
 ```
 
-When virtual chunk locations are compressed, a zstd dictionary is computed globally across the whole manifest. Individual locations are stored in the `compressed_location` field of each `ChunkRef`, and the dictionary is stored in the manifest's `location_dictionary` field.
+> ic[manifest.location-compression]
+> When virtual chunk locations are compressed, a zstd dictionary is computed globally across the whole manifest. Individual locations are stored in the `compressed_location` field of each `ChunkRef`, and the dictionary is stored in the manifest's `location_dictionary` field.
 
 #### Chunk Files
 
-Chunk files contain the binary chunks of a Zarr array, stored under the `chunks/` prefix. The file name is the Crockford base 32 encoding of the chunk's 12-byte id. Chunk encoding and compression are defined by the [Zarr specification](https://zarr-specs.readthedocs.io/en/latest/v3/core/index.html#chunk-encoding), not by Icechunk.
+> ic[chunks.path]
+> Chunk files contain the binary chunks of a Zarr array, stored under the `chunks/` prefix. The file name is the Crockford base 32 encoding of the chunk's 12-byte id.
 
+> ic[chunks.encoding]
+> Chunk encoding and compression are defined by the [Zarr specification](https://zarr-specs.readthedocs.io/en/latest/v3/core/index.html#chunk-encoding), not by Icechunk.
+
+ic[chunks.arrangements]
 Icechunk permits flexibility in how chunks are arranged within files:
 
 - One chunk per chunk file (i.e. standard Zarr)
@@ -411,9 +481,12 @@ Applications may choose to arrange chunks within files in different ways to opti
 #### Transaction Log Files
 
 A transaction log file records which nodes and chunks were modified in a given commit.
-Each snapshot MUST have a corresponding transaction log file stored at `transactions/{id}`, where `{id}` is the Crockford base 32 encoding of the snapshot's id.
 
-The transaction log file MUST use the standard [binary file format](#binary-file-format) with file type `TransactionLog`.
+> ic[txlog.required]
+> Each snapshot MUST have a corresponding transaction log file stored at `transactions/{id}`, where `{id}` is the Crockford base 32 encoding of the snapshot's id.
+
+> ic[txlog.format]
+> The transaction log file MUST use the standard [binary file format](#binary-file-format) with file type `TransactionLog`.
 
 !!! tip "For implementers"
     Transaction logs are not needed to read data from a repository — they exist to support
@@ -453,19 +526,26 @@ The `TransactionLog` table is the root type:
 
 ### Initialize New Repository
 
-A new repository is initialized by creating a new empty snapshot file, a new empty transaction log file,
-and finally creating the repo info file that includes a `main` branch pointing to the new snapshot.
-The first snapshot has a well known id, that encodes to a file name: `1CECHNKREP0F1RSTCMT0`. All object ids are
-encoded in paths using Crockford base 32.
+> ic[algo.init.steps]
+> A new repository is initialized by creating a new empty snapshot file, a new empty transaction log file,
+> and finally creating the repo info file that includes a `main` branch pointing to the new snapshot.
 
-If another client attempts to initialize a repository in the same location, only one can succeed because the repo
-object file is written to atomically.
+> ic[algo.init.first-id]
+> The first snapshot has a well known id, that encodes to a file name: `1CECHNKREP0F1RSTCMT0`. All object ids are
+> encoded in paths using Crockford base 32.
+
+> ic[algo.init.atomic]
+> If another client attempts to initialize a repository in the same location, only one can succeed because the repo
+> object file is written to atomically.
 
 ### Read from Repository
 
 #### From Snapshot ID
 
 If the specific snapshot ID is known, a client can open it directly in read only mode.
+
+ic[algo.read.from-snapshot]
+The steps to read from a snapshot ID are:
 
 1. Use the specified snapshot ID to fetch the snapshot file.
 1. Inspect the snapshot to find the relevant manifest or manifests.
@@ -475,12 +555,18 @@ If the specific snapshot ID is known, a client can open it directly in read only
 
 Usually, a client will want to read from the latest branch (e.g. `main`).
 
+ic[algo.read.from-branch]
+The steps to read from a branch are:
+
 1. Read the repo info object in `repo` path.
 1. Find the snapshot ID currently pointed by the `main` branch by scanning the `branches` field.
 1. Use the snapshot ID to fetch the snapshot file.
 1. Fetch the relevant manifests and the desired chunks pointed by them.
 
 #### From Tag
+
+ic[algo.read.from-tag]
+The steps to read from a tag are:
 
 1. Read the repo info object in `repo` path.
 1. Find the snapshot ID currently pointed by the tag by scanning the `tags` field.
@@ -489,25 +575,43 @@ Usually, a client will want to read from the latest branch (e.g. `main`).
 
 ### Write New Snapshot
 
+ic[algo.write.steps]
+The steps to write a new snapshot are:
+
 1. Open a repository at a specific branch as described above, keeping track of the parent snapshot id and branch name in the session context.
 1. [optional] Write new chunk files.
 1. [optional] Write new chunk manifests.
 1. Write a new transaction log file summarizing all changes in the session.
 1. Write a new snapshot file with the new repository hierarchy and manifest links.
 1. Do conditional update to write the new repo info file that contains the new snapshot and the new pointer for the branch
-    1. If successful, the commit succeeded and the branch is updated.
-    1. If unsuccessful because the branch was updated since the session started, attempt to reconcile and retry the commit.
-    1. If unsuccessful because there was some other previous update to the repo info file, read the file again and retry
+
+> ic[algo.write.commit-success]
+> If the conditional update is successful, the commit succeeded and the branch is updated.
+
+> ic[algo.write.commit-retry]
+> If the conditional update is unsuccessful because the branch was updated since the session started, the client attempts to reconcile and retry the commit.
+
+> ic[algo.write.commit-retry-other]
+> If the conditional update is unsuccessful because there was some other previous update to the repo info file, the client reads the file again and retries.
 
 ### Create New Tag
 
 A tag can be created from any snapshot.
 
+ic[algo.tag.create]
+The steps to create a new tag are:
+
 1. Open the repository at a specific snapshot.
 1. Do conditional update to write the new repo info file that contains the new tag
-    1. If successful, the update succeeded and the tag is created.
-    1. If unsuccessful because there was some previous update, read the file again and retry
-    1. If unsuccessful because the snapshot doesn't exist, fail the update
+
+> ic[algo.tag.conditional-update]
+> If the conditional update is successful, the update succeeded and the tag is created.
+
+> ic[algo.tag.retry]
+> If the conditional update is unsuccessful because there was some previous update, the client reads the file again and retries.
+
+> ic[algo.tag.fail-missing-snapshot]
+> If the conditional update is unsuccessful because the snapshot doesn't exist, the update fails.
 
 ## Changes from spec version 2 to 2.1
 
