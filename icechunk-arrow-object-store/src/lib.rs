@@ -65,6 +65,8 @@ use tokio_util::io::StreamReader;
 use tracing::instrument;
 use url::Url;
 
+#[cfg(feature = "azure")]
+mod azure_fast_list;
 #[cfg(feature = "gcs")]
 mod gcs_fast_list;
 
@@ -1326,8 +1328,81 @@ impl Display for AzureObjectStoreBackend {
 }
 
 #[cfg(feature = "azure")]
+#[async_trait]
 #[typetag::serde(name = "azure_object_store_provider")]
 impl ObjectStoreBackend for AzureObjectStoreBackend {
+    /// Engage the List Blobs fast lister only for configurations it can honor
+    /// exactly: SAS, bearer-token, account-key, or anonymous credentials
+    /// (static or refreshable, the latter re-fetched here per call like the
+    /// GCS gating), and a config that is empty or carries only an
+    /// endpoint-shaped key (`Endpoint`/`UseEmulator`, plus `AllowHttp`, which
+    /// `reqwest` already permits). `FromEnv` (and absent) credentials would
+    /// require replicating `object_store`'s whole env/CLI/IMDS resolution
+    /// chain, so they fall back to the portable listing.
+    async fn fast_list_fetcher(&self) -> StorageResult<Option<Arc<dyn ListPageFetcher>>> {
+        fn parse_bool(value: &str) -> Option<bool> {
+            match value.to_ascii_lowercase().as_str() {
+                "1" | "true" | "on" | "yes" | "y" => Some(true),
+                "0" | "false" | "off" | "no" | "n" => Some(false),
+                _ => None,
+            }
+        }
+        let mut endpoint: Option<&str> = None;
+        let mut use_emulator = false;
+        for (key, value) in self.config.iter().flatten() {
+            match key {
+                AzureConfigKey::Endpoint => endpoint = Some(value),
+                AzureConfigKey::UseEmulator => match parse_bool(value) {
+                    Some(flag) => use_emulator = flag,
+                    None => return Ok(None),
+                },
+                AzureConfigKey::Client(ClientConfigKey::AllowHttp) => {}
+                _ => return Ok(None),
+            }
+        }
+        let credential = match &self.credentials {
+            Some(AzureCredentials::Anonymous) => None,
+            Some(AzureCredentials::Static(credential)) => Some(credential.clone()),
+            Some(AzureCredentials::Refreshable(fetcher)) => {
+                let refreshed = fetcher.get().await.map_err(|e| {
+                    other_error(format!("fetching refreshable Azure credentials: {e}"))
+                })?;
+                Some(match refreshed {
+                    AzureRefreshableCredential::AccessKey { key, .. } => {
+                        AzureStaticCredentials::AccessKey(key)
+                    }
+                    AzureRefreshableCredential::SASToken { token, .. } => {
+                        AzureStaticCredentials::SASToken(token)
+                    }
+                    AzureRefreshableCredential::BearerToken { bearer, .. } => {
+                        AzureStaticCredentials::BearerToken(bearer)
+                    }
+                })
+            }
+            None | Some(AzureCredentials::FromEnv) => return Ok(None),
+        };
+        let auth = match credential {
+            None => azure_fast_list::AzureListAuth::Anonymous,
+            Some(AzureStaticCredentials::SASToken(token)) => {
+                azure_fast_list::AzureListAuth::sas(&token)
+            }
+            Some(AzureStaticCredentials::BearerToken(token)) => {
+                azure_fast_list::AzureListAuth::Bearer(token)
+            }
+            Some(AzureStaticCredentials::AccessKey(key)) => {
+                azure_fast_list::AzureListAuth::shared_key(&key)?
+            }
+        };
+        azure_fast_list::make_fetcher(
+            endpoint,
+            use_emulator,
+            &self.account,
+            &self.container,
+            auth,
+        )
+        .map(Some)
+    }
+
     fn storage_info(&self) -> StorageInfo {
         let mut fields = vec![
             ("account", self.account.clone()),
@@ -2143,6 +2218,136 @@ mod gcs_fast_path_tests {
         let mut b = backend(Some(GcsCredentials::Anonymous), None);
         b.extra_read_headers = vec![("x-goog-meta-a".to_string(), "1".to_string())];
         assert!(!engages(&b).await);
+    }
+}
+
+#[cfg(all(test, feature = "azure"))]
+mod azure_fast_path_tests {
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    use async_trait::async_trait;
+    use icechunk_macros::tokio_test;
+    use object_store::{ClientConfigKey, azure::AzureConfigKey};
+
+    use super::{
+        AzureCredentials, AzureCredentialsFetcher, AzureObjectStoreBackend,
+        AzureRefreshableCredential, AzureStaticCredentials, ObjectStoreBackend as _,
+    };
+
+    #[derive(Debug, serde::Serialize, serde::Deserialize)]
+    struct FixedSasFetcher;
+
+    #[async_trait]
+    #[typetag::serde]
+    impl AzureCredentialsFetcher for FixedSasFetcher {
+        async fn get(&self) -> Result<AzureRefreshableCredential, String> {
+            Ok(AzureRefreshableCredential::SASToken {
+                token: "?sv=1&sig=s".to_string(),
+                expires_after: None,
+            })
+        }
+    }
+
+    fn backend(
+        credentials: Option<AzureCredentials>,
+        config: Option<HashMap<AzureConfigKey, String>>,
+    ) -> AzureObjectStoreBackend {
+        AzureObjectStoreBackend {
+            account: "a".to_string(),
+            container: "c".to_string(),
+            prefix: Some("p".to_string()),
+            credentials,
+            config,
+        }
+    }
+
+    async fn engages(b: &AzureObjectStoreBackend) -> bool {
+        #[expect(clippy::expect_used)]
+        b.fast_list_fetcher().await.expect("must not error").is_some()
+    }
+
+    #[tokio_test]
+    async fn test_fast_lister_engages_for_supported_credentials() {
+        let creds = [
+            AzureStaticCredentials::SASToken("sv=1&sig=s".to_string()),
+            AzureStaticCredentials::BearerToken("tok".to_string()),
+            AzureStaticCredentials::AccessKey("a2V5".to_string()),
+        ];
+        for cred in creds {
+            assert!(
+                engages(&backend(Some(AzureCredentials::Static(cred.clone())), None))
+                    .await,
+                "must engage: {cred:?}"
+            );
+        }
+        assert!(engages(&backend(Some(AzureCredentials::Anonymous), None)).await);
+        assert!(
+            engages(&backend(
+                Some(AzureCredentials::Refreshable(Arc::new(FixedSasFetcher))),
+                None
+            ))
+            .await
+        );
+    }
+
+    #[tokio_test]
+    async fn test_fast_lister_falls_back_for_env_credentials() {
+        assert!(!engages(&backend(None, None)).await);
+        assert!(!engages(&backend(Some(AzureCredentials::FromEnv), None)).await);
+    }
+
+    #[tokio_test]
+    async fn test_fast_lister_honors_endpoint_and_rejects_unknown_config() {
+        let anon = || Some(AzureCredentials::Anonymous);
+        let cfg = |entries: &[(AzureConfigKey, &str)]| {
+            Some(
+                entries
+                    .iter()
+                    .map(|(k, v)| (*k, (*v).to_string()))
+                    .collect::<HashMap<_, _>>(),
+            )
+        };
+        assert!(
+            engages(&backend(
+                anon(),
+                cfg(&[
+                    (AzureConfigKey::Endpoint, "http://localhost:10000/a"),
+                    (AzureConfigKey::Client(ClientConfigKey::AllowHttp), "true"),
+                ])
+            ))
+            .await
+        );
+        assert!(
+            engages(&backend(anon(), cfg(&[(AzureConfigKey::UseEmulator, "true")])))
+                .await
+        );
+        assert!(
+            !engages(&backend(anon(), cfg(&[(AzureConfigKey::UseEmulator, "maybe")])))
+                .await
+        );
+        assert!(
+            !engages(&backend(anon(), cfg(&[(AzureConfigKey::SkipSignature, "true")])))
+                .await
+        );
+        assert!(
+            !engages(&backend(
+                anon(),
+                cfg(&[(AzureConfigKey::Client(ClientConfigKey::ProxyUrl), "http://p")])
+            ))
+            .await
+        );
+    }
+
+    #[tokio_test]
+    async fn test_fast_lister_errors_on_invalid_access_key() {
+        let b = backend(
+            Some(AzureCredentials::Static(AzureStaticCredentials::AccessKey(
+                "not base64!".to_string(),
+            ))),
+            None,
+        );
+        assert!(b.fast_list_fetcher().await.is_err());
     }
 }
 

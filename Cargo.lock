@@ -2356,9 +2356,11 @@ name = "icechunk-arrow-object-store"
 version = "2.1.1"
 dependencies = [
  "async-trait",
+ "base64 0.22.1",
  "bytes",
  "chrono",
  "futures",
+ "hmac",
  "http 1.4.2",
  "icechunk-macros",
  "icechunk-storage",
@@ -2371,6 +2373,7 @@ dependencies = [
  "rmp-serde",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "test-log",
  "tokio",

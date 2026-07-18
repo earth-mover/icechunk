@@ -152,6 +152,156 @@ async fn test_total_nonvirtual_size_in_minio() -> Result<(), Box<dyn std::error:
     Ok(())
 }
 
+#[tokio_test]
+async fn test_total_nonvirtual_size_in_azurite() -> Result<(), Box<dyn std::error::Error>>
+{
+    use std::collections::HashMap;
+
+    use futures::{StreamExt as _, TryStreamExt as _};
+    use icechunk::{
+        ObjectStorage,
+        config::{AzureCredentials, AzureStaticCredentials},
+        format::{
+            ChunkId, ManifestId, NodeId,
+            manifest::{ChunkInfo, Manifest},
+        },
+        storage::Settings,
+    };
+    use icechunk_arrow_object_store::object_store::azure::AzureConfigKey;
+
+    // Azurite's well-known development-storage account key.
+    const EMULATOR_KEY: &str = "Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==";
+    // The long-lived account SAS `azurite-init` in compose.yaml uses to create
+    // `testcontainer` (valid through 2035, permissions rwdftlacup).
+    const COMPOSE_SAS: &str = "sv=2023-01-03&ss=btqf&srt=sco&spr=https%2Chttp&st=2025-01-06T14%3A53%3A30Z&se=2035-01-07T14%3A53%3A00Z&sp=rwdftlacup&sig=jclETGilOzONYp4Y0iK9SpVRLGyehaS5lg5booJ9VYA%3D";
+
+    async fn azurite_storage(
+        prefix: &str,
+        credentials: AzureStaticCredentials,
+    ) -> Result<Arc<dyn Storage + Send + Sync>, Box<dyn std::error::Error>> {
+        Ok(Arc::new(
+            ObjectStorage::new_azure(
+                "devstoreaccount1".to_string(),
+                "testcontainer".to_string(),
+                Some(prefix.to_string()),
+                Some(AzureCredentials::Static(credentials)),
+                Some(HashMap::from([(AzureConfigKey::UseEmulator, "true".to_string())])),
+            )
+            .await?,
+        ))
+    }
+
+    async fn naive_size(
+        storage: &Arc<dyn Storage + Send + Sync>,
+        settings: &Settings,
+        prefix: &str,
+    ) -> Result<u64, Box<dyn std::error::Error>> {
+        let mut objects = storage.list_objects(settings, prefix).await?;
+        let mut sum = 0u64;
+        while let Some(info) = objects.next().await {
+            sum = sum.saturating_add(info?.size_bytes);
+        }
+        Ok(sum)
+    }
+
+    let prefix = format!("test_nvsize_az_{}", Utc::now().timestamp_millis());
+    let seeder = azurite_storage(
+        &prefix,
+        AzureStaticCredentials::AccessKey(EMULATOR_KEY.to_string()),
+    )
+    .await?;
+    let settings = seeder.default_settings().await?;
+    let manager = AssetManager::new_no_cache(
+        Arc::clone(&seeder),
+        settings.clone(),
+        SpecVersionBin::default(),
+        1,
+        100,
+    );
+
+    // More than one page (5000 blobs) of chunks, so the single-page probe sees
+    // a truncated listing and the two-character shard fan-out actually runs;
+    // the random ids span many shards.
+    futures::stream::iter(0..5100u32)
+        .map(|i| {
+            let manager = &manager;
+            async move {
+                manager
+                    .write_chunk(
+                        ChunkId::random(),
+                        Bytes::from(vec![
+                            u8::try_from(i % 251).unwrap_or(0);
+                            (i % 7 + 1) as usize
+                        ]),
+                    )
+                    .await
+            }
+        })
+        .buffer_unordered(64)
+        .try_collect::<Vec<_>>()
+        .await?;
+    let ci = ChunkInfo {
+        node: NodeId::random(),
+        coord: ChunkIndices(vec![0]),
+        payload: ChunkPayload::Inline(Bytes::copy_from_slice(b"inline")),
+    };
+    let manifest = Arc::new(
+        Manifest::from_iter(&ManifestId::random(), vec![ci].into_iter(), None)
+            .await?
+            .unwrap(),
+    );
+    manager.write_manifest(manifest).await?;
+
+    let naive_all = naive_size(&seeder, &settings, "").await?;
+    let naive_chunks = naive_size(&seeder, &settings, "chunks").await?;
+    let naive_manifests = naive_size(&seeder, &settings, "manifests").await?;
+    assert!(naive_chunks > 0);
+    assert!(naive_manifests > 0);
+    assert_eq!(naive_all, naive_chunks + naive_manifests);
+
+    // The fast path must be byte-exact against a naive full listing under both
+    // fast-path credential shapes: SharedKey (account key) and SAS — the
+    // latter is what arraylake vends.
+    let sas = azurite_storage(
+        &prefix,
+        AzureStaticCredentials::SASToken(COMPOSE_SAS.to_string()),
+    )
+    .await?;
+    for (label, storage) in [("access_key", seeder), ("sas", sas)] {
+        // Truncated probe + 1024-shard fan-out.
+        assert_eq!(
+            storage.sum_object_sizes(&settings, "chunks", true).await?,
+            naive_chunks,
+            "sharded chunks sum ({label})"
+        );
+        // Sequential drain of the same >5000-blob prefix: marker pagination.
+        assert_eq!(
+            storage.sum_object_sizes(&settings, "chunks", false).await?,
+            naive_chunks,
+            "sequential chunks sum ({label})"
+        );
+        // Single-page probe short-circuit.
+        assert_eq!(
+            storage.sum_object_sizes(&settings, "manifests", true).await?,
+            naive_manifests,
+            "manifests sum ({label})"
+        );
+        let manager = AssetManager::new_no_cache(
+            Arc::clone(&storage),
+            settings.clone(),
+            SpecVersionBin::default(),
+            1,
+            100,
+        );
+        assert_eq!(
+            manager._total_nonvirtual_size().await?,
+            naive_all,
+            "total nonvirtual size ({label})"
+        );
+    }
+    Ok(())
+}
+
 async fn do_test_repo_chunks_storage(
     storage: Arc<dyn Storage + Send + Sync>,
     spec_version: SpecVersionBin,
