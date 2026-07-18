@@ -945,6 +945,9 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         # This will test out checking out and deleting a branch that does not exist.
         return name
 
+    # ic[verify refs.tag.immutable]
+    # ic[verify refs.tag.no-recreate]
+    # ic[verify algo.tag.fail-missing-snapshot]
     @precondition(lambda self: self.model.has_commits)
     @rule(name=ref_name_text, commit_id=commits, target=tags)
     def create_tag(self, name: str, commit_id: str) -> str:
@@ -1018,6 +1021,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
             self.session = self.repo.writable_session(checkout_branch)
             self.model.checkout_branch(checkout_branch)
 
+    # ic[verify refs.branch.required]
     @rule(branch=consumes(branches))
     def delete_branch(self, branch: str) -> None:
         note(f"Deleting branch {branch!r}")
@@ -1261,6 +1265,8 @@ class VersionControlStateMachine(RuleBasedStateMachine):
 
         # the remaining fields (snapshots, branches, tags, ops_log) are checked by the other invariants
 
+    # ic[verify txlog.required]
+    # ic[verify repo.update.backup]
     def check_file_invariants(self) -> None:
         if Version(self.ic.__version__).major == 1:
             return
@@ -1342,6 +1348,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
                 event("backups exist")
             assert backups.issubset(paths)
 
+    # ic[verify repo.update.ops-log]
     def check_ops_log(self) -> None:
         if self.model.spec_version == 1:
             return

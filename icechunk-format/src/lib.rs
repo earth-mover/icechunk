@@ -47,10 +47,16 @@ pub mod snapshot;
 pub mod transaction_log;
 
 pub const CONFIG_FILE_PATH: &str = "config.yaml";
+// ic[impl layout.paths] this and the following prefix constants
+// ic[impl repo.path] file name
 pub const REPO_INFO_FILE_PATH: &str = "repo";
+// ic[impl chunks.path] prefix
 pub const CHUNKS_FILE_PATH: &str = "chunks";
+// ic[impl manifest.path] prefix
 pub const MANIFESTS_FILE_PATH: &str = "manifests";
+// ic[impl snapshot.path] prefix
 pub const SNAPSHOTS_FILE_PATH: &str = "snapshots";
+// ic[impl txlog.required] path prefix
 pub const TRANSACTION_LOGS_FILE_PATH: &str = "transactions";
 pub const OVERWRITTEN_FILES_PATH: &str = "overwritten";
 pub const V1_REFS_FILE_PATH: &str = "refs";
@@ -188,6 +194,7 @@ impl<const SIZE: usize, T: FileTypeTag> TryFrom<&[u8]> for ObjectId<SIZE, T> {
     }
 }
 
+// ic[impl types.object-id.encoding] Crockford base32 decoding
 impl<const SIZE: usize, T: FileTypeTag> TryFrom<&str> for ObjectId<SIZE, T> {
     type Error = &'static str;
 
@@ -198,6 +205,7 @@ impl<const SIZE: usize, T: FileTypeTag> TryFrom<&str> for ObjectId<SIZE, T> {
     }
 }
 
+// ic[impl types.object-id.encoding] Crockford base32 encoding
 impl<const SIZE: usize, T: FileTypeTag> From<&ObjectId<SIZE, T>> for String {
     fn from(value: &ObjectId<SIZE, T>) -> Self {
         base32::encode(base32::Alphabet::Crockford, &value.0)
@@ -405,6 +413,7 @@ impl From<Infallible> for IcechunkFormatErrorKind {
 pub type IcechunkResult<T> = Result<T, IcechunkFormatError>;
 
 /// Binary format constants (file types, spec versions, compression).
+// ic[impl format.binary-file] header constants; file assembly lives in the icechunk crate
 pub mod format_constants {
     use std::sync::LazyLock;
 
@@ -416,6 +425,10 @@ pub mod format_constants {
     /// Binary file type identifier in the file header.
     #[repr(u8)]
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    // ic[impl snapshot.format] file type byte
+    // ic[impl manifest.format] file type byte
+    // ic[impl txlog.format] file type byte
+    // ic[impl repo.format] file type byte
     pub enum FileTypeBin {
         Snapshot = 1u8,
         Manifest = 2,
@@ -520,12 +533,14 @@ pub mod format_constants {
         }
     }
 
+    // ic[impl format.header] magic bytes
     pub const ICECHUNK_FORMAT_MAGIC_BYTES: &[u8] = "ICE🧊CHUNK".as_bytes();
     // offsets assume a 12-byte magic
     const _: () = assert!(ICECHUNK_FORMAT_MAGIC_BYTES.len() == 12);
 
     // Binary file header layout: magic | impl name | spec version | file type | compression.
     // Reader (check_header) and writer (binary_file_header) both derive offsets from these.
+    // ic[impl format.header] field sizes and offsets
     pub const ICECHUNK_IMPL_NAME_LEN: usize = 24;
     pub const ICECHUNK_SPEC_VERSION_OFFSET: usize =
         ICECHUNK_FORMAT_MAGIC_BYTES.len() + ICECHUNK_IMPL_NAME_LEN;
@@ -572,6 +587,7 @@ pub mod format_constants {
     ///
     /// Discovers (does not assert) the file type, so it works for every metadata
     /// file kind. Tolerant about the impl-name string content.
+    // ic[impl format.header] header parsing
     pub fn parse_file_header(buf: &[u8]) -> Result<FileHeader, IcechunkFormatError> {
         use IcechunkFormatErrorKind as K;
 
@@ -690,6 +706,7 @@ mod tests {
         serialize_and_deserialize_spec_version_bin - spec_version
     );
 
+    // ic[verify types.object-id.encoding]
     #[icechunk_macros::test]
     fn test_object_id_serialization() {
         let sid = SnapshotId::new([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
@@ -744,6 +761,7 @@ mod tests {
         buf
     }
 
+    // ic[verify format.header]
     #[icechunk_macros::test]
     fn test_parse_file_header_roundtrip() {
         use format_constants::*;

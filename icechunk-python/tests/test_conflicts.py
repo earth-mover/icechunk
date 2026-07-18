@@ -25,6 +25,7 @@ def repo(tmpdir: Path, any_spec_version: int | None) -> icechunk.Repository:
     return repo
 
 
+# ic[verify consistency.detect-concurrent-update]
 def test_detect_conflicts(repo: icechunk.Repository) -> None:
     session_a = repo.writable_session("main")
     session_b = repo.writable_session("main")
@@ -69,6 +70,7 @@ def test_detect_conflicts(repo: icechunk.Repository) -> None:
             raise e
 
 
+# ic[verify algo.write.commit-retry]
 def test_rebase_no_conflicts(repo: icechunk.Repository) -> None:
     session_a = repo.writable_session("main")
     session_b = repo.writable_session("main")

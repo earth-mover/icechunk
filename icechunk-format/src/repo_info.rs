@@ -457,6 +457,7 @@ impl RepoInfo {
         Ok(Self { buffer })
     }
 
+    // ic[impl repo.update.ops-log] bounded latest_updates + repo_before_updates chain
     fn mk_latest_updates<
         'bldr,
         'a,
@@ -980,6 +981,7 @@ impl RepoInfo {
         }
     }
 
+    // ic[impl refs.branch.mutable]
     pub fn update_branch(
         &self,
         spec_version: SpecVersionBin,
@@ -1033,6 +1035,7 @@ impl RepoInfo {
         }
     }
 
+    // ic[impl refs.tag.immutable] existing tags cannot be overwritten
     pub fn add_tag(
         &self,
         spec_version: SpecVersionBin,
@@ -1600,6 +1603,7 @@ fn timestamp_to_timestamp(ts: u64) -> IcechunkResult<DateTime<Utc>> {
         .capture()
 }
 
+// ic[impl repo.pruned-tx-logs.full-history] reads the list back in stored order
 fn mk_snapshot_info(
     repo: &generated::Repo<'_>,
     snap: &generated::SnapshotInfo<'_>,
@@ -1950,6 +1954,7 @@ mod tests {
         Ok(())
     }
 
+    // ic[verify repo.pruned-tx-logs.full-history]
     #[test]
     fn test_pruned_ancestor_tx_logs_roundtrip() -> Result<(), Box<dyn std::error::Error>>
     {
@@ -2005,6 +2010,7 @@ mod tests {
         Ok(())
     }
 
+    // ic[verify refs.tag.immutable] cannot re-add an existing tag
     #[test]
     fn test_tags_and_branches() -> Result<(), Box<dyn std::error::Error>> {
         let id1 = SnapshotId::random();
@@ -2141,6 +2147,7 @@ mod tests {
         Ok(())
     }
 
+    // ic[verify repo.update.ops-log]
     #[test]
     fn test_repo_info_updates() -> Result<(), Box<dyn std::error::Error>> {
         let id1 = SnapshotId::random();

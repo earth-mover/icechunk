@@ -89,6 +89,7 @@ pub use icechunk_types::ETag;
 pub struct Generation(pub String);
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone)]
+// ic[impl storage.ops.conditional-update]
 pub struct VersionInfo {
     pub etag: Option<ETag>,
     pub generation: Option<Generation>,
@@ -391,6 +392,7 @@ impl Settings {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+// ic[impl consistency.detect-concurrent-update]
 pub enum VersionedUpdateResult {
     Updated { new_version: VersionInfo },
     NotOnLatestVersion,
@@ -473,6 +475,7 @@ pub enum RepositoryCreation {
 /// Implementations are free to assume files are never overwritten.
 #[async_trait]
 #[typetag::serde(tag = "type")]
+// ic[impl storage.immutability]
 pub trait Storage: fmt::Debug + Display + sealed::Sealed + Sync + Send {
     /// Return structured metadata about this storage backend for display/repr.
     fn storage_info(&self) -> StorageInfo;
@@ -499,6 +502,7 @@ pub trait Storage: fmt::Debug + Display + sealed::Sealed + Sync + Send {
         Ok(())
     }
 
+    // ic[impl storage.ops.range-reads]
     async fn get_object(
         &self,
         settings: &Settings,
@@ -523,6 +527,7 @@ pub trait Storage: fmt::Debug + Display + sealed::Sealed + Sync + Send {
         Ok((Box::pin(reader), version))
     }
 
+    // ic[impl storage.ops.range-reads]
     async fn get_object_range(
         &self,
         settings: &Settings,
@@ -533,6 +538,8 @@ pub trait Storage: fmt::Debug + Display + sealed::Sealed + Sync + Send {
         VersionInfo,
     )>;
 
+    // ic[impl storage.ops.write]
+    // ic[impl storage.ops.conditional-update]
     async fn put_object(
         &self,
         settings: &Settings,
@@ -562,6 +569,7 @@ pub trait Storage: fmt::Debug + Display + sealed::Sealed + Sync + Send {
         prefix: &str,
     ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>>;
 
+    // ic[impl storage.ops.deletes]
     async fn delete_batch(
         &self,
         settings: &Settings,
@@ -575,6 +583,7 @@ pub trait Storage: fmt::Debug + Display + sealed::Sealed + Sync + Send {
         settings: &Settings,
     ) -> StorageResult<DateTime<Utc>>;
 
+    // ic[impl consistency.detect-concurrent-update]
     async fn get_object_conditional(
         &self,
         settings: &Settings,
@@ -585,6 +594,7 @@ pub trait Storage: fmt::Debug + Display + sealed::Sealed + Sync + Send {
     /// Delete a stream of objects, by their id string representations
     /// Input stream includes sizes to get as result the total number of bytes deleted
     #[instrument(skip(self, settings, ids))]
+    // ic[impl storage.ops.deletes]
     async fn delete_objects(
         &self,
         settings: &Settings,

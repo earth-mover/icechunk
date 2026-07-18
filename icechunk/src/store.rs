@@ -181,6 +181,7 @@ impl Store {
     }
 
     #[instrument(skip(self))]
+    // ic[impl chunks.encoding] chunk bytes are returned exactly as stored; Zarr defines their encoding
     pub async fn get(&self, key: &str, byte_range: &ByteRange) -> StoreResult<Bytes> {
         let repo = self.session.read().await;
         get_key(key, byte_range, &repo).await
@@ -272,6 +273,7 @@ impl Store {
     }
 
     #[instrument(skip(self, value))]
+    // ic[impl chunks.encoding] chunk bytes arrive Zarr-encoded and are stored as opaque bytes
     pub async fn set(&self, key: &str, value: Bytes) -> StoreResult<()> {
         if self.read_only().await {
             return Err(StoreError::capture(StoreErrorKind::ReadOnly));

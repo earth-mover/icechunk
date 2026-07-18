@@ -89,6 +89,8 @@ def parse_header(data: bytes) -> tuple[str, int, int, int]:
     return impl_name, spec_version, file_type, compression
 
 
+# ic[verify format.binary-file]
+# ic[verify format.header]
 def assert_valid_header(
     data: bytes, expected_file_type: int, *, filename: str = ""
 ) -> bytes:
@@ -249,6 +251,9 @@ def repo_path() -> Generator[str]:
 # ---------------------------------------------------------------------------
 
 
+# ic[verify repo.path]
+# ic[verify repo.format]
+# ic[verify refs.branch.default-name]
 def test_repo_info_file(repo_path: str, flatbuf_mod: ModuleType) -> None:
     """Read the repo info file, verify header + flatbuffer content."""
     Repo = flatbuf_mod.Repo
@@ -271,6 +276,8 @@ def test_repo_info_file(repo_path: str, flatbuf_mod: ModuleType) -> None:
     assert "v1.0" in tag_names
 
 
+# ic[verify snapshot.path]
+# ic[verify snapshot.format]
 def test_all_snapshots(repo_path: str, flatbuf_mod: ModuleType) -> None:
     """Read every snapshot file, verify header + flatbuffer content."""
     Snapshot = flatbuf_mod.Snapshot
@@ -293,6 +300,13 @@ def test_all_snapshots(repo_path: str, flatbuf_mod: ModuleType) -> None:
         assert len(message) > 0
 
 
+# ic[verify manifest.path]
+# ic[verify manifest.format]
+# ic[verify manifest.content]
+# ic[verify manifest.chunk-ref.inline]
+# ic[verify manifest.chunk-ref.native]
+# ic[verify manifest.chunk-ref.virtual]
+# ic[verify manifest.location-compression]
 def test_all_manifests_and_virtual_locations(
     repo_path: str, flatbuf_mod: ModuleType
 ) -> None:
@@ -396,6 +410,8 @@ def test_all_manifests_and_virtual_locations(
     )
 
 
+# ic[verify txlog.required]
+# ic[verify txlog.format]
 def test_all_transaction_logs(repo_path: str, flatbuf_mod: ModuleType) -> None:
     """Read every transaction log file, verify header + flatbuffer content."""
     TransactionLog = flatbuf_mod.TransactionLog
@@ -415,6 +431,7 @@ def test_all_transaction_logs(repo_path: str, flatbuf_mod: ModuleType) -> None:
         assert_valid_object_id(txn_log.Id())
 
 
+# ic[verify chunks.path]
 def test_chunks_are_valid_zstd(repo_path: str) -> None:
     """Verify all chunk files are valid zstd-compressed data."""
     chunks_dir = Path(repo_path, "chunks")

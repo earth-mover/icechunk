@@ -957,6 +957,7 @@ pub async fn expire_v2(
 /// ```
 ///
 /// returns `new_parent = s1` and `pruned = [s2, s3, s4, s5]` (oldest first).
+// ic[impl repo.pruned-tx-logs.full-history] expiration keeps the pruned tx log chain complete and oldest-first
 fn reparent_and_prune(
     repo_info: &RepoInfo,
     edited: &SnapshotInfo,

@@ -17,6 +17,11 @@ async def async_ancestry(
     return [parent async for parent in repo.async_ancestry(**kwargs)]
 
 
+# ic[verify algo.init.steps]
+# ic[verify algo.init.first-id]
+# ic[verify algo.read.from-snapshot]
+# ic[verify algo.read.from-tag]
+# ic[verify refs.branch.mutable]
 @pytest.mark.parametrize(
     "using_flush",
     [False, True],
@@ -232,6 +237,9 @@ Arrays deleted:
     assert actual == repo.lookup_snapshot(actual.id)
 
 
+# ic[verify refs.branch.mutable]
+# ic[verify algo.read.from-branch]
+# ic[verify algo.write.commit-success]
 async def test_branch_reset(any_spec_version: int | None) -> None:
     config = ic.RepositoryConfig.default()
     config.inline_chunk_threshold_bytes = 1
@@ -281,6 +289,7 @@ async def test_branch_reset(any_spec_version: int | None) -> None:
     ) is None
 
 
+# ic[verify refs.tag.no-recreate]
 async def test_tag_delete(any_spec_version: int | None) -> None:
     repo = ic.Repository.create(
         storage=ic.in_memory_storage(),
@@ -1079,6 +1088,7 @@ Chunks updated:
     )
 
 
+# ic[verify repo.update.ops-log]
 @pytest.mark.parametrize(
     "spec_version",
     [2, None],

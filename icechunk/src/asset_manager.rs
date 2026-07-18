@@ -68,6 +68,7 @@ use crate::{
 /// Reads and writes Icechunk assets with caching and concurrency control.
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(from = "AssetManagerSerializer")]
+// ic[impl layout.paths] all $ROOT-relative object paths (repo, snapshots/, manifests/, transactions/, chunks/, overwritten/) are constructed in this module
 pub struct AssetManager {
     storage: Arc<dyn Storage + Send + Sync>,
     storage_settings: storage::Settings,
@@ -499,6 +500,7 @@ impl AssetManager {
     }
 
     #[instrument(skip(self))]
+    // ic[impl repo.entry-point] every operation starts by fetching the repo info object
     pub async fn fetch_repo_info(
         &self,
     ) -> RepositoryResult<(Arc<RepoInfo>, VersionInfo)> {
@@ -774,6 +776,7 @@ impl AssetManager {
     }
 
     #[instrument(skip(self, info))]
+    // ic[impl algo.init.atomic] if-none-match creation: only one initializer can succeed
     pub async fn create_repo_info(
         &self,
         info: Arc<RepoInfo>,
@@ -782,6 +785,7 @@ impl AssetManager {
     }
 
     #[instrument(skip(self, retry_settings, update))]
+    // ic[impl repo.update.only-mutable] the repo info object is the only object updated in place
     pub async fn update_repo_info(
         &self,
         retry_settings: &storage::RetriesSettings,
@@ -813,6 +817,8 @@ impl AssetManager {
     }
 
     #[instrument(skip(self, retry_settings, update))]
+    // ic[impl algo.write.commit-retry-other] on unrelated concurrent updates, re-read the repo info and retry
+    // ic[impl algo.tag.retry]
     async fn update_repo_info_internal(
         &self,
         retry_settings: &storage::RetriesSettings,
@@ -933,6 +939,7 @@ impl AssetManager {
     }
 
     #[instrument(skip(self))]
+    // ic[impl chunks.arrangements] range reads within a chunk file allow multiple chunks per file
     pub async fn fetch_chunk(
         &self,
         chunk_id: &ChunkId,
@@ -1228,6 +1235,8 @@ fn check_file_type(header: &FileHeader, file_type: FileTypeBin) -> RepositoryRes
     Ok(())
 }
 
+// ic[impl manifest.path]
+// ic[impl manifest.format]
 async fn write_new_manifest(
     new_manifest: Arc<Manifest>,
     spec_version: SpecVersionBin,
@@ -1379,6 +1388,8 @@ async fn compress_with_header(
     Ok(buffer)
 }
 
+// ic[impl snapshot.path]
+// ic[impl snapshot.format]
 async fn write_new_snapshot(
     new_snapshot: Arc<Snapshot>,
     spec_version: SpecVersionBin,
@@ -1458,6 +1469,8 @@ async fn fetch_snapshot(
     .await
 }
 
+// ic[impl txlog.required] transaction logs are stored at transactions/{snapshot id}
+// ic[impl txlog.format]
 async fn write_new_tx_log(
     transaction_id: SnapshotId,
     new_log: Arc<TransactionLog>,
@@ -1580,6 +1593,9 @@ async fn prepare_repo_info(
 }
 
 #[expect(clippy::too_many_arguments)]
+// ic[impl repo.path]
+// ic[impl consistency.detect-concurrent-update] conditional copy+put fail with RepoInfoUpdated if another session updated the repo info
+// ic[impl repo.update.backup] the current repo info is copied to the overwritten/ prefix before being overwritten
 pub async fn write_repo_info(
     info: Arc<RepoInfo>,
     spec_version: SpecVersionBin,
@@ -1672,6 +1688,7 @@ pub async unsafe fn force_write_repo_info(
 }
 
 #[instrument(skip_all)]
+// ic[impl repo.path] the repo info file lives at $ROOT/repo
 pub async fn fetch_repo_info(
     storage: &(dyn Storage + Send + Sync),
     storage_settings: &storage::Settings,
@@ -1800,6 +1817,7 @@ pub async fn async_reader_to_bytes(
     Ok(buffer.into())
 }
 
+// ic[impl repo.update.backup-path] repo.<3000-epoch-reversed-millis>.<12 random bytes base32>
 fn backup_destination(source_path: &str) -> String {
     let last: u64 = 32503680000000;
     let now = Utc::now().timestamp_millis() as u64;

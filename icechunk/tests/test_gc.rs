@@ -575,6 +575,7 @@ async fn test_expire_and_garbage_collect_deleting_expired_refs()
 /// the expired commits' transaction logs are retained via the edited tip's
 /// `pruned_ancestor_tx_logs`.
 #[tokio_test]
+// ic[verify repo.pruned-tx-logs.full-history]
 async fn test_diff_complete_after_expire_and_gc() -> Result<(), Box<dyn std::error::Error>>
 {
     let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
@@ -789,6 +790,7 @@ fn clean_all_now() -> GCConfig {
 /// by the previous run live on the now-pruned old boundary, which the walk
 /// splices in. Diff must stay complete across rounds.
 #[tokio_test]
+// ic[verify repo.pruned-tx-logs.full-history]
 async fn test_repeated_expiration_accumulates_pruned_logs()
 -> Result<(), Box<dyn std::error::Error>> {
     let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
@@ -950,6 +952,7 @@ async fn test_reparent_accumulates_existing_pruned_logs()
 /// Amending the boundary commit must copy its `pruned_ancestor_tx_logs` onto
 /// the amended snapshot, so diff stays complete afterward.
 #[tokio_test]
+// ic[verify repo.pruned-tx-logs.compaction]
 async fn test_amend_preserves_pruned_logs() -> Result<(), Box<dyn std::error::Error>> {
     let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
     let repo = Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)

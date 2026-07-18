@@ -469,6 +469,7 @@ impl ObjectStorage {
             .capture_box()
     }
 
+    // ic[impl layout.root]
     fn prefixed_path(&self, path: &str) -> ObjectPath {
         let path = format!("{}/{path}", self.backend.prefix());
         ObjectPath::from(path)
@@ -491,6 +492,7 @@ impl ObjectStorage {
         }
     }
 
+    // ic[impl storage.ops.conditional-update]
     fn get_put_mode(
         &self,
         settings: &Settings,
@@ -556,6 +558,8 @@ impl Storage for ObjectStorage {
         Ok(self.backend.default_settings())
     }
 
+    // ic[impl storage.ops.write]
+    // ic[impl storage.ops.conditional-update]
     async fn put_object(
         &self,
         settings: &Settings,
@@ -705,6 +709,7 @@ impl Storage for ObjectStorage {
     }
 
     #[instrument(skip(self, batch))]
+    // ic[impl storage.ops.deletes]
     async fn delete_batch(
         &self,
         settings: &Settings,
@@ -759,6 +764,7 @@ impl Storage for ObjectStorage {
     }
 
     #[instrument(skip(self, settings))]
+    // ic[impl consistency.detect-concurrent-update]
     async fn get_object_conditional(
         &self,
         settings: &Settings,
@@ -840,6 +846,8 @@ impl ObjectStorage {
         Ok(ReadbackOutcome::classify(write_id, stored_write_id.as_deref(), &version))
     }
 
+    // ic[impl storage.ops.range-reads]
+    // ic[impl consistency.detect-concurrent-update]
     async fn get_object_range_conditional(
         &self,
         settings: &Settings,

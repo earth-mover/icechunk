@@ -121,6 +121,7 @@ async fn mk_concurrent_commits_same_branch() -> Result<(), Box<dyn Error + Send 
 
 // Regression test for https://github.com/earth-mover/icechunk/pull/1798
 #[test]
+// ic[verify algo.write.commit-retry-other]
 fn concurrent_commits_same_branch() {
     check_pct(
         || {
