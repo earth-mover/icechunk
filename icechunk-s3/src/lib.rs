@@ -668,6 +668,7 @@ impl S3Storage {
     }
 
     /// Build the object key for a repository-relative path under the given layout.
+    // ic[impl layout.root]
     fn key_for(&self, layout: KeyLayout, relpath: &str) -> String {
         match layout {
             // Only reachable with an empty prefix (enforced at construction and
@@ -789,6 +790,8 @@ impl S3Storage {
         }
     }
 
+    // ic[impl storage.ops.conditional-update]
+    // ic[impl consistency.detect-concurrent-update]
     async fn put_object_single<
         I: IntoIterator<Item = (impl Into<String>, impl Into<String>)>,
     >(
@@ -876,6 +879,7 @@ impl S3Storage {
         }
     }
 
+    // ic[impl storage.ops.conditional-update]
     async fn put_object_multipart<
         I: IntoIterator<Item = (impl Into<String>, impl Into<String>)>,
     >(
@@ -1119,6 +1123,7 @@ impl S3Storage {
     }
 }
 
+// ic[impl storage.ops.range-reads]
 pub fn range_to_header(range: &Range<u64>) -> String {
     format!("bytes={}-{}", range.start, range.end - 1)
 }
@@ -1149,6 +1154,7 @@ impl Storage for S3Storage {
         }
     }
 
+    // ic[impl storage.ops.write]
     async fn put_object(
         &self,
         ctx: &StorageContext<'_>,
@@ -1294,6 +1300,7 @@ impl Storage for S3Storage {
     }
 
     #[instrument(skip(self, ctx, batch))]
+    // ic[impl storage.ops.deletes]
     async fn delete_batch(
         &self,
         ctx: &StorageContext<'_>,
@@ -1443,6 +1450,7 @@ impl Storage for S3Storage {
     }
 
     #[instrument(skip(self, ctx))]
+    // ic[impl consistency.detect-concurrent-update]
     async fn get_object_conditional(
         &self,
         ctx: &StorageContext<'_>,
@@ -1479,6 +1487,7 @@ impl Storage for S3Storage {
 }
 
 impl S3Storage {
+    // ic[impl storage.ops.range-reads]
     async fn get_object_range_conditional(
         &self,
         ctx: &StorageContext<'_>,

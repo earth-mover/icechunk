@@ -864,6 +864,7 @@ impl Repository {
     /// The repo info object is mutable, so it may change while this operation happens.
     /// For reproducibility, this method returns the repo object used to calculate the log.
     #[instrument(skip(self))]
+    // ic[impl repo.update.ops-log] walks latest_updates plus the repo_before_updates linked list of backups
     pub async fn ops_log(
         &self,
     ) -> RepositoryResult<(
@@ -1030,6 +1031,7 @@ impl Repository {
     }
 
     #[instrument(skip(self, repo_info))]
+    // ic[impl algo.read.from-branch] find the snapshot id the branch points to in the repo info
     async fn lookup_branch_v2(
         &self,
         branch: &str,
@@ -1106,6 +1108,7 @@ impl Repository {
     }
 
     #[instrument(skip(self))]
+    // ic[impl refs.branch.mutable] branches may be updated to point to a different snapshot
     pub async fn reset_branch(
         &self,
         branch: &str,
@@ -1208,6 +1211,7 @@ impl Repository {
     /// This will remove the branch reference and the branch history. It will not remove the
     /// chunks or snapshots associated with the branch.
     #[instrument(skip(self))]
+    // ic[impl refs.branch.required] the main branch can never be deleted
     pub async fn delete_branch(&self, branch: &str) -> RepositoryResult<()> {
         self.raise_if_cant_write("Cannot delete branch").await?;
         if branch == Ref::DEFAULT_BRANCH {
@@ -1282,6 +1286,7 @@ impl Repository {
     }
 
     #[instrument(skip(self))]
+    // ic[impl refs.tag.no-recreate] deleted tag names stay recorded in the repo info and cannot be reused
     async fn delete_tag_v2(&self, tag: &str) -> RepositoryResult<()> {
         let num_updates = self.config.num_updates_per_repo_info_file();
         let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str, _| {
@@ -1317,6 +1322,7 @@ impl Repository {
 
     /// Create a new tag in the repository at the given snapshot id
     #[instrument(skip(self))]
+    // ic[impl algo.tag.create]
     pub async fn create_tag(
         &self,
         tag_name: &str,
@@ -1349,6 +1355,8 @@ impl Repository {
     }
 
     #[instrument(skip(self))]
+    // ic[impl algo.tag.conditional-update] the tag is added via conditional update of the repo info
+    // ic[impl refs.tag.immutable] creating over an existing (or deleted) tag name fails; tags are never updated
     async fn create_tag_v2(
         &self,
         tag_name: &str,
@@ -1362,6 +1370,7 @@ impl Repository {
                 "tag creation",
             )
             .inject()?;
+            // ic[impl algo.tag.fail-missing-snapshot] the update fails if the snapshot doesn't exist
             raise_if_invalid_snapshot_id_v2(repo_info.as_ref(), snapshot_id)?;
             let new_repo = repo_info
                 .add_tag(
@@ -1427,6 +1436,7 @@ impl Repository {
     }
 
     #[instrument(skip(self, repo_info))]
+    // ic[impl algo.read.from-tag] find the snapshot id the tag points to in the repo info
     async fn lookup_tag_v2(
         &self,
         tag: &str,
@@ -1650,6 +1660,7 @@ impl Repository {
         let am = &self.asset_manager;
 
         // we don't include the changes in from.
+        // ic[impl repo.pruned-tx-logs.full-history] pruned ancestor logs (oldest first) + the snapshot's own log = full history
         // Each snapshot contributes the transaction logs of the ancestors
         // expiration pruned from under it (oldest first) followed by its own
         // log.
@@ -1730,6 +1741,9 @@ impl Repository {
     }
 
     #[instrument(skip(self))]
+    // ic[impl algo.read.from-snapshot]
+    // ic[impl algo.read.from-branch]
+    // ic[impl algo.read.from-tag]
     pub async fn readonly_session(
         &self,
         version: &VersionInfo,
@@ -2225,6 +2239,9 @@ mod tests {
 
     #[tokio_test]
     #[apply(spec_version_cases)]
+    // ic[verify refs.branch.required]
+    // ic[verify refs.branch.default-name]
+    // ic[verify algo.tag.fail-missing-snapshot]
     async fn test_manage_refs(
         #[case] spec_version: SpecVersionBin,
     ) -> Result<(), Box<dyn Error>> {
@@ -3890,6 +3907,7 @@ mod tests {
     }
 
     #[tokio::test]
+    // ic[verify repo.update.ops-log]
     async fn test_ops_log_chain_with_changing_num_updates_per_file()
     -> Result<(), Box<dyn Error>> {
         let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;

@@ -6,7 +6,10 @@ specs (
       {
         name rust-format
         include (icechunk-format/src/**/*.rs)
-        exclude (icechunk-format/src/strategies.rs)
+        exclude (
+          icechunk-format/src/strategies.rs
+          icechunk-format/src/flatbuffers/**
+        )
       }
       {
         name rust-core
@@ -14,11 +17,15 @@ specs (
           icechunk/src/**/*.rs
           icechunk-storage/src/**/*.rs
           icechunk-types/src/**/*.rs
+          icechunk-s3/src/**/*.rs
+          icechunk-arrow-object-store/src/**/*.rs
         )
+        test_include (icechunk/tests/**/*.rs)
       }
       {
         name python
         include (icechunk-python/python/icechunk/**/*.py)
+        test_include (icechunk-python/tests/**/*.py)
       }
     )
   }

@@ -66,6 +66,7 @@ pub enum Ref {
 }
 
 impl Ref {
+    // ic[impl refs.branch.default-name]
     pub const DEFAULT_BRANCH: &'static str = icechunk_types::DEFAULT_BRANCH;
 
     pub fn name(&self) -> &str {
@@ -154,6 +155,7 @@ fn branch_key(branch_name: &str) -> RefResult<String> {
 }
 
 #[instrument(skip(storage, ctx))]
+// ic[impl refs.tag.immutable] creating over an existing tag fails; there is no tag update (v1 refs)
 pub async fn create_tag(
     storage: &(dyn Storage + Send + Sync),
     ctx: &StorageContext<'_>,
@@ -185,6 +187,7 @@ pub async fn create_tag(
 
 #[async_recursion]
 #[instrument(skip(storage, ctx))]
+// ic[impl refs.branch.mutable] branches move via conditional updates (v1 refs)
 pub async fn update_branch(
     storage: &(dyn Storage + Send + Sync),
     ctx: &StorageContext<'_>,
@@ -352,6 +355,7 @@ pub async fn delete_branch(
 }
 
 #[instrument(skip(storage, ctx))]
+// ic[impl refs.tag.no-recreate] a permanent delete marker prevents reusing the tag name (v1 refs)
 pub async fn delete_tag(
     storage: &(dyn Storage + Send + Sync),
     ctx: &StorageContext<'_>,
@@ -539,6 +543,8 @@ mod tests {
     }
 
     #[tokio_test]
+    // ic[verify refs.branch.mutable]
+    // ic[verify refs.tag.immutable]
     async fn test_refs() -> Result<(), Box<dyn std::error::Error>> {
         let ((_,res1),(_,res2,_)) = with_test_storages::<Result<(), Box<dyn std::error::Error>>, _, _>(|storage|  async move {
             let storage_settings =storage.default_settings().await?;
@@ -652,6 +658,7 @@ mod tests {
     }
 
     #[tokio_test]
+    // ic[verify refs.tag.no-recreate]
     async fn test_tag_delete() -> Result<(), Box<dyn std::error::Error>> {
         let ((_, res1), (_, res2, _)) = with_test_storages::<
             Result<(), Box<dyn std::error::Error>>,

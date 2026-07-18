@@ -134,6 +134,7 @@ impl ManifestExtents {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+// ic[impl snapshot.manifest-ref.coverage] manifest id + covered extents
 pub struct ManifestRef {
     pub object_id: ManifestId,
     pub extents: ManifestExtents,
@@ -487,6 +488,7 @@ const COMPRESSION_ALG_ZSTD_DICT: u8 = 1;
 const MAX_DECOMPRESSED_LOCATION_SIZE: usize = 1_024;
 
 #[derive(PartialEq)]
+// ic[impl manifest.content]
 pub struct Manifest {
     buffer: Vec<u8>,
 }
@@ -523,6 +525,7 @@ impl Manifest {
     }
 
     /// Create a zstd decompressor from the manifest's location dictionary, if present.
+    // ic[impl manifest.location-compression] dictionary read from location_dictionary field
     fn decompressor(
         &self,
     ) -> Result<Option<zstd::bulk::Decompressor<'static>>, IcechunkFormatError> {
@@ -541,6 +544,7 @@ impl Manifest {
         }
     }
 
+    // ic[impl manifest.content] chunk refs grouped by array
     pub fn from_sorted_vec(
         manifest_id: &ManifestId,
         sorted_chunks: Vec<ChunkInfo>,
@@ -785,6 +789,9 @@ impl Iterator for PayloadIterator {
     }
 }
 
+// ic[impl manifest.chunk-ref.native] decoding
+// ic[impl manifest.chunk-ref.inline] decoding
+// ic[impl manifest.chunk-ref.virtual] decoding
 fn ref_to_payload(
     chunk_ref: generated::ChunkRef<'_>,
     decompressor: Option<&mut zstd::bulk::Decompressor<'static>>,
@@ -861,6 +868,7 @@ fn checksum(payload: &generated::ChunkRef<'_>) -> Option<Checksum> {
 ///
 /// Returns `Some(dict_bytes)` if compression is enabled and there are enough virtual
 /// chunks, `None` if compression is disabled or cannot be executed.
+// ic[impl manifest.location-compression] global dictionary training
 fn train_location_dictionary(
     chunks: &[ChunkInfo],
     virtual_chunks_compression_config: Option<&LocationCompressionConfig>,
@@ -939,6 +947,7 @@ fn train_location_dictionary(
 ///
 /// Returns one entry per chunk: `Some(compressed_bytes)` for virtual chunks,
 /// `None` for inline/ref chunks.
+// ic[impl manifest.location-compression] per-location compression
 fn compress_locations(
     chunks: &[ChunkInfo],
     dict: &[u8],
@@ -1002,6 +1011,9 @@ fn compress_locations(
     }
 }
 
+// ic[impl manifest.chunk-ref.native] encoding
+// ic[impl manifest.chunk-ref.inline] encoding
+// ic[impl manifest.chunk-ref.virtual] encoding
 fn mk_chunk_ref<'bldr>(
     builder: &mut flatbuffers::FlatBufferBuilder<'bldr>,
     chunk: ChunkInfo,
@@ -1451,6 +1463,7 @@ mod tests {
             .collect()
     }
 
+    // ic[verify manifest.location-compression]
     #[tokio_test]
     async fn test_compression_round_trip() -> Result<(), Box<dyn Error>> {
         // >= threshold virtual chunks with compress=true should round-trip

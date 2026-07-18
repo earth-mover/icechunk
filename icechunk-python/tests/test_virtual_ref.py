@@ -36,6 +36,7 @@ from icechunk.repository import Repository
 from tests.conftest import Permission, write_chunks_to_minio
 
 
+# ic[verify manifest.chunk-ref.virtual]
 @pytest.mark.filterwarnings("ignore:datetime.datetime.utcnow")
 @pytest.mark.parametrize("use_async", [True, False])
 async def test_write_minio_virtual_refs(

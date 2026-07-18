@@ -132,6 +132,7 @@ impl From<&str> for DimensionName {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+// ic[impl snapshot.manifest-ref.coverage] per-array manifests list
 pub enum NodeData {
     Array {
         shape: ArrayShape,
@@ -348,6 +349,7 @@ impl ManifestFileInfo {
 // https://github.com/arthurprs/quick-cache/issues/105
 const SNAPSHOT_NODE_CACHE_SIZE: usize = 2;
 
+// ic[impl snapshot.describes-state]
 pub struct Snapshot {
     buffer: Vec<u8>,
     spec_version: SpecVersionBin,
@@ -375,6 +377,7 @@ impl std::fmt::Debug for Snapshot {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+// ic[impl repo.pruned-tx-logs.full-history] pruned_ancestor_tx_logs, oldest first
 pub struct SnapshotInfo {
     pub id: SnapshotId,
     pub parent_id: Option<SnapshotId>,
@@ -470,6 +473,7 @@ impl Snapshot {
     }
 
     #[expect(clippy::too_many_arguments)]
+    // ic[impl snapshot.describes-state] snapshot file construction
     pub fn from_iter<I>(
         id: Option<SnapshotId>,
         parent_id: Option<SnapshotId>,
@@ -1006,6 +1010,7 @@ mod tests {
         serialize_and_deserialize_manifest_file_info - manifest_file_info
     );
 
+    // ic[verify snapshot.describes-state]
     #[icechunk_macros::test]
     fn test_manifest_info() -> IcechunkResult<()> {
         let manifest_id = |value: u32| {

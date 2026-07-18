@@ -284,6 +284,7 @@ impl Repository {
 }
 
 #[instrument(skip_all)]
+// ic[impl algo.init.steps] write empty snapshot + empty tx log, then the repo info with the main branch
 async fn create(
     config: Option<RepositoryConfig>,
     storage: Arc<dyn Storage + Send + Sync>,
@@ -352,6 +353,9 @@ async fn create(
     let config_ref = &config;
     let create_repo_info = async move {
         // On create we need to create the default branch
+        // ic[impl refs.branch.required]
+        // ic[impl refs.branch.default-name]
+        // ic[impl algo.init.first-id] the initial snapshot uses the well-known first id
         let new_snapshot = Arc::new(Snapshot::initial(spec_version).inject()?);
         let write_snap = asset_manager_c.write_snapshot(Arc::clone(&new_snapshot));
 

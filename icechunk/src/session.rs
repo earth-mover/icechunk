@@ -1339,6 +1339,7 @@ impl Session {
     /// The helper function [`get_chunk`] manages the pattern matching of the result and returns
     /// the bytes.
     #[instrument(skip(self))]
+    // ic[impl chunks.arrangements] chunks may live at any offset/length within repo chunk files, in external files, or inline
     pub async fn get_chunk_reader(
         &self,
         path: &Path,
@@ -1903,6 +1904,7 @@ impl Session {
 
     #[expect(clippy::too_many_arguments)]
     #[instrument(skip(self, solver, properties, before_rebase, after_rebase))]
+    // ic[impl algo.write.commit-retry] on Conflict, reconcile via rebase and retry the commit
     async fn do_commit_rebasing(
         &mut self,
         solver: &(dyn ConflictSolver + Send + Sync),
@@ -2061,6 +2063,7 @@ impl Session {
     /// `Session` in a consistent state, that would successfully commit on top
     /// of the latest successfully fast-forwarded commit.
     #[instrument(skip(self, solver))]
+    // ic[impl algo.write.commit-retry] reconcile the session with the commits that moved the branch
     pub async fn rebase(
         &mut self,
         solver: &(dyn ConflictSolver + Send + Sync),
@@ -2117,6 +2120,7 @@ impl Session {
             // rebase rather than skip it. The previous_repo for the pruned logs
             // is this commit's read-only session, as the pruned snapshots no
             // longer exist.
+            // ic[impl repo.pruned-tx-logs.full-history] replay pruned ancestor logs before the commit's own log
             let pruned_ids = match repo_info.as_ref() {
                 Some(ri) => ri.find_snapshot(&snap_id).inject()?.pruned_ancestor_tx_logs,
                 // V1 repos have no pruned-ancestor logs.
@@ -2947,6 +2951,7 @@ async fn flush_existing_node(
 }
 
 /// Process a single new array node during flush.
+// ic[impl manifest.content] chunk refs are keyed by grid coordinates; one array may span multiple manifests (splits)
 async fn flush_new_node(
     asset_manager: &AssetManager,
     manifest_config: &ManifestConfig,
@@ -3085,6 +3090,7 @@ pub enum CommitMethod {
     Amend,
 }
 
+// ic[impl algo.write.steps] write chunks and manifests, then the transaction log and snapshot files
 async fn do_flush(
     mut flush_data: FlushProcess<'_>,
     message: &str,
@@ -3270,6 +3276,7 @@ async fn do_flush(
         None
     };
 
+    // ic[impl snapshot.describes-state] the new snapshot lists every node in the repo, not a delta
     let new_snapshot = Snapshot::from_iter(
         None,
         parent_id,
@@ -3314,6 +3321,7 @@ async fn do_flush(
 
     let this_tx_log =
         transaction_log_from_change_set(&new_snapshot_id, flush_data.change_set);
+    // ic[impl repo.pruned-tx-logs.compaction] amend merges tx logs, so one log may cover multiple original commits
     let new_tx_log = if commit_method == CommitMethod::NewCommit {
         this_tx_log
     } else {
@@ -3336,6 +3344,7 @@ async fn do_flush(
         }
     };
 
+    // ic[impl txlog.required] every new snapshot gets its transaction log written before commit
     flush_data
         .asset_manager
         .write_transaction_log(new_snapshot_id.clone(), Arc::new(new_tx_log))
@@ -3431,6 +3440,7 @@ async fn raise_if_flags_disabled_before_upload(
 }
 
 #[expect(clippy::too_many_arguments)]
+// ic[impl algo.write.steps] flush the session data, then conditionally update the repo info
 async fn do_commit(
     asset_manager: Arc<AssetManager>,
     branch_name: &str,
@@ -3561,6 +3571,7 @@ async fn do_commit_v1(
 }
 
 #[expect(clippy::too_many_arguments)]
+// ic[impl algo.write.commit-success] a successful conditional update commits the snapshot and moves the branch
 async fn do_commit_v2(
     asset_manager: Arc<AssetManager>,
     branch_name: &str,
@@ -4580,6 +4591,9 @@ mod tests {
 
     #[tokio_test]
     #[apply(spec_version_cases)]
+    // ic[verify repo.update.backup]
+    // ic[verify algo.read.from-snapshot]
+    // ic[verify algo.read.from-branch]
     async fn test_repository_with_updates_and_writes(
         #[case] spec_version: SpecVersionBin,
     ) -> Result<(), Box<dyn Error>> {
@@ -5356,6 +5370,9 @@ mod tests {
 
     #[tokio_test(flavor = "multi_thread")]
     #[apply(spec_version_cases)]
+    // ic[verify algo.write.commit-success]
+    // ic[verify algo.tag.create]
+    // ic[verify algo.init.first-id]
     async fn test_commit_and_refs(
         #[case] spec_version: SpecVersionBin,
     ) -> Result<(), Box<dyn Error>> {
@@ -5791,6 +5808,8 @@ mod tests {
     /// Test that the initial snapshot has an empty transaction log that can be fetched.
     #[tokio_test]
     #[apply(spec_version_cases)]
+    // ic[verify algo.init.steps]
+    // ic[verify txlog.required]
     async fn test_initial_snapshot_has_empty_transaction_log(
         #[case] spec_version: SpecVersionBin,
     ) -> Result<(), Box<dyn Error>> {
@@ -5894,6 +5913,7 @@ mod tests {
 
     #[tokio_test]
     #[apply(spec_version_cases)]
+    // ic[verify consistency.detect-concurrent-update]
     async fn test_no_double_commit(
         #[case] spec_version: SpecVersionBin,
     ) -> Result<(), Box<dyn Error>> {
@@ -7287,6 +7307,7 @@ mod tests {
     #[tokio_test]
     #[apply(spec_version_cases)]
     /// Tests `commit_rebasing` retries the proper number of times when there are conflicts
+    // ic[verify algo.write.commit-retry]
     async fn test_commit_rebasing_attempts(
         #[case] spec_version: SpecVersionBin,
     ) -> Result<(), Box<dyn Error>> {
