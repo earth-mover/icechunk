@@ -34,7 +34,7 @@ percent-encoding.workspace = true
 rand.workspace = true
 reqwest.workspace = true
 serde.workspace = true
-tokio = { workspace = true, features = ["sync", "time"] }
+tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
 tokio-util.workspace = true
 tracing.workspace = true
 typed-path.workspace = true

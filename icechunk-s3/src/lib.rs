@@ -461,7 +461,6 @@ impl S3Storage {
     async fn make_signed_lister(
         &self,
         settings: &Settings,
-        concurrency: usize,
     ) -> StorageResult<SignedLister> {
         let region = self
             .get_client(settings)
@@ -478,7 +477,6 @@ impl S3Storage {
             region,
             creds,
             settings.retries().max_tries().get() as u32,
-            concurrency,
         )
     }
 
@@ -1033,9 +1031,7 @@ impl Storage for S3Storage {
         }
         let layout = self.layout(settings).await?;
         let base_prefix = self.list_prefix(layout, prefix);
-        let lister = self
-            .make_signed_lister(settings, fast_list::DEFAULT_LIST_CONCURRENCY)
-            .await?;
+        let lister = Arc::new(self.make_signed_lister(settings).await?);
         lister.sum(&base_prefix, shardable).await
     }
 
