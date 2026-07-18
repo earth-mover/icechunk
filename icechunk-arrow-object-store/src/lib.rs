@@ -12,7 +12,9 @@ use futures::{
     stream::{self, BoxStream},
 };
 use http::header::{HeaderName, HeaderValue};
-use icechunk_storage::fast_list::{self, ListPageFetcher};
+use icechunk_storage::fast_list::{
+    self, ListPageFetcher, SharedController, sum_with_controller,
+};
 #[cfg(feature = "s3")]
 use icechunk_storage::s3_config::{S3Credentials, S3Options};
 use icechunk_storage::strip_quotes;
@@ -765,27 +767,52 @@ impl Storage for ObjectStorage {
         prefix: &str,
         shardable: bool,
     ) -> StorageResult<u64> {
-        let path = ObjectPath::from(format!("{}/{}", self.backend.prefix(), prefix));
-        let key_prefix = path.as_ref();
-        if !key_prefix.is_empty()
-            && let Some(fetcher) = self.backend.fast_list_fetcher(settings).await?
-        {
-            let base_prefix =
-                if shardable { key_prefix.to_string() } else { format!("{key_prefix}/") };
-            return fast_list::sum(
-                fetcher,
-                &base_prefix,
-                shardable,
-                u32::from(settings.retries().max_tries().get()),
-            )
+        let fetcher = self.backend.fast_list_fetcher(settings).await?;
+        self.sum_prefix_bytes(settings, prefix, shardable, fetcher.as_ref(), None).await
+    }
+
+    /// Sum several prefixes off one fast lister and one shared concurrency
+    /// controller so their fan-outs adapt as a single group. The fetcher is
+    /// resolved once for the whole batch; when the backend vends none, every
+    /// prefix falls back to the portable per-prefix drain exactly as
+    /// [`Self::sum_object_sizes`] would.
+    #[instrument(skip(self, settings))]
+    async fn sum_object_sizes_many(
+        &self,
+        settings: &Settings,
+        prefixes: &[(&str, bool)],
+    ) -> StorageResult<u64> {
+        let fetcher = self.backend.fast_list_fetcher(settings).await?;
+        if fetcher.is_none() {
+            let totals = futures::future::try_join_all(prefixes.iter().map(
+                |&(prefix, shardable)| {
+                    self.sum_prefix_bytes(settings, prefix, shardable, None, None)
+                },
+            ))
+            .await?;
+            return Ok(totals.into_iter().fold(0u64, u64::saturating_add));
+        }
+        let controller = SharedController::new();
+        let done = tokio::sync::Notify::new();
+        let runs = async {
+            let totals = futures::future::try_join_all(prefixes.iter().map(
+                |&(prefix, shardable)| {
+                    self.sum_prefix_bytes(
+                        settings,
+                        prefix,
+                        shardable,
+                        fetcher.as_ref(),
+                        Some(&controller),
+                    )
+                },
+            ))
             .await;
-        }
-        let mut objects = self.list_objects(settings, prefix).await?;
-        let mut sum = 0u64;
-        while let Some(info) = objects.next().await {
-            sum = sum.saturating_add(info?.size_bytes);
-        }
-        Ok(sum)
+            done.notify_one();
+            totals
+        };
+        let (totals, ()) =
+            futures::future::join(runs, controller.run(done.notified())).await;
+        Ok(totals?.into_iter().fold(0u64, u64::saturating_add))
     }
 
     #[instrument(skip(self, batch))]
@@ -883,6 +910,56 @@ impl Storage for ObjectStorage {
 }
 
 impl ObjectStorage {
+    /// Sum one prefix, taking the raw-prefix fast path when `fetcher` is present
+    /// and the key prefix is non-empty, and the portable [`Self::list_objects`]
+    /// drain otherwise. `controller` couples this run to a batch's shared
+    /// concurrency signal; `None` gives the run its own single-prefix governor.
+    async fn sum_prefix_bytes(
+        &self,
+        settings: &Settings,
+        prefix: &str,
+        shardable: bool,
+        fetcher: Option<&Arc<dyn ListPageFetcher>>,
+        controller: Option<&SharedController>,
+    ) -> StorageResult<u64> {
+        let path = ObjectPath::from(format!("{}/{}", self.backend.prefix(), prefix));
+        let key_prefix = path.as_ref();
+        if !key_prefix.is_empty()
+            && let Some(fetcher) = fetcher
+        {
+            let base_prefix =
+                if shardable { key_prefix.to_string() } else { format!("{key_prefix}/") };
+            let max_attempts = u32::from(settings.retries().max_tries().get());
+            return match controller {
+                Some(controller) => {
+                    sum_with_controller(
+                        Arc::clone(fetcher),
+                        &base_prefix,
+                        shardable,
+                        max_attempts,
+                        controller,
+                    )
+                    .await
+                }
+                None => {
+                    fast_list::sum(
+                        Arc::clone(fetcher),
+                        &base_prefix,
+                        shardable,
+                        max_attempts,
+                    )
+                    .await
+                }
+            };
+        }
+        let mut objects = self.list_objects(settings, prefix).await?;
+        let mut sum = 0u64;
+        while let Some(info) = objects.next().await {
+            sum = sum.saturating_add(info?.size_bytes);
+        }
+        Ok(sum)
+    }
+
     async fn get_object_range_conditional(
         &self,
         settings: &Settings,

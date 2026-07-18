@@ -9,9 +9,7 @@ use async_stream::try_stream;
 use backon::{BackoffBuilder as _, ConstantBuilder, ExponentialBuilder, Retryable as _};
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
-use futures::{
-    Stream, StreamExt as _, TryStreamExt as _, future::ready, stream, stream::BoxStream,
-};
+use futures::{Stream, StreamExt as _, TryStreamExt as _, stream::BoxStream};
 use icechunk_types::{ICResultExt as _, error::ICResultCtxExt as _};
 use quick_cache::{Weighter, sync::Cache};
 use serde::{Deserialize, Serialize};
@@ -1081,11 +1079,16 @@ impl AssetManager {
     /// deduplicate across the logical graph. Virtual chunks are never counted;
     /// they are references stored inside manifests, not objects under the root.
     ///
-    /// The six top-level object prefixes are summed concurrently through
-    /// [`Storage::sum_object_sizes`]. The Crockford-base32 prefixes (`chunks`,
-    /// `manifests`, `snapshots`, `transactions`) are passed `shardable = true`,
-    /// letting the native S3 backend fan each one out across its 32 leading-id
-    /// characters as concurrent raw-prefix listings; `refs` and `overwritten`
+    /// The six top-level object prefixes are summed in one
+    /// [`Storage::sum_object_sizes_many`] batch, so the fast-path backends drive
+    /// them off a single lister/HTTP client and one shared concurrency
+    /// controller rather than letting each prefix ramp its own fan-out and
+    /// overshoot the store's aggregate request budget. The Crockford-base32
+    /// prefixes (`chunks`, `manifests`, `snapshots`, `transactions`) are passed
+    /// `shardable = true`: a fast-path backend probes one page and, if it is
+    /// truncated, fans the keyspace out over the 1024 two-character Crockford
+    /// leading prefixes as disjoint concurrent listings (a prefix that fits in a
+    /// single page is summed with that one request); `refs` and `overwritten`
     /// hold arbitrary names and are summed as a single stream. Backends without a
     /// raw-prefix fast path use the portable default (one `list_objects` drain
     /// per prefix), so the result is identical across S3 and object_store
@@ -1103,16 +1106,10 @@ impl AssetManager {
             (OVERWRITTEN_FILES_PATH, false),
         ];
 
-        stream::iter(PREFIXES)
-            .map(|(prefix, shardable)| async move {
-                self.storage
-                    .sum_object_sizes(&self.storage_settings, prefix, shardable)
-                    .await
-                    .inject()
-            })
-            .buffer_unordered(PREFIXES.len())
-            .try_fold(0u64, |acc, partial| ready(Ok(acc.saturating_add(partial))))
+        self.storage
+            .sum_object_sizes_many(&self.storage_settings, &PREFIXES)
             .await
+            .inject()
     }
 
     pub async fn delete_chunks(
@@ -1894,8 +1891,10 @@ mod test {
         // Empty repo lists to zero.
         assert_eq!(manager._total_nonvirtual_size().await?, 0);
 
-        // Write native chunks (their ids span several Crockford leading chars,
-        // exercising the shard fan-out) plus a compressed manifest.
+        // Write native chunks under several Crockford leading chars plus a
+        // compressed manifest. The in-memory backend has no raw-prefix fast
+        // path, so this drives the portable `sum_object_sizes_many` batch, not
+        // the shard fan-out — that engine path is covered in `icechunk-storage`.
         for bytes in [b"aaaa".as_slice(), b"bb", b"cccccc", b"d", b"eeeee"] {
             manager.write_chunk(ChunkId::random(), Bytes::copy_from_slice(bytes)).await?;
         }
@@ -1911,11 +1910,11 @@ mod test {
         );
         manager.write_manifest(manifest).await?;
 
-        // Invariant: the prefix-sharded fan-out sums to exactly the same bytes
-        // as a naive single-stream listing of the whole repo root — no gaps
-        // between shards, no double-counting. Cross-checking against the naive
-        // sum keeps the test independent of per-object on-store (compressed)
-        // sizes.
+        // Invariant: the batch `sum_object_sizes_many` sums to exactly the same
+        // bytes as a naive single-stream listing of the whole repo root — no
+        // gaps between prefixes, no double-counting. Cross-checking against the
+        // naive sum keeps the test independent of per-object on-store
+        // (compressed) sizes.
         let mut naive = 0u64;
         let mut all = backend.list_objects(&settings, "").await?;
         while let Some(info) = all.next().await {
@@ -1923,6 +1922,27 @@ mod test {
         }
         assert!(naive > 0);
         assert_eq!(manager._total_nonvirtual_size().await?, naive);
+
+        // The batch total must equal folding the per-prefix sums, across a mix
+        // of shardable and non-shardable prefixes.
+        const PREFIXES: [(&str, bool); 6] = [
+            (CHUNKS_FILE_PATH, true),
+            (MANIFESTS_FILE_PATH, true),
+            (SNAPSHOTS_FILE_PATH, true),
+            (TRANSACTION_LOGS_FILE_PATH, true),
+            (V1_REFS_FILE_PATH, false),
+            (OVERWRITTEN_FILES_PATH, false),
+        ];
+        let mut per_prefix = 0u64;
+        for (prefix, shardable) in PREFIXES {
+            per_prefix = per_prefix.saturating_add(
+                backend.sum_object_sizes(&settings, prefix, shardable).await?,
+            );
+        }
+        assert_eq!(
+            backend.sum_object_sizes_many(&settings, &PREFIXES).await?,
+            per_prefix
+        );
         Ok(())
     }
 
