@@ -19,20 +19,19 @@
 //! `object_store`'s implementation, which azurite validates in CI).
 
 use std::sync::{Arc, LazyLock};
-use std::time::Duration;
 
 use async_trait::async_trait;
 use base64::prelude::{BASE64_STANDARD, Engine as _};
 use chrono::Utc;
 use hmac::{Hmac, Mac as _};
-use icechunk_storage::fast_list::{
-    CONCURRENCY_CAP, ListPageFetcher, PageAttempt, is_transient_status,
-};
+use icechunk_storage::fast_list::{ListPageFetcher, PageAttempt, is_transient_status};
 use icechunk_storage::{StorageResult, other_error};
 use memchr::memmem;
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
 use sha2::Sha256;
 use url::Url;
+
+use crate::{AzureRefreshableCredential, AzureRefreshableCredentialProvider};
 
 const UNRESERVED: &AsciiSet =
     &NON_ALPHANUMERIC.remove(b'-').remove(b'_').remove(b'.').remove(b'~');
@@ -43,11 +42,24 @@ const AZURE_VERSION: &str = "2023-11-03";
 const RFC1123_FMT: &str = "%a, %d %b %Y %H:%M:%S GMT";
 const EMULATOR_DEFAULT_ENDPOINT: &str = "http://127.0.0.1:10000";
 const MAX_RESULTS: usize = 5000;
-const TIMEOUT_SECS: u64 = 120;
 
-/// How one page attempt authenticates, resolved once per `sum_object_sizes`
-/// call by the backend gating (so refreshable credentials stay fresh across
-/// calls without re-fetching per page).
+/// SAS tokens arrive with or without a leading `?`/`&` depending on how they
+/// were minted; normalize to the bare fragment appended to every list URL.
+fn normalize_sas(token: &str) -> String {
+    token.trim_start_matches(['?', '&']).to_string()
+}
+
+fn decode_access_key(key: &str) -> StorageResult<Vec<u8>> {
+    BASE64_STANDARD
+        .decode(key)
+        .map_err(|e| other_error(format!("invalid Azure access key (base64): {e}")))
+}
+
+/// How one page attempt authenticates. Anonymous, SAS, bearer, and account-key
+/// are fixed for the run; `Refreshable` keeps a live handle to the credential
+/// provider so a token that expires mid-run is re-resolved (and force-refreshed
+/// on a 401/403) rather than failing the sum. Each attempt resolves its stored
+/// auth into a [`ConcreteAuth`] (refreshing if needed).
 #[derive(Debug)]
 pub(crate) enum AzureListAuth {
     Anonymous,
@@ -56,25 +68,50 @@ pub(crate) enum AzureListAuth {
     Bearer(String),
     /// The base64-decoded storage account key.
     SharedKey(Vec<u8>),
+    Refreshable(Arc<AzureRefreshableCredentialProvider>),
 }
 
 impl AzureListAuth {
-    /// SAS tokens arrive with or without a leading `?`/`&` depending on how
-    /// they were minted; normalize to the bare fragment.
     pub(crate) fn sas(token: &str) -> Self {
-        Self::Sas(token.trim_start_matches(['?', '&']).to_string())
+        Self::Sas(normalize_sas(token))
     }
 
     pub(crate) fn shared_key(key: &str) -> StorageResult<Self> {
-        BASE64_STANDARD
-            .decode(key)
-            .map(Self::SharedKey)
-            .map_err(|e| other_error(format!("invalid Azure access key (base64): {e}")))
+        decode_access_key(key).map(Self::SharedKey)
     }
+}
+
+/// The concrete auth applied to one request, after any refresh. Unlike
+/// [`AzureListAuth`] it never carries a provider handle, so URL building and
+/// signing branch on a fixed shape.
+#[derive(Debug)]
+enum ConcreteAuth {
+    Anonymous,
+    Sas(String),
+    Bearer(String),
+    SharedKey(Vec<u8>),
+}
+
+fn concrete_from_refreshable(
+    cred: &AzureRefreshableCredential,
+) -> StorageResult<ConcreteAuth> {
+    Ok(match cred {
+        AzureRefreshableCredential::SASToken { token, .. } => {
+            ConcreteAuth::Sas(normalize_sas(token))
+        }
+        AzureRefreshableCredential::BearerToken { bearer, .. } => {
+            ConcreteAuth::Bearer(bearer.clone())
+        }
+        AzureRefreshableCredential::AccessKey { key, .. } => {
+            ConcreteAuth::SharedKey(decode_access_key(key)?)
+        }
+    })
 }
 
 #[derive(Debug)]
 pub(crate) struct AzureLister {
+    /// Client built by the gating with the run's `allow_http` and timeout
+    /// settings applied.
     http: reqwest::Client,
     /// `{endpoint}/{container}` — for azurite (`use_emulator`) the account is
     /// part of the path, matching `object_store`'s path-style emulator URLs.
@@ -93,12 +130,8 @@ impl AzureLister {
         account: &str,
         container: &str,
         auth: AzureListAuth,
+        http: reqwest::Client,
     ) -> StorageResult<Self> {
-        let http = reqwest::Client::builder()
-            .pool_max_idle_per_host(CONCURRENCY_CAP)
-            .timeout(Duration::from_secs(TIMEOUT_SECS))
-            .build()
-            .map_err(|e| other_error(format!("building reqwest client: {e}")))?;
         // Mirrors object_store's endpoint resolution: the emulator base comes
         // from the environment (ignoring any Endpoint config) and gets
         // path-style `{account}/{container}`; a custom endpoint keeps its own
@@ -126,7 +159,12 @@ impl AzureLister {
         })
     }
 
-    fn build_url(&self, list_prefix: &str, token: Option<&str>) -> String {
+    fn build_url(
+        &self,
+        list_prefix: &str,
+        token: Option<&str>,
+        auth: &ConcreteAuth,
+    ) -> String {
         let mut url = format!(
             "{}?comp=list&restype=container&prefix={}&maxresults={MAX_RESULTS}",
             self.container_url,
@@ -136,11 +174,33 @@ impl AzureLister {
             url.push_str("&marker=");
             url.push_str(&utf8_percent_encode(t, UNRESERVED).to_string());
         }
-        if let AzureListAuth::Sas(sas) = &self.auth {
+        if let ConcreteAuth::Sas(sas) = auth {
             url.push('&');
             url.push_str(sas);
         }
         url
+    }
+
+    /// Resolve the stored auth into the concrete shape for one attempt,
+    /// refreshing a rotating credential if needed. The returned credential (only
+    /// for the refreshable case) is what an auth-expiry response invalidates.
+    async fn resolve(
+        &self,
+    ) -> StorageResult<(ConcreteAuth, Option<AzureRefreshableCredential>)> {
+        match &self.auth {
+            AzureListAuth::Anonymous => Ok((ConcreteAuth::Anonymous, None)),
+            AzureListAuth::Sas(sas) => Ok((ConcreteAuth::Sas(sas.clone()), None)),
+            AzureListAuth::Bearer(bearer) => {
+                Ok((ConcreteAuth::Bearer(bearer.clone()), None))
+            }
+            AzureListAuth::SharedKey(key) => {
+                Ok((ConcreteAuth::SharedKey(key.clone()), None))
+            }
+            AzureListAuth::Refreshable(provider) => {
+                let cred = provider.get_or_update_credentials().await?;
+                Ok((concrete_from_refreshable(&cred)?, Some(cred)))
+            }
+        }
     }
 
     /// `SharedKey` string-to-sign for one list `GET`:
@@ -181,12 +241,20 @@ impl AzureLister {
 #[async_trait]
 impl ListPageFetcher for AzureLister {
     async fn attempt_page(&self, list_prefix: &str, token: Option<&str>) -> PageAttempt {
-        let url = self.build_url(list_prefix, token);
+        let (concrete, resolved) = match self.resolve().await {
+            Ok(resolved) => resolved,
+            Err(e) => {
+                return PageAttempt::Retryable(other_error(format!(
+                    "resolving refreshable Azure credentials for fast list: {e}"
+                )));
+            }
+        };
+        let url = self.build_url(list_prefix, token, &concrete);
         let mut rb = self.http.get(&url).header("x-ms-version", AZURE_VERSION);
-        match &self.auth {
-            AzureListAuth::Anonymous | AzureListAuth::Sas(_) => {}
-            AzureListAuth::Bearer(t) => rb = rb.bearer_auth(t),
-            AzureListAuth::SharedKey(key) => {
+        match &concrete {
+            ConcreteAuth::Anonymous | ConcreteAuth::Sas(_) => {}
+            ConcreteAuth::Bearer(t) => rb = rb.bearer_auth(t),
+            ConcreteAuth::SharedKey(key) => {
                 let date = Utc::now().format(RFC1123_FMT).to_string();
                 match self.shared_key_authorization(key, &date, list_prefix, token) {
                     Ok(authorization) => {
@@ -203,14 +271,24 @@ impl ListPageFetcher for AzureLister {
                 let status = resp.status().as_u16();
                 if status == 200 {
                     match read_page_body(&mut resp).await {
-                        Ok((bytes, next_token)) => {
-                            PageAttempt::Page { bytes, next_token }
-                        }
+                        Ok(outcome) => outcome.into_attempt(&url),
                         Err(e) => PageAttempt::Retryable(other_error(format!(
                             "Azure list body read error for {}: {e}",
                             redact(&url)
                         ))),
                     }
+                } else if (status == 401 || status == 403)
+                    && let (AzureListAuth::Refreshable(provider), Some(cred)) =
+                        (&self.auth, &resolved)
+                {
+                    // A refreshable credential rejected mid-run (bearer 401, SAS
+                    // or SharedKey 403): drop it so the retry re-resolves a fresh
+                    // one instead of failing the sum.
+                    provider.invalidate_if_matches(cred).await;
+                    PageAttempt::Retryable(other_error(format!(
+                        "Azure list HTTP {status} for {} (credential expired; refreshing)",
+                        redact(&url)
+                    )))
                 } else if is_transient_status(status) {
                     PageAttempt::Retryable(other_error(format!(
                         "Azure list HTTP {status} for {}",
@@ -233,6 +311,42 @@ impl ListPageFetcher for AzureLister {
                 "Azure list request error for {}: {e}",
                 redact(&url)
             ))),
+        }
+    }
+}
+
+/// What scanning one complete 200 page body concluded.
+#[derive(Debug)]
+enum ScanOutcome {
+    /// Clean end with no continuation: this shard is fully listed.
+    LastPage { bytes: u64 },
+    /// A continuation token to resume the shard from.
+    Continues { bytes: u64, token: String },
+    /// The body advertised a `NextMarker` that could not be recovered — the
+    /// capture was abandoned as oversized, or left unterminated at end of body.
+    /// Reporting `LastPage` here would silently drop the rest of the shard, so
+    /// the fetcher retries the page and ultimately fails loudly. The bytes seen
+    /// so far are dropped: the retry re-lists the whole page.
+    ContinuationLost,
+}
+
+impl ScanOutcome {
+    fn into_attempt(self, url: &str) -> PageAttempt {
+        match self {
+            ScanOutcome::LastPage { bytes } => {
+                PageAttempt::Page { bytes, next_token: None }
+            }
+            ScanOutcome::Continues { bytes, token } => {
+                PageAttempt::Page { bytes, next_token: Some(token) }
+            }
+            ScanOutcome::ContinuationLost => {
+                PageAttempt::Retryable(other_error(format!(
+                    "Azure list page for {} advertised a NextMarker that could not \
+                     be parsed (oversized or truncated body); retrying rather than \
+                     under-count",
+                    redact(url)
+                )))
+            }
         }
     }
 }
@@ -280,7 +394,7 @@ enum Mode {
 /// `<NextMarker>` is the truncation signal. The last page carries no marker at
 /// all, a self-closing `<NextMarker />` (which the exact-tag pattern never
 /// matches), or an empty `<NextMarker></NextMarker>` (captured empty, mapped
-/// to absent in [`Self::finish`]).
+/// to the last page in [`Self::finish`]).
 ///
 /// `<Content-Length>` appears exactly once per blob, inside `<Properties>`;
 /// the full-tag pattern (with the closing `>`) cannot match the sibling
@@ -314,18 +428,28 @@ impl AzureScan {
     }
 
     /// Digits still open at end of body are flushed (matching `PageScan`'s XML
-    /// end-of-buffer fold); a marker capture still open is malformed and
-    /// treated as absent, as is a completed-but-empty one.
-    fn finish(self) -> (u64, Option<String>) {
-        let mut total = self.total;
-        if let Mode::Digits(value) = self.mode {
-            total = total.saturating_add(value);
+    /// end-of-buffer fold). A completed-but-empty `<NextMarker></NextMarker>` is
+    /// the last-page signal. A marker we saw but could not produce — abandoned
+    /// as oversized, or still mid-capture at end of body — is truncation
+    /// evidence with no usable token, so it becomes a lost continuation rather
+    /// than being silently reported complete.
+    fn finish(self) -> ScanOutcome {
+        let AzureScan { mode, total, token, token_given_up, .. } = self;
+        let total = match &mode {
+            Mode::Digits(value) => total.saturating_add(*value),
+            _ => total,
+        };
+        match token {
+            Some(t) if !t.is_empty() => ScanOutcome::Continues {
+                bytes: total,
+                token: String::from_utf8_lossy(&t).into_owned(),
+            },
+            Some(_) => ScanOutcome::LastPage { bytes: total },
+            None if token_given_up || matches!(mode, Mode::Token(_)) => {
+                ScanOutcome::ContinuationLost
+            }
+            None => ScanOutcome::LastPage { bytes: total },
         }
-        let token = self
-            .token
-            .filter(|t| !t.is_empty())
-            .map(|t| String::from_utf8_lossy(&t).into_owned());
-        (total, token)
     }
 
     /// Seam handling on entering a chunk in `Normal` mode: dispatch the match
@@ -457,9 +581,7 @@ impl AzureScan {
 /// Reads a 200 response body to completion, scanning each chunk as it arrives.
 /// A mid-body error surfaces as `Err` so the attempt can be classified as
 /// retryable.
-async fn read_page_body(
-    resp: &mut reqwest::Response,
-) -> reqwest::Result<(u64, Option<String>)> {
+async fn read_page_body(resp: &mut reqwest::Response) -> reqwest::Result<ScanOutcome> {
     let mut scan = AzureScan::default();
     while let Some(chunk) = resp.chunk().await? {
         scan.feed(&chunk);
@@ -482,20 +604,39 @@ pub(crate) fn make_fetcher(
     account: &str,
     container: &str,
     auth: AzureListAuth,
+    http: reqwest::Client,
 ) -> StorageResult<Arc<dyn ListPageFetcher>> {
-    Ok(Arc::new(AzureLister::new(endpoint, use_emulator, account, container, auth)?))
+    Ok(Arc::new(AzureLister::new(
+        endpoint,
+        use_emulator,
+        account,
+        container,
+        auth,
+        http,
+    )?))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn scan_parts(parts: &[&[u8]]) -> (u64, Option<String>) {
+    fn scan_outcome(parts: &[&[u8]]) -> ScanOutcome {
         let mut scan = AzureScan::default();
         for part in parts {
             scan.feed(part);
         }
         scan.finish()
+    }
+
+    /// Well-formed fixtures resolve to a byte total and an optional continuation
+    /// marker; a lost continuation is a bug in those cases, so it panics here and
+    /// is asserted for explicitly in the dedicated tests.
+    fn scan_parts(parts: &[&[u8]]) -> (u64, Option<String>) {
+        match scan_outcome(parts) {
+            ScanOutcome::LastPage { bytes } => (bytes, None),
+            ScanOutcome::Continues { bytes, token } => (bytes, Some(token)),
+            ScanOutcome::ContinuationLost => panic!("unexpected lost continuation"),
+        }
     }
 
     fn scan_whole(doc: &[u8]) -> (u64, Option<String>) {
@@ -559,8 +700,6 @@ mod tests {
 
     const OPEN_DIGITS_AT_EOF_PAGE: &[u8] = b"<Properties><Content-Length>123";
 
-    const OPEN_TOKEN_AT_EOF_PAGE: &[u8] = b"<NextMarker>abc";
-
     fn fixtures() -> Vec<(&'static [u8], u64, Option<&'static str>)> {
         vec![
             (REALISTIC_PAGE, 1234 + 987_654_321, None),
@@ -577,7 +716,6 @@ mod tests {
             (EXTREME_SIZES_PAGE, u64::MAX, None),
             (SMALL_PAGE, 42, Some("2!8!bWFyaw==")),
             (OPEN_DIGITS_AT_EOF_PAGE, 123, None),
-            (OPEN_TOKEN_AT_EOF_PAGE, 0, None),
         ]
     }
 
@@ -655,16 +793,25 @@ mod tests {
         let at_cap = build(TOKEN_MAX);
         assert_eq!(scan_whole(&at_cap), (0, Some("a".repeat(TOKEN_MAX))));
 
+        // Over the cap the marker is abandoned, but a NextMarker *was* present:
+        // the page must report a lost continuation, not silently look complete.
         let over_cap = build(TOKEN_MAX + 1);
-        assert_eq!(scan_whole(&over_cap), (0, None));
+        assert!(matches!(scan_outcome(&[&over_cap]), ScanOutcome::ContinuationLost));
         let parts: Vec<&[u8]> = over_cap.chunks(97).collect();
-        assert_eq!(scan_parts(&parts), (0, None));
+        assert!(matches!(scan_outcome(&parts), ScanOutcome::ContinuationLost));
     }
 
     #[test]
-    fn azure_scan_end_of_body_flushes_digits_and_drops_open_marker() {
+    fn azure_scan_open_values_at_end_of_body() {
+        // Open digits carry no continuation evidence: the shard is reported
+        // complete with the flushed size.
         assert_eq!(scan_whole(b"<Content-Length>123"), (123, None));
-        assert_eq!(scan_whole(b"<NextMarker>abc"), (0, None));
+        // A NextMarker left open at end of body is a lost continuation: the
+        // listing advertised more pages we could not resume.
+        assert!(matches!(
+            scan_outcome(&[b"<NextMarker>abc"]),
+            ScanOutcome::ContinuationLost
+        ));
     }
 
     fn lister(
@@ -672,13 +819,21 @@ mod tests {
         use_emulator: bool,
         auth: AzureListAuth,
     ) -> Option<AzureLister> {
-        AzureLister::new(endpoint, use_emulator, "myacct", "mycontainer", auth).ok()
+        AzureLister::new(
+            endpoint,
+            use_emulator,
+            "myacct",
+            "mycontainer",
+            auth,
+            reqwest::Client::new(),
+        )
+        .ok()
     }
 
     #[test]
     fn azure_lister_builds_cloud_urls() {
         let url = lister(None, false, AzureListAuth::Anonymous)
-            .map(|l| l.build_url("some/repo/chunks/AB", None))
+            .map(|l| l.build_url("some/repo/chunks/AB", None, &ConcreteAuth::Anonymous))
             .unwrap_or_default();
         assert_eq!(
             url,
@@ -687,7 +842,7 @@ mod tests {
              &prefix=some%2Frepo%2Fchunks%2FAB&maxresults=5000"
         );
         let url = lister(None, false, AzureListAuth::Anonymous)
-            .map(|l| l.build_url("p", Some("2!8!bWFyaw==")))
+            .map(|l| l.build_url("p", Some("2!8!bWFyaw=="), &ConcreteAuth::Anonymous))
             .unwrap_or_default();
         assert_eq!(
             url,
@@ -700,8 +855,9 @@ mod tests {
     #[test]
     fn azure_lister_appends_sas_with_or_without_leading_separator() {
         for raw in ["sv=1&sig=s%3D", "?sv=1&sig=s%3D", "&sv=1&sig=s%3D"] {
-            let url = lister(None, false, AzureListAuth::sas(raw))
-                .map(|l| l.build_url("p", None))
+            let auth = ConcreteAuth::Sas(normalize_sas(raw));
+            let url = lister(None, false, AzureListAuth::Anonymous)
+                .map(|l| l.build_url("p", None, &auth))
                 .unwrap_or_default();
             assert_eq!(
                 url,
@@ -717,7 +873,12 @@ mod tests {
     fn azure_lister_maps_custom_endpoints_and_emulator() {
         let (url, canonical) =
             lister(Some("http://localhost:8888/base/"), false, AzureListAuth::Anonymous)
-                .map(|l| (l.build_url("p", None), l.canonical_path.clone()))
+                .map(|l| {
+                    (
+                        l.build_url("p", None, &ConcreteAuth::Anonymous),
+                        l.canonical_path.clone(),
+                    )
+                })
                 .unwrap_or_default();
         assert!(url.starts_with("http://localhost:8888/base/mycontainer?"), "got: {url}");
         assert_eq!(canonical, "/myacct/base/mycontainer");
@@ -725,7 +886,12 @@ mod tests {
         // The emulator uses path-style URLs: the account is in the path, and
         // the canonicalized resource repeats it.
         let (url, canonical) = lister(None, true, AzureListAuth::Anonymous)
-            .map(|l| (l.build_url("p", None), l.canonical_path.clone()))
+            .map(|l| {
+                (
+                    l.build_url("p", None, &ConcreteAuth::Anonymous),
+                    l.canonical_path.clone(),
+                )
+            })
             .unwrap_or_default();
         assert!(
             url.starts_with("http://127.0.0.1:10000/myacct/mycontainer?"),
@@ -759,5 +925,155 @@ mod tests {
              /myacct/mycontainer\n\
              comp:list\nmarker:2!8!bWFyaw==\nmaxresults:5000\nprefix:p\nrestype:container"
         );
+    }
+
+    mod fetcher {
+        use std::collections::VecDeque;
+        use std::sync::Mutex;
+        use std::time::Duration;
+
+        use icechunk_macros::tokio_test;
+
+        use super::*;
+        use crate::AzureCredentialsFetcher;
+        use crate::FastListHttpConfig;
+        use crate::fast_list_test_server::{FakeResponse, FakeServer};
+
+        /// A refreshable fetcher that yields each scripted credential once, then
+        /// repeats the last. The shared call counter lets a test assert how many
+        /// times a token was minted.
+        #[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
+        struct SequenceFetcher {
+            #[serde(skip)]
+            state: Arc<Mutex<SequenceState>>,
+        }
+
+        #[derive(Debug, Default)]
+        struct SequenceState {
+            remaining: VecDeque<AzureRefreshableCredential>,
+            calls: usize,
+        }
+
+        impl SequenceFetcher {
+            fn new(
+                creds: Vec<AzureRefreshableCredential>,
+            ) -> (Arc<Self>, Arc<Mutex<SequenceState>>) {
+                let state = Arc::new(Mutex::new(SequenceState {
+                    remaining: creds.into(),
+                    calls: 0,
+                }));
+                (Arc::new(Self { state: Arc::clone(&state) }), state)
+            }
+        }
+
+        #[async_trait]
+        #[typetag::serde]
+        impl AzureCredentialsFetcher for SequenceFetcher {
+            async fn get(&self) -> Result<AzureRefreshableCredential, String> {
+                let mut state = self.state.lock().expect("poisoned");
+                state.calls += 1;
+                let cred = if state.remaining.len() > 1 {
+                    state.remaining.pop_front()
+                } else {
+                    state.remaining.front().cloned()
+                };
+                cred.ok_or_else(|| "no scripted credential".to_string())
+            }
+        }
+
+        fn client(request_timeout: Duration) -> reqwest::Client {
+            FastListHttpConfig {
+                allow_http: true,
+                connect_timeout: None,
+                request_timeout,
+                read_timeout: None,
+            }
+            .build_client()
+            .expect("client builds")
+        }
+
+        fn lister(
+            server: &FakeServer,
+            auth: AzureListAuth,
+            timeout: Duration,
+        ) -> AzureLister {
+            AzureLister::new(
+                Some(&server.base_url()),
+                false,
+                "acct",
+                "cont",
+                auth,
+                client(timeout),
+            )
+            .expect("lister builds")
+        }
+
+        fn bearer_cred(token: &str) -> AzureRefreshableCredential {
+            AzureRefreshableCredential::BearerToken {
+                bearer: token.to_string(),
+                expires_after: Some(Utc::now() + chrono::TimeDelta::hours(1)),
+            }
+        }
+
+        #[tokio_test]
+        async fn abandoned_marker_page_fails_loudly() {
+            let mut body = b"<EnumerationResults><Blobs></Blobs><NextMarker>".to_vec();
+            body.extend(std::iter::repeat_n(b'a', TOKEN_MAX + 1));
+            body.extend_from_slice(b"</NextMarker></EnumerationResults>");
+            let server = FakeServer::start(move |_| FakeResponse::ok(body.clone())).await;
+            let lister =
+                lister(&server, AzureListAuth::Anonymous, Duration::from_secs(30));
+            // A page whose NextMarker cannot be parsed must not be reported as a
+            // completed shard (which would silently under-count); it retries.
+            let attempt = lister.attempt_page("chunks/00", None).await;
+            assert!(matches!(attempt, PageAttempt::Retryable(_)), "got {attempt:?}");
+        }
+
+        #[tokio_test]
+        async fn refreshes_credential_after_mid_run_auth_failure() {
+            // 403 is the SAS-expiry status the portable path would refresh past;
+            // a refreshable credential must survive it mid-run.
+            let server = FakeServer::start(|req| match req.authorization.as_deref() {
+                Some("Bearer fresh") => FakeResponse::ok(
+                    b"<EnumerationResults><Blobs><Blob><Properties>\
+                      <Content-Length>42</Content-Length></Properties></Blob></Blobs>\
+                      </EnumerationResults>"
+                        .to_vec(),
+                ),
+                _ => FakeResponse::status(403),
+            })
+            .await;
+            let (fetcher, state) =
+                SequenceFetcher::new(vec![bearer_cred("stale"), bearer_cred("fresh")]);
+            let provider = Arc::new(AzureRefreshableCredentialProvider::new(fetcher));
+            let lister = lister(
+                &server,
+                AzureListAuth::Refreshable(provider),
+                Duration::from_secs(30),
+            );
+
+            let first = lister.attempt_page("chunks/00", None).await;
+            assert!(matches!(first, PageAttempt::Retryable(_)), "got {first:?}");
+            let second = lister.attempt_page("chunks/00", None).await;
+            assert!(
+                matches!(second, PageAttempt::Page { bytes: 42, next_token: None }),
+                "got {second:?}"
+            );
+            assert_eq!(state.lock().expect("poisoned").calls, 2);
+        }
+
+        #[tokio_test]
+        async fn applies_request_timeout() {
+            let server = FakeServer::start(|_| FakeResponse::stall()).await;
+            let lister =
+                lister(&server, AzureListAuth::Anonymous, Duration::from_millis(150));
+            let started = std::time::Instant::now();
+            let attempt = lister.attempt_page("chunks/00", None).await;
+            assert!(matches!(attempt, PageAttempt::Retryable(_)), "got {attempt:?}");
+            assert!(
+                started.elapsed() < Duration::from_secs(5),
+                "configured request timeout should have fired promptly"
+            );
+        }
     }
 }

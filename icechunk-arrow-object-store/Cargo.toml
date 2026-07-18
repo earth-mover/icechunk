@@ -44,6 +44,7 @@ rmp-serde.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
 test-log.workspace = true
+tokio = { workspace = true, features = ["net", "io-util", "rt", "macros", "time"] }
 
 [features]
 default = ["s3", "gcs", "azure", "http", "fs"]

@@ -14,51 +14,58 @@
 //! and streaming the response body through [`JsonScan`].
 
 use std::sync::{Arc, LazyLock};
-use std::time::Duration;
 
 use async_trait::async_trait;
-use icechunk_storage::fast_list::{
-    CONCURRENCY_CAP, ListPageFetcher, PageAttempt, is_transient_status,
-};
+use icechunk_storage::fast_list::{ListPageFetcher, PageAttempt, is_transient_status};
 use icechunk_storage::{StorageResult, other_error};
 use memchr::memmem;
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
+
+use crate::GcsRefreshableCredentialProvider;
 
 const UNRESERVED: &AsciiSet =
     &NON_ALPHANUMERIC.remove(b'-').remove(b'_').remove(b'.').remove(b'~');
 
 const DEFAULT_GCS_ENDPOINT: &str = "https://storage.googleapis.com";
 const MAX_RESULTS: usize = 1000;
-const TIMEOUT_SECS: u64 = 120;
+
+/// How one page attempt authenticates. Anonymous and static bearer are fixed for
+/// the run; `Refreshable` keeps a live handle to the credential provider so a
+/// bearer that expires mid-run is re-resolved (and force-refreshed on a 401)
+/// rather than turning the sum into a 401 failure.
+#[derive(Debug)]
+pub(crate) enum GcsListAuth {
+    Anonymous,
+    Bearer(String),
+    Refreshable(Arc<GcsRefreshableCredentialProvider>),
+}
 
 #[derive(Debug)]
 pub(crate) struct GcsLister {
+    /// Client built by the gating with the run's `allow_http` and timeout
+    /// settings applied.
     http: reqwest::Client,
     /// `{endpoint}/storage/v1/b/{bucket}/o`, the JSON API objects listing for
     /// the bucket. A custom endpoint maps here directly (that is how
     /// fake-gcs-server serves the JSON API too).
     list_url_base: String,
-    bearer: Option<String>,
+    auth: GcsListAuth,
 }
 
 impl GcsLister {
     pub(crate) fn new(
         endpoint: Option<&str>,
         bucket: &str,
-        bearer: Option<String>,
-    ) -> StorageResult<Self> {
-        let http = reqwest::Client::builder()
-            .pool_max_idle_per_host(CONCURRENCY_CAP)
-            .timeout(Duration::from_secs(TIMEOUT_SECS))
-            .build()
-            .map_err(|e| other_error(format!("building reqwest client: {e}")))?;
+        auth: GcsListAuth,
+        http: reqwest::Client,
+    ) -> Self {
         let endpoint =
             endpoint.unwrap_or(DEFAULT_GCS_ENDPOINT).trim_end_matches('/').to_string();
         let list_url_base = format!(
             "{endpoint}/storage/v1/b/{}/o",
             utf8_percent_encode(bucket, UNRESERVED)
         );
-        Ok(Self { http, list_url_base, bearer })
+        Self { http, list_url_base, auth }
     }
 
     fn build_url(&self, list_prefix: &str, token: Option<&str>) -> String {
@@ -78,9 +85,23 @@ impl GcsLister {
 #[async_trait]
 impl ListPageFetcher for GcsLister {
     async fn attempt_page(&self, list_prefix: &str, token: Option<&str>) -> PageAttempt {
+        let bearer = match &self.auth {
+            GcsListAuth::Anonymous => None,
+            GcsListAuth::Bearer(bearer) => Some(bearer.clone()),
+            GcsListAuth::Refreshable(provider) => {
+                match provider.get_or_update_credentials().await {
+                    Ok(cred) => Some(cred.bearer),
+                    Err(e) => {
+                        return PageAttempt::Retryable(other_error(format!(
+                            "resolving refreshable GCS credentials for fast list: {e}"
+                        )));
+                    }
+                }
+            }
+        };
         let url = self.build_url(list_prefix, token);
         let mut rb = self.http.get(&url);
-        if let Some(bearer) = &self.bearer {
+        if let Some(bearer) = &bearer {
             rb = rb.bearer_auth(bearer);
         }
         match rb.send().await {
@@ -88,14 +109,23 @@ impl ListPageFetcher for GcsLister {
                 let status = resp.status().as_u16();
                 if status == 200 {
                     match read_page_body(&mut resp).await {
-                        Ok((bytes, next_token)) => {
-                            PageAttempt::Page { bytes, next_token }
-                        }
+                        Ok(outcome) => outcome.into_attempt(&url),
                         Err(e) => PageAttempt::Retryable(other_error(format!(
                             "GCS list body read error for {}: {e}",
                             redact(&url)
                         ))),
                     }
+                } else if status == 401
+                    && let (GcsListAuth::Refreshable(provider), Some(bearer)) =
+                        (&self.auth, &bearer)
+                {
+                    // A refreshable bearer rejected mid-run: drop it so the retry
+                    // re-resolves a fresh token instead of failing the sum.
+                    provider.invalidate_bearer(bearer).await;
+                    PageAttempt::Retryable(other_error(format!(
+                        "GCS list HTTP 401 for {} (bearer expired; refreshing)",
+                        redact(&url)
+                    )))
                 } else if is_transient_status(status) {
                     PageAttempt::Retryable(other_error(format!(
                         "GCS list HTTP {status} for {}",
@@ -118,6 +148,42 @@ impl ListPageFetcher for GcsLister {
                 "GCS list request error for {}: {e}",
                 redact(&url)
             ))),
+        }
+    }
+}
+
+/// What scanning one complete 200 page body concluded.
+#[derive(Debug)]
+enum ScanOutcome {
+    /// Clean end with no continuation: this shard is fully listed.
+    LastPage { bytes: u64 },
+    /// A continuation token to resume the shard from.
+    Continues { bytes: u64, token: String },
+    /// The body advertised a `nextPageToken` that could not be recovered — the
+    /// capture was abandoned as oversized, or left unterminated at end of body.
+    /// Reporting `LastPage` here would silently drop the rest of the shard, so
+    /// the fetcher retries the page and ultimately fails loudly. The bytes seen
+    /// so far are dropped: the retry re-lists the whole page.
+    ContinuationLost,
+}
+
+impl ScanOutcome {
+    fn into_attempt(self, url: &str) -> PageAttempt {
+        match self {
+            ScanOutcome::LastPage { bytes } => {
+                PageAttempt::Page { bytes, next_token: None }
+            }
+            ScanOutcome::Continues { bytes, token } => {
+                PageAttempt::Page { bytes, next_token: Some(token) }
+            }
+            ScanOutcome::ContinuationLost => {
+                PageAttempt::Retryable(other_error(format!(
+                    "GCS list page for {} advertised a nextPageToken that could not \
+                     be parsed (oversized or truncated body); retrying rather than \
+                     under-count",
+                    redact(url)
+                )))
+            }
         }
     }
 }
@@ -193,8 +259,11 @@ enum Mode {
 /// (not a terminator); no JSON unescaping is performed.
 ///
 /// Unlike `PageScan` (where XML bodies were historically folded to the end of
-/// the buffer), a value still open at end of body is malformed JSON — the
-/// transport retries truncated reads — and is dropped, not flushed.
+/// the buffer), a size value still open at end of body is malformed JSON — the
+/// transport retries truncated reads — and is dropped, not flushed. A
+/// `nextPageToken` left open (or abandoned as oversized) is instead reported as
+/// a lost continuation ([`ScanOutcome::ContinuationLost`]) so the shard is never
+/// silently reported complete when the listing actually continues.
 #[derive(Debug, Default)]
 struct JsonScan {
     mode: Mode,
@@ -222,10 +291,26 @@ impl JsonScan {
     }
 
     /// The presence of a completed `nextPageToken` is the truncation signal;
-    /// there is no separate `IsTruncated` in the JSON API.
-    fn finish(self) -> (u64, Option<String>) {
-        let token = self.token.map(|t| String::from_utf8_lossy(&t).into_owned());
-        (self.total, token)
+    /// there is no separate `IsTruncated` in the JSON API. A `nextPageToken` we
+    /// saw but could not produce — abandoned as oversized, or still mid-capture
+    /// at end of body — is truncation evidence with no usable token: reporting
+    /// the shard complete would under-count, so it becomes a lost continuation.
+    fn finish(self) -> ScanOutcome {
+        if let Some(token) = self.token {
+            return ScanOutcome::Continues {
+                bytes: self.total,
+                token: String::from_utf8_lossy(&token).into_owned(),
+            };
+        }
+        if self.token_given_up
+            || matches!(
+                self.mode,
+                Mode::Token { .. } | Mode::Prelude { kind: Pat::Token, .. }
+            )
+        {
+            return ScanOutcome::ContinuationLost;
+        }
+        ScanOutcome::LastPage { bytes: self.total }
     }
 
     /// Seam handling on entering a chunk in `Normal` mode: dispatch the match
@@ -396,9 +481,7 @@ impl JsonScan {
 /// Reads a 200 response body to completion, scanning each chunk as it arrives.
 /// A mid-body error surfaces as `Err` so the attempt can be classified as
 /// retryable.
-async fn read_page_body(
-    resp: &mut reqwest::Response,
-) -> reqwest::Result<(u64, Option<String>)> {
+async fn read_page_body(resp: &mut reqwest::Response) -> reqwest::Result<ScanOutcome> {
     let mut scan = JsonScan::default();
     while let Some(chunk) = resp.chunk().await? {
         scan.feed(&chunk);
@@ -418,21 +501,33 @@ fn redact(url: &str) -> String {
 pub(crate) fn make_fetcher(
     endpoint: Option<&str>,
     bucket: &str,
-    bearer: Option<String>,
+    auth: GcsListAuth,
+    http: reqwest::Client,
 ) -> StorageResult<Arc<dyn ListPageFetcher>> {
-    Ok(Arc::new(GcsLister::new(endpoint, bucket, bearer)?))
+    Ok(Arc::new(GcsLister::new(endpoint, bucket, auth, http)))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn scan_parts(parts: &[&[u8]]) -> (u64, Option<String>) {
+    fn scan_outcome(parts: &[&[u8]]) -> ScanOutcome {
         let mut scan = JsonScan::default();
         for part in parts {
             scan.feed(part);
         }
         scan.finish()
+    }
+
+    /// Well-formed fixtures resolve to a byte total and an optional continuation
+    /// token; a lost continuation is a bug in those cases, so it panics here and
+    /// is asserted for explicitly in the dedicated tests.
+    fn scan_parts(parts: &[&[u8]]) -> (u64, Option<String>) {
+        match scan_outcome(parts) {
+            ScanOutcome::LastPage { bytes } => (bytes, None),
+            ScanOutcome::Continues { bytes, token } => (bytes, Some(token)),
+            ScanOutcome::ContinuationLost => panic!("unexpected lost continuation"),
+        }
     }
 
     fn scan_whole(doc: &[u8]) -> (u64, Option<String>) {
@@ -559,25 +654,41 @@ mod tests {
         let at_cap = build(TOKEN_MAX);
         assert_eq!(scan_whole(&at_cap), (5, Some("a".repeat(TOKEN_MAX))));
 
+        // Over the cap the token is abandoned, but a nextPageToken *was* present:
+        // the page must report a lost continuation, not silently look complete.
         let over_cap = build(TOKEN_MAX + 1);
-        assert_eq!(scan_whole(&over_cap), (5, None));
+        assert!(matches!(scan_outcome(&[&over_cap]), ScanOutcome::ContinuationLost));
         let parts: Vec<&[u8]> = over_cap.chunks(97).collect();
-        assert_eq!(scan_parts(&parts), (5, None));
+        assert!(matches!(scan_outcome(&parts), ScanOutcome::ContinuationLost));
     }
 
     #[test]
-    fn json_scan_drops_values_open_at_end_of_body() {
+    fn json_scan_open_values_at_end_of_body() {
+        // An open size value carries no continuation evidence: the shard is
+        // reported complete (its bytes are dropped, as the JSON is malformed).
         assert_eq!(scan_whole(br#"{"items":[{"size":"123"#), (0, None));
-        assert_eq!(scan_whole(br#"{"nextPageToken":"abc"#), (0, None));
         assert_eq!(scan_whole(br#"{"items":[{"size""#), (0, None));
+        // A nextPageToken left open at end of body is a lost continuation: the
+        // listing advertised more pages we could not resume.
+        assert!(matches!(
+            scan_outcome(&[br#"{"nextPageToken":"abc"#]),
+            ScanOutcome::ContinuationLost
+        ));
+        assert!(matches!(
+            scan_outcome(&[br#"{"items":[{"size":"5"}],"nextPageToken":"#]),
+            ScanOutcome::ContinuationLost
+        ));
+    }
+
+    fn test_lister(endpoint: Option<&str>, bucket: &str) -> GcsLister {
+        GcsLister::new(endpoint, bucket, GcsListAuth::Anonymous, reqwest::Client::new())
     }
 
     #[test]
     fn gcs_lister_builds_projected_urls() {
-        let lister = GcsLister::new(None, "my.bucket", None).ok().map(|l| {
-            (l.build_url("some/repo/chunks/AB", None), l.build_url("p", Some("tok+/=")))
-        });
-        let (plain, with_token) = lister.unwrap_or_default();
+        let lister = test_lister(None, "my.bucket");
+        let plain = lister.build_url("some/repo/chunks/AB", None);
+        let with_token = lister.build_url("p", Some("tok+/="));
         assert_eq!(
             plain,
             "https://storage.googleapis.com/storage/v1/b/my.bucket/o\
@@ -595,13 +706,149 @@ mod tests {
 
     #[test]
     fn gcs_lister_maps_custom_endpoints() {
-        let url = GcsLister::new(Some("http://localhost:4443/"), "b", None)
-            .ok()
-            .map(|l| l.build_url("p", None))
-            .unwrap_or_default();
+        let url = test_lister(Some("http://localhost:4443/"), "b").build_url("p", None);
         assert!(
             url.starts_with("http://localhost:4443/storage/v1/b/b/o?prefix=p&"),
             "got: {url}"
         );
+    }
+
+    mod fetcher {
+        use std::collections::VecDeque;
+        use std::sync::Mutex;
+        use std::time::Duration;
+
+        use icechunk_macros::tokio_test;
+
+        use super::*;
+        use crate::FastListHttpConfig;
+        use crate::fast_list_test_server::{FakeResponse, FakeServer};
+        use crate::{GcsBearerCredential, GcsCredentialsFetcher};
+
+        /// A refreshable fetcher that yields each scripted credential once, then
+        /// repeats the last. The shared call counter lets a test assert how many
+        /// times a token was minted.
+        #[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
+        struct SequenceFetcher {
+            #[serde(skip)]
+            state: Arc<Mutex<SequenceState>>,
+        }
+
+        #[derive(Debug, Default)]
+        struct SequenceState {
+            remaining: VecDeque<GcsBearerCredential>,
+            calls: usize,
+        }
+
+        impl SequenceFetcher {
+            fn new(
+                creds: Vec<GcsBearerCredential>,
+            ) -> (Arc<Self>, Arc<Mutex<SequenceState>>) {
+                let state = Arc::new(Mutex::new(SequenceState {
+                    remaining: creds.into(),
+                    calls: 0,
+                }));
+                (Arc::new(Self { state: Arc::clone(&state) }), state)
+            }
+        }
+
+        #[async_trait]
+        #[typetag::serde]
+        impl GcsCredentialsFetcher for SequenceFetcher {
+            async fn get(&self) -> Result<GcsBearerCredential, String> {
+                let mut state = self.state.lock().expect("poisoned");
+                state.calls += 1;
+                let cred = if state.remaining.len() > 1 {
+                    state.remaining.pop_front()
+                } else {
+                    state.remaining.front().cloned()
+                };
+                cred.ok_or_else(|| "no scripted credential".to_string())
+            }
+        }
+
+        fn client(allow_http: bool, request_timeout: Duration) -> reqwest::Client {
+            FastListHttpConfig {
+                allow_http,
+                connect_timeout: None,
+                request_timeout,
+                read_timeout: None,
+            }
+            .build_client()
+            .expect("client builds")
+        }
+
+        fn lister(server: &FakeServer, auth: GcsListAuth) -> GcsLister {
+            GcsLister::new(
+                Some(&server.base_url()),
+                "bucket",
+                auth,
+                client(true, Duration::from_secs(30)),
+            )
+        }
+
+        fn bearer(token: &str) -> GcsBearerCredential {
+            GcsBearerCredential {
+                bearer: token.to_string(),
+                expires_after: Some(chrono::Utc::now() + chrono::TimeDelta::hours(1)),
+            }
+        }
+
+        #[tokio_test]
+        async fn abandoned_token_page_fails_loudly() {
+            let mut body = br#"{"nextPageToken":""#.to_vec();
+            body.extend(std::iter::repeat_n(b'a', TOKEN_MAX + 1));
+            body.extend_from_slice(br#"","items":[{"size":"5"}]}"#);
+            let server = FakeServer::start(move |_| FakeResponse::ok(body.clone())).await;
+            let lister = lister(&server, GcsListAuth::Anonymous);
+            // A page whose nextPageToken cannot be parsed must not be reported as
+            // a completed shard (which would silently under-count); it retries.
+            let attempt = lister.attempt_page("chunks/00", None).await;
+            assert!(matches!(attempt, PageAttempt::Retryable(_)), "got {attempt:?}");
+        }
+
+        #[tokio_test]
+        async fn refreshes_bearer_after_mid_run_401() {
+            let server = FakeServer::start(|req| match req.authorization.as_deref() {
+                Some("Bearer fresh") => {
+                    FakeResponse::ok(br#"{"items":[{"size":"42"}]}"#.to_vec())
+                }
+                _ => FakeResponse::status(401),
+            })
+            .await;
+            let (fetcher, state) =
+                SequenceFetcher::new(vec![bearer("stale"), bearer("fresh")]);
+            let provider = Arc::new(GcsRefreshableCredentialProvider::new(fetcher));
+            let lister = lister(&server, GcsListAuth::Refreshable(provider));
+
+            // The stale bearer is rejected; the fetcher survives it, re-resolves,
+            // and the second attempt succeeds with the fresh token.
+            let first = lister.attempt_page("chunks/00", None).await;
+            assert!(matches!(first, PageAttempt::Retryable(_)), "got {first:?}");
+            let second = lister.attempt_page("chunks/00", None).await;
+            assert!(
+                matches!(second, PageAttempt::Page { bytes: 42, next_token: None }),
+                "got {second:?}"
+            );
+            assert_eq!(state.lock().expect("poisoned").calls, 2);
+        }
+
+        #[tokio_test]
+        async fn applies_request_timeout() {
+            let server = FakeServer::start(|_| FakeResponse::stall()).await;
+            let lister = GcsLister::new(
+                Some(&server.base_url()),
+                "bucket",
+                GcsListAuth::Anonymous,
+                client(true, Duration::from_millis(150)),
+            );
+            let started = std::time::Instant::now();
+            let attempt = lister.attempt_page("chunks/00", None).await;
+            assert!(matches!(attempt, PageAttempt::Retryable(_)), "got {attempt:?}");
+            assert!(
+                started.elapsed() < Duration::from_secs(5),
+                "configured request timeout should have fired promptly"
+            );
+        }
     }
 }
