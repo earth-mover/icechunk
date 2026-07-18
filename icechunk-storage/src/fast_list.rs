@@ -20,11 +20,19 @@
 //! error-driven adaptation cannot see it. A `ConcurrencyController` instead
 //! watches goodput (pages/sec): it doubles the limit while each step improves
 //! goodput by at least 15%, reverts to the best-seen limit when the curve
-//! flattens, and afterwards reacts only to bursts of retryable errors by
-//! halving. Individual requests keep their jittered backoff; the controller is
-//! a coarser mechanism layered on top, the way BBR coexists with retransmits.
+//! flattens, sheds concurrency toward the floor if a whole window completes no
+//! pages at all (a stall it must never mistake for headroom), and afterwards
+//! reacts only to bursts of retryable errors by halving. Individual requests
+//! keep their jittered backoff; the controller is a coarser mechanism layered
+//! on top, the way BBR coexists with retransmits.
+//!
+//! Several prefixes summed against one store at once can share a single
+//! controller and limit signal (see [`SharedController`]) so their admissions
+//! adapt as one group rather than each ramping independently and overshooting
+//! the store's aggregate request budget by the number of prefixes.
 
 use std::collections::VecDeque;
+use std::future::Future;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -60,6 +68,12 @@ const GOODPUT_IMPROVEMENT_FACTOR: f64 = 1.15;
 const ERROR_BURST_FRACTION: f64 = 0.02;
 const BEST_GOODPUT_DECAY: f64 = 0.5;
 
+/// One queued unit of fan-out work: a shard prefix and the continuation token
+/// to resume it from (`None` for its first page). Workers park by re-enqueuing
+/// their continuation as one of these rather than holding it suspended — see
+/// [`Engine::worker`].
+type WorkItem = (String, Option<String>);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Phase {
     Probing,
@@ -70,19 +84,23 @@ enum Phase {
 ///
 /// Goodput (pages/sec) is the control signal because the failure mode this
 /// exists for — congestion collapse on narrow links — emits no error signal at
-/// all. The driver in [`sum`] feeds sampled counter deltas through
-/// [`Self::observe`]; the struct never reads a clock and spawns nothing, so
-/// tests drive it with synthetic windows.
+/// all. The driver feeds sampled counter deltas through [`Self::observe`]; the
+/// struct never reads a clock and spawns nothing, so tests drive it with
+/// synthetic windows.
 ///
 /// While probing, the limit doubles as long as each step improves goodput by
 /// ≥15%; the first flat or regressed window reverts to the best-seen limit and
-/// holds. Holding ignores goodput on purpose — the end-of-run tail drain sinks
-/// goodput, and shrinking then would be pointless — reacting only to bursts of
-/// retryable errors (>2% of a window's pages) by halving the limit. An
-/// error-halving also ends probing rather than restarting it: regrowing toward
-/// a throttle ceiling the run just hit would oscillate for the rest of a short
-/// run, and the goodput-vs-concurrency plateau is broad enough that the halved
-/// limit stays within it.
+/// holds. A window that completed *no pages at all* is a stall, never an
+/// improvement (0 goodput would otherwise clear the bar against a 0 baseline);
+/// it sheds concurrency toward the floor and stops probing, because doubling
+/// into a link that is moving nothing is exactly the collapse this governor
+/// exists to prevent. Holding ignores goodput on purpose — the end-of-run tail
+/// drain sinks goodput, and shrinking then would be pointless — reacting only
+/// to bursts of retryable errors (>2% of a window's pages) by halving the
+/// limit. An error-halving also ends probing rather than restarting it:
+/// regrowing toward a throttle ceiling the run just hit would oscillate for the
+/// rest of a short run, and the goodput-vs-concurrency plateau is broad enough
+/// that the halved limit stays within it.
 #[derive(Debug)]
 struct ConcurrencyController {
     limit: usize,
@@ -147,6 +165,24 @@ impl ConcurrencyController {
         }
 
         if self.phase == Phase::Probing {
+            // A judged window that completed no pages carries no goodput
+            // signal: its rate is 0, and 0 clears the ≥15% improvement bar
+            // against a 0 baseline (0 ≥ 1.15·0), so without this guard a
+            // stalled link would double the limit every window straight to the
+            // cap — the congestion collapse the governor exists to prevent.
+            // Treat it as a stall instead: shed toward the floor and stop
+            // probing, on the same reasoning as an error burst (a link moving
+            // nothing needs less pressure, not more).
+            if pages == 0 {
+                let backed_off = (self.limit / 2).max(CONCURRENCY_FLOOR);
+                if backed_off != self.limit {
+                    self.limit = backed_off;
+                    self.discard_next = true;
+                }
+                self.best_limit = self.limit;
+                self.phase = Phase::Holding;
+                return self.limit;
+            }
             let goodput = if secs > 0.0 { pages as f64 / secs } else { 0.0 };
             if goodput >= GOODPUT_IMPROVEMENT_FACTOR * self.best_goodput {
                 self.best_goodput = goodput;
@@ -175,10 +211,23 @@ pub enum PageAttempt {
     /// The page was fetched and its body scanned to the end.
     Page { bytes: u64, next_token: Option<String> },
     /// A transient failure worth retrying: throttling or server errors
-    /// (503/429/5xx), timeouts, connect failures, mid-body read errors.
-    Retryable,
+    /// (503/429/5xx), timeouts, connect failures, mid-body read errors. The
+    /// payload carries the underlying cause so the engine can log each retry at
+    /// debug level and surface the last cause if the attempts are exhausted;
+    /// fetchers populate it with whatever status/error they have in hand.
+    Retryable(StorageError),
     /// A failure retrying cannot fix; aborts the whole sum.
     Fatal(StorageError),
+}
+
+/// Whether an HTTP status warrants a retry rather than aborting the sum: `429`
+/// (Too Many Requests) plus the whole `5xx` server-error range. The three
+/// backend fetchers share this so their retryable-vs-fatal split stays
+/// consistent instead of triplicating divergent status lists; finer,
+/// provider-specific signals (S3 `SlowDown`, GCS `userRateLimitExceeded`, Azure
+/// `ServerBusy`) can still classify a [`PageAttempt::Retryable`] on top of it.
+pub fn is_transient_status(status: u16) -> bool {
+    status == 429 || (500..=599).contains(&status)
 }
 
 /// One attempt at one list page of a provider's raw-prefix listing API.
@@ -198,32 +247,180 @@ pub trait ListPageFetcher: Send + Sync + 'static {
 /// 1024 two-character Crockford shards, drained by up to [`CONCURRENCY_CAP`]
 /// workers gated on a watch channel, with the sampling loop feeding the
 /// concurrency controller and publishing its limit to the workers.
+///
+/// `max_attempts` is the *total* number of tries the engine makes per page
+/// (not the number of retries): callers pass their `max_tries` directly. To
+/// co-schedule several sums against one store under a shared limit, see
+/// [`sum_with_controller`].
 pub async fn sum(
     fetcher: Arc<dyn ListPageFetcher>,
     base_prefix: &str,
     shardable: bool,
-    max_retries: u32,
+    max_attempts: u32,
 ) -> StorageResult<u64> {
-    let engine = Arc::new(Engine {
-        fetcher,
-        max_retries,
-        pages_completed: AtomicU64::new(0),
-        retryable_errors: AtomicU64::new(0),
-    });
-    engine.sum(base_prefix, shardable).await
+    let engine = Engine::new(fetcher, max_attempts, Governor::new());
+    engine.sum_owned(base_prefix, shardable).await
 }
 
-struct Engine {
+/// Like [`sum`], but drives the fan-out off a caller-owned [`SharedController`]
+/// so several concurrent runs adapt as one group. The caller must drive the
+/// controller's sampler once for the batch — see [`SharedController`].
+pub async fn sum_with_controller(
     fetcher: Arc<dyn ListPageFetcher>,
-    max_retries: u32,
-    /// Counter deltas sampled (and reset) every [`SAMPLE_INTERVAL`] by the
-    /// controller driver in [`Self::sum`].
+    base_prefix: &str,
+    shardable: bool,
+    max_attempts: u32,
+    controller: &SharedController,
+) -> StorageResult<u64> {
+    let engine = Engine::new(fetcher, max_attempts, Arc::clone(&controller.governor));
+    engine.sum_shared_run(base_prefix, shardable).await
+}
+
+/// A [`ConcurrencyController`] and its published limit signal, shared across
+/// several concurrent [`sum_with_controller`] runs against one store.
+///
+/// The size-listing entry point sums several top-level prefixes at once (the
+/// six repo roots). Given one controller each, the runs ramp independently and
+/// their admissions add up, overshooting the store's aggregate request budget
+/// by roughly the number of prefixes. Sharing one controller fixes that: every
+/// run's page completions and retryable errors feed one controller measuring
+/// *aggregate* goodput, and it publishes one limit that every run's workers
+/// obey. Because aggregate goodput reaches the store's knee at a lower per-run
+/// limit than a single run would, the group converges so total in-flight
+/// concurrency tracks a single run's optimum instead of multiplying by the
+/// prefix count.
+///
+/// The limit is a per-run worker budget — each run admits up to `limit`
+/// workers of its own; the shared *signal*, not a global slot count, is what
+/// couples the runs. Drive the sampler exactly once for the batch with
+/// [`Self::run`], concurrently with the runs, and resolve its `shutdown` future
+/// once they finish:
+///
+/// ```ignore
+/// let controller = SharedController::new();
+/// let done = tokio::sync::Notify::new();
+/// let sums = async {
+///     let totals = futures::future::try_join_all(prefixes.iter().map(|&(p, shardable)| {
+///         sum_with_controller(fetcher.clone(), p, shardable, max_attempts, &controller)
+///     }))
+///     .await;
+///     done.notify_one();
+///     totals
+/// };
+/// let (totals, ()) = tokio::join!(sums, controller.run(done.notified()));
+/// ```
+#[derive(Debug)]
+pub struct SharedController {
+    governor: Arc<Governor>,
+}
+
+impl SharedController {
+    pub fn new() -> Self {
+        Self { governor: Governor::new() }
+    }
+
+    /// Drive the shared sampling loop until `shutdown` resolves. Run this once
+    /// per batch, concurrently with the [`sum_with_controller`] runs that share
+    /// this controller, and resolve `shutdown` after they have all completed.
+    pub async fn run(&self, shutdown: impl Future<Output = ()>) {
+        drive_sampler(Arc::clone(&self.governor), shutdown).await;
+    }
+}
+
+impl Default for SharedController {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Shared adaptive-concurrency state: the [`ConcurrencyController`], the single
+/// published worker limit, and the counter deltas the sampler folds into it.
+/// One `Governor` backs one *or more* engine runs; when several share it (via
+/// [`SharedController`]) they adapt as a group off aggregate goodput.
+#[derive(Debug)]
+struct Governor {
+    controller: Mutex<ConcurrencyController>,
+    limit_tx: watch::Sender<usize>,
     pages_completed: AtomicU64,
     retryable_errors: AtomicU64,
 }
 
+impl Governor {
+    fn new() -> Arc<Self> {
+        let (limit_tx, _rx) = watch::channel(CONCURRENCY_START);
+        Arc::new(Self {
+            controller: Mutex::new(ConcurrencyController::new()),
+            limit_tx,
+            pages_completed: AtomicU64::new(0),
+            retryable_errors: AtomicU64::new(0),
+        })
+    }
+
+    fn limit_rx(&self) -> watch::Receiver<usize> {
+        self.limit_tx.subscribe()
+    }
+
+    /// One sampling step: fold the counters accumulated since the last call
+    /// into the controller and publish the limit it returns. Called on a fixed
+    /// cadence by [`drive_sampler`]; `secs` is the wall time since the previous
+    /// step. A poisoned controller lock leaves the limit untouched.
+    fn sample(&self, secs: f64) {
+        let pages = self.pages_completed.swap(0, Ordering::Relaxed);
+        let errors = self.retryable_errors.swap(0, Ordering::Relaxed);
+        let Ok(mut controller) = self.controller.lock() else {
+            return;
+        };
+        let limit = controller.observe(pages, errors, secs);
+        drop(controller);
+        if *self.limit_tx.borrow() != limit {
+            let _ = self.limit_tx.send(limit);
+        }
+    }
+}
+
+/// Tick every [`SAMPLE_INTERVAL`] and fold each window into `governor` until
+/// `shutdown` resolves. The single-run entry points spawn this alongside their
+/// fan-out; a [`SharedController`] caller drives it once for a whole batch.
+async fn drive_sampler(governor: Arc<Governor>, shutdown: impl Future<Output = ()>) {
+    let mut ticker =
+        tokio::time::interval_at(Instant::now() + SAMPLE_INTERVAL, SAMPLE_INTERVAL);
+    ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    let mut last_sample = Instant::now();
+    tokio::pin!(shutdown);
+    loop {
+        tokio::select! {
+            _ = ticker.tick() => {
+                let now = Instant::now();
+                let secs = now.duration_since(last_sample).as_secs_f64();
+                last_sample = now;
+                governor.sample(secs);
+            }
+            _ = &mut shutdown => return,
+        }
+    }
+}
+
+struct Engine {
+    fetcher: Arc<dyn ListPageFetcher>,
+    /// Total attempts per page (not retries): the loop in [`Self::fetch_page`]
+    /// makes exactly this many tries before giving up. Callers pass their
+    /// `max_tries` unchanged.
+    max_attempts: u32,
+    governor: Arc<Governor>,
+}
+
 impl Engine {
-    async fn sum(
+    fn new(
+        fetcher: Arc<dyn ListPageFetcher>,
+        max_attempts: u32,
+        governor: Arc<Governor>,
+    ) -> Arc<Self> {
+        Arc::new(Self { fetcher, max_attempts, governor })
+    }
+
+    /// Single-run entry: owns the governor, so it spawns and stops the sampler
+    /// itself around the fan-out.
+    async fn sum_owned(
         self: Arc<Self>,
         base_prefix: &str,
         shardable: bool,
@@ -231,80 +428,107 @@ impl Engine {
         if !shardable {
             return self.sum_prefix(base_prefix.to_string()).await;
         }
-        // Probe one page first: a prefix that fits in a single response is
-        // summed with exactly one request. Only truncated (>1000-object)
-        // prefixes pay for the fan-out below.
+        if let Some(total) = self.probe(base_prefix).await? {
+            return Ok(total);
+        }
+        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+        let sampler =
+            tokio::spawn(drive_sampler(Arc::clone(&self.governor), async move {
+                let _ = shutdown_rx.await;
+            }));
+        let result = Arc::clone(&self).fanout(base_prefix).await;
+        let _ = shutdown_tx.send(());
+        let _ = sampler.await;
+        result
+    }
+
+    /// Shared-controller entry: the governor's sampler is driven externally by
+    /// the [`SharedController`] caller, so this only drives its own workers.
+    async fn sum_shared_run(
+        self: Arc<Self>,
+        base_prefix: &str,
+        shardable: bool,
+    ) -> StorageResult<u64> {
+        if !shardable {
+            return self.sum_prefix(base_prefix.to_string()).await;
+        }
+        if let Some(total) = self.probe(base_prefix).await? {
+            return Ok(total);
+        }
+        self.fanout(base_prefix).await
+    }
+
+    /// Probe one page: `Some(bytes)` when the prefix fits in a single response
+    /// (summed with exactly one request), `None` when it is truncated and the
+    /// caller must fan out. The truncated probe's bytes are deliberately
+    /// dropped — the fan-out re-lists the whole keyspace, so counting them
+    /// would double the first page.
+    async fn probe(&self, base_prefix: &str) -> StorageResult<Option<u64>> {
         let (probe_bytes, next_token) =
             self.fetch_page(&format!("{base_prefix}/"), None).await?;
-        if next_token.is_none() {
-            return Ok(probe_bytes);
-        }
+        Ok(next_token.is_none().then_some(probe_bytes))
+    }
+
+    /// Fan the truncated keyspace out over the 1024 two-character Crockford
+    /// shards and drain them with the adaptive worker pool.
+    async fn fanout(self: Arc<Self>, base_prefix: &str) -> StorageResult<u64> {
         // Ids are >= 2 Crockford characters, so the 1024 two-character
         // sub-prefixes are disjoint and cover the whole keyspace.
-        let queue: Arc<Mutex<VecDeque<String>>> = Arc::new(Mutex::new(
+        let queue: Arc<Mutex<VecDeque<WorkItem>>> = Arc::new(Mutex::new(
             CROCKFORD
                 .chars()
                 .flat_map(|a| {
-                    CROCKFORD.chars().map(move |b| format!("{base_prefix}/{a}{b}"))
+                    CROCKFORD
+                        .chars()
+                        .map(move |b| (format!("{base_prefix}/{a}{b}"), None))
                 })
                 .collect(),
         ));
 
-        let (limit_tx, limit_rx) = watch::channel(CONCURRENCY_START);
+        let limit_rx = self.governor.limit_rx();
+        // Per-run drain signal: when this run's queue empties, it releases its
+        // own parked workers without touching the shared limit, so runs that
+        // share the limit are unaffected.
+        let (drain_tx, drain_rx) = watch::channel(false);
         let mut workers: JoinSet<StorageResult<u64>> = JoinSet::new();
         for index in 0..CONCURRENCY_CAP {
             workers.spawn(Arc::clone(&self).worker(
                 Arc::clone(&queue),
                 limit_rx.clone(),
+                drain_rx.clone(),
                 index,
             ));
         }
         drop(limit_rx);
+        drop(drain_rx);
 
-        let mut controller = ConcurrencyController::new();
-        let mut ticker =
-            tokio::time::interval_at(Instant::now() + SAMPLE_INTERVAL, SAMPLE_INTERVAL);
-        ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
-        let mut last_sample = Instant::now();
-        // The fan-out re-lists the whole keyspace, so the truncated probe
-        // page's bytes must not be counted a second time.
         let mut total = 0u64;
         let mut draining = false;
-
         let result = loop {
-            tokio::select! {
-                joined = workers.join_next() => match joined {
-                    None => break Ok(total),
-                    Some(Ok(Ok(subtotal))) => {
-                        total = total.saturating_add(subtotal);
-                        // A worker exits cleanly only after seeing the queue
-                        // empty, so parked workers can never be needed again:
-                        // admit everyone (they observe the empty queue and
-                        // exit) and freeze the limit so no worker re-parks
-                        // mid-prefix with no future admission coming.
-                        if !draining {
-                            draining = true;
-                            let _ = limit_tx.send(CONCURRENCY_CAP);
-                        }
+            match workers.join_next().await {
+                None => break Ok(total),
+                Some(Ok(Ok(subtotal))) => {
+                    total = total.saturating_add(subtotal);
+                    // A worker returns cleanly only after popping an empty
+                    // queue. Continuations are re-enqueued rather than held in
+                    // parked workers (see `worker`), so an empty queue means
+                    // the run is genuinely done — no worker is sitting on an
+                    // unfinished listing. Release this run's parked workers so
+                    // they observe the empty queue and exit; because the
+                    // released workers hold no work to resume, this cannot
+                    // burst, and because the signal is per-run it leaves any
+                    // co-scheduled runs sharing the limit untouched.
+                    if !draining {
+                        draining = true;
+                        let _ = drain_tx.send(true);
                     }
-                    Some(Ok(Err(e))) => break Err(e),
-                    Some(Err(join_error)) => {
-                        if join_error.is_panic() {
-                            std::panic::resume_unwind(join_error.into_panic());
-                        }
+                }
+                Some(Ok(Err(e))) => break Err(e),
+                Some(Err(join_error)) => {
+                    if join_error.is_panic() {
+                        std::panic::resume_unwind(join_error.into_panic());
                     }
-                },
-                _ = ticker.tick(), if !draining => {
-                    let pages = self.pages_completed.swap(0, Ordering::Relaxed);
-                    let errors = self.retryable_errors.swap(0, Ordering::Relaxed);
-                    let now = Instant::now();
-                    let secs = now.duration_since(last_sample).as_secs_f64();
-                    last_sample = now;
-                    let limit = controller.observe(pages, errors, secs);
-                    if *limit_tx.borrow() != limit {
-                        let _ = limit_tx.send(limit);
-                    }
-                },
+                }
             }
         };
         if result.is_err() {
@@ -314,35 +538,51 @@ impl Engine {
         result
     }
 
-    /// One fan-out worker: pops shard prefixes and pages through them until the
-    /// queue is empty. Admission is re-checked between pages, not prefixes — a
-    /// busy shard of a large repo holds hundreds of pages, and a shrink must
+    /// One fan-out worker: pops shard work items and pages through them until
+    /// the queue is empty. Admission is re-checked between pages, not prefixes —
+    /// a busy shard of a large repo holds hundreds of pages, and a shrink must
     /// take effect after the in-flight request, not minutes later.
+    ///
+    /// When a worker is no longer admitted mid-prefix it does **not** park with
+    /// the continuation token held in its suspended future: doing so lets the
+    /// end-of-run drain (which admits everyone) resume every parked worker at
+    /// once, bursting hundreds of listings past the limit the controller just
+    /// adapted down to. Instead it re-enqueues its `(prefix, continuation)` as
+    /// a fresh work item and returns to the admission gate, so the remaining
+    /// pages are drained by whatever workers the *current* limit admits and the
+    /// drain completes at the adapted concurrency.
     async fn worker(
         self: Arc<Self>,
-        queue: Arc<Mutex<VecDeque<String>>>,
+        queue: Arc<Mutex<VecDeque<WorkItem>>>,
         mut limit_rx: watch::Receiver<usize>,
+        mut drain_rx: watch::Receiver<bool>,
         index: usize,
     ) -> StorageResult<u64> {
         let mut subtotal = 0u64;
         loop {
-            wait_admitted(index, &mut limit_rx).await;
+            wait_admitted(index, &mut limit_rx, &mut drain_rx).await;
             let popped = queue
                 .lock()
                 .map_err(|_| other_error("shard queue mutex poisoned"))?
                 .pop_front();
-            let Some(prefix) = popped else {
+            let Some((prefix, mut token)) = popped else {
                 return Ok(subtotal);
             };
-            let mut token: Option<String> = None;
             loop {
                 let (bytes, next) = self.fetch_page(&prefix, token.as_deref()).await?;
                 subtotal = subtotal.saturating_add(bytes);
-                match next {
-                    Some(t) => token = Some(t),
-                    None => break,
+                let Some(next_token) = next else { break };
+                // Draining admits everyone, so keep paging to completion; only
+                // a genuine shrink (limit dropped below this index while not
+                // draining) re-enqueues the continuation and re-parks.
+                if !*drain_rx.borrow() && index >= *limit_rx.borrow() {
+                    queue
+                        .lock()
+                        .map_err(|_| other_error("shard queue mutex poisoned"))?
+                        .push_back((prefix, Some(next_token)));
+                    break;
                 }
-                wait_admitted(index, &mut limit_rx).await;
+                token = Some(next_token);
             }
         }
     }
@@ -361,9 +601,11 @@ impl Engine {
     }
 
     /// Fetch one list page through the fetcher, retrying retryable attempts
-    /// with jittered exponential backoff. A page counts as completed only once
-    /// the fetcher has scanned its body to the end, so a mid-body read failure
-    /// re-fetches the whole page.
+    /// with jittered exponential backoff. The engine makes exactly
+    /// `max_attempts` tries total; each retry is logged at debug with its
+    /// cause, and the final giving-up error carries the last underlying cause.
+    /// A page counts as completed only once the fetcher has scanned its body to
+    /// the end, so a mid-body read failure re-fetches the whole page.
     async fn fetch_page(
         &self,
         list_prefix: &str,
@@ -374,32 +616,49 @@ impl Engine {
             attempt += 1;
             match self.fetcher.attempt_page(list_prefix, token).await {
                 PageAttempt::Page { bytes, next_token } => {
-                    self.pages_completed.fetch_add(1, Ordering::Relaxed);
+                    self.governor.pages_completed.fetch_add(1, Ordering::Relaxed);
                     return Ok((bytes, next_token));
                 }
-                PageAttempt::Retryable => {
-                    self.retryable_errors.fetch_add(1, Ordering::Relaxed);
+                PageAttempt::Retryable(cause) => {
+                    self.governor.retryable_errors.fetch_add(1, Ordering::Relaxed);
+                    if attempt >= self.max_attempts {
+                        return Err(other_error(format!(
+                            "list giving up after {attempt} attempts for prefix \
+                             {list_prefix:?}: {cause}"
+                        )));
+                    }
+                    tracing::debug!(
+                        attempt,
+                        prefix = list_prefix,
+                        cause = %cause,
+                        "retrying transient list-page failure"
+                    );
+                    tokio::time::sleep(backoff(attempt)).await;
                 }
                 PageAttempt::Fatal(e) => return Err(e),
             }
-            if attempt > self.max_retries {
-                return Err(other_error(format!(
-                    "list giving up after {attempt} attempts for prefix {list_prefix:?}"
-                )));
-            }
-            tokio::time::sleep(backoff(attempt)).await;
         }
     }
 }
 
-/// Park until `index` is below the published worker limit. A closed channel
-/// means the driving [`sum`] is gone (all workers are being torn down);
-/// treating it as admission lets the worker run to its natural exit instead of
-/// hanging.
-async fn wait_admitted(index: usize, limit_rx: &mut watch::Receiver<usize>) {
-    while index >= *limit_rx.borrow_and_update() {
-        if limit_rx.changed().await.is_err() {
+/// Park until `index` is below the published worker limit, this run begins
+/// draining, or the signals close. A closed channel means the driving fan-out
+/// is gone (workers are being torn down); treating it as admission lets the
+/// worker run to its natural exit instead of hanging. The `drain` signal is
+/// per-run: a finished fan-out releases *its own* parked workers without
+/// touching the shared limit, so co-scheduled runs are unaffected.
+async fn wait_admitted(
+    index: usize,
+    limit_rx: &mut watch::Receiver<usize>,
+    drain_rx: &mut watch::Receiver<bool>,
+) {
+    loop {
+        if *drain_rx.borrow_and_update() || index < *limit_rx.borrow_and_update() {
             return;
+        }
+        tokio::select! {
+            changed = limit_rx.changed() => if changed.is_err() { return; },
+            changed = drain_rx.changed() => if changed.is_err() { return; },
         }
     }
 }
@@ -433,6 +692,16 @@ mod tests {
         assert_eq!(sorted, orig);
         for banned in ['I', 'L', 'O', 'U'] {
             assert!(!CROCKFORD.contains(banned));
+        }
+    }
+
+    #[test]
+    fn is_transient_status_covers_429_and_5xx_only() {
+        for ok in [200, 301, 400, 403, 404] {
+            assert!(!is_transient_status(ok), "{ok} must not be transient");
+        }
+        for transient in [429, 500, 501, 502, 503, 504, 599] {
+            assert!(is_transient_status(transient), "{transient} must be transient");
         }
     }
 
@@ -528,6 +797,28 @@ mod tests {
         assert_eq!(c.observe(24, 0, 0.5), 16);
     }
 
+    #[test]
+    fn controller_zero_page_window_sheds_to_floor_and_holds() {
+        let mut c = ConcurrencyController::new();
+        // A full 2s window that completed no pages is a stall: it must never
+        // read as an improvement (0 >= 1.15*0). Shed toward the floor, then
+        // hold there — never ratchet up.
+        assert_eq!(c.observe(0, 0, 2.0), CONCURRENCY_FLOOR);
+        assert_eq!(c.observe(0, 0, 2.0), CONCURRENCY_FLOOR);
+        assert_eq!(c.observe(0, 0, 2.0), CONCURRENCY_FLOOR);
+        // Holding ignores goodput, so even a huge later window stays at floor.
+        assert_eq!(c.observe(100_000, 0, 0.5), CONCURRENCY_FLOOR);
+    }
+
+    #[test]
+    fn controller_zero_page_window_after_ramp_sheds_not_doubles() {
+        let mut c = ConcurrencyController::new();
+        assert_eq!(c.observe(100, 0, 0.5), 32);
+        assert_eq!(c.observe(100, 0, 0.5), 32);
+        // Stalled window at limit 32 must shed to 16, never climb to 64.
+        assert_eq!(c.observe(0, 0, 2.0), 16);
+    }
+
     fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
         m.lock().expect("poisoned")
     }
@@ -547,6 +838,10 @@ mod tests {
         Retryable,
         Fatal(String),
     }
+
+    /// Distinctive cause string a scripted [`Script::Retryable`] carries, so
+    /// tests can assert the engine threads it into the giving-up error.
+    const SCRIPTED_RETRYABLE_CAUSE: &str = "scripted transient failure";
 
     impl ScriptedFetcher {
         fn new<'a>(
@@ -590,7 +885,9 @@ mod tests {
                 Script::Page { bytes, next_token } => {
                     PageAttempt::Page { bytes, next_token }
                 }
-                Script::Retryable => PageAttempt::Retryable,
+                Script::Retryable => {
+                    PageAttempt::Retryable(other_error(SCRIPTED_RETRYABLE_CAUSE))
+                }
                 Script::Fatal(msg) => PageAttempt::Fatal(other_error(msg)),
             }
         }
@@ -685,27 +982,27 @@ mod tests {
                 Script::Page { bytes: 42, next_token: None },
             ],
         )]);
-        let engine = Arc::new(Engine {
-            fetcher: Arc::clone(&fetcher) as _,
-            max_retries: 10,
-            pages_completed: AtomicU64::new(0),
-            retryable_errors: AtomicU64::new(0),
-        });
-        let total = Arc::clone(&engine).sum("refs", false).await;
+        let engine = Engine::new(Arc::clone(&fetcher) as _, 10, Governor::new());
+        let total = Arc::clone(&engine).sum_owned("refs", false).await;
         assert_eq!(total.ok(), Some(42));
         assert_eq!(fetcher.calls().len(), 4);
-        assert_eq!(engine.pages_completed.load(Ordering::Relaxed), 1);
-        assert_eq!(engine.retryable_errors.load(Ordering::Relaxed), 3);
+        assert_eq!(engine.governor.pages_completed.load(Ordering::Relaxed), 1);
+        assert_eq!(engine.governor.retryable_errors.load(Ordering::Relaxed), 3);
     }
 
     #[tokio::test(start_paused = true)]
-    async fn engine_gives_up_past_max_retries() {
+    async fn engine_gives_up_after_max_attempts_with_cause() {
+        // `max_attempts` is the total number of tries: 2 means two attempts,
+        // then give up — no off-by-one extra try.
         let fetcher = ScriptedFetcher::new([(("refs", None), vec![Script::Retryable])]);
         let err = sum(Arc::clone(&fetcher) as _, "refs", false, 2)
             .await
             .expect_err("must give up");
-        assert!(err.to_string().contains("giving up after 3 attempts"), "got: {err}");
-        assert_eq!(fetcher.calls().len(), 3);
+        let msg = err.to_string();
+        assert!(msg.contains("giving up after 2 attempts"), "got: {msg}");
+        // The last underlying cause is threaded into the giving-up error.
+        assert!(msg.contains(SCRIPTED_RETRYABLE_CAUSE), "got: {msg}");
+        assert_eq!(fetcher.calls().len(), 2);
     }
 
     #[tokio::test(start_paused = true)]
@@ -721,7 +1018,7 @@ mod tests {
                 (("chunks/7Z", None), vec![Script::Retryable]),
             ],
         );
-        let err = sum(Arc::clone(&fetcher) as _, "chunks", true, 1)
+        let err = sum(Arc::clone(&fetcher) as _, "chunks", true, 2)
             .await
             .expect_err("must abort");
         assert!(err.to_string().contains("giving up after 2 attempts"), "got: {err}");
@@ -747,5 +1044,118 @@ mod tests {
         // The fatal attempt is not retried.
         let xx_calls = fetcher.calls().iter().filter(|(p, _)| p == "chunks/XX").count();
         assert_eq!(xx_calls, 1);
+    }
+
+    /// Fetcher that shrinks the published limit to 0 the instant it serves the
+    /// first page, forcing the worker driving that shard out of admission
+    /// mid-prefix. Records how many pages it served.
+    struct ShrinkingFetcher {
+        limit_tx: watch::Sender<usize>,
+        calls: Mutex<usize>,
+    }
+
+    #[async_trait]
+    impl ListPageFetcher for ShrinkingFetcher {
+        async fn attempt_page(&self, _prefix: &str, token: Option<&str>) -> PageAttempt {
+            *lock(&self.calls) += 1;
+            if token.is_none() {
+                let _ = self.limit_tx.send(0);
+                PageAttempt::Page { bytes: 1, next_token: Some("t1".to_string()) }
+            } else {
+                PageAttempt::Page { bytes: 2, next_token: None }
+            }
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn worker_reenqueues_continuation_instead_of_holding_it_when_excluded() {
+        // Worker index 0 is admitted for the first page, which drops the limit
+        // to 0. Rather than parking with the "t1" continuation held in its
+        // suspended future (the drain-burst bug), it must re-enqueue that work
+        // item and park empty-handed.
+        let (limit_tx, limit_rx) = watch::channel(1usize);
+        // Keep the drain sender alive so the drain signal never closes and
+        // admits the worker.
+        let (_drain_tx, drain_rx) = watch::channel(false);
+        let fetcher = Arc::new(ShrinkingFetcher {
+            limit_tx: limit_tx.clone(),
+            calls: Mutex::new(0),
+        });
+        let engine = Engine::new(Arc::clone(&fetcher) as _, 3, Governor::new());
+        let queue: Arc<Mutex<VecDeque<WorkItem>>> =
+            Arc::new(Mutex::new(VecDeque::from([("chunks/00".to_string(), None)])));
+        let handle = tokio::spawn(Arc::clone(&engine).worker(
+            Arc::clone(&queue),
+            limit_rx,
+            drain_rx,
+            0,
+        ));
+
+        // Let the worker pop, serve page 1 (shrinking the limit), re-enqueue
+        // its continuation, and park at the admission gate.
+        let mut reenqueued = None;
+        for _ in 0..50 {
+            tokio::task::yield_now().await;
+            let front = lock(&queue).front().cloned();
+            if front.is_some() {
+                reenqueued = front;
+                break;
+            }
+        }
+        assert_eq!(reenqueued, Some(("chunks/00".to_string(), Some("t1".to_string()))));
+        // The parked worker did NOT resume the continuation itself: exactly one
+        // page was fetched, so there is no drain-time burst waiting to fire.
+        assert_eq!(*lock(&fetcher.calls), 1);
+        handle.abort();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn shared_controller_sums_several_prefixes() {
+        // Two shardable prefixes summed through one shared controller: both
+        // fan out and total correctly while sharing one limit signal.
+        let mut entries: Vec<ScriptEntry> = all_shards("chunks", 3);
+        entries.extend(all_shards("manifests", 5));
+        entries.push((
+            ("chunks/".to_string(), None),
+            vec![Script::Page { bytes: 9, next_token: Some("t0".to_string()) }],
+        ));
+        entries.push((
+            ("manifests/".to_string(), None),
+            vec![Script::Page { bytes: 9, next_token: Some("t0".to_string()) }],
+        ));
+        let fetcher = ScriptedFetcher::new(
+            entries.iter().map(|((p, t), o)| ((p.as_str(), t.as_deref()), o.clone())),
+        );
+
+        let controller = SharedController::new();
+        let done = Arc::new(tokio::sync::Notify::new());
+        let runs = {
+            let fetcher = Arc::clone(&fetcher);
+            let controller = &controller;
+            let done = Arc::clone(&done);
+            async move {
+                let chunks = sum_with_controller(
+                    Arc::clone(&fetcher) as _,
+                    "chunks",
+                    true,
+                    3,
+                    controller,
+                );
+                let manifests = sum_with_controller(
+                    Arc::clone(&fetcher) as _,
+                    "manifests",
+                    true,
+                    3,
+                    controller,
+                );
+                let (a, b) = tokio::join!(chunks, manifests);
+                done.notify_one();
+                (a, b)
+            }
+        };
+        let ((chunks, manifests), ()) =
+            tokio::join!(runs, controller.run(done.notified()));
+        assert_eq!(chunks.ok(), Some(1024 * 3));
+        assert_eq!(manifests.ok(), Some(1024 * 5));
     }
 }

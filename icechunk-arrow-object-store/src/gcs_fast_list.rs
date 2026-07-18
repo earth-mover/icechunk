@@ -17,7 +17,9 @@ use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use icechunk_storage::fast_list::{CONCURRENCY_CAP, ListPageFetcher, PageAttempt};
+use icechunk_storage::fast_list::{
+    CONCURRENCY_CAP, ListPageFetcher, PageAttempt, is_transient_status,
+};
 use icechunk_storage::{StorageResult, other_error};
 use memchr::memmem;
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
@@ -89,10 +91,16 @@ impl ListPageFetcher for GcsLister {
                         Ok((bytes, next_token)) => {
                             PageAttempt::Page { bytes, next_token }
                         }
-                        Err(_) => PageAttempt::Retryable,
+                        Err(e) => PageAttempt::Retryable(other_error(format!(
+                            "GCS list body read error for {}: {e}",
+                            redact(&url)
+                        ))),
                     }
-                } else if status == 429 || (500..=599).contains(&status) {
-                    PageAttempt::Retryable
+                } else if is_transient_status(status) {
+                    PageAttempt::Retryable(other_error(format!(
+                        "GCS list HTTP {status} for {}",
+                        redact(&url)
+                    )))
                 } else {
                     PageAttempt::Fatal(other_error(format!(
                         "GCS list HTTP {status} for {}",
@@ -101,7 +109,10 @@ impl ListPageFetcher for GcsLister {
                 }
             }
             Err(e) if e.is_timeout() || e.is_connect() || e.is_request() => {
-                PageAttempt::Retryable
+                PageAttempt::Retryable(other_error(format!(
+                    "GCS list transport error for {}: {e}",
+                    redact(&url)
+                )))
             }
             Err(e) => PageAttempt::Fatal(other_error(format!(
                 "GCS list request error for {}: {e}",

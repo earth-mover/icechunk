@@ -189,9 +189,14 @@ impl ListPageFetcher for SignedLister {
                         Ok((bytes, next_token)) => {
                             PageAttempt::Page { bytes, next_token }
                         }
-                        Err(_) => PageAttempt::Retryable,
+                        Err(e) => PageAttempt::Retryable(other_error(format!(
+                            "S3 list body read error for {}: {e}",
+                            redact(&url)
+                        ))),
                     },
-                    503 | 429 | 500 | 502 | 504 => PageAttempt::Retryable,
+                    503 | 429 | 500 | 502 | 504 => PageAttempt::Retryable(other_error(
+                        format!("S3 list HTTP {status} for {}", redact(&url)),
+                    )),
                     other => PageAttempt::Fatal(other_error(format!(
                         "S3 list HTTP {other} for {}",
                         redact(&url)
@@ -199,7 +204,10 @@ impl ListPageFetcher for SignedLister {
                 }
             }
             Ok(Err(e)) if e.is_timeout() || e.is_connect() || e.is_request() => {
-                PageAttempt::Retryable
+                PageAttempt::Retryable(other_error(format!(
+                    "S3 list transport error for {}: {e}",
+                    redact(&url)
+                )))
             }
             Ok(Err(e)) => PageAttempt::Fatal(other_error(format!(
                 "S3 list request error for {}: {e}",
