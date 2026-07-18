@@ -1981,6 +1981,7 @@ mod tests {
         Ok(())
     }
 
+    // ic[verify refs.branch.mutable] main moves to each new snapshot
     #[test]
     fn test_add_snapshot() -> Result<(), Box<dyn std::error::Error>> {
         let id1 = SnapshotId::random();
@@ -2131,6 +2132,7 @@ mod tests {
     }
 
     // ic[verify refs.tag.immutable] cannot re-add an existing tag
+    // ic[verify refs.branch.mutable] several branches; main updated while others keep pointing at the old snapshot
     #[test]
     fn test_tags_and_branches() -> Result<(), Box<dyn std::error::Error>> {
         let id1 = SnapshotId::random();

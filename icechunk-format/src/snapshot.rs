@@ -1011,6 +1011,7 @@ mod tests {
     );
 
     // ic[verify snapshot.describes-state]
+    // ic[verify snapshot.manifest-ref.coverage] per-array manifests list (id + extents) roundtrips
     #[icechunk_macros::test]
     fn test_manifest_info() -> IcechunkResult<()> {
         let manifest_id = |value: u32| {

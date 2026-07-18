@@ -37,6 +37,8 @@ from tests.conftest import Permission, write_chunks_to_minio
 
 
 # ic[verify manifest.chunk-ref.virtual]
+# ic[verify chunks.arrangements]
+# ic[verify storage.ops.range-reads]
 @pytest.mark.filterwarnings("ignore:datetime.datetime.utcnow")
 @pytest.mark.parametrize("use_async", [True, False])
 async def test_write_minio_virtual_refs(
@@ -239,6 +241,8 @@ async def test_write_minio_virtual_refs(
     _snapshot_id = session.commit("Add virtual refs")
 
 
+# ic[verify chunks.arrangements]
+# ic[verify storage.ops.range-reads]
 @pytest.mark.parametrize(
     "container_type,url_prefix,store_config,explicit_credentials",
     [
