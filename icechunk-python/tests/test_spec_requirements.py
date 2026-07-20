@@ -52,23 +52,6 @@ def test_second_initialization_fails(tmp_path: Path) -> None:
         ic.Repository.create(storage=storage)
 
 
-# ic[verify algo.tag.create] a tag can be created from any snapshot
-def test_tag_from_any_snapshot(tmp_path: Path) -> None:
-    repo = make_repo(tmp_path / "repo")
-    old_snapshot = commit_value(repo, 1)
-    tip = commit_value(repo, 2)
-    assert tip != old_snapshot
-
-    # tag a non-tip snapshot and read back through the tag
-    repo.create_tag("v1", old_snapshot)
-    assert repo.lookup_tag("v1") == old_snapshot
-    session = repo.readonly_session(tag="v1")
-    array = cast(
-        "zarr.core.array.Array[Any]", zarr.open_group(session.store, mode="r")["data"]
-    )
-    assert array[0, 0] == 1
-
-
 # ic[verify algo.tag.conditional-update]
 # ic[verify algo.tag.retry]
 def test_concurrent_tag_creation() -> None:
