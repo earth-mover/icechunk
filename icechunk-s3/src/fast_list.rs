@@ -168,12 +168,51 @@ impl SignedLister {
 #[async_trait]
 impl ListPageFetcher for SignedLister {
     async fn attempt_page(&self, list_prefix: &str, token: Option<&str>) -> PageAttempt {
+        match self.send_once(list_prefix, token).await {
+            Outcome::Attempt(attempt) => attempt,
+            // A mid-run credential rotation fails every in-flight request at
+            // once with `ExpiredToken`. That is an auth event, not congestion:
+            // surfacing each as Retryable would feed the engine's error-burst
+            // signal and permanently halve the shared concurrency for reasons
+            // unrelated to store capacity. So force a single-flight refresh and
+            // retry once inside this attempt — a refresh that succeeds never
+            // reaches the congestion signal. Exactly one in-attempt retry: if
+            // the freshly signed request is still expired it is a genuine
+            // failure and legitimately surfaces as Retryable.
+            Outcome::AuthExpiry { generation, .. } => {
+                self.signer.invalidate(generation).await;
+                match self.send_once(list_prefix, token).await {
+                    Outcome::Attempt(attempt) => attempt,
+                    Outcome::AuthExpiry { url, .. } => {
+                        PageAttempt::Retryable(other_error(format!(
+                            "S3 list credentials still expired after refresh for {}",
+                            redact(&url)
+                        )))
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// One signed request's outcome: a classified [`PageAttempt`], or an auth-expiry
+/// signal that [`SignedLister::attempt_page`] handles by refreshing credentials
+/// and retrying once, keeping credential rotation out of the engine's
+/// congestion signal.
+enum Outcome {
+    Attempt(PageAttempt),
+    AuthExpiry { generation: u64, url: String },
+}
+
+impl SignedLister {
+    /// Sign, send, and classify one `ListObjectsV2` request.
+    async fn send_once(&self, list_prefix: &str, token: Option<&str>) -> Outcome {
         let url = self.build_url(list_prefix, token);
         // A transient failure resolving refreshable credentials (STS/IMDS blip)
         // is retryable, matching the SDK path that re-resolves transparently.
         let identity = match self.signer.identity().await {
             Ok(identity) => identity,
-            Err(e) => return PageAttempt::Retryable(e),
+            Err(e) => return Outcome::Attempt(PageAttempt::Retryable(e)),
         };
         let generation = identity.as_ref().map(|(_, generation)| *generation);
 
@@ -181,81 +220,87 @@ impl ListPageFetcher for SignedLister {
         if let Some((identity, _)) = &identity {
             match self.sign_headers(&url, identity) {
                 Ok(headers) => rb = rb.headers(headers),
-                Err(e) => return PageAttempt::Fatal(e),
+                Err(e) => return Outcome::Attempt(PageAttempt::Fatal(e)),
             }
         }
 
         match rb.send().await {
-            Ok(resp) => self.classify_response(resp, &url, generation).await,
+            Ok(resp) => self.classify_response(resp, url, generation).await,
             Err(e) if e.is_timeout() || e.is_connect() || e.is_request() => {
-                PageAttempt::Retryable(other_error(format!(
+                Outcome::Attempt(PageAttempt::Retryable(other_error(format!(
                     "S3 list transport error for {}: {e}",
                     redact(&url)
-                )))
+                ))))
             }
-            Err(e) => PageAttempt::Fatal(other_error(format!(
+            Err(e) => Outcome::Attempt(PageAttempt::Fatal(other_error(format!(
                 "S3 list request error for {}: {e}",
                 redact(&url)
-            ))),
+            )))),
         }
     }
-}
 
-impl SignedLister {
     async fn classify_response(
         &self,
         mut resp: reqwest::Response,
-        url: &str,
+        url: String,
         generation: Option<u64>,
-    ) -> PageAttempt {
+    ) -> Outcome {
         let status = resp.status().as_u16();
         if status == 200 {
-            return match read_page_body(&mut resp).await {
+            return Outcome::Attempt(match read_page_body(&mut resp).await {
                 Ok(PageEnd::Framed { bytes, next_token }) => {
                     PageAttempt::Page { bytes, next_token }
                 }
                 Ok(PageEnd::TruncatedWithoutToken { cause, .. }) => {
                     PageAttempt::Retryable(other_error(format!(
                         "S3 list {cause} for {}",
-                        redact(url)
+                        redact(&url)
                     )))
                 }
                 Err(e) => PageAttempt::Retryable(other_error(format!(
                     "S3 list body read error for {}: {e}",
-                    redact(url)
+                    redact(&url)
                 ))),
-            };
+            });
         }
-        if is_transient_status(status) {
-            return PageAttempt::Retryable(other_error(format!(
+        if is_transient_status(status) || is_s3_extra_retryable_status(status) {
+            return Outcome::Attempt(PageAttempt::Retryable(other_error(format!(
                 "S3 list HTTP {status} for {}",
-                redact(url)
-            )));
+                redact(&url)
+            ))));
         }
         // A signed request whose credentials expired mid-run comes back as a
-        // 400 `ExpiredToken` (or a 403 expired-signature). Force a single-flight
-        // refresh and retry, rather than aborting the whole sum.
+        // 400 `ExpiredToken` (or a 403 expired-signature). Report it as an auth
+        // event so `attempt_page` can refresh and retry once, rather than
+        // aborting the sum or surfacing it as congestion.
         if self.signer.can_refresh()
             && is_auth_expiry_status(status)
             && let Some(generation) = generation
             && body_signals_expiry(resp).await
         {
-            self.signer.invalidate(generation).await;
-            return PageAttempt::Retryable(other_error(format!(
-                "S3 list credential expiry (HTTP {status}) for {}",
-                redact(url)
-            )));
+            return Outcome::AuthExpiry { generation, url };
         }
-        PageAttempt::Fatal(other_error(format!(
+        Outcome::Attempt(PageAttempt::Fatal(other_error(format!(
             "S3 list HTTP {status} for {}",
-            redact(url)
-        )))
+            redact(&url)
+        ))))
     }
 }
 
 /// HTTP statuses under which an expired session token / signature surfaces.
 fn is_auth_expiry_status(status: u16) -> bool {
     status == 400 || status == 403
+}
+
+/// Statuses the fast path retries on top of the shared [`is_transient_status`]
+/// set (429 + 5xx), mirroring the SDK client this crate builds, which registers
+/// a retry classifier for 408, 429, and 499 (`RETRY_CODES` in `lib.rs`). 429 is
+/// already transient; 408 (Request Timeout) and 499 (Tigris "Client Closed
+/// Request" — Tigris drives buckets through this fast path via its
+/// `t3.storage.dev` endpoint) are the S3-local additions, kept out of
+/// [`is_transient_status`] so the portable GCS/Azure fetchers are unaffected.
+fn is_s3_extra_retryable_status(status: u16) -> bool {
+    status == 408 || status == 499
 }
 
 /// S3 error `<Code>`s that mean the request credentials have expired and a
@@ -477,9 +522,25 @@ fn endpoint_override(config: &S3Options) -> Option<String> {
 }
 
 fn env_endpoint() -> Option<String> {
+    if env_ignore_configured_endpoint_urls() {
+        return None;
+    }
     ["AWS_ENDPOINT_URL_S3", "AWS_ENDPOINT_URL"]
         .into_iter()
         .find_map(|k| std::env::var(k).ok().filter(|v| !v.is_empty()))
+}
+
+/// The SDK consults `AWS_IGNORE_CONFIGURED_ENDPOINT_URLS` before honoring any
+/// environment-configured endpoint; when it is truthy the SDK talks to the
+/// regional default regardless of `AWS_ENDPOINT_URL[_S3]`. The fast path skips
+/// the same env endpoints or it would list a different host than every other
+/// operation (silently wrong sums if a same-named bucket exists on the env
+/// endpoint, e.g. a localstack running beside real AWS). Parsed exactly as the
+/// SDK's `parse_bool`: case-insensitive `true`, nothing else — notably not `1`,
+/// unlike the FIPS/dualstack flags [`env_flag_enabled`] handles.
+fn env_ignore_configured_endpoint_urls() -> bool {
+    std::env::var("AWS_IGNORE_CONFIGURED_ENDPOINT_URLS")
+        .is_ok_and(|v| v.eq_ignore_ascii_case("true"))
 }
 
 /// Whether the signed-lister fast path can faithfully reproduce the SDK's
@@ -1222,6 +1283,7 @@ mod tests {
         let _lock = env_lock();
         let _e = EnvVarGuard::set("AWS_ENDPOINT_URL_S3", "https://minio.internal:9000");
         let _e2 = EnvVarGuard::remove("AWS_ENDPOINT_URL");
+        let _ignore = EnvVarGuard::remove("AWS_IGNORE_CONFIGURED_ENDPOINT_URLS");
 
         let config = S3Options::default().with_region("us-east-1");
         let lister = SignedLister::new(
@@ -1235,6 +1297,60 @@ mod tests {
         let url = lister.build_url("chunks/", None);
         assert!(url.contains("minio.internal:9000"), "url: {url}");
         assert!(!url.contains("amazonaws.com"), "url: {url}");
+    }
+
+    #[test]
+    fn env_endpoint_skipped_when_ignore_flag_set() {
+        let _lock = env_lock();
+        let _e = EnvVarGuard::set("AWS_ENDPOINT_URL_S3", "https://minio.internal:9000");
+        let _e2 = EnvVarGuard::remove("AWS_ENDPOINT_URL");
+
+        let config = S3Options::default().with_region("us-east-1");
+        let list_url = || {
+            SignedLister::new(
+                &config,
+                "test-bucket",
+                "us-east-1".into(),
+                &S3Credentials::Anonymous,
+                &Settings::default(),
+            )
+            .unwrap()
+            .build_url("chunks/", None)
+        };
+
+        // Truthy (case-insensitive `true`) suppresses the env endpoint and the
+        // fast path lists the regional default, exactly as the SDK does.
+        for truthy in ["true", "TRUE", "True"] {
+            let _ignore = EnvVarGuard::set("AWS_IGNORE_CONFIGURED_ENDPOINT_URLS", truthy);
+            let url = list_url();
+            assert!(url.contains("s3.us-east-1.amazonaws.com"), "{truthy}: {url}");
+            assert!(!url.contains("minio.internal"), "{truthy}: {url}");
+        }
+
+        // The SDK's parse_bool accepts only `true`/`false`, so `1` (and other
+        // non-boolean values) do not suppress the env endpoint.
+        for non_truthy in ["1", "false", "yes"] {
+            let _ignore =
+                EnvVarGuard::set("AWS_IGNORE_CONFIGURED_ENDPOINT_URLS", non_truthy);
+            let url = list_url();
+            assert!(url.contains("minio.internal:9000"), "{non_truthy}: {url}");
+        }
+
+        // An explicit endpoint set in config (not via env) is unaffected.
+        let _ignore = EnvVarGuard::set("AWS_IGNORE_CONFIGURED_ENDPOINT_URLS", "true");
+        let explicit = S3Options::default()
+            .with_endpoint_url("https://explicit.example.com")
+            .with_region("us-east-1");
+        let url = SignedLister::new(
+            &explicit,
+            "test-bucket",
+            "us-east-1".into(),
+            &S3Credentials::Anonymous,
+            &Settings::default(),
+        )
+        .unwrap()
+        .build_url("chunks/", None);
+        assert!(url.contains("explicit.example.com"), "url: {url}");
     }
 
     #[test]
@@ -1331,16 +1447,28 @@ mod tests {
         format!("http://{addr}")
     }
 
-    static REFRESH_FETCHES: AtomicUsize = AtomicUsize::new(0);
+    /// Counts credential fetches through a per-instance handle, so tests running
+    /// in parallel do not race a shared counter. The `fetches` field is skipped
+    /// by serde (it is only meaningful in-process) so the typetag `S3Credentials`
+    /// serialization the trait requires still round-trips.
+    #[derive(Debug, Default, Serialize, Deserialize)]
+    struct CountingFetcher {
+        #[serde(skip)]
+        fetches: Arc<AtomicUsize>,
+    }
 
-    #[derive(Debug, Serialize, Deserialize)]
-    struct CountingFetcher;
+    impl CountingFetcher {
+        fn new() -> (Arc<Self>, Arc<AtomicUsize>) {
+            let fetches = Arc::new(AtomicUsize::new(0));
+            (Arc::new(Self { fetches: Arc::clone(&fetches) }), fetches)
+        }
+    }
 
     #[async_trait]
     #[typetag::serde(name = "icechunk-s3-fastlist-test-fetcher")]
     impl S3CredentialsFetcher for CountingFetcher {
         async fn get(&self) -> Result<S3StaticCredentials, String> {
-            REFRESH_FETCHES.fetch_add(1, Ordering::SeqCst);
+            self.fetches.fetch_add(1, Ordering::SeqCst);
             Ok(S3StaticCredentials {
                 access_key_id: "AKIDEXAMPLE".to_string(),
                 secret_access_key: "SECRETKEY".to_string(),
@@ -1352,7 +1480,6 @@ mod tests {
 
     #[tokio::test]
     async fn refreshable_credentials_survive_mid_run_expiry() {
-        REFRESH_FETCHES.store(0, Ordering::SeqCst);
         let seen = Arc::new(AtomicUsize::new(0));
         let handler_seen = Arc::clone(&seen);
         let base = spawn_fake_s3(Duration::ZERO, move || {
@@ -1363,15 +1490,50 @@ mod tests {
             }
         });
 
-        let creds = S3Credentials::Refreshable(Arc::new(CountingFetcher));
+        let (fetcher, fetches) = CountingFetcher::new();
+        let creds = S3Credentials::Refreshable(fetcher);
         let lister = lister_for(&base, &creds, &Settings::default());
-        let total =
-            sum(Arc::new(lister) as Arc<dyn ListPageFetcher>, "chunks", false, 3).await;
 
-        assert_eq!(total.ok(), Some(42));
-        // Once to sign the doomed first attempt, once after the expiry forces a
-        // refresh: not once per attempt.
-        assert_eq!(REFRESH_FETCHES.load(Ordering::SeqCst), 2);
+        // The expiry is refreshed and retried inside the single attempt, so it
+        // resolves to a Page and never surfaces as Retryable — an ExpiredToken
+        // burst at a credential rotation must not reach the engine's congestion
+        // signal and halve the shared concurrency.
+        let attempt = lister.attempt_page("chunks/", None).await;
+        assert!(
+            matches!(attempt, PageAttempt::Page { bytes: 42, .. }),
+            "expiry must refresh-and-retry to a Page, got: {attempt:?}"
+        );
+        // Two requests inside the one attempt (the doomed first, the refreshed
+        // retry) and two fetches (signing the first, re-resolving after expiry):
+        // the refresh is single-flight, not once per in-flight request.
+        assert_eq!(seen.load(Ordering::SeqCst), 2);
+        assert_eq!(fetches.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn refresh_failure_surfaces_retryable() {
+        let seen = Arc::new(AtomicUsize::new(0));
+        let handler_seen = Arc::clone(&seen);
+        let base = spawn_fake_s3(Duration::ZERO, move || {
+            handler_seen.fetch_add(1, Ordering::SeqCst);
+            (400, EXPIRED_TOKEN_BODY.to_string())
+        });
+
+        let (fetcher, fetches) = CountingFetcher::new();
+        let creds = S3Credentials::Refreshable(fetcher);
+        let lister = lister_for(&base, &creds, &Settings::default());
+
+        // The in-attempt refresh gets exactly one retry; a retry that is still
+        // expired is a genuine failure and legitimately surfaces as Retryable
+        // (which does count toward the congestion signal).
+        let attempt = lister.attempt_page("chunks/", None).await;
+        assert!(
+            matches!(attempt, PageAttempt::Retryable(_)),
+            "a refresh that stays expired must surface Retryable, got: {attempt:?}"
+        );
+        // Exactly one in-attempt retry, no loop: two requests, two fetches.
+        assert_eq!(seen.load(Ordering::SeqCst), 2);
+        assert_eq!(fetches.load(Ordering::SeqCst), 2);
     }
 
     #[tokio::test]
@@ -1392,6 +1554,29 @@ mod tests {
 
         assert_eq!(total.ok(), Some(9));
         assert!(seen.load(Ordering::SeqCst) >= 2, "the 507 must have been retried");
+    }
+
+    #[tokio::test]
+    async fn transient_499_is_retried_then_succeeds() {
+        // 499 ("Client Closed Request") is fatal in the shared classifier but
+        // the SDK client this crate builds retries it (Tigris occasionally
+        // sends it); the fast path must match.
+        let seen = Arc::new(AtomicUsize::new(0));
+        let handler_seen = Arc::clone(&seen);
+        let base = spawn_fake_s3(Duration::ZERO, move || {
+            if handler_seen.fetch_add(1, Ordering::SeqCst) == 0 {
+                (499, "<Error><Code>ClientClosedRequest</Code></Error>".to_string())
+            } else {
+                (200, ok_page(21))
+            }
+        });
+
+        let lister = lister_for(&base, &S3Credentials::Anonymous, &Settings::default());
+        let total =
+            sum(Arc::new(lister) as Arc<dyn ListPageFetcher>, "chunks", false, 3).await;
+
+        assert_eq!(total.ok(), Some(21));
+        assert!(seen.load(Ordering::SeqCst) >= 2, "the 499 must have been retried");
     }
 
     #[tokio::test]

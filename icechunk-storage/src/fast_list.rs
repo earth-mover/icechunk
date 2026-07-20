@@ -20,11 +20,12 @@
 //! error-driven adaptation cannot see it. A `ConcurrencyController` instead
 //! watches goodput (pages/sec): it doubles the limit while each step improves
 //! goodput by at least 15%, reverts to the best-seen limit when the curve
-//! flattens, sheds concurrency toward the floor if a whole window completes no
-//! pages at all (a stall it must never mistake for headroom), and afterwards
-//! reacts only to bursts of retryable errors by halving. Individual requests
-//! keep their jittered backoff; the controller is a coarser mechanism layered
-//! on top, the way BBR coexists with retransmits.
+//! flattens, sheds concurrency toward the floor when a whole window completes
+//! no pages at all — never reading that as headroom — yet keeps probing so a
+//! merely slow window cannot pin the run, and once holding reacts only to
+//! bursts of retryable errors by halving. Individual requests keep their
+//! jittered backoff; the controller is a coarser mechanism layered on top, the
+//! way BBR coexists with retransmits.
 //!
 //! Several prefixes summed against one store at once can share a single
 //! controller and limit signal (see [`SharedController`]) so their admissions
@@ -90,11 +91,16 @@ enum Phase {
 ///
 /// While probing, the limit doubles as long as each step improves goodput by
 /// ≥15%; the first flat or regressed window reverts to the best-seen limit and
-/// holds. A window that completed *no pages at all* is a stall, never an
-/// improvement (0 goodput would otherwise clear the bar against a 0 baseline);
-/// it sheds concurrency toward the floor and stops probing, because doubling
-/// into a link that is moving nothing is exactly the collapse this governor
-/// exists to prevent. Holding ignores goodput on purpose — the end-of-run tail
+/// holds. A window that completed *no pages at all* is never an improvement (0
+/// goodput would otherwise clear the bar against a 0 baseline); it sheds
+/// concurrency toward the floor but keeps probing, re-baselining the goodput
+/// target so the ramp resumes the moment pages complete again. Shedding answers
+/// the real stall — doubling into a link that is moving nothing is exactly the
+/// collapse this governor exists to prevent — while staying recoverable answers
+/// its benign twin: a healthy high-latency store whose pages each outlast a
+/// sampling window leaves early windows empty with every request still in
+/// flight, and one of those must not pin a multi-hour run at the floor. Holding
+/// ignores goodput on purpose — the end-of-run tail
 /// drain sinks goodput, and shrinking then would be pointless — reacting only
 /// to bursts of retryable errors (>2% of a window's pages) by halving the
 /// limit. An error-halving also ends probing rather than restarting it:
@@ -170,17 +176,25 @@ impl ConcurrencyController {
             // against a 0 baseline (0 ≥ 1.15·0), so without this guard a
             // stalled link would double the limit every window straight to the
             // cap — the congestion collapse the governor exists to prevent.
-            // Treat it as a stall instead: shed toward the floor and stop
-            // probing, on the same reasoning as an error burst (a link moving
-            // nothing needs less pressure, not more).
+            //
+            // But a zero-page window is not proof of a stall: a healthy
+            // high-latency store whose pages each take just over
+            // MAX_WINDOW_SECS leaves an early window with every request still
+            // in flight and nothing yet completed. Shedding is still right (a
+            // real stall keeps producing zero-page windows and keeps shedding
+            // toward the floor), but pinning a multi-hour run at the floor off
+            // one slow window is the worse failure, so it must recover. Shed
+            // toward the floor and re-baseline the goodput target to 0 while
+            // staying in Probing: the next window that actually completes pages
+            // clears the reset bar and the ramp resumes from the shed limit.
             if pages == 0 {
                 let backed_off = (self.limit / 2).max(CONCURRENCY_FLOOR);
                 if backed_off != self.limit {
                     self.limit = backed_off;
                     self.discard_next = true;
                 }
+                self.best_goodput = 0.0;
                 self.best_limit = self.limit;
-                self.phase = Phase::Holding;
                 return self.limit;
             }
             let goodput = if secs > 0.0 { pages as f64 / secs } else { 0.0 };
@@ -798,16 +812,27 @@ mod tests {
     }
 
     #[test]
-    fn controller_zero_page_window_sheds_to_floor_and_holds() {
+    fn controller_zero_page_window_sheds_toward_floor() {
         let mut c = ConcurrencyController::new();
-        // A full 2s window that completed no pages is a stall: it must never
-        // read as an improvement (0 >= 1.15*0). Shed toward the floor, then
-        // hold there — never ratchet up.
+        // A full 2s window that completed no pages must never read as an
+        // improvement (0 >= 1.15*0). Repeated stalls shed toward the floor.
         assert_eq!(c.observe(0, 0, 2.0), CONCURRENCY_FLOOR);
         assert_eq!(c.observe(0, 0, 2.0), CONCURRENCY_FLOOR);
         assert_eq!(c.observe(0, 0, 2.0), CONCURRENCY_FLOOR);
-        // Holding ignores goodput, so even a huge later window stays at floor.
-        assert_eq!(c.observe(100_000, 0, 0.5), CONCURRENCY_FLOOR);
+    }
+
+    #[test]
+    fn controller_recovers_after_zero_page_window() {
+        let mut c = ConcurrencyController::new();
+        // One early zero-page window (a slow high-latency store, not a stall)
+        // sheds to the floor but must not pin the run there.
+        assert_eq!(c.observe(0, 0, 2.0), CONCURRENCY_FLOOR);
+        // The window right after the shed is warm-up noise, discarded.
+        assert_eq!(c.observe(400, 0, 0.5), CONCURRENCY_FLOOR);
+        // Once pages complete again the ramp resumes from the shed limit.
+        assert_eq!(c.observe(400, 0, 0.5), 16);
+        assert_eq!(c.observe(400, 0, 0.5), 16);
+        assert_eq!(c.observe(800, 0, 0.5), 32);
     }
 
     #[test]
