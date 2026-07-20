@@ -49,3 +49,6 @@ workspace = true
 
 [package.metadata.cargo-machete]
 ignored = ["serde_bytes"]
+
+[package.metadata.docs.rs]
+rustdoc-args = ["--html-in-header", "tracey-rustdoc-header.html"]

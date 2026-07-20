@@ -399,6 +399,13 @@ docs-build *args:
   cd icechunk-python
   uv run --active --group docs mkdocs build -f docs/mkdocs.yml "$@"
 
+[group('docs')]
+[script]
+[doc("Build rustdoc with tracey spec links in source view (same header docs.rs uses)")]
+rustdocs *args:
+  RUSTDOCFLAGS="--html-in-header {{justfile_directory()}}/.config/tracey/rustdoc-header.html" \
+    cargo doc --no-deps -p icechunk -p icechunk-format -p icechunk-storage -p icechunk-types -p icechunk-s3 -p icechunk-arrow-object-store "$@"
+
 [group('upstream')]
 [doc("Check compatibility with zarrs_icechunk")]
 zarrs-upstream zarrs_dir="zarrs_icechunk": zarrs-upstream-clone zarrs-upstream-patch zarrs-upstream-build zarrs-upstream-test

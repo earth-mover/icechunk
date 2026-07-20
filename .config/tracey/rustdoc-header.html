@@ -1,0 +1,47 @@
+<script>
+// Linkify tracey spec annotations (`ic[impl x.y]` / `ic[verify x.y]`) in
+// rustdoc source-view pages: the requirement id becomes a link to the
+// published Icechunk spec. Comment text is otherwise left as written.
+document.addEventListener("DOMContentLoaded", () => {
+  if (!/\/src\//.test(location.pathname)) return;
+  const SPEC = "https://icechunk.io/en/stable/reference/spec-v2-1/#ic-";
+  const RE = /ic\[(impl|verify) ([a-z0-9][a-z0-9._-]*(?:\+\d+)?)\]/g;
+  for (const span of document.querySelectorAll("span.comment")) {
+    // comment spans can wrap across lines and contain line-number <a>
+    // elements, so operate on individual text nodes
+    const walker = document.createTreeWalker(span, NodeFilter.SHOW_TEXT);
+    const nodes = [];
+    while (walker.nextNode()) nodes.push(walker.currentNode);
+    for (const node of nodes) {
+      const text = node.textContent;
+      const frag = document.createDocumentFragment();
+      let m;
+      let last = 0;
+      RE.lastIndex = 0;
+      while ((m = RE.exec(text))) {
+        frag.append(text.slice(last, m.index) + "ic[" + m[1] + " ");
+        const a = document.createElement("a");
+        a.className = "tracey-req-link";
+        a.href = SPEC + m[2];
+        a.target = "_blank";
+        a.rel = "noopener";
+        a.textContent = m[2];
+        frag.append(a, "]");
+        last = RE.lastIndex;
+      }
+      if (last === 0) continue;
+      frag.append(text.slice(last));
+      node.replaceWith(frag);
+    }
+  }
+});
+</script>
+<style>
+span.comment a.tracey-req-link {
+  color: inherit;
+  text-decoration: underline dotted;
+}
+span.comment a.tracey-req-link:hover {
+  text-decoration-style: solid;
+}
+</style>
