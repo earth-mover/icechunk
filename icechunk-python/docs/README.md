@@ -4,16 +4,9 @@ Built with [MkDocs](https://www.mkdocs.org/) using [Material for MkDocs](https:/
 
 ## Developing
 
-### Prerequisites
-
-This repository uses [pixi](https://pixi.prefix.dev/) to manage dependencies.
-
-Currently you need at least pixi version `0.72.0` to build the docs.
-
 ### Building and Running
 
 Please see the ["Building Documentation" section of the Icechunk contributor's guide](https://icechunk.io/en/stable/reference/contributing/#building-documentation) for the most up-to-date build and dev server instructions.
-
 
 Builds output to: `docs/.site` directory.
 
