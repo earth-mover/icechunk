@@ -255,7 +255,7 @@ check-pixi-version:
   grep -h 'PIXI_VERSION:' .github/workflows/*.y*ml | sed 's/.*PIXI_VERSION: "v\(.*\)".*/\1/' | while read -r ver; do
     test "$(pysemver compare "$ver" "$min")" -ge 0
   done
-  docver=$(sed -n 's/.*at least pixi version `\([0-9.]*\)`.*/\1/p' icechunk-python/docs/README.md)
+  docver=$(sed -n 's/.*at least pixi version `\([0-9.]*\)`.*/\1/p' icechunk-python/docs/docs/reference/contributing.md)
   test "$(pysemver compare "$docver" "$min")" -ge 0
 
 [group('lint')]

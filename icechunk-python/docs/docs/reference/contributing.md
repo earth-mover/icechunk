@@ -52,6 +52,8 @@ We use [pixi](https://pixi.prefix.dev/latest/) to manage both the python and rus
         ```
         This is used e.g. in the [Readthedocs build](https://github.com/earth-mover/icechunk/blob/main/.readthedocs.yaml).
 
+    Currently you need at least pixi version `0.72.0` for development.
+
 === "uv"
 
     The easiest way to get started is with [uv](https://docs.astral.sh/uv/), which handles virtual environments and dependencies:
