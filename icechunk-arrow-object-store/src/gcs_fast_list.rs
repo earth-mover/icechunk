@@ -31,8 +31,10 @@ const MAX_RESULTS: usize = 1000;
 
 /// How one page attempt authenticates. Anonymous and static bearer are fixed for
 /// the run; `Refreshable` keeps a live handle to the credential provider so a
-/// bearer that expires mid-run is re-resolved (and force-refreshed on a 401)
-/// rather than turning the sum into a 401 failure.
+/// bearer that expires mid-run is re-resolved and, on a 401 whose body signals an
+/// expired or invalid token, force-refreshed and retried once within the attempt
+/// rather than turning the sum into a 401 failure. A permission denial (403)
+/// fails fast, since a refresh cannot fix it.
 #[derive(Debug)]
 pub(crate) enum GcsListAuth {
     Anonymous,
@@ -82,73 +84,148 @@ impl GcsLister {
     }
 }
 
+/// Outcome of one HTTP round-trip. `Attempt` is a terminal engine outcome;
+/// `Hard` is a non-transient error status held open so [`GcsLister::attempt_page`]
+/// can decide between a mid-run credential refresh and a fatal failure.
+enum PageResult {
+    Attempt(PageAttempt),
+    Hard { status: u16, detail: String },
+}
+
 #[async_trait]
 impl ListPageFetcher for GcsLister {
     async fn attempt_page(&self, list_prefix: &str, token: Option<&str>) -> PageAttempt {
-        let bearer = match &self.auth {
-            GcsListAuth::Anonymous => None,
-            GcsListAuth::Bearer(bearer) => Some(bearer.clone()),
-            GcsListAuth::Refreshable(provider) => {
-                match provider.get_or_update_credentials().await {
-                    Ok(cred) => Some(cred.bearer),
-                    Err(e) => {
-                        return PageAttempt::Retryable(other_error(format!(
-                            "resolving refreshable GCS credentials for fast list: {e}"
-                        )));
-                    }
-                }
+        let url = self.build_url(list_prefix, token);
+        let bearer = match self.current_bearer().await {
+            Ok(bearer) => bearer,
+            Err(e) => {
+                return PageAttempt::Retryable(other_error(format!(
+                    "resolving refreshable GCS credentials for fast list: {e}"
+                )));
             }
         };
-        let url = self.build_url(list_prefix, token);
-        let mut rb = self.http.get(&url);
-        if let Some(bearer) = &bearer {
+        let hard = match self.request_page(&url, bearer.as_deref()).await {
+            PageResult::Attempt(attempt) => return attempt,
+            PageResult::Hard { status, detail } => (status, detail),
+        };
+
+        // A refreshable bearer that GCS rejected mid-run with a 401 signalling an
+        // expired or invalid token is refreshed and retried once inside this same
+        // attempt, so a token rotation surfaces as success rather than a
+        // Retryable that would feed the engine's error-burst congestion signal
+        // and shed shared concurrency. A 403 (insufficient permissions) or a 401
+        // with no expiry signal is an identity/authorization fault a refresh
+        // cannot fix, so it stays fatal with GCS's own error surfaced instead of
+        // a misleading "refresh credentials".
+        let (status, detail) = hard;
+        if let (GcsListAuth::Refreshable(provider), Some(stale)) = (&self.auth, &bearer)
+            && status == 401
+            && signals_token_expiry(&detail)
+        {
+            provider.invalidate_bearer(stale).await;
+            let fresh = match provider.get_or_update_credentials().await {
+                Ok(cred) => cred.bearer,
+                Err(e) => {
+                    return PageAttempt::Retryable(other_error(format!(
+                        "refreshing GCS credentials after mid-run 401 for {}: {e}",
+                        redact(&url)
+                    )));
+                }
+            };
+            return match self.request_page(&url, Some(&fresh)).await {
+                PageResult::Attempt(attempt) => attempt,
+                PageResult::Hard { status, detail } => {
+                    PageAttempt::Retryable(other_error(format!(
+                        "GCS list HTTP {status} after credential refresh for {}: {detail}",
+                        redact(&url)
+                    )))
+                }
+            };
+        }
+        PageAttempt::Fatal(other_error(format!(
+            "GCS list HTTP {status} for {}: {detail}",
+            redact(&url)
+        )))
+    }
+}
+
+impl GcsLister {
+    async fn current_bearer(&self) -> StorageResult<Option<String>> {
+        match &self.auth {
+            GcsListAuth::Anonymous => Ok(None),
+            GcsListAuth::Bearer(bearer) => Ok(Some(bearer.clone())),
+            GcsListAuth::Refreshable(provider) => {
+                Ok(Some(provider.get_or_update_credentials().await?.bearer))
+            }
+        }
+    }
+
+    async fn request_page(&self, url: &str, bearer: Option<&str>) -> PageResult {
+        let mut rb = self.http.get(url);
+        if let Some(bearer) = bearer {
             rb = rb.bearer_auth(bearer);
         }
         match rb.send().await {
             Ok(mut resp) => {
                 let status = resp.status().as_u16();
                 if status == 200 {
-                    match read_page_body(&mut resp).await {
-                        Ok(outcome) => outcome.into_attempt(&url),
+                    PageResult::Attempt(match read_page_body(&mut resp).await {
+                        Ok(outcome) => outcome.into_attempt(url),
                         Err(e) => PageAttempt::Retryable(other_error(format!(
                             "GCS list body read error for {}: {e}",
-                            redact(&url)
+                            redact(url)
                         ))),
-                    }
-                } else if status == 401
-                    && let (GcsListAuth::Refreshable(provider), Some(bearer)) =
-                        (&self.auth, &bearer)
-                {
-                    // A refreshable bearer rejected mid-run: drop it so the retry
-                    // re-resolves a fresh token instead of failing the sum.
-                    provider.invalidate_bearer(bearer).await;
-                    PageAttempt::Retryable(other_error(format!(
-                        "GCS list HTTP 401 for {} (bearer expired; refreshing)",
-                        redact(&url)
-                    )))
+                    })
                 } else if is_transient_status(status) {
-                    PageAttempt::Retryable(other_error(format!(
+                    PageResult::Attempt(PageAttempt::Retryable(other_error(format!(
                         "GCS list HTTP {status} for {}",
-                        redact(&url)
-                    )))
+                        redact(url)
+                    ))))
                 } else {
-                    PageAttempt::Fatal(other_error(format!(
-                        "GCS list HTTP {status} for {}",
-                        redact(&url)
-                    )))
+                    PageResult::Hard { status, detail: read_error_detail(resp).await }
                 }
             }
             Err(e) if e.is_timeout() || e.is_connect() || e.is_request() => {
-                PageAttempt::Retryable(other_error(format!(
+                PageResult::Attempt(PageAttempt::Retryable(other_error(format!(
                     "GCS list transport error for {}: {e}",
-                    redact(&url)
-                )))
+                    redact(url)
+                ))))
             }
-            Err(e) => PageAttempt::Fatal(other_error(format!(
+            Err(e) => PageResult::Attempt(PageAttempt::Fatal(other_error(format!(
                 "GCS list request error for {}: {e}",
-                redact(&url)
-            ))),
+                redact(url)
+            )))),
         }
+    }
+}
+
+/// Substrings GCS uses for an expired or otherwise invalid OAuth token — the
+/// only 401 a credential refresh can fix. `invalid_token` is the
+/// `WWW-Authenticate` challenge value; `Invalid Credentials`/`authError` are the
+/// JSON error body's message and reason. A 403 (permission denied) never carries
+/// these and so stays fatal.
+const GCS_TOKEN_EXPIRY_INDICATORS: [&str; 4] =
+    ["invalid_token", "Invalid Credentials", "authError", "expired"];
+
+fn signals_token_expiry(detail: &str) -> bool {
+    GCS_TOKEN_EXPIRY_INDICATORS.iter().any(|needle| detail.contains(needle))
+}
+
+/// Condense a non-transient error response to one diagnostic line: the
+/// `WWW-Authenticate` challenge (which carries GCS's expiry signal) followed by
+/// a bounded snippet of the JSON error body. Used both to classify the failure
+/// and to surface GCS's real error when it is not a refreshable expiry.
+async fn read_error_detail(resp: reqwest::Response) -> String {
+    const MAX: usize = 512;
+    let challenge = resp
+        .headers()
+        .get(reqwest::header::WWW_AUTHENTICATE)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string);
+    let body: String = resp.text().await.unwrap_or_default().chars().take(MAX).collect();
+    match challenge {
+        Some(challenge) => format!("{challenge} {body}"),
+        None => body,
     }
 }
 
@@ -794,6 +871,12 @@ mod tests {
             }
         }
 
+        const GCS_EXPIRED_TOKEN_BODY: &[u8] =
+            br#"{"error":{"code":401,"message":"Invalid Credentials","errors":[{"reason":"authError","message":"Invalid Credentials"}]}}"#;
+
+        const GCS_FORBIDDEN_BODY: &[u8] =
+            br#"{"error":{"code":403,"message":"caller does not have storage.objects.list access","errors":[{"reason":"insufficientPermissions"}]}}"#;
+
         #[tokio_test]
         async fn abandoned_token_page_fails_loudly() {
             let mut body = br#"{"nextPageToken":""#.to_vec();
@@ -808,12 +891,15 @@ mod tests {
         }
 
         #[tokio_test]
-        async fn refreshes_bearer_after_mid_run_401() {
+        async fn refreshes_bearer_after_mid_run_expiry() {
             let server = FakeServer::start(|req| match req.authorization.as_deref() {
                 Some("Bearer fresh") => {
                     FakeResponse::ok(br#"{"items":[{"size":"42"}]}"#.to_vec())
                 }
-                _ => FakeResponse::status(401),
+                // An expired bearer: GCS answers 401 with the invalid-token
+                // challenge the classifier keys the refresh off of.
+                _ => FakeResponse::error(401, GCS_EXPIRED_TOKEN_BODY)
+                    .with_header("WWW-Authenticate", r#"Bearer error="invalid_token""#),
             })
             .await;
             let (fetcher, state) =
@@ -821,16 +907,35 @@ mod tests {
             let provider = Arc::new(GcsRefreshableCredentialProvider::new(fetcher));
             let lister = lister(&server, GcsListAuth::Refreshable(provider));
 
-            // The stale bearer is rejected; the fetcher survives it, re-resolves,
-            // and the second attempt succeeds with the fresh token.
-            let first = lister.attempt_page("chunks/00", None).await;
-            assert!(matches!(first, PageAttempt::Retryable(_)), "got {first:?}");
-            let second = lister.attempt_page("chunks/00", None).await;
+            // The stale bearer is rejected; the fetcher refreshes and retries
+            // inside the one attempt, so the caller sees success — not a Retryable
+            // that would feed the engine's congestion signal.
+            let attempt = lister.attempt_page("chunks/00", None).await;
             assert!(
-                matches!(second, PageAttempt::Page { bytes: 42, next_token: None }),
-                "got {second:?}"
+                matches!(attempt, PageAttempt::Page { bytes: 42, next_token: None }),
+                "got {attempt:?}"
             );
             assert_eq!(state.lock().expect("poisoned").calls, 2);
+        }
+
+        #[tokio_test]
+        async fn permission_denied_is_fatal_without_refresh() {
+            // A valid credential lacking storage.objects.list access: GCS answers
+            // 403, which a token refresh cannot fix. It must fail fast with the
+            // real error, not re-mint tokens chasing a phantom expiry.
+            let server =
+                FakeServer::start(|_| FakeResponse::error(403, GCS_FORBIDDEN_BODY)).await;
+            let (fetcher, state) = SequenceFetcher::new(vec![bearer("only")]);
+            let provider = Arc::new(GcsRefreshableCredentialProvider::new(fetcher));
+            let lister = lister(&server, GcsListAuth::Refreshable(provider));
+
+            let attempt = lister.attempt_page("chunks/00", None).await;
+            let PageAttempt::Fatal(e) = attempt else {
+                panic!("permission denial must be fatal, got {attempt:?}");
+            };
+            assert!(e.to_string().contains("insufficientPermissions"), "got {e}");
+            // Resolved once to sign the request; never re-minted.
+            assert_eq!(state.lock().expect("poisoned").calls, 1);
         }
 
         #[tokio_test]

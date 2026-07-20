@@ -57,9 +57,12 @@ fn decode_access_key(key: &str) -> StorageResult<Vec<u8>> {
 
 /// How one page attempt authenticates. Anonymous, SAS, bearer, and account-key
 /// are fixed for the run; `Refreshable` keeps a live handle to the credential
-/// provider so a token that expires mid-run is re-resolved (and force-refreshed
-/// on a 401/403) rather than failing the sum. Each attempt resolves its stored
-/// auth into a [`ConcreteAuth`] (refreshing if needed).
+/// provider so a token that expires mid-run is re-resolved and, on a 401/403
+/// whose error code signals an authentication expiry, force-refreshed and retried
+/// once within the attempt rather than failing the sum. A permission denial
+/// (`AuthorizationPermissionMismatch` and friends) fails fast, since a refresh
+/// cannot fix it. Each attempt resolves its stored auth into a [`ConcreteAuth`]
+/// (refreshing if needed).
 #[derive(Debug)]
 pub(crate) enum AzureListAuth {
     Anonymous,
@@ -238,6 +241,15 @@ impl AzureLister {
     }
 }
 
+/// Outcome of one HTTP round-trip. `Attempt` is a terminal engine outcome;
+/// `Hard` is a non-transient error status held open (with its request URL, which
+/// varies with the SAS credential) so [`AzureLister::attempt_page`] can decide
+/// between a mid-run credential refresh and a fatal failure.
+enum PageResult {
+    Attempt(PageAttempt),
+    Hard { status: u16, detail: String, url: String },
+}
+
 #[async_trait]
 impl ListPageFetcher for AzureLister {
     async fn attempt_page(&self, list_prefix: &str, token: Option<&str>) -> PageAttempt {
@@ -249,9 +261,64 @@ impl ListPageFetcher for AzureLister {
                 )));
             }
         };
-        let url = self.build_url(list_prefix, token, &concrete);
+        let (status, detail, url) =
+            match self.request_page(list_prefix, token, &concrete).await {
+                PageResult::Attempt(attempt) => return attempt,
+                PageResult::Hard { status, detail, url } => (status, detail, url),
+            };
+
+        // A refreshable credential that Azure rejected mid-run with an
+        // authentication (expiry) error is refreshed and retried once inside this
+        // same attempt, so a token rotation surfaces as success rather than a
+        // Retryable that would feed the engine's error-burst congestion signal
+        // and shed shared concurrency. An authorization error
+        // (AuthorizationPermissionMismatch and friends) is a missing role
+        // assignment a refresh cannot fix, so it stays fatal with Azure's own
+        // error code surfaced instead of a misleading "refresh credentials".
+        if let (AzureListAuth::Refreshable(provider), Some(stale)) =
+            (&self.auth, &resolved)
+            && (status == 401 || status == 403)
+            && signals_credential_expiry(&detail)
+        {
+            provider.invalidate_if_matches(stale).await;
+            let (fresh, _) = match self.resolve().await {
+                Ok(resolved) => resolved,
+                Err(e) => {
+                    return PageAttempt::Retryable(other_error(format!(
+                        "refreshing Azure credentials after mid-run HTTP {status} \
+                         for {}: {e}",
+                        redact(&url)
+                    )));
+                }
+            };
+            return match self.request_page(list_prefix, token, &fresh).await {
+                PageResult::Attempt(attempt) => attempt,
+                PageResult::Hard { status, detail, url } => {
+                    PageAttempt::Retryable(other_error(format!(
+                        "Azure list HTTP {status} after credential refresh for {}: \
+                         {detail}",
+                        redact(&url)
+                    )))
+                }
+            };
+        }
+        PageAttempt::Fatal(other_error(format!(
+            "Azure list HTTP {status} for {}: {detail}",
+            redact(&url)
+        )))
+    }
+}
+
+impl AzureLister {
+    async fn request_page(
+        &self,
+        list_prefix: &str,
+        token: Option<&str>,
+        auth: &ConcreteAuth,
+    ) -> PageResult {
+        let url = self.build_url(list_prefix, token, auth);
         let mut rb = self.http.get(&url).header("x-ms-version", AZURE_VERSION);
-        match &concrete {
+        match auth {
             ConcreteAuth::Anonymous | ConcreteAuth::Sas(_) => {}
             ConcreteAuth::Bearer(t) => rb = rb.bearer_auth(t),
             ConcreteAuth::SharedKey(key) => {
@@ -262,7 +329,7 @@ impl ListPageFetcher for AzureLister {
                             .header("x-ms-date", date)
                             .header("authorization", authorization);
                     }
-                    Err(e) => return PageAttempt::Fatal(e),
+                    Err(e) => return PageResult::Attempt(PageAttempt::Fatal(e)),
                 }
             }
         }
@@ -270,48 +337,72 @@ impl ListPageFetcher for AzureLister {
             Ok(mut resp) => {
                 let status = resp.status().as_u16();
                 if status == 200 {
-                    match read_page_body(&mut resp).await {
+                    PageResult::Attempt(match read_page_body(&mut resp).await {
                         Ok(outcome) => outcome.into_attempt(&url),
                         Err(e) => PageAttempt::Retryable(other_error(format!(
                             "Azure list body read error for {}: {e}",
                             redact(&url)
                         ))),
-                    }
-                } else if (status == 401 || status == 403)
-                    && let (AzureListAuth::Refreshable(provider), Some(cred)) =
-                        (&self.auth, &resolved)
-                {
-                    // A refreshable credential rejected mid-run (bearer 401, SAS
-                    // or SharedKey 403): drop it so the retry re-resolves a fresh
-                    // one instead of failing the sum.
-                    provider.invalidate_if_matches(cred).await;
-                    PageAttempt::Retryable(other_error(format!(
-                        "Azure list HTTP {status} for {} (credential expired; refreshing)",
-                        redact(&url)
-                    )))
+                    })
                 } else if is_transient_status(status) {
-                    PageAttempt::Retryable(other_error(format!(
+                    PageResult::Attempt(PageAttempt::Retryable(other_error(format!(
                         "Azure list HTTP {status} for {}",
                         redact(&url)
-                    )))
+                    ))))
                 } else {
-                    PageAttempt::Fatal(other_error(format!(
-                        "Azure list HTTP {status} for {}",
-                        redact(&url)
-                    )))
+                    PageResult::Hard {
+                        status,
+                        detail: read_error_detail(resp).await,
+                        url,
+                    }
                 }
             }
             Err(e) if e.is_timeout() || e.is_connect() || e.is_request() => {
-                PageAttempt::Retryable(other_error(format!(
+                PageResult::Attempt(PageAttempt::Retryable(other_error(format!(
                     "Azure list transport error for {}: {e}",
                     redact(&url)
-                )))
+                ))))
             }
-            Err(e) => PageAttempt::Fatal(other_error(format!(
+            Err(e) => PageResult::Attempt(PageAttempt::Fatal(other_error(format!(
                 "Azure list request error for {}: {e}",
                 redact(&url)
-            ))),
+            )))),
         }
+    }
+}
+
+/// Azure storage error codes/wording for an authentication failure a credential
+/// refresh can fix: an expired or invalid SAS (`AuthenticationFailed`, whose
+/// detail carries the SAS time-frame message), bearer, or account key. An
+/// authorization failure (`AuthorizationPermissionMismatch`, `AuthorizationFailure`)
+/// is a missing role assignment refreshing cannot fix and carries none of these,
+/// so it stays fatal.
+const AZURE_EXPIRY_INDICATORS: [&str; 4] = [
+    "AuthenticationFailed",
+    "InvalidAuthenticationInfo",
+    "ExpiredAuthenticationToken",
+    "Signature not valid in the specified time frame",
+];
+
+fn signals_credential_expiry(detail: &str) -> bool {
+    AZURE_EXPIRY_INDICATORS.iter().any(|needle| detail.contains(needle))
+}
+
+/// Condense a non-transient error response to one diagnostic line: the
+/// `x-ms-error-code` header (Azure's canonical error code) followed by a bounded
+/// snippet of the XML error body. Used both to classify the failure and to
+/// surface Azure's real error when it is not a refreshable expiry.
+async fn read_error_detail(resp: reqwest::Response) -> String {
+    const MAX: usize = 512;
+    let code = resp
+        .headers()
+        .get("x-ms-error-code")
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string);
+    let body: String = resp.text().await.unwrap_or_default().chars().take(MAX).collect();
+    match code {
+        Some(code) => format!("{code}; {body}"),
+        None => body,
     }
 }
 
@@ -1029,18 +1120,29 @@ mod tests {
             assert!(matches!(attempt, PageAttempt::Retryable(_)), "got {attempt:?}");
         }
 
+        const AZURE_BLOB_PAGE: &[u8] = b"<EnumerationResults><Blobs><Blob><Properties>\
+            <Content-Length>42</Content-Length></Properties></Blob></Blobs>\
+            </EnumerationResults>";
+
+        const AZURE_EXPIRED_SAS_BODY: &[u8] = b"<?xml version=\"1.0\"?><Error>\
+            <Code>AuthenticationFailed</Code><Message>Server failed to authenticate \
+            the request. AuthenticationErrorDetail:Signature not valid in the \
+            specified time frame</Message></Error>";
+
+        const AZURE_PERMISSION_MISMATCH_BODY: &[u8] = b"<?xml version=\"1.0\"?><Error>\
+            <Code>AuthorizationPermissionMismatch</Code><Message>This request is not \
+            authorized to perform this operation using this permission.</Message>\
+            </Error>";
+
         #[tokio_test]
-        async fn refreshes_credential_after_mid_run_auth_failure() {
-            // 403 is the SAS-expiry status the portable path would refresh past;
-            // a refreshable credential must survive it mid-run.
+        async fn refreshes_credential_after_mid_run_expiry() {
+            // An expired credential: Azure answers 403 with the AuthenticationFailed
+            // code (carried in the x-ms-error-code header) the classifier keys the
+            // refresh off of.
             let server = FakeServer::start(|req| match req.authorization.as_deref() {
-                Some("Bearer fresh") => FakeResponse::ok(
-                    b"<EnumerationResults><Blobs><Blob><Properties>\
-                      <Content-Length>42</Content-Length></Properties></Blob></Blobs>\
-                      </EnumerationResults>"
-                        .to_vec(),
-                ),
-                _ => FakeResponse::status(403),
+                Some("Bearer fresh") => FakeResponse::ok(AZURE_BLOB_PAGE.to_vec()),
+                _ => FakeResponse::error(403, AZURE_EXPIRED_SAS_BODY)
+                    .with_header("x-ms-error-code", "AuthenticationFailed"),
             })
             .await;
             let (fetcher, state) =
@@ -1052,14 +1154,42 @@ mod tests {
                 Duration::from_secs(30),
             );
 
-            let first = lister.attempt_page("chunks/00", None).await;
-            assert!(matches!(first, PageAttempt::Retryable(_)), "got {first:?}");
-            let second = lister.attempt_page("chunks/00", None).await;
+            // The stale credential is rejected; the fetcher refreshes and retries
+            // inside the one attempt, so the caller sees success — not a Retryable
+            // that would feed the engine's congestion signal.
+            let attempt = lister.attempt_page("chunks/00", None).await;
             assert!(
-                matches!(second, PageAttempt::Page { bytes: 42, next_token: None }),
-                "got {second:?}"
+                matches!(attempt, PageAttempt::Page { bytes: 42, next_token: None }),
+                "got {attempt:?}"
             );
             assert_eq!(state.lock().expect("poisoned").calls, 2);
+        }
+
+        #[tokio_test]
+        async fn permission_denied_is_fatal_without_refresh() {
+            // A valid credential lacking List permission: Azure answers 403
+            // AuthorizationPermissionMismatch, which a token refresh cannot fix. It
+            // must fail fast with the real code, not re-mint tokens chasing a
+            // phantom expiry.
+            let server = FakeServer::start(|_| {
+                FakeResponse::error(403, AZURE_PERMISSION_MISMATCH_BODY)
+            })
+            .await;
+            let (fetcher, state) = SequenceFetcher::new(vec![bearer_cred("only")]);
+            let provider = Arc::new(AzureRefreshableCredentialProvider::new(fetcher));
+            let lister = lister(
+                &server,
+                AzureListAuth::Refreshable(provider),
+                Duration::from_secs(30),
+            );
+
+            let attempt = lister.attempt_page("chunks/00", None).await;
+            let PageAttempt::Fatal(e) = attempt else {
+                panic!("permission denial must be fatal, got {attempt:?}");
+            };
+            assert!(e.to_string().contains("AuthorizationPermissionMismatch"), "got {e}");
+            // Resolved once to sign the request; never re-minted.
+            assert_eq!(state.lock().expect("poisoned").calls, 1);
         }
 
         #[tokio_test]

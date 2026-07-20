@@ -19,22 +19,37 @@ pub(crate) struct FakeRequest {
 pub(crate) struct FakeResponse {
     pub status: u16,
     pub body: Vec<u8>,
+    pub headers: Vec<(String, String)>,
     pub delay: Option<Duration>,
 }
 
 impl FakeResponse {
     pub(crate) fn ok(body: impl Into<Vec<u8>>) -> Self {
-        Self { status: 200, body: body.into(), delay: None }
+        Self { status: 200, body: body.into(), headers: Vec::new(), delay: None }
     }
 
-    pub(crate) fn status(status: u16) -> Self {
-        Self { status, body: Vec::new(), delay: None }
+    /// A non-2xx response carrying an error body, for exercising the auth-failure
+    /// classification (expired-token refresh vs permission-denied fatal).
+    pub(crate) fn error(status: u16, body: impl Into<Vec<u8>>) -> Self {
+        Self { status, body: body.into(), headers: Vec::new(), delay: None }
+    }
+
+    /// Attach a response header, for the provider-specific auth-error signals
+    /// (`WWW-Authenticate` on GCS, `x-ms-error-code` on Azure).
+    pub(crate) fn with_header(mut self, name: &str, value: &str) -> Self {
+        self.headers.push((name.to_string(), value.to_string()));
+        self
     }
 
     /// Accept the request but stall past any realistic client timeout without
     /// responding, so a small configured timeout fires.
     pub(crate) fn stall() -> Self {
-        Self { status: 200, body: Vec::new(), delay: Some(Duration::from_secs(30)) }
+        Self {
+            status: 200,
+            body: Vec::new(),
+            headers: Vec::new(),
+            delay: Some(Duration::from_secs(30)),
+        }
     }
 }
 
@@ -72,8 +87,13 @@ impl FakeServer {
                     if let Some(delay) = resp.delay {
                         tokio::time::sleep(delay).await;
                     }
+                    let extra: String = resp
+                        .headers
+                        .iter()
+                        .map(|(name, value)| format!("{name}: {value}\r\n"))
+                        .collect();
                     let head = format!(
-                        "HTTP/1.1 {} X\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                        "HTTP/1.1 {} X\r\ncontent-length: {}\r\nconnection: close\r\n{extra}\r\n",
                         resp.status,
                         resp.body.len(),
                     );

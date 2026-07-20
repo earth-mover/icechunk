@@ -1863,7 +1863,11 @@ impl GcsRefreshableCredentialProvider {
         &self,
     ) -> Result<GcsBearerCredential, StorageError> {
         fn still_fresh(creds: &GcsBearerCredential) -> bool {
-            creds.expires_after.is_some_and(|expires_after| {
+            // No stated expiry means the fetcher mints a non-expiring credential,
+            // as the public fetcher API allows; cache it indefinitely (matching
+            // the S3 signer) so a many-page fan-out does not re-mint per page. It
+            // is refreshed only by an explicit invalidation on a mid-run 401.
+            creds.expires_after.is_none_or(|expires_after| {
                 expires_after
                     > Utc::now() + TimeDelta::seconds(rand::random_range(120..=180))
             })
@@ -1888,6 +1892,7 @@ impl GcsRefreshableCredentialProvider {
         {
             return Ok(creds.clone());
         }
+        // Otherwise, refresh the credential and cache it
         let creds = self.refresher.get().await.map_err(other_error)?;
         *last_credential = Some(creds.clone());
         Ok(creds)
@@ -1935,7 +1940,11 @@ impl AzureRefreshableCredentialProvider {
         &self,
     ) -> Result<AzureRefreshableCredential, StorageError> {
         fn still_fresh(creds: &AzureRefreshableCredential) -> bool {
-            creds.expires_after().is_some_and(|expires_after| {
+            // No stated expiry means the fetcher mints a non-expiring credential,
+            // as the public fetcher API allows; cache it indefinitely (matching
+            // the S3 signer) so a many-page fan-out does not re-mint per page. It
+            // is refreshed only by an explicit invalidation on a mid-run 401/403.
+            creds.expires_after().is_none_or(|expires_after| {
                 expires_after
                     > Utc::now() + TimeDelta::seconds(rand::random_range(120..=180))
             })
@@ -1960,6 +1969,7 @@ impl AzureRefreshableCredentialProvider {
         {
             return Ok(creds.clone());
         }
+        // Otherwise, refresh the credential and cache it
         let creds = self.refresher.get().await.map_err(other_error)?;
         *last_credential = Some(creds.clone());
         Ok(creds)
@@ -2462,6 +2472,8 @@ mod gcs_fast_path_tests {
     struct CountingFetcher {
         #[serde(skip)]
         calls: Arc<std::sync::atomic::AtomicUsize>,
+        #[serde(skip)]
+        never_expires: bool,
     }
 
     #[async_trait]
@@ -2472,17 +2484,23 @@ mod gcs_fast_path_tests {
             // Yield so concurrent callers pile up on the write lock, exercising
             // the single-flight double-check rather than each fetching.
             tokio::task::yield_now().await;
-            Ok(GcsBearerCredential {
-                bearer: "tok".to_string(),
-                expires_after: Some(chrono::Utc::now() + chrono::TimeDelta::hours(1)),
-            })
+            let expires_after = (!self.never_expires)
+                .then(|| chrono::Utc::now() + chrono::TimeDelta::hours(1));
+            Ok(GcsBearerCredential { bearer: "tok".to_string(), expires_after })
         }
     }
 
     fn counting_provider()
     -> (GcsRefreshableCredentialProvider, Arc<std::sync::atomic::AtomicUsize>) {
+        counting_provider_inner(false)
+    }
+
+    fn counting_provider_inner(
+        never_expires: bool,
+    ) -> (GcsRefreshableCredentialProvider, Arc<std::sync::atomic::AtomicUsize>) {
         let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let fetcher = Arc::new(CountingFetcher { calls: Arc::clone(&calls) });
+        let fetcher =
+            Arc::new(CountingFetcher { calls: Arc::clone(&calls), never_expires });
         (GcsRefreshableCredentialProvider::new(fetcher), calls)
     }
 
@@ -2521,6 +2539,18 @@ mod gcs_fast_path_tests {
         provider.invalidate_bearer("tok").await;
         provider.get_or_update_credentials().await.unwrap();
         assert_eq!(calls.load(SeqCst), 2);
+    }
+
+    #[tokio_test]
+    async fn test_refreshable_provider_caches_credential_without_expiry() {
+        use std::sync::atomic::Ordering::SeqCst;
+        let (provider, calls) = counting_provider_inner(true);
+        // A credential minted with expires_after=None is fresh indefinitely, so
+        // a many-page fan-out resolves it once rather than re-minting per page.
+        for _ in 0..64 {
+            provider.get_or_update_credentials().await.unwrap();
+        }
+        assert_eq!(calls.load(SeqCst), 1);
     }
 }
 
@@ -2676,6 +2706,8 @@ mod azure_fast_path_tests {
     struct CountingFetcher {
         #[serde(skip)]
         calls: Arc<std::sync::atomic::AtomicUsize>,
+        #[serde(skip)]
+        never_expires: bool,
     }
 
     #[async_trait]
@@ -2684,17 +2716,26 @@ mod azure_fast_path_tests {
         async fn get(&self) -> Result<AzureRefreshableCredential, String> {
             self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             tokio::task::yield_now().await;
+            let expires_after = (!self.never_expires)
+                .then(|| chrono::Utc::now() + chrono::TimeDelta::hours(1));
             Ok(AzureRefreshableCredential::BearerToken {
                 bearer: "tok".to_string(),
-                expires_after: Some(chrono::Utc::now() + chrono::TimeDelta::hours(1)),
+                expires_after,
             })
         }
     }
 
     fn counting_provider()
     -> (AzureRefreshableCredentialProvider, Arc<std::sync::atomic::AtomicUsize>) {
+        counting_provider_inner(false)
+    }
+
+    fn counting_provider_inner(
+        never_expires: bool,
+    ) -> (AzureRefreshableCredentialProvider, Arc<std::sync::atomic::AtomicUsize>) {
         let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let fetcher = Arc::new(CountingFetcher { calls: Arc::clone(&calls) });
+        let fetcher =
+            Arc::new(CountingFetcher { calls: Arc::clone(&calls), never_expires });
         (AzureRefreshableCredentialProvider::new(fetcher), calls)
     }
 
@@ -2731,6 +2772,18 @@ mod azure_fast_path_tests {
         provider.invalidate_if_matches(&live).await;
         provider.get_or_update_credentials().await.unwrap();
         assert_eq!(calls.load(SeqCst), 2);
+    }
+
+    #[tokio_test]
+    async fn test_refreshable_provider_caches_credential_without_expiry() {
+        use std::sync::atomic::Ordering::SeqCst;
+        let (provider, calls) = counting_provider_inner(true);
+        // A credential minted with expires_after=None is fresh indefinitely, so
+        // a many-page fan-out resolves it once rather than re-minting per page.
+        for _ in 0..64 {
+            provider.get_or_update_credentials().await.unwrap();
+        }
+        assert_eq!(calls.load(SeqCst), 1);
     }
 }
 
