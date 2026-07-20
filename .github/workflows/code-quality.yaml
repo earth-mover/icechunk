@@ -60,6 +60,10 @@ jobs:
         run: |
           just profile=ci develop
 
+      - name: Check pixi version pins
+        run: |
+          just check-pixi-version
+
       - name: Run formatting checks
         run: |
           just format --check

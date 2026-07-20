@@ -156,6 +156,7 @@
                   pkgs.awscli2
                   pkgs.google-cloud-sdk
                   pkgs.just # script launcher with a make flavor
+                  python.pkgs.semver # pysemver, for `just check-msrv`/`check-pixi-version`
                   pkgs.alejandra # nix code formatter
                   pkgs.markdownlint-cli2
                   pkgs.flatbuffers
