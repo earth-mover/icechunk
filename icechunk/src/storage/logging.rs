@@ -113,6 +113,31 @@ impl Storage for LoggingStorage {
         self.backend.list_objects(settings, prefix).await
     }
 
+    async fn sum_object_sizes(
+        &self,
+        settings: &Settings,
+        prefix: &str,
+        shardable: bool,
+    ) -> StorageResult<u64> {
+        self.fetch_log
+            .lock()
+            .expect("poison lock")
+            .push(("sum_object_sizes".to_string(), prefix.to_string()));
+        self.backend.sum_object_sizes(settings, prefix, shardable).await
+    }
+
+    async fn sum_object_sizes_many(
+        &self,
+        settings: &Settings,
+        prefixes: &[(&str, bool)],
+    ) -> StorageResult<u64> {
+        self.fetch_log.lock().expect("poison lock").push((
+            "sum_object_sizes_many".to_string(),
+            prefixes.iter().map(|(p, _)| *p).collect::<Vec<_>>().join(","),
+        ));
+        self.backend.sum_object_sizes_many(settings, prefixes).await
+    }
+
     async fn delete_batch(
         &self,
         settings: &Settings,
@@ -161,5 +186,42 @@ impl Storage for LoggingStorage {
             .expect("poison lock")
             .push(("get_object_range".to_string(), path.to_string()));
         self.backend.get_object_range(settings, path, range).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::storage::new_in_memory_storage;
+
+    #[tokio::test]
+    async fn sum_object_sizes_many_forwards_to_backend_override()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let backend = new_in_memory_storage().await?;
+        let settings = backend.default_settings().await?;
+        backend
+            .put_object(&settings, "chunks/AB", "hello".into(), None, vec![], None)
+            .await?;
+        backend.put_object(&settings, "refs/x", "yo".into(), None, vec![], None).await?;
+
+        let logging = LoggingStorage::new(backend);
+        let prefixes: [(&str, bool); 2] = [("chunks", true), ("refs", false)];
+        let total = logging.sum_object_sizes_many(&settings, &prefixes).await?;
+        assert_eq!(total, "hello".len() as u64 + "yo".len() as u64);
+
+        let ops: Vec<String> =
+            logging.fetch_operations().into_iter().map(|(op, _)| op).collect();
+        // Forwarded to the backend's batch override: the wrapper records exactly
+        // one sum_object_sizes_many. The inherited default drain would instead
+        // fan the wrapper's own per-prefix sum_object_sizes / list_objects out,
+        // so their absence proves the fast path is not being bypassed here.
+        assert_eq!(
+            ops.iter().filter(|op| *op == "sum_object_sizes_many").count(),
+            1,
+            "ops: {ops:?}"
+        );
+        assert!(!ops.iter().any(|op| op == "list_objects"), "ops: {ops:?}");
+        assert!(!ops.iter().any(|op| op == "sum_object_sizes"), "ops: {ops:?}");
+        Ok(())
     }
 }

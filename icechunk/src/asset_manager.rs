@@ -44,6 +44,7 @@ use crate::{
         CHUNKS_FILE_PATH, CONFIG_FILE_PATH, ChunkId, ChunkOffset, IcechunkFormatError,
         IcechunkFormatErrorKind, MANIFESTS_FILE_PATH, ManifestId, OVERWRITTEN_FILES_PATH,
         REPO_INFO_FILE_PATH, SNAPSHOTS_FILE_PATH, SnapshotId, TRANSACTION_LOGS_FILE_PATH,
+        V1_REFS_FILE_PATH,
         format_constants::{
             self, CompressionAlgorithmBin, FileHeader, FileTypeBin, SpecVersionBin,
             parse_file_header,
@@ -1063,6 +1064,54 @@ impl AssetManager {
         ))
     }
 
+    /// **Experimental / internal — not part of the stable API.**
+    ///
+    /// Physical, listing-only approximation of the repository's non-virtual
+    /// size (cf. [`crate::ops::stats::ChunkStorageStats::non_virtual_bytes`]).
+    /// Where [`crate::ops::stats::repo_chunks_storage`] computes the exact,
+    /// graph-deduplicated figure by fetching and decompressing every reachable
+    /// manifest and iterating its chunk payloads, this sums the on-store byte
+    /// sizes of the objects icechunk physically writes under the repo root.
+    /// It reads no manifests and holds nothing in memory, so it is far cheaper
+    /// and near-constant-memory on large repos — at the cost of being an
+    /// approximation: it counts on-store (compressed) manifest, snapshot,
+    /// transaction and ref bytes alongside native chunk bytes, and does not
+    /// deduplicate across the logical graph. Virtual chunks are never counted;
+    /// they are references stored inside manifests, not objects under the root.
+    ///
+    /// The six top-level object prefixes are summed in one
+    /// [`Storage::sum_object_sizes_many`] batch, so the fast-path backends drive
+    /// them off a single lister/HTTP client and one shared concurrency
+    /// controller rather than letting each prefix ramp its own fan-out and
+    /// overshoot the store's aggregate request budget. The Crockford-base32
+    /// prefixes (`chunks`, `manifests`, `snapshots`, `transactions`) are passed
+    /// `shardable = true`: a fast-path backend probes one page and, if it is
+    /// truncated, fans the keyspace out over the 1024 two-character Crockford
+    /// leading prefixes as disjoint concurrent listings (a prefix that fits in a
+    /// single page is summed with that one request); `refs` and `overwritten`
+    /// hold arbitrary names and are summed as a single stream. Backends without a
+    /// raw-prefix fast path use the portable default (one `list_objects` drain
+    /// per prefix), so the result is identical across S3 and object_store
+    /// backends. The small root metadata files (`repo`, `config.yaml`) are
+    /// excluded — negligible next to chunk data.
+    #[doc(hidden)]
+    #[instrument(skip(self))]
+    pub async fn _total_nonvirtual_size(&self) -> RepositoryResult<u64> {
+        const PREFIXES: [(&str, bool); 6] = [
+            (CHUNKS_FILE_PATH, true),
+            (MANIFESTS_FILE_PATH, true),
+            (SNAPSHOTS_FILE_PATH, true),
+            (TRANSACTION_LOGS_FILE_PATH, true),
+            (V1_REFS_FILE_PATH, false),
+            (OVERWRITTEN_FILES_PATH, false),
+        ];
+
+        self.storage
+            .sum_object_sizes_many(&self.storage_settings, &PREFIXES)
+            .await
+            .inject()
+    }
+
     pub async fn delete_chunks(
         &self,
         chunks: BoxStream<'_, (ChunkId, u64)>,
@@ -1826,6 +1875,76 @@ mod test {
         storage::{Storage, logging::LoggingStorage, new_in_memory_storage},
     };
     use std::collections::HashMap;
+
+    #[tokio_test]
+    async fn test_total_nonvirtual_size() -> Result<(), Box<dyn std::error::Error>> {
+        let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+        let settings = storage::Settings::default();
+        let manager = AssetManager::new_no_cache(
+            Arc::clone(&backend),
+            settings.clone(),
+            SpecVersionBin::default(),
+            1,
+            100,
+        );
+
+        // Empty repo lists to zero.
+        assert_eq!(manager._total_nonvirtual_size().await?, 0);
+
+        // Write native chunks under several Crockford leading chars plus a
+        // compressed manifest. The in-memory backend has no raw-prefix fast
+        // path, so this drives the portable `sum_object_sizes_many` batch, not
+        // the shard fan-out — that engine path is covered in `icechunk-storage`.
+        for bytes in [b"aaaa".as_slice(), b"bb", b"cccccc", b"d", b"eeeee"] {
+            manager.write_chunk(ChunkId::random(), Bytes::copy_from_slice(bytes)).await?;
+        }
+        let ci = ChunkInfo {
+            node: NodeId::random(),
+            coord: ChunkIndices(vec![0]),
+            payload: ChunkPayload::Inline(Bytes::copy_from_slice(b"inline")),
+        };
+        let manifest = Arc::new(
+            Manifest::from_iter(&ManifestId::random(), vec![ci].into_iter(), None)
+                .await?
+                .unwrap(),
+        );
+        manager.write_manifest(manifest).await?;
+
+        // Invariant: the batch `sum_object_sizes_many` sums to exactly the same
+        // bytes as a naive single-stream listing of the whole repo root — no
+        // gaps between prefixes, no double-counting. Cross-checking against the
+        // naive sum keeps the test independent of per-object on-store
+        // (compressed) sizes.
+        let mut naive = 0u64;
+        let mut all = backend.list_objects(&settings, "").await?;
+        while let Some(info) = all.next().await {
+            naive = naive.saturating_add(info?.size_bytes);
+        }
+        assert!(naive > 0);
+        assert_eq!(manager._total_nonvirtual_size().await?, naive);
+
+        // The batch total must equal folding the per-prefix sums, across a mix
+        // of shardable and non-shardable prefixes.
+        const PREFIXES: [(&str, bool); 6] = [
+            (CHUNKS_FILE_PATH, true),
+            (MANIFESTS_FILE_PATH, true),
+            (SNAPSHOTS_FILE_PATH, true),
+            (TRANSACTION_LOGS_FILE_PATH, true),
+            (V1_REFS_FILE_PATH, false),
+            (OVERWRITTEN_FILES_PATH, false),
+        ];
+        let mut per_prefix = 0u64;
+        for (prefix, shardable) in PREFIXES {
+            per_prefix = per_prefix.saturating_add(
+                backend.sum_object_sizes(&settings, prefix, shardable).await?,
+            );
+        }
+        assert_eq!(
+            backend.sum_object_sizes_many(&settings, &PREFIXES).await?,
+            per_prefix
+        );
+        Ok(())
+    }
 
     #[tokio_test]
     async fn test_caching_caches() -> Result<(), Box<dyn std::error::Error>> {

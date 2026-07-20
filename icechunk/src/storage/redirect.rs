@@ -379,6 +379,23 @@ impl Storage for RedirectStorage {
         self.backend().await?.list_objects(settings, prefix).await
     }
 
+    async fn sum_object_sizes(
+        &self,
+        settings: &Settings,
+        prefix: &str,
+        shardable: bool,
+    ) -> StorageResult<u64> {
+        self.backend().await?.sum_object_sizes(settings, prefix, shardable).await
+    }
+
+    async fn sum_object_sizes_many(
+        &self,
+        settings: &Settings,
+        prefixes: &[(&str, bool)],
+    ) -> StorageResult<u64> {
+        self.backend().await?.sum_object_sizes_many(settings, prefixes).await
+    }
+
     async fn delete_batch(
         &self,
         settings: &Settings,

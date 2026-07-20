@@ -554,6 +554,54 @@ pub trait Storage: fmt::Debug + Display + sealed::Sealed + Sync + Send {
         prefix: &str,
     ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>>;
 
+    /// Sum the on-store byte sizes of every object whose key starts with `prefix`.
+    ///
+    /// The default implementation drains [`Self::list_objects`] and adds up
+    /// `size_bytes`; it is correct on every backend and ignores `shardable`.
+    /// Backends that can list a raw key prefix (rather than a whole path
+    /// segment) may override this to fan out: when `shardable` is set the caller
+    /// promises that every key under `prefix` is `{prefix}/{crockford-id}`, so
+    /// the keyspace can be split into disjoint per-leading-character sub-prefixes
+    /// listed concurrently. Pass `shardable = false` for prefixes holding
+    /// arbitrary names (they would be missed by single-character shards).
+    async fn sum_object_sizes(
+        &self,
+        settings: &Settings,
+        prefix: &str,
+        shardable: bool,
+    ) -> StorageResult<u64> {
+        let _ = shardable;
+        let mut objects = self.list_objects(settings, prefix).await?;
+        let mut sum = 0u64;
+        while let Some(info) = objects.next().await {
+            sum = sum.saturating_add(info?.size_bytes);
+        }
+        Ok(sum)
+    }
+
+    /// Sum the on-store byte sizes of several `(prefix, shardable)` pairs at once.
+    ///
+    /// The default implementation sums each pair through
+    /// [`Self::sum_object_sizes`] concurrently, so the total is identical to
+    /// calling that method per prefix. Backends with a raw-prefix fast path
+    /// override this to drive the whole batch off one lister/HTTP client and one
+    /// shared concurrency controller: several shardable fan-outs then adapt as a
+    /// single group against the store's aggregate request budget instead of each
+    /// ramping independently and overshooting it by the prefix count. `shardable`
+    /// carries the same promise as in [`Self::sum_object_sizes`].
+    async fn sum_object_sizes_many(
+        &self,
+        settings: &Settings,
+        prefixes: &[(&str, bool)],
+    ) -> StorageResult<u64> {
+        let totals =
+            futures::future::try_join_all(prefixes.iter().map(|&(prefix, shardable)| {
+                self.sum_object_sizes(settings, prefix, shardable)
+            }))
+            .await?;
+        Ok(totals.into_iter().fold(0u64, u64::saturating_add))
+    }
+
     async fn delete_batch(
         &self,
         settings: &Settings,

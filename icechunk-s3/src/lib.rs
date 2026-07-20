@@ -56,6 +56,12 @@ use tokio_util::io::StreamReader;
 use tracing::{error, instrument, trace};
 use typed_path::Utf8UnixPath;
 
+mod fast_list;
+use fast_list::SignedLister;
+use icechunk_storage::fast_list::{
+    ListPageFetcher, SharedController, sum_with_controller,
+};
+
 /// How object keys are laid out inside the bucket for a given repository.
 ///
 /// Native-S3 repositories written before the fix for
@@ -450,6 +456,49 @@ impl S3Storage {
                 )
             })
             .await
+    }
+
+    /// Build a signed-`ListObjectsV2` lister sharing this backend's resolved
+    /// region and credentials. The lister owns the credential source and
+    /// refreshes it on demand (see [`fast_list`]), so a long run survives a
+    /// mid-run token rotation instead of signing every page from one snapshot.
+    async fn make_signed_lister(
+        &self,
+        settings: &Settings,
+    ) -> StorageResult<SignedLister> {
+        let region = self
+            .get_client(settings)
+            .await
+            .config()
+            .region()
+            .map(|r| r.to_string())
+            .or_else(|| self.config.region.clone())
+            .unwrap_or_else(|| "us-east-1".to_string());
+        SignedLister::new(&self.config, &self.bucket, region, &self.credentials, settings)
+    }
+
+    /// Whether the signed-`ListObjectsV2` fast path faithfully reproduces this
+    /// backend's SDK request shaping. Requester-pays and extra read headers need
+    /// request features the bare signer does not carry, and FIPS/dualstack
+    /// resolve a different host than the fast path lists, so those configs stay
+    /// on the portable `list_objects` drain.
+    fn signed_fast_list_available(&self) -> bool {
+        !self.config.requester_pays
+            && self.extra_read_headers.is_empty()
+            && fast_list::signed_list_supported(&self.config)
+    }
+
+    async fn list_and_sum(
+        &self,
+        settings: &Settings,
+        prefix: &str,
+    ) -> StorageResult<u64> {
+        let mut objects = self.list_objects(settings, prefix).await?;
+        let mut sum = 0u64;
+        while let Some(info) = objects.next().await {
+            sum = sum.saturating_add(info?.size_bytes);
+        }
+        Ok(sum)
     }
 
     /// Build the object key for a repository-relative path under the given layout.
@@ -946,6 +995,79 @@ impl Storage for S3Storage {
                 ready(object_to_list_info(prefix.as_str(), &object))
             });
         Ok(stream.boxed())
+    }
+
+    #[instrument(skip(self, settings))]
+    async fn sum_object_sizes(
+        &self,
+        settings: &Settings,
+        prefix: &str,
+        shardable: bool,
+    ) -> StorageResult<u64> {
+        if !self.signed_fast_list_available() {
+            return self.list_and_sum(settings, prefix).await;
+        }
+        let layout = self.layout(settings).await?;
+        let base_prefix = self.list_prefix(layout, prefix);
+        let lister: Arc<dyn ListPageFetcher> =
+            Arc::new(self.make_signed_lister(settings).await?);
+        icechunk_storage::fast_list::sum(
+            lister,
+            &base_prefix,
+            shardable,
+            u32::from(settings.retries().max_tries().get()),
+        )
+        .await
+    }
+
+    /// Sum several prefixes off one signed lister and one shared concurrency
+    /// controller, so their fan-outs adapt as a single group and reuse one HTTP
+    /// connection pool. The fast-path gate is config-based, so it holds for the
+    /// whole batch: when the signed path is unavailable every prefix falls back
+    /// to the portable per-prefix drain, exactly as [`Self::sum_object_sizes`]
+    /// would.
+    #[instrument(skip(self, settings))]
+    async fn sum_object_sizes_many(
+        &self,
+        settings: &Settings,
+        prefixes: &[(&str, bool)],
+    ) -> StorageResult<u64> {
+        if !self.signed_fast_list_available() {
+            let totals = futures::future::try_join_all(
+                prefixes.iter().map(|&(prefix, _)| self.list_and_sum(settings, prefix)),
+            )
+            .await?;
+            return Ok(totals.into_iter().fold(0u64, u64::saturating_add));
+        }
+        let layout = self.layout(settings).await?;
+        let bases: Vec<(String, bool)> = prefixes
+            .iter()
+            .map(|&(prefix, shardable)| (self.list_prefix(layout, prefix), shardable))
+            .collect();
+        let lister: Arc<dyn ListPageFetcher> =
+            Arc::new(self.make_signed_lister(settings).await?);
+        let max_attempts = u32::from(settings.retries().max_tries().get());
+
+        let controller = SharedController::new();
+        let done = tokio::sync::Notify::new();
+        let runs = async {
+            let totals =
+                futures::future::try_join_all(bases.iter().map(|(base, shardable)| {
+                    sum_with_controller(
+                        Arc::clone(&lister),
+                        base,
+                        *shardable,
+                        max_attempts,
+                        &controller,
+                    )
+                }))
+                .await;
+            done.notify_one();
+            totals
+        };
+        let (totals, ()) =
+            futures::future::join(runs, controller.run(done.notified())).await;
+        Ok(totals?.into_iter().fold(0u64, u64::saturating_add))
     }
 
     #[instrument(skip(self, batch))]
