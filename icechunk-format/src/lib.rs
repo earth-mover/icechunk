@@ -908,10 +908,7 @@ mod tests {
 
         // The spec's worked example: `0b1cc8d6787580f0e33a6534` encodes to
         // the file name 1CECHNKREP0F1RSTCMT0 under snapshots/ and transactions/.
-        assert_eq!(
-            String::from(&Snapshot::INITIAL_SNAPSHOT_ID),
-            "1CECHNKREP0F1RSTCMT0"
-        );
+        assert_eq!(String::from(&Snapshot::INITIAL_SNAPSHOT_ID), "1CECHNKREP0F1RSTCMT0");
     }
 
     // ic[verify format.binary-file] header constants; file assembly is verified end-to-end in the icechunk crate
