@@ -216,6 +216,7 @@ platforms = [
   "win-64",
   "osx-64",
 ]
+requires-pixi = ">=0.72"
 
 [tool.pixi.feature.docs.dependencies]
 cairo = ">=1.18.4,<2"
