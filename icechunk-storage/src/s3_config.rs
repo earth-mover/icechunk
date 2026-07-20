@@ -1,9 +1,10 @@
 //! Shared S3 configuration types used by both the native AWS SDK backend and the
 //! `object_store`-based S3 backend.
 //!
-//! These types are always compiled (no feature gate) so that [`ObjectStoreConfig::S3`],
-//! [`ObjectStoreConfig::S3Compatible`], [`ObjectStoreConfig::Tigris`], and
-//! [`Credentials::S3`] are available regardless of which S3 implementation is enabled.
+//! These types are always compiled (no feature gate) so that icechunk's
+//! `ObjectStoreConfig::S3`, `ObjectStoreConfig::S3Compatible`,
+//! `ObjectStoreConfig::Tigris`, and `Credentials::S3` are available regardless
+//! of which S3 implementation is enabled.
 
 use core::fmt;
 use std::sync::Arc;

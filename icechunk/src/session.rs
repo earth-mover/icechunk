@@ -646,7 +646,7 @@ impl Session {
     /// 3. Cannot be committed.
     ///
     /// Such Sessions are useful for distributed writes. You are expected to communicate the forked
-    /// [`Session`] using [`Session.as_bytes()`] and [`Session.from_bytes`] methods to distributed workers,
+    /// [`Session`] using [`Session::as_bytes`] and [`Session::from_bytes`] methods to distributed workers,
     /// do the necessary writes, communicate back the Sessions from each work, and merge them in to the
     /// base Session, which can then be committed.
     #[instrument(skip(self))]

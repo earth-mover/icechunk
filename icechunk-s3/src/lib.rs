@@ -1,4 +1,4 @@
-//! Native S3 client implementation of [`Storage`](icechunk_storage::Storage).
+//! Native S3 client implementation of [`Storage`].
 
 // Re-export AWS SDK types needed by consumers (e.g., icechunk's virtual_chunks)
 pub use aws_sdk_s3;
@@ -79,7 +79,7 @@ pub enum KeyLayout {
     LegacyRoot,
 }
 
-/// Well-known object names probed by [`S3Storage::probe_layout`] to auto-detect
+/// Well-known object names probed by `S3Storage::probe_layout` to auto-detect
 /// the key layout of a pre-existing repository. These are fixed keys that exist
 /// in every repository.
 ///

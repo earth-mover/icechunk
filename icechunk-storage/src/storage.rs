@@ -493,7 +493,7 @@ pub trait Storage: fmt::Debug + Display + sealed::Sealed + Sync + Send {
 
     /// Ensure the storage location is ready to receive writes.
     ///
-    /// Called by [`Repository::create`] before any other I/O. The default
+    /// Called by icechunk's `Repository::create` before any other I/O. The default
     /// implementation is a no-op; backends that need to materialize the
     /// location (e.g. the local filesystem creating the directory) override
     /// this. Read paths like `open` never call it, so a missing location
