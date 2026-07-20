@@ -37,3 +37,6 @@ tempfile.workspace = true
 
 [lints]
 workspace = true
+
+[package.metadata.docs.rs]
+rustdoc-args = ["--html-in-header", "tracey-rustdoc-header.html"]
