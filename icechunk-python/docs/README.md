@@ -16,23 +16,10 @@ This repository uses [uv](https://docs.astral.sh/uv/) to manage dependencies.
 - **Fedora/RHEL**: `sudo dnf install cairo-devel`
 - **Windows**: Download from [cairographics.org](https://cairographics.org/download/)
 
-### Running
+### Building and Running
 
-From the `icechunk-python` directory:
+Please see the ["Building Documentation" section of the Icechunk contributor's guide](https://icechunk.io/en/stable/reference/contributing/#building-documentation) for the most up-to-date build and dev server instructions.
 
-```bash
-
-pixi run docs-serve
-```
-
-> [!TIP]
-> You can use the optional `--dirty` flag to only rebuild changed files, although you may need to restart if you make changes to `mkdocs.yaml`.
-
-### Building
-
-```bash
-pixi run docs-build
-```
 
 Builds output to: `docs/.site` directory.
 
