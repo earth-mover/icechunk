@@ -14,9 +14,14 @@ extra_css:
   - stylesheets/theme.css
   - stylesheets/global.css
   - stylesheets/notebooks.css
+  - stylesheets/tracey.css
 
 extra_javascript:
   - scripts/readthedocs.js
+  - scripts/tracey.js
+
+hooks:
+  - hooks/tracey_anchors.py
 
 theme:
   name: material
