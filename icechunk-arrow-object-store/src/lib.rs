@@ -1,4 +1,4 @@
-//! [`Storage`](icechunk_storage::Storage) implementation using the `object_store` crate.
+//! [`Storage`] implementation using the `object_store` crate.
 //!
 //! Supports local filesystem, in-memory, Azure Blob, and Google Cloud Storage.
 
