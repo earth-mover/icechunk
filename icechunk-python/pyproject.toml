@@ -209,6 +209,7 @@ icechunk = "icechunk._icechunk_python:cli_entrypoint"
 
 [tool.pixi.workspace]
 channels = ["conda-forge", "https://prefix.dev/github-releases"]
+requires-pixi = ">=0.72.0"
 platforms = [
   "osx-arm64",
   { platform = "linux-64", glibc = "2.34" },
@@ -216,7 +217,6 @@ platforms = [
   "win-64",
   "osx-64",
 ]
-requires-pixi = ">=0.72"
 
 [tool.pixi.feature.docs.dependencies]
 cairo = ">=1.18.4,<2"
@@ -265,3 +265,6 @@ py314t = { features = [
   "dev",
   "test",
 ]}
+
+[tool.pixi.dependencies]
+semver = ">=3.0.4,<4"

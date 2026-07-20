@@ -84,9 +84,10 @@ ci-python-check:
   just check-xarray-docs
 
 [group('ci')]
-[doc("Reproduce code-quality.yaml: develop, format check, clippy, doctests, mypy, pre-commit")]
+[doc("Reproduce code-quality.yaml: develop, pixi version check, format check, clippy, doctests, mypy, pre-commit")]
 ci-code-quality $RUSTFLAGS="-D warnings":
   just profile=ci develop
+  just check-pixi-version
   just format "--check"
   just profile=ci lint
   just profile=ci doctest
@@ -242,9 +243,20 @@ check *args:
 [doc("Check Cargo.toml rust-version matches the contributing docs (pass an expected MSRV to pin it)")]
 check-msrv expected="":
   msrv=$(sed -n 's/^rust-version = "\(.*\)"$/\1/p' Cargo.toml)
-  test -n "$msrv"
-  test -z "{{expected}}" || test "$msrv" = "{{expected}}"
+  pysemver check "$msrv"
+  test -z "{{expected}}" || test "$(pysemver compare "$msrv" "{{expected}}")" = 0
   grep -F "The current MSRV is \`$msrv\`" icechunk-python/docs/docs/reference/contributing.md
+
+[group('lint')]
+[script]
+[doc("Check pixi versions in CI workflows and docs satisfy requires-pixi in icechunk-python/pyproject.toml")]
+check-pixi-version:
+  min=$(sed -n 's/^requires-pixi = ">=\(.*\)"$/\1/p' icechunk-python/pyproject.toml)
+  grep -h 'PIXI_VERSION:' .github/workflows/*.y*ml | sed 's/.*PIXI_VERSION: "v\(.*\)".*/\1/' | while read -r ver; do
+    test "$(pysemver compare "$ver" "$min")" -ge 0
+  done
+  docver=$(sed -n 's/.*at least pixi version `\([0-9.]*\)`.*/\1/p' icechunk-python/docs/README.md)
+  test "$(pysemver compare "$docver" "$min")" -ge 0
 
 [group('lint')]
 [doc("Format all Rust files (pass `--check` to verify only)")]

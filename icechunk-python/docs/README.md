@@ -6,15 +6,9 @@ Built with [MkDocs](https://www.mkdocs.org/) using [Material for MkDocs](https:/
 
 ### Prerequisites
 
-This repository uses [uv](https://docs.astral.sh/uv/) to manage dependencies.
+This repository uses [pixi](https://pixi.prefix.dev/) to manage dependencies.
 
-**System dependencies**: The documentation build requires Cairo graphics library for image processing:
-
-- **macOS**: `brew install cairo`
-  - If MkDocs fails to find Cairo, set: `export DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib`
-- **Ubuntu/Debian**: `sudo apt-get install libcairo2-dev`
-- **Fedora/RHEL**: `sudo dnf install cairo-devel`
-- **Windows**: Download from [cairographics.org](https://cairographics.org/download/)
+Currently you need at least pixi version `0.72.0` to build the docs.
 
 ### Building and Running
 
