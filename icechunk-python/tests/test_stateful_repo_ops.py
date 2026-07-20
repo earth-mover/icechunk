@@ -947,6 +947,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
 
     # ic[verify refs.tag.immutable]
     # ic[verify refs.tag.no-recreate]
+    # ic[verify algo.tag.create] tags are created from arbitrary commits
     # ic[verify algo.tag.fail-missing-snapshot]
     @precondition(lambda self: self.model.has_commits)
     @rule(name=ref_name_text, commit_id=commits, target=tags)

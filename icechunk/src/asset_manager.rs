@@ -2193,10 +2193,12 @@ mod test {
     /// Make an in-memory repo so every metadata file kind exists on storage,
     /// then exercise the `AssetManager` header-inspection API against them.
     #[tokio_test]
+    // ic[verify format.binary-file]
     // ic[verify snapshot.path]
     // ic[verify snapshot.format]
     // ic[verify manifest.format]
     // ic[verify txlog.format]
+    // ic[verify repo.format]
     // ic[verify algo.write.steps]
     async fn test_header_methods() -> Result<(), Box<dyn std::error::Error>> {
         let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
