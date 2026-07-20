@@ -20,8 +20,9 @@ use icechunk::{
     repository::{RepositoryError, RepositoryErrorKind},
     storage::{
         self, ConcurrencySettings, ETag, Generation, RepositoryCreation, S3Storage,
-        StorageErrorKind, StorageResult, VersionInfo, mk_client, new_http_storage,
-        new_in_memory_storage, new_redirect_storage, new_s3_storage, s3_storage,
+        StorageErrorKind, StorageResult, VersionInfo, VersionedUpdateResult, mk_client,
+        new_http_storage, new_in_memory_storage, new_redirect_storage, new_s3_storage,
+        s3_storage,
     },
 };
 use icechunk_arrow_object_store::object_store::azure::AzureConfigKey;
@@ -623,6 +624,164 @@ async fn test_list_objects() -> Result<(), Box<dyn std::error::Error>> {
     })
     .await?;
     Ok(())
+}
+
+#[tokio_test]
+async fn conditional_create_conflicts_with_existing()
+-> Result<(), Box<dyn std::error::Error>> {
+    // Exercises the readback's `NotOurWrite` branch (metadata-enabled
+    // backends) and the `NotStamped` branch (local_filesystem); both
+    // must surface as `NotOnLatestVersion`.
+    with_storage(Permission::Modify, |_, storage| async move {
+        let settings = storage.default_settings().await?;
+        let path = "conditional-create-conflict";
+
+        storage
+            .put_object(
+                &settings,
+                path,
+                Bytes::from_static(b"first"),
+                None,
+                Default::default(),
+                None,
+            )
+            .await?
+            .must_write()?;
+
+        let conditional_res = storage
+            .put_object(
+                &settings,
+                path,
+                Bytes::from_static(b"second"),
+                None,
+                Default::default(),
+                Some(&VersionInfo::for_creation()),
+            )
+            .await?;
+
+        assert!(matches!(conditional_res, VersionedUpdateResult::NotOnLatestVersion));
+        Ok(())
+    })
+    .await?;
+    Ok(())
+}
+
+/// Deterministic #2099 regression: a conditional create whose response was
+/// lost must recover via the write-id readback with a *fresh* etag. We model
+/// the retry by seeding the object with a known write-id, then forcing the
+/// create to reuse it.
+async fn assert_lost_response_recovers_with_fresh_etag(
+    label: &str,
+    multipart: bool,
+    requester_pays: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    // minio ignores the requester-pays header; setting it only exercises the
+    // requester-pays branch of the readback HEAD.
+    let (access_key_id, secret_access_key) = Permission::Modify.keys();
+    let storage = new_s3_storage(
+        S3Options::default()
+            .with_region("us-east-1")
+            .with_endpoint_url("http://localhost:4200")
+            .with_allow_http(true)
+            .with_force_path_style(true)
+            .with_requester_pays(requester_pays),
+        "testbucket".to_string(),
+        Some(common::get_random_prefix(label)),
+        Some(S3Credentials::Static(S3StaticCredentials {
+            access_key_id: access_key_id.into(),
+            secret_access_key: secret_access_key.into(),
+            session_token: None,
+            expires_after: None,
+        })),
+        Vec::new(),
+        Vec::new(),
+        None,
+    )?;
+    let mut settings = storage.default_settings().await?;
+    if multipart {
+        // Tiny threshold so small writes exercise the multipart path.
+        settings.minimum_size_for_multipart_upload = Some(1);
+    }
+    let key = "lost-response-create";
+    let forced = format!("forced-write-id-{label}");
+
+    // The first attempt that landed before its response was lost.
+    let seeded = storage
+        .put_object(
+            &settings,
+            key,
+            Bytes::from_static(b"v1"),
+            None,
+            vec![(
+                icechunk_storage::readback::WRITE_ID_METADATA_KEY.to_string(),
+                forced.clone(),
+            )],
+            None,
+        )
+        .await?
+        .must_write()?;
+
+    // The retry: same write-id; conditional create 412s, readback recovers it.
+    icechunk_s3::test_util::force_next_write_id(forced);
+    let recovered = match storage
+        .put_object(
+            &settings,
+            key,
+            Bytes::from_static(b"v2"),
+            None,
+            Default::default(),
+            Some(&VersionInfo::for_creation()),
+        )
+        .await?
+    {
+        VersionedUpdateResult::Updated { new_version } => new_version,
+        VersionedUpdateResult::NotOnLatestVersion => {
+            panic!("{label}: lost-response create should recover, got NotOnLatestVersion")
+        }
+    };
+    assert_eq!(recovered.etag(), seeded.etag(), "{label}: recovered a stale etag");
+
+    // Freshness: a stale recovered etag would 412 the follow-on update.
+    let follow_on = storage
+        .put_object(
+            &settings,
+            key,
+            Bytes::from_static(b"v3"),
+            None,
+            Default::default(),
+            Some(&recovered),
+        )
+        .await?;
+    assert!(
+        matches!(follow_on, VersionedUpdateResult::Updated { .. }),
+        "{label}: recovered etag was stale; follow-on conditional update failed"
+    );
+    Ok(())
+}
+
+#[tokio_test]
+async fn lost_response_conditional_create_recovers_single()
+-> Result<(), Box<dyn std::error::Error>> {
+    assert_lost_response_recovers_with_fresh_etag("lost-response-single", false, false)
+        .await
+}
+
+#[tokio_test]
+async fn lost_response_conditional_create_recovers_multipart()
+-> Result<(), Box<dyn std::error::Error>> {
+    assert_lost_response_recovers_with_fresh_etag("lost-response-multipart", true, false)
+        .await
+}
+
+#[tokio_test]
+async fn lost_response_conditional_create_recovers_requester_pays()
+-> Result<(), Box<dyn std::error::Error>> {
+    assert_lost_response_recovers_with_fresh_etag(
+        "lost-response-requester-pays",
+        false,
+        true,
+    )
+    .await
 }
 
 #[tokio_test]
