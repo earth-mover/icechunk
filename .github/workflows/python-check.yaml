@@ -38,6 +38,16 @@ jobs:
           activate-environment: true
           manifest-path: icechunk-python/pyproject.toml
 
+      - name: Cache Dependencies
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          # The rust cache includes a dep on the Python version (when building icechunk-python)
+          # so we need to bump the version here whenever Python version is updated
+          # Currently: 3.12
+          prefix-key: "rust-py312"
+          shared-key: "wheels"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
       - name: Build wheels
         run: just build-wheels
 
@@ -149,6 +159,13 @@ jobs:
           activate-environment: true
           manifest-path: icechunk-python/pyproject.toml
           environments: py314t
+
+      - name: Cache Dependencies
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          prefix-key: "rust-py314t"
+          shared-key: "wheels"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Build wheels
         run: just build-wheels
