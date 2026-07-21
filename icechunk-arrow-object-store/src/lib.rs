@@ -14,7 +14,6 @@ use futures::{
 use http::header::{HeaderName, HeaderValue};
 #[cfg(feature = "s3")]
 use icechunk_storage::s3_config::{S3Credentials, S3Options};
-use icechunk_storage::strip_quotes;
 use icechunk_storage::{
     ConcurrencySettings, DeleteObjectsResult, ETag, Generation, GetModifiedResult,
     ListInfo, RepositoryCreation, RetriesSettings, Settings, Storage, StorageError,
@@ -649,7 +648,7 @@ impl Storage for ObjectStorage {
             // object_store has no conditional copy, so we do a conditional GET
             // (verifying the source etag) followed by a PUT.
             let opts = GetOptions {
-                if_match: version.etag().map(|e| strip_quotes(e).into()),
+                if_match: version.etag().map(|e| e.into()),
                 ..Default::default()
             };
             let result =
@@ -862,7 +861,7 @@ impl ObjectStorage {
             range,
             if_none_match: previous_version
                 .as_ref()
-                .and_then(|v| v.etag().map(|e| strip_quotes(e).into())),
+                .and_then(|v| v.etag().map(|e| e.into())),
             ..Default::default()
         };
         let res =
@@ -1722,9 +1721,12 @@ mod tests {
     use icechunk_macros::tokio_test;
     use tempfile::TempDir;
 
+    use super::{
+        Bytes, ObjectPath, ObjectStorage, ReadbackOutcome, Settings, Storage as _,
+        VersionedUpdateResult,
+    };
     #[cfg(feature = "http")]
     use super::{NonZeroU16, RetriesSettings, Url};
-    use super::{ObjectPath, ObjectStorage, ReadbackOutcome, Settings};
 
     #[tokio_test]
     async fn test_serialize_object_store() {
@@ -1787,6 +1789,45 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(outcome, ReadbackOutcome::NotOurs);
+    }
+
+    #[tokio_test]
+    async fn conditional_copy_and_get_roundtrip_etag() {
+        // Etags must round-trip verbatim into if_match/if_none_match:
+        // object_store compares them by exact string equality, so stripping
+        // quotes turns every conditional copy into a spurious conflict.
+        let store = ObjectStorage::new_in_memory().await.unwrap();
+        let settings = store.default_settings().await.unwrap();
+        let path = "conditional-roundtrip";
+        let version = match store
+            .put_object(
+                &settings,
+                path,
+                Bytes::from_static(b"payload"),
+                None,
+                Default::default(),
+                None,
+            )
+            .await
+            .unwrap()
+        {
+            VersionedUpdateResult::Updated { new_version } => new_version,
+            VersionedUpdateResult::NotOnLatestVersion => {
+                panic!("unconditional put must succeed")
+            }
+        };
+
+        let copied = store
+            .copy_object(&settings, path, "conditional-roundtrip-copy", None, &version)
+            .await
+            .unwrap();
+        assert!(matches!(copied, VersionedUpdateResult::Updated { .. }));
+
+        let not_modified = store
+            .get_object_range_conditional(&settings, path, None, Some(&version))
+            .await
+            .unwrap();
+        assert!(not_modified.is_none());
     }
 
     #[cfg(feature = "http")]
