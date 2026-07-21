@@ -1722,7 +1722,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::{
-        Bytes, ObjectPath, ObjectStorage, ReadbackOutcome, Settings, Storage,
+        Bytes, ObjectPath, ObjectStorage, ReadbackOutcome, Settings, Storage as _,
         VersionedUpdateResult,
     };
     #[cfg(feature = "http")]
