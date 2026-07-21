@@ -94,7 +94,7 @@ jobs:
       # explicitly save the cache so it gets updated, also do this even if it fails.
       - name: Save cached hypothesis directory
         id: save-hypothesis-cache
-        if: always()
+        if: always() && github.ref == 'refs/heads/main'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v5
         with:
           path: icechunk-python/.hypothesis/

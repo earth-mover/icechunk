@@ -83,17 +83,11 @@ jobs:
         with:
           toolchain: ${{ matrix.settings.rust || 'stable' }}
           targets: ${{ matrix.settings.target }}
-      - name: Cache cargo
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v5
+      - name: Cache Dependencies
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
-          path: |
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            ~/.napi-rs
-            .cargo-cache
-            target/
-          key: ${{ matrix.settings.target }}-cargo-${{ matrix.settings.host }}
+          key: ${{ matrix.settings.target }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
         if: ${{ contains(matrix.settings.target, 'musl') }}
         with:
