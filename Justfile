@@ -417,7 +417,7 @@ zarrs-upstream-clone zarrs_dir="zarrs_icechunk":
 zarrs-upstream-patch zarrs_dir="zarrs_icechunk":
   icechunk_path=$(realpath icechunk)
   if ! grep -q 'icechunk = { path' {{zarrs_dir}}/Cargo.toml; then
-    sed -i '/^\[patch\.crates-io\]/a icechunk = { path = "'"$icechunk_path"'" }' {{zarrs_dir}}/Cargo.toml
+    sed -i.bak $'/^\\[patch\\.crates-io\\]/a\\\nicechunk = { path = "'"$icechunk_path"'" }' {{zarrs_dir}}/Cargo.toml && rm {{zarrs_dir}}/Cargo.toml.bak
   fi
   # empty [workspace] table so cargo doesn't adopt the enclosing icechunk workspace
   if ! grep -q '^\[workspace\]' {{zarrs_dir}}/Cargo.toml; then
