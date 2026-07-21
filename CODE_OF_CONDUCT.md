@@ -60,9 +60,7 @@ representative at an online or offline event.
 
 Instances of abusive, harassing, or otherwise unacceptable behavior may be
 reported to the Icechunk maintainers at Earthmover, who are responsible for
-enforcement, at
-<!-- TODO: maintainer to confirm the official Code of Conduct reporting contact (e.g. conduct@earthmover.io) -->
-`REPORTING_CONTACT_TODO`. All complaints will be reviewed and investigated
+enforcement, at `ryan@earthmover.io` or `joe@earthmover.io`. All complaints will be reviewed and investigated
 promptly and fairly.
 
 All community leaders are obligated to respect the privacy and security of the
