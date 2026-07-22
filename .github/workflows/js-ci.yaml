@@ -25,6 +25,9 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   build:
     defaults:
@@ -72,6 +75,8 @@ jobs:
     runs-on: ${{ matrix.settings.host }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
       - name: Setup node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
         with:
@@ -79,7 +84,7 @@ jobs:
           cache: yarn
           cache-dependency-path: icechunk-js/yarn.lock
       - name: Install
-        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable # zizmor: ignore[superfluous-actions] installs non-default targets
         with:
           toolchain: ${{ matrix.settings.rust || 'stable' }}
           targets: ${{ matrix.settings.target }}
@@ -100,13 +105,13 @@ jobs:
         with:
           tool: cargo-zigbuild
       - name: Setup toolchain
-        run: ${{ matrix.settings.setup }}
+        run: ${{ matrix.settings.setup }} # zizmor: ignore[template-injection] static workflow-defined matrix value
         if: ${{ matrix.settings.setup }}
         shell: bash
       - name: Install dependencies
         run: yarn install
       - name: Build
-        run: ${{ matrix.settings.build }}
+        run: ${{ matrix.settings.build }} # zizmor: ignore[template-injection] static workflow-defined matrix value
         shell: bash
       - name: Upload artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -139,6 +144,8 @@ jobs:
     runs-on: ${{ matrix.settings.host }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
       - name: Setup node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
         with:
@@ -176,6 +183,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
       - name: Setup node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
         with:
@@ -205,6 +214,8 @@ jobs:
         working-directory: ./icechunk-js
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
       - name: Setup node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
         with:
@@ -236,14 +247,16 @@ jobs:
       run:
         working-directory: ./icechunk-js
     permissions:
-      contents: write
-      id-token: write
+      contents: write # to publish the release
+      id-token: write # for npm provenance attestation
     needs:
       - test-macOS-windows-binding
       - test-linux-binding
       - test-wasi
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
       - name: Setup node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
         with:
