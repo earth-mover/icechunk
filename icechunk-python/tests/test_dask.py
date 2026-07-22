@@ -5,12 +5,14 @@ pytest.importorskip("distributed")
 
 import tempfile
 
+import numpy as np
+
 import dask
 import distributed
 import xarray as xr
 import zarr
 from icechunk import Repository, local_filesystem_storage
-from icechunk.dask import store_dask
+from icechunk.dask import session_merge_reduction, store_dask
 from icechunk.xarray import to_icechunk
 from tests.test_xarray import create_test_data, roundtrip
 from xarray.testing import assert_identical
@@ -42,6 +44,11 @@ def test_store_dask(any_spec_version: int | None) -> None:
         zarray = zarr.open_array(fork.store, path="array")
         with dask.config.set(scheduler="processes"):
             store_dask(sources=[dask_array], targets=[zarray])
+
+
+def test_session_merge_reduction_rejects_unknown_arrays() -> None:
+    with pytest.raises(TypeError, match="Expected a dask array"):
+        session_merge_reduction(np.arange(10), split_every=None)  # type: ignore[arg-type]
 
 
 def test_distributed(any_spec_version: int | None) -> None:

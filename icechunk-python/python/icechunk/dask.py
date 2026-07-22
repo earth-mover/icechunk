@@ -1,4 +1,5 @@
 import functools
+import sys
 from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any
 
@@ -103,16 +104,26 @@ def store_dask(
     return session_merge_reduction(stored_arrays, split_every=split_every, **store_kwargs)
 
 
+def _reduction_for(arr: Any) -> Any:
+    # dask-array's Array isn't a da.Array; stock da.reduction re-wraps it via from_array.
+    if isinstance(arr, da.Array):
+        return da.reduction
+    dask_array = sys.modules.get("dask_array")
+    if dask_array is not None and isinstance(arr, dask_array.Array):
+        return dask_array.reduction
+    raise TypeError(f"Expected a dask array, received {type(arr)!r}")
+
+
 def session_merge_reduction(
     arrays: Array | list[Array], *, split_every: int | None, **store_kwargs: Any
 ) -> ForkSession:
-    if isinstance(arrays, da.Array):
+    if not isinstance(arrays, (list, tuple)):
         arrays = [arrays]
     # Now we tree-reduce all changesets
     # reduce the individual arrays since concatenation isn't always trivial due
     # to different shapes
     merged_sessions = [
-        da.reduction(  # type: ignore[no-untyped-call]
+        _reduction_for(arr)(
             arr,
             name="ice-changeset",
             chunk=computing_meta(extract_session),
