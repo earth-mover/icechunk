@@ -90,7 +90,8 @@ jobs:
           HYPOTHESIS_EXPERIMENTAL_OBSERVABILITY: "1"
           HYPOTHESIS_PROFILE: ${{ github.event_name == 'pull_request' && 'ci' || 'nightly' }}
         run: |
-          just hypothesis_profile="$HYPOTHESIS_PROFILE" python-upstream-pytest
+          # later flag wins over the recipe's default --hypothesis-profile=nightly
+          just python-upstream-pytest "--hypothesis-profile=$HYPOTHESIS_PROFILE"
 
       # explicitly save the cache so it gets updated, also do this even if it fails.
       - name: Save cached hypothesis directory

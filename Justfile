@@ -4,9 +4,6 @@ profile := "dev"
 # Enable coverage instrumentation: override with `just coverage=true build-wheels` (default: false)
 coverage := "false"
 
-# Hypothesis profile for `just python-upstream-pytest`: override with `just hypothesis_profile=ci python-upstream-pytest` (default: nightly)
-hypothesis_profile := "nightly"
-
 # Settings can't interpolate variables, so the interpreter preamble below
 # reads these through exported env vars.
 export JUST_COVERAGE := coverage
@@ -589,7 +586,7 @@ python-upstream-describe: python-upstream-setup
 python-upstream-pytest *args: python-upstream-setup
   cd icechunk-python
   source .venv/bin/activate
-  pytest -n 4 --hypothesis-profile={{hypothesis_profile}} --report-log output-pytest-log.jsonl "$@"
+  pytest -n 4 --hypothesis-profile=nightly --report-log output-pytest-log.jsonl "$@"
 
 [group('upstream')]
 [doc("Run full xarray-upstream checks")]
