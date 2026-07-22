@@ -98,7 +98,7 @@ jobs:
 
       - name: Restore cached hypothesis directory
         id: restore-hypothesis-cache
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v5
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: icechunk-python/.hypothesis/
           key: cache-hypothesis-${{ runner.os }}-${{ github.run_id }}
@@ -245,7 +245,7 @@ jobs:
 
       - name: Restore cached hypothesis directory
         id: restore-hypothesis-cache
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v5
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: icechunk-python/.hypothesis/
           key: cache-hypothesis-${{ runner.os }}-shard${{ matrix.shard-id }}-${{ github.run_id }}
@@ -279,7 +279,7 @@ jobs:
       - name: Save cached hypothesis directory
         id: save-hypothesis-cache
         if: always() && github.ref == 'refs/heads/main'
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v5
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: icechunk-python/.hypothesis/
           key: cache-hypothesis-${{ runner.os }}-shard${{ matrix.shard-id }}-${{ github.run_id }}
@@ -332,7 +332,7 @@ jobs:
         run: just coverage-report-python
 
       - name: Upload Python coverage to Codecov
-        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v5
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: coverage_python.lcov
