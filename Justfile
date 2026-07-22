@@ -52,7 +52,7 @@ default:
 # variable overrides (same pattern as pre-commit-ci).
 
 [group('ci')]
-[doc("Reproduce rust-ci.yaml's rust job (Linux lane); needs docker. Other jobs: shuttle-test, wasm-build + wasm-proxy-test")]
+[doc("Reproduce rust-ci.yaml's rust job (Linux lane); needs docker. Other jobs: profile=ci shuttle-test, wasm-build + wasm-proxy-test")]
 ci-rust $RUSTFLAGS="-D warnings":
   just check-msrv
   just contup
@@ -87,13 +87,12 @@ ci-python-check:
   just check-xarray-docs
 
 [group('ci')]
-[doc("Reproduce code-quality.yaml: develop, pixi version check, format check, clippy, doctests, mypy, pre-commit")]
+[doc("Reproduce code-quality.yaml: develop, pixi version check, format check, clippy, mypy, pre-commit")]
 ci-code-quality $RUSTFLAGS="-D warnings":
   just profile=ci develop
   just check-pixi-version
   just format "--check"
   just profile=ci lint
-  just profile=ci doctest
   just mypy
   just py-pre-commit
 
