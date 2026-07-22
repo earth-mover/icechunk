@@ -141,6 +141,20 @@ config.manifest = ic.config.ManifestConfig(
 )
 ```
 
+#### [`max_concurrent_manifest_fetches_during_commit`](../reference/config.md#icechunk.config.ManifestConfig.max_concurrent_manifest_fetches_during_commit)
+
+How many manifests are fetched and updated concurrently during a commit, amend,
+flush, or `rewrite_manifests`. Each changed array's manifest update downloads,
+decompresses, merges, recompresses, and uploads its manifest(s), so raising this
+trades memory for lower commit latency on datasets with many arrays. Defaults to
+`1` (serial).
+
+```python exec="on" session="config" source="material-block"
+config.manifest = ic.config.ManifestConfig(
+    max_concurrent_manifest_fetches_during_commit=16,
+)
+```
+
 ### Applying Configuration
 
 Now we can now create or open an Icechunk repo using our config.

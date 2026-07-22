@@ -290,11 +290,18 @@ impl std::fmt::Debug for CommitBuilder<'_> {
 
 impl<'a> CommitBuilder<'a> {
     fn new(session: &'a mut Session, message: String) -> Self {
+        let max_concurrent_nodes = usize::from(
+            session
+                .config()
+                .manifest()
+                .max_concurrent_manifest_fetches_during_commit()
+                .max(1),
+        );
         Self {
             session,
             message,
             properties: None,
-            max_concurrent_nodes: 1,
+            max_concurrent_nodes,
             allow_empty: false,
             amend: false,
             kind: CommitKind::NewCommit,
@@ -310,8 +317,11 @@ impl<'a> CommitBuilder<'a> {
         self
     }
 
+    /// Override the configured manifest update concurrency for this commit.
+    ///
+    /// Values are clamped to at least 1: with 0 no node would ever be flushed.
     pub fn max_concurrent_nodes(mut self, n: usize) -> Self {
-        self.max_concurrent_nodes = n;
+        self.max_concurrent_nodes = n.max(1);
         self
     }
 
@@ -3710,6 +3720,87 @@ mod tests {
         assert!(splits.find(&ChunkIndices(vec![21, 0])).is_none());
 
         Ok(())
+    }
+
+    async fn write_array_and_commit(
+        repo: &Repository,
+        concurrency: Option<usize>,
+    ) -> Result<(Path, Bytes, SnapshotId), Box<dyn Error>> {
+        let mut session = repo.writable_session("main").await?;
+        session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
+
+        let array_path: Path = "/array".to_string().try_into().unwrap();
+        let shape = ArrayShape::new(vec![(4, 4)]).unwrap();
+        let array_def = Bytes::from_static(br#"{"this":"array"}"#);
+        session
+            .add_array(array_path.clone(), shape, Some(vec!["t".into()]), array_def)
+            .await?;
+
+        let bytes = Bytes::copy_from_slice(&42i8.to_be_bytes());
+        let payload = session.get_chunk_writer()?(bytes.clone()).await?;
+        session
+            .set_chunk_ref(array_path.clone(), ChunkIndices(vec![0]), Some(payload))
+            .await?;
+
+        let mut builder = session.commit("commit");
+        if let Some(n) = concurrency {
+            builder = builder.max_concurrent_nodes(n);
+        }
+        let snapshot = builder.execute().await?;
+        Ok((array_path, bytes, snapshot))
+    }
+
+    async fn assert_chunk_readable(
+        repo: &Repository,
+        array_path: &Path,
+        bytes: Bytes,
+        snapshot: SnapshotId,
+    ) -> Result<(), Box<dyn Error>> {
+        let session = repo.readonly_session(&VersionInfo::SnapshotId(snapshot)).await?;
+        let chunk = get_chunk(
+            session
+                .get_chunk_reader(array_path, &ChunkIndices(vec![0]), &ByteRange::ALL)
+                .await?,
+        )
+        .await?;
+        assert_eq!(chunk, Some(bytes));
+        Ok(())
+    }
+
+    // A concurrency of 0 must not silently drop manifests: `buffer_unordered(0)`
+    // yields an empty stream, so without clamping no node would be flushed and
+    // the commit would silently drop all manifests.
+    #[tokio::test]
+    async fn test_commit_concurrency_zero_still_flushes() -> Result<(), Box<dyn Error>> {
+        let repo = create_memory_store_repository(SpecVersionBin::V2).await;
+        let (array_path, bytes, snapshot) =
+            write_array_and_commit(&repo, Some(0)).await?;
+        assert_chunk_readable(&repo, &array_path, bytes, snapshot).await
+    }
+
+    // The commit concurrency defaults from
+    // `ManifestConfig::max_concurrent_manifest_fetches_during_commit`; a configured
+    // 0 is clamped the same way as an explicit one.
+    #[tokio::test]
+    async fn test_commit_concurrency_from_config() -> Result<(), Box<dyn Error>> {
+        let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+        let config = RepositoryConfig {
+            manifest: Some(ManifestConfig {
+                max_concurrent_manifest_fetches_during_commit: Some(0),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let repo = Repository::create(
+            Some(config),
+            backend,
+            HashMap::new(),
+            Some(SpecVersionBin::V2),
+            true,
+        )
+        .await?;
+        let (array_path, bytes, snapshot) = write_array_and_commit(&repo, None).await?;
+        assert_chunk_readable(&repo, &array_path, bytes, snapshot).await
     }
 
     #[tokio_test]

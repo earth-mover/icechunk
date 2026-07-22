@@ -443,6 +443,9 @@ class TestReprStructural:
         assert "preload" in repr_str
         assert "splitting" in repr_str
         assert "virtual_chunk_location_compression" in repr_str
+        assert "max_concurrent_manifest_fetches_during_commit" in repr_str
+        # str should show the scalar default
+        assert "1 (default)" in str(c)  # max_concurrent_manifest_fetches_during_commit
 
     def test_virtual_chunk_container_shows_fields(self) -> None:
         store_config = icechunk.s3_store(

@@ -273,6 +273,7 @@ pub(crate) async fn setup_repo(
         }),
         splitting: split_config,
         virtual_chunk_location_compression: None,
+        max_concurrent_manifest_fetches_during_commit: None,
     };
 
     let mut config = RepositoryConfig {
