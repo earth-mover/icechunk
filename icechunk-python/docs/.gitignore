@@ -76,3 +76,10 @@ ENV/
 
 # MkDocs documentation
 site*/
+
+# directory indexes generated into the source tree by mkdocs-breadcrumbs-plugin
+docs/getting-started/index.md
+docs/guides/index.md
+docs/understanding/index.md
+docs/reference/flatbuffers-v2/index.md
+docs/guides/ingestion/index.md
