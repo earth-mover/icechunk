@@ -34,6 +34,24 @@ PROTOTYPE = default_buffer_prototype()
 
 Frequency = TypeVar("Frequency", bound=Callable[..., Any])
 
+
+def storage_chunk_sizes(arr: Array) -> tuple[tuple[int, ...], ...]:
+    """Per-dimension sizes of the storage-key chunk grid (shards when sharded).
+
+    Store keys and icechunk's shift_array operate on this grid, not on the
+    inner (read) chunks that cdata_shape/read_chunk_sizes count for sharded
+    arrays. Older zarr lacks write_chunk_sizes but also lacks rectilinear
+    grids, so cells there are regular and can be computed directly.
+    """
+    if hasattr(arr, "write_chunk_sizes"):
+        return arr.write_chunk_sizes  # type: ignore[no-any-return]
+    cell = arr.shards or arr.chunks
+    return tuple(
+        tuple(min(c, s - i * c) for i in range(-(-s // c)))
+        for s, c in zip(arr.shape, cell, strict=True)
+    )
+
+
 # pytestmark = [
 #     pytest.mark.filterwarnings(
 #         "ignore::zarr.core.dtype.common.UnstableSpecificationWarning"
@@ -266,7 +284,8 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
 
         arr_model = zarr.open_array(self.model, path=array_path)
         arr_store = zarr.open_array(self.store, path=array_path)
-        num_chunks = arr_model.cdata_shape
+        grid_sizes = storage_chunk_sizes(arr_model)
+        num_chunks = tuple(len(sizes) for sizes in grid_sizes)
 
         # Draw offset: negative shifts left, positive shifts right
         offset = data.draw(
@@ -290,26 +309,18 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         # - Without resize: data shifting beyond bounds is lost
         should_resize = data.draw(st.booleans())
         if should_resize and any(o > 0 for o in offset):
-            # read_chunk_sizes was added alongside rectilinear support; on older
-            # zarr it doesn't exist but grids are always regular, so synthesize
-            # the same tuple-of-tuples shape from the declared chunk size.
-            if hasattr(arr_model, "read_chunk_sizes"):
-                read_sizes = arr_model.read_chunk_sizes
-            else:
-                read_sizes = tuple(
-                    (c,) * n for c, n in zip(arr_model.chunks, num_chunks, strict=True)
-                )
             # Shifting right by offset[i] pushes the last offset[i] chunks
             # past the original extent; grow by their sizes so they fit.
             new_shape = tuple(
                 arr_model.shape[i]
-                + (sum(read_sizes[i][-offset[i] :]) if offset[i] > 0 else 0)
-                for i in range(len(read_sizes))
+                + (sum(grid_sizes[i][-offset[i] :]) if offset[i] > 0 else 0)
+                for i in range(len(grid_sizes))
             )
             note(f"resizing array '{array_path}' from {arr_model.shape} to {new_shape}")
             arr_model.resize(new_shape)
             arr_store.resize(new_shape)
-            num_chunks = arr_model.cdata_shape
+            grid_sizes = storage_chunk_sizes(arr_model)
+            num_chunks = tuple(len(sizes) for sizes in grid_sizes)
 
         note(f"shifting array '{array_path}' by {offset}")
         self.store.session.shift_array(f"/{array_path}", offset)
