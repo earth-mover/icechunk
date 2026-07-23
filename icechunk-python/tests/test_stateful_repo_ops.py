@@ -930,8 +930,14 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         note(f"Creating branch {name!r} for commit {commit!r}")
 
         # V1 expired snapshots stay on disk so create_branch succeeds, but
-        # the model no longer tracks their store contents.
-        assume(not (self.model.spec_version == 1 and commit not in self.model.commits))
+        # the model no longer tracks their store contents. This also covers a
+        # commit whose ancestry *reaches* an expired-but-on-disk snapshot: the
+        # real ancestry resurrects it while the model has popped it, so skip
+        # unless the whole chain is still modelled.
+        if self.model.spec_version == 1:
+            assume(commit in self.model.commits)
+            ancestry = {s.id for s in self.repo.ancestry(snapshot_id=commit)}
+            assume(ancestry <= set(self.model.commits))
 
         # we can create a tag and branch with the same name
         if name not in self.model.branch_heads and commit in self.model.commits:
@@ -950,8 +956,14 @@ class VersionControlStateMachine(RuleBasedStateMachine):
     def create_tag(self, name: str, commit_id: str) -> str:
         note(f"Creating tag {name!r} for commit {commit_id!r}")
         # V1 expired snapshots stay on disk so create_tag succeeds, but
-        # the model no longer tracks their store contents.
-        assume(not (self.model.spec_version == 1 and commit_id not in self.model.commits))
+        # the model no longer tracks their store contents. This also covers a
+        # commit whose ancestry *reaches* an expired-but-on-disk snapshot: the
+        # real ancestry resurrects it while the model has popped it, so skip
+        # unless the whole chain is still modelled.
+        if self.model.spec_version == 1:
+            assume(commit_id in self.model.commits)
+            ancestry = {s.id for s in self.repo.ancestry(snapshot_id=commit_id)}
+            assume(ancestry <= set(self.model.commits))
         if (
             name in self.model.created_tags
             or name in self.model.tags
