@@ -217,6 +217,25 @@ class InternalError(IcechunkError):
     https://github.com/earth-mover/icechunk/issues."""
 
 
+# tracebacks and reprs show these as icechunk.*, their public import path,
+# matching the Rust-defined classes
+for _cls in (
+    NotFoundError,
+    NodeNotFoundError,
+    SnapshotNotFoundError,
+    RefNotFoundError,
+    RepositoryNotFoundError,
+    AlreadyExistsError,
+    ReadOnlyError,
+    InvalidInputError,
+    SessionStateError,
+    StorageError,
+    FormatError,
+    InternalError,
+):
+    _cls.__module__ = "icechunk"
+
+
 __all__ = [
     "AlreadyExistsError",
     "ConflictError",

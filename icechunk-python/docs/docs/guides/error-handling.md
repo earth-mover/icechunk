@@ -157,7 +157,7 @@ Traceback (most recent call last):
     repo.readonly_session(branch="nope")
   File ".../icechunk/repository.py", line 1534, in readonly_session
     self._repository.readonly_session(
-icechunk._exceptions.RefNotFoundError: ref not found `nope`
+icechunk.RefNotFoundError: ref not found `nope`
 
 context:
    0: icechunk::repository::lookup_branch_v2
