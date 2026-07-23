@@ -4,8 +4,9 @@ All exceptions raised by Icechunk derive from
 [`IcechunkError`][icechunk.IcechunkError], grouped into categories by what a
 handler would do about them. Every instance carries:
 
-- `message`: a one-line description (also what `str(e)` returns). The full
-  diagnostic report is attached as a PEP 678 note, visible in tracebacks.
+- `message`: the chain of causes followed by the operation context (also what
+  `str(e)` returns). The full diagnostic report is attached as a PEP 678
+  note, visible in tracebacks.
 - `kind`: a stable machine-readable code (see
   [`ErrorKind`][icechunk.ErrorKind]) identifying the precise failure without
   needing one class per failure.

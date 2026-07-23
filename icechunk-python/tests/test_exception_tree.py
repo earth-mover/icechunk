@@ -185,6 +185,17 @@ def test_repository_not_found(tmpdir: Any) -> None:
     assert getattr(err, "__notes__", None)
 
 
+def test_repr_reports_runtime_class_and_kind(repo: ic.Repository) -> None:
+    with pytest.raises(ic.RefNotFoundError) as excinfo:
+        repo.lookup_branch("does-not-exist")
+    assert repr(excinfo.value).startswith('icechunk.RefNotFoundError(message="')
+    assert 'kind="ref-not-found"' in repr(excinfo.value)
+
+    assert repr(ic.IcechunkError("boom")) == (
+        'icechunk.IcechunkError(message="boom", kind="unknown")'
+    )
+
+
 def test_no_changes_to_commit(repo: ic.Repository) -> None:
     session = repo.writable_session("main")
     with pytest.raises(ic.SessionStateError) as excinfo:

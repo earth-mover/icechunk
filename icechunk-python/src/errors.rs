@@ -759,8 +759,14 @@ impl IcechunkError {
         Self { message, kind: kind.unwrap_or_else(|| codes::UNKNOWN.to_string()) }
     }
 
-    fn __repr__(&self) -> String {
-        format!("icechunk.IcechunkError(message=\"{}\")", self.message)
+    // Uses the runtime class so Python-defined subclasses report as themselves
+    fn __repr__(slf: &Bound<'_, Self>) -> PyResult<String> {
+        let name = slf.get_type().name()?;
+        let this = slf.borrow();
+        Ok(format!(
+            "icechunk.{}(message=\"{}\", kind=\"{}\")",
+            name, this.message, this.kind
+        ))
     }
 
     fn __str__(&self) -> String {
