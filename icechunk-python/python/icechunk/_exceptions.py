@@ -43,7 +43,9 @@ class ErrorKind(StrEnum):
     """Stable machine-readable codes for the `kind` attribute of [`IcechunkError`][icechunk.IcechunkError].
 
     Codes are append-only: new ones may appear in any release, but existing
-    ones are not renamed or removed.
+    ones are not renamed or removed, since user code matches on them
+    (`if e.kind == ErrorKind.CHUNK_NOT_FOUND:`) and would silently miss a
+    renamed code.
     """
 
     # conflicts
