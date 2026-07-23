@@ -33,9 +33,7 @@ The tree::
 from enum import StrEnum
 
 from icechunk._icechunk_python import (
-    ConflictError,
     IcechunkError,
-    RebaseFailedError,
 )
 
 
@@ -46,6 +44,10 @@ class ErrorKind(StrEnum):
     ones are not renamed or removed, since user code matches on them
     (`if e.kind == ErrorKind.CHUNK_NOT_FOUND:`) and would silently miss a
     renamed code.
+
+    Members are written out literally (rather than generated from the Rust
+    side) so type checkers can see them; `test_error_kind_enum_in_sync_with_rust`
+    keeps them in sync with the codes Rust actually raises.
     """
 
     # conflicts
@@ -236,23 +238,3 @@ for _cls in (
     InternalError,
 ):
     _cls.__module__ = "icechunk"
-
-
-__all__ = [
-    "AlreadyExistsError",
-    "ConflictError",
-    "ErrorKind",
-    "FormatError",
-    "IcechunkError",
-    "InternalError",
-    "InvalidInputError",
-    "NodeNotFoundError",
-    "NotFoundError",
-    "ReadOnlyError",
-    "RebaseFailedError",
-    "RefNotFoundError",
-    "RepositoryNotFoundError",
-    "SessionStateError",
-    "SnapshotNotFoundError",
-    "StorageError",
-]
