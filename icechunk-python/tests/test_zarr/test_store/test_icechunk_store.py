@@ -7,7 +7,6 @@ from typing import Any, TypeVar
 
 import pytest
 
-import zarr
 from icechunk import IcechunkError, IcechunkStore, local_filesystem_storage
 from icechunk.repository import Repository
 from zarr.abc.store import OffsetByteRequest, RangeByteRequest, Store, SuffixByteRequest
@@ -546,7 +545,8 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
             await store.getsize("not-a-real-key")
 
     @pytest.mark.skipif(
-        zarr.__version__ < "3.1.6", reason="Store._get_bytes added in zarr 3.1.6"
+        not hasattr(Store, "_get_bytes"),
+        reason="Store._get_bytes only exists in zarr >=3.1.6,<3.3",
     )
     async def test_get_bytes(self, store: IcechunkStore) -> None:
         # Override: icechunk validates metadata on zarr.json keys,
@@ -561,7 +561,8 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
             )
 
     @pytest.mark.skipif(
-        zarr.__version__ < "3.1.6", reason="Store._get_bytes_sync added in zarr 3.1.6"
+        not hasattr(Store, "_get_bytes_sync"),
+        reason="Store._get_bytes_sync only exists in zarr >=3.1.6,<3.3",
     )
     def test_get_bytes_sync(self, store: IcechunkStore) -> None:
         # Override: icechunk validates metadata on zarr.json keys
@@ -571,7 +572,8 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
         assert store._get_bytes_sync(key, prototype=default_buffer_prototype()) == data
 
     @pytest.mark.skipif(
-        zarr.__version__ < "3.1.6", reason="Store._get_json added in zarr 3.1.6"
+        not hasattr(Store, "_get_json"),
+        reason="Store._get_json only exists in zarr >=3.1.6,<3.3",
     )
     async def test_get_json(self, store: IcechunkStore) -> None:
         # Override: icechunk validates metadata on zarr.json keys,
@@ -583,7 +585,8 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
         assert await store._get_json(key, prototype=default_buffer_prototype()) == data
 
     @pytest.mark.skipif(
-        zarr.__version__ < "3.1.6", reason="Store._get_json_sync added in zarr 3.1.6"
+        not hasattr(Store, "_get_json_sync"),
+        reason="Store._get_json_sync only exists in zarr >=3.1.6,<3.3",
     )
     def test_get_json_sync(self, store: IcechunkStore) -> None:
         # Override: icechunk validates metadata on zarr.json keys
