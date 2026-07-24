@@ -4,6 +4,7 @@ from collections.abc import Callable
 from typing import Any, TypeVar
 
 import hypothesis.strategies as st
+import numpy as np
 import pytest
 from hypothesis import note
 from hypothesis.stateful import (
@@ -28,6 +29,7 @@ from icechunk.testing.trees import absolute, valid_moves
 from icechunk.testing.utils import update_paths_after_move
 from zarr import Array
 from zarr.core.buffer import default_buffer_prototype
+from zarr.core.sync import collect_aiterator, sync
 from zarr.testing.stateful import ZarrHierarchyStateMachine, split_prefix_name
 
 PROTOTYPE = default_buffer_prototype()
@@ -409,3 +411,59 @@ def test_zarr_store() -> None:
     # run_state_machine_as_test(
     #     mk_test_instance_sync, settings=settings(report_multiple_bugs=False)
     # )
+
+
+def test_storage_chunk_sizes_granularity() -> None:
+    model = ModelStore()
+    sharded = zarr.create_array(
+        model, name="s", shape=(4,), shards=(4,), chunks=(2,), dtype="i1", fill_value=1
+    )
+    plain = zarr.create_array(
+        model, name="p", shape=(100, 80), chunks=(30, 40), dtype="i1"
+    )
+    assert storage_chunk_sizes(sharded) == ((4,),)
+    # cdata_shape counts inner chunks for sharded arrays; using it as the
+    # storage-key grid is the bug storage_chunk_sizes exists to avoid.
+    assert sharded.cdata_shape == (2,)
+    assert storage_chunk_sizes(plain) == ((30, 30, 30, 10), (40, 40))
+
+
+def test_shift_sharded_model_vs_store() -> None:
+    """Shifting a sharded array keeps ModelStore and IcechunkStore keys in sync.
+
+    Mirrors the shift_array rule: the array is generated sharded on the model
+    and recreated on the store with only the outer chunk grid, then both are
+    shifted on the storage-key grid.
+    """
+    repo = Repository.create(in_memory_storage(), spec_version=2)
+    session = repo.writable_session("main")
+    store = session.store
+
+    model = ModelStore()
+    zarr.group(store=model)
+
+    arr_model = zarr.create_array(
+        model, name="0", shape=(4,), shards=(4,), chunks=(2,), dtype="i1", fill_value=1
+    )
+    arr_store = zarr.create_array(
+        store, name="0", shape=(4,), chunks=(4,), dtype="i1", fill_value=1
+    )
+    data = np.zeros((4,), dtype="i1")
+    arr_model[:] = data
+    arr_store[:] = data
+
+    model_keys = sorted(collect_aiterator(model.list_prefix("")))
+    store_keys = sorted(collect_aiterator(store.list_prefix("")))
+    assert model_keys == store_keys, (model_keys, store_keys)
+    assert "0/c/0" in model_keys
+
+    grid_sizes = storage_chunk_sizes(arr_model)
+    num_chunks = tuple(len(sizes) for sizes in grid_sizes)
+    assert num_chunks == (1,)
+
+    session.shift_array("/0", (1,))
+    sync(model.shift_array("0", (1,), num_chunks))
+
+    model_keys = sorted(collect_aiterator(model.list_prefix("")))
+    store_keys = sorted(collect_aiterator(store.list_prefix("")))
+    assert model_keys == store_keys, (model_keys, store_keys)
