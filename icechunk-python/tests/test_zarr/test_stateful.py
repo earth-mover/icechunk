@@ -29,7 +29,6 @@ from icechunk.testing.trees import absolute, valid_moves
 from icechunk.testing.utils import update_paths_after_move
 from zarr import Array
 from zarr.core.buffer import default_buffer_prototype
-from zarr.core.sync import collect_aiterator, sync
 from zarr.testing.stateful import ZarrHierarchyStateMachine, split_prefix_name
 
 PROTOTYPE = default_buffer_prototype()
@@ -40,10 +39,14 @@ Frequency = TypeVar("Frequency", bound=Callable[..., Any])
 def storage_chunk_sizes(arr: "Array[Any]") -> tuple[tuple[int, ...], ...]:
     """Per-dimension sizes of the storage-key chunk grid (shards when sharded).
 
-    Store keys and icechunk's shift_array operate on this grid, not on the
-    inner (read) chunks that cdata_shape/read_chunk_sizes count for sharded
-    arrays. Older zarr lacks write_chunk_sizes but also lacks rectilinear
-    grids, so cells there are regular and can be computed directly.
+    Store keys are one object per *write* chunk: with sharding, the whole
+    shard is a single ``c/<i>`` object and read (inner) chunks are byte
+    ranges inside it, never separate keys. Shifts move store keys, so
+    offsets and the grid must be in write-chunk units;
+    ``cdata_shape``/``read_chunk_sizes`` count inner chunks and give the
+    wrong grid for sharded arrays. Older zarr lacks write_chunk_sizes but
+    also lacks rectilinear grids, so cells there are regular and can be
+    computed directly.
     """
     if hasattr(arr, "write_chunk_sizes"):
         return arr.write_chunk_sizes  # type: ignore[no-any-return]
@@ -428,7 +431,7 @@ def test_storage_chunk_sizes_granularity() -> None:
     assert storage_chunk_sizes(plain) == ((30, 30, 30, 10), (40, 40))
 
 
-def test_shift_sharded_model_vs_store() -> None:
+async def test_shift_sharded_model_vs_store() -> None:
     """Shifting a sharded array keeps ModelStore and IcechunkStore keys in sync.
 
     Mirrors the shift_array rule: the array is generated sharded on the model
@@ -452,8 +455,8 @@ def test_shift_sharded_model_vs_store() -> None:
     arr_model[:] = data
     arr_store[:] = data
 
-    model_keys = sorted(collect_aiterator(model.list_prefix("")))
-    store_keys = sorted(collect_aiterator(store.list_prefix("")))
+    model_keys = sorted([k async for k in model.list_prefix("")])
+    store_keys = sorted([k async for k in store.list_prefix("")])
     assert model_keys == store_keys, (model_keys, store_keys)
     assert "0/c/0" in model_keys
 
@@ -462,8 +465,8 @@ def test_shift_sharded_model_vs_store() -> None:
     assert num_chunks == (1,)
 
     session.shift_array("/0", (1,))
-    sync(model.shift_array("0", (1,), num_chunks))
+    await model.shift_array("0", (1,), num_chunks)
 
-    model_keys = sorted(collect_aiterator(model.list_prefix("")))
-    store_keys = sorted(collect_aiterator(store.list_prefix("")))
+    model_keys = sorted([k async for k in model.list_prefix("")])
+    store_keys = sorted([k async for k in store.list_prefix("")])
     assert model_keys == store_keys, (model_keys, store_keys)
