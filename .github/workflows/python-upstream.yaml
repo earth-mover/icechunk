@@ -219,7 +219,7 @@ jobs:
 
       - name: Generate and publish the pytest report
         if: needs.build.outputs.pytest-outcome == 'failure'
-        uses: xarray-contrib/issue-from-pytest-log@87351a8f864e969567cda22a25a2f214cbe2340f # v1.6.0
+        uses: xarray-contrib/issue-from-pytest-log@054799b34bd75a5fd6c86277a4a8a575224e60c6 # v1.6.1
         with:
           log-path: icechunk-python/output-pytest-log.jsonl
 
@@ -294,7 +294,7 @@ jobs:
           path: xarray-backends-logs
 
       - name: Generate and publish the xarray backends report
-        uses: xarray-contrib/issue-from-pytest-log@87351a8f864e969567cda22a25a2f214cbe2340f # v1.6.0
+        uses: xarray-contrib/issue-from-pytest-log@054799b34bd75a5fd6c86277a4a8a575224e60c6 # v1.6.1
         with:
           log-path: xarray-backends-logs/output-pytest-log.jsonl
           issue-title: "Nightly Xarray backends tests failed"

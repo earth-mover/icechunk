@@ -4,6 +4,7 @@ from collections.abc import Callable
 from typing import Any, TypeVar
 
 import hypothesis.strategies as st
+import numpy as np
 import pytest
 from hypothesis import note
 from hypothesis.stateful import (
@@ -33,6 +34,28 @@ from zarr.testing.stateful import ZarrHierarchyStateMachine, split_prefix_name
 PROTOTYPE = default_buffer_prototype()
 
 Frequency = TypeVar("Frequency", bound=Callable[..., Any])
+
+
+def storage_chunk_sizes(arr: "Array[Any]") -> tuple[tuple[int, ...], ...]:
+    """Per-dimension sizes of the storage-key chunk grid (shards when sharded).
+
+    Store keys are one object per *write* chunk: with sharding, the whole
+    shard is a single ``c/<i>`` object and read (inner) chunks are byte
+    ranges inside it, never separate keys. Shifts move store keys, so
+    offsets and the grid must be in write-chunk units;
+    ``cdata_shape``/``read_chunk_sizes`` count inner chunks and give the
+    wrong grid for sharded arrays. Older zarr lacks write_chunk_sizes but
+    also lacks rectilinear grids, so cells there are regular and can be
+    computed directly.
+    """
+    if hasattr(arr, "write_chunk_sizes"):
+        return arr.write_chunk_sizes  # type: ignore[no-any-return]
+    cell = arr.shards or arr.chunks
+    return tuple(
+        tuple(min(c, s - i * c) for i in range(-(-s // c)))
+        for s, c in zip(arr.shape, cell, strict=True)
+    )
+
 
 # pytestmark = [
 #     pytest.mark.filterwarnings(
@@ -266,7 +289,8 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
 
         arr_model = zarr.open_array(self.model, path=array_path)
         arr_store = zarr.open_array(self.store, path=array_path)
-        num_chunks = arr_model.cdata_shape
+        grid_sizes = storage_chunk_sizes(arr_model)
+        num_chunks = tuple(len(sizes) for sizes in grid_sizes)
 
         # Draw offset: negative shifts left, positive shifts right
         offset = data.draw(
@@ -290,26 +314,18 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         # - Without resize: data shifting beyond bounds is lost
         should_resize = data.draw(st.booleans())
         if should_resize and any(o > 0 for o in offset):
-            # read_chunk_sizes was added alongside rectilinear support; on older
-            # zarr it doesn't exist but grids are always regular, so synthesize
-            # the same tuple-of-tuples shape from the declared chunk size.
-            if hasattr(arr_model, "read_chunk_sizes"):
-                read_sizes = arr_model.read_chunk_sizes
-            else:
-                read_sizes = tuple(
-                    (c,) * n for c, n in zip(arr_model.chunks, num_chunks, strict=True)
-                )
             # Shifting right by offset[i] pushes the last offset[i] chunks
             # past the original extent; grow by their sizes so they fit.
             new_shape = tuple(
                 arr_model.shape[i]
-                + (sum(read_sizes[i][-offset[i] :]) if offset[i] > 0 else 0)
-                for i in range(len(read_sizes))
+                + (sum(grid_sizes[i][-offset[i] :]) if offset[i] > 0 else 0)
+                for i in range(len(grid_sizes))
             )
             note(f"resizing array '{array_path}' from {arr_model.shape} to {new_shape}")
             arr_model.resize(new_shape)
             arr_store.resize(new_shape)
-            num_chunks = arr_model.cdata_shape
+            grid_sizes = storage_chunk_sizes(arr_model)
+            num_chunks = tuple(len(sizes) for sizes in grid_sizes)
 
         note(f"shifting array '{array_path}' by {offset}")
         self.store.session.shift_array(f"/{array_path}", offset)
@@ -398,3 +414,59 @@ def test_zarr_store() -> None:
     # run_state_machine_as_test(
     #     mk_test_instance_sync, settings=settings(report_multiple_bugs=False)
     # )
+
+
+def test_storage_chunk_sizes_granularity() -> None:
+    model = ModelStore()
+    sharded = zarr.create_array(
+        model, name="s", shape=(4,), shards=(4,), chunks=(2,), dtype="i1", fill_value=1
+    )
+    plain = zarr.create_array(
+        model, name="p", shape=(100, 80), chunks=(30, 40), dtype="i1"
+    )
+    assert storage_chunk_sizes(sharded) == ((4,),)
+    # cdata_shape counts inner chunks for sharded arrays; using it as the
+    # storage-key grid is the bug storage_chunk_sizes exists to avoid.
+    assert sharded.cdata_shape == (2,)
+    assert storage_chunk_sizes(plain) == ((30, 30, 30, 10), (40, 40))
+
+
+async def test_shift_sharded_model_vs_store() -> None:
+    """Shifting a sharded array keeps ModelStore and IcechunkStore keys in sync.
+
+    Mirrors the shift_array rule: the array is generated sharded on the model
+    and recreated on the store with only the outer chunk grid, then both are
+    shifted on the storage-key grid.
+    """
+    repo = Repository.create(in_memory_storage(), spec_version=2)
+    session = repo.writable_session("main")
+    store = session.store
+
+    model = ModelStore()
+    zarr.group(store=model)
+
+    arr_model = zarr.create_array(
+        model, name="0", shape=(4,), shards=(4,), chunks=(2,), dtype="i1", fill_value=1
+    )
+    arr_store = zarr.create_array(
+        store, name="0", shape=(4,), chunks=(4,), dtype="i1", fill_value=1
+    )
+    data = np.zeros((4,), dtype="i1")
+    arr_model[:] = data
+    arr_store[:] = data
+
+    model_keys = sorted([k async for k in model.list_prefix("")])
+    store_keys = sorted([k async for k in store.list_prefix("")])
+    assert model_keys == store_keys, (model_keys, store_keys)
+    assert "0/c/0" in model_keys
+
+    grid_sizes = storage_chunk_sizes(arr_model)
+    num_chunks = tuple(len(sizes) for sizes in grid_sizes)
+    assert num_chunks == (1,)
+
+    session.shift_array("/0", (1,))
+    await model.shift_array("0", (1,), num_chunks)
+
+    model_keys = sorted([k async for k in model.list_prefix("")])
+    store_keys = sorted([k async for k in store.list_prefix("")])
+    assert model_keys == store_keys, (model_keys, store_keys)
