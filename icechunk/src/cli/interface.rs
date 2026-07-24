@@ -2,7 +2,7 @@
 
 use crate::format::{ChunkIndices, SnapshotId, snapshot::SnapshotInfo};
 use crate::inspect;
-use crate::repository::{RepositoryErrorKind, VersionInfo};
+use crate::repository::VersionInfo;
 use chrono::Local;
 use clap::{Args, Parser, Subcommand};
 use dialoguer::{Input, Select};
@@ -64,7 +64,11 @@ enum RepoCommand {
 struct AncestryArgs {
     #[arg(name = "alias", help = "Alias of the repository in the config")]
     repo: RepositoryAlias,
-    #[arg(name = "reference", help = "ID of snapshot to show ancestry for")]
+    #[arg(
+        name = "reference",
+        default_value = "main",
+        help = "Branch, tag, or snapshot id to show ancestry for"
+    )]
     reference: String,
     #[arg(short = 'n', default_value_t = 10, help = "Number of snapshots to list")]
     n: usize,
@@ -74,7 +78,11 @@ struct AncestryArgs {
 struct InspectArgs {
     #[arg(name = "alias", help = "Alias of the repository in the config")]
     repo: RepositoryAlias,
-    #[arg(name = "reference", help = "ID of snapshot to inspect")]
+    #[arg(
+        name = "reference",
+        default_value = "main",
+        help = "Branch, tag, or snapshot id to inspect"
+    )]
     reference: String,
 }
 
@@ -319,10 +327,17 @@ async fn open_repository(
     Ok(repository)
 }
 
-fn parse_snapshot(reference: &str) -> Result<SnapshotId> {
-    let snapshot_id = SnapshotId::try_from(reference)
-        .map_err(|_| RepositoryErrorKind::InvalidSnapshotId(reference.to_string()))?;
-    Ok(snapshot_id)
+async fn parse_reference(repository: &Repository, reference: &str) -> Result<SnapshotId> {
+    if let Some(snapshot_id) = SnapshotId::try_from(reference).ok() {
+        return Ok(snapshot_id);
+    }
+    if let Some(snapshot_id) = repository.lookup_branch(reference).await.ok() {
+        return Ok(snapshot_id);
+    }
+    if let Some(snapshot_id) = repository.lookup_tag(reference).await.ok() {
+        return Ok(snapshot_id);
+    }
+    Err(anyhow::anyhow!("`{reference}` is not a valid snapshot id, branch, or tag"))
 }
 
 async fn repo_create(init_cmd: &CreateCommand, config: &CliConfig) -> Result<()> {
@@ -357,7 +372,7 @@ async fn list_branches(
 
 async fn create_branch(args: &BranchCreateArgs, config: &CliConfig) -> Result<()> {
     let repository = open_repository(&args.repo, config).await?;
-    let from_snapshot = parse_snapshot(&args.from)?;
+    let from_snapshot = parse_reference(&repository, &args.from).await?;
     repository.create_branch(&args.branch, &from_snapshot).await.context(format!(
         "Failed to create branch {:?} from {:?}",
         args.branch, args.from
@@ -400,7 +415,7 @@ async fn list_tags(
 
 async fn create_tag(args: &TagCreateArgs, config: &CliConfig) -> Result<()> {
     let repository = open_repository(&args.repo, config).await?;
-    let target_snapshot = parse_snapshot(&args.target)?;
+    let target_snapshot = parse_reference(&repository, &args.target).await?;
 
     repository
         .create_tag(&args.tag, &target_snapshot)
@@ -457,7 +472,7 @@ async fn ancestry(
     mut writer: impl std::io::Write,
 ) -> Result<()> {
     let repository = open_repository(&args.repo, config).await?;
-    let snapshot = parse_snapshot(&args.reference)?;
+    let snapshot = parse_reference(&repository, &args.reference).await?;
     let mut ancestry = Box::pin(
         repository.ancestry(&VersionInfo::SnapshotId(snapshot)).await?.take(args.n),
     );
@@ -487,7 +502,7 @@ async fn inspect(
     mut writer: impl std::io::Write,
 ) -> Result<()> {
     let repository = open_repository(&args.repo, config).await?;
-    let snapshot_id = parse_snapshot(&args.reference)?;
+    let snapshot_id = parse_reference(&repository, &args.reference).await?;
     let info = inspect::inspect_snapshot(repository.asset_manager(), &snapshot_id)
         .await
         .context("Failed to inspect snapshot")?;
@@ -568,8 +583,9 @@ async fn diff(
 ) -> Result<()> {
     let repository = open_repository(&args.repo, config).await?;
 
-    let from_ref = VersionInfo::SnapshotId(parse_snapshot(&args.from)?);
-    let to_ref = VersionInfo::SnapshotId(parse_snapshot(&args.to)?);
+    let from_ref =
+        VersionInfo::SnapshotId(parse_reference(&repository, &args.from).await?);
+    let to_ref = VersionInfo::SnapshotId(parse_reference(&repository, &args.to).await?);
 
     let diff = repository.diff(&from_ref, &to_ref).await.context(format!(
         "Failed to compute diff between {:?} and {:?}",
