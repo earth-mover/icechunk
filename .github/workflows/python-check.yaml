@@ -186,7 +186,7 @@ jobs:
           python --version
           WHEEL=$(ls dist/*-cp311-*.whl)
           uv pip install "${WHEEL}" --group test
-          uv pip install pytest-mypy-plugins
+          uv pip install "pytest-mypy-plugins<4"
           # Install specific xarray version based on matrix
           if [ "${{ matrix.xarray-version.version }}" != "latest-release" ]; then
             echo "Installing xarray ${{ matrix.xarray-version.version }}"
