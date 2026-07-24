@@ -258,7 +258,7 @@ repo = icechunk.Repository.create(icechunk.in_memory_storage())
 session = repo.writable_session("main")
 root = zarr.create_group(session.store)
 root.attrs["foo"] = "bar"
-root.create_dataset("data", shape=(10, 10), chunks=(1, 1), dtype=np.int32)
+root.create_array("data", shape=(10, 10), chunks=(1, 1), dtype=np.int32)
 print(session.commit(message="Add foo attribute and data array"))
 ```
 

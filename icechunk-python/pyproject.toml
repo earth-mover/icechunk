@@ -21,7 +21,7 @@ license = { file = "LICENSE" }
 dynamic = ["version"]
 authors = [{ name = "Earthmover", email = "info@earthmover.io" }]
 
-dependencies = ["zarr>=3,!=3.0.3"]
+dependencies = ["zarr>=3.1.0"]
 
 [dependency-groups]
 test = [
@@ -108,7 +108,7 @@ upstream = [
   "distributed==2025.11.0",
   "dask==2025.11.0",
   "xarray @ git+https://github.com/pydata/xarray.git",
-  "zarr @ git+https://github.com/zarr-developers/zarr.git",
+  #"zarr @ git+https://github.com/zarr-developers/zarr.git",
 ]
 dev = [
   { include-group = "upstream" }

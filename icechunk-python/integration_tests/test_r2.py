@@ -14,6 +14,9 @@ import xarray as xr
                 anonymous=True,
             ),
             id="public-url",
+            marks=pytest.mark.skip(
+                reason="dataset at v1/era5_weatherbench2 is now Icechunk v2 format"
+            ),
         ),
         pytest.param(
             ic.s3_storage(
