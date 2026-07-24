@@ -556,6 +556,7 @@ class Model:
             if created_at_by_id[k] < older_than
         }
 
+        new_parents: dict[str, str | None] = {}
         if self.spec_version >= 2:
             # GC re-parents a kept snapshot whose parent run was deleted to its
             # nearest surviving ancestor, harvesting the deleted ancestors' tx
@@ -576,6 +577,7 @@ class Model:
                     harvested.extend(self.pruned_ancestor_tx_logs.get(x, []))
                     harvested.append(x)
                 self.pruned_ancestor_tx_logs[cid] = harvested
+                new_parents[cid] = anc
 
         for k in deleted:
             self.commits.pop(k, None)
@@ -583,11 +585,14 @@ class Model:
             self.pruned_ancestor_tx_logs.pop(k, None)
 
         if self.spec_version >= 2:
-            # V2's delete_snapshots_from_repo_info rewrites parent pointers
-            # for kept snapshots whose parent was GC'd.
-            for c in self.commits.values():
-                if c.parent_id is not None and c.parent_id in deleted:
-                    c.parent_id = self.initial_snapshot_id
+            # V2's delete_snapshots_from_repo_info re-parents a kept snapshot
+            # whose parent was GC'd to its nearest surviving ancestor (the
+            # harvest walk's endpoint), falling back to the initial snapshot
+            # when the whole chain was deleted.
+            for cid, anc in new_parents.items():
+                self.commits[cid].parent_id = (
+                    anc if anc is not None else self.initial_snapshot_id
+                )
         else:
             # V1 doesn't rewrite parent pointers, so commits whose parents
             # were GC'd have broken ancestry and are effectively unusable.
