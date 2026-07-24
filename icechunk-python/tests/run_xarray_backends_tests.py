@@ -10,6 +10,7 @@ from typing import Any
 
 import numpy as np
 import pytest
+from packaging.version import Version
 
 import xarray as xr
 import zarr
@@ -105,17 +106,20 @@ class IcechunkStoreBase(SpecVersionMixin, ZarrBase):
             unpickled = pickle.loads(raw_pickle)
             assert_identical(expected["foo"], unpickled)
 
-    # Upstream xarray time-coding breaks against recent NumPy (int64 * timedelta64
-    # overflow, datetime decode). No released xarray is compatible yet; re-enable
-    # once xarray ships a fix.
-    def test_roundtrip_timedelta_data(self, *args: Any, **kwargs: Any) -> None:
-        pytest.skip("xarray/NumPy timedelta64 incompatibility")
+    # xarray < 2026.7.0 time-coding is incompatible with numpy >= 2.5
+    # (int64 * timedelta64 overflow, datetime decode failures)
+    if Version(xr.__version__) < Version("2026.7.0"):
 
-    def test_roundtrip_timedelta_data_via_dtype(self, *args: Any, **kwargs: Any) -> None:
-        pytest.skip("xarray/NumPy timedelta64 incompatibility")
+        def test_roundtrip_timedelta_data(self, *args: Any, **kwargs: Any) -> None:
+            pytest.skip("xarray/NumPy timedelta64 incompatibility")
 
-    def test_roundtrip_numpy_datetime_data(self, *args: Any, **kwargs: Any) -> None:
-        pytest.skip("xarray/NumPy datetime decode incompatibility")
+        def test_roundtrip_timedelta_data_via_dtype(
+            self, *args: Any, **kwargs: Any
+        ) -> None:
+            pytest.skip("xarray/NumPy timedelta64 incompatibility")
+
+        def test_roundtrip_numpy_datetime_data(self, *args: Any, **kwargs: Any) -> None:
+            pytest.skip("xarray/NumPy datetime decode incompatibility")
 
 
 class TestIcechunkStoreFilesystem(IcechunkStoreBase):
