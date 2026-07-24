@@ -17,6 +17,8 @@ Icechunk is an open source (Apache 2.0) project and welcomes contributions in th
 - Documentation improvements - [open a GitHub pull request](https://github.com/earth-mover/icechunk/pulls)
 - Bug fixes and enhancements - [open a GitHub pull request](https://github.com/earth-mover/icechunk/pulls)
 
+You can also join the [Earthmover Community Slack](https://join.slack.com/t/earthmover-community/shared_invite/zt-2cwje92ir-xU3CfdG8BI~4CJOJy~sceQ) to ask questions and discuss your contributions with the community.
+
 Please read our [Code of Conduct](https://github.com/earth-mover/icechunk/blob/main/CODE_OF_CONDUCT.md). By participating in this project you agree to abide by its terms.
 
 🤖 Please review our [AI Usage Policy](ai-policy.md), which also serves as contribution guidelines, before submitting pull requests.
