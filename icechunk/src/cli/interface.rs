@@ -754,7 +754,7 @@ mod tests {
         let mut writer = Vec::new();
         ancestry(&args, &config, &mut writer).await.unwrap();
         let output = String::from_utf8(writer).unwrap();
-        println!("{}", output);
+        println!("{output}");
 
         let re = Regex::new(
             r"Snapshot: [0-9A-Z]{20}
