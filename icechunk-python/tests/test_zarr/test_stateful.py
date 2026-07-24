@@ -37,7 +37,7 @@ PROTOTYPE = default_buffer_prototype()
 Frequency = TypeVar("Frequency", bound=Callable[..., Any])
 
 
-def storage_chunk_sizes(arr: Array) -> tuple[tuple[int, ...], ...]:
+def storage_chunk_sizes(arr: "Array[Any]") -> tuple[tuple[int, ...], ...]:
     """Per-dimension sizes of the storage-key chunk grid (shards when sharded).
 
     Store keys and icechunk's shift_array operate on this grid, not on the
