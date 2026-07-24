@@ -24,7 +24,7 @@ pub async fn rewrite_manifests(
     repository: &Repository,
     branch: &str,
     message: &str,
-    max_concurrent_manifests: usize,
+    max_concurrent_manifests: Option<usize>,
     properties: Option<SnapshotProperties>,
     commit_method: CommitMethod,
 ) -> ManifestOpsResult<SnapshotId> {
@@ -39,10 +39,10 @@ pub async fn rewrite_manifests(
         .await
         .map_err(|e| ManifestOpsError::ManifestRewriteError(Box::new(e.inject())))?;
 
-    let mut builder = session
-        .commit(message)
-        .max_concurrent_nodes(max_concurrent_manifests)
-        .rewrite_manifests();
+    let mut builder = session.commit(message).rewrite_manifests();
+    if let Some(n) = max_concurrent_manifests {
+        builder = builder.max_concurrent_nodes(n);
+    }
     if commit_method == CommitMethod::Amend {
         builder = builder.amend();
     }

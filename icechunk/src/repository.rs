@@ -2522,6 +2522,7 @@ mod tests {
             }),
             splitting: Some(split_config.clone()),
             virtual_chunk_location_compression: None,
+            max_concurrent_manifest_fetches_during_commit: None,
         };
         let config = RepositoryConfig {
             manifest: Some(man_config),
@@ -2550,6 +2551,7 @@ mod tests {
             }),
             splitting: Some(split_config.clone()),
             virtual_chunk_location_compression: None,
+            max_concurrent_manifest_fetches_during_commit: None,
         };
         let config = RepositoryConfig {
             manifest: Some(man_config),
@@ -2851,7 +2853,7 @@ mod tests {
             &new_repo,
             "main",
             "rewrite_manifests with split-size=12",
-            8,
+            Some(8),
             None,
             commit_method,
         )
@@ -2885,7 +2887,7 @@ mod tests {
             &new_repo,
             "main",
             "rewrite_manifests with split-size=4",
-            8,
+            Some(8),
             None,
             commit_method,
         )
@@ -4238,7 +4240,7 @@ mod tests {
             &repo,
             "main",
             "rewrite manifests",
-            8,
+            Some(8),
             None,
             CommitMethod::NewCommit,
         )
@@ -4303,7 +4305,7 @@ mod tests {
             &repo2,
             "main",
             "rewriting manifests",
-            8,
+            Some(8),
             None,
             CommitMethod::Amend,
         )
@@ -4315,7 +4317,7 @@ mod tests {
             &repo2,
             "main",
             "rewriting manifests",
-            8,
+            Some(8),
             None,
             CommitMethod::NewCommit,
         )

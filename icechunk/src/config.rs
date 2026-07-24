@@ -409,6 +409,10 @@ pub struct ManifestConfig {
     #[serde(default)]
     pub virtual_chunk_location_compression:
         Option<ManifestVirtualChunkLocationCompressionConfig>,
+    /// How many manifests are fetched and updated concurrently during a
+    /// `commit`, `amend`, `flush`, or `rewrite_manifests`.
+    #[serde(default)]
+    pub max_concurrent_manifest_fetches_during_commit: Option<u16>,
 }
 
 static DEFAULT_MANIFEST_PRELOAD_CONFIG: OnceLock<ManifestPreloadConfig> = OnceLock::new();
@@ -432,6 +436,9 @@ impl ManifestConfig {
                 (Some(c), None) => Some(*c),
                 (Some(mine), Some(theirs)) => Some(mine.merge(theirs)),
             },
+            max_concurrent_manifest_fetches_during_commit: other
+                .max_concurrent_manifest_fetches_during_commit
+                .or(self.max_concurrent_manifest_fetches_during_commit),
         }
     }
 
@@ -457,6 +464,10 @@ impl ManifestConfig {
         })
     }
 
+    pub fn max_concurrent_manifest_fetches_during_commit(&self) -> u16 {
+        self.max_concurrent_manifest_fetches_during_commit.unwrap_or(1)
+    }
+
     // for testing only, create a config with no preloading, no splitting, and no max_arrays to scan
     pub fn empty() -> Self {
         ManifestConfig {
@@ -467,6 +478,7 @@ impl ManifestConfig {
             }),
             splitting: None,
             virtual_chunk_location_compression: None,
+            max_concurrent_manifest_fetches_during_commit: None,
         }
     }
 }
@@ -771,6 +783,43 @@ mod tests {
 
     #[cfg(feature = "object-store-azure")]
     use crate::strategies::azure_static_credentials;
+
+    #[icechunk_macros::test]
+    fn test_max_concurrent_manifest_fetches_during_commit_default_and_merge() {
+        use crate::config::ManifestConfig;
+
+        // Unset resolves to the serial default.
+        let unset = ManifestConfig::default();
+        assert_eq!(unset.max_concurrent_manifest_fetches_during_commit, None);
+        assert_eq!(unset.max_concurrent_manifest_fetches_during_commit(), 1);
+
+        // An explicit value is returned by the accessor.
+        let set = ManifestConfig {
+            max_concurrent_manifest_fetches_during_commit: Some(16),
+            ..Default::default()
+        };
+        assert_eq!(set.max_concurrent_manifest_fetches_during_commit(), 16);
+
+        // merge: the other config's value wins when set, otherwise ours is kept.
+        assert_eq!(
+            unset.merge(set.clone()).max_concurrent_manifest_fetches_during_commit,
+            Some(16)
+        );
+        assert_eq!(
+            set.merge(ManifestConfig::default())
+                .max_concurrent_manifest_fetches_during_commit,
+            Some(16)
+        );
+        // When both are set, the other config's value wins.
+        let other = ManifestConfig {
+            max_concurrent_manifest_fetches_during_commit: Some(4),
+            ..Default::default()
+        };
+        assert_eq!(
+            set.merge(other).max_concurrent_manifest_fetches_during_commit,
+            Some(4)
+        );
+    }
 
     #[icechunk_macros::test]
     fn test_merge_replaces_virtual_chunk_containers() {

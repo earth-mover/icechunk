@@ -1094,6 +1094,7 @@ class ManifestConfig:
         splitting: ManifestSplittingConfig | None = None,
         virtual_chunk_location_compression: ManifestVirtualChunkLocationCompressionConfig
         | None = None,
+        max_concurrent_manifest_fetches_during_commit: int | None = None,
     ) -> ManifestConfig:
         """
         Create a new `ManifestConfig` object
@@ -1112,6 +1113,10 @@ class ManifestConfig:
             The configuration for zstd compression of virtual chunk location URLs.
             When None, the default `ManifestVirtualChunkLocationCompressionConfig` is used.
             Default: None
+        max_concurrent_manifest_fetches_during_commit: int | None
+            How many manifests are fetched and updated concurrently during a
+            commit, amend, flush, or rewrite_manifests.
+            Default: 1
         """
         ...
     @property
@@ -1192,6 +1197,33 @@ class ManifestConfig:
         ----------
         value: ManifestVirtualChunkLocationCompressionConfig | None
             The compression configuration.
+        """
+        ...
+
+    @property
+    def max_concurrent_manifest_fetches_during_commit(self) -> int | None:
+        """
+        How many manifests are fetched and updated concurrently during a
+        commit, amend, flush, or rewrite_manifests.
+
+        Default: 1
+
+        Returns
+        -------
+        int | None
+            The number of manifests fetched and updated concurrently during a commit.
+        """
+        ...
+
+    @max_concurrent_manifest_fetches_during_commit.setter
+    def max_concurrent_manifest_fetches_during_commit(self, value: int | None) -> None:
+        """
+        Set how many manifests are fetched and updated concurrently during a commit.
+
+        Parameters
+        ----------
+        value: int | None
+            The number of manifests to fetch and update concurrently.
         """
         ...
 
