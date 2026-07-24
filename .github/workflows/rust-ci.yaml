@@ -14,7 +14,8 @@ on:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # don't cancel main runs: the post-job cache saves only happen there
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 permissions:
   contents: read
@@ -167,7 +168,7 @@ jobs:
           just profile=ci coverage=${coverage} coverage-report
 
       - name: Upload Rust coverage to Codecov
-        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v5
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
         if: ${{ matrix.os == 'ubuntu-latest' }}
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
@@ -187,16 +188,6 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
-      - name: Cache Dependencies
-        uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
-        with:
-          # The rust cache includes a dep on the Python version (when building icechunk-python)
-          # so we need to bump the version here whenever Python version is updated
-          # Currently: 3.12
-          prefix-key: "rust-py312"
-          shared-key: "rust"
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-
       - uses: prefix-dev/setup-pixi@a09b6247153796b190642a2b53fac4241043cf6f # v0.10.0
         with:
           pixi-version: ${{ env.PIXI_VERSION }}
@@ -205,11 +196,25 @@ jobs:
           activate-environment: true
           manifest-path: icechunk-python/pyproject.toml
 
+      # Runs after setup-pixi so the cache key hashes the pixi-pinned rustc,
+      # not the runner image's drifting rustup stable
+      - name: Cache Dependencies
+        uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
+        with:
+          # The rust cache includes a dep on the Python version (when building icechunk-python)
+          # so we need to bump the version here whenever Python version is updated
+          # Currently: 3.12
+          prefix-key: "rust-py312"
+          # reuses code-quality's cache for the overlapping ci-profile deps;
+          # never saves, so the key always holds code-quality's artifacts
+          shared-key: "code-quality"
+          save-if: false
+
       - name: Compile shuttle tests
-        run: just shuttle-test --no-run
+        run: just profile=ci shuttle-test --no-run
 
       - name: Run shuttle tests
-        run: just shuttle-test -- --nocapture
+        run: just profile=ci shuttle-test -- --nocapture
 
   wasm-build:
     name: WASM Build

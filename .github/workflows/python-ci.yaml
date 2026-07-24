@@ -69,13 +69,17 @@ jobs:
         with:
           ref: main
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Generate version for main
         if: ${{ github.event_name == 'schedule' || inputs.branch != 'support/v1.x' }}
         id: version-main
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          USE_GIT_VERSION: ${{ inputs.use_git_version }}
         run: |
           # Version generation logic for main (v2.x)
-          if [[ "${{ github.event_name }}" == "schedule" ]] || [[ "${{ inputs.use_git_version }}" == "true" ]]; then
+          if [[ "$EVENT_NAME" == "schedule" ]] || [[ "$USE_GIT_VERSION" == "true" ]]; then
             # Match only v2.* tags to avoid confusion with v1.x tags
             if ! git describe --tags --match "v2.*" >/dev/null 2>&1; then
               echo "❌ ERROR: No v2.* tags found. Please create v2.0.0-alpha.0 tag first."
@@ -99,13 +103,17 @@ jobs:
         with:
           ref: support/v1.x
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Generate version for support/v1.x
         if: ${{ github.event_name == 'schedule' || inputs.branch == 'support/v1.x' }}
         id: version-v1
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          USE_GIT_VERSION: ${{ inputs.use_git_version }}
         run: |
           # Version generation logic for support/v1.x (v1.x)
-          if [[ "${{ github.event_name }}" == "schedule" ]] || [[ "${{ inputs.use_git_version }}" == "true" ]]; then
+          if [[ "$EVENT_NAME" == "schedule" ]] || [[ "$USE_GIT_VERSION" == "true" ]]; then
             # Match only v1.* tags to avoid confusion with v2.x tags
             if ! git describe --tags --match "v1.*" >/dev/null 2>&1; then
               echo "❌ ERROR: No v1.* tags found"
@@ -123,6 +131,7 @@ jobs:
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
   linux:
+    name: Build linux wheels
     runs-on: ${{ matrix.platform.runner }}
     needs: version
     strategy:
@@ -149,6 +158,7 @@ jobs:
         with:
           ref: ${{ matrix.branch }}
           fetch-depth: 0
+          persist-credentials: false
       - name: Stand up docker services
         run: |
           docker compose up -d
@@ -165,9 +175,11 @@ jobs:
           python-version: '3.12'
       - name: Update version in Cargo.toml
         if: ${{ github.event_name == 'schedule' || inputs.use_git_version == true }}
+        env:
+          VERSION: ${{ matrix.branch == 'main' && needs.version.outputs.version-main || needs.version.outputs.version-v1 }}
+          BRANCH: ${{ matrix.branch }}
         run: |
-          VERSION="${{ matrix.branch == 'main' && needs.version.outputs.version-main || needs.version.outputs.version-v1 }}"
-          echo "Using version: $VERSION for branch ${{ matrix.branch }}"
+          echo "Using version: $VERSION for branch $BRANCH"
           sed -i 's/^version = ".*"/version = "'$VERSION'"/' Cargo.toml
       - name: Build wheels
         uses: PyO3/maturin-action@db323e2cf5679b7feb8bcb561a36b27a0bc19e79 # v1
@@ -184,6 +196,7 @@ jobs:
           path: icechunk-python/dist
 
   musllinux:
+    name: Build musllinux wheels
     runs-on: ${{ matrix.platform.runner }}
     needs: version
     strategy:
@@ -202,14 +215,17 @@ jobs:
         with:
           ref: ${{ matrix.branch }}
           fetch-depth: 0
+          persist-credentials: false
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: 3.x
       - name: Update version in Cargo.toml
         if: ${{ github.event_name == 'schedule' || inputs.use_git_version == true }}
+        env:
+          VERSION: ${{ matrix.branch == 'main' && needs.version.outputs.version-main || needs.version.outputs.version-v1 }}
+          BRANCH: ${{ matrix.branch }}
         run: |
-          VERSION="${{ matrix.branch == 'main' && needs.version.outputs.version-main || needs.version.outputs.version-v1 }}"
-          echo "Using version: $VERSION for branch ${{ matrix.branch }}"
+          echo "Using version: $VERSION for branch $BRANCH"
           sed -i 's/^version = ".*"/version = "'$VERSION'"/' Cargo.toml
       - name: Build wheels
         uses: PyO3/maturin-action@db323e2cf5679b7feb8bcb561a36b27a0bc19e79 # v1
@@ -226,6 +242,7 @@ jobs:
           path: icechunk-python/dist
 
   windows:
+    name: Build windows wheels
     runs-on: ${{ matrix.platform.runner }}
     needs: version
     # aws-lc-sys compiles AWS-LC's C source, which uses C11 atomics. MSVC only enables
@@ -249,16 +266,19 @@ jobs:
         with:
           ref: ${{ matrix.branch }}
           fetch-depth: 0
+          persist-credentials: false
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: 3.x
           architecture: ${{ matrix.platform.target }}
       - name: Update version in Cargo.toml
         if: ${{ github.event_name == 'schedule' || inputs.use_git_version == true }}
+        env:
+          VERSION: ${{ matrix.branch == 'main' && needs.version.outputs.version-main || needs.version.outputs.version-v1 }}
+          BRANCH: ${{ matrix.branch }}
         run: |
-          $VERSION = "${{ matrix.branch == 'main' && needs.version.outputs.version-main || needs.version.outputs.version-v1 }}"
-          Write-Host "Using version: $VERSION for branch ${{ matrix.branch }}"
-          (Get-Content Cargo.toml) -replace '^version = ".*"', "version = `"$VERSION`"" | Set-Content Cargo.toml
+          Write-Host "Using version: $env:VERSION for branch $env:BRANCH"
+          (Get-Content Cargo.toml) -replace '^version = ".*"', "version = `"$env:VERSION`"" | Set-Content Cargo.toml
         shell: powershell
       - name: Build wheels
         uses: PyO3/maturin-action@db323e2cf5679b7feb8bcb561a36b27a0bc19e79 # v1
@@ -274,6 +294,7 @@ jobs:
           path: icechunk-python/dist
 
   macos:
+    name: Build macos wheels
     runs-on: ${{ matrix.platform.runner }}
     needs: version
     strategy:
@@ -292,14 +313,17 @@ jobs:
         with:
           ref: ${{ matrix.branch }}
           fetch-depth: 0
+          persist-credentials: false
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: 3.x
       - name: Update version in Cargo.toml
         if: ${{ github.event_name == 'schedule' || inputs.use_git_version == true }}
+        env:
+          VERSION: ${{ matrix.branch == 'main' && needs.version.outputs.version-main || needs.version.outputs.version-v1 }}
+          BRANCH: ${{ matrix.branch }}
         run: |
-          VERSION="${{ matrix.branch == 'main' && needs.version.outputs.version-main || needs.version.outputs.version-v1 }}"
-          echo "Using version: $VERSION for branch ${{ matrix.branch }}"
+          echo "Using version: $VERSION for branch $BRANCH"
           sed -i '' 's/^version = ".*"/version = "'$VERSION'"/' Cargo.toml
       - name: Build wheels
         uses: PyO3/maturin-action@db323e2cf5679b7feb8bcb561a36b27a0bc19e79 # v1
@@ -315,6 +339,7 @@ jobs:
           path: icechunk-python/dist
 
   sdist:
+    name: Build sdist
     runs-on: ubuntu-latest
     needs: version
     strategy:
@@ -328,11 +353,14 @@ jobs:
         with:
           ref: ${{ matrix.branch }}
           fetch-depth: 0
+          persist-credentials: false
       - name: Update version in Cargo.toml
         if: ${{ github.event_name == 'schedule' || inputs.use_git_version == true }}
+        env:
+          VERSION: ${{ matrix.branch == 'main' && needs.version.outputs.version-main || needs.version.outputs.version-v1 }}
+          BRANCH: ${{ matrix.branch }}
         run: |
-          VERSION="${{ matrix.branch == 'main' && needs.version.outputs.version-main || needs.version.outputs.version-v1 }}"
-          echo "Using version: $VERSION for branch ${{ matrix.branch }}"
+          echo "Using version: $VERSION for branch $BRANCH"
           sed -i 's/^version = ".*"/version = "'$VERSION'"/' Cargo.toml
       - name: Build sdist
         uses: PyO3/maturin-action@db323e2cf5679b7feb8bcb561a36b27a0bc19e79 # v1
@@ -381,8 +409,14 @@ jobs:
 
       - name: Warn about failed build jobs
         if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}
+        env:
+          R_LINUX: ${{ needs.linux.result }}
+          R_MUSL: ${{ needs.musllinux.result }}
+          R_WIN: ${{ needs.windows.result }}
+          R_MAC: ${{ needs.macos.result }}
+          R_SDIST: ${{ needs.sdist.result }}
         run: |
-          echo "::warning title=Incomplete nightly build::Some wheel build jobs failed; uploading only the wheels that built successfully. linux=${{ needs.linux.result }} musllinux=${{ needs.musllinux.result }} windows=${{ needs.windows.result }} macos=${{ needs.macos.result }} sdist=${{ needs.sdist.result }}"
+          echo "::warning title=Incomplete nightly build::Some wheel build jobs failed; uploading only the wheels that built successfully. linux=$R_LINUX musllinux=$R_MUSL windows=$R_WIN macos=$R_MAC sdist=$R_SDIST"
 
       - name: Ensure there is something to upload
         run: |
