@@ -224,7 +224,21 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard-id: [0, 1, 2]
+        # Explicit partition keyed on test cost: each heavy stateful machine
+        # anchors a shard, cheap property tests ride along on the second
+        # xdist worker. The last shard collects everything not claimed by the
+        # others, so new hypothesis tests always run somewhere.
+        include:
+          - shard-id: zarr-hierarchy
+            targets: tests/test_zarr/test_stateful.py
+          - shard-id: repo-ops
+            targets: tests/test_stateful_repo_ops.py tests/test_store_properties.py
+          - shard-id: rest
+            targets: >-
+              --ignore=tests/test_zarr/test_stateful.py
+              --ignore=tests/test_stateful_repo_ops.py
+              --ignore=tests/test_store_properties.py
+              tests integration_tests
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -254,16 +268,16 @@ jobs:
             cache-hypothesis-${{ runner.os }}-shard${{ matrix.shard-id }}-
 
       - name: Install dependencies
-        run: just install-test-wheel test pytest-shard
+        run: just install-test-wheel test
 
-      - name: Run hypothesis tests (shard ${{ matrix.shard-id }}/3)
+      - name: Run hypothesis tests (${{ matrix.shard-id }})
         env:
           HYPOTHESIS_EXPERIMENTAL_OBSERVABILITY: "1"
           NOCOLOR: 1
-          SHARD_ID: ${{ matrix.shard-id }}
+          PYTEST_TARGETS: ${{ matrix.targets }}
           # sysmon core: coverage's default C tracer slows hypothesis workloads badly
           COVERAGE_CORE: sysmon
-        run: just coverage=true pytest-venv -m hypothesis --num-shards=3 --shard-id="$SHARD_ID"
+        run: just coverage=true pytest-venv -m hypothesis $PYTEST_TARGETS
 
       - name: Stash coverage data for aggregation
         env:
