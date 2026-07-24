@@ -129,9 +129,6 @@ filterwarnings = [
   "ignore::ResourceWarning",
   "ignore:Unused async fixture loop scope:pytest.PytestWarning",
   "ignore:.*does not have a Zarr V3 specification.*",
-  # Recent NumPy deprecates the 'generic' timedelta unit; raised transitively at
-  # collection. Remove once upstream deps stop using bare-int timedelta.
-  "ignore:The 'generic' unit for NumPy timedelta is deprecated:DeprecationWarning",
 ]
 
 # remap wheel-venv site-packages paths to the source tree; applied on `coverage combine`

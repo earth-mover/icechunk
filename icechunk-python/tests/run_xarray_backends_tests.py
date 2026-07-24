@@ -105,18 +105,6 @@ class IcechunkStoreBase(SpecVersionMixin, ZarrBase):
             unpickled = pickle.loads(raw_pickle)
             assert_identical(expected["foo"], unpickled)
 
-    # Upstream xarray time-coding breaks against recent NumPy (int64 * timedelta64
-    # overflow, datetime decode). No released xarray is compatible yet; re-enable
-    # once xarray ships a fix.
-    def test_roundtrip_timedelta_data(self, *args: Any, **kwargs: Any) -> None:
-        pytest.skip("xarray/NumPy timedelta64 incompatibility")
-
-    def test_roundtrip_timedelta_data_via_dtype(self, *args: Any, **kwargs: Any) -> None:
-        pytest.skip("xarray/NumPy timedelta64 incompatibility")
-
-    def test_roundtrip_numpy_datetime_data(self, *args: Any, **kwargs: Any) -> None:
-        pytest.skip("xarray/NumPy datetime decode incompatibility")
-
 
 class TestIcechunkStoreFilesystem(IcechunkStoreBase):
     @contextlib.contextmanager
