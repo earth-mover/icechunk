@@ -129,6 +129,9 @@ filterwarnings = [
   "ignore::ResourceWarning",
   "ignore:Unused async fixture loop scope:pytest.PytestWarning",
   "ignore:.*does not have a Zarr V3 specification.*",
+  # xarray < 2026.7.0 raises this on import under numpy >= 2.5; remove when the
+  # minimum supported xarray reaches 2026.7.0
+  "ignore:The 'generic' unit for NumPy timedelta is deprecated:DeprecationWarning",
 ]
 
 # remap wheel-venv site-packages paths to the source tree; applied on `coverage combine`
