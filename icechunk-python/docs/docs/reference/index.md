@@ -37,8 +37,8 @@ The following classes, exceptions, and utilities are available directly in the `
 | [`Repository`](#icechunkrepository) | class | Main entry point for creating and opening repositories |
 | [`IcechunkStore`](#icechunkicechunkstore) | class | Zarr-compatible store backed by an Icechunk session |
 | [`IcechunkError`](#icechunkerror) | exception | Base exception for Icechunk errors |
-| [`ConflictError`](#conflicterror) | exception | Raised on conflicting concurrent writes |
-| [`RebaseFailedError`](#rebasefailederror) | exception | Raised when a rebase cannot be completed |
+| [Exception subclasses](#exceptions) | exception | The full tree: `ConflictError`, `NotFoundError`, `StorageError`, ... — see the [error handling guide](../guides/error-handling.md) |
+| [`ErrorKind`](#icechunkerrorkind) | enum | Stable machine-readable codes carried by every error |
 | [`print_debug_info`](#print_debug_info) | function | Print versions of icechunk and related packages |
 | [`upgrade_icechunk_repository`](#upgrade_icechunk_repository) | function | Migrate a repository to the latest spec version |
 | [`supported_spec_versions`](#supported_spec_versions) | function | List supported spec versions |
@@ -55,11 +55,43 @@ The following classes, exceptions, and utilities are available directly in the `
 
 ## Exceptions
 
+All Icechunk exceptions derive from `IcechunkError`; see the
+[error handling guide](../guides/error-handling.md) for the full tree and
+usage examples.
+
 ::: icechunk.IcechunkError
 
 ::: icechunk.ConflictError
 
 ::: icechunk.RebaseFailedError
+
+::: icechunk.NotFoundError
+
+::: icechunk.NodeNotFoundError
+
+::: icechunk.SnapshotNotFoundError
+
+::: icechunk.RefNotFoundError
+
+::: icechunk.RepositoryNotFoundError
+
+::: icechunk.AlreadyExistsError
+
+::: icechunk.ReadOnlyError
+
+::: icechunk.InvalidInputError
+
+::: icechunk.SessionStateError
+
+::: icechunk.StorageError
+
+::: icechunk.FormatError
+
+::: icechunk.InternalError
+
+## `icechunk.ErrorKind`
+
+::: icechunk.ErrorKind
 
 ## Top-level utilities
 

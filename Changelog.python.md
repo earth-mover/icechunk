@@ -2,6 +2,10 @@
 
 ## Python Icechunk Library [unreleased]
 
+### Features
+
+- Add an exception tree: all Icechunk errors now derive from `IcechunkError` and are grouped into catchable categories. Every exception carries a stable machine-readable `kind` code (see the new `icechunk.ErrorKind` enum), and the full diagnostic report is attached as a PEP 678 note ([#2267](https://github.com/earth-mover/icechunk/issues/2151)).
+
 ### Fixes
 
 - `shift_array` and `reindex_array` on an array with a rectilinear chunk grid used to silently corrupt the array: chunk indices were relabeled without updating the chunk grid, leaving chunk payloads that no longer matched the sizes of their new grid positions. These operations now fail up front unless the array's metadata declares a regular chunk grid ([#2151](https://github.com/earth-mover/icechunk/issues/2151)).

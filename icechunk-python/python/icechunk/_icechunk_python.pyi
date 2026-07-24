@@ -3576,16 +3576,23 @@ class ConflictDetector(ConflictSolver):
 class IcechunkError(Exception):
     """Base class for all Icechunk errors"""
 
+    def __new__(cls, message: str, kind: str | None = None) -> IcechunkError: ...
     @property
     def message(self) -> str: ...
+    @property
+    def kind(self) -> str:
+        """Stable machine-readable error code, see `icechunk.ErrorKind`"""
+        ...
 
-class ConflictError(Exception):
+class ConflictError(IcechunkError):
     """An error that occurs when a conflict is detected"""
 
     def __new__(
         cls,
         expected_parent: str | None = None,
         actual_parent: str | None = None,
+        message: str | None = None,
+        kind: str | None = None,
     ) -> ConflictError:
         """
         Create a new ConflictError.
@@ -3596,6 +3603,10 @@ class ConflictError(Exception):
             The expected parent snapshot ID.
         actual_parent: str | None
             The actual parent snapshot ID of the branch.
+        message: str | None
+            Error message; a default is synthesized from the parents.
+        kind: str | None
+            Machine-readable error code, see `icechunk.ErrorKind`.
         """
         ...
 
@@ -3707,7 +3718,7 @@ class Conflict:
         """
         ...
 
-class RebaseFailedError(IcechunkError):
+class RebaseFailedError(ConflictError):
     """An error that occurs when a rebase operation fails"""
 
     def __new__(cls, snapshot: str, conflicts: list[Conflict]) -> RebaseFailedError:
@@ -3810,6 +3821,10 @@ def user_agent() -> str:
     Returns:
         str: The user-agent string (e.g., "icechunk-rust-2.0.0-alpha.3")
     """
+    ...
+
+def _all_error_kinds() -> list[str]:
+    """All `kind` codes raised exceptions can carry; mirrored by `icechunk.ErrorKind`."""
     ...
 
 def _upgrade_icechunk_repository(
