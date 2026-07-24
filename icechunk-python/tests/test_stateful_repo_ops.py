@@ -930,19 +930,29 @@ class VersionControlStateMachine(RuleBasedStateMachine):
                 note(f"Expecting error when checking out branch {ref!r}")
                 self.repo.writable_session(ref)
 
+    def _v1_chain_fully_modelled(self, commit: str) -> bool:
+        """True when a commit's full on-disk ancestry is still in the model.
+
+        V1 expiration rewrites only ref-reachable chains, so an unreachable
+        commit's on-disk ancestry can still pass through expired snapshots the
+        model dropped — or, after GC deletes their files, become unreadable
+        entirely. Refs must not be created or reset onto such chains.
+        """
+        try:
+            chain = {s.id for s in self.repo.ancestry(snapshot_id=commit)}
+        except IcechunkError:
+            return False
+        return chain <= set(self.model.commits)
+
     @rule(name=ref_name_text, commit=commits, target=branches)
     def create_branch(self, name: str, commit: str) -> str:
         note(f"Creating branch {name!r} for commit {commit!r}")
 
         # V1 expired snapshots stay on disk so create_branch succeeds, but
-        # the model no longer tracks their store contents. This also covers a
-        # commit whose ancestry *reaches* an expired-but-on-disk snapshot: the
-        # real ancestry resurrects it while the model has popped it, so skip
-        # unless the whole chain is still modelled.
+        # the model no longer tracks their store contents.
         if self.model.spec_version == 1:
             assume(commit in self.model.commits)
-            ancestry = {s.id for s in self.repo.ancestry(snapshot_id=commit)}
-            assume(ancestry <= set(self.model.commits))
+            assume(self._v1_chain_fully_modelled(commit))
 
         # we can create a tag and branch with the same name
         if name not in self.model.branch_heads and commit in self.model.commits:
@@ -961,14 +971,10 @@ class VersionControlStateMachine(RuleBasedStateMachine):
     def create_tag(self, name: str, commit_id: str) -> str:
         note(f"Creating tag {name!r} for commit {commit_id!r}")
         # V1 expired snapshots stay on disk so create_tag succeeds, but
-        # the model no longer tracks their store contents. This also covers a
-        # commit whose ancestry *reaches* an expired-but-on-disk snapshot: the
-        # real ancestry resurrects it while the model has popped it, so skip
-        # unless the whole chain is still modelled.
+        # the model no longer tracks their store contents.
         if self.model.spec_version == 1:
             assume(commit_id in self.model.commits)
-            ancestry = {s.id for s in self.repo.ancestry(snapshot_id=commit_id)}
-            assume(ancestry <= set(self.model.commits))
+            assume(self._v1_chain_fully_modelled(commit_id))
         if (
             name in self.model.created_tags
             or name in self.model.tags
@@ -1006,14 +1012,10 @@ class VersionControlStateMachine(RuleBasedStateMachine):
     @rule(branch=branches, commit=commits)
     def reset_branch(self, branch: str, commit: str) -> None:
         # V1 expired snapshots stay on disk so reset_branch would succeed,
-        # but modelling that divergence isn't worthwhile — just skip. This also
-        # covers resetting to a commit whose ancestry *reaches* an expired-but-
-        # on-disk snapshot: the real ancestry resurrects it while the model has
-        # popped it, so skip unless the whole chain is still modelled.
+        # but modelling that divergence isn't worthwhile — just skip.
         if self.model.spec_version == 1:
             assume(commit in self.model.commits)
-            ancestry = {s.id for s in self.repo.ancestry(snapshot_id=commit)}
-            assume(ancestry <= set(self.model.commits))
+            assume(self._v1_chain_fully_modelled(commit))
         if branch not in self.model.branch_heads or commit not in self.model.commits:
             note(f"resetting branch {branch}, expecting error.")
             with pytest.raises(IcechunkError):
