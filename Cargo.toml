@@ -218,6 +218,16 @@ debug = 0
 [profile.ci.package."*"]
 opt-level = 1
 
+# The docs builder starts from an empty cargo cache on every build and only
+# needs an importable extension module, so nothing here trades compile time
+# for runtime speed.
+[profile.docs]
+inherits = "ci"
+incremental = false
+
+[profile.docs.package."*"]
+opt-level = 0
+
 # For convenience with cargo-samply
 [profile.samply]
 inherits = "bench"
