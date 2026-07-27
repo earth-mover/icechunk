@@ -13,6 +13,7 @@
 - A conditional write whose success response was lost in transit (connection drop, proxy timeout) used to surface as a spurious conflict after the transparent retry's precondition failed against Icechunk's own write: "tag already exists", "config was updated by other session", or a commit parent mismatch. Conditional writes are now stamped with a unique write id and read back on suspicious failures, so a write that landed is recognized as a success ([#2156](https://github.com/earth-mover/icechunk/pull/2156)).
 - Conditional operations on `object_store`-backed storage no longer strip quotes from ETags, which caused endless commit retries against stores that compare ETags exactly, such as `object_store` 0.14.1's `InMemory` and `LocalFileSystem` ([#2289](https://github.com/earth-mover/icechunk/pull/2289)).
 - Fix `to_icechunk` and `icechunk.dask.store_dask` failing with `AttributeError: 'function' object has no attribute 'session'` when the `dask-array` package is installed ([#2292](https://github.com/earth-mover/icechunk/pull/2292)).
+- Deleting a store key that cannot hold a chunk no longer raises: chunk coordinates outside the array's chunk grid, paths with no node, and paths pointing at a group are all no-ops now, matching how every other Zarr store treats the deletion of an absent key, and how Icechunk already treats metadata keys. Writing a chunk outside the grid is still rejected ([#XXXX](https://github.com/earth-mover/icechunk/pull/XXXX)).
 
 ## Python Icechunk Library 2.1.1
 
