@@ -10,6 +10,28 @@ ignore = [
   # Transitive dev-dependency: noxious-client -> noxious -> bmrng -> loom 0.4 -> generator 0.6
   # bmrng 0.4 pins loom ^0.4 which pins generator ^0.6; upstream hasn't updated
   "RUSTSEC-2020-0151",
+  # rustls-webpki 0.101.7 name constraint bugs: transitive dep via aws-smithy-http-client
+  # -> rustls 0.21. No upgrade path until AWS SDK drops rustls 0.21. Low impact: reachable
+  # only after signature verification and requires CA misissuance to exploit.
+  "RUSTSEC-2026-0098",
+  "RUSTSEC-2026-0099",
+  # rustls-webpki v0.101.7 has a panic related to certificate list revocation.
+  # we don't enable the `clr` feature that would trigger it.
+  "RUSTSEC-2026-0104",
+  # quick-xml < 0.41.0 DoS advisories (quadratic attribute check / unbounded
+  # namespace allocation): transitive dep via object_store, used only to parse
+  # XML LIST/multipart responses from the S3/GCS/Azure endpoint. No upgrade path
+  # until object_store releases with quick-xml 0.41 (already on their main
+  # branch, unreleased as of 0.14.0). DoS-only (CVSS C:N/I:N/A:H), reachable
+  # only by a malicious/compromised object-store endpoint.
+  "RUSTSEC-2026-0194",
+  "RUSTSEC-2026-0195",
+  # pyo3 0.27 advisories, fixed only in >=0.29: a major bump too disruptive for
+  # the v1.x support branch. OOB read in `nth`/`nth_back` on PyList/PyTuple
+  # iterators (we don't use those methods) and missing `Sync` bound on
+  # `PyCFunction::new_closure` closures (we don't use `new_closure`).
+  "RUSTSEC-2026-0176",
+  "RUSTSEC-2026-0177",
 ]
 
 [licenses]
