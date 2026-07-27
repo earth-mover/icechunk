@@ -2717,9 +2717,16 @@ impl PyRepository {
             let result =
                 pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
                     let lock = self.0.read().await;
-                    rewrite_manifests(&lock, branch, message, 1, metadata, commit_method)
-                        .await
-                        .map_err(PyIcechunkStoreError::ManifestOpsError)
+                    rewrite_manifests(
+                        &lock,
+                        branch,
+                        message,
+                        None,
+                        metadata,
+                        commit_method,
+                    )
+                    .await
+                    .map_err(PyIcechunkStoreError::ManifestOpsError)
                 })?;
             Ok(result.to_string())
         })
@@ -2746,7 +2753,7 @@ impl PyRepository {
                 &repository,
                 &branch,
                 &message,
-                1,
+                None,
                 metadata,
                 commit_method,
             )

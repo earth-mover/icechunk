@@ -178,6 +178,7 @@ def test_can_change_deep_config_values(any_spec_version: int | None) -> None:
     config.storage.storage_class = "STANDARD_IA"
     config.manifest = icechunk.ManifestConfig()
     config.manifest.preload = icechunk.ManifestPreloadConfig(max_total_refs=42)
+    config.manifest.max_concurrent_manifest_fetches_during_commit = 16
     config.max_concurrent_requests = 10
     config.num_updates_per_repo_info_file = 50
     config.repo_update_retries = RepoUpdateRetryConfig(
@@ -239,6 +240,7 @@ def test_can_change_deep_config_values(any_spec_version: int | None) -> None:
     assert stored_config.repo_update_retries.default.initial_backoff_ms == 100
     assert stored_config.repo_update_retries.default.max_backoff_ms == 60_000
     assert stored_config.manifest
+    assert stored_config.manifest.max_concurrent_manifest_fetches_during_commit == 16
     assert stored_config.manifest.preload
     assert stored_config.manifest.preload.max_total_refs == 42
     assert (

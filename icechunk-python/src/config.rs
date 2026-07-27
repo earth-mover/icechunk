@@ -2306,6 +2306,8 @@ pub struct PyManifestConfig {
     #[pyo3(get, set)]
     pub virtual_chunk_location_compression:
         Option<Py<PyManifestVirtualChunkLocationCompressionConfig>>,
+    #[pyo3(get, set)]
+    pub max_concurrent_manifest_fetches_during_commit: Option<u16>,
 }
 
 impl PyRepr for PyManifestConfig {
@@ -2335,6 +2337,16 @@ impl PyRepr for PyManifestConfig {
                     || ManifestVirtualChunkLocationCompressionConfig::default().into(),
                 ),
             ),
+            (
+                "max_concurrent_manifest_fetches_during_commit",
+                py_option_or_default(
+                    &self.max_concurrent_manifest_fetches_during_commit,
+                    &ManifestConfig::default()
+                        .max_concurrent_manifest_fetches_during_commit()
+                        .to_string(),
+                    mode,
+                ),
+            ),
         ]
     }
 }
@@ -2342,15 +2354,21 @@ impl PyRepr for PyManifestConfig {
 #[pymethods]
 impl PyManifestConfig {
     #[new]
-    #[pyo3(signature = (preload=None, splitting=None, virtual_chunk_location_compression=None))]
+    #[pyo3(signature = (preload=None, splitting=None, virtual_chunk_location_compression=None, max_concurrent_manifest_fetches_during_commit=None))]
     fn new(
         preload: Option<Py<PyManifestPreloadConfig>>,
         splitting: Option<Py<PyManifestSplittingConfig>>,
         virtual_chunk_location_compression: Option<
             Py<PyManifestVirtualChunkLocationCompressionConfig>,
         >,
+        max_concurrent_manifest_fetches_during_commit: Option<u16>,
     ) -> Self {
-        Self { preload, splitting, virtual_chunk_location_compression }
+        Self {
+            preload,
+            splitting,
+            virtual_chunk_location_compression,
+            max_concurrent_manifest_fetches_during_commit,
+        }
     }
 
     pub fn __repr__(&self) -> String {
@@ -2381,6 +2399,8 @@ impl From<&PyManifestConfig> for ManifestConfig {
                 .virtual_chunk_location_compression
                 .as_ref()
                 .map(|c| (&*c.borrow(py)).into()),
+            max_concurrent_manifest_fetches_during_commit: value
+                .max_concurrent_manifest_fetches_during_commit,
         })
     }
 }
@@ -2409,6 +2429,8 @@ impl From<ManifestConfig> for PyManifestConfig {
                         "Cannot create instance of ManifestVirtualChunkLocationCompressionConfig",
                     )
                 }),
+            max_concurrent_manifest_fetches_during_commit: value
+                .max_concurrent_manifest_fetches_during_commit,
         }
         })
     }
