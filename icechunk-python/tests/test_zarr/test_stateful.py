@@ -29,6 +29,7 @@ from icechunk.testing.trees import absolute, valid_moves
 from icechunk.testing.utils import update_paths_after_move
 from zarr import Array
 from zarr.core.buffer import default_buffer_prototype
+from zarr.core.common import ceildiv
 from zarr.testing.stateful import ZarrHierarchyStateMachine, split_prefix_name
 
 PROTOTYPE = default_buffer_prototype()
@@ -51,8 +52,9 @@ def storage_chunk_sizes(arr: "Array[Any]") -> tuple[tuple[int, ...], ...]:
     if hasattr(arr, "write_chunk_sizes"):
         return arr.write_chunk_sizes  # type: ignore[no-any-return]
     cell = arr.shards or arr.chunks
+    # a zero-length dimension holds no chunks, and its cell size may be zero too
     return tuple(
-        tuple(min(c, s - i * c) for i in range(-(-s // c)))
+        tuple(min(c, s - i * c) for i in range(ceildiv(s, c)))
         for s, c in zip(arr.shape, cell, strict=True)
     )
 
@@ -429,6 +431,8 @@ def test_storage_chunk_sizes_granularity() -> None:
     # storage-key grid is the bug storage_chunk_sizes exists to avoid.
     assert sharded.cdata_shape == (2,)
     assert storage_chunk_sizes(plain) == ((30, 30, 30, 10), (40, 40))
+    empty = zarr.create_array(model, name="e", shape=(0,), chunks=(0,), dtype="i1")
+    assert storage_chunk_sizes(empty) == ((),)
 
 
 async def test_shift_sharded_model_vs_store() -> None:
