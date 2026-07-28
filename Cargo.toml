@@ -212,6 +212,10 @@ debug = true
 inherits = "dev"
 opt-level = 0
 debug = 0
+# Jobs build once from a restored cache, so incremental state is never reused.
+incremental = false
+# Only the symbol table goes; llvm-cov reads its own sections, so coverage is unaffected.
+strip = "symbols"
 
 # Dependencies tend to cache better between runs,
 # enable a small bit of optimization in this case.
@@ -223,7 +227,6 @@ opt-level = 1
 # for runtime speed.
 [profile.docs]
 inherits = "ci"
-incremental = false
 
 [profile.docs.package."*"]
 opt-level = 0
