@@ -5,6 +5,7 @@
 ### Features
 
 - Add an exception tree: all Icechunk errors now derive from `IcechunkError` and are grouped into catchable categories. Every exception carries a stable machine-readable `kind` code (see the new `icechunk.ErrorKind` enum), and the full diagnostic report is attached as a PEP 678 note ([#2267](https://github.com/earth-mover/icechunk/issues/2151)).
+- Add `ManifestConfig.max_concurrent_manifest_fetches_during_commit` to control how many manifests are fetched and updated concurrently during a commit, amend, flush, or `rewrite_manifests`. Defaults to `1` (serial) ([#2273](https://github.com/earth-mover/icechunk/issues/2273)).
 
 ### Fixes
 
