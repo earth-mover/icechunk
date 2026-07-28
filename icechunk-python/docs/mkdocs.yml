@@ -148,6 +148,10 @@ plugins:
           paths: [../python]
   - mkdocs-jupyter:
       include_source: True
+      # skip jupytext probing of plain .md pages: mkdocstrings "::: module"
+      # directives look like pandoc markdown and trigger pandoc subprocess
+      # conversions where pandoc is installed (e.g. RTD builders)
+      ignore: ["*.md"]
       # include: ["*.ipynb"] # Default: ["*.py", "*.ipynb"]
   - markdown-exec
   - redirects:
