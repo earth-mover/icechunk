@@ -10,7 +10,7 @@
 
 ---
 > [!TIP]
-> **Icechunk 1.0 is released!** Better API, more performance and stability
+> **Icechunk 2.0 is released!** Better consistency, performance, and reliability for tensor storage
 ---
 
 Icechunk is an open-source (Apache 2.0), transactional storage engine for tensor / ND-array data designed for use on cloud object storage.
