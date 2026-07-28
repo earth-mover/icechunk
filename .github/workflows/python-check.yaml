@@ -228,12 +228,16 @@ jobs:
         # anchors a shard, cheap property tests ride along on the second
         # xdist worker. The last shard collects everything not claimed by the
         # others, so new hypothesis tests always run somewhere.
+        # Ids stay numeric to keep the hypothesis caches keyed on them.
         include:
-          - shard-id: zarr-hierarchy
+          - shard-id: 0
+            label: zarr-hierarchy
             targets: tests/test_zarr/test_stateful.py
-          - shard-id: repo-ops
+          - shard-id: 1
+            label: repo-ops
             targets: tests/test_stateful_repo_ops.py tests/test_store_properties.py
-          - shard-id: rest
+          - shard-id: 2
+            label: rest
             targets: >-
               --ignore=tests/test_zarr/test_stateful.py
               --ignore=tests/test_stateful_repo_ops.py
@@ -270,7 +274,7 @@ jobs:
       - name: Install dependencies
         run: just install-test-wheel test
 
-      - name: Run hypothesis tests (${{ matrix.shard-id }})
+      - name: "Run hypothesis tests (shard ${{ matrix.shard-id }}: ${{ matrix.label }})"
         env:
           HYPOTHESIS_EXPERIMENTAL_OBSERVABILITY: "1"
           NOCOLOR: 1
