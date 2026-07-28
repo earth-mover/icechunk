@@ -112,7 +112,8 @@ plugins:
   #- mike # TODO: https://squidfunk.github.io/mkdocs-material/setup/setting-up-versioning/
   #- optimize #TODO: https://squidfunk.github.io/mkdocs-material/plugins/optimize/
   - search
-  - social
+  - social:
+      enabled: !ENV [MKDOCS_SOCIAL_CARDS, true]
   - include-markdown
   - open-in-new-tab
   - mkdocs-breadcrumbs-plugin:

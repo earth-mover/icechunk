@@ -11,5 +11,11 @@ build:
       - asdf global pixi latest
     build:
       html:
+        # Egress probes: docs-build stalls in ~260s connect timeouts on RTD builders
+        - curl -4 -sS -m 5 -o /dev/null -w 'probe fonts.googleapis.com ipv4 %{http_code} %{time_total}s\n' https://fonts.googleapis.com/ || true
+        - curl -6 -sS -m 5 -o /dev/null -w 'probe fonts.googleapis.com ipv6 %{http_code} %{time_total}s\n' https://fonts.googleapis.com/ || true
+        - curl -4 -sS -m 5 -o /dev/null -w 'probe fonts.gstatic.com ipv4 %{http_code} %{time_total}s\n' https://fonts.gstatic.com/ || true
+        - curl -6 -sS -m 5 -o /dev/null -w 'probe fonts.gstatic.com ipv6 %{http_code} %{time_total}s\n' https://fonts.gstatic.com/ || true
+        - curl -4 -sS -m 5 -o /dev/null -w 'probe pypi.org ipv4 %{http_code} %{time_total}s\n' https://pypi.org/ || true
         - pixi run -m icechunk-python/pyproject.toml just profile=docs develop --no-default-features
-        - DISABLE_MKDOCS_2_WARNING=true pixi run -m icechunk-python/pyproject.toml just docs-build --site-dir $READTHEDOCS_OUTPUT/html
+        - DISABLE_MKDOCS_2_WARNING=true MKDOCS_SOCIAL_CARDS=false pixi run -m icechunk-python/pyproject.toml just docs-build --site-dir $READTHEDOCS_OUTPUT/html
