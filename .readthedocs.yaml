@@ -14,4 +14,4 @@ build:
         # Egress probes: docs-build stalls in ~260s connect timeouts on RTD builders
         - bash .readthedocs-probes.sh
         - pixi run -m icechunk-python/pyproject.toml just profile=docs develop --no-default-features
-        - DISABLE_MKDOCS_2_WARNING=true MKDOCS_SOCIAL_CARDS=false pixi run -m icechunk-python/pyproject.toml just docs-build --site-dir $READTHEDOCS_OUTPUT/html
+        - DISABLE_MKDOCS_2_WARNING=true MKDOCS_SOCIAL_CARDS=false pixi run -m icechunk-python/pyproject.toml bash .readthedocs-docs-build.sh --site-dir $READTHEDOCS_OUTPUT/html
