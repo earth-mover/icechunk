@@ -67,6 +67,13 @@ jobs:
       - name: Check if MSRV is up to date
         run: just check-msrv "$MSRV"
 
+      - name: Check the workspace compiles with MSRV
+        if: matrix.os == 'ubuntu-latest'
+        env:
+          # keep MSRV artifacts out of the shared rust-cache
+          CARGO_TARGET_DIR: ${{ runner.temp }}/msrv-target
+        run: pixi run -m icechunk-python/pyproject.toml -e msrv cargo check --locked
+
       - name: Stand up docker services
         if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm'
         run: |
