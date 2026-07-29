@@ -2285,7 +2285,7 @@ dependencies = [
 
 [[package]]
 name = "icechunk"
-version = "2.1.1"
+version = "2.1.2"
 dependencies = [
  "anyhow",
  "assert_fs",
@@ -2353,7 +2353,7 @@ dependencies = [
 
 [[package]]
 name = "icechunk-arrow-object-store"
-version = "2.1.1"
+version = "2.1.2"
 dependencies = [
  "async-trait",
  "bytes",
@@ -2380,7 +2380,7 @@ dependencies = [
 
 [[package]]
 name = "icechunk-format"
-version = "2.1.1"
+version = "2.1.2"
 dependencies = [
  "base32",
  "bytes",
@@ -2431,7 +2431,7 @@ dependencies = [
 
 [[package]]
 name = "icechunk-macros"
-version = "2.1.1"
+version = "2.1.2"
 dependencies = [
  "quote",
  "syn 2.0.118",
@@ -2439,7 +2439,7 @@ dependencies = [
 
 [[package]]
 name = "icechunk-python"
-version = "2.1.1"
+version = "2.1.2"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -2466,7 +2466,7 @@ dependencies = [
 
 [[package]]
 name = "icechunk-s3"
-version = "2.1.1"
+version = "2.1.2"
 dependencies = [
  "async-trait",
  "aws-config",
@@ -2493,7 +2493,7 @@ dependencies = [
 
 [[package]]
 name = "icechunk-storage"
-version = "2.1.1"
+version = "2.1.2"
 dependencies = [
  "async-trait",
  "bytes",
@@ -2512,7 +2512,7 @@ dependencies = [
 
 [[package]]
 name = "icechunk-types"
-version = "2.1.1"
+version = "2.1.2"
 dependencies = [
  "serde",
  "serde_with",
