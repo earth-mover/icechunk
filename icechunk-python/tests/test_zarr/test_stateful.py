@@ -1,4 +1,5 @@
 import json
+import math
 import pickle
 from collections.abc import Callable
 from typing import Any, TypeVar
@@ -29,7 +30,6 @@ from icechunk.testing.trees import absolute, valid_moves
 from icechunk.testing.utils import update_paths_after_move
 from zarr import Array
 from zarr.core.buffer import default_buffer_prototype
-from zarr.core.common import ceildiv
 from zarr.testing.stateful import ZarrHierarchyStateMachine, split_prefix_name
 
 PROTOTYPE = default_buffer_prototype()
@@ -54,7 +54,7 @@ def storage_chunk_sizes(arr: "Array[Any]") -> tuple[tuple[int, ...], ...]:
     cell = arr.shards or arr.chunks
     # a zero-length dimension holds no chunks, and its cell size may be zero too
     return tuple(
-        tuple(min(c, s - i * c) for i in range(ceildiv(s, c)))
+        tuple(min(c, s - i * c) for i in range(math.ceil(s / c) if s else 0))
         for s, c in zip(arr.shape, cell, strict=True)
     )
 
