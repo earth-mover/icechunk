@@ -5,7 +5,7 @@
 ### Fixes
 
 - Fix garbage collection deleting still-referenced transaction logs when the host and object-store clocks are skewed ([#2310](https://github.com/earth-mover/icechunk/pull/2310)).
-- Deleting a store key that cannot hold a chunk no longer raises: chunk coordinates outside the array's chunk grid, paths with no node, and paths pointing at a group are all no-ops now, matching how every store shipped with zarr-python treats the deletion of an absent key, and how Icechunk already treats metadata keys. Writing a chunk outside the grid is still rejected ([#2312](https://github.com/earth-mover/icechunk/pull/2312)).
+- Deleting a chunk key that cannot exist (coordinates outside the chunk grid, missing node, or a group path) is now a no-op instead of raising, matching zarr-python's stores. Writing a chunk outside the grid is still rejected ([#2312](https://github.com/earth-mover/icechunk/pull/2312)).
 - `to_icechunk` no longer passes `synchronizer` and `zarr_version` to xarray's `ZarrStore.open_group`; xarray removed both parameters and passing them made `to_icechunk` fail with a `TypeError` on xarray development versions ([#2312](https://github.com/earth-mover/icechunk/pull/2312)).
 
 ## Python Icechunk Library 2.1.2
