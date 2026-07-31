@@ -421,10 +421,9 @@ async fn garbage_collect_one_attempt(
                 asset_manager
                     .list_snapshots()
                     .await?
-                    .inspect_err(|e| error!("Listing snapshots: {e}"))
-                    .filter_map(|snap| ready(snap.ok().map(|s| (s.id, s.created_at))))
-                    .collect()
-                    .await
+                    .map_ok(|s| (s.id, s.created_at))
+                    .try_collect()
+                    .await?
             } else {
                 HashMap::new()
             };
