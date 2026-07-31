@@ -34,8 +34,7 @@ jobs:
       - uses: prefix-dev/setup-pixi@a09b6247153796b190642a2b53fac4241043cf6f # v0.10.0
         with:
           pixi-version: ${{ env.PIXI_VERSION }}
-          cache: true
-          cache-write: ${{ github.ref == 'refs/heads/main' }}
+          cache: false
           activate-environment: true
           manifest-path: icechunk-python/pyproject.toml
 
@@ -83,8 +82,7 @@ jobs:
       - uses: prefix-dev/setup-pixi@a09b6247153796b190642a2b53fac4241043cf6f # v0.10.0
         with:
           pixi-version: ${{ env.PIXI_VERSION }}
-          cache: true
-          cache-write: ${{ github.ref == 'refs/heads/main' }}
+          cache: false
           activate-environment: true
           manifest-path: icechunk-python/pyproject.toml
 
@@ -155,8 +153,7 @@ jobs:
       - uses: prefix-dev/setup-pixi@a09b6247153796b190642a2b53fac4241043cf6f # v0.10.0
         with:
           pixi-version: ${{ env.PIXI_VERSION }}
-          cache: true
-          cache-write: ${{ github.ref == 'refs/heads/main' }}
+          cache: false
           activate-environment: true
           manifest-path: icechunk-python/pyproject.toml
           environments: py314t
@@ -191,8 +188,7 @@ jobs:
       - uses: prefix-dev/setup-pixi@a09b6247153796b190642a2b53fac4241043cf6f # v0.10.0
         with:
           pixi-version: ${{ env.PIXI_VERSION }}
-          cache: true
-          cache-write: ${{ github.ref == 'refs/heads/main' }}
+          cache: false
           activate-environment: true
           manifest-path: icechunk-python/pyproject.toml
           environments: py314t
@@ -251,8 +247,7 @@ jobs:
       - uses: prefix-dev/setup-pixi@a09b6247153796b190642a2b53fac4241043cf6f # v0.10.0
         with:
           pixi-version: ${{ env.PIXI_VERSION }}
-          cache: true
-          cache-write: ${{ github.ref == 'refs/heads/main' }}
+          cache: false
           activate-environment: true
           manifest-path: icechunk-python/pyproject.toml
 
@@ -335,8 +330,7 @@ jobs:
       - uses: prefix-dev/setup-pixi@a09b6247153796b190642a2b53fac4241043cf6f # v0.10.0
         with:
           pixi-version: ${{ env.PIXI_VERSION }}
-          cache: true
-          cache-write: ${{ github.ref == 'refs/heads/main' }}
+          cache: false
           activate-environment: true
           manifest-path: icechunk-python/pyproject.toml
 
@@ -371,8 +365,7 @@ jobs:
       - uses: prefix-dev/setup-pixi@a09b6247153796b190642a2b53fac4241043cf6f # v0.10.0
         with:
           pixi-version: ${{ env.PIXI_VERSION }}
-          cache: true
-          cache-write: ${{ github.ref == 'refs/heads/main' }}
+          cache: false
           activate-environment: true
           manifest-path: icechunk-python/pyproject.toml
 
@@ -411,8 +404,7 @@ jobs:
       - uses: prefix-dev/setup-pixi@a09b6247153796b190642a2b53fac4241043cf6f # v0.10.0
         with:
           pixi-version: ${{ env.PIXI_VERSION }}
-          cache: true
-          cache-write: ${{ github.ref == 'refs/heads/main' }}
+          cache: false
           activate-environment: true
           manifest-path: icechunk-python/pyproject.toml
 
@@ -456,8 +448,7 @@ jobs:
       - uses: prefix-dev/setup-pixi@a09b6247153796b190642a2b53fac4241043cf6f # v0.10.0
         with:
           pixi-version: ${{ env.PIXI_VERSION }}
-          cache: true
-          cache-write: ${{ github.ref == 'refs/heads/main' }}
+          cache: false
           activate-environment: true
           manifest-path: icechunk-python/pyproject.toml
 
@@ -484,8 +475,7 @@ jobs:
       - uses: prefix-dev/setup-pixi@a09b6247153796b190642a2b53fac4241043cf6f # v0.10.0
         with:
           pixi-version: ${{ env.PIXI_VERSION }}
-          cache: true
-          cache-write: ${{ github.ref == 'refs/heads/main' }}
+          cache: false
           activate-environment: true
           manifest-path: icechunk-python/pyproject.toml
 
