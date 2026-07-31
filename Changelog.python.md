@@ -2,6 +2,10 @@
 
 ## Python Icechunk Library [unreleased]
 
+### Features
+
+- Retrying a commit that lost the compare-and-set race against a concurrent committer (via `commit(rebase_with=...)` or `rebase()` followed by a new `commit()`) no longer regenerates every manifest. Manifests written by the failed attempt are reused for arrays the concurrent commit didn't touch and whose session changes the rebase didn't patch, so losing a commit race is now proportionally cheaper for uncoordinated writers working on disjoint arrays ([#2318](https://github.com/earth-mover/icechunk/pull/2318)).
+
 ### Fixes
 
 - Fix garbage collection deleting still-referenced transaction logs when the host and object-store clocks are skewed ([#2310](https://github.com/earth-mover/icechunk/pull/2310)).
