@@ -7130,6 +7130,397 @@ mod tests {
         Ok(())
     }
 
+    /// Return the ids of the manifests referenced by the array at `path` in
+    /// the given snapshot.
+    async fn node_manifest_ids(
+        repo: &Repository,
+        snapshot_id: &SnapshotId,
+        path: &Path,
+    ) -> Result<Vec<ManifestId>, Box<dyn Error>> {
+        let session =
+            repo.readonly_session(&VersionInfo::SnapshotId(snapshot_id.clone())).await?;
+        let node = session.get_node(path).await?;
+        match node.node_data {
+            NodeData::Array { manifests, .. } => {
+                Ok(manifests.into_iter().map(|mr| mr.object_id).collect())
+            }
+            NodeData::Group => panic!("expected an array node at {path}"),
+        }
+    }
+
+    #[tokio_test]
+    #[apply(spec_version_cases)]
+    /// A "semi-coordinated writers" scenario: concurrent sessions write to
+    /// disjoint arrays, without explicit serialization, using
+    /// `commit().rebase(...)` to recover from the compare-and-set race.
+    ///
+    /// Verifies that after the rebased commit:
+    /// * all chunks written by both writers are readable,
+    /// * arrays not touched by this session keep referencing exactly the
+    ///   manifests written by the other writer (they are not rewritten), and
+    /// * arrays touched by this session reference new manifests.
+    async fn test_commit_rebasing_semi_coordinated_writers(
+        #[case] spec_version: SpecVersionBin,
+    ) -> Result<(), Box<dyn Error>> {
+        let repo = create_memory_store_repository(spec_version).await;
+
+        let array_a: Path = "/array-a".try_into().unwrap();
+        let array_b: Path = "/array-b".try_into().unwrap();
+        let array_c: Path = "/array-c".try_into().unwrap();
+        let array_d: Path = "/array-d".try_into().unwrap();
+
+        let mut ds = repo.writable_session("main").await?;
+        for path in [&array_a, &array_b, &array_c] {
+            ds.add_array(path.clone(), basic_shape(), None, user_data()).await?;
+        }
+        ds.commit("create arrays").max_concurrent_nodes(8).execute().await?;
+
+        // this session writes chunks to arrays a and b, and creates array d
+        let mut session = repo.writable_session("main").await?;
+        session
+            .set_chunk_ref(
+                array_a.clone(),
+                ChunkIndices(vec![0]),
+                Some(ChunkPayload::Inline("writer 1 a0".into())),
+            )
+            .await?;
+        session
+            .set_chunk_ref(
+                array_b.clone(),
+                ChunkIndices(vec![1]),
+                Some(ChunkPayload::Inline("writer 1 b1".into())),
+            )
+            .await?;
+        session.add_array(array_d.clone(), basic_shape(), None, user_data()).await?;
+        session
+            .set_chunk_ref(
+                array_d.clone(),
+                ChunkIndices(vec![2]),
+                Some(ChunkPayload::Inline("writer 1 d2".into())),
+            )
+            .await?;
+
+        // meanwhile, an uncoordinated writer lands two commits to array c
+        for coord in [0u32, 1] {
+            let mut other = repo.writable_session("main").await?;
+            other
+                .set_chunk_ref(
+                    array_c.clone(),
+                    ChunkIndices(vec![coord]),
+                    Some(ChunkPayload::Inline(format!("writer 2 c{coord}").into())),
+                )
+                .await?;
+            other
+                .commit(format!("writer 2 writes c{coord}").as_str())
+                .max_concurrent_nodes(8)
+                .execute()
+                .await?;
+        }
+
+        let branch_tip = repo.lookup_branch("main").await?;
+        let c_manifests_before = node_manifest_ids(&repo, &branch_tip, &array_c).await?;
+        assert!(!c_manifests_before.is_empty());
+        // arrays a and b have no chunks yet, so no manifests
+        assert!(node_manifest_ids(&repo, &branch_tip, &array_a).await?.is_empty());
+        assert!(node_manifest_ids(&repo, &branch_tip, &array_b).await?.is_empty());
+
+        // the commit loses the compare-and-set race and recovers via rebase
+        let snap = session
+            .commit("writer 1 writes a, b and d")
+            .max_concurrent_nodes(8)
+            .rebase(&ConflictDetector, 2)
+            .execute()
+            .await?;
+
+        // all data from both writers is present
+        let read = repo.readonly_session(&VersionInfo::SnapshotId(snap.clone())).await?;
+        for (path, coord, expected) in [
+            (&array_a, 0u32, "writer 1 a0"),
+            (&array_b, 1, "writer 1 b1"),
+            (&array_d, 2, "writer 1 d2"),
+            (&array_c, 0, "writer 2 c0"),
+            (&array_c, 1, "writer 2 c1"),
+        ] {
+            assert_eq!(
+                read.get_chunk_ref(path, &ChunkIndices(vec![coord])).await?,
+                Some(ChunkPayload::Inline(expected.into())),
+                "bad chunk data for {path} chunk [{coord}]"
+            );
+        }
+
+        // the array this session didn't touch keeps exactly the other
+        // writer's manifests
+        assert_eq!(node_manifest_ids(&repo, &snap, &array_c).await?, c_manifests_before);
+        // the arrays this session touched now reference manifests
+        for path in [&array_a, &array_b, &array_d] {
+            assert!(!node_manifest_ids(&repo, &snap, path).await?.is_empty());
+        }
+
+        // the rebased commit sits on top of the other writer's commits
+        let messages: Vec<_> = repo
+            .ancestry(&VersionInfo::SnapshotId(snap))
+            .await?
+            .map_ok(|info| info.message)
+            .try_collect()
+            .await?;
+        assert_eq!(
+            &messages[0..3],
+            ["writer 1 writes a, b and d", "writer 2 writes c1", "writer 2 writes c0"]
+        );
+
+        Ok(())
+    }
+
+    #[tokio_test]
+    #[apply(spec_version_cases)]
+    /// Chunk-level conflicts resolved through the `commit().rebase(...)` path
+    /// (not a manual `rebase()` call), for both `UseOurs` and `UseTheirs`.
+    ///
+    /// The rebase patches the session's change set before the flush is
+    /// re-attempted; verifies the final data honors the conflict resolution
+    /// policy for conflicting chunks and keeps both writers' non-conflicting
+    /// chunks.
+    async fn test_commit_rebasing_solves_chunk_conflicts(
+        #[case] spec_version: SpecVersionBin,
+    ) -> Result<(), Box<dyn Error>> {
+        for selection in [VersionSelection::UseOurs, VersionSelection::UseTheirs] {
+            let repo = create_memory_store_repository(spec_version).await;
+
+            let path: Path = "/array".try_into().unwrap();
+            let mut ds = repo.writable_session("main").await?;
+            ds.add_array(path.clone(), basic_shape(), None, user_data()).await?;
+            ds.commit("create array").max_concurrent_nodes(8).execute().await?;
+
+            let mut session = repo.writable_session("main").await?;
+            session
+                .set_chunk_ref(
+                    path.clone(),
+                    ChunkIndices(vec![0]),
+                    Some(ChunkPayload::Inline("ours".into())),
+                )
+                .await?;
+            session
+                .set_chunk_ref(
+                    path.clone(),
+                    ChunkIndices(vec![1]),
+                    Some(ChunkPayload::Inline("ours only".into())),
+                )
+                .await?;
+
+            let mut other = repo.writable_session("main").await?;
+            other
+                .set_chunk_ref(
+                    path.clone(),
+                    ChunkIndices(vec![0]),
+                    Some(ChunkPayload::Inline("theirs".into())),
+                )
+                .await?;
+            other
+                .set_chunk_ref(
+                    path.clone(),
+                    ChunkIndices(vec![2]),
+                    Some(ChunkPayload::Inline("theirs only".into())),
+                )
+                .await?;
+            other.commit("other writer").max_concurrent_nodes(8).execute().await?;
+
+            let solver = BasicConflictSolver {
+                on_chunk_conflict: selection.clone(),
+                ..Default::default()
+            };
+            let snap = session
+                .commit("this writer")
+                .max_concurrent_nodes(8)
+                .rebase(&solver, 2)
+                .execute()
+                .await?;
+
+            let expected_conflicting = match selection {
+                VersionSelection::UseOurs => "ours",
+                VersionSelection::UseTheirs => "theirs",
+                VersionSelection::Fail => unreachable!(),
+            };
+            let read =
+                repo.readonly_session(&VersionInfo::SnapshotId(snap.clone())).await?;
+            for (coord, expected) in
+                [(0u32, expected_conflicting), (1, "ours only"), (2, "theirs only")]
+            {
+                assert_eq!(
+                    read.get_chunk_ref(&path, &ChunkIndices(vec![coord])).await?,
+                    Some(ChunkPayload::Inline(expected.into())),
+                    "bad chunk data for chunk [{coord}] with policy {selection:?}"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[tokio_test]
+    #[apply(spec_version_cases)]
+    /// A session whose commit lost the compare-and-set race remains usable:
+    /// more chunks can be written before recovering with a manual `rebase()`
+    /// followed by a new `commit()`. All writes, including the ones made
+    /// after the failed commit, must land.
+    async fn test_failed_commit_session_remains_writable(
+        #[case] spec_version: SpecVersionBin,
+    ) -> Result<(), Box<dyn Error>> {
+        let repo = create_memory_store_repository(spec_version).await;
+
+        let array_a: Path = "/array-a".try_into().unwrap();
+        let array_b: Path = "/array-b".try_into().unwrap();
+        let mut ds = repo.writable_session("main").await?;
+        ds.add_array(array_a.clone(), basic_shape(), None, user_data()).await?;
+        ds.add_array(array_b.clone(), basic_shape(), None, user_data()).await?;
+        ds.commit("create arrays").max_concurrent_nodes(8).execute().await?;
+
+        let mut session = repo.writable_session("main").await?;
+        session
+            .set_chunk_ref(
+                array_a.clone(),
+                ChunkIndices(vec![0]),
+                Some(ChunkPayload::Inline("writer 1 a0".into())),
+            )
+            .await?;
+
+        let mut other = repo.writable_session("main").await?;
+        other
+            .set_chunk_ref(
+                array_b.clone(),
+                ChunkIndices(vec![0]),
+                Some(ChunkPayload::Inline("writer 2 b0".into())),
+            )
+            .await?;
+        other.commit("writer 2").max_concurrent_nodes(8).execute().await?;
+
+        let res = session.commit("writer 1").max_concurrent_nodes(8).execute().await;
+        assert!(matches!(
+            res,
+            Err(SessionError { kind: SessionErrorKind::Conflict { .. }, .. })
+        ));
+
+        // the session is still writable after the failed commit
+        session
+            .set_chunk_ref(
+                array_a.clone(),
+                ChunkIndices(vec![1]),
+                Some(ChunkPayload::Inline("writer 1 a1".into())),
+            )
+            .await?;
+
+        session.rebase(&ConflictDetector).await?;
+        let snap = session.commit("writer 1").max_concurrent_nodes(8).execute().await?;
+
+        let read = repo.readonly_session(&VersionInfo::SnapshotId(snap)).await?;
+        for (path, coord, expected) in [
+            (&array_a, 0u32, "writer 1 a0"),
+            (&array_a, 1, "writer 1 a1"),
+            (&array_b, 0, "writer 2 b0"),
+        ] {
+            assert_eq!(
+                read.get_chunk_ref(path, &ChunkIndices(vec![coord])).await?,
+                Some(ChunkPayload::Inline(expected.into())),
+                "bad chunk data for {path} chunk [{coord}]"
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio_test]
+    #[apply(spec_version_cases)]
+    /// `commit().rebase(...)` needing multiple attempts, with a different
+    /// array racing on each attempt. Verifies the data of every array after
+    /// the commit finally succeeds, exercising repeated flushes against
+    /// changing parent snapshots.
+    async fn test_commit_rebasing_data_after_multiple_attempts(
+        #[case] spec_version: SpecVersionBin,
+    ) -> Result<(), Box<dyn Error>> {
+        let repo = Arc::new(create_memory_store_repository(spec_version).await);
+
+        let array: Path = "/array".try_into().unwrap();
+        let others: Vec<Path> =
+            (0..3).map(|i| format!("/other-{i}").as_str().try_into().unwrap()).collect();
+
+        let mut ds = repo.writable_session("main").await?;
+        ds.add_array(array.clone(), basic_shape(), None, user_data()).await?;
+        for other in &others {
+            ds.add_array(other.clone(), basic_shape(), None, user_data()).await?;
+        }
+        ds.commit("create arrays").max_concurrent_nodes(8).execute().await?;
+
+        let mut session = repo.writable_session("main").await?;
+        session
+            .set_chunk_ref(
+                array.clone(),
+                ChunkIndices(vec![0]),
+                Some(ChunkPayload::Inline("main writer".into())),
+            )
+            .await?;
+
+        // initial racing commit, so the first commit attempt fails
+        let mut other = repo.writable_session("main").await?;
+        other
+            .set_chunk_ref(
+                others[0].clone(),
+                ChunkIndices(vec![0]),
+                Some(ChunkPayload::Inline("other writer 0".into())),
+            )
+            .await?;
+        other.commit("other writer 0").max_concurrent_nodes(8).execute().await?;
+
+        // after the first two rebases, another racing commit lands, each time
+        // to a different array
+        let racing: RebaseHook = {
+            let repo = Arc::clone(&repo);
+            let others = others.clone();
+            Box::new(move |attempt| {
+                let repo = Arc::clone(&repo);
+                let others = others.clone();
+                Box::pin(async move {
+                    if attempt <= 2 {
+                        let path = others[attempt as usize].clone();
+                        let mut s = repo.writable_session("main").await.unwrap();
+                        s.set_chunk_ref(
+                            path,
+                            ChunkIndices(vec![0]),
+                            Some(ChunkPayload::Inline(
+                                format!("other writer {attempt}").into(),
+                            )),
+                        )
+                        .await
+                        .unwrap();
+                        s.commit(format!("other writer {attempt}").as_str())
+                            .max_concurrent_nodes(8)
+                            .execute()
+                            .await
+                            .unwrap();
+                    }
+                })
+            })
+        };
+
+        let snap = session
+            .commit("main writer")
+            .max_concurrent_nodes(8)
+            .rebase(&ConflictDetector, 10)
+            .after_rebase_hook(racing)
+            .execute()
+            .await?;
+
+        let read = repo.readonly_session(&VersionInfo::SnapshotId(snap)).await?;
+        assert_eq!(
+            read.get_chunk_ref(&array, &ChunkIndices(vec![0])).await?,
+            Some(ChunkPayload::Inline("main writer".into()))
+        );
+        for (i, other) in others.iter().enumerate() {
+            assert_eq!(
+                read.get_chunk_ref(other, &ChunkIndices(vec![0])).await?,
+                Some(ChunkPayload::Inline(format!("other writer {i}").into())),
+                "bad chunk data for {other}"
+            );
+        }
+        Ok(())
+    }
+
     #[tokio_test]
     async fn manifest_files_consistency() -> Result<(), Box<dyn Error>> {
         let repo = Arc::new(create_memory_store_repository(SpecVersionBin::V2).await);
