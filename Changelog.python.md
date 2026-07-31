@@ -4,7 +4,7 @@
 
 ### Fixes
 
-- Garbage collection judged repo-info retention of an unreachable snapshot by its host-stamped `flushed_at`, but file deletion by the storage `created_at`. A snapshot falling between the two timestamps was dropped from the repo info — deleting the transaction logs its `pruned_ancestor_tx_logs` still referenced — while its snapshot file survived. Both decisions now use the storage `created_at` ([#2310](https://github.com/earth-mover/icechunk/pull/2310)).
+- Fix garbage collection deleting still-referenced transaction logs when the host and object-store clocks are skewed ([#2310](https://github.com/earth-mover/icechunk/pull/2310)).
 
 ## Python Icechunk Library 2.1.2
 
