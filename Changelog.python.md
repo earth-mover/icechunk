@@ -4,7 +4,7 @@
 
 ### Fixes
 
-- Deleting a store key that cannot hold a chunk no longer raises: chunk coordinates outside the array's chunk grid, paths with no node, and paths pointing at a group are all no-ops now, matching how every other Zarr store treats the deletion of an absent key, and how Icechunk already treats metadata keys. Writing a chunk outside the grid is still rejected ([#XXXX](https://github.com/earth-mover/icechunk/pull/XXXX)).
+- Deleting a store key that cannot hold a chunk no longer raises: chunk coordinates outside the array's chunk grid, paths with no node, and paths pointing at a group are all no-ops now, matching how every store shipped with zarr-python treats the deletion of an absent key, and how Icechunk already treats metadata keys. Writing a chunk outside the grid is still rejected ([#XXXX](https://github.com/earth-mover/icechunk/pull/XXXX)).
 
 ## Python Icechunk Library 2.1.2
 
