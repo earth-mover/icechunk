@@ -431,8 +431,14 @@ def test_storage_chunk_sizes_granularity() -> None:
     # storage-key grid is the bug storage_chunk_sizes exists to avoid.
     assert sharded.cdata_shape == (2,)
     assert storage_chunk_sizes(plain) == ((30, 30, 30, 10), (40, 40))
-    empty = zarr.create_array(model, name="e", shape=(0,), chunks=(0,), dtype="i1")
+    empty = zarr.create_array(model, name="e", shape=(0,), chunks=(1,), dtype="i1")
     assert storage_chunk_sizes(empty) == ((),)
+    if Version(zarr.__version__) < Version("3.3.0"):
+        # zarr < 3.3 allows a zero cell size when the dimension is empty
+        cell_zero = zarr.create_array(
+            model, name="z", shape=(0,), chunks=(0,), dtype="i1"
+        )
+        assert storage_chunk_sizes(cell_zero) == ((),)
 
 
 async def test_shift_sharded_model_vs_store() -> None:
