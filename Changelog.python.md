@@ -1,5 +1,11 @@
 # Changelog
 
+## Python Icechunk Library [unreleased]
+
+### Fixes
+
+- Fix garbage collection deleting still-referenced transaction logs when the host and object-store clocks are skewed ([#2310](https://github.com/earth-mover/icechunk/pull/2310)).
+
 ## Python Icechunk Library 2.1.2
 
 ### Features
