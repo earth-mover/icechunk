@@ -5,8 +5,10 @@ import pickle
 from pathlib import Path
 from typing import Any, TypeVar
 
+import numpy as np
 import pytest
 
+import zarr
 from icechunk import IcechunkError, IcechunkStore, local_filesystem_storage
 from icechunk.repository import Repository
 from zarr.abc.store import OffsetByteRequest, RangeByteRequest, Store, SuffixByteRequest
@@ -374,6 +376,28 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
         if not store.supports_deletes:
             pytest.skip("store does not support deletes")
         await store.delete("zarr.json")
+
+    async def test_delete_out_of_grid_chunk_does_not_raise(
+        self, store: IcechunkStore
+    ) -> None:
+        # A sharded array has one key per shard, so an index on the inner chunk
+        # grid (which is what `cdata_shape` counts) names a key that cannot exist.
+        arr = zarr.create_array(
+            store,
+            name="Y",
+            shape=(5,),
+            shards=(4,),
+            chunks=(2,),
+            dtype="i1",
+            fill_value=0,
+        )
+        arr[:] = np.arange(5, dtype="i1")
+        before = sorted(await _collect_aiterator(store.list_prefix("")))
+        assert "Y/c/2" not in before
+
+        await store.delete("Y/c/2")
+
+        assert sorted(await _collect_aiterator(store.list_prefix(""))) == before
 
     async def test_get_partial_values(  # type: ignore[override]
         self,

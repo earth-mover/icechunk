@@ -1,4 +1,5 @@
 import json
+import math
 import pickle
 from collections.abc import Callable
 from typing import Any, TypeVar
@@ -51,8 +52,9 @@ def storage_chunk_sizes(arr: "Array[Any]") -> tuple[tuple[int, ...], ...]:
     if hasattr(arr, "write_chunk_sizes"):
         return arr.write_chunk_sizes  # type: ignore[no-any-return]
     cell = arr.shards or arr.chunks
+    # a zero-length dimension holds no chunks, and its cell size may be zero too
     return tuple(
-        tuple(min(c, s - i * c) for i in range(-(-s // c)))
+        tuple(min(c, s - i * c) for i in range(math.ceil(s / c) if s else 0))
         for s, c in zip(arr.shape, cell, strict=True)
     )
 
@@ -429,6 +431,14 @@ def test_storage_chunk_sizes_granularity() -> None:
     # storage-key grid is the bug storage_chunk_sizes exists to avoid.
     assert sharded.cdata_shape == (2,)
     assert storage_chunk_sizes(plain) == ((30, 30, 30, 10), (40, 40))
+    empty = zarr.create_array(model, name="e", shape=(0,), chunks=(1,), dtype="i1")
+    assert storage_chunk_sizes(empty) == ((),)
+    if Version(zarr.__version__) < Version("3.3.0"):
+        # zarr < 3.3 allows a zero cell size when the dimension is empty
+        cell_zero = zarr.create_array(
+            model, name="z", shape=(0,), chunks=(0,), dtype="i1"
+        )
+        assert storage_chunk_sizes(cell_zero) == ((),)
 
 
 async def test_shift_sharded_model_vs_store() -> None:
