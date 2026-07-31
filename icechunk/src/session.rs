@@ -16,8 +16,9 @@ use itertools::{Itertools as _, enumerate, repeat_n};
 use regex::bytes::Regex;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, hash_map::DefaultHasher},
     future::{Future, ready},
+    hash::Hasher,
     ops::Range,
     pin::Pin,
     sync::Arc,
@@ -497,6 +498,11 @@ pub struct Session {
     snapshot_id: SnapshotId,
     change_set: ChangeSet,
     default_commit_metadata: SnapshotProperties,
+    // Manifests written by a failed commit attempt of this session, reusable
+    // by the next attempt. Only meaningful within the process that wrote
+    // them, so it's not serialized with the session.
+    #[serde(skip)]
+    flushed_manifests: FlushedManifestCache,
 }
 
 impl Session {
@@ -522,6 +528,7 @@ impl Session {
             snapshot_id,
             change_set: ChangeSet::for_edits(),
             default_commit_metadata: SnapshotProperties::default(),
+            flushed_manifests: FlushedManifestCache::default(),
         }
     }
 
@@ -555,6 +562,7 @@ impl Session {
             snapshot_id,
             change_set: ChangeSet::for_edits(),
             default_commit_metadata,
+            flushed_manifests: FlushedManifestCache::default(),
         }
     }
 
@@ -583,6 +591,7 @@ impl Session {
             snapshot_id,
             change_set: ChangeSet::for_rearranging(),
             default_commit_metadata,
+            flushed_manifests: FlushedManifestCache::default(),
         }
     }
 
@@ -1621,6 +1630,10 @@ impl Session {
             self.snapshot_id(),
             self.config.manifest(),
         );
+        // Anonymous flushes don't race on a branch, so they are never
+        // retried; there is no reason to keep the manifests they write
+        // available for reuse.
+        let mut flushed_manifests = FlushedManifestCache::default();
         let new_snap = do_flush(
             flush_data,
             message,
@@ -1629,6 +1642,7 @@ impl Session {
             false,
             CommitMethod::NewCommit,
             self.config.manifest().splitting(),
+            &mut flushed_manifests,
         )
         .await?;
 
@@ -1747,12 +1761,14 @@ impl Session {
             is_rearrange,
             self.config.repo_update_retries().retries(),
             num_updates,
+            &mut self.flushed_manifests,
         )
         .await?;
 
         // if the commit was successful, we update the session to be
         // a read only session pointed at the new snapshot
         self.change_set = ChangeSet::for_edits();
+        self.flushed_manifests = FlushedManifestCache::default();
         self.snapshot_id = id.clone();
         // Once committed, the session is now read only, which we control
         // by setting the branch_name to None (you can only write to a branch session)
@@ -2543,6 +2559,132 @@ struct NodeFlushResult {
     node_id: NodeId,
     manifest_refs: Vec<ManifestRef>,
     manifest_files: Vec<ManifestFileInfo>,
+    // Fingerprint of the inputs that produced the manifests above, when they
+    // are eligible for reuse by a later flush attempt (see
+    // [`FlushedManifestCache`]). `None` when the node's manifests were not
+    // (re)generated from fingerprintable inputs, e.g. for unmodified nodes or
+    // when rewriting all manifests.
+    fingerprint: Option<ManifestFlushFingerprint>,
+}
+
+/// Manifests written by the last flush attempt of a session.
+///
+/// When a commit loses the compare-and-set race against a concurrent
+/// committer, the manifests it wrote during its flush are left in storage,
+/// unreferenced by any committed snapshot. When the session retries the
+/// commit after a rebase, most nodes usually flush from exactly the same
+/// inputs: the same previous manifest refs (because the concurrent committer
+/// didn't touch the node) and the same session chunk changes (because the
+/// rebase didn't need to patch them). For those nodes, the manifests written
+/// by the failed attempt are exactly the manifests the retry would write
+/// again, so the retry can reference them instead of fetching, merging,
+/// compressing and uploading the same data a second time.
+///
+/// Reuse is decided by fingerprinting every input of a node's manifest
+/// generation, see [`manifest_flush_fingerprint`]. Any change to the node in
+/// the new parent snapshot, or to the session's chunk changes for the node
+/// (for example a conflict solver dropping chunks during rebase, or the user
+/// writing more chunks after a failed commit), changes the fingerprint and
+/// disables reuse for that node.
+///
+/// The cache is only meaningful within the session that wrote the manifests:
+/// it relies on the session config being immutable and on written objects
+/// remaining in storage, so it is not serialized with the session.
+#[derive(Debug, Clone, Default)]
+struct FlushedManifestCache {
+    nodes: HashMap<NodeId, CachedNodeManifests>,
+}
+
+impl FlushedManifestCache {
+    fn lookup(
+        &self,
+        node_id: &NodeId,
+        fingerprint: &ManifestFlushFingerprint,
+    ) -> Option<&CachedNodeManifests> {
+        self.nodes.get(node_id).filter(|cached| &cached.fingerprint == fingerprint)
+    }
+}
+
+#[derive(Debug, Clone)]
+struct CachedNodeManifests {
+    fingerprint: ManifestFlushFingerprint,
+    manifest_refs: Vec<ManifestRef>,
+    manifest_files: Vec<ManifestFileInfo>,
+}
+
+/// Fingerprint of the inputs that determine the manifests a flush writes for
+/// a node. Two flushes of a node with equal fingerprints write
+/// interchangeable manifests.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ManifestFlushFingerprint {
+    hashes: [u64; 2],
+    bytes_hashed: u64,
+}
+
+/// Feeds everything written to it to two independent hashers, keeping track
+/// of the total number of bytes written.
+struct FingerprintWriter {
+    hashers: [DefaultHasher; 2],
+    bytes_hashed: u64,
+}
+
+impl FingerprintWriter {
+    fn new() -> Self {
+        let mut hashers = [DefaultHasher::new(), DefaultHasher::new()];
+        // domain-separate the hashers so they produce independent hashes for
+        // the same input
+        Hasher::write(&mut hashers[1], b"icechunk.manifest-flush-fingerprint");
+        Self { hashers, bytes_hashed: 0 }
+    }
+
+    fn finish(self) -> ManifestFlushFingerprint {
+        ManifestFlushFingerprint {
+            hashes: [self.hashers[0].finish(), self.hashers[1].finish()],
+            bytes_hashed: self.bytes_hashed,
+        }
+    }
+}
+
+impl std::io::Write for FingerprintWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        for hasher in &mut self.hashers {
+            Hasher::write(hasher, buf);
+        }
+        self.bytes_hashed += buf.len() as u64;
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Compute the fingerprint of all the inputs that determine the manifests
+/// written for a node during flush: the manifest refs the node carries in the
+/// parent snapshot (empty for new nodes), the split extents (which cover any
+/// relevant shape or dimension changes), and the session's chunk changes for
+/// the node. Everything else that manifest generation depends on (splitting
+/// and compression config, spec version) is immutable for the life of the
+/// session, which is the maximum life of the cache.
+fn manifest_flush_fingerprint<'a>(
+    node_id: &NodeId,
+    node_path: &Path,
+    previous_manifests: &[ManifestRef],
+    splits: &ManifestSplits,
+    chunk_changes: impl Iterator<Item = (&'a ChunkIndices, &'a Option<ChunkPayload>)>,
+) -> SessionResult<ManifestFlushFingerprint> {
+    let mut writer = FingerprintWriter::new();
+    rmp_serde::encode::write(
+        &mut writer,
+        &(node_id, node_path, previous_manifests, splits),
+    )
+    .capture_box()?;
+    // chunk changes come from a BTreeMap, so the iteration order (and with it
+    // the fingerprint) is deterministic
+    for change in chunk_changes {
+        rmp_serde::encode::write(&mut writer, &change).capture_box()?;
+    }
+    Ok(writer.finish())
 }
 
 async fn write_manifest_from_stream(
@@ -2647,6 +2789,7 @@ async fn flush_existing_node(
     old_snapshot: &Snapshot,
     split_config: &ManifestSplittingConfig,
     rewrite_manifests: bool,
+    flushed_manifests: Option<&FlushedManifestCache>,
     node: NodeSnapshot,
 ) -> SessionResult<Option<NodeFlushResult>> {
     let node_id = &node.id;
@@ -2669,10 +2812,34 @@ async fn flush_existing_node(
             let splits =
                 split_config.get_split_sizes(&new_node.path, &shape, &dimension_names);
 
+            let fingerprint = match flushed_manifests {
+                None => None,
+                Some(cache) => {
+                    let fingerprint = manifest_flush_fingerprint(
+                        node_id,
+                        &node.path,
+                        &manifests,
+                        &splits,
+                        change_set.array_chunks_iterator(node_id, &node.path),
+                    )?;
+                    if let Some(cached) = cache.lookup(node_id, &fingerprint) {
+                        trace!(path=%node.path, "Flush inputs unchanged, reusing the manifests written by the previous commit attempt");
+                        return Ok(Some(NodeFlushResult {
+                            node_id: node_id.clone(),
+                            manifest_refs: cached.manifest_refs.clone(),
+                            manifest_files: cached.manifest_files.clone(),
+                            fingerprint: Some(fingerprint),
+                        }));
+                    }
+                    Some(fingerprint)
+                }
+            };
+
             let mut result = NodeFlushResult {
                 node_id: node_id.clone(),
                 manifest_refs: Vec::new(),
                 manifest_files: Vec::new(),
+                fingerprint,
             };
 
             // Some points to take into account to understand this algorithm:
@@ -2764,6 +2931,7 @@ async fn flush_existing_node(
                     node_id: node_id.clone(),
                     manifest_refs: Vec::new(),
                     manifest_files: Vec::new(),
+                    fingerprint: None,
                 };
                 for mr in &array_refs {
                     #[expect(clippy::expect_used)]
@@ -2788,11 +2956,37 @@ async fn flush_new_node(
     node_id: &NodeId,
     node_path: &Path,
     splits: &ManifestSplits,
+    flushed_manifests: Option<&FlushedManifestCache>,
 ) -> SessionResult<NodeFlushResult> {
+    let fingerprint = match flushed_manifests {
+        None => None,
+        Some(cache) => {
+            // a new node has no manifests in the parent snapshot
+            let fingerprint = manifest_flush_fingerprint(
+                node_id,
+                node_path,
+                &[],
+                splits,
+                change_set.array_chunks_iterator(node_id, node_path),
+            )?;
+            if let Some(cached) = cache.lookup(node_id, &fingerprint) {
+                trace!(path=%node_path, "Flush inputs unchanged, reusing the manifests written by the previous commit attempt");
+                return Ok(NodeFlushResult {
+                    node_id: node_id.clone(),
+                    manifest_refs: cached.manifest_refs.clone(),
+                    manifest_files: cached.manifest_files.clone(),
+                    fingerprint: Some(fingerprint),
+                });
+            }
+            Some(fingerprint)
+        }
+    };
+
     let mut result = NodeFlushResult {
         node_id: node_id.clone(),
         manifest_refs: Vec::new(),
         manifest_files: Vec::new(),
+        fingerprint,
     };
 
     for extent in splits.iter() {
@@ -2914,6 +3108,7 @@ pub enum CommitMethod {
     Amend,
 }
 
+#[expect(clippy::too_many_arguments)]
 async fn do_flush(
     mut flush_data: FlushProcess<'_>,
     message: &str,
@@ -2922,6 +3117,7 @@ async fn do_flush(
     rewrite_manifests: bool,
     commit_method: CommitMethod,
     split_config: &ManifestSplittingConfig,
+    flushed_manifests: &mut FlushedManifestCache,
 ) -> SessionResult<Arc<Snapshot>> {
     let old_snapshot =
         flush_data.asset_manager.fetch_snapshot(flush_data.parent_id).await.inject()?;
@@ -2959,6 +3155,15 @@ async fn do_flush(
     let manifest_config = flush_data.manifest_config;
     let parent_id = flush_data.parent_id;
 
+    // Manifests written by a previous, failed commit attempt of this session
+    // can be reused when a node's flush inputs are unchanged. When rewriting
+    // manifests the user wants fresh manifests, so we don't reuse.
+    let previously_flushed: Option<&FlushedManifestCache> =
+        if rewrite_manifests { None } else { Some(&*flushed_manifests) };
+    // The manifests written by this flush, to offer them for reuse if this
+    // commit attempt fails and gets retried
+    let mut new_flushed_nodes: HashMap<NodeId, CachedNodeManifests> = HashMap::new();
+
     let array_nodes: Vec<NodeSnapshot> = old_snapshot
         .iter()
         .filter_ok(|node| node.node_type() == NodeType::Array)
@@ -2978,6 +3183,7 @@ async fn do_flush(
                     old_snapshot.as_ref(),
                     split_config,
                     rewrite_manifests,
+                    previously_flushed,
                     node,
                 )
                 .await
@@ -2988,6 +3194,16 @@ async fn do_flush(
         .await?;
 
     for result in existing_results.into_iter().flatten() {
+        if let Some(fingerprint) = result.fingerprint {
+            new_flushed_nodes.insert(
+                result.node_id.clone(),
+                CachedNodeManifests {
+                    fingerprint,
+                    manifest_refs: result.manifest_refs.clone(),
+                    manifest_files: result.manifest_files.clone(),
+                },
+            );
+        }
         flush_data
             .manifest_refs
             .entry(result.node_id)
@@ -3022,6 +3238,7 @@ async fn do_flush(
                     &node_id,
                     &node_path,
                     &splits,
+                    previously_flushed,
                 )
                 .await
             }
@@ -3031,6 +3248,16 @@ async fn do_flush(
         .await?;
 
     for result in new_node_results {
+        if let Some(fingerprint) = result.fingerprint {
+            new_flushed_nodes.insert(
+                result.node_id.clone(),
+                CachedNodeManifests {
+                    fingerprint,
+                    manifest_refs: result.manifest_refs.clone(),
+                    manifest_files: result.manifest_files.clone(),
+                },
+            );
+        }
         flush_data
             .manifest_refs
             .entry(result.node_id)
@@ -3038,6 +3265,11 @@ async fn do_flush(
             .extend(result.manifest_refs);
         flush_data.manifest_files.extend(result.manifest_files);
     }
+
+    // If this commit attempt fails the compare-and-set race, the next attempt
+    // can reuse the manifests this one wrote. Stale entries from older
+    // attempts are dropped: their manifests are no longer offered for reuse.
+    flushed_manifests.nodes = new_flushed_nodes;
 
     // manifest_files & manifest_refs _must_ be consistent
     let mfiles =
@@ -3206,6 +3438,7 @@ async fn do_commit(
     is_rearrange: bool,
     retry_settings: &storage::RetriesSettings,
     num_updates_per_repo_info_file: u16,
+    flushed_manifests: &mut FlushedManifestCache,
 ) -> SessionResult<SnapshotId> {
     info!(branch_name, old_snapshot_id=%snapshot_id, "Commit started");
 
@@ -3233,6 +3466,7 @@ async fn do_commit(
         rewrite_manifests,
         commit_method,
         manifest_config.splitting(),
+        flushed_manifests,
     )
     .await?;
     let new_snapshot_id = new_snapshot.id();
@@ -7522,6 +7756,355 @@ mod tests {
     }
 
     #[tokio_test]
+    #[apply(spec_version_cases)]
+    /// After losing the compare-and-set race, a rebased commit reuses the
+    /// manifests written by its failed attempt for nodes the concurrent
+    /// writer didn't touch, instead of writing them again.
+    ///
+    /// Storage ends up with exactly one manifest per array: the counts
+    /// verify no extra manifests were written by the retried flush.
+    async fn test_commit_rebasing_reuses_manifests_of_unchanged_nodes(
+        #[case] spec_version: SpecVersionBin,
+    ) -> Result<(), Box<dyn Error>> {
+        let repo = create_memory_store_repository(spec_version).await;
+
+        let array_a: Path = "/array-a".try_into().unwrap();
+        let array_b: Path = "/array-b".try_into().unwrap();
+        let array_c: Path = "/array-c".try_into().unwrap();
+        let mut ds = repo.writable_session("main").await?;
+        ds.add_array(array_a.clone(), basic_shape(), None, user_data()).await?;
+        ds.add_array(array_b.clone(), basic_shape(), None, user_data()).await?;
+        ds.commit("create arrays").max_concurrent_nodes(8).execute().await?;
+        // no chunks written yet, so no manifests
+        assert_manifest_count(repo.asset_manager(), 0).await;
+
+        // this session writes to existing array a and to brand new array c
+        let mut session = repo.writable_session("main").await?;
+        session
+            .set_chunk_ref(
+                array_a.clone(),
+                ChunkIndices(vec![0]),
+                Some(ChunkPayload::Inline("writer 1 a0".into())),
+            )
+            .await?;
+        session.add_array(array_c.clone(), basic_shape(), None, user_data()).await?;
+        session
+            .set_chunk_ref(
+                array_c.clone(),
+                ChunkIndices(vec![0]),
+                Some(ChunkPayload::Inline("writer 1 c0".into())),
+            )
+            .await?;
+
+        // a concurrent writer beats it to the branch, writing to array b only
+        let mut other = repo.writable_session("main").await?;
+        other
+            .set_chunk_ref(
+                array_b.clone(),
+                ChunkIndices(vec![0]),
+                Some(ChunkPayload::Inline("writer 2 b0".into())),
+            )
+            .await?;
+        other.commit("writer 2").max_concurrent_nodes(8).execute().await?;
+        assert_manifest_count(repo.asset_manager(), 1).await;
+
+        let snap = session
+            .commit("writer 1")
+            .max_concurrent_nodes(8)
+            .rebase(&ConflictDetector, 2)
+            .execute()
+            .await?;
+
+        // the retried flush reused the manifests for arrays a and c written
+        // by the failed attempt: exactly one manifest per array exists, with
+        // no orphans left behind by the retry
+        assert_manifest_count(repo.asset_manager(), 3).await;
+
+        let read = repo.readonly_session(&VersionInfo::SnapshotId(snap)).await?;
+        for (path, expected) in [
+            (&array_a, "writer 1 a0"),
+            (&array_c, "writer 1 c0"),
+            (&array_b, "writer 2 b0"),
+        ] {
+            assert_eq!(
+                read.get_chunk_ref(path, &ChunkIndices(vec![0])).await?,
+                Some(ChunkPayload::Inline(expected.into())),
+                "bad chunk data for {path}"
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio_test]
+    #[apply(spec_version_cases)]
+    /// Manifests written by a failed commit attempt are also reused by the
+    /// manual recovery flow: `commit()` fails, then `rebase()` followed by a
+    /// new `commit()`.
+    async fn test_manual_rebase_commit_reuses_manifests(
+        #[case] spec_version: SpecVersionBin,
+    ) -> Result<(), Box<dyn Error>> {
+        let repo = create_memory_store_repository(spec_version).await;
+
+        let array_a: Path = "/array-a".try_into().unwrap();
+        let array_b: Path = "/array-b".try_into().unwrap();
+        let mut ds = repo.writable_session("main").await?;
+        ds.add_array(array_a.clone(), basic_shape(), None, user_data()).await?;
+        ds.add_array(array_b.clone(), basic_shape(), None, user_data()).await?;
+        ds.commit("create arrays").max_concurrent_nodes(8).execute().await?;
+
+        let mut session = repo.writable_session("main").await?;
+        session
+            .set_chunk_ref(
+                array_a.clone(),
+                ChunkIndices(vec![0]),
+                Some(ChunkPayload::Inline("writer 1 a0".into())),
+            )
+            .await?;
+
+        let mut other = repo.writable_session("main").await?;
+        other
+            .set_chunk_ref(
+                array_b.clone(),
+                ChunkIndices(vec![0]),
+                Some(ChunkPayload::Inline("writer 2 b0".into())),
+            )
+            .await?;
+        other.commit("writer 2").max_concurrent_nodes(8).execute().await?;
+
+        session.commit("writer 1").max_concurrent_nodes(8).execute().await.unwrap_err();
+        session.rebase(&ConflictDetector).await?;
+        let snap = session.commit("writer 1").max_concurrent_nodes(8).execute().await?;
+
+        // one manifest for array b (writer 2), one for array a, reused from
+        // the failed commit attempt
+        assert_manifest_count(repo.asset_manager(), 2).await;
+
+        let read = repo.readonly_session(&VersionInfo::SnapshotId(snap)).await?;
+        for (path, expected) in [(&array_a, "writer 1 a0"), (&array_b, "writer 2 b0")] {
+            assert_eq!(
+                read.get_chunk_ref(path, &ChunkIndices(vec![0])).await?,
+                Some(ChunkPayload::Inline(expected.into())),
+                "bad chunk data for {path}"
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio_test]
+    #[apply(spec_version_cases)]
+    /// A rebased commit must NOT reuse the manifests written by its failed
+    /// attempt when the flush inputs changed between attempts, or data would
+    /// be lost. Two ways inputs change:
+    /// * the concurrent commit touched the same node, so the node's previous
+    ///   manifests are different on retry, and
+    /// * the rebase itself patched the session's changes for the node (here,
+    ///   dropping our conflicting chunk under `UseTheirs`).
+    async fn test_commit_rebasing_rewrites_manifests_when_flush_inputs_change(
+        #[case] spec_version: SpecVersionBin,
+    ) -> Result<(), Box<dyn Error>> {
+        // Case 1: the concurrent commit wrote to the same array (different
+        // chunks). The retry must merge with the concurrent manifest.
+        let repo = create_memory_store_repository(spec_version).await;
+        let path: Path = "/array".try_into().unwrap();
+        let mut ds = repo.writable_session("main").await?;
+        ds.add_array(path.clone(), basic_shape(), None, user_data()).await?;
+        ds.commit("create array").max_concurrent_nodes(8).execute().await?;
+
+        let mut session = repo.writable_session("main").await?;
+        session
+            .set_chunk_ref(
+                path.clone(),
+                ChunkIndices(vec![0]),
+                Some(ChunkPayload::Inline("writer 1 a0".into())),
+            )
+            .await?;
+
+        let mut other = repo.writable_session("main").await?;
+        other
+            .set_chunk_ref(
+                path.clone(),
+                ChunkIndices(vec![1]),
+                Some(ChunkPayload::Inline("writer 2 a1".into())),
+            )
+            .await?;
+        other.commit("writer 2").max_concurrent_nodes(8).execute().await?;
+
+        let snap = session
+            .commit("writer 1")
+            .max_concurrent_nodes(8)
+            .rebase(&ConflictDetector, 2)
+            .execute()
+            .await?;
+
+        // three manifests exist: writer 2's, the failed attempt's (orphaned,
+        // it doesn't include writer 2's chunk), and the retry's merged one
+        assert_manifest_count(repo.asset_manager(), 3).await;
+
+        // both writers' chunks must be in the merged manifest
+        let read = repo.readonly_session(&VersionInfo::SnapshotId(snap)).await?;
+        for (coord, expected) in [(0u32, "writer 1 a0"), (1, "writer 2 a1")] {
+            assert_eq!(
+                read.get_chunk_ref(&path, &ChunkIndices(vec![coord])).await?,
+                Some(ChunkPayload::Inline(expected.into())),
+                "bad chunk data for chunk [{coord}]"
+            );
+        }
+
+        // Case 2: the rebase patches the session's chunk changes
+        // (UseTheirs drops our conflicting chunk), so the failed attempt's
+        // manifest (which contains our version of the chunk) can't be reused.
+        let repo = create_memory_store_repository(spec_version).await;
+        let mut ds = repo.writable_session("main").await?;
+        ds.add_array(path.clone(), basic_shape(), None, user_data()).await?;
+        ds.commit("create array").max_concurrent_nodes(8).execute().await?;
+
+        let mut session = repo.writable_session("main").await?;
+        session
+            .set_chunk_ref(
+                path.clone(),
+                ChunkIndices(vec![0]),
+                Some(ChunkPayload::Inline("ours".into())),
+            )
+            .await?;
+        session
+            .set_chunk_ref(
+                path.clone(),
+                ChunkIndices(vec![1]),
+                Some(ChunkPayload::Inline("ours only".into())),
+            )
+            .await?;
+
+        let mut other = repo.writable_session("main").await?;
+        other
+            .set_chunk_ref(
+                path.clone(),
+                ChunkIndices(vec![0]),
+                Some(ChunkPayload::Inline("theirs".into())),
+            )
+            .await?;
+        other.commit("writer 2").max_concurrent_nodes(8).execute().await?;
+
+        let solver = BasicConflictSolver {
+            on_chunk_conflict: VersionSelection::UseTheirs,
+            ..Default::default()
+        };
+        let snap = session
+            .commit("writer 1")
+            .max_concurrent_nodes(8)
+            .rebase(&solver, 2)
+            .execute()
+            .await?;
+
+        assert_manifest_count(repo.asset_manager(), 3).await;
+        let read = repo.readonly_session(&VersionInfo::SnapshotId(snap)).await?;
+        for (coord, expected) in [(0u32, "theirs"), (1, "ours only")] {
+            assert_eq!(
+                read.get_chunk_ref(&path, &ChunkIndices(vec![coord])).await?,
+                Some(ChunkPayload::Inline(expected.into())),
+                "bad chunk data for chunk [{coord}]"
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio_test]
+    #[apply(spec_version_cases)]
+    /// Manifest reuse holds across several rebase attempts: no matter how
+    /// many times the commit races, the session writes the manifests for its
+    /// unchanged nodes only once.
+    async fn test_commit_rebasing_reuses_manifests_across_multiple_attempts(
+        #[case] spec_version: SpecVersionBin,
+    ) -> Result<(), Box<dyn Error>> {
+        let repo = Arc::new(create_memory_store_repository(spec_version).await);
+
+        let array: Path = "/array".try_into().unwrap();
+        let others: Vec<Path> =
+            (0..3).map(|i| format!("/other-{i}").as_str().try_into().unwrap()).collect();
+
+        let mut ds = repo.writable_session("main").await?;
+        ds.add_array(array.clone(), basic_shape(), None, user_data()).await?;
+        for other in &others {
+            ds.add_array(other.clone(), basic_shape(), None, user_data()).await?;
+        }
+        ds.commit("create arrays").max_concurrent_nodes(8).execute().await?;
+
+        let mut session = repo.writable_session("main").await?;
+        session
+            .set_chunk_ref(
+                array.clone(),
+                ChunkIndices(vec![0]),
+                Some(ChunkPayload::Inline("main writer".into())),
+            )
+            .await?;
+
+        let mut other = repo.writable_session("main").await?;
+        other
+            .set_chunk_ref(
+                others[0].clone(),
+                ChunkIndices(vec![0]),
+                Some(ChunkPayload::Inline("other writer 0".into())),
+            )
+            .await?;
+        other.commit("other writer 0").max_concurrent_nodes(8).execute().await?;
+
+        let racing: RebaseHook = {
+            let repo = Arc::clone(&repo);
+            let others = others.clone();
+            Box::new(move |attempt| {
+                let repo = Arc::clone(&repo);
+                let others = others.clone();
+                Box::pin(async move {
+                    if attempt <= 2 {
+                        let path = others[attempt as usize].clone();
+                        let mut s = repo.writable_session("main").await.unwrap();
+                        s.set_chunk_ref(
+                            path,
+                            ChunkIndices(vec![0]),
+                            Some(ChunkPayload::Inline(
+                                format!("other writer {attempt}").into(),
+                            )),
+                        )
+                        .await
+                        .unwrap();
+                        s.commit(format!("other writer {attempt}").as_str())
+                            .max_concurrent_nodes(8)
+                            .execute()
+                            .await
+                            .unwrap();
+                    }
+                })
+            })
+        };
+
+        let snap = session
+            .commit("main writer")
+            .max_concurrent_nodes(8)
+            .rebase(&ConflictDetector, 10)
+            .after_rebase_hook(racing)
+            .execute()
+            .await?;
+
+        // one manifest per racing commit, plus a single manifest for
+        // /array: it was written by the first attempt and reused by all
+        // three retries
+        assert_manifest_count(repo.asset_manager(), 4).await;
+
+        let read = repo.readonly_session(&VersionInfo::SnapshotId(snap)).await?;
+        assert_eq!(
+            read.get_chunk_ref(&array, &ChunkIndices(vec![0])).await?,
+            Some(ChunkPayload::Inline("main writer".into()))
+        );
+        for (i, other) in others.iter().enumerate() {
+            assert_eq!(
+                read.get_chunk_ref(other, &ChunkIndices(vec![0])).await?,
+                Some(ChunkPayload::Inline(format!("other writer {i}").into())),
+                "bad chunk data for {other}"
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio_test]
     async fn manifest_files_consistency() -> Result<(), Box<dyn Error>> {
         let repo = Arc::new(create_memory_store_repository(SpecVersionBin::V2).await);
         let mut session = repo.writable_session("main").await?;
@@ -7553,6 +8136,7 @@ mod tests {
             false,
             CommitMethod::NewCommit,
             manifest_config.splitting(),
+            &mut FlushedManifestCache::default(),
         )
         .await;
 
