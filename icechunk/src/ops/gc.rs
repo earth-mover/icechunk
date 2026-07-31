@@ -411,12 +411,34 @@ async fn garbage_collect_one_attempt(
 
     let mut all_snaps = HashSet::new();
     let repo_info = if asset_manager.spec_version() > SpecVersionBin::V1 {
+        // The retention decision must use the same clock as the physical delete
+        // (storage created_at, see must_delete_snapshot). Judging it by flushed_at
+        // half-deletes a snapshot in the (flushed_at, created_at] window: it is
+        // dropped from the repo info (losing its pruned_ancestor_tx_logs
+        // references) while its file survives.
+        let created_at_by_id: HashMap<SnapshotId, DateTime<Utc>> =
+            if config.deletes_snapshots() {
+                asset_manager
+                    .list_snapshots()
+                    .await?
+                    .map_ok(|s| (s.id, s.created_at))
+                    .try_collect()
+                    .await?
+            } else {
+                HashMap::new()
+            };
         let (ri, _) = asset_manager.fetch_repo_info().await?;
         non_pointed_but_new = ri
             .all_snapshots()?
             .filter_map_ok(|si| {
                 all_snaps.insert(si.id.clone());
-                if si.flushed_at >= snap_deadline { Some(si.id) } else { None }
+                // A snapshot not visible in the listing yet cannot be deleted by
+                // this run either, so it is retained.
+                if created_at_by_id.get(&si.id).is_none_or(|c| *c >= snap_deadline) {
+                    Some(si.id)
+                } else {
+                    None
+                }
             })
             .try_collect()?;
 
