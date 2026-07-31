@@ -51,8 +51,7 @@ jobs:
       - uses: prefix-dev/setup-pixi@a09b6247153796b190642a2b53fac4241043cf6f # v0.10.0
         with:
           pixi-version: ${{ env.PIXI_VERSION }}
-          cache: true
-          cache-write: ${{ github.ref == 'refs/heads/main' }}
+          cache: false
           manifest-path: icechunk-python/pyproject.toml
           # environment activation doesn't work on windows
           # https://github.com/prefix-dev/setup-pixi/issues/122#issuecomment-2326495414
