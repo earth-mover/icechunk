@@ -825,6 +825,88 @@ async fn test_gc_retains_snapshot_between_flushed_and_created_at()
     Ok(())
 }
 
+/// A snapshot released from the repo info by `expire` leaves its file on disk
+/// (expire never deletes files). A later GC builds `keep_tx_logs` only from
+/// repo-info pruned refs, so a cutoff that falls between the released
+/// snapshot's pruned-ancestor tx logs' `created_at` and the snapshot file's
+/// own `created_at` deletes those tx logs while the file gate keeps the
+/// snapshot file. The surviving on-disk snapshot then references tx logs that
+/// no longer exist.
+#[tokio_test]
+async fn test_gc_keeps_pruned_tx_logs_of_stranded_snapshot_file()
+-> Result<(), Box<dyn std::error::Error>> {
+    let inner: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+    // Write latency separates consecutive writes' `created_at`, so the cutoff
+    // can land between /b's tx log and /c's snapshot file.
+    let storage: Arc<dyn Storage + Send + Sync> =
+        Arc::new(LatencyStorage::new(inner, 20, 0));
+    let repo = Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
+        .await?;
+    let am = Arc::clone(repo.asset_manager());
+
+    let a = commit_group(&repo, "main", "/a").await?;
+    repo.create_branch("feat", &a).await?;
+    let b = commit_group(&repo, "feat", "/b").await?;
+    let c = commit_group(&repo, "feat", "/c").await?;
+
+    // Expire /b (both branch tips are protected): /c is re-parented to the
+    // root, harvesting pruned_ancestor_tx_logs = [a, b].
+    let result = expire(
+        Arc::clone(&am),
+        Utc::now() + chrono::Duration::days(1),
+        ExpiredRefAction::Ignore,
+        ExpiredRefAction::Ignore,
+        None,
+        100,
+    )
+    .await?;
+    assert_eq!(result.released_snapshots.len(), 1);
+    assert!(result.edited_snapshots.contains(&c));
+
+    // Drop the feat ref and expire again: /c is released from the repo info,
+    // taking its pruned refs with it, while its file stays on disk.
+    repo.delete_branch("feat").await?;
+    let result = expire(
+        Arc::clone(&am),
+        Utc::now() + chrono::Duration::days(1),
+        ExpiredRefAction::Ignore,
+        ExpiredRefAction::Ignore,
+        None,
+        100,
+    )
+    .await?;
+    assert!(result.released_snapshots.contains(&c));
+
+    // Cutoff exactly at /c's storage created_at: /b's tx log (older) is inside
+    // the delete window, /c's snapshot file is not.
+    let c_created_at = am
+        .list_snapshots()
+        .await?
+        .try_collect::<Vec<_>>()
+        .await?
+        .into_iter()
+        .find(|s| s.id == c)
+        .expect("snapshot /c not listed")
+        .created_at;
+    let gc_config = GCConfig::clean_all(
+        c_created_at,
+        c_created_at,
+        None,
+        NonZeroU16::new(50).unwrap(),
+        NonZeroUsize::new(512 * 1024 * 1024).unwrap(),
+        NonZeroU16::new(500).unwrap(),
+        false,
+    );
+    garbage_collect(Arc::clone(&am), &gc_config, None, 100).await?;
+
+    // /c's snapshot file survives the file gate...
+    let on_disk: Vec<_> = am.list_snapshots().await?.try_collect().await?;
+    assert!(on_disk.iter().any(|s| s.id == c));
+    // ...so the tx logs its pruned refs point at must survive with it.
+    am.fetch_transaction_log(&b).await?;
+    Ok(())
+}
+
 /// Commit a single new group on `branch` and return the new snapshot id.
 async fn commit_group(
     repo: &Repository,
