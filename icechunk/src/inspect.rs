@@ -18,7 +18,8 @@ use crate::{
         manifest::{ChunkPayload, ManifestRef},
         repo_info::UpdateType,
         snapshot::{
-            ManifestFileInfo, NodeData, NodeSnapshot, NodeType, SnapshotProperties,
+            DimensionName, ManifestFileInfo, NodeData, NodeSnapshot, NodeType,
+            SnapshotProperties,
         },
         transaction_log::TransactionLog,
     },
@@ -28,10 +29,10 @@ use crate::{
 use icechunk_types::{ICResultExt as _, error::ICResultCtxExt as _};
 
 #[derive(Debug, Serialize, Deserialize)]
-struct ManifestFileInfoInspect {
-    id: String,
-    size_bytes: u64,
-    num_chunk_refs: u32,
+pub(crate) struct ManifestFileInfoInspect {
+    pub(crate) id: String,
+    pub(crate) size_bytes: u64,
+    pub(crate) num_chunk_refs: u32,
 }
 
 impl From<ManifestFileInfo> for ManifestFileInfoInspect {
@@ -45,9 +46,9 @@ impl From<ManifestFileInfo> for ManifestFileInfoInspect {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct ManifestRefInspect {
-    id: String,
-    extents: Vec<(u32, u32)>,
+pub(crate) struct ManifestRefInspect {
+    pub(crate) id: String,
+    pub(crate) extents: Vec<(u32, u32)>,
 }
 
 impl From<ManifestRef> for ManifestRefInspect {
@@ -60,12 +61,22 @@ impl From<ManifestRef> for ManifestRefInspect {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct NodeSnapshotInspect {
-    id: String,
-    path: String,
-    node_type: String,
+pub(crate) struct DimensionShapeInspect {
     #[serde(skip_serializing_if = "Option::is_none")]
-    manifest_refs: Option<Vec<ManifestRefInspect>>,
+    pub(crate) name: Option<String>,
+    pub(crate) array_length: u64,
+    pub(crate) num_chunks: u32,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub(crate) struct NodeSnapshotInspect {
+    pub(crate) id: String,
+    pub(crate) path: String,
+    pub(crate) node_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) shape: Option<Vec<DimensionShapeInspect>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) manifest_refs: Option<Vec<ManifestRefInspect>>,
 }
 
 impl From<NodeSnapshot> for NodeSnapshotInspect {
@@ -76,6 +87,31 @@ impl From<NodeSnapshot> for NodeSnapshotInspect {
             node_type: match value.node_type() {
                 NodeType::Group => "group".to_string(),
                 NodeType::Array => "array".to_string(),
+            },
+            shape: match &value.node_data {
+                NodeData::Array { shape, dimension_names, .. } => {
+                    let names: Vec<Option<String>> = match dimension_names {
+                        Some(names) => names
+                            .iter()
+                            .map(|n| match n {
+                                DimensionName::Name(n) => Some(n.clone()),
+                                DimensionName::NotSpecified => None,
+                            })
+                            .collect(),
+                        None => vec![None; shape.len()],
+                    };
+                    let dims = shape
+                        .iter()
+                        .zip(names)
+                        .map(|(dim, name)| DimensionShapeInspect {
+                            name,
+                            array_length: dim.array_length(),
+                            num_chunks: dim.num_chunks(),
+                        })
+                        .collect();
+                    Some(dims)
+                }
+                NodeData::Group => None,
             },
             manifest_refs: match value.node_data {
                 NodeData::Array { manifests, .. } => {
@@ -89,20 +125,20 @@ impl From<NodeSnapshot> for NodeSnapshotInspect {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct SnapshotInfoInspect {
+pub(crate) struct SnapshotInfoInspect {
     // TODO: add fields
     //path: String,
     //size_bytes: u64,
-    id: String,
-    flushed_at: DateTime<Utc>,
-    commit_message: String,
-    metadata: SnapshotProperties,
+    pub(crate) id: String,
+    pub(crate) flushed_at: DateTime<Utc>,
+    pub(crate) commit_message: String,
+    pub(crate) metadata: SnapshotProperties,
 
-    manifests: Vec<ManifestFileInfoInspect>,
-    nodes: Vec<NodeSnapshotInspect>,
+    pub(crate) manifests: Vec<ManifestFileInfoInspect>,
+    pub(crate) nodes: Vec<NodeSnapshotInspect>,
 }
 
-async fn inspect_snapshot(
+pub(crate) async fn inspect_snapshot(
     asset_manager: &AssetManager,
     id: &SnapshotId,
 ) -> RepositoryResult<SnapshotInfoInspect> {
