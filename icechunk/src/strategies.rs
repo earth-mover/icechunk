@@ -391,9 +391,11 @@ prop_compose! {
 
 prop_compose! {
     pub fn manifest_config()
-        (splitting in option::of(manifest_splitting_config()), preload in option::of(manifest_preload_config()))
+        (splitting in option::of(manifest_splitting_config()),
+        preload in option::of(manifest_preload_config()),
+        max_concurrent_manifest_fetches_during_commit in option::of(any::<u16>()))
     -> ManifestConfig {
-        ManifestConfig{preload, splitting, virtual_chunk_location_compression: None}
+        ManifestConfig{preload, splitting, virtual_chunk_location_compression: None, max_concurrent_manifest_fetches_during_commit}
     }
 }
 

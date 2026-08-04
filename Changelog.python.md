@@ -2,13 +2,25 @@
 
 ## Python Icechunk Library [unreleased]
 
+### Fixes
+
+- Fix garbage collection deleting still-referenced transaction logs when the host and object-store clocks are skewed ([#2310](https://github.com/earth-mover/icechunk/pull/2310)).
+- Deleting a chunk key that cannot exist (coordinates outside the chunk grid, missing node, or a group path) is now a no-op instead of raising, matching zarr-python's stores. Writing a chunk outside the grid is still rejected ([#2312](https://github.com/earth-mover/icechunk/pull/2312)).
+- `to_icechunk` no longer passes `synchronizer` and `zarr_version` to xarray's `ZarrStore.open_group`; xarray removed both parameters and passing them made `to_icechunk` fail with a `TypeError` on xarray development versions ([#2312](https://github.com/earth-mover/icechunk/pull/2312)).
+
+## Python Icechunk Library 2.1.2
+
 ### Features
 
-- Add an exception tree: all Icechunk errors now derive from `IcechunkError` and are grouped into catchable categories. Every exception carries a stable machine-readable `kind` code (see the new `icechunk.ErrorKind` enum), and the full diagnostic report is attached as a PEP 678 note ([#2267](https://github.com/earth-mover/icechunk/issues/2151)).
+- Add an exception tree: all Icechunk errors now derive from `IcechunkError` and are grouped into catchable categories. Every exception carries a stable machine-readable `kind` code (see the new `icechunk.ErrorKind` enum), and the full diagnostic report is attached as a PEP 678 note ([#2267](https://github.com/earth-mover/icechunk/pull/2267)).
+- Add `ManifestConfig.max_concurrent_manifest_fetches_during_commit` to control how many manifests are fetched and updated concurrently during a commit, amend, flush, or `rewrite_manifests`. Defaults to `1` (serial) ([#2274](https://github.com/earth-mover/icechunk/pull/2274)).
 
 ### Fixes
 
-- `shift_array` and `reindex_array` on an array with a rectilinear chunk grid used to silently corrupt the array: chunk indices were relabeled without updating the chunk grid, leaving chunk payloads that no longer matched the sizes of their new grid positions. These operations now fail up front unless the array's metadata declares a regular chunk grid ([#2151](https://github.com/earth-mover/icechunk/issues/2151)).
+- `shift_array` and `reindex_array` on an array with a rectilinear chunk grid used to silently corrupt the array: chunk indices were relabeled without updating the chunk grid, leaving chunk payloads that no longer matched the sizes of their new grid positions. These operations now fail up front unless the array's metadata declares a regular chunk grid ([#2257](https://github.com/earth-mover/icechunk/pull/2257)).
+- A conditional write whose success response was lost in transit (connection drop, proxy timeout) used to surface as a spurious conflict after the transparent retry's precondition failed against Icechunk's own write: "tag already exists", "config was updated by other session", or a commit parent mismatch. Conditional writes are now stamped with a unique write id and read back on suspicious failures, so a write that landed is recognized as a success ([#2156](https://github.com/earth-mover/icechunk/pull/2156)).
+- Conditional operations on `object_store`-backed storage no longer strip quotes from ETags, which caused endless commit retries against stores that compare ETags exactly, such as `object_store` 0.14.1's `InMemory` and `LocalFileSystem` ([#2289](https://github.com/earth-mover/icechunk/pull/2289)).
+- Fix `to_icechunk` and `icechunk.dask.store_dask` failing with `AttributeError: 'function' object has no attribute 'session'` when the `dask-array` package is installed ([#2292](https://github.com/earth-mover/icechunk/pull/2292)).
 
 ## Python Icechunk Library 2.1.1
 

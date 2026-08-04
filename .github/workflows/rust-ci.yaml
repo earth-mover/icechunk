@@ -51,7 +51,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
@@ -59,13 +59,19 @@ jobs:
       - uses: prefix-dev/setup-pixi@a09b6247153796b190642a2b53fac4241043cf6f # v0.10.0
         with:
           pixi-version: ${{ env.PIXI_VERSION }}
-          cache: true
-          cache-write: ${{ github.ref == 'refs/heads/main' }}
+          cache: false
           activate-environment: true
           manifest-path: icechunk-python/pyproject.toml
 
       - name: Check if MSRV is up to date
         run: just check-msrv "$MSRV"
+
+      - name: Check the workspace compiles with MSRV
+        if: matrix.os == 'ubuntu-latest'
+        env:
+          # keep MSRV artifacts out of the shared rust-cache
+          CARGO_TARGET_DIR: ${{ runner.temp }}/msrv-target
+        run: pixi run -m icechunk-python/pyproject.toml -e msrv cargo check --locked
 
       - name: Stand up docker services
         if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm'
@@ -183,7 +189,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
@@ -191,8 +197,7 @@ jobs:
       - uses: prefix-dev/setup-pixi@a09b6247153796b190642a2b53fac4241043cf6f # v0.10.0
         with:
           pixi-version: ${{ env.PIXI_VERSION }}
-          cache: true
-          cache-write: ${{ github.ref == 'refs/heads/main' }}
+          cache: false
           activate-environment: true
           manifest-path: icechunk-python/pyproject.toml
 
@@ -225,13 +230,13 @@ jobs:
         working-directory: ./
     steps:
       - name: Checkout repository
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
       - name: Install just
-        uses: taiki-e/install-action@43aecc8d72668fbcfe75c31400bc4f890f1c5853 # v2
+        uses: taiki-e/install-action@a6b2e2dcd845ddd7f509ce4f3ed3d922b80cc5d9 # v2
         env:
           GITHUB_TOKEN: ${{ github.token }}
         with:

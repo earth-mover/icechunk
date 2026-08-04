@@ -239,12 +239,13 @@ check *args:
 
 [group('lint')]
 [script]
-[doc("Check Cargo.toml rust-version matches the contributing docs (pass an expected MSRV to pin it)")]
+[doc("Check Cargo.toml rust-version matches the contributing docs and the pixi msrv environment (pass an expected MSRV to pin it)")]
 check-msrv expected="":
   msrv=$(sed -n 's/^rust-version = "\(.*\)"$/\1/p' Cargo.toml)
   pysemver check "$msrv"
   test -z "{{expected}}" || test "$(pysemver compare "$msrv" "{{expected}}")" = 0
   grep -F "The current MSRV is \`$msrv\`" icechunk-python/docs/docs/reference/contributing.md
+  grep -A1 -xF '[tool.pixi.feature.msrv.dependencies]' icechunk-python/pyproject.toml | grep -xF "rust = \"~=$msrv\""
 
 [group('lint')]
 [script]

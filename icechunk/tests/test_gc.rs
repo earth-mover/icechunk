@@ -23,6 +23,7 @@ use icechunk::{
     refs::Ref,
     repository::VersionInfo,
     session::get_chunk,
+    storage::latency::LatencyStorage,
 };
 use icechunk_macros::tokio_test;
 use pretty_assertions::assert_eq;
@@ -742,6 +743,85 @@ async fn test_gc_deletes_only_unreferenced_expired_tx_logs()
     // ...while the unreferenced ones are gone.
     assert!(asset_manager.fetch_transaction_log(&d).await.is_err());
     assert!(asset_manager.fetch_transaction_log(&e).await.is_err());
+    Ok(())
+}
+
+/// A snapshot whose host-stamped `flushed_at` and storage `created_at` straddle
+/// the GC cutoff must be retained in the repo info, because the file-delete
+/// gate (`created_at < cutoff`) keeps its file. Gating the repo-info decision
+/// on `flushed_at` instead half-deletes it: the snapshot vanishes from the repo
+/// info — losing its `pruned_ancestor_tx_logs` references, whose tx logs are
+/// then deleted — while its file survives on disk.
+#[tokio_test]
+async fn test_gc_retains_snapshot_between_flushed_and_created_at()
+-> Result<(), Box<dyn std::error::Error>> {
+    let inner: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+    // Write latency widens the (flushed_at, created_at] window the cutoff must
+    // land in.
+    let storage: Arc<dyn Storage + Send + Sync> =
+        Arc::new(LatencyStorage::new(inner, 20, 0));
+    let repo = Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
+        .await?;
+    let am = Arc::clone(repo.asset_manager());
+
+    let a = commit_group(&repo, "main", "/a").await?;
+    repo.create_branch("feat", &a).await?;
+    let b = commit_group(&repo, "feat", "/b").await?;
+    let c = commit_group(&repo, "feat", "/c").await?;
+
+    // Expire /b (both branch tips are protected): /c is re-parented to the
+    // root, harvesting pruned_ancestor_tx_logs = [a, b].
+    let result = expire(
+        Arc::clone(&am),
+        Utc::now() + chrono::Duration::days(1),
+        ExpiredRefAction::Ignore,
+        ExpiredRefAction::Ignore,
+        None,
+        100,
+    )
+    .await?;
+    assert_eq!(result.released_snapshots.len(), 1);
+    assert!(result.edited_snapshots.contains(&c));
+
+    // Make /c unreachable; it stays in the repo info carrying its pruned refs.
+    repo.delete_branch("feat").await?;
+
+    // Cutoff exactly at /c's storage created_at: too new for the file gate,
+    // while its flushed_at (earlier by at least the write latency) is expired.
+    let c_created_at = am
+        .list_snapshots()
+        .await?
+        .try_collect::<Vec<_>>()
+        .await?
+        .into_iter()
+        .find(|s| s.id == c)
+        .expect("snapshot /c not listed")
+        .created_at;
+    let (repo_info, _) = am.fetch_repo_info().await?;
+    assert!(repo_info.find_snapshot(&c)?.flushed_at < c_created_at);
+
+    let gc_config = GCConfig::clean_all(
+        c_created_at,
+        c_created_at,
+        None,
+        NonZeroU16::new(50).unwrap(),
+        NonZeroUsize::new(512 * 1024 * 1024).unwrap(),
+        NonZeroU16::new(500).unwrap(),
+        false,
+    );
+    let summary = garbage_collect(Arc::clone(&am), &gc_config, None, 100).await?;
+
+    // Only /b's snapshot file is deleted; /c's file is too new.
+    assert_eq!(summary.snapshots_deleted, 1);
+    // No tx log is deleted: /b's is referenced by /c's pruned refs, and /c is
+    // retained.
+    assert_eq!(summary.transaction_logs_deleted, 0);
+
+    // /c is still a repo snapshot, pruned refs intact, and /b's log fetchable.
+    let (repo_info, _) = am.fetch_repo_info().await?;
+    let kept = repo_info.find_snapshot(&c)?;
+    assert_eq!(kept.pruned_ancestor_tx_logs, vec![a.clone(), b.clone()]);
+    am.fetch_transaction_log(&b).await?;
     Ok(())
 }
 

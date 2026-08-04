@@ -41,6 +41,15 @@ repos:
 
   - repo: local
     hooks:
+      # icechunk-python's readme is what PyPI renders, and it cannot point outside
+      # the package directory, so it is a copy that must not drift.
+      - id: readme-sync
+        name: "icechunk-python/README.md matches the root README.md"
+        entry: diff README.md icechunk-python/README.md
+        language: system
+        files: ^(README\.md|icechunk-python/README\.md)$
+        pass_filenames: false
+
       - id: rust-pre-commit-fast
         name: "Fast Rust checks (format, lint)"
         entry: just pre-commit-fast

@@ -132,10 +132,8 @@ class _XarrayDatasetWriter:
             "append_dim": append_dim,
             "write_region": region,
             "safe_chunks": self.safe_chunks,
-            "synchronizer": None,
             "consolidated": False,
             "consolidate_on_close": False,
-            "zarr_version": None,
         }
 
         if Version(xr.__version__) >= Version("2025.06.0"):

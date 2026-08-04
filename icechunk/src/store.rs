@@ -531,10 +531,21 @@ impl Store {
                 };
                 Ok(session.delete_node(node.inject()?).await.inject()?)
             }
-            Key::Chunk { node_path, coords } => Ok(session
-                .delete_chunks(&node_path, vec![coords].into_iter())
-                .await
-                .inject()?),
+            Key::Chunk { node_path, coords } => {
+                // As for metadata keys above: a key that cannot exist is not an error
+                // to delete. There is no node, it is not an array, or the coordinates
+                // fall outside the array's chunk grid.
+                match session.delete_chunks(&node_path, vec![coords].into_iter()).await {
+                    Err(SessionError {
+                        kind:
+                            SessionErrorKind::NodeNotFound { .. }
+                            | SessionErrorKind::NotAnArray { .. }
+                            | SessionErrorKind::InvalidIndex { .. },
+                        ..
+                    }) => Ok(()),
+                    res => Ok(res.inject()?),
+                }
+            }
             Key::ZarrV2(_) => Ok(()),
         }
     }
@@ -2110,11 +2121,13 @@ mod tests {
             Err(StoreError{kind: StoreErrorKind::InvalidKey { key }, ..}) if key == "array/foo",
         ));
 
-        assert!(matches!(
-            store.delete("array/c/10/1/1").await,
-            Err(StoreError{kind: StoreErrorKind::SessionError(SessionErrorKind::InvalidIndex { coords, path }),..})
-                if path.to_string() == "/array" && coords == ChunkIndices([10, 1, 1].to_vec())
-        ));
+        store.set("array/c/1/1/1", data.clone()).await.unwrap();
+        // deleting a key that cannot hold a chunk is a no-op, and touches nothing else
+        store.delete("array/c/10/1/1").await.unwrap();
+        store.delete("no/such/node/c/0/0/0").await.unwrap();
+        // the root is a group, not an array
+        store.delete("c/0").await.unwrap();
+        assert_eq!(store.get("array/c/1/1/1", &ByteRange::ALL).await.unwrap(), data);
 
         Ok(())
     }
