@@ -1,5 +1,6 @@
+import re
+from collections.abc import AsyncIterator, Iterable, Sequence
 from collections.abc import Buffer as ReadableBuffer
-from collections.abc import Iterable, Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -28,6 +29,33 @@ from zarr.core.sync import SyncMixin
 
 if TYPE_CHECKING:
     from icechunk import Session
+
+
+# Zarr v3 chunk keys carry a literal "c" component before the grid coords:
+# "group/array/c/0/3/1" with "/" as the separator, "group/array/c.0.3.1" with ".".
+_COORD_SEP = re.compile(r"[./]")
+
+
+def _split_chunk_key(key: str) -> tuple[str, list[int]] | None:
+    """Split a chunk key into ``(array_path, coords)``, or ``None`` if it is not one.
+
+    Returns ``None`` for metadata keys (``zarr.json``) and anything else that
+    does not look like ``.../c/<i>/<j>/...``, so a caller can fall back to a
+    plain ``get`` rather than mistake a metadata key for a chunk.
+    """
+    parts = key.split("/")
+    # "/"-separated coords: a standalone "c" component, coords after it.
+    if "c" in parts[1:]:
+        index = len(parts) - 1 - parts[::-1].index("c")
+        coords = parts[index + 1 :]
+        if coords and all(part.lstrip("-").isdigit() for part in coords):
+            return "/".join(parts[:index]), [int(part) for part in coords]
+    # "."-separated coords, all in the final component: "c.0.3.1".
+    if parts[-1].startswith("c.") and len(parts[-1]) > 2:
+        coords = _COORD_SEP.split(parts[-1])[1:]
+        if coords and all(part.lstrip("-").isdigit() for part in coords):
+            return "/".join(parts[:-1]), [int(part) for part in coords]
+    return None
 
 
 def _byte_request_to_tuple(
@@ -205,6 +233,78 @@ class IcechunkStore(Store, SyncMixin):
         ranges = [(k[0], _byte_request_to_tuple(k[1])) for k in key_ranges]
         result = await self._store.get_partial_values(list(ranges))
         return [prototype.buffer.from_bytes(r) for r in result]
+
+    async def get_many(
+        self,
+        requests: Sequence[tuple[str, ByteRequest | None] | str],
+        *,
+        prototype: BufferPrototype,
+        concurrency: int | None = None,
+    ) -> AsyncIterator[Sequence[tuple[int, Buffer | None | BaseException]]]:
+        """Retrieve many values at once, coalescing the reads behind them.
+
+        Zarr's bulk read hook, served by :meth:`get_many_chunks`: requests that
+        name whole chunks are resolved together and their byte ranges merged, so
+        chunks sitting near each other in one backing object are fetched in a few
+        large range GETs instead of one per chunk. Each yielded batch is one such
+        read, so a caller can decode the chunks that have arrived while the rest
+        are still in flight, and a read that fails is reported against exactly
+        the chunks that shared it.
+
+        Requests this cannot route through the coalescing path — metadata keys,
+        and any request for part of a chunk rather than all of it — fall back to
+        :meth:`get`, and are yielded as they land.
+
+        ``concurrency`` is ignored: how many reads are in flight is the repo's
+        ``get_partial_values_concurrency``, and how a merged span becomes
+        requests is the storage layer's decision.
+        """
+        chunk_requests: list[tuple[str, list[int]]] = []
+        # Position in `requests` of each entry in `chunk_requests`, since the
+        # native call reports results by its own request index.
+        chunk_indices: list[int] = []
+        plain: list[tuple[int, str, ByteRequest | None]] = []
+        for index, request in enumerate(requests):
+            key, byte_range = (request, None) if isinstance(request, str) else request
+            split = _split_chunk_key(key) if byte_range is None else None
+            if split is None:
+                plain.append((index, key, byte_range))
+            else:
+                chunk_requests.append(split)
+                chunk_indices.append(index)
+
+        for index, key, byte_range in plain:
+            try:
+                value: Buffer | None | BaseException = await self.get(
+                    key, prototype=prototype, byte_range=byte_range
+                )
+            except Exception as err:
+                value = err
+            yield [(index, value)]
+
+        if not chunk_requests:
+            return
+
+        chunks = self.get_many_chunks(chunk_requests)
+        try:
+            async for batch in chunks:
+                yield [
+                    (
+                        chunk_indices[request_index],
+                        error
+                        if error is not None
+                        # `data` is a zero-copy view of the coalesced span it came
+                        # from, so it is a buffer rather than `bytes`.
+                        else (
+                            None
+                            if data is None
+                            else prototype.buffer.from_bytes(memoryview(data))
+                        ),
+                    )
+                    for request_index, data, error in batch
+                ]
+        finally:
+            await chunks.aclose()
 
     async def exists(self, key: str) -> bool:
         """Check if a key exists in the store.
