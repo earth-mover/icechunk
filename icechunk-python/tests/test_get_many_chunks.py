@@ -446,3 +446,51 @@ def test_one_failed_chunk_does_not_fail_the_batch(tmp_path: Path) -> None:
     data, error = outcomes[1]
     assert data is None
     assert isinstance(error, icechunk.IcechunkError)
+
+
+def _drain_get_many(
+    store: icechunk.IcechunkStore, keys: list[str]
+) -> dict[int, bytes | None | BaseException]:
+    """Collect `IcechunkStore.get_many` results, keyed by request index."""
+    from zarr.core.buffer import default_buffer_prototype
+
+    async def _collect() -> dict[int, bytes | None | BaseException]:
+        out: dict[int, bytes | None | BaseException] = {}
+        async for batch in store.get_many(keys, prototype=default_buffer_prototype()):
+            assert len(batch) > 0, "empty batches are never yielded"
+            for index, value in batch:
+                assert index not in out, "each request is reported exactly once"
+                if isinstance(value, BaseException) or value is None:
+                    out[index] = value
+                else:
+                    out[index] = value.to_bytes()
+        return out
+
+    return asyncio.run(_collect())
+
+
+def test_get_many_serves_chunk_keys(tmp_path: Path) -> None:
+    """Zarr's bulk hook resolves chunk keys through the coalescing path."""
+    repo, backing = _virtual_repo(tmp_path)
+    store = _commit_virtual_refs(
+        repo, tmp_path, [(0, 0, 100), (1, 100, 100), (2, 500, 80)]
+    )
+
+    values = _drain_get_many(store, ["v/c/0", "v/c/1", "v/c/2"])
+
+    assert values == {0: backing[0:100], 1: backing[100:200], 2: backing[500:580]}
+
+
+def test_get_many_mixes_metadata_and_chunk_keys(tmp_path: Path) -> None:
+    """Keys that are not whole chunks fall back to `get` rather than being dropped."""
+    repo, backing = _virtual_repo(tmp_path)
+    store = _commit_virtual_refs(repo, tmp_path, [(0, 0, 100)])
+
+    values = _drain_get_many(store, ["v/zarr.json", "v/c/0", "v/c/9"])
+
+    metadata = values[0]
+    assert isinstance(metadata, bytes)
+    assert b'"zarr_format"' in metadata
+    assert values[1] == backing[0:100]
+    # Coord outside the array's grid: absent, not an error.
+    assert values[2] is None
