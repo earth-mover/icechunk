@@ -1,6 +1,7 @@
 import datetime
 from collections.abc import (
     AsyncIterator,
+    Buffer,
     Callable,
     Iterable,
     Mapping,
@@ -2870,6 +2871,42 @@ class PyStore:
             dict[int, bytes],  # inlined
         ]
     ]: ...
+    def resolve_chunk_refs(
+        self, array_path: str, coords: list[list[int]]
+    ) -> tuple[
+        np.ndarray[tuple[int], np.dtype[np.uint8]],  # kinds (n,)
+        list[str],  # paths
+        np.ndarray[tuple[int], np.dtype[np.uint64]],  # offsets (n,)
+        np.ndarray[tuple[int], np.dtype[np.uint64]],  # lengths (n,)
+        dict[int, bytes],  # inlined
+    ]: ...
+    async def resolve_chunk_refs_async(
+        self, array_path: str, coords: list[list[int]]
+    ) -> tuple[
+        np.ndarray[tuple[int], np.dtype[np.uint8]],
+        list[str],
+        np.ndarray[tuple[int], np.dtype[np.uint64]],
+        np.ndarray[tuple[int], np.dtype[np.uint64]],
+        dict[int, bytes],
+    ]: ...
+    def get_many_chunks(
+        self,
+        requests: list[tuple[str, list[int]]],
+        max_gap: int,
+        max_coalesced_bytes: int | None = None,
+        # One non-empty list per completed span, not one item per chunk. Buffers
+        # are zero-copy views of a coalesced span, not `bytes`. Failures are
+        # per-chunk: exactly one of the buffer / the error is set, and both are
+        # None for an uninitialized chunk.
+    ) -> AsyncCloseableIterator[
+        list[tuple[int, Buffer | None, IcechunkError | None]]
+    ]: ...
+    def coalescing_report(
+        self,
+        requests: list[tuple[str, list[int]]],
+        max_gap: int,
+        max_coalesced_bytes: int | None = None,
+    ) -> dict[str, int]: ...
     async def set_virtual_ref_async(
         self,
         key: str,

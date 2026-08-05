@@ -8,12 +8,9 @@ use icechunk::{
     Store,
     format::{
         ChunkIndices, ChunkLength, ChunkOffset, Path,
-        manifest::{
-            Checksum, ChunkPayload, ChunkRef, SecondsSinceEpoch, VirtualChunkLocation,
-            VirtualChunkRef,
-        },
+        manifest::{Checksum, SecondsSinceEpoch, VirtualChunkLocation, VirtualChunkRef},
     },
-    session::{SessionError, SessionErrorKind},
+    session::CoalescingReport,
     storage::ETag,
     store::{SetVirtualRefsResult, StoreError, StoreErrorKind},
 };
@@ -31,9 +28,11 @@ use tokio::sync::Mutex;
 
 use crate::{
     display::{PyRepr, ReprMode, py_bool},
-    errors::{PyIcechunkStoreError, PyIcechunkStoreResult},
+    errors::{PyIcechunkStoreError, PyIcechunkStoreResult, session_error_to_pyerr},
     impl_pickle,
-    session::{ChunkType, PySession},
+    session::{
+        PySession, ResolvedChunkRef, payload_to_resolved, resolve_chunk_refs_impl,
+    },
     streams::PyAsyncCloseableIterator,
     virtualrefs::{build_vrefs_from_arrays, do_set_virtual_refs, vrefs_result_to_py},
 };
@@ -49,6 +48,73 @@ pub(crate) fn parse_array_path(path: String) -> PyResult<Path> {
     let path = if path.starts_with('/') { path } else { format!("/{path}") };
     Path::try_from(path)
         .map_err(|e| PyValueError::new_err(format!("Invalid array path: {e}")))
+}
+
+/// Parse a list of `(array_path, coords)` requests into `(Path, ChunkIndices)`
+/// pairs, as `get_many_chunks` / `coalescing_report` take them.
+fn parse_requests(
+    requests: Vec<(String, Vec<u32>)>,
+) -> PyResult<Vec<(Path, ChunkIndices)>> {
+    requests
+        .into_iter()
+        .map(|(array_path, coords)| {
+            Ok((parse_array_path(array_path)?, ChunkIndices(coords)))
+        })
+        .collect()
+}
+
+/// Pack resolved chunk refs into the columnar tuple the chunk-reference APIs
+/// return: `(kinds, paths, offsets, lengths, inlined)`, with row `i` describing
+/// the `i`th ref. This avoids allocating one Python object per chunk — the
+/// arrays are built in one pass.
+///
+/// `coords` prepends a `(n, ndim)` coords column, as `array_chunk_iterator`
+/// yields; `resolve_chunk_refs` omits it because the caller already has the
+/// coords it asked for, in order.
+fn resolved_refs_to_columns(
+    py: Python<'_>,
+    resolved: Vec<ResolvedChunkRef>,
+    coords: Option<(Vec<u32>, usize)>,
+) -> PyResult<Py<PyAny>> {
+    let n = resolved.len();
+    let mut kinds: Vec<u8> = Vec::with_capacity(n);
+    let mut paths: Vec<String> = Vec::with_capacity(n);
+    let mut offsets: Vec<u64> = Vec::with_capacity(n);
+    let mut lengths: Vec<u64> = Vec::with_capacity(n);
+    let mut inlined: Vec<(usize, Bytes)> = Vec::new();
+
+    for (i, r) in resolved.into_iter().enumerate() {
+        kinds.push(r.kind);
+        paths.push(r.location);
+        offsets.push(r.offset);
+        lengths.push(r.length);
+        if let Some(b) = r.inline_data {
+            inlined.push((i, b));
+        }
+    }
+
+    let kinds_arr = kinds.into_pyarray(py).into_any().unbind();
+    let offsets_arr = offsets.into_pyarray(py).into_any().unbind();
+    let lengths_arr = lengths.into_pyarray(py).into_any().unbind();
+    let paths_list: Py<PyAny> = PyList::new(py, paths)?.into_any().unbind();
+    let inlined_dict = PyDict::new(py);
+    for (i, b) in inlined {
+        let slice: &[u8] = b.as_ref();
+        inlined_dict.set_item(i, PyBytesType::new(py, slice))?;
+    }
+    let mut columns: Vec<Py<PyAny>> = Vec::with_capacity(6);
+    if let Some((coords_flat, ndim)) = coords {
+        columns
+            .push(coords_flat.into_pyarray(py).reshape((n, ndim))?.into_any().unbind());
+    }
+    columns.extend([
+        kinds_arr,
+        paths_list,
+        offsets_arr,
+        lengths_arr,
+        inlined_dict.into_any().unbind(),
+    ]);
+    Ok(PyTuple::new(py, columns)?.into_any().unbind())
 }
 
 #[derive(FromPyObject, Clone, Debug)]
@@ -657,84 +723,20 @@ impl PyStore {
                 .chunks(batch_size as usize);
 
             for await infos in stream {
-                let n = infos.len();
                 let mut coords_flat: Vec<u32> = Vec::new();
-                let mut kinds: Vec<u8> = Vec::with_capacity(n);
-                let mut paths: Vec<String> = Vec::with_capacity(n);
-                let mut offsets: Vec<u64> = Vec::with_capacity(n);
-                let mut lengths: Vec<u64> = Vec::with_capacity(n);
-                let mut inlined: Vec<(usize, Bytes)> = Vec::new();
                 let mut ndim: usize = 0;
+                let mut resolved: Vec<ResolvedChunkRef> =
+                    Vec::with_capacity(infos.len());
 
-                for (i, ci_res) in infos.into_iter().enumerate() {
+                for ci_res in infos {
                     let ci = ci_res?;
                     ndim = ci.coord.0.len();
                     coords_flat.extend_from_slice(&ci.coord.0);
-                    kinds.push(ChunkType::from(&ci.payload) as u8);
-                    match ci.payload {
-                        ChunkPayload::Virtual(VirtualChunkRef {
-                            location, offset, length, ..
-                        }) => {
-                            let url = session
-                                .resolve_virtual_location(&location)
-                                .map_err(|e| {
-                                    PyIcechunkStoreError::SessionError(
-                                        SessionError::capture(
-                                            SessionErrorKind::VirtualReferenceError(e.kind),
-                                        ),
-                                    )
-                                })?;
-                            paths.push(url);
-                            offsets.push(offset);
-                            lengths.push(length);
-                        }
-                        ChunkPayload::Ref(ChunkRef { id, offset, length }) => {
-                            paths.push(format!("{id}"));
-                            offsets.push(offset);
-                            lengths.push(length);
-                        }
-                        ChunkPayload::Inline(bytes) => {
-                            paths.push(String::new());
-                            offsets.push(0);
-                            lengths.push(bytes.len() as u64);
-                            inlined.push((i, bytes));
-                        }
-                        other => {
-                            Err(PyIcechunkStoreError::PyValueError(format!(
-                                "array_chunk_iterator encountered an unsupported ChunkPayload variant: {other:?}"
-                            )))?
-                        }
-                    }
+                    resolved.push(payload_to_resolved(&session, ci.payload)?);
                 }
 
-                let batch = Python::attach(|py| -> PyResult<Py<PyAny>> {
-                    let coords_arr = coords_flat
-                        .into_pyarray(py)
-                        .reshape((n, ndim))?
-                        .into_any()
-                        .unbind();
-                    let kinds_arr = kinds.into_pyarray(py).into_any().unbind();
-                    let offsets_arr = offsets.into_pyarray(py).into_any().unbind();
-                    let lengths_arr = lengths.into_pyarray(py).into_any().unbind();
-                    let paths_list: Py<PyAny> =
-                        PyList::new(py, paths)?.into_any().unbind();
-                    let inlined_dict = PyDict::new(py);
-                    for (i, b) in inlined {
-                        let slice: &[u8] = b.as_ref();
-                        inlined_dict.set_item(i, PyBytesType::new(py, slice))?;
-                    }
-                    let tup = PyTuple::new(
-                        py,
-                        [
-                            coords_arr,
-                            kinds_arr,
-                            paths_list,
-                            offsets_arr,
-                            lengths_arr,
-                            inlined_dict.into_any().unbind(),
-                        ],
-                    )?;
-                    Ok(tup.into_any().unbind())
+                let batch = Python::attach(|py| {
+                    resolved_refs_to_columns(py, resolved, Some((coords_flat, ndim)))
                 })?;
 
                 yield batch;
@@ -742,6 +744,159 @@ impl PyStore {
         };
         let prepared = Arc::new(Mutex::new(res.boxed()));
         Ok(PyAsyncCloseableIterator::new(prepared))
+    }
+
+    /// Resolve an explicit set of chunk coordinates for one array to their
+    /// references, without scanning the whole manifest.
+    ///
+    /// Unlike `array_chunk_iterator`, which walks the entire array manifest,
+    /// this only reads the manifest pages the requested coordinates fall in —
+    /// reusing the same lazy per-key lookup the read path uses.
+    ///
+    /// Returns a columnar 5-tuple aligned with the input coords (row `i`
+    /// describes `coords[i]`), matching `array_chunk_iterator`'s column layout
+    /// minus the coords column:
+    ///
+    /// ```text
+    /// kinds    : np.ndarray[uint8]    values of icechunk.ChunkType
+    ///                                  (0 = uninitialized/missing)
+    /// paths    : list[str]            URL (virtual) | chunk_id (native) | "" otherwise
+    /// offsets  : np.ndarray[uint64]
+    /// lengths  : np.ndarray[uint64]
+    /// inlined  : dict[int, bytes]     inline rows only, keyed by row index
+    /// ```
+    fn resolve_chunk_refs(
+        &self,
+        py: Python<'_>,
+        array_path: String,
+        coords: Vec<Vec<u32>>,
+    ) -> PyResult<Py<PyAny>> {
+        let session = self.0.session();
+        let resolved = py.detach(move || {
+            pyo3_async_runtimes::tokio::get_runtime()
+                .block_on(resolve_chunk_refs_impl(session, array_path, coords))
+        })?;
+        resolved_refs_to_columns(py, resolved, None)
+    }
+
+    fn resolve_chunk_refs_async<'py>(
+        &'py self,
+        py: Python<'py>,
+        array_path: String,
+        coords: Vec<Vec<u32>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let session = self.0.session();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let resolved = resolve_chunk_refs_impl(session, array_path, coords).await?;
+            Python::attach(|py| resolved_refs_to_columns(py, resolved, None))
+        })
+    }
+
+    /// Bulk-read many chunks with read coalescing (see `Session::get_many_chunks`).
+    ///
+    /// `requests` is a list of `(array_path, coords)` and may span multiple
+    /// arrays. Returns an async iterator yielding a non-empty
+    /// `list[(request_index, bytes, error)]` per completed span, in completion
+    /// order, where `request_index` is the chunk's position in `requests`.
+    /// `bytes` is that chunk's exact bytes (a zero-copy view of its coalesced
+    /// span); `None` means the chunk is uninitialized.
+    ///
+    /// Coalescing knobs `max_gap` / `max_coalesced_bytes` are per call. Chunks
+    /// are grouped and coalesced per manifest, and manifests are pipelined.
+    #[pyo3(signature = (requests, max_gap, max_coalesced_bytes=None))]
+    fn get_many_chunks(
+        &self,
+        requests: Vec<(String, Vec<u32>)>,
+        max_gap: u64,
+        max_coalesced_bytes: Option<u64>,
+    ) -> PyResult<PyAsyncCloseableIterator> {
+        let store = Arc::clone(&self.0);
+        // Parsed before the stream is built so a malformed path is raised by this
+        // call rather than deferred to the first `__anext__`. Resolving the array
+        // itself needs the session lock, so a path that parses but names no array
+        // (or names a group) can only surface on first iteration.
+        let parsed = parse_requests(requests)?;
+        let res = try_stream! {
+            let session_lock = store.session();
+            let session = session_lock.read_owned().await;
+
+            let stream = session
+                .get_many_chunks(parsed, max_gap, max_coalesced_bytes)
+                .await
+                .map_err(PyIcechunkStoreError::SessionError)?;
+
+            // One `Python::attach` (hence one GIL acquire and one asyncio
+            // round-trip) per batch rather than per chunk. At small chunk sizes
+            // that delivery cost otherwise dominates the I/O the coalescing saves.
+            for await outcomes in stream {
+                let batch = Python::attach(|py| -> PyResult<Py<PyAny>> {
+                    let none = || py.None().into_bound(py);
+                    let mut rows: Vec<Bound<'_, PyAny>> =
+                        Vec::with_capacity(outcomes.len());
+                    for (index, outcome) in outcomes {
+                        let (data, error): (Bound<'_, PyAny>, Bound<'_, PyAny>) = match outcome {
+                            // Zero-copy: wrap the chunk's Bytes via the buffer protocol.
+                            Ok(Some(b)) => (PyBytes::new(b).into_bound_py_any(py)?, none()),
+                            Ok(None) => (none(), none()),
+                            // Per-chunk failure: the rest of the batch still streams.
+                            Err(err) => (
+                                none(),
+                                session_error_to_pyerr(&err).into_value(py).into_bound(py).into_any(),
+                            ),
+                        };
+                        rows.push(
+                            PyTuple::new(py, [index.into_bound_py_any(py)?, data, error])?
+                                .into_any(),
+                        );
+                    }
+                    Ok(PyList::new(py, rows)?.into_any().unbind())
+                })?;
+                yield batch;
+            }
+        };
+        let prepared = Arc::new(Mutex::new(res.boxed()));
+        Ok(PyAsyncCloseableIterator::new(prepared))
+    }
+
+    /// Diagnostic: resolve `requests` and plan spans without fetching, returning
+    /// the coalescing stats (span count, over-read, kind breakdown) as a dict.
+    /// Use it to see whether coalescing actually merges for an access pattern
+    /// and how much it over-reads at a given `max_gap`. Timing this call also
+    /// isolates the resolve phase (no download).
+    #[pyo3(signature = (requests, max_gap, max_coalesced_bytes=None))]
+    fn coalescing_report(
+        &self,
+        py: Python<'_>,
+        requests: Vec<(String, Vec<u32>)>,
+        max_gap: u64,
+        max_coalesced_bytes: Option<u64>,
+    ) -> PyResult<Py<PyAny>> {
+        let store = Arc::clone(&self.0);
+        let report: CoalescingReport = py.detach(move || {
+            pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+                let session_lock = store.session();
+                let session = session_lock.read_owned().await;
+                let parsed = parse_requests(requests)?;
+                let report = session
+                    .coalescing_report(parsed, max_gap, max_coalesced_bytes)
+                    .await
+                    .map_err(PyIcechunkStoreError::SessionError)?;
+                Ok::<CoalescingReport, PyErr>(report)
+            })
+        })?;
+
+        let d = PyDict::new(py);
+        d.set_item("requested", report.requested)?;
+        d.set_item("virtual_chunks", report.virtual_chunks)?;
+        d.set_item("native_chunks", report.native_chunks)?;
+        d.set_item("inline_chunks", report.inline_chunks)?;
+        d.set_item("missing_chunks", report.missing_chunks)?;
+        d.set_item("spans", report.spans)?;
+        d.set_item("useful_bytes", report.useful_bytes)?;
+        d.set_item("over_read_bytes", report.over_read_bytes)?;
+        d.set_item("max_span_bytes", report.max_span_bytes)?;
+        d.set_item("concurrency", report.concurrency)?;
+        Ok(d.into_any().unbind())
     }
 
     fn delete<'py>(
