@@ -1,10 +1,14 @@
 use std::{borrow::Cow, ops::Deref as _, sync::Arc};
 
 use async_stream::try_stream;
+use bytes::Bytes;
 use futures::{StreamExt as _, TryStreamExt as _};
 use icechunk::{
     Store,
-    format::{ChunkIndices, Path, manifest::ChunkPayload},
+    format::{
+        ChunkIndices, Path,
+        manifest::{ChunkPayload, ChunkRef, VirtualChunkRef},
+    },
     session::{
         ReindexMapping, ReindexOperationResult, Session, SessionError, SessionErrorKind,
         SessionMode,
@@ -51,6 +55,20 @@ impl From<&ChunkPayload> for ChunkType {
             _ => ChunkType::Uninitialized,
         }
     }
+}
+
+/// A single resolved chunk reference, in the plain-data form the columnar
+/// `resolve_chunk_refs` result is built from. `location`, `offset` and
+/// `length` share the same meaning across kinds (see `array_chunk_iterator`):
+/// virtual → resolved source URL, native → `chunk_id`, inline → empty +
+/// `inline_data`. Uninitialized coords are represented with `kind == 0`
+/// (`ChunkType::Uninitialized`).
+pub(crate) struct ResolvedChunkRef {
+    pub kind: u8,
+    pub location: String,
+    pub offset: u64,
+    pub length: u64,
+    pub inline_data: Option<Bytes>,
 }
 
 /// The mode of a session, determining what operations are allowed.
@@ -764,4 +782,87 @@ impl PySession {
 
         Ok(res.as_ref().map(ChunkType::from).unwrap_or(ChunkType::Uninitialized))
     }
+}
+
+/// Convert a resolved [`ChunkPayload`] into a [`ResolvedChunkRef`], expanding
+/// virtual locations through the session's resolver — the payload →
+/// `(kind, location, offset, length, inline)` mapping shared by every API that
+/// exposes chunk references (`resolve_chunk_refs`, `array_chunk_iterator`).
+pub(crate) fn payload_to_resolved(
+    session: &Session,
+    payload: ChunkPayload,
+) -> PyResult<ResolvedChunkRef> {
+    let kind = ChunkType::from(&payload) as u8;
+    let cref = match payload {
+        ChunkPayload::Virtual(VirtualChunkRef { location, offset, length, .. }) => {
+            let url = session.resolve_virtual_location(&location).map_err(|e| {
+                PyIcechunkStoreError::SessionError(SessionError::capture(
+                    SessionErrorKind::VirtualReferenceError(e.kind),
+                ))
+            })?;
+            ResolvedChunkRef { kind, location: url, offset, length, inline_data: None }
+        }
+        ChunkPayload::Ref(ChunkRef { id, offset, length }) => ResolvedChunkRef {
+            kind,
+            location: format!("{id}"),
+            offset,
+            length,
+            inline_data: None,
+        },
+        ChunkPayload::Inline(bytes) => ResolvedChunkRef {
+            kind,
+            location: String::new(),
+            offset: 0,
+            length: bytes.len() as u64,
+            inline_data: Some(bytes),
+        },
+        other => {
+            return Err(PyIcechunkStoreError::PyValueError(format!(
+                "encountered an unsupported ChunkPayload variant: {other:?}"
+            ))
+            .into());
+        }
+    };
+    Ok(cref)
+}
+
+/// Resolve an explicit batch of chunk coordinates for one array to their
+/// references. Returns one [`ResolvedChunkRef`] per input coord in input order;
+/// uninitialized coords get `kind == 0` (`ChunkType::Uninitialized`). The
+/// per-coord loop lives here (in Rust) so callers cross the FFI boundary once.
+///
+/// Resolution goes through [`Session::resolve_chunk_payloads`], which routes the
+/// coords to the manifests holding them and fetches each of those once —
+/// touching only the pages the coords fall in, never the whole manifest, and
+/// never re-resolving the array's node per coord.
+pub(crate) async fn resolve_chunk_refs_impl(
+    session: Arc<RwLock<Session>>,
+    array_path: String,
+    coords: Vec<Vec<u32>>,
+) -> PyResult<Vec<ResolvedChunkRef>> {
+    let session = session.read().await;
+    let array_path = crate::store::parse_array_path(array_path)?;
+
+    let requests: Vec<_> = coords
+        .into_iter()
+        .map(|coord| (array_path.clone(), ChunkIndices(coord)))
+        .collect();
+    let payloads = session
+        .resolve_chunk_payloads(requests)
+        .await
+        .map_err(PyIcechunkStoreError::SessionError)?;
+
+    payloads
+        .into_iter()
+        .map(|payload| match payload {
+            Some(p) => payload_to_resolved(&session, p),
+            None => Ok(ResolvedChunkRef {
+                kind: ChunkType::Uninitialized as u8,
+                location: String::new(),
+                offset: 0,
+                length: 0,
+                inline_data: None,
+            }),
+        })
+        .collect()
 }

@@ -8,10 +8,14 @@
 //! - **Writable**: Can read and write chunks/metadata
 //! - **Rearrange**: Can move/rename nodes (no chunk writes)
 
-use async_stream::try_stream;
+use async_stream::{stream, try_stream};
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
-use futures::{Stream, StreamExt as _, TryStreamExt as _, future::Either, stream};
+use futures::{
+    Stream, StreamExt as _, TryStreamExt as _,
+    future::Either,
+    stream::{self, FuturesUnordered},
+};
 use itertools::{Itertools as _, enumerate, repeat_n};
 use regex::bytes::Regex;
 use serde::{Deserialize, Serialize};
@@ -23,7 +27,7 @@ use std::{
     sync::Arc,
 };
 use thiserror::Error;
-use tokio::task::JoinError;
+use tokio::{sync::Semaphore, task::JoinError};
 use tracing::{Instrument as _, Span, debug, info, instrument, trace, warn};
 
 use crate::{
@@ -41,14 +45,14 @@ use crate::{
     error::ICError,
     feature_flags::{MOVE_NODE_FLAG, raise_if_feature_flag_disabled},
     format::{
-        ByteRange, ChunkIndices, ChunkOffset, IcechunkFormatError,
+        ByteRange, ChunkId, ChunkIndices, ChunkOffset, IcechunkFormatError,
         IcechunkFormatErrorKind, ManifestId, NodeId, ObjectId, Path, SnapshotId,
         format_constants::SpecVersionBin,
         manifest::{
-            ChunkInfo, ChunkPayload, ChunkRef, LocationCompressionConfig, Manifest,
-            ManifestExtents, ManifestRef, ManifestSplits, Overlap, VirtualChunkLocation,
-            VirtualChunkRef, VirtualReferenceError, VirtualReferenceErrorKind,
-            uniform_manifest_split_edges,
+            Checksum, ChunkInfo, ChunkPayload, ChunkRef, LocationCompressionConfig,
+            Manifest, ManifestExtents, ManifestRef, ManifestSplits, Overlap,
+            VirtualChunkLocation, VirtualChunkRef, VirtualReferenceError,
+            VirtualReferenceErrorKind, uniform_manifest_split_edges,
         },
         repo_info::{RepoInfo, UpdateType},
         snapshot::{
@@ -89,6 +93,11 @@ pub enum SessionErrorKind {
     VirtualReferenceError(#[from] VirtualReferenceErrorKind),
     #[error(transparent)]
     RefError(#[from] RefErrorKind),
+
+    #[error(
+        "coalesced range GET for `{object}` returned {got} bytes, expected {expected}"
+    )]
+    CoalescedShortRead { object: String, expected: u64, got: u64 },
 
     #[error("Read only sessions cannot modify the repository")]
     ReadOnlySession,
@@ -286,6 +295,446 @@ where
     // Note: I don't think we can distinguish between out of bounds index for the array
     //       and an index that is part of a split that hasn't been written yet.
     enumerate(iter).find(|(_, e)| e.contains(coord.0.as_slice()))
+}
+
+/// Identifies the backing object a chunk's bytes live in. Read coalescing groups
+/// by this: only chunks in the same object can share a range GET. Virtual chunks
+/// group by their resolved absolute URL, native chunks by their chunk id.
+///
+/// Sharing an object is necessary but not sufficient to merge: [`plan_spans`] is
+/// applied per resolved manifest group, so two chunks merge only if they also
+/// share a manifest and array. Chunks of different arrays that point into the
+/// same object do not merge while the writer emits one manifest per array, even
+/// though this key would allow it.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum BackingObject {
+    Virtual(String),
+    Native(ChunkId),
+}
+
+/// A requested chunk resolved to a byte range within a backing object — the
+/// input to [`plan_spans`].
+#[derive(Debug, Clone)]
+struct ResolvedChunk {
+    /// Index of this chunk in the original `get_many_chunks` request list.
+    request_index: usize,
+    object: BackingObject,
+    offset: ChunkOffset,
+    length: u64,
+    /// Virtual-chunk checksum, validated when the span is fetched. `None` for native.
+    checksum: Option<Checksum>,
+}
+
+impl ResolvedChunk {
+    fn end(&self) -> ChunkOffset {
+        self.offset + self.length
+    }
+}
+
+#[derive(Debug, Clone)]
+struct SpanMember {
+    request_index: usize,
+    offset: ChunkOffset,
+    length: u64,
+}
+
+/// A contiguous byte range fetched in a single GET, serving one or more chunks.
+/// `start..end` bound the bytes actually fetched; the bytes no member wants are
+/// the over-read.
+#[derive(Debug, Clone)]
+struct CoalescedSpan {
+    object: BackingObject,
+    start: ChunkOffset,
+    end: ChunkOffset,
+    /// Checksum used to validate the fetch. All members share it by
+    /// construction — [`plan_spans`] groups on it, so refs disagreeing about an
+    /// object's checksum land in separate spans.
+    checksum: Option<Checksum>,
+    members: Vec<SpanMember>,
+}
+
+impl CoalescedSpan {
+    /// Bytes some member actually wants: the *union* of the member ranges, not
+    /// their summed lengths. Members can overlap — refs into one object may
+    /// overlap, and requesting the same coord twice puts two members on the same
+    /// range — so summing would double-count, and would make `over_read_bytes`
+    /// underflow once the sum exceeded the span. Members are offset-sorted by
+    /// [`plan_spans`], so one sweep suffices.
+    fn useful_bytes(&self) -> u64 {
+        let mut total = 0;
+        let mut covered = self.start;
+        for m in &self.members {
+            let end = m.offset + m.length;
+            if end > covered {
+                total += end - covered.max(m.offset);
+                covered = end;
+            }
+        }
+        total
+    }
+
+    /// Bytes fetched that no member wants. Cannot underflow: the member union is
+    /// contained in `start..end` by construction.
+    fn over_read_bytes(&self) -> u64 {
+        (self.end - self.start) - self.useful_bytes()
+    }
+}
+
+/// Group resolved chunks into coalesced byte-range spans.
+///
+/// Chunks are grouped by backing object (never across objects), sorted by
+/// offset, and neighbours whose gap is within `max_gap` are merged — subject to
+/// `max_coalesced_bytes` capping a single span. `max_gap == 0` merges only
+/// strictly adjacent chunks (zero over-read); larger values trade over-read for
+/// fewer round-trips. Each input chunk appears in exactly one span.
+fn plan_spans(
+    resolved: Vec<ResolvedChunk>,
+    max_gap: u64,
+    max_coalesced_bytes: Option<u64>,
+) -> Vec<CoalescedSpan> {
+    // Keyed by checksum as well as object: a span is fetched with one
+    // precondition, so refs that disagree about the object's checksum must not
+    // share it. Merging them would validate some members against another's
+    // checksum — or, when one is `None`, drop validation entirely and return
+    // bytes the single-chunk read path would reject as modified.
+    let mut groups: HashMap<(BackingObject, Option<Checksum>), Vec<ResolvedChunk>> =
+        HashMap::new();
+    for c in resolved {
+        groups.entry((c.object.clone(), c.checksum.clone())).or_default().push(c);
+    }
+
+    let mut spans = Vec::new();
+    for ((object, _), mut group) in groups {
+        group.sort_by_key(|c| c.offset);
+        let mut current: Option<CoalescedSpan> = None;
+        for c in group {
+            let member = SpanMember {
+                request_index: c.request_index,
+                offset: c.offset,
+                length: c.length,
+            };
+            match current.as_mut() {
+                Some(span) => {
+                    let gap = c.offset.saturating_sub(span.end);
+                    let new_end = span.end.max(c.end());
+                    let new_size = new_end - span.start;
+                    let within_gap = gap <= max_gap;
+                    let within_cap =
+                        max_coalesced_bytes.is_none_or(|cap| new_size <= cap);
+                    if within_gap && within_cap {
+                        span.members.push(member);
+                        span.end = new_end;
+                    } else {
+                        if let Some(done) = current.take() {
+                            spans.push(done);
+                        }
+                        current = Some(CoalescedSpan {
+                            object: object.clone(),
+                            start: c.offset,
+                            end: c.end(),
+                            checksum: c.checksum,
+                            members: vec![member],
+                        });
+                    }
+                }
+                None => {
+                    current = Some(CoalescedSpan {
+                        object: object.clone(),
+                        start: c.offset,
+                        end: c.end(),
+                        checksum: c.checksum,
+                        members: vec![member],
+                    });
+                }
+            }
+        }
+        if let Some(done) = current {
+            spans.push(done);
+        }
+    }
+    spans
+}
+
+/// The outcome of one requested chunk in [`Session::get_many_chunks`].
+///
+/// `Ok(None)` is an uninitialized chunk. `Err` is scoped to the chunks it
+/// actually affected rather than failing the whole batch — matching
+/// [`Store::get_partial_values`](crate::Store::get_partial_values), which reports
+/// per-key errors. The error is shared behind an `Arc` because coalescing means
+/// one failed span fails every chunk that shared it.
+pub type ChunkOutcome = Result<Option<Bytes>, Arc<SessionError>>;
+
+/// Resolved requests split into what can be returned immediately (inline bytes,
+/// missing/uninitialized, or a chunk whose location could not be resolved) and
+/// what needs a range GET. Kind counts are derivable from these two vecs, so
+/// they aren't stored here.
+struct Partitioned {
+    immediate: Vec<(u64, ChunkOutcome)>,
+    to_fetch: Vec<ResolvedChunk>,
+}
+
+/// The requested coords of one array that live in one manifest, keyed by
+/// `(manifest, node)` and holding the request index of each coord.
+///
+/// Resolving one group means fetching that single manifest (there is no
+/// partial-manifest read), which then yields every ref in the page — so
+/// coalescing is scoped to a manifest for free. The key is `(manifest, node)`
+/// rather than manifest alone because a manifest may hold refs for several
+/// arrays (`Manifest.arrays` is keyed by node id), and a payload lookup needs
+/// the node the coord belongs to.
+type ManifestWork = ((ManifestId, NodeId), Vec<(usize, ChunkIndices)>);
+
+/// Requested coords bucketed for coalescing. `missing` needs no fetch;
+/// `changeset` chunks are already resolved from the session; `groups` each
+/// require one manifest fetch (deduplicated by the asset manager when several
+/// groups share a manifest).
+struct ManifestGrouping {
+    missing: Vec<u64>,
+    changeset: Vec<(usize, Option<ChunkPayload>)>,
+    groups: Vec<ManifestWork>,
+}
+
+/// One completed unit of work driven by [`Session::get_many_chunks`]'s shared
+/// `FuturesUnordered`. A `Resolved` manifest fans out into span GETs that come
+/// back as `Done`, so both kinds share one queue and manifest-resolve overlaps
+/// span-download. Failures arrive as `Done` too, attributed to exactly the
+/// request indices they affected.
+enum Work {
+    Resolved(Vec<(usize, Option<ChunkPayload>)>),
+    Done(Vec<(u64, ChunkOutcome)>),
+}
+
+/// Attribute one failure to every request index it affected — the coords of a
+/// manifest that would not load, or the members of a span that would not fetch.
+fn fail_all(
+    indices: impl IntoIterator<Item = u64>,
+    err: SessionError,
+) -> Vec<(u64, ChunkOutcome)> {
+    let err = Arc::new(err);
+    indices.into_iter().map(|i| (i, Err(Arc::clone(&err)))).collect()
+}
+
+/// Diagnostic summary of coalescing a set of requests, without fetching. Lets a
+/// caller see the merge ratio (`spans` vs coalescable chunks) and `over_read`
+/// for a given `max_gap` / `max_coalesced_bytes` — i.e. whether coalescing is
+/// actually helping for this access pattern.
+///
+/// `spans` is the number of range GETs `get_many_chunks` issues for the same
+/// arguments — this layer never splits a merged span back apart. The storage
+/// layer may still divide a span larger than `ideal_concurrent_request_size`
+/// into bounded concurrent parts, so the count of HTTP requests can exceed
+/// `spans` for large spans.
+#[derive(Debug, Clone)]
+pub struct CoalescingReport {
+    pub requested: usize,
+    pub virtual_chunks: usize,
+    pub native_chunks: usize,
+    pub inline_chunks: usize,
+    pub missing_chunks: usize,
+    pub spans: usize,
+    pub useful_bytes: u64,
+    pub over_read_bytes: u64,
+    pub max_span_bytes: u64,
+    pub concurrency: usize,
+}
+
+#[cfg(test)]
+mod plan_spans_tests {
+    use icechunk_format::manifest::SecondsSinceEpoch;
+    use icechunk_types::ETag;
+
+    use super::{BackingObject, Checksum, CoalescedSpan, ResolvedChunk, plan_spans};
+
+    fn virt(request_index: usize, url: &str, offset: u64, length: u64) -> ResolvedChunk {
+        ResolvedChunk {
+            request_index,
+            object: BackingObject::Virtual(url.to_string()),
+            offset,
+            length,
+            checksum: None,
+        }
+    }
+
+    fn over_read(span: &CoalescedSpan) -> u64 {
+        span.over_read_bytes()
+    }
+
+    fn member_indices(span: &CoalescedSpan) -> Vec<u64> {
+        span.members.iter().map(|m| m.request_index as u64).collect()
+    }
+
+    #[test]
+    fn empty_input_yields_no_spans() {
+        assert!(plan_spans(vec![], 0, None).is_empty());
+    }
+
+    #[test]
+    fn adjacent_chunks_merge_with_zero_over_read() {
+        // Two adjacent chunks in one file collapse to one span, no over-read.
+        let spans = plan_spans(
+            vec![virt(0, "s3://b/f", 0, 100), virt(1, "s3://b/f", 100, 50)],
+            0,
+            None,
+        );
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].start, 0);
+        assert_eq!(spans[0].end, 150);
+        assert_eq!(over_read(&spans[0]), 0);
+        assert_eq!(member_indices(&spans[0]), vec![0, 1]);
+    }
+
+    #[test]
+    fn gap_within_max_gap_merges_beyond_does_not() {
+        let chunks = || vec![virt(0, "s3://b/f", 0, 100), virt(1, "s3://b/f", 120, 50)];
+        // gap of 20: not merged at max_gap=0, merged at max_gap=20.
+        assert_eq!(plan_spans(chunks(), 0, None).len(), 2);
+        let merged = plan_spans(chunks(), 20, None);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(over_read(&merged[0]), 20);
+    }
+
+    #[test]
+    fn max_coalesced_bytes_caps_a_span() {
+        // Adjacent, but the cap forbids a span larger than 100 bytes.
+        let spans = plan_spans(
+            vec![virt(0, "s3://b/f", 0, 80), virt(1, "s3://b/f", 80, 80)],
+            0,
+            Some(100),
+        );
+        assert_eq!(spans.len(), 2);
+    }
+
+    #[test]
+    fn distinct_objects_never_merge() {
+        let spans = plan_spans(
+            vec![virt(0, "s3://b/f1", 0, 100), virt(1, "s3://b/f2", 100, 50)],
+            1_000_000,
+            None,
+        );
+        assert_eq!(spans.len(), 2);
+    }
+
+    #[test]
+    fn overlapping_chunks_merge_without_shrinking_or_double_counting() {
+        // A fully-contained chunk (10..40 inside 0..100) must not shrink the
+        // span or add phantom over-read; both members are retained.
+        let spans = plan_spans(
+            vec![virt(0, "s3://b/f", 0, 100), virt(1, "s3://b/f", 10, 30)],
+            0,
+            None,
+        );
+        assert_eq!(spans.len(), 1);
+        assert_eq!((spans[0].start, spans[0].end), (0, 100));
+        assert_eq!(member_indices(&spans[0]), vec![0, 1]);
+        // The contained member's bytes are already wanted by the first, so they
+        // are counted once: 100 useful, no over-read. Summing member lengths
+        // would claim 130 useful in a 100-byte span.
+        assert_eq!(spans[0].useful_bytes(), 100);
+        assert_eq!(over_read(&spans[0]), 0);
+    }
+
+    #[test]
+    fn one_coord_requested_twice_shares_a_span_and_is_counted_once() {
+        // Duplicate requests for the same coord resolve to two members on the
+        // identical range. Both must be served, and the byte accounting must not
+        // double-count them (which would make over-read underflow).
+        let spans = plan_spans(
+            vec![virt(0, "s3://b/f", 0, 100), virt(1, "s3://b/f", 0, 100)],
+            0,
+            None,
+        );
+        assert_eq!(spans.len(), 1);
+        assert_eq!((spans[0].start, spans[0].end), (0, 100));
+        assert_eq!(member_indices(&spans[0]), vec![0, 1]);
+        assert_eq!(spans[0].useful_bytes(), 100);
+        assert_eq!(over_read(&spans[0]), 0);
+    }
+
+    #[test]
+    fn partially_overlapping_chunks_count_the_overlap_once() {
+        let spans = plan_spans(
+            vec![virt(0, "s3://b/f", 0, 100), virt(1, "s3://b/f", 60, 100)],
+            0,
+            None,
+        );
+        assert_eq!(spans.len(), 1);
+        assert_eq!((spans[0].start, spans[0].end), (0, 160));
+        // 0..160 is entirely wanted; the 60..100 overlap is not counted twice.
+        assert_eq!(spans[0].useful_bytes(), 160);
+        assert_eq!(over_read(&spans[0]), 0);
+    }
+
+    #[test]
+    fn native_and_virtual_never_share_a_span() {
+        use super::ChunkId;
+        let native = ResolvedChunk {
+            request_index: 0,
+            object: BackingObject::Native(ChunkId::random()),
+            offset: 0,
+            length: 100,
+            checksum: None,
+        };
+        let virtual_same_range = virt(1, "s3://b/f", 100, 50);
+        let spans = plan_spans(vec![native, virtual_same_range], 1_000_000, None);
+        assert_eq!(spans.len(), 2);
+    }
+
+    #[test]
+    fn chunks_from_different_requests_in_one_object_coalesce() {
+        // Cross-array: request 5 and request 2 land in the same object (out of
+        // input order) and still merge into one offset-sorted span.
+        let spans = plan_spans(
+            vec![virt(5, "s3://b/f", 100, 50), virt(2, "s3://b/f", 0, 100)],
+            0,
+            None,
+        );
+        assert_eq!(spans.len(), 1);
+        assert_eq!(member_indices(&spans[0]), vec![2, 5]);
+        assert_eq!(spans[0].start, 0);
+        assert_eq!(spans[0].end, 150);
+    }
+
+    #[test]
+    fn adjacent_chunks_disagreeing_on_checksum_never_merge() {
+        // A span carries one precondition, so refs that disagree about the
+        // object's checksum must not share it — otherwise a member is validated
+        // against another's checksum, or (against a `None`) not at all.
+        let with = |request_index: usize, offset: u64, checksum| ResolvedChunk {
+            request_index,
+            object: BackingObject::Virtual("s3://b/f".to_string()),
+            offset,
+            length: 100,
+            checksum,
+        };
+        let spans = plan_spans(
+            vec![
+                with(0, 0, None),
+                with(1, 100, Some(Checksum::ETag(ETag("abc".to_string())))),
+                with(2, 200, Some(Checksum::ETag(ETag("abc".to_string())))),
+                with(3, 300, Some(Checksum::LastModified(SecondsSinceEpoch(7)))),
+            ],
+            0,
+            None,
+        );
+        // Byte-adjacent throughout, so offsets alone would collapse all four into
+        // one span. Three distinct checksums => three spans, and the two sharing
+        // an ETag do merge.
+        assert_eq!(spans.len(), 3);
+        let mut grouped: Vec<Vec<u64>> = spans.iter().map(member_indices).collect();
+        grouped.sort();
+        assert_eq!(grouped, vec![vec![0], vec![1, 2], vec![3]]);
+        // Every span's checksum is the one its members recorded.
+        for span in &spans {
+            assert!(span.members.iter().all(|m| {
+                let expected = match m.request_index {
+                    0 => None,
+                    3 => Some(Checksum::LastModified(SecondsSinceEpoch(7))),
+                    _ => Some(Checksum::ETag(ETag("abc".to_string()))),
+                };
+                span.checksum == expected
+            }));
+        }
+    }
 }
 
 pub type RebaseHook =
@@ -1331,6 +1780,429 @@ impl Session {
             Some(_) => Ok(None),
             None => Ok(None),
         }
+    }
+
+    /// Bulk-read many chunks with **read coalescing**, grouped by manifest.
+    ///
+    /// Requested coords are bucketed by the manifest that holds them; each
+    /// bucket's manifest is fetched once (there is no partial-manifest read, so
+    /// this resolves every ref in the page at once), its chunks are coalesced —
+    /// nearby byte ranges in the same backing object merged into a few large
+    /// range GETs — and those spans are fetched through Icechunk's own fetchers
+    /// (virtual + native), bounded by `get_partial_values_concurrency`. Buckets
+    /// are pipelined: one manifest's spans download while the next manifest
+    /// still loads.
+    ///
+    /// Coalescing is therefore scoped to a single manifest. Coords from
+    /// different arrays live in different manifests and so are never merged
+    /// together, but are still fetched and returned correctly.
+    ///
+    /// The stream yields one non-empty batch per completed unit of work — a
+    /// span's members, a bucket's immediately-serviceable chunks, or the coords
+    /// a failure hit — as `(request_index, outcome)` pairs, where
+    /// `request_index` is the chunk's position in `requests`. Batches arrive in
+    /// completion order and every requested coord appears in exactly one. A
+    /// chunk's bytes are byte-identical to an individual
+    /// [`Session::get_chunk_reader`] read; virtual/native chunks come back as
+    /// zero-copy slices of their coalesced span buffer, inline chunks directly.
+    /// Uninitialized/missing coords yield `Ok(None)`.
+    ///
+    /// Batching is what the span already knows — the members it just fetched —
+    /// so it costs nothing here, and it is how a consumer that pays per item
+    /// (notably the Python binding, one GIL acquire and one asyncio round-trip
+    /// per yield) amortizes that cost over a whole GET instead of per chunk.
+    ///
+    /// Failures are per-chunk ([`ChunkOutcome`]), not per-batch: a manifest that
+    /// won't load fails its own coords and a span that won't fetch fails its own
+    /// members, while every other chunk is still delivered. Errors that prevent
+    /// the request from starting at all — an unknown path, a group instead of an
+    /// array — surface from this function instead.
+    ///
+    /// See [`plan_spans`] for the coalescing knobs `max_gap` /
+    /// `max_coalesced_bytes`.
+    pub async fn get_many_chunks<'a>(
+        &'a self,
+        requests: Vec<(Path, ChunkIndices)>,
+        max_gap: u64,
+        max_coalesced_bytes: Option<u64>,
+    ) -> SessionResult<impl Stream<Item = Vec<(u64, ChunkOutcome)>> + 'a + use<'a>> {
+        // The only concurrency gate this layer applies: `conc` spans in flight.
+        // How a span is turned into requests belongs to the storage layer, which
+        // splits one larger than `ideal_concurrent_request_size` into bounded
+        // concurrent parts. So this decides *what to merge*, and the fetcher
+        // decides *how to issue it* — `max_gap` is the knob that trades
+        // round-trips for over-read, and nothing here second-guesses it by
+        // splitting merged spans back apart.
+        let sem = Arc::new(Semaphore::new(self.span_concurrency()));
+
+        // Group by manifest first — there is no partial-manifest read, so
+        // fetching a manifest resolves every ref in it at once. This makes the
+        // manifest the natural coalescing + pipelining unit.
+        let grouping = self.group_by_manifest(requests).await?;
+
+        // A single `FuturesUnordered` drives both manifest-resolve and span-fetch
+        // futures. Resolving a manifest fans out into its span GETs, pushed onto
+        // the same queue while other manifests are still resolving — so manifest
+        // fetches overlap span downloads, and each chunk is yielded the moment its
+        // own span lands (no per-manifest barrier). Boxed as `Send + 'a` (not
+        // `.boxed()`, which needs `'static`, nor `.boxed_local()`, which is
+        // `!Send`) because the Python binding requires a `Send` stream.
+        let stream = stream! {
+            if !grouping.missing.is_empty() {
+                yield grouping.missing.into_iter().map(|i| (i, Ok(None))).collect();
+            }
+
+            let mut work: FuturesUnordered<
+                Pin<Box<dyn Future<Output = Work> + Send + 'a>>,
+            > = FuturesUnordered::new();
+
+            // Session-written chunks are already resolved; coalesce among
+            // themselves as their own batch.
+            if !grouping.changeset.is_empty() {
+                let cs = grouping.changeset;
+                work.push(Box::pin(async move { Work::Resolved(cs) }));
+            }
+            for g in grouping.groups {
+                let indices: Vec<u64> = g.1.iter().map(|(i, _)| *i as u64).collect();
+                let sem = Arc::clone(&sem);
+                work.push(Box::pin(async move {
+                    // Manifest fetches take from the same budget as span fetches:
+                    // both are requests to the same backend, and a read touching
+                    // many splits would otherwise open one connection per split
+                    // before a single span downloaded. Deadlock-free because a
+                    // resolve never waits on a span.
+                    let _permit = sem.acquire().await.ok();
+                    match self.resolve_manifest_group(g).await {
+                        Ok(resolved) => Work::Resolved(resolved),
+                        Err(err) => Work::Done(fail_all(indices, err)),
+                    }
+                }));
+            }
+
+            while let Some(item) = work.next().await {
+                match item {
+                    Work::Resolved(resolved) => {
+                        let part = self.partition(resolved);
+                        if !part.immediate.is_empty() {
+                            yield part.immediate;
+                        }
+                        for span in plan_spans(part.to_fetch, max_gap, max_coalesced_bytes)
+                        {
+                            let sem = Arc::clone(&sem);
+                            let indices: Vec<u64> =
+                                span.members.iter().map(|m| m.request_index as u64).collect();
+                            work.push(Box::pin(async move {
+                                match self.fetch_span(span, sem).await {
+                                    Ok(members) => Work::Done(
+                                        members
+                                            .into_iter()
+                                            .map(|(i, b)| (i, Ok(b)))
+                                            .collect(),
+                                    ),
+                                    Err(err) => Work::Done(fail_all(indices, err)),
+                                }
+                            }));
+                        }
+                    }
+                    Work::Done(outcomes) => {
+                        if !outcomes.is_empty() {
+                            yield outcomes;
+                        }
+                    }
+                }
+            }
+        };
+        Ok(stream)
+    }
+
+    /// Bucket requested coords by the manifest that holds them, without fetching
+    /// any manifest. Resolves each array's node once (its manifest extents are
+    /// enough to route a coord), checks the session change set, and routes each
+    /// coord via [`find_coord`]. Coords in no manifest — or out of range — are
+    /// `missing`.
+    async fn group_by_manifest(
+        &self,
+        requests: Vec<(Path, ChunkIndices)>,
+    ) -> SessionResult<ManifestGrouping> {
+        // Bucket by array first so each node is resolved once.
+        let mut by_array: HashMap<Path, Vec<(usize, ChunkIndices)>> = HashMap::new();
+        for (i, (path, coords)) in requests.into_iter().enumerate() {
+            by_array.entry(path).or_default().push((i, coords));
+        }
+
+        let mut missing: Vec<u64> = Vec::new();
+        let mut changeset: Vec<(usize, Option<ChunkPayload>)> = Vec::new();
+        let mut groups: HashMap<(ManifestId, NodeId), Vec<(usize, ChunkIndices)>> =
+            HashMap::new();
+
+        for (path, coords_list) in by_array {
+            let node = self.get_node(&path).await?;
+            let node_id = node.id.clone();
+            let NodeData::Array { shape, manifests, .. } = &node.node_data else {
+                return Err(SessionError::capture(SessionErrorKind::NotAnArray {
+                    node: Box::new(node),
+                    message: "getting many chunks".to_string(),
+                }));
+            };
+            for (i, coords) in coords_list {
+                if !shape.valid_chunk_coord(&coords) {
+                    missing.push(i as u64);
+                    continue;
+                }
+                // Session writes take precedence over the committed manifests.
+                if let Some(session_chunk) =
+                    self.change_set().get_chunk_ref(&node_id, &coords).cloned()
+                {
+                    changeset.push((i, session_chunk));
+                    continue;
+                }
+                match find_coord(manifests.iter().map(|m| &m.extents), &coords) {
+                    Some((idx, _)) => {
+                        groups
+                            .entry((manifests[idx].object_id.clone(), node_id.clone()))
+                            .or_default()
+                            .push((i, coords));
+                    }
+                    None => missing.push(i as u64),
+                }
+            }
+        }
+
+        Ok(ManifestGrouping { missing, changeset, groups: groups.into_iter().collect() })
+    }
+
+    /// Fetch a group's manifest (one whole-object GET, cached) and resolve all of
+    /// its coords to payloads — `None` for a coord not present in the page.
+    ///
+    /// Resolved as one batch so the node lookup and the location decompressor are
+    /// built once for the group rather than once per coord.
+    async fn resolve_manifest_group(
+        &self,
+        ((manifest_id, node_id), coords): ManifestWork,
+    ) -> SessionResult<Vec<(usize, Option<ChunkPayload>)>> {
+        let manifest = self.fetch_manifest(&manifest_id).await?;
+        let payloads = manifest
+            .get_chunk_payloads(&node_id, coords.iter().map(|(_, c)| c))
+            .inject()?;
+        Ok(coords.iter().map(|(i, _)| *i).zip(payloads).collect())
+    }
+
+    /// Resolve every group's manifest concurrently, bounded by
+    /// [`Session::span_concurrency`]. Shared by `get_many_chunks`'s driver,
+    /// `resolve_chunk_payloads` and `coalescing_report` so all three see the same
+    /// resolve behavior.
+    async fn resolve_groups(
+        &self,
+        groups: Vec<ManifestWork>,
+    ) -> SessionResult<Vec<Vec<(usize, Option<ChunkPayload>)>>> {
+        stream::iter(groups)
+            .map(|work| self.resolve_manifest_group(work))
+            .buffer_unordered(self.span_concurrency())
+            .try_collect()
+            .await
+    }
+
+    /// How many coalesced spans this session keeps in flight. The storage layer
+    /// decides how each span becomes requests, so this bounds spans, not GETs.
+    fn span_concurrency(&self) -> usize {
+        (self.config().get_partial_values_concurrency() as usize).max(1)
+    }
+
+    /// Resolve an explicit set of chunk coords to their payloads, in input order,
+    /// without fetching any chunk bytes. `None` for an uninitialized coord.
+    ///
+    /// This is the planning half of [`Session::get_many_chunks`] and shares its
+    /// grouping: each array's node is resolved once and each touched manifest
+    /// fetched once, rather than once per coord as a loop over
+    /// [`Session::get_chunk_ref`] would do. Manifests are fetched concurrently,
+    /// bounded by `get_partial_values_concurrency`.
+    pub async fn resolve_chunk_payloads(
+        &self,
+        requests: Vec<(Path, ChunkIndices)>,
+    ) -> SessionResult<Vec<Option<ChunkPayload>>> {
+        let n = requests.len();
+        let grouping = self.group_by_manifest(requests).await?;
+
+        let mut out: Vec<Option<ChunkPayload>> = vec![None; n];
+        // `missing` needs no write — it is already `None`.
+        for (i, payload) in grouping.changeset {
+            out[i] = payload;
+        }
+        for (i, payload) in
+            self.resolve_groups(grouping.groups).await?.into_iter().flatten()
+        {
+            out[i] = payload;
+        }
+        Ok(out)
+    }
+
+    /// Diagnostic: resolve `requests` and plan spans, but do **not** fetch.
+    /// Reports the merge ratio and over-read so callers can tell whether
+    /// coalescing helps for this access pattern before paying for it.
+    pub async fn coalescing_report(
+        &self,
+        requests: Vec<(Path, ChunkIndices)>,
+        max_gap: u64,
+        max_coalesced_bytes: Option<u64>,
+    ) -> SessionResult<CoalescingReport> {
+        let requested = requests.len();
+        let grouping = self.group_by_manifest(requests).await?;
+
+        let mut missing_chunks = grouping.missing.len();
+        let mut inline_chunks = 0usize;
+        let mut native_chunks = 0usize;
+        let mut virtual_chunks = 0usize;
+        let mut spans = 0usize;
+        let mut useful_bytes = 0u64;
+        let mut over_read_bytes = 0u64;
+        let mut max_span_bytes = 0u64;
+
+        // Resolved through the same helper `get_many_chunks` uses, so timing this
+        // call reflects the resolve cost that call actually pays and the counts
+        // below describe the batches it would actually plan.
+        let mut batches = self.resolve_groups(grouping.groups).await?;
+        if !grouping.changeset.is_empty() {
+            batches.push(grouping.changeset);
+        }
+
+        for resolved in batches {
+            let part = self.partition(resolved);
+            for (_, outcome) in &part.immediate {
+                match outcome {
+                    Ok(Some(_)) => inline_chunks += 1,
+                    Ok(None) => missing_chunks += 1,
+                    // A location that could not be expanded at all. Rare, and
+                    // narrower than it looks — only `vcc://` names are checked
+                    // against containers here, so it is not a reliable count of
+                    // unfetchable chunks. `get_many_chunks` reports the real
+                    // thing per chunk, with the error.
+                    Err(_) => {}
+                }
+            }
+            let native = part
+                .to_fetch
+                .iter()
+                .filter(|c| matches!(c.object, BackingObject::Native(_)))
+                .count();
+            native_chunks += native;
+            virtual_chunks += part.to_fetch.len() - native;
+            for span in plan_spans(part.to_fetch, max_gap, max_coalesced_bytes) {
+                useful_bytes += span.useful_bytes();
+                over_read_bytes += span.over_read_bytes();
+                max_span_bytes = max_span_bytes.max(span.end - span.start);
+                spans += 1;
+            }
+        }
+
+        Ok(CoalescingReport {
+            requested,
+            virtual_chunks,
+            native_chunks,
+            inline_chunks,
+            missing_chunks,
+            spans,
+            useful_bytes,
+            over_read_bytes,
+            max_span_bytes,
+            concurrency: self.span_concurrency(),
+        })
+    }
+
+    /// Split resolved payloads into immediately-serviceable results (inline
+    /// bytes / missing) and chunks that need a range GET (virtual + native).
+    ///
+    /// A virtual chunk whose location can't be resolved is reported as that
+    /// chunk's own failure rather than the batch's: no container matching a URL
+    /// says nothing about the other chunks in the request.
+    fn partition(&self, resolved: Vec<(usize, Option<ChunkPayload>)>) -> Partitioned {
+        let mut immediate: Vec<(u64, ChunkOutcome)> = Vec::new();
+        let mut to_fetch: Vec<ResolvedChunk> = Vec::new();
+        for (i, payload) in resolved {
+            match payload {
+                Some(ChunkPayload::Inline(bytes)) => {
+                    immediate.push((i as u64, Ok(Some(bytes))));
+                }
+                Some(ChunkPayload::Ref(ChunkRef { id, offset, length })) => {
+                    to_fetch.push(ResolvedChunk {
+                        request_index: i,
+                        object: BackingObject::Native(id),
+                        offset,
+                        length,
+                        checksum: None,
+                    });
+                }
+                Some(ChunkPayload::Virtual(VirtualChunkRef {
+                    location,
+                    offset,
+                    length,
+                    checksum,
+                })) => {
+                    // Group by the resolved absolute URL so refs pointing at the
+                    // same object coalesce; fetching that URL is a no-op re-expand.
+                    match self.resolve_virtual_location(&location).inject() {
+                        Ok(url) => to_fetch.push(ResolvedChunk {
+                            request_index: i,
+                            object: BackingObject::Virtual(url),
+                            offset,
+                            length,
+                            checksum,
+                        }),
+                        Err(err) => immediate.push((i as u64, Err(Arc::new(err)))),
+                    }
+                }
+                // Missing, or an unknown future payload variant (mirrors the read
+                // path treating those as absent).
+                Some(_) | None => immediate.push((i as u64, Ok(None))),
+            }
+        }
+        Partitioned { immediate, to_fetch }
+    }
+
+    /// Fetch one coalesced span as a single range GET (bounded by `sem`) and
+    /// slice each member out as a zero-copy view of the span buffer.
+    async fn fetch_span(
+        &self,
+        span: CoalescedSpan,
+        sem: Arc<Semaphore>,
+    ) -> SessionResult<Vec<(u64, Option<Bytes>)>> {
+        // `sem` is never closed, so acquire never actually errors; if it somehow
+        // did we just proceed unbounded rather than fail the read.
+        let _permit = sem.acquire().await.ok();
+        let range = span.start..span.end;
+        let buffer = match &span.object {
+            BackingObject::Virtual(url) => self
+                .virtual_resolver
+                .fetch_chunk(url, &range, span.checksum.as_ref())
+                .await
+                .inject()?,
+            BackingObject::Native(id) => {
+                self.asset_manager.fetch_chunk(id, &range).await.inject()?
+            }
+        };
+        // The member slices below assume the fetch returned exactly the span's
+        // bytes. The virtual fetcher already enforces this; the native path does
+        // not, so guard here rather than let a truncated object panic `slice`.
+        let expected = (span.end - span.start) as usize;
+        if buffer.len() != expected {
+            let object = match &span.object {
+                BackingObject::Virtual(url) => url.clone(),
+                BackingObject::Native(id) => format!("{id}"),
+            };
+            return Err(SessionError::capture(SessionErrorKind::CoalescedShortRead {
+                object,
+                expected: expected as u64,
+                got: buffer.len() as u64,
+            }));
+        }
+        Ok(span
+            .members
+            .iter()
+            .map(|m| {
+                let rel = (m.offset - span.start) as usize;
+                let bytes = buffer.slice(rel..rel + m.length as usize);
+                (m.request_index as u64, Some(bytes))
+            })
+            .collect())
     }
 
     /// Returns a function that can be used to asynchronously write chunk bytes to object store
@@ -5995,7 +6867,7 @@ mod tests {
                 checksum: None,
             }),
             ChunkPayload::Ref(ChunkRef {
-                id: crate::format::ChunkId::random(),
+                id: ChunkId::random(),
                 offset: 0,
                 length: 0,
             }),

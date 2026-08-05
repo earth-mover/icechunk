@@ -139,6 +139,7 @@ class ErrorKind(StrEnum):
     VIRTUAL_CHUNK_FETCH = "virtual-chunk-fetch"
     VIRTUAL_CHUNK_MODIFIED = "virtual-chunk-modified"
     INVALID_OBJECT_SIZE = "invalid-object-size"
+    COALESCED_SHORT_READ = "coalesced-short-read"
     # format
     SERIALIZATION = "serialization"
     DESERIALIZATION = "deserialization"

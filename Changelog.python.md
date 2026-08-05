@@ -2,6 +2,12 @@
 
 ## Python Icechunk Library [unreleased]
 
+### Features
+
+- Add `IcechunkStore.get_many_chunks`, a bulk chunk read with **coalescing**: chunks whose byte ranges are near each other in the same backing object are merged into a few large range GETs instead of one per chunk, which is the dominant cost for virtual datasets with many small chunks. It streams a `list[(request_index, data, error)]` per completed span in completion order, so failures are reported per chunk rather than failing the batch, and `data` is a zero-copy view of its span. Batching the hand-off to Python keeps per-item delivery cost (a GIL acquire and an asyncio round-trip each) from exceeding the I/O the coalescing saves. `max_gap` trades over-read for round-trips and `max_coalesced_bytes` caps a single request.
+- Add `IcechunkStore.coalescing_report` to plan the spans for a set of chunks *without* fetching, so an access pattern's merge ratio and over-read can be measured before paying to download anything.
+- Add `IcechunkStore.resolve_chunk_refs` (and `resolve_chunk_refs_async`) to resolve explicit chunk coordinates to their references — kind, location, offset, length — reading only the manifests those coordinates fall in rather than walking the whole manifest as `array_chunk_iterator` does.
+
 ### Fixes
 
 - Fix garbage collection deleting still-referenced transaction logs when the host and object-store clocks are skewed ([#2310](https://github.com/earth-mover/icechunk/pull/2310)).
