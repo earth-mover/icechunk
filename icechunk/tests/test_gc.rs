@@ -101,6 +101,7 @@ async fn do_test_gc(
         HashMap::new(),
         spec_version,
         true,
+        None,
     )
     .await?;
 
@@ -404,7 +405,7 @@ async fn do_test_expire_and_garbage_collect(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let storage_settings = storage.default_settings().await?;
     let mut repo =
-        Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
+        Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true, None)
             .await?;
 
     let expire_older_than = make_design_doc_repo(&mut repo).await?;
@@ -415,6 +416,7 @@ async fn do_test_expire_and_garbage_collect(
         SpecVersionBin::current(),
         1,
         DEFAULT_MAX_CONCURRENT_REQUESTS,
+        common::compat_governor(DEFAULT_MAX_CONCURRENT_REQUESTS),
     ));
 
     let result = expire(
@@ -430,7 +432,7 @@ async fn do_test_expire_and_garbage_collect(
     assert_eq!(result.released_snapshots.len(), 5);
     assert_eq!(result.deleted_refs.len(), 0);
 
-    let repo = Repository::open(None, Arc::clone(&storage), HashMap::new()).await?;
+    let repo = Repository::open(None, Arc::clone(&storage), HashMap::new(), None).await?;
 
     // this behavior is slightly different than the one documented
     // in the initial design doc. IC 2.0 doesn't remove snapshot "5"
@@ -476,6 +478,7 @@ async fn do_test_expire_and_garbage_collect(
         SpecVersionBin::current(),
         1,
         DEFAULT_MAX_CONCURRENT_REQUESTS,
+        common::compat_governor(DEFAULT_MAX_CONCURRENT_REQUESTS),
     ));
 
     let summary =
@@ -520,7 +523,7 @@ async fn test_expire_and_garbage_collect_deleting_expired_refs()
     let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
     let storage_settings = storage.default_settings().await?;
     let mut repo =
-        Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
+        Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true, None)
             .await?;
 
     let expire_older_than = make_design_doc_repo(&mut repo).await?;
@@ -531,6 +534,7 @@ async fn test_expire_and_garbage_collect_deleting_expired_refs()
         SpecVersionBin::current(),
         1,
         DEFAULT_MAX_CONCURRENT_REQUESTS,
+        common::compat_governor(DEFAULT_MAX_CONCURRENT_REQUESTS),
     ));
 
     let result = expire(
@@ -580,8 +584,9 @@ async fn test_diff_complete_after_expire_and_gc() -> Result<(), Box<dyn std::err
 {
     let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
     let storage_settings = storage.default_settings().await?;
-    let repo = Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
-        .await?;
+    let repo =
+        Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true, None)
+            .await?;
 
     // The initial (root) snapshot, which survives expiration and becomes the
     // new parent of the boundary commit.
@@ -615,6 +620,7 @@ async fn test_diff_complete_after_expire_and_gc() -> Result<(), Box<dyn std::err
         SpecVersionBin::current(),
         1,
         DEFAULT_MAX_CONCURRENT_REQUESTS,
+        common::compat_governor(DEFAULT_MAX_CONCURRENT_REQUESTS),
     ));
     let result = expire(
         Arc::clone(&asset_manager),
@@ -646,7 +652,7 @@ async fn test_diff_complete_after_expire_and_gc() -> Result<(), Box<dyn std::err
     assert_eq!(summary.transaction_logs_deleted, 0);
 
     // Reopen for a fresh view of storage, then diff root -> tip.
-    let repo = Repository::open(None, Arc::clone(&storage), HashMap::new()).await?;
+    let repo = Repository::open(None, Arc::clone(&storage), HashMap::new(), None).await?;
     let diff = repo
         .diff(
             &VersionInfo::SnapshotId(initial_id),
@@ -681,8 +687,9 @@ async fn test_gc_deletes_only_unreferenced_expired_tx_logs()
 -> Result<(), Box<dyn std::error::Error>> {
     let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
     let storage_settings = storage.default_settings().await?;
-    let repo = Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
-        .await?;
+    let repo =
+        Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true, None)
+            .await?;
 
     commit_group(&repo, "main", "/").await?;
     let a = commit_group(&repo, "main", "/a").await?;
@@ -703,6 +710,7 @@ async fn test_gc_deletes_only_unreferenced_expired_tx_logs()
         SpecVersionBin::current(),
         1,
         DEFAULT_MAX_CONCURRENT_REQUESTS,
+        common::compat_governor(DEFAULT_MAX_CONCURRENT_REQUESTS),
     ));
     let result = expire(
         Arc::clone(&asset_manager),
@@ -760,8 +768,9 @@ async fn test_gc_retains_snapshot_between_flushed_and_created_at()
     // land in.
     let storage: Arc<dyn Storage + Send + Sync> =
         Arc::new(LatencyStorage::new(inner, 20, 0));
-    let repo = Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
-        .await?;
+    let repo =
+        Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true, None)
+            .await?;
     let am = Arc::clone(repo.asset_manager());
 
     let a = commit_group(&repo, "main", "/a").await?;
@@ -872,8 +881,9 @@ fn clean_all_now() -> GCConfig {
 async fn test_repeated_expiration_accumulates_pruned_logs()
 -> Result<(), Box<dyn std::error::Error>> {
     let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
-    let repo = Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
-        .await?;
+    let repo =
+        Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true, None)
+            .await?;
     // Run expiration/GC on the repo's own asset manager so its caches stay
     // coherent and we can keep committing without reopening.
     let am = Arc::clone(repo.asset_manager());
@@ -956,8 +966,9 @@ async fn test_repeated_expiration_accumulates_pruned_logs()
 async fn test_reparent_accumulates_existing_pruned_logs()
 -> Result<(), Box<dyn std::error::Error>> {
     let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
-    let repo = Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
-        .await?;
+    let repo =
+        Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true, None)
+            .await?;
     let am = Arc::clone(repo.asset_manager());
 
     let initial_id = repo
@@ -1032,8 +1043,9 @@ async fn test_reparent_accumulates_existing_pruned_logs()
 #[tokio_test]
 async fn test_amend_preserves_pruned_logs() -> Result<(), Box<dyn std::error::Error>> {
     let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
-    let repo = Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
-        .await?;
+    let repo =
+        Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true, None)
+            .await?;
     let am = Arc::clone(repo.asset_manager());
 
     let initial_id = repo
@@ -1103,8 +1115,9 @@ async fn test_rebase_detects_conflict_in_pruned_ancestor()
     use icechunk::session::{SessionError, SessionErrorKind};
 
     let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
-    let repo = Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
-        .await?;
+    let repo =
+        Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true, None)
+            .await?;
     let am = Arc::clone(repo.asset_manager());
 
     let conflict_path: Path = "/conflict".try_into().unwrap();
@@ -1175,8 +1188,9 @@ async fn test_rebase_errors_on_missing_pruned_ancestor_log()
     use icechunk::session::{SessionError, SessionErrorKind};
 
     let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
-    let repo = Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
-        .await?;
+    let repo =
+        Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true, None)
+            .await?;
     let am = Arc::clone(repo.asset_manager());
 
     let conflict_path: Path = "/conflict".try_into().unwrap();
@@ -1232,8 +1246,9 @@ async fn test_diff_skips_missing_pruned_log() -> Result<(), Box<dyn std::error::
     use futures::stream;
 
     let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
-    let repo = Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
-        .await?;
+    let repo =
+        Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true, None)
+            .await?;
     let am = Arc::clone(repo.asset_manager());
 
     let initial_id = repo
@@ -1286,8 +1301,9 @@ async fn test_diff_skips_missing_pruned_log() -> Result<(), Box<dyn std::error::
 async fn test_inspect_shows_synthetic_composite() -> Result<(), Box<dyn std::error::Error>>
 {
     let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
-    let repo = Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
-        .await?;
+    let repo =
+        Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true, None)
+            .await?;
     let am = Arc::clone(repo.asset_manager());
 
     let g0 = commit_group(&repo, "main", "/").await?;
@@ -1371,9 +1387,11 @@ async fn test_gc_reset_branch() -> Result<(), Box<dyn std::error::Error>> {
         SpecVersionBin::current(),
         1,
         DEFAULT_MAX_CONCURRENT_REQUESTS,
+        common::compat_governor(DEFAULT_MAX_CONCURRENT_REQUESTS),
     ));
-    let repo = Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
-        .await?;
+    let repo =
+        Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true, None)
+            .await?;
 
     let mut session = repo.writable_session("main").await?;
     let array_path: Path = "/array".to_string().try_into().unwrap();
@@ -1472,8 +1490,9 @@ async fn test_expire_deletes_branch_sharing_tip_with_main()
 -> Result<(), Box<dyn std::error::Error>> {
     let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
     let storage_settings = storage.default_settings().await?;
-    let repo = Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
-        .await?;
+    let repo =
+        Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true, None)
+            .await?;
 
     let mut session = repo.writable_session("main").await?;
     let user_data = Bytes::new();
@@ -1494,6 +1513,7 @@ async fn test_expire_deletes_branch_sharing_tip_with_main()
         SpecVersionBin::current(),
         1,
         DEFAULT_MAX_CONCURRENT_REQUESTS,
+        common::compat_governor(DEFAULT_MAX_CONCURRENT_REQUESTS),
     ));
 
     let result = expire(
@@ -1508,7 +1528,7 @@ async fn test_expire_deletes_branch_sharing_tip_with_main()
 
     assert!(result.deleted_refs.contains(&Ref::Branch("feature".to_string())));
 
-    let repo = Repository::open(None, Arc::clone(&storage), HashMap::new()).await?;
+    let repo = Repository::open(None, Arc::clone(&storage), HashMap::new(), None).await?;
     let branches = repo.list_branches().await?;
     assert!(branches.contains("main"));
     assert!(!branches.contains("feature"));

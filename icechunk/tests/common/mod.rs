@@ -1,15 +1,154 @@
-use std::{env, sync::Arc};
+use std::{
+    env,
+    sync::{
+        Arc, LazyLock, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
+};
 
+use async_trait::async_trait;
 use chrono::Utc;
 use icechunk::{
     Storage,
     config::{S3Credentials, S3Options, S3StaticCredentials},
+    governors::CompatGovernorConfig,
     new_s3_storage,
     storage::{
-        Settings, mk_client, new_r2_storage, new_tigris_storage, r2_storage, s3_storage,
-        tigris_storage,
+        Asset, Direction, GovernorFactory, IoClass, IoGovernor, IoOutcome, IoPermit,
+        IoResult, MemoryPermit, MemoryState, PermitState, Settings, StorageContext,
+        UnlimitedGovernor, UnlimitedGovernorConfig, mk_client, new_r2_storage,
+        new_tigris_storage, r2_storage, s3_storage, tigris_storage,
     },
 };
+
+/// Compat governor with the given request limit, mirroring the pre-governor
+/// semaphore behavior.
+pub(crate) fn compat_governor(max_concurrent_requests: u16) -> Arc<dyn IoGovernor> {
+    CompatGovernorConfig { max_concurrent_requests }.build()
+}
+
+/// Ungoverned [`StorageContext`] for tests that drive `Storage` directly.
+pub(crate) fn ctx_for(settings: &Settings) -> StorageContext<'_> {
+    static GOVERNOR: LazyLock<Arc<dyn IoGovernor>> =
+        LazyLock::new(|| Arc::new(UnlimitedGovernor));
+    StorageContext { settings, governor: &GOVERNOR, asset: Asset::Other }
+}
+
+/// Governor that admits everything immediately but records every event, for
+/// asserting how many requests/reservations an operation makes.
+#[derive(Debug, Default)]
+pub(crate) struct CountingGovernor {
+    pub(crate) counters: Arc<GovernorCounters>,
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct GovernorCounters {
+    reserves: Mutex<Vec<IoClass>>,
+    adjusts: Mutex<Vec<u64>>,
+    pub(crate) read_acquires: AtomicU64,
+    pub(crate) write_acquires: AtomicU64,
+    pub(crate) aborts: AtomicU64,
+    completions: Mutex<Vec<(Direction, IoOutcome)>>,
+    throttles: Mutex<Vec<IoClass>>,
+}
+
+impl GovernorCounters {
+    /// Memory reservations observed, in reservation order.
+    pub(crate) fn reserves(&self) -> Vec<IoClass> {
+        self.reserves.lock().unwrap().clone()
+    }
+
+    /// Throttle signals observed, in signal order.
+    pub(crate) fn throttles(&self) -> Vec<IoClass> {
+        self.throttles.lock().unwrap().clone()
+    }
+
+    /// Reservation adjustments observed, in call order.
+    pub(crate) fn adjusts(&self) -> Vec<u64> {
+        self.adjusts.lock().unwrap().clone()
+    }
+
+    /// Successful completions observed for `direction`, in completion order.
+    pub(crate) fn ok_completions(&self, direction: Direction) -> Vec<IoOutcome> {
+        self.completions
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(d, outcome)| *d == direction && outcome.result == IoResult::Ok)
+            .map(|(_, outcome)| *outcome)
+            .collect()
+    }
+
+    /// Total bytes reported by successful completions for `direction`.
+    pub(crate) fn ok_bytes(&self, direction: Direction) -> u64 {
+        self.ok_completions(direction).iter().map(|o| o.bytes).sum()
+    }
+}
+
+#[derive(Debug)]
+struct CountingPermit {
+    counters: Arc<GovernorCounters>,
+    direction: Direction,
+}
+
+impl PermitState for CountingPermit {
+    fn complete(self: Box<Self>, outcome: IoOutcome) {
+        self.counters.completions.lock().unwrap().push((self.direction, outcome));
+    }
+    fn abort(self: Box<Self>) {
+        self.counters.aborts.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+#[derive(Debug)]
+struct CountingReservation {
+    counters: Arc<GovernorCounters>,
+}
+
+impl MemoryState for CountingReservation {
+    fn adjust(&self, actual_total: u64) {
+        self.counters.adjusts.lock().unwrap().push(actual_total);
+    }
+}
+
+#[async_trait]
+impl IoGovernor for CountingGovernor {
+    async fn reserve_memory(
+        &self,
+        class: IoClass,
+        _expected_total: Option<u64>,
+    ) -> MemoryPermit {
+        self.counters.reserves.lock().unwrap().push(class);
+        MemoryPermit::new(Box::new(CountingReservation {
+            counters: Arc::clone(&self.counters),
+        }))
+    }
+
+    async fn acquire(&self, class: IoClass, _expected_bytes: Option<u64>) -> IoPermit {
+        let counter = match class.direction {
+            Direction::Read => &self.counters.read_acquires,
+            Direction::Write => &self.counters.write_acquires,
+        };
+        counter.fetch_add(1, Ordering::SeqCst);
+        IoPermit::new(Box::new(CountingPermit {
+            counters: Arc::clone(&self.counters),
+            direction: class.direction,
+        }))
+    }
+
+    fn factory(&self) -> Arc<dyn GovernorFactory> {
+        // test-only governor: the recipe intentionally rebuilds as Unlimited
+        Arc::new(UnlimitedGovernorConfig {})
+    }
+
+    fn record_throttle(&self, class: IoClass) {
+        self.counters.throttles.lock().unwrap().push(class);
+    }
+
+    fn as_arc_any(self: Arc<Self>) -> Arc<dyn std::any::Any + Send + Sync> {
+        self
+    }
+}
 
 pub(crate) enum Permission {
     #[expect(dead_code)]

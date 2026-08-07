@@ -6,6 +6,7 @@ mod config;
 mod conflicts;
 mod display;
 mod errors;
+mod governor;
 mod pickle;
 mod repository;
 mod session;
@@ -36,6 +37,11 @@ use conflicts::{
 };
 use display::PyAncestryGraph;
 use errors::{_all_error_kinds, IcechunkError, PyConflictError, PyRebaseFailedError};
+use governor::{
+    PyBandwidthGovernor, PyBandwidthGovernorConfig, PyCompatGovernor,
+    PyCompatGovernorConfig, PyDirectionConfig, PyDirectionMetrics, PyGovernorMetrics,
+    PyIoGovernor, PyMemoryMetrics,
+};
 use icechunk::{format::format_constants::SpecVersionBin, initialize_tracing};
 use pyo3::prelude::*;
 use pyo3::types::PyMapping;
@@ -211,6 +217,15 @@ fn _icechunk_python(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyConflictSolver>()?;
     m.add_class::<PyBasicConflictSolver>()?;
     m.add_class::<PyConflictDetector>()?;
+    m.add_class::<PyIoGovernor>()?;
+    m.add_class::<PyBandwidthGovernor>()?;
+    m.add_class::<PyCompatGovernor>()?;
+    m.add_class::<PyBandwidthGovernorConfig>()?;
+    m.add_class::<PyDirectionConfig>()?;
+    m.add_class::<PyCompatGovernorConfig>()?;
+    m.add_class::<PyGovernorMetrics>()?;
+    m.add_class::<PyDirectionMetrics>()?;
+    m.add_class::<PyMemoryMetrics>()?;
     m.add_class::<PyVersionSelection>()?;
     m.add_class::<PyS3StaticCredentials>()?;
     m.add_class::<PyS3Credentials>()?;

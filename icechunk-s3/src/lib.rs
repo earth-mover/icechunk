@@ -21,7 +21,7 @@ use aws_sdk_s3::{
         RuntimeComponents, StalledStreamProtectionConfig,
         interceptors::{
             BeforeDeserializationInterceptorContextMut,
-            BeforeTransmitInterceptorContextMut,
+            BeforeTransmitInterceptorContextMut, FinalizerInterceptorContextRef,
         },
     },
     error::{BoxError, SdkError},
@@ -44,8 +44,9 @@ pub use icechunk_storage::s3_config::{
     S3StaticCredentials,
 };
 use icechunk_storage::{
-    DeleteObjectsResult, GetModifiedResult, ListInfo, RepositoryCreation, Settings,
-    Storage, StorageError, StorageErrorKind, StorageInfo, StorageResult, VersionInfo,
+    DeleteObjectsResult, Direction, GetModifiedResult, IoClass, IoGovernor, ListInfo,
+    MemoryPermit, ObjectRange, RepositoryCreation, Settings, Storage, StorageContext,
+    StorageError, StorageErrorKind, StorageInfo, StorageResult, VersionInfo,
     VersionedUpdateResult, obj_not_found_res, obj_store_error, obj_store_error_res,
     other_error,
     readback::{
@@ -203,6 +204,47 @@ impl Intercept for StripChecksumOn304Interceptor {
             for name in to_remove {
                 response.headers_mut().remove(&name);
             }
+        }
+        Ok(())
+    }
+}
+
+/// HTTP statuses reported to [`IoGovernor::record_throttle`] as throttle
+/// signals: the `RETRY_CODES` special-cased in [`mk_client`] (408, 429,
+/// 499) plus 503, S3's `SlowDown`.
+const THROTTLE_CODES: &[u16] = &[408, 429, 499, 503];
+
+/// Per-operation interceptor reporting throttled attempts to the I/O governor.
+///
+/// `read_after_attempt` runs once per attempt including the ones the SDK
+/// is about to retry. Attached per operation via `.customize().interceptor(...)`
+#[derive(Debug)]
+pub struct ThrottleObserver {
+    governor: Arc<dyn IoGovernor>,
+    class: IoClass,
+}
+
+impl ThrottleObserver {
+    pub fn new(governor: &Arc<dyn IoGovernor>, class: IoClass) -> Self {
+        Self { governor: Arc::clone(governor), class }
+    }
+}
+
+impl Intercept for ThrottleObserver {
+    fn name(&self) -> &'static str {
+        "ThrottleObserver"
+    }
+
+    fn read_after_attempt(
+        &self,
+        context: &FinalizerInterceptorContextRef<'_>,
+        _runtime_components: &RuntimeComponents,
+        _cfg: &mut ConfigBag,
+    ) -> Result<(), BoxError> {
+        if let Some(response) = context.response()
+            && THROTTLE_CODES.contains(&response.status().as_u16())
+        {
+            self.governor.record_throttle(self.class);
         }
         Ok(())
     }
@@ -542,8 +584,8 @@ impl S3Storage {
     }
 
     /// Resolve this repository's [`KeyLayout`], probing storage at most once.
-    async fn layout(&self, settings: &Settings) -> StorageResult<KeyLayout> {
-        self.key_layout.get_or_try_init(|| self.probe_layout(settings)).await.copied()
+    async fn layout(&self, ctx: &StorageContext<'_>) -> StorageResult<KeyLayout> {
+        self.key_layout.get_or_try_init(|| self.probe_layout(ctx)).await.copied()
     }
 
     /// Detect the key layout of the repository.
@@ -552,7 +594,7 @@ impl S3Storage {
     /// prefix can never produce a leading slash, so the layout is unambiguously
     /// [`KeyLayout::Standard`]. The probe HEADs a few fixed anchor files under
     /// both layouts.
-    async fn probe_layout(&self, settings: &Settings) -> StorageResult<KeyLayout> {
+    async fn probe_layout(&self, ctx: &StorageContext<'_>) -> StorageResult<KeyLayout> {
         if !self.prefix.is_empty() {
             // the legacy bug only triggered on empty prefixes
             return Ok(KeyLayout::Standard);
@@ -567,8 +609,8 @@ impl S3Storage {
             let rooted_key = self.key_for(KeyLayout::LegacyRoot, anchor);
             async move {
                 let (clean, rooted) = futures::future::try_join(
-                    self.head_etag(settings, &clean_key),
-                    self.head_etag(settings, &rooted_key),
+                    self.head_etag(ctx, &clean_key),
+                    self.head_etag(ctx, &rooted_key),
                 )
                 .await?;
                 Ok::<_, StorageError>(AnchorProbe { clean, rooted })
@@ -588,11 +630,11 @@ impl S3Storage {
     /// as `"x"`.
     async fn head_etag(
         &self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         key: &str,
     ) -> StorageResult<Option<String>> {
         let mut req = self
-            .get_client(settings)
+            .get_client(ctx.settings)
             .await
             .head_object()
             .bucket(self.bucket.clone())
@@ -600,7 +642,15 @@ impl S3Storage {
         if self.config.requester_pays {
             req = req.request_payer(aws_sdk_s3::types::RequestPayer::Requester);
         }
-        match req.send().await {
+        match req
+            .customize()
+            .interceptor(ThrottleObserver::new(
+                ctx.governor,
+                ctx.io_class(Direction::Read),
+            ))
+            .send()
+            .await
+        {
             Ok(out) => Ok(Some(out.e_tag().unwrap_or_default().to_string())),
             Err(sdk_err) => {
                 let absent = sdk_err.as_service_error().is_some_and(|e| e.is_not_found())
@@ -616,13 +666,15 @@ impl S3Storage {
         I: IntoIterator<Item = (impl Into<String>, impl Into<String>)>,
     >(
         &self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         key: &str,
         bytes: Bytes,
         content_type: Option<impl Into<String>>,
         metadata: I,
         previous_version: Option<&VersionInfo>,
     ) -> StorageResult<VersionedUpdateResult> {
+        let settings = ctx.settings;
+        let expected = bytes.len() as u64;
         let mut req = self
             .get_client(settings)
             .await
@@ -667,7 +719,18 @@ impl S3Storage {
             req = req.metadata(WRITE_ID_METADATA_KEY, id);
         }
 
-        match req.send().await {
+        let permit =
+            ctx.governor.acquire(ctx.io_class(Direction::Write), Some(expected)).await;
+        let result = req
+            .customize()
+            .interceptor(ThrottleObserver::new(
+                ctx.governor,
+                ctx.io_class(Direction::Write),
+            ))
+            .send()
+            .await;
+        permit.complete_result(&result, expected);
+        match result {
             Ok(out) => {
                 let new_etag = out
                     .e_tag()
@@ -680,7 +743,7 @@ impl S3Storage {
             Err(SdkError::ServiceError(err)) => {
                 let code = err.err().meta().code().unwrap_or_default();
                 if is_precondition_code(code) {
-                    self.recover_precondition(settings, key, write_id.as_deref()).await
+                    self.recover_precondition(ctx, key, write_id.as_deref()).await
                 } else {
                     obj_store_error_res(SdkError::<PutObjectError>::ServiceError(err))
                 }
@@ -690,7 +753,7 @@ impl S3Storage {
                 let status = err.raw().status().as_u16();
                 // see https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutObject.html#API_PutObject_RequestSyntax
                 if status == 409 || status == 412 {
-                    self.recover_precondition(settings, key, write_id.as_deref()).await
+                    self.recover_precondition(ctx, key, write_id.as_deref()).await
                 } else {
                     obj_store_error_res(SdkError::<PutObjectError>::ResponseError(err))
                 }
@@ -703,13 +766,14 @@ impl S3Storage {
         I: IntoIterator<Item = (impl Into<String>, impl Into<String>)>,
     >(
         &self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         key: &str,
         bytes: &Bytes,
         content_type: Option<impl Into<String>>,
         metadata: I,
         previous_version: Option<&VersionInfo>,
     ) -> StorageResult<VersionedUpdateResult> {
+        let settings = ctx.settings;
         let mut multi = self
             .get_client(settings)
             .await
@@ -742,7 +806,17 @@ impl S3Storage {
             multi = multi.storage_class(klass);
         }
 
-        let create_res = multi.send().await.capture_box()?;
+        let permit = ctx.governor.acquire(ctx.io_class(Direction::Write), None).await;
+        let create_res = multi
+            .customize()
+            .interceptor(ThrottleObserver::new(
+                ctx.governor,
+                ctx.io_class(Direction::Write),
+            ))
+            .send()
+            .await;
+        permit.complete_result(&create_res, 0);
+        let create_res = create_res.capture_box()?;
         let upload_id = create_res.upload_id().ok_or(other_error(
             "No upload_id in create multipart upload result".to_string(),
         ))?;
@@ -760,6 +834,7 @@ impl S3Storage {
             .into_iter()
             .enumerate()
             .map(|(part_idx, range)| async move {
+                let part_len = range.end - range.start;
                 let body = bytes.slice(range.start as usize..range.end as usize).into();
                 let idx = part_idx as i32 + 1;
                 let mut req = self
@@ -776,7 +851,20 @@ impl S3Storage {
                     req = req.checksum_algorithm(to_sdk_checksum(algo));
                 }
 
-                req.send().await.map(|res| (idx, res))
+                let permit = ctx
+                    .governor
+                    .acquire(ctx.io_class(Direction::Write), Some(part_len))
+                    .await;
+                let result = req
+                    .customize()
+                    .interceptor(ThrottleObserver::new(
+                        ctx.governor,
+                        ctx.io_class(Direction::Write),
+                    ))
+                    .send()
+                    .await;
+                permit.complete_result(&result, part_len);
+                result.map(|res| (idx, res))
             })
             .collect::<FuturesOrdered<_>>();
 
@@ -811,7 +899,17 @@ impl S3Storage {
             None => {}
         }
 
-        match req.send().await {
+        let permit = ctx.governor.acquire(ctx.io_class(Direction::Write), None).await;
+        let result = req
+            .customize()
+            .interceptor(ThrottleObserver::new(
+                ctx.governor,
+                ctx.io_class(Direction::Write),
+            ))
+            .send()
+            .await;
+        permit.complete_result(&result, 0);
+        match result {
             Ok(out) => {
                 let new_etag = out
                     .e_tag()
@@ -825,10 +923,10 @@ impl S3Storage {
                 // `NoSuchUpload` = SDK-retried complete after a lost response,
                 // or a failed upload; readback tells them apart.
                 if is_precondition_code(code) {
-                    self.recover_precondition(settings, key, write_id.as_deref()).await
+                    self.recover_precondition(ctx, key, write_id.as_deref()).await
                 } else if code == "NoSuchUpload" {
                     self.recover_lost_response(
-                        settings,
+                        ctx,
                         key,
                         write_id.as_deref(),
                         obj_store_error(SdkError::ServiceError(err)),
@@ -841,11 +939,11 @@ impl S3Storage {
             Err(SdkError::ResponseError(err)) => {
                 let status = err.raw().status().as_u16();
                 if status == 409 || status == 412 {
-                    self.recover_precondition(settings, key, write_id.as_deref()).await
+                    self.recover_precondition(ctx, key, write_id.as_deref()).await
                 } else if status == 404 {
                     // NoSuchUpload surfaced as a raw HTTP status.
                     self.recover_lost_response(
-                        settings,
+                        ctx,
                         key,
                         write_id.as_deref(),
                         obj_store_error(SdkError::<PutObjectError>::ResponseError(err)),
@@ -863,25 +961,23 @@ impl S3Storage {
     /// 409/412 status).
     async fn recover_precondition(
         &self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         key: &str,
         write_id: Option<&str>,
     ) -> StorageResult<VersionedUpdateResult> {
-        let outcome =
-            self.read_back_after_conditional_failure(settings, key, write_id).await;
+        let outcome = self.read_back_after_conditional_failure(ctx, key, write_id).await;
         resolve_precondition(outcome, key)
     }
 
     /// Readback + resolve for a failure only our own landed write can rescue.
     async fn recover_lost_response(
         &self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         key: &str,
         write_id: Option<&str>,
         original: StorageError,
     ) -> StorageResult<VersionedUpdateResult> {
-        let outcome =
-            self.read_back_after_conditional_failure(settings, key, write_id).await;
+        let outcome = self.read_back_after_conditional_failure(ctx, key, write_id).await;
         resolve_lost_response(outcome, key, original)
     }
 
@@ -889,13 +985,13 @@ impl S3Storage {
     /// failure.
     async fn read_back_after_conditional_failure(
         &self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         key: &str,
         write_id: Option<&str>,
     ) -> StorageResult<ReadbackOutcome> {
         let Some(write_id) = write_id else { return Ok(ReadbackOutcome::NotOurs) };
         let mut head = self
-            .get_client(settings)
+            .get_client(ctx.settings)
             .await
             .head_object()
             .bucket(self.bucket.clone())
@@ -903,7 +999,15 @@ impl S3Storage {
         if self.config.requester_pays {
             head = head.request_payer(aws_sdk_s3::types::RequestPayer::Requester);
         }
-        let (stored_write_id, version) = match head.send().await {
+        let (stored_write_id, version) = match head
+            .customize()
+            .interceptor(ThrottleObserver::new(
+                ctx.governor,
+                ctx.io_class(Direction::Read),
+            ))
+            .send()
+            .await
+        {
             Ok(out) => (
                 out.metadata().and_then(|m| m.get(WRITE_ID_METADATA_KEY)).cloned(),
                 // S3 has no generation; etag is the only version identity.
@@ -961,18 +1065,19 @@ impl Storage for S3Storage {
 
     async fn put_object(
         &self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         path: &str,
         bytes: Bytes,
         content_type: Option<&str>,
         metadata: Vec<(String, String)>,
         previous_version: Option<&VersionInfo>,
     ) -> StorageResult<VersionedUpdateResult> {
-        let layout = self.layout(settings).await?;
+        let settings = ctx.settings;
+        let layout = self.layout(ctx).await?;
         let path = self.key_for(layout, path);
         if bytes.len() >= settings.minimum_size_for_multipart_upload() as usize {
             self.put_object_multipart(
-                settings,
+                ctx,
                 path.as_str(),
                 &bytes,
                 content_type,
@@ -982,7 +1087,7 @@ impl Storage for S3Storage {
             .await
         } else {
             self.put_object_single(
-                settings,
+                ctx,
                 path.as_str(),
                 bytes,
                 content_type,
@@ -993,15 +1098,16 @@ impl Storage for S3Storage {
         }
     }
 
-    async fn copy_object(
+    async fn copy_object_raw(
         &self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         from: &str,
         to: &str,
         content_type: Option<&str>,
         version: &VersionInfo,
     ) -> StorageResult<VersionedUpdateResult> {
-        let layout = self.layout(settings).await?;
+        let settings = ctx.settings;
+        let layout = self.layout(ctx).await?;
         let from = format!("{}/{}", self.bucket, self.key_for(layout, from));
         let to = self.key_for(layout, to);
         let mut req = self
@@ -1026,7 +1132,15 @@ impl Storage for S3Storage {
         if self.config.requester_pays {
             req = req.request_payer(aws_sdk_s3::types::RequestPayer::Requester);
         }
-        match req.send().await {
+        match req
+            .customize()
+            .interceptor(ThrottleObserver::new(
+                ctx.governor,
+                ctx.io_class(Direction::Write),
+            ))
+            .send()
+            .await
+        {
             Ok(_) => Ok(VersionedUpdateResult::Updated { new_version: version.clone() }),
             Err(SdkError::ServiceError(err)) => {
                 let code = err.err().meta().code().unwrap_or_default();
@@ -1067,13 +1181,14 @@ impl Storage for S3Storage {
         }
     }
 
-    #[instrument(skip(self, settings))]
-    async fn list_objects<'a>(
+    #[instrument(name = "list_objects", skip(self, ctx))]
+    async fn list_objects_raw<'a>(
         &'a self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         prefix: &str,
     ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
-        let layout = self.layout(settings).await?;
+        let settings = ctx.settings;
+        let layout = self.layout(ctx).await?;
         let prefix = self.list_prefix(layout, prefix);
         let mut req = self
             .get_client(settings)
@@ -1086,6 +1201,9 @@ impl Storage for S3Storage {
             req = req.request_payer(aws_sdk_s3::types::RequestPayer::Requester);
         }
 
+        // FIXME: `into_paginator` bypasses `customize()`, so list requests
+        // carry no `ThrottleObserver` and throttled list attempts go
+        // unobserved by the governor.
         let stream = req
             .into_paginator()
             .send()
@@ -1103,13 +1221,14 @@ impl Storage for S3Storage {
         Ok(stream.boxed())
     }
 
-    #[instrument(skip(self, batch))]
-    async fn delete_batch(
+    #[instrument(name = "delete_batch", skip(self, ctx, batch))]
+    async fn delete_batch_raw(
         &self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         prefix: &str,
         batch: Vec<(String, u64)>,
     ) -> StorageResult<DeleteObjectsResult> {
+        let settings = ctx.settings;
         fn join_prefix_id(prefix: &str, id: &str) -> String {
             if prefix.is_empty() {
                 id.to_string()
@@ -1118,7 +1237,7 @@ impl Storage for S3Storage {
             }
         }
 
-        let layout = self.layout(settings).await?;
+        let layout = self.layout(ctx).await?;
         let mut sizes = HashMap::new();
         let mut ids = Vec::new();
         for (id, size) in batch.into_iter() {
@@ -1149,7 +1268,15 @@ impl Storage for S3Storage {
             req = req.request_payer(aws_sdk_s3::types::RequestPayer::Requester);
         }
 
-        let res = req.send().await.capture_box()?;
+        let res = req
+            .customize()
+            .interceptor(ThrottleObserver::new(
+                ctx.governor,
+                ctx.io_class(Direction::Write),
+            ))
+            .send()
+            .await
+            .capture_box()?;
 
         if let Some(err) = res.errors.as_ref().and_then(|e| e.first()) {
             tracing::error!(
@@ -1171,13 +1298,14 @@ impl Storage for S3Storage {
         Ok(result)
     }
 
-    #[instrument(skip(self, settings))]
-    async fn get_object_last_modified(
+    #[instrument(name = "get_object_last_modified", skip(self, ctx))]
+    async fn get_object_last_modified_raw(
         &self,
+        ctx: &StorageContext<'_>,
         path: &str,
-        settings: &Settings,
     ) -> StorageResult<DateTime<Utc>> {
-        let layout = self.layout(settings).await?;
+        let settings = ctx.settings;
+        let layout = self.layout(ctx).await?;
         let key = self.key_for(layout, path);
         let mut req = self
             .get_client(settings)
@@ -1190,7 +1318,15 @@ impl Storage for S3Storage {
             req = req.request_payer(aws_sdk_s3::types::RequestPayer::Requester);
         }
 
-        let res = req.send().await.capture_box()?;
+        let res = req
+            .customize()
+            .interceptor(ThrottleObserver::new(
+                ctx.governor,
+                ctx.io_class(Direction::Read),
+            ))
+            .send()
+            .await
+            .capture_box()?;
 
         let res = res
             .last_modified
@@ -1202,15 +1338,21 @@ impl Storage for S3Storage {
         Ok(res)
     }
 
-    #[instrument(skip(self, settings))]
-    async fn get_object_conditional(
+    #[instrument(name = "get_object_conditional", skip(self, ctx))]
+    async fn get_object_conditional_raw(
         &self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         path: &str,
+        reservation: &MemoryPermit,
         previous_version: Option<&VersionInfo>,
     ) -> StorageResult<GetModifiedResult> {
         match self
-            .get_object_range_conditional(settings, path, None, previous_version)
+            .get_object_range_conditional(
+                ctx,
+                path,
+                ObjectRange::Whole(reservation),
+                previous_version,
+            )
             .await
         {
             Ok(Some((stream, new_version))) => {
@@ -1224,14 +1366,14 @@ impl Storage for S3Storage {
 
     async fn get_object_range(
         &self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         path: &str,
-        range: Option<&Range<u64>>,
+        target: ObjectRange<'_>,
     ) -> StorageResult<(
         Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>,
         VersionInfo,
     )> {
-        self.get_object_range_conditional(settings, path, range, None).await.map(|v| {
+        self.get_object_range_conditional(ctx, path, target, None).await.map(|v| {
             // If we got a result, then we can unwrap safely here:
             // Errors would be in the other branch, and None is only expected
             // if previous_version was passed in function call, but we set it to None
@@ -1244,9 +1386,9 @@ impl Storage for S3Storage {
 impl S3Storage {
     async fn get_object_range_conditional(
         &self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         path: &str,
-        range: Option<&Range<u64>>,
+        target: ObjectRange<'_>,
         previous_version: Option<&VersionInfo>,
     ) -> StorageResult<
         Option<(
@@ -1254,14 +1396,14 @@ impl S3Storage {
             VersionInfo,
         )>,
     > {
-        let layout = self.layout(settings).await?;
-        let client = self.get_client(settings).await;
+        let layout = self.layout(ctx).await?;
+        let client = self.get_client(ctx.settings).await;
         let bucket = self.bucket.clone();
         let key = self.key_for(layout, path);
 
         let mut req = client.get_object().bucket(bucket).key(key);
 
-        if let Some(range) = range {
+        if let Some(range) = target.range() {
             req = req.range(range_to_header(range));
         }
 
@@ -1275,9 +1417,24 @@ impl S3Storage {
             req = req.if_none_match(strip_quotes(etag));
         };
 
-        match req.send().await {
+        match req
+            .customize()
+            .interceptor(ThrottleObserver::new(
+                ctx.governor,
+                ctx.io_class(Direction::Read),
+            ))
+            .send()
+            .await
+        {
             Ok(output) => match output.e_tag {
                 Some(etag) => {
+                    // a whole-object GET's content-length is the object's
+                    // total size; it trues up the riding reservation
+                    if let Some(len) = output.content_length
+                        && let Ok(len) = u64::try_from(len)
+                    {
+                        target.observe_total_size(len);
+                    }
                     let stream = stream2stream(output.body)
                         .map_err(|e| StorageError::capture(e.into()));
                     Ok(Some((Box::pin(stream), VersionInfo::from_etag_only(etag))))
@@ -1690,6 +1847,127 @@ pub fn tigris_storage(
         merge_required_headers(extra_write_headers, tigris_write_headers),
         legacy_rooted_keys,
     )
+}
+
+/// [`ThrottleObserver`] sees every attempt below the SDK retry loop: a
+/// throttled-then-successful operation records exactly one signal while
+/// retrying as before, and clean operations record nothing.
+#[cfg(test)]
+mod throttle_observer_tests {
+    use std::sync::Mutex;
+
+    use aws_smithy_runtime::client::http::test_util::{ReplayEvent, StaticReplayClient};
+    use icechunk_macros::tokio_test;
+    use icechunk_storage::{
+        Asset, GovernorFactory, IoPermit, MemoryPermit, UnlimitedGovernorConfig,
+    };
+
+    use super::*;
+
+    #[derive(Debug, Default)]
+    struct ThrottleRecorder {
+        throttles: Mutex<Vec<IoClass>>,
+    }
+
+    impl ThrottleRecorder {
+        fn throttles(&self) -> Vec<IoClass> {
+            self.throttles.lock().unwrap().clone()
+        }
+    }
+
+    #[async_trait]
+    impl IoGovernor for ThrottleRecorder {
+        async fn reserve_memory(
+            &self,
+            _class: IoClass,
+            _expected_total: Option<u64>,
+        ) -> MemoryPermit {
+            MemoryPermit::noop()
+        }
+
+        async fn acquire(
+            &self,
+            _class: IoClass,
+            _expected_bytes: Option<u64>,
+        ) -> IoPermit {
+            IoPermit::noop()
+        }
+
+        fn factory(&self) -> Arc<dyn GovernorFactory> {
+            Arc::new(UnlimitedGovernorConfig {})
+        }
+
+        fn record_throttle(&self, class: IoClass) {
+            self.throttles.lock().unwrap().push(class);
+        }
+
+        fn as_arc_any(self: Arc<Self>) -> Arc<dyn std::any::Any + Send + Sync> {
+            self
+        }
+    }
+
+    const SLOW_DOWN: &str = r#"<?xml version="1.0" encoding="UTF-8"?><Error><Code>SlowDown</Code><Message>Please reduce your request rate.</Message></Error>"#;
+
+    const CLASS: IoClass = IoClass { direction: Direction::Read, asset: Asset::Chunk };
+
+    fn event(status: u16, body: &'static str) -> ReplayEvent {
+        use aws_sdk_s3::config::http::{HttpRequest, HttpResponse};
+        use aws_sdk_s3::primitives::SdkBody;
+        ReplayEvent::new(
+            HttpRequest::empty(),
+            HttpResponse::new(status.try_into().unwrap(), SdkBody::from(body)),
+        )
+    }
+
+    /// Run one observed `get_object` against canned responses, returning
+    /// what the governor was told.
+    async fn run_observed_get(http_client: &StaticReplayClient) -> Vec<IoClass> {
+        let config = aws_config::defaults(BehaviorVersion::v2026_01_12())
+            .region(Region::new("us-east-1"))
+            .credentials_provider(aws_credential_types::Credentials::new(
+                "ak", "sk", None, None, "test",
+            ))
+            .http_client(http_client.clone())
+            .retry_config(
+                RetryConfig::standard()
+                    .with_max_attempts(3)
+                    .with_initial_backoff(Duration::from_millis(1))
+                    .with_max_backoff(Duration::from_millis(2)),
+            )
+            .load()
+            .await;
+        let client =
+            Client::from_conf(Builder::from(&config).force_path_style(true).build());
+
+        let recorder = Arc::new(ThrottleRecorder::default());
+        let governor: Arc<dyn IoGovernor> = Arc::clone(&recorder) as _;
+        let result = client
+            .get_object()
+            .bucket("testbucket")
+            .key("some/key")
+            .customize()
+            .interceptor(ThrottleObserver::new(&governor, CLASS))
+            .send()
+            .await;
+        assert!(result.is_ok(), "replayed get_object must succeed: {result:?}");
+        recorder.throttles()
+    }
+
+    #[tokio_test]
+    async fn test_throttled_attempt_records_one_signal_and_still_retries() {
+        let http_client =
+            StaticReplayClient::new(vec![event(503, SLOW_DOWN), event(200, "payload")]);
+        assert_eq!(run_observed_get(&http_client).await, vec![CLASS]);
+        // retry behavior unchanged: 2 attempts, the second succeeded
+        assert_eq!(http_client.actual_requests().count(), 2);
+    }
+
+    #[tokio_test]
+    async fn test_successful_attempt_records_nothing() {
+        let http_client = StaticReplayClient::new(vec![event(200, "payload")]);
+        assert!(run_observed_get(&http_client).await.is_empty());
+        assert_eq!(http_client.actual_requests().count(), 1);
+    }
 }
 
 #[cfg(test)]

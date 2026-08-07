@@ -29,14 +29,14 @@ static RETRYABLE_ERROR: LazyLock<regex::Regex> = LazyLock::new(|| {
     .unwrap()
 });
 use async_compression::{Level, tokio::bufread::ZstdEncoder};
-use tokio::{
-    io::{AsyncBufRead, AsyncReadExt as _},
-    sync::Semaphore,
-};
+use tokio::io::{AsyncBufRead, AsyncReadExt as _};
+#[cfg(not(feature = "shuttle"))]
+use tokio::sync::Semaphore;
 use tracing::{debug, instrument, trace, warn};
 
 use crate::format::repo_info::RepoAvailability;
-use crate::storage::GetModifiedResult;
+use crate::governors::CompatGovernorConfig;
+use crate::storage::{GetModifiedResult, ObjectRange};
 use crate::{
     RepositoryConfig, Storage, StorageError,
     config::CachingConfig,
@@ -60,8 +60,8 @@ use crate::{
     private,
     repository::{RepositoryError, RepositoryErrorKind, RepositoryResult},
     storage::{
-        self, DeleteObjectsResult, ListInfo, StorageErrorKind, VersionInfo,
-        VersionedUpdateResult,
+        self, Asset, DeleteObjectsResult, Direction, GovernorFactory, IoGovernor,
+        ListInfo, StorageContext, StorageErrorKind, VersionInfo, VersionedUpdateResult,
     },
 };
 
@@ -98,11 +98,21 @@ pub struct AssetManager {
     #[serde(skip)]
     chunk_cache: Cache<(ChunkId, Range<ChunkOffset>), Bytes, FileWeighter>,
 
-    #[serde(skip)]
-    request_semaphore: Semaphore,
+    #[serde(rename = "governor_factory", serialize_with = "serialize_governor_factory")]
+    governor: Arc<dyn IoGovernor>,
 
     #[serde(skip)]
     repo_cache: RwLock<Option<(Arc<RepoInfo>, VersionInfo)>>,
+}
+
+/// Emits the governor's recipe as `Option<&dyn GovernorFactory>`; the
+/// deserialize side lives on [`AssetManagerSerializer`].
+fn serialize_governor_factory<S: serde::Serializer>(
+    governor: &Arc<dyn IoGovernor>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    let factory = governor.factory();
+    Some(&*factory).serialize(serializer)
 }
 
 const fn _default_true() -> bool {
@@ -124,10 +134,24 @@ struct AssetManagerSerializer {
     compression_level: u8,
     max_concurrent_requests: u16,
     use_repo_info_cache: bool,
+    // rmp encodes structs as positional arrays: new fields must stay trailing
+    // and defaulted so older writers' bytes still parse.
+    #[serde(default)]
+    governor_factory: Option<Box<dyn GovernorFactory>>,
 }
 
 impl From<AssetManagerSerializer> for AssetManager {
     fn from(value: AssetManagerSerializer) -> Self {
+        let governor = match &value.governor_factory {
+            // Rebind to the process-wide instance for this recipe, so sessions
+            // deserialized from one governor stay jointly governed.
+            Some(factory) => crate::governors::intern_or_build(factory.as_ref()),
+            // Bytes from a pre-governor writer: compat default, as always.
+            None => CompatGovernorConfig {
+                max_concurrent_requests: value.max_concurrent_requests,
+            }
+            .build(),
+        };
         AssetManager::new(
             value.storage,
             value.storage_settings,
@@ -140,6 +164,7 @@ impl From<AssetManagerSerializer> for AssetManager {
             value.compression_level,
             value.max_concurrent_requests,
             value.use_repo_info_cache,
+            governor,
         )
     }
 }
@@ -158,6 +183,7 @@ impl AssetManager {
         compression_level: u8,
         max_concurrent_requests: u16,
         use_repo_info_cache: bool,
+        governor: Arc<dyn IoGovernor>,
     ) -> Self {
         Self {
             num_snapshot_nodes,
@@ -180,7 +206,7 @@ impl AssetManager {
             chunk_cache: Cache::with_weighter(0, num_bytes_chunks, FileWeighter),
             snapshot_cache_size_warned: AtomicBool::new(false),
             manifest_cache_size_warned: AtomicBool::new(false),
-            request_semaphore: Semaphore::new(max_concurrent_requests as usize),
+            governor,
             repo_cache: RwLock::new(None),
             use_repo_info_cache,
         }
@@ -192,6 +218,7 @@ impl AssetManager {
         spec_version: SpecVersionBin,
         compression_level: u8,
         max_concurrent_requests: u16,
+        governor: Arc<dyn IoGovernor>,
     ) -> Self {
         Self::new(
             storage,
@@ -205,6 +232,7 @@ impl AssetManager {
             compression_level,
             max_concurrent_requests,
             false,
+            governor,
         )
     }
 
@@ -215,6 +243,7 @@ impl AssetManager {
         config: &CachingConfig,
         compression_level: u8,
         max_concurrent_requests: u16,
+        governor: Arc<dyn IoGovernor>,
     ) -> Self {
         Self::new(
             storage,
@@ -228,6 +257,7 @@ impl AssetManager {
             compression_level,
             max_concurrent_requests,
             true,
+            governor,
         )
     }
 
@@ -244,11 +274,25 @@ impl AssetManager {
             self.compression_level,
             self.max_concurrent_requests,
             true,
+            Arc::clone(&self.governor),
         )
     }
 
     pub fn spec_version(&self) -> SpecVersionBin {
         self.spec_version
+    }
+
+    pub fn governor(&self) -> &Arc<dyn IoGovernor> {
+        &self.governor
+    }
+
+    /// Build the [`StorageContext`] for one storage operation on `asset`.
+    pub fn storage_context(&self, asset: Asset) -> StorageContext<'_> {
+        StorageContext {
+            settings: &self.storage_settings,
+            governor: &self.governor,
+            asset,
+        }
     }
 
     pub fn remove_cached_snapshot(&self, snapshot_id: &SnapshotId) {
@@ -279,9 +323,14 @@ impl AssetManager {
     pub async fn fetch_config(
         &self,
     ) -> RepositoryResult<Option<(RepositoryConfig, VersionInfo)>> {
+        let ctx = self.storage_context(Asset::Config);
+        // size unknown until the response arrives; trued up from its
+        // content-length, held until the decoded config is handed off
+        let permit =
+            ctx.governor.reserve_memory(ctx.io_class(Direction::Read), None).await;
         match self
             .storage
-            .get_object(&self.storage_settings, CONFIG_FILE_PATH, None)
+            .get_object(&ctx, CONFIG_FILE_PATH, ObjectRange::Whole(&permit))
             .await
         {
             Ok((mut result, version)) => {
@@ -308,7 +357,7 @@ impl AssetManager {
             match self
                 .storage
                 .copy_object(
-                    &self.storage_settings,
+                    &self.storage_context(Asset::Config),
                     CONFIG_FILE_PATH,
                     backup_path.as_str(),
                     content_type,
@@ -324,7 +373,7 @@ impl AssetManager {
         match self
             .storage
             .put_object(
-                &self.storage_settings,
+                &self.storage_context(Asset::Config),
                 CONFIG_FILE_PATH,
                 bytes,
                 content_type,
@@ -347,8 +396,7 @@ impl AssetManager {
             self.spec_version(),
             self.compression_level,
             self.storage.as_ref(),
-            &self.storage_settings,
-            &self.request_semaphore,
+            &self.storage_context(Asset::Manifest),
         )
         .await?;
         self.warn_if_manifest_cache_small(manifest.as_ref());
@@ -368,8 +416,7 @@ impl AssetManager {
                     manifest_id,
                     manifest_size,
                     self.storage.as_ref(),
-                    &self.storage_settings,
-                    &self.request_semaphore,
+                    &self.storage_context(Asset::Manifest),
                 )
                 .await?;
                 self.warn_if_manifest_cache_small(manifest.as_ref());
@@ -424,8 +471,7 @@ impl AssetManager {
             self.spec_version(),
             self.compression_level,
             self.storage.as_ref(),
-            &self.storage_settings,
-            &self.request_semaphore,
+            &self.storage_context(Asset::Snapshot),
         )
         .await?;
         let snapshot_id = snapshot.id().clone();
@@ -446,8 +492,7 @@ impl AssetManager {
                 let (snapshot, _header) = fetch_snapshot(
                     snapshot_id,
                     self.storage.as_ref(),
-                    &self.storage_settings,
-                    &self.request_semaphore,
+                    &self.storage_context(Asset::Snapshot),
                 )
                 .await?;
                 self.warn_if_snapshot_cache_small(snapshot.as_ref());
@@ -470,8 +515,7 @@ impl AssetManager {
             self.spec_version(),
             self.compression_level,
             self.storage.as_ref(),
-            &self.storage_settings,
-            &self.request_semaphore,
+            &self.storage_context(Asset::TransactionLog),
         )
         .await?;
         self.transactions_cache.insert(transaction_id, log);
@@ -488,8 +532,7 @@ impl AssetManager {
                 let (transaction, _header) = fetch_transaction_log(
                     transaction_id,
                     self.storage.as_ref(),
-                    &self.storage_settings,
-                    &self.request_semaphore,
+                    &self.storage_context(Asset::TransactionLog),
                 )
                 .await?;
                 let _fail_is_ok = guard.insert(Arc::clone(&transaction));
@@ -522,7 +565,7 @@ impl AssetManager {
 
         match fetch_repo_info_from_path(
             self.storage.as_ref(),
-            &self.storage_settings,
+            &self.storage_context(Asset::RepoInfo),
             REPO_INFO_FILE_PATH,
             repo_cache.as_ref().map(|(_, info)| info),
         )
@@ -587,8 +630,12 @@ impl AssetManager {
         &self,
         file_name: &str,
     ) -> RepositoryResult<(Arc<RepoInfo>, VersionInfo)> {
-        fetch_repo_info_backup(self.storage.as_ref(), &self.storage_settings, file_name)
-            .await
+        fetch_repo_info_backup(
+            self.storage.as_ref(),
+            &self.storage_context(Asset::RepoInfo),
+            file_name,
+        )
+        .await
     }
 
     /// Read-only inspection: fetch just the [`FileHeader`] of the metadata file at
@@ -601,10 +648,14 @@ impl AssetManager {
     pub async fn fetch_header(&self, path: &str) -> RepositoryResult<FileHeader> {
         let len = format_constants::ICECHUNK_FILE_HEADER_LEN;
         let range = 0u64..(len as u64);
-        let _permit = self.request_semaphore.acquire().await.capture()?;
+        let ctx = self.storage_context(Asset::Other);
+        let _permit = ctx
+            .governor
+            .reserve_memory(ctx.io_class(Direction::Read), Some(len as u64))
+            .await;
         let (read, _) = self
             .storage
-            .get_object(&self.storage_settings, path, Some(&range))
+            .get_object(&ctx, path, ObjectRange::Ranged(&range))
             .await
             .inject()?;
         let bytes = async_reader_to_bytes(read, len).await.capture()?;
@@ -655,8 +706,7 @@ impl AssetManager {
         fetch_snapshot(
             snapshot_id,
             self.storage.as_ref(),
-            &self.storage_settings,
-            &self.request_semaphore,
+            &self.storage_context(Asset::Snapshot),
         )
         .await
     }
@@ -675,8 +725,7 @@ impl AssetManager {
             manifest_id,
             manifest_size,
             self.storage.as_ref(),
-            &self.storage_settings,
-            &self.request_semaphore,
+            &self.storage_context(Asset::Manifest),
         )
         .await
     }
@@ -693,8 +742,7 @@ impl AssetManager {
         fetch_transaction_log(
             transaction_id,
             self.storage.as_ref(),
-            &self.storage_settings,
-            &self.request_semaphore,
+            &self.storage_context(Asset::TransactionLog),
         )
         .await
     }
@@ -710,7 +758,7 @@ impl AssetManager {
         // TODO: widen the cache to store the FileHeader so we can serve from cache
         let fetched = fetch_repo_info_from_path(
             self.storage.as_ref(),
-            &self.storage_settings,
+            &self.storage_context(Asset::RepoInfo),
             REPO_INFO_FILE_PATH,
             None,
         )
@@ -731,7 +779,7 @@ impl AssetManager {
     ) -> RepositoryResult<(Arc<RepoInfo>, VersionInfo, FileHeader)> {
         let fetched = fetch_repo_info_from_path(
             self.storage.as_ref(),
-            &self.storage_settings,
+            &self.storage_context(Asset::RepoInfo),
             format!("{OVERWRITTEN_FILES_PATH}/{file_name}").as_str(),
             None,
         )
@@ -755,7 +803,7 @@ impl AssetManager {
             self.compression_level,
             backup_path,
             self.storage.as_ref(),
-            &self.storage_settings,
+            &self.storage_context(Asset::RepoInfo),
             None,
         )
         .await?;
@@ -861,7 +909,7 @@ impl AssetManager {
                 self.compression_level,
                 Some(backup_path.as_str()),
                 self.storage.as_ref(),
-                &self.storage_settings,
+                &self.storage_context(Asset::RepoInfo),
                 None,
             )
             .await
@@ -917,14 +965,18 @@ impl AssetManager {
         }
 
         let path = format!("{CHUNKS_FILE_PATH}/{chunk_id}");
-        let _permit = self.request_semaphore.acquire().await.capture()?;
         let settings = storage::Settings {
             storage_class: self.storage_settings.chunks_storage_class().cloned(),
             ..self.storage_settings.clone()
         };
+        let ctx = StorageContext {
+            settings: &settings,
+            governor: &self.governor,
+            asset: Asset::Chunk,
+        };
         // we don't pre-populate the chunk cache, there are too many of them for this to be useful
         self.storage
-            .put_object(&settings, path.as_str(), bytes, None, Default::default(), None)
+            .put_object(&ctx, path.as_str(), bytes, None, Default::default(), None)
             .await
             .inject()?
             .must_write()
@@ -945,10 +997,17 @@ impl AssetManager {
                 trace!(%chunk_id, ?range, "Downloading chunk");
                 let path = format!("{CHUNKS_FILE_PATH}/{chunk_id}");
                 let retry = (|| async {
-                    let permit = self.request_semaphore.acquire().await.capture()?;
+                    let ctx = self.storage_context(Asset::Chunk);
+                    let permit = ctx
+                        .governor
+                        .reserve_memory(
+                            ctx.io_class(Direction::Read),
+                            Some(range.end - range.start),
+                        )
+                        .await;
                     let (read, _) = self
                         .storage
-                        .get_object(&self.storage_settings, &path, Some(range))
+                        .get_object(&ctx, &path, ObjectRange::Ranged(range))
                         .await
                         .inject()?;
                     let bytes_result =
@@ -994,11 +1053,10 @@ impl AssetManager {
     ) -> RepositoryResult<DateTime<Utc>> {
         debug!(%snapshot_id, "Getting snapshot timestamp");
         let path = format!("{SNAPSHOTS_FILE_PATH}/{snapshot_id}");
-        let _permit = self.request_semaphore.acquire().await.capture()?;
-        self.storage
-            .get_object_last_modified(path.as_str(), &self.storage_settings)
-            .await
-            .inject()
+        let ctx = self.storage_context(Asset::Snapshot);
+        let _permit =
+            ctx.governor.reserve_memory(ctx.io_class(Direction::Read), None).await;
+        self.storage.get_object_last_modified(&ctx, path.as_str()).await.inject()
     }
 
     #[instrument(skip(self))]
@@ -1017,7 +1075,7 @@ impl AssetManager {
     ) -> RepositoryResult<BoxStream<'_, RepositoryResult<ListInfo<ChunkId>>>> {
         Ok(translate_list_infos(
             self.storage
-                .list_objects(&self.storage_settings, CHUNKS_FILE_PATH)
+                .list_objects(&self.storage_context(Asset::Chunk), CHUNKS_FILE_PATH)
                 .await
                 .inject()?
                 .map(|r| r.inject()),
@@ -1030,7 +1088,7 @@ impl AssetManager {
     ) -> RepositoryResult<BoxStream<'_, RepositoryResult<ListInfo<ManifestId>>>> {
         Ok(translate_list_infos(
             self.storage
-                .list_objects(&self.storage_settings, MANIFESTS_FILE_PATH)
+                .list_objects(&self.storage_context(Asset::Manifest), MANIFESTS_FILE_PATH)
                 .await
                 .inject()?
                 .map(|r| r.inject()),
@@ -1043,7 +1101,7 @@ impl AssetManager {
     ) -> RepositoryResult<BoxStream<'_, RepositoryResult<ListInfo<SnapshotId>>>> {
         Ok(translate_list_infos(
             self.storage
-                .list_objects(&self.storage_settings, SNAPSHOTS_FILE_PATH)
+                .list_objects(&self.storage_context(Asset::Snapshot), SNAPSHOTS_FILE_PATH)
                 .await
                 .inject()?
                 .map(|r| r.inject()),
@@ -1056,7 +1114,10 @@ impl AssetManager {
     ) -> RepositoryResult<BoxStream<'_, RepositoryResult<ListInfo<SnapshotId>>>> {
         Ok(translate_list_infos(
             self.storage
-                .list_objects(&self.storage_settings, TRANSACTION_LOGS_FILE_PATH)
+                .list_objects(
+                    &self.storage_context(Asset::TransactionLog),
+                    TRANSACTION_LOGS_FILE_PATH,
+                )
                 .await
                 .inject()?
                 .map(|r| r.inject()),
@@ -1069,7 +1130,7 @@ impl AssetManager {
     ) -> RepositoryResult<DeleteObjectsResult> {
         self.storage
             .delete_objects(
-                &self.storage_settings,
+                &self.storage_context(Asset::Chunk),
                 CHUNKS_FILE_PATH,
                 chunks.map(|(id, size)| (id.to_string(), size)).boxed(),
             )
@@ -1083,7 +1144,7 @@ impl AssetManager {
     ) -> RepositoryResult<DeleteObjectsResult> {
         self.storage
             .delete_objects(
-                &self.storage_settings,
+                &self.storage_context(Asset::Manifest),
                 MANIFESTS_FILE_PATH,
                 manifests.map(|(id, size)| (id.to_string(), size)).boxed(),
             )
@@ -1097,7 +1158,7 @@ impl AssetManager {
     ) -> RepositoryResult<DeleteObjectsResult> {
         self.storage
             .delete_objects(
-                &self.storage_settings,
+                &self.storage_context(Asset::Snapshot),
                 SNAPSHOTS_FILE_PATH,
                 snapshots.map(|(id, size)| (id.to_string(), size)).boxed(),
             )
@@ -1111,7 +1172,7 @@ impl AssetManager {
     ) -> RepositoryResult<DeleteObjectsResult> {
         self.storage
             .delete_objects(
-                &self.storage_settings,
+                &self.storage_context(Asset::TransactionLog),
                 TRANSACTION_LOGS_FILE_PATH,
                 transaction_logs.map(|(id, size)| (id.to_string(), size)).boxed(),
             )
@@ -1128,7 +1189,7 @@ impl AssetManager {
     ) -> RepositoryResult<BoxStream<'_, RepositoryResult<String>>> {
         let stream = self
             .storage
-            .list_objects(&self.storage_settings, OVERWRITTEN_FILES_PATH)
+            .list_objects(&self.storage_context(Asset::Other), OVERWRITTEN_FILES_PATH)
             .await
             .inject()?
             .map_ok(|li| li.id)
@@ -1233,8 +1294,7 @@ async fn write_new_manifest(
     spec_version: SpecVersionBin,
     compression_level: u8,
     storage: &(dyn Storage + Send + Sync),
-    storage_settings: &storage::Settings,
-    semaphore: &Semaphore,
+    ctx: &StorageContext<'_>,
 ) -> RepositoryResult<u64> {
     if !storage.can_write().await.inject()? {
         return Err(RepositoryErrorKind::ReadonlyStorage(
@@ -1275,13 +1335,13 @@ async fn write_new_manifest(
     debug!(%id, size_bytes=len, "Writing manifest");
     let path = format!("{MANIFESTS_FILE_PATH}/{id}");
     let settings = storage::Settings {
-        storage_class: storage_settings.metadata_storage_class().cloned(),
-        ..storage_settings.clone()
+        storage_class: ctx.settings.metadata_storage_class().cloned(),
+        ..ctx.settings.clone()
     };
+    let ctx = StorageContext { settings: &settings, ..*ctx };
 
-    let _permit = semaphore.acquire().await.capture()?;
     storage
-        .put_object(&settings, path.as_str(), buffer.into(), None, metadata, None)
+        .put_object(&ctx, path.as_str(), buffer.into(), None, metadata, None)
         .await
         .inject()?
         .must_write()
@@ -1289,23 +1349,34 @@ async fn write_new_manifest(
     Ok(len)
 }
 
-#[instrument(skip(storage, storage_settings, semaphore))]
+#[instrument(skip(storage, ctx))]
 async fn fetch_manifest(
     manifest_id: &ManifestId,
     manifest_size: u64,
     storage: &(dyn Storage + Send),
-    storage_settings: &storage::Settings,
-    semaphore: &Semaphore,
+    ctx: &StorageContext<'_>,
 ) -> RepositoryResult<(Arc<Manifest>, FileHeader)> {
     debug!(%manifest_id, "Downloading manifest");
 
     let path = format!("{MANIFESTS_FILE_PATH}/{manifest_id}");
+    // held across download and decode: the reservation covers the buffer until
+    // the decoded value is handed off. When the size is unknown (a whole-object
+    // GET), it is trued up from the response's content-length
+    let permit = ctx
+        .governor
+        .reserve_memory(
+            ctx.io_class(Direction::Read),
+            (manifest_size > 0).then_some(manifest_size),
+        )
+        .await;
     let range = 0..manifest_size;
-    let range = if manifest_size > 0 { Some(&range) } else { None };
-    let _permit = semaphore.acquire().await.capture()?;
+    let target = if manifest_size > 0 {
+        ObjectRange::Ranged(&range)
+    } else {
+        ObjectRange::Whole(&permit)
+    };
 
-    let (read, _) =
-        storage.get_object(storage_settings, path.as_str(), range).await.inject()?;
+    let (read, _) = storage.get_object(ctx, path.as_str(), target).await.inject()?;
     fetch_and_decode(
         read,
         manifest_size,
@@ -1384,8 +1455,7 @@ async fn write_new_snapshot(
     spec_version: SpecVersionBin,
     compression_level: u8,
     storage: &(dyn Storage + Send + Sync),
-    storage_settings: &storage::Settings,
-    semaphore: &Semaphore,
+    ctx: &StorageContext<'_>,
 ) -> RepositoryResult<SnapshotId> {
     if !storage.can_write().await.inject()? {
         return Err(RepositoryErrorKind::ReadonlyStorage(
@@ -1422,12 +1492,12 @@ async fn write_new_snapshot(
     debug!(%id, size_bytes=buffer.len(), "Writing snapshot");
     let path = format!("{SNAPSHOTS_FILE_PATH}/{id}");
     let settings = storage::Settings {
-        storage_class: storage_settings.metadata_storage_class().cloned(),
-        ..storage_settings.clone()
+        storage_class: ctx.settings.metadata_storage_class().cloned(),
+        ..ctx.settings.clone()
     };
-    let _permit = semaphore.acquire().await.capture()?;
+    let ctx = StorageContext { settings: &settings, ..*ctx };
     storage
-        .put_object(&settings, path.as_str(), buffer.into(), None, metadata, None)
+        .put_object(&ctx, path.as_str(), buffer.into(), None, metadata, None)
         .await
         .inject()?
         .must_write()
@@ -1436,19 +1506,22 @@ async fn write_new_snapshot(
     Ok(id)
 }
 
-#[instrument(skip(storage, storage_settings, semaphore))]
+#[instrument(skip(storage, ctx))]
 async fn fetch_snapshot(
     snapshot_id: &SnapshotId,
     storage: &(dyn Storage + Send + Sync),
-    storage_settings: &storage::Settings,
-    semaphore: &Semaphore,
+    ctx: &StorageContext<'_>,
 ) -> RepositoryResult<(Arc<Snapshot>, FileHeader)> {
     debug!(%snapshot_id, "Downloading snapshot");
-    let _permit = semaphore.acquire().await.capture()?;
+    // held across download and decode; size unknown until content arrives,
+    // then trued up from the response's content-length
+    let permit = ctx.governor.reserve_memory(ctx.io_class(Direction::Read), None).await;
 
     let path = format!("{SNAPSHOTS_FILE_PATH}/{snapshot_id}");
-    let (read, _) =
-        storage.get_object(storage_settings, path.as_str(), None).await.inject()?;
+    let (read, _) = storage
+        .get_object(ctx, path.as_str(), ObjectRange::Whole(&permit))
+        .await
+        .inject()?;
     fetch_and_decode(
         read,
         DEFAULT_PREALLOC_HINT as u64,
@@ -1464,8 +1537,7 @@ async fn write_new_tx_log(
     spec_version: SpecVersionBin,
     compression_level: u8,
     storage: &(dyn Storage + Send + Sync),
-    storage_settings: &storage::Settings,
-    semaphore: &Semaphore,
+    ctx: &StorageContext<'_>,
 ) -> RepositoryResult<()> {
     if !storage.can_write().await.inject()? {
         return Err(RepositoryErrorKind::ReadonlyStorage(
@@ -1501,13 +1573,13 @@ async fn write_new_tx_log(
     debug!(%transaction_id, size_bytes=buffer.len(), "Writing transaction log");
     let path = format!("{TRANSACTION_LOGS_FILE_PATH}/{transaction_id}");
     let settings = storage::Settings {
-        storage_class: storage_settings.metadata_storage_class().cloned(),
-        ..storage_settings.clone()
+        storage_class: ctx.settings.metadata_storage_class().cloned(),
+        ..ctx.settings.clone()
     };
+    let ctx = StorageContext { settings: &settings, ..*ctx };
 
-    let _permit = semaphore.acquire().await.capture()?;
     storage
-        .put_object(&settings, path.as_str(), buffer.into(), None, metadata, None)
+        .put_object(&ctx, path.as_str(), buffer.into(), None, metadata, None)
         .await
         .inject()?
         .must_write()
@@ -1516,18 +1588,21 @@ async fn write_new_tx_log(
     Ok(())
 }
 
-#[instrument(skip(storage, storage_settings, semaphore))]
+#[instrument(skip(storage, ctx))]
 async fn fetch_transaction_log(
     transaction_id: &SnapshotId,
     storage: &(dyn Storage + Send + Sync),
-    storage_settings: &storage::Settings,
-    semaphore: &Semaphore,
+    ctx: &StorageContext<'_>,
 ) -> RepositoryResult<(Arc<TransactionLog>, FileHeader)> {
     debug!(%transaction_id, "Downloading transaction log");
     let path = format!("{TRANSACTION_LOGS_FILE_PATH}/{transaction_id}");
-    let _permit = semaphore.acquire().await.capture()?;
-    let (read, _) =
-        storage.get_object(storage_settings, path.as_str(), None).await.inject()?;
+    // held across download and decode; size unknown until content arrives,
+    // then trued up from the response's content-length
+    let permit = ctx.governor.reserve_memory(ctx.io_class(Direction::Read), None).await;
+    let (read, _) = storage
+        .get_object(ctx, path.as_str(), ObjectRange::Whole(&permit))
+        .await
+        .inject()?;
     fetch_and_decode(
         read,
         DEFAULT_PREALLOC_HINT as u64,
@@ -1587,7 +1662,7 @@ pub async fn write_repo_info(
     compression_level: u8,
     backup_path: Option<&str>,
     storage: &(dyn Storage + Send + Sync),
-    storage_settings: &storage::Settings,
+    ctx: &StorageContext<'_>,
     path: Option<&str>,
 ) -> RepositoryResult<VersionInfo> {
     let (buffer, metadata) =
@@ -1599,13 +1674,7 @@ pub async fn write_repo_info(
     if let Some(backup_path) = backup_path {
         let backup_path = format!("{OVERWRITTEN_FILES_PATH}/{backup_path}");
         match storage
-            .copy_object(
-                storage_settings,
-                repo_file_path,
-                backup_path.as_str(),
-                None,
-                version,
-            )
+            .copy_object(ctx, repo_file_path, backup_path.as_str(), None, version)
             .await
             .inject()?
         {
@@ -1619,14 +1688,7 @@ pub async fn write_repo_info(
     }
 
     match storage
-        .put_object(
-            storage_settings,
-            repo_file_path,
-            buffer.into(),
-            None,
-            metadata,
-            Some(version),
-        )
+        .put_object(ctx, repo_file_path, buffer.into(), None, metadata, Some(version))
         .await
         .inject()?
     {
@@ -1649,7 +1711,7 @@ pub async unsafe fn force_write_repo_info(
     spec_version: SpecVersionBin,
     compression_level: u8,
     storage: &(dyn Storage + Send + Sync),
-    storage_settings: &storage::Settings,
+    ctx: &StorageContext<'_>,
     path: Option<&str>,
 ) -> RepositoryResult<VersionInfo> {
     let (buffer, metadata) =
@@ -1660,7 +1722,7 @@ pub async unsafe fn force_write_repo_info(
     let repo_file_path = path.unwrap_or(REPO_INFO_FILE_PATH);
 
     match storage
-        .put_object(storage_settings, repo_file_path, buffer.into(), None, metadata, None)
+        .put_object(ctx, repo_file_path, buffer.into(), None, metadata, None)
         .await
         .inject()?
     {
@@ -1674,28 +1736,28 @@ pub async unsafe fn force_write_repo_info(
 #[instrument(skip_all)]
 pub async fn fetch_repo_info(
     storage: &(dyn Storage + Send + Sync),
-    storage_settings: &storage::Settings,
+    ctx: &StorageContext<'_>,
 ) -> RepositoryResult<(Arc<RepoInfo>, VersionInfo)> {
-    fetch_repo_info_from_path(storage, storage_settings, REPO_INFO_FILE_PATH, None)
-        .await
-        .map(|fetched| {
+    fetch_repo_info_from_path(storage, ctx, REPO_INFO_FILE_PATH, None).await.map(
+        |fetched| {
             // Since we didn't give a previous version, there must be a result here
             #[expect(clippy::expect_used)]
             let (info, version, _header) =
                 fetched.expect("Logic bug, must have a repo_info here");
             (info, version)
-        })
+        },
+    )
 }
 
 #[instrument(skip_all)]
 async fn fetch_repo_info_backup(
     storage: &(dyn Storage + Send + Sync),
-    storage_settings: &storage::Settings,
+    ctx: &StorageContext<'_>,
     file_name: &str,
 ) -> RepositoryResult<(Arc<RepoInfo>, VersionInfo)> {
     fetch_repo_info_from_path(
         storage,
-        storage_settings,
+        ctx,
         format!("{OVERWRITTEN_FILES_PATH}/{file_name}").as_str(),
         None,
     )
@@ -1712,12 +1774,15 @@ async fn fetch_repo_info_backup(
 #[instrument(skip_all)]
 pub async fn fetch_repo_info_from_path(
     storage: &(dyn Storage + Send + Sync),
-    storage_settings: &storage::Settings,
+    ctx: &StorageContext<'_>,
     path: &str,
     previous_version: Option<&VersionInfo>,
 ) -> RepositoryResult<Option<(Arc<RepoInfo>, VersionInfo, FileHeader)>> {
     debug!("Downloading repo info");
-    match storage.get_object_conditional(storage_settings, path, previous_version).await {
+    // size unknown until the response arrives; trued up from its
+    // content-length, held until the decoded repo info is handed off
+    let permit = ctx.governor.reserve_memory(ctx.io_class(Direction::Read), None).await;
+    match storage.get_object_conditional(ctx, path, &permit, previous_version).await {
         Ok(GetModifiedResult::Modified { data, new_version }) => {
             let (repo_info, header) = fetch_and_decode(
                 data,
@@ -1823,9 +1888,17 @@ mod test {
             manifest::{ChunkInfo, ChunkPayload, LocationCompressionConfig},
             snapshot::ArrayShape,
         },
-        storage::{Storage, logging::LoggingStorage, new_in_memory_storage},
+        storage::{
+            MemoryPermit, MemoryState, Storage, logging::LoggingStorage,
+            new_in_memory_storage,
+        },
     };
     use std::collections::HashMap;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    fn compat_governor(max_concurrent_requests: u16) -> Arc<dyn IoGovernor> {
+        CompatGovernorConfig { max_concurrent_requests }.build()
+    }
 
     #[tokio_test]
     async fn test_caching_caches() -> Result<(), Box<dyn std::error::Error>> {
@@ -1837,6 +1910,7 @@ mod test {
             SpecVersionBin::default(),
             1,
             100,
+            compat_governor(100),
         );
 
         let node1 = NodeId::random();
@@ -1869,6 +1943,7 @@ mod test {
             &CachingConfig::default(),
             1,
             100,
+            compat_governor(100),
         );
 
         let compression: LocationCompressionConfig =
@@ -1951,6 +2026,7 @@ mod test {
             SpecVersionBin::default(),
             1,
             100,
+            compat_governor(100),
         );
 
         let ci1 = ChunkInfo {
@@ -2012,6 +2088,7 @@ mod test {
             },
             1,
             100,
+            compat_governor(100),
         );
 
         // we keep asking for all 3 items, but the cache can only fit 2
@@ -2038,6 +2115,7 @@ mod test {
             SpecVersionBin::default(),
             1,
             100,
+            compat_governor(100),
         ));
 
         // some reasonable size so it takes some time to parse
@@ -2066,6 +2144,7 @@ mod test {
             &CachingConfig::default(),
             1,
             100,
+            compat_governor(100),
         ));
 
         let manager_c = Arc::new(manager);
@@ -2085,6 +2164,140 @@ mod test {
         Ok(())
     }
 
+    /// Wraps a governor to record how many memory reservations are alive at
+    /// once (reservation grant to `MemoryPermit` drop).
+    #[derive(Debug)]
+    struct MaxConcurrencyGovernor {
+        inner: Arc<dyn IoGovernor>,
+        in_flight: Arc<AtomicU64>,
+        max_seen: Arc<AtomicU64>,
+        total: Arc<AtomicU64>,
+    }
+
+    #[derive(Debug)]
+    struct TrackedReservation {
+        inner: MemoryPermit,
+        in_flight: Arc<AtomicU64>,
+    }
+
+    impl MemoryState for TrackedReservation {
+        fn adjust(&self, actual_total: u64) {
+            self.inner.adjust(actual_total);
+        }
+    }
+
+    impl Drop for TrackedReservation {
+        fn drop(&mut self) {
+            self.in_flight.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl IoGovernor for MaxConcurrencyGovernor {
+        async fn reserve_memory(
+            &self,
+            class: storage::IoClass,
+            expected_total: Option<u64>,
+        ) -> MemoryPermit {
+            let inner = self.inner.reserve_memory(class, expected_total).await;
+            self.total.fetch_add(1, Ordering::SeqCst);
+            let n = self.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+            self.max_seen.fetch_max(n, Ordering::SeqCst);
+            MemoryPermit::new(Box::new(TrackedReservation {
+                inner,
+                in_flight: Arc::clone(&self.in_flight),
+            }))
+        }
+
+        async fn acquire(
+            &self,
+            class: storage::IoClass,
+            expected_bytes: Option<u64>,
+        ) -> storage::IoPermit {
+            self.inner.acquire(class, expected_bytes).await
+        }
+
+        fn factory(&self) -> Arc<dyn GovernorFactory> {
+            self.inner.factory()
+        }
+
+        fn as_arc_any(self: Arc<Self>) -> Arc<dyn std::any::Any + Send + Sync> {
+            self
+        }
+    }
+
+    /// A compat governor with a single unit serializes concurrent logical
+    /// fetches: the second manifest download can't start until the first
+    /// one's reservation is released at hand-off.
+    #[tokio_test]
+    async fn test_limit_one_governor_serializes_fetches()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+        let settings = storage::Settings::default();
+        let writer = AssetManager::new_no_cache(
+            Arc::clone(&storage),
+            settings.clone(),
+            SpecVersionBin::default(),
+            1,
+            100,
+            compat_governor(100),
+        );
+
+        let mut ids_and_sizes = Vec::new();
+        for _ in 0..2 {
+            let manifest = Arc::new(
+                Manifest::from_iter(
+                    &ManifestId::random(),
+                    (0..5_000).map(|_| ChunkInfo {
+                        node: NodeId::random(),
+                        coord: ChunkIndices(vec![rand::random(), rand::random()]),
+                        payload: ChunkPayload::Inline("hello".into()),
+                    }),
+                    None,
+                )
+                .await?
+                .unwrap(),
+            );
+            let id = manifest.id().clone();
+            let size = writer.write_manifest(manifest).await?;
+            ids_and_sizes.push((id, size));
+        }
+
+        let in_flight = Arc::new(AtomicU64::new(0));
+        let max_seen = Arc::new(AtomicU64::new(0));
+        let total = Arc::new(AtomicU64::new(0));
+        let governor: Arc<dyn IoGovernor> = Arc::new(MaxConcurrencyGovernor {
+            inner: CompatGovernorConfig { max_concurrent_requests: 1 }.build(),
+            in_flight: Arc::clone(&in_flight),
+            max_seen: Arc::clone(&max_seen),
+            total: Arc::clone(&total),
+        });
+        let manager = Arc::new(AssetManager::new_no_cache(
+            Arc::clone(&storage),
+            settings,
+            SpecVersionBin::default(),
+            1,
+            1,
+            governor,
+        ));
+
+        let tasks: Vec<_> = ids_and_sizes
+            .into_iter()
+            .map(|(id, size)| {
+                let manager = Arc::clone(&manager);
+                tokio::task::spawn(async move { manager.fetch_manifest(&id, size).await })
+            })
+            .collect();
+        for task in tasks {
+            assert!(task.await?.is_ok());
+        }
+
+        assert_eq!(total.load(Ordering::SeqCst), 2);
+        assert_eq!(max_seen.load(Ordering::SeqCst), 1);
+        assert_eq!(in_flight.load(Ordering::SeqCst), 0);
+        Ok(())
+    }
+
     #[tokio_test]
     async fn test_repo_info_caching_no_cache() -> Result<(), Box<dyn std::error::Error>> {
         let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
@@ -2095,6 +2308,7 @@ mod test {
             SpecVersionBin::default(),
             1,
             100,
+            compat_governor(100),
         );
         let initial = Snapshot::initial(SpecVersionBin::current()).unwrap();
         let repo_info = Arc::new(RepoInfo::initial(
@@ -2131,6 +2345,7 @@ mod test {
             &CachingConfig::default(),
             1,
             100,
+            compat_governor(100),
         );
         let initial = Snapshot::initial(SpecVersionBin::current()).unwrap();
         let repo_info = Arc::new(RepoInfo::initial(
@@ -2187,6 +2402,7 @@ mod test {
             HashMap::new(),
             Some(SpecVersionBin::current()),
             true,
+            None,
         )
         .await?;
 
@@ -2270,6 +2486,155 @@ mod test {
             am.fetch_repo_info_backup_with_header(backup_name).await?;
         assert_eq!(with_header, header);
 
+        Ok(())
+    }
+
+    /// Pins the compatibility mechanism `AssetManagerSerializer` relies on:
+    /// rmp encodes structs as positional arrays, so a reader with an extra
+    /// trailing `#[serde(default)]` field accepts bytes from an older writer,
+    /// while an old reader rejects new bytes loudly.
+    #[icechunk_macros::test]
+    fn test_rmp_trailing_default_field_arity() {
+        #[derive(Serialize, Deserialize)]
+        struct Old {
+            a: u32,
+            b: bool,
+        }
+        #[derive(Serialize, Deserialize)]
+        struct New {
+            a: u32,
+            b: bool,
+            #[serde(default)]
+            c: Option<u16>,
+        }
+
+        let old_bytes = rmp_serde::to_vec(&Old { a: 7, b: true }).unwrap();
+        let new: New = rmp_serde::from_slice(&old_bytes).unwrap();
+        assert_eq!((new.a, new.b, new.c), (7, true, None));
+
+        let new_bytes = rmp_serde::to_vec(&New { a: 7, b: true, c: Some(3) }).unwrap();
+        assert!(rmp_serde::from_slice::<Old>(&new_bytes).is_err());
+    }
+
+    /// Deserializing the same bytes twice in one process rebinds both
+    /// managers to a single interned governor; the source instance itself
+    /// is never interned.
+    #[tokio_test]
+    async fn test_deserialized_managers_share_interned_governor()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let storage = new_in_memory_storage().await?;
+        let manager = AssetManager::new_no_cache(
+            storage,
+            storage::Settings::default(),
+            SpecVersionBin::default(),
+            1,
+            5,
+            compat_governor(5),
+        );
+
+        let bytes = rmp_serde::to_vec(&manager)?;
+        let m1: AssetManager = rmp_serde::from_slice(&bytes)?;
+        let m2: AssetManager = rmp_serde::from_slice(&bytes)?;
+
+        assert!(Arc::ptr_eq(m1.governor(), m2.governor()));
+        assert!(!Arc::ptr_eq(manager.governor(), m1.governor()));
+        Ok(())
+    }
+
+    /// Bytes serialized before the governor-factory field existed (11
+    /// positional fields) still deserialize, falling back to a compat
+    /// governor sized by `max_concurrent_requests`.
+    #[tokio_test]
+    async fn test_old_bytes_without_factory_get_compat_default()
+    -> Result<(), Box<dyn std::error::Error>> {
+        #[derive(Serialize)]
+        struct OldAssetManager {
+            storage: Arc<dyn Storage + Send + Sync>,
+            storage_settings: storage::Settings,
+            spec_version: SpecVersionBin,
+            num_snapshot_nodes: u64,
+            num_chunk_refs: u64,
+            num_transaction_changes: u64,
+            num_bytes_attributes: u64,
+            num_bytes_chunks: u64,
+            compression_level: u8,
+            max_concurrent_requests: u16,
+            use_repo_info_cache: bool,
+        }
+
+        let old = OldAssetManager {
+            storage: new_in_memory_storage().await?,
+            storage_settings: storage::Settings::default(),
+            spec_version: SpecVersionBin::default(),
+            num_snapshot_nodes: 1,
+            num_chunk_refs: 1,
+            num_transaction_changes: 1,
+            num_bytes_attributes: 1,
+            num_bytes_chunks: 1,
+            compression_level: 1,
+            max_concurrent_requests: 3,
+            use_repo_info_cache: true,
+        };
+
+        let manager: AssetManager = rmp_serde::from_slice(&rmp_serde::to_vec(&old)?)?;
+        let expected: Box<dyn GovernorFactory> =
+            Box::new(CompatGovernorConfig { max_concurrent_requests: 3 });
+        assert_eq!(
+            rmp_serde::to_vec(&manager.governor().factory())?,
+            rmp_serde::to_vec(&expected)?
+        );
+        Ok(())
+    }
+
+    /// A factory tag this binary doesn't know (e.g. bytes from a future
+    /// icechunk) fails deserialization loudly instead of degrading silently.
+    #[tokio_test]
+    async fn test_unknown_factory_tag_fails_loudly()
+    -> Result<(), Box<dyn std::error::Error>> {
+        #[derive(Serialize)]
+        struct FutureFactory {
+            governor_type: &'static str,
+            knob: u32,
+        }
+        #[derive(Serialize)]
+        struct FutureAssetManager {
+            storage: Arc<dyn Storage + Send + Sync>,
+            storage_settings: storage::Settings,
+            spec_version: SpecVersionBin,
+            num_snapshot_nodes: u64,
+            num_chunk_refs: u64,
+            num_transaction_changes: u64,
+            num_bytes_attributes: u64,
+            num_bytes_chunks: u64,
+            compression_level: u8,
+            max_concurrent_requests: u16,
+            use_repo_info_cache: bool,
+            governor_factory: Option<FutureFactory>,
+        }
+
+        let value = FutureAssetManager {
+            storage: new_in_memory_storage().await?,
+            storage_settings: storage::Settings::default(),
+            spec_version: SpecVersionBin::default(),
+            num_snapshot_nodes: 1,
+            num_chunk_refs: 1,
+            num_transaction_changes: 1,
+            num_bytes_attributes: 1,
+            num_bytes_chunks: 1,
+            compression_level: 1,
+            max_concurrent_requests: 3,
+            use_repo_info_cache: true,
+            governor_factory: Some(FutureFactory {
+                governor_type: "hyperspeed",
+                knob: 9,
+            }),
+        };
+
+        // named mode so the factory serializes as a tag-carrying map, the
+        // shape typetag emits
+        let bytes = rmp_serde::to_vec_named(&value)?;
+        let err = rmp_serde::from_slice::<AssetManager>(&bytes).unwrap_err().to_string();
+        assert!(err.contains("hyperspeed"), "unhelpful error: {err}");
         Ok(())
     }
 }

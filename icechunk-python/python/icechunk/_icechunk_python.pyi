@@ -2386,6 +2386,7 @@ class PyRepository:
         authorize_virtual_chunk_access: dict[str, _AnyCredential | None] | None = None,
         spec_version: SpecVersion | int | None = None,
         check_clean_root: bool = True,
+        governor: IoGovernor | None = None,
     ) -> PyRepository: ...
     @classmethod
     async def create_async(
@@ -2396,6 +2397,7 @@ class PyRepository:
         authorize_virtual_chunk_access: dict[str, _AnyCredential | None] | None = None,
         spec_version: SpecVersion | int | None = None,
         check_clean_root: bool = True,
+        governor: IoGovernor | None = None,
     ) -> PyRepository: ...
     @classmethod
     def open(
@@ -2404,6 +2406,7 @@ class PyRepository:
         *,
         config: RepositoryConfig | None = None,
         authorize_virtual_chunk_access: dict[str, _AnyCredential | None] | None = None,
+        governor: IoGovernor | None = None,
     ) -> PyRepository: ...
     @classmethod
     async def open_async(
@@ -2412,6 +2415,7 @@ class PyRepository:
         *,
         config: RepositoryConfig | None = None,
         authorize_virtual_chunk_access: dict[str, _AnyCredential | None] | None = None,
+        governor: IoGovernor | None = None,
     ) -> PyRepository: ...
     @classmethod
     def open_or_create(
@@ -2422,6 +2426,7 @@ class PyRepository:
         authorize_virtual_chunk_access: dict[str, _AnyCredential | None] | None = None,
         create_version: SpecVersion | int | None = None,
         check_clean_root: bool = True,
+        governor: IoGovernor | None = None,
     ) -> PyRepository: ...
     @classmethod
     async def open_or_create_async(
@@ -2432,6 +2437,7 @@ class PyRepository:
         authorize_virtual_chunk_access: dict[str, _AnyCredential | None] | None = None,
         create_version: SpecVersion | int | None = None,
         check_clean_root: bool = True,
+        governor: IoGovernor | None = None,
     ) -> PyRepository: ...
     @staticmethod
     def exists(
@@ -2461,6 +2467,7 @@ class PyRepository:
     def config(self) -> RepositoryConfig: ...
     def storage_settings(self) -> StorageSettings: ...
     def storage(self) -> Storage: ...
+    def governor(self) -> IoGovernor: ...
     @property
     def authorized_virtual_container_prefixes(self) -> set[str]: ...
     def reopen(
@@ -2724,6 +2731,8 @@ class PySession:
     def branch(self) -> str | None: ...
     @property
     def has_uncommitted_changes(self) -> bool: ...
+    @property
+    def governor(self) -> IoGovernor: ...
     def status(self) -> Diff: ...
     def discard_changes(self) -> None: ...
     def move_node(self, from_path: str, to_path: str) -> None: ...
@@ -3930,3 +3939,532 @@ class ChunkStorageStats:
     def __str__(self) -> str: ...
     def _repr_html_(self) -> str: ...
     def __add__(self, other: ChunkStorageStats, /) -> ChunkStorageStats: ...
+
+class IoGovernor:
+    """
+    Opaque handle to an I/O governor injected into a `Repository`.
+
+    A governor controls how Icechunk performs I/O against object storage:
+    it is consulted before every logical fetch (to reserve buffer memory)
+    and before every HTTP request (to admit it). One governor instance can
+    be shared by several repositories to bound their combined resource
+    usage.
+
+    This class cannot be constructed directly: build one of the concrete
+    subclasses (`BandwidthGovernor`, `CompatGovernor`) instead. Equality is
+    identity of the underlying governor instance.
+
+    !!! warning
+        Experimental: governors and their configuration may change in
+        future releases.
+    """
+
+@final
+class BandwidthGovernor(IoGovernor):
+    """
+    A governor that holds one workload to a target network bandwidth
+    without exceeding a memory budget, both adjustable at runtime.
+
+    HTTP requests are admitted against the target bandwidth at the rate
+    they are expected to consume while active, and logical read fetches
+    reserve their total size against the memory budget until hand-off.
+    Throttle responses from the object store temporarily reduce the
+    effective bandwidth.
+
+    !!! warning
+        Experimental: governors and their configuration may change in
+        future releases.
+    """
+
+    def __new__(cls, config: BandwidthGovernorConfig) -> BandwidthGovernor:
+        """
+        Build a governor from a configuration.
+
+        Parameters
+        ----------
+        config: BandwidthGovernorConfig
+            The recipe: per-direction targets and backend constants, plus
+            the memory budget. `BandwidthGovernorConfig.s3_defaults`
+            provides reasonable backend constants for S3-like stores.
+        """
+        ...
+    def __repr__(self, /) -> str: ...
+    @property
+    def label(self) -> str:
+        """
+        The label given at construction, for telemetry and identity.
+        """
+        ...
+    @property
+    def read_bandwidth(self) -> int:
+        """
+        The target read bandwidth in bytes per second.
+        """
+        ...
+    @read_bandwidth.setter
+    def read_bandwidth(self, value: int) -> None:
+        """
+        Change the target read bandwidth, in bytes per second.
+
+        Takes effect immediately, also for repositories already using this
+        governor. Shrinking never cancels in-flight requests.
+        """
+        ...
+    @property
+    def write_bandwidth(self) -> int:
+        """
+        The target write bandwidth in bytes per second.
+        """
+        ...
+    @write_bandwidth.setter
+    def write_bandwidth(self, value: int) -> None:
+        """
+        Change the target write bandwidth, in bytes per second.
+
+        Takes effect immediately, also for repositories already using this
+        governor. Shrinking never cancels in-flight requests.
+        """
+        ...
+    @property
+    def memory_budget(self) -> int:
+        """
+        The memory budget for in-flight reads, in bytes.
+        """
+        ...
+    @memory_budget.setter
+    def memory_budget(self, value: int) -> None:
+        """
+        Change the memory budget, in bytes.
+
+        Takes effect immediately, also for repositories already using this
+        governor. Shrinking never cancels in-flight reservations; the pool
+        drains passively to its new size.
+        """
+        ...
+    def metrics(self) -> GovernorMetrics:
+        """
+        A point-in-time snapshot of the governor's state.
+
+        Returns
+        -------
+        GovernorMetrics
+            Per-direction bandwidth and queue metrics plus memory pool
+            usage.
+        """
+        ...
+
+@final
+class CompatGovernor(IoGovernor):
+    """
+    A governor reproducing Icechunk's classic I/O control: a fixed-size
+    pool of concurrent request units, ignoring request sizes.
+
+    This is what repositories use when no governor is injected, sized by
+    `RepositoryConfig.max_concurrent_requests`. Construct one explicitly
+    to share a single concurrency pool between several repositories.
+
+    !!! warning
+        Experimental: governors and their configuration may change in
+        future releases.
+    """
+
+    def __new__(cls, config: CompatGovernorConfig) -> CompatGovernor:
+        """
+        Build a governor from a configuration.
+
+        Parameters
+        ----------
+        config: CompatGovernorConfig
+            The recipe: the number of concurrent request units.
+        """
+        ...
+    def __repr__(self, /) -> str: ...
+    @property
+    def max_concurrent_requests(self) -> int:
+        """
+        The size of the request unit pool, fixed at construction.
+        """
+        ...
+
+@final
+class DirectionConfig:
+    """
+    Per-direction (read or write) configuration for a `BandwidthGovernor`.
+
+    Bandwidths are in bytes per second. Besides the target, the fields
+    describe what one HTTP connection to the object store can do; they are
+    backend constants rather than tuning knobs.
+    `BandwidthGovernorConfig.s3_defaults` fills them in for S3-like
+    stores.
+
+    !!! warning
+        Experimental: governors and their configuration may change in
+        future releases.
+    """
+
+    def __new__(
+        cls,
+        *,
+        target_bandwidth: int,
+        max_connection_bandwidth: int,
+        min_connection_bandwidth: int,
+        request_latency_us: int,
+        min_request_bytes: int,
+        unknown_request_bytes: int = ...,
+    ) -> DirectionConfig:
+        """
+        Create a new `DirectionConfig` object.
+
+        Parameters
+        ----------
+        target_bandwidth: int
+            The target bandwidth in bytes per second; adjustable after
+            construction through the governor.
+        max_connection_bandwidth: int
+            The most one connection can sustain, in bytes per second; cap
+            of the adaptive estimate.
+        min_connection_bandwidth: int
+            What a cold connection delivers, in bytes per second; floor
+            and starting value of the adaptive estimate.
+        request_latency_us: int
+            Assumed per-request latency in microseconds (healthy-store
+            median or lower).
+        min_request_bytes: int
+            Requests are priced as if at least this big, so tiny requests
+            can't be admitted without bound.
+        unknown_request_bytes: int
+            Requests of unknown size are priced as this many bytes.
+            Default: 1 MiB.
+        """
+        ...
+    def __getnewargs_ex__(self) -> tuple[tuple[Any, ...], dict[str, Any]]: ...
+    def __repr__(self, /) -> str: ...
+    def __str__(self, /) -> str: ...
+    def _repr_html_(self, /) -> str: ...
+    @property
+    def target_bandwidth(self) -> int:
+        """
+        The target bandwidth in bytes per second.
+        """
+        ...
+    @target_bandwidth.setter
+    def target_bandwidth(self, value: int) -> None: ...
+    @property
+    def max_connection_bandwidth(self) -> int:
+        """
+        The most one connection can sustain, in bytes per second.
+        """
+        ...
+    @max_connection_bandwidth.setter
+    def max_connection_bandwidth(self, value: int) -> None: ...
+    @property
+    def min_connection_bandwidth(self) -> int:
+        """
+        What a cold connection delivers, in bytes per second.
+        """
+        ...
+    @min_connection_bandwidth.setter
+    def min_connection_bandwidth(self, value: int) -> None: ...
+    @property
+    def request_latency_us(self) -> int:
+        """
+        Assumed per-request latency in microseconds.
+        """
+        ...
+    @request_latency_us.setter
+    def request_latency_us(self, value: int) -> None: ...
+    @property
+    def min_request_bytes(self) -> int:
+        """
+        Requests are priced as if at least this big.
+        """
+        ...
+    @min_request_bytes.setter
+    def min_request_bytes(self, value: int) -> None: ...
+    @property
+    def unknown_request_bytes(self) -> int:
+        """
+        Requests of unknown size are priced as this many bytes.
+        """
+        ...
+    @unknown_request_bytes.setter
+    def unknown_request_bytes(self, value: int) -> None: ...
+
+@final
+class BandwidthGovernorConfig:
+    """
+    Serializable recipe for a `BandwidthGovernor`.
+
+    !!! warning
+        Experimental: governors and their configuration may change in
+        future releases.
+    """
+
+    def __new__(
+        cls,
+        *,
+        label: str = ...,
+        read: DirectionConfig,
+        write: DirectionConfig,
+        memory_budget: int,
+        unknown_object_bytes: int = ...,
+    ) -> BandwidthGovernorConfig:
+        """
+        Create a new `BandwidthGovernorConfig` object.
+
+        Parameters
+        ----------
+        label: str
+            Identity and telemetry name for governors built from this
+            config. When not given, a random ``governor-xxxxxxxx`` label is
+            generated, so distinct configs never share an identity by
+            accident. The label is part of the recipe that decides which
+            deserialized sessions rebind to one governor within a process;
+            give two configs the same label (and settings) only to make
+            them deliberately interchangeable.
+        read: DirectionConfig
+            Read-direction target and backend constants.
+        write: DirectionConfig
+            Write-direction target and backend constants.
+        memory_budget: int
+            Memory budget in bytes for in-flight reads; adjustable after
+            construction through the governor.
+        unknown_object_bytes: int
+            Logical fetches of unknown size reserve this much memory,
+            trued up when the actual size becomes known. Default: 4 MiB.
+        """
+        ...
+    @staticmethod
+    def s3_defaults(
+        label: str = ...,
+        *,
+        read_bandwidth: int,
+        write_bandwidth: int,
+        memory_budget: int,
+    ) -> BandwidthGovernorConfig:
+        """
+        A config with S3 backend constants.
+
+        Parameters
+        ----------
+        label: str
+            Identity and telemetry name for governors built from this
+            config. When not given, a random ``governor-xxxxxxxx`` label is
+            generated, so distinct configs never share an identity by
+            accident.
+        read_bandwidth: int
+            The target read bandwidth in bytes per second.
+        write_bandwidth: int
+            The target write bandwidth in bytes per second.
+        memory_budget: int
+            Memory budget in bytes for in-flight reads.
+
+        Returns
+        -------
+        BandwidthGovernorConfig
+            A config with the given targets and S3 backend constants.
+        """
+        ...
+    def __getnewargs_ex__(self) -> tuple[tuple[Any, ...], dict[str, Any]]: ...
+    def __repr__(self, /) -> str: ...
+    def __str__(self, /) -> str: ...
+    def _repr_html_(self, /) -> str: ...
+    @property
+    def label(self) -> str:
+        """
+        Identity and telemetry name for governors built from this config.
+        """
+        ...
+    @label.setter
+    def label(self, value: str) -> None: ...
+    @property
+    def read(self) -> DirectionConfig:
+        """
+        Read-direction target and backend constants.
+        """
+        ...
+    @read.setter
+    def read(self, value: DirectionConfig) -> None: ...
+    @property
+    def write(self) -> DirectionConfig:
+        """
+        Write-direction target and backend constants.
+        """
+        ...
+    @write.setter
+    def write(self, value: DirectionConfig) -> None: ...
+    @property
+    def memory_budget(self) -> int:
+        """
+        Memory budget in bytes for in-flight reads.
+        """
+        ...
+    @memory_budget.setter
+    def memory_budget(self, value: int) -> None: ...
+    @property
+    def unknown_object_bytes(self) -> int:
+        """
+        Logical fetches of unknown size reserve this much memory.
+        """
+        ...
+    @unknown_object_bytes.setter
+    def unknown_object_bytes(self, value: int) -> None: ...
+
+@final
+class CompatGovernorConfig:
+    """
+    Serializable recipe for a `CompatGovernor`.
+
+    !!! warning
+        Experimental: governors and their configuration may change in
+        future releases.
+    """
+
+    def __new__(cls, *, max_concurrent_requests: int = ...) -> CompatGovernorConfig:
+        """
+        Create a new `CompatGovernorConfig` object.
+
+        Parameters
+        ----------
+        max_concurrent_requests: int
+            The number of concurrent request units. Default: 256.
+        """
+        ...
+    def __getnewargs_ex__(self) -> tuple[tuple[Any, ...], dict[str, Any]]: ...
+    def __repr__(self, /) -> str: ...
+    def __str__(self, /) -> str: ...
+    def _repr_html_(self, /) -> str: ...
+    @property
+    def max_concurrent_requests(self) -> int:
+        """
+        The number of concurrent request units.
+        """
+        ...
+    @max_concurrent_requests.setter
+    def max_concurrent_requests(self, value: int) -> None: ...
+
+@final
+class DirectionMetrics:
+    """
+    One direction's bandwidth pool and estimate, from
+    `BandwidthGovernor.metrics`. Bandwidths in bytes per second.
+
+    !!! warning
+        Experimental: governors and their configuration may change in
+        future releases.
+    """
+
+    def __repr__(self, /) -> str: ...
+    def __str__(self, /) -> str: ...
+    def _repr_html_(self, /) -> str: ...
+    @property
+    def target_bandwidth(self) -> int:
+        """
+        The target bandwidth as last set, in bytes per second.
+        """
+        ...
+    @property
+    def effective_bandwidth(self) -> int:
+        """
+        What the pool currently admits: the target scaled by the throttle
+        response's cut factor (equal to the target while no cut is in
+        effect).
+        """
+        ...
+    @property
+    def observed_connection_bandwidth(self) -> int:
+        """
+        The adaptive estimate of one connection's bandwidth.
+        """
+        ...
+    @property
+    def in_flight_cost(self) -> int:
+        """
+        Total cost in bytes per second of the admitted, not-yet-finished
+        requests.
+        """
+        ...
+    @property
+    def in_flight_requests(self) -> int:
+        """
+        Number of admitted, not-yet-finished requests.
+        """
+        ...
+    @property
+    def queued_requests(self) -> int:
+        """
+        Requests waiting for admission.
+        """
+        ...
+    @property
+    def throttles_total(self) -> int:
+        """
+        Throttle signals observed since construction.
+        """
+        ...
+
+@final
+class MemoryMetrics:
+    """
+    The memory pool of a `BandwidthGovernor`, from
+    `BandwidthGovernor.metrics`.
+
+    !!! warning
+        Experimental: governors and their configuration may change in
+        future releases.
+    """
+
+    def __repr__(self, /) -> str: ...
+    def __str__(self, /) -> str: ...
+    def _repr_html_(self, /) -> str: ...
+    @property
+    def budget(self) -> int:
+        """
+        The memory budget as last set, in bytes.
+        """
+        ...
+    @property
+    def reserved(self) -> int:
+        """
+        Memory in bytes reserved by in-flight logical fetches.
+        """
+        ...
+    @property
+    def queued_fetches(self) -> int:
+        """
+        Logical fetches waiting for a reservation.
+        """
+        ...
+
+@final
+class GovernorMetrics:
+    """
+    Snapshot of a `BandwidthGovernor`'s state, from
+    `BandwidthGovernor.metrics`.
+
+    !!! warning
+        Experimental: governors and their configuration may change in
+        future releases.
+    """
+
+    def __repr__(self, /) -> str: ...
+    def __str__(self, /) -> str: ...
+    def _repr_html_(self, /) -> str: ...
+    @property
+    def read(self) -> DirectionMetrics:
+        """
+        Read-direction bandwidth pool metrics.
+        """
+        ...
+    @property
+    def write(self) -> DirectionMetrics:
+        """
+        Write-direction bandwidth pool metrics.
+        """
+        ...
+    @property
+    def memory(self) -> MemoryMetrics:
+        """
+        Memory pool metrics.
+        """
+        ...

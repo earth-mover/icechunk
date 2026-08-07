@@ -27,7 +27,8 @@ use icechunk::{
         S3ChecksumAlgorithm, S3Credentials, S3CredentialsFetcher, S3Options,
         S3StaticCredentials,
     },
-    storage::{self, ConcurrencySettings},
+    governors::CompatGovernorConfig,
+    storage::{self, Asset, ConcurrencySettings, GovernorFactory as _, StorageContext},
     virtual_chunks::VirtualChunkContainer,
 };
 use pyo3::{
@@ -3230,9 +3231,15 @@ impl PyStorage {
                 Some(s) => s.merge(defaults),
                 None => defaults,
             };
+            let governor = CompatGovernorConfig::default().build();
+            let ctx = StorageContext {
+                settings: &settings,
+                governor: &governor,
+                asset: Asset::Other,
+            };
             let stream = self
                 .0
-                .list_objects(&settings, &prefix)
+                .list_objects(&ctx, &prefix)
                 .await
                 .map_err(PyIcechunkStoreError::StorageError)?;
             let results: Vec<(String, u64)> = stream
@@ -3271,9 +3278,15 @@ impl PyStorage {
                 Some(s) => s.merge(defaults),
                 None => defaults,
             };
+            let governor = CompatGovernorConfig::default().build();
+            let ctx = StorageContext {
+                settings: &settings,
+                governor: &governor,
+                asset: Asset::Other,
+            };
             let stream = self
                 .0
-                .list_objects(&settings, &prefix)
+                .list_objects(&ctx, &prefix)
                 .await
                 .map_err(PyIcechunkStoreError::StorageError)?;
             let results: Vec<PyStorageObjectInfo> = stream

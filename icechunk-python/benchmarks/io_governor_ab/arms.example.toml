@@ -1,0 +1,27 @@
+# Extra benchmark arms for `python -m benchmarks.io_governor_ab run --arms-config <file>`.
+#
+# Each [arm.<name>] runs the branch build with the given governor and is
+# reported alongside the built-in arms (never gated). `shared = true` builds
+# ONE governor per round and hands it to every repo of the scenario;
+# otherwise each repo gets its own instance.
+#
+# Bandwidth fields accept unit suffixes: rates like "25Gbps" (bits) or
+# "3GB/s" (bytes), sizes like "512MiB". Anything not set here keeps the
+# BandwidthGovernorConfig.s3_defaults value.
+
+[arm.bw-10g]
+type = "bandwidth"
+memory_budget = "2GB"
+read.target_bandwidth = "10Gbps"
+write.target_bandwidth = "10Gbps"
+
+[arm.bw-tight-memory]
+type = "bandwidth"
+shared = true
+memory_budget = "256MiB"
+read.target_bandwidth = "25Gbps"
+write.target_bandwidth = "25Gbps"
+
+[arm.compat-64]
+type = "compat"
+max_concurrent_requests = 64

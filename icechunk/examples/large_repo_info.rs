@@ -10,7 +10,9 @@ use icechunk::{
         repo_info::{RepoAvailability, RepoInfo, RepoStatus, UpdateInfo, UpdateType},
         snapshot::SnapshotInfo,
     },
-    new_in_memory_storage, storage,
+    governors::CompatGovernorConfig,
+    new_in_memory_storage,
+    storage::{self, GovernorFactory as _, ObjectRange},
 };
 use rand::{Rng, RngExt as _};
 use std::{sync::Arc, time::Instant};
@@ -89,10 +91,17 @@ async fn measure_size(
         SpecVersionBin::V2,
         3,
         16,
+        CompatGovernorConfig { max_concurrent_requests: 16 }.build(),
     );
     am.create_repo_info(Arc::new(repo_info)).await?;
 
-    let (mut reader, _) = stor.get_object(&settings, REPO_INFO_FILE_PATH, None).await?;
+    let (mut reader, _) = stor
+        .get_object(
+            &am.storage_context(storage::Asset::RepoInfo),
+            REPO_INFO_FILE_PATH,
+            ObjectRange::unmetered(),
+        )
+        .await?;
     let mut buf = Vec::new();
     reader.read_to_end(&mut buf).await?;
     let compressed_size = buf.len();

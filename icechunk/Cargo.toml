@@ -100,6 +100,7 @@ rstest.workspace = true
 rstest_reuse.workspace = true
 tempfile.workspace = true
 test-log.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
 test-strategy.workspace = true
 tracing-chrome.workspace = true
 tracing-samply.workspace = true

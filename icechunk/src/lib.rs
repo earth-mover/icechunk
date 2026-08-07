@@ -47,6 +47,7 @@ pub mod display;
 pub mod error;
 pub mod feature_flags;
 pub use icechunk_format as format;
+pub mod governors;
 pub mod inspect;
 pub mod migrations;
 pub mod ops;

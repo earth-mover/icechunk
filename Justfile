@@ -331,6 +331,21 @@ chrome-trace *args:
 bench-compare *args:
   pytest-benchmark compare --group=group,func,param --sort=fullname --columns=median --name=short "$@"
 
+[group('bench')]
+[script]
+[doc("Install the released icechunk wheel as `icechunk_baseline` for A/B benchmarks (default: last release; bump on release)")]
+io-governor-ab-baseline version="2.1.2":
+  cd icechunk-python && source .venv/bin/activate
+  # --installer uv: auto-detect targets the pixi env via CONDA_PREFIX, not .venv
+  uv run third-wheel sync -v --installer uv --rename "icechunk=={{version}}=icechunk_baseline"
+
+[group('bench')]
+[script]
+[doc("Run the governor A/B benchmark harness (see icechunk-python/benchmarks/io_governor_ab/README.md)")]
+io-governor-ab *args:
+  cd icechunk-python
+  uv run python -m benchmarks.io_governor_ab "$@"
+
 [group('lint')]
 [doc("Run ruff formatter on Python code")]
 ruff-format *args:

@@ -1,4 +1,11 @@
-use std::{collections::HashMap, env, future::Future, pin::Pin, sync::Arc};
+use std::{
+    collections::HashMap,
+    env,
+    future::Future,
+    num::{NonZeroU16, NonZeroU64},
+    pin::Pin,
+    sync::{Arc, atomic::Ordering},
+};
 
 use bytes::Bytes;
 use chrono::Utc;
@@ -11,18 +18,22 @@ use icechunk::{
     },
     error::ICError,
     format::{
-        CHUNKS_FILE_PATH, ChunkId, MANIFESTS_FILE_PATH, Path, SNAPSHOTS_FILE_PATH,
-        SnapshotId, TRANSACTION_LOGS_FILE_PATH, format_constants::SpecVersionBin,
+        CHUNKS_FILE_PATH, ChunkId, ChunkIndices, MANIFESTS_FILE_PATH, ManifestId, NodeId,
+        Path, SNAPSHOTS_FILE_PATH, SnapshotId, TRANSACTION_LOGS_FILE_PATH,
+        format_constants::SpecVersionBin,
+        manifest::{ChunkInfo, ChunkPayload, Manifest},
         snapshot::Snapshot,
     },
     new_local_filesystem_storage,
     refs::{RefData, RefErrorKind},
     repository::{RepositoryError, RepositoryErrorKind},
+    session::Session,
     storage::{
-        self, ConcurrencySettings, ETag, Generation, RepositoryCreation, S3Storage,
-        StorageErrorKind, StorageResult, VersionInfo, VersionedUpdateResult, mk_client,
-        new_http_storage, new_in_memory_storage, new_redirect_storage, new_s3_storage,
-        s3_storage,
+        self, Asset, ConcurrencySettings, Direction, ETag, Generation, GetModifiedResult,
+        IoClass, IoGovernor, MemoryPermit, ObjectRange, RepositoryCreation, S3Storage,
+        StorageContext, StorageErrorKind, StorageResult, VersionInfo,
+        VersionedUpdateResult, mk_client, new_http_storage, new_in_memory_storage,
+        new_redirect_storage, new_s3_storage, s3_storage,
     },
 };
 use icechunk_arrow_object_store::object_store::azure::AzureConfigKey;
@@ -278,7 +289,7 @@ async fn test_object_write_read() -> Result<(), Box<dyn std::error::Error>> {
 
             storage
                 .put_object(
-                    &storage_settings,
+                    &common::ctx_for(&storage_settings),
                     path.as_str(),
                     Bytes::copy_from_slice(&bytes[..]),
                     Some("application/foo"),
@@ -289,19 +300,32 @@ async fn test_object_write_read() -> Result<(), Box<dyn std::error::Error>> {
                 .must_write()?;
 
             // check with unknown size
-            let (read, _) =
-                storage.get_object(&storage_settings, path.as_str(), None).await?;
+            let (read, _) = storage
+                .get_object(
+                    &common::ctx_for(&storage_settings),
+                    path.as_str(),
+                    ObjectRange::unmetered(),
+                )
+                .await?;
             assert_eq!(async_read_to_bytes(read).await?.as_slice(), bytes);
 
             // check with known size
             let (read, _) = storage
-                .get_object(&storage_settings, path.as_str(), Some(&(0..1024)))
+                .get_object(
+                    &common::ctx_for(&storage_settings),
+                    path.as_str(),
+                    ObjectRange::Ranged(&(0..1024)),
+                )
                 .await?;
             assert_eq!(async_read_to_bytes(read).await?.as_slice(), bytes);
 
             // check with small range
             let (read, _) = storage
-                .get_object(&storage_settings, path.as_str(), Some(&(42..44)))
+                .get_object(
+                    &common::ctx_for(&storage_settings),
+                    path.as_str(),
+                    ObjectRange::Ranged(&(42..44)),
+                )
                 .await?;
             assert_eq!(
                 async_read_to_bytes(read).await?.as_slice(),
@@ -326,6 +350,7 @@ async fn test_tag_write_get(
             Default::default(),
             Some(spec_version),
             true,
+            None,
         )
         .await?;
         repo.create_tag("mytag", &Snapshot::INITIAL_SNAPSHOT_ID).await?;
@@ -344,7 +369,7 @@ async fn test_fetch_non_existing_tag(
 ) -> Result<(), Box<dyn std::error::Error>> {
     with_storage(Permission::Modify, |_, storage| async move {
         let repo =
-            Repository::create(None, storage, Default::default(), Some(spec_version), true).await?;
+            Repository::create(None, storage, Default::default(), Some(spec_version), true, None).await?;
         repo.create_tag("mytag", &Snapshot::INITIAL_SNAPSHOT_ID).await?;
         let back = repo.lookup_tag("non-existing-tag").await;
         assert!(
@@ -367,7 +392,7 @@ async fn test_create_existing_tag(
 ) -> Result<(), Box<dyn std::error::Error>> {
     with_storage(Permission::Modify, |_, storage| async move {
         let repo =
-            Repository::create(None, storage, Default::default(), Some(spec_version), true).await?;
+            Repository::create(None, storage, Default::default(), Some(spec_version), true, None).await?;
         repo.create_tag("mytag", &Snapshot::INITIAL_SNAPSHOT_ID).await?;
         let res  = repo.create_tag("mytag", &Snapshot::INITIAL_SNAPSHOT_ID).await;
         assert!(
@@ -391,6 +416,7 @@ async fn check_clean_repo() -> Result<(), Box<dyn std::error::Error>> {
             Default::default(),
             None,
             true,
+            None,
         )
         .await?;
 
@@ -402,6 +428,7 @@ async fn check_clean_repo() -> Result<(), Box<dyn std::error::Error>> {
             Default::default(),
             None,
             true,
+            None,
         )
         .await;
         assert!(res.is_err());
@@ -413,7 +440,8 @@ async fn check_clean_repo() -> Result<(), Box<dyn std::error::Error>> {
         // creating repo with check_clean_repo = false
         // fails because it tries to overwrite a repo info that is not up to date
         let res =
-            Repository::create(None, storage, Default::default(), None, false).await;
+            Repository::create(None, storage, Default::default(), None, false, None)
+                .await;
         assert!(res.is_err());
         assert!(matches!(
             res,
@@ -481,7 +509,8 @@ async fn create_refuses_empty_prefix_on_object_store()
         );
         assert!(
             matches!(
-                Repository::create(None, storage, Default::default(), None, true).await,
+                Repository::create(None, storage, Default::default(), None, true, None)
+                    .await,
                 Err(ICError { kind: RepositoryErrorKind::EmptyPrefixCreation, .. })
             ),
             "{name}: Repository::create should fail with EmptyPrefixCreation",
@@ -532,7 +561,7 @@ async fn test_list_objects() -> Result<(), Box<dyn std::error::Error>> {
         let settings = storage.default_settings().await?;
         storage
             .put_object(
-                &settings,
+                &common::ctx_for(&settings),
                 "foo/bar/1",
                 Bytes::new(),
                 None,
@@ -543,7 +572,7 @@ async fn test_list_objects() -> Result<(), Box<dyn std::error::Error>> {
             .must_write()?;
         storage
             .put_object(
-                &settings,
+                &common::ctx_for(&settings),
                 "foo/bar/2",
                 Bytes::new(),
                 None,
@@ -553,25 +582,53 @@ async fn test_list_objects() -> Result<(), Box<dyn std::error::Error>> {
             .await?
             .must_write()?;
         storage
-            .put_object(&settings, "foo/3", Bytes::new(), None, Default::default(), None)
+            .put_object(
+                &common::ctx_for(&settings),
+                "foo/3",
+                Bytes::new(),
+                None,
+                Default::default(),
+                None,
+            )
             .await?
             .must_write()?;
         storage
-            .put_object(&settings, "foo/4", Bytes::new(), None, Default::default(), None)
+            .put_object(
+                &common::ctx_for(&settings),
+                "foo/4",
+                Bytes::new(),
+                None,
+                Default::default(),
+                None,
+            )
             .await?
             .must_write()?;
         storage
-            .put_object(&settings, "5", Bytes::new(), None, Default::default(), None)
+            .put_object(
+                &common::ctx_for(&settings),
+                "5",
+                Bytes::new(),
+                None,
+                Default::default(),
+                None,
+            )
             .await?
             .must_write()?;
         storage
-            .put_object(&settings, "6", Bytes::new(), None, Default::default(), None)
+            .put_object(
+                &common::ctx_for(&settings),
+                "6",
+                Bytes::new(),
+                None,
+                Default::default(),
+                None,
+            )
             .await?
             .must_write()?;
 
         for prefix in ["foo/bar", "foo/bar/"] {
             let mut obs: Vec<_> = storage
-                .list_objects(&settings, prefix)
+                .list_objects(&common::ctx_for(&settings), prefix)
                 .await?
                 .map_ok(|li| li.id)
                 .try_collect()
@@ -582,7 +639,7 @@ async fn test_list_objects() -> Result<(), Box<dyn std::error::Error>> {
 
         for prefix in ["foo", "foo/"] {
             let mut obs: Vec<_> = storage
-                .list_objects(&settings, prefix)
+                .list_objects(&common::ctx_for(&settings), prefix)
                 .await?
                 .map_ok(|li| li.id)
                 .try_collect()
@@ -601,7 +658,7 @@ async fn test_list_objects() -> Result<(), Box<dyn std::error::Error>> {
 
         for prefix in ["", "/"] {
             let mut obs: Vec<_> = storage
-                .list_objects(&settings, prefix)
+                .list_objects(&common::ctx_for(&settings), prefix)
                 .await?
                 .map_ok(|li| li.id)
                 .try_collect()
@@ -638,7 +695,7 @@ async fn conditional_create_conflicts_with_existing()
 
         storage
             .put_object(
-                &settings,
+                &common::ctx_for(&settings),
                 path,
                 Bytes::from_static(b"first"),
                 None,
@@ -650,7 +707,7 @@ async fn conditional_create_conflicts_with_existing()
 
         let conditional_res = storage
             .put_object(
-                &settings,
+                &common::ctx_for(&settings),
                 path,
                 Bytes::from_static(b"second"),
                 None,
@@ -708,7 +765,7 @@ async fn assert_lost_response_recovers_with_fresh_etag(
     // The first attempt that landed before its response was lost.
     let seeded = storage
         .put_object(
-            &settings,
+            &common::ctx_for(&settings),
             key,
             Bytes::from_static(b"v1"),
             None,
@@ -725,7 +782,7 @@ async fn assert_lost_response_recovers_with_fresh_etag(
     icechunk_s3::test_util::force_next_write_id(forced);
     let recovered = match storage
         .put_object(
-            &settings,
+            &common::ctx_for(&settings),
             key,
             Bytes::from_static(b"v2"),
             None,
@@ -744,7 +801,7 @@ async fn assert_lost_response_recovers_with_fresh_etag(
     // Freshness: a stale recovered etag would 412 the follow-on update.
     let follow_on = storage
         .put_object(
-            &settings,
+            &common::ctx_for(&settings),
             key,
             Bytes::from_static(b"v3"),
             None,
@@ -790,7 +847,7 @@ async fn test_delete_objects() -> Result<(), Box<dyn std::error::Error>> {
         let settings = storage.default_settings().await?;
         storage
             .put_object(
-                &settings,
+                &common::ctx_for(&settings),
                 "foo/bar/1",
                 Bytes::new(),
                 None,
@@ -801,7 +858,7 @@ async fn test_delete_objects() -> Result<(), Box<dyn std::error::Error>> {
             .must_write()?;
         storage
             .put_object(
-                &settings,
+                &common::ctx_for(&settings),
                 "foo/bar/2",
                 Bytes::new(),
                 None,
@@ -811,26 +868,54 @@ async fn test_delete_objects() -> Result<(), Box<dyn std::error::Error>> {
             .await?
             .must_write()?;
         storage
-            .put_object(&settings, "foo/3", Bytes::new(), None, Default::default(), None)
+            .put_object(
+                &common::ctx_for(&settings),
+                "foo/3",
+                Bytes::new(),
+                None,
+                Default::default(),
+                None,
+            )
             .await?
             .must_write()?;
         storage
-            .put_object(&settings, "foo/4", Bytes::new(), None, Default::default(), None)
+            .put_object(
+                &common::ctx_for(&settings),
+                "foo/4",
+                Bytes::new(),
+                None,
+                Default::default(),
+                None,
+            )
             .await?
             .must_write()?;
         storage
-            .put_object(&settings, "5", Bytes::new(), None, Default::default(), None)
+            .put_object(
+                &common::ctx_for(&settings),
+                "5",
+                Bytes::new(),
+                None,
+                Default::default(),
+                None,
+            )
             .await?
             .must_write()?;
         storage
-            .put_object(&settings, "6", Bytes::new(), None, Default::default(), None)
+            .put_object(
+                &common::ctx_for(&settings),
+                "6",
+                Bytes::new(),
+                None,
+                Default::default(),
+                None,
+            )
             .await?
             .must_write()?;
 
         // passing a prefix without slash
         let res = storage
             .delete_objects(
-                &settings,
+                &common::ctx_for(&settings),
                 "foo/bar",
                 stream::iter([("1".to_string(), 1)]).boxed(),
             )
@@ -841,7 +926,7 @@ async fn test_delete_objects() -> Result<(), Box<dyn std::error::Error>> {
         // passing a prefix with slash
         let res = storage
             .delete_objects(
-                &settings,
+                &common::ctx_for(&settings),
                 "foo/bar/",
                 stream::iter([("2".to_string(), 2)]).boxed(),
             )
@@ -850,7 +935,7 @@ async fn test_delete_objects() -> Result<(), Box<dyn std::error::Error>> {
         assert_eq!(res.deleted_bytes, 2);
 
         let mut obs: Vec<_> = storage
-            .list_objects(&settings, "foo/bar")
+            .list_objects(&common::ctx_for(&settings), "foo/bar")
             .await?
             .map_ok(|li| li.id)
             .try_collect()
@@ -861,7 +946,7 @@ async fn test_delete_objects() -> Result<(), Box<dyn std::error::Error>> {
         // passing a prefix without slash
         let res = storage
             .delete_objects(
-                &settings,
+                &common::ctx_for(&settings),
                 "",
                 stream::iter([("foo/3".to_string(), 5), ("foo/4".to_string(), 6)])
                     .boxed(),
@@ -871,7 +956,7 @@ async fn test_delete_objects() -> Result<(), Box<dyn std::error::Error>> {
         assert_eq!(res.deleted_bytes, 11);
 
         let mut obs: Vec<_> = storage
-            .list_objects(&settings, "foo")
+            .list_objects(&common::ctx_for(&settings), "foo")
             .await?
             .map_ok(|li| li.id)
             .try_collect()
@@ -892,7 +977,7 @@ async fn test_fetch_non_existing_branch(
 ) -> Result<(), Box<dyn std::error::Error>> {
     with_storage(Permission::Modify, |_, storage| async move {
         let repo =
-            Repository::create(None, storage, Default::default(), Some(spec_version), true).await?;
+            Repository::create(None, storage, Default::default(), Some(spec_version), true, None).await?;
         let back = repo.lookup_branch("non-existing-branch").await;
         assert!(
             matches!(
@@ -920,6 +1005,7 @@ async fn test_write_config_on_empty(
             spec_version,
             1, // we are only reading, compression doesn't matter
             DEFAULT_MAX_CONCURRENT_REQUESTS,
+            common::compat_governor(DEFAULT_MAX_CONCURRENT_REQUESTS),
         ));
         let config = RepositoryConfig::default();
         let Some(version) =
@@ -954,6 +1040,7 @@ async fn test_write_config_on_existing(
             spec_version,
             1, // we are only reading, compression doesn't matter
             DEFAULT_MAX_CONCURRENT_REQUESTS,
+            common::compat_governor(DEFAULT_MAX_CONCURRENT_REQUESTS),
         ));
         let config1 = RepositoryConfig::default();
         let Some(first_version) =
@@ -992,6 +1079,7 @@ async fn test_write_config_fails_on_bad_version_when_non_existing(
         spec_version,
         1, // we are only reading, compression doesn't matter
         DEFAULT_MAX_CONCURRENT_REQUESTS,
+        common::compat_governor(DEFAULT_MAX_CONCURRENT_REQUESTS),
     ));
     let config = RepositoryConfig::default();
     let err = am
@@ -1024,6 +1112,7 @@ async fn test_write_config_fails_on_bad_version_when_existing(
             spec_version,
             1, // we are only reading, compression doesn't matter
             DEFAULT_MAX_CONCURRENT_REQUESTS,
+            common::compat_governor(DEFAULT_MAX_CONCURRENT_REQUESTS),
         ));
 
         let config1 = RepositoryConfig::default();
@@ -1082,6 +1171,7 @@ async fn test_write_config_can_overwrite_with_unsafe_config(
             spec_version,
             1, // we are only reading, compression doesn't matter
             DEFAULT_MAX_CONCURRENT_REQUESTS,
+            common::compat_governor(DEFAULT_MAX_CONCURRENT_REQUESTS),
         ));
 
         let config1 = RepositoryConfig::default();
@@ -1130,10 +1220,10 @@ async fn test_storage_classes() -> Result<(), Box<dyn std::error::Error>> {
 
     // we write 2 chunks in IA and one in standard, in ascending order of id
     st.put_object(
-        &storage::Settings {
+        &common::ctx_for(&storage::Settings {
             storage_class: Some("STANDARD_IA".to_string()),
             ..storage::Settings::default()
-        },
+        }),
         "chunks/000000000000",
         Bytes::new(),
         None,
@@ -1143,10 +1233,10 @@ async fn test_storage_classes() -> Result<(), Box<dyn std::error::Error>> {
     .await?
     .must_write()?;
     st.put_object(
-        &storage::Settings {
+        &common::ctx_for(&storage::Settings {
             storage_class: Some("STANDARD_IA".to_string()),
             ..storage::Settings::default()
-        },
+        }),
         "chunks/000000000001",
         Bytes::new(),
         None,
@@ -1156,7 +1246,7 @@ async fn test_storage_classes() -> Result<(), Box<dyn std::error::Error>> {
     .await?
     .must_write()?;
     st.put_object(
-        &storage::Settings::default(),
+        &common::ctx_for(&storage::Settings::default()),
         "chunks/000000000002",
         Bytes::new(),
         None,
@@ -1202,7 +1292,7 @@ async fn test_write_object_larger_than_multipart_threshold()
 
         storage
             .put_object(
-                &custom_settings,
+                &common::ctx_for(&custom_settings),
                 path.as_str(),
                 bytes.clone(),
                 None,
@@ -1213,7 +1303,11 @@ async fn test_write_object_larger_than_multipart_threshold()
             .must_write()?;
         let fetched = async_read_to_bytes(
             storage
-                .get_object(&custom_settings, path.as_str(), Some(&(0..1024)))
+                .get_object(
+                    &common::ctx_for(&custom_settings),
+                    path.as_str(),
+                    ObjectRange::Ranged(&(0..1024)),
+                )
                 .await?
                 .0,
         )
@@ -1223,6 +1317,551 @@ async fn test_write_object_larger_than_multipart_threshold()
         Ok(())
     })
     .await?;
+    Ok(())
+}
+
+/// Every storage operation admits its HTTP requests through the governor:
+/// one acquire per request, completed with the transferred bytes (readers
+/// complete at EOF, dropping before EOF aborts). The in-memory settings
+/// split every ranged read into 5 parts.
+#[tokio_test]
+async fn test_governor_request_accounting() -> Result<(), Box<dyn std::error::Error>> {
+    let storage = new_in_memory_storage().await?;
+    let settings = storage.default_settings().await?;
+    let gov = Arc::new(common::CountingGovernor::default());
+    let counters = Arc::clone(&gov.counters);
+    let governor: Arc<dyn IoGovernor> = gov;
+    let ctx =
+        StorageContext { settings: &settings, governor: &governor, asset: Asset::Other };
+
+    // put: one write acquire, completed with the payload size
+    let data = Bytes::from_static(b"0123456789ab"); // 12 bytes
+    let version = storage
+        .put_object(&ctx, "some/key", data.clone(), None, vec![], None)
+        .await?
+        .must_write()?;
+    assert_eq!(counters.write_acquires.load(Ordering::SeqCst), 1);
+    let writes = counters.ok_completions(Direction::Write);
+    assert_eq!(writes.len(), 1);
+    assert_eq!(writes[0].bytes, 12);
+
+    // ranged read: one acquire per part, completions add up to the range
+    let (reader, _) =
+        storage.get_object(&ctx, "some/key", ObjectRange::Ranged(&(0..10))).await?;
+    assert_eq!(async_read_to_bytes(reader).await?.len(), 10);
+    assert_eq!(counters.read_acquires.load(Ordering::SeqCst), 5);
+    assert_eq!(counters.ok_completions(Direction::Read).len(), 5);
+    assert_eq!(counters.ok_bytes(Direction::Read), 10);
+
+    // unranged read: a single request completed only when the reader hits EOF
+    let (reader, _) =
+        storage.get_object(&ctx, "some/key", ObjectRange::unmetered()).await?;
+    assert_eq!(counters.read_acquires.load(Ordering::SeqCst), 6);
+    assert_eq!(
+        counters.ok_completions(Direction::Read).len(),
+        5,
+        "must not complete before EOF"
+    );
+    assert_eq!(async_read_to_bytes(reader).await?.len(), 12);
+    let reads = counters.ok_completions(Direction::Read);
+    assert_eq!(reads.len(), 6);
+    assert_eq!(reads[5].bytes, 12);
+
+    // dropping a reader before EOF reports an abort
+    let (reader, _) =
+        storage.get_object(&ctx, "some/key", ObjectRange::unmetered()).await?;
+    drop(reader);
+    assert_eq!(counters.read_acquires.load(Ordering::SeqCst), 7);
+    assert_eq!(counters.aborts.load(Ordering::SeqCst), 1);
+
+    // conditional get, modified: the permit rides the reader to EOF
+    match storage
+        .get_object_conditional(&ctx, "some/key", MemoryPermit::unmetered(), None)
+        .await?
+    {
+        GetModifiedResult::Modified { data, .. } => {
+            assert_eq!(counters.read_acquires.load(Ordering::SeqCst), 8);
+            assert_eq!(counters.ok_completions(Direction::Read).len(), 6);
+            assert_eq!(async_read_to_bytes(data).await?.len(), 12);
+            assert_eq!(counters.ok_completions(Direction::Read).len(), 7);
+        }
+        GetModifiedResult::OnLatestVersion => panic!("expected Modified"),
+    }
+
+    // conditional get, on latest version: completes with no bytes
+    match storage
+        .get_object_conditional(
+            &ctx,
+            "some/key",
+            MemoryPermit::unmetered(),
+            Some(&version),
+        )
+        .await?
+    {
+        GetModifiedResult::OnLatestVersion => {
+            let reads = counters.ok_completions(Direction::Read);
+            assert_eq!(reads.len(), 8);
+            assert_eq!(reads[7].bytes, 0);
+        }
+        modified => panic!("expected OnLatestVersion, got {modified:?}"),
+    }
+
+    // metadata and list requests are metered too
+    storage.get_object_last_modified(&ctx, "some/key").await?;
+    assert_eq!(counters.read_acquires.load(Ordering::SeqCst), 10);
+    let _stream = storage.list_objects(&ctx, "").await?;
+    assert_eq!(counters.read_acquires.load(Ordering::SeqCst), 11);
+    assert_eq!(counters.ok_completions(Direction::Read).len(), 10);
+
+    // delete: one write request for the whole batch
+    storage.delete_batch(&ctx, "some", vec![("key".to_string(), 12)]).await?;
+    assert_eq!(counters.write_acquires.load(Ordering::SeqCst), 2);
+    assert_eq!(counters.ok_completions(Direction::Write).len(), 2);
+
+    // raw storage operations only admit requests; logical fetches reserve
+    // memory one layer up, in the AssetManager
+    assert!(counters.reserves().is_empty());
+    Ok(())
+}
+
+/// A multipart upload acquires once per HTTP request it issues: create +
+/// one per part + complete; part completions add up to the payload.
+#[tokio_test]
+async fn test_governor_multipart_write_accounting()
+-> Result<(), Box<dyn std::error::Error>> {
+    let storage = mk_s3_storage(
+        common::get_random_prefix("multipart_governor").as_str(),
+        &Permission::Modify,
+    )
+    .await?;
+    let mut settings = storage.default_settings().await?;
+    // Force the multipart path with a deterministic 3-part split (two 6 MiB
+    // parts + 1 byte). Non-last parts must be >= 5 MiB (S3 rule).
+    let payload_len: u64 = 2 * 6 * 1024 * 1024 + 1;
+    settings.minimum_size_for_multipart_upload = Some(100);
+    settings.concurrency = Some(ConcurrencySettings {
+        max_concurrent_requests_for_object: NonZeroU16::new(18),
+        ideal_concurrent_request_size: NonZeroU64::new(5 * 1024 * 1024),
+    });
+
+    let gov = Arc::new(common::CountingGovernor::default());
+    let counters = Arc::clone(&gov.counters);
+    let governor: Arc<dyn IoGovernor> = gov;
+    let ctx =
+        StorageContext { settings: &settings, governor: &governor, asset: Asset::Chunk };
+
+    let bytes = Bytes::from(vec![17u8; payload_len as usize]);
+    storage
+        .put_object(&ctx, "chunk-1", bytes, None, Default::default(), None)
+        .await?
+        .must_write()?;
+
+    // create + 3 parts + complete
+    assert_eq!(counters.write_acquires.load(Ordering::SeqCst), 5);
+    assert_eq!(counters.ok_completions(Direction::Write).len(), 5);
+    assert_eq!(counters.ok_bytes(Direction::Write), payload_len);
+    assert_eq!(counters.aborts.load(Ordering::SeqCst), 0);
+    Ok(())
+}
+
+/// The `AssetManager` reserves memory with the governor once per logical
+/// fetch; writes reserve nothing (they are metered per HTTP request at the
+/// storage layer).
+#[tokio_test]
+async fn test_governor_memory_reservation_accounting()
+-> Result<(), Box<dyn std::error::Error>> {
+    let storage = new_in_memory_storage().await?;
+    let settings = storage.default_settings().await?;
+    let gov = Arc::new(common::CountingGovernor::default());
+    let counters = Arc::clone(&gov.counters);
+    let governor: Arc<dyn IoGovernor> = gov;
+    let am = AssetManager::new_no_cache(
+        storage,
+        settings,
+        SpecVersionBin::default(),
+        1,
+        DEFAULT_MAX_CONCURRENT_REQUESTS,
+        governor,
+    );
+
+    let manifest = Arc::new(
+        Manifest::from_iter(
+            &ManifestId::random(),
+            (0..100u32).map(|i| ChunkInfo {
+                node: NodeId::random(),
+                coord: ChunkIndices(vec![i]),
+                payload: ChunkPayload::Inline("hello".into()),
+            }),
+            None,
+        )
+        .await?
+        .unwrap(),
+    );
+    let id = manifest.id().clone();
+
+    // write: no memory reservation, one write request
+    let size = am.write_manifest(Arc::clone(&manifest)).await?;
+    assert!(counters.reserves().is_empty());
+    assert_eq!(counters.write_acquires.load(Ordering::SeqCst), 1);
+    assert_eq!(counters.ok_bytes(Direction::Write), size);
+
+    // fetch (the no-cache manager always misses): one Manifest reservation
+    // plus one (free) acquire per request -- in-memory settings split the
+    // ranged read into 5 parts
+    let fetched = am.fetch_manifest(&id, size).await?;
+    assert_eq!(fetched.len(), manifest.len());
+    assert_eq!(
+        counters.reserves(),
+        vec![IoClass { direction: Direction::Read, asset: Asset::Manifest }]
+    );
+    assert_eq!(counters.read_acquires.load(Ordering::SeqCst), 5);
+    assert_eq!(counters.ok_bytes(Direction::Read), size);
+    Ok(())
+}
+
+/// Unknown-size logical fetches ride their memory reservation on the
+/// storage context; the backend trues it up from the response's
+/// content-length, exactly once per fetch. Known-size (ranged) fetches
+/// have nothing to observe.
+#[tokio_test]
+async fn test_content_length_adjusts_memory_reservations()
+-> Result<(), Box<dyn std::error::Error>> {
+    let storage = new_in_memory_storage().await?;
+    let settings = storage.default_settings().await?;
+    let gov = Arc::new(common::CountingGovernor::default());
+    let counters = Arc::clone(&gov.counters);
+    let governor: Arc<dyn IoGovernor> = gov;
+    let am = AssetManager::new_no_cache(
+        storage,
+        settings,
+        SpecVersionBin::default(),
+        1,
+        DEFAULT_MAX_CONCURRENT_REQUESTS,
+        governor,
+    );
+
+    let manifest = Arc::new(
+        Manifest::from_iter(
+            &ManifestId::random(),
+            (0..100u32).map(|i| ChunkInfo {
+                node: NodeId::random(),
+                coord: ChunkIndices(vec![i]),
+                payload: ChunkPayload::Inline("hello".into()),
+            }),
+            None,
+        )
+        .await?
+        .unwrap(),
+    );
+    let id = manifest.id().clone();
+    let size = am.write_manifest(Arc::clone(&manifest)).await?;
+
+    // known size: a ranged GET, nothing to observe
+    am.fetch_manifest(&id, size).await?;
+    assert_eq!(counters.adjusts(), Vec::<u64>::new());
+
+    // unknown size: a whole-object GET; the reservation is trued up to
+    // the file's actual size, exactly once
+    am.fetch_manifest_unknown_size(&id).await?;
+    assert_eq!(counters.adjusts(), vec![size]);
+
+    // snapshots always fetch with unknown size (evict what write_snapshot
+    // cached so the fetch reaches storage)
+    let snapshot = Arc::new(Snapshot::initial(SpecVersionBin::current()).unwrap());
+    am.write_snapshot(Arc::clone(&snapshot)).await?;
+    am.remove_cached_snapshot(&snapshot.id());
+    am.fetch_snapshot(&snapshot.id()).await?;
+    let adjusts = counters.adjusts();
+    assert_eq!(adjusts.len(), 2);
+    assert!(adjusts[1] > 0, "snapshot reservation trued up from content-length");
+    Ok(())
+}
+
+/// A `BandwidthGovernor` reservation made with an unknown size converges
+/// to the object's actual size once the backend observes the response's
+/// content-length -- while the permit is still held.
+#[tokio_test]
+async fn test_bandwidth_governor_memory_converges_to_actual_size()
+-> Result<(), Box<dyn std::error::Error>> {
+    use icechunk::governors::{BandwidthGovernor, BandwidthGovernorConfig};
+
+    let storage = new_in_memory_storage().await?;
+    let settings = storage.default_settings().await?;
+
+    // M = 100 KB, far below the 4 MiB unknown-size default: the
+    // reservation starts capped at the whole budget
+    let config = BandwidthGovernorConfig::s3_defaults("m", 5_000_000, 5_000_000, 100_000);
+    let gov = Arc::new(BandwidthGovernor::new(&config));
+    let governor: Arc<dyn IoGovernor> = Arc::clone(&gov) as Arc<dyn IoGovernor>;
+
+    let ctx = StorageContext {
+        settings: &settings,
+        governor: &governor,
+        asset: Asset::Snapshot,
+    };
+    let data = Bytes::from(vec![7u8; 5_000]);
+    storage.put_object(&ctx, "snap", data, None, vec![], None).await?.must_write()?;
+
+    let permit = governor
+        .reserve_memory(
+            IoClass { direction: Direction::Read, asset: Asset::Snapshot },
+            None,
+        )
+        .await;
+    assert_eq!(gov.metrics().memory.reserved, 100_000, "capped at the budget");
+
+    let (reader, _) =
+        storage.get_object(&ctx, "snap", ObjectRange::Whole(&permit)).await?;
+    assert_eq!(
+        gov.metrics().memory.reserved,
+        5_000,
+        "trued up to the actual size while still held"
+    );
+
+    assert_eq!(async_read_to_bytes(reader).await?.len(), 5_000);
+    drop(permit);
+    assert_eq!(gov.metrics().memory.reserved, 0);
+    Ok(())
+}
+
+/// Repositories created/opened with clones of one governor Arc share the
+/// instance: I/O from all of them is observed on the one governor and the
+/// accessors expose it.
+#[tokio_test]
+async fn test_governor_shared_across_repositories()
+-> Result<(), Box<dyn std::error::Error>> {
+    let gov = Arc::new(common::CountingGovernor::default());
+    let counters = Arc::clone(&gov.counters);
+    let governor: Arc<dyn IoGovernor> = gov;
+
+    let storage1 = new_in_memory_storage().await?;
+    let storage2 = new_in_memory_storage().await?;
+
+    let repo1 = Repository::create(
+        None,
+        Arc::clone(&storage1),
+        HashMap::new(),
+        None,
+        true,
+        Some(Arc::clone(&governor)),
+    )
+    .await?;
+    let writes_repo1 = counters.write_acquires.load(Ordering::SeqCst);
+    assert!(writes_repo1 > 0, "creation I/O flows through the injected governor");
+
+    let repo2 = Repository::create(
+        None,
+        storage2,
+        HashMap::new(),
+        None,
+        true,
+        Some(Arc::clone(&governor)),
+    )
+    .await?;
+    let writes_repo2 = counters.write_acquires.load(Ordering::SeqCst);
+    assert!(writes_repo2 > writes_repo1, "second repo lands on the same instance");
+
+    // the accessors expose the shared instance
+    assert!(Arc::ptr_eq(repo1.governor(), &governor));
+    assert!(Arc::ptr_eq(repo2.governor(), &governor));
+    let session = repo1.writable_session("main").await?;
+    assert!(Arc::ptr_eq(session.governor(), &governor));
+
+    // open (not just create) governs all of its I/O with the injected
+    // governor, including the spec-version bootstrap reads
+    let reads_before = counters.read_acquires.load(Ordering::SeqCst);
+    let opened =
+        Repository::open(None, storage1, HashMap::new(), Some(Arc::clone(&governor)))
+            .await?;
+    assert!(Arc::ptr_eq(opened.governor(), &governor));
+    assert!(
+        counters.read_acquires.load(Ordering::SeqCst) > reads_before,
+        "open's bootstrap reads flow through the injected governor"
+    );
+    Ok(())
+}
+
+/// `reopen` shares the `AssetManager` -- and therefore the governor -- with
+/// the original repository.
+#[tokio_test]
+async fn test_governor_shared_on_reopen() -> Result<(), Box<dyn std::error::Error>> {
+    let storage = new_in_memory_storage().await?;
+    let repo =
+        Repository::create(None, storage, HashMap::new(), None, true, None).await?;
+    let reopened = repo.reopen(None, None).await?;
+    assert!(Arc::ptr_eq(repo.asset_manager(), reopened.asset_manager()));
+    assert!(Arc::ptr_eq(repo.governor(), reopened.governor()));
+    Ok(())
+}
+
+/// Smoke test for the throttle observation plumbing against a real store:
+/// with the `ThrottleObserver` interceptor (native S3) or the
+/// `GovernedHttpConnector` (`object_store`) installed, normal operations
+/// still work and a healthy store records no throttle signals.
+#[tokio_test]
+async fn test_throttle_observation_smoke() -> Result<(), Box<dyn std::error::Error>> {
+    let native = mk_s3_storage(
+        common::get_random_prefix("throttle_smoke_native").as_str(),
+        &Permission::Modify,
+    )
+    .await?;
+    let object_store = mk_s3_object_store_storage(
+        common::get_random_prefix("throttle_smoke_object_store").as_str(),
+        &Permission::Modify,
+    )
+    .await?;
+
+    for storage in [native, object_store] {
+        let settings = storage.default_settings().await?;
+        let gov = Arc::new(common::CountingGovernor::default());
+        let counters = Arc::clone(&gov.counters);
+        let governor: Arc<dyn IoGovernor> = gov;
+        let ctx = StorageContext {
+            settings: &settings,
+            governor: &governor,
+            asset: Asset::Other,
+        };
+
+        let data = Bytes::from_static(b"throttle smoke payload");
+        storage
+            .put_object(&ctx, "smoke/key", data.clone(), None, vec![], None)
+            .await?
+            .must_write()?;
+        let (reader, _) =
+            storage.get_object(&ctx, "smoke/key", ObjectRange::unmetered()).await?;
+        assert_eq!(async_read_to_bytes(reader).await?, data);
+        storage.get_object_last_modified(&ctx, "smoke/key").await?;
+        storage.delete_batch(&ctx, "smoke", vec![("key".to_string(), 22)]).await?;
+
+        assert_eq!(counters.throttles(), vec![]);
+    }
+    Ok(())
+}
+
+/// Sessions deserialized in one process from the same governor rebind to a
+/// single interned instance, which still enforces the original limits.
+#[tokio_test]
+async fn test_deserialized_sessions_share_interned_governor()
+-> Result<(), Box<dyn std::error::Error>> {
+    use futures::FutureExt as _;
+
+    let storage = new_in_memory_storage().await?;
+    let governor = common::compat_governor(7);
+    let repo = Repository::create(
+        None,
+        storage,
+        HashMap::new(),
+        None,
+        true,
+        Some(Arc::clone(&governor)),
+    )
+    .await?;
+    let session = repo.writable_session("main").await?;
+
+    let bytes = session.as_bytes()?;
+    let s1 = Session::from_bytes(&bytes)?;
+    let s2 = Session::from_bytes(&bytes)?;
+
+    assert!(Arc::ptr_eq(s1.governor(), s2.governor()));
+    // rebinding happens only at deserialization: the source stays its own
+    assert!(!Arc::ptr_eq(session.governor(), s1.governor()));
+
+    // the rebound governor still enforces the serialized compat limit
+    let rebound = Arc::clone(s1.governor());
+    let class = IoClass { direction: Direction::Read, asset: Asset::Chunk };
+    let mut held = Vec::new();
+    for _ in 0..7 {
+        held.push(rebound.reserve_memory(class, None).await);
+    }
+    let mut eighth = rebound.reserve_memory(class, None).boxed();
+    assert!(futures::poll!(eighth.as_mut()).is_pending());
+    drop(held);
+    assert!(futures::poll!(eighth.as_mut()).is_ready());
+    Ok(())
+}
+
+/// A real workload runs end to end through a `BandwidthGovernor` sized
+/// small enough to actually gate it (every large request runs oversized
+/// and serialized): chunks write and read back, the pools drain, and the
+/// saturating transfers move the adaptive connection-bandwidth estimate.
+#[tokio_test]
+async fn test_bandwidth_governor_end_to_end() -> Result<(), Box<dyn std::error::Error>> {
+    use icechunk::format::{ByteRange, snapshot::ArrayShape};
+    use icechunk::governors::{BandwidthGovernor, BandwidthGovernorConfig};
+    use icechunk::repository::VersionInfo as RepoVersionInfo;
+    use icechunk::session::get_chunk;
+
+    // B = 5 MB/s (below one connection's cold bandwidth), M = 1 MB
+    let config =
+        BandwidthGovernorConfig::s3_defaults("e2e", 5_000_000, 5_000_000, 1_000_000);
+    let gov = Arc::new(BandwidthGovernor::new(&config));
+    let governor: Arc<dyn IoGovernor> = Arc::clone(&gov) as Arc<dyn IoGovernor>;
+
+    let storage = new_in_memory_storage().await?;
+    let repo = Repository::create(
+        None,
+        Arc::clone(&storage),
+        HashMap::new(),
+        None,
+        true,
+        Some(Arc::clone(&governor)),
+    )
+    .await?;
+    assert!(Arc::ptr_eq(repo.governor(), &governor));
+
+    let mut session = repo.writable_session("main").await?;
+    let path: Path = "/array".try_into().unwrap();
+    let shape = ArrayShape::new(vec![(4u64, 4u32)]).unwrap();
+    session.add_array(path.clone(), shape, None, Bytes::new()).await?;
+
+    // the first chunk is big enough that its transfers saturate a connection
+    let payloads: Vec<Bytes> = (0..4u32)
+        .map(|i| match i {
+            0 => Bytes::from(vec![42u8; 16 * 1024 * 1024]),
+            _ => Bytes::from(vec![i as u8; 64]),
+        })
+        .collect();
+    for (i, data) in payloads.iter().enumerate() {
+        let payload = session.get_chunk_writer()?(data.clone()).await?;
+        session
+            .set_chunk_ref(path.clone(), ChunkIndices(vec![i as u32]), Some(payload))
+            .await?;
+    }
+    session.commit("chunks").execute().await?;
+
+    // a fresh open reads everything back through cold caches, all of it
+    // flowing through the same governor
+    let repo =
+        Repository::open(None, storage, HashMap::new(), Some(Arc::clone(&governor)))
+            .await?;
+    let session =
+        repo.readonly_session(&RepoVersionInfo::BranchTipRef("main".to_string())).await?;
+    for (i, expected) in payloads.iter().enumerate() {
+        let reader = session
+            .get_chunk_reader(&path, &ChunkIndices(vec![i as u32]), &ByteRange::ALL)
+            .await?;
+        let bytes = get_chunk(reader).await?.expect("chunk must exist");
+        assert_eq!(&bytes, expected);
+    }
+
+    // the pools drained: nothing in flight, queued, or reserved
+    let m = gov.metrics();
+    assert_eq!(m.read.in_flight_requests, 0);
+    assert_eq!(m.read.in_flight_cost, 0);
+    assert_eq!(m.read.queued_requests, 0);
+    assert_eq!(m.write.in_flight_requests, 0);
+    assert_eq!(m.write.in_flight_cost, 0);
+    assert_eq!(m.memory.reserved, 0);
+    assert_eq!(m.memory.queued_fetches, 0);
+    assert_eq!(m.read.throttles_total, 0);
+    assert_eq!(m.write.throttles_total, 0);
+
+    // the 16 MiB transfers were saturating samples: the estimate moved
+    // off its cold floor in both directions
+    assert!(m.read.observed_connection_bandwidth > config.read.min_connection_bandwidth);
+    assert!(
+        m.write.observed_connection_bandwidth > config.write.min_connection_bandwidth
+    );
     Ok(())
 }
 
@@ -1237,7 +1876,7 @@ async fn test_get_object_conditional() -> Result<(), Box<dyn std::error::Error>>
 
         storage
             .put_object(
-                &storage_settings,
+                &common::ctx_for(&storage_settings),
                 path.as_str(),
                 Bytes::copy_from_slice(&bytes[..]),
                 Some("application/foo"),
@@ -1248,21 +1887,36 @@ async fn test_get_object_conditional() -> Result<(), Box<dyn std::error::Error>>
             .must_write()?;
 
         // get version for existing object
-        let (read, version) =
-            storage.get_object(&storage_settings, path.as_str(), None).await?;
+        let (read, version) = storage
+            .get_object(
+                &common::ctx_for(&storage_settings),
+                path.as_str(),
+                ObjectRange::unmetered(),
+            )
+            .await?;
         assert_eq!(async_read_to_bytes(read).await?.as_slice(), bytes);
 
         // conditional get, should return OnLatestVersion
         let res = storage
-            .get_object_conditional(&storage_settings, path.as_str(), Some(&version))
+            .get_object_conditional(
+                &common::ctx_for(&storage_settings),
+                path.as_str(),
+                MemoryPermit::unmetered(),
+                Some(&version),
+            )
             .await?;
-        assert!(matches!(res, storage::GetModifiedResult::OnLatestVersion));
+        assert!(matches!(res, GetModifiedResult::OnLatestVersion));
 
         // conditional get without a version, should return Modified
         let res = storage
-            .get_object_conditional(&storage_settings, path.as_str(), None)
+            .get_object_conditional(
+                &common::ctx_for(&storage_settings),
+                path.as_str(),
+                MemoryPermit::unmetered(),
+                None,
+            )
             .await?;
-        if let storage::GetModifiedResult::Modified { data, .. } = res {
+        if let GetModifiedResult::Modified { data, .. } = res {
             assert_eq!(async_read_to_bytes(data).await?.as_slice(), bytes);
         } else {
             panic!("Didn't return data");
@@ -1271,12 +1925,13 @@ async fn test_get_object_conditional() -> Result<(), Box<dyn std::error::Error>>
         // conditional get random etag, should return Modified
         let res = storage
             .get_object_conditional(
-                &storage_settings,
+                &common::ctx_for(&storage_settings),
                 path.as_str(),
+                MemoryPermit::unmetered(),
                 Some(&VersionInfo::from_etag_only("0xbadc0ffee".to_string())),
             )
             .await?;
-        if let storage::GetModifiedResult::Modified { data, .. } = res {
+        if let GetModifiedResult::Modified { data, .. } = res {
             assert_eq!(async_read_to_bytes(data).await?.as_slice(), bytes);
         } else {
             panic!("Didn't return data");
@@ -1312,7 +1967,10 @@ async fn test_http_storage() -> Result<(), Box<dyn std::error::Error>> {
         let settings = storage.default_settings().await?;
         let mut data = Vec::with_capacity(1_024);
 
-        let mut read = storage.get_object(&settings, "repo", None).await?.0;
+        let mut read = storage
+            .get_object(&common::ctx_for(&settings), "repo", ObjectRange::unmetered())
+            .await?
+            .0;
         read.read_to_end(&mut data).await?;
         let expected = std::fs::metadata(repo_path.join("repo"))?.len();
         assert_eq!(expected, data.len() as u64);
@@ -1325,14 +1983,24 @@ async fn test_http_storage() -> Result<(), Box<dyn std::error::Error>> {
             }),
             ..settings.clone()
         };
-        let mut read =
-            storage.get_object(&conc_settings, "repo", Some(&(0..100))).await?.0;
+        let mut read = storage
+            .get_object(
+                &common::ctx_for(&conc_settings),
+                "repo",
+                ObjectRange::Ranged(&(0..100)),
+            )
+            .await?
+            .0;
         read.read_to_end(&mut data).await?;
         assert_eq!(100, data.len() as u64);
 
         let mut data = Vec::with_capacity(1_024);
         let mut read = storage
-            .get_object(&conc_settings, "snapshots/1CECHNKREP0F1RSTCMT0", None)
+            .get_object(
+                &common::ctx_for(&conc_settings),
+                "snapshots/1CECHNKREP0F1RSTCMT0",
+                ObjectRange::unmetered(),
+            )
             .await?
             .0;
         read.read_to_end(&mut data).await?;
@@ -1340,7 +2008,8 @@ async fn test_http_storage() -> Result<(), Box<dyn std::error::Error>> {
             std::fs::metadata(repo_path.join("snapshots/1CECHNKREP0F1RSTCMT0"))?.len();
         assert_eq!(expected, data.len() as u64);
 
-        let lm = storage.get_object_last_modified("repo", &settings).await?;
+        let lm =
+            storage.get_object_last_modified(&common::ctx_for(&settings), "repo").await?;
         assert!(lm < Utc::now());
     }
 
@@ -1382,7 +2051,7 @@ async fn test_http_storage_with_auth_header() -> Result<(), Box<dyn std::error::
     let settings = storage_with_auth.default_settings().await?;
     let mut data = Vec::with_capacity(1_024);
     storage_with_auth
-        .get_object(&settings, "repo", None)
+        .get_object(&common::ctx_for(&settings), "repo", ObjectRange::unmetered())
         .await?
         .0
         .read_to_end(&mut data)
@@ -1392,7 +2061,10 @@ async fn test_http_storage_with_auth_header() -> Result<(), Box<dyn std::error::
 
     // Without the Authorization header – the server should reject the request
     let storage_no_auth = new_http_storage(url.as_str(), None, None)?;
-    let Err(err) = storage_no_auth.get_object(&settings, "repo", None).await else {
+    let Err(err) = storage_no_auth
+        .get_object(&common::ctx_for(&settings), "repo", ObjectRange::unmetered())
+        .await
+    else {
         panic!("expected an error when no Authorization header is provided");
     };
     // The request reached the server and was rejected at the HTTP layer (an
@@ -1444,8 +2116,14 @@ async fn test_redirect_storage() -> Result<(), Box<dyn std::error::Error>> {
     let storage = new_redirect_storage(url.as_str())?;
     let mut data = Vec::with_capacity(1_024);
     let settings = storage.default_settings().await?;
-    let mut read =
-        storage.get_object(&settings, "refs/branch.main/ref.json", None).await?.0;
+    let mut read = storage
+        .get_object(
+            &common::ctx_for(&settings),
+            "refs/branch.main/ref.json",
+            ObjectRange::unmetered(),
+        )
+        .await?
+        .0;
 
     // stop the server, because it shouldn't be needed after the first interaction
     stop.send(()).unwrap();
@@ -1454,7 +2132,7 @@ async fn test_redirect_storage() -> Result<(), Box<dyn std::error::Error>> {
     read.read_to_end(&mut data).await?;
     let _: RefData = serde_json::from_slice(&data)?;
 
-    let repo = Repository::open(None, storage, Default::default()).await?;
+    let repo = Repository::open(None, storage, Default::default(), None).await?;
     let session = repo
         .readonly_session(&icechunk::repository::VersionInfo::BranchTipRef(
             "main".to_string(),
@@ -1477,6 +2155,7 @@ async fn test_basic_repo_ops(
             Default::default(),
             Some(spec_version),
             true,
+            None,
         )
         .await?;
 
@@ -1491,7 +2170,7 @@ async fn test_basic_repo_ops(
         assert_eq!(session.list_nodes(&Path::root()).await?.count(), 0);
 
         // reopen from storage
-        let repo = Repository::open(None, storage, Default::default()).await?;
+        let repo = Repository::open(None, storage, Default::default(), None).await?;
 
         let branches = repo.list_branches().await?;
         assert!(branches.contains("main"));
@@ -1533,7 +2212,7 @@ async fn put_probe_object(
     let key = format!("{CHUNKS_FILE_PATH}/{}", ChunkId::random());
     storage
         .put_object(
-            &settings,
+            &common::ctx_for(&settings),
             &key,
             Bytes::from_static(b"hello write headers"),
             None,
@@ -1736,7 +2415,7 @@ async fn test_invalid_native_s3_header_errors_not_panics()
     let settings = storage.default_settings().await?;
     let result = storage
         .put_object(
-            &settings,
+            &common::ctx_for(&settings),
             "chunks/x",
             Bytes::from_static(b"data"),
             None,

@@ -17,8 +17,9 @@ use std::{
     ops::Range,
     pin::Pin,
     sync::{Arc, Mutex, OnceLock},
+    task::{Context, Poll},
 };
-use tokio::io::AsyncBufRead;
+use tokio::io::{AsyncBufRead, AsyncRead, ReadBuf};
 use tokio_util::io::StreamReader;
 use tracing::{instrument, warn};
 
@@ -27,6 +28,9 @@ use bytes::Bytes;
 use thiserror::Error;
 
 use crate::ICError;
+use crate::governor::{
+    Direction, IoOutcome, IoPermit, IoResult, MemoryPermit, ObjectRange, StorageContext,
+};
 use crate::sealed;
 
 /// Storage operation error types.
@@ -470,7 +474,114 @@ pub enum RepositoryCreation {
     RefusedEmptyPrefix,
 }
 
+/// A reader carrying the [`IoPermit`] of the request that produced it.
+///
+/// Counts every byte handed to the consumer and completes the permit at
+/// EOF; a read error completes it with [`IoResult::Error`]; dropping the
+/// reader before EOF reports an abort (via the permit's `Drop`).
+pub struct PermitTrackedReader {
+    inner: Pin<Box<dyn AsyncBufRead + Send>>,
+    permit: Option<IoPermit>,
+    bytes: u64,
+}
+
+impl PermitTrackedReader {
+    pub fn new(inner: Pin<Box<dyn AsyncBufRead + Send>>, permit: IoPermit) -> Self {
+        Self { inner, permit: Some(permit), bytes: 0 }
+    }
+
+    fn finish(&mut self, result: IoResult) {
+        if let Some(permit) = self.permit.take() {
+            permit.complete(IoOutcome { bytes: self.bytes, result });
+        }
+    }
+}
+
+impl fmt::Debug for PermitTrackedReader {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PermitTrackedReader")
+            .field("permit", &self.permit)
+            .field("bytes", &self.bytes)
+            .finish_non_exhaustive()
+    }
+}
+
+impl AsyncRead for PermitTrackedReader {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        let this = self.get_mut();
+        // zero bytes into a zero-capacity buffer is not EOF
+        let had_capacity = buf.remaining() > 0;
+        let before = buf.filled().len();
+        match this.inner.as_mut().poll_read(cx, buf) {
+            Poll::Ready(Ok(())) => {
+                let n = (buf.filled().len() - before) as u64;
+                this.bytes += n;
+                if n == 0 && had_capacity {
+                    this.finish(IoResult::Ok);
+                }
+                Poll::Ready(Ok(()))
+            }
+            Poll::Ready(Err(err)) => {
+                this.finish(IoResult::Error);
+                Poll::Ready(Err(err))
+            }
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
+impl AsyncBufRead for PermitTrackedReader {
+    fn poll_fill_buf(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<std::io::Result<&[u8]>> {
+        let this = self.get_mut();
+        let poll = this.inner.as_mut().poll_fill_buf(cx);
+        // only disjoint fields below: `poll` still borrows `inner`
+        match &poll {
+            Poll::Ready(Ok([])) => {
+                if let Some(permit) = this.permit.take() {
+                    permit
+                        .complete(IoOutcome { bytes: this.bytes, result: IoResult::Ok });
+                }
+            }
+            Poll::Ready(Err(_)) => {
+                if let Some(permit) = this.permit.take() {
+                    permit.complete(IoOutcome {
+                        bytes: this.bytes,
+                        result: IoResult::Error,
+                    });
+                }
+            }
+            _ => {}
+        }
+        poll
+    }
+
+    fn consume(self: Pin<&mut Self>, amt: usize) {
+        let this = self.get_mut();
+        this.bytes += amt as u64;
+        this.inner.as_mut().consume(amt);
+    }
+}
+
 /// Implementations are free to assume files are never overwritten.
+///
+/// # Governor integration
+///
+/// Every method that issues HTTP requests admits them through
+/// `ctx.governor.acquire`, one permit per request. For most operations that
+/// happens in provided front-door methods that then delegate to a `*_raw`
+/// required method ([`Storage::copy_object`] → [`Storage::copy_object_raw`],
+/// etc.), so implementations don't need to (and must not) consult the
+/// governor themselves. The exception is [`Storage::put_object`]: it stays
+/// a required method and acquires inside each implementation, because
+/// multipart uploads fan out into several requests only the implementation
+/// can see.
 #[async_trait]
 #[typetag::serde(tag = "type")]
 pub trait Storage: fmt::Debug + Display + sealed::Sealed + Sync + Send {
@@ -501,41 +612,72 @@ pub trait Storage: fmt::Debug + Display + sealed::Sealed + Sync + Send {
 
     async fn get_object(
         &self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         path: &str,
-        range: Option<&Range<u64>>,
+        target: ObjectRange<'_>,
     ) -> StorageResult<(Pin<Box<dyn AsyncBufRead + Send>>, VersionInfo)> {
-        if let Some(range) = range {
-            self.get_object_concurrently(settings, path, range).await
-        } else {
-            self.get_object_range_read(settings, path, range).await
+        match target {
+            ObjectRange::Ranged(range) => {
+                self.get_object_concurrently(ctx, path, range).await
+            }
+            ObjectRange::Whole(_) => self.get_object_range_read(ctx, path, target).await,
         }
     }
 
+    /// Issue a single governed GET.
+    ///
+    /// The request permit rides inside the returned [`PermitTrackedReader`]
+    /// and reports the outcome to the governor when the reader hits EOF or
+    /// is dropped.
     async fn get_object_range_read(
         &self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         path: &str,
-        range: Option<&Range<u64>>,
+        target: ObjectRange<'_>,
     ) -> StorageResult<(Pin<Box<dyn AsyncBufRead + Send>>, VersionInfo)> {
-        let (stream, version) = self.get_object_range(settings, path, range).await?;
-        let reader = StreamReader::new(stream.map_err(std::io::Error::other));
-        Ok((Box::pin(reader), version))
+        let permit = ctx
+            .governor
+            .acquire(ctx.io_class(Direction::Read), target.expected_bytes())
+            .await;
+        match self.get_object_range(ctx, path, target).await {
+            Ok((stream, version)) => {
+                let reader = StreamReader::new(stream.map_err(std::io::Error::other));
+                let reader = PermitTrackedReader::new(Box::pin(reader), permit);
+                Ok((Box::pin(reader), version))
+            }
+            Err(err) => {
+                permit.complete(IoOutcome { bytes: 0, result: IoResult::Error });
+                Err(err)
+            }
+        }
     }
 
+    /// The raw read primitive: one GET request, *not* consulting the
+    /// governor. All reads ultimately flow through here; callers go through
+    /// the governed [`Storage::get_object`] /
+    /// [`Storage::get_object_range_read`] /
+    /// [`Storage::get_object_concurrently`] front doors instead.
+    ///
+    /// Implementations report a whole-object response's total size through
+    /// [`ObjectRange::observe_total_size`].
     async fn get_object_range(
         &self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         path: &str,
-        range: Option<&Range<u64>>,
+        target: ObjectRange<'_>,
     ) -> StorageResult<(
         Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>,
         VersionInfo,
     )>;
 
+    /// Write an object.
+    ///
+    /// Unlike the other operations, implementations acquire the governor
+    /// permits themselves (see the trait-level docs): a single-shot upload
+    /// acquires once, a multipart upload once per request it issues.
     async fn put_object(
         &self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         path: &str,
         bytes: Bytes,
         content_type: Option<&str>,
@@ -543,9 +685,24 @@ pub trait Storage: fmt::Debug + Display + sealed::Sealed + Sync + Send {
         previous_version: Option<&VersionInfo>,
     ) -> StorageResult<VersionedUpdateResult>;
 
+    /// Governed front door for [`Storage::copy_object_raw`].
     async fn copy_object(
         &self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
+        from: &str,
+        to: &str,
+        content_type: Option<&str>,
+        version: &VersionInfo,
+    ) -> StorageResult<VersionedUpdateResult> {
+        let permit = ctx.governor.acquire(ctx.io_class(Direction::Write), None).await;
+        let res = self.copy_object_raw(ctx, from, to, content_type, version).await;
+        permit.complete_result(&res, 0);
+        res
+    }
+
+    async fn copy_object_raw(
+        &self,
+        ctx: &StorageContext<'_>,
         from: &str,
         to: &str,
         content_type: Option<&str>,
@@ -556,38 +713,109 @@ pub trait Storage: fmt::Debug + Display + sealed::Sealed + Sync + Send {
     ///
     /// Returns a stream of [`ListInfo`] entries, each containing the object's key and size in bytes.
     /// Pass an empty prefix to list all objects in the repository's storage root.
+    ///
+    /// Governed front door for [`Storage::list_objects_raw`]. The governor
+    /// admits one request per listing; later result pages are not metered
+    /// (known v1 gap).
     async fn list_objects<'a>(
         &'a self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
+        prefix: &str,
+    ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
+        let permit = ctx.governor.acquire(ctx.io_class(Direction::Read), None).await;
+        let res = self.list_objects_raw(ctx, prefix).await;
+        permit.complete_result(&res, 0);
+        res
+    }
+
+    async fn list_objects_raw<'a>(
+        &'a self,
+        ctx: &StorageContext<'_>,
         prefix: &str,
     ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>>;
 
+    /// Governed front door for [`Storage::delete_batch_raw`].
     async fn delete_batch(
         &self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
+        prefix: &str,
+        batch: Vec<(String, u64)>,
+    ) -> StorageResult<DeleteObjectsResult> {
+        let permit = ctx.governor.acquire(ctx.io_class(Direction::Write), None).await;
+        let res = self.delete_batch_raw(ctx, prefix, batch).await;
+        permit.complete_result(&res, 0);
+        res
+    }
+
+    async fn delete_batch_raw(
+        &self,
+        ctx: &StorageContext<'_>,
         prefix: &str,
         batch: Vec<(String, u64)>,
     ) -> StorageResult<DeleteObjectsResult>;
 
+    /// Governed front door for [`Storage::get_object_last_modified_raw`].
     async fn get_object_last_modified(
         &self,
+        ctx: &StorageContext<'_>,
         path: &str,
-        settings: &Settings,
+    ) -> StorageResult<DateTime<Utc>> {
+        let permit = ctx.governor.acquire(ctx.io_class(Direction::Read), None).await;
+        let res = self.get_object_last_modified_raw(ctx, path).await;
+        permit.complete_result(&res, 0);
+        res
+    }
+
+    async fn get_object_last_modified_raw(
+        &self,
+        ctx: &StorageContext<'_>,
+        path: &str,
     ) -> StorageResult<DateTime<Utc>>;
 
+    /// Governed front door for [`Storage::get_object_conditional_raw`]. On
+    /// [`GetModifiedResult::Modified`] the permit rides inside the returned
+    /// reader and completes at EOF.
+    ///
+    /// A conditional GET is always whole-object, so it takes the logical
+    /// fetch's memory reservation for the response to true up
+    /// ([`MemoryPermit::unmetered`] for deliberately unmetered fetches).
     async fn get_object_conditional(
         &self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         path: &str,
+        reservation: &MemoryPermit,
+        previous_version: Option<&VersionInfo>,
+    ) -> StorageResult<GetModifiedResult> {
+        let permit = ctx.governor.acquire(ctx.io_class(Direction::Read), None).await;
+        match self
+            .get_object_conditional_raw(ctx, path, reservation, previous_version)
+            .await
+        {
+            Ok(GetModifiedResult::Modified { data, new_version }) => {
+                let data = Box::pin(PermitTrackedReader::new(data, permit));
+                Ok(GetModifiedResult::Modified { data, new_version })
+            }
+            res => {
+                permit.complete_result(&res, 0);
+                res
+            }
+        }
+    }
+
+    async fn get_object_conditional_raw(
+        &self,
+        ctx: &StorageContext<'_>,
+        path: &str,
+        reservation: &MemoryPermit,
         previous_version: Option<&VersionInfo>,
     ) -> StorageResult<GetModifiedResult>;
 
     /// Delete a stream of objects, by their id string representations
     /// Input stream includes sizes to get as result the total number of bytes deleted
-    #[instrument(skip(self, settings, ids))]
+    #[instrument(skip(self, ctx, ids))]
     async fn delete_objects(
         &self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         prefix: &str,
         ids: BoxStream<'_, (String, u64)>,
     ) -> StorageResult<DeleteObjectsResult> {
@@ -598,7 +826,7 @@ pub trait Storage: fmt::Debug + Display + sealed::Sealed + Sync + Send {
                 let res = Arc::clone(&res);
                 async move {
                     let new_deletes = self
-                        .delete_batch(settings, prefix, batch)
+                        .delete_batch(ctx, prefix, batch)
                         .await
                         .unwrap_or_else(|_| {
                             // FIXME: handle error instead of skipping
@@ -615,8 +843,8 @@ pub trait Storage: fmt::Debug + Display + sealed::Sealed + Sync + Send {
         Ok(res.clone())
     }
 
-    async fn root_is_clean(&self, settings: &Settings) -> StorageResult<bool> {
-        match self.list_objects(settings, "").await {
+    async fn root_is_clean(&self, ctx: &StorageContext<'_>) -> StorageResult<bool> {
+        match self.list_objects(ctx, "").await {
             Ok(mut stream) => match stream.next().await {
                 None => Ok(true),
                 Some(Ok(_)) => Ok(false),
@@ -629,22 +857,37 @@ pub trait Storage: fmt::Debug + Display + sealed::Sealed + Sync + Send {
 
     async fn get_object_concurrently_multiple(
         &self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         key: &str,
         parts: Vec<Range<u64>>,
     ) -> StorageResult<(Pin<Box<dyn AsyncBufRead + Send>>, VersionInfo)> {
-        let settings2 = settings.clone();
+        let settings2 = ctx.settings.clone();
+        let governor2 = Arc::clone(ctx.governor);
+        let asset = ctx.asset;
         let key2 = key.to_string();
         let results = parts
             .into_iter()
             .map(move |range| {
                 let key = key2.clone();
                 let settings = settings2.clone();
+                let governor = Arc::clone(&governor2);
                 async move {
+                    let ctx = StorageContext {
+                        settings: &settings,
+                        governor: &governor,
+                        asset,
+                    };
+                    let expected = range.end - range.start;
+                    let permit = governor
+                        .acquire(ctx.io_class(Direction::Read), Some(expected))
+                        .await;
+                    // an early `?` drops the permit, reporting an abort
                     let (stream, version) = self
-                        .get_object_range(&settings, key.as_ref(), Some(&range))
+                        .get_object_range(&ctx, key.as_ref(), ObjectRange::Ranged(&range))
                         .await?;
                     let all_bytes: Vec<_> = stream.try_collect().await?;
+                    let bytes = all_bytes.iter().map(|b| b.len() as u64).sum();
+                    permit.complete(IoOutcome { bytes, result: IoResult::Ok });
                     Ok::<_, StorageError>((all_bytes, version))
                 }
             })
@@ -668,21 +911,21 @@ pub trait Storage: fmt::Debug + Display + sealed::Sealed + Sync + Send {
 
     async fn get_object_concurrently(
         &self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         key: &str,
         range: &Range<u64>,
     ) -> StorageResult<(Pin<Box<dyn AsyncBufRead + Send>>, VersionInfo)> {
         let parts = split_in_multiple_requests(
             range,
-            settings.concurrency().ideal_concurrent_request_size().get(),
-            settings.concurrency().max_concurrent_requests_for_object().get(),
+            ctx.settings.concurrency().ideal_concurrent_request_size().get(),
+            ctx.settings.concurrency().max_concurrent_requests_for_object().get(),
         )
         .collect::<Vec<_>>();
 
         let res: (Pin<Box<dyn AsyncBufRead + Send>>, VersionInfo) = match parts.len() {
             0 => (Box::pin(tokio::io::empty()), VersionInfo::for_creation()),
-            1 => self.get_object_range_read(settings, key, Some(range)).await?,
-            _ => self.get_object_concurrently_multiple(settings, key, parts).await?,
+            1 => self.get_object_range_read(ctx, key, ObjectRange::Ranged(range)).await?,
+            _ => self.get_object_concurrently_multiple(ctx, key, parts).await?,
         };
         Ok(res)
     }
@@ -758,4 +1001,107 @@ pub fn split_in_multiple_equal_requests(
 
 pub fn strip_quotes(s: &str) -> &str {
     s.strip_prefix('"').and_then(|s| s.strip_suffix('"')).unwrap_or(s)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::governor::PermitState;
+    use futures::executor::block_on;
+    use tokio::io::{AsyncBufReadExt as _, AsyncReadExt as _};
+
+    /// What the permit reported: `Ok(outcome)` for complete, `Err(())` for abort.
+    type Report = Arc<Mutex<Option<Result<IoOutcome, ()>>>>;
+
+    #[derive(Debug)]
+    struct Recorder(Report);
+
+    impl PermitState for Recorder {
+        fn complete(self: Box<Self>, outcome: IoOutcome) {
+            *self.0.lock().unwrap() = Some(Ok(outcome));
+        }
+        fn abort(self: Box<Self>) {
+            *self.0.lock().unwrap() = Some(Err(()));
+        }
+    }
+
+    fn tracked_reader(
+        chunks: Vec<StorageResult<Bytes>>,
+    ) -> (PermitTrackedReader, Report) {
+        let report = Report::default();
+        let permit = IoPermit::new(Box::new(Recorder(Arc::clone(&report))));
+        let stream = stream::iter(chunks).map_err(std::io::Error::other);
+        let reader =
+            PermitTrackedReader::new(Box::pin(StreamReader::new(stream)), permit);
+        (reader, report)
+    }
+
+    fn reported(report: &Report) -> Option<Result<IoOutcome, ()>> {
+        *report.lock().unwrap()
+    }
+
+    #[test]
+    fn tracked_reader_completes_at_eof() {
+        block_on(async {
+            let (mut reader, report) = tracked_reader(vec![
+                Ok(Bytes::from_static(b"hello ")),
+                Ok(Bytes::from_static(b"world")),
+            ]);
+            let mut data = Vec::new();
+            reader.read_to_end(&mut data).await.unwrap();
+            assert_eq!(data, b"hello world");
+            let outcome = reported(&report).unwrap().unwrap();
+            assert_eq!(outcome.bytes, 11);
+            assert_eq!(outcome.result, IoResult::Ok);
+
+            // dropping after EOF must not overwrite the completion with an abort
+            drop(reader);
+            assert!(reported(&report).unwrap().is_ok());
+        });
+    }
+
+    #[test]
+    fn tracked_reader_drop_before_eof_aborts() {
+        block_on(async {
+            let (mut reader, report) =
+                tracked_reader(vec![Ok(Bytes::from_static(b"hello world"))]);
+            let mut buf = [0u8; 4];
+            reader.read_exact(&mut buf).await.unwrap();
+            assert_eq!(reported(&report), None, "must not report before EOF");
+            drop(reader);
+            assert_eq!(reported(&report), Some(Err(())));
+        });
+    }
+
+    #[test]
+    fn tracked_reader_error_completes_with_error() {
+        block_on(async {
+            let (mut reader, report) = tracked_reader(vec![
+                Ok(Bytes::from_static(b"abc")),
+                Err(other_error("stream broke")),
+            ]);
+            let mut data = Vec::new();
+            reader.read_to_end(&mut data).await.unwrap_err();
+            let outcome = reported(&report).unwrap().unwrap();
+            assert_eq!(outcome.bytes, 3);
+            assert_eq!(outcome.result, IoResult::Error);
+        });
+    }
+
+    #[test]
+    fn tracked_reader_counts_bufread_consumption() {
+        block_on(async {
+            let (mut reader, report) = tracked_reader(vec![
+                Ok(Bytes::from_static(b"hello ")),
+                Ok(Bytes::from_static(b"world")),
+            ]);
+            // read_until with an absent delimiter drives poll_fill_buf/consume
+            let mut data = Vec::new();
+            reader.read_until(0, &mut data).await.unwrap();
+            assert_eq!(data, b"hello world");
+            let outcome = reported(&report).unwrap().unwrap();
+            assert_eq!(outcome.bytes, 11);
+            assert_eq!(outcome.result, IoResult::Ok);
+        });
+    }
 }

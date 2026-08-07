@@ -11,10 +11,13 @@ use crate::storage::redirect::RedirectStorage;
 
 // Re-export everything from icechunk-storage
 pub use icechunk_storage::{
-    ConcurrencySettings, DeleteObjectsResult, ETag, Generation, GetModifiedResult,
-    ICError, ListInfo, RepositoryCreation, RetriesSettings, Settings, Storage,
-    StorageError, StorageErrorKind, StorageInfo, StorageResult, TimeoutSettings,
-    VersionInfo, VersionedUpdateResult,
+    Asset, ConcurrencySettings, DeleteObjectsResult, Direction, ETag, Generation,
+    GetModifiedResult, GovernorFactory, ICError, IoClass, IoGovernor, IoOutcome,
+    IoPermit, IoResult, ListInfo, MemoryPermit, MemoryState, ObjectRange, PermitState,
+    PermitTrackedReader, RepositoryCreation, RetriesSettings, Settings, Storage,
+    StorageContext, StorageError, StorageErrorKind, StorageInfo, StorageResult,
+    TimeoutSettings, UnlimitedGovernor, UnlimitedGovernorConfig, VersionInfo,
+    VersionedUpdateResult,
     s3_config::{S3Credentials, S3CredentialsFetcher, S3Options, S3StaticCredentials},
     split_in_multiple_equal_requests, split_in_multiple_requests, strip_quotes,
 };
@@ -28,7 +31,7 @@ pub use icechunk_s3::{
 
 // Re-export from icechunk-arrow-object-store
 pub use icechunk_arrow_object_store::{
-    ObjectStorage, new_in_memory_storage, validate_extra_headers,
+    ObjectStorage, ThrottleSink, new_in_memory_storage, validate_extra_headers,
 };
 
 #[cfg(feature = "object-store-fs")]
@@ -100,18 +103,26 @@ mod tests {
         use std::{fs::File, io::Write as _, path::PathBuf};
         use tempfile::TempDir;
 
+        let settings = Settings::default();
+        let governor: Arc<dyn IoGovernor> = Arc::new(UnlimitedGovernor);
+        let ctx = StorageContext {
+            settings: &settings,
+            governor: &governor,
+            asset: Asset::Other,
+        };
+
         let repo_dir = TempDir::new().unwrap();
         let s = new_local_filesystem_storage(repo_dir.path()).await.unwrap();
-        assert!(s.root_is_clean(&Settings::default()).await.unwrap());
+        assert!(s.root_is_clean(&ctx).await.unwrap());
 
         let mut file = File::create(repo_dir.path().join("foo.txt")).unwrap();
         write!(file, "hello").unwrap();
-        assert!(!s.root_is_clean(&Settings::default()).await.unwrap());
+        assert!(!s.root_is_clean(&ctx).await.unwrap());
 
         let inside_existing =
             PathBuf::from_iter([repo_dir.path().as_os_str().to_str().unwrap(), "foo"]);
         let s = new_local_filesystem_storage(&inside_existing).await.unwrap();
-        assert!(s.root_is_clean(&Settings::default()).await.unwrap());
+        assert!(s.root_is_clean(&ctx).await.unwrap());
     }
 
     #[cfg(feature = "object-store-gcs")]

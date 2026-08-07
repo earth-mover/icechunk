@@ -22,6 +22,7 @@ use crate::{
     conflicts::PyConflictSolver,
     display::{PyRepr, ReprMode, py_bool},
     errors::{PyIcechunkStoreError, PyIcechunkStoreResult},
+    governor::governor_to_py,
     repository::{PyDiff, PySnapshotProperties},
     store::PyStore,
     streams::PyAsyncCloseableIterator,
@@ -388,6 +389,13 @@ impl PySession {
             let store = Arc::new(store);
             Ok(PyStore(store))
         })
+    }
+
+    #[getter]
+    pub fn governor(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        // This is blocking function, we need to release the Gil
+        let governor = py.detach(|| Arc::clone(self.0.blocking_read().governor()));
+        governor_to_py(py, governor)
     }
 
     #[getter]

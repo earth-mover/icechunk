@@ -1,5 +1,4 @@
 use std::fmt;
-use std::ops::Range;
 use std::pin::Pin;
 use std::sync::Arc;
 
@@ -8,9 +7,9 @@ use bytes::Bytes;
 use futures::stream::BoxStream;
 use futures::{Stream, StreamExt};
 use icechunk::storage::{
-    DeleteObjectsResult, ETag, Generation, GetModifiedResult, ListInfo, Settings,
-    Storage, StorageError, StorageInfo, StorageResult, VersionInfo,
-    VersionedUpdateResult,
+    DeleteObjectsResult, Direction, ETag, Generation, GetModifiedResult, ListInfo,
+    MemoryPermit, ObjectRange, Storage, StorageContext, StorageError, StorageInfo,
+    StorageResult, VersionInfo, VersionedUpdateResult,
 };
 use napi::bindgen_prelude::{Buffer, Promise};
 use napi::threadsafe_function::ThreadsafeFunction;
@@ -270,13 +269,16 @@ impl Storage for JsCallbackStorage {
 
     async fn get_object_range(
         &self,
-        _settings: &Settings,
+        _ctx: &StorageContext<'_>,
         path: &str,
-        range: Option<&Range<u64>>,
+        target: ObjectRange<'_>,
     ) -> StorageResult<(
         Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>,
         VersionInfo,
     )> {
+        // the JS callback reports no content-length, so a whole-object
+        // read's riding reservation keeps its default weight
+        let range = target.range();
         let args = JsStorageGetObjectRangeArgs {
             path: path.to_string(),
             range_start: range.map(|r| r.start as f64),
@@ -298,13 +300,14 @@ impl Storage for JsCallbackStorage {
 
     async fn put_object(
         &self,
-        _settings: &Settings,
+        ctx: &StorageContext<'_>,
         path: &str,
         bytes: Bytes,
         content_type: Option<&str>,
         metadata: Vec<(String, String)>,
         previous_version: Option<&VersionInfo>,
     ) -> StorageResult<VersionedUpdateResult> {
+        let expected = bytes.len() as u64;
         let args = JsStoragePutObjectArgs {
             path: path.to_string(),
             data: bytes.to_vec().into(),
@@ -315,19 +318,25 @@ impl Storage for JsCallbackStorage {
                 .collect(),
             previous_version: previous_version.map(|v| v.into()),
         };
-        let result = self
-            .put_object_fn
-            .call_async(Ok(args))
-            .await
-            .map_err(|e| js_storage_error("JS putObject call failed", e))?
-            .await
-            .map_err(|e| js_storage_error("JS putObject failed", e))?;
-        result.into_rust()
+        let permit =
+            ctx.governor.acquire(ctx.io_class(Direction::Write), Some(expected)).await;
+        let result = async {
+            self.put_object_fn
+                .call_async(Ok(args))
+                .await
+                .map_err(|e| js_storage_error("JS putObject call failed", e))?
+                .await
+                .map_err(|e| js_storage_error("JS putObject failed", e))?
+                .into_rust()
+        }
+        .await;
+        permit.complete_result(&result, expected);
+        result
     }
 
-    async fn copy_object(
+    async fn copy_object_raw(
         &self,
-        _settings: &Settings,
+        _ctx: &StorageContext<'_>,
         from: &str,
         to: &str,
         content_type: Option<&str>,
@@ -349,9 +358,9 @@ impl Storage for JsCallbackStorage {
         result.into_rust()
     }
 
-    async fn list_objects<'a>(
+    async fn list_objects_raw<'a>(
         &'a self,
-        _settings: &Settings,
+        _ctx: &StorageContext<'_>,
         prefix: &str,
     ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
         let items = self
@@ -376,9 +385,9 @@ impl Storage for JsCallbackStorage {
         Ok(futures::stream::iter(rust_items).boxed())
     }
 
-    async fn delete_batch(
+    async fn delete_batch_raw(
         &self,
-        _settings: &Settings,
+        _ctx: &StorageContext<'_>,
         prefix: &str,
         batch: Vec<(String, u64)>,
     ) -> StorageResult<DeleteObjectsResult> {
@@ -403,10 +412,10 @@ impl Storage for JsCallbackStorage {
         })
     }
 
-    async fn get_object_last_modified(
+    async fn get_object_last_modified_raw(
         &self,
+        _ctx: &StorageContext<'_>,
         path: &str,
-        _settings: &Settings,
     ) -> StorageResult<chrono::DateTime<chrono::Utc>> {
         self.get_object_last_modified_fn
             .call_async(Ok(path.to_string()))
@@ -416,10 +425,11 @@ impl Storage for JsCallbackStorage {
             .map_err(|e| js_storage_error("JS getObjectLastModified failed", e))
     }
 
-    async fn get_object_conditional(
+    async fn get_object_conditional_raw(
         &self,
-        _settings: &Settings,
+        _ctx: &StorageContext<'_>,
         path: &str,
+        _reservation: &MemoryPermit,
         previous_version: Option<&VersionInfo>,
     ) -> StorageResult<GetModifiedResult> {
         let args = JsStorageGetObjectConditionalArgs {
