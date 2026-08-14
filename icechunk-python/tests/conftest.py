@@ -4,6 +4,7 @@ from typing import Literal, cast
 import boto3
 import pytest
 from hypothesis import HealthCheck, settings
+from hypothesis.database import DirectoryBasedExampleDatabase
 from mypy_boto3_s3.client import S3Client
 
 import zarr
@@ -34,6 +35,10 @@ settings.register_profile(
     max_examples=200,
     stateful_step_count=75,
     suppress_health_check=[HealthCheck.filter_too_much, HealthCheck.too_slow],
+    # The built-in "ci" profile sets derandomize=True and database=None.
+    # Undo both so failures persist in .hypothesis/examples and replay across runs.
+    derandomize=False,
+    database=DirectoryBasedExampleDatabase(".hypothesis/examples"),
 )
 settings.register_profile(
     "nightly",
