@@ -67,15 +67,15 @@ jobs:
         run: |
           just python-upstream-mypy
 
-      - name: Restore cached hypothesis directory
+      - name: Restore cached hypothesis examples
         id: restore-hypothesis-cache
         if: always()
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: icechunk-python/.hypothesis/
+          path: icechunk-python/.hypothesis/examples/
           key: cache-hypothesis-${{ runner.os }}-${{ github.run_id }}
           restore-keys: |
-            cache-hypothesis-
+            cache-hypothesis-${{ runner.os }}-
 
       - name: describe environment
         if: steps.setup.outcome == 'success'
@@ -93,12 +93,12 @@ jobs:
           just python-upstream-pytest "--hypothesis-profile=$HYPOTHESIS_PROFILE"
 
       # explicitly save the cache so it gets updated, also do this even if it fails.
-      - name: Save cached hypothesis directory
+      - name: Save cached hypothesis examples
         id: save-hypothesis-cache
         if: always() && github.ref == 'refs/heads/main'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: icechunk-python/.hypothesis/
+          path: icechunk-python/.hypothesis/examples/
           key: cache-hypothesis-${{ runner.os }}-${{ github.run_id }}
 
       - name: Upload logs
