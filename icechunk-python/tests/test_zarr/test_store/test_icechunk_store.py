@@ -314,7 +314,9 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
         i.e. no unwanted replacement occurs.
         """
         await store.set("foo/bar/zarr.json", self.buffer_cls.from_bytes(ARRAY_METADATA))
-        data = self.buffer_cls.from_bytes(b"")
+        # upstream uses empty values here; icechunk rejects zero-length chunks, and the
+        # content is irrelevant to what this test checks, which is listing
+        data = self.buffer_cls.from_bytes(b"x")
         store_dict = {
             "foo/bar/c/1/0/0": data,
             "foo/bar/c/0/0/0": data,
@@ -467,7 +469,8 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
             "c/1/1/0",
             "c/1/1/1",
         ]
-        values = [bytes(i) for i, _ in enumerate(keys)]
+        # non-zero sizes: icechunk rejects zero-length chunks
+        values = [bytes(i + 1) for i, _ in enumerate(keys)]
         for k, v in zip(keys, values, strict=False):
             await self.set(store, k, self.buffer_cls.from_bytes(v))
         observed_buffers = collect_aiterator(
@@ -555,7 +558,9 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
             f"{prefix}/c/1/1/0",
             f"{prefix}/c/1/1/1",
         ]
-        values = [bytes(i) for i, _ in enumerate(keys)]
+        # sizes differ per chunk so a wrong total cannot go unnoticed, but none
+        # is zero: icechunk rejects zero-length chunks
+        values = [bytes(i + 1) for i, _ in enumerate(keys)]
         for k, v in zip(keys, values, strict=False):
             await self.set(store, k, self.buffer_cls.from_bytes(v))
 

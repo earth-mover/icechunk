@@ -466,19 +466,12 @@ pub enum ChunkPayload {
 }
 
 impl ChunkPayload {
-    /// Whether this payload is a virtual reference to zero bytes of chunk data.
-    ///
-    /// Only virtual references are considered. An inline payload may legitimately be
-    /// empty: zarr's store contract requires that writing an empty value at a chunk key
-    /// succeeds, and zarr-python's own store test suite does exactly that. A `Ref` can
-    /// never be empty, because a chunk is materialized only when `len > threshold`, and
-    /// that threshold is a `u16`, so empty data stays inline whatever it is configured
-    /// to. That leaves virtual references, where a length of zero is always a bug in
-    /// whatever generated the reference.
-    pub fn is_zero_length_virtual_ref(&self) -> bool {
+    /// Number of bytes of chunk data this payload refers to.
+    pub fn length(&self) -> ChunkLength {
         match self {
-            ChunkPayload::Virtual(VirtualChunkRef { length, .. }) => *length == 0,
-            ChunkPayload::Inline(_) | ChunkPayload::Ref(_) => false,
+            ChunkPayload::Inline(bytes) => bytes.len() as ChunkLength,
+            ChunkPayload::Virtual(VirtualChunkRef { length, .. }) => *length,
+            ChunkPayload::Ref(ChunkRef { length, .. }) => *length,
         }
     }
 }
