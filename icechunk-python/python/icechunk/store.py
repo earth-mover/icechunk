@@ -230,7 +230,7 @@ class IcechunkStore(Store, SyncMixin):
             raise TypeError(
                 f"IcechunkStore.set(): `value` must be a Buffer instance. Got an instance of {type(value)} instead."
             )
-        return await self._store.set(key, value.to_bytes())
+        return await self._store.set(key, value.as_buffer_like())
 
     async def set_if_not_exists(self, key: str, value: Buffer) -> None:
         """
@@ -241,7 +241,7 @@ class IcechunkStore(Store, SyncMixin):
         key : str
         value : Buffer
         """
-        return await self._store.set_if_not_exists(key, value.to_bytes())
+        return await self._store.set_if_not_exists(key, value.as_buffer_like())
 
     def set_virtual_ref(
         self,
