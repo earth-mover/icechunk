@@ -7,6 +7,7 @@
 - Fix garbage collection deleting still-referenced transaction logs when the host and object-store clocks are skewed ([#2310](https://github.com/earth-mover/icechunk/pull/2310)).
 - Deleting a chunk key that cannot exist (coordinates outside the chunk grid, missing node, or a group path) is now a no-op instead of raising, matching zarr-python's stores. Writing a chunk outside the grid is still rejected ([#2312](https://github.com/earth-mover/icechunk/pull/2312)).
 - `to_icechunk` no longer passes `synchronizer` and `zarr_version` to xarray's `ZarrStore.open_group`; xarray removed both parameters and passing them made `to_icechunk` fail with a `TypeError` on xarray development versions ([#2312](https://github.com/earth-mover/icechunk/pull/2312)).
+- Writing a chunk reference with length 0 is now rejected instead of being committed. A chunk must decode to the full chunk shape, so no valid chunk is ever zero bytes long, and such a reference could only fail once it was read back — long after the commit that introduced it. Applies to inline, virtual and native references alike. To record that a chunk is not stored at all, delete it rather than writing a zero-length reference; it then reads back as the array's fill value ([#2328](https://github.com/earth-mover/icechunk/issues/2328)).
 
 ## Python Icechunk Library 2.1.2
 
