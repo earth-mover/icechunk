@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 This example uses Dask as a task orchestration framework
 to write or update an array in an Icechunk repository.

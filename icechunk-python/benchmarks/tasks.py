@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from __future__ import annotations
 
 # This app records performance measurements for icechunk reads/writes orchestrated using plain tasks.
 # See array.py that orchestrates similar operations using an array library.
