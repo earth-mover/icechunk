@@ -25,8 +25,12 @@ jobs:
   run:
     if: ${{ github.event_name != 'issue_comment' || github.event.issue.pull_request }}
     runs-on: ubuntu-latest
+    env:
+      HAS_SLACK_TOKEN: ${{ secrets.SLACK_APP_TOKEN != '' }}
     steps:
-      - uses: earth-mover/pr-review-bot@159af5b9dffde3f3ac3c85b005b248ea1b8b50c7 # main
+      # Fork PRs run without secrets; the bot cannot post to Slack there.
+      - if: ${{ env.HAS_SLACK_TOKEN == 'true' }}
+        uses: earth-mover/pr-review-bot@159af5b9dffde3f3ac3c85b005b248ea1b8b50c7 # main
         with:
           channel: C07C8TCQQRG
           board-name: Icechunk PR Board
