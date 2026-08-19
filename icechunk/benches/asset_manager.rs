@@ -7,6 +7,8 @@ use icechunk::format::format_constants::SpecVersionBin;
 use icechunk::format::manifest::{ChunkInfo, ChunkPayload, Manifest};
 use icechunk::format::snapshot::{ArrayShape, NodeData, NodeSnapshot, Snapshot};
 use icechunk::format::{ChunkIndices, IcechunkFormatError, ManifestId, NodeId, Path};
+use icechunk::governors::CompatGovernorConfig;
+use icechunk::storage::GovernorFactory as _;
 use icechunk::storage::{self, new_local_filesystem_storage};
 use tempfile::TempDir;
 use tokio::runtime::Runtime;
@@ -70,6 +72,7 @@ fn benchmark_write_new_snapshot(c: &mut Criterion) {
         SpecVersionBin::current(),
         3, // compression level
         16,
+        CompatGovernorConfig { max_concurrent_requests: 16 }.build(),
     );
 
     for num_nodes in [1000, 100_000] {
@@ -120,8 +123,14 @@ fn benchmark_write_new_manifest(c: &mut Criterion) {
     let storage = rt.block_on(new_local_filesystem_storage(tmp_dir.path())).unwrap();
     let settings =
         storage::Settings { unsafe_use_metadata: Some(false), ..Default::default() };
-    let asset_manager =
-        AssetManager::new_no_cache(storage, settings, SpecVersionBin::current(), 3, 16);
+    let asset_manager = AssetManager::new_no_cache(
+        storage,
+        settings,
+        SpecVersionBin::current(),
+        3,
+        16,
+        CompatGovernorConfig { max_concurrent_requests: 16 }.build(),
+    );
 
     group.throughput(Throughput::Bytes(num_chunks as u64 * inline_size as u64));
     group.bench_function(BenchmarkId::new("inline", num_chunks), |b| {

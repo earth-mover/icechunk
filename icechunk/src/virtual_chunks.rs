@@ -73,6 +73,14 @@ use crate::storage::ObjectStoreBackend as _;
 use crate::storage::Role;
 #[cfg(feature = "object-store-s3")]
 use crate::storage::S3ObjectStoreBackend;
+#[cfg(any(
+    feature = "object-store-s3",
+    feature = "object-store-fs",
+    feature = "object-store-gcs",
+    feature = "object-store-azure",
+    feature = "object-store-http"
+))]
+use crate::storage::ThrottleSink;
 use crate::{
     ObjectStoreConfig,
     config::Credentials,
@@ -84,10 +92,13 @@ use crate::{
         },
     },
     private,
-    storage::{self, split_in_multiple_requests, strip_quotes},
+    storage::{
+        self, Asset, Direction, IoClass, IoGovernor, split_in_multiple_requests,
+        strip_quotes,
+    },
 };
 #[cfg(feature = "s3")]
-use icechunk_s3::{mk_client, range_to_header};
+use icechunk_s3::{ThrottleObserver, mk_client, range_to_header};
 
 pub type ContainerName = String;
 
@@ -273,6 +284,7 @@ pub trait ChunkFetcher: std::fmt::Debug + private::Sealed + Send + Sync {
     /// `chunk_location` is kept for the scheme/host/port and error messages.
     async fn fetch_part(
         &self,
+        governor: &Arc<dyn IoGovernor>,
         chunk_location: &Url,
         key: &str,
         range: Range<ChunkOffset>,
@@ -281,17 +293,29 @@ pub trait ChunkFetcher: std::fmt::Debug + private::Sealed + Send + Sync {
 
     async fn fetch_chunk(
         &self,
+        governor: &Arc<dyn IoGovernor>,
         chunk_location: &Url,
         key: &str,
         range: &Range<ChunkOffset>,
         checksum: Option<&Checksum>,
     ) -> Result<Bytes, VirtualReferenceError> {
+        let class = IoClass { direction: Direction::Read, asset: Asset::VirtualChunk };
         let results = split_in_multiple_requests(
             range,
             self.ideal_concurrent_request_size().get(),
             self.max_concurrent_requests_for_object().get(),
         )
-        .map(|range| self.fetch_part(chunk_location, key, range, checksum))
+        .map(|range| async move {
+            let expected = range.end - range.start;
+            let permit = governor.acquire(class, Some(expected)).await;
+            let res =
+                self.fetch_part(governor, chunk_location, key, range, checksum).await;
+            // fetch_part returns the part fully downloaded and still unread, so
+            // remaining() is the actual transfer size
+            let bytes = res.as_ref().map_or(0, |part| part.remaining() as u64);
+            permit.complete_result(&res, bytes);
+            res
+        })
         .collect::<FuturesOrdered<_>>();
 
         let init: Box<dyn Buf + Unpin + Send> = Box::new(&[][..]);
@@ -459,10 +483,18 @@ impl VirtualChunkResolver {
 
     pub async fn fetch_chunk(
         &self,
+        governor: &Arc<dyn IoGovernor>,
         chunk_location: &str,
         range: &Range<ChunkOffset>,
         checksum: Option<&Checksum>,
     ) -> Result<Bytes, VirtualReferenceError> {
+        // Held until the assembled bytes are returned to the caller.
+        let _permit = governor
+            .reserve_memory(
+                IoClass { direction: Direction::Read, asset: Asset::VirtualChunk },
+                Some(range.end - range.start),
+            )
+            .await;
         let location = self.expand_location(chunk_location)?;
 
         // The parsed `url` is used only for the scheme/host/port and for matching
@@ -478,7 +510,7 @@ impl VirtualChunkResolver {
             .capture()?;
         let key = resolved_object_key(&location)?;
         let fetcher = self.get_fetcher(&url).await?;
-        fetcher.fetch_chunk(&url, &key, range, checksum).await
+        fetcher.fetch_chunk(governor, &url, &key, range, checksum).await
     }
 
     /// Validate that a virtual chunk location can be written: a container must
@@ -939,6 +971,7 @@ impl ChunkFetcher for S3Fetcher {
 
     async fn fetch_part(
         &self,
+        governor: &Arc<dyn IoGovernor>,
         chunk_location: &Url,
         key: &str,
         range: Range<ChunkOffset>,
@@ -979,6 +1012,11 @@ impl ChunkFetcher for S3Fetcher {
         };
 
         let res = b
+            .customize()
+            .interceptor(ThrottleObserver::new(
+                governor,
+                IoClass { direction: Direction::Read, asset: Asset::VirtualChunk },
+            ))
             .send()
             .await
             .map_err(|e| match e {
@@ -1035,6 +1073,9 @@ impl ChunkFetcher for S3Fetcher {
 pub struct ObjectStoreFetcher {
     client: Arc<dyn ObjectStore>,
     settings: storage::Settings,
+    /// Broadcasts throttle signals from `client`'s HTTP layer to the
+    /// governors registered by [`Self::fetch_part`] calls.
+    sink: Arc<ThrottleSink>,
 }
 
 #[cfg(any(
@@ -1063,6 +1104,8 @@ impl ObjectStoreFetcher {
                 unsafe_use_metadata: Some(false),
                 ..settings
             },
+            // no HTTP layer feeds it, but registration stays harmless
+            sink: Arc::default(),
         }
     }
 
@@ -1082,11 +1125,12 @@ impl ObjectStoreFetcher {
             extra_read_headers: Vec::new(),
             extra_write_headers: Vec::new(),
         };
+        let sink = Arc::new(ThrottleSink::default());
         let client = backend
-            .mk_object_store(&settings, Role::Read)
+            .mk_object_store(&settings, Role::Read, &sink)
             .map_err(|e| VirtualReferenceErrorKind::OtherError(Box::new(e)))
             .capture()?;
-        Ok(ObjectStoreFetcher { client, settings })
+        Ok(ObjectStoreFetcher { client, settings, sink })
     }
 
     #[cfg(feature = "object-store-http")]
@@ -1107,11 +1151,12 @@ impl ObjectStoreFetcher {
             config: Some(config),
             headers: if headers.is_empty() { None } else { Some(headers.clone()) },
         };
+        let sink = Arc::new(ThrottleSink::default());
         let client = backend
-            .mk_object_store(&settings, Role::Read)
+            .mk_object_store(&settings, Role::Read, &sink)
             .map_err(|e| VirtualReferenceErrorKind::OtherError(Box::new(e)))
             .capture()?;
-        Ok(ObjectStoreFetcher { client, settings })
+        Ok(ObjectStoreFetcher { client, settings, sink })
     }
 
     #[cfg(feature = "object-store-gcs")]
@@ -1136,12 +1181,13 @@ impl ObjectStoreFetcher {
             extra_read_headers: Vec::new(),
             extra_write_headers: Vec::new(),
         };
+        let sink = Arc::new(ThrottleSink::default());
         let client = backend
-            .mk_object_store(&settings, Role::Read)
+            .mk_object_store(&settings, Role::Read, &sink)
             .map_err(|e| VirtualReferenceErrorKind::OtherError(Box::new(e)))
             .capture()?;
 
-        Ok(ObjectStoreFetcher { client, settings })
+        Ok(ObjectStoreFetcher { client, settings, sink })
     }
 
     #[cfg(feature = "object-store-azure")]
@@ -1167,12 +1213,13 @@ impl ObjectStoreFetcher {
             config: Some(config),
         };
 
+        let sink = Arc::new(ThrottleSink::default());
         let client = backend
-            .mk_object_store(&settings, Role::Read)
+            .mk_object_store(&settings, Role::Read, &sink)
             .map_err(|e| VirtualReferenceErrorKind::OtherError(Box::new(e)))
             .capture()?;
 
-        Ok(ObjectStoreFetcher { client, settings })
+        Ok(ObjectStoreFetcher { client, settings, sink })
     }
 }
 
@@ -1194,11 +1241,13 @@ impl ChunkFetcher for ObjectStoreFetcher {
 
     async fn fetch_part(
         &self,
+        governor: &Arc<dyn IoGovernor>,
         chunk_location: &Url,
         key: &str,
         range: Range<ChunkOffset>,
         checksum: Option<&Checksum>,
     ) -> Result<Box<dyn Buf + Unpin + Send>, VirtualReferenceError> {
+        self.sink.register(governor);
         let usize_range = range.start..range.end;
         let mut options =
             GetOptions { range: Some(usize_range.into()), ..Default::default() };
@@ -1268,6 +1317,11 @@ mod tests {
         },
         virtual_chunks::{VirtualChunkContainer, VirtualChunkResolver},
     };
+
+    #[cfg(feature = "object-store-fs")]
+    fn ungoverned() -> std::sync::Arc<dyn crate::storage::IoGovernor> {
+        std::sync::Arc::new(crate::storage::UnlimitedGovernor)
+    }
 
     // The object key reaching a fetcher must be the verbatim, percent-decoded
     // path: `//`, `.` and `..` are literal bytes of an opaque key.
@@ -1491,7 +1545,7 @@ mod tests {
         );
 
         let path = "file:///example/foo.nc";
-        let res = resolver.fetch_chunk(path, &(0..100), None).await;
+        let res = resolver.fetch_chunk(&ungoverned(), path, &(0..100), None).await;
         assert!(matches!(
             res,
             Err(VirtualReferenceError {
@@ -1516,7 +1570,7 @@ mod tests {
         );
 
         let path = "file:///example/foo.nc";
-        let res = resolver.fetch_chunk(path, &(0..100), None).await;
+        let res = resolver.fetch_chunk(&ungoverned(), path, &(0..100), None).await;
         assert!(matches!(
             res,
             Err(VirtualReferenceError {
@@ -1543,7 +1597,7 @@ mod tests {
         );
 
         let path = "file:///example/foo.nc";
-        let res = resolver.fetch_chunk(path, &(0..100), None).await;
+        let res = resolver.fetch_chunk(&ungoverned(), path, &(0..100), None).await;
         assert!(matches!(
             res,
             Err(VirtualReferenceError {

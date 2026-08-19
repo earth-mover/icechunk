@@ -141,12 +141,17 @@ pub(crate) trait PyRepr {
     }
 }
 
-/// Get the repr of an optional `Py<T>` where `T` implements `PyRepr`.
+/// Get the repr of a `Py<T>` where `T` implements `PyRepr`.
 ///
 /// Pyclass structs that hold other pyclass structs as attributes store them as
 /// `Py<T>` (a Python-managed reference-counted pointer). To access the underlying
 /// Rust struct and call the `PyRepr` trait method on it, we need to borrow it
 /// via `Py::borrow(py)`, which requires the GIL and the `PyClass` bound.
+pub(crate) fn py_nested_repr<T: PyRepr + PyClass>(obj: &Py<T>, mode: ReprMode) -> String {
+    Python::attach(|py| obj.borrow(py).render(mode))
+}
+
+/// Like [`py_nested_repr`], but for an optional value; `None` renders as `"None"`.
 pub(crate) fn py_option_nested_repr<T: PyRepr + PyClass>(
     opt: &Option<Py<T>>,
     mode: ReprMode,

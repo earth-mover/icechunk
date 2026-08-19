@@ -41,6 +41,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         HashMap::new(),
         Some(SpecVersionBin::V2),
         true,
+        None,
     )
     .await?;
     let session = Arc::new(RwLock::new(repo.writable_session("main").await?));

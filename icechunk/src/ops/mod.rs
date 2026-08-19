@@ -15,6 +15,7 @@ use crate::{
     },
     refs::{RefResult, list_refs},
     repository::RepositoryResult,
+    storage::Asset,
 };
 use icechunk_types::error::ICResultCtxExt as _;
 
@@ -115,16 +116,18 @@ pub async fn all_roots_v1<'a>(
     asset_manager: Arc<AssetManager>,
     extra_roots: &'a HashSet<SnapshotId>,
 ) -> RefResult<impl Stream<Item = RefResult<SnapshotId>> + 'a> {
-    let all_refs =
-        list_refs(asset_manager.storage().as_ref(), asset_manager.storage_settings())
-            .await?;
+    let all_refs = list_refs(
+        asset_manager.storage().as_ref(),
+        &asset_manager.storage_context(Asset::Ref),
+    )
+    .await?;
     let roots = stream::iter(all_refs)
         .then(move |r| {
             let asset_manager = Arc::clone(&asset_manager);
             async move {
                 r.fetch(
                     asset_manager.storage().as_ref(),
-                    asset_manager.storage_settings(),
+                    &asset_manager.storage_context(Asset::Ref),
                 )
                 .await
                 .map(|ref_data| ref_data.snapshot)
@@ -166,9 +169,15 @@ mod tests {
     async fn test_pointed_snapshots_duplicate() -> Result<(), Box<dyn std::error::Error>>
     {
         let storage = new_in_memory_storage().await?;
-        let repo =
-            Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
-                .await?;
+        let repo = Repository::create(
+            None,
+            Arc::clone(&storage),
+            HashMap::new(),
+            None,
+            true,
+            None,
+        )
+        .await?;
         let mut session = repo.writable_session("main").await?;
         session.add_group(Path::root(), Bytes::new()).await?;
         let snap = session.commit("commit").max_concurrent_nodes(8).execute().await?;

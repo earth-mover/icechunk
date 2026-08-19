@@ -4,6 +4,11 @@
 
 pub use object_store;
 
+mod throttle;
+#[cfg(any(feature = "s3", feature = "gcs", feature = "azure", feature = "http"))]
+use throttle::GovernedHttpConnector;
+pub use throttle::ThrottleSink;
+
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::{DateTime, TimeDelta, Utc};
@@ -15,10 +20,11 @@ use http::header::{HeaderName, HeaderValue};
 #[cfg(feature = "s3")]
 use icechunk_storage::s3_config::{S3Credentials, S3Options};
 use icechunk_storage::{
-    ConcurrencySettings, DeleteObjectsResult, ETag, Generation, GetModifiedResult,
-    ListInfo, RepositoryCreation, RetriesSettings, Settings, Storage, StorageError,
-    StorageErrorKind, StorageInfo, StorageResult, VersionInfo, VersionedUpdateResult,
-    obj_not_found_res, obj_store_error, obj_store_error_res, other_error,
+    ConcurrencySettings, DeleteObjectsResult, Direction, ETag, Generation,
+    GetModifiedResult, ListInfo, MemoryPermit, ObjectRange, RepositoryCreation,
+    RetriesSettings, Settings, Storage, StorageContext, StorageError, StorageErrorKind,
+    StorageInfo, StorageResult, VersionInfo, VersionedUpdateResult, obj_not_found_res,
+    obj_store_error, obj_store_error_res, other_error,
     readback::{
         ReadbackOutcome, WRITE_ID_METADATA_KEY, resolve_lost_response,
         resolve_precondition, write_id_for,
@@ -57,7 +63,6 @@ use std::{
     fmt::{self, Debug, Display},
     future::ready,
     num::{NonZeroU16, NonZeroU64},
-    ops::Range,
     path::{Path as StdPath, PathBuf},
     pin::Pin,
     sync::Arc,
@@ -290,6 +295,11 @@ pub struct ObjectStorage {
     read_client: OnceCell<Arc<dyn ObjectStore>>,
     #[serde(skip)]
     write_client: OnceCell<Arc<dyn ObjectStore>>,
+    /// Broadcasts throttle signals observed by this storage's HTTP clients
+    /// to the governors of registered callers. Runtime-only; rebuilt empty
+    /// after deserialization, together with the clients that feed it.
+    #[serde(skip)]
+    sink: Arc<ThrottleSink>,
 }
 
 impl ObjectStorage {
@@ -299,6 +309,7 @@ impl ObjectStorage {
             allow_empty_prefix_creation: false,
             read_client: OnceCell::new(),
             write_client: OnceCell::new(),
+            sink: Arc::default(),
         }
     }
 
@@ -429,14 +440,18 @@ impl ObjectStorage {
                 Role::Read => {
                     self.read_client
                         .get_or_try_init(|| async {
-                            self.backend.mk_object_store(settings, Role::Read)
+                            self.backend.mk_object_store(settings, Role::Read, &self.sink)
                         })
                         .await
                 }
                 Role::Write => {
                     self.write_client
                         .get_or_try_init(|| async {
-                            self.backend.mk_object_store(settings, Role::Write)
+                            self.backend.mk_object_store(
+                                settings,
+                                Role::Write,
+                                &self.sink,
+                            )
                         })
                         .await
                 }
@@ -444,7 +459,7 @@ impl ObjectStorage {
         } else {
             self.read_client
                 .get_or_try_init(|| async {
-                    self.backend.mk_object_store(settings, Role::Read)
+                    self.backend.mk_object_store(settings, Role::Read, &self.sink)
                 })
                 .await
         }
@@ -558,13 +573,15 @@ impl Storage for ObjectStorage {
 
     async fn put_object(
         &self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         path: &str,
         bytes: Bytes,
         content_type: Option<&str>,
         metadata: Vec<(String, String)>,
         previous_version: Option<&VersionInfo>,
     ) -> StorageResult<VersionedUpdateResult> {
+        self.sink.register(ctx.governor);
+        let settings = ctx.settings;
         let path = self.prefixed_path(path);
         let mut attributes = Attributes::new();
         if settings.unsafe_use_metadata() {
@@ -592,11 +609,12 @@ impl Storage for ObjectStorage {
 
         let options = PutOptions { mode, attributes, ..PutOptions::default() };
         // FIXME: use multipart
-        let res = self
-            .get_client(settings, Role::Write)
-            .await?
-            .put_opts(&path, bytes.into(), options)
-            .await;
+        let client = self.get_client(settings, Role::Write).await?;
+        let expected = bytes.len() as u64;
+        let permit =
+            ctx.governor.acquire(ctx.io_class(Direction::Write), Some(expected)).await;
+        let res = client.put_opts(&path, bytes.into(), options).await;
+        permit.complete_result(&res, expected);
         match res {
             Ok(res) => {
                 let new_version = VersionInfo {
@@ -633,14 +651,16 @@ impl Storage for ObjectStorage {
         }
     }
 
-    async fn copy_object(
+    async fn copy_object_raw(
         &self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         from: &str,
         to: &str,
         _content_type: Option<&str>,
         version: &VersionInfo,
     ) -> StorageResult<VersionedUpdateResult> {
+        self.sink.register(ctx.governor);
+        let settings = ctx.settings;
         let from = self.prefixed_path(from);
         let to = self.prefixed_path(to);
 
@@ -685,15 +705,16 @@ impl Storage for ObjectStorage {
         }
     }
 
-    #[instrument(skip(self, settings))]
-    async fn list_objects<'a>(
+    #[instrument(name = "list_objects", skip(self, ctx))]
+    async fn list_objects_raw<'a>(
         &'a self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         prefix: &str,
     ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
+        self.sink.register(ctx.governor);
         let prefix = ObjectPath::from(format!("{}/{}", self.backend.prefix(), prefix));
         let stream =
-            self.get_client(settings, Role::Read).await?.list(Some(&prefix)).map(
+            self.get_client(ctx.settings, Role::Read).await?.list(Some(&prefix)).map(
                 move |object| {
                     let prefix = prefix.clone();
                     object
@@ -704,13 +725,15 @@ impl Storage for ObjectStorage {
         Ok(stream.boxed())
     }
 
-    #[instrument(skip(self, batch))]
-    async fn delete_batch(
+    #[instrument(name = "delete_batch", skip(self, ctx, batch))]
+    async fn delete_batch_raw(
         &self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         prefix: &str,
         batch: Vec<(String, u64)>,
     ) -> StorageResult<DeleteObjectsResult> {
+        self.sink.register(ctx.governor);
+        let settings = ctx.settings;
         let mut sizes = HashMap::new();
         let mut ids = Vec::new();
         for (id, size) in batch {
@@ -741,15 +764,16 @@ impl Storage for ObjectStorage {
         Ok(res)
     }
 
-    #[instrument(skip(self, settings))]
-    async fn get_object_last_modified(
+    #[instrument(name = "get_object_last_modified", skip(self, ctx))]
+    async fn get_object_last_modified_raw(
         &self,
+        ctx: &StorageContext<'_>,
         path: &str,
-        settings: &Settings,
     ) -> StorageResult<DateTime<Utc>> {
+        self.sink.register(ctx.governor);
         let path = self.prefixed_path(path);
         let res = self
-            .get_client(settings, Role::Read)
+            .get_client(ctx.settings, Role::Read)
             .await?
             .head(&path)
             .await
@@ -758,15 +782,22 @@ impl Storage for ObjectStorage {
         Ok(res.last_modified)
     }
 
-    #[instrument(skip(self, settings))]
-    async fn get_object_conditional(
+    #[instrument(name = "get_object_conditional", skip(self, ctx, reservation))]
+    async fn get_object_conditional_raw(
         &self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         path: &str,
+        reservation: &MemoryPermit,
         previous_version: Option<&VersionInfo>,
     ) -> StorageResult<GetModifiedResult> {
+        self.sink.register(ctx.governor);
         match self
-            .get_object_range_conditional(settings, path, None, previous_version)
+            .get_object_range_conditional(
+                ctx,
+                path,
+                ObjectRange::Whole(reservation),
+                previous_version,
+            )
             .await
         {
             Ok(Some((stream, new_version))) => {
@@ -778,17 +809,18 @@ impl Storage for ObjectStorage {
         }
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip(self, ctx, target))]
     async fn get_object_range(
         &self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         path: &str,
-        range: Option<&Range<u64>>,
+        target: ObjectRange<'_>,
     ) -> StorageResult<(
         Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>,
         VersionInfo,
     )> {
-        self.get_object_range_conditional(settings, path, range, None).await.map(|v| {
+        self.sink.register(ctx.governor);
+        self.get_object_range_conditional(ctx, path, target, None).await.map(|v| {
             // If we got a result, then we can unwrap safely here:
             // Errors would be in the other branch, and None is only expected
             // if previous_version was passed in function call, but we set it to None
@@ -842,9 +874,9 @@ impl ObjectStorage {
 
     async fn get_object_range_conditional(
         &self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         path: &str,
-        range: Option<&Range<u64>>,
+        target: ObjectRange<'_>,
         previous_version: Option<&VersionInfo>,
     ) -> StorageResult<
         Option<(
@@ -853,7 +885,7 @@ impl ObjectStorage {
         )>,
     > {
         let full_key = self.prefixed_path(path);
-        let range = range.map(|range| {
+        let range = target.range().map(|range| {
             let usize_range = range.start..range.end;
             usize_range.into()
         });
@@ -864,11 +896,17 @@ impl ObjectStorage {
                 .and_then(|v| v.etag().map(|e| e.into())),
             ..Default::default()
         };
-        let res =
-            self.get_client(settings, Role::Read).await?.get_opts(&full_key, opts).await;
+        let res = self
+            .get_client(ctx.settings, Role::Read)
+            .await?
+            .get_opts(&full_key, opts)
+            .await;
 
         match res {
             Ok(result) => {
+                // `meta.size` is the object's total size; on a
+                // whole-object read it trues up the riding reservation
+                target.observe_total_size(result.meta.size);
                 let version = VersionInfo {
                     etag: result.meta.e_tag.as_ref().cloned().map(ETag),
                     generation: result.meta.version.as_ref().cloned().map(Generation),
@@ -889,10 +927,14 @@ pub trait ObjectStoreBackend: Debug + Display + Sync + Send {
     ///
     /// `role` selects which custom-header set (read vs write) the client carries.
     /// Backends without per-role headers (or without an HTTP layer) ignore it.
+    ///
+    /// `sink` receives the throttle signals the built client observes;
+    /// backends without an HTTP layer ignore it.
     fn mk_object_store(
         &self,
         settings: &Settings,
         role: Role,
+        sink: &Arc<ThrottleSink>,
     ) -> Result<Arc<dyn ObjectStore>, StorageError>;
 
     /// Whether this backend's read and write header sets differ.
@@ -952,6 +994,7 @@ impl ObjectStoreBackend for InMemoryObjectStoreBackend {
         &self,
         _settings: &Settings,
         _role: Role,
+        _sink: &Arc<ThrottleSink>,
     ) -> Result<Arc<dyn ObjectStore>, StorageError> {
         Ok(Arc::new(InMemory::new()))
     }
@@ -1009,6 +1052,7 @@ impl ObjectStoreBackend for LocalFileSystemObjectStoreBackend {
         &self,
         _settings: &Settings,
         _role: Role,
+        _sink: &Arc<ThrottleSink>,
     ) -> Result<Arc<dyn ObjectStore>, StorageError> {
         let path = std::fs::canonicalize(&self.path).map_err(|err| {
             if err.kind() == std::io::ErrorKind::NotFound {
@@ -1102,6 +1146,7 @@ impl ObjectStoreBackend for HttpObjectStoreBackend {
         settings: &Settings,
         // HTTP storage is read-only; its `headers` apply to every (read) request.
         _role: Role,
+        sink: &Arc<ThrottleSink>,
     ) -> Result<Arc<dyn ObjectStore>, StorageError> {
         let empty = HashMap::new();
         let config = self.config.as_ref().unwrap_or(&empty);
@@ -1142,6 +1187,7 @@ impl ObjectStoreBackend for HttpObjectStoreBackend {
         let builder = HttpBuilder::new()
             .with_url(&self.url)
             .with_client_options(client_opts)
+            .with_http_connector(GovernedHttpConnector::new(Arc::clone(sink)))
             .with_retry(RetryConfig {
                 backoff: BackoffConfig {
                     init_backoff: core::time::Duration::from_millis(
@@ -1220,6 +1266,7 @@ impl ObjectStoreBackend for S3ObjectStoreBackend {
         &self,
         settings: &Settings,
         role: Role,
+        sink: &Arc<ThrottleSink>,
     ) -> Result<Arc<dyn ObjectStore>, StorageError> {
         let builder = AmazonS3Builder::new();
 
@@ -1260,8 +1307,10 @@ impl ObjectStoreBackend for S3ObjectStoreBackend {
             builder
         };
 
-        // Defaults
+        // Defaults. The connector is attached after the credentials match,
+        // whose `from_env` arm builds a fresh builder.
         let builder = builder
+            .with_http_connector(GovernedHttpConnector::new(Arc::clone(sink)))
             .with_bucket_name(&self.bucket)
             .with_conditional_put(object_store::aws::S3ConditionalPut::ETagMatch)
             .with_config(
@@ -1365,6 +1414,7 @@ impl ObjectStoreBackend for AzureObjectStoreBackend {
         settings: &Settings,
         // TODO: Azure custom-header support
         _role: Role,
+        sink: &Arc<ThrottleSink>,
     ) -> Result<Arc<dyn ObjectStore>, StorageError> {
         let builder = MicrosoftAzureBuilder::new();
 
@@ -1388,7 +1438,10 @@ impl ObjectStoreBackend for AzureObjectStoreBackend {
         };
 
         // Either the account name should be provided or user_emulator should be set to true to use the default account
+        // The connector is attached after the credentials match, whose
+        // `from_env` arm builds a fresh builder.
         let builder = builder
+            .with_http_connector(GovernedHttpConnector::new(Arc::clone(sink)))
             .with_account(&self.account)
             .with_container_name(&self.container)
             .with_config(
@@ -1480,6 +1533,7 @@ impl ObjectStoreBackend for GcsObjectStoreBackend {
         &self,
         settings: &Settings,
         role: Role,
+        sink: &Arc<ThrottleSink>,
     ) -> Result<Arc<dyn ObjectStore>, StorageError> {
         let builder = GoogleCloudStorageBuilder::new();
 
@@ -1514,10 +1568,15 @@ impl ObjectStoreBackend for GcsObjectStoreBackend {
             None | Some(GcsCredentials::FromEnv) => GoogleCloudStorageBuilder::from_env(),
         };
 
-        let builder = builder.with_bucket_name(&self.bucket).with_config(
-            GoogleConfigKey::Client(ClientConfigKey::UserAgent),
-            icechunk_types::user_agent(),
-        );
+        // The connector is attached after the credentials match, whose
+        // `from_env` arm builds a fresh builder.
+        let builder = builder
+            .with_http_connector(GovernedHttpConnector::new(Arc::clone(sink)))
+            .with_bucket_name(&self.bucket)
+            .with_config(
+                GoogleConfigKey::Client(ClientConfigKey::UserAgent),
+                icechunk_types::user_agent(),
+            );
 
         // Add options (user config takes precedence over defaults)
         let builder = self
@@ -1722,8 +1781,8 @@ mod tests {
     use tempfile::TempDir;
 
     use super::{
-        Bytes, ObjectPath, ObjectStorage, ReadbackOutcome, Settings, Storage as _,
-        VersionedUpdateResult,
+        Bytes, ObjectPath, ObjectRange, ObjectStorage, ReadbackOutcome, Settings,
+        Storage as _, StorageContext, VersionedUpdateResult,
     };
     #[cfg(feature = "http")]
     use super::{NonZeroU16, RetriesSettings, Url};
@@ -1798,10 +1857,17 @@ mod tests {
         // quotes turns every conditional copy into a spurious conflict.
         let store = ObjectStorage::new_in_memory().await.unwrap();
         let settings = store.default_settings().await.unwrap();
+        let governor: std::sync::Arc<dyn icechunk_storage::IoGovernor> =
+            std::sync::Arc::new(icechunk_storage::UnlimitedGovernor);
+        let ctx = StorageContext {
+            settings: &settings,
+            governor: &governor,
+            asset: icechunk_storage::Asset::Other,
+        };
         let path = "conditional-roundtrip";
         let version = match store
             .put_object(
-                &settings,
+                &ctx,
                 path,
                 Bytes::from_static(b"payload"),
                 None,
@@ -1818,13 +1884,18 @@ mod tests {
         };
 
         let copied = store
-            .copy_object(&settings, path, "conditional-roundtrip-copy", None, &version)
+            .copy_object(&ctx, path, "conditional-roundtrip-copy", None, &version)
             .await
             .unwrap();
         assert!(matches!(copied, VersionedUpdateResult::Updated { .. }));
 
         let not_modified = store
-            .get_object_range_conditional(&settings, path, None, Some(&version))
+            .get_object_range_conditional(
+                &ctx,
+                path,
+                ObjectRange::unmetered(),
+                Some(&version),
+            )
             .await
             .unwrap();
         assert!(not_modified.is_none());
@@ -2070,15 +2141,22 @@ mod s3_header_tests {
             &[("x-amz-meta-reader", "r")],
             &[("x-amz-acl", "bucket-owner-full-control")],
         );
-        assert!(b.mk_object_store(&Settings::default(), Role::Read).is_ok());
-        assert!(b.mk_object_store(&Settings::default(), Role::Write).is_ok());
+        assert!(
+            b.mk_object_store(&Settings::default(), Role::Read, &Arc::default()).is_ok()
+        );
+        assert!(
+            b.mk_object_store(&Settings::default(), Role::Write, &Arc::default()).is_ok()
+        );
     }
 
     /// An invalid header name surfaces as an error at client-build time.
     #[test]
     fn test_mk_object_store_invalid_header_errs() {
         let b = backend(&[], &[("bad header", "v")]);
-        assert!(b.mk_object_store(&Settings::default(), Role::Write).is_err());
+        assert!(
+            b.mk_object_store(&Settings::default(), Role::Write, &Arc::default())
+                .is_err()
+        );
     }
 
     /// Headers round-trip through serde, and `skip_serializing_if` keeps the
@@ -2131,14 +2209,28 @@ mod http_tests {
     #[test]
     fn test_mk_object_store_opts_only() {
         let b = backend(&[("allow_http", "true")], &[]);
-        assert!(b.mk_object_store(&Settings::default(), super::Role::Read).is_ok());
+        assert!(
+            b.mk_object_store(
+                &Settings::default(),
+                super::Role::Read,
+                &std::sync::Arc::default()
+            )
+            .is_ok()
+        );
     }
 
     /// Store builds with headers only (no opts).
     #[test]
     fn test_mk_object_store_headers_only() {
         let b = backend(&[], &[("Authorization", "Bearer token123")]);
-        assert!(b.mk_object_store(&Settings::default(), super::Role::Read).is_ok());
+        assert!(
+            b.mk_object_store(
+                &Settings::default(),
+                super::Role::Read,
+                &std::sync::Arc::default()
+            )
+            .is_ok()
+        );
     }
 
     /// Store builds when both opts and headers are present — the opts-clobber
@@ -2147,20 +2239,41 @@ mod http_tests {
     fn test_mk_object_store_opts_and_headers() {
         let b =
             backend(&[("allow_http", "true")], &[("Authorization", "Bearer token123")]);
-        assert!(b.mk_object_store(&Settings::default(), super::Role::Read).is_ok());
+        assert!(
+            b.mk_object_store(
+                &Settings::default(),
+                super::Role::Read,
+                &std::sync::Arc::default()
+            )
+            .is_ok()
+        );
     }
 
     /// A header name containing a space is invalid and must return Err.
     #[test]
     fn test_mk_object_store_invalid_header_name() {
         let b = backend(&[], &[("bad header", "value")]);
-        assert!(b.mk_object_store(&Settings::default(), super::Role::Read).is_err());
+        assert!(
+            b.mk_object_store(
+                &Settings::default(),
+                super::Role::Read,
+                &std::sync::Arc::default()
+            )
+            .is_err()
+        );
     }
 
     /// A header value containing a newline is invalid and must return Err.
     #[test]
     fn test_mk_object_store_invalid_header_value() {
         let b = backend(&[], &[("X-Custom", "val\nue")]);
-        assert!(b.mk_object_store(&Settings::default(), super::Role::Read).is_err());
+        assert!(
+            b.mk_object_store(
+                &Settings::default(),
+                super::Role::Read,
+                &std::sync::Arc::default()
+            )
+            .is_err()
+        );
     }
 }

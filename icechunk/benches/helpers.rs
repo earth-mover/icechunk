@@ -349,7 +349,8 @@ pub(crate) async fn setup_repo(
         auth.insert(url_prefix, cred);
     }
 
-    let repository = Repository::create(Some(config), storage, auth, None, false).await?;
+    let repository =
+        Repository::create(Some(config), storage, auth, None, false, None).await?;
 
     let mut session = repository.writable_session("main").await?;
 

@@ -9,6 +9,7 @@ from icechunk._icechunk_python import (
     AncestryGraph,
     AsyncCloseableIterator,
     ChunkStorageStats,
+    IoGovernor,
     PyRepository,
     RepoStatus,
     SpecVersion,
@@ -106,6 +107,7 @@ class Repository:
         authorize_virtual_chunk_access: dict[str, AnyCredential | None] | None = None,
         spec_version: SpecVersion | int | None = None,
         check_clean_root: bool = True,
+        governor: IoGovernor | None = None,
     ) -> Self:
         """
         Create a new Icechunk repository.
@@ -136,6 +138,16 @@ class Repository:
         spec_version : SpecVersion, optional
             Use this version of the spec for the new repository. If not passed, the latest version
             of the spec that was available before the library version release will be used.
+        governor : IoGovernor, optional
+            Inject an I/O governor controlling how this repository performs I/O
+            against object storage. One governor instance can be shared by several
+            repositories to bound their combined resource usage. If not provided, a
+            default governor is built, sized by
+            ``RepositoryConfig.max_concurrent_requests``. See ``icechunk.experimental``.
+
+            !!! warning
+                Experimental: governors and their configuration may change in future
+                releases.
 
         Returns
         -------
@@ -150,6 +162,7 @@ class Repository:
                 authorize_virtual_chunk_access=authorize_virtual_chunk_access,
                 spec_version=spec_version,
                 check_clean_root=check_clean_root,
+                governor=governor,
             )
         )
 
@@ -161,6 +174,7 @@ class Repository:
         authorize_virtual_chunk_access: dict[str, AnyCredential | None] | None = None,
         spec_version: SpecVersion | int | None = None,
         check_clean_root: bool = True,
+        governor: IoGovernor | None = None,
     ) -> Self:
         """
         Create a new Icechunk repository asynchronously.
@@ -191,6 +205,16 @@ class Repository:
         spec_version : SpecVersion, optional
             Use this version of the spec for the new repository. If not passed, the latest version
             of the spec that was available before the library version release will be used.
+        governor : IoGovernor, optional
+            Inject an I/O governor controlling how this repository performs I/O
+            against object storage. One governor instance can be shared by several
+            repositories to bound their combined resource usage. If not provided, a
+            default governor is built, sized by
+            ``RepositoryConfig.max_concurrent_requests``. See ``icechunk.experimental``.
+
+            !!! warning
+                Experimental: governors and their configuration may change in future
+                releases.
 
         Returns
         -------
@@ -205,6 +229,7 @@ class Repository:
                 authorize_virtual_chunk_access=authorize_virtual_chunk_access,
                 spec_version=spec_version,
                 check_clean_root=check_clean_root,
+                governor=governor,
             )
         )
 
@@ -214,6 +239,7 @@ class Repository:
         storage: Storage,
         config: RepositoryConfig | None = None,
         authorize_virtual_chunk_access: dict[str, AnyCredential | None] | None = None,
+        governor: IoGovernor | None = None,
     ) -> Self:
         """
         Open an existing Icechunk repository.
@@ -243,6 +269,16 @@ class Repository:
             environment (or uses anonymous access), which can expose private credentials.
             As a security measure, Icechunk will block access to virtual chunks if the
             container is not authorized using this argument.
+        governor : IoGovernor, optional
+            Inject an I/O governor controlling how this repository performs I/O
+            against object storage. One governor instance can be shared by several
+            repositories to bound their combined resource usage. If not provided, a
+            default governor is built, sized by
+            ``RepositoryConfig.max_concurrent_requests``. See ``icechunk.experimental``.
+
+            !!! warning
+                Experimental: governors and their configuration may change in future
+                releases.
 
         Returns
         -------
@@ -255,6 +291,7 @@ class Repository:
                 storage,
                 config=config,
                 authorize_virtual_chunk_access=authorize_virtual_chunk_access,
+                governor=governor,
             )
         )
 
@@ -264,6 +301,7 @@ class Repository:
         storage: Storage,
         config: RepositoryConfig | None = None,
         authorize_virtual_chunk_access: dict[str, AnyCredential | None] | None = None,
+        governor: IoGovernor | None = None,
     ) -> Self:
         """
         Open an existing Icechunk repository asynchronously.
@@ -293,6 +331,16 @@ class Repository:
             environment (or uses anonymous access), which can expose private credentials.
             As a security measure, Icechunk will block access to virtual chunks if the
             container is not authorized using this argument.
+        governor : IoGovernor, optional
+            Inject an I/O governor controlling how this repository performs I/O
+            against object storage. One governor instance can be shared by several
+            repositories to bound their combined resource usage. If not provided, a
+            default governor is built, sized by
+            ``RepositoryConfig.max_concurrent_requests``. See ``icechunk.experimental``.
+
+            !!! warning
+                Experimental: governors and their configuration may change in future
+                releases.
 
         Returns
         -------
@@ -305,6 +353,7 @@ class Repository:
                 storage,
                 config=config,
                 authorize_virtual_chunk_access=authorize_virtual_chunk_access,
+                governor=governor,
             )
         )
 
@@ -316,6 +365,7 @@ class Repository:
         authorize_virtual_chunk_access: dict[str, AnyCredential | None] | None = None,
         create_version: SpecVersion | int | None = None,
         check_clean_root: bool = True,
+        governor: IoGovernor | None = None,
     ) -> Self:
         """
         Open an existing Icechunk repository or create a new one if it does not exist.
@@ -350,7 +400,16 @@ class Repository:
             Use this version of the spec for the new repository, if it needs to be created.
             If not passed, the latest version of the spec that was available before the
             library version release will be used.
+        governor : IoGovernor, optional
+            Inject an I/O governor controlling how this repository performs I/O
+            against object storage. One governor instance can be shared by several
+            repositories to bound their combined resource usage. If not provided, a
+            default governor is built, sized by
+            ``RepositoryConfig.max_concurrent_requests``. See ``icechunk.experimental``.
 
+            !!! warning
+                Experimental: governors and their configuration may change in future
+                releases.
 
         Returns
         -------
@@ -365,6 +424,7 @@ class Repository:
                 authorize_virtual_chunk_access=authorize_virtual_chunk_access,
                 create_version=create_version,
                 check_clean_root=check_clean_root,
+                governor=governor,
             )
         )
 
@@ -376,6 +436,7 @@ class Repository:
         authorize_virtual_chunk_access: dict[str, AnyCredential | None] | None = None,
         create_version: SpecVersion | int | None = None,
         check_clean_root: bool = True,
+        governor: IoGovernor | None = None,
     ) -> Self:
         """
         Open an existing Icechunk repository or create a new one if it does not exist (async version).
@@ -410,6 +471,16 @@ class Repository:
             Use this version of the spec for the new repository, if it needs to be created.
             If not passed, the latest version of the spec that was available before the
             library version release will be used.
+        governor : IoGovernor, optional
+            Inject an I/O governor controlling how this repository performs I/O
+            against object storage. One governor instance can be shared by several
+            repositories to bound their combined resource usage. If not provided, a
+            default governor is built, sized by
+            ``RepositoryConfig.max_concurrent_requests``. See ``icechunk.experimental``.
+
+            !!! warning
+                Experimental: governors and their configuration may change in future
+                releases.
 
         Returns
         -------
@@ -424,6 +495,7 @@ class Repository:
                 authorize_virtual_chunk_access=authorize_virtual_chunk_access,
                 create_version=create_version,
                 check_clean_root=check_clean_root,
+                governor=governor,
             )
         )
 
@@ -610,6 +682,27 @@ class Repository:
             The repository storage instance.
         """
         return self._repository.storage()
+
+    @property
+    def governor(self) -> IoGovernor:
+        """
+        The I/O governor this repository uses.
+
+        Comparing governors with ``==`` tests whether two repositories share
+        one instance. When the governor is a known concrete type (e.g.
+        ``BandwidthGovernor``), the returned object exposes its knobs and
+        metrics.
+
+        !!! warning
+            Experimental: governors and their configuration may change in future
+            releases.
+
+        Returns
+        -------
+        IoGovernor
+            The governor instance.
+        """
+        return self._repository.governor()
 
     @property
     def authorized_virtual_container_prefixes(self) -> set[str]:

@@ -23,7 +23,7 @@ use icechunk::{
 };
 use noxious_client::{Client, StreamDirection, Toxic, ToxicKind};
 
-use crate::common::Permission;
+use crate::common::{self, Permission};
 
 /// Create S3 storage pointing to toxiproxy (which proxies to `MinIO`)
 fn create_proxied_storage(
@@ -114,6 +114,7 @@ fn create_test_manager(storage: Arc<S3Storage>) -> AssetManager {
         SpecVersionBin::default(),
         1,
         100,
+        common::compat_governor(100),
     )
 }
 
@@ -436,8 +437,11 @@ where
     // arming the toxic, so the byte budget is spent on the trigger path
     // (PUT responses) and not on cold-start traffic.
     let warmup_settings = storage.default_settings().await?;
-    let _: Vec<_> =
-        storage.list_objects(&warmup_settings, "").await?.try_collect().await?;
+    let _: Vec<_> = storage
+        .list_objects(&common::ctx_for(&warmup_settings), "")
+        .await?
+        .try_collect()
+        .await?;
     install_limit_data_toxic(proxy_label, LOST_RESPONSE_TOXIC_NAME, toxic_bytes).await?;
 
     let removal_proxy = proxy_name.clone();
@@ -480,6 +484,7 @@ async fn conditional_put_repro(
                 std::collections::HashMap::new(),
                 Some(SpecVersionBin::default()),
                 false,
+                None,
             )
             .await;
 
@@ -487,7 +492,7 @@ async fn conditional_put_repro(
 
             let list_settings = storage_for_list.default_settings().await?;
             let keys: Vec<String> = storage_for_list
-                .list_objects(&list_settings, "")
+                .list_objects(&common::ctx_for(&list_settings), "")
                 .await?
                 .map_ok(|li| li.id)
                 .try_collect()
@@ -567,7 +572,7 @@ async fn zero_byte_conditional_put_lost_response()
         |storage, settings, toxic_remover| async move {
             let result = storage
                 .put_object(
-                    &settings,
+                    &common::ctx_for(&settings),
                     "zero-byte-test",
                     Bytes::new(),
                     None,

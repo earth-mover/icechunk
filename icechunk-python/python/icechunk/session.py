@@ -1,7 +1,7 @@
 from collections.abc import AsyncIterator, Callable, Iterable, Sequence
 from typing import Any
 
-from icechunk._icechunk_python import ChunkType, PySession, SessionMode
+from icechunk._icechunk_python import ChunkType, IoGovernor, PySession, SessionMode
 from icechunk.config import RepositoryConfig
 from icechunk.conflicts import ConflictSolver
 from icechunk.snapshots import Diff
@@ -105,6 +105,28 @@ class Session:
             The branch that the session is based on if the session is writable, None otherwise.
         """
         return self._session.branch
+
+    @property
+    def governor(self) -> IoGovernor:
+        """
+        The I/O governor this session uses.
+
+        Comparing governors with ``==`` tests whether two sessions share one
+        instance: sessions unpickled from equal governor recipes within one
+        process share a single rebound governor. When the governor is a known
+        concrete type (e.g. ``BandwidthGovernor``), the returned object
+        exposes its knobs and metrics.
+
+        !!! warning
+            Experimental: governors and their configuration may change in future
+            releases.
+
+        Returns
+        -------
+        IoGovernor
+            The governor instance.
+        """
+        return self._session.governor
 
     @property
     def has_uncommitted_changes(self) -> bool:

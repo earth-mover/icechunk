@@ -531,6 +531,9 @@ pub struct RepositoryConfig {
     #[serde(default)]
     pub compression: Option<CompressionConfig>,
 
+    /// Sizes the default compat [`IoGovernor`](crate::storage::IoGovernor)
+    /// built when no governor is injected at `Repository::create`/`open` time.
+    /// Ignored when a governor is injected.
     #[serde(default)]
     pub max_concurrent_requests: Option<u16>,
 

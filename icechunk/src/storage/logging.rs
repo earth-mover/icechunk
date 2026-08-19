@@ -2,7 +2,6 @@
 
 use std::{
     fmt,
-    ops::Range,
     pin::Pin,
     sync::{Arc, Mutex},
 };
@@ -14,9 +13,9 @@ use futures::{Stream, stream::BoxStream};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    DeleteObjectsResult, GetModifiedResult, ListInfo, RepositoryCreation, Settings,
-    Storage, StorageError, StorageInfo, StorageResult, VersionInfo,
-    VersionedUpdateResult,
+    DeleteObjectsResult, GetModifiedResult, ListInfo, MemoryPermit, ObjectRange,
+    RepositoryCreation, Settings, Storage, StorageContext, StorageError, StorageInfo,
+    StorageResult, VersionInfo, VersionedUpdateResult,
 };
 use icechunk_storage::sealed;
 
@@ -70,7 +69,7 @@ impl Storage for LoggingStorage {
 
     async fn put_object(
         &self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         path: &str,
         bytes: Bytes,
         content_type: Option<&str>,
@@ -82,13 +81,13 @@ impl Storage for LoggingStorage {
             .expect("poison lock")
             .push(("put_object".to_string(), path.to_string()));
         self.backend
-            .put_object(settings, path, bytes, content_type, metadata, previous_version)
+            .put_object(ctx, path, bytes, content_type, metadata, previous_version)
             .await
     }
 
-    async fn copy_object(
+    async fn copy_object_raw(
         &self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         from: &str,
         to: &str,
         content_type: Option<&str>,
@@ -98,24 +97,24 @@ impl Storage for LoggingStorage {
             .lock()
             .expect("poison lock")
             .push(("copy_object".to_string(), format!("{from} -> {to}")));
-        self.backend.copy_object(settings, from, to, content_type, version).await
+        self.backend.copy_object_raw(ctx, from, to, content_type, version).await
     }
 
-    async fn list_objects<'a>(
+    async fn list_objects_raw<'a>(
         &'a self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         prefix: &str,
     ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
         self.fetch_log
             .lock()
             .expect("poison lock")
             .push(("list_objects".to_string(), prefix.to_string()));
-        self.backend.list_objects(settings, prefix).await
+        self.backend.list_objects_raw(ctx, prefix).await
     }
 
-    async fn delete_batch(
+    async fn delete_batch_raw(
         &self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         prefix: &str,
         batch: Vec<(String, u64)>,
     ) -> StorageResult<DeleteObjectsResult> {
@@ -123,35 +122,38 @@ impl Storage for LoggingStorage {
             .lock()
             .expect("poison lock")
             .push(("delete_batch".to_string(), prefix.to_string()));
-        self.backend.delete_batch(settings, prefix, batch).await
+        self.backend.delete_batch_raw(ctx, prefix, batch).await
     }
 
-    async fn get_object_last_modified(
+    async fn get_object_last_modified_raw(
         &self,
+        ctx: &StorageContext<'_>,
         path: &str,
-        settings: &Settings,
     ) -> StorageResult<DateTime<Utc>> {
         self.fetch_log
             .lock()
             .expect("poison lock")
             .push(("get_object_last_modified".to_string(), path.to_string()));
-        self.backend.get_object_last_modified(path, settings).await
+        self.backend.get_object_last_modified_raw(ctx, path).await
     }
 
-    async fn get_object_conditional(
+    async fn get_object_conditional_raw(
         &self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         path: &str,
+        reservation: &MemoryPermit,
         previous_version: Option<&VersionInfo>,
     ) -> StorageResult<GetModifiedResult> {
-        self.backend.get_object_conditional(settings, path, previous_version).await
+        self.backend
+            .get_object_conditional_raw(ctx, path, reservation, previous_version)
+            .await
     }
 
     async fn get_object_range(
         &self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         path: &str,
-        range: Option<&Range<u64>>,
+        target: ObjectRange<'_>,
     ) -> StorageResult<(
         Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>,
         VersionInfo,
@@ -160,6 +162,6 @@ impl Storage for LoggingStorage {
             .lock()
             .expect("poison lock")
             .push(("get_object_range".to_string(), path.to_string()));
-        self.backend.get_object_range(settings, path, range).await
+        self.backend.get_object_range(ctx, path, target).await
     }
 }

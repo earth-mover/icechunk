@@ -46,10 +46,11 @@ async fn mk_repo(
             HashMap::new(),
             Some(spec_version),
             true,
+            None,
         )
         .await?)
     } else {
-        Ok(Repository::open(None, storage, HashMap::new()).await?)
+        Ok(Repository::open(None, storage, HashMap::new(), None).await?)
     }
 }
 

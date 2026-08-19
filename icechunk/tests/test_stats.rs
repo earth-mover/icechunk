@@ -98,6 +98,7 @@ async fn do_test_repo_chunks_storage(
         spec_version,
         1,
         DEFAULT_MAX_CONCURRENT_REQUESTS,
+        common::compat_governor(DEFAULT_MAX_CONCURRENT_REQUESTS),
     ));
 
     let repo = Repository::create(
@@ -109,6 +110,7 @@ async fn do_test_repo_chunks_storage(
         Default::default(),
         Some(spec_version),
         true,
+        None,
     )
     .await?;
 
@@ -259,6 +261,7 @@ async fn test_virtual_chunk_deduplication(
         spec_version,
         1,
         DEFAULT_MAX_CONCURRENT_REQUESTS,
+        common::compat_governor(DEFAULT_MAX_CONCURRENT_REQUESTS),
     ));
 
     let repo = Repository::create(
@@ -270,6 +273,7 @@ async fn test_virtual_chunk_deduplication(
         Default::default(),
         Some(spec_version),
         true,
+        None,
     )
     .await?;
 

@@ -62,6 +62,10 @@ benchmark = [
   "coiled",
   "toolz",
 ]
+# benchmarks/io_governor_ab (governor A/B harness). Not in `benchmark`: that group is a
+# pixi feature in the default solve-group, so adding deps there invalidates
+# the tracked pixi.lock; this group is not referenced by any pixi environment.
+io-governor-ab = ["arraylake", "rich"]
 docs = [
   "scipy",
   "cftime",

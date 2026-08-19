@@ -12,6 +12,7 @@ use crate::{
     format::SnapshotId,
     ops::gc::{ExpireResult, ExpiredRefAction, GCError, GCResult},
     refs::{Ref, delete_branch, delete_tag, list_refs},
+    storage::Asset,
 };
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -52,7 +53,10 @@ pub async fn expire_ref(
     older_than: DateTime<Utc>,
 ) -> GCResult<ExpireRefResult> {
     let snap_id = reference
-        .fetch(asset_manager.storage().as_ref(), asset_manager.storage_settings())
+        .fetch(
+            asset_manager.storage().as_ref(),
+            &asset_manager.storage_context(Asset::Ref),
+        )
         .await
         .map(|ref_data| ref_data.snapshot)?;
 
@@ -167,9 +171,9 @@ pub async fn expire(
     expired_tags: ExpiredRefAction,
 ) -> GCResult<ExpireResult> {
     let storage = asset_manager.storage().as_ref();
-    let storage_settings = asset_manager.storage_settings();
+    let ctx = asset_manager.storage_context(Asset::Ref);
 
-    let all_refs = stream::iter(list_refs(storage, storage_settings).await?);
+    let all_refs = stream::iter(list_refs(storage, &ctx).await?);
     let asset_manager = Arc::clone(&asset_manager);
 
     all_refs
@@ -198,7 +202,7 @@ pub async fn expire(
                     Ref::Tag(name) => {
                         if expired_tags == ExpiredRefAction::Delete {
                             tracing::info!(name, "Deleting expired tag");
-                            delete_tag(storage, storage_settings, name.as_str())
+                            delete_tag(storage, &ctx, name.as_str())
                                 .await
                                 .map_err(GCError::Ref)?;
                             result.deleted_refs.insert(r);
@@ -209,7 +213,7 @@ pub async fn expire(
                             && name != Ref::DEFAULT_BRANCH
                         {
                             tracing::info!(name, "Deleting expired branch");
-                            delete_branch(storage, storage_settings, name.as_str())
+                            delete_branch(storage, &ctx, name.as_str())
                                 .await
                                 .map_err(GCError::Ref)?;
                             result.deleted_refs.insert(r);

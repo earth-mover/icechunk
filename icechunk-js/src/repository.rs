@@ -218,6 +218,7 @@ impl JsRepository {
             creds,
             version,
             check_clean_root.unwrap_or(true),
+            None,
         )
         .await
         .map_napi_err()?;
@@ -232,7 +233,7 @@ impl JsRepository {
     ) -> napi::Result<JsRepository> {
         let config = convert_config(config)?;
         let creds = convert_credentials(authorize_virtual_chunk_access);
-        let repo = Repository::open(config, Arc::clone(&storage.0), creds)
+        let repo = Repository::open(config, Arc::clone(&storage.0), creds, None)
             .await
             .map_napi_err()?;
         Ok(JsRepository(Arc::new(RwLock::new(repo))))
@@ -258,6 +259,7 @@ impl JsRepository {
             creds,
             version,
             check_clean_root.unwrap_or(true),
+            None,
         )
         .await
         .map_napi_err()?;

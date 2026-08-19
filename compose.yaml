@@ -6,7 +6,7 @@ volumes:
 services:
   rustfs:
     container_name: icechunk_rustfs
-    image: rustfs/rustfs:1.0.0-beta.6
+    image: rustfs/rustfs:1.0.0-rc.1
     hostname: rustfs
     healthcheck:
       test: curl 127.0.0.1:9000/health
@@ -30,7 +30,7 @@ services:
 
   rustfs_init:
     container_name: icechunk_rustfs_init
-    image: rustfs/rc:v0.1.19
+    image: rustfs/rc:v0.1.31
     restart: "no"
     depends_on:
       rustfs:
@@ -41,17 +41,20 @@ services:
       - '-c'
       - |
         set -ex
+        # the rc image's default workdir is not writable
+        cd /tmp
 
         rc alias set local http://rustfs:9000 test123 test123
         rc admin user add local readonly basicuser
 
+        # no "Principal" field: rustfs rejects it in user policies, and the
+        # attach step already names the user
         echo '{
           "Version": "2012-10-17",
           "Statement": [
             {
               "Sid": "AllowGetObjectOnly",
               "Effect": "Allow",
-              "Principal": { "AWS": ["readonly"] },
               "Action": [
                 "s3:GetObject"
               ],
@@ -74,7 +77,6 @@ services:
             {
               "Sid": "AllowToModify",
               "Effect": "Allow",
-              "Principal": { "AWS": ["modify"] },
               "Action": [
                 "s3:GetObject",
                 "s3:PutObject",

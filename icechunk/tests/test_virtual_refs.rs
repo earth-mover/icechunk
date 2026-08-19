@@ -17,10 +17,11 @@ use icechunk::{
     repository::VersionInfo,
     session::{SessionError, SessionErrorKind, get_chunk},
     storage::{
-        self, ConcurrencySettings, ETag, ObjectStorage, mk_client, new_s3_storage,
+        self, Asset, ConcurrencySettings, Direction, ETag, IoClass, IoGovernor,
+        ObjectStorage, mk_client, new_s3_storage,
     },
     store::{StoreError, StoreErrorKind},
-    virtual_chunks::VirtualChunkContainer,
+    virtual_chunks::{VirtualChunkContainer, VirtualChunkResolver},
 };
 use icechunk_macros::tokio_test;
 use rstest::rstest;
@@ -28,10 +29,15 @@ use rstest_reuse::{self, *};
 use std::{
     collections::{HashMap, HashSet},
     error::Error,
+    num::{NonZeroU16, NonZeroU64},
     path::PathBuf,
+    sync::atomic::Ordering,
+    time::Duration,
     vec,
 };
 use std::{path::Path as StdPath, sync::Arc};
+
+use crate::common;
 use tempfile::TempDir;
 use tokio::sync::RwLock;
 
@@ -83,6 +89,7 @@ async fn create_repository(
         credentials,
         Some(spec_version),
         true,
+        None,
     )
     .await
     .expect("Failed to initialize repository")
@@ -320,7 +327,7 @@ async fn write_chunks_to_azure(
     for (chunk_id, bytes) in chunks {
         storage
             .put_object(
-                &storage::Settings::default(),
+                &common::ctx_for(&storage::Settings::default()),
                 format!("chunks/{chunk_id}").as_str(),
                 bytes,
                 None,
@@ -1235,6 +1242,7 @@ async fn test_zarr_store_with_multiple_virtual_chunk_containers(
         virtual_creds,
         Some(spec_version),
         true,
+        None,
     )
     .await?;
 
@@ -1476,8 +1484,9 @@ async fn test_virtual_refs_with_vcc_relative_urls(
     let creds: HashMap<String, Option<Credentials>> =
         [(format!("file://{}", chunk_dir.path().to_str().unwrap()), None)].into();
 
-    let repo = Repository::create(Some(config), storage, creds, Some(spec_version), true)
-        .await?;
+    let repo =
+        Repository::create(Some(config), storage, creds, Some(spec_version), true, None)
+            .await?;
 
     let session = repo.writable_session("main").await?;
     let store = Store::from_session(Arc::new(RwLock::new(session))).await;
@@ -1603,9 +1612,15 @@ async fn test_vcc_relative_ref_rejects_file_traversal() -> Result<(), Box<dyn Er
     let mut config = RepositoryConfig::default();
     config.set_virtual_chunk_container(container)?;
     let creds: HashMap<String, Option<Credentials>> = [(prefix, None)].into();
-    let repo =
-        Repository::create(Some(config), storage, creds, Some(SpecVersionBin::V2), true)
-            .await?;
+    let repo = Repository::create(
+        Some(config),
+        storage,
+        creds,
+        Some(SpecVersionBin::V2),
+        true,
+        None,
+    )
+    .await?;
 
     let mut ds = repo.writable_session("main").await?;
     let path: Path = "/a".try_into().unwrap();
@@ -1650,5 +1665,86 @@ async fn test_vcc_relative_ref_rejects_file_traversal() -> Result<(), Box<dyn Er
         ),
         "vcc://->file traversal must be rejected with NoContainerForUrl, got: {read:?}"
     );
+    Ok(())
+}
+
+fn local_fs_resolver(
+    dir: &StdPath,
+    settings: storage::Settings,
+) -> (VirtualChunkResolver, String) {
+    let prefix = format!("file://{}/", dir.to_str().unwrap());
+    let container = VirtualChunkContainer::new(
+        prefix.clone(),
+        ObjectStoreConfig::LocalFileSystem(PathBuf::new()),
+    )
+    .unwrap();
+    let resolver = VirtualChunkResolver::new(
+        [container].into_iter(),
+        [(prefix.clone(), None)].into(),
+        settings,
+    );
+    (resolver, prefix)
+}
+
+#[tokio_test]
+async fn test_virtual_fetch_governor_accounting() -> Result<(), Box<dyn Error>> {
+    let dir = TempDir::new()?;
+    let data = Bytes::from(vec![42u8; 100]);
+    std::fs::write(dir.path().join("chunk.bin"), &data)?;
+
+    // split every fetch into 5 governed requests of 20 bytes
+    let settings = storage::Settings {
+        concurrency: Some(ConcurrencySettings {
+            max_concurrent_requests_for_object: Some(NonZeroU16::new(5).unwrap()),
+            ideal_concurrent_request_size: Some(NonZeroU64::new(20).unwrap()),
+        }),
+        ..Default::default()
+    };
+    let (resolver, prefix) = local_fs_resolver(dir.path(), settings);
+
+    let gov = Arc::new(common::CountingGovernor::default());
+    let counters = Arc::clone(&gov.counters);
+    let governor: Arc<dyn IoGovernor> = gov;
+
+    let location = format!("{prefix}chunk.bin");
+    let bytes = resolver.fetch_chunk(&governor, &location, &(0..100), None).await?;
+    assert_eq!(bytes, data);
+
+    assert_eq!(
+        counters.reserves(),
+        vec![IoClass { direction: Direction::Read, asset: Asset::VirtualChunk }]
+    );
+    assert_eq!(counters.read_acquires.load(Ordering::SeqCst), 5);
+    assert_eq!(counters.write_acquires.load(Ordering::SeqCst), 0);
+    assert_eq!(counters.ok_bytes(Direction::Read), 100);
+    Ok(())
+}
+
+// With the compat governor, virtual reads consume the same units as native
+// reads: while a native read holds the only unit, a virtual fetch must wait.
+#[tokio_test]
+async fn test_virtual_reads_contend_with_native_reads() -> Result<(), Box<dyn Error>> {
+    let dir = TempDir::new()?;
+    let data = Bytes::from(vec![1u8; 10]);
+    std::fs::write(dir.path().join("chunk.bin"), &data)?;
+    let (resolver, prefix) = local_fs_resolver(dir.path(), Default::default());
+
+    let governor = common::compat_governor(1);
+
+    // what AssetManager::fetch_chunk holds while a native read is in flight
+    let native_read = governor
+        .reserve_memory(IoClass { direction: Direction::Read, asset: Asset::Chunk }, None)
+        .await;
+
+    let location = format!("{prefix}chunk.bin");
+    let fetch = resolver.fetch_chunk(&governor, &location, &(0..10), None);
+    tokio::pin!(fetch);
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), fetch.as_mut()).await.is_err(),
+        "virtual fetch must block while a native read holds the only unit"
+    );
+
+    drop(native_read);
+    assert_eq!(fetch.await?, data);
     Ok(())
 }

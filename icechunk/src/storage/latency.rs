@@ -2,7 +2,6 @@
 
 use std::{
     fmt,
-    ops::Range,
     pin::Pin,
     sync::{
         Arc,
@@ -18,9 +17,9 @@ use futures::{Stream, stream::BoxStream};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    DeleteObjectsResult, GetModifiedResult, ListInfo, RepositoryCreation, Settings,
-    Storage, StorageError, StorageInfo, StorageResult, VersionInfo,
-    VersionedUpdateResult,
+    DeleteObjectsResult, GetModifiedResult, ListInfo, MemoryPermit, ObjectRange,
+    RepositoryCreation, Settings, Storage, StorageContext, StorageError, StorageInfo,
+    StorageResult, VersionInfo, VersionedUpdateResult,
 };
 use icechunk_storage::sealed;
 
@@ -98,7 +97,7 @@ impl Storage for LatencyStorage {
 
     async fn put_object(
         &self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         path: &str,
         bytes: Bytes,
         content_type: Option<&str>,
@@ -107,73 +106,76 @@ impl Storage for LatencyStorage {
     ) -> StorageResult<VersionedUpdateResult> {
         self.sleep_for_write().await;
         self.backend
-            .put_object(settings, path, bytes, content_type, metadata, previous_version)
+            .put_object(ctx, path, bytes, content_type, metadata, previous_version)
             .await
     }
 
-    async fn copy_object(
+    async fn copy_object_raw(
         &self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         from: &str,
         to: &str,
         content_type: Option<&str>,
         version: &VersionInfo,
     ) -> StorageResult<VersionedUpdateResult> {
         self.sleep_for_write().await;
-        self.backend.copy_object(settings, from, to, content_type, version).await
+        self.backend.copy_object_raw(ctx, from, to, content_type, version).await
     }
 
-    async fn list_objects<'a>(
+    async fn list_objects_raw<'a>(
         &'a self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         prefix: &str,
     ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
         // NOTE: this only sleeps on the initial call. The underlying stream
         // pages back to storage every ~1k keys without additional delays.
         self.sleep_for_read().await;
-        self.backend.list_objects(settings, prefix).await
+        self.backend.list_objects_raw(ctx, prefix).await
     }
 
-    async fn delete_batch(
+    async fn delete_batch_raw(
         &self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         prefix: &str,
         batch: Vec<(String, u64)>,
     ) -> StorageResult<DeleteObjectsResult> {
         self.sleep_for_write().await;
-        self.backend.delete_batch(settings, prefix, batch).await
+        self.backend.delete_batch_raw(ctx, prefix, batch).await
     }
 
-    async fn get_object_last_modified(
+    async fn get_object_last_modified_raw(
         &self,
+        ctx: &StorageContext<'_>,
         path: &str,
-        settings: &Settings,
     ) -> StorageResult<DateTime<Utc>> {
         self.sleep_for_read().await;
-        self.backend.get_object_last_modified(path, settings).await
+        self.backend.get_object_last_modified_raw(ctx, path).await
     }
 
-    async fn get_object_conditional(
+    async fn get_object_conditional_raw(
         &self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         path: &str,
+        reservation: &MemoryPermit,
         previous_version: Option<&VersionInfo>,
     ) -> StorageResult<GetModifiedResult> {
         self.sleep_for_read().await;
-        self.backend.get_object_conditional(settings, path, previous_version).await
+        self.backend
+            .get_object_conditional_raw(ctx, path, reservation, previous_version)
+            .await
     }
 
     async fn get_object_range(
         &self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         path: &str,
-        range: Option<&Range<u64>>,
+        target: ObjectRange<'_>,
     ) -> StorageResult<(
         Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>,
         VersionInfo,
     )> {
         self.sleep_for_read().await;
-        self.backend.get_object_range(settings, path, range).await
+        self.backend.get_object_range(ctx, path, target).await
     }
 }
 
@@ -184,9 +186,17 @@ mod tests {
 
     #[tokio::test]
     async fn storage_with_latency() {
+        use crate::storage::{Asset, IoGovernor, UnlimitedGovernor};
+
         let backend = new_in_memory_storage().await.unwrap();
         let storage = LatencyStorage::new(backend, 0, 0);
         let settings = storage.default_settings().await.unwrap();
+        let governor: Arc<dyn IoGovernor> = Arc::new(UnlimitedGovernor);
+        let ctx = StorageContext {
+            settings: &settings,
+            governor: &governor,
+            asset: Asset::Other,
+        };
 
         // Add 500ms write latency, 300ms read latency
         storage.set_write_delay_ms(500);
@@ -194,13 +204,16 @@ mod tests {
 
         let start = std::time::Instant::now();
         storage
-            .put_object(&settings, "test/key", "hello".into(), None, vec![], None)
+            .put_object(&ctx, "test/key", "hello".into(), None, vec![], None)
             .await
             .unwrap();
         let write_with_latency = start.elapsed();
 
         let start = std::time::Instant::now();
-        let _ = storage.get_object_range(&settings, "test/key", None).await.unwrap();
+        let _ = storage
+            .get_object_range(&ctx, "test/key", ObjectRange::unmetered())
+            .await
+            .unwrap();
         let read_with_latency = start.elapsed();
 
         // Allow some wiggle room for scheduling jitter

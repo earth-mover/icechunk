@@ -1513,7 +1513,7 @@ mod tests {
     ) -> Repository {
         let storage =
             new_in_memory_storage().await.expect("failed to create in-memory store");
-        Repository::create(None, storage, HashMap::new(), spec_version, true)
+        Repository::create(None, storage, HashMap::new(), spec_version, true, None)
             .await
             .unwrap()
     }
@@ -2928,8 +2928,9 @@ mod tests {
                 .expect("could not create storage"),
         );
 
-        let repo =
-            Repository::create(None, storage, HashMap::new(), None, true).await.unwrap();
+        let repo = Repository::create(None, storage, HashMap::new(), None, true, None)
+            .await
+            .unwrap();
         let ds = Arc::new(RwLock::new(repo.writable_session("main").await.unwrap()));
         let store = Store::from_session(Arc::clone(&ds)).await;
         store

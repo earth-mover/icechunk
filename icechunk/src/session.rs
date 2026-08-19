@@ -60,7 +60,7 @@ use crate::{
     },
     refs::{RefError, RefErrorKind, fetch_branch_tip_v1, update_branch},
     repository::{RepositoryError, RepositoryErrorKind, RepositoryResult},
-    storage::{self, StorageErrorKind},
+    storage::{self, Asset, IoGovernor, StorageContext, StorageErrorKind},
     virtual_chunks::{VirtualChunkContainer, VirtualChunkResolver},
 };
 use icechunk_types::{ICResultExt as _, error::ICResultCtxExt as _};
@@ -626,6 +626,11 @@ impl Session {
 
     pub fn config(&self) -> &RepositoryConfig {
         &self.config
+    }
+
+    /// The [`IoGovernor`] gating all I/O done through this session.
+    pub fn governor(&self) -> &Arc<dyn IoGovernor> {
+        self.asset_manager.governor()
     }
 
     pub fn matching_container(
@@ -1304,9 +1309,15 @@ impl Session {
             })) => {
                 let byte_range = construct_valid_byte_range(byte_range, offset, length)?;
                 let resolver = Arc::clone(&self.virtual_resolver);
+                let governor = Arc::clone(self.asset_manager.governor());
                 Ok(Some(crate::compat::ic_boxed!(async move {
                     resolver
-                        .fetch_chunk(location.url(), &byte_range, checksum.as_ref())
+                        .fetch_chunk(
+                            &governor,
+                            location.url(),
+                            &byte_range,
+                            checksum.as_ref(),
+                        )
                         .await
                         .inject()
                 })))
@@ -2021,7 +2032,7 @@ impl Session {
     ) -> SessionResult<Vec<SnapshotId>> {
         let ref_data = match fetch_branch_tip_v1(
             self.storage.as_ref(),
-            self.storage_settings.as_ref(),
+            &self.asset_manager.storage_context(Asset::Ref),
             branch_name,
         )
         .await
@@ -3241,7 +3252,7 @@ async fn do_commit(
         SpecVersionBin::V1 => {
             do_commit_v1(
                 asset_manager.storage().as_ref(),
-                asset_manager.storage_settings(),
+                &asset_manager.storage_context(Asset::Ref),
                 branch_name,
                 snapshot_id,
                 new_snapshot_id.clone(),
@@ -3290,7 +3301,7 @@ async fn do_commit(
 
 async fn do_commit_v1(
     storage: &dyn Storage,
-    storage_settings: &storage::Settings,
+    ctx: &StorageContext<'_>,
     branch_name: &str,
     parent_snapshot_id: &SnapshotId,
     new_snapshot_id: SnapshotId,
@@ -3298,7 +3309,7 @@ async fn do_commit_v1(
     debug!(branch_name, new_snapshot_id=%new_snapshot_id, "Updating branch");
     match update_branch(
         storage,
-        storage_settings,
+        ctx,
         branch_name,
         new_snapshot_id,
         Some(parent_snapshot_id),
@@ -3495,8 +3506,9 @@ mod tests {
             manifest::{ManifestExtents, ManifestSplits},
             repo_info::RepoInfo,
         },
+        governors::CompatGovernorConfig,
         repository::VersionInfo,
-        storage::new_in_memory_storage,
+        storage::{GovernorFactory as _, new_in_memory_storage},
         strategies::{
             ShapeDim, chunk_indices, empty_writable_session, node_paths, shapes_and_dims,
         },
@@ -3532,7 +3544,7 @@ mod tests {
     async fn create_memory_store_repository(spec_version: SpecVersionBin) -> Repository {
         let storage =
             new_in_memory_storage().await.expect("failed to create in-memory store");
-        Repository::create(None, storage, HashMap::new(), Some(spec_version), true)
+        Repository::create(None, storage, HashMap::new(), Some(spec_version), true, None)
             .await
             .unwrap()
     }
@@ -3829,6 +3841,7 @@ mod tests {
             HashMap::new(),
             Some(SpecVersionBin::V2),
             true,
+            None,
         )
         .await?;
         let (array_path, bytes, snapshot) = write_array_and_commit(&repo, None).await?;
@@ -3921,6 +3934,7 @@ mod tests {
             HashMap::new(),
             Some(spec_version),
             true,
+            None,
         )
         .await?;
         let mut session = repo.writable_session("main").await?;
@@ -4041,6 +4055,7 @@ mod tests {
             SpecVersionBin::current(),
             1,
             100,
+            CompatGovernorConfig { max_concurrent_requests: 100 }.build(),
         );
 
         let array_id = NodeId::random();
@@ -4129,6 +4144,7 @@ mod tests {
             Arc::clone(&storage),
             &RepositoryConfig::default(),
             &storage::VersionInfo::for_creation(),
+            Arc::clone(asset_manager.governor()),
         )
         .await?;
         let repo_info = RepoInfo::initial(
@@ -4152,7 +4168,7 @@ mod tests {
         )?;
         asset_manager.create_repo_info(Arc::new(repo_info)).await?;
 
-        let repo = Repository::open(None, storage, HashMap::new()).await?;
+        let repo = Repository::open(None, storage, HashMap::new(), None).await?;
         let mut ds = repo.writable_session("main").await?;
 
         // retrieve the old array node
@@ -4349,6 +4365,7 @@ mod tests {
             HashMap::new(),
             Some(spec_version),
             true,
+            None,
         )
         .await?;
 
@@ -4814,9 +4831,15 @@ mod tests {
         #[case] spec_version: SpecVersionBin,
     ) -> Result<(), Box<dyn Error>> {
         let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
-        let repo =
-            Repository::create(None, storage, HashMap::new(), Some(spec_version), true)
-                .await?;
+        let repo = Repository::create(
+            None,
+            storage,
+            HashMap::new(),
+            Some(spec_version),
+            true,
+            None,
+        )
+        .await?;
         let mut ds = repo.writable_session("main").await?;
         let def = Bytes::copy_from_slice(b"");
 
@@ -4896,6 +4919,7 @@ mod tests {
             HashMap::new(),
             Some(spec_version),
             true,
+            None,
         )
         .await?;
 
@@ -5723,6 +5747,7 @@ mod tests {
             HashMap::new(),
             Some(SpecVersionBin::current()),
             true,
+            None,
         )
         .await?;
         let mut session = repo.writable_session("main").await?;
@@ -5847,6 +5872,7 @@ mod tests {
             HashMap::new(),
             Some(SpecVersionBin::current()),
             true,
+            None,
         )
         .await?;
         let mut session = repo.writable_session("main").await?;
@@ -5889,6 +5915,7 @@ mod tests {
             HashMap::new(),
             Some(spec_version),
             true,
+            None,
         )
         .await?;
         let mut ds = repo.writable_session("main").await?;
@@ -5961,6 +5988,7 @@ mod tests {
             HashMap::new(),
             Some(spec_version),
             true,
+            None,
         )
         .await?;
         let mut session = repo.writable_session("main").await?;
@@ -6016,6 +6044,7 @@ mod tests {
             HashMap::new(),
             Some(spec_version),
             true,
+            None,
         )
         .await?;
         let mut session = repo.writable_session("main").await?;

@@ -76,3 +76,7 @@ coverage.xml
 .mypy_cache/
 
 .benchmarks/
+
+# governor A/B benchmark artifacts (benchmarks/io_governor_ab)
+io-governor-ab-*.json
+bench-ab-*.json
