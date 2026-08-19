@@ -49,7 +49,7 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Build wheels
-        run: just build-wheels
+        run: just profile=ci-wheel build-wheels
 
       - name: Upload wheels
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -166,7 +166,7 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Build wheels
-        run: just build-wheels
+        run: just profile=ci-wheel build-wheels
         env:
           PYTHON_VERSION: "3.14t"
 
@@ -216,6 +216,9 @@ jobs:
   test-hypothesis-shard:
     name: test-hypothesis-shard (${{ matrix.shard-id }})
     runs-on: ubuntu-latest
+    # PRs and main already run hypothesis on these exact commits; skipping in
+    # the merge queue keeps it off the merge-gating critical path
+    if: github.event_name != 'merge_group'
     needs: [build-wheels]
     strategy:
       fail-fast: false
@@ -298,10 +301,12 @@ jobs:
           path: icechunk-python/.hypothesis/
           key: cache-hypothesis-${{ runner.os }}-shard${{ matrix.shard-id }}-${{ github.run_id }}
 
-        # Aggregation job preserves the required "test-hypothesis" check name
+        # Aggregation job preserves the required "test-hypothesis" check name;
+        # skipped on merge_group along with the shards (a skipped required
+        # check counts as passing)
   test-hypothesis:
     name: test-hypothesis
-    if: always()
+    if: always() && github.event_name != 'merge_group'
     needs: [test-hypothesis-shard]
     runs-on: ubuntu-latest
     steps:
