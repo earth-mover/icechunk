@@ -41,7 +41,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: prefix-dev/setup-pixi@a09b6247153796b190642a2b53fac4241043cf6f # v0.10.0
+      - uses: prefix-dev/setup-pixi@f00437f565399d418b0acc85936d12c1fb668347 # v0.10.1
         with:
           pixi-version: ${{ env.PIXI_VERSION }}
           cache: false
@@ -218,7 +218,7 @@ jobs:
 
       - name: Generate and publish the pytest report
         if: needs.build.outputs.pytest-outcome == 'failure'
-        uses: xarray-contrib/issue-from-pytest-log@054799b34bd75a5fd6c86277a4a8a575224e60c6 # v1.6.1
+        uses: xarray-contrib/issue-from-pytest-log@35b4e0a9e06f8e7e261778289cf4b968b722662d # v1.6.2
         with:
           log-path: icechunk-python/output-pytest-log.jsonl
 
@@ -238,7 +238,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: prefix-dev/setup-pixi@a09b6247153796b190642a2b53fac4241043cf6f # v0.10.0
+      - uses: prefix-dev/setup-pixi@f00437f565399d418b0acc85936d12c1fb668347 # v0.10.1
         with:
           pixi-version: ${{ env.PIXI_VERSION }}
           cache: false
@@ -292,7 +292,7 @@ jobs:
           path: xarray-backends-logs
 
       - name: Generate and publish the xarray backends report
-        uses: xarray-contrib/issue-from-pytest-log@054799b34bd75a5fd6c86277a4a8a575224e60c6 # v1.6.1
+        uses: xarray-contrib/issue-from-pytest-log@35b4e0a9e06f8e7e261778289cf4b968b722662d # v1.6.2
         with:
           log-path: xarray-backends-logs/output-pytest-log.jsonl
           issue-title: "Nightly Xarray backends tests failed"

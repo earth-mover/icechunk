@@ -56,7 +56,7 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
-      - uses: prefix-dev/setup-pixi@a09b6247153796b190642a2b53fac4241043cf6f # v0.10.0
+      - uses: prefix-dev/setup-pixi@f00437f565399d418b0acc85936d12c1fb668347 # v0.10.1
         with:
           pixi-version: ${{ env.PIXI_VERSION }}
           cache: false
@@ -83,7 +83,7 @@ jobs:
         run: just contwait
 
       - name: Cache Dependencies
-        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
         with:
           # The rust cache includes a dep on the Python version (when building icechunk-python)
           # so we need to bump the version here whenever Python version is updated
@@ -194,7 +194,7 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
-      - uses: prefix-dev/setup-pixi@a09b6247153796b190642a2b53fac4241043cf6f # v0.10.0
+      - uses: prefix-dev/setup-pixi@f00437f565399d418b0acc85936d12c1fb668347 # v0.10.1
         with:
           pixi-version: ${{ env.PIXI_VERSION }}
           cache: false
@@ -204,7 +204,7 @@ jobs:
       # Runs after setup-pixi so the cache key hashes the pixi-pinned rustc,
       # not the runner image's drifting rustup stable
       - name: Cache Dependencies
-        uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
+        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
         with:
           # The rust cache includes a dep on the Python version (when building icechunk-python)
           # so we need to bump the version here whenever Python version is updated
@@ -236,7 +236,7 @@ jobs:
           persist-credentials: false
 
       - name: Install just
-        uses: taiki-e/install-action@a6b2e2dcd845ddd7f509ce4f3ed3d922b80cc5d9 # v2
+        uses: taiki-e/install-action@82cd3e7658a6f96c86c0234aeeda1748937cb0a1 # v2
         env:
           GITHUB_TOKEN: ${{ github.token }}
         with:
@@ -262,7 +262,7 @@ jobs:
           test -f /usr/include/wasm32-wasi/limits.h && echo "found /usr/include/wasm32-wasi/limits.h"
 
       - name: Cache Dependencies
-        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
         with:
           key: wasm-${{ env.MSRV }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
