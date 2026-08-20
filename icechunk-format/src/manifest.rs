@@ -465,6 +465,17 @@ pub enum ChunkPayload {
     Ref(ChunkRef),
 }
 
+impl ChunkPayload {
+    /// Number of bytes of chunk data this payload refers to.
+    pub fn length(&self) -> ChunkLength {
+        match self {
+            ChunkPayload::Inline(bytes) => bytes.len() as ChunkLength,
+            ChunkPayload::Virtual(VirtualChunkRef { length, .. }) => *length,
+            ChunkPayload::Ref(ChunkRef { length, .. }) => *length,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ChunkInfo {
     pub node: NodeId,
