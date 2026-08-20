@@ -25,6 +25,7 @@ __metadata:
     "@tybys/wasm-util": "npm:^0.10.1"
     ava: "npm:^8.0.0"
     chalk: "npm:^6.0.0"
+    emnapi: "npm:^1.8.1"
     husky: "npm:^9.1.7"
     lint-staged: "npm:^17.0.5"
     npm-run-all2: "npm:^9.0.0"
@@ -1938,6 +1939,18 @@ __metadata:
   version: 2.0.0
   resolution: "emittery@npm:2.0.0"
   checksum: 10c0/b8b5836e9fd368670e1ce5cb948feef30351ecebfbf589ac807c1f6b38c90d6556b2d48883f9b3c371fad59c92519b333dc3919a8ff5e351aea0f8b424203826
+  languageName: node
+  linkType: hard
+
+"emnapi@npm:^1.8.1":
+  version: 1.11.3
+  resolution: "emnapi@npm:1.11.3"
+  peerDependencies:
+    node-addon-api: ">= 6.1.0"
+  peerDependenciesMeta:
+    node-addon-api:
+      optional: true
+  checksum: 10c0/db54d41a412a6d009f6840bacb4c0076ed27f7305569a1c00ddf1314636f32a266c4a84a9a5d18a7bb7a5f9359aebf2af0f130fdd037c82591fb7b3ea22ccc8a
   languageName: node
   linkType: hard
 

@@ -78,6 +78,7 @@
     "@tybys/wasm-util": "^0.10.1",
     "ava": "^8.0.0",
     "chalk": "^6.0.0",
+    "emnapi": "^1.8.1",
     "husky": "^9.1.7",
     "lint-staged": "^17.0.5",
     "npm-run-all2": "^9.0.0",
