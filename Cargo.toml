@@ -84,7 +84,7 @@ serde_yaml_ng = "0.10.0"
 shuttle = "0.9.1"
 shuttle-tokio = { version = "0.1.0", features = ["rt-multi-thread", "macros"] }
 strsim = "0.11"
-syn = { version = "2.0", features = ["full"] }
+syn = { version = "3.0", features = ["full"] }
 tempfile = "3.27.0"
 test-log = { version = "0.2.21", default-features = false, features = ["trace", "color", "unstable"] }
 test-strategy = "0.4.5"

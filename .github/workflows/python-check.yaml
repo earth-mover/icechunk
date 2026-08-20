@@ -95,14 +95,14 @@ jobs:
           name: test-wheels
           path: icechunk-python/dist
 
-      - name: Restore cached hypothesis directory
+      - name: Restore cached hypothesis examples
         id: restore-hypothesis-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: icechunk-python/.hypothesis/
+          path: icechunk-python/.hypothesis/examples/
           key: cache-hypothesis-${{ runner.os }}-${{ github.run_id }}
           restore-keys: |
-            cache-hypothesis-
+            cache-hypothesis-${{ runner.os }}-
 
       - name: Install dependencies - ${{ matrix.deps-version.name }}
         env:
@@ -227,7 +227,7 @@ jobs:
         # anchors a shard, cheap property tests ride along on the second
         # xdist worker. The last shard collects everything not claimed by the
         # others, so new hypothesis tests always run somewhere.
-        # Ids stay numeric to keep the hypothesis caches keyed on them.
+        # Ids stay numeric to keep the shard artifact names keyed on them.
         include:
           - shard-id: 0
             label: zarr-hierarchy
@@ -260,14 +260,14 @@ jobs:
           name: test-wheels
           path: icechunk-python/dist
 
-      - name: Restore cached hypothesis directory
+      - name: Restore cached hypothesis examples
         id: restore-hypothesis-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: icechunk-python/.hypothesis/
-          key: cache-hypothesis-${{ runner.os }}-shard${{ matrix.shard-id }}-${{ github.run_id }}
+          path: icechunk-python/.hypothesis/examples/
+          key: cache-hypothesis-${{ runner.os }}-${{ github.run_id }}
           restore-keys: |
-            cache-hypothesis-${{ runner.os }}-shard${{ matrix.shard-id }}-
+            cache-hypothesis-${{ runner.os }}-
 
       - name: Install dependencies
         run: just install-test-wheel test
@@ -293,23 +293,42 @@ jobs:
           path: icechunk-python/.coverage-fragments/.coverage.hypothesis-${{ matrix.shard-id }}
           include-hidden-files: true
 
-      - name: Save cached hypothesis directory
-        id: save-hypothesis-cache
-        if: always() && github.ref == 'refs/heads/main'
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        # Failing shards are the ones with fresh failure examples, so upload always
+      - name: Upload hypothesis examples for aggregation
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          path: icechunk-python/.hypothesis/
-          key: cache-hypothesis-${{ runner.os }}-shard${{ matrix.shard-id }}-${{ github.run_id }}
+          name: hypothesis-examples-${{ matrix.shard-id }}
+          path: icechunk-python/.hypothesis/examples/
+          include-hidden-files: true
+          if-no-files-found: ignore
 
-        # Aggregation job preserves the required "test-hypothesis" check name;
-        # skipped on merge_group along with the shards (a skipped required
-        # check counts as passing)
+        # Keeps the required "test-hypothesis" check name; skipped on
+        # merge_group with the shards, because a skipped check does not fail.
   test-hypothesis:
     name: test-hypothesis
     if: always() && github.event_name != 'merge_group'
     needs: [test-hypothesis-shard]
     runs-on: ubuntu-latest
     steps:
+        # continue-on-error: a run where no shard had examples uploads no artifacts
+        # Example files are named by content hash, so shards merge by copy
+      - name: Download hypothesis examples from all shards
+        if: github.ref == 'refs/heads/main'
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: hypothesis-examples-*
+          merge-multiple: true
+          path: icechunk-python/.hypothesis/examples
+
+      - name: Save merged hypothesis examples
+        if: github.ref == 'refs/heads/main' && hashFiles('icechunk-python/.hypothesis/examples/**') != ''
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: icechunk-python/.hypothesis/examples/
+          key: cache-hypothesis-${{ runner.os }}-${{ github.run_id }}
+
       - name: Verify all shards passed
         env:
           SHARDS_RESULT: ${{ needs.test-hypothesis-shard.result }}
