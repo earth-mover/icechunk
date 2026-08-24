@@ -35,6 +35,7 @@ __all__ = [
     "azure_store",
     "gcs_storage",
     "gcs_store",
+    "hf_storage",
     "http_storage",
     "http_store",
     "in_memory_storage",
@@ -568,6 +569,101 @@ def r2_storage(
         account_id=account_id,
         credentials=credentials,
         legacy_rooted_keys=legacy_rooted_keys,
+        read_headers=read_headers,
+        write_headers=write_headers,
+        headers=headers,
+    )
+
+
+def hf_storage(
+    *,
+    bucket: str,
+    prefix: str | None,
+    namespace: str,
+    endpoint_url: str = "https://s3.hf.co",
+    access_key_id: str | None = None,
+    secret_access_key: str | None = None,
+    session_token: str | None = None,
+    expires_after: datetime | None = None,
+    from_env: bool | None = None,
+    get_credentials: Callable[[], S3StaticCredentials] | None = None,
+    scatter_initial_credentials: bool = False,
+    network_stream_timeout_seconds: int = 60,
+    read_headers: dict[str, str] | None = None,
+    write_headers: dict[str, str] | None = None,
+    headers: dict[str, str] | None = None,
+) -> Storage:
+    """Create a Storage instance that saves data in a Hugging Face Storage Bucket.
+
+    Data goes through Hugging Face's S3-compatible gateway. The credentials are
+    the S3 access key and secret generated from a Hugging Face access token. The
+    token itself is not an S3 credential. See
+    https://huggingface.co/docs/hub/storage-buckets-s3 for how to generate them.
+
+    The gateway discards user metadata. Icechunk therefore cannot recover from a
+    lost response to a conditional write. Such a write can report a spurious
+    conflict on the retry.
+
+    Parameters
+    ----------
+    bucket: str
+        The bucket name, without the namespace
+    prefix: str | None
+        The prefix within the bucket that is the root directory of the repository.
+        An empty or ``None`` prefix points at the bucket root. Creating a
+        repository at the bucket root is not supported in modern Icechunk
+        versions; existing bucket-root repositories can still be opened and
+        updated.
+    namespace: str
+        The bucket owner: a Hugging Face username or organization name
+    endpoint_url: str
+        The gateway address. Icechunk appends the namespace to it. The gateway
+        scopes every operation to the namespace in the endpoint path.
+    access_key_id: str | None
+        S3 credential access key. It starts with `HFAK`
+    secret_access_key: str | None
+        S3 credential secret access key
+    session_token: str | None
+        Optional S3 credential session token
+    expires_after: datetime | None
+        Optional expiration for the object store credentials
+    from_env: bool | None
+        Fetch credentials from the operative system environment
+    get_credentials: Callable[[], S3StaticCredentials] | None
+        Use this function to get and refresh object store credentials
+    scatter_initial_credentials: bool, optional
+        Immediately call and store the value returned by get_credentials. This is useful if the
+        repo or session will be pickled to generate many copies. Passing scatter_initial_credentials=True will
+        ensure all those copies don't need to call get_credentials immediately. After the initial
+        set of credentials has expired, the cached value is no longer used. Notice that credentials
+        obtained are stored, and they can be sent over the network if you pickle the session/repo.
+    network_stream_timeout_seconds: int
+        Timeout requests if no bytes can be transmitted during this period of time.
+        If set to 0, timeout is disabled. Default: 60.
+    read_headers: dict[str, str] | None
+        Extra HTTP headers to attach to every read request to the object store.
+    write_headers: dict[str, str] | None
+        Extra HTTP headers to attach to every write request to the object store.
+    headers: dict[str, str] | None
+        Extra HTTP headers to attach to both read and write requests. They are
+        merged with ``read_headers``/``write_headers``, which take precedence per
+        role on a key conflict.
+    """
+    return s3_storage(
+        bucket=bucket,
+        prefix=prefix,
+        # the gateway serves one region and only path-style URLs
+        region="us-east-1",
+        endpoint_url=f"{endpoint_url.rstrip('/')}/{namespace}",
+        force_path_style=True,
+        access_key_id=access_key_id,
+        secret_access_key=secret_access_key,
+        session_token=session_token,
+        expires_after=expires_after,
+        from_env=from_env,
+        get_credentials=get_credentials,
+        scatter_initial_credentials=scatter_initial_credentials,
+        network_stream_timeout_seconds=network_stream_timeout_seconds,
         read_headers=read_headers,
         write_headers=write_headers,
         headers=headers,

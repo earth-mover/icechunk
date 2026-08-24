@@ -5,6 +5,7 @@
 ### Features
 
 - The `inspect_*` methods now report a `header` for the file they read: the library version that wrote it, and that file's spec version, file type and compression ([#2347](https://github.com/earth-mover/icechunk/pull/2347)).
+- Add `hf_storage`, a preset for Hugging Face Storage Buckets. It takes the bucket's `namespace` and sets the gateway endpoint, the region and path-style URLs. The gateway discards user metadata, so Icechunk cannot recover from a lost response to a conditional write.
 
 ### Fixes
 
