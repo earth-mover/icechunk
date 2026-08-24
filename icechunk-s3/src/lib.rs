@@ -4,8 +4,8 @@
 pub use aws_sdk_s3;
 
 use std::{
-    collections::HashMap, fmt, future::ready, ops::Range, pin::Pin, sync::Arc,
-    time::Duration,
+    borrow::Cow, collections::HashMap, fmt, future::ready, ops::Range, pin::Pin,
+    sync::Arc, time::Duration,
 };
 
 use async_trait::async_trait;
@@ -60,6 +60,7 @@ use tokio::sync::OnceCell;
 use tokio_util::io::StreamReader;
 use tracing::{error, instrument, trace, warn};
 use typed_path::Utf8UnixPath;
+use url::Url;
 use uuid::Uuid;
 
 /// How object keys are laid out inside the bucket for a given repository.
@@ -208,6 +209,22 @@ impl Intercept for StripChecksumOn304Interceptor {
     }
 }
 
+/// Append the `/` that separates an endpoint path from the bucket name.
+///
+/// The SDK omits it, so `https://s3.hf.co/<ns>` addresses `/<ns><bucket>/<key>`.
+fn endpoint_with_bucket_separator(endpoint_url: &str) -> Cow<'_, str> {
+    if endpoint_url.ends_with('/') {
+        return Cow::Borrowed(endpoint_url);
+    }
+    match Url::parse(endpoint_url) {
+        // The SDK appends the bucket name to any path past the root.
+        Ok(url) if url.has_authority() && url.path() != "/" => {
+            Cow::Owned(format!("{endpoint_url}/"))
+        }
+        _ => Cow::Borrowed(endpoint_url),
+    }
+}
+
 #[instrument(skip(credentials))]
 pub async fn mk_client(
     config: &S3Options,
@@ -222,7 +239,7 @@ pub async fn mk_client(
         .map(|r| RegionProviderChain::first_try(Some(Region::new(r.clone()))))
         .unwrap_or_else(RegionProviderChain::default_provider);
 
-    let endpoint = config.endpoint_url.clone();
+    let endpoint = config.endpoint_url.as_deref().map(endpoint_with_bucket_separator);
     let region = if endpoint.is_some() {
         // GH793, the S3 SDK requires a region even though it may not make sense
         // for S3-compatible object stores like Tigris or Ceph.
@@ -1709,6 +1726,23 @@ mod tests {
         }
         assert!(!is_precondition_code("NoSuchUpload"));
         assert!(!is_precondition_code(""));
+    }
+
+    #[test]
+    fn endpoint_bucket_separator() {
+        // these endpoints need the separator the SDK omits
+        for (input, expected) in [
+            ("https://s3.hf.co/my-namespace", "https://s3.hf.co/my-namespace/"),
+            ("https://s3.hf.co/my-namespace/", "https://s3.hf.co/my-namespace/"),
+            ("http://localhost:9000/a/b", "http://localhost:9000/a/b/"),
+            // no path, so the SDK builds the URL correctly
+            ("https://fly.storage.tigris.dev", "https://fly.storage.tigris.dev"),
+            ("http://localhost:9000", "http://localhost:9000"),
+            ("http://localhost:9000/", "http://localhost:9000/"),
+            ("localhost:9000", "localhost:9000"),
+        ] {
+            assert_eq!(endpoint_with_bucket_separator(input), expected, "{input}");
+        }
     }
 
     #[tokio_test]
