@@ -2,6 +2,10 @@
 
 ## Python Icechunk Library [unreleased]
 
+### Features
+
+- The `inspect_*` methods now report a `header` for the file they read: the library version that wrote it, and that file's spec version, file type and compression ([#TODO](https://github.com/earth-mover/icechunk/pull/TODO)).
+
 ### Fixes
 
 - Fix garbage collection deleting still-referenced transaction logs when the host and object-store clocks are skewed ([#2310](https://github.com/earth-mover/icechunk/pull/2310)).

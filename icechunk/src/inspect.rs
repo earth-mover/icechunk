@@ -14,7 +14,9 @@ use crate::{
     asset_manager::AssetManager,
     format::{
         IcechunkFormatError, IcechunkFormatErrorKind, ManifestId, SnapshotId,
-        format_constants::SpecVersionBin,
+        format_constants::{
+            self, CompressionAlgorithmBin, FileHeader, FileTypeBin, SpecVersionBin,
+        },
         manifest::{ChunkPayload, ManifestRef},
         repo_info::UpdateType,
         snapshot::{
@@ -27,6 +29,49 @@ use crate::{
     storage::StorageErrorKind,
 };
 use icechunk_types::{ICResultExt as _, error::ICResultCtxExt as _};
+
+/// The binary header of the inspected metadata file: who wrote it and how.
+#[derive(Debug, Serialize, Deserialize)]
+pub(crate) struct FileHeaderInspect {
+    /// Full implementation string in the header, e.g. `ic-2.1.0`.
+    pub(crate) written_by: String,
+    pub(crate) app_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) app_version: Option<String>,
+    pub(crate) spec_version: String,
+    pub(crate) file_type: String,
+    pub(crate) compression: String,
+}
+
+impl From<FileHeader> for FileHeaderInspect {
+    fn from(value: FileHeader) -> Self {
+        use format_constants::{
+            ICECHUNK_COMPRESSION_ZSTD, ICECHUNK_FILE_TYPE_MANIFEST,
+            ICECHUNK_FILE_TYPE_REPO_INFO, ICECHUNK_FILE_TYPE_SNAPSHOT,
+            ICECHUNK_FILE_TYPE_TRANSACTION_LOG,
+        };
+        Self {
+            written_by: value.impl_name,
+            app_name: value.app_name,
+            app_version: value.app_version,
+            spec_version: value.spec_version.to_string(),
+            file_type: match value.file_type {
+                FileTypeBin::Snapshot => ICECHUNK_FILE_TYPE_SNAPSHOT,
+                FileTypeBin::Manifest => ICECHUNK_FILE_TYPE_MANIFEST,
+                FileTypeBin::TransactionLog => ICECHUNK_FILE_TYPE_TRANSACTION_LOG,
+                FileTypeBin::RepoInfo => ICECHUNK_FILE_TYPE_REPO_INFO,
+                FileTypeBin::Attributes => "attributes",
+                FileTypeBin::Chunk => "chunk",
+            }
+            .to_string(),
+            compression: match value.compression {
+                CompressionAlgorithmBin::None => "none",
+                CompressionAlgorithmBin::Zstd => ICECHUNK_COMPRESSION_ZSTD,
+            }
+            .to_string(),
+        }
+    }
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct ManifestFileInfoInspect {
@@ -130,6 +175,7 @@ pub(crate) struct SnapshotInfoInspect {
     //path: String,
     //size_bytes: u64,
     pub(crate) id: String,
+    pub(crate) header: FileHeaderInspect,
     pub(crate) flushed_at: DateTime<Utc>,
     pub(crate) commit_message: String,
     pub(crate) metadata: SnapshotProperties,
@@ -143,8 +189,10 @@ pub(crate) async fn inspect_snapshot(
     id: &SnapshotId,
 ) -> RepositoryResult<SnapshotInfoInspect> {
     let snap = asset_manager.fetch_snapshot(id).await?;
+    let header = asset_manager.fetch_snapshot_header(id).await?;
     let res = SnapshotInfoInspect {
         id: snap.id().to_string(),
+        header: header.into(),
         flushed_at: snap.flushed_at().inject()?,
         commit_message: snap.message(),
         metadata: snap.metadata().inject()?,
@@ -292,6 +340,7 @@ struct RepoInfoSnapshotInspect {
 
 #[derive(Debug, Serialize, Deserialize)]
 struct RepoInfoInspect {
+    header: FileHeaderInspect,
     spec_version: String,
     branches: BTreeMap<String, String>,
     tags: BTreeMap<String, String>,
@@ -307,6 +356,7 @@ async fn inspect_repo_info(
     asset_manager: &AssetManager,
 ) -> RepositoryResult<RepoInfoInspect> {
     let (info, _) = asset_manager.fetch_repo_info().await?;
+    let header = asset_manager.fetch_repo_info_header().await?;
 
     let branches = info
         .branches()
@@ -348,6 +398,7 @@ async fn inspect_repo_info(
         .inject()?;
 
     Ok(RepoInfoInspect {
+        header: header.into(),
         spec_version: info.spec_version().inject()?.to_string(),
         branches,
         tags,
@@ -394,6 +445,7 @@ struct ManifestVirtualChunksCompressionInspect {
 #[derive(Debug, Serialize, Deserialize)]
 struct ManifestInspect {
     id: String,
+    header: FileHeaderInspect,
     size_bytes: usize,
     num_arrays: usize,
     total_chunk_refs: usize,
@@ -409,6 +461,7 @@ async fn inspect_manifest(
     manifest_id: &ManifestId,
 ) -> RepositoryResult<ManifestInspect> {
     let manifest = asset_manager.fetch_manifest_unknown_size(manifest_id).await?;
+    let header = asset_manager.fetch_manifest_header(manifest_id).await?;
     let node_ids: Vec<_> = manifest.arrays().collect();
     let mut arrays = Vec::with_capacity(node_ids.len());
     for node_id in node_ids {
@@ -441,6 +494,7 @@ async fn inspect_manifest(
     };
     Ok(ManifestInspect {
         id: manifest.id().to_string(),
+        header: header.into(),
         size_bytes: manifest.bytes().len(),
         num_arrays: arrays.len(),
         total_chunk_refs: total_inline + total_native + total_virtual,
@@ -494,6 +548,10 @@ struct SyntheticCompositeInspect {
 
 #[derive(Debug, Serialize, Deserialize)]
 struct TransactionLogInspect {
+    /// Header of the snapshot's own transaction log file. When
+    /// `synthetic_composite` is set, the merged pruned-ancestor logs have
+    /// headers of their own, which are not reported here.
+    header: FileHeaderInspect,
     new_groups: Vec<String>,
     new_arrays: Vec<String>,
     deleted_groups: Vec<String>,
@@ -507,10 +565,15 @@ struct TransactionLogInspect {
 }
 
 /// Pure transform of a single transaction log into its inspect representation.
+///
+/// `header` is passed in because the merged view of a collapsed ancestry has no
+/// single file of its own; the caller decides which file's header describes it.
 fn inspect_transaction_log(
     tx: &TransactionLog,
+    header: FileHeaderInspect,
 ) -> RepositoryResult<TransactionLogInspect> {
     Ok(TransactionLogInspect {
+        header,
         new_groups: tx.new_groups().map(|id| id.to_string()).collect(),
         new_arrays: tx.new_arrays().map(|id| id.to_string()).collect(),
         deleted_groups: tx.deleted_groups().map(|id| id.to_string()).collect(),
@@ -562,9 +625,11 @@ async fn inspect_snapshot_tx_logs(
     id: &SnapshotId,
 ) -> RepositoryResult<TransactionLogInspect> {
     let own = asset_manager.fetch_transaction_log(id).await?;
+    let header: FileHeaderInspect =
+        asset_manager.fetch_transaction_log_header(id).await?.into();
     let pruned_ids = pruned_ancestor_tx_logs(asset_manager, id).await?;
     if pruned_ids.is_empty() {
-        return inspect_transaction_log(&own);
+        return inspect_transaction_log(&own, header);
     }
 
     let mut pruned_logs = Vec::with_capacity(pruned_ids.len());
@@ -597,11 +662,11 @@ async fn inspect_snapshot_tx_logs(
     let to_merge = pruned_logs.iter().map(Arc::as_ref).chain([own.as_ref()]);
     // FIXME: this can (and will for large repos with expiration) blow the tx log buffer limit
     let merged = TransactionLog::merge(id, to_merge).inject()?;
-    let mut info = inspect_transaction_log(&merged)?;
+    let mut info = inspect_transaction_log(&merged, header)?;
     info.synthetic_composite = Some(SyntheticCompositeInspect {
         note: "Synthetic composite: this snapshot's ancestry was collapsed by \
                expiration; the log below merges its pruned-ancestor logs with its \
-               own log."
+               own log. `header` describes this snapshot's own log only."
             .to_string(),
         merged_pruned_ancestor_tx_logs: merged_ids,
         missing_tx_logs: missing,
@@ -653,6 +718,10 @@ mod tests {
         let json = snapshot_json(repo.asset_manager(), &snap_id, true).await?;
         let info: SnapshotInfoInspect = serde_json::from_str(json.as_str())?;
         assert!(info.id == snap_id.to_string());
+        assert_eq!(info.header.app_name, "ic");
+        assert!(info.header.app_version.is_some());
+        assert_eq!(info.header.spec_version, SpecVersionBin::V2.to_string());
+        assert_eq!(info.header.file_type, "snapshot");
 
         Ok(())
     }
@@ -671,6 +740,12 @@ mod tests {
         let info: RepoInfoInspect = serde_json::from_str(json.as_str())?;
         assert!(info.branches.contains_key("main"));
         assert!(!info.snapshots.is_empty());
+        assert_eq!(info.header.file_type, "repo-info");
+        assert_eq!(info.header.app_name, "ic");
+        assert_eq!(
+            info.header.written_by,
+            format!("ic-{}", info.header.app_version.as_deref().unwrap_or_default())
+        );
 
         // compact mode has no newlines
         let compact = repo_info_json(repo.asset_manager(), false).await?;

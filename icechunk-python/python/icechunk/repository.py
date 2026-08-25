@@ -2165,8 +2165,10 @@ class Repository:
         Returns
         -------
         dict[str, Any]
-            Keys: ``id``, ``flushed_at``, ``commit_message``, ``metadata``,
-            ``manifests``, ``nodes``.
+            Keys: ``id``, ``header``, ``flushed_at``, ``commit_message``,
+            ``metadata``, ``manifests``, ``nodes``.
+
+            See :meth:`inspect_repo_info` for the contents of ``header``.
         """
         result: dict[str, Any] = json.loads(
             self._repository.inspect_snapshot(snapshot_id, pretty=False)
@@ -2192,8 +2194,10 @@ class Repository:
         Returns
         -------
         dict[str, Any]
-            Keys: ``id``, ``flushed_at``, ``commit_message``, ``metadata``,
-            ``manifests``, ``nodes``.
+            Keys: ``id``, ``header``, ``flushed_at``, ``commit_message``,
+            ``metadata``, ``manifests``, ``nodes``.
+
+            See :meth:`inspect_repo_info` for the contents of ``header``.
         """
         result: dict[str, Any] = json.loads(
             await self._repository.inspect_snapshot_async(snapshot_id, pretty=False)
@@ -2213,8 +2217,15 @@ class Repository:
         Returns
         -------
         dict[str, Any]
-            Keys: ``spec_version``, ``branches``, ``tags``, ``deleted_tags``,
-            ``snapshots``, ``metadata``, ``latest_updates``.
+            Keys: ``header``, ``spec_version``, ``branches``, ``tags``,
+            ``deleted_tags``, ``snapshots``, ``metadata``, ``latest_updates``.
+
+            Every ``inspect_*`` method reports a ``header`` describing the
+            binary header of the file it read. Keys: ``written_by`` (the
+            library that wrote that file, e.g. ``ic-2.1.0``), ``app_name``,
+            ``app_version``, ``spec_version`` (the version of that file, which
+            can be older than the repository's after a migration),
+            ``file_type`` and ``compression``.
         """
         result: dict[str, Any] = json.loads(
             self._repository.inspect_repo_info(pretty=False)
@@ -2234,8 +2245,15 @@ class Repository:
         Returns
         -------
         dict[str, Any]
-            Keys: ``spec_version``, ``branches``, ``tags``, ``deleted_tags``,
-            ``snapshots``, ``metadata``, ``latest_updates``.
+            Keys: ``header``, ``spec_version``, ``branches``, ``tags``,
+            ``deleted_tags``, ``snapshots``, ``metadata``, ``latest_updates``.
+
+            Every ``inspect_*`` method reports a ``header`` describing the
+            binary header of the file it read. Keys: ``written_by`` (the
+            library that wrote that file, e.g. ``ic-2.1.0``), ``app_name``,
+            ``app_version``, ``spec_version`` (the version of that file, which
+            can be older than the repository's after a migration),
+            ``file_type`` and ``compression``.
         """
         result: dict[str, Any] = json.loads(
             await self._repository.inspect_repo_info_async(pretty=False)
@@ -2262,9 +2280,11 @@ class Repository:
         Returns
         -------
         dict[str, Any]
-            Keys: ``id``, ``size_bytes``, ``num_arrays``,
+            Keys: ``id``, ``header``, ``size_bytes``, ``num_arrays``,
             ``total_chunk_refs``, ``total_inline``, ``total_native``,
             ``total_virtual``, ``arrays``, ``compression``.
+
+            See :meth:`inspect_repo_info` for the contents of ``header``.
         """
         result: dict[str, Any] = json.loads(
             self._repository.inspect_manifest(manifest_id, pretty=False)
@@ -2291,9 +2311,11 @@ class Repository:
         Returns
         -------
         dict[str, Any]
-            Keys: ``id``, ``size_bytes``, ``num_arrays``,
+            Keys: ``id``, ``header``, ``size_bytes``, ``num_arrays``,
             ``total_chunk_refs``, ``total_inline``, ``total_native``,
             ``total_virtual``, ``arrays``, ``compression``.
+
+            See :meth:`inspect_repo_info` for the contents of ``header``.
         """
         result: dict[str, Any] = json.loads(
             await self._repository.inspect_manifest_async(manifest_id, pretty=False)
@@ -2318,9 +2340,11 @@ class Repository:
         Returns
         -------
         dict[str, Any]
-            Keys: ``new_groups``, ``new_arrays``, ``deleted_groups``,
-            ``deleted_arrays``, ``updated_groups``, ``updated_arrays``,
-            ``updated_chunks``, ``moved_nodes``.
+            Keys: ``header``, ``new_groups``, ``new_arrays``,
+            ``deleted_groups``, ``deleted_arrays``, ``updated_groups``,
+            ``updated_arrays``, ``updated_chunks``, ``moved_nodes``.
+
+            See :meth:`inspect_repo_info` for the contents of ``header``.
 
             When the snapshot's ancestry was collapsed by expiration, an
             additional ``synthetic_composite`` key is present. It shows
@@ -2329,7 +2353,9 @@ class Repository:
             ``merged_pruned_ancestor_tx_logs`` (the pruned-ancestor
             transaction logs merged into this one, oldest first), and
             ``missing_tx_logs`` (referenced pruned-ancestor logs absent from
-            storage, expected only when an older GC deleted them).
+            storage, expected only when an older GC deleted them). In that
+            case ``header`` describes the snapshot's own log; the merged
+            logs have headers of their own, not reported here.
         """
         result: dict[str, Any] = json.loads(
             self._repository.inspect_transaction_log(snapshot_id, pretty=False)
@@ -2354,9 +2380,11 @@ class Repository:
         Returns
         -------
         dict[str, Any]
-            Keys: ``new_groups``, ``new_arrays``, ``deleted_groups``,
-            ``deleted_arrays``, ``updated_groups``, ``updated_arrays``,
-            ``updated_chunks``, ``moved_nodes``.
+            Keys: ``header``, ``new_groups``, ``new_arrays``,
+            ``deleted_groups``, ``deleted_arrays``, ``updated_groups``,
+            ``updated_arrays``, ``updated_chunks``, ``moved_nodes``.
+
+            See :meth:`inspect_repo_info` for the contents of ``header``.
 
             When the snapshot's ancestry was collapsed by expiration, an
             additional ``synthetic_composite`` key is present. It shows
@@ -2365,7 +2393,9 @@ class Repository:
             ``merged_pruned_ancestor_tx_logs`` (the pruned-ancestor
             transaction logs merged into this one, oldest first), and
             ``missing_tx_logs`` (referenced pruned-ancestor logs absent from
-            storage, expected only when an older GC deleted them).
+            storage, expected only when an older GC deleted them). In that
+            case ``header`` describes the snapshot's own log; the merged
+            logs have headers of their own, not reported here.
         """
         raw = await self._repository.inspect_transaction_log_async(
             snapshot_id, pretty=False
