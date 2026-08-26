@@ -57,7 +57,7 @@ class Task:
     seed: int  # An RNG seed used to generate or recreate random data for the array
 
 
-def generate_task_array(task: Task, shape: tuple[int, ...]) -> np.typing.ArrayLike:
+def generate_task_array(task: Task, shape: tuple[int, ...]) -> np.ndarray:
     """Generates a randm array with the given shape and using the seed in the Task"""
     np.random.seed(task.seed)
     return np.random.rand(*shape)

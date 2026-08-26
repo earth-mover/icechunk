@@ -46,7 +46,7 @@ class TaskResult:
     time: timedelta
 
 
-def generate_task_array(task: Task, shape: tuple[int, ...]) -> np.typing.ArrayLike:
+def generate_task_array(task: Task, shape: tuple[int, ...]) -> np.ndarray:
     """Generates a random array with the given shape and using the seed in the Task"""
     seed = math.prod(slicer.stop for slicer in task.region)
     np.random.seed(seed)
