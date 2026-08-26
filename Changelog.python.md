@@ -4,7 +4,7 @@
 
 ### Features
 
-- The `inspect_*` methods now report a `header` for the file they read: the library version that wrote it, and that file's spec version, file type and compression ([#TODO](https://github.com/earth-mover/icechunk/pull/TODO)).
+- The `inspect_*` methods now report a `header` for the file they read: the library version that wrote it, and that file's spec version, file type and compression ([#2347](https://github.com/earth-mover/icechunk/pull/2347)).
 
 ### Fixes
 
