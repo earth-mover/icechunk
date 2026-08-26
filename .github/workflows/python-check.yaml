@@ -31,7 +31,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: prefix-dev/setup-pixi@a09b6247153796b190642a2b53fac4241043cf6f # v0.10.0
+      - uses: prefix-dev/setup-pixi@f00437f565399d418b0acc85936d12c1fb668347 # v0.10.1
         with:
           pixi-version: ${{ env.PIXI_VERSION }}
           cache: false
@@ -39,7 +39,7 @@ jobs:
           manifest-path: icechunk-python/pyproject.toml
 
       - name: Cache Dependencies
-        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
         with:
           # The rust cache includes a dep on the Python version (when building icechunk-python)
           # so we need to bump the version here whenever Python version is updated
@@ -49,7 +49,7 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Build wheels
-        run: just build-wheels
+        run: just profile=ci-wheel build-wheels
 
       - name: Upload wheels
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -79,7 +79,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: prefix-dev/setup-pixi@a09b6247153796b190642a2b53fac4241043cf6f # v0.10.0
+      - uses: prefix-dev/setup-pixi@f00437f565399d418b0acc85936d12c1fb668347 # v0.10.1
         with:
           pixi-version: ${{ env.PIXI_VERSION }}
           cache: false
@@ -95,14 +95,14 @@ jobs:
           name: test-wheels
           path: icechunk-python/dist
 
-      - name: Restore cached hypothesis directory
+      - name: Restore cached hypothesis examples
         id: restore-hypothesis-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: icechunk-python/.hypothesis/
+          path: icechunk-python/.hypothesis/examples/
           key: cache-hypothesis-${{ runner.os }}-${{ github.run_id }}
           restore-keys: |
-            cache-hypothesis-
+            cache-hypothesis-${{ runner.os }}-
 
       - name: Install dependencies - ${{ matrix.deps-version.name }}
         env:
@@ -150,7 +150,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: prefix-dev/setup-pixi@a09b6247153796b190642a2b53fac4241043cf6f # v0.10.0
+      - uses: prefix-dev/setup-pixi@f00437f565399d418b0acc85936d12c1fb668347 # v0.10.1
         with:
           pixi-version: ${{ env.PIXI_VERSION }}
           cache: false
@@ -159,14 +159,14 @@ jobs:
           environments: py314t
 
       - name: Cache Dependencies
-        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
         with:
           prefix-key: "rust-py314t"
           shared-key: "wheels"
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Build wheels
-        run: just build-wheels
+        run: just profile=ci-wheel build-wheels
         env:
           PYTHON_VERSION: "3.14t"
 
@@ -185,7 +185,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: prefix-dev/setup-pixi@a09b6247153796b190642a2b53fac4241043cf6f # v0.10.0
+      - uses: prefix-dev/setup-pixi@f00437f565399d418b0acc85936d12c1fb668347 # v0.10.1
         with:
           pixi-version: ${{ env.PIXI_VERSION }}
           cache: false
@@ -216,6 +216,9 @@ jobs:
   test-hypothesis-shard:
     name: test-hypothesis-shard (${{ matrix.shard-id }})
     runs-on: ubuntu-latest
+    # PRs and main already run hypothesis on these exact commits; skipping in
+    # the merge queue keeps it off the merge-gating critical path
+    if: github.event_name != 'merge_group'
     needs: [build-wheels]
     strategy:
       fail-fast: false
@@ -224,7 +227,7 @@ jobs:
         # anchors a shard, cheap property tests ride along on the second
         # xdist worker. The last shard collects everything not claimed by the
         # others, so new hypothesis tests always run somewhere.
-        # Ids stay numeric to keep the hypothesis caches keyed on them.
+        # Ids stay numeric to keep the shard artifact names keyed on them.
         include:
           - shard-id: 0
             label: zarr-hierarchy
@@ -244,7 +247,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: prefix-dev/setup-pixi@a09b6247153796b190642a2b53fac4241043cf6f # v0.10.0
+      - uses: prefix-dev/setup-pixi@f00437f565399d418b0acc85936d12c1fb668347 # v0.10.1
         with:
           pixi-version: ${{ env.PIXI_VERSION }}
           cache: false
@@ -257,14 +260,14 @@ jobs:
           name: test-wheels
           path: icechunk-python/dist
 
-      - name: Restore cached hypothesis directory
+      - name: Restore cached hypothesis examples
         id: restore-hypothesis-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: icechunk-python/.hypothesis/
-          key: cache-hypothesis-${{ runner.os }}-shard${{ matrix.shard-id }}-${{ github.run_id }}
+          path: icechunk-python/.hypothesis/examples/
+          key: cache-hypothesis-${{ runner.os }}-${{ github.run_id }}
           restore-keys: |
-            cache-hypothesis-${{ runner.os }}-shard${{ matrix.shard-id }}-
+            cache-hypothesis-${{ runner.os }}-
 
       - name: Install dependencies
         run: just install-test-wheel test
@@ -290,21 +293,42 @@ jobs:
           path: icechunk-python/.coverage-fragments/.coverage.hypothesis-${{ matrix.shard-id }}
           include-hidden-files: true
 
-      - name: Save cached hypothesis directory
-        id: save-hypothesis-cache
-        if: always() && github.ref == 'refs/heads/main'
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        # Failing shards are the ones with fresh failure examples, so upload always
+      - name: Upload hypothesis examples for aggregation
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          path: icechunk-python/.hypothesis/
-          key: cache-hypothesis-${{ runner.os }}-shard${{ matrix.shard-id }}-${{ github.run_id }}
+          name: hypothesis-examples-${{ matrix.shard-id }}
+          path: icechunk-python/.hypothesis/examples/
+          include-hidden-files: true
+          if-no-files-found: ignore
 
-        # Aggregation job preserves the required "test-hypothesis" check name
+        # Keeps the required "test-hypothesis" check name; skipped on
+        # merge_group with the shards, because a skipped check does not fail.
   test-hypothesis:
     name: test-hypothesis
-    if: always()
+    if: always() && github.event_name != 'merge_group'
     needs: [test-hypothesis-shard]
     runs-on: ubuntu-latest
     steps:
+        # continue-on-error: a run where no shard had examples uploads no artifacts
+        # Example files are named by content hash, so shards merge by copy
+      - name: Download hypothesis examples from all shards
+        if: github.ref == 'refs/heads/main'
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: hypothesis-examples-*
+          merge-multiple: true
+          path: icechunk-python/.hypothesis/examples
+
+      - name: Save merged hypothesis examples
+        if: github.ref == 'refs/heads/main' && hashFiles('icechunk-python/.hypothesis/examples/**') != ''
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: icechunk-python/.hypothesis/examples/
+          key: cache-hypothesis-${{ runner.os }}-${{ github.run_id }}
+
       - name: Verify all shards passed
         env:
           SHARDS_RESULT: ${{ needs.test-hypothesis-shard.result }}
@@ -327,7 +351,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: prefix-dev/setup-pixi@a09b6247153796b190642a2b53fac4241043cf6f # v0.10.0
+      - uses: prefix-dev/setup-pixi@f00437f565399d418b0acc85936d12c1fb668347 # v0.10.1
         with:
           pixi-version: ${{ env.PIXI_VERSION }}
           cache: false
@@ -362,7 +386,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: prefix-dev/setup-pixi@a09b6247153796b190642a2b53fac4241043cf6f # v0.10.0
+      - uses: prefix-dev/setup-pixi@f00437f565399d418b0acc85936d12c1fb668347 # v0.10.1
         with:
           pixi-version: ${{ env.PIXI_VERSION }}
           cache: false
@@ -401,7 +425,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: prefix-dev/setup-pixi@a09b6247153796b190642a2b53fac4241043cf6f # v0.10.0
+      - uses: prefix-dev/setup-pixi@f00437f565399d418b0acc85936d12c1fb668347 # v0.10.1
         with:
           pixi-version: ${{ env.PIXI_VERSION }}
           cache: false
@@ -445,7 +469,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: prefix-dev/setup-pixi@a09b6247153796b190642a2b53fac4241043cf6f # v0.10.0
+      - uses: prefix-dev/setup-pixi@f00437f565399d418b0acc85936d12c1fb668347 # v0.10.1
         with:
           pixi-version: ${{ env.PIXI_VERSION }}
           cache: false
@@ -472,7 +496,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: prefix-dev/setup-pixi@a09b6247153796b190642a2b53fac4241043cf6f # v0.10.0
+      - uses: prefix-dev/setup-pixi@f00437f565399d418b0acc85936d12c1fb668347 # v0.10.1
         with:
           pixi-version: ${{ env.PIXI_VERSION }}
           cache: false

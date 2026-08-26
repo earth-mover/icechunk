@@ -121,6 +121,7 @@ pub(crate) mod codes {
         // invalid input
         INVALID_KEY => "invalid-key",
         INVALID_CHUNK_INDEX => "invalid-chunk-index",
+        ZERO_LENGTH_CHUNK => "zero-length-chunk",
         INVALID_MANIFEST_SPLIT_INDEX => "invalid-manifest-split-index",
         INVALID_REF_TYPE => "invalid-ref-type",
         INVALID_REF_NAME => "invalid-ref-name",
@@ -296,6 +297,7 @@ fn classify_session(kind: &SessionErrorKind) -> Classified {
             class("InternalError", codes::CONFLICTING_PATH_NOT_FOUND)
         }
         K::InvalidIndex { .. } => class("InvalidInputError", codes::INVALID_CHUNK_INDEX),
+        K::ZeroLengthChunk { .. } => class("InvalidInputError", codes::ZERO_LENGTH_CHUNK),
         K::InvalidIndexForSplitManifests { .. } => {
             class("InvalidInputError", codes::INVALID_MANIFEST_SPLIT_INDEX)
         }

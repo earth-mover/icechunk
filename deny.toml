@@ -24,14 +24,10 @@ ignore = [
   # rustls-webpki v0.101.7 has a panic related to certificate list revocation.
   # we don't enable the `clr` feature that would trigger it.
   "RUSTSEC-2026-0104",
-  # quick-xml < 0.41.0 DoS advisories (quadratic attribute check / unbounded
-  # namespace allocation): transitive dep via object_store, used only to parse
-  # XML LIST/multipart responses from the S3/GCS/Azure endpoint. No upgrade path
-  # until object_store releases with quick-xml 0.41 (already on their main
-  # branch, unreleased as of 0.14.0). DoS-only (CVSS C:N/I:N/A:H), reachable
-  # only by a malicious/compromised object-store endpoint.
-  "RUSTSEC-2026-0194",
-  "RUSTSEC-2026-0195",
+  # h2 unbounded empty DATA frames (low severity): patched only in h2 >= 0.4.16.
+  # The h2 0.3 line is a transitive dep via aws-smithy-http-client -> hyper 0.14
+  # with no patched release. No upgrade path until the AWS SDK drops that stack.
+  "RUSTSEC-2026-0258",
 ]
 
 [licenses]

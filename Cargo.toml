@@ -84,7 +84,7 @@ serde_yaml_ng = "0.10.0"
 shuttle = "0.9.1"
 shuttle-tokio = { version = "0.1.0", features = ["rt-multi-thread", "macros"] }
 strsim = "0.11"
-syn = { version = "2.0", features = ["full"] }
+syn = { version = "3.0", features = ["full"] }
 tempfile = "3.27.0"
 test-log = { version = "0.2.21", default-features = false, features = ["trace", "color", "unstable"] }
 test-strategy = "0.4.5"
@@ -173,6 +173,14 @@ opt-level = 2
 lto = "off"
 codegen-units = 8
 debug = 1
+
+# Wheels for CI test jobs: opt-level 2 keeps test workloads fast while
+# skipping the LTO + single-codegen-unit compile cost of `release`.
+[profile.ci-wheel]
+inherits = "release"
+opt-level = 2
+lto = "off"
+codegen-units = 8
 
 # Optimized profile for benchmarking with maturin/PyO3 compatibility
 # maturin doesn't work well with --profile bench for ... reasons.

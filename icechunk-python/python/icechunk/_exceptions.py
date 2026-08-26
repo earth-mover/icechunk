@@ -83,6 +83,7 @@ class ErrorKind(StrEnum):
     # invalid input
     INVALID_KEY = "invalid-key"
     INVALID_CHUNK_INDEX = "invalid-chunk-index"
+    ZERO_LENGTH_CHUNK = "zero-length-chunk"
     INVALID_MANIFEST_SPLIT_INDEX = "invalid-manifest-split-index"
     INVALID_REF_TYPE = "invalid-ref-type"
     INVALID_REF_NAME = "invalid-ref-name"

@@ -188,6 +188,13 @@ pub enum SessionErrorKind {
     )]
     InvalidIndex { coords: ChunkIndices, path: Path },
     #[error(
+        "zero-length chunk: the payload for coordinates {coords:?} of the array at {path} has length 0. \
+         A chunk must decode to the full chunk shape, so no valid chunk is ever zero bytes long, and such a \
+         chunk can only fail when it is read back. To record that a chunk is not stored at all, as in a sparse \
+         array, delete it instead of writing a zero-length one; it will then read back as the array's fill value"
+    )]
+    ZeroLengthChunk { coords: ChunkIndices, path: Path },
+    #[error(
         "cannot shift or reindex chunks of the array at `{path}`: `shift_array` and `reindex_array` require an array whose metadata declares a `regular` chunk grid, found `{grid_type}`. \
          Reindexing chunks on a non-regular grid would corrupt the array, because chunk payloads would no longer match \
          the sizes of their new grid positions. See https://github.com/earth-mover/icechunk/issues/2151"
@@ -1125,6 +1132,16 @@ impl Session {
         coord: ChunkIndices,
         data: Option<ChunkPayload>,
     ) -> SessionResult<()> {
+        // No valid chunk is ever zero bytes long, however it is stored: a chunk has to
+        // decode to the full chunk shape, and nothing decodes from nothing. `data: None`
+        // is untouched - deleting is how a chunk that isn't stored is recorded, and it
+        // reads back as the array's fill value.
+        if data.as_ref().is_some_and(|payload| payload.length() == 0) {
+            return Err(SessionError::capture(SessionErrorKind::ZeroLengthChunk {
+                coords: coord,
+                path: node.path.clone(),
+            }));
+        }
         if let NodeData::Array { ref shape, .. } = node.node_data {
             if shape.valid_chunk_coord(&coord) {
                 self.change_set_mut()?.set_chunk_ref(node.id.clone(), coord, data)?;
@@ -5944,6 +5961,72 @@ mod tests {
             }
             _ => panic!("Expected InvalidIndex Error"),
         }
+        Ok(())
+    }
+
+    #[tokio_test]
+    #[apply(spec_version_cases)]
+    async fn test_setting_zero_length_chunk(
+        #[case] spec_version: SpecVersionBin,
+    ) -> Result<(), Box<dyn Error>> {
+        let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+        let repo = Repository::create(
+            None,
+            Arc::clone(&storage),
+            HashMap::new(),
+            Some(spec_version),
+            true,
+        )
+        .await?;
+        let mut ds = repo.writable_session("main").await?;
+
+        let shape = ArrayShape::new(vec![(5, 3), (5, 3)]).unwrap();
+        ds.add_group(Path::root(), Bytes::new()).await?;
+        let apath: Path = "/array1".try_into()?;
+        ds.add_array(apath.clone(), shape, None, Bytes::new()).await?;
+
+        // no valid chunk is zero bytes long however it is stored
+        let zero_length = [
+            ChunkPayload::Inline(Bytes::new()),
+            ChunkPayload::Virtual(VirtualChunkRef {
+                location: VirtualChunkLocation::from_url("s3://bucket/foo.nc")?,
+                offset: 0,
+                length: 0,
+                checksum: None,
+            }),
+            ChunkPayload::Ref(ChunkRef {
+                id: crate::format::ChunkId::random(),
+                offset: 0,
+                length: 0,
+            }),
+        ];
+
+        for payload in zero_length {
+            let res = ds
+                .set_chunk_ref(apath.clone(), ChunkIndices(vec![0, 0]), Some(payload))
+                .await;
+            match res {
+                Err(SessionError {
+                    kind: SessionErrorKind::ZeroLengthChunk { coords, path },
+                    ..
+                }) => {
+                    assert_eq!(coords, ChunkIndices(vec![0, 0]));
+                    assert_eq!(path, apath);
+                }
+                _ => panic!("Expected ZeroLengthChunk Error, got: {res:?}"),
+            }
+        }
+
+        // a non-empty payload at the same coordinates is still accepted, and deleting
+        // is how a chunk that isn't stored is recorded
+        ds.set_chunk_ref(
+            apath.clone(),
+            ChunkIndices(vec![0, 0]),
+            Some(ChunkPayload::Inline("hello".into())),
+        )
+        .await?;
+        ds.set_chunk_ref(apath.clone(), ChunkIndices(vec![0, 0]), None).await?;
+
         Ok(())
     }
 
