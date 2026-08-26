@@ -56,6 +56,42 @@ repo = icechunk.Repository.open(
 
 In this configuration, even if the upper layers of the stack (Dask and Zarr) issue many more concurrent requests, Icechunk will only open 10 HTTP connections to the object store at once.
 
+## Read coalescing
+
+A read that touches many chunks does not issue one request per chunk. Chunks that sit near each other in the same object are merged into a single ranged request, so the cost of a read tracks the number of *spans* it needs rather than the number of chunks it touches.
+
+This matters most for [virtual datasets](./virtual.md), where chunks point into files written by something else and a single array can be thousands of small chunks scattered through one object.
+
+Merging saves round trips by reading bytes you did not ask for — the gaps between the chunks you want. `max_gap_bytes` is how much of that you will accept: the largest run of unwanted bytes Icechunk will read through to combine two chunks. It defaults to 256 KiB.
+
+```python
+config = icechunk.RepositoryConfig.default()
+config.coalescing = icechunk.CoalescingConfig(max_gap_bytes=64 * 1024)
+repo = icechunk.Repository.open(storage=storage, config=config)
+```
+
+Set `max_gap_bytes=0` to merge only chunks that are exactly adjacent, which never reads a byte you did not ask for. `max_coalesced_bytes` caps how large a single merged request may grow; it is unset by default.
+
+### Measuring the tradeoff
+
+`coalescing_report` plans the requests for a set of chunks without fetching anything, so you can see what a setting costs before paying for it:
+
+```python
+requests = [("myarray", [i]) for i in range(64)]
+store.coalescing_report(requests)
+```
+
+For 64 chunks of 1 KiB spaced 4 KiB apart in one object:
+
+| `max_gap_bytes` | requests | wanted | read |
+|---|---|---|---|
+| 0 | 64 | 64 KiB | 64 KiB |
+| 262144 (default) | 1 | 64 KiB | 253 KiB |
+
+One request instead of 64, for 189 KiB of bytes nobody asked for. Which side of that is cheaper depends on your link: over a high-latency connection the round trips dominate and merging wins easily, while on a bandwidth-limited one the extra bytes can cost more than the requests they save. Measure with `coalescing_report` against your own layout rather than assuming.
+
+Pass `max_gap_bytes` or `max_coalesced_bytes` directly to `coalescing_report` to try a value without reopening the repo.
+
 ## Scalability
 
 Icechunk is designed to be cloud native, making it able to take advantage of the horizontal scaling of cloud providers. To learn more, check out [this blog post](https://earthmover.io/blog/exploring-icechunk-scalability) which explores just how well Icechunk can perform when matched with AWS S3.

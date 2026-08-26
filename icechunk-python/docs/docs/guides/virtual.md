@@ -12,6 +12,10 @@ While Icechunk works wonderfully with native chunks managed by Zarr, there is lo
 
     Currently, Icechunk supports virtual references to data stored in `s3` compatible, `gcs`, `azure`, `http/https`, and `local` storage backends.
 
+!!! tip
+
+    Virtual datasets are usually many small chunks spread through files someone else wrote, which makes reads round-trip bound. Icechunk merges chunks that sit near each other in the same file into single ranged requests — see [read coalescing](./performance.md#read-coalescing) for the knob and how to measure it.
+
 !!! warning "Security considerations with virtual chunks"
 
     Virtual chunks let Icechunk point to external locations (s3://, http://, file://, etc.), which means a malicious repo could try to trick your code into reading sensitive data from your machine or other sources.

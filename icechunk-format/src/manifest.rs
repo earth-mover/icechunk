@@ -686,15 +686,42 @@ impl Manifest {
         node: &NodeId,
         coord: &ChunkIndices,
     ) -> IcechunkResult<ChunkPayload> {
-        let mut decompressor = self.decompressor()?;
-        let manifest = self.root();
-        let chunk_ref = lookup_node(manifest, node)
-            .and_then(|array_manifest| lookup_ref(array_manifest, coord))
+        self.get_chunk_payloads(node, [coord])?
+            .pop()
+            .flatten()
             .ok_or_else(|| IcechunkFormatErrorKind::ChunkCoordinatesNotFound {
                 coords: coord.clone(),
             })
-            .capture()?;
-        ref_to_payload(chunk_ref, decompressor.as_mut())
+            .capture()
+    }
+
+    /// Resolve many coords of one array, in input order, `None` where a coord
+    /// has no ref in this manifest.
+    ///
+    /// Prefer this over calling [`Manifest::get_chunk_payload`] in a loop: the
+    /// node lookup and the location decompressor are built once for the whole
+    /// batch rather than per coord. The decompressor matters — for a manifest
+    /// with zstd-compressed virtual locations, building it primes a dictionary,
+    /// so per-coord construction is a real cost on the manifests large enough to
+    /// have been compressed in the first place.
+    pub fn get_chunk_payloads<'a>(
+        &self,
+        node: &NodeId,
+        coords: impl IntoIterator<Item = &'a ChunkIndices>,
+    ) -> IcechunkResult<Vec<Option<ChunkPayload>>> {
+        let mut decompressor = self.decompressor()?;
+        let Some(array_manifest) = lookup_node(self.root(), node) else {
+            return Ok(coords.into_iter().map(|_| None).collect());
+        };
+        coords
+            .into_iter()
+            .map(|coord| match lookup_ref(array_manifest, coord) {
+                Some(chunk_ref) => {
+                    ref_to_payload(chunk_ref, decompressor.as_mut()).map(Some)
+                }
+                None => Ok(None),
+            })
+            .collect()
     }
 
     pub fn iter(

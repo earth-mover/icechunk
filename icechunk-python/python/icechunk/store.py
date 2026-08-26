@@ -1,10 +1,17 @@
-from collections.abc import Iterable
+from collections.abc import AsyncIterator, Iterable, Sequence
+from collections.abc import Buffer as ReadableBuffer
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
 
-from icechunk._icechunk_python import AsyncCloseableIterator, PyStore, VirtualChunkSpec
+from icechunk._icechunk_python import (
+    AsyncCloseableIterator,
+    IcechunkError,
+    PyStore,
+    VirtualChunkSpec,
+    partition_chunk_keys,
+)
 
 __all__ = [
     "IcechunkStore",
@@ -200,6 +207,78 @@ class IcechunkStore(Store, SyncMixin):
         result = await self._store.get_partial_values(list(ranges))
         return [prototype.buffer.from_bytes(r) for r in result]
 
+    async def get_many(
+        self,
+        requests: Sequence[tuple[str, ByteRequest | None] | str],
+        *,
+        prototype: BufferPrototype,
+        concurrency: int | None = None,
+    ) -> AsyncIterator[Sequence[tuple[int, Buffer | None | BaseException]]]:
+        """Retrieve many values at once, coalescing the reads behind them.
+
+        Zarr's bulk read hook, served by :meth:`get_many_chunks`: requests that
+        name whole chunks are resolved together and their byte ranges merged, so
+        chunks sitting near each other in one backing object are fetched in a few
+        large range GETs instead of one per chunk. Each yielded batch is one such
+        read, so a caller can decode the chunks that have arrived while the rest
+        are still in flight, and a read that fails is reported against exactly
+        the chunks that shared it.
+
+        Requests this cannot route through the coalescing path — metadata keys,
+        and any request for part of a chunk rather than all of it — fall back to
+        :meth:`get`, and are yielded as they land.
+
+        ``concurrency`` is ignored: how many reads are in flight is the repo's
+        ``get_partial_values_concurrency``, and how a merged span becomes
+        requests is the storage layer's decision.
+        """
+        pairs = [
+            (request, None) if isinstance(request, str) else request
+            for request in requests
+        ]
+        chunks, plain_indices = partition_chunk_keys(
+            [key for key, _ in pairs],
+            [index for index, (_, rng) in enumerate(pairs) if rng is not None],
+        )
+        chunk_requests = [(path, coords) for _, path, coords in chunks]
+        # Position in `requests` of each entry in `chunk_requests`, since the
+        # native call reports results by its own request index.
+        chunk_indices = [index for index, _, _ in chunks]
+
+        for index in plain_indices:
+            key, byte_range = pairs[index]
+            try:
+                value: Buffer | None | BaseException = await self.get(
+                    key, prototype=prototype, byte_range=byte_range
+                )
+            except Exception as err:
+                value = err
+            yield [(index, value)]
+
+        if not chunk_requests:
+            return
+
+        chunks = self.get_many_chunks(chunk_requests)
+        try:
+            async for batch in chunks:
+                yield [
+                    (
+                        chunk_indices[request_index],
+                        error
+                        if error is not None
+                        # `data` is a zero-copy view of the coalesced span it came
+                        # from, so it is a buffer rather than `bytes`.
+                        else (
+                            None
+                            if data is None
+                            else prototype.buffer.from_bytes(memoryview(data))
+                        ),
+                    )
+                    for request_index, data, error in batch
+                ]
+        finally:
+            await chunks.aclose()
+
     async def exists(self, key: str) -> bool:
         """Check if a key exists in the store.
 
@@ -327,6 +406,136 @@ class IcechunkStore(Store, SyncMixin):
             Maximum number of rows per batch.
         """
         return self._store.array_chunk_iterator(array_path, batch_size)
+
+    def get_many_chunks(
+        self,
+        requests: Iterable[tuple[str, Sequence[int]]],
+        *,
+        max_gap_bytes: int | None = None,
+        max_coalesced_bytes: int | None = None,
+    ) -> AsyncCloseableIterator[
+        list[tuple[int, ReadableBuffer | None, IcechunkError | None]]
+    ]:
+        """Bulk-read many chunks with read coalescing, streamed in completion order.
+
+        Requested chunks are grouped by the manifest that holds them; each
+        manifest is fetched once (there is no partial-manifest read, so that
+        resolves every ref in the page at once), its chunks are coalesced —
+        nearby byte ranges in the same backing object merged into a few large
+        range GETs — and those spans are fetched through Icechunk's own fetchers.
+        Manifests are pipelined: one manifest's spans download while the next
+        manifest still loads.
+
+        Coalescing is scoped to a manifest, so chunks from different arrays (which
+        live in different manifests) are not merged together, but are still
+        fetched and returned correctly. All kinds are handled: virtual and native
+        chunks are fetched (and coalesced when they share a backing object);
+        inline chunks are returned directly.
+
+        Each yielded item is a **non-empty list of chunks**, one list per
+        completed span, in completion order::
+
+            [(request_index, data, error), ...]
+
+        so a consumer loops twice::
+
+            async for batch in store.get_many_chunks(requests):
+                for request_index, data, error in batch:
+                    ...
+
+        Chunks are batched because the per-item hand-off to Python — a GIL
+        acquire and an asyncio round-trip each — costs more than the I/O
+        coalescing saves once chunks are small. Batch boundaries are the spans
+        the coalescer planned, so they are not a size you can rely on: a list
+        holds anything from one chunk to every chunk in the request.
+
+        ``request_index`` is the chunk's position in ``requests``. Every
+        requested chunk appears in exactly one batch, and for each, exactly one
+        of the following holds:
+
+        - ``data`` is the chunk's exact bytes, byte-identical to ``get``.
+        - ``data`` and ``error`` are both ``None`` — the chunk is
+          uninitialized/missing, so map it straight to a fill value.
+        - ``error`` is the exception that chunk failed with.
+
+        Failures are per-chunk, not per-batch: a manifest that won't load fails
+        its own coords and a span that won't fetch fails its own members, while
+        every other chunk is still delivered. Because coalescing merges chunks
+        into shared spans, one failure can appear against several chunks.
+
+        Errors that stop the request from starting at all are raised rather than
+        reported per chunk: a malformed ``array_path`` raises from this call, and
+        one that names no array (or names a group) raises from the first
+        iteration, since resolving it needs the session lock the iterator takes.
+
+        ``data`` is a buffer-protocol object, **not** a ``bytes``: it is a
+        zero-copy view of the coalesced span the chunk came from. Use
+        ``memoryview(data)`` to read it in place, or ``bytes(data)`` to copy. A
+        retained view keeps its *whole* span alive, including any over-read, so
+        copy out the chunks you intend to hold on to.
+
+        The returned iterator holds the session's read lock for as long as it is
+        open, which blocks writes. Exhaust it, or ``aclose()`` it (e.g. via
+        ``contextlib.aclosing``) if you stop early.
+
+        Parameters
+        ----------
+        requests : Iterable[tuple[str, Sequence[int]]]
+            ``(array_path, coords)`` pairs. May span multiple arrays.
+        max_gap_bytes : int | None
+            Max unwanted bytes tolerated between two chunks before merging them
+            into one GET. ``0`` merges only strictly adjacent chunks (zero
+            over-read); larger trades over-read for fewer round-trips. How a merged
+            span then becomes requests is the storage layer's decision, while
+            ``get_partial_values_concurrency`` bounds how many spans are in flight.
+            ``None`` uses the repo's ``CoalescingConfig.max_gap_bytes``.
+        max_coalesced_bytes : int | None
+            Hard cap on a single span's size, so a pathological run can't produce
+            one giant request. ``None`` uses ``CoalescingConfig.max_coalesced_bytes``,
+            no cap.
+        """
+        return self._store.get_many_chunks(
+            [(array_path, list(coords)) for array_path, coords in requests],
+            max_gap_bytes,
+            max_coalesced_bytes,
+        )
+
+    def coalescing_report(
+        self,
+        requests: Iterable[tuple[str, Sequence[int]]],
+        *,
+        max_gap_bytes: int | None = None,
+        max_coalesced_bytes: int | None = None,
+    ) -> dict[str, int]:
+        """Resolve ``requests`` and plan coalesced spans **without fetching**.
+
+        A diagnostic for whether coalescing actually helps a given access
+        pattern: it reports how many spans the chunks collapse into and how much
+        over-read a ``max_gap_bytes`` costs, before you pay to download anything.
+        Timing this call also isolates the resolve phase (no download) from the
+        total ``get_many_chunks`` wall.
+
+        Returns a dict with: ``requested``, ``virtual_chunks``, ``native_chunks``,
+        ``inline_chunks``, ``missing_chunks``, ``spans``, ``useful_bytes``,
+        ``over_read_bytes``, ``max_span_bytes``, ``concurrency``.
+
+        ``spans`` is how many range GETs ``get_many_chunks`` issues for the same
+        arguments: a count close to the coalescable chunk count means coalescing
+        isn't merging for this pattern, ``spans`` ≪ chunks means it is. The storage
+        layer may still divide a span larger than ``ideal_concurrent_request_size``
+        into concurrent parts, so the HTTP request count can exceed ``spans`` when
+        spans are large. ``concurrency`` is how many spans are in flight at once.
+
+        ``useful_bytes`` counts the bytes some chunk actually wants, and
+        ``over_read_bytes`` the rest of what gets fetched. Chunks whose byte
+        ranges overlap — including one coord requested twice — count their shared
+        bytes once, so the two always sum to the bytes fetched.
+        """
+        return self._store.coalescing_report(
+            [(array_path, list(coords)) for array_path, coords in requests],
+            max_gap_bytes,
+            max_coalesced_bytes,
+        )
 
     async def set_virtual_ref_async(
         self,
