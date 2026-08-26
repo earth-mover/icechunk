@@ -137,6 +137,17 @@ icechunk.hf_storage(
 
 One Hugging Face behavior limits Icechunk. The gateway discards user metadata. Icechunk stamps a write id in that metadata on every conditional write. It reads the id back after a suspicious failure. The id separates a lost success response from a real conflict. On Hugging Face that read always fails. A conditional write whose response is lost in transit can therefore report a conflict that never happened. Retry the commit when that happens.
 
+You can stop Icechunk from sending metadata the gateway discards:
+
+```python
+config = icechunk.RepositoryConfig(
+    storage=icechunk.StorageSettings(unsafe_use_metadata=False),
+)
+repo = icechunk.Repository.open(storage=storage, config=config)
+```
+
+The setting is optional. It removes the unused headers. Icechunk then warns once that lost-response recovery is off. The setting does not change the behavior above. The read back already fails on Hugging Face, with or without the setting.
+
 #### Minio
 
 [Minio](https://min.io/) is available as a storage backend for Icechunk. Functionally this storage backend is the same as S3 storage, but with a different endpoint.
