@@ -1,4 +1,15 @@
+from typing import Any
+
 import icechunk as ic
+import zarr
+
+
+def check_header(header: dict[str, Any], file_type: str) -> None:
+    assert header["file_type"] == file_type
+    assert header["app_name"] == "ic"
+    assert header["written_by"] == f"ic-{header['app_version']}"
+    assert header["spec_version"] == "2.0"
+    assert header["compression"] in ("none", "zstd")
 
 
 async def test_inspect_snapshot() -> None:
@@ -11,6 +22,7 @@ async def test_inspect_snapshot() -> None:
 
     assert sync_result == async_result
     assert sync_result["id"] == snap
+    check_header(sync_result["header"], "snapshot")
 
 
 async def test_inspect_repo_info() -> None:
@@ -23,6 +35,7 @@ async def test_inspect_repo_info() -> None:
     assert sync_result == async_result
     assert "main" in sync_result["branches"]
     assert len(sync_result["snapshots"]) > 0
+    check_header(sync_result["header"], "repo-info")
 
 
 async def test_inspect_manifest() -> None:
@@ -53,6 +66,7 @@ async def test_inspect_manifest() -> None:
             arr["num_chunk_refs"]
             == arr["num_inline"] + arr["num_native"] + arr["num_virtual"]
         )
+    check_header(sync_result["header"], "manifest")
 
 
 async def test_inspect_transaction_log() -> None:
@@ -67,3 +81,17 @@ async def test_inspect_transaction_log() -> None:
     assert "new_groups" in sync_result
     assert "new_arrays" in sync_result
     assert "moved_nodes" in sync_result
+    check_header(sync_result["header"], "transaction-log")
+
+
+async def test_inspect_reports_writing_library_version() -> None:
+    """Files this build writes are stamped with this build's version."""
+    repo = ic.Repository.create(storage=ic.in_memory_storage())
+    session = repo.writable_session("main")
+    zarr.group(store=session.store, overwrite=True)
+    snap = session.commit("commit")
+
+    version = f"ic-{ic.__version__}"
+    assert repo.inspect_repo_info()["header"]["written_by"] == version
+    assert repo.inspect_snapshot(snap)["header"]["written_by"] == version
+    assert repo.inspect_transaction_log(snap)["header"]["written_by"] == version
