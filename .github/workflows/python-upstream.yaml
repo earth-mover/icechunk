@@ -21,6 +21,9 @@ permissions:
 
 env:
   PIXI_VERSION: "v0.72.0"
+  # Title of the issue the pytest reporter keeps up to date. Pinned here (it is
+  # also the action's default) so the comment step below can find that issue.
+  UPSTREAM_ISSUE_TITLE: "⚠️ Nightly upstream-dev CI failed ⚠️"
 
 jobs:
   build:
@@ -221,6 +224,34 @@ jobs:
         uses: xarray-contrib/issue-from-pytest-log@35b4e0a9e06f8e7e261778289cf4b968b722662d # v1.6.2
         with:
           log-path: icechunk-python/output-pytest-log.jsonl
+          issue-title: ${{ env.UPSTREAM_ISSUE_TITLE }}
+
+        # Every reporter above rewrites an existing issue's *body*, which
+        # notifies nobody: a nightly that has been failing for a week reads
+        # exactly like one that never failed. Comment as well, so whoever
+        # watches the issue hears about it.
+      - name: Comment on the failure issues
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          SETUP_OUTCOME: ${{ needs.build.outputs.setup-outcome }}
+          MYPY_OUTCOME: ${{ needs.build.outputs.mypy-outcome }}
+          PYTEST_OUTCOME: ${{ needs.build.outputs.pytest-outcome }}
+        run: |
+          comment_on() {
+            number=$(gh issue list --state open --limit 200 --json number,title |
+              jq -r --arg t "$1" 'map(select(.title == $t)) | .[0].number // empty')
+            if [ -z "$number" ]; then
+              echo "no open issue titled '$1'"
+              return
+            fi
+            gh issue comment "$number" --body \
+              "Failed again in tonight's run: $RUN_URL — the issue body has the current failures."
+          }
+          [ "$SETUP_OUTCOME" != failure ] || comment_on "Nightly upstream dependency installation failed"
+          [ "$MYPY_OUTCOME" != failure ] || comment_on "Nightly MyPy type checking failed with upstream dependencies"
+          [ "$PYTEST_OUTCOME" != failure ] || comment_on "$UPSTREAM_ISSUE_TITLE"
 
   xarray-backends:
     name: xarray-tests-upstream
@@ -296,3 +327,51 @@ jobs:
         with:
           log-path: xarray-backends-logs/output-pytest-log.jsonl
           issue-title: "Nightly Xarray backends tests failed"
+
+        # The report only rewrites the issue body, which notifies nobody
+      - name: Comment on the failure issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          number=$(gh issue list --state open --limit 200 --json number,title |
+            jq -r 'map(select(.title == "Nightly Xarray backends tests failed")) | .[0].number // empty')
+          if [ -z "$number" ]; then
+            echo "no open issue for the xarray backends failure"
+            exit 0
+          fi
+          gh issue comment "$number" --body \
+            "Failed again in tonight's run: $RUN_URL — the issue body has the current failures."
+
+    # The jobs above are `continue-on-error` so upstream breakage does not block
+    # anything, which also leaves the run itself green: a nightly failing for days
+    # is invisible in the Actions list. Reflect the outcome in the run status.
+  nightly-status:
+    name: nightly-status
+    runs-on: ubuntu-latest
+    needs: [build, xarray-backends]
+    if: always() && github.event_name == 'schedule'
+    steps:
+      - name: Fail the run if any nightly job failed
+        env:
+          SETUP_OUTCOME: ${{ needs.build.outputs.setup-outcome }}
+          MYPY_OUTCOME: ${{ needs.build.outputs.mypy-outcome }}
+          PYTEST_OUTCOME: ${{ needs.build.outputs.pytest-outcome }}
+          XARRAY_OUTCOME: ${{ needs.xarray-backends.outputs.pytest-outcome }}
+          # A job can also die before those steps run — a broken wheel build, say
+          BUILD_RESULT: ${{ needs.build.result }}
+          XARRAY_RESULT: ${{ needs.xarray-backends.result }}
+        run: |
+          failed=""
+          [ "$SETUP_OUTCOME" != failure ] || failed="$failed setup"
+          [ "$MYPY_OUTCOME" != failure ] || failed="$failed mypy"
+          [ "$PYTEST_OUTCOME" != failure ] || failed="$failed pytest"
+          [ "$XARRAY_OUTCOME" != failure ] || failed="$failed xarray-backends"
+          [ "$BUILD_RESULT" != failure ] || failed="$failed upstream-dev-job"
+          [ "$XARRAY_RESULT" != failure ] || failed="$failed xarray-backends-job"
+          if [ -n "$failed" ]; then
+            echo "::error::nightly upstream-dev failed:$failed"
+            exit 1
+          fi
+          echo "nightly upstream-dev is clean"

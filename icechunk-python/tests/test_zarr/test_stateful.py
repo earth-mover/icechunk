@@ -1,3 +1,4 @@
+import inspect
 import json
 import math
 import pickle
@@ -7,7 +8,7 @@ from typing import Any, TypeVar
 import hypothesis.strategies as st
 import numpy as np
 import pytest
-from hypothesis import note
+from hypothesis import assume, note
 from hypothesis.stateful import (
     initialize,
     invariant,
@@ -29,10 +30,20 @@ from icechunk.testing.models import GroupNode, ModelStore
 from icechunk.testing.trees import absolute, valid_moves
 from icechunk.testing.utils import update_paths_after_move
 from zarr import Array
+from zarr.codecs.bytes import BytesCodec
 from zarr.core.buffer import default_buffer_prototype
 from zarr.testing.stateful import ZarrHierarchyStateMachine, split_prefix_name
+from zarr.testing.strategies import arrays as zarr_arrays
+from zarr.testing.strategies import node_names
 
 PROTOTYPE = default_buffer_prototype()
+
+# zarr >= 3.3 draws the array on the model store and *recreates* it in the store
+# under test, dropping the sharding codec the strategy may have drawn (see
+# `add_array` below). Older zarr builds the same array in both stores, and its
+# `arrays` strategy opens the group with mode="w", which would wipe the model
+# store if we drove it ourselves — so only override against the newer API.
+ZARR_RECREATES_ARRAYS = "open_mode" in inspect.signature(zarr_arrays).parameters
 
 Frequency = TypeVar("Frequency", bound=Callable[..., Any])
 
@@ -115,6 +126,71 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         self.model.spec_version = spec_version
 
         super().init_store()
+
+    if ZARR_RECREATES_ARRAYS:
+
+        @rule(data=st.data(), name=node_names)
+        def add_array(self, data: st.DataObject, name: str) -> None:
+            """Give both stores the same array, sharding codec included.
+
+            zarr's rule draws the array on the model store, where the strategy
+            may give it a sharding codec, and then recreates it in the store
+            under test with ``create_array(chunks=<grid cell>,
+            compressors=None)``, which drops that codec (and the drawn
+            attributes). The two sides then differ where sharding matters:
+            writing a chunk that is entirely fill value elides the object on the
+            unsharded side only, so the store loses a key the model keeps.
+
+            Same fix as zarr-developers/zarr-python#4288, which is on zarr's
+            main but not in a release yet — and CI installs the latest release.
+            Drop this override once that release lands.
+            """
+            if self.all_groups:
+                parent = data.draw(
+                    st.sampled_from(sorted(self.all_groups)), label="Array parent"
+                )
+            else:
+                parent = ""
+            path = f"{parent}/{name}".lstrip("/")
+            assume(self.can_add(path))
+
+            # mypy resolves `zarr_arrays` against the installed zarr, which may
+            # be the older one without `open_mode`. This rule only exists for
+            # the newer API, where that argument stops the strategy from opening
+            # the model store with mode="w" and wiping it.
+            arrays_strategy: Any = zarr_arrays
+            a = data.draw(
+                arrays_strategy(
+                    stores=st.just(self.model),
+                    paths=st.just(parent),
+                    array_names=st.just(name),
+                    zarr_formats=st.just(3),
+                    compressors=st.just(BytesCodec()),
+                    open_mode="a",
+                ),
+                label="generated array",
+            )
+            note(
+                f"Adding array:  path='{path}'  shape={a.shape}  "
+                f"chunks={a.metadata.chunk_grid}"
+            )
+
+            # `from_array` keeps the drawn chunk grid, codecs and dimension
+            # names. `attributes` and `fill_value` are passed explicitly because
+            # zarr up to 3.3.0 silently drops both (fixed by zarr#4288, so this
+            # is a no-op on newer zarr); the data is copied here rather than by
+            # `write_data=True`, whose shard-wise copy still does not support
+            # rectilinear chunk grids.
+            arr = zarr.from_array(
+                self.store,
+                data=a,
+                name=path,
+                attributes=a.attrs.asdict(),
+                fill_value=a.fill_value,
+                write_data=False,
+            )
+            arr[:] = a[:]
+            self.all_arrays.add(path)
 
     @precondition(
         lambda self: (

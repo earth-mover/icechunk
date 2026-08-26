@@ -1297,22 +1297,27 @@ class VersionControlStateMachine(RuleBasedStateMachine):
             if p.startswith("transactions/")
         }
 
-        # The legitimate orphan tx logs are pruned ancestors of every snapshot
-        # whose *file* is still on disk.
-        pruned_extra: set[str] = set()
+        # A tx log whose own snapshot file is gone must be a retained pruned
+        # ancestor. Only repo info snapshots keep one alive, and the mirror below
+        # also covers snapshots dropped from it, whose logs GC has already
+        # deleted.
+        orphan_txs = transactions - snapshots
         if self.model.spec_version >= 2:
-            referenced = {
+            explainable = {
                 tx
                 for sid in snapshots
                 for tx in self.model.pruned_ancestor_tx_logs.get(sid, ())
             }
-            pruned_extra = referenced - snapshots
+            assert orphan_txs <= explainable, (
+                f"tx logs without a snapshot that no snapshot retains as a pruned "
+                f"ancestor: {orphan_txs - explainable}"
+            )
 
             # GC must never delete a tx log still referenced by a snapshot that
             # is still in the repo info. `inspect_transaction_log` surfaces, per
             # such snapshot, any referenced pruned logs that are wrongly absent.
             missing_pruned: set[str] = set()
-            for sid in snapshots:
+            for sid in self.model.commits:
                 try:
                     tx_log = self.repo.inspect_transaction_log(sid)
                 except IcechunkError:
@@ -1327,15 +1332,14 @@ class VersionControlStateMachine(RuleBasedStateMachine):
             assert not missing_pruned, (
                 f"pruned-ancestor tx logs referenced by surviving snapshots are missing: {missing_pruned}"
             )
+        else:
+            # No pruned-ancestor retention before spec V2: every tx log must
+            # have its snapshot.
+            assert not orphan_txs, f"tx logs without a snapshot: {orphan_txs}"
 
-        # The retained pruned-ancestor logs whose snapshot file was GC'd are the
-        # only legitimate tx logs without a matching snapshot. Everything else
-        # must satisfy the pre-feature invariants, so subtract them out first.
-        assert transactions - snapshots == pruned_extra, (
-            f"tx logs without a snapshot that are not retained pruned ancestors: "
-            f"{(transactions - snapshots) - pruned_extra}"
-        )
-        transactions_core = transactions - pruned_extra
+        # The invariants below pair each tx log with the snapshot it is named
+        # after, so drop the pruned-ancestor logs that outlived their snapshot.
+        transactions_core = transactions & snapshots
 
         if self.model.initial_spec_version == 1:
             expired = any(
