@@ -1,4 +1,4 @@
-use std::{borrow::Cow, sync::Arc};
+use std::{borrow::Cow, collections::HashSet, sync::Arc};
 
 use async_stream::try_stream;
 use bytes::Bytes;
@@ -12,7 +12,7 @@ use icechunk::{
     },
     session::CoalescingReport,
     storage::ETag,
-    store::{SetVirtualRefsResult, StoreError, StoreErrorKind},
+    store::{SetVirtualRefsResult, StoreError, StoreErrorKind, split_chunk_key},
 };
 use itertools::Itertools as _;
 use numpy::{IntoPyArray as _, PyArrayMethods as _, PyReadonlyArray1};
@@ -30,9 +30,7 @@ use crate::{
     display::{PyRepr, ReprMode, py_bool},
     errors::{PyIcechunkStoreError, PyIcechunkStoreResult, session_error_to_pyerr},
     impl_pickle,
-    session::{
-        PySession, ResolvedChunkRef, payload_to_resolved, resolve_chunk_refs_impl,
-    },
+    session::{PySession, ResolvedChunkRef, payload_to_resolved},
     streams::PyAsyncCloseableIterator,
     virtualrefs::{build_vrefs_from_arrays, do_set_virtual_refs, vrefs_result_to_py},
 };
@@ -48,6 +46,32 @@ pub(crate) fn parse_array_path(path: String) -> PyResult<Path> {
     let path = if path.starts_with('/') { path } else { format!("/{path}") };
     Path::try_from(path)
         .map_err(|e| PyValueError::new_err(format!("Invalid array path: {e}")))
+}
+
+/// Whole-chunk keys as `(index into the original keys, array path, coords)`.
+type ChunkKeyPartition = Vec<(usize, String, Vec<u32>)>;
+
+/// Split store keys into whole-chunk reads and the indices of everything else,
+/// so the store's own key parser is the only one. `excluded` holds indices of
+/// keys carrying a byte range, which are never whole-chunk reads.
+#[pyfunction]
+#[pyo3(signature = (keys, excluded))]
+pub(crate) fn partition_chunk_keys(
+    keys: Vec<String>,
+    excluded: Vec<usize>,
+) -> (ChunkKeyPartition, Vec<usize>) {
+    let excluded: HashSet<usize> = excluded.into_iter().collect();
+    let mut chunks = Vec::with_capacity(keys.len());
+    let mut plain = Vec::new();
+    for (index, key) in keys.into_iter().enumerate() {
+        match (excluded.contains(&index), split_chunk_key(&key)) {
+            (false, Some((node_path, coords))) => {
+                chunks.push((index, node_path.to_string(), coords.0));
+            }
+            _ => plain.push(index),
+        }
+    }
+    (chunks, plain)
 }
 
 /// Parse a list of `(array_path, coords)` requests into `(Path, ChunkIndices)`
@@ -746,52 +770,6 @@ impl PyStore {
         Ok(PyAsyncCloseableIterator::new(prepared))
     }
 
-    /// Resolve an explicit set of chunk coordinates for one array to their
-    /// references, without scanning the whole manifest.
-    ///
-    /// Unlike `array_chunk_iterator`, which walks the entire array manifest,
-    /// this only reads the manifest pages the requested coordinates fall in —
-    /// reusing the same lazy per-key lookup the read path uses.
-    ///
-    /// Returns a columnar 5-tuple aligned with the input coords (row `i`
-    /// describes `coords[i]`), matching `array_chunk_iterator`'s column layout
-    /// minus the coords column:
-    ///
-    /// ```text
-    /// kinds    : np.ndarray[uint8]    values of icechunk.ChunkType
-    ///                                  (0 = uninitialized/missing)
-    /// paths    : list[str]            URL (virtual) | chunk_id (native) | "" otherwise
-    /// offsets  : np.ndarray[uint64]
-    /// lengths  : np.ndarray[uint64]
-    /// inlined  : dict[int, bytes]     inline rows only, keyed by row index
-    /// ```
-    fn resolve_chunk_refs(
-        &self,
-        py: Python<'_>,
-        array_path: String,
-        coords: Vec<Vec<u32>>,
-    ) -> PyResult<Py<PyAny>> {
-        let session = self.0.session();
-        let resolved = py.detach(move || {
-            pyo3_async_runtimes::tokio::get_runtime()
-                .block_on(resolve_chunk_refs_impl(session, array_path, coords))
-        })?;
-        resolved_refs_to_columns(py, resolved, None)
-    }
-
-    fn resolve_chunk_refs_async<'py>(
-        &'py self,
-        py: Python<'py>,
-        array_path: String,
-        coords: Vec<Vec<u32>>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let session = self.0.session();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let resolved = resolve_chunk_refs_impl(session, array_path, coords).await?;
-            Python::attach(|py| resolved_refs_to_columns(py, resolved, None))
-        })
-    }
-
     /// Bulk-read many chunks with read coalescing (see `Session::get_many_chunks`).
     ///
     /// `requests` is a list of `(array_path, coords)` and may span multiple
@@ -801,13 +779,13 @@ impl PyStore {
     /// `bytes` is that chunk's exact bytes (a zero-copy view of its coalesced
     /// span); `None` means the chunk is uninitialized.
     ///
-    /// Coalescing knobs `max_gap` / `max_coalesced_bytes` are per call. Chunks
-    /// are grouped and coalesced per manifest, and manifests are pipelined.
-    #[pyo3(signature = (requests, max_gap, max_coalesced_bytes=None))]
+    /// `max_gap_bytes` / `max_coalesced_bytes` override the repo config for this call.
+    /// Chunks are grouped and coalesced per manifest, and manifests are pipelined.
+    #[pyo3(signature = (requests, max_gap_bytes=None, max_coalesced_bytes=None))]
     fn get_many_chunks(
         &self,
         requests: Vec<(String, Vec<u32>)>,
-        max_gap: u64,
+        max_gap_bytes: Option<u64>,
         max_coalesced_bytes: Option<u64>,
     ) -> PyResult<PyAsyncCloseableIterator> {
         let store = Arc::clone(&self.0);
@@ -819,9 +797,13 @@ impl PyStore {
         let res = try_stream! {
             let session_lock = store.session();
             let session = session_lock.read_owned().await;
+            let coalescing = session.config().coalescing();
+            let max_gap_bytes = max_gap_bytes.unwrap_or_else(|| coalescing.max_gap_bytes());
+            let max_coalesced_bytes =
+                max_coalesced_bytes.or_else(|| coalescing.max_coalesced_bytes());
 
             let stream = session
-                .get_many_chunks(parsed, max_gap, max_coalesced_bytes)
+                .get_many_chunks(parsed, max_gap_bytes, max_coalesced_bytes)
                 .await
                 .map_err(PyIcechunkStoreError::SessionError)?;
 
@@ -861,14 +843,14 @@ impl PyStore {
     /// Diagnostic: resolve `requests` and plan spans without fetching, returning
     /// the coalescing stats (span count, over-read, kind breakdown) as a dict.
     /// Use it to see whether coalescing actually merges for an access pattern
-    /// and how much it over-reads at a given `max_gap`. Timing this call also
+    /// and how much it over-reads at a given `max_gap_bytes`. Timing this call also
     /// isolates the resolve phase (no download).
-    #[pyo3(signature = (requests, max_gap, max_coalesced_bytes=None))]
+    #[pyo3(signature = (requests, max_gap_bytes=None, max_coalesced_bytes=None))]
     fn coalescing_report(
         &self,
         py: Python<'_>,
         requests: Vec<(String, Vec<u32>)>,
-        max_gap: u64,
+        max_gap_bytes: Option<u64>,
         max_coalesced_bytes: Option<u64>,
     ) -> PyResult<Py<PyAny>> {
         let store = Arc::clone(&self.0);
@@ -876,9 +858,14 @@ impl PyStore {
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
                 let session_lock = store.session();
                 let session = session_lock.read_owned().await;
+                let coalescing = session.config().coalescing();
+                let max_gap_bytes =
+                    max_gap_bytes.unwrap_or_else(|| coalescing.max_gap_bytes());
+                let max_coalesced_bytes =
+                    max_coalesced_bytes.or_else(|| coalescing.max_coalesced_bytes());
                 let parsed = parse_requests(requests)?;
                 let report = session
-                    .coalescing_report(parsed, max_gap, max_coalesced_bytes)
+                    .coalescing_report(parsed, max_gap_bytes, max_coalesced_bytes)
                     .await
                     .map_err(PyIcechunkStoreError::SessionError)?;
                 Ok::<CoalescingReport, PyErr>(report)

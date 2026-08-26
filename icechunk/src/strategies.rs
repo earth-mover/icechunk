@@ -479,6 +479,7 @@ prop_compose! {
         RepositoryConfig{
             inline_chunk_threshold_bytes,
             get_partial_values_concurrency,
+            coalescing: None,
             compression,
             max_concurrent_requests,
             caching,

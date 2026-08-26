@@ -1,4 +1,3 @@
-import re
 from collections.abc import AsyncIterator, Iterable, Sequence
 from collections.abc import Buffer as ReadableBuffer
 from datetime import datetime
@@ -11,6 +10,7 @@ from icechunk._icechunk_python import (
     IcechunkError,
     PyStore,
     VirtualChunkSpec,
+    partition_chunk_keys,
 )
 
 __all__ = [
@@ -29,33 +29,6 @@ from zarr.core.sync import SyncMixin
 
 if TYPE_CHECKING:
     from icechunk import Session
-
-
-# Zarr v3 chunk keys carry a literal "c" component before the grid coords:
-# "group/array/c/0/3/1" with "/" as the separator, "group/array/c.0.3.1" with ".".
-_COORD_SEP = re.compile(r"[./]")
-
-
-def _split_chunk_key(key: str) -> tuple[str, list[int]] | None:
-    """Split a chunk key into ``(array_path, coords)``, or ``None`` if it is not one.
-
-    Returns ``None`` for metadata keys (``zarr.json``) and anything else that
-    does not look like ``.../c/<i>/<j>/...``, so a caller can fall back to a
-    plain ``get`` rather than mistake a metadata key for a chunk.
-    """
-    parts = key.split("/")
-    # "/"-separated coords: a standalone "c" component, coords after it.
-    if "c" in parts[1:]:
-        index = len(parts) - 1 - parts[::-1].index("c")
-        coords = parts[index + 1 :]
-        if coords and all(part.lstrip("-").isdigit() for part in coords):
-            return "/".join(parts[:index]), [int(part) for part in coords]
-    # "."-separated coords, all in the final component: "c.0.3.1".
-    if parts[-1].startswith("c.") and len(parts[-1]) > 2:
-        coords = _COORD_SEP.split(parts[-1])[1:]
-        if coords and all(part.lstrip("-").isdigit() for part in coords):
-            return "/".join(parts[:-1]), [int(part) for part in coords]
-    return None
 
 
 def _byte_request_to_tuple(
@@ -259,21 +232,21 @@ class IcechunkStore(Store, SyncMixin):
         ``get_partial_values_concurrency``, and how a merged span becomes
         requests is the storage layer's decision.
         """
-        chunk_requests: list[tuple[str, list[int]]] = []
+        pairs = [
+            (request, None) if isinstance(request, str) else request
+            for request in requests
+        ]
+        chunks, plain_indices = partition_chunk_keys(
+            [key for key, _ in pairs],
+            [index for index, (_, rng) in enumerate(pairs) if rng is not None],
+        )
+        chunk_requests = [(path, coords) for _, path, coords in chunks]
         # Position in `requests` of each entry in `chunk_requests`, since the
         # native call reports results by its own request index.
-        chunk_indices: list[int] = []
-        plain: list[tuple[int, str, ByteRequest | None]] = []
-        for index, request in enumerate(requests):
-            key, byte_range = (request, None) if isinstance(request, str) else request
-            split = _split_chunk_key(key) if byte_range is None else None
-            if split is None:
-                plain.append((index, key, byte_range))
-            else:
-                chunk_requests.append(split)
-                chunk_indices.append(index)
+        chunk_indices = [index for index, _, _ in chunks]
 
-        for index, key, byte_range in plain:
+        for index in plain_indices:
+            key, byte_range = pairs[index]
             try:
                 value: Buffer | None | BaseException = await self.get(
                     key, prototype=prototype, byte_range=byte_range
@@ -434,76 +407,11 @@ class IcechunkStore(Store, SyncMixin):
         """
         return self._store.array_chunk_iterator(array_path, batch_size)
 
-    def resolve_chunk_refs(
-        self,
-        array_path: str,
-        coords: Iterable[Sequence[int]],
-    ) -> tuple[
-        "np.ndarray[tuple[int], np.dtype[np.uint8]]",  # kinds (n,)
-        list[str],  # paths
-        "np.ndarray[tuple[int], np.dtype[np.uint64]]",  # offsets (n,)
-        "np.ndarray[tuple[int], np.dtype[np.uint64]]",  # lengths (n,)
-        dict[int, bytes],  # inlined
-    ]:
-        """Resolve specific chunks to their references without scanning the manifest.
-
-        Unlike ``array_chunk_iterator``, which walks the entire array manifest,
-        this reads only the manifest pages the requested coordinates fall in,
-        reusing the same lazy per-key lookup the read path uses. The cost is
-        proportional to the number of coordinates and touched pages rather than
-        the size of the array's manifest. Lookups are fanned out concurrently
-        (bounded by the repo's ``get_partial_values_concurrency``).
-
-        The result is a columnar 5-tuple whose columns are aligned with the
-        input coords — row ``i`` describes ``coords[i]``. This is the same
-        layout ``array_chunk_iterator`` yields, minus the coords column (the
-        caller already has them, in order)::
-
-            kinds:    np.ndarray[uint8]    values of icechunk.ChunkType
-                                            (0 = uninitialized/missing)
-            paths:    list[str]            URL (virtual) | chunk_id (native) | "" otherwise
-            offsets:  np.ndarray[uint64]
-            lengths:  np.ndarray[uint64]
-            inlined:  dict[int, bytes]     inline rows only, keyed by row index
-
-        Parameters
-        ----------
-        array_path : str
-            Zarr path to the array (e.g. ``"a"`` or ``"/group/var"``).
-        coords : Iterable[Sequence[int]]
-            Chunk-grid coordinates, one sequence of integers per chunk, in the
-            same form ``Session.chunk_coordinates`` yields. Example:
-            ``[(0, 0, 0), (0, 1, 5)]``.
-        """
-        return self._store.resolve_chunk_refs(
-            array_path, [list(coord) for coord in coords]
-        )
-
-    async def resolve_chunk_refs_async(
-        self,
-        array_path: str,
-        coords: Iterable[Sequence[int]],
-    ) -> tuple[
-        "np.ndarray[tuple[int], np.dtype[np.uint8]]",
-        list[str],
-        "np.ndarray[tuple[int], np.dtype[np.uint64]]",
-        "np.ndarray[tuple[int], np.dtype[np.uint64]]",
-        dict[int, bytes],
-    ]:
-        """Resolve specific chunks to their references without scanning the manifest.
-
-        Async variant of :meth:`resolve_chunk_refs`; see it for the columnar
-        result layout.
-        """
-        return await self._store.resolve_chunk_refs_async(
-            array_path, [list(coord) for coord in coords]
-        )
-
     def get_many_chunks(
         self,
         requests: Iterable[tuple[str, Sequence[int]]],
         *,
-        max_gap: int = 256 * 1024,
+        max_gap_bytes: int | None = None,
         max_coalesced_bytes: int | None = None,
     ) -> AsyncCloseableIterator[
         list[tuple[int, ReadableBuffer | None, IcechunkError | None]]
@@ -574,22 +482,21 @@ class IcechunkStore(Store, SyncMixin):
         ----------
         requests : Iterable[tuple[str, Sequence[int]]]
             ``(array_path, coords)`` pairs. May span multiple arrays.
-        max_gap : int
+        max_gap_bytes : int | None
             Max unwanted bytes tolerated between two chunks before merging them
             into one GET. ``0`` merges only strictly adjacent chunks (zero
-            over-read); larger trades over-read for fewer round-trips. This is the
-            knob for trading round-trips against over-read — how a merged span is
-            then turned into requests is the storage layer's decision
-            (``ideal_concurrent_request_size``,
-            ``max_concurrent_requests_for_object``), while
+            over-read); larger trades over-read for fewer round-trips. How a merged
+            span then becomes requests is the storage layer's decision, while
             ``get_partial_values_concurrency`` bounds how many spans are in flight.
+            ``None`` uses the repo's ``CoalescingConfig.max_gap_bytes``.
         max_coalesced_bytes : int | None
             Hard cap on a single span's size, so a pathological run can't produce
-            one giant request. ``None`` means no cap.
+            one giant request. ``None`` uses ``CoalescingConfig.max_coalesced_bytes``,
+            no cap.
         """
         return self._store.get_many_chunks(
             [(array_path, list(coords)) for array_path, coords in requests],
-            max_gap,
+            max_gap_bytes,
             max_coalesced_bytes,
         )
 
@@ -597,14 +504,14 @@ class IcechunkStore(Store, SyncMixin):
         self,
         requests: Iterable[tuple[str, Sequence[int]]],
         *,
-        max_gap: int = 256 * 1024,
+        max_gap_bytes: int | None = None,
         max_coalesced_bytes: int | None = None,
     ) -> dict[str, int]:
         """Resolve ``requests`` and plan coalesced spans **without fetching**.
 
         A diagnostic for whether coalescing actually helps a given access
         pattern: it reports how many spans the chunks collapse into and how much
-        over-read a ``max_gap`` costs, before you pay to download anything.
+        over-read a ``max_gap_bytes`` costs, before you pay to download anything.
         Timing this call also isolates the resolve phase (no download) from the
         total ``get_many_chunks`` wall.
 
@@ -626,7 +533,7 @@ class IcechunkStore(Store, SyncMixin):
         """
         return self._store.coalescing_report(
             [(array_path, list(coords)) for array_path, coords in requests],
-            max_gap,
+            max_gap_bytes,
             max_coalesced_bytes,
         )
 

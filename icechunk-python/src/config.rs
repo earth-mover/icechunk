@@ -18,11 +18,11 @@ use icechunk::{
     ObjectStoreConfig, RepositoryConfig, Storage,
     config::{
         AzureCredentials, AzureCredentialsFetcher, AzureRefreshableCredential,
-        AzureStaticCredentials, CachingConfig, CompressionAlgorithm, CompressionConfig,
-        Credentials, GcsBearerCredential, GcsCredentials, GcsCredentialsFetcher,
-        GcsStaticCredentials, ManifestConfig, ManifestPreloadCondition,
-        ManifestPreloadConfig, ManifestSplitCondition, ManifestSplitDim,
-        ManifestSplitDimCondition, ManifestSplittingConfig,
+        AzureStaticCredentials, CachingConfig, CoalescingConfig, CompressionAlgorithm,
+        CompressionConfig, Credentials, GcsBearerCredential, GcsCredentials,
+        GcsCredentialsFetcher, GcsStaticCredentials, ManifestConfig,
+        ManifestPreloadCondition, ManifestPreloadConfig, ManifestSplitCondition,
+        ManifestSplitDim, ManifestSplitDimCondition, ManifestSplittingConfig,
         ManifestVirtualChunkLocationCompressionConfig, RepoUpdateRetryConfig,
         S3ChecksumAlgorithm, S3Credentials, S3CredentialsFetcher, S3Options,
         S3StaticCredentials,
@@ -991,6 +991,82 @@ impl From<&PyCompressionConfig> for CompressionConfig {
         Self {
             algorithm: value.algorithm.as_ref().map(|a| a.clone().into()),
             level: value.level,
+        }
+    }
+}
+
+#[pyclass(skip_from_py_object, name = "CoalescingConfig", eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PyCoalescingConfig {
+    #[pyo3(get, set)]
+    pub max_gap_bytes: Option<u64>,
+    #[pyo3(get, set)]
+    pub max_coalesced_bytes: Option<u64>,
+}
+
+impl PyRepr for PyCoalescingConfig {
+    const EXECUTABLE: bool = true;
+    fn cls_name() -> &'static str {
+        "icechunk.config.CoalescingConfig"
+    }
+    fn fields(&self, mode: ReprMode) -> Vec<(&str, String)> {
+        let defaults = CoalescingConfig::default();
+        vec![
+            (
+                "max_gap_bytes",
+                py_option_or_default(
+                    &self.max_gap_bytes,
+                    &defaults.max_gap_bytes().to_string(),
+                    mode,
+                ),
+            ),
+            (
+                "max_coalesced_bytes",
+                py_option_or_default(&self.max_coalesced_bytes, "None", mode),
+            ),
+        ]
+    }
+}
+
+#[pymethods]
+impl PyCoalescingConfig {
+    #[staticmethod]
+    /// Create a default `CoalescingConfig` instance
+    fn default() -> Self {
+        CoalescingConfig::default().into()
+    }
+
+    #[pyo3(signature = (max_gap_bytes=None, max_coalesced_bytes=None))]
+    #[new]
+    pub fn new(max_gap_bytes: Option<u64>, max_coalesced_bytes: Option<u64>) -> Self {
+        Self { max_gap_bytes, max_coalesced_bytes }
+    }
+
+    pub fn __repr__(&self) -> String {
+        <Self as PyRepr>::__repr__(self)
+    }
+    pub fn __str__(&self) -> String {
+        <Self as PyRepr>::__str__(self)
+    }
+    pub fn _repr_html_(&self) -> String {
+        <Self as PyRepr>::_repr_html_(self)
+    }
+}
+
+impl From<CoalescingConfig> for PyCoalescingConfig {
+    fn from(value: CoalescingConfig) -> Self {
+        Self {
+            max_gap_bytes: value.max_gap_bytes,
+            max_coalesced_bytes: value.max_coalesced_bytes,
+        }
+    }
+}
+
+impl From<&PyCoalescingConfig> for CoalescingConfig {
+    fn from(value: &PyCoalescingConfig) -> Self {
+        Self {
+            max_gap_bytes: value.max_gap_bytes,
+            max_coalesced_bytes: value.max_coalesced_bytes,
         }
     }
 }
@@ -2444,6 +2520,8 @@ pub struct PyRepositoryConfig {
     #[pyo3(get, set)]
     pub get_partial_values_concurrency: Option<u16>,
     #[pyo3(get, set)]
+    pub coalescing: Option<Py<PyCoalescingConfig>>,
+    #[pyo3(get, set)]
     pub compression: Option<Py<PyCompressionConfig>>,
     #[pyo3(get, set)]
     pub max_concurrent_requests: Option<u16>,
@@ -2488,6 +2566,7 @@ impl TryFrom<&PyRepositoryConfig> for RepositoryConfig {
             Ok(Self {
                 inline_chunk_threshold_bytes: value.inline_chunk_threshold_bytes,
                 get_partial_values_concurrency: value.get_partial_values_concurrency,
+                coalescing: value.coalescing.as_ref().map(|c| (&*c.borrow(py)).into()),
                 compression: value.compression.as_ref().map(|c| (&*c.borrow(py)).into()),
                 max_concurrent_requests: value.max_concurrent_requests,
                 caching: value.caching.as_ref().map(|c| (&*c.borrow(py)).into()),
@@ -2511,6 +2590,10 @@ impl From<RepositoryConfig> for PyRepositoryConfig {
         Python::attach(|py| Self {
             inline_chunk_threshold_bytes: value.inline_chunk_threshold_bytes,
             get_partial_values_concurrency: value.get_partial_values_concurrency,
+            coalescing: value.coalescing.map(|c| {
+                Py::new(py, Into::<PyCoalescingConfig>::into(c))
+                    .expect("Cannot create instance of CoalescingConfig")
+            }),
             compression: value.compression.map(|c| {
                 Py::new(py, Into::<PyCompressionConfig>::into(c))
                     .expect("Cannot create instance of CompressionConfig")
@@ -2653,6 +2736,12 @@ impl PyRepr for PyRepositoryConfig {
                     CachingConfig::default().into()
                 }),
             ),
+            (
+                "coalescing",
+                py_option_nested_repr_or_default(&self.coalescing, mode, || {
+                    CoalescingConfig::default().into()
+                }),
+            ),
             ("storage", py_option_nested_repr(&self.storage, mode)),
             (
                 "manifest",
@@ -2680,11 +2769,12 @@ impl PyRepositoryConfig {
     }
 
     #[new]
-    #[pyo3(signature = (inline_chunk_threshold_bytes = None, get_partial_values_concurrency = None, compression = None, max_concurrent_requests = None, caching = None, storage = None, virtual_chunk_containers = None, manifest = None, repo_update_retries = None, num_updates_per_repo_info_file = None))]
+    #[pyo3(signature = (inline_chunk_threshold_bytes = None, get_partial_values_concurrency = None, coalescing = None, compression = None, max_concurrent_requests = None, caching = None, storage = None, virtual_chunk_containers = None, manifest = None, repo_update_retries = None, num_updates_per_repo_info_file = None))]
     #[expect(clippy::too_many_arguments)]
     pub fn new(
         inline_chunk_threshold_bytes: Option<u16>,
         get_partial_values_concurrency: Option<u16>,
+        coalescing: Option<Py<PyCoalescingConfig>>,
         compression: Option<Py<PyCompressionConfig>>,
         max_concurrent_requests: Option<u16>,
         caching: Option<Py<PyCachingConfig>>,
@@ -2697,6 +2787,7 @@ impl PyRepositoryConfig {
         Self {
             inline_chunk_threshold_bytes,
             get_partial_values_concurrency,
+            coalescing,
             compression,
             max_concurrent_requests,
             caching,

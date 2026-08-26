@@ -126,7 +126,7 @@ def test_virtual_bytes_identical_to_individual_gets(tmp_path: Path) -> None:
     store = session.store
     requests = [("v", [0]), ("v", [1]), ("v", [2]), ("v", [3])]
 
-    results: dict[int, bytes | None] = dict(_drain(store, requests, max_gap=0))
+    results: dict[int, bytes | None] = dict(_drain(store, requests, max_gap_bytes=0))
 
     # Every present chunk is byte-identical to the backing-file slice AND to a
     # plain individual get.
@@ -164,7 +164,7 @@ def test_cross_array_same_object(tmp_path: Path) -> None:
     session = repo.readonly_session(branch="main")
     store = session.store
 
-    results = dict(_drain(store, [("a", [0]), ("b", [0])], max_gap=0))
+    results = dict(_drain(store, [("a", [0]), ("b", [0])], max_gap_bytes=0))
     assert results[0] == backing[0:128]
     assert results[1] == backing[128:256]
 
@@ -198,7 +198,7 @@ def test_disagreeing_checksums_do_not_coalesce(tmp_path: Path) -> None:
 
     # Coalescing must not launder chunk 1 past its failed precondition.
     with pytest.raises(icechunk.IcechunkError, match="checksum"):
-        _drain(store, [("v", [0]), ("v", [1])], max_gap=0)
+        _drain(store, [("v", [0]), ("v", [1])], max_gap_bytes=0)
 
 
 @pytest.mark.parametrize(
@@ -253,10 +253,10 @@ def test_coalescing_report_merge_ratio_and_over_read(tmp_path: Path) -> None:
     )
     reqs = [("v", [0]), ("v", [1]), ("v", [2])]
 
-    # max_gap=0: chunks 0 and 1 are adjacent -> one span; chunk 2 is gapped ->
+    # max_gap_bytes=0: chunks 0 and 1 are adjacent -> one span; chunk 2 is gapped ->
     # its own span. 3 virtual chunks collapse to 2 spans with zero over-read, and
     # `spans` is the GET count -- nothing splits a merged span back apart.
-    rep = store.coalescing_report(reqs, max_gap=0)
+    rep = store.coalescing_report(reqs, max_gap_bytes=0)
     assert rep["virtual_chunks"] == 3
     assert rep["spans"] == 2
     assert rep["over_read_bytes"] == 0
@@ -265,13 +265,13 @@ def test_coalescing_report_merge_ratio_and_over_read(tmp_path: Path) -> None:
     # Gap big enough to bridge 200->500 merges all three into one span; the
     # skipped 300 bytes between chunk 1's end and chunk 2 become over-read.
     # (All three coords are in the same array = same manifest, so they can merge.)
-    rep = store.coalescing_report(reqs, max_gap=300)
+    rep = store.coalescing_report(reqs, max_gap_bytes=300)
     assert rep["spans"] == 1
     assert rep["over_read_bytes"] == 300
 
     # A byte cap smaller than the merged span forces the split back apart, so the
     # over-read the gap would have cost is not paid.
-    rep = store.coalescing_report(reqs, max_gap=300, max_coalesced_bytes=200)
+    rep = store.coalescing_report(reqs, max_gap_bytes=300, max_coalesced_bytes=200)
     assert rep["spans"] == 2
     assert rep["over_read_bytes"] == 0
 
@@ -286,9 +286,9 @@ def test_bytes_are_right_when_a_span_over_reads(tmp_path: Path) -> None:
     reqs = [("v", [0]), ("v", [1]), ("v", [2])]
 
     # One span covering 0..580, of which 200..500 is over-read.
-    assert store.coalescing_report(reqs, max_gap=300)["spans"] == 1
+    assert store.coalescing_report(reqs, max_gap_bytes=300)["spans"] == 1
 
-    results = dict(_drain(store, reqs, max_gap=300))
+    results = dict(_drain(store, reqs, max_gap_bytes=300))
     for i, (_, offset, length) in enumerate(refs):
         assert results[i] == backing[offset : offset + length]
 
@@ -301,7 +301,7 @@ def test_duplicate_coords_are_each_served(tmp_path: Path) -> None:
     store = _commit_virtual_refs(repo, tmp_path, [(0, 0, 100), (1, 100, 100)])
     reqs = [("v", [0]), ("v", [1]), ("v", [0])]
 
-    rep = store.coalescing_report(reqs, max_gap=0)
+    rep = store.coalescing_report(reqs, max_gap_bytes=0)
     assert rep["requested"] == 3
     assert rep["virtual_chunks"] == 3
     assert rep["spans"] == 1
@@ -309,7 +309,7 @@ def test_duplicate_coords_are_each_served(tmp_path: Path) -> None:
     assert rep["useful_bytes"] == 200
     assert rep["over_read_bytes"] == 0
 
-    results = dict(_drain(store, reqs, max_gap=0))
+    results = dict(_drain(store, reqs, max_gap_bytes=0))
     assert sorted(results) == [0, 1, 2]
     assert results[0] == backing[0:100]
     assert results[1] == backing[100:200]
@@ -342,12 +342,12 @@ def test_merging_reduces_the_get_count(tmp_path: Path) -> None:
 
     # 16 byte-adjacent chunks collapse into a single GET, with zero over-read --
     # even though 16 > the default concurrency of 10.
-    rep = store.coalescing_report(reqs, max_gap=0)
+    rep = store.coalescing_report(reqs, max_gap_bytes=0)
     assert rep["virtual_chunks"] == 16
     assert rep["spans"] == 1
     assert rep["over_read_bytes"] == 0
 
-    results = dict(_drain(store, reqs, max_gap=0))
+    results = dict(_drain(store, reqs, max_gap_bytes=0))
     assert len(results) == 16
     for coord in range(16):
         assert results[coord] == backing[coord * 64 : (coord + 1) * 64]
@@ -403,12 +403,12 @@ def test_split_manifests_are_all_served(tmp_path: Path) -> None:
 
     # 3 splits of 2 adjacent chunks each -> 2 chunks merge within a split, but
     # never across splits: 3 spans, not 1.
-    rep = store.coalescing_report(reqs, max_gap=0)
+    rep = store.coalescing_report(reqs, max_gap_bytes=0)
     assert rep["virtual_chunks"] == 6
     assert rep["spans"] == 3
     assert rep["over_read_bytes"] == 0
 
-    results = dict(_drain(store, reqs, max_gap=0))
+    results = dict(_drain(store, reqs, max_gap_bytes=0))
     assert len(results) == 6
     for coord in range(6):
         assert results[coord] == backing[coord * 64 : (coord + 1) * 64]
@@ -434,7 +434,7 @@ def test_one_failed_chunk_does_not_fail_the_batch(tmp_path: Path) -> None:
     outcomes = {
         index: (data, error)
         for index, data, error in _drain_outcomes(
-            store, [("v", [0]), ("v", [1]), ("v", [2])], max_gap=0
+            store, [("v", [0]), ("v", [1]), ("v", [2])], max_gap_bytes=0
         )
     }
     # All three chunks are accounted for.
@@ -494,3 +494,35 @@ def test_get_many_mixes_metadata_and_chunk_keys(tmp_path: Path) -> None:
     assert values[1] == backing[0:100]
     # Coord outside the array's grid: absent, not an error.
     assert values[2] is None
+
+
+@pytest.mark.parametrize("max_gap_bytes,expected_spans", [(0, 8), (256 * 1024, 1)])
+def test_repo_config_max_gap_drives_coalescing(
+    tmp_path: Path, max_gap_bytes: int, expected_spans: int
+) -> None:
+    """`max_gap_bytes` is reachable from the repo config, so a plain array read -- which
+    has nowhere to pass a per-call value -- still gets the configured policy."""
+    config = icechunk.RepositoryConfig.default()
+    config.coalescing = icechunk.CoalescingConfig(max_gap_bytes=max_gap_bytes)
+    repo, _ = _virtual_repo(tmp_path, config)
+    # 8 chunks of 64B, each separated by a 64B hole: merging them costs over-read.
+    store = _commit_virtual_refs(repo, tmp_path, [(c, c * 128, 64) for c in range(8)])
+    reqs = [("v", [c]) for c in range(8)]
+
+    assert store.coalescing_report(reqs)["spans"] == expected_spans
+    assert len(_drain(store, reqs)) == 8
+
+
+def test_get_many_uses_the_configured_max_gap(tmp_path: Path) -> None:
+    """The zarr bulk-read hook takes no coalescing arguments, so the repo config is
+    the only way its reads can be tuned."""
+    config = icechunk.RepositoryConfig.default()
+    config.coalescing = icechunk.CoalescingConfig(max_gap_bytes=0)
+    repo, backing = _virtual_repo(tmp_path, config)
+    store = _commit_virtual_refs(repo, tmp_path, [(c, c * 128, 64) for c in range(8)])
+
+    assert store.coalescing_report([("v", [c]) for c in range(8)])["spans"] == 8
+    values = _drain_get_many(store, [f"v/c/{c}" for c in range(8)])
+    assert values == {
+        coord: backing[coord * 128 : coord * 128 + 64] for coord in range(8)
+    }

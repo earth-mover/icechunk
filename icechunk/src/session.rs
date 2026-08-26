@@ -383,13 +383,13 @@ impl CoalescedSpan {
 /// Group resolved chunks into coalesced byte-range spans.
 ///
 /// Chunks are grouped by backing object (never across objects), sorted by
-/// offset, and neighbours whose gap is within `max_gap` are merged — subject to
-/// `max_coalesced_bytes` capping a single span. `max_gap == 0` merges only
+/// offset, and neighbours whose gap is within `max_gap_bytes` are merged — subject to
+/// `max_coalesced_bytes` capping a single span. `max_gap_bytes == 0` merges only
 /// strictly adjacent chunks (zero over-read); larger values trade over-read for
 /// fewer round-trips. Each input chunk appears in exactly one span.
 fn plan_spans(
     resolved: Vec<ResolvedChunk>,
-    max_gap: u64,
+    max_gap_bytes: u64,
     max_coalesced_bytes: Option<u64>,
 ) -> Vec<CoalescedSpan> {
     // Keyed by checksum as well as object: a span is fetched with one
@@ -417,10 +417,13 @@ fn plan_spans(
                 Some(span) => {
                     let gap = c.offset.saturating_sub(span.end);
                     let new_end = span.end.max(c.end());
-                    let new_size = new_end - span.start;
-                    let within_gap = gap <= max_gap;
-                    let within_cap =
-                        max_coalesced_bytes.is_none_or(|cap| new_size <= cap);
+                    let within_gap = gap <= max_gap_bytes;
+                    // A chunk already inside the span costs no extra bytes, so the
+                    // cap cannot exclude it -- splitting would refetch what the
+                    // span already covers.
+                    let within_cap = new_end == span.end
+                        || max_coalesced_bytes
+                            .is_none_or(|cap| new_end - span.start <= cap);
                     if within_gap && within_cap {
                         span.members.push(member);
                         span.end = new_end;
@@ -516,7 +519,7 @@ fn fail_all(
 
 /// Diagnostic summary of coalescing a set of requests, without fetching. Lets a
 /// caller see the merge ratio (`spans` vs coalescable chunks) and `over_read`
-/// for a given `max_gap` / `max_coalesced_bytes` — i.e. whether coalescing is
+/// for a given `max_gap_bytes` / `max_coalesced_bytes` — i.e. whether coalescing is
 /// actually helping for this access pattern.
 ///
 /// `spans` is the number of range GETs `get_many_chunks` issues for the same
@@ -586,7 +589,7 @@ mod plan_spans_tests {
     #[test]
     fn gap_within_max_gap_merges_beyond_does_not() {
         let chunks = || vec![virt(0, "s3://b/f", 0, 100), virt(1, "s3://b/f", 120, 50)];
-        // gap of 20: not merged at max_gap=0, merged at max_gap=20.
+        // gap of 20: not merged at max_gap_bytes=0, merged at max_gap_bytes=20.
         assert_eq!(plan_spans(chunks(), 0, None).len(), 2);
         let merged = plan_spans(chunks(), 20, None);
         assert_eq!(merged.len(), 1);
@@ -594,7 +597,7 @@ mod plan_spans_tests {
     }
 
     #[test]
-    fn max_coalesced_bytes_caps_a_span() {
+    fn max_span_bytes_caps_a_span() {
         // Adjacent, but the cap forbids a span larger than 100 bytes.
         let spans = plan_spans(
             vec![virt(0, "s3://b/f", 0, 80), virt(1, "s3://b/f", 80, 80)],
@@ -602,6 +605,30 @@ mod plan_spans_tests {
             Some(100),
         );
         assert_eq!(spans.len(), 2);
+    }
+
+    #[test]
+    fn the_cap_never_splits_out_a_contained_chunk() {
+        // The second chunk lies inside the first, so merging it adds no bytes --
+        // splitting would refetch the range the span already covers.
+        let spans = plan_spans(
+            vec![virt(0, "s3://b/f", 0, 300), virt(1, "s3://b/f", 50, 150)],
+            0,
+            Some(200),
+        );
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].useful_bytes(), 300);
+    }
+
+    #[test]
+    fn the_cap_never_splits_out_a_duplicate_coord() {
+        let spans = plan_spans(
+            vec![virt(0, "s3://b/f", 0, 300), virt(1, "s3://b/f", 0, 300)],
+            0,
+            Some(200),
+        );
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].useful_bytes(), 300);
     }
 
     #[test]
@@ -1818,19 +1845,19 @@ impl Session {
     /// the request from starting at all — an unknown path, a group instead of an
     /// array — surface from this function instead.
     ///
-    /// See [`plan_spans`] for the coalescing knobs `max_gap` /
+    /// See [`plan_spans`] for the coalescing knobs `max_gap_bytes` /
     /// `max_coalesced_bytes`.
     pub async fn get_many_chunks<'a>(
         &'a self,
         requests: Vec<(Path, ChunkIndices)>,
-        max_gap: u64,
+        max_gap_bytes: u64,
         max_coalesced_bytes: Option<u64>,
     ) -> SessionResult<impl Stream<Item = Vec<(u64, ChunkOutcome)>> + 'a + use<'a>> {
         // The only concurrency gate this layer applies: `conc` spans in flight.
         // How a span is turned into requests belongs to the storage layer, which
         // splits one larger than `ideal_concurrent_request_size` into bounded
         // concurrent parts. So this decides *what to merge*, and the fetcher
-        // decides *how to issue it* — `max_gap` is the knob that trades
+        // decides *how to issue it* — `max_gap_bytes` is the knob that trades
         // round-trips for over-read, and nothing here second-guesses it by
         // splitting merged spans back apart.
         let sem = Arc::new(Semaphore::new(self.span_concurrency()));
@@ -1886,7 +1913,7 @@ impl Session {
                         if !part.immediate.is_empty() {
                             yield part.immediate;
                         }
-                        for span in plan_spans(part.to_fetch, max_gap, max_coalesced_bytes)
+                        for span in plan_spans(part.to_fetch, max_gap_bytes, max_coalesced_bytes)
                         {
                             let sem = Arc::clone(&sem);
                             let indices: Vec<u64> =
@@ -1988,9 +2015,8 @@ impl Session {
     }
 
     /// Resolve every group's manifest concurrently, bounded by
-    /// [`Session::span_concurrency`]. Shared by `get_many_chunks`'s driver,
-    /// `resolve_chunk_payloads` and `coalescing_report` so all three see the same
-    /// resolve behavior.
+    /// [`Session::span_concurrency`]. Shared by `get_many_chunks`'s driver and
+    /// `coalescing_report`, so both see the same resolve behavior.
     async fn resolve_groups(
         &self,
         groups: Vec<ManifestWork>,
@@ -2008,41 +2034,13 @@ impl Session {
         (self.config().get_partial_values_concurrency() as usize).max(1)
     }
 
-    /// Resolve an explicit set of chunk coords to their payloads, in input order,
-    /// without fetching any chunk bytes. `None` for an uninitialized coord.
-    ///
-    /// This is the planning half of [`Session::get_many_chunks`] and shares its
-    /// grouping: each array's node is resolved once and each touched manifest
-    /// fetched once, rather than once per coord as a loop over
-    /// [`Session::get_chunk_ref`] would do. Manifests are fetched concurrently,
-    /// bounded by `get_partial_values_concurrency`.
-    pub async fn resolve_chunk_payloads(
-        &self,
-        requests: Vec<(Path, ChunkIndices)>,
-    ) -> SessionResult<Vec<Option<ChunkPayload>>> {
-        let n = requests.len();
-        let grouping = self.group_by_manifest(requests).await?;
-
-        let mut out: Vec<Option<ChunkPayload>> = vec![None; n];
-        // `missing` needs no write — it is already `None`.
-        for (i, payload) in grouping.changeset {
-            out[i] = payload;
-        }
-        for (i, payload) in
-            self.resolve_groups(grouping.groups).await?.into_iter().flatten()
-        {
-            out[i] = payload;
-        }
-        Ok(out)
-    }
-
     /// Diagnostic: resolve `requests` and plan spans, but do **not** fetch.
     /// Reports the merge ratio and over-read so callers can tell whether
     /// coalescing helps for this access pattern before paying for it.
     pub async fn coalescing_report(
         &self,
         requests: Vec<(Path, ChunkIndices)>,
-        max_gap: u64,
+        max_gap_bytes: u64,
         max_coalesced_bytes: Option<u64>,
     ) -> SessionResult<CoalescingReport> {
         let requested = requests.len();
@@ -2086,7 +2084,7 @@ impl Session {
                 .count();
             native_chunks += native;
             virtual_chunks += part.to_fetch.len() - native;
-            for span in plan_spans(part.to_fetch, max_gap, max_coalesced_bytes) {
+            for span in plan_spans(part.to_fetch, max_gap_bytes, max_coalesced_bytes) {
                 useful_bytes += span.useful_bytes();
                 over_read_bytes += span.over_read_bytes();
                 max_span_bytes = max_span_bytes.max(span.end - span.start);
@@ -6866,11 +6864,7 @@ mod tests {
                 length: 0,
                 checksum: None,
             }),
-            ChunkPayload::Ref(ChunkRef {
-                id: ChunkId::random(),
-                offset: 0,
-                length: 0,
-            }),
+            ChunkPayload::Ref(ChunkRef { id: ChunkId::random(), offset: 0, length: 0 }),
         ];
 
         for payload in zero_length {

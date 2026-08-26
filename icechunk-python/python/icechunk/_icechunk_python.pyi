@@ -528,6 +528,41 @@ class CompressionConfig:
         CompressionConfig
         """
 
+class CoalescingConfig:
+    """How bulk reads merge nearby chunks into fewer, larger requests."""
+
+    def __init__(
+        self,
+        max_gap_bytes: int | None = None,
+        max_coalesced_bytes: int | None = None,
+    ) -> None:
+        """
+        Create a new `CoalescingConfig` object.
+
+        Parameters
+        ----------
+        max_gap_bytes: int | None
+            Unwanted bytes a bulk read will merge across to save a round trip.
+            0 merges only strictly adjacent chunks.
+            Default: 262144
+        max_coalesced_bytes: int | None
+            Ceiling on a merged span, so one request cannot grow without bound.
+            Default: None
+        """
+        ...
+    @property
+    def max_gap_bytes(self) -> int | None: ...
+    @max_gap_bytes.setter
+    def max_gap_bytes(self, value: int | None) -> None: ...
+    @property
+    def max_coalesced_bytes(self) -> int | None: ...
+    @max_coalesced_bytes.setter
+    def max_coalesced_bytes(self, value: int | None) -> None: ...
+    @staticmethod
+    def default() -> CoalescingConfig:
+        """Create a default `CoalescingConfig` instance."""
+        ...
+
 class CachingConfig:
     """Configuration for how Icechunk caches its metadata files"""
 
@@ -1734,6 +1769,7 @@ class RepositoryConfig:
         cls,
         inline_chunk_threshold_bytes: int | None = None,
         get_partial_values_concurrency: int | None = None,
+        coalescing: CoalescingConfig | None = None,
         compression: CompressionConfig | None = None,
         max_concurrent_requests: int | None = None,
         caching: CachingConfig | None = None,
@@ -1754,6 +1790,10 @@ class RepositoryConfig:
         get_partial_values_concurrency: int | None
             The number of concurrent requests to make when getting partial values from storage.
             Default: 10
+        coalescing: CoalescingConfig | None
+            How bulk reads merge nearby chunks into fewer, larger requests. When
+            None, the default `CoalescingConfig` is used.
+            Default: None
         compression: CompressionConfig | None
             The compression configuration for the repository. When None, the
             default `CompressionConfig` is used.
@@ -1807,6 +1847,28 @@ class RepositoryConfig:
     def inline_chunk_threshold_bytes(self, value: int | None) -> None:
         """
         Set the maximum size of a chunk that will be stored inline in the repository. Chunks larger than this size will be written to storage.
+        """
+        ...
+    @property
+    def coalescing(self) -> CoalescingConfig | None:
+        """
+        How bulk reads merge nearby chunks into fewer, larger requests.
+
+        Returns
+        -------
+        CoalescingConfig | None
+            The coalescing configuration for the repository.
+        """
+        ...
+    @coalescing.setter
+    def coalescing(self, value: CoalescingConfig | None) -> None:
+        """
+        Set the coalescing configuration for the repository.
+
+        Parameters
+        ----------
+        value: CoalescingConfig | None
+            The coalescing configuration for the repository.
         """
         ...
     @property
@@ -2871,28 +2933,10 @@ class PyStore:
             dict[int, bytes],  # inlined
         ]
     ]: ...
-    def resolve_chunk_refs(
-        self, array_path: str, coords: list[list[int]]
-    ) -> tuple[
-        np.ndarray[tuple[int], np.dtype[np.uint8]],  # kinds (n,)
-        list[str],  # paths
-        np.ndarray[tuple[int], np.dtype[np.uint64]],  # offsets (n,)
-        np.ndarray[tuple[int], np.dtype[np.uint64]],  # lengths (n,)
-        dict[int, bytes],  # inlined
-    ]: ...
-    async def resolve_chunk_refs_async(
-        self, array_path: str, coords: list[list[int]]
-    ) -> tuple[
-        np.ndarray[tuple[int], np.dtype[np.uint8]],
-        list[str],
-        np.ndarray[tuple[int], np.dtype[np.uint64]],
-        np.ndarray[tuple[int], np.dtype[np.uint64]],
-        dict[int, bytes],
-    ]: ...
     def get_many_chunks(
         self,
         requests: list[tuple[str, list[int]]],
-        max_gap: int,
+        max_gap_bytes: int | None = None,
         max_coalesced_bytes: int | None = None,
         # One non-empty list per completed span, not one item per chunk. Buffers
         # are zero-copy views of a coalesced span, not `bytes`. Failures are
@@ -2904,7 +2948,7 @@ class PyStore:
     def coalescing_report(
         self,
         requests: list[tuple[str, list[int]]],
-        max_gap: int,
+        max_gap_bytes: int | None = None,
         max_coalesced_bytes: int | None = None,
     ) -> dict[str, int]: ...
     async def set_virtual_ref_async(
@@ -3873,6 +3917,17 @@ def shutdown_telemetry() -> None:
       to the collector. Defaults to "icechunk".
     - ICECHUNK_OTEL_FILTER: which spans are exported, in `tracing-subscriber` filter
       syntax. Defaults to "icechunk=info".
+    """
+    ...
+
+def partition_chunk_keys(
+    keys: list[str], excluded: list[int]
+) -> tuple[list[tuple[int, str, list[int]]], list[int]]:
+    """Split store keys into whole-chunk reads and everything else.
+
+    Returns ``(chunks, plain)``: ``chunks`` holds ``(index, array_path, coords)``
+    for each key naming a whole chunk, ``plain`` the indices of the rest.
+    Indices in ``excluded`` are never treated as chunk reads.
     """
     ...
 

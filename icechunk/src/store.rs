@@ -1132,6 +1132,15 @@ impl Key {
     }
 }
 
+/// Array path and coords of a key naming a whole chunk, `None` for anything
+/// else, so callers can route the rest to a plain `get`.
+pub fn split_chunk_key(key: &str) -> Option<(Path, ChunkIndices)> {
+    match Key::parse(key) {
+        Ok(Key::Chunk { node_path, coords }) => Some((node_path, coords)),
+        _ => None,
+    }
+}
+
 impl Display for Key {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
