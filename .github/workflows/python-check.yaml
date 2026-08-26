@@ -39,7 +39,7 @@ jobs:
           manifest-path: icechunk-python/pyproject.toml
 
       - name: Cache Dependencies
-        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        uses: ./.github/actions/rust-cache
         with:
           # The rust cache includes a dep on the Python version (when building icechunk-python)
           # so we need to bump the version here whenever Python version is updated
@@ -159,7 +159,7 @@ jobs:
           environments: py314t
 
       - name: Cache Dependencies
-        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        uses: ./.github/actions/rust-cache
         with:
           prefix-key: "rust-py314t"
           shared-key: "wheels"

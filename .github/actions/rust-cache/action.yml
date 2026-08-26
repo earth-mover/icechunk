@@ -1,0 +1,47 @@
+name: "Rust cache"
+description: "Swatinem/rust-cache keyed on the toolchain this repo builds with."
+
+inputs:
+  prefix-key:
+    description: "The prefix cache key."
+    required: false
+    default: "v0-rust"
+  shared-key:
+    description: "A cache key used instead of the job-based key, stable over multiple jobs."
+    required: false
+  key:
+    description: "An additional cache key added alongside the job-based key."
+    required: false
+  save-if:
+    description: "Whether the cache should be saved."
+    required: false
+    default: "true"
+  cmd-format:
+    description: "A format string used to run `rustc`, i.e. to reach it through pixi."
+    required: false
+    default: "{0}"
+
+runs:
+  using: composite
+  steps:
+    # rust-cache keys on every toolchain `rustup toolchain list` reports. The runner
+    # image's stable toolchain is never built with here, and it moves on each image
+    # rollout, so keep it out of the key. The rustc and cargo shims are separate
+    # hardlinks and still work.
+    - name: Move rustup out of the cache key
+      shell: bash
+      run: |
+        for rustup in "$HOME"/.cargo/bin/rustup "$HOME"/.cargo/bin/rustup.exe; do
+          if [ -f "$rustup" ]; then
+            mv "$rustup" "$HOME/$(basename "$rustup").hidden"
+          fi
+        done
+
+    - name: Cache dependencies
+      uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+      with:
+        prefix-key: ${{ inputs.prefix-key }}
+        shared-key: ${{ inputs.shared-key }}
+        key: ${{ inputs.key }}
+        save-if: ${{ inputs.save-if }}
+        cmd-format: ${{ inputs.cmd-format }}

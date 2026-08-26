@@ -17,7 +17,9 @@ updates:
         patterns:
           - "*"
   - package-ecosystem: "github-actions"
-    directory: "/"
+    directories:
+      - "/"
+      - "/.github/actions/rust-cache"
     schedule:
       interval: "weekly"
       day: "monday"
