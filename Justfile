@@ -562,7 +562,7 @@ python-upstream-setup:
   uv pip install "$WHEEL" --group dev \
     --resolution highest \
     --index-strategy unsafe-best-match 2>&1 | tee setup-output.log
-  uv pip install "hypothesis @ git+https://github.com/ianhi/hypothesis.git@flaky-feedback#subdirectory=hypothesis-python"
+  uv pip install hypothesis
   uv pip list
 
 [private]
