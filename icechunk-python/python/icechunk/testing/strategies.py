@@ -161,9 +161,15 @@ def draw_older_than(data: st.DataObject, storage: ic.Storage) -> datetime.dateti
     result: datetime.datetime = data.draw(
         st.one_of(
             st.just(max(created_at_times) + datetime.timedelta(days=1)),
-            # Add 1μs to ensure we delete both the tx log & snapshot
-            st.sampled_from(created_at_times).map(
-                lambda time: time + datetime.timedelta(microseconds=1)
+            # Not `sampled_from`: the number of snapshots depends on earlier
+            # expire/GC runs, and replaying a choice against a differently-sized
+            # strategy raises FlakyStrategyDefinition.
+            st.integers(min_value=0, max_value=255).map(
+                # Add 1μs to ensure we delete both the tx log & snapshot
+                lambda i: (
+                    created_at_times[i % len(created_at_times)]
+                    + datetime.timedelta(microseconds=1)
+                )
             ),
             st.just(datetime.datetime(2000, 1, 1, tzinfo=datetime.UTC)),
         )
