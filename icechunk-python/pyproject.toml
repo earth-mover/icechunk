@@ -19,6 +19,8 @@ license = { file = "LICENSE" }
 dynamic = ["version"]
 authors = [{ name = "Earthmover", email = "info@earthmover.io" }]
 
+# This is the minimum zarr version for users. The pixi dev environments set a
+# maximum version. See [tool.pixi.feature.dev.pypi-dependencies] below.
 dependencies = ["zarr>=3.1.0"]
 
 [dependency-groups]
@@ -210,6 +212,11 @@ platforms = [
   "win-64",
   "osx-64",
 ]
+
+# zarr 3.2 changed the type hints that the zarr test overrides suppress.
+# mypy then reports unused suppressions. We support zarr 3.2 in a separate change.
+[tool.pixi.feature.dev.pypi-dependencies]
+zarr = "<3.2"
 
 [tool.pixi.feature.docs.dependencies]
 cairo = ">=1.18.4,<2"

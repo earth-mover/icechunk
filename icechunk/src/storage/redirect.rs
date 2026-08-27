@@ -99,7 +99,7 @@ impl RedirectStorage {
         let res = client.execute(req).await.map_err(|e| {
             StorageErrorKind::BadRedirect(format!(
                 "Request to redirect url ({}) failed, cannot find target Storage instance: {e}",
-                &self.url
+                self.url
             ))
         }).capture()?;
         let storage_url = res.headers().get("location").ok_or_else(|| {
@@ -108,7 +108,7 @@ impl RedirectStorage {
             )
         }).capture()?.to_str().map_err(|e| {
             StorageErrorKind::BadRedirect(format!(
-                "Request to redirect url ({}) doesn't return a proper redirect to a known Storage protocol: {e}", &self.url
+                "Request to redirect url ({}) doesn't return a proper redirect to a known Storage protocol: {e}", self.url
             ))
         }).capture()?;
 
