@@ -156,7 +156,7 @@ impl StreamLimiter {
 mod tests {
     use std::{convert::Infallible, error::Error, future::ready, sync::Arc};
 
-    use futures::{FutureExt as _, StreamExt as _, TryStreamExt as _, stream};
+    use futures::{FutureExt as _, StreamExt as _, stream};
     use icechunk_macros::tokio_test;
     use tokio::pin;
 

@@ -103,7 +103,7 @@ async fn write_chunks_to_store(
                 opts.clone(),
             )
             .await
-            .expect(&format!("putting chunk to {} failed", &path));
+            .expect(&format!("putting chunk to {path} failed"));
     }
 }
 async fn create_local_repository(
