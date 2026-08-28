@@ -196,7 +196,7 @@ impl RealStore {
     ) -> Result<Arc<dyn Storage + Send + Sync>, Box<dyn std::error::Error>> {
         let prefix = Some(String::new());
         let creds = Some(self.credentials.clone());
-        let storage: Arc<dyn Storage + Send + Sync> = match &self.kind {
+        let storage: Arc<dyn Storage + Send + Sync> = match self.kind {
             RealStoreKind::Aws => Arc::new(
                 s3_storage(
                     self.options.clone(),
@@ -260,7 +260,7 @@ impl RealStore {
     ) -> Result<Arc<dyn Storage + Send + Sync>, Box<dyn std::error::Error>> {
         let creds = Some(self.credentials.clone());
         let prefix = Some(prefix);
-        let storage: Arc<dyn Storage + Send + Sync> = match &self.kind {
+        let storage: Arc<dyn Storage + Send + Sync> = match self.kind {
             RealStoreKind::Aws => new_s3_storage(
                 self.options.clone(),
                 self.bucket.clone(),

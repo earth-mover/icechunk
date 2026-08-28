@@ -1237,12 +1237,6 @@ async fn test_write_object_larger_than_multipart_threshold()
     Ok(())
 }
 
-/// The Hugging Face gateway ignores `If-None-Match` on `GetObject`. It answers
-/// 200 where S3 answers 304.
-fn honors_conditional_get(storage_name: &str) -> bool {
-    !storage_name.starts_with("HF")
-}
-
 #[tokio_test]
 async fn test_get_object_conditional() -> Result<(), Box<dyn std::error::Error>> {
     with_storage(Permission::Modify, |name, storage| async move {
@@ -1273,11 +1267,11 @@ async fn test_get_object_conditional() -> Result<(), Box<dyn std::error::Error>>
         let res = storage
             .get_object_conditional(&storage_settings, path.as_str(), Some(&version))
             .await?;
-        if honors_conditional_get(name) {
-            assert!(matches!(res, storage::GetModifiedResult::OnLatestVersion));
-        } else {
-            // the gateway re-sends the object instead of answering 304
+        if name.starts_with("HF") {
+            // the Huggin Face gateway ignores If-None-Match on GetObject and re-sends the object
             assert!(matches!(res, storage::GetModifiedResult::Modified { .. }));
+        } else {
+            assert!(matches!(res, storage::GetModifiedResult::OnLatestVersion));
         }
 
         // conditional get without a version, should return Modified

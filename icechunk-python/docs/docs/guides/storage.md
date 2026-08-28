@@ -133,7 +133,7 @@ icechunk.hf_storage(
 )
 ```
 
-`namespace` is the owner of the bucket: your username or an organization name. The gateway scopes every request to the namespace in the endpoint path. `hf_storage` therefore builds the endpoint as `https://s3.hf.co/<namespace>` and sends the bare bucket name. It also sets the region to `us-east-1` and forces path-style URLs. The gateway requires both.
+`namespace` is the owner of the bucket: your username or an organization name. The gateway scopes every request to the namespace in the endpoint path. `hf_storage` therefore builds the endpoint as `https://s3.hf.co/<namespace>`. It sends the bare bucket name. It sets the region to `us-east-1`. It forces path-style URLs. The gateway requires that region and that URL style.
 
 The Hugging Face gateway discards user metadata which imposes some limitations on Icechunk: A conditional write whose response is lost in transit can report a conflict that never happened. Retry the commit if that happens.
 

@@ -2519,7 +2519,6 @@ dependencies = [
  "tracing",
  "typed-path",
  "typetag",
- "url",
  "uuid",
 ]
 

@@ -580,7 +580,6 @@ def hf_storage(
     bucket: str,
     prefix: str | None,
     namespace: str,
-    endpoint_url: str | None = None,
     access_key_id: str | None = None,
     secret_access_key: str | None = None,
     session_token: str | None = None,
@@ -589,6 +588,7 @@ def hf_storage(
     get_credentials: Callable[[], S3StaticCredentials] | None = None,
     scatter_initial_credentials: bool = False,
     network_stream_timeout_seconds: int = 60,
+    legacy_rooted_keys: bool | None = None,
     read_headers: dict[str, str] | None = None,
     write_headers: dict[str, str] | None = None,
     headers: dict[str, str] | None = None,
@@ -602,9 +602,9 @@ def hf_storage(
 
     The gateway discards user metadata. Icechunk stores a write id there to tell
     a lost success response apart from a real conflict. On Hugging Face that
-    recovery is unavailable. If the network loses a conditional write's response
-    on its way back to the client, a rare event, the retry reports a conflict
-    that never happened. Retry the commit.
+    recovery is unavailable. The network can lose a conditional write's response
+    on its way back to the client. That is rare. The retry then reports a
+    conflict that never happened. Retry the commit.
 
     Parameters
     ----------
@@ -618,10 +618,6 @@ def hf_storage(
         updated.
     namespace: str
         The bucket owner: a Hugging Face username or organization name
-    endpoint_url: str | None
-        The gateway address. Defaults to `https://s3.hf.co`. Icechunk appends the
-        namespace to it. The gateway scopes every operation to the namespace in
-        the endpoint path.
     access_key_id: str | None
         S3 credential access key. It starts with `HFAK`
     secret_access_key: str | None
@@ -643,6 +639,11 @@ def hf_storage(
     network_stream_timeout_seconds: int
         Timeout requests if no bytes can be transmitted during this period of time.
         If set to 0, timeout is disabled. Default: 60.
+    legacy_rooted_keys: bool | None
+        The object key layout. ``None`` (default) detects it automatically and is
+        what most users will want; only set it explicitly if you have a special
+        situation and know what you're doing. ``True`` forces the old leading-slash
+        layout (empty prefix only); ``False`` forces the standard one.
     read_headers: dict[str, str] | None
         Extra HTTP headers to attach to every read request to the object store.
     write_headers: dict[str, str] | None
@@ -662,7 +663,6 @@ def hf_storage(
         scatter_initial_credentials=scatter_initial_credentials,
     )
     options = S3Options(
-        endpoint_url=endpoint_url,
         network_stream_timeout_seconds=network_stream_timeout_seconds,
     )
     return Storage.new_hf(
@@ -671,6 +671,7 @@ def hf_storage(
         prefix=prefix,
         namespace=namespace,
         credentials=credentials,
+        legacy_rooted_keys=legacy_rooted_keys,
         read_headers=read_headers,
         write_headers=write_headers,
         headers=headers,

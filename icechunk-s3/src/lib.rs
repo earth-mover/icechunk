@@ -60,7 +60,6 @@ use tokio::sync::OnceCell;
 use tokio_util::io::StreamReader;
 use tracing::{error, instrument, trace, warn};
 use typed_path::Utf8UnixPath;
-use url::Url;
 use uuid::Uuid;
 
 /// How object keys are laid out inside the bucket for a given repository.
@@ -213,15 +212,13 @@ impl Intercept for StripChecksumOn304Interceptor {
 ///
 /// The SDK omits it, so `https://s3.hf.co/<ns>` addresses `/<ns><bucket>/<key>`.
 fn endpoint_with_bucket_separator(endpoint_url: &str) -> Cow<'_, str> {
-    if endpoint_url.ends_with('/') {
-        return Cow::Borrowed(endpoint_url);
-    }
-    match Url::parse(endpoint_url) {
-        // The SDK appends the bucket name to any path past the root.
-        Ok(url) if url.has_authority() && url.path() != "/" => {
-            Cow::Owned(format!("{endpoint_url}/"))
-        }
-        _ => Cow::Borrowed(endpoint_url),
+    // The SDK appends the bucket name to any path past the root.
+    let has_path =
+        endpoint_url.split_once("://").is_some_and(|(_, rest)| rest.contains('/'));
+    if has_path && !endpoint_url.ends_with('/') {
+        Cow::Owned(format!("{endpoint_url}/"))
+    } else {
+        Cow::Borrowed(endpoint_url)
     }
 }
 
@@ -1606,12 +1603,15 @@ pub fn r2_storage(
 }
 
 /// The Hugging Face S3-compatible gateway.
-pub const HF_GATEWAY_ENDPOINT: &str = "https://s3.hf.co";
+const HF_GATEWAY_ENDPOINT: &str = "https://s3.hf.co";
 
 /// Build storage for a Hugging Face Storage Bucket.
 ///
 /// `namespace` owns the bucket: a Hugging Face user or organization. The gateway
 /// scopes every operation to it through the endpoint path.
+///
+/// Hugging Face runs one gateway, so this overwrites any `endpoint_url` in
+/// `config`.
 ///
 /// `extra_read_headers`/`extra_write_headers` are extra HTTP headers attached to
 /// read/write requests respectively.
@@ -1642,19 +1642,9 @@ pub fn new_hf_storage(
     )?))
 }
 
-/// Build storage for a Hugging Face Storage Bucket.
-///
-/// `namespace` owns the bucket: a Hugging Face user or organization. The gateway
-/// scopes every operation to it through the endpoint path.
-///
-/// `extra_read_headers`/`extra_write_headers` are extra HTTP headers attached to
-/// read/write requests respectively.
-///
-/// For `legacy_rooted_keys`, see [`S3Storage::new`]: `None` auto-detects the key
-/// layout (the usual choice), `Some(true)` forces the legacy leading-slash layout,
-/// and `Some(false)` forces the standard layout.
+/// The concrete storage behind [`new_hf_storage`], so tests can read its config.
 #[expect(clippy::too_many_arguments)]
-pub fn hf_storage(
+fn hf_storage(
     config: S3Options,
     bucket: String,
     prefix: Option<String>,
@@ -1664,16 +1654,8 @@ pub fn hf_storage(
     extra_write_headers: Vec<(String, String)>,
     legacy_rooted_keys: Option<bool>,
 ) -> StorageResult<S3Storage> {
-    if namespace.is_empty() {
-        return Err(other_error(
-            "Hugging Face storage requires the namespace that owns the bucket"
-                .to_string(),
-        ));
-    }
-
     let mut config = config;
-    let gateway = config.endpoint_url.as_deref().unwrap_or(HF_GATEWAY_ENDPOINT);
-    config.endpoint_url = Some(format!("{}/{namespace}", gateway.trim_end_matches('/')));
+    config.endpoint_url = Some(format!("{HF_GATEWAY_ENDPOINT}/{namespace}"));
     if config.region.is_none() {
         // the gateway serves one region and still requires the field
         config.region = Some("us-east-1".to_string());
@@ -1854,43 +1836,6 @@ mod tests {
         assert_eq!(storage.config.region.as_deref(), Some("us-east-1"));
         assert!(storage.config.force_path_style);
         assert_eq!(storage.bucket, "my-bucket");
-    }
-
-    #[test]
-    fn hf_storage_keeps_a_custom_gateway() {
-        let storage = hf_storage(
-            S3Options::default().with_endpoint_url("http://localhost:9000/"),
-            "my-bucket".to_string(),
-            None,
-            "my-namespace",
-            None,
-            Vec::new(),
-            Vec::new(),
-            None,
-        )
-        .unwrap();
-
-        assert_eq!(
-            storage.config.endpoint_url.as_deref(),
-            Some("http://localhost:9000/my-namespace")
-        );
-    }
-
-    #[test]
-    fn hf_storage_rejects_an_empty_namespace() {
-        assert!(
-            hf_storage(
-                S3Options::default(),
-                "my-bucket".to_string(),
-                None,
-                "",
-                None,
-                Vec::new(),
-                Vec::new(),
-                None,
-            )
-            .is_err()
-        );
     }
 
     #[tokio_test]
