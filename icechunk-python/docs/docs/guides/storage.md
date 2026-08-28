@@ -135,18 +135,7 @@ icechunk.hf_storage(
 
 `namespace` is the owner of the bucket: your username or an organization name. The gateway scopes every request to the namespace in the endpoint path. `hf_storage` therefore builds the endpoint as `https://s3.hf.co/<namespace>` and sends the bare bucket name. It also sets the region to `us-east-1` and forces path-style URLs. The gateway requires both.
 
-One Hugging Face behavior limits Icechunk. The gateway discards user metadata. Icechunk stamps a write id in that metadata on every conditional write. It reads the id back after a suspicious failure. The id separates a lost success response from a real conflict. On Hugging Face that read always fails. A conditional write whose response is lost in transit can therefore report a conflict that never happened. Retry the commit when that happens.
-
-You can stop Icechunk from sending metadata the gateway discards:
-
-```python
-config = icechunk.RepositoryConfig(
-    storage=icechunk.StorageSettings(unsafe_use_metadata=False),
-)
-repo = icechunk.Repository.open(storage=storage, config=config)
-```
-
-The setting is optional. It removes the unused headers. Icechunk then warns once that lost-response recovery is off. The setting does not change the behavior above. The read back already fails on Hugging Face, with or without the setting.
+The Hugging Face gateway discards user metadata which imposes some limitations on Icechunk: A conditional write whose response is lost in transit can report a conflict that never happened. Retry the commit if that happens.
 
 #### Minio
 

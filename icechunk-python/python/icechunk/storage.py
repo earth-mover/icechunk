@@ -580,7 +580,7 @@ def hf_storage(
     bucket: str,
     prefix: str | None,
     namespace: str,
-    endpoint_url: str = "https://s3.hf.co",
+    endpoint_url: str | None = None,
     access_key_id: str | None = None,
     secret_access_key: str | None = None,
     session_token: str | None = None,
@@ -600,9 +600,11 @@ def hf_storage(
     token itself is not an S3 credential. See
     https://huggingface.co/docs/hub/storage-buckets-s3 for how to generate them.
 
-    The gateway discards user metadata. Icechunk therefore cannot recover from a
-    lost response to a conditional write. Such a write can report a spurious
-    conflict on the retry.
+    The gateway discards user metadata. Icechunk stores a write id there to tell
+    a lost success response apart from a real conflict. On Hugging Face that
+    recovery is unavailable. If the network loses a conditional write's response
+    on its way back to the client, a rare event, the retry reports a conflict
+    that never happened. Retry the commit.
 
     Parameters
     ----------
@@ -616,9 +618,10 @@ def hf_storage(
         updated.
     namespace: str
         The bucket owner: a Hugging Face username or organization name
-    endpoint_url: str
-        The gateway address. Icechunk appends the namespace to it. The gateway
-        scopes every operation to the namespace in the endpoint path.
+    endpoint_url: str | None
+        The gateway address. Defaults to `https://s3.hf.co`. Icechunk appends the
+        namespace to it. The gateway scopes every operation to the namespace in
+        the endpoint path.
     access_key_id: str | None
         S3 credential access key. It starts with `HFAK`
     secret_access_key: str | None
@@ -649,13 +652,7 @@ def hf_storage(
         merged with ``read_headers``/``write_headers``, which take precedence per
         role on a key conflict.
     """
-    return s3_storage(
-        bucket=bucket,
-        prefix=prefix,
-        # the gateway serves one region and only path-style URLs
-        region="us-east-1",
-        endpoint_url=f"{endpoint_url.rstrip('/')}/{namespace}",
-        force_path_style=True,
+    credentials = s3_credentials(
         access_key_id=access_key_id,
         secret_access_key=secret_access_key,
         session_token=session_token,
@@ -663,7 +660,17 @@ def hf_storage(
         from_env=from_env,
         get_credentials=get_credentials,
         scatter_initial_credentials=scatter_initial_credentials,
+    )
+    options = S3Options(
+        endpoint_url=endpoint_url,
         network_stream_timeout_seconds=network_stream_timeout_seconds,
+    )
+    return Storage.new_hf(
+        config=options,
+        bucket=bucket,
+        prefix=prefix,
+        namespace=namespace,
+        credentials=credentials,
         read_headers=read_headers,
         write_headers=write_headers,
         headers=headers,

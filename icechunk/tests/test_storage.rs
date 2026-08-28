@@ -232,6 +232,17 @@ where
         let s = common::make_r2_integration_storage(prefix.clone())?;
         storages.push(("R2_slash", s));
     }
+    if let Ok(e) = env::var("HF_BUCKET")
+        && !e.is_empty()
+    {
+        let prefix = common::get_random_prefix("with_storage");
+        let s = common::make_hf_integration_storage(prefix.clone())?;
+        storages.push(("HF", s));
+
+        let prefix = format!("{}/", common::get_random_prefix("with_storage"));
+        let s = common::make_hf_integration_storage(prefix.clone())?;
+        storages.push(("HF_slash", s));
+    }
     // if let Ok(e) = env::var("TIGRIS_BUCKET") && !e.is_empty() {
     //     let prefix = common::get_random_prefix("with_storage");
     //     let s = common::make_tigris_integration_storage(prefix.clone())?;
@@ -1697,6 +1708,13 @@ async fn test_write_headers_reach_aws() -> Result<(), Box<dyn std::error::Error>
 #[ignore = "needs credentials from env"]
 async fn test_write_headers_reach_r2() -> Result<(), Box<dyn std::error::Error>> {
     let store = common::r2_real_store().expect("R2_* env vars must be set");
+    real_store_write_header_check(&store).await
+}
+
+#[tokio_test]
+#[ignore = "needs credentials from env"]
+async fn test_write_headers_reach_hf() -> Result<(), Box<dyn std::error::Error>> {
+    let store = common::hf_real_store().expect("HF_* env vars must be set");
     real_store_write_header_check(&store).await
 }
 

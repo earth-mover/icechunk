@@ -3055,6 +3055,38 @@ impl PyStorage {
         Ok(PyStorage(storage))
     }
 
+    #[pyo3(signature = ( config, bucket, prefix, namespace, credentials=None, legacy_rooted_keys=None, *, read_headers=None, write_headers=None, headers=None))]
+    #[classmethod]
+    #[expect(clippy::too_many_arguments)]
+    pub(crate) fn new_hf(
+        _cls: &Bound<'_, PyType>,
+        config: &PyS3Options,
+        bucket: String,
+        prefix: Option<String>,
+        namespace: String,
+        credentials: Option<PyS3Credentials>,
+        legacy_rooted_keys: Option<bool>,
+        read_headers: Option<HashMap<String, String>>,
+        write_headers: Option<HashMap<String, String>>,
+        headers: Option<HashMap<String, String>>,
+    ) -> PyResult<Self> {
+        let (read_headers, write_headers) =
+            resolve_request_headers(headers, read_headers, write_headers)?;
+        let storage = storage::new_hf_storage(
+            config.into(),
+            bucket,
+            prefix,
+            &namespace,
+            credentials.map(|cred| cred.into()),
+            read_headers,
+            write_headers,
+            legacy_rooted_keys,
+        )
+        .map_err(PyIcechunkStoreError::StorageError)?;
+
+        Ok(PyStorage(storage))
+    }
+
     #[classmethod]
     pub(crate) fn new_in_memory(
         _cls: &Bound<'_, PyType>,

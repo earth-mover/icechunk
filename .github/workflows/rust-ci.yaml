@@ -106,6 +106,11 @@ jobs:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
 
+          HF_BUCKET: ${{ vars.HF_BUCKET }}
+          HF_NAMESPACE: ${{ vars.HF_NAMESPACE }}
+          HF_ACCESS_KEY_ID: ${{ secrets.HF_ACCESS_KEY_ID }}
+          HF_SECRET_ACCESS_KEY: ${{ secrets.HF_SECRET_ACCESS_KEY }}
+
           TIGRIS_BUCKET: ${{ secrets.TIGRIS_BUCKET }}
           TIGRIS_REGION: ${{ secrets.TIGRIS_REGION }}
           TIGRIS_ACCESS_KEY_ID: ${{ secrets.TIGRIS_ACCESS_KEY_ID }}
@@ -147,6 +152,11 @@ jobs:
           AWS_REGION: ${{ secrets.AWS_REGION }}
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+          HF_BUCKET: ${{ vars.HF_BUCKET }}
+          HF_NAMESPACE: ${{ vars.HF_NAMESPACE }}
+          HF_ACCESS_KEY_ID: ${{ secrets.HF_ACCESS_KEY_ID }}
+          HF_SECRET_ACCESS_KEY: ${{ secrets.HF_SECRET_ACCESS_KEY }}
 
           TIGRIS_BUCKET: ${{ secrets.TIGRIS_BUCKET }}
           TIGRIS_REGION: ${{ secrets.TIGRIS_REGION }}
