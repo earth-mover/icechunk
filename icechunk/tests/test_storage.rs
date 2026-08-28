@@ -1724,13 +1724,6 @@ async fn test_write_headers_reach_r2() -> Result<(), Box<dyn std::error::Error>>
 
 #[tokio_test]
 #[ignore = "needs credentials from env"]
-async fn test_write_headers_reach_hf() -> Result<(), Box<dyn std::error::Error>> {
-    let store = common::hf_real_store().expect("HF_* env vars must be set");
-    real_store_write_header_check(&store).await
-}
-
-#[tokio_test]
-#[ignore = "needs credentials from env"]
 async fn test_write_headers_reach_tigris() -> Result<(), Box<dyn std::error::Error>> {
     // Also verifies a user x-amz-meta-* header coexists with the injected
     // X-Tigris-* consistency headers.

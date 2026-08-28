@@ -6,8 +6,8 @@ use icechunk::{
     config::{S3Credentials, S3Options, S3StaticCredentials},
     new_s3_storage,
     storage::{
-        HF_GATEWAY_ENDPOINT, Settings, hf_storage, mk_client, new_hf_storage,
-        new_r2_storage, new_tigris_storage, r2_storage, s3_storage, tigris_storage,
+        Settings, mk_client, new_hf_storage, new_r2_storage, new_tigris_storage,
+        r2_storage, s3_storage, tigris_storage,
     },
 };
 
@@ -182,11 +182,6 @@ pub(crate) enum RealStoreKind {
     Aws,
     R2,
     Tigris,
-    /// The gateway scopes every operation to the namespace, so the constructor
-    /// needs it separately from the resolved endpoint in `options`.
-    Hf {
-        namespace: String,
-    },
 }
 
 impl RealStore {
@@ -234,20 +229,6 @@ impl RealStore {
                     prefix,
                     creds,
                     false,
-                    Vec::new(),
-                    Vec::new(),
-                    legacy_rooted_keys.then_some(true),
-                )?
-                .unsafe_allow_empty_prefix_creation(),
-            ),
-            RealStoreKind::Hf { namespace } => Arc::new(
-                hf_storage(
-                    // the constructor appends the namespace again
-                    self.options.clone().with_endpoint_url(HF_GATEWAY_ENDPOINT),
-                    self.bucket.clone(),
-                    prefix,
-                    namespace,
-                    creds,
                     Vec::new(),
                     Vec::new(),
                     legacy_rooted_keys.then_some(true),
@@ -305,17 +286,6 @@ impl RealStore {
                 prefix,
                 creds,
                 false,
-                Vec::new(),
-                write_headers,
-                None,
-            )?,
-            RealStoreKind::Hf { namespace } => new_hf_storage(
-                // the constructor appends the namespace again
-                self.options.clone().with_endpoint_url(HF_GATEWAY_ENDPOINT),
-                self.bucket.clone(),
-                prefix,
-                namespace,
-                creds,
                 Vec::new(),
                 write_headers,
                 None,
@@ -382,26 +352,6 @@ pub(crate) fn r2_real_store() -> Option<RealStore> {
         }),
         bucket,
         kind: RealStoreKind::R2,
-    })
-}
-
-/// `None` when the Hugging Face env vars are not set.
-pub(crate) fn hf_real_store() -> Option<RealStore> {
-    let bucket = env::var("HF_BUCKET").ok().filter(|s| !s.is_empty())?;
-    let namespace = env::var("HF_NAMESPACE").ok()?;
-    Some(RealStore {
-        options: S3Options::default()
-            .with_region("us-east-1")
-            .with_endpoint_url(format!("{HF_GATEWAY_ENDPOINT}/{namespace}"))
-            .with_force_path_style(true),
-        credentials: S3Credentials::Static(S3StaticCredentials {
-            access_key_id: env::var("HF_ACCESS_KEY_ID").ok()?,
-            secret_access_key: env::var("HF_SECRET_ACCESS_KEY").ok()?,
-            session_token: None,
-            expires_after: None,
-        }),
-        bucket,
-        kind: RealStoreKind::Hf { namespace },
     })
 }
 
