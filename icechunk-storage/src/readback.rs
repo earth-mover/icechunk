@@ -20,6 +20,9 @@ use crate::storage::{
 /// C# identifier (no `-`), and nginx-fronted S3 gateways drop names that contain `_`.
 pub const WRITE_ID_METADATA_KEY: &str = "icechunkwriteid";
 
+/// The key conditional writes stamped before the rename to alphanumeric names.
+pub const WRITE_ID_METADATA_KEY_DEPRECATED: &str = "icechunk_write_id";
+
 static CONDITIONAL_WITHOUT_METADATA_WARNED: Once = Once::new();
 
 /// Warn once: conditional writes on but metadata off → no lost-response recovery.
