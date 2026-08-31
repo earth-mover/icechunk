@@ -232,6 +232,17 @@ where
         let s = common::make_r2_integration_storage(prefix.clone())?;
         storages.push(("R2_slash", s));
     }
+    if let Ok(e) = env::var("HF_BUCKET")
+        && !e.is_empty()
+    {
+        let prefix = common::get_random_prefix("with_storage");
+        let s = common::make_hf_integration_storage(prefix.clone())?;
+        storages.push(("HF", s));
+
+        let prefix = format!("{}/", common::get_random_prefix("with_storage"));
+        let s = common::make_hf_integration_storage(prefix.clone())?;
+        storages.push(("HF_slash", s));
+    }
     // if let Ok(e) = env::var("TIGRIS_BUCKET") && !e.is_empty() {
     //     let prefix = common::get_random_prefix("with_storage");
     //     let s = common::make_tigris_integration_storage(prefix.clone())?;
@@ -1228,7 +1239,7 @@ async fn test_write_object_larger_than_multipart_threshold()
 
 #[tokio_test]
 async fn test_get_object_conditional() -> Result<(), Box<dyn std::error::Error>> {
-    with_storage(Permission::Modify, |_, storage| async move {
+    with_storage(Permission::Modify, |name, storage| async move {
         let storage_settings = storage.default_settings().await?;
         let id = SnapshotId::random();
         let bytes: [u8; 1024] = core::array::from_fn(|_| rand::random());
@@ -1256,7 +1267,12 @@ async fn test_get_object_conditional() -> Result<(), Box<dyn std::error::Error>>
         let res = storage
             .get_object_conditional(&storage_settings, path.as_str(), Some(&version))
             .await?;
-        assert!(matches!(res, storage::GetModifiedResult::OnLatestVersion));
+        if name.starts_with("HF") {
+            // the Huggin Face gateway ignores If-None-Match on GetObject and re-sends the object
+            assert!(matches!(res, storage::GetModifiedResult::Modified { .. }));
+        } else {
+            assert!(matches!(res, storage::GetModifiedResult::OnLatestVersion));
+        }
 
         // conditional get without a version, should return Modified
         let res = storage

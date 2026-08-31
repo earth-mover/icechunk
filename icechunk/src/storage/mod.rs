@@ -22,8 +22,8 @@ pub use icechunk_storage::{
 // Re-export from icechunk-s3
 #[cfg(feature = "s3")]
 pub use icechunk_s3::{
-    S3Storage, mk_client, new_r2_storage, new_s3_storage, new_tigris_storage, r2_storage,
-    range_to_header, s3_storage, tigris_storage,
+    S3Storage, mk_client, new_hf_storage, new_r2_storage, new_s3_storage,
+    new_tigris_storage, r2_storage, range_to_header, s3_storage, tigris_storage,
 };
 
 // Re-export from icechunk-arrow-object-store

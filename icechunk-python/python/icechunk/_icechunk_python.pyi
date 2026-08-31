@@ -3474,6 +3474,20 @@ class Storage:
         headers: dict[str, str] | None = None,
     ) -> Storage: ...
     @classmethod
+    def new_hf(
+        cls,
+        config: S3Options,
+        bucket: str,
+        prefix: str | None,
+        namespace: str,
+        credentials: _AnyS3Credential | None = None,
+        legacy_rooted_keys: bool | None = None,
+        *,
+        read_headers: dict[str, str] | None = None,
+        write_headers: dict[str, str] | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> Storage: ...
+    @classmethod
     def new_azure_blob(
         cls,
         account: str,

@@ -325,6 +325,21 @@ def test_s3_storage_options() -> None:
     # currently this is only testing we can construct
 
 
+def test_hf_storage_options() -> None:
+    storage = icechunk.hf_storage(
+        bucket="testbucket",
+        prefix="this-repo-does-not-exist",
+        namespace="my-namespace",
+        access_key_id="HFAKnotreal",
+        secret_access_key="notreal",
+    )
+    rendered = str(storage)
+    # the gateway scopes operations to the namespace in the endpoint path
+    assert "endpoint_url: https://s3.hf.co/my-namespace" in rendered
+    assert "force_path_style: True" in rendered
+    assert "region: us-east-1" in rendered
+
+
 def test_clear_virtual_chunk_containers_persists_through_reopen() -> None:
     """Test that clearing VCCs is respected by reopen().
 

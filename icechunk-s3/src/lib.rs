@@ -4,8 +4,8 @@
 pub use aws_sdk_s3;
 
 use std::{
-    collections::HashMap, fmt, future::ready, ops::Range, pin::Pin, sync::Arc,
-    time::Duration,
+    borrow::Cow, collections::HashMap, fmt, future::ready, ops::Range, pin::Pin,
+    sync::Arc, time::Duration,
 };
 
 use async_trait::async_trait;
@@ -208,6 +208,20 @@ impl Intercept for StripChecksumOn304Interceptor {
     }
 }
 
+/// Append the `/` that separates an endpoint path from the bucket name.
+///
+/// The SDK omits it, so `https://s3.hf.co/<ns>` addresses `/<ns><bucket>/<key>`.
+fn endpoint_with_bucket_separator(endpoint_url: &str) -> Cow<'_, str> {
+    // The SDK appends the bucket name to any path past the root.
+    let has_path =
+        endpoint_url.split_once("://").is_some_and(|(_, rest)| rest.contains('/'));
+    if has_path && !endpoint_url.ends_with('/') {
+        Cow::Owned(format!("{endpoint_url}/"))
+    } else {
+        Cow::Borrowed(endpoint_url)
+    }
+}
+
 #[instrument(skip(credentials))]
 pub async fn mk_client(
     config: &S3Options,
@@ -222,7 +236,7 @@ pub async fn mk_client(
         .map(|r| RegionProviderChain::first_try(Some(Region::new(r.clone()))))
         .unwrap_or_else(RegionProviderChain::default_provider);
 
-    let endpoint = config.endpoint_url.clone();
+    let endpoint = config.endpoint_url.as_deref().map(endpoint_with_bucket_separator);
     let region = if endpoint.is_some() {
         // GH793, the S3 SDK requires a region even though it may not make sense
         // for S3-compatible object stores like Tigris or Ceph.
@@ -1588,6 +1602,79 @@ pub fn r2_storage(
     )
 }
 
+/// The Hugging Face S3-compatible gateway.
+const HF_GATEWAY_ENDPOINT: &str = "https://s3.hf.co";
+
+/// Build storage for a Hugging Face Storage Bucket.
+///
+/// `namespace` owns the bucket: a Hugging Face user or organization. The gateway
+/// scopes every operation to it through the endpoint path.
+///
+/// Hugging Face runs one gateway, so this overwrites any `endpoint_url` in
+/// `config`.
+///
+/// `extra_read_headers`/`extra_write_headers` are extra HTTP headers attached to
+/// read/write requests respectively.
+///
+/// For `legacy_rooted_keys`, see [`S3Storage::new`]: `None` auto-detects the key
+/// layout (the usual choice), `Some(true)` forces the legacy leading-slash layout,
+/// and `Some(false)` forces the standard layout.
+#[expect(clippy::too_many_arguments)]
+pub fn new_hf_storage(
+    config: S3Options,
+    bucket: String,
+    prefix: Option<String>,
+    namespace: &str,
+    credentials: Option<S3Credentials>,
+    extra_read_headers: Vec<(String, String)>,
+    extra_write_headers: Vec<(String, String)>,
+    legacy_rooted_keys: Option<bool>,
+) -> StorageResult<Arc<dyn Storage + Send + Sync>> {
+    Ok(Arc::new(hf_storage(
+        config,
+        bucket,
+        prefix,
+        namespace,
+        credentials,
+        extra_read_headers,
+        extra_write_headers,
+        legacy_rooted_keys,
+    )?))
+}
+
+/// The concrete storage behind [`new_hf_storage`], so tests can read its config.
+#[expect(clippy::too_many_arguments)]
+fn hf_storage(
+    config: S3Options,
+    bucket: String,
+    prefix: Option<String>,
+    namespace: &str,
+    credentials: Option<S3Credentials>,
+    extra_read_headers: Vec<(String, String)>,
+    extra_write_headers: Vec<(String, String)>,
+    legacy_rooted_keys: Option<bool>,
+) -> StorageResult<S3Storage> {
+    let mut config = config;
+    config.endpoint_url = Some(format!("{HF_GATEWAY_ENDPOINT}/{namespace}"));
+    if config.region.is_none() {
+        // the gateway serves one region and still requires the field
+        config.region = Some("us-east-1".to_string());
+    }
+    // the gateway does not serve virtual-hosted style URLs
+    config.force_path_style = true;
+
+    S3Storage::new(
+        config,
+        bucket,
+        prefix,
+        credentials.unwrap_or(S3Credentials::FromEnv),
+        true,
+        extra_read_headers,
+        extra_write_headers,
+        legacy_rooted_keys,
+    )
+}
+
 /// Build storage for a Tigris bucket.
 ///
 /// `extra_read_headers`/`extra_write_headers` are extra HTTP headers attached to
@@ -1709,6 +1796,46 @@ mod tests {
         }
         assert!(!is_precondition_code("NoSuchUpload"));
         assert!(!is_precondition_code(""));
+    }
+
+    #[test]
+    fn endpoint_bucket_separator() {
+        // these endpoints need the separator the SDK omits
+        for (input, expected) in [
+            ("https://s3.hf.co/my-namespace", "https://s3.hf.co/my-namespace/"),
+            ("https://s3.hf.co/my-namespace/", "https://s3.hf.co/my-namespace/"),
+            ("http://localhost:9000/a/b", "http://localhost:9000/a/b/"),
+            // no path, so the SDK builds the URL correctly
+            ("https://fly.storage.tigris.dev", "https://fly.storage.tigris.dev"),
+            ("http://localhost:9000", "http://localhost:9000"),
+            ("http://localhost:9000/", "http://localhost:9000/"),
+            ("localhost:9000", "localhost:9000"),
+        ] {
+            assert_eq!(endpoint_with_bucket_separator(input), expected, "{input}");
+        }
+    }
+
+    #[test]
+    fn hf_storage_sets_gateway_config() {
+        let storage = hf_storage(
+            S3Options::default(),
+            "my-bucket".to_string(),
+            Some("some/prefix".to_string()),
+            "my-namespace",
+            None,
+            Vec::new(),
+            Vec::new(),
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(
+            storage.config.endpoint_url.as_deref(),
+            Some("https://s3.hf.co/my-namespace")
+        );
+        assert_eq!(storage.config.region.as_deref(), Some("us-east-1"));
+        assert!(storage.config.force_path_style);
+        assert_eq!(storage.bucket, "my-bucket");
     }
 
     #[tokio_test]

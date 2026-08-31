@@ -5,6 +5,7 @@
 ### Features
 
 - The `inspect_*` methods now report a `header` for the file they read: the library version that wrote it, and that file's spec version, file type and compression ([#2347](https://github.com/earth-mover/icechunk/pull/2347)).
+- Add `hf_storage`, a preset for Hugging Face Storage Buckets. It takes the bucket's `namespace`. It sets the gateway endpoint, the region and path-style URLs. The gateway discards user metadata, so Icechunk cannot recover from a lost response to a conditional write ([#2346](https://github.com/earth-mover/icechunk/pull/2346)).
 
 ### Fixes
 
@@ -12,6 +13,7 @@
 - Deleting a chunk key that cannot exist (coordinates outside the chunk grid, missing node, or a group path) is now a no-op instead of raising, matching zarr-python's stores. Writing a chunk outside the grid is still rejected ([#2312](https://github.com/earth-mover/icechunk/pull/2312)).
 - `to_icechunk` no longer passes `synchronizer` and `zarr_version` to xarray's `ZarrStore.open_group`; xarray removed both parameters and passing them made `to_icechunk` fail with a `TypeError` on xarray development versions ([#2312](https://github.com/earth-mover/icechunk/pull/2312)).
 - Writing a chunk with length 0 is now rejected instead of being committed. A chunk must decode to the full chunk shape, so no valid chunk is ever zero bytes long, and such a chunk could only fail once it was read back — long after the commit that introduced it. This is how a sparse GeoTIFF's unstored tiles (`offset = 0, byteCount = 0`) used to reach a repository. Applies to inline, virtual and materialized chunks alike, which means Icechunk deliberately rejects an empty write at a chunk key where a plain key-value store would accept it, in the same way it already rejects invalid zarr keys and invalid metadata. To record that a chunk is not stored at all, delete it rather than writing a zero-length one; it then reads back as the array's fill value ([#2328](https://github.com/earth-mover/icechunk/issues/2328)).
+- S3 endpoints whose URL includes a path no longer fail with `NoSuchBucket`. Hugging Face Storage Buckets use such a URL: `https://s3.hf.co/<namespace>`. The AWS SDK joins the endpoint path and the bucket name without a separator. Requests therefore addressed `/<namespace><bucket>/<key>`. Icechunk now appends the missing `/`. Endpoints without a path, such as Tigris, R2 and MinIO, keep the same behavior ([#2346](https://github.com/earth-mover/icechunk/pull/2346)).
 
 ## Python Icechunk Library 2.1.2
 

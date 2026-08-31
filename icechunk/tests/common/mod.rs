@@ -6,8 +6,8 @@ use icechunk::{
     config::{S3Credentials, S3Options, S3StaticCredentials},
     new_s3_storage,
     storage::{
-        Settings, mk_client, new_r2_storage, new_tigris_storage, r2_storage, s3_storage,
-        tigris_storage,
+        Settings, mk_client, new_hf_storage, new_r2_storage, new_tigris_storage,
+        r2_storage, s3_storage, tigris_storage,
     },
 };
 
@@ -94,6 +94,30 @@ pub(crate) fn make_r2_integration_storage(
         Some(bucket),
         Some(prefix),
         Some(env::var("R2_ACCOUNT_ID")?),
+        Some(credentials),
+        Vec::new(),
+        Vec::new(),
+        None,
+    )?;
+    Ok(storage)
+}
+
+pub(crate) fn make_hf_integration_storage(
+    prefix: String,
+) -> Result<Arc<dyn Storage + Send + Sync>, Box<dyn std::error::Error>> {
+    let credentials = S3Credentials::Static(S3StaticCredentials {
+        access_key_id: env::var("HF_ACCESS_KEY_ID")?,
+        secret_access_key: env::var("HF_SECRET_ACCESS_KEY")?,
+        session_token: None,
+        expires_after: None,
+    });
+    let bucket = env::var("HF_BUCKET")?;
+
+    let storage: Arc<dyn Storage + Send + Sync> = new_hf_storage(
+        S3Options::default(),
+        bucket,
+        Some(prefix),
+        &env::var("HF_NAMESPACE")?,
         Some(credentials),
         Vec::new(),
         Vec::new(),

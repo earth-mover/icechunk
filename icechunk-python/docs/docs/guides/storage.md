@@ -114,6 +114,29 @@ icechunk.r2_storage(
 )
 ```
 
+#### Hugging Face
+
+Icechunk can use [Hugging Face Storage Buckets](https://huggingface.co/docs/hub/storage-buckets) through their [S3-compatible gateway](https://huggingface.co/docs/hub/storage-buckets-s3). You will need to:
+
+1. [create a bucket](https://huggingface.co/docs/hub/storage-buckets#creating-a-bucket) under your username or one of your organizations; and
+2. [generate S3 credentials](https://huggingface.co/docs/hub/storage-buckets-s3#generating-s3-credentials) from a Hugging Face access token. The access key ID starts with `HFAK`. An access token alone is not an S3 credential.
+
+Icechunk provides a helper function for [creating Hugging Face storage configurations](../reference/storage.md#icechunk.storage.hf_storage).
+
+```python
+icechunk.hf_storage(
+    bucket="my-bucket",
+    prefix="quickstart-demo-1",
+    namespace="my-username",
+    access_key_id="HFAK...",
+    secret_access_key="my-secret-key",
+)
+```
+
+`namespace` is the owner of the bucket: your username or an organization name. The gateway scopes every request to the namespace in the endpoint path. `hf_storage` therefore builds the endpoint as `https://s3.hf.co/<namespace>`. It sends the bare bucket name. It sets the region to `us-east-1`. It forces path-style URLs. The gateway requires that region and that URL style.
+
+The Hugging Face gateway discards user metadata which imposes some limitations on Icechunk: A conditional write whose response is lost in transit can report a conflict that never happened. Retry the commit if that happens.
+
 #### Minio
 
 [Minio](https://min.io/) is available as a storage backend for Icechunk. Functionally this storage backend is the same as S3 storage, but with a different endpoint.
