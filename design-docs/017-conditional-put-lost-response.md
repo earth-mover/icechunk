@@ -111,9 +111,11 @@ the native S3 backend (single-PUT and multipart paths) and the
 * **Identical bodies.** Recovery assumes all retries of a write send
   the same body. True for transparent SDK retries, which are the only
   retries in play below this layer.
-* **Key naming.** The key uses underscores (`icechunk_write_id`)
-  because Azure requires metadata names to be valid C# identifiers;
-  S3 additionally lowercases metadata keys.
+* **Key naming.** The key is alphanumeric (`icechunkwriteid`). Azure
+  requires metadata names to be valid C# identifiers, which rules out
+  `-`, and nginx-fronted S3 gateways drop header names containing `_`,
+  which made signed metadata headers vanish in flight. S3 additionally
+  lowercases metadata keys.
 
 ## Testing
 
