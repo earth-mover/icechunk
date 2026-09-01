@@ -533,21 +533,29 @@ pub mod format_constants {
     pub const ICECHUNK_COMPRESSION_OFFSET: usize = ICECHUNK_FILE_TYPE_OFFSET + 1;
     pub const ICECHUNK_FILE_HEADER_LEN: usize = ICECHUNK_COMPRESSION_OFFSET + 1;
 
-    pub const LATEST_ICECHUNK_FORMAT_VERSION_METADATA_KEY: &str = "ic_spec_ver";
+    // Object-metadata keys use letters only. Azure needs a valid C# identifier, which
+    // bars `-`, and nginx-fronted S3 gateways drop header names that contain `_`.
+    // The `_DEPRECATED` keys name what repositories written before that change carry.
+    pub const LATEST_ICECHUNK_FORMAT_VERSION_METADATA_KEY: &str = "icspecver";
+    pub const LATEST_ICECHUNK_FORMAT_VERSION_METADATA_KEY_DEPRECATED: &str =
+        "ic_spec_ver";
 
     pub const ICECHUNK_LIB_VERSION: &str = env!("CARGO_PKG_VERSION");
 
     pub static ICECHUNK_CLIENT_NAME: LazyLock<String> =
         LazyLock::new(|| "ic-".to_string() + ICECHUNK_LIB_VERSION);
-    pub const ICECHUNK_CLIENT_NAME_METADATA_KEY: &str = "ic_client";
+    pub const ICECHUNK_CLIENT_NAME_METADATA_KEY: &str = "icclient";
+    pub const ICECHUNK_CLIENT_NAME_METADATA_KEY_DEPRECATED: &str = "ic_client";
 
     pub const ICECHUNK_FILE_TYPE_SNAPSHOT: &str = "snapshot";
     pub const ICECHUNK_FILE_TYPE_MANIFEST: &str = "manifest";
     pub const ICECHUNK_FILE_TYPE_TRANSACTION_LOG: &str = "transaction-log";
     pub const ICECHUNK_FILE_TYPE_REPO_INFO: &str = "repo-info";
-    pub const ICECHUNK_FILE_TYPE_METADATA_KEY: &str = "ic_file_type";
+    pub const ICECHUNK_FILE_TYPE_METADATA_KEY: &str = "icfiletype";
+    pub const ICECHUNK_FILE_TYPE_METADATA_KEY_DEPRECATED: &str = "ic_file_type";
 
-    pub const ICECHUNK_COMPRESSION_METADATA_KEY: &str = "ic_comp_alg";
+    pub const ICECHUNK_COMPRESSION_METADATA_KEY: &str = "iccompalg";
+    pub const ICECHUNK_COMPRESSION_METADATA_KEY_DEPRECATED: &str = "ic_comp_alg";
     pub const ICECHUNK_COMPRESSION_ZSTD: &str = "zstd";
 
     /// Decoded contents of a metadata file's binary header.
@@ -869,5 +877,24 @@ mod tests {
             err.kind(),
             IcechunkFormatErrorKind::InvalidSpecVersion { found: 99, .. }
         ));
+    }
+
+    #[icechunk_macros::test]
+    fn test_object_metadata_keys_are_portable() {
+        use format_constants::*;
+        for key in [
+            LATEST_ICECHUNK_FORMAT_VERSION_METADATA_KEY,
+            ICECHUNK_CLIENT_NAME_METADATA_KEY,
+            ICECHUNK_FILE_TYPE_METADATA_KEY,
+            ICECHUNK_COMPRESSION_METADATA_KEY,
+        ] {
+            assert!(
+                !key.is_empty()
+                    && key.starts_with(|c: char| c.is_ascii_alphabetic())
+                    && key.chars().all(|c| c.is_ascii_alphanumeric()),
+                "{key} must be ASCII alphanumeric and start with a letter: \
+                 Azure rejects `-` and nginx-fronted S3 gateways drop `_`"
+            );
+        }
     }
 }

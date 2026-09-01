@@ -16,9 +16,12 @@ use crate::storage::{
     other_error,
 };
 
-/// Per-PUT token stamped on conditional writes; underscores keep it portable
-/// to Azure (C# identifier rules).
-pub const WRITE_ID_METADATA_KEY: &str = "icechunk_write_id";
+/// Per-PUT token stamped on conditional writes. Letters only: Azure needs a valid
+/// C# identifier (no `-`), and nginx-fronted S3 gateways drop names that contain `_`.
+pub const WRITE_ID_METADATA_KEY: &str = "icechunkwriteid";
+
+/// The key conditional writes stamped before the rename to alphanumeric names.
+pub const WRITE_ID_METADATA_KEY_DEPRECATED: &str = "icechunk_write_id";
 
 static CONDITIONAL_WITHOUT_METADATA_WARNED: Once = Once::new();
 
@@ -223,6 +226,15 @@ mod tests {
             VersionedUpdateResult::Updated {
                 new_version: VersionInfo::from_etag_only("E1".to_string())
             }
+        );
+    }
+
+    #[test]
+    fn write_id_metadata_key_is_portable() {
+        assert!(
+            WRITE_ID_METADATA_KEY.starts_with(|c: char| c.is_ascii_alphabetic())
+                && WRITE_ID_METADATA_KEY.chars().all(|c| c.is_ascii_alphanumeric()),
+            "Azure rejects `-` and nginx-fronted S3 gateways drop `_`"
         );
     }
 }
