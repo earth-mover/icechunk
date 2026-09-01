@@ -5,6 +5,7 @@ import pickle
 from collections.abc import Callable
 from typing import Any, TypeVar
 
+import hypothesis.extra.numpy as npst
 import hypothesis.strategies as st
 import numpy as np
 import pytest
@@ -30,11 +31,12 @@ from icechunk.testing.models import GroupNode, ModelStore
 from icechunk.testing.trees import absolute, valid_moves
 from icechunk.testing.utils import update_paths_after_move
 from zarr import Array
+from zarr.codecs import ShardingCodec
 from zarr.codecs.bytes import BytesCodec
 from zarr.core.buffer import default_buffer_prototype
 from zarr.testing.stateful import ZarrHierarchyStateMachine, split_prefix_name
 from zarr.testing.strategies import arrays as zarr_arrays
-from zarr.testing.strategies import node_names
+from zarr.testing.strategies import node_names, orthogonal_indices
 
 PROTOTYPE = default_buffer_prototype()
 
@@ -44,6 +46,28 @@ PROTOTYPE = default_buffer_prototype()
 # `arrays` strategy opens the group with mode="w", which would wipe the model
 # store if we drove it ourselves — so only override against the newer API.
 ZARR_RECREATES_ARRAYS = "open_mode" in inspect.signature(zarr_arrays).parameters
+
+
+def _writes_sharded_oindex() -> bool:
+    """Whether zarr can write an orthogonal selection to a sharded array.
+
+    An integer array on any axis reaches the sharding codec in broadcast
+    (``np.ix_``) form. That codec's partial-encode path reads the selection
+    back as a pointwise one and raises. The probe writes four points inside one
+    shard. A one-point selection still writes, because both shapes then hold
+    one element.
+    """
+    arr = zarr.create_array({}, shape=(4, 4), chunks=(2, 2), shards=(2, 4), dtype="int64")
+    try:
+        arr.oindex[np.array([0, 1]), np.array([2, 3])] = np.zeros((2, 2), dtype="int64")
+    except (ValueError, IndexError):
+        return False
+    return True
+
+
+# Probed rather than pinned to a version, so the override below disappears on
+# its own once zarr releases the fix.
+ZARR_WRITES_SHARDED_OINDEX = _writes_sharded_oindex()
 
 Frequency = TypeVar("Frequency", bound=Callable[..., Any])
 
@@ -68,6 +92,17 @@ def storage_chunk_sizes(arr: "Array[Any]") -> tuple[tuple[int, ...], ...]:
         tuple(min(c, s - i * c) for i in range(math.ceil(s / c) if s else 0))
         for s, c in zip(arr.shape, cell, strict=True)
     )
+
+
+def is_sharded(arr: "Array[Any]") -> bool:
+    """True when the array stores shards.
+
+    ``Array.shards`` raises on a rectilinear chunk grid. The newer zarr
+    strategies draw those grids, so this reads the codec chain instead.
+    These arrays are always zarr format 3. Format 2 cannot shard.
+    """
+    codecs = getattr(arr.metadata, "codecs", ())
+    return any(isinstance(codec, ShardingCodec) for codec in codecs)
 
 
 # pytestmark = [
@@ -191,6 +226,38 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
             )
             arr[:] = a[:]
             self.all_arrays.add(path)
+
+    if not ZARR_WRITES_SHARDED_OINDEX:
+
+        @precondition(lambda self: bool(self.all_arrays))
+        @rule(data=st.data())
+        def overwrite_array_orthogonal_indexing(self, data: st.DataObject) -> None:
+            """Copy of zarr's rule with the broken sharded writes skipped.
+
+            An integer array on any axis reaches the sharding codec in
+            broadcast (``np.ix_``) form. That codec's partial-encode path reads
+            the selection back as a pointwise one. The write then raises
+            ``ValueError: shape mismatch`` unless it covers a single point. It
+            fails on the model store, before icechunk sees it. A selection of
+            slices always works, and so does any unsharded target.
+            """
+            array = data.draw(st.sampled_from(sorted(self.all_arrays)))
+            model_array = zarr.open_array(path=array, store=self.model)
+            store_array = zarr.open_array(path=array, store=self.store)
+            indexer, _ = data.draw(orthogonal_indices(shape=model_array.shape))
+            assume(
+                not is_sharded(model_array)
+                or not any(isinstance(dim_sel, np.ndarray) for dim_sel in indexer)
+            )
+            note(f"overwriting array orthogonal {indexer=}")
+            new_data = data.draw(
+                npst.arrays(
+                    shape=model_array.oindex[indexer].shape,  # type: ignore[union-attr]
+                    dtype=model_array.dtype,
+                )
+            )
+            model_array.oindex[indexer] = new_data
+            store_array.oindex[indexer] = new_data
 
     @precondition(
         lambda self: (
