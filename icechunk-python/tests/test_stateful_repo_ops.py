@@ -6,7 +6,7 @@ import json
 import operator
 import sys
 import textwrap
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, fields
 from functools import partial
 from typing import Any, Literal, Self, cast
@@ -248,6 +248,11 @@ class Model:
         self.ops_log: list[UpdateModel] = []
         self.migrated: bool = False
 
+        # Migration replaces ops_log with synthetic entries, so a V1 expiration
+        # is recorded here instead. It rewrites snapshot files without writing
+        # matching transaction logs, which weakens a file invariant for good.
+        self.v1_expiration_ran: bool = False
+
         # a tag once created, can never be recreated even after expiration
         self.created_tags: set[str] = set()
 
@@ -474,38 +479,35 @@ class Model:
             self.reachable_snapshots() if self.spec_version < 2 else set(self.commits)
         )
 
+        # V2 expiration re-parents a retained snapshot whose parent was released
+        # to the root of its branch, collapsing every ancestor in between. Rust
+        # reads the pre-edit repo info, so gather before dropping the released
+        # snapshots below, and apply after.
+        edits: dict[str, tuple[str | None, list[str]]] = {}
+        if self.spec_version >= 2:
+            for cid, c in self.commits.items():
+                # A released snapshot leaves the repo info, so only the ones
+                # that stay get re-parented.
+                if cid not in expired_snaps and c.parent_id in expired_snaps:
+                    edits[cid] = self.reparent_and_prune(
+                        cid, lambda anc: self.commits[anc].parent_id is None
+                    )
+
         for id in expired_snaps:
             # notice we don't delete from self.ondisk_snaps, those can still be deleted by GC
             # however we do pop from `commits` since that is a list of unexpired snaps
             if id not in ref_pointees:
                 self.commits.pop(id, None)
 
-        # A retained snapshot whose parent was released is
-        # re-parented to the root, dropping every ancestor between it and the
-        # root from its path; their tx logs (oldest first) are spliced into its
-        # pruned_ancestor_tx_logs.
-        # Must run before the re-parenting below rewrites the parents we walk here.
         if self.spec_version >= 2:
+            for cid, (root, pruned) in edits.items():
+                self.commits[cid].parent_id = root or self.initial_snapshot_id
+                self.pruned_ancestor_tx_logs[cid] = pruned
+        else:
+            # V1 rewrites snapshot files and keeps no pruned-ancestor list.
             for cid, c in self.commits.items():
-                if c.parent_id not in expired_snaps:
-                    continue
-                collapsed: list[str] = []
-                anc: str | None = c.parent_id
-                while anc is not None and anc != self.initial_snapshot_id:
-                    collapsed.append(anc)
-                    ancestor = self.ondisk_snaps.get(anc)
-                    anc = ancestor.parent_id if ancestor is not None else None
-                harvested: list[str] = []
-                for x in reversed(collapsed):
-                    harvested.extend(self.pruned_ancestor_tx_logs.get(x, []))
-                    harvested.append(x)
-                self.pruned_ancestor_tx_logs[cid] = harvested
-
-        # we reparent to the initial snapshot for simplicity. This should be good enough to make
-        # self.reachable_snapshots() accurate.
-        for cid, c in self.commits.items():
-            if cid in rewritable and c.parent_id in expired_snaps:
-                c.parent_id = self.initial_snapshot_id
+                if cid in rewritable and c.parent_id in expired_snaps:
+                    c.parent_id = self.initial_snapshot_id
 
         if delete_expired_tags:
             tags_to_delete = {
@@ -529,12 +531,45 @@ class Model:
         else:
             branches_to_delete = set()
 
+        if self.spec_version < 2:
+            self.v1_expiration_ran = True
         self.ops_log.append(ExpirationRanUpdateModel())
         return ExpireInfo(
             expired_snapshots=expired_snaps,
             deleted_branches=branches_to_delete,
             deleted_tags=tags_to_delete,
         )
+
+    def reparent_and_prune(
+        self, cid: str, is_boundary: Callable[[str], bool]
+    ) -> tuple[str | None, list[str]]:
+        """Mirror of Rust's `reparent_and_prune` (icechunk/src/ops/gc.rs).
+
+        Walks the ancestry of `cid` until an ancestor satisfies `is_boundary`,
+        which becomes the new parent. Every ancestor it passes is collapsed:
+        oldest first, each contributes its own pruned logs and then its id.
+        The snapshot's own pruned logs are newer than that run, so they come
+        last. Returns `None` as the parent when no boundary is found.
+        """
+        collapsed: list[tuple[str, list[str]]] = []
+        new_parent: str | None = None
+        anc = self.commits[cid].parent_id
+        while anc is not None:
+            snap = self.commits.get(anc)
+            if snap is None:
+                # Not in the repo info any more, where Rust's ancestry ends.
+                break
+            if is_boundary(anc):
+                new_parent = anc
+                break
+            collapsed.append((anc, list(self.pruned_ancestor_tx_logs.get(anc, ()))))
+            anc = snap.parent_id
+        pruned: list[str] = []
+        for anc_id, anc_pruned in reversed(collapsed):
+            pruned.extend(anc_pruned)
+            pruned.append(anc_id)
+        pruned.extend(self.pruned_ancestor_tx_logs.get(cid, ()))
+        return new_parent, pruned
 
     def reachable_snapshots(self) -> set[str]:
         assert self.initial_snapshot_id is not None
@@ -579,17 +614,8 @@ class Model:
             for cid, c in self.commits.items():
                 if cid in deleted or c.parent_id not in deleted:
                     continue
-                collapsed: list[str] = []
-                anc: str | None = c.parent_id
-                while anc is not None and anc in deleted:
-                    collapsed.append(anc)
-                    ancestor = self.ondisk_snaps.get(anc)
-                    anc = ancestor.parent_id if ancestor is not None else None
-                harvested: list[str] = []
-                for x in reversed(collapsed):
-                    harvested.extend(self.pruned_ancestor_tx_logs.get(x, []))
-                    harvested.append(x)
-                self.pruned_ancestor_tx_logs[cid] = harvested
+                anc, pruned = self.reparent_and_prune(cid, lambda a: a not in deleted)
+                self.pruned_ancestor_tx_logs[cid] = pruned
                 new_parents[cid] = anc
 
         for k in deleted:
@@ -1355,10 +1381,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         transactions_core = transactions & snapshots
 
         if self.model.initial_spec_version == 1:
-            expired = any(
-                isinstance(op, ExpirationRanUpdateModel) for op in self.model.ops_log
-            )
-            if expired:
+            if self.model.v1_expiration_ran:
                 # V1 expire rewrites snapshot files without creating matching
                 # transaction logs, so we can only assert the weaker invariant.
                 assert transactions_core <= snapshots - {INITIAL_SNAPSHOT}
