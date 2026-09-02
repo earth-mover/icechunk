@@ -26,7 +26,7 @@ use crate::{
         repo_info::{RepoAvailability, RepoInfo, UpdateInfo, UpdateType},
         snapshot::{ManifestFileInfo, Snapshot, SnapshotInfo},
     },
-    ops::pointed_snapshots,
+    ops::{pointed_snapshots, reachable_snapshots_v2},
     refs::{Ref, RefError},
     repository::{RepositoryError, RepositoryErrorKind, RepositoryResult},
     storage::{self, DeleteObjectsResult, ListInfo},
@@ -409,6 +409,14 @@ async fn garbage_collect_one_attempt(
 
     let mut non_pointed_but_new = HashSet::new();
 
+    // The snapshot objects in storage, listed once and reused by the delete
+    // pass below. Values are each object's `(created_at, size_bytes)`: the
+    // first decides retention and the physical delete, the second only feeds
+    // the summary's byte count.
+    // `None` when we never listed them: V1 repos, which don't need the
+    // retention check, and runs that keep snapshots, which don't delete any.
+    let mut listed_snaps: Option<HashMap<SnapshotId, (DateTime<Utc>, u64)>> = None;
+
     let mut all_snaps = HashSet::new();
     let repo_info = if asset_manager.spec_version() > SpecVersionBin::V1 {
         // The retention decision must use the same clock as the physical delete
@@ -416,29 +424,33 @@ async fn garbage_collect_one_attempt(
         // half-deletes a snapshot in the (flushed_at, created_at] window: it is
         // dropped from the repo info (losing its pruned_ancestor_tx_logs
         // references) while its file survives.
-        let created_at_by_id: HashMap<SnapshotId, DateTime<Utc>> =
-            if config.deletes_snapshots() {
+        if config.deletes_snapshots() {
+            listed_snaps = Some(
                 asset_manager
                     .list_snapshots()
                     .await?
-                    .map_ok(|s| (s.id, s.created_at))
+                    .map_ok(|s| (s.id, (s.created_at, s.size_bytes)))
                     .try_collect()
-                    .await?
-            } else {
-                HashMap::new()
-            };
+                    .await?,
+            );
+        }
         let (ri, _) = asset_manager.fetch_repo_info().await?;
+        let reachable = reachable_snapshots_v2(ri.as_ref(), &config.extra_roots)?;
         non_pointed_but_new = ri
             .all_snapshots()?
             .filter_map_ok(|si| {
                 all_snaps.insert(si.id.clone());
+                if reachable.contains(&si.id) {
+                    return None;
+                }
                 // A snapshot not visible in the listing yet cannot be deleted by
                 // this run either, so it is retained.
-                if created_at_by_id.get(&si.id).is_none_or(|c| *c >= snap_deadline) {
-                    Some(si.id)
-                } else {
-                    None
-                }
+                let old_enough_to_drop = listed_snaps.as_ref().is_some_and(|listed| {
+                    listed
+                        .get(&si.id)
+                        .is_some_and(|(created_at, _)| *created_at < snap_deadline)
+                });
+                if old_enough_to_drop { None } else { Some(si.id) }
             })
             .try_collect()?;
 
@@ -447,14 +459,20 @@ async fn garbage_collect_one_attempt(
         None
     };
 
-    let pointed_snaps =
-        pointed_snapshots(Arc::clone(&asset_manager), &config.extra_roots).await?;
+    let pointed_snaps = pointed_snapshots(
+        Arc::clone(&asset_manager),
+        repo_info.clone(),
+        &config.extra_roots,
+        config.max_snapshots_in_memory,
+    )
+    .await?;
     let am = Arc::clone(&asset_manager);
-    let non_pointed_snaps = stream::iter(non_pointed_but_new.into_iter().map(Ok))
-        .and_then(move |id| {
+    let non_pointed_snaps = stream::iter(non_pointed_but_new)
+        .map(move |id| {
             let am = Arc::clone(&am);
             async move { am.fetch_snapshot(&id).await }
-        });
+        })
+        .buffer_unordered(config.max_snapshots_in_memory.get() as usize);
 
     let (keep_chunks, keep_manifests, mut keep_snapshots) = find_retained(
         Arc::clone(&asset_manager),
@@ -491,7 +509,22 @@ async fn garbage_collect_one_attempt(
             .await?;
         }
         debug!("Garbage collecting snapshots");
-        let res = gc_snapshots(asset_manager.as_ref(), config, &keep_snapshots).await?;
+        let res = match listed_snaps.take() {
+            Some(listed) => {
+                let candidates = stream::iter(listed.into_iter().map(
+                    |(id, (created_at, size_bytes))| {
+                        Ok(ListInfo { id, created_at, size_bytes })
+                    },
+                ));
+                gc_snapshots(asset_manager.as_ref(), config, &keep_snapshots, candidates)
+                    .await?
+            }
+            None => {
+                let candidates = asset_manager.list_snapshots().await?;
+                gc_snapshots(asset_manager.as_ref(), config, &keep_snapshots, candidates)
+                    .await?
+            }
+        };
         summary.snapshots_deleted = res.deleted_objects;
         summary.bytes_deleted += res.deleted_bytes;
     }
@@ -762,16 +795,16 @@ pub async fn gc_manifests(
     }
 }
 
-#[instrument(skip(asset_manager,  config, keep_ids), fields(keep_ids.len = keep_ids.len()))]
+/// `snapshots` are the delete candidates
+#[instrument(skip(asset_manager,  config, keep_ids, snapshots), fields(keep_ids.len = keep_ids.len()))]
 pub async fn gc_snapshots(
     asset_manager: &AssetManager,
     config: &GCConfig,
     keep_ids: &HashSet<SnapshotId>,
+    snapshots: impl Stream<Item = RepositoryResult<ListInfo<SnapshotId>>> + Send,
 ) -> GCResult<DeleteObjectsResult> {
     info!("Deleting snapshots");
-    let to_delete = asset_manager
-        .list_snapshots()
-        .await?
+    let to_delete = snapshots
         .inspect_err(|e| error!("Deleting snapshots: {e}"))
         .filter_map(move |snapshot| {
             ready(snapshot.ok().and_then(|snapshot| {
@@ -1255,4 +1288,69 @@ async fn expire_v2_one_attempt(
 
     debug!("Expiration done");
     Ok(ExpireResult { released_snapshots, edited_snapshots, deleted_refs: deleted_tags })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap as StdHashMap;
+
+    use chrono::Duration;
+    use icechunk_macros::tokio_test;
+
+    use super::*;
+    use crate::{
+        Storage,
+        format::SNAPSHOTS_FILE_PATH,
+        storage::new_in_memory_storage,
+        test_utils::{logging_asset_manager, repo_with_converging_refs},
+    };
+
+    /// GC must read each snapshot at most once. Snapshots newer than the
+    /// metadata cutoff used to be fetched twice: once walking the ref
+    /// ancestries and again as (supposedly) non-pointed but new.
+    #[tokio_test]
+    async fn test_gc_reads_each_snapshot_once() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+        let repo = repo_with_converging_refs(&backend).await?;
+        let (logging, asset_manager) = logging_asset_manager(
+            &backend,
+            repo.storage_settings().clone(),
+            SpecVersionBin::V2,
+        );
+
+        // a cutoff in the past leaves every snapshot newer than the deadline,
+        // which is what put them all in `non_pointed_but_new`
+        let cutoff = Utc::now() - Duration::hours(1);
+        let config = GCConfig::clean_all(
+            cutoff,
+            cutoff,
+            None,
+            NonZeroU16::new(10).unwrap(),
+            NonZeroUsize::new(1_000_000_000).unwrap(),
+            NonZeroU16::new(10).unwrap(),
+            true,
+        );
+        garbage_collect(Arc::clone(&asset_manager), &config, None, 10).await?;
+
+        let snapshot_prefix = format!("{SNAPSHOTS_FILE_PATH}/");
+        let mut reads_per_snapshot: StdHashMap<String, usize> = StdHashMap::new();
+        let mut snapshot_listings = 0;
+        for (op, path) in logging.fetch_operations() {
+            if op == "list_objects" {
+                if path == SNAPSHOTS_FILE_PATH {
+                    snapshot_listings += 1;
+                }
+            } else if path.starts_with(&snapshot_prefix) {
+                *reads_per_snapshot.entry(path).or_default() += 1;
+            }
+        }
+        assert_eq!(snapshot_listings, 1, "the snapshots prefix was listed twice");
+        let repeated: Vec<_> =
+            reads_per_snapshot.iter().filter(|(_, n)| **n > 1).collect();
+        assert!(repeated.is_empty(), "snapshots read more than once: {repeated:?}");
+        // 5 commits plus the initial snapshot
+        assert_eq!(reads_per_snapshot.len(), 6);
+        Ok(())
+    }
 }

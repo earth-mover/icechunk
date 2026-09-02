@@ -79,7 +79,15 @@ pub(crate) mod test_utils {
     use rstest::rstest;
     use rstest_reuse::{self, *};
 
-    #[expect(unused_imports)]
+    use std::{collections::HashMap, sync::Arc};
+
+    use bytes::Bytes;
+
+    use crate::{
+        Repository, Storage, asset_manager::AssetManager, format::Path, storage,
+        storage::logging::LoggingStorage,
+    };
+
     use crate::format::format_constants::SpecVersionBin;
 
     #[template]
@@ -87,6 +95,56 @@ pub(crate) mod test_utils {
     #[case::v1(SpecVersionBin::V1)]
     #[case::v2(SpecVersionBin::V2)]
     pub fn spec_version_cases(#[case] spec_version: SpecVersionBin) {}
+
+    /// A V2 repo whose history is `INITIAL -> c0 -> .. -> c4` on `main`, with a
+    /// tag at `c2` and both a tag and a branch at `c4`, so the ancestries of
+    /// the three refs converge.
+    pub(crate) async fn repo_with_converging_refs(
+        backend: &Arc<dyn Storage + Send + Sync>,
+    ) -> Result<Repository, Box<dyn std::error::Error>> {
+        let repo = Repository::create(
+            None,
+            Arc::clone(backend),
+            HashMap::new(),
+            Some(SpecVersionBin::V2),
+            true,
+        )
+        .await?;
+        for i in 0..5u32 {
+            let mut session = repo.writable_session("main").await?;
+            let path: Path = format!("/g{i}").as_str().try_into().unwrap();
+            session.add_group(path, Bytes::new()).await?;
+            let snap = session.commit("commit").max_concurrent_nodes(8).execute().await?;
+            if i == 2 {
+                repo.create_tag("mid", &snap).await?;
+            }
+            if i == 4 {
+                repo.create_tag("tip", &snap).await?;
+                repo.create_branch("other", &snap).await?;
+            }
+        }
+        Ok(repo)
+    }
+
+    /// An `AssetManager` over `backend` that caches nothing, so every fetch
+    /// reaches storage, paired with the [`LoggingStorage`] recording those
+    /// fetches. For tests that count reads.
+    pub(crate) fn logging_asset_manager(
+        backend: &Arc<dyn Storage + Send + Sync>,
+        storage_settings: storage::Settings,
+        spec_version: SpecVersionBin,
+    ) -> (Arc<LoggingStorage>, Arc<AssetManager>) {
+        let logging = Arc::new(LoggingStorage::new(Arc::clone(backend)));
+        let logging_dyn: Arc<dyn Storage + Send + Sync> = Arc::clone(&logging) as _;
+        let asset_manager = Arc::new(AssetManager::new_no_cache(
+            logging_dyn,
+            storage_settings,
+            spec_version,
+            1,
+            100,
+        ));
+        (logging, asset_manager)
+    }
 }
 
 mod private {
