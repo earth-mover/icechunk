@@ -671,8 +671,6 @@ mod tests {
     use icechunk_macros::tokio_test;
     use tempfile::{TempDir, tempdir};
 
-    use futures::TryStreamExt as _;
-
     use crate::{RepositoryConfig, new_local_filesystem_storage, refs};
 
     use super::*;
