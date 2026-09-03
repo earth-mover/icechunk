@@ -2479,6 +2479,38 @@ mod tests {
         Ok(())
     }
 
+    /// `reset_branch` used to report `from_snapshot_id` as both the expected and
+    /// the actual parent, so a real conflict printed as `(Some(X)) != (Some(X))`.
+    #[tokio::test]
+    async fn test_reset_branch_conflict_reports_actual_parent()
+    -> Result<(), Box<dyn Error>> {
+        let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+        let repo = Repository::create(
+            None,
+            Arc::clone(&storage),
+            HashMap::new(),
+            Some(SpecVersionBin::V2),
+            true,
+        )
+        .await?;
+
+        let tip = repo.lookup_branch("main").await?;
+        let stale = SnapshotId::random();
+        let err = repo.reset_branch("main", &tip, Some(&stale)).await.unwrap_err();
+
+        assert!(
+            matches!(
+                &err.kind,
+                RepositoryErrorKind::Conflict {
+                    expected_parent: Some(expected),
+                    actual_parent: Some(actual),
+                } if expected == &stale && actual == &tip
+            ),
+            "expected a conflict naming the real branch tip, got: {err}"
+        );
+        Ok(())
+    }
+
     #[test]
     fn test_manifest_preload_default_condition() {
         let condition =
