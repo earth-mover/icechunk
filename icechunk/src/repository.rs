@@ -1363,13 +1363,16 @@ impl Repository {
         from_snapshot_id: Option<&SnapshotId>,
     ) -> RepositoryResult<()> {
         let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str, _| {
-            if let Some(from_snapshot_id) = from_snapshot_id
-                && &repo_info.resolve_branch(branch).inject()? != from_snapshot_id
-            {
-                return Err(RepositoryError::capture(RepositoryErrorKind::Conflict {
-                    expected_parent: Some(from_snapshot_id.clone()),
-                    actual_parent: Some(from_snapshot_id.clone()),
-                }));
+            if let Some(from_snapshot_id) = from_snapshot_id {
+                let actual_parent = repo_info.resolve_branch(branch).inject()?;
+                if &actual_parent != from_snapshot_id {
+                    return Err(RepositoryError::capture(
+                        RepositoryErrorKind::Conflict {
+                            expected_parent: Some(from_snapshot_id.clone()),
+                            actual_parent: Some(actual_parent),
+                        },
+                    ));
+                }
             }
             let num_updates = self.config.num_updates_per_repo_info_file();
 
