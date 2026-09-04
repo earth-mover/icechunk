@@ -95,15 +95,6 @@ jobs:
           name: test-wheels
           path: icechunk-python/dist
 
-      - name: Restore cached hypothesis examples
-        id: restore-hypothesis-cache
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: icechunk-python/.hypothesis/examples/
-          key: cache-hypothesis-${{ runner.os }}-${{ github.run_id }}
-          restore-keys: |
-            cache-hypothesis-${{ runner.os }}-
-
       - name: Install dependencies - ${{ matrix.deps-version.name }}
         env:
           DEPS_NAME: ${{ matrix.deps-version.name }}
@@ -262,6 +253,7 @@ jobs:
 
       - name: Restore cached hypothesis examples
         id: restore-hypothesis-cache
+        if: github.ref == 'refs/heads/main'
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: icechunk-python/.hypothesis/examples/

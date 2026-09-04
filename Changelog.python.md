@@ -2,10 +2,13 @@
 
 ## Python Icechunk Library [unreleased]
 
+## Python Icechunk Library 2.2.0
+
 ### Features
 
 - The `inspect_*` methods now report a `header` for the file they read: the library version that wrote it, and that file's spec version, file type and compression ([#2347](https://github.com/earth-mover/icechunk/pull/2347)).
 - Add `hf_storage`, a preset for Hugging Face Storage Buckets. It takes the bucket's `namespace`. It sets the gateway endpoint, the region and path-style URLs. The gateway discards user metadata, so Icechunk cannot recover from a lost response to a conditional write ([#2346](https://github.com/earth-mover/icechunk/pull/2346)).
+- Add `branch` (`list`, `create`, `delete`), `tag` (`list`, `create`, `delete`) and `ancestry` subcommands to the `icechunk` command line interface ([#2299](https://github.com/earth-mover/icechunk/pull/2299)).
 
 ### Fixes
 
@@ -15,6 +18,10 @@
 - Writing a chunk with length 0 is now rejected instead of being committed. A chunk must decode to the full chunk shape, so no valid chunk is ever zero bytes long, and such a chunk could only fail once it was read back — long after the commit that introduced it. This is how a sparse GeoTIFF's unstored tiles (`offset = 0, byteCount = 0`) used to reach a repository. Applies to inline, virtual and materialized chunks alike, which means Icechunk deliberately rejects an empty write at a chunk key where a plain key-value store would accept it, in the same way it already rejects invalid zarr keys and invalid metadata. To record that a chunk is not stored at all, delete it rather than writing a zero-length one; it then reads back as the array's fill value ([#2328](https://github.com/earth-mover/icechunk/issues/2328)).
 - Object metadata keys no longer contain `_`: they are now `icspecver`, `icclient`, `icfiletype`, `iccompalg` and `icechunkwriteid`. S3 gateways fronted by nginx dropped the old names, which failed writes with `AccessDenied: There were headers present in the request which were not signed`. The old names stay available as `*_DEPRECATED` constants ([#2354](https://github.com/earth-mover/icechunk/pull/2354)).
 - S3 endpoints whose URL includes a path no longer fail with `NoSuchBucket`. Hugging Face Storage Buckets use such a URL: `https://s3.hf.co/<namespace>`. The AWS SDK joins the endpoint path and the bucket name without a separator. Requests therefore addressed `/<namespace><bucket>/<key>`. Icechunk now appends the missing `/`. Endpoints without a path, such as Tigris, R2 and MinIO, keep the same behavior ([#2346](https://github.com/earth-mover/icechunk/pull/2346)).
+
+### Performance
+
+- Writing to a store no longer copies the NumPy buffer: `set` and `set_if_not_exists` pass the buffer through instead of converting it to `bytes`. `PyStore.set` and `PyStore.set_if_not_exists` now accept `BytesLike` ([#2332](https://github.com/earth-mover/icechunk/pull/2332)).
 
 ## Python Icechunk Library 2.1.2
 
