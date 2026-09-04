@@ -160,10 +160,11 @@ async fn unique_manifest_infos<'a>(
     max_snapshots_in_memory: NonZeroU16,
 ) -> RepositoryResult<impl TryStream<Ok = ManifestFileInfo, Error = RepositoryError> + 'a>
 {
-    let all_snaps = pointed_snapshots(asset_manager, extra_roots)
-        .await?
-        .map(ready)
-        .buffer_unordered(max_snapshots_in_memory.get() as usize);
+    let all_snaps =
+        pointed_snapshots(asset_manager, None, extra_roots, max_snapshots_in_memory)
+            .await?
+            .map(ready)
+            .buffer_unordered(max_snapshots_in_memory.get() as usize);
     let all_manifest_infos = all_snaps
         // this could be slightly optimized by not collecting all manifest info records into a vec
         // but we don't expect too many, and they are small anyway
