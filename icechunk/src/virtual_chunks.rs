@@ -176,7 +176,6 @@ impl VirtualChunkContainer {
                     );
                 }
             }
-            #[cfg(feature = "object-store-http")]
             ("http" | "https", ObjectStoreConfig::Http(_)) => {
                 if !url.has_host() {
                     return Err(
@@ -241,7 +240,6 @@ impl VirtualChunkContainer {
                 ObjectStoreConfig::LocalFileSystem(_),
                 Some(Credentials::LocalFileSystemAccess) | None,
             ) => Ok(()),
-            #[cfg(feature = "object-store-http")]
             (ObjectStoreConfig::Http(_), Some(Credentials::HttpAccess) | None) => Ok(()),
 
             (ObjectStoreConfig::InMemory, Some(_)) => {
@@ -251,7 +249,6 @@ impl VirtualChunkContainer {
             (ObjectStoreConfig::LocalFileSystem(..), Some(_)) => {
                 Err("local file storage does not accept credentials".to_string())
             }
-            #[cfg(feature = "object-store-http")]
             (ObjectStoreConfig::Http(_), Some(_)) => {
                 // TODO: Support basic and bearer auth
                 Err("http storage does not support credentials yet".to_string())
@@ -326,6 +323,29 @@ type CacheKey = (ContainerName, Option<BucketName>);
 
 type ChunkFetcherCache = Cache<CacheKey, Arc<dyn ChunkFetcher>>;
 
+/// Result of a custom HTTP virtual-chunk read. Metadata is required when the
+/// reference carries the corresponding checksum; it is checked by the resolver.
+#[derive(Debug)]
+pub struct HttpVirtualChunkResponse {
+    pub data: Bytes,
+    pub etag: Option<String>,
+    pub last_modified: Option<u32>,
+}
+
+/// HTTP transport supplied by an embedding runtime, for example browser fetch.
+/// Implementations must return exactly the requested range from this URL and
+/// must not follow redirects outside the authorized container.
+#[async_trait]
+pub trait HttpVirtualChunkFetcher: std::fmt::Debug + Send + Sync {
+    async fn fetch(
+        &self,
+        url: &str,
+        range: &Range<ChunkOffset>,
+        checksum: Option<&Checksum>,
+        config: &crate::config::HttpConfig,
+    ) -> Result<HttpVirtualChunkResponse, VirtualReferenceError>;
+}
+
 /// Resolves virtual chunk references to actual bytes from external sources.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct VirtualChunkResolver {
@@ -335,6 +355,8 @@ pub struct VirtualChunkResolver {
     settings: storage::Settings,
     #[serde(skip, default = "new_cache")]
     fetchers: ChunkFetcherCache,
+    #[serde(skip)]
+    http_fetcher: Option<Arc<dyn HttpVirtualChunkFetcher>>,
 }
 
 fn new_cache() -> ChunkFetcherCache {
@@ -377,7 +399,25 @@ impl VirtualChunkResolver {
         sort_containers(&mut containers);
         let credentials =
             credentials.into_iter().map(|(k, v)| (add_trailing(k), v)).collect();
-        VirtualChunkResolver { containers, credentials, settings, fetchers: new_cache() }
+        VirtualChunkResolver {
+            containers,
+            credentials,
+            settings,
+            fetchers: new_cache(),
+            http_fetcher: None,
+        }
+    }
+
+    /// Attach a runtime HTTP transport while preserving container authorization.
+    /// The returned resolver has a fresh fetcher cache; the callback is not serialized.
+    pub fn with_http_fetcher(&self, fetcher: Arc<dyn HttpVirtualChunkFetcher>) -> Self {
+        Self {
+            containers: self.containers.clone(),
+            credentials: self.credentials.clone(),
+            settings: self.settings.clone(),
+            fetchers: new_cache(),
+            http_fetcher: Some(fetcher),
+        }
     }
 
     pub fn matching_container(
@@ -476,6 +516,58 @@ impl VirtualChunkResolver {
                 url: location.clone(),
             })
             .capture()?;
+        if let Some(fetcher) = &self.http_fetcher {
+            if let Some(cont) = self.matching_container_by_url(url.as_str()) {
+                if let ObjectStoreConfig::Http(config) = &cont.store {
+                    match self.credentials.get(&cont.url_prefix) {
+                        Some(None) | Some(Some(Credentials::HttpAccess)) => {},
+                        Some(Some(_)) => return Err(VirtualReferenceError::capture(
+                            VirtualReferenceErrorKind::InvalidCredentials("HTTP".to_string()),
+                        )),
+                        None => return Err(VirtualReferenceError::capture(
+                            VirtualReferenceErrorKind::UnauthorizedVirtualChunkContainer {
+                                url_prefix: cont.url_prefix.clone(), name: cont.name.clone(),
+                            },
+                        )),
+                    }
+                    let expected =
+                        range.end.checked_sub(range.start).ok_or_else(|| {
+                            VirtualReferenceError::capture(
+                                VirtualReferenceErrorKind::OtherError(
+                                    "invalid virtual chunk byte range".into(),
+                                ),
+                            )
+                        })?;
+                    let response =
+                        fetcher.fetch(url.as_str(), range, checksum, config).await?;
+                    let valid = match checksum {
+                        Some(Checksum::ETag(etag)) => {
+                            response.etag.as_deref().is_some_and(|value| {
+                                strip_quotes(value) == strip_quotes(&etag.0)
+                            })
+                        }
+                        Some(Checksum::LastModified(SecondsSinceEpoch(seconds))) => {
+                            response.last_modified.is_some_and(|value| value <= *seconds)
+                        }
+                        None => true,
+                    };
+                    if !valid {
+                        return Err(VirtualReferenceError::capture(
+                            VirtualReferenceErrorKind::ObjectModified(location),
+                        ));
+                    }
+                    if response.data.len() as u64 != expected {
+                        return Err(VirtualReferenceError::capture(
+                            VirtualReferenceErrorKind::InvalidObjectSize {
+                                expected,
+                                available: response.data.len() as u64,
+                            },
+                        ));
+                    }
+                    return Ok(response.data);
+                }
+            }
+        }
         let key = resolved_object_key(&location)?;
         let fetcher = self.get_fetcher(&url).await?;
         fetcher.fetch_chunk(&url, &key, range, checksum).await
@@ -696,6 +788,12 @@ impl VirtualChunkResolver {
                     .await?,
                 ))
             }
+            #[cfg(not(feature = "object-store-http"))]
+            ObjectStoreConfig::Http(_) => Err(VirtualReferenceError::capture(
+                VirtualReferenceErrorKind::OtherError(
+                    "HTTP virtual chunks require a custom HTTP fetcher in this build".into(),
+                ),
+            )),
             #[cfg(feature = "object-store-http")]
             ObjectStoreConfig::Http(http_config) => {
                 match self.credentials.get(&cont.url_prefix) {
@@ -1747,5 +1845,130 @@ mod tests {
         let found = resolver.matching_container(&loc);
         assert!(found.is_some());
         assert_eq!(found.unwrap().name(), Some("my-data"));
+    }
+}
+
+#[cfg(test)]
+mod http_callback_tests {
+    use super::*;
+    use crate::config::HttpConfig;
+    use crate::storage::ETag;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[derive(Debug)]
+    struct Fetcher {
+        calls: Arc<AtomicUsize>,
+        bytes: Bytes,
+        etag: Option<String>,
+        modified: Option<u32>,
+    }
+    #[async_trait]
+    impl HttpVirtualChunkFetcher for Fetcher {
+        async fn fetch(
+            &self,
+            url: &str,
+            range: &Range<ChunkOffset>,
+            _checksum: Option<&Checksum>,
+            _config: &HttpConfig,
+        ) -> Result<HttpVirtualChunkResponse, VirtualReferenceError> {
+            assert_eq!(url, "https://example.com/tiles/a.tif");
+            assert_eq!(range, &(4..8));
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(HttpVirtualChunkResponse {
+                data: self.bytes.clone(),
+                etag: self.etag.clone(),
+                last_modified: self.modified,
+            })
+        }
+    }
+    fn resolver(
+        authorized: bool,
+        bytes: &'static [u8],
+        etag: Option<&str>,
+        modified: Option<u32>,
+    ) -> (VirtualChunkResolver, Arc<AtomicUsize>) {
+        let prefix = "https://example.com/tiles/";
+        let container = VirtualChunkContainer::new_named(
+            "tiles".into(),
+            prefix.into(),
+            ObjectStoreConfig::Http(HttpConfig::default()),
+        )
+        .unwrap();
+        let credentials = if authorized {
+            HashMap::from([(prefix.into(), Some(Credentials::HttpAccess))])
+        } else {
+            HashMap::new()
+        };
+        let calls = Arc::new(AtomicUsize::new(0));
+        let fetcher = Fetcher {
+            calls: Arc::clone(&calls),
+            bytes: Bytes::from_static(bytes),
+            etag: etag.map(str::to_owned),
+            modified,
+        };
+        (
+            VirtualChunkResolver::new(
+                std::iter::once(container),
+                credentials,
+                storage::Settings::default(),
+            )
+            .with_http_fetcher(Arc::new(fetcher)),
+            calls,
+        )
+    }
+    #[tokio::test]
+    async fn resolves_named_http_references() {
+        let (r, calls) = resolver(true, b"abcd", Some("\"v1\""), Some(100));
+        let bytes = r
+            .fetch_chunk(
+                "vcc://tiles/a.tif",
+                &(4..8),
+                Some(&Checksum::ETag(ETag("v1".into()))),
+            )
+            .await
+            .unwrap();
+        assert_eq!(bytes.as_ref(), b"abcd");
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+    #[tokio::test]
+    async fn rejects_unauthorized_and_outside_prefix_without_fetching() {
+        let (r, calls) = resolver(false, b"abcd", None, None);
+        assert!(
+            r.fetch_chunk("https://example.com/tiles/a.tif", &(4..8), None)
+                .await
+                .is_err()
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        let (r, calls) = resolver(true, b"abcd", None, None);
+        for url in [
+            "https://example.com/tiles-other/a.tif",
+            "https://example.com/tiles/../a.tif",
+        ] {
+            assert!(r.fetch_chunk(url, &(4..8), None).await.is_err());
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
+    #[tokio::test]
+    async fn validates_lengths_and_checksums() {
+        let url = "https://example.com/tiles/a.tif";
+        let etag = Checksum::ETag(ETag("v1".into()));
+        for value in [None, Some("v2")] {
+            let (r, _) = resolver(true, b"abcd", value, None);
+            assert!(r.fetch_chunk(url, &(4..8), Some(&etag)).await.is_err());
+        }
+        let (r, _) = resolver(true, b"abc", None, None);
+        assert!(r.fetch_chunk(url, &(4..8), None).await.is_err());
+        let modified = Checksum::LastModified(SecondsSinceEpoch(100));
+        for value in [None, Some(101)] {
+            let (r, _) = resolver(true, b"abcd", None, value);
+            assert!(r.fetch_chunk(url, &(4..8), Some(&modified)).await.is_err());
+        }
+        let (r, _) = resolver(true, b"abcd", None, Some(99));
+        assert!(r.fetch_chunk(url, &(4..8), Some(&modified)).await.is_ok());
+    }
+    #[test]
+    fn http_config_deserializes_without_native_networking() {
+        let config: ObjectStoreConfig = serde_json::from_str(r#"{"http":{}}"#).unwrap();
+        assert!(matches!(config, ObjectStoreConfig::Http(_)));
     }
 }

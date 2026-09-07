@@ -49,7 +49,6 @@ pub use icechunk_arrow_object_store::object_store::gcp::GcpCredential;
 /// request made by the underlying HTTP client (e.g. `"authorization": "Bearer …"`).
 /// Header values are **not** included in `Debug`/`Display` output to avoid leaking
 /// credentials in logs.
-#[cfg(feature = "object-store-http")]
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct HttpConfig {
     /// Generic transport options (`ClientConfigKey` names → values).
@@ -67,7 +66,6 @@ pub enum ObjectStoreConfig {
     InMemory,
     #[cfg(feature = "object-store-fs")]
     LocalFileSystem(PathBuf),
-    #[cfg(feature = "object-store-http")]
     Http(HttpConfig),
     S3Compatible(S3Options),
     S3(S3Options),
