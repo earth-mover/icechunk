@@ -6,3 +6,5 @@ mod repository;
 mod session;
 mod storage;
 mod store;
+
+mod virtual_chunks;

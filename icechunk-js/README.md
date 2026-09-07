@@ -92,7 +92,33 @@ This is the primary way to use cloud storage in the browser, where native Rust n
 
 #### Virtual Chunks
 
-Virtual chunks are supported in node but not in WASM builds.
+Node.js supports the native virtual-chunk backends. WASM can read HTTP(S) virtual
+chunks through an explicit JavaScript callback. This reads the referenced byte
+ranges directly in the browser, without materializing the source data.
+
+```typescript
+const { Repository } = await import('@earthmover/icechunk')
+const { createHttpVirtualChunkFetcher } = await import('@earthmover/icechunk/http-virtual-chunks')
+
+const repo = await Repository.open(storage, undefined, {
+  'https://data.example.com/tiles/': { type: 'HttpAccess' },
+})
+await repo.setHttpVirtualChunkFetcher(createHttpVirtualChunkFetcher())
+const session = await repo.readonlySession({ branch: 'main' })
+```
+
+Register the callback before opening sessions. It is not persisted or serialized.
+The repository must already contain matching HTTP virtual-chunk containers (for
+example, configured when writing it from Python). The resolver checks explicit
+prefix authorization, response length, and stored `ETag`/`Last-Modified` checksums.
+
+The provided helper requires HTTP 206 responses with the exact `Content-Range`.
+Cross-origin sources must allow CORS and expose `Content-Range`, plus `ETag` or
+`Last-Modified` when referenced checksums require them. Checksums are verified against the metadata of the same response, without
+sending conditional headers. Redirects and ambient cookies are disabled.
+Native HTTP transport options are rejected; use a custom callback when needed.
+TIFF compression/predictor codecs still need support in your Zarr reader.
+Non-HTTP virtual-chunk backends remain unavailable in WASM.
 
 ## Using in the Browser (WASM)
 
@@ -158,7 +184,8 @@ yarn build
 yarn test
 ```
 
-For WASM:
+For WASM, install the JavaScript development dependencies before building.
+
 
 ```bash
 # Requires brew install llvm and env vars (see docs/docs/contributing.md)
