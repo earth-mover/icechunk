@@ -6,19 +6,22 @@
 //! between their parents and the tip, then writes one snapshot that applies
 //! every source on top of the tip.
 
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{BTreeMap, HashMap, HashSet},
+    sync::Arc,
+};
 
 use crate::{
     conflicts::Conflict,
     format::{
-        ChunkIndices, NodeId, Path, SnapshotId,
+        ChunkIndices, IcechunkFormatErrorKind, ManifestId, NodeId, Path, SnapshotId,
         repo_info::RepoInfo,
-        snapshot::{Snapshot, SnapshotInfo},
+        snapshot::{ManifestFileInfo, NodeData, NodeSnapshot, Snapshot, SnapshotInfo},
         transaction_log::TransactionLog,
     },
     session::{SessionError, SessionErrorKind, SessionResult},
 };
-use icechunk_types::error::ICResultCtxExt as _;
+use icechunk_types::{ICResultExt as _, error::ICResultCtxExt as _};
 
 /// A conflict between two snapshots found during a merge.
 ///
@@ -227,6 +230,103 @@ pub(crate) fn detect_conflicts(
     Ok(found)
 }
 
+/// A source snapshot with everything the merge reads from it.
+pub(crate) struct Source {
+    pub(crate) id: SnapshotId,
+    pub(crate) parent: SnapshotId,
+    pub(crate) snapshot: Arc<Snapshot>,
+    pub(crate) log: Arc<TransactionLog>,
+}
+
+/// The result node list before manifests of existing arrays are merged.
+pub(crate) struct MergedNodes {
+    /// Result nodes keyed by path string, the order `Snapshot::from_iter` needs.
+    /// Arrays that exist in the tip keep the tip's manifest refs.
+    pub(crate) nodes: BTreeMap<String, NodeSnapshot>,
+    /// Manifest files of arrays new in a source, taken from that source.
+    pub(crate) files: HashMap<ManifestId, ManifestFileInfo>,
+}
+
+fn manifest_info(
+    snapshot: &Snapshot,
+    id: &ManifestId,
+) -> SessionResult<ManifestFileInfo> {
+    snapshot
+        .manifest_info(id)
+        .inject()?
+        .ok_or_else(|| IcechunkFormatErrorKind::ManifestInfoNotFound {
+            manifest_id: id.clone(),
+        })
+        .capture::<IcechunkFormatErrorKind>()
+        .inject()
+}
+
+/// Apply the node changes of every source to the tip's node list.
+///
+/// Paths in a source equal paths in the tip because logs with moves are
+/// rejected before this runs.
+pub(crate) fn merge_nodes(
+    tip: &Snapshot,
+    sources: &[Source],
+) -> SessionResult<MergedNodes> {
+    let mut nodes: BTreeMap<String, NodeSnapshot> = BTreeMap::new();
+    let mut key_of: HashMap<NodeId, String> = HashMap::new();
+    for node in tip.iter() {
+        let node = node.inject()?;
+        let key = node.path.to_string();
+        key_of.insert(node.id.clone(), key.clone());
+        nodes.insert(key, node);
+    }
+    let mut files = HashMap::new();
+    for source in sources {
+        for id in source.log.deleted_groups().chain(source.log.deleted_arrays()) {
+            if let Some(key) = key_of.remove(&id) {
+                nodes.remove(&key);
+            }
+        }
+        let new_ids: HashSet<NodeId> =
+            source.log.new_groups().chain(source.log.new_arrays()).collect();
+        let mut wanted: HashSet<NodeId> =
+            source.log.updated_groups().chain(source.log.updated_arrays()).collect();
+        wanted.extend(new_ids.iter().cloned());
+        for node in source.snapshot.iter() {
+            let node = node.inject()?;
+            if !wanted.contains(&node.id) {
+                continue;
+            }
+            let key = node.path.to_string();
+            let NodeSnapshot { id, path, user_data, node_data } = node;
+            let node_data = if new_ids.contains(&id) {
+                if let NodeData::Array { manifests, .. } = &node_data {
+                    for mref in manifests {
+                        files.insert(
+                            mref.object_id.clone(),
+                            manifest_info(source.snapshot.as_ref(), &mref.object_id)?,
+                        );
+                    }
+                }
+                node_data
+            } else {
+                // A metadata update keeps the tip's manifests, which Step 5 merges.
+                match (node_data, nodes.get(&key).map(|n| &n.node_data)) {
+                    (
+                        NodeData::Array { shape, dimension_names, .. },
+                        Some(NodeData::Array { manifests, .. }),
+                    ) => NodeData::Array {
+                        shape,
+                        dimension_names,
+                        manifests: manifests.clone(),
+                    },
+                    (node_data, _) => node_data,
+                }
+            };
+            key_of.insert(id.clone(), key.clone());
+            nodes.insert(key, NodeSnapshot { id, path, user_data, node_data });
+        }
+    }
+    Ok(MergedNodes { nodes, files })
+}
+
 #[cfg(test)]
 mod tests {
     use std::{collections::HashMap, error::Error};
@@ -238,8 +338,10 @@ mod tests {
     use crate::{
         Repository,
         format::{
-            ChunkIndices, Path, format_constants::SpecVersionBin, manifest::ChunkPayload,
-            snapshot::ArrayShape,
+            ChunkIndices, Path,
+            format_constants::SpecVersionBin,
+            manifest::ChunkPayload,
+            snapshot::{ArrayShape, NodeData},
         },
         new_in_memory_storage,
     };
@@ -302,6 +404,98 @@ mod tests {
             )
             .await?;
         Ok(session.commit(format!("chunk {index}")).execute().await?)
+    }
+
+    /// Load a flushed snapshot as a merge source.
+    async fn load_source(
+        repo: &Repository,
+        id: &SnapshotId,
+    ) -> Result<Source, Box<dyn Error>> {
+        let (repo_info, _) = repo.asset_manager().fetch_repo_info().await?;
+        let parent =
+            repo_info.find_snapshot(id)?.parent_id.ok_or("source has no parent")?;
+        Ok(Source {
+            id: id.clone(),
+            parent,
+            snapshot: repo.asset_manager().fetch_snapshot(id).await?,
+            log: repo.asset_manager().fetch_transaction_log(id).await?,
+        })
+    }
+
+    #[tokio_test]
+    async fn merge_nodes_applies_structure_changes() -> Result<(), Box<dyn Error>> {
+        let (repo, array) = repo_with_array().await?;
+        let tip_id = repo.lookup_branch("main").await?;
+
+        // one source per change kind
+        let mut session = repo.writable_session("main").await?;
+        session.add_group(path("/group"), Bytes::from_static(b"g")).await?;
+        let new_group = session.commit("group").anonymous().execute().await?;
+
+        let mut session = repo.writable_session("main").await?;
+        session.add_array(path("/fresh"), shape(), None, Bytes::new()).await?;
+        session.set_chunk_ref(path("/fresh"), ChunkIndices(vec![0]), inline("f")).await?;
+        let new_array = session.commit("fresh").anonymous().execute().await?;
+
+        let mut session = repo.writable_session("main").await?;
+        session.update_group(&Path::root(), Bytes::from_static(b"root")).await?;
+        let updated = session.commit("root attrs").anonymous().execute().await?;
+
+        let mut session = repo.writable_session("main").await?;
+        session.delete_array(array.clone()).await?;
+        let deleted = session.commit("delete").anonymous().execute().await?;
+
+        let tip = repo.asset_manager().fetch_snapshot(&tip_id).await?;
+        let mut sources = Vec::new();
+        for id in [&new_group, &new_array, &updated, &deleted] {
+            sources.push(load_source(&repo, id).await?);
+        }
+
+        let merged = merge_nodes(tip.as_ref(), &sources)?;
+
+        let paths: Vec<&String> = merged.nodes.keys().collect();
+        assert_eq!(paths, vec!["/", "/fresh", "/group"]);
+        assert_eq!(merged.nodes["/"].user_data, Bytes::from_static(b"root"));
+        assert_eq!(merged.nodes["/group"].user_data, Bytes::from_static(b"g"));
+        let fresh_snapshot = repo.asset_manager().fetch_snapshot(&new_array).await?;
+        let fresh_in_source = fresh_snapshot.get_node(&path("/fresh"))?;
+        assert_eq!(merged.nodes["/fresh"].node_data, fresh_in_source.node_data);
+        let NodeData::Array { manifests, .. } = &merged.nodes["/fresh"].node_data else {
+            panic!("fresh is an array");
+        };
+        assert_eq!(manifests.len(), 1);
+        assert!(merged.files.contains_key(&manifests[0].object_id));
+        Ok(())
+    }
+
+    #[tokio_test]
+    async fn merge_nodes_keeps_tip_manifests_for_updated_arrays()
+    -> Result<(), Box<dyn Error>> {
+        let (repo, array) = repo_with_array().await?;
+        commit_chunk(&repo, &array, 0, "t").await?;
+        let tip_id = repo.lookup_branch("main").await?;
+        let tip = repo.asset_manager().fetch_snapshot(&tip_id).await?;
+
+        let mut session = repo.writable_session("main").await?;
+        session.update_array(&array, shape(), None, Bytes::from_static(b"attrs")).await?;
+        let updated = session.commit("attrs").anonymous().execute().await?;
+        let sources = vec![load_source(&repo, &updated).await?];
+
+        let merged = merge_nodes(tip.as_ref(), &sources)?;
+
+        let node = &merged.nodes["/array"];
+        assert_eq!(node.user_data, Bytes::from_static(b"attrs"));
+        let tip_node = tip.get_node(&array)?;
+        let (
+            NodeData::Array { manifests, .. },
+            NodeData::Array { manifests: tip_manifests, .. },
+        ) = (&node.node_data, &tip_node.node_data)
+        else {
+            panic!("both are arrays");
+        };
+        assert_eq!(manifests, tip_manifests);
+        assert_eq!(manifests.len(), 1);
+        Ok(())
     }
 
     #[tokio_test]
