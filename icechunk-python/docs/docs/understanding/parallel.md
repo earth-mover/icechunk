@@ -185,6 +185,9 @@ def write_timestamp(*, itime: int, storage: ic.Storage) -> str:
     return session.flush(f"time step {itime}")
 
 
+storage = ic.local_filesystem_storage(tempfile.TemporaryDirectory().name)
+repo = ic.Repository.open(storage)
+
 with ProcessPoolExecutor() as executor:
     futures = [
         executor.submit(write_timestamp, itime=i, storage=storage)
