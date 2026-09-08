@@ -65,6 +65,8 @@ usage examples.
 
 ::: icechunk.RebaseFailedError
 
+::: icechunk.MergeConflictError
+
 ::: icechunk.NotFoundError
 
 ::: icechunk.NodeNotFoundError
