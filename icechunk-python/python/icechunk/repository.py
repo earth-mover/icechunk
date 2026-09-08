@@ -1282,6 +1282,65 @@ class Repository:
         """
         await self._repository.reset_branch_async(branch, snapshot_id, from_snapshot_id)
 
+    def merge_snapshots(
+        self,
+        branch: str,
+        snapshots: list[str],
+        message: str,
+        *,
+        metadata: dict[str, Any] | None = None,
+    ) -> str:
+        """
+        Merge snapshots into one commit on a branch.
+
+        Each snapshot is usually a detached snapshot from `Session.flush`. Its parent
+        must be an ancestor of the branch tip. The merge applies every snapshot on top
+        of the current tip and commits the result. It fails if two snapshots, or a
+        snapshot and a commit made after its parent, change the same chunk or node.
+
+        Parameters
+        ----------
+        branch : str
+            The branch to commit to.
+        snapshots : list[str]
+            The IDs of the snapshots to merge.
+        message : str
+            The message for the new commit.
+        metadata : dict[str, Any] | None, optional
+            Additional metadata to store with the commit snapshot.
+
+        Returns
+        -------
+        str
+            The ID of the new commit.
+
+        Raises
+        ------
+        icechunk.MergeConflictError
+            If two snapshots conflict, or a snapshot conflicts with a commit made
+            after its parent. The error lists every conflict.
+        icechunk.ConflictError
+            If the branch tip moved while the merge ran. Call the method again.
+        """
+        return self._repository.merge_snapshots(branch, snapshots, message, metadata)
+
+    async def merge_snapshots_async(
+        self,
+        branch: str,
+        snapshots: list[str],
+        message: str,
+        *,
+        metadata: dict[str, Any] | None = None,
+    ) -> str:
+        """
+        Merge snapshots into one commit on a branch (async version).
+
+        See `merge_snapshots` for details.
+        """
+        return await self._repository.merge_snapshots_async(
+            branch, snapshots, message, metadata
+        )
+
     def delete_branch(self, branch: str) -> None:
         """
         Delete a branch.

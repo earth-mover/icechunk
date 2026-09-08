@@ -15,7 +15,8 @@ The tree::
 
     IcechunkError
     ├── ConflictError
-    │   └── RebaseFailedError
+    │   ├── RebaseFailedError
+    │   └── MergeConflictError
     ├── NotFoundError                 (also a KeyError)
     │   ├── NodeNotFoundError
     │   ├── SnapshotNotFoundError
@@ -54,6 +55,7 @@ class ErrorKind(StrEnum):
     COMMIT_CONFLICT = "commit-conflict"
     BRANCH_UPDATE_CONFLICT = "branch-update-conflict"
     REBASE_FAILED = "rebase-failed"
+    MERGE_CONFLICT = "merge-conflict"
     CONFIG_UPDATED = "config-updated"
     REPO_INFO_UPDATED = "repo-info-updated"
     UPDATE_ATTEMPTS_EXHAUSTED = "update-attempts-exhausted"
@@ -105,6 +107,8 @@ class ErrorKind(StrEnum):
     EMPTY_PREFIX_CREATION = "empty-prefix-creation"
     PARENT_DIRECTORY_NOT_CLEAN = "parent-directory-not-clean"
     BAD_SNAPSHOT_CHAIN_FOR_DIFF = "bad-snapshot-chain-for-diff"
+    SNAPSHOT_NOT_IN_BRANCH_HISTORY = "snapshot-not-in-branch-history"
+    NO_SNAPSHOTS_TO_MERGE = "no-snapshots-to-merge"
     # session/repository state
     COMMIT_NOT_ALLOWED = "commit-not-allowed"
     MERGE_NOT_ALLOWED = "merge-not-allowed"

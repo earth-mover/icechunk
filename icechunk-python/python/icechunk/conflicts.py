@@ -4,6 +4,7 @@ from icechunk._icechunk_python import (
     ConflictDetector,
     ConflictSolver,
     ConflictType,
+    MergeConflict,
     VersionSelection,
 )
 
@@ -13,5 +14,6 @@ __all__ = [
     "ConflictDetector",
     "ConflictSolver",
     "ConflictType",
+    "MergeConflict",
     "VersionSelection",
 ]

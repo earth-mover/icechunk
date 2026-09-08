@@ -23,7 +23,10 @@ use pyo3::{
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::{conflicts::PyConflict, impl_pickle};
+use crate::{
+    conflicts::{PyConflict, PyMergeConflict},
+    impl_pickle,
+};
 
 /// A simple wrapper around the `StoreError` to make it easier to convert to a `PyErr`
 ///
@@ -92,6 +95,7 @@ pub(crate) mod codes {
         COMMIT_CONFLICT => "commit-conflict",
         BRANCH_UPDATE_CONFLICT => "branch-update-conflict",
         REBASE_FAILED => "rebase-failed",
+        MERGE_CONFLICT => "merge-conflict",
         CONFIG_UPDATED => "config-updated",
         REPO_INFO_UPDATED => "repo-info-updated",
         UPDATE_ATTEMPTS_EXHAUSTED => "update-attempts-exhausted",
@@ -143,6 +147,8 @@ pub(crate) mod codes {
         EMPTY_PREFIX_CREATION => "empty-prefix-creation",
         PARENT_DIRECTORY_NOT_CLEAN => "parent-directory-not-clean",
         BAD_SNAPSHOT_CHAIN_FOR_DIFF => "bad-snapshot-chain-for-diff",
+        SNAPSHOT_NOT_IN_BRANCH_HISTORY => "snapshot-not-in-branch-history",
+        NO_SNAPSHOTS_TO_MERGE => "no-snapshots-to-merge",
         // session/repository state
         COMMIT_NOT_ALLOWED => "commit-not-allowed",
         MERGE_NOT_ALLOWED => "merge-not-allowed",
@@ -207,6 +213,9 @@ enum Classified {
     RebaseFailed {
         snapshot: String,
         conflicts: Vec<PyConflict>,
+    },
+    MergeConflict {
+        conflicts: Vec<PyMergeConflict>,
     },
     /// `class` names a class in `icechunk._exceptions`; `None` is the
     /// Rust-defined `IcechunkError` root.
@@ -286,6 +295,13 @@ fn classify_session(kind: &SessionErrorKind) -> Classified {
             snapshot: snapshot.to_string(),
             conflicts: conflicts.iter().map(PyConflict::from).collect(),
         },
+        K::MergeConflict { conflicts } => Classified::MergeConflict {
+            conflicts: conflicts.iter().map(PyMergeConflict::from).collect(),
+        },
+        K::SnapshotNotInBranchHistory { .. } => {
+            class("InvalidInputError", codes::SNAPSHOT_NOT_IN_BRANCH_HISTORY)
+        }
+        K::NoSnapshotsToMerge => class("InvalidInputError", codes::NO_SNAPSHOTS_TO_MERGE),
         K::MissingPrunedAncestorTxLog { .. } => {
             class("SessionStateError", codes::REBASE_TX_LOG_PRUNED)
         }
@@ -675,6 +691,9 @@ fn build_pyerr(
         Classified::RebaseFailed { snapshot, conflicts } => {
             py.get_type::<PyRebaseFailedError>().call1((snapshot, conflicts))?
         }
+        Classified::MergeConflict { conflicts } => {
+            py.get_type::<PyMergeConflictError>().call1((conflicts,))?
+        }
         Classified::Class { class: None, code } => {
             py.get_type::<IcechunkError>().call1((message, Some(code)))?
         }
@@ -909,3 +928,40 @@ impl PyRebaseFailedError {
 }
 
 impl_pickle!(PyRebaseFailedError);
+
+#[pyclass(extends=PyConflictError, name = "MergeConflictError", module = "icechunk")]
+#[derive(Serialize, Deserialize)]
+pub(crate) struct PyMergeConflictError {
+    #[pyo3(get)]
+    conflicts: Vec<PyMergeConflict>,
+}
+
+#[pymethods]
+impl PyMergeConflictError {
+    #[new]
+    pub(crate) fn new(conflicts: Vec<PyMergeConflict>) -> PyClassInitializer<Self> {
+        let message = format!("Merge failed: {} conflicts found", conflicts.len());
+        PyConflictError::new(
+            None,
+            None,
+            Some(message),
+            Some(codes::MERGE_CONFLICT.to_string()),
+        )
+        .add_subclass(Self { conflicts })
+    }
+
+    fn __repr__(&self) -> String {
+        format!("icechunk.MergeConflictError(conflicts={:?})", self.conflicts)
+    }
+
+    // Control pickling to work with tblib
+    fn __reduce__(slf: &Bound<'_, Self>) -> PyResult<(Py<PyAny>, Py<PyAny>)> {
+        let py = slf.py();
+        let cls = slf.get_type().into_py_any(py)?;
+        let this = slf.borrow();
+        let args = (this.conflicts.clone(),).into_py_any(py)?;
+        Ok((cls, args))
+    }
+}
+
+impl_pickle!(PyMergeConflictError);

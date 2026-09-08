@@ -32,10 +32,13 @@ use config::{
 };
 use conflicts::{
     PyBasicConflictSolver, PyConflict, PyConflictDetector, PyConflictSolver,
-    PyConflictType, PyVersionSelection,
+    PyConflictType, PyMergeConflict, PyVersionSelection,
 };
 use display::PyAncestryGraph;
-use errors::{_all_error_kinds, IcechunkError, PyConflictError, PyRebaseFailedError};
+use errors::{
+    _all_error_kinds, IcechunkError, PyConflictError, PyMergeConflictError,
+    PyRebaseFailedError,
+};
 use icechunk::{format::format_constants::SpecVersionBin, initialize_tracing};
 use pyo3::prelude::*;
 use pyo3::types::PyMapping;
@@ -265,9 +268,11 @@ fn _icechunk_python(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("IcechunkError", py.get_type::<IcechunkError>())?;
     m.add("ConflictError", py.get_type::<PyConflictError>())?;
     m.add("RebaseFailedError", py.get_type::<PyRebaseFailedError>())?;
+    m.add("MergeConflictError", py.get_type::<PyMergeConflictError>())?;
     m.add_function(wrap_pyfunction!(_all_error_kinds, m)?)?;
     m.add_class::<PyConflictType>()?;
     m.add_class::<PyConflict>()?;
+    m.add_class::<PyMergeConflict>()?;
 
     Ok(())
 }

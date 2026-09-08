@@ -2538,6 +2538,20 @@ class PyRepository:
     async def reset_branch_async(
         self, branch_name: str, to_snapshot_id: str, from_snapshot_id: str | None
     ) -> None: ...
+    def merge_snapshots(
+        self,
+        branch: str,
+        snapshots: list[str],
+        message: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> str: ...
+    async def merge_snapshots_async(
+        self,
+        branch: str,
+        snapshots: list[str],
+        message: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> str: ...
     def delete_branch(self, branch: str) -> None: ...
     async def delete_branch_async(self, branch: str) -> None: ...
     def delete_tag(self, tag: str) -> None: ...
@@ -3766,6 +3780,42 @@ class Conflict:
         """
         ...
 
+class MergeConflict:
+    """A conflict between two snapshots found while merging snapshots"""
+
+    def __new__(
+        cls, first_snapshot: str, second_snapshot: str, conflict: Conflict
+    ) -> MergeConflict:
+        """
+        Create a new MergeConflict.
+
+        Parameters
+        ----------
+        first_snapshot: str
+            The snapshot treated as already applied. For a source and an
+            intervening commit, this is the commit.
+        second_snapshot: str
+            The snapshot applied on top of the first one.
+        conflict: Conflict
+            What the two snapshots both changed.
+        """
+        ...
+
+    @property
+    def first_snapshot(self) -> str:
+        """The snapshot treated as already applied"""
+        ...
+
+    @property
+    def second_snapshot(self) -> str:
+        """The snapshot applied on top of the first one"""
+        ...
+
+    @property
+    def conflict(self) -> Conflict:
+        """What the two snapshots both changed"""
+        ...
+
 class RebaseFailedError(ConflictError):
     """An error that occurs when a rebase operation fails"""
 
@@ -3795,6 +3845,25 @@ class RebaseFailedError(ConflictError):
             list[Conflict]: The conflicts that occurred during the rebase operation
         """
     ...
+
+class MergeConflictError(ConflictError):
+    """An error that occurs when snapshots cannot be merged"""
+
+    def __new__(cls, conflicts: list[MergeConflict]) -> MergeConflictError:
+        """
+        Create a new MergeConflictError.
+
+        Parameters
+        ----------
+        conflicts: list[MergeConflict]
+            Every conflict the merge found.
+        """
+        ...
+
+    @property
+    def conflicts(self) -> list[MergeConflict]:
+        """Every conflict the merge found"""
+        ...
 
 def initialize_logs() -> None:
     """

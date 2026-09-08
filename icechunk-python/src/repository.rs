@@ -61,6 +61,19 @@ fn parse_commit_method(method: &str) -> PyResult<icechunk::session::CommitMethod
     }
 }
 
+fn parse_snapshot_ids(ids: &[String]) -> PyResult<Vec<SnapshotId>> {
+    ids.iter()
+        .map(|id| {
+            SnapshotId::try_from(id.as_str()).map_err(|_| {
+                PyIcechunkStoreError::RepositoryError(RepositoryError::capture(
+                    RepositoryErrorKind::InvalidSnapshotId(id.to_owned()),
+                ))
+                .into()
+            })
+        })
+        .collect()
+}
+
 /// Wrapper needed to implement pyo3 conversion classes
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct JsonValue(pub serde_json::Value);
@@ -2340,6 +2353,56 @@ impl PyRepository {
                 .await
                 .map_err(PyIcechunkStoreError::RepositoryError)?;
             Ok(())
+        })
+    }
+
+    #[pyo3(signature = (branch, snapshots, message, metadata=None))]
+    pub(crate) fn merge_snapshots(
+        &self,
+        py: Python<'_>,
+        branch: &str,
+        snapshots: Vec<String>,
+        message: &str,
+        metadata: Option<PySnapshotProperties>,
+    ) -> PyResult<String> {
+        let snapshots = parse_snapshot_ids(&snapshots)?;
+        let metadata = metadata.map(|m| m.into());
+        // This function calls block_on, so we need to allow other thread python to make progress
+        py.detach(move || {
+            pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+                let snapshot_id = self
+                    .0
+                    .read()
+                    .await
+                    .merge_snapshots(branch, &snapshots, message, metadata)
+                    .await
+                    .map_err(PyIcechunkStoreError::SessionError)?;
+                Ok(snapshot_id.to_string())
+            })
+        })
+    }
+
+    #[pyo3(signature = (branch, snapshots, message, metadata=None))]
+    fn merge_snapshots_async<'py>(
+        &'py self,
+        py: Python<'py>,
+        branch: &str,
+        snapshots: Vec<String>,
+        message: &str,
+        metadata: Option<PySnapshotProperties>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let repository = Arc::clone(&self.0);
+        let branch = branch.to_owned();
+        let message = message.to_owned();
+        let snapshots = parse_snapshot_ids(&snapshots)?;
+        let metadata = metadata.map(|m| m.into());
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let repository = repository.read().await;
+            let snapshot_id = repository
+                .merge_snapshots(&branch, &snapshots, &message, metadata)
+                .await
+                .map_err(PyIcechunkStoreError::SessionError)?;
+            Ok(snapshot_id.to_string())
         })
     }
 
