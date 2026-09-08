@@ -58,6 +58,7 @@ use crate::{
         },
         transaction_log::TransactionLog,
     },
+    ops::merge::MergeConflict,
     refs::{RefError, RefErrorKind, fetch_branch_tip_v1, update_branch},
     repository::{RepositoryError, RepositoryErrorKind, RepositoryResult},
     storage::{self, StorageErrorKind},
@@ -167,6 +168,12 @@ pub enum SessionErrorKind {
     Conflict { expected_parent: Option<SnapshotId>, actual_parent: Option<SnapshotId> },
     #[error("cannot rebase snapshot {snapshot} on top of the branch")]
     RebaseFailed { snapshot: SnapshotId, conflicts: Vec<Conflict> },
+    #[error("cannot merge snapshots: {} conflicts found", conflicts.len())]
+    MergeConflict { conflicts: Vec<MergeConflict> },
+    #[error("snapshot {snapshot} is not in the history of branch {branch}")]
+    SnapshotNotInBranchHistory { snapshot: SnapshotId, branch: String },
+    #[error("no snapshots to merge")]
+    NoSnapshotsToMerge,
     #[error(
         "cannot rebase: transaction log {tx_log} of an expiration-pruned ancestor of \
          {snapshot} is missing (likely deleted by an older Icechunk GC), so conflicts \
@@ -2601,7 +2608,7 @@ async fn write_manifest_from_stream(
 /// Creates a new manifest for the node, by obtaining all previous chunks coming from
 /// `previous_manifests`, filtering those that are in the `extent`, and overriding them
 /// with any changes in `modified_chunks`
-async fn write_manifest_with_changes(
+pub(crate) async fn write_manifest_with_changes(
     asset_manager: &AssetManager,
     manifest_config: &ManifestConfig,
     previous_manifests: impl Iterator<Item = &ManifestRef>,
@@ -3335,7 +3342,7 @@ async fn do_commit_v1(
 }
 
 #[expect(clippy::too_many_arguments)]
-async fn do_commit_v2(
+pub(crate) async fn do_commit_v2(
     asset_manager: Arc<AssetManager>,
     branch_name: &str,
     parent_snapshot_id: &SnapshotId,
@@ -3418,7 +3425,7 @@ async fn do_commit_v2(
     Ok(res)
 }
 
-async fn fetch_manifest(
+pub(crate) async fn fetch_manifest(
     manifest_id: &ManifestId,
     snapshot_id: &SnapshotId,
     asset_manager: &AssetManager,

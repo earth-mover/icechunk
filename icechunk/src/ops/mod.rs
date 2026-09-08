@@ -24,6 +24,8 @@ pub mod expiration_v1;
 pub mod gc;
 /// Manifest optimization and rebuilding.
 pub mod manifests;
+/// Merge snapshots into one commit.
+pub mod merge;
 /// Repository statistics.
 pub mod stats;
 
