@@ -251,6 +251,7 @@ pub(crate) fn detect_conflicts(
 }
 
 /// A source snapshot with everything the merge reads from it.
+#[derive(Clone)]
 pub(crate) struct Source {
     pub(crate) id: SnapshotId,
     pub(crate) parent: SnapshotId,
@@ -441,6 +442,28 @@ pub(crate) async fn merge_array_manifests(
         }
     }
     Ok(result)
+}
+
+/// Runs `merge_array_manifests` for one array, owning its `writers` instead
+/// of borrowing them from the caller's source list.
+async fn merge_one_array_manifest(
+    asset_manager: Arc<AssetManager>,
+    config: &RepositoryConfig,
+    tip: Arc<Snapshot>,
+    key: String,
+    node: NodeSnapshot,
+    writers: Vec<Source>,
+) -> SessionResult<(String, ArrayManifests)> {
+    let writers: Vec<&Source> = writers.iter().collect();
+    let result = merge_array_manifests(
+        asset_manager.as_ref(),
+        config,
+        tip.as_ref(),
+        &node,
+        &writers,
+    )
+    .await?;
+    Ok((key, result))
 }
 
 /// The source manifest that already equals the merged split: one source wrote
@@ -635,15 +658,18 @@ pub(crate) async fn merge_planned(
     }
 
     // Arrays of the tip that a source wrote chunks to. Arrays a source created
-    // already carry that source's manifests.
-    let touched: Vec<(String, NodeSnapshot, Vec<&Source>)> = nodes
+    // already carry that source's manifests. Sources are cloned (an id, two
+    // `Arc`s) so the concurrent merges below own their data instead of
+    // borrowing from this frame, which some callers need for a `'static` future.
+    let touched: Vec<(String, NodeSnapshot, Vec<Source>)> = nodes
         .iter()
         .filter_map(|(key, node)| {
-            let writers: Vec<&Source> = sources
+            let writers: Vec<Source> = sources
                 .iter()
                 .filter(|s| {
                     s.log.chunks_updated(&node.id) && !s.log.array_created(&node.id)
                 })
+                .cloned()
                 .collect();
             (!writers.is_empty()).then(|| (key.clone(), node.clone(), writers))
         })
@@ -653,19 +679,14 @@ pub(crate) async fn merge_planned(
             .max(1);
     let merged: Vec<(String, ArrayManifests)> = stream::iter(touched)
         .map(|(key, node, writers)| {
-            let asset_manager = Arc::clone(&asset_manager);
-            let tip = Arc::clone(&tip);
-            async move {
-                let result = merge_array_manifests(
-                    asset_manager.as_ref(),
-                    config,
-                    tip.as_ref(),
-                    &node,
-                    &writers,
-                )
-                .await?;
-                Ok::<_, SessionError>((key, result))
-            }
+            merge_one_array_manifest(
+                Arc::clone(&asset_manager),
+                config,
+                Arc::clone(&tip),
+                key,
+                node,
+                writers,
+            )
         })
         .buffer_unordered(max_concurrent)
         .try_collect()
