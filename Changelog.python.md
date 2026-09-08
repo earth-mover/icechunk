@@ -4,7 +4,7 @@
 
 ### Features
 
-- Add `Repository.merge_snapshots`. Distributed workers save their changes with `Session.flush` and return the snapshot ID. A coordinator merges the IDs into one commit on a branch. The merge applies the snapshots on top of the current tip and fails with `MergeConflictError` if two snapshots, or a snapshot and a later commit, change the same chunk or node ([#2060](https://github.com/earth-mover/icechunk/issues/2060)).
+- Add `Repository.merge_snapshots`. Distributed workers save their changes with `Session.flush` and return the snapshot ID. A coordinator merges the IDs into one commit on a branch. The merge applies the snapshots on top of the current tip. It fails with `MergeConflictError` if two snapshots, or a snapshot and a later commit, change the same chunk or node ([#2060](https://github.com/earth-mover/icechunk/issues/2060)).
 
 ## Python Icechunk Library 2.2.0
 

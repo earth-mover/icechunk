@@ -1295,8 +1295,9 @@ class Repository:
 
         Each snapshot is usually a detached snapshot from `Session.flush`. Its parent
         must be an ancestor of the branch tip. The merge applies every snapshot on top
-        of the current tip and commits the result. It fails if two snapshots, or a
-        snapshot and a commit made after its parent, change the same chunk or node.
+        of the current tip and commits the result. It fails if two snapshots change the
+        same chunk or node. It also fails if a snapshot conflicts with a commit made
+        after its parent.
 
         Parameters
         ----------
