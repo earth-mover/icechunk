@@ -4,6 +4,7 @@
 
 ### Features
 
+- Add `Repository.merge_snapshots`. Distributed workers save their changes with `Session.flush` and return the snapshot ID. A coordinator merges the IDs into one commit on a branch. The merge applies the snapshots on top of the current tip and fails with `MergeConflictError` if two snapshots, or a snapshot and a later commit, change the same chunk or node ([#2060](https://github.com/earth-mover/icechunk/issues/2060)).
 - Requests icechunk makes to the object store now identify themselves in the `User-Agent` header: the product token is `icechunk/<version>`,
 chunk requests add `array=<path>; chunk=<coords>` and manifest requests add `array=<path>`. `Repository.create`, `open` and
 `open_or_create` accept `attribution=Attribution(client=..., workload=..., principal=...)` to add caller labels to every request

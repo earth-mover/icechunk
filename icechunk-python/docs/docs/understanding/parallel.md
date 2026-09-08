@@ -157,6 +157,62 @@ ondisk = xr.open_zarr(repo.readonly_session("main").store)
 xr.testing.assert_identical(ds, ondisk)
 ```
 
+### Distributed writes with flushed snapshots
+
+Use this flow when workers run on different machines and no `Session` object can move
+between them. Each worker writes its region and calls
+[`Session.flush`](../reference/session.md#icechunk.session.Session.flush). The call
+saves the changes as a detached snapshot and returns its ID. No branch points at that
+snapshot. The worker sends the ID string back to the coordinator.
+
+The coordinator calls
+[`Repository.merge_snapshots`](../reference/index.md#icechunk.Repository.merge_snapshots)
+with the IDs. The merge applies every snapshot on top of the current tip of the branch
+and creates one commit.
+
+!!! warning
+
+    Concurrent flushes need an object store that supports conditional writes.
+    [Local file system storage is not safe for concurrent commits](../guides/storage.md#filesystem-storage).
+    The same limitation applies to concurrent flushes.
+
+```python
+def write_timestamp(*, itime: int, storage: ic.Storage) -> str:
+    repo = ic.Repository.open(storage)
+    session = repo.writable_session("main")
+    ds = xr.tutorial.open_dataset("rasm").isel(time=[itime])
+    ds.to_zarr(session.store, region="auto")
+    return session.flush(f"time step {itime}")
+
+
+with ProcessPoolExecutor() as executor:
+    futures = [
+        executor.submit(write_timestamp, itime=i, storage=storage)
+        for i in range(ds.sizes["time"])
+    ]
+    snapshots = [f.result() for f in futures]
+
+print(repo.merge_snapshots("main", snapshots, "finished writes"))
+```
+
+The merge fails in two cases:
+
+- Two snapshots can change the same chunk or node. A snapshot can also conflict with a
+  commit made to the branch after the snapshot's parent. Either failure raises
+  [`MergeConflictError`](../reference/index.md#exceptions), which lists every conflict.
+- The tip of the branch moves while the merge runs. The merge raises `ConflictError`.
+  Call `merge_snapshots` again. A failed merge does not change the flushed snapshots.
+
+The flushed snapshots stay in the repository after the merge. Garbage collection removes
+them once nothing points at them.
+
+!!! warning
+
+    Expiration and garbage collection treat a flushed snapshot as unreachable.
+    `expire_snapshots` and `garbage_collect` can delete a flushed snapshot before
+    the merge uses it. Do not run expiration or garbage collection with a cutoff newer than
+    pending flushed snapshots.
+
 ### Uncooperative distributed writes
 
 !!! warning
