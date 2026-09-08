@@ -152,8 +152,22 @@ pub(crate) struct LogView<'a> {
     pub(crate) log: &'a TransactionLog,
 }
 
+/// Paths of the nodes a log created, with whether each node is an array.
+fn new_nodes<'a>(view: &LogView<'_>, paths: &'a PathIndex) -> Vec<(&'a Path, bool)> {
+    view.log
+        .new_groups()
+        .map(|id| (id, false))
+        .chain(view.log.new_arrays().map(|id| (id, true)))
+        .filter_map(|(id, is_array)| paths.get(&id).map(|path| (path, is_array)))
+        .collect()
+}
+
 /// Conflicts between two logs, in the direction the rebase detector uses:
 /// `previous` is already applied, `current` is applied on top of it.
+///
+/// Two checks run in both directions: `ChunksUpdatedInUpdatedArray` and
+/// `NewNodeInInvalidGroup`. Concurrent sources do not see each other. A shape or
+/// chunk grid change invalidates the chunks a sibling source wrote, in either order.
 pub(crate) fn detect_conflicts(
     previous: &LogView<'_>,
     current: &LogView<'_>,
@@ -168,23 +182,20 @@ pub(crate) fn detect_conflicts(
         });
     };
 
-    // Nodes `previous` created, with whether each one is an array.
-    let previous_new: Vec<(&Path, bool)> = previous
-        .log
-        .new_groups()
-        .map(|id| (id, false))
-        .chain(previous.log.new_arrays().map(|id| (id, true)))
-        .filter_map(|(id, is_array)| paths.get(&id).map(|path| (path, is_array)))
-        .collect();
-    for id in current.log.new_groups().chain(current.log.new_arrays()) {
-        let Some(path) = paths.get(&id) else { continue };
-        for (previous_path, is_array) in &previous_new {
-            if *previous_path == path {
-                push(Conflict::NewNodeConflictsWithExistingNode(path.clone()));
-            } else if *is_array
+    let previous_new = new_nodes(previous, paths);
+    let current_new = new_nodes(current, paths);
+    for (path, is_array) in &current_new {
+        for (previous_path, previous_is_array) in &previous_new {
+            if previous_path == path {
+                push(Conflict::NewNodeConflictsWithExistingNode((*path).clone()));
+            } else if *previous_is_array
                 && path.ancestors().skip(1).any(|ancestor| ancestor == **previous_path)
             {
                 push(Conflict::NewNodeInInvalidGroup((*previous_path).clone()));
+            } else if *is_array
+                && previous_path.ancestors().skip(1).any(|ancestor| ancestor == **path)
+            {
+                push(Conflict::NewNodeInInvalidGroup((*path).clone()));
             }
         }
     }
@@ -195,6 +206,12 @@ pub(crate) fn detect_conflicts(
         }
         if previous.log.array_deleted(&id) {
             push(Conflict::ZarrMetadataUpdateOfDeletedArray(paths.path(&id)?));
+        }
+        if previous.log.chunks_updated(&id) {
+            push(Conflict::ChunksUpdatedInUpdatedArray {
+                path: paths.path(&id)?,
+                node_id: id.clone(),
+            });
         }
     }
     for id in current.log.updated_groups() {
@@ -1229,6 +1246,28 @@ mod tests {
     }
 
     #[test]
+    fn detects_chunks_written_before_an_array_update() -> Result<(), Box<dyn Error>> {
+        let updated = NodeId::random();
+        let mut a = ChangeSet::for_edits();
+        a.set_chunk_ref(updated.clone(), ChunkIndices(vec![0]), inline("a"))?;
+        let mut b = ChangeSet::for_edits();
+        b.update_array(&updated, &path("/updated"), array_data())?;
+        let paths = PathIndex::from_pairs([(updated.clone(), path("/updated"))]);
+
+        let (_, _, found) = conflicts(&a, &b, &paths)?;
+
+        let kinds: Vec<&Conflict> = found.iter().map(|c| &c.conflict).collect();
+        assert_eq!(
+            kinds,
+            vec![&Conflict::ChunksUpdatedInUpdatedArray {
+                path: path("/updated"),
+                node_id: updated,
+            }]
+        );
+        Ok(())
+    }
+
+    #[test]
     fn detects_delete_of_updated_nodes() -> Result<(), Box<dyn Error>> {
         let array = NodeId::random();
         let written = NodeId::random();
@@ -1293,6 +1332,25 @@ mod tests {
                 &Conflict::NewNodeInInvalidGroup(path("/parent")),
             ]
         );
+        Ok(())
+    }
+
+    #[test]
+    fn detects_new_array_over_an_existing_child() -> Result<(), Box<dyn Error>> {
+        let (a_child, b_parent) = (NodeId::random(), NodeId::random());
+        let mut a = ChangeSet::for_edits();
+        a.add_group(path("/parent/child"), a_child.clone(), Bytes::new())?;
+        let mut b = ChangeSet::for_edits();
+        b.add_array(path("/parent"), b_parent.clone(), array_data())?;
+        let paths = PathIndex::from_pairs([
+            (a_child, path("/parent/child")),
+            (b_parent, path("/parent")),
+        ]);
+
+        let (_, _, found) = conflicts(&a, &b, &paths)?;
+
+        let kinds: Vec<&Conflict> = found.iter().map(|c| &c.conflict).collect();
+        assert_eq!(kinds, vec![&Conflict::NewNodeInInvalidGroup(path("/parent"))]);
         Ok(())
     }
 
