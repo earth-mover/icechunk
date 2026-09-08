@@ -72,14 +72,13 @@
     "test": "ava",
     "preversion": "napi build --platform && git add .",
     "version": "napi version",
-    "prepare": "husky",
-    "test:http-virtual-chunks": "node --test __test__/http-virtual-chunks.test.mjs"
+    "prepare": "husky"
   },
   "devDependencies": {
     "@emnapi/core": "2.0.0-alpha.4",
     "@emnapi/runtime": "2.0.0-alpha.4",
-    "@napi-rs/cli": "^3.9.0",
-    "@napi-rs/wasm-runtime": "^1.2.3",
+    "@napi-rs/cli": "^3.2.0",
+    "@napi-rs/wasm-runtime": "^1.1.1",
     "@oxc-node/core": "^0.1.0",
     "@taplo/cli": "^0.7.0",
     "@tybys/wasm-util": "^0.10.1",

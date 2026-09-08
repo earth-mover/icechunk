@@ -18,8 +18,8 @@ __metadata:
   dependencies:
     "@emnapi/core": "npm:2.0.0-alpha.4"
     "@emnapi/runtime": "npm:2.0.0-alpha.4"
-    "@napi-rs/cli": "npm:^3.9.0"
-    "@napi-rs/wasm-runtime": "npm:^1.2.3"
+    "@napi-rs/cli": "npm:^3.2.0"
+    "@napi-rs/wasm-runtime": "npm:^1.1.1"
     "@oxc-node/core": "npm:^0.1.0"
     "@taplo/cli": "npm:^0.7.0"
     "@tybys/wasm-util": "npm:^0.10.1"
@@ -388,7 +388,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@napi-rs/cli@npm:^3.9.0":
+"@napi-rs/cli@npm:^3.2.0":
   version: 3.9.0
   resolution: "@napi-rs/cli@npm:3.9.0"
   dependencies:
@@ -829,7 +829,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@napi-rs/wasm-runtime@npm:^1.1.6, @napi-rs/wasm-runtime@npm:^1.2.3":
+"@napi-rs/wasm-runtime@npm:^1.1.1, @napi-rs/wasm-runtime@npm:^1.1.6":
   version: 1.2.3
   resolution: "@napi-rs/wasm-runtime@npm:1.2.3"
   dependencies:

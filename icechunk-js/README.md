@@ -108,9 +108,17 @@ const session = await repo.readonlySession({ branch: 'main' })
 ```
 
 Register the callback before opening sessions. It is not persisted or serialized.
-The repository must already contain matching HTTP virtual-chunk containers (for
-example, configured when writing it from Python). The resolver checks explicit
-prefix authorization, response length, and stored `ETag`/`Last-Modified` checksums.
+The repository configuration must define an HTTP virtual-chunk container whose
+URL prefix matches each referenced HTTP source. For example, references to
+`https://example.com/tiles/a.tif` can use a container configured for
+`https://example.com/tiles/` with an HTTP store. You can configure this container
+when creating the repository in Python.
+
+Registering the callback only supplies the HTTP transport; it does not configure
+containers or authorize access. Pass the allowed prefixes in
+`authorizeVirtualChunkAccess` when opening the repository, as shown above.
+The resolver checks that authorization, the response length, and the stored
+`ETag`/`Last-Modified` checksums.
 
 The provided helper requires HTTP 206 responses with the exact `Content-Range`.
 Cross-origin sources must allow CORS and expose `Content-Range`, plus `ETag` or
@@ -118,7 +126,9 @@ Cross-origin sources must allow CORS and expose `Content-Range`, plus `ETag` or
 sending conditional headers. Redirects and ambient cookies are disabled.
 Native HTTP transport options are rejected; use a custom callback when needed.
 TIFF compression/predictor codecs still need support in your Zarr reader.
-Non-HTTP virtual-chunk backends remain unavailable in WASM.
+In WASM, virtual chunks can only be read from HTTP(S) URLs. References using
+`s3://`, `gs://`, or local file paths are not supported. Files hosted on S3 or
+GCS can still be read if their references use HTTP(S) URLs.
 
 ## Using in the Browser (WASM)
 

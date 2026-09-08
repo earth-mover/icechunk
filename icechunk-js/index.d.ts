@@ -488,7 +488,12 @@ export interface HttpVirtualChunkRequest {
   options: Record<string, string>
 }
 
-/** Metadata is mandatory when the reference has the corresponding checksum. */
+/**
+ * If the reference records an ETag, return the response's `etag`. If it records
+ * a modification-time check, return the response's `lastModified` timestamp.
+ * The resolver rejects the read if the required value is missing or fails the
+ * check. Both fields are optional when the reference has no checksum.
+ */
 export interface HttpVirtualChunkResponse {
   data: Uint8Array
   etag?: string
