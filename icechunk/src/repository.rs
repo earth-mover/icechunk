@@ -53,6 +53,7 @@ use crate::{
             SnapshotProperties,
         },
     },
+    ops,
     refs::{self, Ref, RefError, RefErrorKind},
     session::{Session, SessionError, SessionErrorKind, SessionResult},
     storage::{self, StorageErrorKind},
@@ -1404,6 +1405,38 @@ impl Repository {
             .update_repo_info(self.config.repo_update_retries().retries(), do_update)
             .await?;
         Ok(())
+    }
+
+    /// Merge snapshots into one commit on `branch`.
+    ///
+    /// Each snapshot's parent must be an ancestor of the branch tip. The merge
+    /// fails with [`SessionErrorKind::MergeConflict`] when two snapshots, or a
+    /// snapshot and a commit between its parent and the tip, change the same
+    /// thing. The sources stay in the repository until garbage collection
+    /// removes them as unreachable.
+    #[instrument(skip(self, properties))]
+    pub async fn merge_snapshots(
+        &self,
+        branch: &str,
+        snapshots: &[SnapshotId],
+        message: &str,
+        properties: Option<SnapshotProperties>,
+    ) -> SessionResult<SnapshotId> {
+        self.raise_if_cant_write("Cannot merge snapshots").await.inject()?;
+        self.asset_manager.fail_unless_spec_at_least(SpecVersionBin::V2).inject()?;
+        let mut merged = self.default_commit_metadata.clone();
+        if let Some(properties) = properties {
+            merged.extend(properties);
+        }
+        ops::merge::merge_snapshots(
+            Arc::clone(&self.asset_manager),
+            &self.config,
+            branch,
+            snapshots,
+            message,
+            merged,
+        )
+        .await
     }
 
     /// Delete a branch from the repository.

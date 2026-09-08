@@ -11,6 +11,9 @@ use std::{
     sync::Arc,
 };
 
+use futures::{StreamExt as _, TryStreamExt as _, stream};
+use tracing::{debug, info, instrument};
+
 use crate::{
     asset_manager::AssetManager,
     change_set::ChunkTable,
@@ -21,15 +24,23 @@ use crate::{
         Path, SnapshotId,
         manifest::{ManifestExtents, ManifestRef, Overlap},
         repo_info::RepoInfo,
-        snapshot::{ManifestFileInfo, NodeData, NodeSnapshot, Snapshot, SnapshotInfo},
+        snapshot::{
+            ManifestFileInfo, NodeData, NodeSnapshot, Snapshot, SnapshotInfo,
+            SnapshotProperties,
+        },
         transaction_log::TransactionLog,
     },
+    repository::{RepositoryError, RepositoryErrorKind},
     session::{
-        SessionError, SessionErrorKind, SessionResult, fetch_manifest,
-        write_manifest_with_changes,
+        CommitMethod, SessionError, SessionErrorKind, SessionResult, do_commit_v2,
+        fetch_manifest, write_manifest_with_changes,
     },
+    storage::StorageErrorKind,
 };
-use icechunk_types::{ICResultExt as _, error::ICResultCtxExt as _};
+use icechunk_types::{
+    ICResultExt as _,
+    error::{ICError, ICResultCtxExt as _},
+};
 
 /// A conflict between two snapshots found during a merge.
 ///
@@ -119,6 +130,7 @@ impl PathIndex {
         Ok(Self(index))
     }
 
+    #[cfg(test)]
     pub(crate) fn from_pairs(pairs: impl IntoIterator<Item = (NodeId, Path)>) -> Self {
         Self(pairs.into_iter().collect())
     }
@@ -505,6 +517,268 @@ async fn modified_chunks(
         table.insert(coord.clone(), payload);
     }
     Ok(table)
+}
+
+/// Fetch a pruned ancestor log. A missing one would hide conflicts, so it fails the merge.
+async fn fetch_pruned_log(
+    asset_manager: &AssetManager,
+    log_id: &SnapshotId,
+    commit: &SnapshotId,
+) -> SessionResult<Arc<TransactionLog>> {
+    match asset_manager.fetch_transaction_log(log_id).await {
+        Ok(log) => Ok(log),
+        Err(err)
+            if matches!(
+                err.kind,
+                RepositoryErrorKind::StorageError(StorageErrorKind::ObjectNotFound)
+            ) =>
+        {
+            Err(SessionError::capture(SessionErrorKind::MissingPrunedAncestorTxLog {
+                snapshot: commit.clone(),
+                tx_log: log_id.clone(),
+            }))
+        }
+        Err(err) => Err(err).inject(),
+    }
+}
+
+fn move_conflict(id: &SnapshotId) -> MergeConflict {
+    MergeConflict {
+        first_snapshot: id.clone(),
+        second_snapshot: id.clone(),
+        conflict: Conflict::MoveOperationCannotBeRebased,
+    }
+}
+
+/// Merge the sources of an already computed plan and commit on `branch`.
+#[instrument(skip(asset_manager, config, plan, properties))]
+pub(crate) async fn merge_planned(
+    asset_manager: Arc<AssetManager>,
+    config: &RepositoryConfig,
+    branch: &str,
+    plan: MergePlan,
+    message: &str,
+    properties: SnapshotProperties,
+) -> SessionResult<SnapshotId> {
+    info!(tip = %plan.tip, sources = plan.sources.len(), "Merge started");
+    let tip = asset_manager.fetch_snapshot(&plan.tip).await.inject()?;
+
+    let mut sources = Vec::with_capacity(plan.sources.len());
+    for source in &plan.sources {
+        sources.push(Source {
+            id: source.id.clone(),
+            parent: source.parent.clone(),
+            snapshot: asset_manager.fetch_snapshot(&source.id).await.inject()?,
+            log: asset_manager.fetch_transaction_log(&source.id).await.inject()?,
+        });
+    }
+    let parent_ids: HashSet<&SnapshotId> = sources.iter().map(|s| &s.parent).collect();
+    let mut parents = Vec::with_capacity(parent_ids.len());
+    for id in parent_ids {
+        parents.push(asset_manager.fetch_snapshot(id).await.inject()?);
+    }
+    let paths = PathIndex::from_snapshots(
+        std::iter::once(tip.as_ref())
+            .chain(sources.iter().map(|s| s.snapshot.as_ref()))
+            .chain(parents.iter().map(|p| p.as_ref())),
+    )?;
+
+    let mut conflicts = Vec::new();
+    for source in &sources {
+        if source.log.has_moves() {
+            conflicts.push(move_conflict(&source.id));
+        }
+    }
+    for (planned, source) in plan.sources.iter().zip(&sources) {
+        let current = LogView { id: &source.id, log: &source.log };
+        for commit in &planned.intervening {
+            for log_id in &commit.pruned_ancestor_tx_logs {
+                let log = fetch_pruned_log(&asset_manager, log_id, &commit.id).await?;
+                if log.has_moves() {
+                    conflicts.push(move_conflict(log_id));
+                }
+                conflicts.extend(detect_conflicts(
+                    &LogView { id: log_id, log: &log },
+                    &current,
+                    &paths,
+                )?);
+            }
+            let log = asset_manager.fetch_transaction_log(&commit.id).await.inject()?;
+            if log.has_moves() {
+                conflicts.push(move_conflict(&commit.id));
+            }
+            conflicts.extend(detect_conflicts(
+                &LogView { id: &commit.id, log: &log },
+                &current,
+                &paths,
+            )?);
+        }
+    }
+    for (index, earlier) in sources.iter().enumerate() {
+        for later in sources.iter().skip(index + 1) {
+            conflicts.extend(detect_conflicts(
+                &LogView { id: &earlier.id, log: &earlier.log },
+                &LogView { id: &later.id, log: &later.log },
+                &paths,
+            )?);
+        }
+    }
+    if !conflicts.is_empty() {
+        debug!(count = conflicts.len(), "Merge aborted, conflicts found");
+        return Err(SessionError::capture(SessionErrorKind::MergeConflict { conflicts }));
+    }
+
+    let MergedNodes { mut nodes, mut files } = merge_nodes(tip.as_ref(), &sources)?;
+    for file in tip.manifest_files() {
+        let file = file.inject()?;
+        files.insert(file.id.clone(), file);
+    }
+
+    // Arrays of the tip that a source wrote chunks to. Arrays a source created
+    // already carry that source's manifests.
+    let touched: Vec<(String, NodeSnapshot, Vec<&Source>)> = nodes
+        .iter()
+        .filter_map(|(key, node)| {
+            let writers: Vec<&Source> = sources
+                .iter()
+                .filter(|s| {
+                    s.log.chunks_updated(&node.id) && !s.log.array_created(&node.id)
+                })
+                .collect();
+            (!writers.is_empty()).then(|| (key.clone(), node.clone(), writers))
+        })
+        .collect();
+    let max_concurrent =
+        usize::from(config.manifest().max_concurrent_manifest_fetches_during_commit())
+            .max(1);
+    let merged: Vec<(String, ArrayManifests)> = stream::iter(touched)
+        .map(|(key, node, writers)| {
+            let asset_manager = Arc::clone(&asset_manager);
+            let tip = Arc::clone(&tip);
+            async move {
+                let result = merge_array_manifests(
+                    asset_manager.as_ref(),
+                    config,
+                    tip.as_ref(),
+                    &node,
+                    &writers,
+                )
+                .await?;
+                Ok::<_, SessionError>((key, result))
+            }
+        })
+        .buffer_unordered(max_concurrent)
+        .try_collect()
+        .await?;
+    for (key, ArrayManifests { refs, files: new_files }) in merged {
+        if let Some(NodeSnapshot {
+            node_data: NodeData::Array { manifests, .. }, ..
+        }) = nodes.get_mut(&key)
+        {
+            *manifests = refs;
+        }
+        for file in new_files {
+            files.insert(file.id.clone(), file);
+        }
+    }
+
+    // Every ref in the result must have a file; unreferenced tip files are dropped.
+    let mut manifest_files: BTreeMap<ManifestId, ManifestFileInfo> = BTreeMap::new();
+    for node in nodes.values() {
+        if let NodeData::Array { manifests, .. } = &node.node_data {
+            for mref in manifests {
+                let file = files
+                    .get(&mref.object_id)
+                    .cloned()
+                    .ok_or_else(|| IcechunkFormatErrorKind::ManifestInfoNotFound {
+                        manifest_id: mref.object_id.clone(),
+                    })
+                    .capture::<IcechunkFormatErrorKind>()
+                    .inject()?;
+                manifest_files.insert(mref.object_id.clone(), file);
+            }
+        }
+    }
+
+    let new_snapshot = Snapshot::from_iter(
+        None,
+        None,
+        asset_manager.spec_version(),
+        message,
+        Some(properties),
+        manifest_files.into_values().collect(),
+        None,
+        nodes.into_values().map(Ok),
+    )
+    .inject()?;
+    let new_ts = new_snapshot.flushed_at().inject()?;
+    let old_ts = tip.flushed_at().inject()?;
+    if new_ts <= old_ts {
+        return Err(SessionError::capture(
+            SessionErrorKind::InvalidSnapshotTimestampOrdering {
+                parent: old_ts,
+                child: new_ts,
+            },
+        ));
+    }
+    let new_snapshot = Arc::new(new_snapshot);
+    let new_id = new_snapshot.id();
+    asset_manager.write_snapshot(Arc::clone(&new_snapshot)).await.inject()?;
+
+    let logs: Vec<Arc<TransactionLog>> =
+        sources.iter().map(|s| Arc::clone(&s.log)).collect();
+    let log_id = new_id.clone();
+    let merged_log = tokio::task::spawn_blocking(move || {
+        TransactionLog::merge(&log_id, logs.iter().map(|l| l.as_ref()))
+    })
+    .await
+    .capture()?
+    .inject()?;
+    asset_manager
+        .write_transaction_log(new_id.clone(), Arc::new(merged_log))
+        .await
+        .inject()?;
+
+    match do_commit_v2(
+        Arc::clone(&asset_manager),
+        branch,
+        &plan.tip,
+        new_snapshot,
+        CommitMethod::NewCommit,
+        false,
+        config.repo_update_retries().retries(),
+        config.num_updates_per_repo_info_file(),
+    )
+    .await
+    {
+        Ok(_) => {}
+        Err(RepositoryError {
+            kind: RepositoryErrorKind::Conflict { expected_parent, actual_parent },
+            context,
+        }) => {
+            return Err(ICError {
+                kind: SessionErrorKind::Conflict { expected_parent, actual_parent },
+                context,
+            });
+        }
+        Err(err) => return Err(err).inject(),
+    }
+    info!(%new_id, "Merge done");
+    Ok(new_id)
+}
+
+/// Merge `snapshots` into one commit on `branch`.
+pub async fn merge_snapshots(
+    asset_manager: Arc<AssetManager>,
+    config: &RepositoryConfig,
+    branch: &str,
+    snapshots: &[SnapshotId],
+    message: &str,
+    properties: SnapshotProperties,
+) -> SessionResult<SnapshotId> {
+    let (repo_info, _) = asset_manager.fetch_repo_info().await.inject()?;
+    let plan = plan_merge(repo_info.as_ref(), branch, snapshots)?;
+    merge_planned(asset_manager, config, branch, plan, message, properties).await
 }
 
 #[cfg(test)]
@@ -1288,6 +1562,320 @@ mod tests {
         assert_eq!(
             manifest.get_chunk_payload(&node.id, &ChunkIndices(vec![1]))?,
             ChunkPayload::Inline("orig1".into())
+        );
+        Ok(())
+    }
+
+    use std::num::{NonZeroU16, NonZeroUsize};
+
+    use chrono::Utc;
+
+    use crate::{
+        format::ByteRange,
+        ops::gc::{GCConfig, garbage_collect},
+        repository::VersionInfo,
+        session::get_chunk,
+    };
+
+    async fn read_chunk(
+        repo: &Repository,
+        path: &Path,
+        index: u32,
+    ) -> Result<Option<Bytes>, Box<dyn Error>> {
+        let session =
+            repo.readonly_session(&VersionInfo::BranchTipRef("main".to_string())).await?;
+        let reader = session
+            .get_chunk_reader(path, &ChunkIndices(vec![index]), &ByteRange::ALL)
+            .await?;
+        Ok(get_chunk(reader).await?)
+    }
+
+    #[tokio_test]
+    async fn merge_disjoint_writers() -> Result<(), Box<dyn Error>> {
+        let (repo, path) = repo_with_array().await?;
+        let a = flush_chunk(&repo, &path, 0, "a").await?;
+        let b = flush_chunk(&repo, &path, 1, "b").await?;
+        let meta: SnapshotProperties = [("job".to_string(), 7.into())].into();
+
+        let merged =
+            repo.merge_snapshots("main", &[a, b], "merge", Some(meta.clone())).await?;
+
+        assert_eq!(read_chunk(&repo, &path, 0).await?, Some(Bytes::from_static(b"a")));
+        assert_eq!(read_chunk(&repo, &path, 1).await?, Some(Bytes::from_static(b"b")));
+        assert_eq!(read_chunk(&repo, &path, 2).await?, None);
+        let history: Vec<_> = repo
+            .ancestry(&VersionInfo::BranchTipRef("main".to_string()))
+            .await?
+            .try_collect()
+            .await?;
+        assert_eq!(history.len(), 3);
+        assert_eq!(history[0].id, merged);
+        assert_eq!(history[0].message, "merge");
+        assert_eq!(history[0].metadata, meta);
+        Ok(())
+    }
+
+    #[tokio_test]
+    async fn merge_reuses_manifests_and_gc_removes_sources() -> Result<(), Box<dyn Error>>
+    {
+        let (repo, path) = split_repo_with_array().await?;
+        let a = flush_chunk(&repo, &path, 0, "a").await?;
+        let b = flush_chunk(&repo, &path, 3, "b").await?;
+        let source_a = repo.asset_manager().fetch_snapshot(&a).await?;
+        let reused = array_refs(&source_a, &path)[0].object_id.clone();
+        let before = manifest_count(&repo).await?;
+
+        let merged =
+            repo.merge_snapshots("main", &[a.clone(), b.clone()], "merge", None).await?;
+
+        assert_eq!(manifest_count(&repo).await?, before);
+        let merged_snapshot = repo.asset_manager().fetch_snapshot(&merged).await?;
+        assert!(
+            array_refs(&merged_snapshot, &path).iter().any(|m| m.object_id == reused)
+        );
+
+        let later = Utc::now() + chrono::Duration::hours(1);
+        let gc_config = GCConfig::clean_all(
+            later,
+            later,
+            None,
+            NonZeroU16::new(50).ok_or("nonzero")?,
+            NonZeroUsize::new(512 * 1024 * 1024).ok_or("nonzero")?,
+            NonZeroU16::new(500).ok_or("nonzero")?,
+            false,
+        );
+        let summary =
+            garbage_collect(Arc::clone(repo.asset_manager()), &gc_config, None, 100)
+                .await?;
+        assert_eq!(summary.snapshots_deleted, 2);
+        assert_eq!(summary.manifests_deleted, 0);
+        let remaining: Vec<SnapshotId> = repo
+            .asset_manager()
+            .list_snapshots()
+            .await?
+            .map_ok(|info| info.id)
+            .try_collect()
+            .await?;
+        assert!(!remaining.contains(&a));
+        assert!(!remaining.contains(&b));
+        assert!(remaining.contains(&merged));
+        assert_eq!(read_chunk(&repo, &path, 0).await?, Some(Bytes::from_static(b"a")));
+        Ok(())
+    }
+
+    #[tokio_test]
+    async fn merge_onto_moved_tip_without_conflict() -> Result<(), Box<dyn Error>> {
+        let (repo, path) = repo_with_array().await?;
+        let a = flush_chunk(&repo, &path, 0, "a").await?;
+        commit_chunk(&repo, &path, 2, "c").await?;
+
+        repo.merge_snapshots("main", &[a], "merge", None).await?;
+
+        assert_eq!(read_chunk(&repo, &path, 0).await?, Some(Bytes::from_static(b"a")));
+        assert_eq!(read_chunk(&repo, &path, 2).await?, Some(Bytes::from_static(b"c")));
+        Ok(())
+    }
+
+    #[tokio_test]
+    async fn merge_onto_moved_tip_with_conflict() -> Result<(), Box<dyn Error>> {
+        let (repo, path) = repo_with_array().await?;
+        let a = flush_chunk(&repo, &path, 0, "a").await?;
+        let c = commit_chunk(&repo, &path, 0, "c").await?;
+
+        let err = repo
+            .merge_snapshots("main", std::slice::from_ref(&a), "merge", None)
+            .await
+            .unwrap_err();
+
+        let SessionErrorKind::MergeConflict { conflicts } = err.kind else {
+            panic!("expected MergeConflict, got {err:?}");
+        };
+        assert_eq!(conflicts.len(), 1);
+        assert_eq!(conflicts[0].first_snapshot, c);
+        assert_eq!(conflicts[0].second_snapshot, a);
+        assert!(matches!(conflicts[0].conflict, Conflict::ChunkDoubleUpdate { .. }));
+        Ok(())
+    }
+
+    #[tokio_test]
+    async fn merge_reports_every_conflict() -> Result<(), Box<dyn Error>> {
+        let (repo, path) = repo_with_array().await?;
+        let a = flush_chunk(&repo, &path, 0, "a").await?;
+        let b = flush_chunk(&repo, &path, 0, "b").await?;
+        let c = flush_chunk(&repo, &path, 0, "c").await?;
+
+        let err = repo
+            .merge_snapshots("main", &[a.clone(), b.clone(), c.clone()], "merge", None)
+            .await
+            .unwrap_err();
+
+        let SessionErrorKind::MergeConflict { conflicts } = err.kind else {
+            panic!("expected MergeConflict, got {err:?}");
+        };
+        let pairs: Vec<(SnapshotId, SnapshotId)> = conflicts
+            .iter()
+            .map(|c| (c.first_snapshot.clone(), c.second_snapshot.clone()))
+            .collect();
+        assert_eq!(pairs, vec![(a.clone(), b.clone()), (a, c.clone()), (b, c)]);
+        Ok(())
+    }
+
+    #[tokio_test]
+    async fn merge_fails_on_pruned_ancestor_conflict() -> Result<(), Box<dyn Error>> {
+        use std::time::Duration;
+
+        use crate::ops::gc::{ExpiredRefAction, expire};
+
+        // The source and the expired commit both create `/array`, which is the
+        // conflict. Expiration releases every snapshot older than the cutoff
+        // except roots, so the source branches off the initial snapshot and is
+        // written after the cutoff.
+        let repo = create_repo().await;
+        let array = path("/array");
+        let initial = repo.lookup_branch("main").await?;
+
+        let mut session = repo.writable_session("main").await?;
+        session.add_group(Path::root(), Bytes::new()).await?;
+        session.add_array(array.clone(), shape(), None, Bytes::new()).await?;
+        let c1 = session.commit("c1").execute().await?;
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        let expire_older_than = Utc::now();
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        let c2 = commit_chunk(&repo, &array, 3, "c2").await?;
+
+        repo.create_branch("worker", &initial).await?;
+        let mut session = repo.writable_session("worker").await?;
+        session.add_group(Path::root(), Bytes::new()).await?;
+        session.add_array(array.clone(), shape(), None, Bytes::new()).await?;
+        session.set_chunk_ref(array.clone(), ChunkIndices(vec![0]), inline("a")).await?;
+        let a = session.commit("source").anonymous().execute().await?;
+
+        let result = expire(
+            Arc::clone(repo.asset_manager()),
+            expire_older_than,
+            ExpiredRefAction::Ignore,
+            ExpiredRefAction::Ignore,
+            None,
+            100,
+        )
+        .await?;
+        assert!(result.released_snapshots.contains(&c1));
+        let (repo_info, _) = repo.asset_manager().fetch_repo_info().await?;
+        assert_eq!(
+            repo_info.find_snapshot(&c2)?.pruned_ancestor_tx_logs,
+            vec![c1.clone()]
+        );
+
+        let err = repo
+            .merge_snapshots("main", std::slice::from_ref(&a), "merge", None)
+            .await
+            .unwrap_err();
+
+        let SessionErrorKind::MergeConflict { conflicts } = err.kind else {
+            panic!("expected MergeConflict, got {err:?}");
+        };
+        assert!(conflicts.iter().any(|c| {
+            c.first_snapshot == c1
+                && c.second_snapshot == a
+                && c.conflict == Conflict::NewNodeConflictsWithExistingNode(array.clone())
+        }));
+        Ok(())
+    }
+
+    #[tokio_test]
+    async fn merge_fails_when_tip_moves_after_planning() -> Result<(), Box<dyn Error>> {
+        let (repo, path) = repo_with_array().await?;
+        let old_tip = repo.lookup_branch("main").await?;
+        let a = flush_chunk(&repo, &path, 0, "a").await?;
+        let (repo_info, _) = repo.asset_manager().fetch_repo_info().await?;
+        let plan = plan_merge(&repo_info, "main", &[a])?;
+        let new_tip = commit_chunk(&repo, &path, 2, "c").await?;
+
+        let err = merge_planned(
+            Arc::clone(repo.asset_manager()),
+            repo.config(),
+            "main",
+            plan,
+            "merge",
+            SnapshotProperties::default(),
+        )
+        .await
+        .unwrap_err();
+
+        assert!(matches!(
+            err.kind,
+            SessionErrorKind::Conflict { ref expected_parent, ref actual_parent }
+                if expected_parent == &Some(old_tip.clone()) && actual_parent == &Some(new_tip.clone())
+        ));
+        Ok(())
+    }
+
+    #[tokio_test]
+    async fn merge_rejects_v1_repository() -> Result<(), Box<dyn Error>> {
+        let storage = new_in_memory_storage().await?;
+        let repo = Repository::create(
+            None,
+            storage,
+            HashMap::new(),
+            Some(SpecVersionBin::V1),
+            true,
+        )
+        .await?;
+        let path: Path = "/array".try_into()?;
+        let mut session = repo.writable_session("main").await?;
+        session.add_group(Path::root(), Bytes::new()).await?;
+        session.add_array(path.clone(), shape(), None, Bytes::new()).await?;
+        session.commit("create array").execute().await?;
+        let a = flush_chunk(&repo, &path, 0, "a").await?;
+
+        let err = repo.merge_snapshots("main", &[a], "merge", None).await.unwrap_err();
+
+        assert!(matches!(
+            err.kind,
+            SessionErrorKind::RepositoryError(RepositoryErrorKind::BadRepoVersion { .. })
+        ));
+        Ok(())
+    }
+
+    #[tokio_test]
+    async fn merge_rejects_empty_list() -> Result<(), Box<dyn Error>> {
+        let (repo, _) = repo_with_array().await?;
+
+        let err = repo.merge_snapshots("main", &[], "merge", None).await.unwrap_err();
+
+        assert!(matches!(err.kind, SessionErrorKind::NoSnapshotsToMerge));
+        Ok(())
+    }
+
+    #[tokio_test]
+    async fn merge_applies_structure_and_deletions_end_to_end()
+    -> Result<(), Box<dyn Error>> {
+        let (repo, array) = repo_with_array().await?;
+        commit_chunk(&repo, &array, 1, "drop").await?;
+
+        let mut session = repo.writable_session("main").await?;
+        session.add_group(path("/group"), Bytes::from_static(b"g")).await?;
+        let new_group = session.commit("group").anonymous().execute().await?;
+        let mut session = repo.writable_session("main").await?;
+        session.set_chunk_ref(array.clone(), ChunkIndices(vec![1]), None).await?;
+        let deleter = session.commit("delete chunk").anonymous().execute().await?;
+        let mut session = repo.writable_session("main").await?;
+        session.add_array(path("/fresh"), shape(), None, Bytes::new()).await?;
+        session.set_chunk_ref(path("/fresh"), ChunkIndices(vec![0]), inline("f")).await?;
+        let fresh = session.commit("fresh").anonymous().execute().await?;
+
+        repo.merge_snapshots("main", &[new_group, deleter, fresh], "merge", None).await?;
+
+        assert_eq!(read_chunk(&repo, &array, 1).await?, None);
+        assert_eq!(
+            read_chunk(&repo, &path("/fresh"), 0).await?,
+            Some(Bytes::from_static(b"f"))
+        );
+        let session =
+            repo.readonly_session(&VersionInfo::BranchTipRef("main".to_string())).await?;
+        assert_eq!(
+            session.get_group(&path("/group")).await?.user_data,
+            Bytes::from_static(b"g")
         );
         Ok(())
     }
