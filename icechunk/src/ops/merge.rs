@@ -432,11 +432,16 @@ pub(crate) async fn merge_array_manifests(
 }
 
 /// The source manifest that already equals the merged split: one source wrote
-/// the split, its parent is the tip, and it has a manifest fully inside this extent.
+/// the split, its parent is the tip, and exactly one of its manifests
+/// intersects the split, lying fully inside it.
 ///
 /// A manifest's own extents are trimmed to the coordinates it actually holds
 /// (see `write_manifest_from_stream`), so they are usually narrower than the
-/// split boundary; `Overlap::Complete` is the right test, not equality.
+/// split boundary; `Overlap::Complete` is the right test, not equality. A
+/// source can also split its manifests more finely than this merge does, so
+/// more than one of its manifests can intersect the split: reuse only applies
+/// when a single manifest already holds the split's entire content, otherwise
+/// the other intersecting manifests' chunks would be silently dropped.
 fn reusable_manifest(
     coords: &[(usize, ChunkIndices)],
     sources: &[&Source],
@@ -456,13 +461,16 @@ fn reusable_manifest(
     let NodeData::Array { manifests, .. } = &source_node.node_data else {
         return Ok(None);
     };
-    for mref in manifests {
-        if mref.extents.overlap_with(extent) == Overlap::Complete {
-            let file = manifest_info(source.snapshot.as_ref(), &mref.object_id)?;
-            return Ok(Some((mref.clone(), file)));
-        }
+    let intersecting: Vec<&ManifestRef> = manifests
+        .iter()
+        .filter(|mref| mref.extents.overlap_with(extent) != Overlap::None)
+        .collect();
+    let [mref] = intersecting.as_slice() else { return Ok(None) };
+    if mref.extents.overlap_with(extent) != Overlap::Complete {
+        return Ok(None);
     }
-    Ok(None)
+    let file = manifest_info(source.snapshot.as_ref(), &mref.object_id)?;
+    Ok(Some(((*mref).clone(), file)))
 }
 
 /// Chunk references the sources wrote for `coords`, read from the source
@@ -1202,6 +1210,84 @@ mod tests {
         assert_eq!(
             manifest.get_chunk_payload(&node.id, &ChunkIndices(vec![1]))?,
             ChunkPayload::Inline("tip".into())
+        );
+        Ok(())
+    }
+
+    /// A worker splitting more finely than the coordinator can leave more than
+    /// one of its manifests inside a single coordinator split; the fast path
+    /// must not reuse either of them, or the untouched chunk they don't cover
+    /// individually would be dropped.
+    #[tokio_test]
+    async fn finer_source_splits_keep_untouched_chunk() -> Result<(), Box<dyn Error>> {
+        let storage = new_in_memory_storage().await?;
+        let coordinator_config = RepositoryConfig {
+            manifest: Some(ManifestConfig {
+                splitting: Some(ManifestSplittingConfig::with_size(2)),
+                ..ManifestConfig::default()
+            }),
+            ..RepositoryConfig::default()
+        };
+        let repo = Repository::create(
+            Some(coordinator_config),
+            Arc::clone(&storage),
+            HashMap::new(),
+            Some(SpecVersionBin::V2),
+            true,
+        )
+        .await?;
+        let path: Path = "/array".try_into()?;
+        let mut session = repo.writable_session("main").await?;
+        session.add_group(Path::root(), Bytes::new()).await?;
+        session.add_array(path.clone(), shape(), None, Bytes::new()).await?;
+        session.commit("create array").execute().await?;
+        commit_chunk(&repo, &path, 0, "orig0").await?;
+        commit_chunk(&repo, &path, 1, "orig1").await?;
+        let tip_id = repo.lookup_branch("main").await?;
+        let tip = repo.asset_manager().fetch_snapshot(&tip_id).await?;
+
+        // Same storage and branch, but splitting one chunk per manifest.
+        let worker_config = RepositoryConfig {
+            manifest: Some(ManifestConfig {
+                splitting: Some(ManifestSplittingConfig::with_size(1)),
+                ..ManifestConfig::default()
+            }),
+            ..RepositoryConfig::default()
+        };
+        let worker =
+            Repository::open(Some(worker_config), Arc::clone(&storage), HashMap::new())
+                .await?;
+        let a = flush_chunk(&worker, &path, 0, "new0").await?;
+        let source = load_source(&repo, &a).await?;
+        let node = tip.get_node(&path)?;
+
+        let merged = merge_array_manifests(
+            repo.asset_manager().as_ref(),
+            repo.config(),
+            tip.as_ref(),
+            node.as_ref(),
+            &[&source],
+        )
+        .await?;
+
+        assert_eq!(merged.refs.len(), 1);
+        let source_manifest_ids: HashSet<ManifestId> =
+            array_refs(&source.snapshot, &path)
+                .into_iter()
+                .map(|r| r.object_id)
+                .collect();
+        assert!(!source_manifest_ids.contains(&merged.refs[0].object_id));
+        let manifest = repo
+            .asset_manager()
+            .fetch_manifest(&merged.refs[0].object_id, merged.files[0].size_bytes)
+            .await?;
+        assert_eq!(
+            manifest.get_chunk_payload(&node.id, &ChunkIndices(vec![0]))?,
+            ChunkPayload::Inline("new0".into())
+        );
+        assert_eq!(
+            manifest.get_chunk_payload(&node.id, &ChunkIndices(vec![1]))?,
+            ChunkPayload::Inline("orig1".into())
         );
         Ok(())
     }
