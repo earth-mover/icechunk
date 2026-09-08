@@ -2,6 +2,10 @@
 
 ## Python Icechunk Library [unreleased]
 
+### Fixes
+
+- Garbage collection no longer deletes objects that a caller wrote after its cutoff on Tigris. Tigris lists whole-second timestamps. The floored value can precede the write by up to one second. GC now deletes an object only after that whole second precedes the cutoff.
+
 ## Python Icechunk Library 2.2.0
 
 ### Features

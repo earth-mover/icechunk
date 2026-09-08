@@ -5,7 +5,7 @@ use std::{
 };
 
 use bytes::Bytes;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, TimeDelta, Utc};
 use futures::{StreamExt as _, TryStreamExt as _};
 use icechunk::{
     Repository, RepositoryConfig, Storage,
@@ -240,6 +240,61 @@ async fn do_test_gc(
     // The last 3 should still be accessible
     for snap_id in &anon_snaps[2..] {
         repo.readonly_session(&VersionInfo::SnapshotId(snap_id.clone())).await?;
+    }
+
+    Ok(())
+}
+
+/// Tigris lists whole-second timestamps.
+/// The write falls anywhere inside the second the listing reports.
+/// GC must keep the object when the cutoff falls inside that second.
+#[tokio_test]
+#[ignore = "needs credentials from env"]
+async fn test_gc_cutoff_inside_listed_second_in_tigris()
+-> Result<(), Box<dyn std::error::Error>> {
+    let prefix = format!("test_cutoff_{}", Utc::now().timestamp_millis());
+    let storage = common::make_tigris_integration_storage(prefix)?;
+    let repo = Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
+        .await?;
+    let mut session = repo.writable_session("main").await?;
+    session.add_group(Path::root(), Bytes::new()).await?;
+    session.commit("base").execute().await?;
+
+    let mut session = repo.writable_session("main").await?;
+    session.add_group(Path::try_from("/dangling").unwrap(), Bytes::new()).await?;
+    let dangling = session.commit("dangling").anonymous().execute().await?;
+
+    let listed: Vec<_> =
+        repo.asset_manager().list_snapshots().await?.try_collect().await?;
+    let created_at = listed
+        .iter()
+        .find(|s| s.id == dangling)
+        .expect("the dangling snapshot is listed")
+        .created_at;
+
+    // The cutoff sits half a granularity after the listed timestamp.
+    // It falls inside the write second, or after the write itself.
+    let whole_seconds = created_at.timestamp_subsec_nanos() == 0;
+    let (cutoff, expected_deleted) = if whole_seconds {
+        (created_at + TimeDelta::milliseconds(500), 0)
+    } else {
+        (created_at + TimeDelta::microseconds(500), 1)
+    };
+
+    let gc_config = GCConfig::clean_all(
+        cutoff,
+        cutoff,
+        None,
+        NonZeroU16::new(50).unwrap(),
+        NonZeroUsize::new(512 * 1024 * 1024).unwrap(),
+        NonZeroU16::new(500).unwrap(),
+        false,
+    );
+    let summary =
+        garbage_collect(Arc::clone(repo.asset_manager()), &gc_config, None, 100).await?;
+    assert_eq!(summary.snapshots_deleted, expected_deleted);
+    if whole_seconds {
+        repo.readonly_session(&VersionInfo::SnapshotId(dangling)).await?;
     }
 
     Ok(())

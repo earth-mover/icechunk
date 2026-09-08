@@ -8,7 +8,7 @@ use std::{
 };
 
 use backon::{BackoffBuilder as _, ExponentialBuilder, Retryable as _};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, TimeDelta, Utc};
 use futures::{Stream, StreamExt as _, TryStream, TryStreamExt as _, stream};
 use itertools::Itertools as _;
 use tokio::task::{self};
@@ -141,30 +141,52 @@ impl GCConfig {
 
     fn must_delete_chunk(&self, chunk: &ListInfo<ChunkId>) -> bool {
         match self.dangling_chunks {
-            Action::DeleteIfCreatedBefore(before) => chunk.created_at < before,
+            Action::DeleteIfCreatedBefore(before) => {
+                created_entirely_before(chunk.created_at, before)
+            }
             _ => false,
         }
     }
 
     fn must_delete_manifest(&self, manifest: &ListInfo<ManifestId>) -> bool {
         match self.dangling_manifests {
-            Action::DeleteIfCreatedBefore(before) => manifest.created_at < before,
+            Action::DeleteIfCreatedBefore(before) => {
+                created_entirely_before(manifest.created_at, before)
+            }
             _ => false,
         }
     }
 
     fn must_delete_snapshot(&self, snapshot: &ListInfo<SnapshotId>) -> bool {
         match self.dangling_snapshots {
-            Action::DeleteIfCreatedBefore(before) => snapshot.created_at < before,
+            Action::DeleteIfCreatedBefore(before) => {
+                created_entirely_before(snapshot.created_at, before)
+            }
             _ => false,
         }
     }
 
     fn must_delete_transaction_log(&self, tx_log: &ListInfo<SnapshotId>) -> bool {
         match self.dangling_transaction_logs {
-            Action::DeleteIfCreatedBefore(before) => tx_log.created_at < before,
+            Action::DeleteIfCreatedBefore(before) => {
+                created_entirely_before(tx_log.created_at, before)
+            }
             _ => false,
         }
+    }
+}
+
+/// Decides if the object's write instant precedes `cutoff` with certainty.
+///
+/// A store can floor the listed timestamp to a whole second. Tigris does this.
+/// The write then falls anywhere in `[created_at, created_at + 1s)`.
+/// GC deletes the object only if that whole interval precedes the cutoff.
+/// A looser rule deletes objects that a caller wrote after the cutoff.
+fn created_entirely_before(created_at: DateTime<Utc>, cutoff: DateTime<Utc>) -> bool {
+    if created_at.timestamp_subsec_nanos() == 0 {
+        created_at + TimeDelta::seconds(1) <= cutoff
+    } else {
+        created_at < cutoff
     }
 }
 
@@ -446,9 +468,9 @@ async fn garbage_collect_one_attempt(
                 // A snapshot not visible in the listing yet cannot be deleted by
                 // this run either, so it is retained.
                 let old_enough_to_drop = listed_snaps.as_ref().is_some_and(|listed| {
-                    listed
-                        .get(&si.id)
-                        .is_some_and(|(created_at, _)| *created_at < snap_deadline)
+                    listed.get(&si.id).is_some_and(|(created_at, _)| {
+                        created_entirely_before(*created_at, snap_deadline)
+                    })
                 });
                 if old_enough_to_drop { None } else { Some(si.id) }
             })
@@ -1294,7 +1316,7 @@ async fn expire_v2_one_attempt(
 mod tests {
     use std::collections::HashMap as StdHashMap;
 
-    use chrono::Duration;
+    use chrono::{Duration, TimeZone as _};
     use icechunk_macros::tokio_test;
 
     use super::*;
@@ -1352,5 +1374,46 @@ mod tests {
         // 5 commits plus the initial snapshot
         assert_eq!(reads_per_snapshot.len(), 6);
         Ok(())
+    }
+
+    fn at(secs: i64, nanos: u32) -> DateTime<Utc> {
+        Utc.timestamp_opt(secs, nanos).unwrap()
+    }
+
+    fn config_deleting_before(before: DateTime<Utc>) -> GCConfig {
+        GCConfig::clean_all(
+            before,
+            before,
+            None,
+            NonZeroU16::new(50).unwrap(),
+            NonZeroUsize::new(1024).unwrap(),
+            NonZeroU16::new(500).unwrap(),
+            false,
+        )
+    }
+
+    fn chunk_listed_at(created_at: DateTime<Utc>) -> ListInfo<ChunkId> {
+        ListInfo { id: ChunkId::random(), created_at, size_bytes: 1 }
+    }
+
+    /// A store that lists whole seconds floors `created_at`.
+    /// The listing then reports a time before the write.
+    #[test]
+    fn whole_second_timestamp_survives_a_cutoff_inside_its_second() {
+        let config = config_deleting_before(at(100, 400_000_000));
+        assert!(!config.must_delete_chunk(&chunk_listed_at(at(100, 0))));
+    }
+
+    #[test]
+    fn whole_second_timestamp_is_deleted_once_its_second_has_passed() {
+        let config = config_deleting_before(at(101, 0));
+        assert!(config.must_delete_chunk(&chunk_listed_at(at(100, 0))));
+    }
+
+    #[test]
+    fn sub_second_timestamp_is_compared_exactly() {
+        let config = config_deleting_before(at(100, 400_000_000));
+        assert!(config.must_delete_chunk(&chunk_listed_at(at(100, 399_000_000))));
+        assert!(!config.must_delete_chunk(&chunk_listed_at(at(100, 400_000_000))));
     }
 }
