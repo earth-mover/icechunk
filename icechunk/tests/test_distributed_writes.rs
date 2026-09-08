@@ -11,8 +11,8 @@ use bytes::Bytes;
 use icechunk::{
     Repository, RepositoryConfig, Storage,
     format::{
-        ByteRange, ChunkIndices, Path, format_constants::SpecVersionBin,
-        snapshot::ArrayShape,
+        ByteRange, ChunkIndices, Path, SnapshotId, format_constants::SpecVersionBin,
+        manifest::ChunkPayload, snapshot::ArrayShape,
     },
     repository::VersionInfo,
     session::{Session, get_chunk},
@@ -146,6 +146,87 @@ async fn test_distributed_writes_in_tigris(
         common::make_tigris_integration_storage(prefix)
     })
     .await
+}
+
+/// Each worker flushes its region as a detached snapshot. The coordinator
+/// merges the snapshot ids. Spec V2 only: merge rejects V1 repositories.
+#[tokio_test]
+async fn test_flush_and_merge_in_minio() -> Result<(), Box<dyn std::error::Error>> {
+    let prefix = format!("test_flush_and_merge_{}", Utc::now().timestamp_millis());
+    let mk_storage = |prefix: String| {
+        common::make_minio_integration_storage(prefix, &Permission::Modify)
+    };
+
+    let repo = mk_repo(mk_storage(prefix.clone())?, true, SpecVersionBin::V2).await?;
+    let mut session = repo.writable_session("main").await?;
+    let shape =
+        ArrayShape::new(vec![(SIZE as u64, SIZE as u32), (SIZE as u64, SIZE as u32)])
+            .unwrap();
+    let array_path: Path = "/array".try_into().unwrap();
+    session.add_array(array_path.clone(), shape, None, Bytes::new()).await?;
+    session.commit("create array").execute().await?;
+
+    let mut set = JoinSet::new();
+    let size = SIZE as u32;
+    let quarter = size / 4;
+    for worker in 0..4u32 {
+        let repo =
+            mk_repo(mk_storage(prefix.clone())?, false, SpecVersionBin::V2).await?;
+        let path = array_path.clone();
+        // The last worker takes the remainder so all `size` columns are covered
+        // even when `size` doesn't divide evenly by 4.
+        let end = if worker == 3 { size } else { (worker + 1) * quarter };
+        let xs = worker * quarter..end;
+        set.spawn(async move { flush_chunks(repo, path, xs, 0..size).await });
+    }
+    let mut snapshots = Vec::new();
+    for result in set.join_all().await {
+        snapshots.push(result.map_err(|e| e.to_string())?);
+    }
+
+    repo.merge_snapshots("main", &snapshots, "merge workers", None).await?;
+
+    let session =
+        repo.readonly_session(&VersionInfo::BranchTipRef("main".to_string())).await?;
+    for x in 0..size {
+        for y in 0..size {
+            let bytes = get_chunk(
+                session
+                    .get_chunk_reader(
+                        &array_path,
+                        &ChunkIndices(vec![x, y]),
+                        &ByteRange::ALL,
+                    )
+                    .await?,
+            )
+            .await?;
+            assert_eq!(bytes, Some(Bytes::from(format!("{x},{y}"))));
+        }
+    }
+    Ok(())
+}
+
+/// Write inline chunks for every (x, y) in the ranges and flush them as a
+/// detached snapshot.
+async fn flush_chunks(
+    repo: Repository,
+    path: Path,
+    xs: Range<u32>,
+    ys: Range<u32>,
+) -> Result<SnapshotId, Box<dyn std::error::Error + Send + Sync>> {
+    let mut session = repo.writable_session("main").await?;
+    for x in xs {
+        for y in ys.clone() {
+            session
+                .set_chunk_ref(
+                    path.clone(),
+                    ChunkIndices(vec![x, y]),
+                    Some(ChunkPayload::Inline(format!("{x},{y}").into())),
+                )
+                .await?;
+        }
+    }
+    Ok(session.commit("worker flush").anonymous().execute().await?)
 }
 
 /// This test does a distributed write from 4 different [`Repository`] instances, and then commits.
