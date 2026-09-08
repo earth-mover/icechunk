@@ -177,38 +177,50 @@ and creates one commit.
     The same limitation applies to concurrent flushes.
 
 ```python
-def write_timestamp(*, itime: int, storage: ic.Storage) -> str:
-    repo = ic.Repository.open(storage)
+from concurrent.futures import ProcessPoolExecutor
+
+
+def get_storage() -> ic.Storage:
+    # `Storage` cannot be pickled, so every worker builds its own
+    return ic.s3_storage(bucket="my-bucket", prefix="my-repo", region="us-east-1")
+
+
+def write_timestamp(*, itime: int) -> str:
+    repo = ic.Repository.open(get_storage())
     session = repo.writable_session("main")
     ds = xr.tutorial.open_dataset("rasm").isel(time=[itime])
-    ds.to_zarr(session.store, region="auto")
+    # every worker writes the same chunks of xc and yc, so drop them
+    ds.drop_vars(["xc", "yc"]).to_zarr(session.store, region="auto")
     return session.flush(f"time step {itime}")
 
 
-storage = ic.local_filesystem_storage(tempfile.TemporaryDirectory().name)
-repo = ic.Repository.open(storage)
+repo = ic.Repository.create(get_storage())
+
+# write the array metadata and the coordinates before the workers start
+session = repo.writable_session("main")
+ds.to_zarr(session.store, compute=False, encoding={"Tair": {"chunks": chunks}}, mode="w")
+session.commit("initialize store")
 
 with ProcessPoolExecutor() as executor:
     futures = [
-        executor.submit(write_timestamp, itime=i, storage=storage)
-        for i in range(ds.sizes["time"])
+        executor.submit(write_timestamp, itime=i) for i in range(ds.sizes["time"])
     ]
     snapshots = [f.result() for f in futures]
 
 print(repo.merge_snapshots("main", snapshots, "finished writes"))
 ```
 
-The merge fails in two cases:
+The merge fails in these cases:
 
-- Two snapshots can change the same chunk or node. A snapshot can also conflict with a
-  commit made to the branch after the snapshot's parent. Either failure raises
-  [`MergeConflictError`](../reference/index.md#icechunk.MergeConflictError), which lists
-  every conflict.
+- Two snapshots change the same chunk or node. A snapshot conflicts with a commit made
+  after its parent. The merge raises
+  [`MergeConflictError`](../reference/index.md#icechunk.MergeConflictError). The error
+  lists every conflict.
 - The tip of the branch moves while the merge runs. The merge raises `ConflictError`.
   Call `merge_snapshots` again. A failed merge does not change the flushed snapshots.
 
 The flushed snapshots stay in the repository after the merge. Garbage collection removes
-them once nothing points at them.
+them when they are older than its cutoff.
 
 !!! warning
 

@@ -146,7 +146,7 @@ def test_merge_from_process_pool() -> None:
     # One worker: local filesystem repo_info updates aren't conditional, so
     # genuinely concurrent flushes race and can drop all but one
     # registration. This still exercises a fresh, unpicklable `Storage`
-    # reopened in a separate process for each flush.
+    # reopened in a worker process.
     with tempfile.TemporaryDirectory() as path:
         repo = create_repo(local_filesystem_storage(path))
         with ProcessPoolExecutor(max_workers=1) as executor:
