@@ -11,7 +11,8 @@ precise failure.
 ```
 IcechunkError
 ├── ConflictError
-│   └── RebaseFailedError
+│   ├── RebaseFailedError
+│   └── MergeConflictError
 ├── NotFoundError                 (also a KeyError)
 │   ├── NodeNotFoundError
 │   ├── SnapshotNotFoundError
@@ -30,6 +31,7 @@ IcechunkError
 |-----------|-------------|
 | [`ConflictError`](../reference/index.md#icechunk.ConflictError) | A concurrent writer got there first: commit conflicts, branch update conflicts |
 | [`RebaseFailedError`](../reference/index.md#icechunk.RebaseFailedError) | A rebase could not resolve all conflicts; carries `snapshot` and `conflicts` |
+| [`MergeConflictError`](../reference/index.md#icechunk.MergeConflictError) | `Repository.merge_snapshots` found a conflict between snapshots, or between a snapshot and a later commit; carries `conflicts` |
 | [`NotFoundError`](../reference/index.md#icechunk.NotFoundError) | Something that was asked for does not exist |
 | [`NodeNotFoundError`](../reference/index.md#icechunk.NodeNotFoundError) | No group, array, or chunk at the given path |
 | [`SnapshotNotFoundError`](../reference/index.md#icechunk.SnapshotNotFoundError) | No snapshot with the given id (or at the given time) |

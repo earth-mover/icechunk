@@ -199,7 +199,8 @@ The merge fails in two cases:
 
 - Two snapshots can change the same chunk or node. A snapshot can also conflict with a
   commit made to the branch after the snapshot's parent. Either failure raises
-  [`MergeConflictError`](../reference/index.md#exceptions), which lists every conflict.
+  [`MergeConflictError`](../reference/index.md#icechunk.MergeConflictError), which lists
+  every conflict.
 - The tip of the branch moves while the merge runs. The merge raises `ConflictError`.
   Call `merge_snapshots` again. A failed merge does not change the flushed snapshots.
 
