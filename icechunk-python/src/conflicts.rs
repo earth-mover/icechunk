@@ -7,6 +7,7 @@ use icechunk::conflicts::{
     basic_solver::{BasicConflictSolver, VersionSelection},
     detector::ConflictDetector,
 };
+use icechunk::ops::merge::MergeConflict;
 use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -246,6 +247,79 @@ impl From<&Conflict> for PyConflict {
                 path: String::new(),
                 conflicted_chunks: None,
             },
+        }
+    }
+}
+
+#[pyclass(from_py_object, name = "MergeConflict", module = "icechunk")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct PyMergeConflict {
+    #[pyo3(get)]
+    first_snapshot: String,
+    #[pyo3(get)]
+    second_snapshot: String,
+    #[pyo3(get)]
+    conflict: PyConflict,
+}
+
+impl PyRepr for PyMergeConflict {
+    const EXECUTABLE: bool = false;
+    fn cls_name() -> &'static str {
+        "icechunk.conflicts.MergeConflict"
+    }
+    fn fields(&self, _mode: ReprMode) -> Vec<(&str, String)> {
+        vec![
+            ("first_snapshot", self.first_snapshot.clone()),
+            ("second_snapshot", self.second_snapshot.clone()),
+            ("conflict", <PyConflict as PyRepr>::__repr__(&self.conflict)),
+        ]
+    }
+}
+
+#[pymethods]
+impl PyMergeConflict {
+    #[new]
+    fn new(
+        first_snapshot: String,
+        second_snapshot: String,
+        conflict: PyConflict,
+    ) -> Self {
+        Self { first_snapshot, second_snapshot, conflict }
+    }
+
+    fn __repr__(&self) -> String {
+        <Self as PyRepr>::__repr__(self)
+    }
+
+    fn __str__(&self) -> String {
+        <Self as PyRepr>::__str__(self)
+    }
+
+    fn _repr_html_(&self) -> String {
+        <Self as PyRepr>::_repr_html_(self)
+    }
+
+    fn __reduce__(&self, py: Python<'_>) -> PyResult<(Py<PyAny>, Py<PyAny>)> {
+        use pyo3::IntoPyObjectExt as _;
+        let cls = py.get_type::<PyMergeConflict>().into_py_any(py)?;
+        let args = (
+            self.first_snapshot.clone(),
+            self.second_snapshot.clone(),
+            self.conflict.clone(),
+        )
+            .into_py_any(py)?;
+        Ok((cls, args))
+    }
+}
+
+impl_pickle!(PyMergeConflict);
+
+impl From<&MergeConflict> for PyMergeConflict {
+    fn from(conflict: &MergeConflict) -> Self {
+        Self {
+            first_snapshot: conflict.first_snapshot.to_string(),
+            second_snapshot: conflict.second_snapshot.to_string(),
+            conflict: PyConflict::from(&conflict.conflict),
         }
     }
 }

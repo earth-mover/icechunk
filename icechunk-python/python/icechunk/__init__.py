@@ -20,6 +20,7 @@ from icechunk._icechunk_python import (
     ChunkType,
     ConflictError,
     IcechunkError,
+    MergeConflictError,
     RebaseFailedError,
     RepoAvailability,
     RepoStatus,
@@ -55,6 +56,7 @@ from icechunk.conflicts import (
     ConflictDetector,
     ConflictSolver,
     ConflictType,
+    MergeConflict,
     VersionSelection,
 )
 from icechunk.credentials import (
@@ -177,6 +179,8 @@ __all__ = [
     "ManifestSplitDimCondition",
     "ManifestSplittingConfig",
     "ManifestVirtualChunkLocationCompressionConfig",
+    "MergeConflict",
+    "MergeConflictError",
     "NodeNotFoundError",
     "NotFoundError",
     "ObjectStoreConfig",
