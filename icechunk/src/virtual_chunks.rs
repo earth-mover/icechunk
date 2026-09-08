@@ -325,7 +325,7 @@ type ChunkFetcherCache = Cache<CacheKey, Arc<dyn ChunkFetcher>>;
 
 /// Result of a custom HTTP virtual-chunk read.
 ///
-/// If the reference records an ETag, return the response's `etag`. If it records
+/// If the reference records an `ETag``, return the response's `etag`. If it records
 /// a modification-time check, return the response's `last_modified` timestamp.
 /// The resolver rejects the read if the required value is missing or fails the
 /// check. Both fields are optional when the reference has no checksum.
@@ -520,9 +520,9 @@ impl VirtualChunkResolver {
                 url: location.clone(),
             })
             .capture()?;
-        if let Some(fetcher) = &self.http_fetcher {
-            if let Some(cont) = self.matching_container_by_url(url.as_str()) {
-                if let ObjectStoreConfig::Http(config) = &cont.store {
+        if let Some(fetcher) = &self.http_fetcher
+            && let Some(cont) = self.matching_container_by_url(url.as_str())
+                && let ObjectStoreConfig::Http(config) = &cont.store {
                     match self.credentials.get(&cont.url_prefix) {
                         Some(None) | Some(Some(Credentials::HttpAccess)) => {},
                         Some(Some(_)) => return Err(VirtualReferenceError::capture(
@@ -570,8 +570,6 @@ impl VirtualChunkResolver {
                     }
                     return Ok(response.data);
                 }
-            }
-        }
         let key = resolved_object_key(&location)?;
         let fetcher = self.get_fetcher(&url).await?;
         fetcher.fetch_chunk(&url, &key, range, checksum).await
