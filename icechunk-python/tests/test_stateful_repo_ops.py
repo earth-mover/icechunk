@@ -183,6 +183,12 @@ class NewCommitUpdateModel(UpdateModel):
 
 
 @dataclass(eq=False)
+class NewDetachedSnapshotUpdateModel(UpdateModel):
+    ictype = ic.UpdateType.NewDetachedSnapshot
+    new_snap_id: str
+
+
+@dataclass(eq=False)
 class CommitAmendedUpdateModel(UpdateModel):
     ictype = ic.UpdateType.CommitAmended
     branch: str
@@ -328,6 +334,17 @@ class Model:
         assert self.branch is not None
         self._commit(snap)
         self.ops_log.append(NewCommitUpdateModel(self.branch, snap.id))
+
+    def flush(self, snap: SnapshotInfo) -> None:
+        """Record a detached snapshot from `Session.flush`.
+
+        Icechunk lists it in the repo's snapshot registry like a real commit,
+        without moving any branch or tag, so it stays eligible for expiration
+        and GC until it is merged away or expires on its own.
+        """
+        self.commits[snap.id] = CommitModel.from_snapshot_and_store(snap, {})
+        self.ondisk_snaps[snap.id] = self.commits[snap.id]
+        self.ops_log.append(NewDetachedSnapshotUpdateModel(snap.id))
 
     def amend(self, snap: SnapshotInfo) -> None:
         """Amend the HEAD commit."""
@@ -894,6 +911,54 @@ class VersionControlStateMachine(RuleBasedStateMachine):
 
         # Update model
         self.model.amend(snapinfo)
+        return commit_id
+
+    @rule(data=st.data(), nsources=st.integers(2, 3), target=commits)
+    @precondition(
+        lambda self: (
+            self.model.branch is not None
+            and not self.model.changes_made
+            and self.model.spec_version >= 2
+        )
+    )
+    def merge_flushed_snapshots(self, data: st.DataObject, nsources: int) -> str:
+        """Flush one detached snapshot per path from the tip, then merge them."""
+        branch = self.model.branch
+        assert branch is not None
+
+        def no_nesting(paths: list[str]) -> bool:
+            nodes = [p.removesuffix("/zarr.json") for p in paths]
+            return not any(a != b and b.startswith(a + "/") for a in nodes for b in nodes)
+
+        # Two new arrays where one sits under the other would conflict
+        # (NewNodeInInvalidGroup), so keep the paths disjoint.
+        paths = data.draw(
+            st.lists(
+                metadata_paths, min_size=nsources, max_size=nsources, unique=True
+            ).filter(no_nesting)
+        )
+        snapshot_ids = []
+        for path in paths:
+            value = data.draw(v3_array_metadata)
+            session = self.repo.writable_session(branch)
+            store = NewSyncStoreWrapper(session.store)
+            # delete then set, so the flush always has a change
+            store.delete(path)
+            store.set(path, value)
+            snap_id = session.flush(f"flush {path}")
+            snapshot_ids.append(snap_id)
+            self.model.flush(self.repo.lookup_snapshot(snap_id))
+            self.model.delete_doc(path)
+            self.model[path] = value
+        message = data.draw(st.text(max_size=MAX_TEXT_SIZE))
+        note(f"merging {snapshot_ids!r} into {branch!r}")
+
+        commit_id = self.repo.merge_snapshots(branch, snapshot_ids, message)
+
+        snapinfo = next(iter(self.repo.ancestry(branch=branch)))
+        assert snapinfo.id == commit_id
+        self.session = self.repo.writable_session(branch)
+        self.model.commit(snapinfo)
         return commit_id
 
     @rule(ref=commits)
