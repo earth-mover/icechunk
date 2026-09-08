@@ -72,8 +72,7 @@
     "test": "ava",
     "preversion": "napi build --platform && git add .",
     "version": "napi version",
-    "prepare": "husky",
-    "test:http-virtual-chunks": "node --test __test__/http-virtual-chunks.test.mjs"
+    "prepare": "husky"
   },
   "devDependencies": {
     "@emnapi/core": "^1.11.3",
