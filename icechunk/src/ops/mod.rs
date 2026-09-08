@@ -177,6 +177,8 @@ pub mod expiration;
 pub mod gc;
 /// Manifest optimization and rebuilding.
 pub mod manifests;
+/// Merge snapshots into one commit.
+pub mod merge;
 /// A hash set sharded across many locks, for parallel accumulation.
 pub mod sharded_set;
 /// Repository statistics.
