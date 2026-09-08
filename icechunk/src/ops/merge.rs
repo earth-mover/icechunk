@@ -12,14 +12,22 @@ use std::{
 };
 
 use crate::{
+    asset_manager::AssetManager,
+    change_set::ChunkTable,
+    config::RepositoryConfig,
     conflicts::Conflict,
     format::{
-        ChunkIndices, IcechunkFormatErrorKind, ManifestId, NodeId, Path, SnapshotId,
+        ChunkIndices, IcechunkFormatError, IcechunkFormatErrorKind, ManifestId, NodeId,
+        Path, SnapshotId,
+        manifest::{ManifestExtents, ManifestRef, Overlap},
         repo_info::RepoInfo,
         snapshot::{ManifestFileInfo, NodeData, NodeSnapshot, Snapshot, SnapshotInfo},
         transaction_log::TransactionLog,
     },
-    session::{SessionError, SessionErrorKind, SessionResult},
+    session::{
+        SessionError, SessionErrorKind, SessionResult, fetch_manifest,
+        write_manifest_with_changes,
+    },
 };
 use icechunk_types::{ICResultExt as _, error::ICResultCtxExt as _};
 
@@ -325,6 +333,170 @@ pub(crate) fn merge_nodes(
         }
     }
     Ok(MergedNodes { nodes, files })
+}
+
+/// Merged manifest refs and files for one array that exists in the tip.
+pub(crate) struct ArrayManifests {
+    pub(crate) refs: Vec<ManifestRef>,
+    pub(crate) files: Vec<ManifestFileInfo>,
+}
+
+/// Merge the chunk changes of `sources` into the tip's manifests for `node`,
+/// one split at a time. Space is proportional to one split plus the
+/// coordinates the sources wrote to this node.
+pub(crate) async fn merge_array_manifests(
+    asset_manager: &AssetManager,
+    config: &RepositoryConfig,
+    tip: &Snapshot,
+    node: &NodeSnapshot,
+    sources: &[&Source],
+) -> SessionResult<ArrayManifests> {
+    let mut result = ArrayManifests { refs: Vec::new(), files: Vec::new() };
+    let NodeData::Array { shape, dimension_names, manifests: tip_refs } = &node.node_data
+    else {
+        return Ok(result);
+    };
+    let splits =
+        config.manifest().splitting().get_split_sizes(&node.path, shape, dimension_names);
+
+    // Coordinates per split, with the index of the source that wrote each one.
+    let mut touched: HashMap<ManifestExtents, Vec<(usize, ChunkIndices)>> =
+        HashMap::new();
+    for (index, source) in sources.iter().enumerate() {
+        for coord in source.log.updated_chunks_for(&node.id) {
+            if let Some(extent) = splits.find(&coord) {
+                touched.entry(extent).or_default().push((index, coord));
+            }
+        }
+    }
+
+    let tip_id = tip.id();
+    for extent in splits.iter() {
+        let intersecting: Vec<(&ManifestRef, Overlap)> = tip_refs
+            .iter()
+            .filter_map(|mref| match mref.extents.overlap_with(&extent) {
+                Overlap::None => None,
+                overlap => Some((mref, overlap)),
+            })
+            .collect();
+        match touched.remove(&extent) {
+            Some(coords) => {
+                if let Some((mref, file)) =
+                    reusable_manifest(&coords, sources, node, &extent, &tip_id)?
+                {
+                    result.refs.push(mref);
+                    result.files.push(file);
+                    continue;
+                }
+                let table =
+                    modified_chunks(asset_manager, sources, node, &coords).await?;
+                if let Some((new_ref, file)) = write_manifest_with_changes(
+                    asset_manager,
+                    config.manifest(),
+                    intersecting.iter().map(|(mref, _)| *mref),
+                    table,
+                    &extent,
+                    &node.id,
+                    &tip_id,
+                )
+                .await?
+                {
+                    result.refs.push(new_ref);
+                    result.files.push(file);
+                }
+            }
+            None => {
+                for (mref, overlap) in intersecting {
+                    if overlap == Overlap::Complete {
+                        result.refs.push(mref.clone());
+                        result.files.push(manifest_info(tip, &mref.object_id)?);
+                    } else if let Some((new_ref, file)) = write_manifest_with_changes(
+                        asset_manager,
+                        config.manifest(),
+                        std::iter::once(mref),
+                        ChunkTable::default(),
+                        &extent,
+                        &node.id,
+                        &tip_id,
+                    )
+                    .await?
+                    {
+                        result.refs.push(new_ref);
+                        result.files.push(file);
+                    }
+                }
+            }
+        }
+    }
+    Ok(result)
+}
+
+/// The source manifest that already equals the merged split: one source wrote
+/// the split, its parent is the tip, and it has a manifest fully inside this extent.
+///
+/// A manifest's own extents are trimmed to the coordinates it actually holds
+/// (see `write_manifest_from_stream`), so they are usually narrower than the
+/// split boundary; `Overlap::Complete` is the right test, not equality.
+fn reusable_manifest(
+    coords: &[(usize, ChunkIndices)],
+    sources: &[&Source],
+    node: &NodeSnapshot,
+    extent: &ManifestExtents,
+    tip_id: &SnapshotId,
+) -> SessionResult<Option<(ManifestRef, ManifestFileInfo)>> {
+    let Some(&(first, _)) = coords.first() else { return Ok(None) };
+    if coords.iter().any(|(index, _)| *index != first) {
+        return Ok(None);
+    }
+    let Some(source) = sources.get(first) else { return Ok(None) };
+    if &source.parent != tip_id {
+        return Ok(None);
+    }
+    let source_node = source.snapshot.get_node(&node.path).inject()?;
+    let NodeData::Array { manifests, .. } = &source_node.node_data else {
+        return Ok(None);
+    };
+    for mref in manifests {
+        if mref.extents.overlap_with(extent) == Overlap::Complete {
+            let file = manifest_info(source.snapshot.as_ref(), &mref.object_id)?;
+            return Ok(Some((mref.clone(), file)));
+        }
+    }
+    Ok(None)
+}
+
+/// Chunk references the sources wrote for `coords`, read from the source
+/// manifests. A coordinate absent from its source manifest is a deletion.
+async fn modified_chunks(
+    asset_manager: &AssetManager,
+    sources: &[&Source],
+    node: &NodeSnapshot,
+    coords: &[(usize, ChunkIndices)],
+) -> SessionResult<ChunkTable> {
+    let mut table = ChunkTable::new();
+    for (index, coord) in coords {
+        let Some(source) = sources.get(*index) else { continue };
+        let source_node = source.snapshot.get_node(&node.path).inject()?;
+        let NodeData::Array { manifests, .. } = &source_node.node_data else { continue };
+        let mut payload = None;
+        for mref in manifests.iter().filter(|mref| mref.extents.contains(&coord.0)) {
+            let manifest =
+                fetch_manifest(&mref.object_id, &source.id, asset_manager).await?;
+            match manifest.get_chunk_payload(&node.id, coord) {
+                Ok(found) => {
+                    payload = Some(found);
+                    break;
+                }
+                Err(IcechunkFormatError {
+                    kind: IcechunkFormatErrorKind::ChunkCoordinatesNotFound { .. },
+                    ..
+                }) => {}
+                Err(err) => return Err(err).inject(),
+            }
+        }
+        table.insert(coord.clone(), payload);
+    }
+    Ok(table)
 }
 
 #[cfg(test)]
@@ -841,6 +1013,195 @@ mod tests {
 
         assert!(
             matches!(err.kind, SessionErrorKind::ConflictingPathNotFound(ref n) if n == &id)
+        );
+        Ok(())
+    }
+
+    use crate::{
+        RepositoryConfig,
+        config::{ManifestConfig, ManifestSplittingConfig},
+        format::manifest::ManifestRef,
+    };
+
+    /// Repo whose manifests hold two chunks each, with `/array` of four chunks.
+    async fn split_repo_with_array() -> Result<(Repository, Path), Box<dyn Error>> {
+        let storage = new_in_memory_storage().await?;
+        let config = RepositoryConfig {
+            manifest: Some(ManifestConfig {
+                splitting: Some(ManifestSplittingConfig::with_size(2)),
+                ..ManifestConfig::default()
+            }),
+            ..RepositoryConfig::default()
+        };
+        let repo = Repository::create(
+            Some(config),
+            storage,
+            HashMap::new(),
+            Some(SpecVersionBin::V2),
+            true,
+        )
+        .await?;
+        let path: Path = "/array".try_into()?;
+        let mut session = repo.writable_session("main").await?;
+        session.add_group(Path::root(), Bytes::new()).await?;
+        session.add_array(path.clone(), shape(), None, Bytes::new()).await?;
+        session.commit("create array").execute().await?;
+        Ok((repo, path))
+    }
+
+    async fn manifest_count(repo: &Repository) -> Result<usize, Box<dyn Error>> {
+        use futures::StreamExt as _;
+        Ok(repo.asset_manager().list_manifests().await?.count().await)
+    }
+
+    fn array_refs(snapshot: &Snapshot, path: &Path) -> Vec<ManifestRef> {
+        match &snapshot.get_node(path).expect("node exists").node_data {
+            NodeData::Array { manifests, .. } => manifests.clone(),
+            NodeData::Group => panic!("not an array"),
+        }
+    }
+
+    #[tokio_test]
+    async fn disjoint_splits_reuse_source_manifests() -> Result<(), Box<dyn Error>> {
+        let (repo, path) = split_repo_with_array().await?;
+        let tip_id = repo.lookup_branch("main").await?;
+        let a = flush_chunk(&repo, &path, 0, "a").await?;
+        let b = flush_chunk(&repo, &path, 3, "b").await?;
+        let tip = repo.asset_manager().fetch_snapshot(&tip_id).await?;
+        let sources = [load_source(&repo, &a).await?, load_source(&repo, &b).await?];
+        let node = tip.get_node(&path)?;
+        let before = manifest_count(&repo).await?;
+
+        let merged = merge_array_manifests(
+            repo.asset_manager().as_ref(),
+            repo.config(),
+            tip.as_ref(),
+            node.as_ref(),
+            &sources.iter().collect::<Vec<_>>(),
+        )
+        .await?;
+
+        assert_eq!(manifest_count(&repo).await?, before, "no manifest written");
+        let mut expected: Vec<ManifestRef> = array_refs(&sources[0].snapshot, &path);
+        expected.extend(array_refs(&sources[1].snapshot, &path));
+        let mut got = merged.refs.clone();
+        got.sort_by(|x, y| x.object_id.cmp(&y.object_id));
+        expected.sort_by(|x, y| x.object_id.cmp(&y.object_id));
+        assert_eq!(got, expected);
+        assert_eq!(merged.files.len(), 2);
+        Ok(())
+    }
+
+    #[tokio_test]
+    async fn shared_split_writes_one_merged_manifest() -> Result<(), Box<dyn Error>> {
+        let (repo, path) = split_repo_with_array().await?;
+        commit_chunk(&repo, &path, 1, "tip").await?;
+        let tip_id = repo.lookup_branch("main").await?;
+        let a = flush_chunk(&repo, &path, 0, "a").await?;
+        let b = flush_chunk(&repo, &path, 1, "b").await?; // overwrites the tip's chunk 1
+        let tip = repo.asset_manager().fetch_snapshot(&tip_id).await?;
+        let sources = [load_source(&repo, &a).await?, load_source(&repo, &b).await?];
+        let node = tip.get_node(&path)?;
+
+        let merged = merge_array_manifests(
+            repo.asset_manager().as_ref(),
+            repo.config(),
+            tip.as_ref(),
+            node.as_ref(),
+            &sources.iter().collect::<Vec<_>>(),
+        )
+        .await?;
+
+        assert_eq!(merged.refs.len(), 1);
+        let info = &merged.files[0];
+        let manifest = repo
+            .asset_manager()
+            .fetch_manifest(&merged.refs[0].object_id, info.size_bytes)
+            .await?;
+        assert_eq!(
+            manifest.get_chunk_payload(&node.id, &ChunkIndices(vec![0]))?,
+            ChunkPayload::Inline("a".into())
+        );
+        assert_eq!(
+            manifest.get_chunk_payload(&node.id, &ChunkIndices(vec![1]))?,
+            ChunkPayload::Inline("b".into())
+        );
+        Ok(())
+    }
+
+    #[tokio_test]
+    async fn deletion_removes_chunk_from_merged_manifest() -> Result<(), Box<dyn Error>> {
+        let (repo, path) = split_repo_with_array().await?;
+        commit_chunk(&repo, &path, 0, "keep").await?;
+        commit_chunk(&repo, &path, 1, "drop").await?;
+        let tip_id = repo.lookup_branch("main").await?;
+        let mut session = repo.writable_session("main").await?;
+        session.set_chunk_ref(path.clone(), ChunkIndices(vec![1]), None).await?;
+        let deleter = session.commit("delete 1").anonymous().execute().await?;
+        // a second writer on the same split forces the rewrite path
+        let other = flush_chunk(&repo, &path, 0, "keep2").await?;
+        let tip = repo.asset_manager().fetch_snapshot(&tip_id).await?;
+        let sources =
+            [load_source(&repo, &deleter).await?, load_source(&repo, &other).await?];
+        let node = tip.get_node(&path)?;
+
+        let merged = merge_array_manifests(
+            repo.asset_manager().as_ref(),
+            repo.config(),
+            tip.as_ref(),
+            node.as_ref(),
+            &sources.iter().collect::<Vec<_>>(),
+        )
+        .await?;
+
+        assert_eq!(merged.refs.len(), 1);
+        let manifest = repo
+            .asset_manager()
+            .fetch_manifest(&merged.refs[0].object_id, merged.files[0].size_bytes)
+            .await?;
+        assert_eq!(
+            manifest.get_chunk_payload(&node.id, &ChunkIndices(vec![0]))?,
+            ChunkPayload::Inline("keep2".into())
+        );
+        assert!(manifest.get_chunk_payload(&node.id, &ChunkIndices(vec![1])).is_err());
+        Ok(())
+    }
+
+    #[tokio_test]
+    async fn moved_tip_rewrites_instead_of_reusing() -> Result<(), Box<dyn Error>> {
+        let (repo, path) = split_repo_with_array().await?;
+        let a = flush_chunk(&repo, &path, 0, "a").await?;
+        commit_chunk(&repo, &path, 1, "tip").await?;
+        let tip_id = repo.lookup_branch("main").await?;
+        let tip = repo.asset_manager().fetch_snapshot(&tip_id).await?;
+        let sources = [load_source(&repo, &a).await?];
+        let node = tip.get_node(&path)?;
+
+        let merged = merge_array_manifests(
+            repo.asset_manager().as_ref(),
+            repo.config(),
+            tip.as_ref(),
+            node.as_ref(),
+            &sources.iter().collect::<Vec<_>>(),
+        )
+        .await?;
+
+        assert_eq!(merged.refs.len(), 1);
+        assert_ne!(
+            merged.refs[0].object_id,
+            array_refs(&sources[0].snapshot, &path)[0].object_id
+        );
+        let manifest = repo
+            .asset_manager()
+            .fetch_manifest(&merged.refs[0].object_id, merged.files[0].size_bytes)
+            .await?;
+        assert_eq!(
+            manifest.get_chunk_payload(&node.id, &ChunkIndices(vec![0]))?,
+            ChunkPayload::Inline("a".into())
+        );
+        assert_eq!(
+            manifest.get_chunk_payload(&node.id, &ChunkIndices(vec![1]))?,
+            ChunkPayload::Inline("tip".into())
         );
         Ok(())
     }
