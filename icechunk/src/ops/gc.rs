@@ -40,6 +40,17 @@ pub enum Action {
     DeleteIfCreatedBefore(DateTime<Utc>),
 }
 
+impl Action {
+    fn deletes(&self, created_at: DateTime<Utc>) -> bool {
+        match self {
+            Action::DeleteIfCreatedBefore(before) => {
+                created_entirely_before(created_at, *before)
+            }
+            Action::Keep => false,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct GCConfig {
     extra_roots: HashSet<SnapshotId>,
@@ -140,39 +151,19 @@ impl GCConfig {
     }
 
     fn must_delete_chunk(&self, chunk: &ListInfo<ChunkId>) -> bool {
-        match self.dangling_chunks {
-            Action::DeleteIfCreatedBefore(before) => {
-                created_entirely_before(chunk.created_at, before)
-            }
-            _ => false,
-        }
+        self.dangling_chunks.deletes(chunk.created_at)
     }
 
     fn must_delete_manifest(&self, manifest: &ListInfo<ManifestId>) -> bool {
-        match self.dangling_manifests {
-            Action::DeleteIfCreatedBefore(before) => {
-                created_entirely_before(manifest.created_at, before)
-            }
-            _ => false,
-        }
+        self.dangling_manifests.deletes(manifest.created_at)
     }
 
     fn must_delete_snapshot(&self, snapshot: &ListInfo<SnapshotId>) -> bool {
-        match self.dangling_snapshots {
-            Action::DeleteIfCreatedBefore(before) => {
-                created_entirely_before(snapshot.created_at, before)
-            }
-            _ => false,
-        }
+        self.dangling_snapshots.deletes(snapshot.created_at)
     }
 
     fn must_delete_transaction_log(&self, tx_log: &ListInfo<SnapshotId>) -> bool {
-        match self.dangling_transaction_logs {
-            Action::DeleteIfCreatedBefore(before) => {
-                created_entirely_before(tx_log.created_at, before)
-            }
-            _ => false,
-        }
+        self.dangling_transaction_logs.deletes(tx_log.created_at)
     }
 }
 
@@ -1380,40 +1371,13 @@ mod tests {
         Utc.timestamp_opt(secs, nanos).unwrap()
     }
 
-    fn config_deleting_before(before: DateTime<Utc>) -> GCConfig {
-        GCConfig::clean_all(
-            before,
-            before,
-            None,
-            NonZeroU16::new(50).unwrap(),
-            NonZeroUsize::new(1024).unwrap(),
-            NonZeroU16::new(500).unwrap(),
-            false,
-        )
-    }
-
-    fn chunk_listed_at(created_at: DateTime<Utc>) -> ListInfo<ChunkId> {
-        ListInfo { id: ChunkId::random(), created_at, size_bytes: 1 }
-    }
-
     /// A store that lists whole seconds floors `created_at`.
     /// The listing then reports a time before the write.
     #[test]
-    fn whole_second_timestamp_survives_a_cutoff_inside_its_second() {
-        let config = config_deleting_before(at(100, 400_000_000));
-        assert!(!config.must_delete_chunk(&chunk_listed_at(at(100, 0))));
-    }
-
-    #[test]
-    fn whole_second_timestamp_is_deleted_once_its_second_has_passed() {
-        let config = config_deleting_before(at(101, 0));
-        assert!(config.must_delete_chunk(&chunk_listed_at(at(100, 0))));
-    }
-
-    #[test]
-    fn sub_second_timestamp_is_compared_exactly() {
-        let config = config_deleting_before(at(100, 400_000_000));
-        assert!(config.must_delete_chunk(&chunk_listed_at(at(100, 399_000_000))));
-        assert!(!config.must_delete_chunk(&chunk_listed_at(at(100, 400_000_000))));
+    fn whole_second_timestamps_are_kept_until_their_second_passes() {
+        assert!(!created_entirely_before(at(100, 0), at(100, 400_000_000)));
+        assert!(created_entirely_before(at(100, 0), at(101, 0)));
+        assert!(created_entirely_before(at(100, 399_000_000), at(100, 400_000_000)));
+        assert!(!created_entirely_before(at(100, 400_000_000), at(100, 400_000_000)));
     }
 }

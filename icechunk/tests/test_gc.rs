@@ -15,7 +15,7 @@ use icechunk::{
         ManifestSplitDim, ManifestSplitDimCondition, ManifestSplittingConfig,
     },
     format::{
-        ByteRange, ChunkIndices, Path, format_constants::SpecVersionBin,
+        ByteRange, ChunkIndices, Path, SnapshotId, format_constants::SpecVersionBin,
         manifest::ChunkPayload, snapshot::ArrayShape,
     },
     new_in_memory_storage,
@@ -23,7 +23,7 @@ use icechunk::{
     refs::Ref,
     repository::VersionInfo,
     session::get_chunk,
-    storage::latency::LatencyStorage,
+    storage::{ListInfo, latency::LatencyStorage},
 };
 use icechunk_macros::tokio_test;
 use pretty_assertions::assert_eq;
@@ -139,12 +139,7 @@ async fn do_test_gc(
 
     // verify doing gc without dangling objects doesn't change the repo
 
-    // GC compares the cutoff against each object's `created_at`, which on a real
-    // store is its second-precision, server-clock `LastModified`. Sleep so the
-    // cutoff clears second-truncation and clock skew (in-memory needs only 1ms;
-    // see `threshold_between_commits`).
-    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-    let now = Utc::now();
+    let now = cutoff_after_all_listed(&repo).await?;
     let gc_config = GCConfig::clean_all(
         now,
         now,
@@ -202,15 +197,12 @@ async fn do_test_gc(
     }
 
     // Create 5 anonymous snapshots (detached, not on any branch). The first two
-    // are expired, the last three kept. Take the cutoff between the groups from
-    // `Utc::now()` after a sleep so it clears the second-truncation + clock skew
-    // of the server-side `created_at` (`LastModified`) that GC deletes by
+    // are expired, the last three kept. The sleep keeps anon[1] and anon[2] in
+    // different listed seconds.
     let mut anon_snaps = vec![];
-    let mut cutoff = None;
     for i in 0..5 {
         if i == 2 {
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-            cutoff = Some(Utc::now());
         }
         let mut session = repo.writable_session("main").await?;
         let bytes = Bytes::copy_from_slice(&(100i8 + i as i8).to_be_bytes());
@@ -222,8 +214,11 @@ async fn do_test_gc(
         anon_snaps.push(snap_id);
     }
 
-    // anon[0..2] were created before the cutoff, anon[2..5] after it.
-    let cutoff = cutoff.expect("cutoff set at i == 2");
+    // One second past anon[1] deletes it whether the store lists whole seconds
+    // or milliseconds, and still precedes anon[2].
+    let listed = listed_snapshots(&repo).await?;
+    let anon1 = listed.iter().find(|s| s.id == anon_snaps[1]).expect("anon[1] is listed");
+    let cutoff = anon1.created_at + TimeDelta::seconds(1);
     let gc_config = GCConfig::clean_all(
         cutoff,
         cutoff,
@@ -264,22 +259,12 @@ async fn test_gc_cutoff_inside_listed_second_in_tigris()
     session.add_group(Path::try_from("/dangling").unwrap(), Bytes::new()).await?;
     let dangling = session.commit("dangling").anonymous().execute().await?;
 
-    let listed: Vec<_> =
-        repo.asset_manager().list_snapshots().await?.try_collect().await?;
-    let created_at = listed
-        .iter()
-        .find(|s| s.id == dangling)
-        .expect("the dangling snapshot is listed")
-        .created_at;
+    let listed = listed_snapshots(&repo).await?;
+    let created_at =
+        listed.iter().find(|s| s.id == dangling).expect("dangling is listed").created_at;
 
-    // The cutoff sits half a granularity after the listed timestamp.
-    // It falls inside the write second, or after the write itself.
-    let whole_seconds = created_at.timestamp_subsec_nanos() == 0;
-    let (cutoff, expected_deleted) = if whole_seconds {
-        (created_at + TimeDelta::milliseconds(500), 0)
-    } else {
-        (created_at + TimeDelta::microseconds(500), 1)
-    };
+    // The cutoff falls inside the listed second, after the write instant.
+    let cutoff = created_at + TimeDelta::milliseconds(500);
 
     let gc_config = GCConfig::clean_all(
         cutoff,
@@ -292,12 +277,26 @@ async fn test_gc_cutoff_inside_listed_second_in_tigris()
     );
     let summary =
         garbage_collect(Arc::clone(repo.asset_manager()), &gc_config, None, 100).await?;
-    assert_eq!(summary.snapshots_deleted, expected_deleted);
-    if whole_seconds {
-        repo.readonly_session(&VersionInfo::SnapshotId(dangling)).await?;
-    }
+    assert_eq!(summary.snapshots_deleted, 0);
+    repo.readonly_session(&VersionInfo::SnapshotId(dangling)).await?;
 
     Ok(())
+}
+
+/// Cutoff past every listed snapshot, from the store clock.
+/// The extra second covers whole-second listings.
+async fn cutoff_after_all_listed(
+    repo: &Repository,
+) -> Result<DateTime<Utc>, Box<dyn std::error::Error>> {
+    let listed = listed_snapshots(repo).await?;
+    let newest = listed.iter().map(|s| s.created_at).max().expect("snapshots listed");
+    Ok(newest + TimeDelta::seconds(1))
+}
+
+async fn listed_snapshots(
+    repo: &Repository,
+) -> Result<Vec<ListInfo<SnapshotId>>, Box<dyn std::error::Error>> {
+    Ok(repo.asset_manager().list_snapshots().await?.try_collect().await?)
 }
 
 async fn branch_commit_messages(repo: &Repository, branch: &str) -> Vec<String> {
@@ -515,7 +514,7 @@ async fn do_test_expire_and_garbage_collect(
         Vec::from(["5", "Repository initialized"])
     );
 
-    let now = Utc::now();
+    let now = cutoff_after_all_listed(&repo).await?;
     let gc_config = GCConfig::clean_all(
         now,
         now,
@@ -885,7 +884,7 @@ async fn commit_group(
     repo: &Repository,
     branch: &str,
     path: &str,
-) -> Result<icechunk::format::SnapshotId, Box<dyn std::error::Error>> {
+) -> Result<SnapshotId, Box<dyn std::error::Error>> {
     let mut session = repo.writable_session(branch).await?;
     let path = if path == "/" { Path::root() } else { Path::try_from(path).unwrap() };
     session.add_group(path, Bytes::new()).await?;
