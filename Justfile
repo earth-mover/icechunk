@@ -699,11 +699,14 @@ coverage-clean:
 # corepack provisions yarn@4.12.0 per packageManager; suppress its download prompt
 export COREPACK_ENABLE_DOWNLOAD_PROMPT := env("COREPACK_ENABLE_DOWNLOAD_PROMPT", "0")
 
+[private]
+[doc("conda-forge nodejs ships corepack without yarn shims")]
+yarn-shim:
+  command -v yarn >/dev/null || corepack enable
+
 [group('js')]
 [doc("Install icechunk-js dependencies with yarn")]
-js-install:
-  # conda-forge nodejs ships corepack without yarn shims
-  command -v yarn >/dev/null || corepack enable
+js-install: yarn-shim
   cd icechunk-js && yarn install
 
 [group('js')]
@@ -731,7 +734,7 @@ js-build-wasi *args: js-install
 [group('js')]
 [script]
 [doc("Run icechunk-js tests under WASI like CI's test-wasi lane (needs js-build-wasi)")]
-js-test-wasi *args:
+js-test-wasi *args: yarn-shim
   cd icechunk-js
   # `yarn config set` writes .yarnrc.yml; restore host setup on exit
   yarn config set supportedArchitectures.cpu "wasm32"

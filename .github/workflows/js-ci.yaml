@@ -5,6 +5,7 @@ env:
   APP_NAME: icechunk
   MACOSX_DEPLOYMENT_TARGET: "10.13"
   CARGO_INCREMENTAL: "1"
+  PIXI_VERSION: "v0.72.0"
 
 on:
   push:
@@ -30,49 +31,69 @@ permissions:
 
 jobs:
   build:
+    name: stable - ${{ matrix.settings.target }} - node@22
+    runs-on: ${{ matrix.settings.host }}
     defaults:
       run:
-        working-directory: ./icechunk-js
+        shell: ${{ matrix.settings.shell || 'bash' }}
     strategy:
       fail-fast: false
       matrix:
         settings:
           - host: windows-latest
-            build: yarn build --target x86_64-pc-windows-msvc
             target: x86_64-pc-windows-msvc
-          - host: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            build: yarn build --target x86_64-unknown-linux-gnu --use-napi-cross
-            setup: |
-              # The napi-cross toolchain ships GCC 4.8 which lacks C11
-              # <stdatomic.h>, breaking aws-lc-sys. Use cmake builder with
-              # system GCC override for that crate only.
-              echo "AWS_LC_SYS_CMAKE_BUILDER=1" >> $GITHUB_ENV
-              echo "AWS_LC_SYS_TARGET_CC=gcc" >> $GITHUB_ENV
-              echo "AWS_LC_SYS_TARGET_CXX=g++" >> $GITHUB_ENV
+            # environment activation doesn't work on windows
+            # https://github.com/prefix-dev/setup-pixi/issues/122#issuecomment-2326495414
+            shell: pixi run -m icechunk-python/pyproject.toml -e js pwsh -Command {0}
           - host: macos-latest
             target: aarch64-apple-darwin
-            build: yarn build --target aarch64-apple-darwin
           - host: ubuntu-latest
             target: wasm32-wasip1-threads
-            build: yarn build --target wasm32-wasip1-threads
-            rust: '1.91.1'
-            setup: |
-              sudo apt-get update
-              sudo apt-get install -y --no-install-recommends clang llvm wasi-libc libc++-dev
-              echo "CC_wasm32_wasip1_threads=clang" >> $GITHUB_ENV
-              echo "CXX_wasm32_wasip1_threads=clang++" >> $GITHUB_ENV
-              echo "AR_wasm32_wasip1_threads=llvm-ar" >> $GITHUB_ENV
-              echo "CC_wasm32_wasi=clang" >> $GITHUB_ENV
-              echo "CXX_wasm32_wasi=clang++" >> $GITHUB_ENV
-              echo "AR_wasm32_wasi=llvm-ar" >> $GITHUB_ENV
-              echo "WASI_SYSROOT=/usr" >> $GITHUB_ENV
-              echo "CFLAGS_wasm32_wasip1_threads=--sysroot=/usr -isystem /usr/include/wasm32-wasi" >> $GITHUB_ENV
-              echo "CXXFLAGS_wasm32_wasip1_threads=--sysroot=/usr -isystem /usr/include/wasm32-wasi" >> $GITHUB_ENV
-              echo "CFLAGS_wasm32_wasi=--sysroot=/usr -isystem /usr/include/wasm32-wasi" >> $GITHUB_ENV
-              echo "CXXFLAGS_wasm32_wasi=--sysroot=/usr -isystem /usr/include/wasm32-wasi" >> $GITHUB_ENV
-    name: stable - ${{ matrix.settings.target }} - node@22
-    runs-on: ${{ matrix.settings.host }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: prefix-dev/setup-pixi@f00437f565399d418b0acc85936d12c1fb668347 # v0.10.1
+        with:
+          pixi-version: ${{ env.PIXI_VERSION }}
+          cache: false
+          activate-environment: ${{ matrix.settings.host != 'windows-latest' }}
+          manifest-path: icechunk-python/pyproject.toml
+          environments: js
+      - name: Cache yarn downloads
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: icechunk-js/.yarn/cache
+          key: yarn-${{ matrix.settings.host }}-${{ hashFiles('icechunk-js/yarn.lock') }}
+      - name: Cache Dependencies
+        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        with:
+          # pixi.lock pins rustc, so a toolchain bump invalidates the cache
+          key: ${{ matrix.settings.target }}-${{ hashFiles('icechunk-python/pixi.lock') }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      # napi builds for the host when no target is given, so the two native
+      # lanes need no target argument at all.
+      - name: Build
+        if: matrix.settings.target != 'wasm32-wasip1-threads'
+        run: just js-build
+      - name: Build wasm
+        if: matrix.settings.target == 'wasm32-wasip1-threads'
+        run: just js-build-wasi
+      - name: Upload artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: bindings-${{ matrix.settings.target }}
+          path: |
+            icechunk-js/${{ env.APP_NAME }}.*.node
+            icechunk-js/${{ env.APP_NAME }}.*.wasm
+          if-no-files-found: error
+
+  build-linux-gnu:
+    name: stable - x86_64-unknown-linux-gnu - node@22
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./icechunk-js
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -83,40 +104,32 @@ jobs:
           node-version: 24
           cache: yarn
           cache-dependency-path: icechunk-js/yarn.lock
-      - name: Install
-        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable # zizmor: ignore[superfluous-actions] installs non-default targets
-        with:
-          toolchain: ${{ matrix.settings.rust || 'stable' }}
-          targets: ${{ matrix.settings.target }}
+      - name: Install rust
+        # the runner image ships an older stable; track the current one
+        run: rustup update stable --no-self-update && rustup default stable
       - name: Cache Dependencies
         uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
         with:
-          key: ${{ matrix.settings.target }}
+          key: x86_64-unknown-linux-gnu
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
-        if: ${{ contains(matrix.settings.target, 'musl') }}
-        with:
-          version: 0.14.1
-      - name: Install cargo-zigbuild
-        uses: taiki-e/install-action@82cd3e7658a6f96c86c0234aeeda1748937cb0a1 # v2
-        if: ${{ contains(matrix.settings.target, 'musl') }}
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        with:
-          tool: cargo-zigbuild
       - name: Setup toolchain
-        run: ${{ matrix.settings.setup }} # zizmor: ignore[template-injection] static workflow-defined matrix value
-        if: ${{ matrix.settings.setup }}
+        # The napi-cross toolchain ships GCC 4.8 which lacks C11
+        # <stdatomic.h>, breaking aws-lc-sys. Use cmake builder with
+        # system GCC override for that crate only.
+        run: |
+          echo "AWS_LC_SYS_CMAKE_BUILDER=1" >> $GITHUB_ENV
+          echo "AWS_LC_SYS_TARGET_CC=gcc" >> $GITHUB_ENV
+          echo "AWS_LC_SYS_TARGET_CXX=g++" >> $GITHUB_ENV
         shell: bash
       - name: Install dependencies
         run: yarn install
       - name: Build
-        run: ${{ matrix.settings.build }} # zizmor: ignore[template-injection] static workflow-defined matrix value
+        run: yarn build --target x86_64-unknown-linux-gnu --use-napi-cross
         shell: bash
       - name: Upload artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: bindings-${{ matrix.settings.target }}
+          name: bindings-x86_64-unknown-linux-gnu
           path: |
             icechunk-js/${{ env.APP_NAME }}.*.node
             icechunk-js/${{ env.APP_NAME }}.*.wasm
@@ -128,17 +141,18 @@ jobs:
       - build
     defaults:
       run:
-        working-directory: ./icechunk-js
+        shell: ${{ matrix.settings.shell || 'bash' }}
     strategy:
       fail-fast: false
       matrix:
         settings:
           - host: windows-latest
             target: x86_64-pc-windows-msvc
-            architecture: x64
+            # environment activation doesn't work on windows
+            # https://github.com/prefix-dev/setup-pixi/issues/122#issuecomment-2326495414
+            shell: pixi run -m icechunk-python/pyproject.toml -e js pwsh -Command {0}
           - host: macos-latest
             target: aarch64-apple-darwin
-            architecture: arm64
         node:
           - "22"
     runs-on: ${{ matrix.settings.host }}
@@ -146,33 +160,33 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Setup node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+      - uses: prefix-dev/setup-pixi@f00437f565399d418b0acc85936d12c1fb668347 # v0.10.1
         with:
-          node-version: ${{ matrix.node }}
-          cache: yarn
-          cache-dependency-path: icechunk-js/yarn.lock
-          architecture: ${{ matrix.settings.architecture }}
-      - name: Install dependencies
-        run: yarn install
+          pixi-version: ${{ env.PIXI_VERSION }}
+          cache: false
+          activate-environment: ${{ matrix.settings.host != 'windows-latest' }}
+          manifest-path: icechunk-python/pyproject.toml
+          environments: js
+      - name: Cache yarn downloads
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: icechunk-js/.yarn/cache
+          key: yarn-${{ matrix.settings.host }}-${{ hashFiles('icechunk-js/yarn.lock') }}
       - name: Download artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: bindings-${{ matrix.settings.target }}
           path: ./icechunk-js
       - name: List packages
-        run: ls -R .
+        run: ls -R icechunk-js
         shell: bash
       - name: Test bindings
-        run: yarn test
+        run: just js-test
 
   test-linux-binding:
     name: Test bindings on ${{ matrix.target }} - node@${{ matrix.node }}
     needs:
-      - build
-    defaults:
-      run:
-        working-directory: ./icechunk-js
+      - build-linux-gnu
     strategy:
       fail-fast: false
       matrix:
@@ -185,59 +199,60 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Setup node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+      - uses: prefix-dev/setup-pixi@f00437f565399d418b0acc85936d12c1fb668347 # v0.10.1
         with:
-          node-version: ${{ matrix.node }}
-          cache: yarn
-          cache-dependency-path: icechunk-js/yarn.lock
-      - name: Install dependencies
-        run: yarn install
+          pixi-version: ${{ env.PIXI_VERSION }}
+          cache: false
+          activate-environment: true
+          manifest-path: icechunk-python/pyproject.toml
+          environments: js
+      - name: Cache yarn downloads
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: icechunk-js/.yarn/cache
+          key: yarn-ubuntu-latest-${{ hashFiles('icechunk-js/yarn.lock') }}
       - name: Download artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: bindings-${{ matrix.target }}
           path: ./icechunk-js
       - name: List packages
-        run: ls -R .
+        run: ls -R icechunk-js
         shell: bash
       - name: Test bindings
-        run: yarn test
+        run: just js-test
 
   test-wasi:
     name: Test WASI target
     needs:
       - build
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: ./icechunk-js
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Setup node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+      - uses: prefix-dev/setup-pixi@f00437f565399d418b0acc85936d12c1fb668347 # v0.10.1
         with:
-          node-version: 24
-          cache: yarn
-          cache-dependency-path: icechunk-js/yarn.lock
-      - name: Install dependencies
-        run: |
-          yarn config set supportedArchitectures.cpu "wasm32"
-          yarn install
+          pixi-version: ${{ env.PIXI_VERSION }}
+          cache: false
+          activate-environment: true
+          manifest-path: icechunk-python/pyproject.toml
+          environments: js
+      - name: Cache yarn downloads
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: icechunk-js/.yarn/cache
+          key: yarn-ubuntu-latest-${{ hashFiles('icechunk-js/yarn.lock') }}
       - name: Download artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: bindings-wasm32-wasip1-threads
           path: ./icechunk-js
       - name: List packages
-        run: ls -R .
+        run: ls -R icechunk-js
         shell: bash
       - name: Test bindings
-        run: yarn test
-        env:
-          NAPI_RS_FORCE_WASI: 1
+        run: just js-test-wasi
 
   publish:
     name: Publish
