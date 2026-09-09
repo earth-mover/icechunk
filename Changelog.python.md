@@ -5,6 +5,7 @@
 ### Fixes
 
 - Update tests to deal with Tigris and other stores listing whole-second timestamps ([#2368](https://github.com/earth-mover/icechunk/pull/2368)).
+- `storage_class`, `metadata_storage_class` and `chunks_storage_class` now apply to the `object_store` backends — `gcs_storage`, `azure_storage` and `s3_object_store_storage`. They were silently ignored there; only `s3_storage`, `tigris_storage` and `r2_storage` honored them. The value is passed to the provider unchanged, so use its own names (`NEARLINE` on GCS, `Cool` on Azure). The local filesystem backend has no storage classes and keeps ignoring the setting ([#904](https://github.com/earth-mover/icechunk/issues/904), [#2364](https://github.com/earth-mover/icechunk/issues/2364)).
 
 ## Python Icechunk Library 2.2.0
 

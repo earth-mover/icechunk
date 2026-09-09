@@ -1548,18 +1548,18 @@ class StorageSettings:
         storage_class: str | None
             Store all objects using this object store storage class.
             If None the object store default will be used.
-            Currently not supported in GCS.
+            The value is passed to the provider as is, so use its own names:
+            for example STANDARD_IA on S3, NEARLINE on GCS, Cool on Azure.
+            Ignored by the local filesystem backend, which has no storage classes.
             Example: STANDARD_IA
             Default: None
 
         metadata_storage_class: str | None
             Store metadata objects using this object store storage class.
-            Currently not supported in GCS.
             Default: None (falls back to `storage_class`)
 
         chunks_storage_class: str | None
             Store chunk objects using this object store storage class.
-            Currently not supported in GCS.
             Default: None (falls back to `storage_class`)
 
         minimum_size_for_multipart_upload: int | None

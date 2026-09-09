@@ -21,8 +21,8 @@ use icechunk::{
     storage::{
         self, ConcurrencySettings, ETag, Generation, RepositoryCreation, S3Storage,
         StorageErrorKind, StorageResult, VersionInfo, VersionedUpdateResult, mk_client,
-        new_http_storage, new_in_memory_storage, new_redirect_storage, new_s3_storage,
-        s3_storage,
+        new_http_storage, new_in_memory_storage, new_redirect_storage,
+        new_s3_object_store_storage, new_s3_storage, s3_storage,
     },
 };
 use icechunk_arrow_object_store::object_store::azure::AzureConfigKey;
@@ -1130,6 +1130,38 @@ async fn test_storage_classes() -> Result<(), Box<dyn std::error::Error>> {
     }
     let prefix = common::get_random_prefix("test_storage_classes");
     let st = common::make_aws_integration_storage(prefix.clone())?;
+    check_storage_classes(st, &prefix).await
+}
+
+/// Same as [`test_storage_classes`] but through the `object_store` backend,
+/// which used to drop the storage class on the floor.
+#[tokio_test]
+async fn test_storage_classes_object_store() -> Result<(), Box<dyn std::error::Error>> {
+    if let Ok(e) = env::var("AWS_BUCKET")
+        && !e.is_empty()
+    {
+    } else {
+        return Ok(());
+    }
+    let prefix = common::get_random_prefix("test_storage_classes_object_store");
+    let st = new_s3_object_store_storage(
+        common::get_aws_integration_options()?,
+        common::get_aws_integration_bucket()?,
+        Some(prefix.clone()),
+        Some(common::get_aws_integration_credentials()?),
+        Vec::new(),
+        Vec::new(),
+    )
+    .await?;
+    check_storage_classes(st, &prefix).await
+}
+
+/// Write two objects as `STANDARD_IA` and one with the default class, then
+/// list the prefix with the AWS SDK and check the classes S3 recorded.
+async fn check_storage_classes(
+    st: Arc<dyn Storage + Send + Sync>,
+    prefix: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
     let client = mk_client(
         &common::get_aws_integration_options()?,
         common::get_aws_integration_credentials()?,
