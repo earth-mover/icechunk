@@ -522,54 +522,55 @@ impl VirtualChunkResolver {
             .capture()?;
         if let Some(fetcher) = &self.http_fetcher
             && let Some(cont) = self.matching_container_by_url(url.as_str())
-                && let ObjectStoreConfig::Http(config) = &cont.store {
-                    match self.credentials.get(&cont.url_prefix) {
-                        Some(None) | Some(Some(Credentials::HttpAccess)) => {},
-                        Some(Some(_)) => return Err(VirtualReferenceError::capture(
-                            VirtualReferenceErrorKind::InvalidCredentials("HTTP".to_string()),
-                        )),
-                        None => return Err(VirtualReferenceError::capture(
-                            VirtualReferenceErrorKind::UnauthorizedVirtualChunkContainer {
-                                url_prefix: cont.url_prefix.clone(), name: cont.name.clone(),
-                            },
-                        )),
-                    }
-                    let expected =
-                        range.end.checked_sub(range.start).ok_or_else(|| {
-                            VirtualReferenceError::capture(
-                                VirtualReferenceErrorKind::OtherError(
-                                    "invalid virtual chunk byte range".into(),
-                                ),
-                            )
-                        })?;
-                    let response =
-                        fetcher.fetch(url.as_str(), range, checksum, config).await?;
-                    let valid = match checksum {
-                        Some(Checksum::ETag(etag)) => {
-                            response.etag.as_deref().is_some_and(|value| {
-                                strip_quotes(value) == strip_quotes(&etag.0)
-                            })
-                        }
-                        Some(Checksum::LastModified(SecondsSinceEpoch(seconds))) => {
-                            response.last_modified.is_some_and(|value| value <= *seconds)
-                        }
-                        None => true,
-                    };
-                    if !valid {
-                        return Err(VirtualReferenceError::capture(
-                            VirtualReferenceErrorKind::ObjectModified(location),
-                        ));
-                    }
-                    if response.data.len() as u64 != expected {
-                        return Err(VirtualReferenceError::capture(
-                            VirtualReferenceErrorKind::InvalidObjectSize {
-                                expected,
-                                available: response.data.len() as u64,
-                            },
-                        ));
-                    }
-                    return Ok(response.data);
+            && let ObjectStoreConfig::Http(config) = &cont.store
+        {
+            match self.credentials.get(&cont.url_prefix) {
+                Some(None) | Some(Some(Credentials::HttpAccess)) => {}
+                Some(Some(_)) => {
+                    return Err(VirtualReferenceError::capture(
+                        VirtualReferenceErrorKind::InvalidCredentials("HTTP".to_string()),
+                    ));
                 }
+                None => {
+                    return Err(VirtualReferenceError::capture(
+                        VirtualReferenceErrorKind::UnauthorizedVirtualChunkContainer {
+                            url_prefix: cont.url_prefix.clone(),
+                            name: cont.name.clone(),
+                        },
+                    ));
+                }
+            }
+            let expected = range.end.checked_sub(range.start).ok_or_else(|| {
+                VirtualReferenceError::capture(VirtualReferenceErrorKind::OtherError(
+                    "invalid virtual chunk byte range".into(),
+                ))
+            })?;
+            let response = fetcher.fetch(url.as_str(), range, checksum, config).await?;
+            let valid = match checksum {
+                Some(Checksum::ETag(etag)) => response
+                    .etag
+                    .as_deref()
+                    .is_some_and(|value| strip_quotes(value) == strip_quotes(&etag.0)),
+                Some(Checksum::LastModified(SecondsSinceEpoch(seconds))) => {
+                    response.last_modified.is_some_and(|value| value <= *seconds)
+                }
+                None => true,
+            };
+            if !valid {
+                return Err(VirtualReferenceError::capture(
+                    VirtualReferenceErrorKind::ObjectModified(location),
+                ));
+            }
+            if response.data.len() as u64 != expected {
+                return Err(VirtualReferenceError::capture(
+                    VirtualReferenceErrorKind::InvalidObjectSize {
+                        expected,
+                        available: response.data.len() as u64,
+                    },
+                ));
+            }
+            return Ok(response.data);
+        }
         let key = resolved_object_key(&location)?;
         let fetcher = self.get_fetcher(&url).await?;
         fetcher.fetch_chunk(&url, &key, range, checksum).await
