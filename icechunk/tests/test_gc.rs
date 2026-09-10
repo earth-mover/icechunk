@@ -823,8 +823,8 @@ async fn test_gc_retains_snapshot_between_flushed_and_created_at()
     let b = commit_group(&repo, "feat", "/b").await?;
     let c = commit_group(&repo, "feat", "/c").await?;
 
-    // Expire /b (both branch tips are protected): /c is re-parented to the
-    // root, harvesting pruned_ancestor_tx_logs = [a, b].
+    // Expire /b. Expiration keeps both branch tips. It re-parents /c to
+    // the root, so /c gets pruned_ancestor_tx_logs = [a, b].
     let result = expire(
         Arc::clone(&am),
         Utc::now() + chrono::Duration::days(1),
@@ -876,6 +876,130 @@ async fn test_gc_retains_snapshot_between_flushed_and_created_at()
     let kept = repo_info.find_snapshot(&c)?;
     assert_eq!(kept.pruned_ancestor_tx_logs, vec![a.clone(), b.clone()]);
     am.fetch_transaction_log(&b).await?;
+    Ok(())
+}
+
+/// A snapshot that `expire` releases from the repo info keeps its file on
+/// disk: expire never deletes files. The release destroys the snapshot's
+/// `pruned_ancestor_tx_logs`, which live only on the repo info. GC then
+/// deletes the tx logs those refs protected. The `created_at` gate can
+/// still keep the released snapshot's own file. That stranded file is
+/// unreachable, and a later GC removes it.
+#[tokio_test]
+async fn test_gc_deletes_pruned_tx_logs_of_expire_released_snapshot()
+-> Result<(), Box<dyn std::error::Error>> {
+    let inner: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+    // Write latency separates the `created_at` of consecutive writes. The
+    // cutoff can then land between /b's tx log and /c's files.
+    let storage: Arc<dyn Storage + Send + Sync> =
+        Arc::new(LatencyStorage::new(inner, 20, 0));
+    let repo = Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
+        .await?;
+    let am = Arc::clone(repo.asset_manager());
+
+    let a = commit_group(&repo, "main", "/a").await?;
+    repo.create_branch("feat", &a).await?;
+    let b = commit_group(&repo, "feat", "/b").await?;
+    let c = commit_group(&repo, "feat", "/c").await?;
+
+    // Expire /b. Expiration keeps both branch tips. It re-parents /c to
+    // the root, so /c gets pruned_ancestor_tx_logs = [a, b].
+    let result = expire(
+        Arc::clone(&am),
+        Utc::now() + chrono::Duration::days(1),
+        ExpiredRefAction::Ignore,
+        ExpiredRefAction::Ignore,
+        None,
+        100,
+    )
+    .await?;
+    assert_eq!(result.released_snapshots.len(), 1);
+    assert!(result.edited_snapshots.contains(&c));
+    let (repo_info, _) = am.fetch_repo_info().await?;
+    assert_eq!(
+        repo_info.find_snapshot(&c)?.pruned_ancestor_tx_logs,
+        vec![a.clone(), b.clone()]
+    );
+
+    // Drop the feat ref and expire again. The expiration releases /c from
+    // the repo info and destroys its pruned refs. The file of /c stays on
+    // disk.
+    repo.delete_branch("feat").await?;
+    let result = expire(
+        Arc::clone(&am),
+        Utc::now() + chrono::Duration::days(1),
+        ExpiredRefAction::Ignore,
+        ExpiredRefAction::Ignore,
+        None,
+        100,
+    )
+    .await?;
+    assert!(result.released_snapshots.contains(&c));
+
+    // Set the cutoff just below the `created_at` of /c's files. The delete
+    // window then contains /b's tx log but not /c's files.
+    let c_snapshot_created_at = am
+        .list_snapshots()
+        .await?
+        .try_collect::<Vec<_>>()
+        .await?
+        .into_iter()
+        .find(|s| s.id == c)
+        .expect("snapshot /c not listed")
+        .created_at;
+    let c_tx_created_at = am
+        .list_transaction_logs()
+        .await?
+        .try_collect::<Vec<_>>()
+        .await?
+        .into_iter()
+        .find(|t| t.id == c)
+        .expect("tx log /c not listed")
+        .created_at;
+    let cutoff = c_snapshot_created_at.min(c_tx_created_at);
+    let gc_config = GCConfig::clean_all(
+        cutoff,
+        cutoff,
+        None,
+        NonZeroU16::new(50).unwrap(),
+        NonZeroUsize::new(512 * 1024 * 1024).unwrap(),
+        NonZeroU16::new(500).unwrap(),
+        false,
+    );
+    let summary = garbage_collect(Arc::clone(&am), &gc_config, None, 100).await?;
+
+    // GC deletes only /b's files. /a survives as the tip of main. /c's
+    // files are too new for the gate. Nothing protects /b's tx log.
+    assert_eq!(summary.snapshots_deleted, 1);
+    assert_eq!(summary.transaction_logs_deleted, 1);
+    assert!(am.fetch_transaction_log(&b).await.is_err());
+    am.fetch_transaction_log(&a).await?;
+
+    // The snapshot file of /c stays on disk. The repo info no longer
+    // contains /c.
+    let on_disk: Vec<_> = am.list_snapshots().await?.try_collect().await?;
+    assert!(on_disk.iter().any(|s| s.id == c));
+    let (repo_info, _) = am.fetch_repo_info().await?;
+    assert!(repo_info.find_snapshot(&c).is_err());
+
+    // A follow-up GC whose cutoff passes /c's files removes the stranded
+    // snapshot file and its tx log.
+    let now = Utc::now();
+    let gc_config = GCConfig::clean_all(
+        now,
+        now,
+        None,
+        NonZeroU16::new(50).unwrap(),
+        NonZeroUsize::new(512 * 1024 * 1024).unwrap(),
+        NonZeroU16::new(500).unwrap(),
+        false,
+    );
+    let summary = garbage_collect(Arc::clone(&am), &gc_config, None, 100).await?;
+    assert_eq!(summary.snapshots_deleted, 1);
+    assert_eq!(summary.transaction_logs_deleted, 1);
+    let on_disk: Vec<_> = am.list_snapshots().await?.try_collect().await?;
+    assert!(!on_disk.iter().any(|s| s.id == c));
+    assert!(am.fetch_transaction_log(&c).await.is_err());
     Ok(())
 }
 
