@@ -241,9 +241,14 @@ class Model:
         self.branch_heads: dict[str, str] = {}
         self.deleted_tags: set[str] = set()
 
-        # Mirror of each snapshot's `pruned_ancestor_tx_logs` repo field
-        # Keyed by snapshot id
+        # Mirror of each snapshot's `pruned_ancestor_tx_logs` repo field.
+        # Keyed by snapshot id. The field lives only on the repo info, so
+        # entries exist only for snapshots in `commits`.
         self.pruned_ancestor_tx_logs: dict[str, list[str]] = {}
+
+        # Transaction-log files on disk. The set is exact once the repo is
+        # at spec v2. The upgrade seeds it from storage for migrated repos.
+        self.ondisk_tx_logs: set[str] = set()
 
         self.ops_log: list[UpdateModel] = []
         self.migrated: bool = False
@@ -256,6 +261,9 @@ class Model:
         self.initial_snapshot_id = HEAD
         self.commits[HEAD] = CommitModel.from_snapshot_and_store(snap, {})
         self.ondisk_snaps[HEAD] = self.commits[HEAD]
+        # V2 writes an empty transaction log for the initial snapshot.
+        # V1 does not.
+        self.ondisk_tx_logs = {HEAD} if self.spec_version >= 2 else set()
         self.HEAD = HEAD
         self.create_branch(DEFAULT_BRANCH, HEAD)
         self.checkout_branch(DEFAULT_BRANCH)
@@ -291,7 +299,7 @@ class Model:
             del self.store[key]
             self.changes_made = True
 
-    def upgrade(self, dry_run: bool) -> None:
+    def upgrade(self, dry_run: bool, ondisk_tx_logs: set[str]) -> None:
         if not dry_run:
             # only reachable snapshots are migrated over
             self.commits = {
@@ -302,6 +310,9 @@ class Model:
             self.ops_log = [RepoMigratedUpdateModel(self.spec_version, 2)]
             self.migrated = True
             self.spec_version = 2
+            # The model does not track V1-era files exactly. Seed the
+            # tx-log mirror from what the upgrade left on disk.
+            self.ondisk_tx_logs = ondisk_tx_logs
 
     @property
     def has_commits(self) -> bool:
@@ -318,6 +329,7 @@ class Model:
             snap, copy.deepcopy(self.store)
         )
         self.ondisk_snaps[ref] = self.commits[ref]
+        self.ondisk_tx_logs.add(ref)
         self.changes_made = False
         self.HEAD = ref
 
@@ -501,6 +513,12 @@ class Model:
                     harvested.append(x)
                 self.pruned_ancestor_tx_logs[cid] = harvested
 
+            # A released snapshot leaves the repo info. Only the repo info
+            # stores pruned_ancestor_tx_logs, so the release destroys the
+            # released snapshot's refs.
+            for id in expired_snaps:
+                self.pruned_ancestor_tx_logs.pop(id, None)
+
         # we reparent to the initial snapshot for simplicity. This should be good enough to make
         # self.reachable_snapshots() accurate.
         for cid, c in self.commits.items():
@@ -554,14 +572,15 @@ class Model:
         self,
         older_than: datetime.datetime,
         created_at_by_id: dict[str, datetime.datetime],
+        tx_created_at_by_id: dict[str, datetime.datetime],
     ) -> set[str]:
         """Predict which snapshots Rust GC will delete.
 
         Uses storage-level created_at (not written_at/flushed_at) to match
         Rust's gc_snapshots. The store can floor a created_at to a whole
         second. Rust then deletes it only after that whole second passes.
-        The created_at_by_id dict must be captured *before* calling
-        Rust GC, since GC deletes the files from storage.
+        Both created_at dicts must be captured *before* calling Rust GC,
+        since GC deletes the files from storage.
         """
         reachable_snaps = self.reachable_snapshots()
 
@@ -625,6 +644,21 @@ class Model:
             }:
                 for k in orphaned:
                     self.commits.pop(k, None)
+
+        if self.spec_version >= 2:
+            # GC keeps the tx log of each repo-info snapshot. GC also keeps
+            # each tx log that a repo-info snapshot references in
+            # pruned_ancestor_tx_logs. The storage created_at gate decides
+            # every other tx log, as it does for snapshot files.
+            keep_tx_logs = set(self.commits)
+            for refs in self.pruned_ancestor_tx_logs.values():
+                keep_tx_logs.update(refs)
+            self.ondisk_tx_logs = {
+                t
+                for t in self.ondisk_tx_logs
+                if t in keep_tx_logs
+                or not created_entirely_before(tx_created_at_by_id[t])
+            }
         note(f"Deleted snapshots in model: {deleted!r}")
         self.ops_log.append(GCRanUpdateModel())
         return deleted
@@ -651,7 +685,11 @@ class Model:
         self.commits = {k: v for k, v in self.commits.items() if k in on_disk}
         self.ondisk_snaps = {k: v for k, v in self.ondisk_snaps.items() if k in on_disk}
         self.pruned_ancestor_tx_logs = {
-            k: v for k, v in self.pruned_ancestor_tx_logs.items() if k in on_disk
+            k: v for k, v in self.pruned_ancestor_tx_logs.items() if k in self.commits
+        }
+        self.ondisk_tx_logs = {
+            obj.key.removeprefix("transactions/")
+            for obj in storage.list_objects_metadata(prefix="transactions")
         }
 
         # Reparent commits whose parent was deleted
@@ -834,7 +872,12 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         self.session = self.repo.writable_session(branch)
         self.model.checkout_branch(branch)
 
-        self.model.upgrade(dry_run)
+        assert self.storage is not None
+        tx_logs_on_disk = {
+            obj.key.removeprefix("transactions/")
+            for obj in self.storage.list_objects_metadata(prefix="transactions")
+        }
+        self.model.upgrade(dry_run, ondisk_tx_logs=tx_logs_on_disk)
         if not dry_run:
             assert self.repo.spec_version == 2
 
@@ -1180,18 +1223,31 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         assert self.storage is not None
         older_than = draw_older_than(data, self.storage)
         note(f"running garbage_collect for {older_than=!r}")
-        # Snapshot created_at before Rust GC deletes files from storage
+        # Capture snapshot and tx-log created_at before Rust GC deletes files
         created_at_by_id = {
             obj.key.removeprefix("snapshots/"): obj.created_at
             for obj in self.storage.list_objects_metadata(prefix="snapshots")
         }
+        tx_created_at_by_id = {
+            obj.key.removeprefix("transactions/"): obj.created_at
+            for obj in self.storage.list_objects_metadata(prefix="transactions")
+        }
         summary = self.repo.garbage_collect(older_than)
         note(f"actual GC result {summary=!r}")
-        expected = self.model.garbage_collect(older_than, created_at_by_id)
+        tx_logs_before = set(self.model.ondisk_tx_logs)
+        expected = self.model.garbage_collect(
+            older_than, created_at_by_id, tx_created_at_by_id
+        )
         assert summary.snapshots_deleted == len(expected), (
             summary.snapshots_deleted,
             expected,
         )
+        if self.model.spec_version >= 2:
+            expected_deleted_tx_logs = tx_logs_before - self.model.ondisk_tx_logs
+            assert summary.transaction_logs_deleted == len(expected_deleted_tx_logs), (
+                summary.transaction_logs_deleted,
+                expected_deleted_tx_logs,
+            )
 
         event(f"snapshots garbage collected: {len(expected)}")
 
@@ -1317,22 +1373,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
             if p.startswith("transactions/")
         }
 
-        # A tx log whose own snapshot file is gone must be a retained pruned
-        # ancestor. Only repo info snapshots keep one alive, and the mirror below
-        # also covers snapshots dropped from it, whose logs GC has already
-        # deleted.
-        orphan_txs = transactions - snapshots
         if self.model.spec_version >= 2:
-            explainable = {
-                tx
-                for sid in snapshots
-                for tx in self.model.pruned_ancestor_tx_logs.get(sid, ())
-            }
-            assert orphan_txs <= explainable, (
-                f"tx logs without a snapshot that no snapshot retains as a pruned "
-                f"ancestor: {orphan_txs - explainable}"
-            )
-
             # GC must never delete a tx log still referenced by a snapshot that
             # is still in the repo info. `inspect_transaction_log` surfaces, per
             # such snapshot, any referenced pruned logs that are wrongly absent.
@@ -1341,10 +1382,11 @@ class VersionControlStateMachine(RuleBasedStateMachine):
                 try:
                     tx_log = self.repo.inspect_transaction_log(sid)
                 except IcechunkError:
-                    # A snapshot with no own tx log (e.g. the initial commit of
-                    # a pre-upgrade V1 repo) carries no pruned logs.
-                    assert self.model.initial_spec_version == 1
-                    assert self.model.migrated
+                    # The initial commit of a pre-upgrade V1 repo has no tx
+                    # log. An expire-released snapshot file can also outlive
+                    # its tx log: GC gates the two files independently on
+                    # created_at.
+                    assert sid not in self.model.ondisk_tx_logs
                     continue
                 composite = tx_log.get("synthetic_composite")
                 if composite is not None:
@@ -1352,27 +1394,28 @@ class VersionControlStateMachine(RuleBasedStateMachine):
             assert not missing_pruned, (
                 f"pruned-ancestor tx logs referenced by surviving snapshots are missing: {missing_pruned}"
             )
+
+            # Expire destroys a released snapshot's pruned refs: the field
+            # lives only on the repo info. The first GC whose cutoff passes
+            # the protected tx logs then deletes them, and also deletes a
+            # stranded file's own log. The snapshot file itself can outlive
+            # its logs. The model mirrors every deletion in ondisk_tx_logs.
+            assert transactions == self.model.ondisk_tx_logs, (
+                f"unexpected tx logs on disk: {transactions - self.model.ondisk_tx_logs}, "
+                f"tx logs missing from disk: {self.model.ondisk_tx_logs - transactions}"
+            )
         else:
-            # No pruned-ancestor retention before spec V2: every tx log must
-            # have its snapshot.
-            assert not orphan_txs, f"tx logs without a snapshot: {orphan_txs}"
-
-        # The invariants below pair each tx log with the snapshot it is named
-        # after, so drop the pruned-ancestor logs that outlived their snapshot.
-        transactions_core = transactions & snapshots
-
-        if self.model.initial_spec_version == 1:
+            # V1 has no pruned refs. A tx log never outlives its snapshot file.
+            assert transactions <= snapshots
             expired = any(
                 isinstance(op, ExpirationRanUpdateModel) for op in self.model.ops_log
             )
             if expired:
                 # V1 expire rewrites snapshot files without creating matching
                 # transaction logs, so we can only assert the weaker invariant.
-                assert transactions_core <= snapshots - {INITIAL_SNAPSHOT}
+                assert transactions <= snapshots - {INITIAL_SNAPSHOT}
             else:
-                assert snapshots - {INITIAL_SNAPSHOT} == transactions_core
-        else:
-            assert snapshots == transactions_core
+                assert snapshots - {INITIAL_SNAPSHOT} == transactions
 
         if self.model.spec_version >= 2:
             ops = list(self.repo.ops_log())
