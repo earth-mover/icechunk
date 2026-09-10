@@ -57,7 +57,15 @@ jobs:
           # https://github.com/prefix-dev/setup-pixi/issues/122#issuecomment-2326495414
           # activate-environment: true
 
+      - name: Unshadow the MSVC linker
+        # Git bash puts a GNU `link` ahead of MSVC's link.exe on PATH, and rustc
+        # picks the wrong one.
+        shell: bash
+        run: rm -f /usr/bin/link.exe
+
       - name: Run tests
-        shell: pixi run -m icechunk-python/pyproject.toml pwsh -Command {0}
+        # `pwsh -Command {0}` runs nothing and still exits 0. bash also gives
+        # just the `sh` it needs for recipes.
+        shell: pixi run -m icechunk-python/pyproject.toml bash -e {0}
         run: |
           just profile=ci unit-test

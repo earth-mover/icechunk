@@ -172,12 +172,18 @@ build-release *args:
 
 # WASI toolchain for wasm-build / js-build-wasi; inert for other targets.
 # wasi-sdk sysroots have a per-target include dir; Debian's wasi-libc doesn't.
+# conda's linux-64 CFLAGS carry -march=nocona. clang rejects that option for wasm.
+# cc-rs applies CFLAGS alongside the suffixed variables. Both wasm recipes clear CFLAGS.
+# Without a wasi sysroot, as in the pixi js env, clang still searches /usr/include.
+# The host glibc headers then fail the wasm compile.
+# -nostdlibinc drops the system include paths and keeps clang's builtin ones.
+# Those headers plus zstd's own wasm-shim cover the build.
 export WASI_SYSROOT := env("WASI_SYSROOT", "/usr")
 export CC_wasm32_wasip1_threads := env("CC_wasm32_wasip1_threads", "clang")
 export CXX_wasm32_wasip1_threads := env("CXX_wasm32_wasip1_threads", "clang++")
 export AR_wasm32_wasip1_threads := env("AR_wasm32_wasip1_threads", "llvm-ar")
-wasi_include := if path_exists(WASI_SYSROOT / "include/wasm32-wasip1-threads") == "true" { WASI_SYSROOT / "include/wasm32-wasip1-threads" } else { WASI_SYSROOT / "include/wasm32-wasi" }
-export CFLAGS_wasm32_wasip1_threads := "--sysroot=" + WASI_SYSROOT + " -isystem " + wasi_include
+wasi_include := if path_exists(WASI_SYSROOT / "include/wasm32-wasip1-threads") == "true" { WASI_SYSROOT / "include/wasm32-wasip1-threads" } else if path_exists(WASI_SYSROOT / "include/wasm32-wasi") == "true" { WASI_SYSROOT / "include/wasm32-wasi" } else { "" }
+export CFLAGS_wasm32_wasip1_threads := if wasi_include == "" { "-nostdlibinc" } else { "--sysroot=" + WASI_SYSROOT + " -isystem " + wasi_include }
 export CXXFLAGS_wasm32_wasip1_threads := CFLAGS_wasm32_wasip1_threads
 
 [group('build')]
@@ -186,6 +192,7 @@ export CXXFLAGS_wasm32_wasip1_threads := CFLAGS_wasm32_wasip1_threads
 wasm-build:
   # compile smoke test: don't fail on existing warnings in no-default-features wasm cfgs
   export RUSTFLAGS=""
+  export CFLAGS="" CXXFLAGS=""
   cargo build -p icechunk --no-default-features --target wasm32-wasip1-threads
 
 [group('test')]
@@ -562,7 +569,7 @@ python-upstream-setup:
   uv pip install "$WHEEL" --group dev \
     --resolution highest \
     --index-strategy unsafe-best-match 2>&1 | tee setup-output.log
-  uv pip install "hypothesis @ git+https://github.com/ianhi/hypothesis.git@flaky-feedback#subdirectory=hypothesis-python"
+  uv pip install hypothesis
   uv pip list
 
 [private]
@@ -726,12 +733,17 @@ js-test *args: js-install
 [doc("Build icechunk-js for wasm32-wasip1-threads (same WASI toolchain env as wasm-build)")]
 js-build-wasi *args: js-install
   cd icechunk-js
+  export CFLAGS="" CXXFLAGS=""
+  # napi-build 2.3.x derives the wasi sysroot from the RUSTC path. cargo passes a bare name.
+  # napi-build then drops crt1-reactor.o. The module loses the _initialize export.
+  # A module without _initialize hangs on require().
+  export RUSTC="$(command -v rustc)"
   yarn build --target wasm32-wasip1-threads "$@"
 
 [group('js')]
 [script]
 [doc("Run icechunk-js tests under WASI like CI's test-wasi lane (needs js-build-wasi)")]
-js-test-wasi *args:
+js-test-wasi *args: js-install
   cd icechunk-js
   # `yarn config set` writes .yarnrc.yml; restore host setup on exit
   yarn config set supportedArchitectures.cpu "wasm32"
