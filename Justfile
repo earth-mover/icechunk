@@ -172,6 +172,8 @@ build-release *args:
 
 # WASI toolchain for wasm-build / js-build-wasi; inert for other targets.
 # wasi-sdk sysroots have a per-target include dir; Debian's wasi-libc doesn't.
+# conda's linux-64 CFLAGS carry -march=nocona. clang rejects that option for wasm.
+# cc-rs applies CFLAGS alongside the suffixed variables. Both wasm recipes clear CFLAGS.
 export WASI_SYSROOT := env("WASI_SYSROOT", "/usr")
 export CC_wasm32_wasip1_threads := env("CC_wasm32_wasip1_threads", "clang")
 export CXX_wasm32_wasip1_threads := env("CXX_wasm32_wasip1_threads", "clang++")
@@ -186,8 +188,6 @@ export CXXFLAGS_wasm32_wasip1_threads := CFLAGS_wasm32_wasip1_threads
 wasm-build:
   # compile smoke test: don't fail on existing warnings in no-default-features wasm cfgs
   export RUSTFLAGS=""
-  # conda's linux-64 CFLAGS carry -march=nocona, which clang rejects for wasm;
-  # cc-rs applies them alongside the target-suffixed ones
   export CFLAGS="" CXXFLAGS=""
   cargo build -p icechunk --no-default-features --target wasm32-wasip1-threads
 
@@ -702,14 +702,11 @@ coverage-clean:
 # corepack provisions yarn@4.12.0 per packageManager; suppress its download prompt
 export COREPACK_ENABLE_DOWNLOAD_PROMPT := env("COREPACK_ENABLE_DOWNLOAD_PROMPT", "0")
 
-[private]
-[doc("conda-forge nodejs ships corepack without yarn shims")]
-yarn-shim:
-  command -v yarn >/dev/null || corepack enable
-
 [group('js')]
 [doc("Install icechunk-js dependencies with yarn")]
-js-install: yarn-shim
+js-install:
+  # conda-forge nodejs ships corepack without yarn shims
+  command -v yarn >/dev/null || corepack enable
   cd icechunk-js && yarn install
 
 [group('js')]
@@ -732,15 +729,13 @@ js-test *args: js-install
 [doc("Build icechunk-js for wasm32-wasip1-threads (same WASI toolchain env as wasm-build)")]
 js-build-wasi *args: js-install
   cd icechunk-js
-  # conda's linux-64 CFLAGS carry -march=nocona, which clang rejects for wasm;
-  # cc-rs applies them alongside the target-suffixed ones
   export CFLAGS="" CXXFLAGS=""
   yarn build --target wasm32-wasip1-threads "$@"
 
 [group('js')]
 [script]
 [doc("Run icechunk-js tests under WASI like CI's test-wasi lane (needs js-build-wasi)")]
-js-test-wasi *args: yarn-shim
+js-test-wasi *args: js-install
   cd icechunk-js
   # `yarn config set` writes .yarnrc.yml; restore host setup on exit
   yarn config set supportedArchitectures.cpu "wasm32"
