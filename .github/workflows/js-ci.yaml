@@ -67,6 +67,11 @@ jobs:
           # pixi.lock pins rustc, so a toolchain bump invalidates the cache
           key: ${{ matrix.settings.target }}-${{ hashFiles('icechunk-python/pixi.lock') }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Unshadow the MSVC linker
+        # Git bash puts a GNU `link` ahead of MSVC's link.exe on PATH, and rustc
+        # picks the wrong one.
+        if: runner.os == 'Windows'
+        run: rm -f /usr/bin/link.exe
       # napi builds for the host when no target is given, so the two native
       # lanes need no target argument at all.
       - name: Build
