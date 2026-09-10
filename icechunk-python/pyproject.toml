@@ -247,8 +247,10 @@ cargo-llvm-cov = ">=0.9.0,<0.10"
 nodejs = ">=22.23.2,<23"
 semver = ">=3.0.4,<4"
 
-# WASI toolchain for the icechunk-js wasm32-wasip1-threads target: the rust std
-# for it, plus the clang/llvm-ar the Justfile points CC/CXX/AR at.
+# WASI toolchain for `just wasm-build`, a compile check only: the rust std for
+# wasm32-wasip1-threads, plus the clang/llvm-ar the Justfile points CC/CXX/AR at.
+# A module linked against this conda std hangs on require(), so js-ci builds the
+# shipped wasm with rustup instead. Do not trust `just js-build-wasi` output here.
 [tool.pixi.feature.js.dependencies]
 rust-std-wasm32-wasip1-threads = "~=1.98.1"
 clang = ">=19.1.7"
@@ -285,8 +287,10 @@ msrv = { features = [
   "build",
   "msrv"
 ]}
+# the js lanes build no python; the default feature would pull the project's
+# pypi dependencies, which have no free-threaded wheels on windows
 js = { features = [
   "build",
   "rustc",
   "js"
-]}
+], no-default-feature = true }

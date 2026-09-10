@@ -186,6 +186,9 @@ export CXXFLAGS_wasm32_wasip1_threads := CFLAGS_wasm32_wasip1_threads
 wasm-build:
   # compile smoke test: don't fail on existing warnings in no-default-features wasm cfgs
   export RUSTFLAGS=""
+  # conda's linux-64 CFLAGS carry -march=nocona, which clang rejects for wasm;
+  # cc-rs applies them alongside the target-suffixed ones
+  export CFLAGS="" CXXFLAGS=""
   cargo build -p icechunk --no-default-features --target wasm32-wasip1-threads
 
 [group('test')]
@@ -729,6 +732,9 @@ js-test *args: js-install
 [doc("Build icechunk-js for wasm32-wasip1-threads (same WASI toolchain env as wasm-build)")]
 js-build-wasi *args: js-install
   cd icechunk-js
+  # conda's linux-64 CFLAGS carry -march=nocona, which clang rejects for wasm;
+  # cc-rs applies them alongside the target-suffixed ones
+  export CFLAGS="" CXXFLAGS=""
   yarn build --target wasm32-wasip1-threads "$@"
 
 [group('js')]
