@@ -247,10 +247,7 @@ cargo-llvm-cov = ">=0.9.0,<0.10"
 nodejs = ">=22.23.2,<23"
 semver = ">=3.0.4,<4"
 
-# This feature holds the WASI toolchain for `just wasm-build`, a compile check.
-# A module linked against this conda std hangs on require().
-# js-ci builds the shipped wasm with rustup instead.
-# Do not trust `just js-build-wasi` output here.
+# This feature holds the WASI toolchain for the wasm32-wasip1-threads target.
 [tool.pixi.feature.js.dependencies]
 rust-std-wasm32-wasip1-threads = "~=1.98.1"
 clang = ">=19.1.7"

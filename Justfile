@@ -730,6 +730,10 @@ js-test *args: js-install
 js-build-wasi *args: js-install
   cd icechunk-js
   export CFLAGS="" CXXFLAGS=""
+  # napi-build 2.3.x derives the wasi sysroot from the RUSTC path. cargo passes a bare name.
+  # napi-build then drops crt1-reactor.o. The module loses the _initialize export.
+  # A module without _initialize hangs on require().
+  export RUSTC="$(command -v rustc)"
   yarn build --target wasm32-wasip1-threads "$@"
 
 [group('js')]
