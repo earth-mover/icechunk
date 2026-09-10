@@ -42,9 +42,10 @@ jobs:
         settings:
           - host: windows-latest
             target: x86_64-pc-windows-msvc
-            # environment activation doesn't work on windows
-            # https://github.com/prefix-dev/setup-pixi/issues/122#issuecomment-2326495414
-            shell: pixi run -m icechunk-python/pyproject.toml -e js pwsh -Command {0}
+            # setup-pixi cannot activate an environment on windows, so the shell
+            # wraps every command. `pwsh -Command {0}` silently runs nothing, so
+            # this uses the Git bash that the runner image ships.
+            shell: pixi run -m icechunk-python/pyproject.toml -e js bash -e {0}
           - host: macos-latest
             target: aarch64-apple-darwin
           - host: ubuntu-latest
@@ -143,9 +144,10 @@ jobs:
         settings:
           - host: windows-latest
             target: x86_64-pc-windows-msvc
-            # environment activation doesn't work on windows
-            # https://github.com/prefix-dev/setup-pixi/issues/122#issuecomment-2326495414
-            shell: pixi run -m icechunk-python/pyproject.toml -e js pwsh -Command {0}
+            # setup-pixi cannot activate an environment on windows, so the shell
+            # wraps every command. `pwsh -Command {0}` silently runs nothing, so
+            # this uses the Git bash that the runner image ships.
+            shell: pixi run -m icechunk-python/pyproject.toml -e js bash -e {0}
           - host: macos-latest
             target: aarch64-apple-darwin
     runs-on: ${{ matrix.settings.host }}
