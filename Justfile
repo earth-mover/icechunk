@@ -174,12 +174,16 @@ build-release *args:
 # wasi-sdk sysroots have a per-target include dir; Debian's wasi-libc doesn't.
 # conda's linux-64 CFLAGS carry -march=nocona. clang rejects that option for wasm.
 # cc-rs applies CFLAGS alongside the suffixed variables. Both wasm recipes clear CFLAGS.
+# Without a wasi sysroot, as in the pixi js env, clang still searches /usr/include.
+# The host glibc headers then fail the wasm compile.
+# -nostdlibinc drops the system include paths and keeps clang's builtin ones.
+# Those headers plus zstd's own wasm-shim cover the build.
 export WASI_SYSROOT := env("WASI_SYSROOT", "/usr")
 export CC_wasm32_wasip1_threads := env("CC_wasm32_wasip1_threads", "clang")
 export CXX_wasm32_wasip1_threads := env("CXX_wasm32_wasip1_threads", "clang++")
 export AR_wasm32_wasip1_threads := env("AR_wasm32_wasip1_threads", "llvm-ar")
-wasi_include := if path_exists(WASI_SYSROOT / "include/wasm32-wasip1-threads") == "true" { WASI_SYSROOT / "include/wasm32-wasip1-threads" } else { WASI_SYSROOT / "include/wasm32-wasi" }
-export CFLAGS_wasm32_wasip1_threads := "--sysroot=" + WASI_SYSROOT + " -isystem " + wasi_include
+wasi_include := if path_exists(WASI_SYSROOT / "include/wasm32-wasip1-threads") == "true" { WASI_SYSROOT / "include/wasm32-wasip1-threads" } else if path_exists(WASI_SYSROOT / "include/wasm32-wasi") == "true" { WASI_SYSROOT / "include/wasm32-wasi" } else { "" }
+export CFLAGS_wasm32_wasip1_threads := if wasi_include == "" { "-nostdlibinc" } else { "--sysroot=" + WASI_SYSROOT + " -isystem " + wasi_include }
 export CXXFLAGS_wasm32_wasip1_threads := CFLAGS_wasm32_wasip1_threads
 
 [group('build')]
