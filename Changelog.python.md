@@ -2,6 +2,10 @@
 
 ## Python Icechunk Library [unreleased]
 
+### Fixes
+
+- Update tests to deal with Tigris and other stores listing whole-second timestamps ([#2368](https://github.com/earth-mover/icechunk/pull/2368)).
+
 ## Python Icechunk Library 2.2.0
 
 ### Features

@@ -8,7 +8,7 @@ use std::{
 };
 
 use backon::{BackoffBuilder as _, ExponentialBuilder, Retryable as _};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, TimeDelta, Utc};
 use futures::{Stream, StreamExt as _, TryStream, TryStreamExt as _, stream};
 use itertools::Itertools as _;
 use tokio::task::{self};
@@ -38,6 +38,17 @@ use icechunk_types::{ICResultExt as _, error::ICResultCtxExt as _};
 pub enum Action {
     Keep,
     DeleteIfCreatedBefore(DateTime<Utc>),
+}
+
+impl Action {
+    fn deletes(&self, created_at: DateTime<Utc>) -> bool {
+        match self {
+            Action::DeleteIfCreatedBefore(before) => {
+                created_entirely_before(created_at, *before)
+            }
+            Action::Keep => false,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -140,31 +151,33 @@ impl GCConfig {
     }
 
     fn must_delete_chunk(&self, chunk: &ListInfo<ChunkId>) -> bool {
-        match self.dangling_chunks {
-            Action::DeleteIfCreatedBefore(before) => chunk.created_at < before,
-            _ => false,
-        }
+        self.dangling_chunks.deletes(chunk.created_at)
     }
 
     fn must_delete_manifest(&self, manifest: &ListInfo<ManifestId>) -> bool {
-        match self.dangling_manifests {
-            Action::DeleteIfCreatedBefore(before) => manifest.created_at < before,
-            _ => false,
-        }
+        self.dangling_manifests.deletes(manifest.created_at)
     }
 
     fn must_delete_snapshot(&self, snapshot: &ListInfo<SnapshotId>) -> bool {
-        match self.dangling_snapshots {
-            Action::DeleteIfCreatedBefore(before) => snapshot.created_at < before,
-            _ => false,
-        }
+        self.dangling_snapshots.deletes(snapshot.created_at)
     }
 
     fn must_delete_transaction_log(&self, tx_log: &ListInfo<SnapshotId>) -> bool {
-        match self.dangling_transaction_logs {
-            Action::DeleteIfCreatedBefore(before) => tx_log.created_at < before,
-            _ => false,
-        }
+        self.dangling_transaction_logs.deletes(tx_log.created_at)
+    }
+}
+
+/// Decides if the object's write instant precedes `cutoff` with certainty.
+///
+/// A store can floor the listed timestamp to a whole second. Tigris does this.
+/// The write then falls anywhere in `[created_at, created_at + 1s)`.
+/// GC deletes the object only if that whole interval precedes the cutoff.
+/// A looser rule deletes objects that a caller wrote after the cutoff.
+fn created_entirely_before(created_at: DateTime<Utc>, cutoff: DateTime<Utc>) -> bool {
+    if created_at.timestamp_subsec_nanos() == 0 {
+        created_at + TimeDelta::seconds(1) <= cutoff
+    } else {
+        created_at < cutoff
     }
 }
 
@@ -446,9 +459,9 @@ async fn garbage_collect_one_attempt(
                 // A snapshot not visible in the listing yet cannot be deleted by
                 // this run either, so it is retained.
                 let old_enough_to_drop = listed_snaps.as_ref().is_some_and(|listed| {
-                    listed
-                        .get(&si.id)
-                        .is_some_and(|(created_at, _)| *created_at < snap_deadline)
+                    listed.get(&si.id).is_some_and(|(created_at, _)| {
+                        created_entirely_before(*created_at, snap_deadline)
+                    })
                 });
                 if old_enough_to_drop { None } else { Some(si.id) }
             })
@@ -1294,7 +1307,7 @@ async fn expire_v2_one_attempt(
 mod tests {
     use std::collections::HashMap as StdHashMap;
 
-    use chrono::Duration;
+    use chrono::{Duration, TimeZone as _};
     use icechunk_macros::tokio_test;
 
     use super::*;
@@ -1352,5 +1365,19 @@ mod tests {
         // 5 commits plus the initial snapshot
         assert_eq!(reads_per_snapshot.len(), 6);
         Ok(())
+    }
+
+    fn at(secs: i64, nanos: u32) -> DateTime<Utc> {
+        Utc.timestamp_opt(secs, nanos).unwrap()
+    }
+
+    /// A store that lists whole seconds floors `created_at`.
+    /// The listing then reports a time before the write.
+    #[test]
+    fn whole_second_timestamps_are_kept_until_their_second_passes() {
+        assert!(!created_entirely_before(at(100, 0), at(100, 400_000_000)));
+        assert!(created_entirely_before(at(100, 0), at(101, 0)));
+        assert!(created_entirely_before(at(100, 399_000_000), at(100, 400_000_000)));
+        assert!(!created_entirely_before(at(100, 400_000_000), at(100, 400_000_000)));
     }
 }
