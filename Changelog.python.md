@@ -2,6 +2,10 @@
 
 ## Python Icechunk Library [unreleased]
 
+### Performance
+
+- On S3-compatible storage, garbage collection now lists chunks, manifests, snapshots and transaction logs with 32 concurrent listings, one per possible first character of the object id. Before, each prefix was one serial chain of 1000-key pages: about 56,000 sequential requests for a repository with 56 million chunks. GCS, Azure and local storage still use one listing ([#TBD](https://github.com/earth-mover/icechunk/pull/TBD)).
+
 ### Fixes
 
 - Update tests to deal with Tigris and other stores listing whole-second timestamps ([#2368](https://github.com/earth-mover/icechunk/pull/2368)).

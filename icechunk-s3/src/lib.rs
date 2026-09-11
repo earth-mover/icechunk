@@ -555,6 +555,37 @@ impl S3Storage {
         self.key_for(layout, relpath.strip_prefix('/').unwrap_or(relpath))
     }
 
+    /// Lists the keys that start with `key_prefix`. Ids are relative to `id_root`.
+    async fn list_keys(
+        &self,
+        settings: &Settings,
+        key_prefix: String,
+        id_root: String,
+    ) -> BoxStream<'static, StorageResult<ListInfo<String>>> {
+        let mut req = self
+            .get_client(settings)
+            .await
+            .list_objects_v2()
+            .bucket(self.bucket.clone())
+            .prefix(key_prefix);
+
+        if self.config.requester_pays {
+            req = req.request_payer(aws_sdk_s3::types::RequestPayer::Requester);
+        }
+
+        req.into_paginator()
+            .send()
+            .into_stream_03x()
+            .map_err(obj_store_error)
+            .try_filter_map(|page| {
+                let contents = page.contents.map(|cont| stream::iter(cont).map(Ok));
+                ready(Ok(contents))
+            })
+            .try_flatten()
+            .and_then(move |object| ready(object_to_list_info(id_root.as_str(), &object)))
+            .boxed()
+    }
+
     /// Resolve this repository's [`KeyLayout`], probing storage at most once.
     async fn layout(&self, settings: &Settings) -> StorageResult<KeyLayout> {
         self.key_layout.get_or_try_init(|| self.probe_layout(settings)).await.copied()
@@ -1089,32 +1120,28 @@ impl Storage for S3Storage {
     ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
         let layout = self.layout(settings).await?;
         let prefix = self.list_prefix(layout, prefix);
-        let mut req = self
-            .get_client(settings)
-            .await
-            .list_objects_v2()
-            .bucket(self.bucket.clone())
-            .prefix(prefix.clone());
+        Ok(self.list_keys(settings, prefix.clone(), prefix).await)
+    }
 
-        if self.config.requester_pays {
-            req = req.request_payer(aws_sdk_s3::types::RequestPayer::Requester);
+    #[instrument(skip(self, settings, id_prefixes))]
+    async fn list_objects_with_id_prefixes<'a>(
+        &'a self,
+        settings: &Settings,
+        prefix: &str,
+        id_prefixes: &[&str],
+    ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
+        let layout = self.layout(settings).await?;
+        let prefix = self.list_prefix(layout, prefix);
+        let mut listings = Vec::with_capacity(id_prefixes.len());
+        for id_prefix in id_prefixes {
+            let key_prefix = if prefix.is_empty() || prefix.ends_with('/') {
+                format!("{prefix}{id_prefix}")
+            } else {
+                format!("{prefix}/{id_prefix}")
+            };
+            listings.push(self.list_keys(settings, key_prefix, prefix.clone()).await);
         }
-
-        let stream = req
-            .into_paginator()
-            .send()
-            .into_stream_03x()
-            .map_err(obj_store_error)
-            .try_filter_map(|page| {
-                let contents = page.contents.map(|cont| stream::iter(cont).map(Ok));
-                ready(Ok(contents))
-            })
-            .try_flatten()
-            .and_then(move |object| {
-                let prefix = prefix.clone();
-                ready(object_to_list_info(prefix.as_str(), &object))
-            });
-        Ok(stream.boxed())
+        Ok(stream::select_all(listings).boxed())
     }
 
     #[instrument(skip(self, batch))]

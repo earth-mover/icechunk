@@ -113,6 +113,19 @@ impl Storage for LoggingStorage {
         self.backend.list_objects(settings, prefix).await
     }
 
+    async fn list_objects_with_id_prefixes<'a>(
+        &'a self,
+        settings: &Settings,
+        prefix: &str,
+        id_prefixes: &[&str],
+    ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
+        self.fetch_log
+            .lock()
+            .expect("poison lock")
+            .push(("list_objects_with_id_prefixes".to_string(), prefix.to_string()));
+        self.backend.list_objects_with_id_prefixes(settings, prefix, id_prefixes).await
+    }
+
     async fn delete_batch(
         &self,
         settings: &Settings,
