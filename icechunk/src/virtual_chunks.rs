@@ -325,7 +325,7 @@ type ChunkFetcherCache = Cache<CacheKey, Arc<dyn ChunkFetcher>>;
 
 /// Result of a custom HTTP virtual-chunk read.
 ///
-/// If the reference records an `ETag``, return the response's `etag`. If it records
+/// If the reference records an `ETag`, return the response's `etag`. If it records
 /// a modification-time check, return the response's `last_modified` timestamp.
 /// The resolver rejects the read if the required value is missing or fails the
 /// check. Both fields are optional when the reference has no checksum.
