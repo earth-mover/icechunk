@@ -100,7 +100,7 @@ services:
   # (see icechunk/tests/test_key_layout.rs and #2239).
   minio:
     container_name: icechunk_minio
-    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
     hostname: minio
     healthcheck:
       test: curl -f http://127.0.0.1:9000/minio/health/live
