@@ -516,6 +516,16 @@ impl Repository {
         })
     }
 
+    /// Set the HTTP transport for sessions opened after this call. The callback
+    /// is runtime-only and is not persisted or serialized with the repository.
+    pub fn set_http_virtual_chunk_fetcher(
+        &mut self,
+        fetcher: Arc<dyn crate::virtual_chunks::HttpVirtualChunkFetcher>,
+    ) {
+        self.virtual_resolver =
+            Arc::new(self.virtual_resolver.with_http_fetcher(fetcher));
+    }
+
     #[instrument(skip_all)]
     pub async fn exists(
         storage: Arc<dyn Storage + Send + Sync>,
