@@ -42,8 +42,9 @@ use crate::{
     config::CachingConfig,
     format::{
         CHUNKS_FILE_PATH, CONFIG_FILE_PATH, ChunkId, ChunkOffset, IcechunkFormatError,
-        IcechunkFormatErrorKind, MANIFESTS_FILE_PATH, ManifestId, OVERWRITTEN_FILES_PATH,
-        REPO_INFO_FILE_PATH, SNAPSHOTS_FILE_PATH, SnapshotId, TRANSACTION_LOGS_FILE_PATH,
+        IcechunkFormatErrorKind, MANIFESTS_FILE_PATH, ManifestId, OBJECT_ID_FIRST_CHARS,
+        OVERWRITTEN_FILES_PATH, REPO_INFO_FILE_PATH, SNAPSHOTS_FILE_PATH, SnapshotId,
+        TRANSACTION_LOGS_FILE_PATH,
         format_constants::{
             self, CompressionAlgorithmBin, FileHeader, FileTypeBin, SpecVersionBin,
             parse_file_header,
@@ -1015,48 +1016,45 @@ impl AssetManager {
     pub async fn list_chunks(
         &self,
     ) -> RepositoryResult<BoxStream<'_, RepositoryResult<ListInfo<ChunkId>>>> {
-        Ok(translate_list_infos(
-            self.storage
-                .list_objects(&self.storage_settings, CHUNKS_FILE_PATH)
-                .await
-                .inject()?
-                .map(|r| r.inject()),
-        ))
+        self.list_object_ids(CHUNKS_FILE_PATH).await
     }
 
     #[instrument(skip(self))]
     pub async fn list_manifests(
         &self,
     ) -> RepositoryResult<BoxStream<'_, RepositoryResult<ListInfo<ManifestId>>>> {
-        Ok(translate_list_infos(
-            self.storage
-                .list_objects(&self.storage_settings, MANIFESTS_FILE_PATH)
-                .await
-                .inject()?
-                .map(|r| r.inject()),
-        ))
+        self.list_object_ids(MANIFESTS_FILE_PATH).await
     }
 
     #[instrument(skip(self))]
     pub async fn list_snapshots(
         &self,
     ) -> RepositoryResult<BoxStream<'_, RepositoryResult<ListInfo<SnapshotId>>>> {
-        Ok(translate_list_infos(
-            self.storage
-                .list_objects(&self.storage_settings, SNAPSHOTS_FILE_PATH)
-                .await
-                .inject()?
-                .map(|r| r.inject()),
-        ))
+        self.list_object_ids(SNAPSHOTS_FILE_PATH).await
     }
 
     #[instrument(skip(self))]
     pub async fn list_transaction_logs(
         &self,
     ) -> RepositoryResult<BoxStream<'_, RepositoryResult<ListInfo<SnapshotId>>>> {
+        self.list_object_ids(TRANSACTION_LOGS_FILE_PATH).await
+    }
+
+    /// Unordered: storage can list each possible first character of the id concurrently.
+    async fn list_object_ids<'a, Id>(
+        &'a self,
+        prefix: &str,
+    ) -> RepositoryResult<BoxStream<'a, RepositoryResult<ListInfo<Id>>>>
+    where
+        Id: for<'b> TryFrom<&'b str> + Send + std::fmt::Debug + 'a,
+    {
         Ok(translate_list_infos(
             self.storage
-                .list_objects(&self.storage_settings, TRANSACTION_LOGS_FILE_PATH)
+                .list_objects_with_id_prefixes(
+                    &self.storage_settings,
+                    prefix,
+                    &OBJECT_ID_FIRST_CHARS,
+                )
                 .await
                 .inject()?
                 .map(|r| r.inject()),

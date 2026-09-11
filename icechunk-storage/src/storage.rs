@@ -4,6 +4,7 @@ use chrono::{DateTime, Utc};
 use core::fmt;
 use futures::{
     Stream, StreamExt as _, TryStreamExt as _,
+    future::ready,
     stream::{self, BoxStream, FuturesOrdered},
 };
 use itertools::Itertools as _;
@@ -561,6 +562,25 @@ pub trait Storage: fmt::Debug + Display + sealed::Sealed + Sync + Send {
         settings: &Settings,
         prefix: &str,
     ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>>;
+
+    /// Like [`Storage::list_objects`], limited to ids starting with one of `id_prefixes`.
+    /// Unordered. Override to list each id prefix concurrently; the default filters.
+    async fn list_objects_with_id_prefixes<'a>(
+        &'a self,
+        settings: &Settings,
+        prefix: &str,
+        id_prefixes: &[&str],
+    ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
+        let id_prefixes: Vec<String> =
+            id_prefixes.iter().map(|id_prefix| (*id_prefix).to_string()).collect();
+        Ok(self
+            .list_objects(settings, prefix)
+            .await?
+            .try_filter(move |info| {
+                ready(id_prefixes.iter().any(|id_prefix| info.id.starts_with(id_prefix)))
+            })
+            .boxed())
+    }
 
     async fn delete_batch(
         &self,

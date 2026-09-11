@@ -638,6 +638,36 @@ async fn test_list_objects() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[tokio_test]
+async fn test_list_objects_with_id_prefixes() -> Result<(), Box<dyn std::error::Error>> {
+    with_storage(Permission::Modify, |_, storage| async move {
+        let settings = storage.default_settings().await?;
+        for path in
+            ["foo/0a", "foo/0b", "foo/1a", "foo/Za", "foo/bar/0c", "foo0/0d", "0e"]
+        {
+            storage
+                .put_object(&settings, path, Bytes::new(), None, Default::default(), None)
+                .await?
+                .must_write()?;
+        }
+
+        for prefix in ["foo", "foo/"] {
+            let mut obs: Vec<_> = storage
+                .list_objects_with_id_prefixes(&settings, prefix, &["0", "Z"])
+                .await?
+                .map_ok(|li| li.id)
+                .try_collect()
+                .await?;
+            obs.sort();
+            assert_eq!(obs, vec!["0a".to_string(), "0b".to_string(), "Za".to_string()]);
+        }
+
+        Ok(())
+    })
+    .await?;
+    Ok(())
+}
+
+#[tokio_test]
 async fn conditional_create_conflicts_with_existing()
 -> Result<(), Box<dyn std::error::Error>> {
     // Exercises the readback's `NotOurWrite` branch (metadata-enabled

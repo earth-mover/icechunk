@@ -379,6 +379,18 @@ impl Storage for RedirectStorage {
         self.backend().await?.list_objects(settings, prefix).await
     }
 
+    async fn list_objects_with_id_prefixes<'a>(
+        &'a self,
+        settings: &Settings,
+        prefix: &str,
+        id_prefixes: &[&str],
+    ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
+        self.backend()
+            .await?
+            .list_objects_with_id_prefixes(settings, prefix, id_prefixes)
+            .await
+    }
+
     async fn delete_batch(
         &self,
         settings: &Settings,
