@@ -39,7 +39,10 @@ use crate::{
     conflicts::{Conflict, ConflictResolution, ConflictSolver},
     diff::{Diff, DiffBuilder},
     error::ICError,
-    feature_flags::{commit_required_flags, raise_if_commit_flags_disabled},
+    feature_flags::{
+        REBASE_FLAG, commit_required_flags, raise_if_commit_flags_disabled,
+        raise_if_feature_flag_disabled,
+    },
     format::{
         ByteRange, ChunkIndices, ChunkOffset, IcechunkFormatError,
         IcechunkFormatErrorKind, ManifestId, NodeId, ObjectId, Path, SnapshotId,
@@ -1974,6 +1977,11 @@ impl Session {
                 (commits, Some(repo_info))
             }
         };
+
+        if let Some(ri) = &repo_info {
+            raise_if_feature_flag_disabled(ri.as_ref(), REBASE_FLAG, "rebase session")
+                .inject()?;
+        }
 
         trace!("Found {} commits to rebase over", new_commits.len());
 

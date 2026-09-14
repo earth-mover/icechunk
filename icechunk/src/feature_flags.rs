@@ -1039,4 +1039,60 @@ mod tests {
             "commit chunk update",
         );
     }
+
+    #[tokio::test]
+    async fn try_create_sessions_without_commit_flag() {
+        let repo = new_repo().await;
+
+        let _ = repo.writable_session("main").await.unwrap();
+        let _ = repo.rearrange_session("main").await.unwrap();
+
+        repo.set_feature_flag("commit", Some(false)).await.unwrap();
+        assert_flag_disabled_repo(
+            repo.writable_session("main").await,
+            "commit",
+            "create writable session",
+        );
+        assert_flag_disabled_repo(
+            repo.rearrange_session("main").await,
+            "commit",
+            "create rearrange session",
+        );
+
+        repo.set_feature_flag("commit", None).await.unwrap();
+        let _ = repo.writable_session("main").await.unwrap();
+        let _ = repo.rearrange_session("main").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn try_rebase_without_feature_flag() {
+        use crate::conflicts::detector::ConflictDetector;
+
+        let repo = new_repo().await;
+        commit_root_and_array(&repo).await;
+
+        // session B starts behind the commit session A makes
+        let mut session_b = repo.writable_session("main").await.unwrap();
+        session_b
+            .add_group("/b".try_into().unwrap(), Bytes::copy_from_slice(b""))
+            .await
+            .unwrap();
+        let mut session_a = repo.writable_session("main").await.unwrap();
+        session_a
+            .add_group("/a".try_into().unwrap(), Bytes::copy_from_slice(b""))
+            .await
+            .unwrap();
+        session_a.commit("a").execute().await.unwrap();
+
+        repo.set_feature_flag("rebase", Some(false)).await.unwrap();
+        assert_flag_disabled_session(
+            session_b.rebase(&ConflictDetector).await,
+            "rebase",
+            "rebase session",
+        );
+
+        repo.set_feature_flag("rebase", None).await.unwrap();
+        session_b.rebase(&ConflictDetector).await.unwrap();
+        session_b.commit("b").execute().await.unwrap();
+    }
 }
