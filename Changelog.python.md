@@ -4,6 +4,7 @@
 
 ### Fixes
 
+- Local filesystem storage now supports conditional updates on unix. Concurrent commits from several threads or processes no longer lose updates. The implementation uses advisory file locks, which do not work on NFS ([#XXXX](https://github.com/earth-mover/icechunk/pull/XXXX)).
 - Update tests to deal with Tigris and other stores listing whole-second timestamps ([#2368](https://github.com/earth-mover/icechunk/pull/2368)).
 
 ## Python Icechunk Library 2.2.0

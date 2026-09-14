@@ -38,7 +38,7 @@ use object_store::azure::{
 use object_store::gcp::{GcpCredential, GoogleCloudStorageBuilder, GoogleConfigKey};
 #[cfg(feature = "http")]
 use object_store::http::HttpBuilder;
-#[cfg(feature = "fs")]
+#[cfg(all(feature = "fs", not(unix)))]
 use object_store::local::LocalFileSystem;
 use object_store::{
     Attribute, AttributeValue, Attributes, GetOptions, ObjectMeta, ObjectStore,
@@ -68,6 +68,9 @@ use tokio_util::io::StreamReader;
 use tracing::{instrument, warn};
 use url::Url;
 use uuid::Uuid;
+
+#[cfg(all(feature = "fs", unix))]
+mod local;
 
 /// Whether a storage operation reads from or writes to the object store.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -321,11 +324,14 @@ impl ObjectStorage {
 
     /// Create an local filesystem Storage implementation
     ///
-    /// This implementation should not be used in production code.
+    /// On unix, concurrent commits are safe on a local disk. They use advisory
+    /// file locks, which do not work on NFS. On other platforms concurrent
+    /// commits can lose updates.
     #[cfg(feature = "fs")]
     pub async fn new_local_filesystem(
         prefix: &StdPath,
     ) -> Result<ObjectStorage, StorageError> {
+        #[cfg(not(unix))]
         tracing::warn!(
             "The LocalFileSystem storage is not safe for concurrent commits. If more than one thread/process will attempt to commit at the same time, prefer using object stores."
         );
@@ -1017,6 +1023,10 @@ impl ObjectStoreBackend for LocalFileSystemObjectStoreBackend {
                 StorageError::capture(StorageErrorKind::IOError(err))
             }
         })?;
+        #[cfg(unix)]
+        let fs =
+            local::ConditionalLocalFileSystem::new_with_prefix(&path).capture_box()?;
+        #[cfg(not(unix))]
         let fs = LocalFileSystem::new_with_prefix(path).capture_box()?;
         Ok(Arc::new(fs))
     }
@@ -1039,7 +1049,8 @@ impl ObjectStoreBackend for LocalFileSystemObjectStoreBackend {
                     NonZeroU64::new(4 * 1024).unwrap_or(NonZeroU64::MIN),
                 ),
             }),
-            unsafe_use_conditional_update: Some(false),
+            // Conditional updates need the inode lock in `local`, which is unix only.
+            unsafe_use_conditional_update: Some(cfg!(unix)),
             unsafe_use_metadata: Some(false),
             retries: Some(RetriesSettings {
                 max_tries: Some(NonZeroU16::new(1).unwrap_or(NonZeroU16::MIN)),

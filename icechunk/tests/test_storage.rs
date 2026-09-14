@@ -1027,7 +1027,7 @@ async fn test_write_config_fails_on_bad_version_when_non_existing(
 async fn test_write_config_fails_on_bad_version_when_existing(
     #[case] spec_version: SpecVersionBin,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    with_storage(Permission::Modify, |storage_type, storage| async move {
+    with_storage(Permission::Modify, |_, storage| async move {
         let storage_settings = storage.default_settings().await?;
         let am = Arc::new(AssetManager::new_no_cache(
             storage,
@@ -1054,22 +1054,11 @@ async fn test_write_config_fails_on_bad_version_when_existing(
             )
             .await?;
 
-        if storage_type == "local_filesystem" {
-            // FIXME: local file system doesn't have conditional updates yet
-            assert!(update_res.is_some());
-        } else {
-            assert!(update_res.is_none());
-        }
+        assert!(update_res.is_none());
 
         let (fetched_config, fetched_version) = am.fetch_config().await?.unwrap();
-        if storage_type == "local_filesystem" {
-            // FIXME: local file system doesn't have conditional updates yet
-            assert_ne!(fetched_version, version);
-            assert_eq!(fetched_config, config1);
-        } else {
-            assert_eq!(fetched_version, version);
-            assert_eq!(fetched_config, config1);
-        }
+        assert_eq!(fetched_version, version);
+        assert_eq!(fetched_config, config1);
         Ok(())
     })
     .await?;

@@ -25,7 +25,7 @@ http.workspace = true
 object_store.workspace = true
 rand.workspace = true
 serde.workspace = true
-tokio = { workspace = true, features = ["sync"] }
+tokio = { workspace = true, features = ["rt", "sync"] }
 tokio-util.workspace = true
 tracing.workspace = true
 typetag.workspace = true
