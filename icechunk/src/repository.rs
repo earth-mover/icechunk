@@ -1237,7 +1237,7 @@ impl Repository {
         Ok(branch_version.snapshot)
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip(self, repo_info))]
     async fn lookup_branch_v2(
         &self,
         branch: &str,
@@ -1622,7 +1622,7 @@ impl Repository {
         Ok(ref_data.snapshot)
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip(self, repo_info))]
     async fn lookup_tag_v2(
         &self,
         tag: &str,
