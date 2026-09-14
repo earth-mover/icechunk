@@ -243,7 +243,9 @@ mod tests {
             format_constants::SpecVersionBin,
             manifest::ChunkPayload,
             repo_info::UpdateType,
-            snapshot::{ArrayShape, NodeType, Snapshot, SnapshotInfo},
+            snapshot::{
+                ArrayShape, NodeType, Snapshot, SnapshotInfo, SnapshotProperties,
+            },
         },
         new_in_memory_storage,
         repository::{RepositoryError, RepositoryErrorKind},
@@ -810,6 +812,231 @@ mod tests {
         assert_eq!(
             ids(commit_required_flags(&cs, CommitMethod::NewCommit, false, false)),
             vec![COMMIT_FLAG, MOVE_NODE_FLAG]
+        );
+    }
+
+    #[tokio::test]
+    async fn try_amend_without_feature_flag() {
+        let repo = new_repo().await;
+        commit_root_and_array(&repo).await;
+
+        let mut session = repo.writable_session("main").await.unwrap();
+        session
+            .add_group("/g1".try_into().unwrap(), Bytes::copy_from_slice(b""))
+            .await
+            .unwrap();
+        session.commit("amend ok").amend().execute().await.unwrap();
+
+        repo.set_feature_flag("amend", Some(false)).await.unwrap();
+        let mut session = repo.writable_session("main").await.unwrap();
+        session
+            .add_group("/g2".try_into().unwrap(), Bytes::copy_from_slice(b""))
+            .await
+            .unwrap();
+        assert_flag_disabled_session(
+            session.commit("blocked").amend().execute().await,
+            "amend",
+            "commit amend",
+        );
+
+        repo.set_feature_flag("amend", None).await.unwrap();
+        session.commit("amend ok again").amend().execute().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn try_rewrite_manifests_without_feature_flag() {
+        let repo = new_repo().await;
+        commit_root_and_array(&repo).await;
+
+        let mut session = repo.writable_session("main").await.unwrap();
+        session.commit("rewrite ok").rewrite_manifests().execute().await.unwrap();
+
+        repo.set_feature_flag("rewrite_manifests", Some(false)).await.unwrap();
+        let mut session = repo.writable_session("main").await.unwrap();
+        assert_flag_disabled_session(
+            session.commit("blocked").rewrite_manifests().execute().await,
+            "rewrite_manifests",
+            "commit manifest rewrite",
+        );
+
+        repo.set_feature_flag("rewrite_manifests", None).await.unwrap();
+        session.commit("rewrite ok again").rewrite_manifests().execute().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn try_default_commit_metadata_without_feature_flag() {
+        let mut repo = new_repo().await;
+        repo.set_default_commit_metadata(SnapshotProperties::from([(
+            "author".to_string(),
+            serde_json::Value::from("test"),
+        )]));
+
+        let mut session = repo.writable_session("main").await.unwrap();
+        session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await.unwrap();
+
+        repo.set_feature_flag("set_default_commit_metadata", Some(false)).await.unwrap();
+        assert_flag_disabled_session(
+            session.commit("blocked").execute().await,
+            "set_default_commit_metadata",
+            "commit default commit metadata",
+        );
+
+        repo.set_feature_flag("set_default_commit_metadata", None).await.unwrap();
+        session.commit("allowed").execute().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn try_create_new_nodes_without_feature_flag() {
+        let repo = new_repo().await;
+
+        let mut session = repo.writable_session("main").await.unwrap();
+        session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await.unwrap();
+
+        repo.set_feature_flag("create_new_nodes", Some(false)).await.unwrap();
+        assert_flag_disabled_session(
+            session.commit("blocked").execute().await,
+            "create_new_nodes",
+            "commit new nodes",
+        );
+
+        repo.set_feature_flag("create_new_nodes", None).await.unwrap();
+        session.commit("allowed").execute().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn try_delete_nodes_without_feature_flag() {
+        let repo = new_repo().await;
+        commit_root_and_array(&repo).await;
+
+        let mut session = repo.writable_session("main").await.unwrap();
+        session.delete_array("/array".try_into().unwrap()).await.unwrap();
+
+        repo.set_feature_flag("delete_nodes", Some(false)).await.unwrap();
+        assert_flag_disabled_session(
+            session.commit("blocked").execute().await,
+            "delete_nodes",
+            "commit node delete",
+        );
+
+        repo.set_feature_flag("delete_nodes", None).await.unwrap();
+        session.commit("allowed").execute().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn try_update_chunks_without_feature_flag() {
+        let repo = new_repo().await;
+        commit_root_and_array(&repo).await;
+
+        let mut session = repo.writable_session("main").await.unwrap();
+        session
+            .set_chunk_ref(
+                "/array".try_into().unwrap(),
+                ChunkIndices(vec![0]),
+                Some(ChunkPayload::Inline(Bytes::from_static(b"1234"))),
+            )
+            .await
+            .unwrap();
+
+        repo.set_feature_flag("update_chunks", Some(false)).await.unwrap();
+        assert_flag_disabled_session(
+            session.commit("blocked").execute().await,
+            "update_chunks",
+            "commit chunk update",
+        );
+
+        repo.set_feature_flag("update_chunks", None).await.unwrap();
+        session.commit("allowed").execute().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn try_update_array_metadata_without_feature_flag() {
+        let repo = new_repo().await;
+        commit_root_and_array(&repo).await;
+
+        let mut session = repo.writable_session("main").await.unwrap();
+        session
+            .update_array(
+                &"/array".try_into().unwrap(),
+                ArrayShape::new(vec![(8, 4)]).unwrap(),
+                Some(vec!["t".into()]),
+                Bytes::from_static(br#"{"this":"array2"}"#),
+            )
+            .await
+            .unwrap();
+
+        repo.set_feature_flag("update_array_metadata", Some(false)).await.unwrap();
+        assert_flag_disabled_session(
+            session.commit("blocked").execute().await,
+            "update_array_metadata",
+            "commit array metadata update",
+        );
+
+        repo.set_feature_flag("update_array_metadata", None).await.unwrap();
+        session.commit("allowed").execute().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn try_update_group_metadata_without_feature_flag() {
+        let repo = new_repo().await;
+        commit_root_and_array(&repo).await;
+
+        let mut session = repo.writable_session("main").await.unwrap();
+        session
+            .update_group(&Path::root(), Bytes::from_static(br#"{"attr":1}"#))
+            .await
+            .unwrap();
+
+        repo.set_feature_flag("update_group_metadata", Some(false)).await.unwrap();
+        assert_flag_disabled_session(
+            session.commit("blocked").execute().await,
+            "update_group_metadata",
+            "commit group metadata update",
+        );
+
+        repo.set_feature_flag("update_group_metadata", None).await.unwrap();
+        session.commit("allowed").execute().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn mixed_change_set_reports_first_disabled_flag() {
+        let repo = new_repo().await;
+        commit_root_and_array(&repo).await;
+
+        // new array plus a chunk write: create_new_nodes comes before
+        // update_chunks in the required flag list
+        let mut session = repo.writable_session("main").await.unwrap();
+        session
+            .add_array(
+                "/array2".try_into().unwrap(),
+                ArrayShape::new(vec![(4, 4)]).unwrap(),
+                Some(vec!["t".into()]),
+                Bytes::from_static(br#"{"this":"array2"}"#),
+            )
+            .await
+            .unwrap();
+        session
+            .set_chunk_ref(
+                "/array2".try_into().unwrap(),
+                ChunkIndices(vec![0]),
+                Some(ChunkPayload::Inline(Bytes::from_static(b"1234"))),
+            )
+            .await
+            .unwrap();
+
+        repo.set_feature_flag("create_new_nodes", Some(false)).await.unwrap();
+        repo.set_feature_flag("update_chunks", Some(false)).await.unwrap();
+        assert_flag_disabled_session(
+            session.commit("blocked").execute().await,
+            "create_new_nodes",
+            "commit new nodes",
+        );
+
+        // with create_new_nodes back on, the next flag in the list is reported
+        repo.set_feature_flag("create_new_nodes", None).await.unwrap();
+        assert_flag_disabled_session(
+            session.commit("blocked").execute().await,
+            "update_chunks",
+            "commit chunk update",
         );
     }
 }
