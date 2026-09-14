@@ -69,23 +69,24 @@
     "prepare": "husky"
   },
   "devDependencies": {
-    "@emnapi/core": "^1.8.1",
-    "@emnapi/runtime": "^1.8.1",
+    "@emnapi/core": "^1.11.3",
+    "@emnapi/runtime": "^1.11.3",
     "@napi-rs/cli": "^3.2.0",
-    "@napi-rs/wasm-runtime": "^1.1.1",
+    "@napi-rs/wasm-runtime": "^1.2.4",
     "@oxc-node/core": "^0.1.0",
     "@taplo/cli": "^0.7.0",
     "@tybys/wasm-util": "^0.10.1",
     "ava": "^8.0.0",
-    "chalk": "^5.6.2",
+    "chalk": "^6.0.0",
+    "emnapi": "^1.11.3",
     "husky": "^9.1.7",
-    "lint-staged": "^17.0.5",
-    "npm-run-all2": "^9.0.0",
-    "oxlint": "^1.14.0",
+    "lint-staged": "^17.5.1",
+    "npm-run-all2": "^9.0.3",
+    "oxlint": "^1.83.0",
     "prettier": "^3.6.2",
-    "tinybench": "^6.0.0",
+    "tinybench": "^6.2.0",
     "typescript": "^6.0.2",
-    "zarrita": "^0.7.3"
+    "zarrita": "^0.7.5"
   },
   "lint-staged": {
     "*.@(js|ts|tsx)": [
