@@ -5,7 +5,11 @@ use std::{
 
 use icechunk_types::ICResultExt as _;
 
-use crate::format::{IcechunkFormatErrorKind, IcechunkResult, repo_info::RepoInfo};
+use crate::{
+    change_set::ChangeSet,
+    format::{IcechunkFormatErrorKind, IcechunkResult, repo_info::RepoInfo},
+    session::CommitMethod,
+};
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct FeatureFlag {
@@ -59,10 +63,28 @@ impl FeatureFlag {
 }
 
 // Feature flag ID constants.
-// IDs 1-2 are reserved for future commit/amend flags.
+pub const COMMIT_FLAG: u16 = 1;
+pub const AMEND_FLAG: u16 = 2;
 pub const MOVE_NODE_FLAG: u16 = 3;
 pub const CREATE_TAG_FLAG: u16 = 4;
 pub const DELETE_TAG_FLAG: u16 = 5;
+pub const REBASE_FLAG: u16 = 6;
+pub const CREATE_NEW_NODES_FLAG: u16 = 7;
+pub const DELETE_NODES_FLAG: u16 = 8;
+pub const UPDATE_CHUNKS_FLAG: u16 = 9;
+pub const UPDATE_ARRAY_METADATA_FLAG: u16 = 10;
+pub const UPDATE_GROUP_METADATA_FLAG: u16 = 11;
+pub const CREATE_BRANCH_FLAG: u16 = 12;
+pub const DELETE_BRANCH_FLAG: u16 = 13;
+pub const RESET_BRANCH_FLAG: u16 = 14;
+pub const GARBAGE_COLLECTION_FLAG: u16 = 15;
+pub const EXPIRATION_FLAG: u16 = 16;
+// ID 17 is reserved for upgrade_spec_version. No upgrade path starts from a
+// repo that has repo info, so nothing can check it yet.
+pub const UPDATE_CONFIG_FLAG: u16 = 18;
+pub const SET_DEFAULT_COMMIT_METADATA_FLAG: u16 = 19;
+pub const UPDATE_REPOSITORY_METADATA_FLAG: u16 = 20;
+pub const REWRITE_MANIFESTS_FLAG: u16 = 21;
 
 /// Query the repo info object and determine if the feature flag is enabled or not.
 /// This function takes into account user settings in repo info object and the
@@ -94,6 +116,64 @@ pub fn raise_if_feature_flag_disabled(
     }
 }
 
+/// Flags a commit or flush must honor, in check order. Each entry pairs the
+/// flag id with the noun for the error description.
+pub(crate) fn commit_required_flags(
+    change_set: &ChangeSet,
+    commit_method: CommitMethod,
+    rewrite_manifests: bool,
+    has_default_commit_metadata: bool,
+) -> Vec<(u16, &'static str)> {
+    let mut flags = vec![(COMMIT_FLAG, "")];
+    if commit_method == CommitMethod::Amend {
+        flags.push((AMEND_FLAG, "amend"));
+    }
+    if rewrite_manifests {
+        flags.push((REWRITE_MANIFESTS_FLAG, "manifest rewrite"));
+    }
+    if matches!(change_set, ChangeSet::Rearrange(_)) {
+        flags.push((MOVE_NODE_FLAG, "rearrange session"));
+    }
+    if has_default_commit_metadata {
+        flags.push((SET_DEFAULT_COMMIT_METADATA_FLAG, "default commit metadata"));
+    }
+    if change_set.new_nodes().next().is_some() {
+        flags.push((CREATE_NEW_NODES_FLAG, "new nodes"));
+    }
+    if change_set.deleted_groups().next().is_some()
+        || change_set.deleted_arrays().next().is_some()
+    {
+        flags.push((DELETE_NODES_FLAG, "node delete"));
+    }
+    if change_set
+        .arrays_with_chunk_changes()
+        .any(|node| change_set.has_chunk_changes(node))
+    {
+        flags.push((UPDATE_CHUNKS_FLAG, "chunk update"));
+    }
+    if change_set.updated_arrays().next().is_some() {
+        flags.push((UPDATE_ARRAY_METADATA_FLAG, "array metadata update"));
+    }
+    if change_set.updated_groups().next().is_some() {
+        flags.push((UPDATE_GROUP_METADATA_FLAG, "group metadata update"));
+    }
+    flags
+}
+
+/// Checks every entry of `required_flags`. `verb` is `commit` or `flush`.
+pub(crate) fn raise_if_commit_flags_disabled(
+    repo_info: &RepoInfo,
+    verb: &str,
+    required_flags: &[(u16, &'static str)],
+) -> IcechunkResult<()> {
+    for (flag_id, noun) in required_flags {
+        let description =
+            if noun.is_empty() { verb.to_string() } else { format!("{verb} {noun}") };
+        raise_if_feature_flag_disabled(repo_info, *flag_id, &description)?;
+    }
+    Ok(())
+}
+
 pub fn find_feature_flag_id(flag: &str) -> IcechunkResult<u16> {
     FEATURE_FLAGS
         .get(flag)
@@ -117,9 +197,26 @@ pub(crate) static FEATURE_FLAGS: LazyLock<HashMap<&str, (u16, bool)>> =
     LazyLock::new(|| {
         let res = HashMap::from([
             // (name, (id, default_enabled))
+            ("commit", (COMMIT_FLAG, true)),
+            ("amend", (AMEND_FLAG, true)),
             ("move_node", (MOVE_NODE_FLAG, true)),
             ("create_tag", (CREATE_TAG_FLAG, true)),
             ("delete_tag", (DELETE_TAG_FLAG, true)),
+            ("rebase", (REBASE_FLAG, true)),
+            ("create_new_nodes", (CREATE_NEW_NODES_FLAG, true)),
+            ("delete_nodes", (DELETE_NODES_FLAG, true)),
+            ("update_chunks", (UPDATE_CHUNKS_FLAG, true)),
+            ("update_array_metadata", (UPDATE_ARRAY_METADATA_FLAG, true)),
+            ("update_group_metadata", (UPDATE_GROUP_METADATA_FLAG, true)),
+            ("create_branch", (CREATE_BRANCH_FLAG, true)),
+            ("delete_branch", (DELETE_BRANCH_FLAG, true)),
+            ("reset_branch", (RESET_BRANCH_FLAG, true)),
+            ("garbage_collection", (GARBAGE_COLLECTION_FLAG, true)),
+            ("expiration", (EXPIRATION_FLAG, true)),
+            ("update_config", (UPDATE_CONFIG_FLAG, true)),
+            ("set_default_commit_metadata", (SET_DEFAULT_COMMIT_METADATA_FLAG, true)),
+            ("update_repository_metadata", (UPDATE_REPOSITORY_METADATA_FLAG, true)),
+            ("rewrite_manifests", (REWRITE_MANIFESTS_FLAG, true)),
         ]);
         //  check we didn't duplicate ids
         debug_assert_eq!(
@@ -140,15 +237,17 @@ mod tests {
 
     use crate::{
         Repository, Storage,
+        change_set::ChangeSet,
         format::{
-            IcechunkFormatError,
+            ChunkIndices, IcechunkFormatError,
             format_constants::SpecVersionBin,
+            manifest::ChunkPayload,
             repo_info::UpdateType,
-            snapshot::{Snapshot, SnapshotInfo},
+            snapshot::{ArrayShape, NodeType, Snapshot, SnapshotInfo},
         },
         new_in_memory_storage,
         repository::{RepositoryError, RepositoryErrorKind},
-        session::{SessionError, SessionErrorKind},
+        session::{CommitMethod, SessionError, SessionErrorKind},
     };
 
     use super::*;
@@ -498,5 +597,104 @@ mod tests {
                 ..
             }) if feature_flag == "move_node" && feature_description == "flush rearrange session"
         ));
+    }
+
+    #[test]
+    fn commit_required_flags_by_change_set() {
+        use crate::format::NodeId;
+
+        let ids = |flags: Vec<(u16, &'static str)>| {
+            flags.into_iter().map(|(id, _)| id).collect::<Vec<_>>()
+        };
+
+        // empty edit change set: only the commit flag
+        let empty = ChangeSet::for_edits();
+        assert_eq!(
+            ids(commit_required_flags(&empty, CommitMethod::NewCommit, false, false)),
+            vec![COMMIT_FLAG]
+        );
+        // amend, rewrite and default metadata add their flags in order
+        assert_eq!(
+            ids(commit_required_flags(&empty, CommitMethod::Amend, true, true)),
+            vec![
+                COMMIT_FLAG,
+                AMEND_FLAG,
+                REWRITE_MANIFESTS_FLAG,
+                SET_DEFAULT_COMMIT_METADATA_FLAG
+            ]
+        );
+
+        // new array
+        let mut cs = ChangeSet::for_edits();
+        cs.add_array(
+            "/a".try_into().unwrap(),
+            NodeId::random(),
+            crate::change_set::ArrayData {
+                shape: ArrayShape::new(vec![(4, 4)]).unwrap(),
+                dimension_names: None,
+                user_data: Bytes::new(),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            ids(commit_required_flags(&cs, CommitMethod::NewCommit, false, false)),
+            vec![COMMIT_FLAG, CREATE_NEW_NODES_FLAG]
+        );
+
+        // deleted group
+        let mut cs = ChangeSet::for_edits();
+        cs.delete_group("/g".try_into().unwrap(), &NodeId::random()).unwrap();
+        assert_eq!(
+            ids(commit_required_flags(&cs, CommitMethod::NewCommit, false, false)),
+            vec![COMMIT_FLAG, DELETE_NODES_FLAG]
+        );
+
+        // chunk change
+        let mut cs = ChangeSet::for_edits();
+        cs.set_chunk_ref(
+            NodeId::random(),
+            ChunkIndices(vec![0]),
+            Some(ChunkPayload::Inline(Bytes::from_static(b"1234"))),
+        )
+        .unwrap();
+        assert_eq!(
+            ids(commit_required_flags(&cs, CommitMethod::NewCommit, false, false)),
+            vec![COMMIT_FLAG, UPDATE_CHUNKS_FLAG]
+        );
+
+        // updated array and updated group
+        let mut cs = ChangeSet::for_edits();
+        cs.update_array(
+            &NodeId::random(),
+            &"/a".try_into().unwrap(),
+            crate::change_set::ArrayData {
+                shape: ArrayShape::new(vec![(4, 4)]).unwrap(),
+                dimension_names: None,
+                user_data: Bytes::new(),
+            },
+        )
+        .unwrap();
+        cs.update_group(&NodeId::random(), &"/g".try_into().unwrap(), Bytes::new())
+            .unwrap();
+        assert_eq!(
+            ids(commit_required_flags(&cs, CommitMethod::NewCommit, false, false)),
+            vec![COMMIT_FLAG, UPDATE_ARRAY_METADATA_FLAG, UPDATE_GROUP_METADATA_FLAG]
+        );
+
+        // rearrange change set with one move
+        let mut cs = ChangeSet::for_rearranging();
+        let id = NodeId::random();
+        cs.move_node(
+            "/from".try_into().unwrap(),
+            "/to".try_into().unwrap(),
+            std::iter::empty(),
+            &id,
+            NodeType::Group,
+        )
+        .unwrap();
+        assert_eq!(
+            ids(commit_required_flags(&cs, CommitMethod::NewCommit, false, false)),
+            vec![COMMIT_FLAG, MOVE_NODE_FLAG]
+        );
     }
 }
