@@ -227,6 +227,26 @@ conflict list is the useful answer. A solver stays possible as a later option.
   change. The retry collision described above needs an answer first. One
   option is a flush that succeeds when the registered snapshot has the same
   parent and content hash.
+* **List detached snapshots.** A coordinator that does not receive worker
+  results needs to find pending sources in the store. Repo info records every
+  flushed snapshot, but nothing marks it as detached. The listing computes the
+  set: every snapshot minus those reachable from a branch tip or a tag.
+  Garbage collection computes the same set as `pointed_snaps`. Proposed shape,
+  next to `list_branches` and `list_tags`:
+
+  ```python
+  def list_detached_snapshots(self) -> list[SnapshotInfo]
+  async def list_detached_snapshots_async(self) -> list[SnapshotInfo]
+  ```
+
+  It returns the existing `SnapshotInfo` type, oldest first, from one repo
+  info read. Callers filter on `metadata` set at flush time, such as a run id.
+  No filter arguments, because repo info is already in memory. V1 fails with
+  `BadRepoVersion`, because V1 flush does not register snapshots. Callers must
+  handle three cases. Merged sources stay listed until garbage collection
+  removes them. A retried worker leaves two snapshots with overlapping chunks,
+  so the caller keeps one per task. Flushes from other jobs appear too, so the
+  metadata filter scopes the list.
 * **A "merged from" snapshot property.** Record the source ids on the merge
   commit for provenance.
 * **Source cleanup option.** Delete the source snapshots after a successful
