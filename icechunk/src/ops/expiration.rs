@@ -13,6 +13,7 @@ use tracing::{debug, info, instrument};
 use crate::{
     asset_manager::AssetManager,
     config::RepoUpdateRetryConfig,
+    feature_flags::{EXPIRATION_FLAG, raise_if_feature_flag_disabled},
     format::{
         SnapshotId,
         format_constants::SpecVersionBin,
@@ -71,7 +72,8 @@ pub async fn expire(
     repo_update_retries: Option<&RepoUpdateRetryConfig>,
     num_updates_per_repo_info_file: u16,
 ) -> GCResult<ExpireResult> {
-    ensure_repo_writable(asset_manager.as_ref(), "expire").await?;
+    ensure_repo_writable(asset_manager.as_ref(), "expire", EXPIRATION_FLAG, "expiration")
+        .await?;
 
     match asset_manager.spec_version() {
         SpecVersionBin::V1 => {
@@ -306,6 +308,8 @@ async fn expire_v2_one_attempt(
     );
 
     let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str, version| {
+        raise_if_feature_flag_disabled(repo_info.as_ref(), EXPIRATION_FLAG, "expiration")
+            .inject()?;
         // we retry if the repo info object was modified since we started
         if version != repo_info_version_at_start {
             return Err(RepositoryError::capture(RepositoryErrorKind::RepoInfoUpdated));
