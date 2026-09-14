@@ -663,6 +663,82 @@ mod tests {
         Ok(())
     }
 
+    /// Two writers must not both move one branch off the same parent. The loser
+    /// must get a conflict ([#1494](https://github.com/earth-mover/icechunk/issues/1494)).
+    #[tokio_test]
+    async fn test_concurrent_branch_updates_keep_one_winner()
+    -> Result<(), Box<dyn std::error::Error>> {
+        const WRITERS: usize = 8;
+
+        let ((_, res1), (_, res2, _)) = with_test_storages::<
+            Result<(), Box<dyn std::error::Error>>,
+            _,
+            _,
+        >(|storage| async move {
+            let storage_settings = storage.default_settings().await?;
+            let parent = SnapshotId::random();
+            update_branch(
+                storage.as_ref(),
+                &storage_settings,
+                "main",
+                parent.clone(),
+                None,
+            )
+            .await?;
+
+            // The barrier starts all writers on one parent, so they race
+            // between the fetch and the write.
+            let barrier = Arc::new(tokio::sync::Barrier::new(WRITERS));
+            let mut writers = Vec::with_capacity(WRITERS);
+            for _ in 0..WRITERS {
+                let storage = Arc::clone(&storage);
+                let settings = storage_settings.clone();
+                let barrier = Arc::clone(&barrier);
+                let parent = parent.clone();
+                let snapshot = SnapshotId::random();
+                writers.push(tokio::spawn(async move {
+                    barrier.wait().await;
+                    let res = update_branch(
+                        storage.as_ref(),
+                        &settings,
+                        "main",
+                        snapshot.clone(),
+                        Some(&parent),
+                    )
+                    .await;
+                    (snapshot, res)
+                }));
+            }
+
+            let mut winner = None;
+            for writer in writers {
+                let (snapshot, res) = writer.await?;
+                match res {
+                    Ok(_) => {
+                        assert_eq!(winner, None, "two writers moved the same branch");
+                        winner = Some(snapshot);
+                    }
+                    Err(RefError {
+                        kind: RefErrorKind::Conflict { expected_parent, .. },
+                        ..
+                    }) => assert_eq!(expected_parent, Some(parent.clone())),
+                    Err(err) => return Err(err.into()),
+                }
+            }
+
+            let winner = winner.expect("one writer must move the branch");
+            assert_eq!(
+                fetch_branch_tip_v1(storage.as_ref(), &storage_settings, "main").await?,
+                RefData { snapshot: winner }
+            );
+            Ok(())
+        })
+        .await;
+        res1?;
+        res2?;
+        Ok(())
+    }
+
     #[tokio_test]
     async fn test_tag_delete() -> Result<(), Box<dyn std::error::Error>> {
         let ((_, res1), (_, res2, _)) = with_test_storages::<

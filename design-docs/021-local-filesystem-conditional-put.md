@@ -86,6 +86,31 @@ step 4 against the same etag.
   local-filesystem special case. Local storage now behaves like the
   object stores.
 
+### Network filesystems
+
+`flock` is advisory, and on a network filesystem it may guard one
+client only. `local::network_filesystem` names the filesystem that
+holds the repository path through `statfs(2)`. Linux reports a magic
+number; the table covers nfs, smb, cifs and smb2. BSD and macOS report
+a name; the table covers nfs, smbfs and webdav. The probe walks up to
+the first existing ancestor, because a repository is often created
+before its directory exists.
+
+When the probe names a network filesystem, `default_settings` sets
+`unsafe_use_conditional_update: Some(false)`. It logs a warning that
+names the filesystem and the path. An explicit
+`unsafe_use_conditional_update = true` in the user's settings still
+overrides it.
+
+A manual check under `icechunk-arrow-object-store/checks/nfs-lock/`
+mounts one NFS-Ganesha export from two client containers and probes
+the lock. Against Ganesha 6.5 over NFSv4.1, `flock` did reach the
+server. A contended blocking lock failed with `EIO` instead of
+waiting. A lock on NFS therefore either works or fails every contended
+commit. Both outcomes argue for the default: keep conditional updates
+off there. The check is not part of `just test`; its README lists the
+prerequisites.
+
 ## Alternatives considered
 
 * **Move the local backend to Apache OpenDAL.** OpenDAL 0.59.1's `fs`
@@ -118,9 +143,10 @@ step 4 against the same etag.
   processes honor it. Every icechunk writer goes through this code, so
   that holds for icechunk. A process that edits the files by other
   means is outside the guarantee, as it always was.
-* **NFS.** Advisory locks are unreliable on NFS. The doc comment on
-  `new_local_filesystem` states this limit. Behavior on NFS is no worse
-  than before.
+* **Network filesystems.** Detection covers the filesystems in the
+  `statfs` tables above. A network filesystem that reports another
+  type, such as a FUSE mount, passes as local and gets the lock path.
+  The doc comment on `new_local_filesystem` states this limit.
 * **Windows.** `std::fs::File::lock` exists on Windows, but a `rename`
   over a file with an open handle may fail there. `object_store` has
   seen "Access is denied" on Windows for rapid operations on one path
@@ -153,6 +179,15 @@ they cover the settings plumbing as well as the store:
 The last two tests were checked by mutation. With the lock removed, the
 counter test fails. With the `NotFound` mapping removed, the delete
 test fails.
+
+Two more tests cover the filesystem probe. A temporary directory and a
+child path that does not exist yet both report no network filesystem.
+The `statfs` tables map the documented magic numbers and names.
+
+`refs::tests::test_concurrent_branch_updates_keep_one_winner` races
+eight writers through `update_branch` behind a barrier. Exactly one
+writer must move the branch. The others must get a `Conflict` that
+names the shared parent.
 
 ## Future work
 

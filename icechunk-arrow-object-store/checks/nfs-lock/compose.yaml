@@ -1,0 +1,48 @@
+name: icechunk-nfs-lock-check
+
+# Two clients contend for one lock on a shared filesystem. See README.md.
+# Ganesha serves NFSv4 from user space, so no kernel nfsd is needed.
+
+services:
+  nfs:
+    build: ./server
+    cap_add:
+      # ganesha calls prctl(PR_SET_IO_FLUSHER).
+      - SYS_RESOURCE
+      # The VFS FSAL reaches files with open_by_handle_at, which needs this.
+      # Without it every NFS operation fails with EPERM, mount included.
+      - DAC_READ_SEARCH
+    volumes:
+      - export:/export
+    healthcheck:
+      # Port 2049 is 0x0801. /proc needs no extra package in the image.
+      test: ["CMD-SHELL", "grep -q ':0801' /proc/net/tcp /proc/net/tcp6"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  client:
+    build:
+      context: ./client
+    # `mount` needs it. The control run does not, but one image keeps the two
+    # runs comparable.
+    privileged: true
+    # An SELinux host (Fedora, RHEL) labels an NFS mount in a way a confined
+    # container cannot read, and every getattr then fails with EPERM.
+    security_opt:
+      - label=disable
+    depends_on:
+      nfs:
+        condition: service_healthy
+    environment:
+      MODE: ${MODE:-nfs}
+      # Vary this to compare mounts, e.g. MOUNT_OPTS=nfsvers=4.1,local_lock=all
+      MOUNT_OPTS: ${MOUNT_OPTS:-nfsvers=4.1}
+      HOLD_SECONDS: ${HOLD_SECONDS:-3}
+    volumes:
+      - ./results:/results
+      - local:/local
+
+volumes:
+  export:
+  local:

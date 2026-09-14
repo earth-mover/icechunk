@@ -323,7 +323,7 @@ Icechunk can also be used on a [local filesystem](../reference/storage.md#icechu
 #### Limitations
 
 !!! warning
-    File system Storage is not safe in the presence of concurrent commits. If two sessions are trying to commit at the same time, both operations may return successfully but one of the commits can be lost. Don't use file system storage in production if there is the possibility of concurrent commits.
+    File locks serialize concurrent commits on file system Storage. A session that loses the race gets a conflict. It cannot overwrite the winner. These locks are advisory and work on one host only. A network file system such as NFS or SMB can ignore them. Two sessions can then both commit, and one commit is lost. Use object storage for concurrent commits on a network file system.
 
 - Icechunk currently does not work with a local filesystem storage backend on Windows. See [this issue](https://github.com/earth-mover/icechunk/issues/665) for more discussion. To work around, try using [WSL](https://learn.microsoft.com/en-us/windows/wsl/about) or a cloud storage backend.
 

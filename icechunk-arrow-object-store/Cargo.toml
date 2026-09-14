@@ -25,12 +25,16 @@ http.workspace = true
 object_store.workspace = true
 rand.workspace = true
 serde.workspace = true
-tokio = { workspace = true, features = ["rt", "sync"] }
+tokio = { workspace = true, features = ["sync"] }
 tokio-util.workspace = true
 tracing.workspace = true
 typetag.workspace = true
 url.workspace = true
 uuid.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+# `statfs`, to name the filesystem holding a local repository
+libc = { workspace = true, optional = true }
 
 [dev-dependencies]
 icechunk-macros.workspace = true
@@ -46,7 +50,7 @@ s3 = ["object_store/aws"]
 gcs = ["object_store/gcp"]
 azure = ["object_store/azure"]
 http = ["object_store/http"]
-fs = ["object_store/fs"]
+fs = ["object_store/fs", "tokio/rt", "dep:libc"]
 
 [lints]
 workspace = true

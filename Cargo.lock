@@ -2394,6 +2394,7 @@ dependencies = [
  "icechunk-macros",
  "icechunk-storage",
  "icechunk-types",
+ "libc",
  "object_store",
  "rand 0.10.2",
  "rmp-serde",

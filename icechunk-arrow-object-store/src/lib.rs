@@ -1040,6 +1040,22 @@ impl ObjectStoreBackend for LocalFileSystemObjectStoreBackend {
     }
 
     fn default_settings(&self) -> Settings {
+        // `ConditionalLocalFileSystem` does conditional updates with file
+        // locks, so unix only, and only where a lock reaches other hosts.
+        #[cfg(unix)]
+        let network_fs = local::network_filesystem(&self.path);
+        #[cfg(not(unix))]
+        let network_fs: Option<&str> = None;
+        if let Some(filesystem) = network_fs {
+            warn!(
+                filesystem,
+                path = %self.path.display(),
+                "conditional updates are off on this repository: a file lock on \
+                 this filesystem may not reach other hosts, so two commits at \
+                 once can both succeed and one can be lost. Use an object store \
+                 for concurrent commits."
+            );
+        }
         Settings {
             concurrency: Some(ConcurrencySettings {
                 max_concurrent_requests_for_object: Some(
@@ -1049,8 +1065,12 @@ impl ObjectStoreBackend for LocalFileSystemObjectStoreBackend {
                     NonZeroU64::new(4 * 1024).unwrap_or(NonZeroU64::MIN),
                 ),
             }),
-            // Conditional updates need the inode lock in `local`, which is unix only.
-            unsafe_use_conditional_update: Some(cfg!(unix)),
+            // A local put refuses attributes, which is why metadata stays off.
+            unsafe_use_conditional_update: if cfg!(unix) && network_fs.is_none() {
+                None
+            } else {
+                Some(false)
+            },
             unsafe_use_metadata: Some(false),
             retries: Some(RetriesSettings {
                 max_tries: Some(NonZeroU16::new(1).unwrap_or(NonZeroU16::MIN)),
