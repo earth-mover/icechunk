@@ -1114,4 +1114,41 @@ mod tests {
         session_b.rebase(&ConflictDetector).await.unwrap();
         session_b.commit("b").execute().await.unwrap();
     }
+
+    #[tokio::test]
+    async fn try_branch_ops_without_feature_flags() {
+        let repo = new_repo().await;
+        let snap = commit_root_and_array(&repo).await;
+
+        repo.create_branch("exists", &Snapshot::INITIAL_SNAPSHOT_ID).await.unwrap();
+        repo.reset_branch("exists", &snap, None).await.unwrap();
+
+        repo.set_feature_flag("create_branch", Some(false)).await.unwrap();
+        repo.set_feature_flag("delete_branch", Some(false)).await.unwrap();
+        repo.set_feature_flag("reset_branch", Some(false)).await.unwrap();
+
+        assert_flag_disabled_repo(
+            repo.create_branch("blocked", &Snapshot::INITIAL_SNAPSHOT_ID).await,
+            "create_branch",
+            "branch creation",
+        );
+        assert_flag_disabled_repo(
+            repo.reset_branch("exists", &Snapshot::INITIAL_SNAPSHOT_ID, None).await,
+            "reset_branch",
+            "branch reset",
+        );
+        assert_flag_disabled_repo(
+            repo.delete_branch("exists").await,
+            "delete_branch",
+            "branch delete",
+        );
+
+        repo.set_feature_flag("create_branch", None).await.unwrap();
+        repo.set_feature_flag("delete_branch", None).await.unwrap();
+        repo.set_feature_flag("reset_branch", None).await.unwrap();
+
+        repo.create_branch("allowed", &Snapshot::INITIAL_SNAPSHOT_ID).await.unwrap();
+        repo.reset_branch("exists", &Snapshot::INITIAL_SNAPSHOT_ID, None).await.unwrap();
+        repo.delete_branch("exists").await.unwrap();
+    }
 }

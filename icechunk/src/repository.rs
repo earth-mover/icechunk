@@ -40,8 +40,9 @@ use crate::{
     display::AncestryGraph,
     error::ICError,
     feature_flags::{
-        COMMIT_FLAG, CREATE_TAG_FLAG, DELETE_TAG_FLAG, FEATURE_FLAGS, FeatureFlag,
-        MOVE_NODE_FLAG, find_feature_flag_id, raise_if_feature_flag_disabled,
+        COMMIT_FLAG, CREATE_BRANCH_FLAG, CREATE_TAG_FLAG, DELETE_BRANCH_FLAG,
+        DELETE_TAG_FLAG, FEATURE_FLAGS, FeatureFlag, MOVE_NODE_FLAG, RESET_BRANCH_FLAG,
+        find_feature_flag_id, raise_if_feature_flag_disabled,
     },
     format::{
         IcechunkFormatError, IcechunkFormatErrorKind, ManifestId, NodeId, Path,
@@ -1164,6 +1165,12 @@ impl Repository {
         let num_updates = self.config.num_updates_per_repo_info_file();
         let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str, _| {
             raise_if_invalid_snapshot_id_v2(repo_info.as_ref(), snapshot_id)?;
+            raise_if_feature_flag_disabled(
+                repo_info.as_ref(),
+                CREATE_BRANCH_FLAG,
+                "branch creation",
+            )
+            .inject()?;
             Ok(Arc::new(
                 repo_info
                     .add_branch(
@@ -1375,6 +1382,12 @@ impl Repository {
         from_snapshot_id: Option<&SnapshotId>,
     ) -> RepositoryResult<()> {
         let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str, _| {
+            raise_if_feature_flag_disabled(
+                repo_info.as_ref(),
+                RESET_BRANCH_FLAG,
+                "branch reset",
+            )
+            .inject()?;
             if let Some(from_snapshot_id) = from_snapshot_id {
                 let actual_parent = repo_info.resolve_branch(branch).inject()?;
                 if &actual_parent != from_snapshot_id {
@@ -1446,6 +1459,12 @@ impl Repository {
     async fn delete_branch_v2(&self, branch: &str) -> RepositoryResult<()> {
         let num_updates = self.config.num_updates_per_repo_info_file();
         let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str, _| {
+            raise_if_feature_flag_disabled(
+                repo_info.as_ref(),
+                DELETE_BRANCH_FLAG,
+                "branch delete",
+            )
+            .inject()?;
             let new_repo = repo_info
                 .delete_branch(self.spec_version(), branch, backup_path, num_updates)
                 .map_err(|err| match err {
