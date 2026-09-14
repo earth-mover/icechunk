@@ -748,7 +748,7 @@ impl Snapshot {
     }
 }
 
-// Preserve the linear scan's first-match semantics for duplicate manifest IDs.
+// Return the first matching entry when multiple manifests have the same ID.
 // Continuing left after a match keeps even an all-equal vector logarithmic.
 fn lookup_first_manifest_index(
     len: usize,
