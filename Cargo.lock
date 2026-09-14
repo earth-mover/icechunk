@@ -2304,6 +2304,7 @@ dependencies = [
  "icechunk-storage",
  "icechunk-types",
  "itertools 0.15.0",
+ "libc",
  "noxious-client",
  "opentelemetry",
  "opentelemetry-otlp",

@@ -90,6 +90,7 @@ assert_fs.workspace = true
 clap.workspace = true
 criterion.workspace = true
 fs_extra.workspace = true
+libc.workspace = true
 noxious-client.workspace = true
 port_check.workspace = true
 pretty_assertions.workspace = true
