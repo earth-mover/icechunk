@@ -1183,13 +1183,13 @@ impl Repository {
     ) -> RepositoryResult<()> {
         let num_updates = self.config.num_updates_per_repo_info_file();
         let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str, _| {
-            raise_if_invalid_snapshot_id_v2(repo_info.as_ref(), snapshot_id)?;
             raise_if_feature_flag_disabled(
                 repo_info.as_ref(),
                 CREATE_BRANCH_FLAG,
                 "branch creation",
             )
             .inject()?;
+            raise_if_invalid_snapshot_id_v2(repo_info.as_ref(), snapshot_id)?;
             Ok(Arc::new(
                 repo_info
                     .add_branch(
@@ -2063,7 +2063,6 @@ impl Repository {
         self.fail_unless_online_status("Cannot create rearrange session").await?;
 
         let (ri, _) = self.asset_manager().fetch_repo_info().await?;
-        let snapshot_id = self.lookup_branch_v2(branch, Some(&ri)).await?;
 
         raise_if_feature_flag_disabled(
             ri.as_ref(),
@@ -2077,6 +2076,8 @@ impl Repository {
             "create rearrange session",
         )
         .inject()?;
+
+        let snapshot_id = self.lookup_branch_v2(branch, Some(&ri)).await?;
 
         let session = Session::create_rearrange_session(
             self.config.clone(),
