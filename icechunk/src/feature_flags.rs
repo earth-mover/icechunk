@@ -239,7 +239,7 @@ mod tests {
         Repository, Storage,
         change_set::ChangeSet,
         format::{
-            ChunkIndices, IcechunkFormatError,
+            ChunkIndices, IcechunkFormatError, SnapshotId,
             format_constants::SpecVersionBin,
             manifest::ChunkPayload,
             repo_info::UpdateType,
@@ -251,6 +251,85 @@ mod tests {
     };
 
     use super::*;
+
+    async fn new_repo() -> Repository {
+        let storage: Arc<dyn Storage + Send + Sync> =
+            new_in_memory_storage().await.unwrap();
+        Repository::create(None, storage, HashMap::new(), None, true).await.unwrap()
+    }
+
+    /// Commits a root group and an array at `/array`. Returns the snapshot id.
+    async fn commit_root_and_array(repo: &Repository) -> SnapshotId {
+        let mut session = repo.writable_session("main").await.unwrap();
+        session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await.unwrap();
+        session
+            .add_array(
+                "/array".try_into().unwrap(),
+                ArrayShape::new(vec![(4, 4)]).unwrap(),
+                Some(vec!["t".into()]),
+                Bytes::from_static(br#"{"this":"array"}"#),
+            )
+            .await
+            .unwrap();
+        session.commit("root and array").execute().await.unwrap()
+    }
+
+    fn assert_flag_disabled_repo<T: std::fmt::Debug>(
+        res: Result<T, RepositoryError>,
+        flag: &str,
+        description: &str,
+    ) {
+        match res {
+            Err(RepositoryError {
+                kind:
+                    RepositoryErrorKind::FormatError(
+                        IcechunkFormatErrorKind::FeatureFlagDisabled {
+                            feature_description,
+                            feature_flag,
+                        },
+                    ),
+                ..
+            }) => {
+                assert_eq!(feature_flag, flag);
+                assert_eq!(feature_description, description);
+            }
+            other => panic!("expected FeatureFlagDisabled({flag}), got {other:?}"),
+        }
+    }
+
+    /// Accepts both the commit path shape (wrapped in RepositoryError) and the
+    /// direct session shape.
+    fn assert_flag_disabled_session<T: std::fmt::Debug>(
+        res: Result<T, SessionError>,
+        flag: &str,
+        description: &str,
+    ) {
+        let (feature_flag, feature_description) = match res {
+            Err(SessionError {
+                kind:
+                    SessionErrorKind::RepositoryError(RepositoryErrorKind::FormatError(
+                        IcechunkFormatErrorKind::FeatureFlagDisabled {
+                            feature_description,
+                            feature_flag,
+                        },
+                    )),
+                ..
+            })
+            | Err(SessionError {
+                kind:
+                    SessionErrorKind::FormatError(
+                        IcechunkFormatErrorKind::FeatureFlagDisabled {
+                            feature_description,
+                            feature_flag,
+                        },
+                    ),
+                ..
+            }) => (feature_flag, feature_description),
+            other => panic!("expected FeatureFlagDisabled({flag}), got {other:?}"),
+        };
+        assert_eq!(feature_flag, flag);
+        assert_eq!(feature_description, description);
+    }
 
     #[tokio::test]
     async fn all_flags_on_new_repo() {
@@ -597,6 +676,42 @@ mod tests {
                 ..
             }) if feature_flag == "move_node" && feature_description == "flush rearrange session"
         ));
+    }
+
+    #[tokio::test]
+    async fn try_commit_without_commit_flag() {
+        let repo = new_repo().await;
+
+        let mut session = repo.writable_session("main").await.unwrap();
+        session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await.unwrap();
+
+        repo.set_feature_flag("commit", Some(false)).await.unwrap();
+        assert_flag_disabled_session(
+            session.commit("blocked").execute().await,
+            "commit",
+            "commit",
+        );
+
+        repo.set_feature_flag("commit", None).await.unwrap();
+        session.commit("allowed").execute().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn try_flush_without_commit_flag() {
+        let repo = new_repo().await;
+
+        let mut session = repo.writable_session("main").await.unwrap();
+        session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await.unwrap();
+
+        repo.set_feature_flag("commit", Some(false)).await.unwrap();
+        assert_flag_disabled_session(
+            session.commit("blocked").anonymous().execute().await,
+            "commit",
+            "flush",
+        );
+
+        repo.set_feature_flag("commit", None).await.unwrap();
+        session.commit("allowed").anonymous().execute().await.unwrap();
     }
 
     #[test]
