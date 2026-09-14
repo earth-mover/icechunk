@@ -42,7 +42,8 @@ use crate::{
     feature_flags::{
         COMMIT_FLAG, CREATE_BRANCH_FLAG, CREATE_TAG_FLAG, DELETE_BRANCH_FLAG,
         DELETE_TAG_FLAG, FEATURE_FLAGS, FeatureFlag, MOVE_NODE_FLAG, RESET_BRANCH_FLAG,
-        find_feature_flag_id, raise_if_feature_flag_disabled,
+        UPDATE_CONFIG_FLAG, UPDATE_REPOSITORY_METADATA_FLAG, find_feature_flag_id,
+        raise_if_feature_flag_disabled,
     },
     format::{
         IcechunkFormatError, IcechunkFormatErrorKind, ManifestId, NodeId, Path,
@@ -685,6 +686,12 @@ impl Repository {
             let num_updates = self.config.num_updates_per_repo_info_file();
             let spec_version = self.spec_version();
             let do_update = move |repo_info: Arc<RepoInfo>, backup_path: &str, _| {
+                raise_if_feature_flag_disabled(
+                    repo_info.as_ref(),
+                    UPDATE_CONFIG_FLAG,
+                    "config update",
+                )
+                .inject()?;
                 Ok(Arc::new(
                     repo_info
                         .set_config(spec_version, &config, backup_path, num_updates)
@@ -735,6 +742,12 @@ impl Repository {
         let mut final_metadata = Default::default();
         let num_updates = self.config().num_updates_per_repo_info_file();
         let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str, _| {
+            raise_if_feature_flag_disabled(
+                repo_info.as_ref(),
+                UPDATE_REPOSITORY_METADATA_FLAG,
+                "repository metadata update",
+            )
+            .inject()?;
             final_metadata = repo_info.metadata().inject()?;
             final_metadata.extend(metadata.clone());
             Ok(Arc::new(
@@ -765,6 +778,12 @@ impl Repository {
 
         let num_updates = self.config().num_updates_per_repo_info_file();
         let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str, _| {
+            raise_if_feature_flag_disabled(
+                repo_info.as_ref(),
+                UPDATE_REPOSITORY_METADATA_FLAG,
+                "repository metadata update",
+            )
+            .inject()?;
             Ok(Arc::new(
                 repo_info
                     .set_metadata(self.spec_version(), metadata, backup_path, num_updates)

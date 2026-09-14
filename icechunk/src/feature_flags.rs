@@ -1151,4 +1151,43 @@ mod tests {
         repo.reset_branch("exists", &Snapshot::INITIAL_SNAPSHOT_ID, None).await.unwrap();
         repo.delete_branch("exists").await.unwrap();
     }
+
+    #[tokio::test]
+    async fn try_config_and_metadata_ops_without_feature_flags() {
+        let repo = new_repo().await;
+        let metadata = SnapshotProperties::from([(
+            "owner".to_string(),
+            serde_json::Value::from("test"),
+        )]);
+
+        repo.save_config().await.unwrap();
+        repo.set_metadata(&metadata).await.unwrap();
+        repo.update_metadata(&metadata).await.unwrap();
+
+        repo.set_feature_flag("update_config", Some(false)).await.unwrap();
+        repo.set_feature_flag("update_repository_metadata", Some(false)).await.unwrap();
+
+        assert_flag_disabled_repo(
+            repo.save_config().await,
+            "update_config",
+            "config update",
+        );
+        assert_flag_disabled_repo(
+            repo.set_metadata(&metadata).await,
+            "update_repository_metadata",
+            "repository metadata update",
+        );
+        assert_flag_disabled_repo(
+            repo.update_metadata(&metadata).await,
+            "update_repository_metadata",
+            "repository metadata update",
+        );
+
+        repo.set_feature_flag("update_config", None).await.unwrap();
+        repo.set_feature_flag("update_repository_metadata", None).await.unwrap();
+
+        repo.save_config().await.unwrap();
+        repo.set_metadata(&metadata).await.unwrap();
+        repo.update_metadata(&metadata).await.unwrap();
+    }
 }
