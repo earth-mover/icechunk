@@ -1511,6 +1511,7 @@ class StorageSettings:
         chunks_storage_class: str | None = None,
         minimum_size_for_multipart_upload: int | None = None,
         timeouts: StorageTimeoutSettings | None = None,
+        fsync: bool | None = None,
     ) -> StorageSettings:
         """
         Create a new `StorageSettings` object
@@ -1544,6 +1545,11 @@ class StorageSettings:
             This is only useful in object stores that don't support the feature.
             Use at your own risk.
             Default: True
+
+        fsync: bool | None
+            Call fsync after every write to a local filesystem repository.
+            Object stores ignore it. Slower, but a commit survives a power loss.
+            Default: False
 
         storage_class: str | None
             Store all objects using this object store storage class.
@@ -1650,6 +1656,17 @@ class StorageSettings:
 
     @unsafe_use_metadata.setter
     def unsafe_use_metadata(self, value: bool) -> None: ...
+    @property
+    def fsync(self) -> bool | None:
+        """True if Icechunk calls fsync after every write to a local filesystem repository.
+
+        Object stores ignore this setting.
+        Default: False
+        """
+        ...
+
+    @fsync.setter
+    def fsync(self, value: bool) -> None: ...
     @property
     def storage_class(self) -> str | None:
         """All objects in object store will use this storage class or the default if None.

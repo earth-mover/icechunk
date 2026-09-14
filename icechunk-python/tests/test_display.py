@@ -88,6 +88,7 @@ class TestReprRoundtrip:
             StorageSettings(
                 retries=StorageRetriesSettings(max_tries=5),
                 storage_class="STANDARD_IA",
+                fsync=True,
             )
         )
 

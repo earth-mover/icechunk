@@ -1464,6 +1464,8 @@ pub struct PyStorageSettings {
     pub chunks_storage_class: Option<String>,
     #[pyo3(get, set)]
     pub minimum_size_for_multipart_upload: Option<u64>,
+    #[pyo3(get, set)]
+    pub fsync: Option<bool>,
 }
 
 impl From<storage::Settings> for PyStorageSettings {
@@ -1491,6 +1493,7 @@ impl From<storage::Settings> for PyStorageSettings {
             metadata_storage_class: value.metadata_storage_class,
             chunks_storage_class: value.chunks_storage_class,
             minimum_size_for_multipart_upload: value.minimum_size_for_multipart_upload,
+            fsync: value.fsync,
         })
     }
 }
@@ -1508,6 +1511,7 @@ impl From<&PyStorageSettings> for storage::Settings {
             metadata_storage_class: value.metadata_storage_class.clone(),
             chunks_storage_class: value.chunks_storage_class.clone(),
             minimum_size_for_multipart_upload: value.minimum_size_for_multipart_upload,
+            fsync: value.fsync,
         })
     }
 }
@@ -1566,6 +1570,7 @@ impl PyRepr for PyStorageSettings {
                     mode,
                 ),
             ),
+            ("fsync", py_option_bool_or_default(&self.fsync, d.fsync(), mode)),
             (
                 "concurrency",
                 py_option_nested_repr_or_default(&self.concurrency, mode, || {
@@ -1585,7 +1590,7 @@ impl PyRepr for PyStorageSettings {
 
 #[pymethods]
 impl PyStorageSettings {
-    #[pyo3(signature = ( concurrency=None, retries=None, unsafe_use_conditional_create=None, unsafe_use_conditional_update=None, unsafe_use_metadata=None, storage_class=None, metadata_storage_class=None, chunks_storage_class=None, minimum_size_for_multipart_upload=None, timeouts=None))]
+    #[pyo3(signature = ( concurrency=None, retries=None, unsafe_use_conditional_create=None, unsafe_use_conditional_update=None, unsafe_use_metadata=None, storage_class=None, metadata_storage_class=None, chunks_storage_class=None, minimum_size_for_multipart_upload=None, timeouts=None, fsync=None))]
     #[new]
     #[expect(clippy::too_many_arguments)]
     pub fn new(
@@ -1599,6 +1604,7 @@ impl PyStorageSettings {
         chunks_storage_class: Option<String>,
         minimum_size_for_multipart_upload: Option<u64>,
         timeouts: Option<Py<PyStorageTimeoutSettings>>,
+        fsync: Option<bool>,
     ) -> Self {
         Self {
             concurrency,
@@ -1611,6 +1617,7 @@ impl PyStorageSettings {
             metadata_storage_class,
             chunks_storage_class,
             minimum_size_for_multipart_upload,
+            fsync,
         }
     }
 

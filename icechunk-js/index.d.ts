@@ -426,6 +426,7 @@ export interface StorageSettings {
   metadataStorageClass?: string
   chunksStorageClass?: string
   minimumSizeForMultipartUpload?: number
+  fsync?: boolean
 }
 
 /** Storage timeout settings */

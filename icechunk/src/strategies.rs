@@ -446,6 +446,7 @@ prop_compose! {
         metadata_storage_class in option::of(".*"),
         chunks_storage_class in option::of(".*"),
         minimum_size_for_multipart_upload in option::of(any::<u64>()),
+        fsync in option::of(any::<bool>()),
     ) -> Settings  {
         Settings {
             concurrency,
@@ -458,6 +459,7 @@ prop_compose! {
             metadata_storage_class,
             chunks_storage_class,
             minimum_size_for_multipart_upload,
+            fsync,
         }
     }
 }

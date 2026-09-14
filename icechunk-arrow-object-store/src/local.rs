@@ -32,8 +32,8 @@ pub(crate) struct ConditionalLocalFileSystem {
 }
 
 impl ConditionalLocalFileSystem {
-    pub(crate) fn new_with_prefix(root: &StdPath) -> Result<Self> {
-        let inner = Arc::new(LocalFileSystem::new_with_prefix(root)?);
+    pub(crate) fn new_with_prefix(root: &StdPath, fsync: bool) -> Result<Self> {
+        let inner = Arc::new(LocalFileSystem::new_with_prefix(root)?.with_fsync(fsync));
         let root = Url::from_directory_path(root).map_err(|()| Error::Generic {
             store: "ConditionalLocalFileSystem",
             source: format!("{} is not an absolute path", root.display()).into(),
@@ -389,6 +389,25 @@ mod tests {
 
         let final_count = std::fs::read_to_string(root.join(path)).unwrap();
         assert_eq!(final_count, (TASKS * INCREMENTS).to_string());
+    }
+
+    /// `fsync` is not observable from outside the process. This checks the
+    /// setting reaches the store without breaking a write.
+    #[tokio_test]
+    async fn writes_round_trip_with_fsync_on() {
+        let tmp = TempDir::new().unwrap();
+        let store = ObjectStorage::new_local_filesystem(tmp.path()).await.unwrap();
+        let settings =
+            Settings { fsync: Some(true), ..store.default_settings().await.unwrap() };
+        let path = "refs/branch.main/ref.json";
+
+        let v1 = updated(
+            put(&store, &settings, path, b"v1", Some(&VersionInfo::for_creation())).await,
+        );
+        updated(put(&store, &settings, path, b"v2", Some(&v1)).await);
+
+        let (bytes, _) = get(&store, &settings, path).await;
+        assert_eq!(bytes, b"v2");
     }
 
     #[test]

@@ -1013,7 +1013,7 @@ impl ObjectStoreBackend for LocalFileSystemObjectStoreBackend {
 
     fn mk_object_store(
         &self,
-        _settings: &Settings,
+        settings: &Settings,
         _role: Role,
     ) -> Result<Arc<dyn ObjectStore>, StorageError> {
         let path = std::fs::canonicalize(&self.path).map_err(|err| {
@@ -1025,9 +1025,12 @@ impl ObjectStoreBackend for LocalFileSystemObjectStoreBackend {
         })?;
         #[cfg(unix)]
         let fs =
-            local::ConditionalLocalFileSystem::new_with_prefix(&path).capture_box()?;
+            local::ConditionalLocalFileSystem::new_with_prefix(&path, settings.fsync())
+                .capture_box()?;
         #[cfg(not(unix))]
-        let fs = LocalFileSystem::new_with_prefix(path).capture_box()?;
+        let fs = LocalFileSystem::new_with_prefix(path)
+            .capture_box()?
+            .with_fsync(settings.fsync());
         Ok(Arc::new(fs))
     }
 

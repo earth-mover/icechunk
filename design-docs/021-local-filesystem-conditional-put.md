@@ -158,6 +158,14 @@ prerequisites.
   write-id. The lost-response recovery from
   [017](017-conditional-put-lost-response.md) does not apply. A local
   filesystem has no lost responses, so nothing is lost.
+* **Durability.** `object_store` does not `fsync` by default, and this
+  design keeps that default. A power loss right after a commit can leave
+  a ref that points at an unwritten snapshot.
+  The storage setting `fsync` turns on `LocalFileSystem::with_fsync`.
+  Every write then calls `sync_all` on the staged file. The publish is
+  followed by an `fsync` of the parent directory. The cost lands on
+  every chunk write. On macOS `sync_all` issues `F_FULLFSYNC`, which
+  costs milliseconds per call. Object stores ignore the setting.
 * **Etag stability.** The soundness argument relies on every publish
   installing a new inode. That is how `LocalFileSystem` publishes
   today. An in-place write path in a future `object_store` release
@@ -183,6 +191,11 @@ test fails.
 Two more tests cover the filesystem probe. A temporary directory and a
 child path that does not exist yet both report no network filesystem.
 The `statfs` tables map the documented magic numbers and names.
+
+`writes_round_trip_with_fsync_on` sets `fsync: Some(true)` and writes
+through `ObjectStorage`. `fsync` is not observable from outside the
+process, so this test only proves the setting reaches the store.
+`icechunk-storage` tests the default and the merge rule for the field.
 
 `refs::tests::test_concurrent_branch_updates_keep_one_winner` races
 eight writers through `update_branch` behind a barrier. Exactly one

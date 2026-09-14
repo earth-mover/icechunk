@@ -255,6 +255,11 @@ pub struct Settings {
 
     #[serde(default)]
     pub minimum_size_for_multipart_upload: Option<u64>,
+
+    /// Call `fsync` after every write to a local filesystem repository.
+    /// Object stores ignore it. Defaults to `false`.
+    #[serde(default)]
+    pub fsync: Option<bool>,
 }
 
 static DEFAULT_CONCURRENCY: OnceLock<ConcurrencySettings> = OnceLock::new();
@@ -287,6 +292,10 @@ impl Settings {
 
     pub fn unsafe_use_metadata(&self) -> bool {
         self.unsafe_use_metadata.unwrap_or(true)
+    }
+
+    pub fn fsync(&self) -> bool {
+        self.fsync.unwrap_or(false)
     }
 
     pub fn metadata_storage_class(&self) -> Option<&String> {
@@ -386,6 +395,7 @@ impl Settings {
                 (Some(c), None) => Some(*c),
                 (Some(_), Some(theirs)) => Some(theirs),
             },
+            fsync: other.fsync.or(self.fsync),
         }
     }
 }
@@ -758,4 +768,26 @@ pub fn split_in_multiple_equal_requests(
 
 pub fn strip_quotes(s: &str) -> &str {
     s.strip_prefix('"').and_then(|s| s.strip_suffix('"')).unwrap_or(s)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Settings;
+
+    #[test]
+    fn fsync_defaults_to_off() {
+        assert!(!Settings::default().fsync());
+    }
+
+    #[test]
+    fn merge_lets_the_other_side_decide_fsync() {
+        let on = Settings { fsync: Some(true), ..Default::default() };
+        let off = Settings { fsync: Some(false), ..Default::default() };
+        let unset = Settings::default();
+
+        assert_eq!(on.merge(unset.clone()).fsync, Some(true));
+        assert_eq!(unset.merge(off.clone()).fsync, Some(false));
+        assert_eq!(on.merge(off).fsync, Some(false));
+        assert_eq!(unset.merge(unset.clone()).fsync, None);
+    }
 }

@@ -5,6 +5,7 @@
 ### Fixes
 
 - Local filesystem storage now supports conditional updates on unix. Concurrent commits from several threads or processes no longer lose updates. The implementation uses advisory file locks. On a network filesystem such as NFS or SMB a lock may not reach other hosts, so conditional updates stay off there and Icechunk logs a warning ([#1494](https://github.com/earth-mover/icechunk/issues/1494)).
+- `StorageSettings` gains `fsync`. When `True`, every write to a local filesystem repository calls `fsync` on the file and its directory, so a commit survives a power loss. It defaults to `False`. Object stores ignore it.
 - Update tests to deal with Tigris and other stores listing whole-second timestamps ([#2368](https://github.com/earth-mover/icechunk/pull/2368)).
 
 ## Python Icechunk Library 2.2.0

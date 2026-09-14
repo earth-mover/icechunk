@@ -147,6 +147,7 @@ pub struct JsStorageSettings {
     pub metadata_storage_class: Option<String>,
     pub chunks_storage_class: Option<String>,
     pub minimum_size_for_multipart_upload: Option<i64>,
+    pub fsync: Option<bool>,
 }
 
 impl From<JsStorageSettings> for Settings {
@@ -164,6 +165,7 @@ impl From<JsStorageSettings> for Settings {
             minimum_size_for_multipart_upload: value
                 .minimum_size_for_multipart_upload
                 .map(|v| v as u64),
+            fsync: value.fsync,
         }
     }
 }
@@ -283,6 +285,7 @@ impl From<RepositoryConfig> for JsRepositoryConfig {
                 minimum_size_for_multipart_upload: s
                     .minimum_size_for_multipart_upload
                     .map(|v| v as i64),
+                fsync: s.fsync,
             }),
             manifest: value.manifest.and_then(|m| serde_json::to_value(m).ok()),
             #[cfg(not(target_family = "wasm"))]
