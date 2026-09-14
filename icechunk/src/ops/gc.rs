@@ -18,6 +18,9 @@ use crate::{
     StorageError,
     asset_manager::AssetManager,
     config::RepoUpdateRetryConfig,
+    feature_flags::{
+        EXPIRATION_FLAG, GARBAGE_COLLECTION_FLAG, raise_if_feature_flag_disabled,
+    },
     format::{
         ChunkId, FileTypeTag, IcechunkFormatError, IcechunkResult, ManifestId, ObjectId,
         SnapshotId,
@@ -356,6 +359,13 @@ pub async fn garbage_collect(
             .capture()
             .map_err(GCError::Repository)?;
         }
+        raise_if_feature_flag_disabled(
+            repo_info.as_ref(),
+            GARBAGE_COLLECTION_FLAG,
+            "garbage collection",
+        )
+        .inject()
+        .map_err(GCError::Repository)?;
     }
 
     let default_retry_config = RepoUpdateRetryConfig::default();
@@ -626,6 +636,12 @@ async fn delete_snapshots_from_repo_info(
     trace!("deleting snapshots from repo info");
     let mut written_repo_info: Option<Arc<RepoInfo>> = None;
     let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str, _| {
+        raise_if_feature_flag_disabled(
+            repo_info.as_ref(),
+            GARBAGE_COLLECTION_FLAG,
+            "garbage collection",
+        )
+        .inject()?;
         let mut final_snaps = HashSet::with_capacity(2 * keep_snapshots.len());
         for si in repo_info.all_snapshots().inject()? {
             let si = si.inject()?;
@@ -1064,6 +1080,9 @@ async fn expire_v2_one_attempt(
 ) -> GCResult<ExpireResult> {
     info!("Expiration started");
     let (repo_info, repo_info_version_at_start) = asset_manager.fetch_repo_info().await?;
+    raise_if_feature_flag_disabled(repo_info.as_ref(), EXPIRATION_FLAG, "expiration")
+        .inject()
+        .map_err(GCError::Repository)?;
     let tags: Vec<(Ref, SnapshotId)> = repo_info
         .tags()?
         .map(|(name, snap)| Ok::<_, GCError>((Ref::Tag(name.to_string()), snap)))
@@ -1245,6 +1264,8 @@ async fn expire_v2_one_attempt(
     );
 
     let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str, version| {
+        raise_if_feature_flag_disabled(repo_info.as_ref(), EXPIRATION_FLAG, "expiration")
+            .inject()?;
         // we retry if the repo info object was modified since we started
         if version != repo_info_version_at_start {
             return Err(RepositoryError::capture(RepositoryErrorKind::RepoInfoUpdated));
