@@ -237,7 +237,7 @@ mod tests {
 
     use crate::{
         Repository, Storage,
-        change_set::ChangeSet,
+        change_set::{ArrayData, ChangeSet},
         format::{
             ChunkIndices, IcechunkFormatError, SnapshotId,
             format_constants::SpecVersionBin,
@@ -299,7 +299,7 @@ mod tests {
         }
     }
 
-    /// Accepts both the commit path shape (wrapped in RepositoryError) and the
+    /// Accepts both the commit path shape (wrapped in `RepositoryError`) and the
     /// direct session shape.
     fn assert_flag_disabled_session<T: std::fmt::Debug>(
         res: Result<T, SessionError>,
@@ -746,7 +746,7 @@ mod tests {
         cs.add_array(
             "/a".try_into().unwrap(),
             NodeId::random(),
-            crate::change_set::ArrayData {
+            ArrayData {
                 shape: ArrayShape::new(vec![(4, 4)]).unwrap(),
                 dimension_names: None,
                 user_data: Bytes::new(),
@@ -784,7 +784,7 @@ mod tests {
         cs.update_array(
             &NodeId::random(),
             &"/a".try_into().unwrap(),
-            crate::change_set::ArrayData {
+            ArrayData {
                 shape: ArrayShape::new(vec![(4, 4)]).unwrap(),
                 dimension_names: None,
                 user_data: Bytes::new(),
@@ -1189,7 +1189,7 @@ mod tests {
         ) {
             match res {
                 Err(GCError::Repository(err)) => {
-                    assert_flag_disabled_repo(Err::<T, _>(err), flag, description)
+                    assert_flag_disabled_repo(Err::<T, _>(err), flag, description);
                 }
                 other => panic!("expected FeatureFlagDisabled({flag}), got {other:?}"),
             }
