@@ -20,8 +20,11 @@ use crate::storage::JsStorage;
 use crate::storage::JsCredentials;
 
 #[cfg(target_family = "wasm")]
-#[allow(dead_code)]
-type JsCredentials = ();
+#[napi(object, js_name = "Credentials")]
+pub struct JsCredentials {
+    /// WASM currently supports only { type: 'HttpAccess' }.
+    pub r#type: String,
+}
 
 fn convert_config(
     config: Option<JsRepositoryConfig>,
@@ -33,17 +36,33 @@ fn convert_config(
 
 fn convert_credentials(
     creds: Option<HashMap<String, Option<JsCredentials>>>,
-) -> HashMap<String, Option<Credentials>> {
+) -> napi::Result<HashMap<String, Option<Credentials>>> {
     #[cfg(not(target_family = "wasm"))]
     {
-        creds
+        Ok(creds
             .map(|c| c.into_iter().map(|(k, v)| (k, v.map(|c| c.into()))).collect())
-            .unwrap_or_default()
+            .unwrap_or_default())
     }
     #[cfg(target_family = "wasm")]
     {
-        let _ = creds;
-        HashMap::new()
+        creds
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(prefix, value)| {
+                let credential = value
+                    .map(|credential| {
+                        if credential.r#type == "HttpAccess" {
+                            Ok(Credentials::HttpAccess)
+                        } else {
+                            Err(napi::Error::from_reason(
+                                "WASM virtual chunks support only HttpAccess credentials",
+                            ))
+                        }
+                    })
+                    .transpose()?;
+                Ok((prefix, credential))
+            })
+            .collect()
     }
 }
 
@@ -198,6 +217,26 @@ pub struct JsRepository(pub(crate) Arc<RwLock<Repository>>);
 
 #[napi]
 impl JsRepository {
+    /// Register an HTTP virtual-chunk callback before creating read sessions.
+    /// Callbacks use the error-first convention, like Storage.newCustom.
+    #[napi(
+        ts_args_type = "callback: (err: null, request: HttpVirtualChunkRequest) => Promise<HttpVirtualChunkResponse>"
+    )]
+    pub async fn set_http_virtual_chunk_fetcher(
+        &self,
+        callback: napi::threadsafe_function::ThreadsafeFunction<
+            crate::virtual_chunks::JsHttpVirtualChunkRequest,
+            napi::bindgen_prelude::Promise<
+                crate::virtual_chunks::JsHttpVirtualChunkResponse,
+            >,
+        >,
+    ) -> napi::Result<()> {
+        self.0.write().await.set_http_virtual_chunk_fetcher(Arc::new(
+            crate::virtual_chunks::JsHttpVirtualChunkFetcher(callback),
+        ));
+        Ok(())
+    }
+
     #[napi(factory)]
     pub async fn create(
         storage: &JsStorage,
@@ -211,7 +250,7 @@ impl JsRepository {
             .map(|v| SpecVersionBin::try_from(v as u8))
             .transpose()
             .map_napi_err()?;
-        let creds = convert_credentials(authorize_virtual_chunk_access);
+        let creds = convert_credentials(authorize_virtual_chunk_access)?;
         let repo = Repository::create(
             config,
             Arc::clone(&storage.0),
@@ -231,7 +270,7 @@ impl JsRepository {
         authorize_virtual_chunk_access: Option<HashMap<String, Option<JsCredentials>>>,
     ) -> napi::Result<JsRepository> {
         let config = convert_config(config)?;
-        let creds = convert_credentials(authorize_virtual_chunk_access);
+        let creds = convert_credentials(authorize_virtual_chunk_access)?;
         let repo = Repository::open(config, Arc::clone(&storage.0), creds)
             .await
             .map_napi_err()?;
@@ -251,7 +290,7 @@ impl JsRepository {
             .map(|v| SpecVersionBin::try_from(v as u8))
             .transpose()
             .map_napi_err()?;
-        let creds = convert_credentials(authorize_virtual_chunk_access);
+        let creds = convert_credentials(authorize_virtual_chunk_access)?;
         let repo = Repository::open_or_create(
             config,
             Arc::clone(&storage.0),

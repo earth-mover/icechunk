@@ -677,6 +677,7 @@ mod native {
     /// Credentials for virtual chunk access
     #[napi(js_name = "Credentials")]
     pub enum JsCredentials {
+        HttpAccess,
         S3(JsS3Credentials),
         Gcs(JsGcsCredentials),
         Azure(JsAzureCredentials),
@@ -685,6 +686,7 @@ mod native {
     impl From<JsCredentials> for icechunk::config::Credentials {
         fn from(creds: JsCredentials) -> Self {
             match creds {
+                JsCredentials::HttpAccess => icechunk::config::Credentials::HttpAccess,
                 JsCredentials::S3(c) => icechunk::config::Credentials::S3(c.into()),
                 JsCredentials::Gcs(c) => icechunk::config::Credentials::Gcs(c.into()),
                 JsCredentials::Azure(c) => icechunk::config::Credentials::Azure(c.into()),
