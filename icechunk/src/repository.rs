@@ -40,8 +40,8 @@ use crate::{
     display::AncestryGraph,
     error::ICError,
     feature_flags::{
-        CREATE_TAG_FLAG, DELETE_TAG_FLAG, FEATURE_FLAGS, FeatureFlag, MOVE_NODE_FLAG,
-        find_feature_flag_id, raise_if_feature_flag_disabled,
+        COMMIT_FLAG, CREATE_TAG_FLAG, DELETE_TAG_FLAG, FEATURE_FLAGS, FeatureFlag,
+        MOVE_NODE_FLAG, find_feature_flag_id, raise_if_feature_flag_disabled,
     },
     format::{
         IcechunkFormatError, IcechunkFormatErrorKind, ManifestId, NodeId, Path,
@@ -1985,7 +1985,19 @@ impl Repository {
 
         self.fail_unless_online_status("Cannot create writable session").await?;
 
-        let snapshot_id = self.lookup_branch(branch).await?;
+        let snapshot_id = match self.spec_version() {
+            SpecVersionBin::V1 => self.lookup_branch(branch).await?,
+            SpecVersionBin::V2 => {
+                let (ri, _) = self.asset_manager().fetch_repo_info().await?;
+                raise_if_feature_flag_disabled(
+                    ri.as_ref(),
+                    COMMIT_FLAG,
+                    "create writable session",
+                )
+                .inject()?;
+                self.lookup_branch_v2(branch, Some(&ri)).await?
+            }
+        };
 
         let session = Session::create_writable_session(
             self.config.clone(),
@@ -2015,6 +2027,12 @@ impl Repository {
         let (ri, _) = self.asset_manager().fetch_repo_info().await?;
         let snapshot_id = self.lookup_branch_v2(branch, Some(&ri)).await?;
 
+        raise_if_feature_flag_disabled(
+            ri.as_ref(),
+            COMMIT_FLAG,
+            "create rearrange session",
+        )
+        .inject()?;
         raise_if_feature_flag_disabled(
             ri.as_ref(),
             MOVE_NODE_FLAG,
