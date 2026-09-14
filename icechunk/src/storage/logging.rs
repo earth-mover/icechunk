@@ -6,6 +6,7 @@ use std::{
     ops::Range,
     pin::Pin,
     sync::{Arc, Mutex},
+    time::Duration,
 };
 
 use async_trait::async_trait;
@@ -21,16 +22,59 @@ use super::{
 };
 use icechunk_storage::sealed;
 
+/// Records how many `put_object` calls to matching paths overlap in time, and
+/// slows each one so that overlap is observable.
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct WriteProbe {
+    path_filter: String,
+    delay: Option<Duration>,
+    in_flight: usize,
+    peak: usize,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct LoggingStorage {
     backend: Arc<dyn Storage + Send + Sync>,
     fetch_log: Mutex<Vec<(String, String)>>,
+    #[serde(skip)]
+    probe: Mutex<WriteProbe>,
 }
 
 #[cfg(test)]
 impl LoggingStorage {
     pub fn new(backend: Arc<dyn Storage + Send + Sync>) -> Self {
-        Self { backend, fetch_log: Mutex::new(Vec::new()) }
+        Self {
+            backend,
+            fetch_log: Mutex::new(Vec::new()),
+            probe: Mutex::new(WriteProbe::default()),
+        }
+    }
+
+    /// Delays every `put_object` whose path contains `path_filter`, and records the
+    /// peak number of such writes in flight at once.
+    pub fn probing_writes(
+        backend: Arc<dyn Storage + Send + Sync>,
+        path_filter: &str,
+        delay: Duration,
+    ) -> Self {
+        Self {
+            backend,
+            fetch_log: Mutex::new(Vec::new()),
+            probe: Mutex::new(WriteProbe {
+                path_filter: path_filter.to_string(),
+                delay: Some(delay),
+                in_flight: 0,
+                peak: 0,
+            }),
+        }
+    }
+
+    pub fn peak_concurrent_writes(&self) -> usize {
+        self.probe.lock().expect("poison lock").peak
+    }
+
+    pub fn reset_peak_concurrent_writes(&self) {
+        self.probe.lock().expect("poison lock").peak = 0;
     }
 
     pub fn fetch_operations(&self) -> Vec<(String, String)> {
@@ -82,9 +126,31 @@ impl Storage for LoggingStorage {
             .lock()
             .expect("poison lock")
             .push(("put_object".to_string(), path.to_string()));
-        self.backend
+
+        let delay = {
+            let mut probe = self.probe.lock().expect("poison lock");
+            match probe.delay {
+                Some(delay) if path.contains(&probe.path_filter) => {
+                    probe.in_flight += 1;
+                    probe.peak = probe.peak.max(probe.in_flight);
+                    Some(delay)
+                }
+                _ => None,
+            }
+        };
+        if let Some(delay) = delay {
+            tokio::time::sleep(delay).await;
+        }
+
+        let result = self
+            .backend
             .put_object(settings, path, bytes, content_type, metadata, previous_version)
-            .await
+            .await;
+
+        if delay.is_some() {
+            self.probe.lock().expect("poison lock").in_flight -= 1;
+        }
+        result
     }
 
     async fn copy_object(

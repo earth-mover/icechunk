@@ -23,7 +23,10 @@ use std::{
     sync::Arc,
 };
 use thiserror::Error;
-use tokio::task::JoinError;
+use tokio::{
+    sync::{OwnedSemaphorePermit, Semaphore},
+    task::JoinError,
+};
 use tracing::{Instrument as _, Span, debug, info, instrument, trace, warn};
 
 use crate::{
@@ -2556,6 +2559,34 @@ impl<'a> FlushProcess<'a> {
     }
 }
 
+/// Bounds how many manifests are built and written at once for a whole flush, so
+/// that node concurrency and split concurrency draw on one budget.
+struct ManifestWriteGate {
+    semaphore: Arc<Semaphore>,
+    budget: usize,
+}
+
+impl ManifestWriteGate {
+    fn new(budget: usize) -> Self {
+        let budget = budget.max(1);
+        Self { semaphore: Arc::new(Semaphore::new(budget)), budget }
+    }
+
+    // An owned permit keeps the returned future free of a borrow lifetime, which
+    // the `Send` bound on `commit` needs.
+    async fn permit(&self) -> SessionResult<OwnedSemaphorePermit> {
+        Arc::clone(&self.semaphore)
+            .acquire_owned()
+            .await
+            .map_err(|e| SessionErrorKind::from(RepositoryErrorKind::from(e)))
+            .capture()
+    }
+}
+
+/// One extent's inputs for a manifest write: the extent, the previous manifests it
+/// overlaps, and the chunks the session changed inside it.
+type ExtentWork = (ManifestExtents, Vec<(ManifestRef, Overlap)>, ChunkTable);
+
 struct NodeFlushResult {
     node_id: NodeId,
     manifest_refs: Vec<ManifestRef>,
@@ -2665,6 +2696,7 @@ async fn flush_existing_node(
     split_config: &ManifestSplittingConfig,
     rewrite_manifests: bool,
     node: NodeSnapshot,
+    gate: &ManifestWriteGate,
 ) -> SessionResult<Option<NodeFlushResult>> {
     let node_id = &node.id;
 
@@ -2715,58 +2747,87 @@ async fn flush_existing_node(
                 );
             let snapshot_id = old_snapshot.id();
 
-            for extent in splits.iter() {
-                let intersecting_manifests: Vec<(&ManifestRef, Overlap)> = manifests
-                    .iter()
-                    .filter_map(|mr| match mr.extents.overlap_with(&extent) {
-                        Overlap::None => None,
-                        ov => Some((mr, ov)),
-                    })
-                    .collect();
+            // Each extent is prepared up front so the writes below can overlap.
+            // The refs are cloned, not borrowed: a borrow here would tie a lifetime
+            // into the futures below and break the `Send` bound on `commit`.
+            let work: Vec<ExtentWork> = splits
+                .iter()
+                .map(|extent| {
+                    let intersecting_manifests = manifests
+                        .iter()
+                        .filter_map(|mr| match mr.extents.overlap_with(&extent) {
+                            Overlap::None => None,
+                            ov => Some((mr.clone(), ov)),
+                        })
+                        .collect();
+                    let modified_chunks =
+                        updated_chunks_by_extent.remove(&extent).unwrap_or_default();
+                    (extent, intersecting_manifests, modified_chunks)
+                })
+                .collect();
 
-                let modified_chunks =
-                    updated_chunks_by_extent.remove(&extent).unwrap_or_default();
-
-                if !modified_chunks.is_empty() || rewrite_manifests {
-                    if let Some((new_ref, file_info)) = write_manifest_with_changes(
-                        asset_manager,
-                        manifest_config,
-                        intersecting_manifests.iter().map(|(mr, _)| *mr),
-                        modified_chunks,
-                        &extent,
-                        &node.id,
-                        &snapshot_id,
-                    )
-                    .await?
-                    {
-                        result.manifest_refs.push(new_ref);
-                        result.manifest_files.push(file_info);
-                    }
-                } else {
-                    for (mref, overlap) in intersecting_manifests {
-                        if overlap == Overlap::Complete {
-                            result.manifest_refs.push(mref.clone());
-                            #[expect(clippy::expect_used)]
-                            result.manifest_files.push(
-                                old_snapshot.manifest_info(&mref.object_id).inject()?.expect("logic bug. creating manifest file info for an existing manifest failed."),
-                            );
-                        } else if let Some((new_ref, file_info)) =
-                            write_manifest_with_changes(
+            let written = stream::iter(work.into_iter().map(
+                |(extent, intersecting_manifests, modified_chunks)| {
+                    let snapshot_id = snapshot_id.clone();
+                    async move {
+                        let mut refs = Vec::new();
+                        let mut files = Vec::new();
+                        if !modified_chunks.is_empty() || rewrite_manifests {
+                            let _permit = gate.permit().await?;
+                            if let Some((new_ref, file_info)) = write_manifest_with_changes(
                                 asset_manager,
                                 manifest_config,
-                                std::iter::once(mref),
-                                Default::default(),
+                                intersecting_manifests.iter().map(|(mr, _)| mr),
+                                modified_chunks,
                                 &extent,
-                                &node.id,
+                                node_id,
                                 &snapshot_id,
                             )
                             .await?
-                        {
-                            result.manifest_refs.push(new_ref);
-                            result.manifest_files.push(file_info);
+                            {
+                                refs.push(new_ref);
+                                files.push(file_info);
+                            }
+                        } else {
+                            for (mref, overlap) in intersecting_manifests {
+                                if overlap == Overlap::Complete {
+                                    refs.push(mref.clone());
+                                    #[expect(clippy::expect_used)]
+                                    files.push(
+                                        old_snapshot.manifest_info(&mref.object_id).inject()?.expect("logic bug. creating manifest file info for an existing manifest failed."),
+                                    );
+                                } else {
+                                    let _permit = gate.permit().await?;
+                                    if let Some((new_ref, file_info)) =
+                                        write_manifest_with_changes(
+                                            asset_manager,
+                                            manifest_config,
+                                            std::iter::once(&mref),
+                                            Default::default(),
+                                            &extent,
+                                            node_id,
+                                            &snapshot_id,
+                                        )
+                                        .await?
+                                    {
+                                        refs.push(new_ref);
+                                        files.push(file_info);
+                                    }
+                                }
+                            }
                         }
+                        Ok::<_, SessionError>((refs, files))
                     }
-                }
+                },
+            ))
+            // `buffered` keeps the manifest order the sequential loop produced.
+            .buffered(gate.budget)
+            .try_collect::<Vec<_>>()
+            .await?;
+
+            for (refs, files) in written {
+                result.manifest_refs.extend(refs);
+                result.manifest_files.extend(files);
             }
 
             Ok(Some(result))
@@ -2805,6 +2866,7 @@ async fn flush_new_node(
     node_id: &NodeId,
     node_path: &Path,
     splits: &ManifestSplits,
+    gate: &ManifestWriteGate,
 ) -> SessionResult<NodeFlushResult> {
     let mut result = NodeFlushResult {
         node_id: node_id.clone(),
@@ -2812,35 +2874,41 @@ async fn flush_new_node(
         manifest_files: Vec::new(),
     };
 
-    for extent in splits.iter() {
-        if change_set.array_manifest(node_id).is_some() {
-            let chunks = stream::iter(
-                change_set
-                    .array_chunks_iterator(node_id, node_path)
-                    // FIXME: do we need to optimize this so we don't need multiple passes over all chunks calling
-                    // contains?
-                    .filter_map(|(coord, payload)| {
-                        if let Some(payload) = payload
-                            && extent.contains(&coord.0)
-                        {
-                            Some(ChunkInfo {
-                                node: node_id.clone(),
-                                coord: coord.clone(),
-                                payload: payload.clone(),
-                            })
-                        } else {
-                            None
-                        }
-                    })
-                    .map(Ok),
-            );
-            if let Some((new_ref, file_info)) =
-                write_manifest_from_stream(asset_manager, manifest_config, chunks).await?
-            {
-                result.manifest_refs.push(new_ref);
-                result.manifest_files.push(file_info);
-            }
+    let written = stream::iter(splits.iter().map(|extent| async move {
+        if change_set.array_manifest(node_id).is_none() {
+            return Ok(None);
         }
+        let _permit = gate.permit().await?;
+        let chunks = stream::iter(
+            change_set
+                .array_chunks_iterator(node_id, node_path)
+                // FIXME: do we need to optimize this so we don't need multiple passes over all chunks calling
+                // contains?
+                .filter_map(|(coord, payload)| {
+                    if let Some(payload) = payload
+                        && extent.contains(&coord.0)
+                    {
+                        Some(ChunkInfo {
+                            node: node_id.clone(),
+                            coord: coord.clone(),
+                            payload: payload.clone(),
+                        })
+                    } else {
+                        None
+                    }
+                })
+                .map(Ok),
+        );
+        write_manifest_from_stream(asset_manager, manifest_config, chunks).await
+    }))
+    // `buffered` keeps the manifest order the sequential loop produced.
+    .buffered(gate.budget)
+    .try_collect::<Vec<_>>()
+    .await?;
+
+    for (new_ref, file_info) in written.into_iter().flatten() {
+        result.manifest_refs.push(new_ref);
+        result.manifest_files.push(file_info);
     }
 
     Ok(result)
@@ -2976,6 +3044,9 @@ async fn do_flush(
     let manifest_config = flush_data.manifest_config;
     let parent_id = flush_data.parent_id;
 
+    let gate = ManifestWriteGate::new(max_concurrent_nodes);
+    let gate = &gate;
+
     let array_nodes: Vec<NodeSnapshot> = old_snapshot
         .iter()
         .filter_ok(|node| node.node_type() == NodeType::Array)
@@ -2996,6 +3067,7 @@ async fn do_flush(
                     split_config,
                     rewrite_manifests,
                     node,
+                    gate,
                 )
                 .await
             }
@@ -3039,6 +3111,7 @@ async fn do_flush(
                     &node_id,
                     &node_path,
                     &splits,
+                    gate,
                 )
                 .await
             }
@@ -3526,8 +3599,10 @@ mod tests {
     use rstest::rstest;
     use rstest_reuse::{self, *};
 
+    use icechunk_format::MANIFESTS_FILE_PATH;
     use pretty_assertions::assert_eq;
     use proptest::prelude::{prop_assert, prop_assert_eq};
+    use std::time::Duration;
     use storage::logging::LoggingStorage;
     use test_strategy::proptest;
     #[cfg(not(feature = "shuttle"))]
@@ -3813,6 +3888,106 @@ mod tests {
         )
         .await?;
         assert_eq!(chunk, Some(bytes));
+        Ok(())
+    }
+
+    /// Builds a repo whose array is split into `num_manifests` manifests, commits it,
+    /// and reports how many manifest writes were in flight at once.
+    async fn peak_manifest_write_concurrency(
+        num_manifests: u32,
+        budget: usize,
+        second_commit: bool,
+    ) -> Result<usize, Box<dyn Error>> {
+        let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+        let logging = Arc::new(LoggingStorage::probing_writes(
+            backend,
+            MANIFESTS_FILE_PATH,
+            Duration::from_millis(100),
+        ));
+        let storage: Arc<dyn Storage + Send + Sync> = Arc::clone(&logging) as _;
+
+        let num_chunks = num_manifests;
+        let config = RepositoryConfig {
+            manifest: Some(ManifestConfig {
+                splitting: Some(ManifestSplittingConfig::with_size(1)),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let repo = Repository::create(
+            Some(config),
+            storage,
+            HashMap::new(),
+            Some(SpecVersionBin::V2),
+            true,
+        )
+        .await?;
+
+        let mut session = repo.writable_session("main").await?;
+        let array_path: Path = "/array".to_string().try_into()?;
+        let shape = ArrayShape::new(vec![(num_chunks as u64, num_chunks)]).unwrap();
+        session
+            .add_array(
+                array_path.clone(),
+                shape,
+                Some(vec!["t".into()]),
+                Bytes::from_static(br#"{"this":"array"}"#),
+            )
+            .await?;
+        let bytes = Bytes::copy_from_slice(&42i8.to_be_bytes());
+        for i in 0..num_chunks {
+            let payload = session.get_chunk_writer()?(bytes.clone()).await?;
+            session
+                .set_chunk_ref(array_path.clone(), ChunkIndices(vec![i]), Some(payload))
+                .await?;
+        }
+        session.commit("commit").max_concurrent_nodes(budget).execute().await?;
+        if !second_commit {
+            return Ok(logging.peak_concurrent_writes());
+        }
+
+        // The second commit takes the existing-node path instead of the new-node one.
+        logging.reset_peak_concurrent_writes();
+        let mut session = repo.writable_session("main").await?;
+        for i in 0..num_chunks {
+            let payload =
+                session.get_chunk_writer()?(Bytes::copy_from_slice(&7i8.to_be_bytes()))
+                    .await?;
+            session
+                .set_chunk_ref(array_path.clone(), ChunkIndices(vec![i]), Some(payload))
+                .await?;
+        }
+        session.commit("update").max_concurrent_nodes(budget).execute().await?;
+        Ok(logging.peak_concurrent_writes())
+    }
+
+    // A single array split into many manifests must write those manifests
+    // concurrently, not one round trip at a time.
+    #[tokio_test]
+    async fn test_manifest_writes_within_a_node_are_concurrent()
+    -> Result<(), Box<dyn Error>> {
+        let peak = peak_manifest_write_concurrency(8, 8, false).await?;
+        assert!(peak > 1, "manifest writes were serialized, peak concurrency {peak}");
+        Ok(())
+    }
+
+    // Rewriting the manifests of an array that already exists must also overlap
+    // its writes.
+    #[tokio_test]
+    async fn test_manifest_rewrites_within_a_node_are_concurrent()
+    -> Result<(), Box<dyn Error>> {
+        let peak = peak_manifest_write_concurrency(8, 8, true).await?;
+        assert!(peak > 1, "manifest rewrites were serialized, peak concurrency {peak}");
+        Ok(())
+    }
+
+    // Manifest write concurrency must respect the configured budget, so that the
+    // number of manifests held in memory at once stays bounded.
+    #[tokio_test]
+    async fn test_manifest_write_concurrency_respects_budget()
+    -> Result<(), Box<dyn Error>> {
+        let peak = peak_manifest_write_concurrency(8, 2, false).await?;
+        assert!(peak <= 2, "manifest writes exceeded the budget, peak {peak}");
         Ok(())
     }
 
