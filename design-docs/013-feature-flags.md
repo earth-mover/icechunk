@@ -58,35 +58,34 @@ Before executing a function Icechunk checks the status of the corresponding
 feature flag. Of course feature flags cannot be enforced, since user has access
 to the full on-disk repository, but the Icechunk library will honor them.
 
-## Proposed list of features
+## List of features
 
-These are some of the proposed feature flags, with a subjective indication if
-they should be released in version 2.0 or later. This judgement is mostly
-based on importance of the feature flag and complexity of implementation.
+All flags default to enabled. IDs are fixed; the code holds them in
+`icechunk/src/feature_flags.rs`.
 
-| name                               | default            | implement in   |
-| -----------------------------------| -------------------|----------------|
-| commit                             | enabled            | > 2.0          |
-| amend                              | enabled            |2.0             |
-| rebase                             | enabled            |2.0             |
-| move_node                          | enabled            |2.0             |
-| create_new_nodes                   | enabled            |> 2.0           |
-| delete_nodes                       | enabled            |> 2.0           |
-| update_chunks                      | enabled            | > 2.0          |
-| update_array_metadata              | enabled            | > 2.0          |
-| update_group_metadata              | enabled            | > 2.0          |
-| tag_create                         | enabled            |2.0             |
-| tag_delete                         | enabled            |2.0             |
-| branch_create                      | enabled            |2.0             |
-| branch_delete                      | enabled            |2.0             |
-| branch_reset                       | enabled            |2.0             |
-| garbage_collection                 | enabled            |2.0             |
-| expiration                         | enabled            |2.0             |
-| upgrade_spec_version               | enabled            |2.0             |
-| update_config                      | enabled            |2.0             |
-| set_default_commit_metadata        | enabled            |> 2.0           |
-| update_repository_metadata         | enabled            | > 2.0          |
-| rewrite_manifests                  | enabled            |2.0             |
+| id | name                        | status                                             |
+| -- | --------------------------- | -------------------------------------------------- |
+| 1  | commit                      | implemented                                        |
+| 2  | amend                       | implemented                                        |
+| 3  | move_node                   | implemented                                        |
+| 4  | create_tag                  | implemented                                        |
+| 5  | delete_tag                  | implemented                                        |
+| 6  | rebase                      | implemented                                        |
+| 7  | create_new_nodes            | implemented, checked at commit and flush           |
+| 8  | delete_nodes                | implemented, checked at commit and flush           |
+| 9  | update_chunks               | implemented, checked at commit and flush           |
+| 10 | update_array_metadata       | implemented, checked at commit and flush           |
+| 11 | update_group_metadata       | implemented, checked at commit and flush           |
+| 12 | create_branch               | implemented                                        |
+| 13 | delete_branch               | implemented                                        |
+| 14 | reset_branch                | implemented                                        |
+| 15 | garbage_collection          | implemented                                        |
+| 16 | expiration                  | implemented                                        |
+| 17 | upgrade_spec_version        | reserved; no upgrade path starts from a V2 repo    |
+| 18 | update_config               | implemented                                        |
+| 19 | set_default_commit_metadata | implemented, checked at commit and flush           |
+| 20 | update_repository_metadata  | implemented                                        |
+| 21 | rewrite_manifests           | implemented                                        |
 
 ## Other format changes
 
