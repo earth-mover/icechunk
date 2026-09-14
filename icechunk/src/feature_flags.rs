@@ -1190,4 +1190,76 @@ mod tests {
         repo.set_metadata(&metadata).await.unwrap();
         repo.update_metadata(&metadata).await.unwrap();
     }
+
+    #[tokio::test]
+    async fn try_gc_and_expire_without_feature_flags() {
+        use std::num::{NonZeroU16, NonZeroUsize};
+
+        use chrono::Utc;
+
+        use crate::ops::gc::{
+            ExpiredRefAction, GCConfig, GCError, expire, garbage_collect,
+        };
+
+        fn assert_flag_disabled_gc<T: std::fmt::Debug>(
+            res: Result<T, GCError>,
+            flag: &str,
+            description: &str,
+        ) {
+            match res {
+                Err(GCError::Repository(err)) => {
+                    assert_flag_disabled_repo(Err::<T, _>(err), flag, description)
+                }
+                other => panic!("expected FeatureFlagDisabled({flag}), got {other:?}"),
+            }
+        }
+
+        let repo = new_repo().await;
+        commit_root_and_array(&repo).await;
+
+        let gc_config = GCConfig::clean_all(
+            Utc::now(),
+            Utc::now(),
+            None,
+            NonZeroU16::new(50).unwrap(),
+            NonZeroUsize::new(512 * 1024 * 1024).unwrap(),
+            NonZeroUsize::new(4 * 1024 * 1024 * 1024).unwrap(),
+            NonZeroU16::new(500).unwrap(),
+            NonZeroU16::new(10).unwrap(),
+            NonZeroU16::new(50).unwrap(),
+            None,
+            false,
+        );
+        let run_gc =
+            || garbage_collect(Arc::clone(repo.asset_manager()), &gc_config, None, 100);
+        let run_expire = || {
+            expire(
+                Arc::clone(repo.asset_manager()),
+                Utc::now(),
+                ExpiredRefAction::Ignore,
+                ExpiredRefAction::Ignore,
+                None,
+                100,
+            )
+        };
+
+        run_gc().await.unwrap();
+        run_expire().await.unwrap();
+
+        repo.set_feature_flag("garbage_collection", Some(false)).await.unwrap();
+        repo.set_feature_flag("expiration", Some(false)).await.unwrap();
+
+        assert_flag_disabled_gc(
+            run_gc().await,
+            "garbage_collection",
+            "garbage collection",
+        );
+        assert_flag_disabled_gc(run_expire().await, "expiration", "expiration");
+
+        repo.set_feature_flag("garbage_collection", None).await.unwrap();
+        repo.set_feature_flag("expiration", None).await.unwrap();
+
+        run_gc().await.unwrap();
+        run_expire().await.unwrap();
+    }
 }
