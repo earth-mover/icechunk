@@ -1,5 +1,6 @@
 from icechunk._icechunk_python import (
     CachingConfig,
+    CoalescingConfig,
     CompressionAlgorithm,
     CompressionConfig,
     FeatureFlag,
@@ -19,6 +20,7 @@ from icechunk._icechunk_python import (
 
 __all__ = [
     "CachingConfig",
+    "CoalescingConfig",
     "CompressionAlgorithm",
     "CompressionConfig",
     "FeatureFlag",

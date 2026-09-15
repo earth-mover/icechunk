@@ -18,14 +18,15 @@ use std::env;
 
 use config::{
     PyAzureCredentials, PyAzureRefreshableCredential, PyAzureStaticCredentials,
-    PyCachingConfig, PyChecksumAlgorithm, PyCompressionAlgorithm, PyCompressionConfig,
-    PyCredentials, PyGcsBearerCredential, PyGcsCredentials, PyGcsStaticCredentials,
-    PyLatencyStorage, PyManifestConfig, PyManifestPreloadCondition,
-    PyManifestPreloadConfig, PyManifestVirtualChunkLocationCompressionConfig,
-    PyObjectStoreConfig, PyRepoUpdateRetryConfig, PyRepositoryConfig, PyS3Credentials,
-    PyS3Options, PyS3StaticCredentials, PyStorage, PyStorageConcurrencySettings,
-    PyStorageObjectInfo, PyStorageRetriesSettings, PyStorageSettings,
-    PyStorageTimeoutSettings, PyVirtualChunkContainer,
+    PyCachingConfig, PyChecksumAlgorithm, PyCoalescingConfig, PyCompressionAlgorithm,
+    PyCompressionConfig, PyCredentials, PyGcsBearerCredential, PyGcsCredentials,
+    PyGcsStaticCredentials, PyLatencyStorage, PyManifestConfig,
+    PyManifestPreloadCondition, PyManifestPreloadConfig,
+    PyManifestVirtualChunkLocationCompressionConfig, PyObjectStoreConfig,
+    PyRepoUpdateRetryConfig, PyRepositoryConfig, PyS3Credentials, PyS3Options,
+    PyS3StaticCredentials, PyStorage, PyStorageConcurrencySettings, PyStorageObjectInfo,
+    PyStorageRetriesSettings, PyStorageSettings, PyStorageTimeoutSettings,
+    PyVirtualChunkContainer,
 };
 use config::{
     PyManifestSplitCondition, PyManifestSplitDimCondition, PyManifestSplittingConfig,
@@ -46,7 +47,7 @@ use repository::{
 };
 use session::{ChunkType, PySession, PySessionMode};
 use stats::PyChunkStorageStats;
-use store::{PyStore, VirtualChunkSpec};
+use store::{PyStore, VirtualChunkSpec, partition_chunk_keys};
 
 #[cfg(feature = "cli")]
 use clap::Parser as _;
@@ -231,6 +232,7 @@ fn _icechunk_python(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyCompressionAlgorithm>()?;
     m.add_class::<PyCompressionConfig>()?;
     m.add_class::<PyCachingConfig>()?;
+    m.add_class::<PyCoalescingConfig>()?;
     m.add_class::<PyStorageConcurrencySettings>()?;
     m.add_class::<PyStorageRetriesSettings>()?;
     m.add_class::<PyStorageTimeoutSettings>()?;
@@ -255,6 +257,7 @@ fn _icechunk_python(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(initialize_logs, m)?)?;
     m.add_function(wrap_pyfunction!(set_logs_filter, m)?)?;
     m.add_function(wrap_pyfunction!(shutdown_telemetry, m)?)?;
+    m.add_function(wrap_pyfunction!(partition_chunk_keys, m)?)?;
     m.add_function(wrap_pyfunction!(spec_version, m)?)?;
     m.add_function(wrap_pyfunction!(user_agent, m)?)?;
     m.add_function(wrap_pyfunction!(cli_entrypoint, m)?)?;

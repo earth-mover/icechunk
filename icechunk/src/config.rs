@@ -517,6 +517,38 @@ impl RepoUpdateRetryConfig {
     }
 }
 
+/// How bulk reads merge nearby chunks into fewer, larger requests.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct CoalescingConfig {
+    /// Unwanted bytes a bulk read will merge across to save a round trip.
+    /// 0 merges only strictly adjacent chunks.
+    #[serde(default)]
+    pub max_gap_bytes: Option<u64>,
+
+    /// Ceiling on a merged span, so one request cannot grow without bound.
+    #[serde(default)]
+    pub max_coalesced_bytes: Option<u64>,
+}
+
+pub const DEFAULT_MAX_GAP_BYTES: u64 = 256 * 1024;
+
+impl CoalescingConfig {
+    pub fn max_gap_bytes(&self) -> u64 {
+        self.max_gap_bytes.unwrap_or(DEFAULT_MAX_GAP_BYTES)
+    }
+
+    pub fn max_coalesced_bytes(&self) -> Option<u64> {
+        self.max_coalesced_bytes
+    }
+
+    pub fn merge(&self, other: Self) -> Self {
+        Self {
+            max_gap_bytes: other.max_gap_bytes.or(self.max_gap_bytes),
+            max_coalesced_bytes: other.max_coalesced_bytes.or(self.max_coalesced_bytes),
+        }
+    }
+}
+
 /// Configuration options for a repository.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct RepositoryConfig {
@@ -527,6 +559,9 @@ pub struct RepositoryConfig {
     /// Concurrency used by the `get_partial_values` operation to fetch different keys in parallel
     #[serde(default)]
     pub get_partial_values_concurrency: Option<u16>,
+
+    #[serde(default)]
+    pub coalescing: Option<CoalescingConfig>,
 
     #[serde(default)]
     pub compression: Option<CompressionConfig>,
@@ -562,6 +597,7 @@ pub struct RepositoryConfig {
 }
 
 static DEFAULT_COMPRESSION: OnceLock<CompressionConfig> = OnceLock::new();
+static DEFAULT_COALESCING: OnceLock<CoalescingConfig> = OnceLock::new();
 static DEFAULT_CACHING: OnceLock<CachingConfig> = OnceLock::new();
 static DEFAULT_MANIFEST_CONFIG: OnceLock<ManifestConfig> = OnceLock::new();
 static DEFAULT_REPO_UPDATE_RETRY_CONFIG: OnceLock<RepoUpdateRetryConfig> =
@@ -575,6 +611,11 @@ impl RepositoryConfig {
     }
     pub fn get_partial_values_concurrency(&self) -> u16 {
         self.get_partial_values_concurrency.unwrap_or(10)
+    }
+    pub fn coalescing(&self) -> &CoalescingConfig {
+        self.coalescing
+            .as_ref()
+            .unwrap_or_else(|| DEFAULT_COALESCING.get_or_init(CoalescingConfig::default))
     }
 
     pub fn compression(&self) -> &CompressionConfig {
@@ -620,6 +661,12 @@ impl RepositoryConfig {
             get_partial_values_concurrency: other
                 .get_partial_values_concurrency
                 .or(self.get_partial_values_concurrency),
+            coalescing: match (&self.coalescing, other.coalescing) {
+                (None, None) => None,
+                (None, Some(c)) => Some(c),
+                (Some(c), None) => Some(*c),
+                (Some(mine), Some(theirs)) => Some(mine.merge(theirs)),
+            },
             compression: match (&self.compression, other.compression) {
                 (None, None) => None,
                 (None, Some(c)) => Some(c),
