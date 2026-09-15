@@ -1,6 +1,7 @@
 //! Storage wrapper that adds artificial latency (for testing).
 
 use std::{
+    collections::HashSet,
     fmt,
     ops::Range,
     pin::Pin,
@@ -132,6 +133,16 @@ impl Storage for LatencyStorage {
         // pages back to storage every ~1k keys without additional delays.
         self.sleep_for_read().await;
         self.backend.list_objects(settings, prefix).await
+    }
+
+    async fn list_objects_with_id_first_chars<'a>(
+        &'a self,
+        settings: &Settings,
+        prefix: &str,
+        first_chars: &HashSet<char>,
+    ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
+        self.sleep_for_read().await;
+        self.backend.list_objects_with_id_first_chars(settings, prefix, first_chars).await
     }
 
     async fn delete_batch(
