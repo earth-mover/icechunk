@@ -558,15 +558,22 @@ class Model:
         """Predict which snapshots Rust GC will delete.
 
         Uses storage-level created_at (not written_at/flushed_at) to match
-        Rust's gc_snapshots which checks ``snapshot.created_at < cutoff``.
-        The created_at_by_id dict must be captured *before* calling Rust GC,
-        since GC deletes the files from storage.
+        Rust's gc_snapshots. The store can floor a created_at to a whole
+        second. Rust then deletes it only after that whole second passes.
+        The created_at_by_id dict must be captured *before* calling
+        Rust GC, since GC deletes the files from storage.
         """
         reachable_snaps = self.reachable_snapshots()
+
+        def created_entirely_before(created_at: datetime.datetime) -> bool:
+            if created_at.microsecond == 0:
+                return created_at + datetime.timedelta(seconds=1) <= older_than
+            return created_at < older_than
+
         deleted = {
             k
             for k in set(self.ondisk_snaps) - reachable_snaps
-            if created_at_by_id[k] < older_than
+            if created_entirely_before(created_at_by_id[k])
         }
 
         new_parents: dict[str, str | None] = {}

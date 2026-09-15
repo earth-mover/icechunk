@@ -2,6 +2,10 @@
 
 ## Python Icechunk Library [unreleased]
 
+### Fixes
+
+- Update tests to deal with Tigris and other stores listing whole-second timestamps ([#2368](https://github.com/earth-mover/icechunk/pull/2368)).
+
 ### Performance
 
 - Speed up manifest metadata lookups during commits, reads, and manifest preloading in repositories with many manifests by using binary search instead of linear scans.

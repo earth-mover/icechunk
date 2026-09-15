@@ -1,6 +1,7 @@
 import time
 from datetime import UTC, datetime
 from typing import Any, cast
+from uuid import uuid4
 
 import pytest
 
@@ -10,7 +11,7 @@ from tests.conftest import Permission, get_minio_client
 
 
 def mk_repo(spec_version: int | None) -> tuple[str, ic.Repository]:
-    prefix = "test-repo__" + str(time.time())
+    prefix = "test-repo__" + uuid4().hex
     access_key_id, secret_access_key = Permission.MODIFY.keys()
     repo = ic.Repository.create(
         storage=ic.s3_storage(
@@ -27,6 +28,19 @@ def mk_repo(spec_version: int | None) -> tuple[str, ic.Repository]:
         spec_version=spec_version,
     )
     return (prefix, repo)
+
+
+def cutoff_past_second_boundary() -> datetime:
+    """Return a cutoff that every earlier write precedes by a whole second.
+
+    Object stores list whole-second timestamps. GC deletes an object only
+    once that whole second precedes the cutoff.
+    """
+    # The store stamps the object with its own clock, which can run ahead
+    # of ours by a few tens of milliseconds.
+    time.sleep(0.2)
+    time.sleep(1 - datetime.now(UTC).microsecond / 1_000_000)
+    return datetime.now(UTC)
 
 
 @pytest.mark.filterwarnings("ignore:datetime.datetime.utcnow")
@@ -55,7 +69,7 @@ async def test_expire_and_gc(use_async: bool, any_spec_version: int | None) -> N
         array[i] = i
         session.commit(f"written coord {i}")
 
-    old = datetime.now(UTC)
+    old = cutoff_past_second_boundary()
 
     session = repo.writable_session("main")
     store = session.store
@@ -261,7 +275,7 @@ async def test_gc_deletes_only_unreferenced_expired_tx_logs(use_async: bool) -> 
     # Bracket the threshold with gaps so prior commits land strictly before it
     # and /c strictly after, clear of created_at (ms) vs flushed_at truncation.
     time.sleep(0.05)
-    threshold = datetime.now(UTC)
+    threshold = cutoff_past_second_boundary()
     time.sleep(0.05)
 
     commit_group("main", "c")  # survives, re-parented to root
