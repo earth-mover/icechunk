@@ -23,13 +23,13 @@ use icechunk::{
     refs::Ref,
     repository::VersionInfo,
     session::get_chunk,
-    storage::{ListInfo, latency::LatencyStorage},
+    storage::latency::LatencyStorage,
 };
 use icechunk_macros::tokio_test;
 use pretty_assertions::assert_eq;
 
 use crate::common;
-use crate::common::Permission;
+use crate::common::{Permission, cutoff_after_all_listed, listed_snapshots};
 
 #[tokio_test]
 async fn test_gc_in_minio_spec_v1() -> Result<(), Box<dyn std::error::Error>> {
@@ -281,22 +281,6 @@ async fn test_gc_cutoff_inside_listed_second_in_tigris()
     repo.readonly_session(&VersionInfo::SnapshotId(dangling)).await?;
 
     Ok(())
-}
-
-/// Cutoff past every listed snapshot, from the store clock.
-/// The extra second covers whole-second listings.
-async fn cutoff_after_all_listed(
-    repo: &Repository,
-) -> Result<DateTime<Utc>, Box<dyn std::error::Error>> {
-    let listed = listed_snapshots(repo).await?;
-    let newest = listed.iter().map(|s| s.created_at).max().expect("snapshots listed");
-    Ok(newest + TimeDelta::seconds(1))
-}
-
-async fn listed_snapshots(
-    repo: &Repository,
-) -> Result<Vec<ListInfo<SnapshotId>>, Box<dyn std::error::Error>> {
-    Ok(repo.asset_manager().list_snapshots().await?.try_collect().await?)
 }
 
 async fn branch_commit_messages(repo: &Repository, branch: &str) -> Vec<String> {
