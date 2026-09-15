@@ -1,6 +1,6 @@
 //! Repository state at a point in time (arrays, groups, and manifest references).
 
-use std::{borrow::Cow, collections::BTreeMap, ops::Range, sync::Arc};
+use std::{borrow::Cow, cmp::Ordering, collections::BTreeMap, ops::Range, sync::Arc};
 
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
@@ -731,19 +731,43 @@ impl Snapshot {
         id: &ManifestId,
     ) -> IcechunkResult<Option<ManifestFileInfo>> {
         let root = self.root();
+        // Both manifest vectors are sorted by id in from_iter, as required by snapshot.fbs.
         if let Some(mf2) = root.manifest_files_v2() {
-            mf2.iter()
-                .find(|mf| mf.id().is_some_and(|mid| mid.0 == id.0))
-                .map(|mf| (&mf).try_into())
-                .transpose()
+            lookup_first_manifest_index(mf2.len(), |index| {
+                mf2.get(index).id().map(|mid| mid.0).cmp(&Some(id.0))
+            })
+            .map(|index| (&mf2.get(index)).try_into())
+            .transpose()
         } else {
-            Ok(root
-                .manifest_files()
-                .iter()
-                .find(|mi| mi.id().0 == id.0)
-                .map(|man| man.into()))
+            let mf1 = root.manifest_files();
+            Ok(lookup_first_manifest_index(mf1.len(), |index| {
+                mf1.get(index).id().0.cmp(&id.0)
+            })
+            .map(|index| mf1.get(index).into()))
         }
     }
+}
+
+// Return the first matching entry when multiple manifests have the same ID.
+// Continuing left after a match keeps even an all-equal vector logarithmic.
+fn lookup_first_manifest_index(
+    len: usize,
+    compare: impl Fn(usize) -> Ordering,
+) -> Option<usize> {
+    let (mut left, mut right) = (0, len);
+    let mut found = None;
+    while left < right {
+        let mid = left + (right - left) / 2;
+        match compare(mid) {
+            Ordering::Less => left = mid + 1,
+            Ordering::Equal => {
+                found = Some(mid);
+                right = mid;
+            }
+            Ordering::Greater => right = mid,
+        }
+    }
+    found
 }
 
 struct NodeIterator {
@@ -971,6 +995,92 @@ mod tests {
         serialize_and_deserialize_node_snapshot - node_snapshot,
         serialize_and_deserialize_manifest_file_info - manifest_file_info
     );
+
+    #[icechunk_macros::test]
+    fn test_manifest_info() -> IcechunkResult<()> {
+        let manifest_id = |value: u32| {
+            let mut bytes = [0; 12];
+            bytes[8..].copy_from_slice(&value.to_be_bytes());
+            ManifestId::new(bytes)
+        };
+
+        for spec_version in [SpecVersionBin::V1, SpecVersionBin::V2] {
+            for count in [0, 1, 2, 3, 5, 4096] {
+                // Reverse the input to exercise snapshot construction's ID sorting.
+                let manifests: Vec<_> = (1..=count)
+                    .rev()
+                    .map(|i| ManifestFileInfo {
+                        id: manifest_id(2 * i),
+                        size_bytes: u64::from(i) * 100,
+                        num_chunk_refs: i,
+                    })
+                    .collect();
+                let snapshot = Snapshot::from_iter(
+                    None,
+                    None,
+                    spec_version,
+                    "",
+                    None,
+                    manifests.clone(),
+                    None,
+                    iter::empty(),
+                )?;
+
+                for manifest in manifests {
+                    assert_eq!(snapshot.manifest_info(&manifest.id)?, Some(manifest));
+                }
+                // Misses before, between, and after the stored IDs.
+                assert_eq!(snapshot.manifest_info(&manifest_id(0))?, None);
+                for i in 0..=count {
+                    assert_eq!(snapshot.manifest_info(&manifest_id(2 * i + 1))?, None);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[icechunk_macros::test]
+    fn test_manifest_info_returns_first_duplicate() -> IcechunkResult<()> {
+        for spec_version in [SpecVersionBin::V1, SpecVersionBin::V2] {
+            for ids in
+                [vec![2, 2, 2], vec![2, 2, 4], vec![2, 4, 4, 4, 6], vec![2, 4, 4, 4]]
+            {
+                // Distinct metadata makes selection among equal IDs observable.
+                // Reverse the IDs to also exercise the constructor's stable sort.
+                let manifests: Vec<_> = ids
+                    .into_iter()
+                    .rev()
+                    .zip(1u32..)
+                    .map(|(id, i)| ManifestFileInfo {
+                        id: ManifestId::new([id; 12]),
+                        size_bytes: u64::from(i) * 100,
+                        num_chunk_refs: i,
+                    })
+                    .collect();
+                let snapshot = Snapshot::from_iter(
+                    None,
+                    None,
+                    spec_version,
+                    "",
+                    None,
+                    manifests.clone(),
+                    None,
+                    iter::empty(),
+                )?;
+                let loaded =
+                    Snapshot::from_buffer(spec_version, snapshot.bytes().to_vec())?;
+
+                for snapshot in [&snapshot, &loaded] {
+                    for id in 0..=7 {
+                        let id = ManifestId::new([id; 12]);
+                        let expected = manifests.iter().find(|mf| mf.id == id).cloned();
+                        assert_eq!(snapshot.manifest_info(&id)?, expected);
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
 
     #[icechunk_macros::test]
     fn test_get_node() -> Result<(), Box<dyn std::error::Error>> {
