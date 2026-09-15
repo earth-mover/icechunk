@@ -111,9 +111,7 @@ impl ManifestExtents {
         }
         debug_assert!(
             self.len() == other.len(),
-            "Length mismatch: self = {:?}, other = {:?}",
-            &self,
-            &other
+            "Length mismatch: self = {self:?}, other = {other:?}"
         );
         let mut overlap = Overlap::Complete;
         for (a, b) in zip(other.iter(), self.iter()) {

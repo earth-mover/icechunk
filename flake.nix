@@ -4,6 +4,10 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
+    # ruff 0.15.14, matching `ruff==0.15.14` in icechunk-python/pyproject.toml.
+    # Newer nixpkgs ship ruff 0.16, which reports 309 lint errors on this tree.
+    nixpkgs-ruff.url = "github:NixOS/nixpkgs/331800de5053fcebacf6813adb5db9c9dca22a0c";
+
     fenix = {
       url = "github:nix-community/fenix";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -31,6 +35,7 @@
   outputs = {
     self,
     nixpkgs,
+    nixpkgs-ruff,
     fenix,
     uv2nix,
     pyproject-nix,
@@ -88,6 +93,9 @@
       system: let
         pkgs = nixpkgs.legacyPackages.${system};
 
+        # Held at the revision that shipped 0.15.14; see the input comment.
+        ruff = nixpkgs-ruff.legacyPackages.${system}.ruff;
+
         # Use Python 3.12 from nixpkgs
         python = pkgs.python312;
 
@@ -142,7 +150,7 @@
                 [
                   python
                   pkgs.uv
-                  pkgs.ruff
+                  ruff
 
                   rustToolchain
                   pkgs.cargo-nextest # test runner

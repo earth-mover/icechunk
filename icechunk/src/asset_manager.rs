@@ -1188,7 +1188,7 @@ fn binary_file_header(
     buffer.extend_from_slice(ICECHUNK_FORMAT_MAGIC_BYTES);
     // implementation name
     let implementation =
-        format!("{:<width$}", &*ICECHUNK_CLIENT_NAME, width = ICECHUNK_IMPL_NAME_LEN);
+        format!("{:<width$}", *ICECHUNK_CLIENT_NAME, width = ICECHUNK_IMPL_NAME_LEN);
     buffer.extend_from_slice(&implementation.as_bytes()[..ICECHUNK_IMPL_NAME_LEN]);
     // spec version
     buffer.push(spec_version as u8);
