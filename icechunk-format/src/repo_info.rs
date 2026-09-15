@@ -101,16 +101,16 @@ impl std::fmt::Debug for RepoInfo {
             .into_iter()
             .map(|(name, snap)| format!("{name} -> {snap}"))
             .join(", ");
-        let snaps = self.all_snapshots().map(Vec::from_iter).unwrap_or_default();
+        let snaps =
+            self.snapshot_and_parent_ids().map(Vec::from_iter).unwrap_or_default();
         let snaps = snaps
             .into_iter()
-            .map(|ms| match ms {
-                Ok(snap) => format!(
+            .map(|(id, parent_id)| {
+                format!(
                     "{} -> {}",
-                    snap.id,
-                    snap.parent_id.map(|s| s.to_string()).unwrap_or_default()
-                ),
-                Err(_) => "#err".to_string(),
+                    id,
+                    parent_id.map(|s| s.to_string()).unwrap_or_default()
+                )
             })
             .join(", ");
         // FIXME: add other fields
@@ -719,6 +719,22 @@ impl RepoInfo {
     ) -> IcechunkResult<impl Iterator<Item = IcechunkResult<SnapshotInfo>>> {
         let root = self.root()?;
         Ok(root.snapshots().iter().map(move |snap| mk_snapshot_info(&root, &snap)))
+    }
+
+    /// Reads the ids from the flatbuffer. It does not deserialize snapshot metadata.
+    fn snapshot_and_parent_ids(
+        &self,
+    ) -> IcechunkResult<impl Iterator<Item = (SnapshotId, Option<SnapshotId>)>> {
+        let root = self.root()?;
+        Ok(root.snapshots().iter().map(move |snap| {
+            let parent_id = if snap.parent_offset() >= 0 {
+                let parent = root.snapshots().get(snap.parent_offset() as usize).id();
+                Some(SnapshotId::new(parent.0))
+            } else {
+                None
+            };
+            (SnapshotId::new(snap.id().0), parent_id)
+        }))
     }
 
     /// Doesn't check the validity of `flag_id`
