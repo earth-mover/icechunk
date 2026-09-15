@@ -1,6 +1,7 @@
 //! Storage wrapper that logs all operations (for testing).
 
 use std::{
+    collections::HashSet,
     fmt,
     ops::Range,
     pin::Pin,
@@ -113,17 +114,17 @@ impl Storage for LoggingStorage {
         self.backend.list_objects(settings, prefix).await
     }
 
-    async fn list_objects_with_id_prefixes<'a>(
+    async fn list_objects_with_id_first_chars<'a>(
         &'a self,
         settings: &Settings,
         prefix: &str,
-        id_prefixes: &[&str],
+        first_chars: &HashSet<char>,
     ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
         self.fetch_log
             .lock()
             .expect("poison lock")
-            .push(("list_objects_with_id_prefixes".to_string(), prefix.to_string()));
-        self.backend.list_objects_with_id_prefixes(settings, prefix, id_prefixes).await
+            .push(("list_objects_with_id_first_chars".to_string(), prefix.to_string()));
+        self.backend.list_objects_with_id_first_chars(settings, prefix, first_chars).await
     }
 
     async fn delete_batch(

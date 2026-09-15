@@ -1,4 +1,10 @@
-use std::{collections::HashMap, env, future::Future, pin::Pin, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    env,
+    future::Future,
+    pin::Pin,
+    sync::Arc,
+};
 
 use bytes::Bytes;
 use chrono::Utc;
@@ -638,7 +644,8 @@ async fn test_list_objects() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[tokio_test]
-async fn test_list_objects_with_id_prefixes() -> Result<(), Box<dyn std::error::Error>> {
+async fn test_list_objects_with_id_first_chars() -> Result<(), Box<dyn std::error::Error>>
+{
     with_storage(Permission::Modify, |_, storage| async move {
         let settings = storage.default_settings().await?;
         for path in
@@ -652,7 +659,11 @@ async fn test_list_objects_with_id_prefixes() -> Result<(), Box<dyn std::error::
 
         for prefix in ["foo", "foo/"] {
             let mut obs: Vec<_> = storage
-                .list_objects_with_id_prefixes(&settings, prefix, &["0", "Z"])
+                .list_objects_with_id_first_chars(
+                    &settings,
+                    prefix,
+                    &HashSet::from(['0', 'Z']),
+                )
                 .await?
                 .map_ok(|li| li.id)
                 .try_collect()

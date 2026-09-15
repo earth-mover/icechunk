@@ -1050,7 +1050,7 @@ impl AssetManager {
     {
         Ok(translate_list_infos(
             self.storage
-                .list_objects_with_id_prefixes(
+                .list_objects_with_id_first_chars(
                     &self.storage_settings,
                     prefix,
                     &OBJECT_ID_FIRST_CHARS,

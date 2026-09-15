@@ -7,11 +7,13 @@
 use core::fmt;
 use std::{
     cmp::Ordering,
+    collections::HashSet,
     convert::Infallible,
     fmt::{Debug, Display},
     hash::Hash,
     marker::PhantomData,
     ops::Range,
+    sync::LazyLock,
 };
 
 use ::flatbuffers::InvalidFlatbuffer;
@@ -204,12 +206,10 @@ impl<const SIZE: usize, T: FileTypeTag> From<&ObjectId<SIZE, T>> for String {
     }
 }
 
-/// The Crockford base32 alphabet. The string form of every [`ObjectId`] starts with
-/// one of these characters, so a listing split on them covers every object id.
-pub const OBJECT_ID_FIRST_CHARS: [&str; 32] = [
-    "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "A", "B", "C", "D", "E", "F", "G",
-    "H", "J", "K", "M", "N", "P", "Q", "R", "S", "T", "V", "W", "X", "Y", "Z",
-];
+/// The Crockford base32 alphabet, which `base32` keeps private. Every [`ObjectId`]
+/// starts with one of these, so a listing split on them covers every id.
+pub static OBJECT_ID_FIRST_CHARS: LazyLock<HashSet<char>> =
+    LazyLock::new(|| "0123456789ABCDEFGHJKMNPQRSTVWXYZ".chars().collect());
 
 impl<const SIZE: usize, T: FileTypeTag> From<[u8; SIZE]> for ObjectId<SIZE, T> {
     fn from(value: [u8; SIZE]) -> Self {
@@ -727,16 +727,14 @@ mod tests {
     #[icechunk_macros::test]
     fn test_object_id_first_chars_are_every_possible_first_char() {
         // The first character encodes the top 5 bits of the first byte.
-        let first_chars: std::collections::BTreeSet<String> = (0..=u8::MAX)
-            .map(|first_byte| {
+        let first_chars: HashSet<char> = (0..=u8::MAX)
+            .filter_map(|first_byte| {
                 let mut buf = [0u8; 12];
                 buf[0] = first_byte;
-                String::from(&SnapshotId::new(buf))[..1].to_string()
+                String::from(&SnapshotId::new(buf)).chars().next()
             })
             .collect();
-        let expected: std::collections::BTreeSet<String> =
-            OBJECT_ID_FIRST_CHARS.iter().map(|c| (*c).to_string()).collect();
-        assert_eq!(first_chars, expected);
+        assert_eq!(first_chars, *OBJECT_ID_FIRST_CHARS);
     }
 
     #[icechunk_macros::test]

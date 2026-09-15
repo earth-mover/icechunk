@@ -1350,7 +1350,8 @@ mod tests {
         let mut reads_per_snapshot: StdHashMap<String, usize> = StdHashMap::new();
         let mut snapshot_listings = 0;
         for (op, path) in logging.fetch_operations() {
-            if matches!(op.as_str(), "list_objects" | "list_objects_with_id_prefixes") {
+            if matches!(op.as_str(), "list_objects" | "list_objects_with_id_first_chars")
+            {
                 if path == SNAPSHOTS_FILE_PATH {
                     snapshot_listings += 1;
                 }

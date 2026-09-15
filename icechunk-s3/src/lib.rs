@@ -4,8 +4,14 @@
 pub use aws_sdk_s3;
 
 use std::{
-    borrow::Cow, collections::HashMap, fmt, future::ready, ops::Range, pin::Pin,
-    sync::Arc, time::Duration,
+    borrow::Cow,
+    collections::{HashMap, HashSet},
+    fmt,
+    future::ready,
+    ops::Range,
+    pin::Pin,
+    sync::Arc,
+    time::Duration,
 };
 
 use async_trait::async_trait;
@@ -1123,21 +1129,21 @@ impl Storage for S3Storage {
         Ok(self.list_keys(settings, prefix.clone(), prefix).await)
     }
 
-    #[instrument(skip(self, settings, id_prefixes))]
-    async fn list_objects_with_id_prefixes<'a>(
+    #[instrument(skip(self, settings, first_chars))]
+    async fn list_objects_with_id_first_chars<'a>(
         &'a self,
         settings: &Settings,
         prefix: &str,
-        id_prefixes: &[&str],
+        first_chars: &HashSet<char>,
     ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
         let layout = self.layout(settings).await?;
         let prefix = self.list_prefix(layout, prefix);
-        let mut listings = Vec::with_capacity(id_prefixes.len());
-        for id_prefix in id_prefixes {
+        let mut listings = Vec::with_capacity(first_chars.len());
+        for first_char in first_chars {
             let key_prefix = if prefix.is_empty() || prefix.ends_with('/') {
-                format!("{prefix}{id_prefix}")
+                format!("{prefix}{first_char}")
             } else {
-                format!("{prefix}/{id_prefix}")
+                format!("{prefix}/{first_char}")
             };
             listings.push(self.list_keys(settings, key_prefix, prefix.clone()).await);
         }

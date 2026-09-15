@@ -11,6 +11,7 @@ use itertools::Itertools as _;
 use serde::{Deserialize, Serialize};
 use std::{
     cmp::{max, min},
+    collections::HashSet,
     ffi::OsString,
     fmt::Display,
     iter,
@@ -563,21 +564,20 @@ pub trait Storage: fmt::Debug + Display + sealed::Sealed + Sync + Send {
         prefix: &str,
     ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>>;
 
-    /// Like [`Storage::list_objects`], limited to ids starting with one of `id_prefixes`.
-    /// Unordered. Override to list each id prefix concurrently; the default filters.
-    async fn list_objects_with_id_prefixes<'a>(
+    /// Like [`Storage::list_objects`], limited to ids whose first character is in `first_chars`.
+    /// Unordered. Override to list each character concurrently; the default filters.
+    async fn list_objects_with_id_first_chars<'a>(
         &'a self,
         settings: &Settings,
         prefix: &str,
-        id_prefixes: &[&str],
+        first_chars: &HashSet<char>,
     ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
-        let id_prefixes: Vec<String> =
-            id_prefixes.iter().map(|id_prefix| (*id_prefix).to_string()).collect();
+        let first_chars = first_chars.clone();
         Ok(self
             .list_objects(settings, prefix)
             .await?
             .try_filter(move |info| {
-                ready(id_prefixes.iter().any(|id_prefix| info.id.starts_with(id_prefix)))
+                ready(info.id.chars().next().is_some_and(|c| first_chars.contains(&c)))
             })
             .boxed())
     }
