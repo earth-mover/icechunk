@@ -2249,7 +2249,6 @@ fn raise_if_invalid_snapshot_id_v2(
 
 #[cfg(test)]
 mod tests {
-    use futures::TryStreamExt as _;
     use std::{
         collections::HashMap, error::Error, iter::zip, num::NonZeroU16, path::PathBuf,
         sync::Arc,
@@ -3301,7 +3300,7 @@ mod tests {
                 )
                 .await
                 .unwrap()
-                .unwrap_or_else(|| panic!("getting chunk ref failed for {:?}", &ic));
+                .unwrap_or_else(|| panic!("getting chunk ref failed for {ic:?}"));
                 let expected_value =
                     ravel_multi_index(ic.as_slice(), array_shape.as_slice());
                 let expected =
@@ -3592,7 +3591,7 @@ mod tests {
             )
             .await
             .unwrap()
-            .unwrap_or_else(|| panic!("getting chunk ref failed for {:?}", &idx));
+            .unwrap_or_else(|| panic!("getting chunk ref failed for {idx:?}"));
             let expected = Bytes::copy_from_slice(format!("{val}").as_bytes());
             assert_eq!(actual, expected);
         }
@@ -3756,7 +3755,7 @@ mod tests {
             )
             .await
             .unwrap()
-            .unwrap_or_else(|| panic!("getting chunk ref failed for {:?}", &idx));
+            .unwrap_or_else(|| panic!("getting chunk ref failed for {idx:?}"));
             let expected = Bytes::copy_from_slice(format!("{val}").as_bytes());
             assert_eq!(actual, expected);
         }

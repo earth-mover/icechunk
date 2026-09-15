@@ -1,11 +1,11 @@
-/// Integration tests for network failure retry behavior with `MinIO` + toxiproxy
+/// Integration tests for network failure retry behavior with rustfs + toxiproxy
 ///
 /// These tests verify that we retry on various network errors that occur while
 /// streaming data, not during connection establishment. The AWS SDK's built-in
 /// retry loop doesn't catch these post-connection errors, so we add our own
 /// retry in `AssetManager::fetch_chunk`.
 ///
-/// Tests require `MinIO` and Toxiproxy running via docker compose:
+/// Tests require rustfs and Toxiproxy running via docker compose:
 /// ```bash
 /// docker compose up -d
 /// cargo test --test test_bad_connections -- --nocapture
@@ -25,7 +25,7 @@ use noxious_client::{Client, StreamDirection, Toxic, ToxicKind};
 
 use crate::common::Permission;
 
-/// Create S3 storage pointing to toxiproxy (which proxies to `MinIO`)
+/// Create S3 storage pointing to toxiproxy (which proxies to rustfs)
 fn create_proxied_storage(
     proxy_port: u16,
     timeout_seconds: u32,

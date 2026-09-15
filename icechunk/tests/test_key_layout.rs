@@ -77,38 +77,6 @@ fn root_storage(
     )
 }
 
-const MINIO_ENDPOINT: &str = "http://localhost:4202";
-
-fn minio_options() -> S3Options {
-    S3Options::default()
-        .with_region("us-east-1")
-        .with_endpoint_url(MINIO_ENDPOINT)
-        .with_allow_http(true)
-        .with_force_path_style(true)
-}
-
-fn minio_credentials() -> S3Credentials {
-    static_credentials("minioadmin", "minioadmin")
-}
-
-fn minio_storage(bucket: &str, prefix: Option<&str>) -> Arc<dyn Storage + Send + Sync> {
-    // These tests deliberately create empty-prefix (bucket-root) repos, which is
-    // normally refused, so apply the escape hatch before erasing the type.
-    Arc::new(
-        s3_storage(
-            minio_options(),
-            bucket.to_string(),
-            prefix.map(str::to_string),
-            Some(minio_credentials()),
-            Vec::new(),
-            Vec::new(),
-            None,
-        )
-        .unwrap()
-        .unsafe_allow_empty_prefix_creation(),
-    )
-}
-
 /// Create a fresh, uniquely named bucket and return its name.
 ///
 /// The name sorts lexicographically after `testbucket`, and the zero-padded
@@ -116,10 +84,6 @@ fn minio_storage(bucket: &str, prefix: Option<&str>) -> Arc<dyn Storage + Send +
 /// random suffix keeps it unique under parallel test runs.
 async fn fresh_bucket() -> String {
     create_fresh_bucket(&rustfs_options(), root_credentials()).await
-}
-
-async fn fresh_minio_bucket() -> String {
-    create_fresh_bucket(&minio_options(), minio_credentials()).await
 }
 
 async fn create_fresh_bucket(options: &S3Options, credentials: S3Credentials) -> String {
@@ -264,20 +228,24 @@ async fn empty_prefix_roundtrips() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// Regression for #2239 on a *normalizing* store: `MinIO` maps `"/x"` to `"x"`, so
+/// Regression for #2239 on a *normalizing* store: rustfs maps `"/x"` to `"x"`, so
 /// the layout probe sees the clean and rooted anchors as the same object. It must
 /// resolve to the clean layout (by comparing `ETag`s), not raise a spurious
 /// mixed-layout error. Without the fix, the reopen below fails.
 #[tokio_test]
 async fn empty_prefix_roundtrips_on_normalizing_store()
 -> Result<(), Box<dyn std::error::Error>> {
-    let bucket = fresh_minio_bucket().await;
-    create_repo_with_one_chunk(minio_storage(&bucket, Some("")), SpecVersionBin::V2, 13)
-        .await?;
+    let bucket = fresh_bucket().await;
+    create_repo_with_one_chunk(
+        root_storage(&bucket, Some(""), false),
+        SpecVersionBin::V2,
+        13,
+    )
+    .await?;
 
     // A fresh storage forces the detection probe to run on reopen.
-    let repo =
-        Repository::open(None, minio_storage(&bucket, None), HashMap::new()).await?;
+    let repo = Repository::open(None, root_storage(&bucket, None, false), HashMap::new())
+        .await?;
     assert_eq!(read_chunk0(&repo).await?, 13);
     Ok(())
 }
@@ -474,9 +442,8 @@ async fn rooted_roundtrip_in_tigris() -> Result<(), Box<dyn std::error::Error>> 
 }
 
 // These run only against real S3/R2/Tigris (hence `#[ignore]` + credentials), never
-// the local stores: a rooted repo keeps every object under a leading slash
-// (`/chunks/...`), and neither local store can hold those keys as written. rustfs
-// (:4200) rejects leading-slash keys with a 400, and minio (:4202) silently
+// the local store: a rooted repo keeps every object under a leading slash
+// (`/chunks/...`), and rustfs cannot hold those keys as written. It silently
 // normalizes them (`/x` -> `x`), which collapses the repo into the standard layout
 // so there is no rooted repo left to round-trip. Only a store that preserves the
 // leading slash, like real S3/R2/Tigris, can exercise the legacy layout end to end.
