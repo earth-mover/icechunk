@@ -475,8 +475,7 @@ wait-http name url:
 [group('services')]
 [doc("Wait for all docker compose services to be ready")]
 contwait: rustfs-wait \
-  (wait-http "Azurite" "http://localhost:10000/devstoreaccount1/testcontainer?sv=2023-01-03&ss=btqf&srt=sco&spr=https%2Chttp&st=2025-01-06T14%3A53%3A30Z&se=2035-01-07T14%3A53%3A00Z&sp=rwdftlacup&sig=jclETGilOzONYp4Y0iK9SpVRLGyehaS5lg5booJ9VYA%3D&restype=container") \
-  (wait-http "MinIO" "http://localhost:4202/minio/health/live")
+  (wait-http "Azurite" "http://localhost:10000/devstoreaccount1/testcontainer?sv=2023-01-03&ss=btqf&srt=sco&spr=https%2Chttp&st=2025-01-06T14%3A53%3A30Z&se=2035-01-07T14%3A53%3A00Z&sp=rwdftlacup&sig=jclETGilOzONYp4Y0iK9SpVRLGyehaS5lg5booJ9VYA%3D&restype=container")
 
 [group('services')]
 [doc("Start Jaeger for local OpenTelemetry tracing (UI http://localhost:16686, OTLP gRPC localhost:4317)")]
