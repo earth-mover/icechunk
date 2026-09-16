@@ -472,6 +472,19 @@ pub enum RepositoryCreation {
     RefusedEmptyPrefix,
 }
 
+/// Keeps the listed objects whose id starts with a character in `first_chars`.
+pub fn filter_ids_by_first_char<'a>(
+    listing: BoxStream<'a, StorageResult<ListInfo<String>>>,
+    first_chars: &HashSet<char>,
+) -> BoxStream<'a, StorageResult<ListInfo<String>>> {
+    let first_chars = first_chars.clone();
+    listing
+        .try_filter(move |info| {
+            ready(info.id.chars().next().is_some_and(|c| first_chars.contains(&c)))
+        })
+        .boxed()
+}
+
 /// Implementations are free to assume files are never overwritten.
 #[async_trait]
 #[typetag::serde(tag = "type")]
@@ -572,14 +585,10 @@ pub trait Storage: fmt::Debug + Display + sealed::Sealed + Sync + Send {
         prefix: &str,
         first_chars: &HashSet<char>,
     ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
-        let first_chars = first_chars.clone();
-        Ok(self
-            .list_objects(settings, prefix)
-            .await?
-            .try_filter(move |info| {
-                ready(info.id.chars().next().is_some_and(|c| first_chars.contains(&c)))
-            })
-            .boxed())
+        Ok(filter_ids_by_first_char(
+            self.list_objects(settings, prefix).await?,
+            first_chars,
+        ))
     }
 
     async fn delete_batch(
