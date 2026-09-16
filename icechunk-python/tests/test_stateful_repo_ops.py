@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-
 import datetime
 import itertools
 import json
@@ -229,8 +227,8 @@ class Model:
         self.initial_snapshot_id: str | None = None
         self.changes_made: bool = False
 
-        self.HEAD: None | str = None
-        self.branch: None | str = None
+        self.HEAD: str | None = None
+        self.branch: str | None = None
 
         # we maintain a list of `commits` == snapshots in repo object file
         # and `ondisk_snaps` = commits + expired_snaphsots

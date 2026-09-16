@@ -106,7 +106,7 @@ class _XarrayDatasetWriter:
 
     def __post_init__(self) -> None:
         if not isinstance(self.store, IcechunkStore):
-            raise ValueError(
+            raise ValueError(  # noqa: TRY004
                 f"Please pass in an icechunk.Session. Received {type(self.store)!r} instead."
             )
 

@@ -253,7 +253,7 @@ async def test_thread_concurrency(any_spec_version: int | None) -> None:
             lists.append(pool.submit(do_lists, start, stop))
 
         start.set()
-        time.sleep(SECONDS_TO_RUN)
+        await asyncio.sleep(SECONDS_TO_RUN)
         stop.set()
 
         virtual_writes_count = sum(future.result() for future in virtual_writes)
