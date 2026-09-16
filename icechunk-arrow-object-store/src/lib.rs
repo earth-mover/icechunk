@@ -579,6 +579,17 @@ impl Storage for ObjectStorage {
             }
         };
 
+        // The storage class is not user metadata, so it is sent regardless of
+        // `unsafe_use_metadata`, as the native S3 backend does. `object_store`
+        // maps it to the provider's header (`x-amz-storage-class`,
+        // `x-goog-storage-class`, `x-ms-access-tier`).
+        if let Some(klass) = settings.storage_class()
+            && self.backend.supports_storage_class()
+        {
+            attributes
+                .insert(Attribute::StorageClass, AttributeValue::from(klass.clone()));
+        }
+
         let mode = self.get_put_mode(settings, previous_version);
         let is_conditional = !matches!(mode, PutMode::Overwrite);
         let write_id =
@@ -928,6 +939,13 @@ pub trait ObjectStoreBackend: Debug + Display + Sync + Send {
         false
     }
 
+    /// Whether `Settings::storage_class` is sent with writes. Backends without
+    /// storage tiers return `false` and the setting is ignored; the local
+    /// filesystem must, because `object_store` rejects any put attribute there.
+    fn supports_storage_class(&self) -> bool {
+        true
+    }
+
     fn create_location_if_needed(&self) -> Result<(), StorageError> {
         Ok(())
     }
@@ -1027,6 +1045,10 @@ impl ObjectStoreBackend for LocalFileSystemObjectStoreBackend {
 
     fn artificially_sort_refs_in_mem(&self) -> bool {
         true
+    }
+
+    fn supports_storage_class(&self) -> bool {
+        false
     }
 
     fn default_settings(&self) -> Settings {
@@ -1722,8 +1744,8 @@ mod tests {
     use tempfile::TempDir;
 
     use super::{
-        Bytes, ObjectPath, ObjectStorage, ReadbackOutcome, Settings, Storage as _,
-        VersionedUpdateResult,
+        Attribute, Attributes, Bytes, GetOptions, ObjectPath, ObjectStorage,
+        ReadbackOutcome, Role, Settings, Storage as _, VersionedUpdateResult,
     };
     #[cfg(feature = "http")]
     use super::{NonZeroU16, RetriesSettings, Url};
@@ -1828,6 +1850,109 @@ mod tests {
             .await
             .unwrap();
         assert!(not_modified.is_none());
+    }
+
+    /// HEAD `path` on the underlying `object_store` and return the attributes
+    /// it holds. The in-memory store keeps put attributes, so this observes
+    /// exactly what `put_object` sent.
+    #[expect(clippy::unwrap_used)]
+    async fn stored_attributes(
+        store: &ObjectStorage,
+        settings: &Settings,
+        path: &str,
+    ) -> Attributes {
+        let client = store.get_client(settings, Role::Read).await.unwrap();
+        let opts = GetOptions { head: true, ..Default::default() };
+        client.get_opts(&store.prefixed_path(path), opts).await.unwrap().attributes
+    }
+
+    #[tokio_test]
+    async fn storage_class_is_sent_even_without_metadata() {
+        // The storage class is not user metadata: it must reach the object
+        // store even when `unsafe_use_metadata` is off, which is the case that
+        // used to drop it (attributes were only set inside that guard).
+        let store = ObjectStorage::new_in_memory().await.unwrap();
+        let settings = Settings {
+            storage_class: Some("STANDARD_IA".to_string()),
+            unsafe_use_metadata: Some(false),
+            ..Settings::default()
+        };
+        let path = "chunks/with-class";
+        store
+            .put_object(
+                &settings,
+                path,
+                Bytes::from_static(b"payload"),
+                Some("application/octet-stream"),
+                vec![("k".to_string(), "v".to_string())],
+                None,
+            )
+            .await
+            .unwrap()
+            .must_write()
+            .unwrap();
+
+        let attributes = stored_attributes(&store, &settings, path).await;
+        assert_eq!(
+            attributes.get(&Attribute::StorageClass).map(|v| v.as_ref()),
+            Some("STANDARD_IA")
+        );
+        // ...while everything that *is* metadata stayed behind the guard.
+        assert_eq!(attributes.len(), 1);
+    }
+
+    #[tokio_test]
+    async fn no_storage_class_attribute_when_unset() {
+        let store = ObjectStorage::new_in_memory().await.unwrap();
+        let settings = store.default_settings().await.unwrap();
+        let path = "chunks/without-class";
+        store
+            .put_object(
+                &settings,
+                path,
+                Bytes::from_static(b"payload"),
+                None,
+                vec![],
+                None,
+            )
+            .await
+            .unwrap()
+            .must_write()
+            .unwrap();
+
+        let attributes = stored_attributes(&store, &settings, path).await;
+        assert!(attributes.get(&Attribute::StorageClass).is_none());
+    }
+
+    #[tokio_test]
+    async fn local_filesystem_ignores_storage_class() {
+        // `object_store`'s `LocalFileSystem` rejects any put attribute with
+        // `NotImplemented`, and a filesystem has no storage tiers anyway, so a
+        // configured class must be dropped rather than fail every write.
+        let tmp_dir = TempDir::new().unwrap();
+        let store = ObjectStorage::new_local_filesystem(tmp_dir.path()).await.unwrap();
+        let settings = Settings {
+            storage_class: Some("STANDARD_IA".to_string()),
+            ..store.default_settings().await.unwrap()
+        };
+        let path = "chunks/on-disk";
+        store
+            .put_object(
+                &settings,
+                path,
+                Bytes::from_static(b"payload"),
+                None,
+                vec![],
+                None,
+            )
+            .await
+            .unwrap()
+            .must_write()
+            .unwrap();
+
+        let on_disk =
+            std::fs::read(tmp_dir.path().join("chunks").join("on-disk")).unwrap();
+        assert_eq!(on_disk, b"payload");
     }
 
     #[cfg(feature = "http")]
