@@ -2,14 +2,24 @@
 
 ## Python Icechunk Library [unreleased]
 
+## Python Icechunk Library 2.2.1
+
+### Features
+
+- `icechunk-js` can read HTTP(S) virtual chunks in the browser via `Repository.setHttpVirtualChunkFetcher()` and `createHttpVirtualChunkFetcher()` ([#2363](https://github.com/earth-mover/icechunk/pull/2363)).
+
 ### Fixes
 
 - Update tests to deal with Tigris and other stores listing whole-second timestamps ([#2368](https://github.com/earth-mover/icechunk/pull/2368)).
+- `reset_branch` conflict errors report the actual branch tip instead of the expected parent twice ([#2360](https://github.com/earth-mover/icechunk/pull/2360)).
 
 ### Performance
 
-- Speed up manifest metadata lookups during commits, reads, and manifest preloading in repositories with many manifests by using binary search instead of linear scans.
+- Speed up manifest metadata lookups during commits, reads, and manifest preloading in repositories with many manifests by using binary search instead of linear scans ([#2381](https://github.com/earth-mover/icechunk/pull/2381)).
 - Garbage collection lists 32 ways in parallel on S3 and GCS, one listing per possible first character of an object id. Listing a 2.8 million object repository drops from 299 s to 15 s. Azure and local storage keep a single listing ([#2371](https://github.com/earth-mover/icechunk/pull/2371), [#2385](https://github.com/earth-mover/icechunk/pull/2385)).
+- Garbage collection fetches each snapshot once, concurrently, and lists the snapshots prefix once ([#2358](https://github.com/earth-mover/icechunk/pull/2358)).
+- Branch and tag lookups no longer deserialize every snapshot's metadata ([#2377](https://github.com/earth-mover/icechunk/pull/2377)).
+- `upgrade_icechunk_repository` walks the v1 ancestry from prefetched snapshot infos. A 285,824 snapshot migration drops from 451 s to 209 s ([#2383](https://github.com/earth-mover/icechunk/pull/2383)).
 
 ## Python Icechunk Library 2.2.0
 
