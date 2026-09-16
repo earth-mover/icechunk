@@ -4,12 +4,14 @@ use chrono::{DateTime, Utc};
 use core::fmt;
 use futures::{
     Stream, StreamExt as _, TryStreamExt as _,
+    future::ready,
     stream::{self, BoxStream, FuturesOrdered},
 };
 use itertools::Itertools as _;
 use serde::{Deserialize, Serialize};
 use std::{
     cmp::{max, min},
+    collections::HashSet,
     ffi::OsString,
     fmt::Display,
     iter,
@@ -561,6 +563,24 @@ pub trait Storage: fmt::Debug + Display + sealed::Sealed + Sync + Send {
         settings: &Settings,
         prefix: &str,
     ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>>;
+
+    /// Like [`Storage::list_objects`], limited to ids whose first character is in `first_chars`.
+    /// Unordered. Override to list each character concurrently; the default filters.
+    async fn list_objects_with_id_first_chars<'a>(
+        &'a self,
+        settings: &Settings,
+        prefix: &str,
+        first_chars: &HashSet<char>,
+    ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
+        let first_chars = first_chars.clone();
+        Ok(self
+            .list_objects(settings, prefix)
+            .await?
+            .try_filter(move |info| {
+                ready(info.id.chars().next().is_some_and(|c| first_chars.contains(&c)))
+            })
+            .boxed())
+    }
 
     async fn delete_batch(
         &self,

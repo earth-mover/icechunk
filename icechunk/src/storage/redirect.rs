@@ -1,6 +1,6 @@
 //! Read-only storage that follows HTTP redirects to the underlying backend.
 
-use std::{ops::Range, pin::Pin, sync::Arc};
+use std::{collections::HashSet, ops::Range, pin::Pin, sync::Arc};
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -377,6 +377,18 @@ impl Storage for RedirectStorage {
         prefix: &str,
     ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
         self.backend().await?.list_objects(settings, prefix).await
+    }
+
+    async fn list_objects_with_id_first_chars<'a>(
+        &'a self,
+        settings: &Settings,
+        prefix: &str,
+        first_chars: &HashSet<char>,
+    ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
+        self.backend()
+            .await?
+            .list_objects_with_id_first_chars(settings, prefix, first_chars)
+            .await
     }
 
     async fn delete_batch(

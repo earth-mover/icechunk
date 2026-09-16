@@ -7,11 +7,13 @@
 use core::fmt;
 use std::{
     cmp::Ordering,
+    collections::HashSet,
     convert::Infallible,
     fmt::{Debug, Display},
     hash::Hash,
     marker::PhantomData,
     ops::Range,
+    sync::LazyLock,
 };
 
 use ::flatbuffers::InvalidFlatbuffer;
@@ -203,6 +205,11 @@ impl<const SIZE: usize, T: FileTypeTag> From<&ObjectId<SIZE, T>> for String {
         base32::encode(base32::Alphabet::Crockford, &value.0)
     }
 }
+
+/// The Crockford base32 alphabet, which `base32` keeps private. Every [`ObjectId`]
+/// starts with one of these, so a listing split on them covers every id.
+pub static OBJECT_ID_FIRST_CHARS: LazyLock<HashSet<char>> =
+    LazyLock::new(|| "0123456789ABCDEFGHJKMNPQRSTVWXYZ".chars().collect());
 
 impl<const SIZE: usize, T: FileTypeTag> From<[u8; SIZE]> for ObjectId<SIZE, T> {
     fn from(value: [u8; SIZE]) -> Self {
@@ -715,6 +722,19 @@ mod tests {
             .unwrap(),
             sid,
         );
+    }
+
+    #[icechunk_macros::test]
+    fn test_object_id_first_chars_are_every_possible_first_char() {
+        // The first character encodes the top 5 bits of the first byte.
+        let first_chars: HashSet<char> = (0..=u8::MAX)
+            .filter_map(|first_byte| {
+                let mut buf = [0u8; 12];
+                buf[0] = first_byte;
+                String::from(&SnapshotId::new(buf)).chars().next()
+            })
+            .collect();
+        assert_eq!(first_chars, *OBJECT_ID_FIRST_CHARS);
     }
 
     #[icechunk_macros::test]
