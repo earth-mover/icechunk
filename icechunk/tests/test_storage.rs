@@ -647,6 +647,57 @@ async fn test_list_objects_with_id_first_chars() -> Result<(), Box<dyn std::erro
 }
 
 #[tokio_test]
+async fn test_list_objects_with_id_first_chars_at_bucket_root()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (access_key_id, secret_access_key) = Permission::Modify.keys();
+    let storage = ObjectStorage::new_s3(
+        "testbucket".to_string(),
+        None,
+        Some(S3Credentials::Static(S3StaticCredentials {
+            access_key_id: access_key_id.into(),
+            secret_access_key: secret_access_key.into(),
+            session_token: None,
+            expires_after: None,
+        })),
+        Some(
+            S3Options::default()
+                .with_region("us-east-1")
+                .with_endpoint_url("http://localhost:4200")
+                .with_allow_http(true)
+                .with_force_path_style(true),
+        ),
+        Vec::new(),
+        Vec::new(),
+    )
+    .await?;
+    let settings = storage.default_settings().await?;
+    let dir = common::get_random_prefix("root_first_chars");
+    for id in ["0a", "1a", "Za"] {
+        storage
+            .put_object(
+                &settings,
+                &format!("{dir}/{id}"),
+                Bytes::new(),
+                None,
+                Default::default(),
+                None,
+            )
+            .await?
+            .must_write()?;
+    }
+
+    let mut obs: Vec<_> = storage
+        .list_objects_with_id_first_chars(&settings, &dir, &HashSet::from(['0', 'Z']))
+        .await?
+        .map_ok(|li| li.id)
+        .try_collect()
+        .await?;
+    obs.sort();
+    assert_eq!(obs, vec!["0a".to_string(), "Za".to_string()]);
+    Ok(())
+}
+
+#[tokio_test]
 async fn test_gcs_list_objects_with_id_first_chars()
 -> Result<(), Box<dyn std::error::Error>> {
     let storage = new_gcs_storage(
