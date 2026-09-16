@@ -39,7 +39,7 @@ aws-config = "1.8.15"
 aws-credential-types = "1.2.14"
 aws-sdk-s3 = "1.127.0"
 aws-smithy-runtime = "1.11.3"
-aws-smithy-types-convert = { version = "0.60.14", features = ["convert-chrono", "convert-streams"] }
+aws-smithy-types-convert = { version = "0.61.1", features = ["convert-chrono", "convert-streams"] }
 backon = "1.6.0"
 base32 = "0.5.1"
 bytes = { version = "1.11.1", features = ["serde"] }
