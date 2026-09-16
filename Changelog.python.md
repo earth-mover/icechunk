@@ -2,14 +2,14 @@
 
 ## Python Icechunk Library [unreleased]
 
-### Performance
-
-- Garbage collection lists 32 ways in parallel on S3, one listing per possible first character of an object id. Listing a 2.8 million object repository drops from 299 s to 15 s. Other backends keep a single listing ([#2371](https://github.com/earth-mover/icechunk/pull/2371)).
-- Speed up manifest metadata lookups during commits, reads, and manifest preloading in repositories with many manifests by using binary search instead of linear scans.
-
 ### Fixes
 
 - Update tests to deal with Tigris and other stores listing whole-second timestamps ([#2368](https://github.com/earth-mover/icechunk/pull/2368)).
+
+### Performance
+
+- Speed up manifest metadata lookups during commits, reads, and manifest preloading in repositories with many manifests by using binary search instead of linear scans.
+- Garbage collection lists 32 ways in parallel on S3, one listing per possible first character of an object id. Listing a 2.8 million object repository drops from 299 s to 15 s. Other backends keep a single listing ([#2371](https://github.com/earth-mover/icechunk/pull/2371)).
 
 ## Python Icechunk Library 2.2.0
 
