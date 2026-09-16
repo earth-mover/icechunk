@@ -27,6 +27,10 @@
     "./fetch-storage": {
       "types": "./fetch-storage.d.ts",
       "default": "./fetch-storage.mjs"
+    },
+    "./http-virtual-chunks": {
+      "types": "./http-virtual-chunks.d.ts",
+      "default": "./http-virtual-chunks.mjs"
     }
   },
   "files": [
@@ -34,7 +38,9 @@
     "index.js",
     "browser.js",
     "fetch-storage.mjs",
-    "fetch-storage.d.ts"
+    "fetch-storage.d.ts",
+    "http-virtual-chunks.mjs",
+    "http-virtual-chunks.d.ts"
   ],
   "napi": {
     "binaryName": "icechunk",

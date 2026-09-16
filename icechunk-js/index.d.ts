@@ -2,6 +2,11 @@
 /* eslint-disable */
 
 export declare class Repository {
+  /**
+   * Register an HTTP virtual-chunk callback before creating read sessions.
+   * Callbacks use the error-first convention, like Storage.newCustom.
+   */
+  setHttpVirtualChunkFetcher(callback: (err: null, request: HttpVirtualChunkRequest) => Promise<HttpVirtualChunkResponse>): Promise<void>
   static create(storage: JsStorage, config?: RepositoryConfig | undefined | null, specVersion?: number | undefined | null, authorizeVirtualChunkAccess?: Record<string, JsCredentials | undefined | null> | undefined | null, checkCleanRoot?: boolean | undefined | null): Promise<Repository>
   static open(storage: JsStorage, config?: RepositoryConfig | undefined | null, authorizeVirtualChunkAccess?: Record<string, JsCredentials | undefined | null> | undefined | null): Promise<Repository>
   static openOrCreate(storage: JsStorage, config?: RepositoryConfig | undefined | null, specVersion?: number | undefined | null, authorizeVirtualChunkAccess?: Record<string, JsCredentials | undefined | null> | undefined | null, checkCleanRoot?: boolean | undefined | null): Promise<Repository>
@@ -129,13 +134,13 @@ export type JsStore = Store
 export type AzureCredentials =
   | { type: 'Anonymous' }
   | { type: 'FromEnv' }
-  | { type: 'Static'; field0: AzureStaticCredentials }
+  | { type: 'Static', field0: AzureStaticCredentials }
 
 /** Azure static credentials */
 export type AzureStaticCredentials =
-  | { type: 'AccessKey'; field0: string }
-  | { type: 'SasToken'; field0: string }
-  | { type: 'BearerToken'; field0: string }
+  | { type: 'AccessKey', field0: string }
+  | { type: 'SasToken', field0: string }
+  | { type: 'BearerToken', field0: string }
 
 /** Caching configuration */
 export interface CachingConfig {
@@ -159,9 +164,10 @@ export interface CompressionConfig {
 
 /** Credentials for virtual chunk access */
 export type Credentials =
-  | { type: 'S3'; field0: S3Credentials }
-  | { type: 'Gcs'; field0: GcsCredentials }
-  | { type: 'Azure'; field0: AzureCredentials }
+  | { type: 'HttpAccess' }
+  | { type: 'S3', field0: S3Credentials }
+  | { type: 'Gcs', field0: GcsCredentials }
+  | { type: 'Azure', field0: AzureCredentials }
 
 export interface DiffOptions {
   fromBranch?: string
@@ -201,14 +207,14 @@ export interface GcsBearerCredential {
 export type GcsCredentials =
   | { type: 'Anonymous' }
   | { type: 'FromEnv' }
-  | { type: 'Static'; field0: GcsStaticCredentials }
+  | { type: 'Static', field0: GcsStaticCredentials }
 
 /** GCS static credentials */
 export type GcsStaticCredentials =
-  | { type: 'ServiceAccount'; field0: string }
-  | { type: 'ServiceAccountKey'; field0: string }
-  | { type: 'ApplicationCredentials'; field0: string }
-  | { type: 'BearerToken'; field0: string }
+  | { type: 'ServiceAccount', field0: string }
+  | { type: 'ServiceAccountKey', field0: string }
+  | { type: 'ApplicationCredentials', field0: string }
+  | { type: 'BearerToken', field0: string }
 
 /** HTTP object store configuration carrying transport options and static auth headers. */
 export interface HttpConfig {
@@ -216,6 +222,31 @@ export interface HttpConfig {
   opts: Record<string, string>
   /** Static HTTP headers injected into every request (e.g. `"authorization": "Bearer …"`). */
   headers: Record<string, string>
+}
+
+export interface HttpVirtualChunkRequest {
+  url: string
+  /** Inclusive start, exclusive end. Both must be safe JavaScript integers. */
+  rangeStart: number
+  rangeEnd: number
+  etag?: string
+  /** Unix timestamp in seconds, for If-Unmodified-Since. */
+  lastModified?: number
+  headers: Record<string, string>
+  options: Record<string, string>
+}
+
+/**
+ * If the reference records an ETag, return the response's `etag`. If it records
+ * a modification-time check, return the response's `lastModified` timestamp.
+ * The resolver rejects the read if the required value is missing or fails the
+ * check. Both fields are optional when the reference has no checksum.
+ */
+export interface HttpVirtualChunkResponse {
+  data: Uint8Array
+  etag?: string
+  /** Unix timestamp in seconds from the response Last-Modified header. */
+  lastModified?: number
 }
 
 export interface ManifestFileInfo {
@@ -232,13 +263,13 @@ export interface MovedNode {
 /** Object store configuration for virtual chunk containers */
 export type ObjectStoreConfig =
   | { type: 'InMemory' }
-  | { type: 'LocalFileSystem'; field0: string }
-  | { type: 'Http'; field0: HttpConfig }
-  | { type: 'S3Compatible'; field0: S3Options }
-  | { type: 'S3'; field0: S3Options }
-  | { type: 'Gcs'; field0: Record<string, string> }
-  | { type: 'Azure'; field0: Record<string, string> }
-  | { type: 'Tigris'; field0: S3Options }
+  | { type: 'LocalFileSystem', field0: string }
+  | { type: 'Http', field0: HttpConfig }
+  | { type: 'S3Compatible', field0: S3Options }
+  | { type: 'S3', field0: S3Options }
+  | { type: 'Gcs', field0: Record<string, string> }
+  | { type: 'Azure', field0: Record<string, string> }
+  | { type: 'Tigris', field0: S3Options }
 
 /**
  * Range query matching zarrita's RangeQuery type:
@@ -298,7 +329,7 @@ export interface RepositoryConfig {
 export type S3Credentials =
   | { type: 'FromEnv' }
   | { type: 'Anonymous' }
-  | { type: 'Static'; field0: S3StaticCredentials }
+  | { type: 'Static', field0: S3StaticCredentials }
 
 /** S3 options */
 export interface S3Options {
