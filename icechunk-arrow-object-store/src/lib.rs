@@ -18,7 +18,8 @@ use icechunk_storage::{
     ConcurrencySettings, DeleteObjectsResult, ETag, Generation, GetModifiedResult,
     ListInfo, RepositoryCreation, RetriesSettings, Settings, Storage, StorageError,
     StorageErrorKind, StorageInfo, StorageResult, VersionInfo, VersionedUpdateResult,
-    obj_not_found_res, obj_store_error, obj_store_error_res, other_error,
+    filter_ids_by_first_char, obj_not_found_res, obj_store_error, obj_store_error_res,
+    other_error,
     readback::{
         ReadbackOutcome, WRITE_ID_METADATA_KEY, resolve_lost_response,
         resolve_precondition, write_id_for,
@@ -53,7 +54,7 @@ use object_store::{ClientOptions, HeaderMap};
 use object_store::{CredentialProvider, StaticCredentialProvider};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fmt::{self, Debug, Display},
     future::ready,
     num::{NonZeroU16, NonZeroU64},
@@ -704,6 +705,38 @@ impl Storage for ObjectStorage {
         Ok(stream.boxed())
     }
 
+    #[instrument(skip(self, settings, first_chars))]
+    async fn list_objects_with_id_first_chars<'a>(
+        &'a self,
+        settings: &Settings,
+        prefix: &str,
+        first_chars: &HashSet<char>,
+    ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
+        if !self.backend.ordered_offset_listing() {
+            let listing = self.list_objects(settings, prefix).await?;
+            return Ok(filter_ids_by_first_char(listing, first_chars));
+        }
+        let root = ObjectPath::from(format!("{}/{}", self.backend.prefix(), prefix));
+        let client = self.get_client(settings, Role::Read).await?;
+        let listings: Vec<_> = first_chars
+            .iter()
+            .map(|&first_char| {
+                let offset = ObjectPath::from(format!("{root}/{first_char}"));
+                let root = root.clone();
+                client
+                    .list_with_offset(Some(&root), &offset)
+                    .map_err(obj_store_error)
+                    .and_then(move |object| ready(object_to_list_info(&root, &object)))
+                    // Keys arrive in order, so another first character ends this listing.
+                    .try_take_while(move |info| {
+                        ready(Ok(info.id.starts_with(first_char)))
+                    })
+                    .boxed()
+            })
+            .collect();
+        Ok(stream::select_all(listings).boxed())
+    }
+
     #[instrument(skip(self, batch))]
     async fn delete_batch(
         &self,
@@ -906,6 +939,12 @@ pub trait ObjectStoreBackend: Debug + Display + Sync + Send {
 
     /// The prefix for the object store.
     fn prefix(&self) -> String;
+
+    /// Whether `list_with_offset` runs server side and returns keys in lexicographic
+    /// order. Only then can [`ObjectStorage`] split an id listing by first character.
+    fn ordered_offset_listing(&self) -> bool {
+        false
+    }
 
     /// Return structured metadata about this backend for display/repr.
     fn storage_info(&self) -> StorageInfo;
@@ -1318,6 +1357,10 @@ impl ObjectStoreBackend for S3ObjectStoreBackend {
         true
     }
 
+    fn ordered_offset_listing(&self) -> bool {
+        true
+    }
+
     fn default_settings(&self) -> Settings {
         Default::default()
     }
@@ -1571,6 +1614,10 @@ impl ObjectStoreBackend for GcsObjectStoreBackend {
     }
 
     fn restricts_empty_prefix_creation(&self) -> bool {
+        true
+    }
+
+    fn ordered_offset_listing(&self) -> bool {
         true
     }
 

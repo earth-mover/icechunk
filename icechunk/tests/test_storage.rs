@@ -13,13 +13,14 @@ use icechunk::{
     ObjectStorage, Repository, RepositoryConfig, Storage,
     asset_manager::AssetManager,
     config::{
-        DEFAULT_MAX_CONCURRENT_REQUESTS, S3Credentials, S3Options, S3StaticCredentials,
+        DEFAULT_MAX_CONCURRENT_REQUESTS, GcsCredentials, S3Credentials, S3Options,
+        S3StaticCredentials,
     },
     error::ICError,
     format::{
-        CHUNKS_FILE_PATH, ChunkId, MANIFESTS_FILE_PATH, Path, SNAPSHOTS_FILE_PATH,
-        SnapshotId, TRANSACTION_LOGS_FILE_PATH, format_constants::SpecVersionBin,
-        snapshot::Snapshot,
+        CHUNKS_FILE_PATH, ChunkId, MANIFESTS_FILE_PATH, OBJECT_ID_FIRST_CHARS, Path,
+        SNAPSHOTS_FILE_PATH, SnapshotId, TRANSACTION_LOGS_FILE_PATH,
+        format_constants::SpecVersionBin, snapshot::Snapshot,
     },
     new_local_filesystem_storage,
     refs::{RefData, RefErrorKind},
@@ -27,8 +28,8 @@ use icechunk::{
     storage::{
         self, ConcurrencySettings, ETag, Generation, RepositoryCreation, S3Storage,
         StorageErrorKind, StorageResult, VersionInfo, VersionedUpdateResult, mk_client,
-        new_http_storage, new_in_memory_storage, new_redirect_storage, new_s3_storage,
-        s3_storage,
+        new_gcs_storage, new_http_storage, new_in_memory_storage, new_redirect_storage,
+        new_s3_storage, s3_storage,
     },
 };
 use icechunk_arrow_object_store::object_store::azure::AzureConfigKey;
@@ -642,6 +643,109 @@ async fn test_list_objects_with_id_first_chars() -> Result<(), Box<dyn std::erro
         Ok(())
     })
     .await?;
+    Ok(())
+}
+
+#[tokio_test]
+async fn test_list_objects_with_id_first_chars_at_bucket_root()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (access_key_id, secret_access_key) = Permission::Modify.keys();
+    let storage = ObjectStorage::new_s3(
+        "testbucket".to_string(),
+        None,
+        Some(S3Credentials::Static(S3StaticCredentials {
+            access_key_id: access_key_id.into(),
+            secret_access_key: secret_access_key.into(),
+            session_token: None,
+            expires_after: None,
+        })),
+        Some(
+            S3Options::default()
+                .with_region("us-east-1")
+                .with_endpoint_url("http://localhost:4200")
+                .with_allow_http(true)
+                .with_force_path_style(true),
+        ),
+        Vec::new(),
+        Vec::new(),
+    )
+    .await?;
+    let settings = storage.default_settings().await?;
+    let dir = common::get_random_prefix("root_first_chars");
+    for id in ["0a", "1a", "Za"] {
+        storage
+            .put_object(
+                &settings,
+                &format!("{dir}/{id}"),
+                Bytes::new(),
+                None,
+                Default::default(),
+                None,
+            )
+            .await?
+            .must_write()?;
+    }
+
+    let mut obs: Vec<_> = storage
+        .list_objects_with_id_first_chars(&settings, &dir, &HashSet::from(['0', 'Z']))
+        .await?
+        .map_ok(|li| li.id)
+        .try_collect()
+        .await?;
+    obs.sort();
+    assert_eq!(obs, vec!["0a".to_string(), "Za".to_string()]);
+    Ok(())
+}
+
+#[tokio_test]
+async fn test_gcs_list_objects_with_id_first_chars()
+-> Result<(), Box<dyn std::error::Error>> {
+    let storage = new_gcs_storage(
+        "al-public-test-bucket".to_string(),
+        Some("verification-copy".to_string()),
+        Some(GcsCredentials::Anonymous),
+        None,
+        Vec::new(),
+        Vec::new(),
+    )?;
+    let settings = storage.default_settings().await?;
+    for prefix in [
+        CHUNKS_FILE_PATH,
+        MANIFESTS_FILE_PATH,
+        SNAPSHOTS_FILE_PATH,
+        TRANSACTION_LOGS_FILE_PATH,
+    ] {
+        let all: HashSet<String> = storage
+            .list_objects(&settings, prefix)
+            .await?
+            .map_ok(|li| li.id)
+            .try_collect()
+            .await?;
+        assert!(!all.is_empty(), "no objects under {prefix}");
+        let split: HashSet<String> = storage
+            .list_objects_with_id_first_chars(&settings, prefix, &OBJECT_ID_FIRST_CHARS)
+            .await?
+            .map_ok(|li| li.id)
+            .try_collect()
+            .await?;
+        assert_eq!(split, all);
+
+        let first_char =
+            all.iter().filter_map(|id| id.chars().next()).min().unwrap_or('0');
+        let one_char: HashSet<String> = storage
+            .list_objects_with_id_first_chars(
+                &settings,
+                prefix,
+                &HashSet::from([first_char]),
+            )
+            .await?
+            .map_ok(|li| li.id)
+            .try_collect()
+            .await?;
+        let expected: HashSet<String> =
+            all.into_iter().filter(|id| id.starts_with(first_char)).collect();
+        assert_eq!(one_char, expected);
+    }
     Ok(())
 }
 
