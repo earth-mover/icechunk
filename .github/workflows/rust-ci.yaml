@@ -66,11 +66,22 @@ jobs:
       - name: Check if MSRV is up to date
         run: just check-msrv "$MSRV"
 
+      # Must precede the MSRV check; the shared cache step below runs too late to warm it.
+      # Keyed separately because the MSRV toolchain differs from the stable one used later.
+      - name: Cache MSRV dependencies
+        if: matrix.os == 'ubuntu-latest'
+        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        with:
+          prefix-key: "rust-msrv-${{ env.MSRV }}"
+          shared-key: "msrv"
+          workspaces: ". -> msrv-target"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
       - name: Check the workspace compiles with MSRV
         if: matrix.os == 'ubuntu-latest'
         env:
           # keep MSRV artifacts out of the shared rust-cache
-          CARGO_TARGET_DIR: ${{ runner.temp }}/msrv-target
+          CARGO_TARGET_DIR: msrv-target
         run: pixi run -m icechunk-python/pyproject.toml -e msrv cargo check --locked
 
       - name: Stand up docker services
