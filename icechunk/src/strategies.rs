@@ -481,6 +481,7 @@ prop_compose! {
             get_partial_values_concurrency,
             compression,
             max_concurrent_requests,
+            max_concurrent_decodes: None,
             caching,
             manifest,
             virtual_chunk_containers,

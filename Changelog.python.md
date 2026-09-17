@@ -1,5 +1,11 @@
 # Changelog
 
+## Python Icechunk Library [unreleased]
+
+### Fixes
+
+- Fix a garbage collection deadlock on machines with few CPUs ([#2389](https://github.com/earth-mover/icechunk/pull/2389)).
+
 ## Python Icechunk Library 2.2.1
 
 ### Features

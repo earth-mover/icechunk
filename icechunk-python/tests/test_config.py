@@ -180,6 +180,7 @@ def test_can_change_deep_config_values(any_spec_version: int | None) -> None:
     config.manifest.preload = icechunk.ManifestPreloadConfig(max_total_refs=42)
     config.manifest.max_concurrent_manifest_fetches_during_commit = 16
     config.max_concurrent_requests = 10
+    config.max_concurrent_decodes = 4
     config.num_updates_per_repo_info_file = 50
     config.repo_update_retries = RepoUpdateRetryConfig(
         default=icechunk.StorageRetriesSettings(
@@ -223,6 +224,7 @@ def test_can_change_deep_config_values(any_spec_version: int | None) -> None:
     assert stored_config.compression
     assert stored_config.compression.level == 2
     assert stored_config.max_concurrent_requests == 10
+    assert stored_config.max_concurrent_decodes == 4
     assert stored_config.num_updates_per_repo_info_file == 50
     assert stored_config.caching
     assert stored_config.caching.num_chunk_refs == 8
