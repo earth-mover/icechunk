@@ -1716,10 +1716,11 @@ async fn test_expire_deletes_branch_sharing_tip_with_main()
 /// GC deadlocked on hosts with few cores: the decode gate handed a freed slot to a
 /// snapshot fetch that the full manifest buffer had stopped polling.
 #[tokio_test]
+#[expect(unsafe_code)]
 async fn test_gc_completes_with_one_decode_slot() -> Result<(), Box<dyn std::error::Error>>
 {
-    // Under nextest this runs in its own process, so the gate is still unset here.
-    icechunk::asset_manager::init_decode_gate(1);
+    // SAFETY: nextest runs this test in its own process, and nothing has decoded yet.
+    unsafe { std::env::set_var("ICECHUNK_DECODE_CONCURRENCY", "1") };
     let inner: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
     // Read latency makes the fetches interleave the way they do over a network.
     let storage: Arc<dyn Storage + Send + Sync> =
