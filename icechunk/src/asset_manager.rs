@@ -1352,8 +1352,7 @@ where
     let span = tracing::Span::current();
     tokio::task::spawn_blocking(move || -> RepositoryResult<(T, FileHeader)> {
         let _entered = span.entered();
-        // Wait for the gate here, not on the async task: a tokio semaphore hands a freed
-        // permit to its oldest waiter, and a waiter in an unpolled stream buffer never uses it.
+        // Acquired here, not on the async task: an unpolled async waiter never takes the permit it is handed.
         // release on decode completion, not on cancelled-future drop
         #[cfg(not(feature = "shuttle"))]
         let _decode_permit =

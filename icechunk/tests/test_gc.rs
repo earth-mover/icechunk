@@ -1713,16 +1713,15 @@ async fn test_expire_deletes_branch_sharing_tip_with_main()
     Ok(())
 }
 
-/// GC deadlocked on hosts with few cores: the decode gate handed a freed slot to a
-/// snapshot fetch that the full manifest buffer had stopped polling.
+/// GC deadlocked when freed decode permits went to snapshot fetches nobody polled any more.
 #[tokio_test]
 #[expect(unsafe_code)]
 async fn test_gc_completes_with_one_decode_slot() -> Result<(), Box<dyn std::error::Error>>
 {
-    // SAFETY: nextest runs this test in its own process, and nothing has decoded yet.
+    // nextest runs each test in its own process, so the gate is not built yet.
     unsafe { std::env::set_var("ICECHUNK_DECODE_CONCURRENCY", "1") };
     let inner: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
-    // Read latency makes the fetches interleave the way they do over a network.
+    // Without read latency every fetch completes at once and the deadlock never forms.
     let storage: Arc<dyn Storage + Send + Sync> =
         Arc::new(LatencyStorage::new(inner, 0, 5));
     let repo = Repository::create(
@@ -1763,7 +1762,7 @@ async fn test_gc_completes_with_one_decode_slot() -> Result<(), Box<dyn std::err
         session.commit(format!("commit {idx}")).execute().await?;
     }
 
-    // A fresh repository has an empty cache, so GC has to fetch and decode everything.
+    // The writing repository has everything cached; GC must fetch and decode.
     let repo = Repository::open(None, Arc::clone(&storage), HashMap::new()).await?;
     let config = GCConfig::clean_all(
         Utc::now(),
