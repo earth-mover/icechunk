@@ -2,6 +2,15 @@
 
 ## Python Icechunk Library [unreleased]
 
+### Fixes
+
+- Repositories with more than one million snapshots are readable again ([#2388](https://github.com/earth-mover/icechunk/pull/2388)).
+- Metadata files that could not be read back are no longer written: large files are validated before upload ([#2388](https://github.com/earth-mover/icechunk/pull/2388)).
+
+### Performance
+
+- Repo info accessors no longer re-validate the whole file on every call ([#2388](https://github.com/earth-mover/icechunk/pull/2388)).
+
 ## Python Icechunk Library 2.2.1
 
 ### Features
