@@ -4,7 +4,7 @@
 
 ### Fixes
 
-- Garbage collection no longer hangs on hosts with few CPUs. 2.2.1 fetched snapshots 25 at a time, and the decode gate, a tokio semaphore with one slot per CPU, handed freed slots to snapshot fetches that the full manifest buffer had stopped polling. On a 2-CPU host GC froze within a minute with no error. Decode slots are now taken on the blocking thread, and the new `RepositoryConfig.max_concurrent_decodes` sets the number of slots per repository ([#2389](https://github.com/earth-mover/icechunk/pull/2389)).
+- Fix a garbage collection deadlock on machines with few CPUs ([#2389](https://github.com/earth-mover/icechunk/pull/2389)).
 
 ## Python Icechunk Library 2.2.1
 
