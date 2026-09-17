@@ -177,6 +177,7 @@ pub(crate) mod codes {
         VIRTUAL_CHUNK_FETCH => "virtual-chunk-fetch",
         VIRTUAL_CHUNK_MODIFIED => "virtual-chunk-modified",
         INVALID_OBJECT_SIZE => "invalid-object-size",
+        COALESCED_SHORT_READ => "coalesced-short-read",
         // format
         SERIALIZATION => "serialization",
         DESERIALIZATION => "deserialization",
@@ -234,6 +235,9 @@ fn classify_session(kind: &SessionErrorKind) -> Classified {
         K::FormatError(k) => classify_format(k),
         K::VirtualReferenceError(k) => classify_virtual_ref(k),
         K::RefError(k) => classify_ref(k),
+        K::CoalescedShortRead { .. } => {
+            class("StorageError", codes::COALESCED_SHORT_READ)
+        }
         K::ReadOnlySession => class("ReadOnlyError", codes::READ_ONLY_SESSION),
         K::CommitNotAllowed => class("SessionStateError", codes::COMMIT_NOT_ALLOWED),
         K::MergeNotAllowed => class("SessionStateError", codes::MERGE_NOT_ALLOWED),
@@ -734,6 +738,19 @@ impl From<PyIcechunkStoreError> for PyErr {
             }
         }
     }
+}
+
+/// Build the same typed exception `From<PyIcechunkStoreError>` would, from a
+/// *borrowed* [`SessionError`].
+///
+/// Needed where one failure is reported against several results and so is shared
+/// behind an `Arc` — `get_many_chunks`, where a coalesced span that fails to
+/// fetch fails every chunk that shared it. Carries the classification and
+/// message but not the miette report note, which needs an owned error.
+pub(crate) fn session_error_to_pyerr(error: &SessionError) -> PyErr {
+    let classified = classify_session(error.kind());
+    let message = format!("session error: {}", chain_message(error));
+    Python::attach(|py| build_pyerr(py, classified, message, None).unwrap_or_else(|e| e))
 }
 
 pub(crate) type PyIcechunkStoreResult<T> = Result<T, PyIcechunkStoreError>;

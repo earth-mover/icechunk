@@ -324,6 +324,7 @@ impl TryFrom<JsRepositoryConfig> for RepositoryConfig {
             get_partial_values_concurrency: value
                 .get_partial_values_concurrency
                 .map(|v| v as u16),
+            coalescing: None,
             compression: value.compression.map(|c| c.into()),
             max_concurrent_requests: value.max_concurrent_requests.map(|v| v as u16),
             caching: value.caching.map(|c| c.into()),

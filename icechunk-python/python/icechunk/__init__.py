@@ -32,6 +32,7 @@ from icechunk._icechunk_python import (
 )
 from icechunk.config import (
     CachingConfig,
+    CoalescingConfig,
     CompressionAlgorithm,
     CompressionConfig,
     FeatureFlag,
@@ -145,6 +146,7 @@ __all__ = [
     "CachingConfig",
     "ChecksumAlgorithm",
     "ChunkType",
+    "CoalescingConfig",
     "CommitMethod",
     "CompressionAlgorithm",
     "CompressionConfig",
