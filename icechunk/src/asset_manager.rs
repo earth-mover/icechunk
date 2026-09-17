@@ -52,8 +52,8 @@ use crate::{
         manifest::Manifest,
         repo_info::RepoInfo,
         serializers::{
-            deserialize_manifest, deserialize_repo_info, deserialize_snapshot,
-            deserialize_transaction_log,
+            VERIFY_THRESHOLD_BYTES, deserialize_manifest, deserialize_repo_info,
+            deserialize_snapshot, deserialize_transaction_log, verify_buffer,
         },
         snapshot::{Snapshot, SnapshotInfo},
         transaction_log::TransactionLog,
@@ -1363,12 +1363,28 @@ where
     .capture()?
 }
 
+/// Fail the write if `data` is large enough to be at risk and cannot be read back.
+///
+/// Serializers don't verify what they build, so without this a file that trips a
+/// limit is written happily and only fails when someone reads it back.
+fn verify_before_write(
+    data: &[u8],
+    file_type: FileTypeBin,
+    threshold: usize,
+) -> RepositoryResult<()> {
+    if data.len() >= threshold {
+        verify_buffer(file_type, data).inject()?;
+    }
+    Ok(())
+}
+
 async fn compress_with_header(
     data: &[u8],
     spec_version: SpecVersionBin,
     file_type: FileTypeBin,
     compression_level: u8,
 ) -> RepositoryResult<Vec<u8>> {
+    verify_before_write(data, file_type, VERIFY_THRESHOLD_BYTES)?;
     let mut buffer =
         binary_file_header(spec_version, file_type, CompressionAlgorithmBin::Zstd);
     let mut encoder =
@@ -1824,6 +1840,70 @@ mod test {
         storage::{Storage, logging::LoggingStorage, new_in_memory_storage},
     };
     use std::collections::HashMap;
+
+    /// A buffer no serializer of ours would ever produce.
+    fn unreadable_buffer(size: usize) -> Vec<u8> {
+        vec![0u8; size]
+    }
+
+    #[tokio_test]
+    async fn write_verification_skips_buffers_below_the_threshold() {
+        let data = unreadable_buffer(1024);
+        verify_before_write(data.as_slice(), FileTypeBin::Manifest, data.len() + 1)
+            .expect("small buffers must not be verified");
+    }
+
+    #[tokio_test]
+    async fn write_verification_rejects_buffers_that_cannot_be_read_back() {
+        let data = unreadable_buffer(1024);
+        let err = verify_before_write(data.as_slice(), FileTypeBin::Manifest, data.len())
+            .expect_err("a buffer we could not read back must not be written");
+        assert!(matches!(err.kind, RepositoryErrorKind::FormatError(_)));
+    }
+
+    #[tokio_test]
+    async fn write_verification_accepts_buffers_we_serialize()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let manifest = Manifest::from_iter(
+            &ManifestId::random(),
+            vec![ChunkInfo {
+                node: NodeId::random(),
+                coord: ChunkIndices(vec![0]),
+                payload: ChunkPayload::Inline("hello".into()),
+            }],
+            None,
+        )
+        .await?
+        .expect("manifest is empty");
+        // threshold 0: always verify
+        verify_before_write(manifest.bytes(), FileTypeBin::Manifest, 0)?;
+        Ok(())
+    }
+
+    #[tokio_test]
+    async fn compress_with_header_verifies_files_at_the_threshold()
+    -> Result<(), Box<dyn std::error::Error>> {
+        // below the threshold nothing is checked, even for a buffer we could not read back
+        compress_with_header(
+            unreadable_buffer(1024).as_slice(),
+            SpecVersionBin::current(),
+            FileTypeBin::Manifest,
+            1,
+        )
+        .await?;
+
+        let err = compress_with_header(
+            unreadable_buffer(VERIFY_THRESHOLD_BYTES).as_slice(),
+            SpecVersionBin::current(),
+            FileTypeBin::Manifest,
+            1,
+        )
+        .await
+        .map(|compressed| compressed.len())
+        .expect_err("a file at the threshold must be verified before writing");
+        assert!(matches!(err.kind, RepositoryErrorKind::FormatError(_)));
+        Ok(())
+    }
 
     #[tokio_test]
     async fn test_caching_caches() -> Result<(), Box<dyn std::error::Error>> {

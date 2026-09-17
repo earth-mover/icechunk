@@ -128,12 +128,18 @@ impl TransactionLog {
         Self { buffer }
     }
 
-    pub fn from_buffer(buffer: Vec<u8>) -> IcechunkResult<Self> {
+    /// Check that `buffer` passes every check [`TransactionLog::from_buffer`] applies.
+    pub fn verify_buffer(buffer: &[u8]) -> IcechunkResult<()> {
         let _ = flatbuffers::root_with_opts::<generated::TransactionLog<'_>>(
             &ROOT_OPTIONS,
-            buffer.as_slice(),
+            buffer,
         )
         .capture()?;
+        Ok(())
+    }
+
+    pub fn from_buffer(buffer: Vec<u8>) -> IcechunkResult<Self> {
+        Self::verify_buffer(buffer.as_slice())?;
         Ok(Self { buffer })
     }
 
@@ -511,9 +517,21 @@ impl TransactionLog {
 static ROOT_OPTIONS: VerifierOptions = VerifierOptions {
     max_depth: 64,
     max_tables: 50_000_000,
-    max_apparent_size: 1 << 31, // taken from the default
+    // Large enough that any buffer the builder can produce is readable: the
+    // builder refuses to grow past FLATBUFFERS_MAX_BUFFER_SIZE, and the
+    // verifier's counter runs at most MAX_APPARENT_SIZE_INFLATION times the
+    // buffer it walks. Saturating because the product doesn't fit a 32 bit
+    // usize (wasm32), where it lands on usize::MAX instead.
+    max_apparent_size: crate::serializers::MAX_APPARENT_SIZE_INFLATION
+        .saturating_mul(flatbuffers::FLATBUFFERS_MAX_BUFFER_SIZE),
     ignore_missing_null_terminator: true,
 };
+
+/// The verifier limits applied to every transactionlog buffer we read.
+#[cfg(test)]
+pub(crate) fn root_options() -> &'static VerifierOptions {
+    &ROOT_OPTIONS
+}
 
 // Tests for TransactionLog depend on ChangeSet which lives in the icechunk crate.
 // They are kept in icechunk's test suite instead.
