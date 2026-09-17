@@ -1741,6 +1741,7 @@ class RepositoryConfig:
         manifest: ManifestConfig | None = None,
         repo_update_retries: RepoUpdateRetryConfig | None = None,
         num_updates_per_repo_info_file: int | None = None,
+        max_concurrent_decodes: int | None = None,
     ) -> RepositoryConfig:
         """
         Create a new `RepositoryConfig` object
@@ -1760,6 +1761,10 @@ class RepositoryConfig:
         max_concurrent_requests: int | None
             The maximum number of concurrent HTTP requests Icechunk will do for this repo.
             Default: 256
+        max_concurrent_decodes: int | None
+            The maximum number of metadata files Icechunk will decompress and parse at the
+            same time for this repo.
+            Default: the number of CPUs available to the process
         caching: CachingConfig | None
             The caching configuration for the repository. When None, the default
             `CachingConfig` is used.
@@ -1873,6 +1878,32 @@ class RepositoryConfig:
     def max_concurrent_requests(self, value: int | None) -> None:
         """
         Set the maximum number of concurrent HTTP requests Icechunk should do for this repo.
+
+        Parameters
+        ----------
+        value: int | None
+            The maximum allowed.
+        """
+        ...
+    @property
+    def max_concurrent_decodes(self) -> int | None:
+        """
+        The maximum number of metadata files Icechunk will decompress and parse at the same
+        time for this repo.
+
+        Default: the number of CPUs available to the process
+
+        Returns
+        -------
+        int | None
+            The maximum number of concurrent metadata decodes for this repo.
+        """
+        ...
+    @max_concurrent_decodes.setter
+    def max_concurrent_decodes(self, value: int | None) -> None:
+        """
+        Set the maximum number of metadata files Icechunk should decompress and parse at
+        the same time for this repo.
 
         Parameters
         ----------

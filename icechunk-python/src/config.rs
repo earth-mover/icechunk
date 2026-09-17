@@ -2448,6 +2448,8 @@ pub struct PyRepositoryConfig {
     #[pyo3(get, set)]
     pub max_concurrent_requests: Option<u16>,
     #[pyo3(get, set)]
+    pub max_concurrent_decodes: Option<u16>,
+    #[pyo3(get, set)]
     pub caching: Option<Py<PyCachingConfig>>,
     #[pyo3(get, set)]
     pub storage: Option<Py<PyStorageSettings>>,
@@ -2490,6 +2492,7 @@ impl TryFrom<&PyRepositoryConfig> for RepositoryConfig {
                 get_partial_values_concurrency: value.get_partial_values_concurrency,
                 compression: value.compression.as_ref().map(|c| (&*c.borrow(py)).into()),
                 max_concurrent_requests: value.max_concurrent_requests,
+                max_concurrent_decodes: value.max_concurrent_decodes,
                 caching: value.caching.as_ref().map(|c| (&*c.borrow(py)).into()),
                 storage: value.storage.as_ref().map(|s| (&*s.borrow(py)).into()),
                 virtual_chunk_containers: cont,
@@ -2516,6 +2519,7 @@ impl From<RepositoryConfig> for PyRepositoryConfig {
                     .expect("Cannot create instance of CompressionConfig")
             }),
             max_concurrent_requests: value.max_concurrent_requests,
+            max_concurrent_decodes: value.max_concurrent_decodes,
             caching: value.caching.map(|c| {
                 Py::new(py, Into::<PyCachingConfig>::into(c))
                     .expect("Cannot create instance of CachingConfig")
@@ -2634,6 +2638,14 @@ impl PyRepr for PyRepositoryConfig {
                 ),
             ),
             (
+                "max_concurrent_decodes",
+                py_option_or_default(
+                    &self.max_concurrent_decodes,
+                    &d.max_concurrent_decodes().to_string(),
+                    mode,
+                ),
+            ),
+            (
                 "num_updates_per_repo_info_file",
                 py_option_or_default(
                     &self.num_updates_per_repo_info_file,
@@ -2680,7 +2692,7 @@ impl PyRepositoryConfig {
     }
 
     #[new]
-    #[pyo3(signature = (inline_chunk_threshold_bytes = None, get_partial_values_concurrency = None, compression = None, max_concurrent_requests = None, caching = None, storage = None, virtual_chunk_containers = None, manifest = None, repo_update_retries = None, num_updates_per_repo_info_file = None))]
+    #[pyo3(signature = (inline_chunk_threshold_bytes = None, get_partial_values_concurrency = None, compression = None, max_concurrent_requests = None, caching = None, storage = None, virtual_chunk_containers = None, manifest = None, repo_update_retries = None, num_updates_per_repo_info_file = None, max_concurrent_decodes = None))]
     #[expect(clippy::too_many_arguments)]
     pub fn new(
         inline_chunk_threshold_bytes: Option<u16>,
@@ -2693,12 +2705,14 @@ impl PyRepositoryConfig {
         manifest: Option<Py<PyManifestConfig>>,
         repo_update_retries: Option<Py<PyRepoUpdateRetryConfig>>,
         num_updates_per_repo_info_file: Option<u16>,
+        max_concurrent_decodes: Option<u16>,
     ) -> Self {
         Self {
             inline_chunk_threshold_bytes,
             get_partial_values_concurrency,
             compression,
             max_concurrent_requests,
+            max_concurrent_decodes,
             caching,
             storage,
             virtual_chunk_containers,

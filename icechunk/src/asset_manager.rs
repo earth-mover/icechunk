@@ -81,6 +81,7 @@ pub struct AssetManager {
     compression_level: u8,
 
     max_concurrent_requests: u16,
+    max_concurrent_decodes: u16,
 
     #[serde(default = "_default_true")]
     use_repo_info_cache: bool,
@@ -101,6 +102,8 @@ pub struct AssetManager {
 
     #[serde(skip)]
     request_semaphore: Semaphore,
+    #[serde(skip)]
+    decode_semaphore: Arc<Semaphore>,
 
     #[serde(skip)]
     repo_cache: RwLock<Option<(Arc<RepoInfo>, VersionInfo)>>,
@@ -124,6 +127,8 @@ struct AssetManagerSerializer {
     num_bytes_chunks: u64,
     compression_level: u8,
     max_concurrent_requests: u16,
+    #[serde(default = "crate::config::default_max_concurrent_decodes")]
+    max_concurrent_decodes: u16,
     use_repo_info_cache: bool,
 }
 
@@ -140,6 +145,7 @@ impl From<AssetManagerSerializer> for AssetManager {
             value.num_bytes_chunks,
             value.compression_level,
             value.max_concurrent_requests,
+            value.max_concurrent_decodes,
             value.use_repo_info_cache,
         )
     }
@@ -158,6 +164,7 @@ impl AssetManager {
         num_bytes_chunks: u64,
         compression_level: u8,
         max_concurrent_requests: u16,
+        max_concurrent_decodes: u16,
         use_repo_info_cache: bool,
     ) -> Self {
         Self {
@@ -168,6 +175,7 @@ impl AssetManager {
             num_bytes_chunks,
             compression_level,
             max_concurrent_requests,
+            max_concurrent_decodes,
             storage,
             storage_settings,
             spec_version,
@@ -182,6 +190,7 @@ impl AssetManager {
             snapshot_cache_size_warned: AtomicBool::new(false),
             manifest_cache_size_warned: AtomicBool::new(false),
             request_semaphore: Semaphore::new(max_concurrent_requests as usize),
+            decode_semaphore: Arc::new(Semaphore::new(max_concurrent_decodes as usize)),
             repo_cache: RwLock::new(None),
             use_repo_info_cache,
         }
@@ -205,6 +214,7 @@ impl AssetManager {
             0,
             compression_level,
             max_concurrent_requests,
+            crate::config::default_max_concurrent_decodes(),
             false,
         )
     }
@@ -216,6 +226,7 @@ impl AssetManager {
         config: &CachingConfig,
         compression_level: u8,
         max_concurrent_requests: u16,
+        max_concurrent_decodes: u16,
     ) -> Self {
         Self::new(
             storage,
@@ -228,6 +239,7 @@ impl AssetManager {
             config.num_bytes_chunks(),
             compression_level,
             max_concurrent_requests,
+            max_concurrent_decodes,
             true,
         )
     }
@@ -244,6 +256,7 @@ impl AssetManager {
             self.num_bytes_chunks,
             self.compression_level,
             self.max_concurrent_requests,
+            self.max_concurrent_decodes,
             true,
         )
     }
@@ -371,6 +384,7 @@ impl AssetManager {
                     self.storage.as_ref(),
                     &self.storage_settings,
                     &self.request_semaphore,
+                    &self.decode_semaphore,
                 )
                 .await?;
                 self.warn_if_manifest_cache_small(manifest.as_ref());
@@ -449,6 +463,7 @@ impl AssetManager {
                     self.storage.as_ref(),
                     &self.storage_settings,
                     &self.request_semaphore,
+                    &self.decode_semaphore,
                 )
                 .await?;
                 self.warn_if_snapshot_cache_small(snapshot.as_ref());
@@ -491,6 +506,7 @@ impl AssetManager {
                     self.storage.as_ref(),
                     &self.storage_settings,
                     &self.request_semaphore,
+                    &self.decode_semaphore,
                 )
                 .await?;
                 let _fail_is_ok = guard.insert(Arc::clone(&transaction));
@@ -526,6 +542,7 @@ impl AssetManager {
             &self.storage_settings,
             REPO_INFO_FILE_PATH,
             repo_cache.as_ref().map(|(_, info)| info),
+            &self.decode_semaphore,
         )
         .await
         {
@@ -588,8 +605,13 @@ impl AssetManager {
         &self,
         file_name: &str,
     ) -> RepositoryResult<(Arc<RepoInfo>, VersionInfo)> {
-        fetch_repo_info_backup(self.storage.as_ref(), &self.storage_settings, file_name)
-            .await
+        fetch_repo_info_backup(
+            self.storage.as_ref(),
+            &self.storage_settings,
+            file_name,
+            &self.decode_semaphore,
+        )
+        .await
     }
 
     /// Read-only inspection: fetch just the [`FileHeader`] of the metadata file at
@@ -658,6 +680,7 @@ impl AssetManager {
             self.storage.as_ref(),
             &self.storage_settings,
             &self.request_semaphore,
+            &self.decode_semaphore,
         )
         .await
     }
@@ -678,6 +701,7 @@ impl AssetManager {
             self.storage.as_ref(),
             &self.storage_settings,
             &self.request_semaphore,
+            &self.decode_semaphore,
         )
         .await
     }
@@ -696,6 +720,7 @@ impl AssetManager {
             self.storage.as_ref(),
             &self.storage_settings,
             &self.request_semaphore,
+            &self.decode_semaphore,
         )
         .await
     }
@@ -714,6 +739,7 @@ impl AssetManager {
             &self.storage_settings,
             REPO_INFO_FILE_PATH,
             None,
+            &self.decode_semaphore,
         )
         .await?;
         // unreachable: we get either the object or a not-found error above.
@@ -735,6 +761,7 @@ impl AssetManager {
             &self.storage_settings,
             format!("{OVERWRITTEN_FILES_PATH}/{file_name}").as_str(),
             None,
+            &self.decode_semaphore,
         )
         .await?;
         // unreachable: we get either the object or a not-found error above.
@@ -1196,25 +1223,6 @@ fn binary_file_header(
     buffer
 }
 
-/// Caps concurrent CPU decodes so the blocking pool can't oversubscribe the cores.
-/// Absent under shuttle: a process-global semaphore would leak across shuttle
-/// executions, and the gate's core-oversubscription job is meaningless there.
-/// `ICECHUNK_DECODE_CONCURRENCY` overrides the size.
-#[cfg(not(feature = "shuttle"))]
-fn decode_gate() -> &'static Semaphore {
-    static GATE: LazyLock<Semaphore> = LazyLock::new(|| {
-        let n = std::env::var("ICECHUNK_DECODE_CONCURRENCY")
-            .ok()
-            .and_then(|v| v.parse::<usize>().ok())
-            .filter(|n| *n > 0)
-            .unwrap_or_else(|| {
-                std::thread::available_parallelism().map_or(8, |n| n.get())
-            });
-        Semaphore::new(n.min(Semaphore::MAX_PERMITS))
-    });
-    &GATE
-}
-
 /// Starting buffer capacity for objects without a known size, to avoid a few
 /// initial reallocations while `read_to_end` grows the buffer.
 const DEFAULT_PREALLOC_HINT: usize = 8192;
@@ -1294,13 +1302,14 @@ async fn write_new_manifest(
     Ok(len)
 }
 
-#[instrument(skip(storage, storage_settings, semaphore))]
+#[instrument(skip(storage, storage_settings, semaphore, decode_semaphore))]
 async fn fetch_manifest(
     manifest_id: &ManifestId,
     manifest_size: u64,
     storage: &(dyn Storage + Send),
     storage_settings: &storage::Settings,
     semaphore: &Semaphore,
+    decode_semaphore: &Arc<Semaphore>,
 ) -> RepositoryResult<(Arc<Manifest>, FileHeader)> {
     debug!(%manifest_id, "Downloading manifest");
 
@@ -1315,6 +1324,7 @@ async fn fetch_manifest(
         read,
         manifest_size,
         FileTypeBin::Manifest,
+        Arc::clone(decode_semaphore),
         |spec_version, buffer| deserialize_manifest(spec_version, buffer).map(Arc::new),
     )
     .await
@@ -1327,6 +1337,7 @@ async fn fetch_and_decode<T, F>(
     mut read: Pin<Box<dyn AsyncBufRead + Send>>,
     compressed_size_hint: u64,
     file_type: FileTypeBin,
+    #[cfg_attr(feature = "shuttle", expect(unused))] decode_semaphore: Arc<Semaphore>,
     deserialize: F,
 ) -> RepositoryResult<(T, FileHeader)>
 where
@@ -1356,7 +1367,7 @@ where
         // release on decode completion, not on cancelled-future drop
         #[cfg(not(feature = "shuttle"))]
         let _decode_permit =
-            futures::executor::block_on(decode_gate().acquire()).capture()?;
+            futures::executor::block_on(decode_semaphore.acquire()).capture()?;
         let mut decompressed =
             zstd::decode_all(&compressed[format_constants::ICECHUNK_FILE_HEADER_LEN..])
                 .capture()?;
@@ -1456,12 +1467,13 @@ async fn write_new_snapshot(
     Ok(id)
 }
 
-#[instrument(skip(storage, storage_settings, semaphore))]
+#[instrument(skip(storage, storage_settings, semaphore, decode_semaphore))]
 async fn fetch_snapshot(
     snapshot_id: &SnapshotId,
     storage: &(dyn Storage + Send + Sync),
     storage_settings: &storage::Settings,
     semaphore: &Semaphore,
+    decode_semaphore: &Arc<Semaphore>,
 ) -> RepositoryResult<(Arc<Snapshot>, FileHeader)> {
     debug!(%snapshot_id, "Downloading snapshot");
     let _permit = semaphore.acquire().await.capture()?;
@@ -1473,6 +1485,7 @@ async fn fetch_snapshot(
         read,
         DEFAULT_PREALLOC_HINT as u64,
         FileTypeBin::Snapshot,
+        Arc::clone(decode_semaphore),
         |spec_version, buffer| deserialize_snapshot(spec_version, buffer).map(Arc::new),
     )
     .await
@@ -1536,12 +1549,13 @@ async fn write_new_tx_log(
     Ok(())
 }
 
-#[instrument(skip(storage, storage_settings, semaphore))]
+#[instrument(skip(storage, storage_settings, semaphore, decode_semaphore))]
 async fn fetch_transaction_log(
     transaction_id: &SnapshotId,
     storage: &(dyn Storage + Send + Sync),
     storage_settings: &storage::Settings,
     semaphore: &Semaphore,
+    decode_semaphore: &Arc<Semaphore>,
 ) -> RepositoryResult<(Arc<TransactionLog>, FileHeader)> {
     debug!(%transaction_id, "Downloading transaction log");
     let path = format!("{TRANSACTION_LOGS_FILE_PATH}/{transaction_id}");
@@ -1552,6 +1566,7 @@ async fn fetch_transaction_log(
         read,
         DEFAULT_PREALLOC_HINT as u64,
         FileTypeBin::TransactionLog,
+        Arc::clone(decode_semaphore),
         |spec_version, buffer| {
             deserialize_transaction_log(spec_version, buffer).map(Arc::new)
         },
@@ -1695,16 +1710,23 @@ pub async unsafe fn force_write_repo_info(
 pub async fn fetch_repo_info(
     storage: &(dyn Storage + Send + Sync),
     storage_settings: &storage::Settings,
+    decode_semaphore: &Arc<Semaphore>,
 ) -> RepositoryResult<(Arc<RepoInfo>, VersionInfo)> {
-    fetch_repo_info_from_path(storage, storage_settings, REPO_INFO_FILE_PATH, None)
-        .await
-        .map(|fetched| {
-            // Since we didn't give a previous version, there must be a result here
-            #[expect(clippy::expect_used)]
-            let (info, version, _header) =
-                fetched.expect("Logic bug, must have a repo_info here");
-            (info, version)
-        })
+    fetch_repo_info_from_path(
+        storage,
+        storage_settings,
+        REPO_INFO_FILE_PATH,
+        None,
+        decode_semaphore,
+    )
+    .await
+    .map(|fetched| {
+        // Since we didn't give a previous version, there must be a result here
+        #[expect(clippy::expect_used)]
+        let (info, version, _header) =
+            fetched.expect("Logic bug, must have a repo_info here");
+        (info, version)
+    })
 }
 
 #[instrument(skip_all)]
@@ -1712,12 +1734,14 @@ async fn fetch_repo_info_backup(
     storage: &(dyn Storage + Send + Sync),
     storage_settings: &storage::Settings,
     file_name: &str,
+    decode_semaphore: &Arc<Semaphore>,
 ) -> RepositoryResult<(Arc<RepoInfo>, VersionInfo)> {
     fetch_repo_info_from_path(
         storage,
         storage_settings,
         format!("{OVERWRITTEN_FILES_PATH}/{file_name}").as_str(),
         None,
+        decode_semaphore,
     )
     .await
     .map(|fetched| {
@@ -1735,6 +1759,7 @@ pub async fn fetch_repo_info_from_path(
     storage_settings: &storage::Settings,
     path: &str,
     previous_version: Option<&VersionInfo>,
+    decode_semaphore: &Arc<Semaphore>,
 ) -> RepositoryResult<Option<(Arc<RepoInfo>, VersionInfo, FileHeader)>> {
     debug!("Downloading repo info");
     match storage.get_object_conditional(storage_settings, path, previous_version).await {
@@ -1743,6 +1768,7 @@ pub async fn fetch_repo_info_from_path(
                 data,
                 DEFAULT_PREALLOC_HINT as u64,
                 FileTypeBin::RepoInfo,
+                Arc::clone(decode_semaphore),
                 |spec_version, buffer| {
                     deserialize_repo_info(spec_version, buffer).map(Arc::new)
                 },
@@ -1953,6 +1979,7 @@ mod test {
             &CachingConfig::default(),
             1,
             100,
+            8,
         );
 
         let compression: LocationCompressionConfig =
@@ -2096,6 +2123,7 @@ mod test {
             },
             1,
             100,
+            8,
         );
 
         // we keep asking for all 3 items, but the cache can only fit 2
@@ -2150,6 +2178,7 @@ mod test {
             &CachingConfig::default(),
             1,
             100,
+            8,
         ));
 
         let manager_c = Arc::new(manager);
@@ -2215,6 +2244,7 @@ mod test {
             &CachingConfig::default(),
             1,
             100,
+            8,
         );
         let initial = Snapshot::initial(SpecVersionBin::current()).unwrap();
         let repo_info = Arc::new(RepoInfo::initial(

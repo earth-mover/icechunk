@@ -248,6 +248,7 @@ impl Repository {
             config.caching(),
             config.compression().level(),
             config.max_concurrent_requests(),
+            config.max_concurrent_decodes(),
         ));
 
         if check_clean_root && !storage.root_is_clean(&storage_settings).await.inject()? {
@@ -447,6 +448,7 @@ impl Repository {
             final_config.caching(),
             final_config.compression().level(),
             final_config.max_concurrent_requests(),
+            final_config.max_concurrent_decodes(),
         ));
 
         Self::new(

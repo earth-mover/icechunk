@@ -533,6 +533,9 @@ pub struct RepositoryConfig {
     pub max_concurrent_requests: Option<u16>,
 
     #[serde(default)]
+    pub max_concurrent_decodes: Option<u16>,
+
+    #[serde(default)]
     pub caching: Option<CachingConfig>,
 
     // If not set it will use the Storage implementation default
@@ -565,6 +568,12 @@ static DEFAULT_MANIFEST_CONFIG: OnceLock<ManifestConfig> = OnceLock::new();
 static DEFAULT_REPO_UPDATE_RETRY_CONFIG: OnceLock<RepoUpdateRetryConfig> =
     OnceLock::new();
 pub const DEFAULT_MAX_CONCURRENT_REQUESTS: u16 = 256;
+
+/// One decode per core, so decompression cannot oversubscribe the machine.
+pub(crate) fn default_max_concurrent_decodes() -> u16 {
+    let cores = std::thread::available_parallelism().map_or(8, |n| n.get());
+    u16::try_from(cores).unwrap_or(u16::MAX)
+}
 pub const DEFAULT_NUM_UPDATES_PER_REPO_INFO_FILE: u16 = 1_000;
 
 impl RepositoryConfig {
@@ -599,6 +608,10 @@ impl RepositoryConfig {
         self.max_concurrent_requests.unwrap_or(DEFAULT_MAX_CONCURRENT_REQUESTS)
     }
 
+    pub fn max_concurrent_decodes(&self) -> u16 {
+        self.max_concurrent_decodes.unwrap_or_else(default_max_concurrent_decodes)
+    }
+
     pub fn repo_update_retries(&self) -> &RepoUpdateRetryConfig {
         self.repo_update_retries.as_ref().unwrap_or_else(|| {
             DEFAULT_REPO_UPDATE_RETRY_CONFIG.get_or_init(RepoUpdateRetryConfig::default)
@@ -627,6 +640,15 @@ impl RepositoryConfig {
             max_concurrent_requests: match (
                 &self.max_concurrent_requests,
                 other.max_concurrent_requests,
+            ) {
+                (None, None) => None,
+                (None, Some(c)) => Some(c),
+                (Some(c), None) => Some(*c),
+                (Some(_), Some(theirs)) => Some(theirs),
+            },
+            max_concurrent_decodes: match (
+                &self.max_concurrent_decodes,
+                other.max_concurrent_decodes,
             ) {
                 (None, None) => None,
                 (None, Some(c)) => Some(c),
@@ -893,6 +915,7 @@ inline_chunk_threshold_bytes: null
 get_partial_values_concurrency: null
 compression: null
 max_concurrent_requests: null
+max_concurrent_decodes: null
 caching: null
 storage: null
 virtual_chunk_containers:
@@ -989,6 +1012,7 @@ virtual_chunk_containers:
         assert!(config.get_partial_values_concurrency.is_none());
         assert!(config.compression.is_none());
         assert!(config.max_concurrent_requests.is_none());
+        assert!(config.max_concurrent_decodes.is_none());
         assert!(config.caching.is_none());
         assert!(config.storage.is_none());
         assert!(config.manifest.is_none());

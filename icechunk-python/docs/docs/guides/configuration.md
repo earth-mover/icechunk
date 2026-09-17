@@ -38,6 +38,10 @@ The number of concurrent requests to make when getting partial values from stora
 The maximum total number of concurrent requests this repo will allow.
 See [Performance | Concurrency](performance.md#Concurrency) for details.
 
+### [`max_concurrent_decodes`](../reference/config.md#icechunk.config.RepositoryConfig.max_concurrent_decodes)
+
+The maximum number of metadata files (snapshots, manifests, transaction logs) this repo will decompress and parse at the same time. Defaults to the number of CPUs available to the process.
+
 ### [`compression`](../reference/config.md#icechunk.config.RepositoryConfig.compression)
 
 Icechunk uses Zstd compression to compress its metadata files. [`CompressionConfig`](../reference/config.md#icechunk.config.CompressionConfig) allows you to configure the [compression level](../reference/config.md#icechunk.config.CompressionConfig.level) and [algorithm](../reference/config.md#icechunk.config.CompressionConfig.algorithm). Currently, the only algorithm available is [`Zstd`](https://facebook.github.io/zstd/).

@@ -206,6 +206,7 @@ pub struct JsRepositoryConfig {
     pub get_partial_values_concurrency: Option<u32>,
     pub compression: Option<JsCompressionConfig>,
     pub max_concurrent_requests: Option<u32>,
+    pub max_concurrent_decodes: Option<u32>,
     pub caching: Option<JsCachingConfig>,
     pub storage: Option<JsStorageSettings>,
     /// Manifest configuration, passed as a JSON-compatible object.
@@ -224,6 +225,7 @@ pub struct JsRepositoryConfig {
     pub get_partial_values_concurrency: Option<u32>,
     pub compression: Option<JsCompressionConfig>,
     pub max_concurrent_requests: Option<u32>,
+    pub max_concurrent_decodes: Option<u32>,
     pub caching: Option<JsCachingConfig>,
     pub storage: Option<JsStorageSettings>,
     /// Manifest configuration, passed as a JSON-compatible object.
@@ -247,6 +249,7 @@ impl From<RepositoryConfig> for JsRepositoryConfig {
                 level: c.level.map(|l| l as u32),
             }),
             max_concurrent_requests: value.max_concurrent_requests.map(|v| v as u32),
+            max_concurrent_decodes: value.max_concurrent_decodes.map(|v| v as u32),
             caching: value.caching.map(|c| JsCachingConfig {
                 num_snapshot_nodes: c.num_snapshot_nodes.map(|v| v as i64),
                 num_chunk_refs: c.num_chunk_refs.map(|v| v as i64),
@@ -326,6 +329,7 @@ impl TryFrom<JsRepositoryConfig> for RepositoryConfig {
                 .map(|v| v as u16),
             compression: value.compression.map(|c| c.into()),
             max_concurrent_requests: value.max_concurrent_requests.map(|v| v as u16),
+            max_concurrent_decodes: value.max_concurrent_decodes.map(|v| v as u16),
             caching: value.caching.map(|c| c.into()),
             storage: value.storage.map(|s| s.into()),
             virtual_chunk_containers,
