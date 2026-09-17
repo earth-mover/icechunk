@@ -1354,6 +1354,7 @@ where
         let _entered = span.entered();
         // Wait for the gate here, not on the async task: a tokio semaphore hands a freed
         // permit to its oldest waiter, and a waiter in an unpolled stream buffer never uses it.
+        // release on decode completion, not on cancelled-future drop
         #[cfg(not(feature = "shuttle"))]
         let _decode_permit =
             futures::executor::block_on(decode_gate().acquire()).capture()?;
