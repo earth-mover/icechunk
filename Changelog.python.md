@@ -1,16 +1,5 @@
 # Changelog
 
-## Python Icechunk Library [unreleased]
-
-### Fixes
-
-- Repositories with more than one million snapshots are readable again ([#2388](https://github.com/earth-mover/icechunk/pull/2388)).
-- Metadata files that could not be read back are no longer written: large files are validated before upload ([#2388](https://github.com/earth-mover/icechunk/pull/2388)).
-
-### Performance
-
-- Repo info accessors no longer re-validate the whole file on every call ([#2388](https://github.com/earth-mover/icechunk/pull/2388)).
-
 ## Python Icechunk Library 2.2.1
 
 ### Features
@@ -21,6 +10,8 @@
 
 - Update tests to deal with Tigris and other stores listing whole-second timestamps ([#2368](https://github.com/earth-mover/icechunk/pull/2368)).
 - `reset_branch` conflict errors report the actual branch tip instead of the expected parent twice ([#2360](https://github.com/earth-mover/icechunk/pull/2360)).
+- Repositories with more than one million snapshots are readable again ([#2388](https://github.com/earth-mover/icechunk/pull/2388)).
+- Metadata files that could not be read back are no longer written: large files are validated before upload ([#2388](https://github.com/earth-mover/icechunk/pull/2388)).
 
 ### Performance
 
@@ -29,6 +20,7 @@
 - Garbage collection fetches each snapshot once, concurrently, and lists the snapshots prefix once ([#2358](https://github.com/earth-mover/icechunk/pull/2358)).
 - Branch and tag lookups no longer deserialize every snapshot's metadata ([#2377](https://github.com/earth-mover/icechunk/pull/2377)).
 - `upgrade_icechunk_repository` walks the v1 ancestry from prefetched snapshot infos. A 285,824 snapshot migration drops from 451 s to 209 s ([#2383](https://github.com/earth-mover/icechunk/pull/2383)).
+- Repo info accessors no longer re-validate the whole file on every call ([#2388](https://github.com/earth-mover/icechunk/pull/2388)).
 
 ## Python Icechunk Library 2.2.0
 
