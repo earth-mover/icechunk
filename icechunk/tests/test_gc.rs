@@ -1712,3 +1712,72 @@ async fn test_expire_deletes_branch_sharing_tip_with_main()
 
     Ok(())
 }
+
+/// GC deadlocked on hosts with few cores: the decode gate handed a freed slot to a
+/// snapshot fetch that the full manifest buffer had stopped polling.
+#[tokio_test]
+async fn test_gc_completes_with_one_decode_slot() -> Result<(), Box<dyn std::error::Error>>
+{
+    // Under nextest this runs in its own process, so the gate is still unset here.
+    icechunk::asset_manager::init_decode_gate(1);
+    let inner: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+    // Read latency makes the fetches interleave the way they do over a network.
+    let storage: Arc<dyn Storage + Send + Sync> =
+        Arc::new(LatencyStorage::new(inner, 0, 5));
+    let repo = Repository::create(
+        Some(RepositoryConfig {
+            inline_chunk_threshold_bytes: Some(0),
+            ..Default::default()
+        }),
+        Arc::clone(&storage),
+        HashMap::new(),
+        None,
+        true,
+    )
+    .await?;
+    let arrays: Vec<Path> =
+        (0..3).map(|i| format!("/array{i}").try_into().unwrap()).collect();
+    let mut session = repo.writable_session("main").await?;
+    session.add_group(Path::root(), Bytes::new()).await?;
+    for path in &arrays {
+        session
+            .add_array(
+                path.clone(),
+                ArrayShape::new(vec![(100, 100)]).unwrap(),
+                None,
+                Bytes::new(),
+            )
+            .await?;
+    }
+    session.commit("arrays").execute().await?;
+    for idx in 0..100u32 {
+        let mut session = repo.writable_session("main").await?;
+        for path in &arrays {
+            let payload =
+                session.get_chunk_writer()?(Bytes::from(vec![idx as u8; 8])).await?;
+            session
+                .set_chunk_ref(path.clone(), ChunkIndices(vec![idx]), Some(payload))
+                .await?;
+        }
+        session.commit(format!("commit {idx}")).execute().await?;
+    }
+
+    // A fresh repository has an empty cache, so GC has to fetch and decode everything.
+    let repo = Repository::open(None, Arc::clone(&storage), HashMap::new()).await?;
+    let config = GCConfig::clean_all(
+        Utc::now(),
+        Utc::now(),
+        None,
+        NonZeroU16::new(25).unwrap(),
+        NonZeroUsize::new(64 * 1024 * 1024).unwrap(),
+        NonZeroU16::new(8).unwrap(),
+        true,
+    );
+    let summary = tokio::time::timeout(
+        std::time::Duration::from_secs(120),
+        garbage_collect(Arc::clone(repo.asset_manager()), &config, None, 100),
+    )
+    .await??;
+    assert_eq!(summary.snapshots_deleted, 0);
+    Ok(())
+}

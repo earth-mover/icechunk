@@ -13,7 +13,7 @@ use futures::{Stream, StreamExt as _, TryStreamExt as _, stream::BoxStream};
 use icechunk_types::{ICResultExt as _, error::ICResultCtxExt as _};
 use quick_cache::{Weighter, sync::Cache};
 use serde::{Deserialize, Serialize};
-use std::sync::{LazyLock, RwLock};
+use std::sync::{Condvar, LazyLock, Mutex, OnceLock, RwLock};
 use std::{
     ops::Range,
     pin::Pin,
@@ -1199,13 +1199,64 @@ fn binary_file_header(
 /// Caps concurrent CPU decodes so the blocking pool can't oversubscribe the cores.
 /// Absent under shuttle: a process-global semaphore would leak across shuttle
 /// executions, and the gate's core-oversubscription job is meaningless there.
+/// `ICECHUNK_DECODE_CONCURRENCY` or [`init_decode_gate`] override the size.
 #[cfg(not(feature = "shuttle"))]
-fn decode_gate() -> &'static Semaphore {
-    static GATE: LazyLock<Semaphore> = LazyLock::new(|| {
-        let n = std::thread::available_parallelism().map_or(8, |n| n.get());
-        Semaphore::new(n)
-    });
-    &GATE
+fn decode_gate() -> &'static DecodeGate {
+    DECODE_GATE.get_or_init(|| {
+        let n = std::env::var("ICECHUNK_DECODE_CONCURRENCY")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .filter(|n| *n > 0)
+            .unwrap_or_else(|| {
+                std::thread::available_parallelism().map_or(8, |n| n.get())
+            });
+        DecodeGate::new(n)
+    })
+}
+
+#[cfg(not(feature = "shuttle"))]
+static DECODE_GATE: OnceLock<DecodeGate> = OnceLock::new();
+
+/// Sets how many decodes run at once in this process. Returns false once the gate is in
+/// use: the size cannot change after the first decode.
+#[cfg(not(feature = "shuttle"))]
+pub fn init_decode_gate(slots: usize) -> bool {
+    DECODE_GATE.set(DecodeGate::new(slots.max(1))).is_ok()
+}
+
+/// Taken on the blocking thread, never awaited. A tokio `Semaphore` hands a freed permit
+/// to its oldest waiter, and a waiter in an unpolled stream buffer never uses it: GC deadlocked.
+#[cfg(not(feature = "shuttle"))]
+struct DecodeGate {
+    free: Mutex<usize>,
+    freed: Condvar,
+}
+
+#[cfg(not(feature = "shuttle"))]
+impl DecodeGate {
+    fn new(slots: usize) -> Self {
+        Self { free: Mutex::new(slots), freed: Condvar::new() }
+    }
+
+    fn acquire(&self) -> DecodePermit<'_> {
+        let mut free = self.free.lock().unwrap_or_else(|e| e.into_inner());
+        while *free == 0 {
+            free = self.freed.wait(free).unwrap_or_else(|e| e.into_inner());
+        }
+        *free -= 1;
+        DecodePermit(self)
+    }
+}
+
+#[cfg(not(feature = "shuttle"))]
+struct DecodePermit<'a>(&'a DecodeGate);
+
+#[cfg(not(feature = "shuttle"))]
+impl Drop for DecodePermit<'_> {
+    fn drop(&mut self) {
+        *self.0.free.lock().unwrap_or_else(|e| e.into_inner()) += 1;
+        self.0.freed.notify_one();
+    }
 }
 
 /// Starting buffer capacity for objects without a known size, to avoid a few
@@ -1341,16 +1392,13 @@ where
     }
     let spec_version = header.spec_version;
 
-    // gate concurrent CPU decodes; absent under shuttle (see decode_gate)
-    #[cfg(not(feature = "shuttle"))]
-    let decode_permit = decode_gate().acquire().await.capture()?;
     // keep error span ancestry on the blocking thread
     let span = tracing::Span::current();
     tokio::task::spawn_blocking(move || -> RepositoryResult<(T, FileHeader)> {
         let _entered = span.entered();
-        // release on decode completion, not on cancelled-future drop
+        // gate concurrent CPU decodes; absent under shuttle (see decode_gate)
         #[cfg(not(feature = "shuttle"))]
-        let _decode_permit = decode_permit;
+        let _decode_permit = decode_gate().acquire();
         let mut decompressed =
             zstd::decode_all(&compressed[format_constants::ICECHUNK_FILE_HEADER_LEN..])
                 .capture()?;
