@@ -54,7 +54,7 @@ repo_ops_mod.IcechunkError = (ic.IcechunkError, ic_v1.IcechunkError)  # type: ig
 
 
 import hypothesis.strategies as st
-from hypothesis import event, note
+from hypothesis import assume, event, note
 from hypothesis.stateful import (
     initialize,
     precondition,
@@ -69,7 +69,9 @@ from tests.test_stateful_repo_ops import (
 )
 from tests.test_zarr.test_stateful import (
     ModifiedZarrHierarchyStateMachine,
+    storage_chunk_sizes,
 )
+from zarr.testing.strategies import chunk_paths
 
 
 class CrossVersionVersionControlStateMachine(VersionControlStateMachine):
@@ -423,6 +425,24 @@ class CrossVersionTwoActorZarrHierarchyStateMachine(ModifiedZarrHierarchyStateMa
     )
     def commit_with_check(self, data: st.DataObject) -> None:
         return super().commit_with_check(data)
+
+    # `cdata_shape` counts inner chunks. A sharded array holds one key per shard.
+    # v1 rejects the impossible key. Draw from the storage-key grid instead.
+    @precondition(lambda self: bool(self.all_arrays))
+    @rule(data=st.data())
+    def delete_chunk(self, data: st.DataObject) -> None:
+        array = data.draw(st.sampled_from(sorted(self.all_arrays)))
+        arr = zarr.open_array(path=array, store=self.model)
+        numblocks = tuple(len(sizes) for sizes in storage_chunk_sizes(arr))
+        # A zero-length dimension holds no keys.
+        assume(all(numblocks))
+        chunk_path = data.draw(
+            chunk_paths(ndim=arr.ndim, numblocks=numblocks, subset=False)
+        )
+        path = f"{array}/c/{chunk_path}"
+        note(f"deleting chunk {path=!r}")
+        self._sync(self.model.delete(path))
+        self._sync(self.store.delete(path))
 
 
 def test_two_actors_zarr_cross_version() -> None:
