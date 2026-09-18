@@ -231,10 +231,9 @@ jobs:
           # so we need to bump the version here whenever Python version is updated
           # Currently: 3.12
           prefix-key: "rust-py312"
-          # reuses code-quality's cache for the overlapping ci-profile deps;
-          # never saves, so the key always holds code-quality's artifacts
-          shared-key: "code-quality"
-          save-if: false
+          # own key: Code Quality no longer builds the ci-profile deps shuttle needs
+          shared-key: "shuttle"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Compile shuttle tests
         run: just profile=ci shuttle-test --no-run

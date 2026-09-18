@@ -79,15 +79,18 @@ jobs:
         with:
           persist-credentials: false
 
+      # Same as `just rustfs-up`, but in the background so the image pull and
+      # health wait overlap the setup steps below
+      - name: Stand up RustFS
+        run: (docker compose up -d rustfs_init; echo $? > "$RUNNER_TEMP/rustfs-up.rc") > "$RUNNER_TEMP/rustfs-up.log" 2>&1 &
+
       - uses: prefix-dev/setup-pixi@d3f436a425481402e6a95a1d1fc10331c708cd9e # v0.10.2
         with:
           pixi-version: ${{ env.PIXI_VERSION }}
           cache: false
           activate-environment: true
           manifest-path: icechunk-python/pyproject.toml
-
-      - name: Stand up RustFS
-        run: just rustfs-up
+          environments: wheel-test
 
       - name: Download wheels
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -112,14 +115,19 @@ jobs:
       # this is here instead of earlier to give RustFS more time to get up and running
       # checking and waiting only right before we need it
       - name: Wait for RustFS to be ready
-        run: just rustfs-wait
+        run: |
+          for _ in $(seq 120); do [ -s "$RUNNER_TEMP/rustfs-up.rc" ] && break; sleep 1; done
+          cat "$RUNNER_TEMP/rustfs-up.log"
+          [ "$(cat "$RUNNER_TEMP/rustfs-up.rc")" = 0 ]
+          just rustfs-wait
 
       # Python-line coverage is measured here, against the shipped wheel;
       # Rust+FFI coverage stays in rust-ci where the instrumented build is shared
+      # --cov, not coverage=true: that also sets up llvm-cov, which needs cargo
       - name: Run pytest (non-hypothesis)
         env:
-          coverage: ${{ matrix.deps-version.name == 'latest' }}
-        run: just coverage=${coverage} pytest-venv -n 4 -m "not hypothesis"
+          COV_ARGS: ${{ matrix.deps-version.name == 'latest' && '--cov=icechunk' || '' }}
+        run: just pytest-venv $COV_ARGS -n 4 -m "not hypothesis"
 
       - name: Stash coverage data for aggregation
         if: ${{ matrix.deps-version.name == 'latest' }}
@@ -144,7 +152,9 @@ jobs:
       - uses: prefix-dev/setup-pixi@d3f436a425481402e6a95a1d1fc10331c708cd9e # v0.10.2
         with:
           pixi-version: ${{ env.PIXI_VERSION }}
-          cache: false
+          # py314t builds some PyPI deps from source, so a restore beats a fresh install
+          cache: true
+          cache-write: ${{ github.ref == 'refs/heads/main' }}
           activate-environment: true
           manifest-path: icechunk-python/pyproject.toml
           environments: py314t
@@ -176,16 +186,17 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Stand up RustFS
+        run: (docker compose up -d rustfs_init; echo $? > "$RUNNER_TEMP/rustfs-up.rc") > "$RUNNER_TEMP/rustfs-up.log" 2>&1 &
+
       - uses: prefix-dev/setup-pixi@d3f436a425481402e6a95a1d1fc10331c708cd9e # v0.10.2
         with:
           pixi-version: ${{ env.PIXI_VERSION }}
-          cache: false
+          cache: true
+          cache-write: ${{ github.ref == 'refs/heads/main' }}
           activate-environment: true
           manifest-path: icechunk-python/pyproject.toml
           environments: py314t
-
-      - name: Stand up RustFS
-        run: just rustfs-up
 
       - name: Download wheels
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -199,7 +210,11 @@ jobs:
         run: just install-test-wheel test
 
       - name: Wait for RustFS to be ready
-        run: just rustfs-wait
+        run: |
+          for _ in $(seq 120); do [ -s "$RUNNER_TEMP/rustfs-up.rc" ] && break; sleep 1; done
+          cat "$RUNNER_TEMP/rustfs-up.log"
+          [ "$(cat "$RUNNER_TEMP/rustfs-up.rc")" = 0 ]
+          just rustfs-wait
 
       - name: Run pytest (non-hypothesis)
         run: just pytest-venv -n 4 -m "not hypothesis"
@@ -244,6 +259,7 @@ jobs:
           cache: false
           activate-environment: true
           manifest-path: icechunk-python/pyproject.toml
+          environments: wheel-test
 
       - name: Download wheels
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -271,7 +287,7 @@ jobs:
           PYTEST_TARGETS: ${{ matrix.targets }}
           # sysmon core: coverage's default C tracer slows hypothesis workloads badly
           COVERAGE_CORE: sysmon
-        run: just coverage=true pytest-venv -m hypothesis $PYTEST_TARGETS
+        run: just pytest-venv --cov=icechunk -m hypothesis $PYTEST_TARGETS
 
       - name: Stash coverage data for aggregation
         env:
@@ -417,15 +433,16 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Stand up RustFS
+        run: (docker compose up -d rustfs_init; echo $? > "$RUNNER_TEMP/rustfs-up.rc") > "$RUNNER_TEMP/rustfs-up.log" 2>&1 &
+
       - uses: prefix-dev/setup-pixi@d3f436a425481402e6a95a1d1fc10331c708cd9e # v0.10.2
         with:
           pixi-version: ${{ env.PIXI_VERSION }}
           cache: false
           activate-environment: true
           manifest-path: icechunk-python/pyproject.toml
-
-      - name: Stand up RustFS
-        run: just rustfs-up
+          environments: wheel-test
 
       - name: Download wheels
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -447,7 +464,11 @@ jobs:
         run: just xarray-clone-installed
 
       - name: Wait for RustFS to be ready
-        run: just rustfs-wait
+        run: |
+          for _ in $(seq 120); do [ -s "$RUNNER_TEMP/rustfs-up.rc" ] && break; sleep 1; done
+          cat "$RUNNER_TEMP/rustfs-up.log"
+          [ "$(cat "$RUNNER_TEMP/rustfs-up.rc")" = 0 ]
+          just rustfs-wait
 
       - name: Run xarray backends tests
         run: just xarray-backends-pytest
