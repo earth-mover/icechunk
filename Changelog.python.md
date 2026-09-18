@@ -4,7 +4,7 @@
 
 ### Performance
 
-- Garbage collection walks manifests in parallel: the retained-chunk set is sharded so many manifests can be decoded at once instead of one at a time behind a single lock. On a 64-CPU host against a cloud object store the retained-object walk runs about 1.8x faster ([#2393](https://github.com/earth-mover/icechunk/pull/2393)).
+- Garbage collection on spec v2 repositories walks the retained objects much faster: every snapshot and manifest fetch runs as its own task instead of being polled from one stream, and the retained-chunk set is sharded so manifests are decoded in parallel instead of one at a time behind a single lock. On a 64-CPU host against a cloud object store, with 1,024 fetches in flight, the walk of a 7,000-manifest repository dropped from 3.3 s to 0.4 s ([#2393](https://github.com/earth-mover/icechunk/pull/2393)).
 
 ## Python Icechunk Library 2.2.2
 

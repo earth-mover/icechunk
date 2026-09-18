@@ -16,7 +16,7 @@ use crate::{
     refs::{RefResult, list_refs},
     repository::RepositoryResult,
 };
-use icechunk_types::error::ICResultCtxExt as _;
+use icechunk_types::{ICResultExt as _, error::ICResultCtxExt as _};
 
 /// Expire old snapshots beyond a threshold.
 pub mod expiration_v1;
@@ -74,10 +74,14 @@ pub fn pointed_snapshots_v2(
     max_concurrent_fetches: NonZeroU16,
 ) -> RepositoryResult<impl Stream<Item = RepositoryResult<Arc<Snapshot>>> + use<>> {
     let ids = reachable_snapshots_v2(repo_info, extra_roots)?;
+    // Each fetch runs as its own task. Polling them all from the stream's task caps
+    // throughput at what one core can drive.
     let res = stream::iter(ids)
         .map(move |id| {
             let asset_manager = Arc::clone(&asset_manager);
-            async move { asset_manager.fetch_snapshot(&id).await }
+            let handle =
+                tokio::spawn(async move { asset_manager.fetch_snapshot(&id).await });
+            async move { handle.await.capture()? }
         })
         .buffer_unordered(max_concurrent_fetches.get() as usize);
     Ok(res)

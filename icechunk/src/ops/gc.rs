@@ -322,7 +322,12 @@ pub async fn find_retained(
     let compute_stream = limiter
         .limit_stream(manifest_infos, |minfo| minfo.size_bytes as usize)
         .map_ok(|m| {
-            manifest_retained(Arc::clone(&keep_manifests), Arc::clone(&asset_manager), m)
+            let handle = tokio::spawn(manifest_retained(
+                Arc::clone(&keep_manifests),
+                Arc::clone(&asset_manager),
+                m,
+            ));
+            async move { handle.await.capture()? }
         })
         // Now we can buffer a bunch of fetch_manifest operations. Because we are using
         // StreamLimiter we know memory is not going to blow up
