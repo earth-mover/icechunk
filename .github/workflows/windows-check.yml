@@ -38,6 +38,12 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
+      # The rust-cache restore and cargo's crate unpacking run about 3x faster
+      # on D: (the workspace disk) than on the C: OS disk.
+      - name: Keep the cargo home on the D drive
+        shell: pwsh
+        run: Add-Content $env:GITHUB_ENV "CARGO_HOME=$env:RUNNER_TEMP\cargo-home"
+
       - name: Cache Dependencies
         uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
         with:
@@ -45,13 +51,16 @@ jobs:
           # so we need to bump the version here whenever Python version is updated
           # Currently: 3.12
           prefix-key: "rust-py312"
-          shared-key: "rust"
+          # cargo comes from pixi.lock, which the key does not otherwise see
+          shared-key: "rust-${{ hashFiles('icechunk-python/pixi.lock') }}"
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - uses: prefix-dev/setup-pixi@d3f436a425481402e6a95a1d1fc10331c708cd9e # v0.10.2
         with:
           pixi-version: ${{ env.PIXI_VERSION }}
-          cache: false
+          cache: true
+          cache-write: ${{ github.ref == 'refs/heads/main' }}
+          environments: rust-test
           manifest-path: icechunk-python/pyproject.toml
           # environment activation doesn't work on windows
           # https://github.com/prefix-dev/setup-pixi/issues/122#issuecomment-2326495414
@@ -66,6 +75,6 @@ jobs:
       - name: Run tests
         # `pwsh -Command {0}` runs nothing and still exits 0. bash also gives
         # just the `sh` it needs for recipes.
-        shell: pixi run -m icechunk-python/pyproject.toml bash -e {0}
+        shell: pixi run -m icechunk-python/pyproject.toml -e rust-test bash -e {0}
         run: |
           just profile=ci unit-test

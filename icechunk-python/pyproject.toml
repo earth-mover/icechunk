@@ -259,6 +259,9 @@ llvm-tools = ">=19.1.7"
 [tool.pixi.feature.msrv.dependencies]
 rust = "~=1.91.1"
 
+[tool.pixi.feature.nextest.dependencies]
+cargo-nextest = ">=0.9.143,<0.10"
+
 [tool.pixi.feature.build.target.linux-64.dependencies]
 sysroot_linux-64 = ">=2.34"
 
@@ -303,4 +306,10 @@ js = { features = [
 wheel-test = { features = [
   "py312",
   "runner"
+], no-default-feature = true, solve-group = "default" }
+# The Windows Rust tests need only cargo and nextest. A small env installs faster.
+rust-test = { features = [
+  "runner",
+  "rustc",
+  "nextest"
 ], no-default-feature = true, solve-group = "default" }
