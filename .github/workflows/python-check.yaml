@@ -57,6 +57,115 @@ jobs:
           name: test-wheels
           path: icechunk-python/dist
 
+  # TEMPORARY experiment probe: cargo timings, link-time split, pixi cache seed
+  wheel-probe:
+    name: wheel-probe
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: prefix-dev/setup-pixi@d3f436a425481402e6a95a1d1fc10331c708cd9e # v0.10.2
+        with:
+          pixi-version: ${{ env.PIXI_VERSION }}
+          cache: true
+          cache-write: true
+          activate-environment: true
+          manifest-path: icechunk-python/pyproject.toml
+
+      - name: Cache Dependencies
+        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        with:
+          prefix-key: "rust-py312"
+          shared-key: "wheels"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Build wheels with cargo timings
+        run: just profile=ci-wheel build-wheels --timings=html
+
+      - name: Linker identity
+        run: |
+          ls -la target/ci-wheel/*.so || true
+          readelf -p .comment target/ci-wheel/lib_icechunk_python.so || true
+          rustc -vV
+          which ld.lld mold ld.gold || true
+
+      - name: Install lld and mold
+        run: |
+          s=$(date +%s)
+          sudo apt-get install -y --no-install-recommends lld mold >/dev/null 2>&1 || (sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends lld mold)
+          echo "apt install took $(( $(date +%s) - s ))s"
+          ld.lld --version; mold --version
+
+      - name: Relink icechunk-python with each linker
+        run: |
+          mkdir -p /tmp/probe
+          cat > /tmp/probe/x86_64-probe-linux-gnu-cc <<'SH'
+          #!/usr/bin/env bash
+          real=x86_64-conda-linux-gnu-cc
+          out=/tmp/probe/link-times.txt
+          printf '%s\n' "$@" > /tmp/probe/link-args.txt
+          run() { local label=$1; shift; local s e rc; s=$(date +%s%N); "$real" "$@" 2>>/tmp/probe/link-stderr.txt; rc=$?; e=$(date +%s%N); echo "$label: $(( (e-s)/1000000 ))ms rc=$rc" >> $out; return $rc; }
+          run default "$@"
+          run bfd "$@" -fuse-ld=bfd
+          run lld "$@" -fuse-ld=lld
+          run mold "$@" -fuse-ld=mold
+          run default-again "$@"
+          SH
+          cat > /tmp/probe/rustc-wrap.sh <<'SH'
+          #!/usr/bin/env bash
+          rustc="$1"; shift
+          if [[ " $* " == *" --crate-name _icechunk_python "* ]]; then
+            args=()
+            for a in "$@"; do
+              case "$a" in linker=*) a="linker=/tmp/probe/x86_64-probe-linux-gnu-cc";; esac
+              args+=("$a")
+            done
+            printf '%s\n' "${args[@]}" > /tmp/probe/rustc-args.txt
+            s=$(date +%s%N); "$rustc" "${args[@]}"; rc=$?; e=$(date +%s%N)
+            echo "rustc _icechunk_python total (incl 5 links): $(( (e-s)/1000000 ))ms rc=$rc" >> /tmp/probe/link-times.txt
+            exit $rc
+          fi
+          exec "$rustc" "$@"
+          SH
+          chmod +x /tmp/probe/*
+          touch icechunk-python/src/lib.rs
+          s=$(date +%s)
+          RUSTC_WRAPPER=/tmp/probe/rustc-wrap.sh just profile=ci-wheel build-wheels
+          echo "probe rebuild took $(( $(date +%s) - s ))s"
+          cat /tmp/probe/link-times.txt
+          echo "--- link args (linker flags) ---"
+          grep -E "fuse-ld|^-B|gcc-ld|^-Wl" /tmp/probe/link-args.txt | head -40
+          echo "--- rustc args ---"
+          grep -v "^/" /tmp/probe/rustc-args.txt | head -60
+          echo "--- link stderr ---"
+          head -20 /tmp/probe/link-stderr.txt || true
+
+      - name: Upload cargo timings
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: cargo-timings
+          path: target/cargo-timings/
+
+  # TEMPORARY experiment probe: seed the py314t pixi cache
+  pixi-cache-ft-probe:
+    name: pixi-cache-ft-probe
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: prefix-dev/setup-pixi@d3f436a425481402e6a95a1d1fc10331c708cd9e # v0.10.2
+        with:
+          pixi-version: ${{ env.PIXI_VERSION }}
+          cache: true
+          cache-write: true
+          activate-environment: true
+          manifest-path: icechunk-python/pyproject.toml
+          environments: py314t
+
   test:
     name: test (${{ matrix.deps-version.name }}, ${{ matrix.deps-version.xarray }}, ${{ matrix.deps-version.dask }}, ${{ matrix.deps-version.distributed }}, ${{ matrix.deps-version.zarr }})
     runs-on: ubuntu-latest
@@ -271,7 +380,7 @@ jobs:
           PYTEST_TARGETS: ${{ matrix.targets }}
           # sysmon core: coverage's default C tracer slows hypothesis workloads badly
           COVERAGE_CORE: sysmon
-        run: just coverage=true pytest-venv -m hypothesis $PYTEST_TARGETS
+        run: just coverage=true pytest-venv -m hypothesis --durations=10 $PYTEST_TARGETS
 
       - name: Stash coverage data for aggregation
         env:
