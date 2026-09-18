@@ -424,13 +424,18 @@ jobs:
         # run them on a single runner.
         run: just profile=ci test-integration true
 
-  # Not a required check: it re-runs the full suite instrumented for the codecov report
-  ubuntu-coverage:
-    name: Rust coverage (ubuntu-latest)
-    timeout-minutes: 45
+  # Not a required check: these jobs re-run the tests instrumented for the codecov report.
+  # The Rust tests, doctests and examples, split in two like ubuntu-test.
+  ubuntu-coverage-rust:
+    name: Rust coverage, Rust tests (ubuntu-latest, ${{ matrix.partition }}/${{ strategy.job-total }})
+    timeout-minutes: 30
     runs-on: ubuntu-latest
     env:
       coverage: true
+    strategy:
+      fail-fast: false
+      matrix:
+        partition: [1, 2]
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -445,12 +450,9 @@ jobs:
           activate-environment: true
           manifest-path: icechunk-python/pyproject.toml
 
+      # Backgrounded so the image pulls overlap the compile
       - name: Stand up docker services
-        run: |
-          just contup
-
-      - name: Wait for containers to be ready
-        run: just contwait
+        run: just contup > "$RUNNER_TEMP/contup.log" 2>&1 &
 
       - name: Cache Dependencies
         uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
@@ -458,7 +460,17 @@ jobs:
           # Currently: Python 3.12, see the rust job's cache step
           prefix-key: "rust-py312"
           shared-key: "rust"
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          # partition 2 also builds the examples, so its cache covers both partitions
+          save-if: ${{ github.ref == 'refs/heads/main' && matrix.partition == 2 }}
+
+      - name: Compile tests
+        run: just profile=ci coverage=${coverage} compile-tests "--locked"
+
+      - name: Wait for containers to be ready
+        run: |
+          while pgrep -f "docker compose up" > /dev/null; do sleep 1; done
+          cat "$RUNNER_TEMP/contup.log"
+          just contwait
 
       - name: Run tests with Docker services
         env:
@@ -483,34 +495,141 @@ jobs:
           TIGRIS_ACCESS_KEY_ID: ${{ secrets.TIGRIS_ACCESS_KEY_ID }}
           TIGRIS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
 
-        run: |
-          just profile=ci coverage=${coverage} compile-tests "--locked"
-          just profile=ci coverage=${coverage} test
+          PARTITION: ${{ matrix.partition }}
+          PARTITIONS: ${{ strategy.job-total }}
+        run: just profile=ci coverage=${coverage} test --partition "slice:$PARTITION/$PARTITIONS"
 
+      # partition 2 does not get the slowest test, so it has time for these
       - name: Run doc tests
+        if: matrix.partition == 2
         run: |
           just profile=ci coverage=${coverage} doctest
 
       - name: Run examples
+        if: matrix.partition == 2
         run: |
           just profile=ci coverage=${coverage} run-all-examples
 
-      # Python tests against the instrumented extension: their profraw merges
-      # with the cargo-test profiles into one unified Rust+FFI report
-      - name: Run Python tests for coverage
-        run: |
-          just profile=ci coverage=${coverage} develop
-          just profile=ci coverage=${coverage} pytest -n 4 -m "not hypothesis"
-
       - name: Prepare coverage for upload
+        env:
+          PARTITION: ${{ matrix.partition }}
         run: |
           just profile=ci coverage=${coverage} coverage-report
+          mkdir coverage-part
+          mv coverage_rust.lcov "coverage-part/rust-tests-$PARTITION.lcov"
+
+      - name: Upload coverage part
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: rust-coverage-rust-tests-${{ matrix.partition }}
+          path: coverage-part
+
+  # The Python tests against the instrumented extension, for the FFI coverage
+  ubuntu-coverage-python:
+    name: Rust coverage, Python tests (ubuntu-latest, ${{ matrix.shard }})
+    timeout-minutes: 30
+    runs-on: ubuntu-latest
+    env:
+      coverage: true
+    strategy:
+      fail-fast: false
+      matrix:
+        # list every id below the shard count in ICECHUNK_PYTEST_SHARD
+        shard: [0, 1, 2]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Stand up RustFS
+        run: (docker compose up -d rustfs_init; echo $? > "$RUNNER_TEMP/rustfs-up.rc") > "$RUNNER_TEMP/rustfs-up.log" 2>&1 &
+
+      - uses: prefix-dev/setup-pixi@d3f436a425481402e6a95a1d1fc10331c708cd9e # v0.10.2
+        with:
+          pixi-version: ${{ env.PIXI_VERSION }}
+          cache: false
+          activate-environment: true
+          manifest-path: icechunk-python/pyproject.toml
+
+      # Own key: the extension build compiles the dependencies with other features than the tests
+      - name: Cache Dependencies
+        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        with:
+          # Currently: Python 3.12, see the rust job's cache step
+          prefix-key: "rust-py312"
+          shared-key: "rust-coverage-python"
+          save-if: ${{ github.ref == 'refs/heads/main' && matrix.shard == 0 }}
+
+      - name: Build the instrumented extension
+        run: just profile=ci coverage=${coverage} develop
+
+      - name: Wait for RustFS to be ready
+        run: |
+          for _ in $(seq 300); do [ -s "$RUNNER_TEMP/rustfs-up.rc" ] && break; sleep 1; done
+          cat "$RUNNER_TEMP/rustfs-up.log"
+          [ "$(cat "$RUNNER_TEMP/rustfs-up.rc")" = 0 ]
+          just rustfs-wait
+
+      - name: Run Python tests for coverage
+        env:
+          ICECHUNK_PYTEST_SHARD: ${{ matrix.shard }}/3
+          ICECHUNK_PYTEST_SHARD_REPORT: ${{ runner.temp }}/shard-count.txt
+        run: just profile=ci coverage=${coverage} pytest -n 4 -m "not hypothesis"
+
+      # Send the Python-line lcov too: the rust flag has always included it
+      - name: Prepare coverage for upload
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: |
+          just profile=ci coverage=${coverage} coverage-report
+          mkdir coverage-part
+          mv coverage_rust.lcov "coverage-part/rust-python-$SHARD.lcov"
+          mv coverage_python.lcov "coverage-part/python-$SHARD.lcov"
+          mv "$RUNNER_TEMP/shard-count.txt" coverage-part/
+
+      - name: Upload coverage part
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: rust-coverage-python-${{ matrix.shard }}
+          path: coverage-part
+
+  # One codecov upload of all parts, and none if a part fails
+  ubuntu-coverage:
+    name: Rust coverage (ubuntu-latest)
+    needs: [ubuntu-coverage-rust, ubuntu-coverage-python]
+    timeout-minutes: 10
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Download coverage parts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: rust-coverage-*
+          path: coverage-parts
+
+      - name: Verify the Python shards ran all tests
+        run: .github/scripts/check-shard-counts.sh coverage-parts
+
+      - name: List coverage files
+        id: parts
+        run: |
+          files=$(find coverage-parts -name '*.lcov' | sort | paste -sd, -)
+          echo "$files"
+          echo "files=$files" >> "$GITHUB_OUTPUT"
 
       - name: Upload Rust coverage to Codecov
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          files: coverage_rust.lcov
+          files: ${{ steps.parts.outputs.files }}
+          disable_search: true
           flags: rust
           name: rust-coverage
           fail_ci_if_error: false
