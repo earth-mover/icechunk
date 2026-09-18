@@ -1,5 +1,5 @@
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 from uuid import uuid4
 
@@ -30,17 +30,31 @@ def mk_repo(spec_version: int | None) -> tuple[str, ic.Repository]:
     return (prefix, repo)
 
 
-def cutoff_past_second_boundary() -> datetime:
-    """Return a cutoff that every earlier write precedes by a whole second.
+def cutoff_after_all_listed(prefix: str) -> datetime:
+    """Return a cutoff that GC reads as later than every object written so far.
 
-    Object stores list whole-second timestamps. GC deletes an object only
-    once that whole second precedes the cutoff.
+    GC keeps an object whose listing carries a whole second until that second
+    passes: see created_entirely_before in icechunk/src/ops/gc.rs. One second
+    past the newest listed object clears both branches of that rule. Mirrors
+    cutoff_after_all_listed in icechunk/tests/common/mod.rs.
+
+    On return the host clock has passed the cutoff, so the caller can write
+    objects that must fall after it.
     """
-    # The store stamps the object with its own clock, which can run ahead
-    # of ours by a few tens of milliseconds.
-    time.sleep(0.2)
-    time.sleep(1 - datetime.now(UTC).microsecond / 1_000_000)
-    return datetime.now(UTC)
+    client = get_minio_client()
+    newest = max(
+        obj["LastModified"]
+        for kind in ("snapshots", "chunks", "manifests", "transactions")
+        for obj in client.list_objects(
+            Bucket="testbucket", Prefix=f"{prefix}/{kind}"
+        ).get("Contents", [])
+    )
+    # boto3 tags the timestamp with its own UTC class; the bindings want UTC.
+    cutoff = newest.astimezone(UTC) + timedelta(seconds=1)
+    # The store stamps objects with its own clock, which can trail ours by a
+    # few tens of milliseconds.
+    time.sleep(max((cutoff - datetime.now(UTC)).total_seconds(), 0.0) + 0.2)
+    return cutoff
 
 
 @pytest.mark.filterwarnings("ignore:datetime.datetime.utcnow")
@@ -69,7 +83,7 @@ async def test_expire_and_gc(use_async: bool, any_spec_version: int | None) -> N
         array[i] = i
         session.commit(f"written coord {i}")
 
-    old = cutoff_past_second_boundary()
+    old = cutoff_after_all_listed(prefix)
 
     session = repo.writable_session("main")
     store = session.store
@@ -272,11 +286,8 @@ async def test_gc_deletes_only_unreferenced_expired_tx_logs(use_async: bool) -> 
     commit_group("doomed", "d")
     commit_group("doomed", "e")
 
-    # Bracket the threshold with gaps so prior commits land strictly before it
-    # and /c strictly after, clear of created_at (ms) vs flushed_at truncation.
-    time.sleep(0.05)
-    threshold = cutoff_past_second_boundary()
-    time.sleep(0.05)
+    # The threshold follows every commit above and precedes /c.
+    threshold = cutoff_after_all_listed(prefix)
 
     commit_group("main", "c")  # survives, re-parented to root
 
