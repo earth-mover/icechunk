@@ -304,3 +304,7 @@ wheel-test = { features = [
   "py312",
   "runner"
 ], no-default-feature = true, solve-group = "default" }
+wheel-test-py314t = { features = [
+  "py314t",
+  "runner"
+], no-default-feature = true }

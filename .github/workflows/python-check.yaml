@@ -202,7 +202,8 @@ jobs:
 
   build-wheels-free-threaded:
     name: build-wheels-free-threaded
-    runs-on: ubuntu-latest
+    # test-free-threaded waits on this compile, so it gets the paid 8-core runner; forks do not
+    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || 'ubuntu24-8-core-amd64' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -236,10 +237,17 @@ jobs:
           name: test-wheels-free-threaded
           path: icechunk-python/dist
 
-  test-free-threaded:
-    name: test-free-threaded
+  test-free-threaded-shard:
+    name: test-free-threaded-shard (${{ matrix.shard }})
     runs-on: ubuntu-latest
-    needs: [build-wheels-free-threaded]
+    permissions:
+      contents: read
+      actions: read # wait-for-step.sh reads the job states of this run
+    strategy:
+      fail-fast: false
+      matrix:
+        # list every id below the shard count in ICECHUNK_PYTEST_SHARD
+        shard: [0, 1, 2, 3]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -251,11 +259,24 @@ jobs:
       - uses: prefix-dev/setup-pixi@d3f436a425481402e6a95a1d1fc10331c708cd9e # v0.10.2
         with:
           pixi-version: ${{ env.PIXI_VERSION }}
-          cache: true
-          cache-write: ${{ github.ref == 'refs/heads/main' }}
+          cache: false
           activate-environment: true
           manifest-path: icechunk-python/pyproject.toml
-          environments: py314t
+          environments: wheel-test-py314t
+
+      # zstandard has no 3.14t wheel and takes ~45s to build. Build it into uv's cache
+      # while the wheel compiles; the install step below still does the full install.
+      - name: Prefetch test dependencies
+        continue-on-error: true
+        working-directory: icechunk-python
+        run: |
+          uv venv "$RUNNER_TEMP/prefetch" --python 3.14t
+          uv pip install --python "$RUNNER_TEMP/prefetch" --group test
+
+      - name: Wait for build-wheels-free-threaded
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: .github/scripts/wait-for-step.sh build-wheels-free-threaded "Upload wheels" 90
 
       - name: Download wheels
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -276,7 +297,39 @@ jobs:
           just rustfs-wait
 
       - name: Run pytest (non-hypothesis)
-        run: just pytest-venv -n 4 -m "not hypothesis"
+        env:
+          ICECHUNK_PYTEST_SHARD: ${{ matrix.shard }}/4
+          ICECHUNK_PYTEST_SHARD_REPORT: ${{ runner.temp }}/shard-count.txt
+        run: just pytest-venv -n 4 --dist worksteal -m "not hypothesis"
+
+      - name: Upload shard count
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: shard-count-free-threaded-${{ matrix.shard }}
+          path: ${{ runner.temp }}/shard-count.txt
+
+  # Keeps the "test-free-threaded" check name, and fails unless every shard passed
+  test-free-threaded:
+    name: test-free-threaded
+    if: always()
+    needs: [test-free-threaded-shard]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+
+      # A failed or cancelled shard uploads no count, and the check below catches that
+      - name: Download shard counts
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: shard-count-free-threaded-*
+          path: shard-counts
+
+      - name: Verify every shard passed and all tests ran
+        run: .github/scripts/check-shard-counts.sh shard-counts
 
   test-hypothesis-shard:
     name: test-hypothesis-shard (${{ matrix.shard-id }})
