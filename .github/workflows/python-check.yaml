@@ -214,23 +214,30 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Explicit partition keyed on test cost: each heavy stateful machine
-        # anchors a shard, cheap property tests ride along on the second
-        # xdist worker. The last shard collects everything not claimed by the
-        # others, so new hypothesis tests always run somewhere.
+        # Explicit partition keyed on test cost: each stateful machine runs
+        # alone, because xdist hands a worker two tests up front and the second
+        # one waits behind the machine. The last shard collects everything not
+        # claimed by the others, so new hypothesis tests always run somewhere.
         # Ids stay numeric to keep the shard artifact names keyed on them.
         include:
           - shard-id: 0
+            label: repo-ops
+            targets: tests/test_stateful_repo_ops.py
+          - shard-id: 1
+            label: parallel-sessions
+            targets: tests/test_stateful_parallel_sessions.py
+          - shard-id: 2
             label: zarr-hierarchy
             targets: tests/test_zarr/test_stateful.py
-          - shard-id: 1
-            label: repo-ops
-            targets: tests/test_stateful_repo_ops.py tests/test_store_properties.py
-          - shard-id: 2
+          - shard-id: 3
+            label: store-properties
+            targets: tests/test_store_properties.py
+          - shard-id: 4
             label: rest
             targets: >-
-              --ignore=tests/test_zarr/test_stateful.py
               --ignore=tests/test_stateful_repo_ops.py
+              --ignore=tests/test_stateful_parallel_sessions.py
+              --ignore=tests/test_zarr/test_stateful.py
               --ignore=tests/test_store_properties.py
               tests integration_tests
     steps:
@@ -271,7 +278,7 @@ jobs:
           PYTEST_TARGETS: ${{ matrix.targets }}
           # sysmon core: coverage's default C tracer slows hypothesis workloads badly
           COVERAGE_CORE: sysmon
-        run: just coverage=true pytest-venv -m hypothesis $PYTEST_TARGETS
+        run: just coverage=true pytest-venv -m hypothesis --durations=10 $PYTEST_TARGETS
 
       - name: Stash coverage data for aggregation
         env:
