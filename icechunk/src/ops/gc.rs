@@ -238,31 +238,52 @@ async fn manifest_retained(
     Ok((manifest, minfo))
 }
 
+// One mutex over the retained-chunk set serialises every manifest walk; the shards let
+// the blocking threads insert in parallel.
+const RETAINED_CHUNK_SHARDS: usize = 64;
+
+type RetainedChunks = Vec<Mutex<HashSet<ChunkId>>>;
+
+fn chunk_shard(id: &ChunkId) -> usize {
+    id.0[0] as usize % RETAINED_CHUNK_SHARDS
+}
+
 async fn chunks_retained(
-    keep_chunks: Arc<Mutex<HashSet<ChunkId>>>,
+    keep_chunks: Arc<RetainedChunks>,
     manifest: Arc<Manifest>,
     minfo: ManifestFileInfo,
 ) -> RepositoryResult<ManifestFileInfo> {
     task::spawn_blocking(move || {
-        let chunk_ids =
-            manifest.chunk_payloads().inject()?.filter_map(|payload| match payload {
-                Ok(ChunkPayload::Ref(chunk_ref)) => Some(chunk_ref.id.clone()),
-                Ok(_) => None,
+        let mut per_shard: Vec<Vec<ChunkId>> =
+            (0..RETAINED_CHUNK_SHARDS).map(|_| Vec::new()).collect();
+        for payload in manifest.chunk_payloads().inject()? {
+            match payload {
+                Ok(ChunkPayload::Ref(chunk_ref)) => {
+                    per_shard[chunk_shard(&chunk_ref.id)].push(chunk_ref.id);
+                }
+                Ok(_) => {}
                 Err(err) => {
                     tracing::error!(
                         error = %err,
                         "Error in chunk payload iterator"
                     );
-                    None
                 }
-            });
-        keep_chunks
-            .lock()
-            .map_err(|_| {
-                RepositoryErrorKind::Other("can't lock retained chunks mutex".to_string())
-            })
-            .capture()?
-            .extend(chunk_ids);
+            }
+        }
+        for (shard, ids) in keep_chunks.iter().zip(per_shard) {
+            if ids.is_empty() {
+                continue;
+            }
+            shard
+                .lock()
+                .map_err(|_| {
+                    RepositoryErrorKind::Other(
+                        "can't lock retained chunks mutex".to_string(),
+                    )
+                })
+                .capture()?
+                .extend(ids);
+        }
         Ok::<_, RepositoryError>(())
     })
     .await
@@ -276,7 +297,9 @@ pub async fn find_retained(
     config: &GCConfig,
     snaps: impl Stream<Item = RepositoryResult<Arc<Snapshot>>>,
 ) -> GCResult<(HashSet<ChunkId>, HashSet<ManifestId>, HashSet<SnapshotId>)> {
-    let keep_chunks = Arc::new(Mutex::new(HashSet::new()));
+    let keep_chunks: Arc<RetainedChunks> = Arc::new(
+        (0..RETAINED_CHUNK_SHARDS).map(|_| Mutex::new(HashSet::new())).collect(),
+    );
     let keep_manifests = Arc::new(Mutex::new(HashSet::new()));
     let keep_snapshots = Arc::new(Mutex::new(HashSet::new()));
 
@@ -304,9 +327,12 @@ pub async fn find_retained(
         // Now we can buffer a bunch of fetch_manifest operations. Because we are using
         // StreamLimiter we know memory is not going to blow up
         .try_buffer_unordered(config.max_concurrent_manifest_fetches.get() as usize)
-        .and_then(move |(manifest, minfo)| {
+        // `and_then` would await each manifest walk in turn; buffer them so the
+        // blocking pool decodes many manifests at once.
+        .map_ok(move |(manifest, minfo)| {
             chunks_retained(Arc::clone(keep_chunks_ref), manifest, minfo)
-        });
+        })
+        .try_buffer_unordered(config.max_concurrent_manifest_fetches.get() as usize);
 
     limiter
         .unlimit_stream(compute_stream, |minfo| minfo.size_bytes as usize)
@@ -316,11 +342,21 @@ pub async fn find_retained(
     debug_assert_eq!(limiter.current_usage(), 0);
 
     #[expect(clippy::expect_used)]
+    let keep_chunks = Arc::try_unwrap(keep_chunks)
+        .expect("Logic error: multiple owners to retained chunks")
+        .into_iter()
+        .map(|shard| {
+            shard.into_inner().expect("Logic error: multiple owners to retained chunks")
+        })
+        .reduce(|mut acc, shard| {
+            acc.extend(shard);
+            acc
+        })
+        .unwrap_or_default();
+
+    #[expect(clippy::expect_used)]
     Ok((
-        Arc::try_unwrap(keep_chunks)
-            .expect("Logic error: multiple owners to retained chunks")
-            .into_inner()
-            .expect("Logic error: multiple owners to retained chunks"),
+        keep_chunks,
         Arc::try_unwrap(keep_manifests)
             .expect("Logic error: multiple owners to retained manifests")
             .into_inner()
