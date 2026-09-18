@@ -324,7 +324,7 @@ async fn empty_prefix_gc_actually_deletes_chunks()
     // forget the second commit, making its chunk garbage
     repo.reset_branch("main", &first, None).await?;
 
-    let now = Utc::now();
+    let now = common::cutoff_after_all_listed(&repo).await?;
     let gc_config = GCConfig::clean_all(
         now,
         now,
