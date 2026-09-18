@@ -1,7 +1,7 @@
 import pickle
-import time
 from datetime import UTC, datetime
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 
@@ -202,8 +202,7 @@ def test_s3_refreshable_credentials_pickle_with_optimization(
         allow_http=True,
         force_path_style=True,
         bucket="testbucket",
-        prefix="test_refreshable_credentials_pickle_optimization-"
-        + str(int(time.time() * 1000)),
+        prefix="test_refreshable_credentials_pickle_optimization-" + uuid4().hex,
         get_credentials=creds_obj,
         scatter_initial_credentials=scatter_initial_credentials,
     )
