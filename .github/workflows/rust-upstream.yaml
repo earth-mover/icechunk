@@ -111,9 +111,6 @@ jobs:
       - name: Create or update failure issue
         shell: bash
         run: |
-          # Read the template
-          template=$(cat .github/zarrs-upstream-failure-template.md)
-
           # Combine build and test output
           test_output="=== Build Output ===
           "
@@ -133,12 +130,19 @@ jobs:
             test_output+="No test output captured"
           fi
 
-          # Replace placeholders
-          issue_body="${template//\{\{WORKFLOW\}\}/$WORKFLOW_NAME}"
-          issue_body="${issue_body//\{\{RUN_ID\}\}/$RUN_ID}"
-          issue_body="${issue_body//\{\{RUN_URL\}\}/$RUN_URL}"
-          issue_body="${issue_body//\{\{DATE\}\}/$(date -u)}"
-          issue_body="${issue_body//\{\{TEST_OUTPUT\}\}/$test_output}"
+          # Fill the template. Bash ${var//pat/repl} expands an `&` in the
+          # replacement to the matched text, which corrupts compiler output.
+          issue_body=$(
+            WORKFLOW="$WORKFLOW_NAME" DATE="$(date -u)" TEST_OUTPUT="$test_output" \
+            python3 - <<'PY'
+          import os
+
+          template = open(".github/zarrs-upstream-failure-template.md").read()
+          for key in ("WORKFLOW", "RUN_ID", "RUN_URL", "DATE", "TEST_OUTPUT"):
+              template = template.replace("{{%s}}" % key, os.environ[key])
+          print(template, end="")
+          PY
+          )
 
           # Check for existing open issue with same title
           issue_title="$ZARRS_ISSUE_TITLE"
