@@ -318,25 +318,23 @@ pub async fn find_retained(
         config.max_compressed_manifest_mem_bytes.get(),
     ));
 
-    let keep_chunks_ref = &keep_chunks;
     let compute_stream = limiter
         .limit_stream(manifest_infos, |minfo| minfo.size_bytes as usize)
-        .map_ok(|m| {
-            let handle = tokio::spawn(manifest_retained(
-                Arc::clone(&keep_manifests),
-                Arc::clone(&asset_manager),
-                m,
-            ));
+        .map_ok(|minfo| {
+            let keep_manifests = Arc::clone(&keep_manifests);
+            let keep_chunks = Arc::clone(&keep_chunks);
+            let asset_manager = Arc::clone(&asset_manager);
+            // Each manifest is fetched, decoded and walked on its own task. Polling the
+            // fetches from this stream's task caps throughput at what one core can drive.
+            let handle = tokio::spawn(async move {
+                let (manifest, minfo) =
+                    manifest_retained(keep_manifests, asset_manager, minfo).await?;
+                chunks_retained(keep_chunks, manifest, minfo).await
+            });
             async move { handle.await.capture()? }
         })
         // Now we can buffer a bunch of fetch_manifest operations. Because we are using
         // StreamLimiter we know memory is not going to blow up
-        .try_buffer_unordered(config.max_concurrent_manifest_fetches.get() as usize)
-        // `and_then` would await each manifest walk in turn; buffer them so the
-        // blocking pool decodes many manifests at once.
-        .map_ok(move |(manifest, minfo)| {
-            chunks_retained(Arc::clone(keep_chunks_ref), manifest, minfo)
-        })
         .try_buffer_unordered(config.max_concurrent_manifest_fetches.get() as usize);
 
     limiter
