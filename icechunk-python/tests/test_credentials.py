@@ -136,7 +136,7 @@ class ExpirableCredentials:
     def __call__(self) -> S3StaticCredentials:
         try:
             s = self.path.read_text()
-        except Exception:
+        except Exception:  # noqa: BLE001
             s = ""
 
         s += "."

@@ -508,18 +508,20 @@ def containers_credentials(
             res[name] = cred
         elif isinstance(cred, AnyS3Credential):
             res[name] = Credentials.S3(cred)
-        elif (
-            isinstance(cred, GcsCredentials.FromEnv)
-            or isinstance(cred, GcsCredentials.Static)
-            or isinstance(cred, GcsCredentials.Refreshable)
-            or isinstance(cred, GcsCredentials.Anonymous)
+        elif isinstance(
+            cred,
+            GcsCredentials.FromEnv
+            | GcsCredentials.Static
+            | GcsCredentials.Refreshable
+            | GcsCredentials.Anonymous,
         ):
             res[name] = Credentials.Gcs(cast(GcsCredentials, cred))
-        elif (
-            isinstance(cred, AzureCredentials.FromEnv)
-            or isinstance(cred, AzureCredentials.Anonymous)
-            or isinstance(cred, AzureCredentials.Static)
-            or isinstance(cred, AzureCredentials.Refreshable)
+        elif isinstance(
+            cred,
+            AzureCredentials.FromEnv
+            | AzureCredentials.Anonymous
+            | AzureCredentials.Static
+            | AzureCredentials.Refreshable,
         ):
             res[name] = Credentials.Azure(cast(AzureCredentials, cred))
         else:

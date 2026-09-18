@@ -156,7 +156,7 @@ def write(
         client = distributed.Client(cluster)  # type: ignore[no-untyped-call]
         print(client)
         with distributed.performance_report(  # type: ignore[no-untyped-call]
-            f"reports/{ingest.name}-ingest-{dataset.storage_config.store}-{ICECHUNK_FORMAT}-{datetime.datetime.now()}.html"
+            f"reports/{ingest.name}-ingest-{dataset.storage_config.store}-{ICECHUNK_FORMAT}-{datetime.datetime.now(datetime.UTC)}.html"
         ):
             logger.info(f"Started writing {tuple(towrite.data_vars)}.")
             with zarr.config.set({"async.concurrency": 24}):

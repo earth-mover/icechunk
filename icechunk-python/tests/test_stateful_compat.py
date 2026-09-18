@@ -241,7 +241,7 @@ class CrossVersionExpireGCStateMachine(VersionControlStateMachine):
                     delete_expired_branches=delete_expired_branches,
                     delete_expired_tags=delete_expired_tags,
                 )
-            except (ic.IcechunkError, Exception) as e:
+            except (ic.IcechunkError, Exception) as e:  # noqa: BLE001
                 v2_error = e
             try:
                 v1_result = v1_repo.expire_snapshots(
@@ -249,7 +249,7 @@ class CrossVersionExpireGCStateMachine(VersionControlStateMachine):
                     delete_expired_branches=delete_expired_branches,
                     delete_expired_tags=delete_expired_tags,
                 )
-            except (ic_v1.IcechunkError, Exception) as e:
+            except (ic_v1.IcechunkError, Exception) as e:  # noqa: BLE001
                 v1_error = e
 
             if v2_error is not None or v1_error is not None:
@@ -276,11 +276,11 @@ class CrossVersionExpireGCStateMachine(VersionControlStateMachine):
             v1_error: Exception | None = None
             try:
                 v2_summary = self.repo.garbage_collect(older_than)
-            except (ic.IcechunkError, Exception) as e:
+            except (ic.IcechunkError, Exception) as e:  # noqa: BLE001
                 v2_error = e
             try:
                 v1_summary = v1_repo.garbage_collect(older_than)
-            except (ic_v1.IcechunkError, Exception) as e:
+            except (ic_v1.IcechunkError, Exception) as e:  # noqa: BLE001
                 v1_error = e
 
             if v2_error is not None or v1_error is not None:

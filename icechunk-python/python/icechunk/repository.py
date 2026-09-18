@@ -530,7 +530,7 @@ class Repository:
 
     def __setstate__(self, state: object) -> None:
         if not isinstance(state, dict):
-            raise ValueError("Invalid repository state")
+            raise ValueError("Invalid repository state")  # noqa: TRY004
         self._repository = PyRepository.from_bytes(state["_repository"])
 
     @staticmethod

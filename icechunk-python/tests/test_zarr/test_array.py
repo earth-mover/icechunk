@@ -55,7 +55,7 @@ def test_array_creation_existing_node(
     """
     spath = StorePath(store)
     group = Group.from_store(store, zarr_format=zarr_format)
-    expected_exception: type[ContainsArrayError] | type[ContainsGroupError]
+    expected_exception: type[ContainsArrayError | ContainsGroupError]
     if extant_node == "array":
         expected_exception = ContainsArrayError
         _ = group.create_array("extant", shape=(10,), dtype="uint8")

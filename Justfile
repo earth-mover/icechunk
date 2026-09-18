@@ -341,7 +341,7 @@ bench-compare *args:
 [group('lint')]
 [doc("Run ruff formatter on Python code")]
 ruff-format *args:
-  ruff format "$@"
+  ruff format icechunk-python/ "$@"
 
 [group('lint')]
 [doc("Run ruff linter on Python code (pass `--fix` for auto-fix)")]

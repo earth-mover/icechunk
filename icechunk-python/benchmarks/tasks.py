@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-
 # This app records performance measurements for icechunk reads/writes orchestrated using plain tasks.
 # See array.py that orchestrates similar operations using an array library.
 
@@ -8,7 +6,6 @@
 # --executor=dask-threads, --executor=dask-processes, --executor=dask-distributed --num-workers --threads-per-worker
 # --framework=dask-array or --framework=tasks
 
-#
 import math
 import os
 import time
