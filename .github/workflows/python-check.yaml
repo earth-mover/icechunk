@@ -437,21 +437,35 @@ jobs:
           name: python-coverage
           fail_ci_if_error: false
 
-  compat-stateful:
-    name: compat-stateful
+  compat-stateful-shard:
+    name: compat-stateful-shard (${{ matrix.shard-id }})
     runs-on: ubuntu-latest
-    needs: [build-wheels]
+    permissions:
+      contents: read
+      actions: read # wait-for-step.sh reads the job states of this run
+    strategy:
+      fail-fast: false
+      matrix:
+        # Every shard runs every test with 1/N of the example budget
+        # (see tests/conftest.py) and its own random seeds. N is the matrix size.
+        shard-id: [0, 1, 2, 3, 4, 5]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
+      # the default env, because install-ic-v1 needs third-wheel
       - uses: prefix-dev/setup-pixi@d3f436a425481402e6a95a1d1fc10331c708cd9e # v0.10.2
         with:
           pixi-version: ${{ env.PIXI_VERSION }}
           cache: false
           activate-environment: true
           manifest-path: icechunk-python/pyproject.toml
+
+      - name: Wait for build-wheels
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: .github/scripts/wait-for-step.sh build-wheels "Upload wheels" 90
 
       - name: Download wheels
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -465,7 +479,26 @@ jobs:
           just install-ic-v1
 
       - name: Run cross-version stateful tests
-        run: just pytest-venv tests/test_stateful_compat.py -v
+        env:
+          ICECHUNK_HYPOTHESIS_SHARDS: ${{ strategy.job-total }}
+        # -n 3: one worker per test. auto gives 2 here, so two tests would run one after the other
+        run: just pytest-venv tests/test_stateful_compat.py -v -n 3 --durations=10
+
+  # Keeps the "compat-stateful" check name
+  compat-stateful:
+    name: compat-stateful
+    if: always()
+    needs: [compat-stateful-shard]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify all shards passed
+        env:
+          SHARDS_RESULT: ${{ needs.compat-stateful-shard.result }}
+        run: |
+          if [ "$SHARDS_RESULT" != "success" ]; then
+            echo "::error::One or more compat-stateful shards failed"
+            exit 1
+          fi
 
   xarray-backends-shard:
     name: xarray-backends-shard (${{ matrix.xarray-version.name }}, ${{ matrix.shard }})
