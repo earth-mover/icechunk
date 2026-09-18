@@ -592,8 +592,24 @@ jobs:
       - name: Compile shuttle tests
         run: just profile=ci shuttle-test --no-run
 
+      # Each shuttle run is single-threaded and every process draws fresh random proptest
+      # cases, so one process per core together runs at least proptest's default 256 cases.
       - name: Run shuttle tests
-        run: just profile=ci shuttle-test -- --nocapture
+        run: |
+          procs=$(nproc)
+          cases=$(((256 + procs - 1) / procs))
+          pids=()
+          for i in $(seq "$procs"); do
+            PROPTEST_CASES=$cases just profile=ci shuttle-test -- --nocapture > "$RUNNER_TEMP/shuttle-$i.log" 2>&1 &
+            pids+=("$!")
+          done
+          rc=0
+          for i in $(seq "$procs"); do
+            wait "${pids[$((i - 1))]}" || rc=1
+            echo "--- process $i of $procs, $cases proptest cases"
+            cat "$RUNNER_TEMP/shuttle-$i.log"
+          done
+          exit "$rc"
 
   wasm-build:
     name: WASM Build
