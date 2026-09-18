@@ -6,11 +6,14 @@ from pathlib import Path
 import pytest
 
 from icechunk import (
+    AzureCredentials,
+    AzureRefreshableCredential,
     IcechunkError,
     Repository,
     S3Options,
     S3StaticCredentials,
     Storage,
+    azure_refreshable_credentials,
     s3_refreshable_credentials,
     s3_storage,
 )
@@ -221,3 +224,16 @@ def test_s3_refreshable_credentials_pickle_with_optimization(
 
     called_only_once = path.read_text() == "."
     assert called_only_once == scatter_initial_credentials
+
+
+def get_azure_bearer_token() -> AzureRefreshableCredential.BearerToken:
+    return AzureRefreshableCredential.BearerToken(
+        "token", expires_after=datetime.now(UTC)
+    )
+
+
+def test_azure_refreshable_credentials_accepts_a_variant() -> None:
+    """A factory returns one variant, never the AzureRefreshableCredential
+    namespace class. mypy checks this file, so it guards the annotation."""
+    credentials = azure_refreshable_credentials(get_azure_bearer_token)
+    assert isinstance(credentials, AzureCredentials.Refreshable)
