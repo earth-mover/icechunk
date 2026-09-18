@@ -57,8 +57,8 @@ jobs:
           name: test-wheels
           path: icechunk-python/dist
 
-  test:
-    name: test (${{ matrix.deps-version.name }}, ${{ matrix.deps-version.xarray }}, ${{ matrix.deps-version.dask }}, ${{ matrix.deps-version.distributed }}, ${{ matrix.deps-version.zarr }})
+  test-shard:
+    name: test-shard (${{ matrix.deps-version.name }}, ${{ matrix.shard }})
     runs-on: ubuntu-latest
     needs: [build-wheels]
     strategy:
@@ -74,6 +74,8 @@ jobs:
             dask: "latest-release"
             distributed: "latest-release"
             zarr: "latest-release"
+        # list every id below the shard count in ICECHUNK_PYTEST_SHARD
+        shard: [0, 1, 2]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -119,19 +121,53 @@ jobs:
       - name: Run pytest (non-hypothesis)
         env:
           coverage: ${{ matrix.deps-version.name == 'latest' }}
+          ICECHUNK_PYTEST_SHARD: ${{ matrix.shard }}/3
         run: just coverage=${coverage} pytest-venv -n 4 -m "not hypothesis"
 
       - name: Stash coverage data for aggregation
         if: ${{ matrix.deps-version.name == 'latest' }}
-        run: just coverage-stash test-latest
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: just coverage-stash "test-latest-$SHARD"
 
       - name: Upload coverage data
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         if: ${{ matrix.deps-version.name == 'latest' }}
         with:
-          name: python-coverage-data-test-latest
-          path: icechunk-python/.coverage-fragments/.coverage.test-latest
+          name: python-coverage-data-test-latest-${{ matrix.shard }}
+          path: icechunk-python/.coverage-fragments/.coverage.test-latest-${{ matrix.shard }}
           include-hidden-files: true
+
+  # Keeps the per-variant "test (...)" check names. A skipped required check
+  # counts as passing, so this runs always and fails unless every shard passed.
+  test:
+    name: test (${{ matrix.deps-version.name }}, ${{ matrix.deps-version.xarray }}, ${{ matrix.deps-version.dask }}, ${{ matrix.deps-version.distributed }}, ${{ matrix.deps-version.zarr }})
+    if: always()
+    needs: [test-shard]
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        # same entries as test-shard, so the check names stay the same
+        deps-version:
+          - name: minimum
+            xarray: "2025.07.1"
+            dask: "2025.2.0"
+            distributed: "2025.2.0"
+            zarr: "3.1.0"
+          - name: latest
+            xarray: "latest-release"
+            dask: "latest-release"
+            distributed: "latest-release"
+            zarr: "latest-release"
+    steps:
+      - name: Verify all shards passed
+        env:
+          SHARDS_RESULT: ${{ needs.test-shard.result }}
+        run: |
+          if [ "$SHARDS_RESULT" != "success" ]; then
+            echo "::error::One or more test shards failed"
+            exit 1
+          fi
 
   build-wheels-free-threaded:
     name: build-wheels-free-threaded
@@ -399,8 +435,8 @@ jobs:
       - name: Run cross-version stateful tests
         run: just pytest-venv tests/test_stateful_compat.py -v
 
-  xarray-backends:
-    name: xarray-backends (${{ matrix.xarray-version.name }}, ${{ matrix.xarray-version.version }}, ${{ matrix.xarray-version.zarr }})
+  xarray-backends-shard:
+    name: xarray-backends-shard (${{ matrix.xarray-version.name }}, ${{ matrix.shard }})
     runs-on: ubuntu-latest
     needs: [build-wheels]
     strategy:
@@ -412,6 +448,8 @@ jobs:
           - name: latest-release
             version: "latest-release"
             zarr: "latest-release"
+        # list every id below the shard count in ICECHUNK_PYTEST_SHARD
+        shard: [0, 1, 2]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -450,7 +488,36 @@ jobs:
         run: just rustfs-wait
 
       - name: Run xarray backends tests
+        env:
+          ICECHUNK_PYTEST_SHARD: ${{ matrix.shard }}/3
         run: just xarray-backends-pytest
+
+  # Keeps the per-variant "xarray-backends (...)" check names. A skipped required
+  # check counts as passing, so this runs always and fails unless every shard passed.
+  xarray-backends:
+    name: xarray-backends (${{ matrix.xarray-version.name }}, ${{ matrix.xarray-version.version }}, ${{ matrix.xarray-version.zarr }})
+    if: always()
+    needs: [xarray-backends-shard]
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        # same entries as xarray-backends-shard, so the check names stay the same
+        xarray-version:
+          - name: minimum
+            version: "2025.07.1"
+            zarr: "3.1.0"
+          - name: latest-release
+            version: "latest-release"
+            zarr: "latest-release"
+    steps:
+      - name: Verify all shards passed
+        env:
+          SHARDS_RESULT: ${{ needs.xarray-backends-shard.result }}
+        run: |
+          if [ "$SHARDS_RESULT" != "success" ]; then
+            echo "::error::One or more xarray-backends shards failed"
+            exit 1
+          fi
 
   stubtest:
     name: stubtest

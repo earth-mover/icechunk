@@ -1,5 +1,8 @@
+import os
+import zlib
+from collections import defaultdict
 from enum import Enum
-from typing import Literal, cast
+from typing import Any, Literal, cast
 
 import boto3
 import pytest
@@ -129,3 +132,54 @@ def write_chunks_to_minio(
 )
 def any_spec_version(request: pytest.FixtureRequest) -> SpecVersion | int | None:
     return cast(SpecVersion | int | None, request.param)
+
+
+SHARD_ENV = "ICECHUNK_PYTEST_SHARD"
+shard_counts_key = pytest.StashKey[tuple[int, int]]()
+
+
+# Runs after -m/-k deselection. The cases of one parametrized test go round-robin
+# from a crc32 offset, so slow families spread out and all processes agree.
+@pytest.hookimpl(trylast=True)
+def pytest_collection_modifyitems(
+    config: pytest.Config, items: list[pytest.Item]
+) -> None:
+    spec = os.environ.get(SHARD_ENV)
+    if not spec:
+        return
+    index, count = (int(part) for part in spec.split("/"))
+    families: dict[str, list[str]] = defaultdict(list)
+    for item in items:
+        families[item.nodeid.partition("[")[0]].append(item.nodeid)
+    shard_of = {
+        nodeid: (zlib.crc32(base.encode()) + rank) % count
+        for base, nodeids in families.items()
+        for rank, nodeid in enumerate(sorted(nodeids))
+    }
+    kept = [item for item in items if shard_of[item.nodeid] == index]
+    dropped = [item for item in items if shard_of[item.nodeid] != index]
+    config.stash[shard_counts_key] = (len(kept), len(items))
+    items[:] = kept
+    config.hook.pytest_deselected(items=dropped)
+    # xdist workers have no terminal, so the controller reports their counts
+    workeroutput = getattr(config, "workeroutput", None)
+    if workeroutput is not None:
+        workeroutput[SHARD_ENV] = config.stash[shard_counts_key]
+
+
+@pytest.hookimpl(optionalhook=True)
+def pytest_testnodedown(node: Any, error: object) -> None:
+    counts = getattr(node, "workeroutput", {}).get(SHARD_ENV)
+    if counts is not None:
+        node.config.stash[shard_counts_key] = tuple(counts)
+
+
+def pytest_terminal_summary(
+    terminalreporter: pytest.TerminalReporter, config: pytest.Config
+) -> None:
+    counts = config.stash.get(shard_counts_key, None)
+    if counts is not None:
+        kept, total = counts
+        terminalreporter.write_line(
+            f"{SHARD_ENV}={os.environ[SHARD_ENV]}: kept {kept} of {total} items"
+        )
