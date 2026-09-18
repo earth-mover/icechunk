@@ -34,9 +34,7 @@ jobs:
       - uses: prefix-dev/setup-pixi@d3f436a425481402e6a95a1d1fc10331c708cd9e # v0.10.2
         with:
           pixi-version: ${{ env.PIXI_VERSION }}
-          cache: true
-          # One writer per environment; the other jobs restore what it saved on main
-          cache-write: ${{ github.ref == 'refs/heads/main' }}
+          cache: false
           activate-environment: true
           manifest-path: icechunk-python/pyproject.toml
 
@@ -51,6 +49,8 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Build wheels
+        env:
+          CARGO_BUILD_JOBS: 6
         run: just profile=ci-wheel build-wheels
 
       - name: Upload wheels
@@ -71,8 +71,7 @@ jobs:
       - uses: prefix-dev/setup-pixi@d3f436a425481402e6a95a1d1fc10331c708cd9e # v0.10.2
         with:
           pixi-version: ${{ env.PIXI_VERSION }}
-          cache: true
-          cache-write: true
+          cache: false
           activate-environment: true
           manifest-path: icechunk-python/pyproject.toml
 
@@ -83,72 +82,32 @@ jobs:
           shared-key: "wheels"
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      - name: Use the ci-wheel profile from main
+      - name: Build wheels with cargo timings (A1, jobs=4)
         run: |
-          git fetch -q --depth=1 origin main
-          git show FETCH_HEAD:Cargo.toml > Cargo.toml
-          git diff --stat
+          s=$(date +%s%N)
+          just profile=ci-wheel build-wheels --timings
+          echo "A1-jobs4: $(( ($(date +%s%N)-s)/1000000 ))ms"
 
-      - name: Build wheels with cargo timings
-        run: just profile=ci-wheel build-wheels --timings
-
-      - name: Linker identity
+      - name: Paired rebuilds of the workspace crates on this runner
         run: |
-          ls -la target/ci-wheel/*.so || true
-          readelf -p .comment target/ci-wheel/lib_icechunk_python.so || true
-          rustc -vV
-          which ld.lld mold ld.gold || true
-
-      - name: Install lld and mold
-        run: |
-          s=$(date +%s)
-          sudo apt-get install -y --no-install-recommends lld mold >/dev/null 2>&1 || (sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends lld mold)
-          echo "apt install took $(( $(date +%s) - s ))s"
-          ld.lld --version; mold --version
-
-      - name: Relink icechunk-python with each linker
-        run: |
-          mkdir -p /tmp/probe
-          cat > /tmp/probe/x86_64-probe-linux-gnu-cc <<'SH'
-          #!/usr/bin/env bash
-          real=x86_64-conda-linux-gnu-cc
-          out=/tmp/probe/link-times.txt
-          printf '%s\n' "$@" > /tmp/probe/link-args.txt
-          run() { local label=$1; shift; local s e rc; s=$(date +%s%N); "$real" "$@" 2>>/tmp/probe/link-stderr.txt; rc=$?; e=$(date +%s%N); echo "$label: $(( (e-s)/1000000 ))ms rc=$rc" >> $out; return $rc; }
-          run default "$@"
-          run bfd "$@" -fuse-ld=bfd
-          run lld "$@" -fuse-ld=lld
-          run mold "$@" -fuse-ld=mold
-          run default-again "$@"
-          SH
-          cat > /tmp/probe/rustc-wrap.sh <<'SH'
-          #!/usr/bin/env bash
-          rustc="$1"; shift
-          if [[ " $* " == *" --crate-name _icechunk_python "* ]]; then
-            args=()
-            for a in "$@"; do
-              case "$a" in linker=*) a="linker=/tmp/probe/x86_64-probe-linux-gnu-cc";; esac
-              args+=("$a")
-            done
-            printf '%s\n' "${args[@]}" > /tmp/probe/rustc-args.txt
-            s=$(date +%s%N); "$rustc" "${args[@]}"; rc=$?; e=$(date +%s%N)
-            echo "rustc _icechunk_python total (incl 5 links): $(( (e-s)/1000000 ))ms rc=$rc" >> /tmp/probe/link-times.txt
-            exit $rc
-          fi
-          exec "$rustc" "$@"
-          SH
-          chmod +x /tmp/probe/*
-          touch icechunk-python/src/lib.rs
-          s=$(date +%s)
-          RUSTC_WRAPPER=/tmp/probe/rustc-wrap.sh just profile=ci-wheel build-wheels
-          echo "probe rebuild took $(( $(date +%s) - s ))s"
-          cat /tmp/probe/link-times.txt
-          echo "--- link args (linker flags) ---"
-          grep -E "fuse-ld|^-B|gcc-ld|^-Wl" /tmp/probe/link-args.txt | head -40
-          echo "--- rustc args ---"
-          grep -v "^/" /tmp/probe/rustc-args.txt | head -60
-          echo "--- link stderr ---"
-          head -20 /tmp/probe/link-stderr.txt || true
+          ws="icechunk-types icechunk-storage icechunk-format icechunk-s3 icechunk-arrow-object-store icechunk icechunk-python"
+          cp Cargo.toml /tmp/Cargo.main.toml
+          build() {
+            local label=$1; shift
+            for c in $ws; do touch "$c/src/lib.rs"; done
+            local s; s=$(date +%s%N)
+            env "$@" just profile=ci-wheel build-wheels --timings > /tmp/b.log 2>&1 || { tail -40 /tmp/b.log; exit 1; }
+            echo "$label: $(( ($(date +%s%N)-s)/1000000 ))ms | $(grep Finished /tmp/b.log) | compiled=$(grep -c Compiling /tmp/b.log)" | tee -a /tmp/paired.txt
+            grep Compiling /tmp/b.log | sed 's/^ *//' | tr '\n' ';'; echo
+          }
+          build B1-jobs6 CARGO_BUILD_JOBS=6
+          build A2-jobs4 CARGO_BUILD_JOBS=4
+          { cat /tmp/Cargo.main.toml; for c in $ws; do printf '\n[profile.ci-wheel.package.%s]\ncodegen-units = 16\n' "$c"; done; } > Cargo.toml
+          build C1-cgu16-jobs4 CARGO_BUILD_JOBS=4
+          cp /tmp/Cargo.main.toml Cargo.toml
+          build A3-jobs4 CARGO_BUILD_JOBS=4
+          build B2-jobs6 CARGO_BUILD_JOBS=6
+          echo "=== summary"; cat /tmp/paired.txt
 
       - name: Upload cargo timings
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -181,8 +140,7 @@ jobs:
       - uses: prefix-dev/setup-pixi@d3f436a425481402e6a95a1d1fc10331c708cd9e # v0.10.2
         with:
           pixi-version: ${{ env.PIXI_VERSION }}
-          cache: true
-          cache-write: false
+          cache: false
           activate-environment: true
           manifest-path: icechunk-python/pyproject.toml
 
@@ -244,6 +202,7 @@ jobs:
       - uses: prefix-dev/setup-pixi@d3f436a425481402e6a95a1d1fc10331c708cd9e # v0.10.2
         with:
           pixi-version: ${{ env.PIXI_VERSION }}
+          # py314t installs in about 100s but restores in about 15s; the default env gains nothing
           cache: true
           cache-write: ${{ github.ref == 'refs/heads/main' }}
           activate-environment: true
@@ -343,8 +302,7 @@ jobs:
       - uses: prefix-dev/setup-pixi@d3f436a425481402e6a95a1d1fc10331c708cd9e # v0.10.2
         with:
           pixi-version: ${{ env.PIXI_VERSION }}
-          cache: true
-          cache-write: false
+          cache: false
           activate-environment: true
           manifest-path: icechunk-python/pyproject.toml
 
@@ -449,8 +407,7 @@ jobs:
       - uses: prefix-dev/setup-pixi@d3f436a425481402e6a95a1d1fc10331c708cd9e # v0.10.2
         with:
           pixi-version: ${{ env.PIXI_VERSION }}
-          cache: true
-          cache-write: false
+          cache: false
           activate-environment: true
           manifest-path: icechunk-python/pyproject.toml
 
@@ -485,8 +442,7 @@ jobs:
       - uses: prefix-dev/setup-pixi@d3f436a425481402e6a95a1d1fc10331c708cd9e # v0.10.2
         with:
           pixi-version: ${{ env.PIXI_VERSION }}
-          cache: true
-          cache-write: false
+          cache: false
           activate-environment: true
           manifest-path: icechunk-python/pyproject.toml
 
@@ -525,8 +481,7 @@ jobs:
       - uses: prefix-dev/setup-pixi@d3f436a425481402e6a95a1d1fc10331c708cd9e # v0.10.2
         with:
           pixi-version: ${{ env.PIXI_VERSION }}
-          cache: true
-          cache-write: false
+          cache: false
           activate-environment: true
           manifest-path: icechunk-python/pyproject.toml
 
@@ -570,8 +525,7 @@ jobs:
       - uses: prefix-dev/setup-pixi@d3f436a425481402e6a95a1d1fc10331c708cd9e # v0.10.2
         with:
           pixi-version: ${{ env.PIXI_VERSION }}
-          cache: true
-          cache-write: false
+          cache: false
           activate-environment: true
           manifest-path: icechunk-python/pyproject.toml
 
@@ -598,8 +552,7 @@ jobs:
       - uses: prefix-dev/setup-pixi@d3f436a425481402e6a95a1d1fc10331c708cd9e # v0.10.2
         with:
           pixi-version: ${{ env.PIXI_VERSION }}
-          cache: true
-          cache-write: false
+          cache: false
           activate-environment: true
           manifest-path: icechunk-python/pyproject.toml
 

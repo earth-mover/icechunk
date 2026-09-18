@@ -178,13 +178,9 @@ debug = 1
 # skipping the LTO + single-codegen-unit compile cost of `release`.
 [profile.ci-wheel]
 inherits = "release"
-opt-level = 1
+opt-level = 2
 lto = "off"
 codegen-units = 8
-
-# Dependencies keep opt-level 2 so the shared rust-cache stays valid.
-[profile.ci-wheel.package."*"]
-opt-level = 2
 
 # Optimized profile for benchmarking with maturin/PyO3 compatibility
 # maturin doesn't work well with --profile bench for ... reasons.
