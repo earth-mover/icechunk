@@ -1,3 +1,5 @@
+import math
+import os
 from enum import Enum
 from typing import Literal, cast
 
@@ -23,6 +25,10 @@ if zarr_has_rectilinear_chunks:
 # hypothesis auto-selects "ci" when the CI env var is set.
 # Select with: pytest --hypothesis-profile=nightly
 # ---------------------------------------------------------------------------
+# CI runs every hypothesis test in each of N shards, so each shard gets 1/N of the examples
+HYPOTHESIS_SHARDS = max(1, int(os.environ.get("ICECHUNK_HYPOTHESIS_SHARDS", "1")))
+CI_MAX_EXAMPLES = 200
+
 settings.register_profile(
     "default",
     parent=settings.get_profile("default"),
@@ -32,7 +38,7 @@ settings.register_profile(
 settings.register_profile(
     "ci",
     parent=settings.get_profile("ci"),
-    max_examples=200,
+    max_examples=math.ceil(CI_MAX_EXAMPLES / HYPOTHESIS_SHARDS),
     stateful_step_count=75,
     suppress_health_check=[HealthCheck.filter_too_much, HealthCheck.too_slow],
     # The built-in "ci" profile sets derandomize=True and database=None.
@@ -48,6 +54,18 @@ settings.register_profile(
     derandomize=False,
     suppress_health_check=[HealthCheck.filter_too_much, HealthCheck.too_slow],
 )
+
+
+def pytest_report_header(config: pytest.Config) -> str | None:
+    if HYPOTHESIS_SHARDS == 1:
+        return None
+    current = settings()
+    return (
+        f"hypothesis shards={HYPOTHESIS_SHARDS} "
+        f"profile={settings.get_current_profile_name()} "
+        f"max_examples={current.max_examples} "
+        f"stateful_step_count={current.stateful_step_count}"
+    )
 
 
 class Permission(Enum):

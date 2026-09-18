@@ -214,25 +214,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Explicit partition keyed on test cost: each heavy stateful machine
-        # anchors a shard, cheap property tests ride along on the second
-        # xdist worker. The last shard collects everything not claimed by the
-        # others, so new hypothesis tests always run somewhere.
-        # Ids stay numeric to keep the shard artifact names keyed on them.
-        include:
-          - shard-id: 0
-            label: zarr-hierarchy
-            targets: tests/test_zarr/test_stateful.py
-          - shard-id: 1
-            label: repo-ops
-            targets: tests/test_stateful_repo_ops.py tests/test_store_properties.py
-          - shard-id: 2
-            label: rest
-            targets: >-
-              --ignore=tests/test_zarr/test_stateful.py
-              --ignore=tests/test_stateful_repo_ops.py
-              --ignore=tests/test_store_properties.py
-              tests integration_tests
+        # Every shard runs every hypothesis test with 1/N of the example budget
+        # (see tests/conftest.py) and its own random seeds. N is the matrix size.
+        shard-id: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -264,14 +248,14 @@ jobs:
       - name: Install dependencies
         run: just install-test-wheel test
 
-      - name: "Run hypothesis tests (shard ${{ matrix.shard-id }}: ${{ matrix.label }})"
+      - name: "Run hypothesis tests (shard ${{ matrix.shard-id }})"
         env:
           HYPOTHESIS_EXPERIMENTAL_OBSERVABILITY: "1"
           NOCOLOR: 1
-          PYTEST_TARGETS: ${{ matrix.targets }}
+          ICECHUNK_HYPOTHESIS_SHARDS: ${{ strategy.job-total }}
           # sysmon core: coverage's default C tracer slows hypothesis workloads badly
           COVERAGE_CORE: sysmon
-        run: just coverage=true pytest-venv -m hypothesis $PYTEST_TARGETS
+        run: just coverage=true pytest-venv -m hypothesis --hypothesis-show-statistics --durations=15 tests integration_tests
 
       - name: Stash coverage data for aggregation
         env:
