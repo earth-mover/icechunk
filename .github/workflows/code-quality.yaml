@@ -27,8 +27,8 @@ env:
   PIXI_VERSION: "v0.72.0"
 
 jobs:
-  code-quality:
-    name: Code Quality
+  rust-lint:
+    name: Code Quality (rust)
     timeout-minutes: 15
     runs-on: ubuntu-latest
 
@@ -58,14 +58,6 @@ jobs:
           shared-key: "code-quality"
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      - name: Prepare pixi for development
-        run: |
-          just profile=ci develop
-
-      - name: Check pixi version pins
-        run: |
-          just check-pixi-version
-
       - name: Run formatting checks
         run: |
           just format --check
@@ -74,6 +66,30 @@ jobs:
         run: |
           just profile=ci lint
 
+  python-lint:
+    name: Code Quality (python)
+    timeout-minutes: 15
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - uses: prefix-dev/setup-pixi@d3f436a425481402e6a95a1d1fc10331c708cd9e # v0.10.2
+        with:
+          pixi-version: ${{ env.PIXI_VERSION }}
+          cache: false
+          activate-environment: true
+          manifest-path: icechunk-python/pyproject.toml
+
+      - name: Check pixi version pins
+        run: |
+          just check-pixi-version
+
+      # mypy reads the source tree and the .pyi stubs, so it needs no built extension
       - name: Python mypy type checking
         run: |
           just mypy
@@ -81,3 +97,21 @@ jobs:
       - name: Run pre-commit checks (skip Rust)
         run: |
           just py-pre-commit
+
+  # Keeps the required "Code Quality" check name. A skipped required check
+  # counts as passing, so this fails unless both lint jobs succeeded.
+  code-quality:
+    name: Code Quality
+    if: always()
+    needs: [rust-lint, python-lint]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify all lint jobs passed
+        env:
+          RUST_RESULT: ${{ needs.rust-lint.result }}
+          PYTHON_RESULT: ${{ needs.python-lint.result }}
+        run: |
+          if [ "$RUST_RESULT" != "success" ] || [ "$PYTHON_RESULT" != "success" ]; then
+            echo "::error::One or more lint jobs failed"
+            exit 1
+          fi
