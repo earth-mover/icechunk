@@ -1,28 +1,31 @@
 //! Repository statistics (chunk counts, sizes, etc.).
 
-use futures::{StreamExt as _, TryStream, TryStreamExt as _, future::ready, stream};
-use itertools::Itertools as _;
 use std::{
     collections::HashSet,
     num::{NonZeroU16, NonZeroUsize},
     ops::Add,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
 };
-use tokio::task;
+
 use tracing::{instrument, trace};
 
 use crate::{
     asset_manager::AssetManager,
     format::{
-        ChunkId, ChunkLength, ChunkOffset, SnapshotId,
+        ChunkLength, ChunkOffset,
         manifest::{ChunkPayload, Manifest, VirtualChunkLocation},
-        snapshot::ManifestFileInfo,
     },
-    ops::pointed_snapshots,
+    ops::{
+        pointed_snapshots,
+        sharded_set::{ChunkIdSet, ShardedSet},
+        walker::{ManifestConsumer, WalkLimits, walk_manifests},
+    },
     repository::{RepositoryError, RepositoryErrorKind, RepositoryResult},
-    stream_utils::{StreamLimiter, try_unique_stream},
 };
-use icechunk_types::{ICResultExt as _, error::ICResultCtxExt as _};
+use icechunk_types::error::ICResultCtxExt as _;
 
 /// Statistics about chunk storage across different chunk types
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -66,115 +69,60 @@ impl Add for ChunkStorageStats {
     }
 }
 
-/// Helper function to deduplicate chunks by inserting into a `HashSet` and counting if new
-fn insert_and_increment_size_if_new<T: Eq + std::hash::Hash>(
-    seen: &Arc<Mutex<HashSet<T>>>,
-    key: T,
-    size_increment: u64,
-    size_counter: &mut u64,
-) -> RepositoryResult<()> {
-    if seen
-        .lock()
-        .map_err(|e| {
-            RepositoryErrorKind::Other(format!(
-                "Thread panic during manifest_chunk_storage: {e}"
-            ))
-        })
-        .capture()?
-        .insert(key)
-    {
-        *size_counter += size_increment;
-    }
-    Ok(())
+#[derive(Default)]
+struct ChunkStorage {
+    seen_native: ChunkIdSet,
+    // Virtual chunks have no id; (location, offset, length) identifies the bytes.
+    seen_virtual: ShardedSet<(VirtualChunkLocation, ChunkOffset, ChunkLength)>,
+    native_bytes: AtomicU64,
+    virtual_bytes: AtomicU64,
+    // Inline chunks live in the manifest, so every occurrence is stored.
+    inlined_bytes: AtomicU64,
 }
 
-#[expect(clippy::type_complexity)]
-fn calculate_manifest_storage(
-    manifest: &Arc<Manifest>,
-    // Different types of chunks require using different types of ids to de-duplicate them when counting.
-    seen_native_chunks: &Arc<Mutex<HashSet<ChunkId>>>,
-    // Virtual chunks don't necessarily have checksums, so we instead use the (url, offset, length) tuple as an identifier.
-    // This is more expensive, but should work to de-duplicate because the only way that this identifier could be the same
-    // for different chunks is if the data were entirely overwritten at that exact storage location.
-    // In that scenario it makes sense not to count both chunks towards the storage total,
-    // as the overwritten data is no longer accessible anyway.
-    seen_virtual_chunks: &Arc<
-        Mutex<HashSet<(VirtualChunkLocation, ChunkOffset, ChunkLength)>>,
-    >,
-) -> RepositoryResult<ChunkStorageStats> {
-    trace!(manifest_id = %manifest.id(), "Processing manifest");
-    let mut native_bytes: u64 = 0;
-    let mut virtual_bytes: u64 = 0;
-    let mut inlined_bytes: u64 = 0;
-    for payload in manifest.chunk_payloads().inject()? {
-        match payload {
-            Ok(ChunkPayload::Ref(chunk_ref)) => {
-                // Deduplicate native chunks by ChunkId
-                insert_and_increment_size_if_new(
-                    seen_native_chunks,
-                    chunk_ref.id,
-                    chunk_ref.length,
-                    &mut native_bytes,
-                )?;
-            }
-            Ok(ChunkPayload::Virtual(virtual_ref)) => {
-                // Deduplicate by by (location, offset, length)
-                let virtual_chunk_identifier = (
-                    // TODO: Remove the need for this clone somehow?
-                    // It could potentially save a lot of memory usage for large virtual stores with long urls...
-                    virtual_ref.location.clone(),
-                    virtual_ref.offset,
-                    virtual_ref.length,
-                );
-                insert_and_increment_size_if_new(
-                    seen_virtual_chunks,
-                    virtual_chunk_identifier,
-                    virtual_ref.length,
-                    &mut virtual_bytes,
-                )?;
-            }
-            Ok(ChunkPayload::Inline(bytes)) => {
-                // Inline chunks are stored in the manifest itself,
-                // so count each occurrence since they're actually stored repeatedly across different manifests
-                inlined_bytes += bytes.len() as u64;
-            }
-            Ok(_) => {}
-            // TODO: don't skip errors
-            Err(err) => {
-                tracing::error!(
-                    error = %err,
-                    "Error in chunk payload iterator"
-                );
-            }
-        }
+impl ChunkStorage {
+    fn into_stats(self) -> ChunkStorageStats {
+        ChunkStorageStats::new(
+            self.native_bytes.into_inner(),
+            self.virtual_bytes.into_inner(),
+            self.inlined_bytes.into_inner(),
+        )
     }
-    trace!(manifest_id = %manifest.id(), "Manifest done");
-
-    let stats = ChunkStorageStats::new(native_bytes, virtual_bytes, inlined_bytes);
-    Ok(stats)
 }
 
-async fn unique_manifest_infos<'a>(
-    asset_manager: Arc<AssetManager>,
-    extra_roots: &'a HashSet<SnapshotId>,
-    max_snapshots_in_memory: NonZeroU16,
-) -> RepositoryResult<impl TryStream<Ok = ManifestFileInfo, Error = RepositoryError> + 'a>
-{
-    let all_snaps =
-        pointed_snapshots(asset_manager, None, extra_roots, max_snapshots_in_memory)
-            .await?
-            .map(ready)
-            .buffer_unordered(max_snapshots_in_memory.get() as usize);
-    let all_manifest_infos = all_snaps
-        // this could be slightly optimized by not collecting all manifest info records into a vec
-        // but we don't expect too many, and they are small anyway
-        .map(|snap| {
-            let files: Vec<_> = snap?.manifest_files().try_collect().inject()?;
-            Ok(stream::iter(files.into_iter().map(Ok)))
-        })
-        .try_flatten();
-    let res = try_unique_stream(|mi| mi.id.clone(), all_manifest_infos);
-    Ok(res)
+impl ManifestConsumer for ChunkStorage {
+    type Output = ();
+    type Acc = ();
+
+    fn consume(&self, manifest: &Manifest) -> RepositoryResult<()> {
+        trace!(manifest_id = %manifest.id(), "Processing manifest");
+        // Native ids stream straight into their shards. Virtual keys and the
+        // inlined sum come out of the same single pass.
+        let mut virtual_ = Vec::new();
+        let mut inlined = 0u64;
+        let native =
+            manifest.chunk_payloads().inject()?.filter_map(|payload| match payload {
+                Ok(ChunkPayload::Ref(r)) => Some(Ok((r.id, r.length))),
+                Ok(ChunkPayload::Virtual(v)) => {
+                    virtual_.push(((v.location, v.offset, v.length), v.length));
+                    None
+                }
+                Ok(ChunkPayload::Inline(bytes)) => {
+                    inlined += bytes.len() as u64;
+                    None
+                }
+                Ok(_) => None,
+                Err(err) => Some(Err(err)),
+            });
+        let new_native = self.seen_native.try_extend_weighted(native).inject()?;
+        let new_virtual = self.seen_virtual.extend_weighted(virtual_);
+        self.native_bytes.fetch_add(new_native, Ordering::Relaxed);
+        self.virtual_bytes.fetch_add(new_virtual, Ordering::Relaxed);
+        self.inlined_bytes.fetch_add(inlined, Ordering::Relaxed);
+        Ok(())
+    }
+
+    fn fold(_acc: &mut (), _output: ()) {}
 }
 
 /// Compute the total size in bytes of all committed repo chunks.
@@ -186,64 +134,26 @@ pub async fn repo_chunks_storage(
     max_compressed_manifest_mem_bytes: NonZeroUsize,
     max_concurrent_manifest_fetches: NonZeroU16,
 ) -> RepositoryResult<ChunkStorageStats> {
-    let extra_roots = Default::default();
-    let manifest_infos = unique_manifest_infos(
+    let extra_roots = HashSet::new();
+    let snaps = pointed_snapshots(
         Arc::clone(&asset_manager),
+        None,
         &extra_roots,
         max_snapshots_in_memory,
     )
     .await?;
-
-    // we want to fetch many manifests in parallel, but not more than memory allows
-    // for this we use the StreamLimiter using the manifest size in bytes for usage
-    let limiter = &Arc::new(StreamLimiter::new(
-        "repo_chunks_storage".to_string(),
-        max_compressed_manifest_mem_bytes.get(),
-    ));
-
-    // We rate limit the stream of manifests to make sure we don't blow up memory
-    let rate_limited_manifests =
-        limiter.limit_stream(manifest_infos, |minfo| minfo.size_bytes as usize);
-
-    let seen_native_chunks = &Arc::new(Mutex::new(HashSet::new()));
-    let seen_virtual_chunks = &Arc::new(Mutex::new(HashSet::new()));
-    let asset_manager = &asset_manager;
-
-    let compute_stream = rate_limited_manifests
-        .map_ok(|m| async move {
-            let manifest =
-                Arc::clone(asset_manager).fetch_manifest(&m.id, m.size_bytes).await?;
-            Ok((manifest, m))
-        })
-        // Now we can buffer a bunch of fetch_manifest operations. Because we are using
-        // StreamLimiter we know memory is not going to blow up
-        .try_buffer_unordered(max_concurrent_manifest_fetches.get() as usize)
-        .and_then(|(manifest, minfo)| async move {
-            let seen_native_chunks = Arc::clone(seen_native_chunks);
-            let seen_virtual_chunks = Arc::clone(seen_virtual_chunks);
-            let stats = task::spawn_blocking(move || {
-                calculate_manifest_storage(
-                    &manifest,
-                    &seen_native_chunks,
-                    &seen_virtual_chunks,
-                )
-            })
-            .await
-            .capture()??;
-            Ok((stats, minfo))
-        });
-    let (_, res) = limiter
-        .unlimit_stream(compute_stream, |(_, minfo)| minfo.size_bytes as usize)
-        .try_fold(
-            (0u64, ChunkStorageStats::default()),
-            |(processed, total_stats), (partial, _)| {
-                //info!("Processed {processed} manifests");
-                ready(Ok((processed + 1, total_stats + partial)))
-            },
-        )
-        .await?;
-
-    debug_assert_eq!(limiter.current_usage(), 0);
-
-    Ok(res)
+    let limits = WalkLimits {
+        max_concurrent_manifest_fetches,
+        max_manifest_mem_bytes: max_compressed_manifest_mem_bytes,
+        decode_workers: NonZeroU16::new(asset_manager.max_concurrent_decodes())
+            .unwrap_or(NonZeroU16::MIN),
+    };
+    let consumer = Arc::new(ChunkStorage::default());
+    walk_manifests(asset_manager, limits, Arc::clone(&consumer), snaps).await?;
+    let consumer = Arc::try_unwrap(consumer).map_err(|_| {
+        RepositoryError::capture(RepositoryErrorKind::Other(
+            "manifest walker still holds the consumer".to_string(),
+        ))
+    })?;
+    Ok(consumer.into_stats())
 }

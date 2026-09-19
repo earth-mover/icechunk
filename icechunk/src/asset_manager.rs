@@ -431,6 +431,30 @@ impl AssetManager {
         self.fetch_manifest(manifest_id, 0).await
     }
 
+    /// Compressed manifest bytes straight from storage: no cache, no
+    /// request or decode semaphore. For bulk traversals that own their
+    /// own concurrency limits.
+    #[instrument(skip(self))]
+    pub async fn fetch_manifest_bytes(
+        &self,
+        manifest_id: &ManifestId,
+        size_bytes: u64,
+    ) -> RepositoryResult<Vec<u8>> {
+        let path = format!("{MANIFESTS_FILE_PATH}/{manifest_id}");
+        let range = 0..size_bytes;
+        let range = if size_bytes > 0 { Some(&range) } else { None };
+        let (read, _) = self
+            .storage
+            .get_object(&self.storage_settings, path.as_str(), range)
+            .await
+            .inject()?;
+        read_all(read, size_bytes).await
+    }
+
+    pub fn max_concurrent_decodes(&self) -> u16 {
+        self.max_concurrent_decodes
+    }
+
     #[instrument(skip(self, snapshot))]
     pub async fn write_snapshot(&self, snapshot: Arc<Snapshot>) -> RepositoryResult<()> {
         let snapshot_c = Arc::clone(&snapshot);
@@ -1330,11 +1354,63 @@ async fn fetch_manifest(
     .await
 }
 
+/// Read a whole object into memory, preallocating `size_hint` bytes.
+async fn read_all(
+    mut read: Pin<Box<dyn AsyncBufRead + Send>>,
+    size_hint: u64,
+) -> RepositoryResult<Vec<u8>> {
+    let mut bytes = Vec::with_capacity(size_hint as usize);
+    read.read_to_end(&mut bytes).await.capture()?;
+    Ok(bytes)
+}
+
+/// Parse the icechunk file header and check that it announces `file_type`
+/// and a compression the decode path knows how to undo (only Zstd).
+fn checked_header(
+    compressed: &[u8],
+    file_type: FileTypeBin,
+) -> RepositoryResult<FileHeader> {
+    let header = parse_file_header(compressed).inject()?;
+    check_file_type(&header, file_type)?;
+    if header.compression != CompressionAlgorithmBin::Zstd {
+        return Err(RepositoryErrorKind::FormatError(
+            IcechunkFormatErrorKind::InvalidCompressionAlgorithm,
+        ))
+        .capture();
+    }
+    Ok(header)
+}
+
+/// Decompress the body that follows a [`checked_header`] and deserialize it.
+/// CPU bound: the caller runs this on a blocking thread.
+fn decode_body<T, F>(
+    header: &FileHeader,
+    compressed: &[u8],
+    deserialize: F,
+) -> RepositoryResult<T>
+where
+    F: FnOnce(SpecVersionBin, Vec<u8>) -> Result<T, IcechunkFormatError>,
+{
+    let mut decompressed =
+        zstd::decode_all(&compressed[format_constants::ICECHUNK_FILE_HEADER_LEN..])
+            .capture()?;
+    // trim decode_all's ≤2x slack before the value is kept around
+    decompressed.shrink_to_fit();
+    deserialize(header.spec_version, decompressed).inject()
+}
+
+/// Decode the compressed bytes of a manifest file, as written by
+/// `write_manifest`. The caller runs this on a blocking thread.
+pub fn decode_manifest(compressed: &[u8]) -> RepositoryResult<Manifest> {
+    let header = checked_header(compressed, FileTypeBin::Manifest)?;
+    decode_body(&header, compressed, deserialize_manifest)
+}
+
 /// Read compressed bytes (async IO), then decompress+deserialize on a gated blocking thread.
 ///
 /// Returns the deserialized value together with the parsed [`FileHeader`].
 async fn fetch_and_decode<T, F>(
-    mut read: Pin<Box<dyn AsyncBufRead + Send>>,
+    read: Pin<Box<dyn AsyncBufRead + Send>>,
     compressed_size_hint: u64,
     file_type: FileTypeBin,
     #[cfg_attr(feature = "shuttle", expect(unused))] decode_semaphore: Arc<Semaphore>,
@@ -1344,20 +1420,10 @@ where
     T: Send + 'static,
     F: FnOnce(SpecVersionBin, Vec<u8>) -> Result<T, IcechunkFormatError> + Send + 'static,
 {
-    let mut compressed = Vec::with_capacity(compressed_size_hint as usize);
-    read.read_to_end(&mut compressed).await.capture()?;
+    let compressed = read_all(read, compressed_size_hint).await?;
 
     // on the async task: fail fast (no permit) and keep span ancestry on header errors
-    let header = parse_file_header(&compressed).inject()?;
-    check_file_type(&header, file_type)?;
-    // the decode path below only knows how to undo Zstd
-    if header.compression != CompressionAlgorithmBin::Zstd {
-        return Err(RepositoryErrorKind::FormatError(
-            IcechunkFormatErrorKind::InvalidCompressionAlgorithm,
-        ))
-        .capture();
-    }
-    let spec_version = header.spec_version;
+    let header = checked_header(&compressed, file_type)?;
 
     // keep error span ancestry on the blocking thread
     let span = tracing::Span::current();
@@ -1368,12 +1434,7 @@ where
         #[cfg(not(feature = "shuttle"))]
         let _decode_permit =
             futures::executor::block_on(decode_semaphore.acquire()).capture()?;
-        let mut decompressed =
-            zstd::decode_all(&compressed[format_constants::ICECHUNK_FILE_HEADER_LEN..])
-                .capture()?;
-        // trim decode_all's ≤2x slack before it's cached
-        decompressed.shrink_to_fit();
-        let value = deserialize(spec_version, decompressed).inject()?;
+        let value = decode_body(&header, &compressed, deserialize)?;
         Ok((value, header))
     })
     .await
@@ -2384,6 +2445,57 @@ mod test {
             am.fetch_repo_info_backup_with_header(backup_name).await?;
         assert_eq!(with_header, header);
 
+        Ok(())
+    }
+
+    #[tokio_test]
+    async fn raw_manifest_bytes_decode_to_the_cached_manifest()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+        let repo = Repository::create(
+            Some(RepositoryConfig {
+                // force non-inline chunks so a manifest file is written
+                inline_chunk_threshold_bytes: Some(0),
+                ..Default::default()
+            }),
+            storage,
+            HashMap::new(),
+            None,
+            true,
+        )
+        .await?;
+        let mut session = repo.writable_session("main").await?;
+        session.add_group(Path::root(), Bytes::new()).await?;
+        let array_path: Path = "/a".to_string().try_into()?;
+        session
+            .add_array(
+                array_path.clone(),
+                ArrayShape::new(vec![(4, 4)]).unwrap(),
+                None,
+                Bytes::from_static(br#"{"zarr_format":3}"#),
+            )
+            .await?;
+        for i in 0..4u32 {
+            let payload =
+                session.get_chunk_writer()?(Bytes::from(vec![i as u8; 100])).await?;
+            session
+                .set_chunk_ref(array_path.clone(), ChunkIndices(vec![i]), Some(payload))
+                .await?;
+        }
+        let snap_id = session.commit("c").max_concurrent_nodes(8).execute().await?;
+
+        let am = repo.asset_manager();
+        let snapshot = am.fetch_snapshot(&snap_id).await?;
+        let info = snapshot.manifest_files().next().expect("a manifest")?;
+
+        let bytes = am.fetch_manifest_bytes(&info.id, info.size_bytes).await?;
+        assert_eq!(bytes.len() as u64, info.size_bytes);
+        let decoded = decode_manifest(&bytes)?;
+        let cached = am.fetch_manifest(&info.id, info.size_bytes).await?;
+        assert_eq!(decoded.id(), cached.id());
+        assert_eq!(decoded.len(), cached.len());
+        assert_eq!(decoded.len(), 4);
+        assert!(am.max_concurrent_decodes() >= 1);
         Ok(())
     }
 }

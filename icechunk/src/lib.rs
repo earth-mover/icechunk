@@ -57,7 +57,6 @@ pub mod storage;
 pub mod store;
 #[cfg(test)]
 pub mod strategies;
-mod stream_utils;
 pub mod virtual_chunks;
 
 pub use config::{ObjectStoreConfig, RepositoryConfig};
