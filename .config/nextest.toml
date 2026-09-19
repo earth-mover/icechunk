@@ -6,3 +6,8 @@ lost-response = { max-threads = 1 }
 [[profile.default.overrides]]
 filter = 'test(conditional_put)'
 test-group = 'lost-response'
+
+# Start the ~60s test first, so that it does not set the tail of a CI test partition.
+[[profile.default.overrides]]
+filter = 'test(repo_info_with_more_than_ten_million_snapshots_is_usable)'
+priority = 100
