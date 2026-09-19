@@ -401,6 +401,7 @@ pub async fn garbage_collect(
         .await
 }
 
+#[instrument(skip_all)]
 async fn garbage_collect_one_attempt(
     asset_manager: Arc<AssetManager>,
     config: &GCConfig,
