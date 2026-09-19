@@ -2873,6 +2873,7 @@ impl PyRepository {
         max_concurrent_manifest_fetches: NonZeroU16,
         max_concurrent_deletes: NonZeroU16,
         max_consecutive_delete_failures: NonZeroU16,
+        max_concurrent_listings: Option<NonZeroU16>,
     ) -> PyResult<PyGCSummary> {
         // This function calls block_on, so we need to allow other thread python to make progress
         py.detach(move || {
@@ -2887,6 +2888,7 @@ impl PyRepository {
                         max_concurrent_manifest_fetches,
                         max_concurrent_deletes,
                         max_consecutive_delete_failures,
+                        max_concurrent_listings,
                         dry_run,
                     );
                     let (asset_manager, num_updates) = {
@@ -2916,6 +2918,7 @@ impl PyRepository {
         max_concurrent_manifest_fetches: NonZeroU16,
         max_concurrent_deletes: NonZeroU16,
         max_consecutive_delete_failures: NonZeroU16,
+        max_concurrent_listings: Option<NonZeroU16>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let repository = Arc::clone(&self.0);
         pyo3_async_runtimes::tokio::future_into_py::<_, PyGCSummary>(py, async move {
@@ -2928,6 +2931,7 @@ impl PyRepository {
                 max_concurrent_manifest_fetches,
                 max_concurrent_deletes,
                 max_consecutive_delete_failures,
+                max_concurrent_listings,
                 dry_run,
             );
             let (asset_manager, num_updates) = {

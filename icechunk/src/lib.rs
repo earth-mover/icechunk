@@ -133,7 +133,31 @@ pub(crate) mod test_utils {
         storage_settings: storage::Settings,
         spec_version: SpecVersionBin,
     ) -> (Arc<LoggingStorage>, Arc<AssetManager>) {
-        let logging = Arc::new(LoggingStorage::new(Arc::clone(backend)));
+        logging_asset_manager_inner(backend, storage_settings, spec_version, None)
+    }
+
+    /// Like [`logging_asset_manager`], but the wrapper claims native id-prefix
+    /// listing whatever the backend says, so `AssetManager` takes the fan-out
+    /// path instead of the single listing it uses for backends that only filter.
+    pub(crate) fn fanning_out_logging_asset_manager(
+        backend: &Arc<dyn Storage + Send + Sync>,
+        storage_settings: storage::Settings,
+        spec_version: SpecVersionBin,
+    ) -> (Arc<LoggingStorage>, Arc<AssetManager>) {
+        logging_asset_manager_inner(backend, storage_settings, spec_version, Some(true))
+    }
+
+    fn logging_asset_manager_inner(
+        backend: &Arc<dyn Storage + Send + Sync>,
+        storage_settings: storage::Settings,
+        spec_version: SpecVersionBin,
+        native_id_prefixes: Option<bool>,
+    ) -> (Arc<LoggingStorage>, Arc<AssetManager>) {
+        let logging = LoggingStorage::new(Arc::clone(backend));
+        let logging = Arc::new(match native_id_prefixes {
+            Some(native) => logging.with_native_id_prefixes(native),
+            None => logging,
+        });
         let logging_dyn: Arc<dyn Storage + Send + Sync> = Arc::clone(&logging) as _;
         let asset_manager = Arc::new(AssetManager::new_no_cache(
             logging_dyn,

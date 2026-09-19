@@ -211,6 +211,26 @@ impl<const SIZE: usize, T: FileTypeTag> From<&ObjectId<SIZE, T>> for String {
 pub static OBJECT_ID_FIRST_CHARS: LazyLock<HashSet<char>> =
     LazyLock::new(|| "0123456789ABCDEFGHJKMNPQRSTVWXYZ".chars().collect());
 
+/// The 32 one-character id prefixes GC and stats list concurrently. Sorted, so
+/// the order a listing fans out in does not depend on the hash set's iteration.
+pub static OBJECT_ID_ONE_CHAR_PREFIXES: LazyLock<Vec<String>> = LazyLock::new(|| {
+    let mut prefixes: Vec<String> =
+        OBJECT_ID_FIRST_CHARS.iter().map(|c| c.to_string()).collect();
+    prefixes.sort_unstable();
+    prefixes
+});
+
+/// The 32 × 32 two-character id prefixes, sorted. Used to list large object
+/// sets with more concurrency than the 32 one-character prefixes allow.
+pub static OBJECT_ID_TWO_CHAR_PREFIXES: LazyLock<Vec<String>> = LazyLock::new(|| {
+    let mut prefixes: Vec<String> = OBJECT_ID_ONE_CHAR_PREFIXES
+        .iter()
+        .flat_map(|a| OBJECT_ID_ONE_CHAR_PREFIXES.iter().map(move |b| format!("{a}{b}")))
+        .collect();
+    prefixes.sort_unstable();
+    prefixes
+});
+
 impl<const SIZE: usize, T: FileTypeTag> From<[u8; SIZE]> for ObjectId<SIZE, T> {
     fn from(value: [u8; SIZE]) -> Self {
         ObjectId::new(value)
@@ -735,6 +755,21 @@ mod tests {
             })
             .collect();
         assert_eq!(first_chars, *OBJECT_ID_FIRST_CHARS);
+    }
+
+    #[icechunk_macros::test]
+    fn two_char_prefixes_cover_the_alphabet() {
+        let p = &*OBJECT_ID_TWO_CHAR_PREFIXES;
+        assert_eq!(p.len(), 1024);
+        assert!(p.windows(2).all(|w| w[0] < w[1]), "sorted and distinct");
+        assert!(p.iter().all(
+            |s| s.len() == 2 && s.chars().all(|c| OBJECT_ID_FIRST_CHARS.contains(&c))
+        ));
+        // every random id starts with exactly one of them
+        for _ in 0..1000 {
+            let id = ChunkId::random().to_string();
+            assert_eq!(p.iter().filter(|s| id.starts_with(s.as_str())).count(), 1);
+        }
     }
 
     #[icechunk_macros::test]

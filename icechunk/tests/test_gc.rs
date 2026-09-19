@@ -149,6 +149,7 @@ async fn do_test_gc(
         NonZeroU16::new(500).unwrap(),
         NonZeroU16::new(10).unwrap(),
         NonZeroU16::new(50).unwrap(),
+        None,
         false,
     );
     let summary =
@@ -230,6 +231,7 @@ async fn do_test_gc(
         NonZeroU16::new(500).unwrap(),
         NonZeroU16::new(10).unwrap(),
         NonZeroU16::new(50).unwrap(),
+        None,
         false,
     );
     let summary =
@@ -279,6 +281,7 @@ async fn test_gc_cutoff_inside_listed_second_in_tigris()
         NonZeroU16::new(500).unwrap(),
         NonZeroU16::new(10).unwrap(),
         NonZeroU16::new(50).unwrap(),
+        None,
         false,
     );
     let summary =
@@ -514,6 +517,7 @@ async fn do_test_expire_and_garbage_collect(
         NonZeroU16::new(500).unwrap(),
         NonZeroU16::new(10).unwrap(),
         NonZeroU16::new(50).unwrap(),
+        None,
         false,
     );
     let asset_manager = Arc::new(AssetManager::new_no_cache(
@@ -603,6 +607,7 @@ async fn test_expire_and_garbage_collect_deleting_expired_refs()
         NonZeroU16::new(500).unwrap(),
         NonZeroU16::new(10).unwrap(),
         NonZeroU16::new(50).unwrap(),
+        None,
         false,
     );
     let summary =
@@ -686,6 +691,7 @@ async fn test_diff_complete_after_expire_and_gc() -> Result<(), Box<dyn std::err
         NonZeroU16::new(500).unwrap(),
         NonZeroU16::new(10).unwrap(),
         NonZeroU16::new(50).unwrap(),
+        None,
         false,
     );
     let summary =
@@ -778,6 +784,7 @@ async fn test_gc_deletes_only_unreferenced_expired_tx_logs()
         NonZeroU16::new(500).unwrap(),
         NonZeroU16::new(10).unwrap(),
         NonZeroU16::new(50).unwrap(),
+        None,
         false,
     );
     let summary =
@@ -861,6 +868,7 @@ async fn test_gc_retains_snapshot_between_flushed_and_created_at()
         NonZeroU16::new(500).unwrap(),
         NonZeroU16::new(10).unwrap(),
         NonZeroU16::new(50).unwrap(),
+        None,
         false,
     );
     let summary = garbage_collect(Arc::clone(&am), &gc_config, None, 100).await?;
@@ -933,6 +941,7 @@ async fn test_gc_deletes_pruned_tx_logs_of_expire_released_snapshot()
         NonZeroU16::new(500).unwrap(),
         NonZeroU16::new(10).unwrap(),
         NonZeroU16::new(50).unwrap(),
+        None,
         false,
     );
     let summary = garbage_collect(Arc::clone(&am), &gc_config, None, 100).await?;
@@ -986,6 +995,7 @@ async fn test_gc_deletes_pruned_tx_logs_of_expire_released_snapshot()
         NonZeroU16::new(500).unwrap(),
         NonZeroU16::new(10).unwrap(),
         NonZeroU16::new(50).unwrap(),
+        None,
         false,
     );
     let summary = garbage_collect(Arc::clone(&am), &gc_config, None, 100).await?;
@@ -1017,6 +1027,7 @@ async fn test_gc_deletes_pruned_tx_logs_of_expire_released_snapshot()
         NonZeroU16::new(500).unwrap(),
         NonZeroU16::new(10).unwrap(),
         NonZeroU16::new(50).unwrap(),
+        None,
         false,
     );
     let summary = garbage_collect(Arc::clone(&am), &gc_config, None, 100).await?;
@@ -1065,6 +1076,7 @@ fn clean_all_now() -> GCConfig {
         NonZeroU16::new(500).unwrap(),
         NonZeroU16::new(10).unwrap(),
         NonZeroU16::new(50).unwrap(),
+        None,
         false,
     )
 }
@@ -1189,6 +1201,7 @@ async fn test_reparent_accumulates_existing_pruned_logs()
         NonZeroU16::new(500).unwrap(),
         NonZeroU16::new(10).unwrap(),
         NonZeroU16::new(50).unwrap(),
+        None,
         false,
     );
     garbage_collect(Arc::clone(&am), &gc_config, None, 100).await?;
@@ -1641,6 +1654,7 @@ async fn test_gc_reset_branch() -> Result<(), Box<dyn std::error::Error>> {
         NonZeroU16::new(500).unwrap(),
         NonZeroU16::new(10).unwrap(),
         NonZeroU16::new(50).unwrap(),
+        None,
         false,
     );
     let summary =
@@ -1801,6 +1815,7 @@ async fn test_gc_completes_with_one_decode_slot() -> Result<(), Box<dyn std::err
         NonZeroU16::new(8).unwrap(),
         NonZeroU16::new(10).unwrap(),
         NonZeroU16::new(50).unwrap(),
+        None,
         true,
     );
     let summary = tokio::time::timeout(

@@ -1,6 +1,12 @@
 //! Command line definitions and presets.
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
+use icechunk::format::{
+    CHUNKS_FILE_PATH, MANIFESTS_FILE_PATH, SNAPSHOTS_FILE_PATH,
+    TRANSACTION_LOGS_FILE_PATH,
+};
+
+use crate::BoxError;
 
 #[derive(Parser, Debug)]
 #[command(name = "gc_bench", about = "GC and stats benchmark on a synthetic repo")]
@@ -17,6 +23,8 @@ pub(crate) enum Command {
     Gc(GcArgs),
     /// Run chunk storage stats against a built repository
     Stats(StatsArgs),
+    /// Measure object listing throughput (read only: it issues list requests and nothing else)
+    List(ListArgs),
 }
 
 #[derive(ValueEnum, Debug, Clone, Copy)]
@@ -205,6 +213,9 @@ pub(crate) struct GcArgs {
     pub(crate) max_concurrent_deletes: u16,
     #[arg(long, default_value_t = 50)]
     pub(crate) max_consecutive_delete_failures: u16,
+    /// Concurrent listing streams; default scales with cores (8 per core, 32..=256)
+    #[arg(long)]
+    pub(crate) max_concurrent_listings: Option<u16>,
 }
 
 #[derive(Args, Debug)]
@@ -215,4 +226,92 @@ pub(crate) struct StatsArgs {
     pub(crate) net: NetArgs,
     #[command(flatten)]
     pub(crate) walk: WalkArgs,
+}
+
+/// Which object prefix to list.
+#[derive(ValueEnum, Debug, Clone, Copy)]
+pub(crate) enum Kind {
+    Chunks,
+    Manifests,
+    Snapshots,
+    #[value(name = "transaction_logs", alias = "transaction-logs")]
+    TransactionLogs,
+}
+
+impl Kind {
+    /// The repository-relative prefix, without a trailing slash.
+    pub(crate) fn prefix(self) -> &'static str {
+        match self {
+            Self::Chunks => CHUNKS_FILE_PATH,
+            Self::Manifests => MANIFESTS_FILE_PATH,
+            Self::Snapshots => SNAPSHOTS_FILE_PATH,
+            Self::TransactionLogs => TRANSACTION_LOGS_FILE_PATH,
+        }
+    }
+}
+
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ListMode {
+    /// A single `list_objects` stream over the whole prefix: the per-stream
+    /// baseline of the store
+    Single,
+    /// The production path: `AssetManager::list_*_with_concurrency`, with
+    /// `--streams` listing tasks, draining the stream on the caller
+    #[value(name = "asset-manager", alias = "asset_manager")]
+    AssetManager,
+}
+
+/// Listing throughput measurement. The only subcommand that accepts `--s3-*`,
+/// and the only one safe to point at a production repository.
+#[derive(Args, Debug)]
+#[command(group = clap::ArgGroup::new("target").required(true).multiple(false))]
+pub(crate) struct ListArgs {
+    /// Local `RustFS` dataset name, as in the other subcommands
+    #[arg(long, group = "target")]
+    pub(crate) name: Option<String>,
+    /// Real S3 bucket; needs `--s3-prefix`
+    #[arg(long, group = "target", requires = "s3_prefix")]
+    pub(crate) s3_bucket: Option<String>,
+    /// Repository prefix inside `--s3-bucket`
+    #[arg(long, requires = "s3_bucket")]
+    pub(crate) s3_prefix: Option<String>,
+    /// Region of `--s3-bucket`
+    #[arg(long, default_value = "us-east-1")]
+    pub(crate) s3_region: String,
+
+    #[arg(long, value_enum, default_value_t = Kind::Chunks)]
+    pub(crate) kind: Kind,
+    #[arg(long, value_enum, default_value_t = ListMode::Single)]
+    pub(crate) mode: ListMode,
+    /// Concurrent listing tasks in `--mode asset-manager`
+    #[arg(long, default_value_t = 64)]
+    pub(crate) streams: usize,
+    /// Stop listing after this long
+    #[arg(long, default_value_t = 30)]
+    pub(crate) duration_secs: u64,
+    /// Stop early once this many keys have been listed
+    #[arg(long)]
+    pub(crate) max_keys: Option<u64>,
+}
+
+/// What `list` was pointed at.
+#[derive(Debug)]
+pub(crate) enum Target {
+    Dataset(String),
+    S3 { bucket: String, prefix: String, region: String },
+}
+
+impl ListArgs {
+    /// The argument group makes the two forms mutually exclusive and one of them required.
+    pub(crate) fn target(&self) -> Result<Target, BoxError> {
+        match (&self.name, &self.s3_bucket, &self.s3_prefix) {
+            (Some(name), None, None) => Ok(Target::Dataset(name.clone())),
+            (None, Some(bucket), Some(prefix)) => Ok(Target::S3 {
+                bucket: bucket.clone(),
+                prefix: prefix.clone(),
+                region: self.s3_region.clone(),
+            }),
+            _ => Err("pass either --name or --s3-bucket with --s3-prefix".into()),
+        }
+    }
 }

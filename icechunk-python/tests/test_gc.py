@@ -173,16 +173,22 @@ async def test_expire_and_gc(use_async: bool, any_spec_version: int | None) -> N
     assert gc_result.delete_errors == []
     assert gc_result.skipped_phases == []
 
-    # now let's run real GC, no dry_run, with the delete knobs set explicitly:
-    # small batches in flight and a low failure threshold must not change the
-    # outcome when every delete succeeds
+    # now let's run real GC, no dry_run, with the delete and listing knobs set
+    # explicitly: few requests in flight and a low failure threshold must not
+    # change the outcome when every delete succeeds
     if use_async:
         gc_result = await repo.garbage_collect_async(
-            old, max_concurrent_deletes=2, max_consecutive_delete_failures=3
+            old,
+            max_concurrent_deletes=2,
+            max_consecutive_delete_failures=3,
+            max_concurrent_listings=4,
         )
     else:
         gc_result = repo.garbage_collect(
-            old, max_concurrent_deletes=2, max_consecutive_delete_failures=3
+            old,
+            max_concurrent_deletes=2,
+            max_consecutive_delete_failures=3,
+            max_concurrent_listings=4,
         )
 
     space_after = space_used()

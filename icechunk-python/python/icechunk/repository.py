@@ -1910,6 +1910,7 @@ class Repository:
         max_concurrent_manifest_fetches: int = 500,
         max_concurrent_deletes: int = 10,
         max_consecutive_delete_failures: int = 50,
+        max_concurrent_listings: int | None = None,
     ) -> GCSummary:
         """Delete any objects no longer accessible from any branches or tags.
 
@@ -1940,6 +1941,10 @@ class Repository:
             Give up, with an error, after this many delete requests fail in a row.
             Isolated failures are reported in the returned summary and don't stop
             the run.
+        max_concurrent_listings : int | None
+            How many object listings to run concurrently while looking for
+            garbage. Must be at least 1. Defaults to eight per available core,
+            between 32 and 256.
 
         Returns
         -------
@@ -1958,6 +1963,7 @@ class Repository:
             max_concurrent_manifest_fetches=max_concurrent_manifest_fetches,
             max_concurrent_deletes=max_concurrent_deletes,
             max_consecutive_delete_failures=max_consecutive_delete_failures,
+            max_concurrent_listings=max_concurrent_listings,
         )
 
     async def garbage_collect_async(
@@ -1970,6 +1976,7 @@ class Repository:
         max_concurrent_manifest_fetches: int = 500,
         max_concurrent_deletes: int = 10,
         max_consecutive_delete_failures: int = 50,
+        max_concurrent_listings: int | None = None,
     ) -> GCSummary:
         """Delete any objects no longer accessible from any branches or tags (async version).
 
@@ -2000,6 +2007,10 @@ class Repository:
             Give up, with an error, after this many delete requests fail in a row.
             Isolated failures are reported in the returned summary and don't stop
             the run.
+        max_concurrent_listings : int | None
+            How many object listings to run concurrently while looking for
+            garbage. Must be at least 1. Defaults to eight per available core,
+            between 32 and 256.
 
         Returns
         -------
@@ -2018,6 +2029,7 @@ class Repository:
             max_concurrent_manifest_fetches=max_concurrent_manifest_fetches,
             max_concurrent_deletes=max_concurrent_deletes,
             max_consecutive_delete_failures=max_consecutive_delete_failures,
+            max_concurrent_listings=max_concurrent_listings,
         )
 
     def chunk_storage_stats(

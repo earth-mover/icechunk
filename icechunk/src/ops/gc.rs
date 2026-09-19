@@ -4,18 +4,22 @@ use std::{
     collections::{HashMap, HashSet},
     num::{NonZeroU16, NonZeroUsize},
     pin::pin,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering as AtomicOrdering},
+    },
+    time::Instant,
 };
 
 use backon::{BackoffBuilder as _, ExponentialBuilder, Retryable as _};
 use chrono::{DateTime, TimeDelta, Utc};
 use futures::{Stream, StreamExt as _, TryStreamExt as _, stream};
 use itertools::Itertools as _;
-use tokio::task::JoinSet;
+use tokio::{sync::mpsc, task::JoinSet};
 use tracing::{debug, error, info, instrument, trace, warn};
 
 use crate::{
-    StorageError,
+    Storage, StorageError,
     asset_manager::AssetManager,
     config::RepoUpdateRetryConfig,
     format::{
@@ -28,9 +32,9 @@ use crate::{
         snapshot::{Snapshot, SnapshotInfo},
     },
     ops::{
-        pointed_snapshots, reachable_snapshots_v2,
+        AbortOnDrop, pointed_snapshots, reachable_snapshots_v2,
         sharded_set::ChunkIdSet,
-        walker::{ManifestConsumer, WalkLimits, walk_manifests},
+        walker::{ManifestConsumer, PROGRESS_INTERVAL, WalkLimits, walk_manifests},
     },
     refs::{Ref, RefError},
     repository::{RepositoryError, RepositoryErrorKind, RepositoryResult},
@@ -69,6 +73,7 @@ pub struct GCConfig {
     max_concurrent_manifest_fetches: NonZeroU16,
     max_concurrent_deletes: NonZeroU16,
     max_consecutive_delete_failures: NonZeroU16,
+    max_concurrent_listings: Option<NonZeroU16>,
 
     dry_run: bool,
 }
@@ -87,6 +92,7 @@ impl GCConfig {
         max_concurrent_manifest_fetches: NonZeroU16,
         max_concurrent_deletes: NonZeroU16,
         max_consecutive_delete_failures: NonZeroU16,
+        max_concurrent_listings: Option<NonZeroU16>,
         dry_run: bool,
     ) -> Self {
         GCConfig {
@@ -101,6 +107,7 @@ impl GCConfig {
             max_concurrent_manifest_fetches,
             max_concurrent_deletes,
             max_consecutive_delete_failures,
+            max_concurrent_listings,
             dry_run,
         }
     }
@@ -114,6 +121,7 @@ impl GCConfig {
         max_concurrent_manifest_fetches: NonZeroU16,
         max_concurrent_deletes: NonZeroU16,
         max_consecutive_delete_failures: NonZeroU16,
+        max_concurrent_listings: Option<NonZeroU16>,
         dry_run: bool,
     ) -> Self {
         use Action::DeleteIfCreatedBefore as D;
@@ -129,8 +137,16 @@ impl GCConfig {
             max_concurrent_manifest_fetches,
             max_concurrent_deletes,
             max_consecutive_delete_failures,
+            max_concurrent_listings,
             dry_run,
         )
+    }
+
+    /// How many id prefixes GC lists concurrently, defaulting to a value
+    /// derived from the machine's cores.
+    pub fn list_concurrency(&self) -> NonZeroU16 {
+        self.max_concurrent_listings
+            .unwrap_or_else(storage::listing::default_list_concurrency)
     }
 
     pub fn action_needed(&self) -> bool {
@@ -257,6 +273,10 @@ impl ManifestConsumer for RetainedChunks {
     // Nothing to fold: `consume` already inserts every id into the shared
     // sharded set from the decode workers in parallel.
     fn fold(_acc: &mut (), _output: ()) {}
+
+    fn progress(&self) -> Option<(&'static str, u64)> {
+        Some(("retained_chunks", self.retained.len() as u64))
+    }
 }
 
 #[instrument(skip_all)]
@@ -394,7 +414,7 @@ async fn garbage_collect_one_attempt(
         if config.deletes_snapshots() {
             listed_snaps = Some(
                 asset_manager
-                    .list_snapshots()
+                    .list_snapshots_with_concurrency(config.list_concurrency())
                     .await?
                     .map_ok(|s| (s.id, (s.created_at, s.size_bytes)))
                     .try_collect()
@@ -503,7 +523,9 @@ async fn garbage_collect_one_attempt(
                     .await?
             }
             None => {
-                let candidates = asset_manager.list_snapshots().await?;
+                let candidates = asset_manager
+                    .list_snapshots_with_concurrency(config.list_concurrency())
+                    .await?;
                 gc_snapshots(asset_manager.as_ref(), config, &keep_snapshots, candidates)
                     .await?
             }
@@ -820,10 +842,21 @@ fn absorb_batch(
     Ok(())
 }
 
+/// Batches queued between the listing collector and the deleter.
+const DELETE_QUEUE_BATCHES: usize = 100;
+
 /// Delete every candidate accepted by `should_delete`, in batches of
 /// `batch_size`, with at most `max_concurrent_deletes` requests in flight.
-/// Failed batches are recorded and the phase continues, unless
-/// `max_consecutive_delete_failures` batches fail in a row.
+/// Listing and filtering run on the calling task; deletes run on one deleter
+/// task fed through a bounded channel, so listing only waits when
+/// [`DELETE_QUEUE_BATCHES`] batches are already queued. Failed batches are
+/// recorded and the phase continues, unless `max_consecutive_delete_failures`
+/// batches fail in a row.
+///
+/// A listing error does not cut the deletes short: the batches already queued
+/// are drained first and only then is the error returned, because everything
+/// queued has already passed `should_delete` and the listing failure says
+/// nothing about it.
 async fn delete_listed<Id, S>(
     asset_manager: &AssetManager,
     config: &GCConfig,
@@ -836,21 +869,159 @@ where
     Id: std::fmt::Display,
     S: Stream<Item = RepositoryResult<ListInfo<Id>>>,
 {
-    let storage = Arc::clone(asset_manager.storage());
-    let settings = asset_manager.storage_settings().clone();
-    let max_in_flight = config.max_concurrent_deletes.get() as usize;
-    let threshold = config.max_consecutive_delete_failures.get() as u32;
+    let progress = Arc::new(DeleteProgress::default());
+    // each message is one delete batch: up to `batch_size` (object key, size
+    // in bytes) pairs, the key relative to `prefix`, the size for the summary
+    let (tx, rx) = mpsc::channel::<Vec<(String, u64)>>(DELETE_QUEUE_BATCHES);
+    let mut deleter = AbortOnDrop(tokio::spawn(run_deletes(
+        Arc::clone(asset_manager.storage()),
+        asset_manager.storage_settings().clone(),
+        prefix,
+        config.max_concurrent_deletes.get() as usize,
+        config.max_consecutive_delete_failures.get() as u32,
+        config.dry_run,
+        rx,
+        Arc::clone(&progress),
+    )));
+    // held in a guard so every return path below aborts it
+    let _reporter =
+        AbortOnDrop(tokio::spawn(report_delete_progress(Arc::clone(&progress), prefix)));
 
+    let collected: GCResult<()> = async {
+        let mut batch: Vec<(String, u64)> = Vec::with_capacity(batch_size.get());
+        let mut candidates = pin!(candidates);
+        while let Some(candidate) = candidates.next().await {
+            let candidate = candidate?;
+            progress.candidates_listed.fetch_add(1, AtomicOrdering::Relaxed);
+            // the deleter returned, so nothing more will be deleted; listing on
+            // would be wasted work. Its error is reported after the join.
+            if tx.is_closed() {
+                return Ok(());
+            }
+            if !should_delete(&candidate) {
+                continue;
+            }
+            progress.candidates_accepted.fetch_add(1, AtomicOrdering::Relaxed);
+            batch.push((candidate.id.to_string(), candidate.size_bytes));
+            if batch.len() == batch_size.get() {
+                let full =
+                    std::mem::replace(&mut batch, Vec::with_capacity(batch_size.get()));
+                if tx.send(full).await.is_err() {
+                    // the deleter gave up; its error is reported below
+                    return Ok(());
+                }
+                progress.batches_queued.fetch_add(1, AtomicOrdering::Relaxed);
+            }
+        }
+        if !batch.is_empty() && tx.send(batch).await.is_ok() {
+            progress.batches_queued.fetch_add(1, AtomicOrdering::Relaxed);
+        }
+        Ok(())
+    }
+    .await;
+    drop(tx);
+
+    let report = (&mut deleter.0).await.capture().map_err(GCError::Repository)??;
+    collected?;
+    Ok(report)
+}
+
+/// Live counters of one delete phase, shared by the collector, the deleter and
+/// the progress reporter.
+#[derive(Debug, Default)]
+struct DeleteProgress {
+    candidates_listed: AtomicU64,
+    candidates_accepted: AtomicU64,
+    batches_queued: AtomicU64,
+    batches_done: AtomicU64,
+    deleted_objects: AtomicU64,
+    failed_objects: AtomicU64,
+}
+
+impl DeleteProgress {
+    fn read(&self) -> [u64; 6] {
+        [
+            self.candidates_listed.load(AtomicOrdering::Relaxed),
+            self.candidates_accepted.load(AtomicOrdering::Relaxed),
+            self.batches_queued.load(AtomicOrdering::Relaxed),
+            self.batches_done.load(AtomicOrdering::Relaxed),
+            self.deleted_objects.load(AtomicOrdering::Relaxed),
+            self.failed_objects.load(AtomicOrdering::Relaxed),
+        ]
+    }
+}
+
+/// Log the delete phase's counters every [`PROGRESS_INTERVAL`], skipping ticks
+/// where nothing moved. Runs until aborted by [`delete_listed`].
+async fn report_delete_progress(progress: Arc<DeleteProgress>, prefix: &'static str) {
+    let started = Instant::now();
+    let mut ticker = tokio::time::interval(PROGRESS_INTERVAL);
+    // the first tick completes immediately
+    ticker.tick().await;
+    let mut last = [0u64; 6];
+    loop {
+        ticker.tick().await;
+        let now = progress.read();
+        if now == last {
+            continue;
+        }
+        let [listed, accepted, batches_queued, batches_done, deleted, failed] = now;
+        info!(
+            prefix,
+            listed,
+            accepted,
+            batches_queued,
+            batches_done,
+            deleted,
+            failed,
+            elapsed_s = (started.elapsed().as_secs_f64() * 10.0).round() / 10.0,
+            "delete phase progress"
+        );
+        last = now;
+    }
+}
+
+/// The deleter task: pulls batches, keeps at most `max_in_flight` delete
+/// requests running, and stops with `DeletesFailing` after `threshold`
+/// consecutive failed batches (dropping the `JoinSet` aborts the rest).
+#[expect(clippy::too_many_arguments)]
+async fn run_deletes(
+    storage: Arc<dyn Storage + Send + Sync>,
+    settings: storage::Settings,
+    prefix: &'static str,
+    max_in_flight: usize,
+    threshold: u32,
+    dry_run: bool,
+    mut rx: mpsc::Receiver<Vec<(String, u64)>>,
+    progress: Arc<DeleteProgress>,
+) -> GCResult<DeleteReport> {
     let mut report = DeleteReport::default();
     let mut consecutive_failures = 0u32;
     let mut in_flight: JoinSet<BatchOutcome> = JoinSet::new();
-
-    let submit = |batch: Vec<(String, u64)>,
-                  in_flight: &mut JoinSet<BatchOutcome>,
-                  report: &mut DeleteReport| {
-        if config.dry_run {
+    // the report is the deleter's own state; the atomics mirror it for the
+    // reporter, which cannot see across the task boundary
+    let publish = |report: &DeleteReport, batches_done: u64| {
+        progress.batches_done.fetch_add(batches_done, AtomicOrdering::Relaxed);
+        progress.deleted_objects.store(report.deleted_objects, AtomicOrdering::Relaxed);
+        progress.failed_objects.store(report.failed_objects, AtomicOrdering::Relaxed);
+    };
+    while let Some(batch) = rx.recv().await {
+        if dry_run {
             report.record_dry_run(&batch);
-            return;
+            publish(&report, 1);
+            continue;
+        }
+        while in_flight.len() >= max_in_flight {
+            if let Some(joined) = in_flight.join_next().await {
+                absorb_batch(
+                    &mut report,
+                    &mut consecutive_failures,
+                    prefix,
+                    threshold,
+                    joined,
+                )?;
+                publish(&report, 1);
+            }
         }
         let storage = Arc::clone(&storage);
         let settings = settings.clone();
@@ -858,36 +1029,10 @@ where
         in_flight.spawn(async move {
             (batch_len, storage.delete_batch(&settings, prefix, batch).await)
         });
-    };
-
-    let mut batch: Vec<(String, u64)> = Vec::with_capacity(batch_size.get());
-    let mut candidates = pin!(candidates);
-    while let Some(candidate) = candidates.next().await {
-        let candidate = candidate?;
-        if !should_delete(&candidate) {
-            continue;
-        }
-        batch.push((candidate.id.to_string(), candidate.size_bytes));
-        if batch.len() == batch_size.get() {
-            while in_flight.len() >= max_in_flight {
-                if let Some(joined) = in_flight.join_next().await {
-                    absorb_batch(
-                        &mut report,
-                        &mut consecutive_failures,
-                        prefix,
-                        threshold,
-                        joined,
-                    )?;
-                }
-            }
-            submit(std::mem::take(&mut batch), &mut in_flight, &mut report);
-        }
-    }
-    if !batch.is_empty() {
-        submit(batch, &mut in_flight, &mut report);
     }
     while let Some(joined) = in_flight.join_next().await {
         absorb_batch(&mut report, &mut consecutive_failures, prefix, threshold, joined)?;
+        publish(&report, 1);
     }
     Ok(report)
 }
@@ -899,7 +1044,8 @@ pub async fn gc_chunks(
     keep_ids: &ChunkIdSet,
 ) -> GCResult<DeleteReport> {
     info!("Deleting chunks");
-    let candidates = asset_manager.list_chunks().await?;
+    let candidates =
+        asset_manager.list_chunks_with_concurrency(config.list_concurrency()).await?;
     delete_listed(
         asset_manager,
         config,
@@ -918,7 +1064,8 @@ pub async fn gc_manifests(
     keep_ids: &HashSet<ManifestId>,
 ) -> GCResult<DeleteReport> {
     info!("Deleting manifests");
-    let candidates = asset_manager.list_manifests().await?;
+    let candidates =
+        asset_manager.list_manifests_with_concurrency(config.list_concurrency()).await?;
     delete_listed(
         asset_manager,
         config,
@@ -971,7 +1118,9 @@ pub async fn gc_transaction_logs(
     keep_ids: &HashSet<SnapshotId>,
 ) -> GCResult<DeleteReport> {
     info!("Deleting transaction logs");
-    let candidates = asset_manager.list_transaction_logs().await?;
+    let candidates = asset_manager
+        .list_transaction_logs_with_concurrency(config.list_concurrency())
+        .await?;
     delete_listed(
         asset_manager,
         config,
@@ -1487,6 +1636,7 @@ mod tests {
             NonZeroU16::new(10).unwrap(),
             NonZeroU16::new(10).unwrap(),
             NonZeroU16::new(50).unwrap(),
+            None,
             true,
         );
         garbage_collect(Arc::clone(&asset_manager), &config, None, 10).await?;
@@ -1495,8 +1645,7 @@ mod tests {
         let mut reads_per_snapshot: StdHashMap<String, usize> = StdHashMap::new();
         let mut snapshot_listings = 0;
         for (op, path) in logging.fetch_operations() {
-            if matches!(op.as_str(), "list_objects" | "list_objects_with_id_first_chars")
-            {
+            if matches!(op.as_str(), "list_objects" | "list_objects_with_id_prefixes") {
                 if path == SNAPSHOTS_FILE_PATH {
                     snapshot_listings += 1;
                 }
@@ -1504,7 +1653,12 @@ mod tests {
                 *reads_per_snapshot.entry(path).or_default() += 1;
             }
         }
-        assert_eq!(snapshot_listings, 1, "the snapshots prefix was listed twice");
+        // the in-memory backend has no server-side prefix listing, so one pass
+        // over the snapshots is a single full listing
+        assert_eq!(
+            snapshot_listings, 1,
+            "expected one listing pass over the snapshots prefix, got {snapshot_listings} calls"
+        );
         let repeated: Vec<_> =
             reads_per_snapshot.iter().filter(|(_, n)| **n > 1).collect();
         assert!(repeated.is_empty(), "snapshots read more than once: {repeated:?}");
@@ -1536,6 +1690,8 @@ mod tests {
         Alternate,
         /// every call returns `Ok`, but reports one object fewer than requested
         ShortByOne,
+        /// every call waits for one permit from `gate` before delegating
+        Gated,
     }
 
     /// What `delete_batch` should do with this call.
@@ -1558,6 +1714,28 @@ mod tests {
         mode: FailMode,
         /// prefix whose listings yield an `Err` after their first item
         list_error_prefix: Option<String>,
+        /// permits `FailMode::Gated` deletes wait on; ignored by every other mode
+        #[serde(skip, default = "closed_gate")]
+        gate: Arc<tokio::sync::Semaphore>,
+        /// what to report from `lists_id_prefixes_natively`: `None` defers to
+        /// the backend, `Some` picks which `AssetManager` listing path runs
+        #[serde(default)]
+        native_id_prefixes: Option<bool>,
+    }
+
+    /// A gate no delete can pass until the test adds permits.
+    fn closed_gate() -> Arc<tokio::sync::Semaphore> {
+        Arc::new(tokio::sync::Semaphore::new(0))
+    }
+
+    /// The `Err` a broken listing yields after its first item.
+    fn injected_listing_failure()
+    -> impl Stream<Item = StorageResult<ListInfo<String>>> + Send {
+        stream::once(async {
+            Err(StorageError::capture(StorageErrorKind::Other(
+                "injected listing failure".to_string(),
+            )))
+        })
     }
 
     impl FlakyDeletes {
@@ -1574,6 +1752,7 @@ mod tests {
                 FailMode::Alternate if n.is_multiple_of(2) => Injected::Fail,
                 FailMode::Alternate => Injected::Nothing,
                 FailMode::ShortByOne => Injected::ReportOneFewer,
+                FailMode::Gated => Injected::Nothing,
             }
         }
     }
@@ -1641,28 +1820,37 @@ mod tests {
             settings: &Settings,
             prefix: &str,
         ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
-            self.backend.list_objects(settings, prefix).await
-        }
-
-        async fn list_objects_with_id_first_chars<'a>(
-            &'a self,
-            settings: &Settings,
-            prefix: &str,
-            first_chars: &HashSet<char>,
-        ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
-            let listing = self
-                .backend
-                .list_objects_with_id_first_chars(settings, prefix, first_chars)
-                .await?;
+            let listing = self.backend.list_objects(settings, prefix).await?;
             if self.list_error_prefix.as_deref() != Some(prefix) {
                 return Ok(listing);
             }
-            let broken = stream::once(async {
-                Err(StorageError::capture(StorageErrorKind::Other(
-                    "injected listing failure".to_string(),
-                )))
-            });
-            Ok(listing.take(1).chain(broken).boxed())
+            Ok(listing.take(1).chain(injected_listing_failure()).boxed())
+        }
+
+        async fn list_objects_with_id_prefixes<'a>(
+            &'a self,
+            settings: &Settings,
+            prefix: &str,
+            id_prefixes: &[String],
+        ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
+            let listing = self
+                .backend
+                .list_objects_with_id_prefixes(settings, prefix, id_prefixes)
+                .await?;
+            // Fail a worker's listing, never the probe: the probe asks for the
+            // single two-character prefix `"00"`, workers for one-character ones.
+            // Breaking the probe would abort before any worker ran.
+            let is_worker_call =
+                id_prefixes.len() == 1 && id_prefixes[0].as_str() != "00";
+            if self.list_error_prefix.as_deref() != Some(prefix) || !is_worker_call {
+                return Ok(listing);
+            }
+            Ok(listing.take(1).chain(injected_listing_failure()).boxed())
+        }
+
+        fn lists_id_prefixes_natively(&self) -> bool {
+            self.native_id_prefixes
+                .unwrap_or_else(|| self.backend.lists_id_prefixes_natively())
         }
 
         async fn delete_batch(
@@ -1671,6 +1859,12 @@ mod tests {
             prefix: &str,
             batch: Vec<(String, u64)>,
         ) -> StorageResult<DeleteObjectsResult> {
+            if matches!(self.mode, FailMode::Gated) {
+                let _permit = self.gate.acquire().await.map_err(|err| {
+                    StorageError::capture(StorageErrorKind::Other(err.to_string()))
+                })?;
+                return self.backend.delete_batch(settings, prefix, batch).await;
+            }
             match self.injected(prefix) {
                 Injected::Nothing => {
                     self.backend.delete_batch(settings, prefix, batch).await
@@ -1779,6 +1973,7 @@ mod tests {
             NonZeroU16::new(10).unwrap(),
             NonZeroU16::new(max_concurrent_deletes).unwrap(),
             NonZeroU16::new(max_consecutive_delete_failures).unwrap(),
+            None,
             false,
         )
     }
@@ -1802,12 +1997,33 @@ mod tests {
         mode: FailMode,
         list_error_prefix: Option<&str>,
     ) -> (Arc<AssetManager>, Arc<FlakyDeletes>) {
+        wrapped_asset_manager_listing(
+            repo,
+            backend,
+            failing_prefix,
+            mode,
+            list_error_prefix,
+            None,
+        )
+    }
+
+    #[cfg(not(feature = "shuttle"))]
+    fn wrapped_asset_manager_listing(
+        repo: &crate::Repository,
+        backend: &Arc<dyn Storage + Send + Sync>,
+        failing_prefix: Option<&str>,
+        mode: FailMode,
+        list_error_prefix: Option<&str>,
+        native_id_prefixes: Option<bool>,
+    ) -> (Arc<AssetManager>, Arc<FlakyDeletes>) {
         let flaky = Arc::new(FlakyDeletes {
             backend: Arc::clone(backend),
             calls: AtomicUsize::new(0),
             failing_prefix: failing_prefix.map(str::to_string),
             mode,
             list_error_prefix: list_error_prefix.map(str::to_string),
+            gate: closed_gate(),
+            native_id_prefixes,
         });
         let storage: Arc<dyn Storage + Send + Sync> = Arc::clone(&flaky) as _;
         let am = Arc::new(AssetManager::new_no_cache(
@@ -1818,6 +2034,18 @@ mod tests {
             100,
         ));
         (am, flaky)
+    }
+
+    #[cfg(not(feature = "shuttle"))]
+    /// An asset manager whose deletes all block until the returned semaphore
+    /// hands out permits, one per batch.
+    fn gated_asset_manager(
+        repo: &crate::Repository,
+        backend: &Arc<dyn Storage + Send + Sync>,
+    ) -> (Arc<AssetManager>, Arc<tokio::sync::Semaphore>) {
+        let (am, flaky) = wrapped_asset_manager(repo, backend, None, FailMode::Gated);
+        let gate = Arc::clone(&flaky.gate);
+        (am, gate)
     }
 
     /// Chunks are the last phase, so a failure there skips nothing. The
@@ -2015,21 +2243,88 @@ mod tests {
         Ok(())
     }
 
-    /// A listing that breaks mid-stream aborts the whole run: no phase gets a
-    /// complete candidate set, so nothing may be deleted.
+    /// Listing must finish while every delete is still blocked: the collector
+    /// never waits on the deleter except when the batch queue is full.
     #[tokio_test]
-    async fn listing_errors_abort_the_run() -> Result<(), Box<dyn std::error::Error>> {
+    async fn listing_runs_ahead_of_blocked_deletes()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+        let repo = repo_with_garbage(&backend).await?;
+        let (am, gate) = gated_asset_manager(&repo, &backend);
+
+        // 4 garbage chunks as 4 batches of 1; a marker item at the end of the
+        // candidate stream records when listing finished. The marker is a random
+        // id that `should_delete` rejects.
+        let garbage: Vec<ListInfo<ChunkId>> =
+            am.list_chunks().await?.try_collect().await?;
+        assert_eq!(garbage.len(), 4);
+        let garbage_ids: HashSet<ChunkId> =
+            garbage.iter().map(|i| i.id.clone()).collect();
+        let listed_all = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let marker =
+            ListInfo { id: ChunkId::random(), created_at: Utc::now(), size_bytes: 0 };
+        let candidates = stream::iter(garbage.into_iter().map(Ok)).chain(stream::once({
+            let listed_all = Arc::clone(&listed_all);
+            async move {
+                listed_all.store(true, Ordering::SeqCst);
+                Ok::<_, RepositoryError>(marker)
+            }
+        }));
+        // max_concurrent_deletes = 1, so the deleter can only ever hold one
+        // batch in flight and must block on the gate for the rest
+        let config = gc_config_with(50, 1);
+        let am2 = Arc::clone(&am);
+        let run = tokio::spawn(async move {
+            delete_listed(
+                am2.as_ref(),
+                &config,
+                CHUNKS_FILE_PATH,
+                NonZeroUsize::MIN,
+                candidates,
+                move |info| garbage_ids.contains(&info.id),
+            )
+            .await
+        });
+
+        // listing completes although no delete has been allowed to finish
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while !listed_all.load(Ordering::SeqCst) {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await?;
+        assert_eq!(am.list_chunks().await?.count().await, 4, "nothing deleted yet");
+
+        gate.add_permits(4);
+        let report =
+            tokio::time::timeout(std::time::Duration::from_secs(5), run).await???;
+        assert_eq!(report.deleted_objects, 4);
+        assert_eq!(report.failed_objects, 0);
+        assert_eq!(am.list_chunks().await?.count().await, 0);
+        Ok(())
+    }
+
+    /// A listing that breaks mid-stream aborts the whole run: no phase gets a
+    /// complete candidate set, so nothing may be deleted. `fan_out` picks which
+    /// listing path breaks: a prefix worker, or the single full listing that
+    /// backends without server-side prefix listing use. Both are forced, so
+    /// the choice does not depend on what the in-memory backend reports.
+    #[cfg(not(feature = "shuttle"))]
+    async fn listing_error_aborts_the_run(
+        fan_out: bool,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
         let repo = repo_with_garbage(&backend).await?;
         let manifests_before = repo.asset_manager().list_manifests().await?.count().await;
         let tx_logs_before =
             repo.asset_manager().list_transaction_logs().await?.count().await;
-        let (am, _flaky) = wrapped_asset_manager_with(
+        let (am, _flaky) = wrapped_asset_manager_listing(
             &repo,
             &backend,
             None,
             FailMode::Alternate,
             Some(SNAPSHOTS_FILE_PATH),
+            Some(fan_out),
         );
 
         let result = garbage_collect(Arc::clone(&am), &gc_config(50), None, 10).await;
@@ -2050,5 +2345,20 @@ mod tests {
         );
         assert_eq!(repo.asset_manager().list_chunks().await?.count().await, 4);
         Ok(())
+    }
+
+    /// The error surfaces from a prefix worker, through the channel and the
+    /// stream, and aborts the run.
+    #[tokio_test]
+    async fn listing_errors_abort_the_run_fanning_out()
+    -> Result<(), Box<dyn std::error::Error>> {
+        listing_error_aborts_the_run(true).await
+    }
+
+    /// The same, on the single-listing path a non-native backend takes.
+    #[tokio_test]
+    async fn listing_errors_abort_the_run_single_listing()
+    -> Result<(), Box<dyn std::error::Error>> {
+        listing_error_aborts_the_run(false).await
     }
 }
