@@ -15,8 +15,8 @@ use icechunk::{
         ManifestSplitDim, ManifestSplitDimCondition, ManifestSplittingConfig,
     },
     format::{
-        ByteRange, ChunkIndices, Path, SnapshotId, format_constants::SpecVersionBin,
-        manifest::ChunkPayload, snapshot::ArrayShape,
+        ByteRange, ChunkIndices, Path, SnapshotId, TRANSACTION_LOGS_FILE_PATH,
+        format_constants::SpecVersionBin, manifest::ChunkPayload, snapshot::ArrayShape,
     },
     new_in_memory_storage,
     ops::gc::{ExpiredRefAction, GCConfig, GCSummary, expire, garbage_collect},
@@ -147,6 +147,8 @@ async fn do_test_gc(
         NonZeroU16::new(50).unwrap(),
         NonZeroUsize::new(512 * 1024 * 1024).unwrap(),
         NonZeroU16::new(500).unwrap(),
+        NonZeroU16::new(10).unwrap(),
+        NonZeroU16::new(50).unwrap(),
         false,
     );
     let summary =
@@ -226,6 +228,8 @@ async fn do_test_gc(
         NonZeroU16::new(50).unwrap(),
         NonZeroUsize::new(512 * 1024 * 1024).unwrap(),
         NonZeroU16::new(500).unwrap(),
+        NonZeroU16::new(10).unwrap(),
+        NonZeroU16::new(50).unwrap(),
         false,
     );
     let summary =
@@ -273,6 +277,8 @@ async fn test_gc_cutoff_inside_listed_second_in_tigris()
         NonZeroU16::new(50).unwrap(),
         NonZeroUsize::new(512 * 1024 * 1024).unwrap(),
         NonZeroU16::new(500).unwrap(),
+        NonZeroU16::new(10).unwrap(),
+        NonZeroU16::new(50).unwrap(),
         false,
     );
     let summary =
@@ -506,6 +512,8 @@ async fn do_test_expire_and_garbage_collect(
         NonZeroU16::new(50).unwrap(),
         NonZeroUsize::new(512 * 1024 * 1024).unwrap(),
         NonZeroU16::new(500).unwrap(),
+        NonZeroU16::new(10).unwrap(),
+        NonZeroU16::new(50).unwrap(),
         false,
     );
     let asset_manager = Arc::new(AssetManager::new_no_cache(
@@ -593,6 +601,8 @@ async fn test_expire_and_garbage_collect_deleting_expired_refs()
         NonZeroU16::new(50).unwrap(),
         NonZeroUsize::new(512 * 1024 * 1024).unwrap(),
         NonZeroU16::new(500).unwrap(),
+        NonZeroU16::new(10).unwrap(),
+        NonZeroU16::new(50).unwrap(),
         false,
     );
     let summary =
@@ -674,6 +684,8 @@ async fn test_diff_complete_after_expire_and_gc() -> Result<(), Box<dyn std::err
         NonZeroU16::new(50).unwrap(),
         NonZeroUsize::new(512 * 1024 * 1024).unwrap(),
         NonZeroU16::new(500).unwrap(),
+        NonZeroU16::new(10).unwrap(),
+        NonZeroU16::new(50).unwrap(),
         false,
     );
     let summary =
@@ -764,6 +776,8 @@ async fn test_gc_deletes_only_unreferenced_expired_tx_logs()
         NonZeroU16::new(50).unwrap(),
         NonZeroUsize::new(512 * 1024 * 1024).unwrap(),
         NonZeroU16::new(500).unwrap(),
+        NonZeroU16::new(10).unwrap(),
+        NonZeroU16::new(50).unwrap(),
         false,
     );
     let summary =
@@ -845,6 +859,8 @@ async fn test_gc_retains_snapshot_between_flushed_and_created_at()
         NonZeroU16::new(50).unwrap(),
         NonZeroUsize::new(512 * 1024 * 1024).unwrap(),
         NonZeroU16::new(500).unwrap(),
+        NonZeroU16::new(10).unwrap(),
+        NonZeroU16::new(50).unwrap(),
         false,
     );
     let summary = garbage_collect(Arc::clone(&am), &gc_config, None, 100).await?;
@@ -915,6 +931,8 @@ async fn test_gc_deletes_pruned_tx_logs_of_expire_released_snapshot()
         NonZeroU16::new(50).unwrap(),
         NonZeroUsize::new(512 * 1024 * 1024).unwrap(),
         NonZeroU16::new(500).unwrap(),
+        NonZeroU16::new(10).unwrap(),
+        NonZeroU16::new(50).unwrap(),
         false,
     );
     let summary = garbage_collect(Arc::clone(&am), &gc_config, None, 100).await?;
@@ -966,6 +984,8 @@ async fn test_gc_deletes_pruned_tx_logs_of_expire_released_snapshot()
         NonZeroU16::new(50).unwrap(),
         NonZeroUsize::new(512 * 1024 * 1024).unwrap(),
         NonZeroU16::new(500).unwrap(),
+        NonZeroU16::new(10).unwrap(),
+        NonZeroU16::new(50).unwrap(),
         false,
     );
     let summary = garbage_collect(Arc::clone(&am), &gc_config, None, 100).await?;
@@ -995,6 +1015,8 @@ async fn test_gc_deletes_pruned_tx_logs_of_expire_released_snapshot()
         NonZeroU16::new(50).unwrap(),
         NonZeroUsize::new(512 * 1024 * 1024).unwrap(),
         NonZeroU16::new(500).unwrap(),
+        NonZeroU16::new(10).unwrap(),
+        NonZeroU16::new(50).unwrap(),
         false,
     );
     let summary = garbage_collect(Arc::clone(&am), &gc_config, None, 100).await?;
@@ -1041,6 +1063,8 @@ fn clean_all_now() -> GCConfig {
         NonZeroU16::new(50).unwrap(),
         NonZeroUsize::new(512 * 1024 * 1024).unwrap(),
         NonZeroU16::new(500).unwrap(),
+        NonZeroU16::new(10).unwrap(),
+        NonZeroU16::new(50).unwrap(),
         false,
     )
 }
@@ -1163,6 +1187,8 @@ async fn test_reparent_accumulates_existing_pruned_logs()
         NonZeroU16::new(50).unwrap(),
         NonZeroUsize::new(512 * 1024 * 1024).unwrap(),
         NonZeroU16::new(500).unwrap(),
+        NonZeroU16::new(10).unwrap(),
+        NonZeroU16::new(50).unwrap(),
         false,
     );
     garbage_collect(Arc::clone(&am), &gc_config, None, 100).await?;
@@ -1351,7 +1377,6 @@ async fn test_rebase_detects_conflict_in_pruned_ancestor()
 #[tokio_test]
 async fn test_rebase_errors_on_missing_pruned_ancestor_log()
 -> Result<(), Box<dyn std::error::Error>> {
-    use futures::stream;
     use icechunk::conflicts::detector::ConflictDetector;
     use icechunk::session::{SessionError, SessionErrorKind};
 
@@ -1391,7 +1416,13 @@ async fn test_rebase_errors_on_missing_pruned_ancestor_log()
     garbage_collect(Arc::clone(&am), &clean_all_now(), None, 100).await?;
 
     // Simulate an older GC having deleted the pruned ancestor's tx log.
-    am.delete_transaction_logs(stream::once(async { (x.clone(), 0u64) }).boxed()).await?;
+    am.storage()
+        .delete_batch(
+            am.storage_settings(),
+            TRANSACTION_LOGS_FILE_PATH,
+            vec![(x.to_string(), 0u64)],
+        )
+        .await?;
     am.remove_cached_tx_log(&x);
 
     match conflicting.rebase(&ConflictDetector).await {
@@ -1410,8 +1441,6 @@ async fn test_rebase_errors_on_missing_pruned_ancestor_log()
 /// skips that log, producing an incomplete diff rather than failing.
 #[tokio_test]
 async fn test_diff_skips_missing_pruned_log() -> Result<(), Box<dyn std::error::Error>> {
-    use futures::stream;
-
     let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
     let repo = Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
         .await?;
@@ -1441,7 +1470,13 @@ async fn test_diff_skips_missing_pruned_log() -> Result<(), Box<dyn std::error::
     garbage_collect(Arc::clone(&am), &clean_all_now(), None, 100).await?;
 
     // Delete /a's pruned-ancestor tx log, then diff: it should still succeed.
-    am.delete_transaction_logs(stream::once(async { (a.clone(), 0u64) }).boxed()).await?;
+    am.storage()
+        .delete_batch(
+            am.storage_settings(),
+            TRANSACTION_LOGS_FILE_PATH,
+            vec![(a.to_string(), 0u64)],
+        )
+        .await?;
     am.remove_cached_tx_log(&a);
 
     let diff = repo
@@ -1517,9 +1552,14 @@ async fn test_inspect_shows_synthetic_composite() -> Result<(), Box<dyn std::err
 
     // GC retains the pruned-ancestor logs (c references them), so the composite
     // stays complete. Now simulate an older GC having deleted one of them.
-    use futures::stream;
     garbage_collect(Arc::clone(&am), &clean_all_now(), None, 100).await?;
-    am.delete_transaction_logs(stream::once(async { (a.clone(), 0u64) }).boxed()).await?;
+    am.storage()
+        .delete_batch(
+            am.storage_settings(),
+            TRANSACTION_LOGS_FILE_PATH,
+            vec![(a.to_string(), 0u64)],
+        )
+        .await?;
     am.remove_cached_tx_log(&a);
 
     // The composite now flags `a` as missing and drops its content (/a), while
@@ -1599,6 +1639,8 @@ async fn test_gc_reset_branch() -> Result<(), Box<dyn std::error::Error>> {
         NonZeroU16::new(50).unwrap(),
         NonZeroUsize::new(512 * 1024 * 1024).unwrap(),
         NonZeroU16::new(500).unwrap(),
+        NonZeroU16::new(10).unwrap(),
+        NonZeroU16::new(50).unwrap(),
         false,
     );
     let summary =
@@ -1757,6 +1799,8 @@ async fn test_gc_completes_with_one_decode_slot() -> Result<(), Box<dyn std::err
         NonZeroU16::new(25).unwrap(),
         NonZeroUsize::new(64 * 1024 * 1024).unwrap(),
         NonZeroU16::new(8).unwrap(),
+        NonZeroU16::new(10).unwrap(),
+        NonZeroU16::new(50).unwrap(),
         true,
     );
     let summary = tokio::time::timeout(

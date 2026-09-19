@@ -83,8 +83,22 @@ pub(crate) async fn gc(args: GcArgs) -> Result<(), BoxError> {
     let opened = open(&args.name, &args.net).await?;
     let (snaps, mem, fetches) = walk(&args.walk)?;
     let cutoff = Utc::now() - TimeDelta::seconds(args.cutoff_age_secs as i64);
-    let config =
-        GCConfig::clean_all(cutoff, cutoff, None, snaps, mem, fetches, !args.delete);
+    let deletes = non_zero_u16(args.max_concurrent_deletes, "--max-concurrent-deletes")?;
+    let delete_failures = non_zero_u16(
+        args.max_consecutive_delete_failures,
+        "--max-consecutive-delete-failures",
+    )?;
+    let config = GCConfig::clean_all(
+        cutoff,
+        cutoff,
+        None,
+        snaps,
+        mem,
+        fetches,
+        deletes,
+        delete_failures,
+        !args.delete,
+    );
     println!(
         "gc on {} (dry_run={}, cutoff={})",
         args.name,

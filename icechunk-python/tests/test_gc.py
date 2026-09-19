@@ -168,12 +168,22 @@ async def test_expire_and_gc(use_async: bool, any_spec_version: int | None) -> N
     # not implemented yet
     assert gc_result.attributes_deleted == 0
     assert gc_result.transaction_logs_deleted == expected_tx_logs_deleted
+    # a dry run issues no deletes, so nothing can fail or be skipped
+    assert gc_result.objects_failed_to_delete == 0
+    assert gc_result.delete_errors == []
+    assert gc_result.skipped_phases == []
 
-    # now let's run real GC, no dry_run.
+    # now let's run real GC, no dry_run, with the delete knobs set explicitly:
+    # small batches in flight and a low failure threshold must not change the
+    # outcome when every delete succeeds
     if use_async:
-        gc_result = await repo.garbage_collect_async(old)
+        gc_result = await repo.garbage_collect_async(
+            old, max_concurrent_deletes=2, max_consecutive_delete_failures=3
+        )
     else:
-        gc_result = repo.garbage_collect(old)
+        gc_result = repo.garbage_collect(
+            old, max_concurrent_deletes=2, max_consecutive_delete_failures=3
+        )
 
     space_after = space_used()
 
@@ -187,6 +197,12 @@ async def test_expire_and_gc(use_async: bool, any_spec_version: int | None) -> N
     # not implemented yet
     assert gc_result.attributes_deleted == 0
     assert gc_result.transaction_logs_deleted == expected_tx_logs_deleted
+    assert gc_result.objects_failed_to_delete == 0
+    assert gc_result.delete_errors == []
+    assert gc_result.skipped_phases == []
+    for field in ("objects_failed_to_delete", "delete_errors", "skipped_phases"):
+        assert field in repr(gc_result)
+        assert field in gc_result._repr_html_()
 
     assert (
         len(
