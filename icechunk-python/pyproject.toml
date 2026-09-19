@@ -230,17 +230,20 @@ python-freethreading = "~=3.14.0"
 [tool.pixi.feature.rustc.dependencies]
 rust = "~=1.98.0"
 
-[tool.pixi.feature.build.dependencies]
+# CI jobs that only test a prebuilt wheel install just this and python.
+[tool.pixi.feature.runner.dependencies]
 just = ">=1.58.0,<2"
-compilers = ">=1.11.0,<2"
 uv = ">=0.12.5,<0.13"
+flatbuffers = ">=25.12.19,<26"
+
+[tool.pixi.feature.build.dependencies]
+compilers = ">=1.11.0,<2"
 openssl = ">=3.6.3,<4"
 pkgconfig = ">=1.5.5,<2"
 cargo-deny = ">=0.20.2,<0.21"
 prek = ">=0.4.14,<0.5"
 netcdf4 = ">=1.7.4,<2"
 cargo-nextest = ">=0.9.143,<0.10"
-flatbuffers = ">=25.12.19,<26"
 samply = ">=0.13.1,<0.14"
 cargo-release = ">=1.1.3,<2"
 cargo-llvm-cov = ">=0.9.0,<0.10"
@@ -256,6 +259,13 @@ llvm-tools = ">=19.1.7"
 [tool.pixi.feature.msrv.dependencies]
 rust = "~=1.91.1"
 
+[tool.pixi.feature.nextest.dependencies]
+cargo-nextest = ">=0.9.143,<0.10"
+
+# pysemver, for `just check-msrv`
+[tool.pixi.feature.msrv-check.dependencies]
+semver = ">=3.0.4,<4"
+
 [tool.pixi.feature.build.target.linux-64.dependencies]
 sysroot_linux-64 = ">=2.34"
 
@@ -265,6 +275,7 @@ sysroot_linux-aarch64 = ">=2.34"
 [tool.pixi.environments]
 default = { features = [
   "py312",
+  "runner",
   "build",
   "dev",
   "docs",
@@ -274,20 +285,47 @@ default = { features = [
 benchmark = { features = ["benchmark"], solve-group = "default" }
 py314t = { features = [
   "py314t",
+  "runner",
   "build",
   "dev",
   "test",
   "rustc"
-]}
+], solve-group = "py314t" }
+# The MSRV check only runs cargo. The default feature's PyPI deps get built
+# from source for the free-threaded python this env resolves to.
 msrv = { features = [
+  "runner",
   "build",
   "msrv"
-]}
+], no-default-feature = true }
 # The js lanes build no python.
 # The default feature pulls the project's pypi dependencies.
 # Those dependencies have no free-threaded wheels on windows.
 js = { features = [
+  "runner",
   "build",
   "rustc",
   "js"
 ], no-default-feature = true }
+wheel-test = { features = [
+  "py312",
+  "runner"
+], no-default-feature = true, solve-group = "default" }
+# Same solve group as py314t, so the wheel is tested on the interpreter that built it
+wheel-test-py314t = { features = [
+  "py314t",
+  "runner"
+], no-default-feature = true, solve-group = "py314t" }
+# The Windows Rust tests need only cargo and nextest. A small env installs faster.
+rust-test = { features = [
+  "runner",
+  "rustc",
+  "nextest"
+], no-default-feature = true, solve-group = "default" }
+# The macOS unit-test legs, which also run the MSRV text check
+rust-unit = { features = [
+  "runner",
+  "rustc",
+  "nextest",
+  "msrv-check"
+], no-default-feature = true, solve-group = "default" }
