@@ -8,7 +8,7 @@ use async_stream::try_stream;
 use backon::{BackoffBuilder as _, ExponentialBuilder, Retryable as _};
 use futures::{Stream, StreamExt as _, TryStreamExt as _, stream};
 use tokio::pin;
-use tracing::{info, instrument};
+use tracing::{info, instrument, warn};
 
 use crate::{
     StorageError,
@@ -65,6 +65,49 @@ pub(crate) async fn ensure_repo_writable(
         }
     }
     Ok(())
+}
+
+/// Descriptors an operation needs beyond its concurrent requests: the runtime's
+/// own, stdio, and the object store's idle connection pool.
+const FD_HEADROOM: u64 = 64;
+
+/// The process' soft `RLIMIT_NOFILE`, or `None` where the limit doesn't exist
+/// or is unbounded.
+#[cfg(unix)]
+fn nofile_soft_limit() -> Option<u64> {
+    let (soft, _hard) = rlimit::Resource::NOFILE.get().ok()?;
+    (soft != rlimit::INFINITY).then_some(soft)
+}
+
+#[cfg(not(unix))]
+fn nofile_soft_limit() -> Option<u64> {
+    None
+}
+
+/// The requests a manifest walk has in flight at once: it fetches the
+/// snapshots it walks alongside their manifests.
+pub(crate) fn walk_peak_requests(
+    max_concurrent_manifest_fetches: NonZeroU16,
+    max_snapshots_in_memory: NonZeroU16,
+) -> u64 {
+    max_concurrent_manifest_fetches.get() as u64 + max_snapshots_in_memory.get() as u64
+}
+
+/// Warn when the process cannot open enough files for `peak_requests`
+/// concurrent requests. `op_name` names the operation in the warning.
+pub(crate) fn warn_on_low_fd_limit(peak_requests: u64, op_name: &str) {
+    let Some(soft) = nofile_soft_limit() else { return };
+    let needed = peak_requests + FD_HEADROOM;
+    if soft < needed {
+        warn!(
+            soft_limit = soft,
+            needed,
+            "{op_name} peaks at {peak_requests} concurrent requests, but this \
+             process can only open {soft} files and will likely fail with \
+             \"too many open files\". Raise the limit (ulimit -n {needed}) or \
+             lower the concurrency settings."
+        );
+    }
 }
 
 /// Run `op`, retrying with backoff while it fails because the repo info
