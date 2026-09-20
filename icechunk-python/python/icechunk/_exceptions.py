@@ -136,6 +136,7 @@ class ErrorKind(StrEnum):
     CANNOT_PARSE_URL = "cannot-parse-url"
     BAD_REDIRECT = "bad-redirect"
     SEMAPHORE_ACQUIRE = "semaphore-acquire"
+    THROTTLED = "throttled"
     STORAGE_OTHER = "storage-other"
     VIRTUAL_CHUNK_FETCH = "virtual-chunk-fetch"
     VIRTUAL_CHUNK_MODIFIED = "virtual-chunk-modified"

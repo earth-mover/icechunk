@@ -170,6 +170,7 @@ async def test_expire_and_gc(use_async: bool, any_spec_version: int | None) -> N
     assert gc_result.transaction_logs_deleted == expected_tx_logs_deleted
     # a dry run issues no deletes, so nothing can fail or be skipped
     assert gc_result.objects_failed_to_delete == 0
+    assert gc_result.throttled_batches == 0
     assert gc_result.delete_errors == []
     assert gc_result.skipped_phases == []
 
@@ -206,9 +207,15 @@ async def test_expire_and_gc(use_async: bool, any_spec_version: int | None) -> N
     assert gc_result.attributes_deleted == 0
     assert gc_result.transaction_logs_deleted == expected_tx_logs_deleted
     assert gc_result.objects_failed_to_delete == 0
+    assert gc_result.throttled_batches == 0
     assert gc_result.delete_errors == []
     assert gc_result.skipped_phases == []
-    for field in ("objects_failed_to_delete", "delete_errors", "skipped_phases"):
+    for field in (
+        "objects_failed_to_delete",
+        "throttled_batches",
+        "delete_errors",
+        "skipped_phases",
+    ):
         assert field in repr(gc_result)
         assert field in gc_result._repr_html_()
 

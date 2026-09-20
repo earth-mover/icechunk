@@ -1947,11 +1947,17 @@ class Repository:
         max_concurrent_manifest_fetches : int
             Don't run more than this many concurrent manifest fetches.
         max_concurrent_deletes : int
-            Don't run more than this many concurrent delete requests.
+            Ceiling on concurrent delete requests. It is not the rate the run
+            uses: garbage collection starts at one request in flight and ramps
+            up until the store throttles it or this ceiling is reached, then
+            keeps adjusting. Raising it only helps on prefixes the store has
+            already partitioned, and never causes an abort.
         max_consecutive_delete_failures : int
             Give up, with an error, after this many delete requests fail in a row.
             Isolated failures are reported in the returned summary and don't stop
-            the run.
+            the run. Throttling is not a failure: it only counts here once the
+            store keeps throttling after the back-off between retries has grown
+            to its maximum.
         max_concurrent_listings : int | None
             How many object listings to run concurrently while looking for
             garbage. Must be at least 1. Defaults to eight per available core,
@@ -1963,7 +1969,8 @@ class Repository:
             Summary of objects deleted. Deletes that failed are counted in
             `objects_failed_to_delete`; if a phase had failures, later phases are
             skipped and listed in `skipped_phases`, so the next run can delete
-            them in a safe order.
+            them in a safe order. Requests the store asked us to slow down are
+            counted in `throttled_batches`; they were retried, not failed.
         """
 
         return self._repository.garbage_collect(
@@ -2025,11 +2032,17 @@ class Repository:
         max_concurrent_manifest_fetches : int
             Don't run more than this many concurrent manifest fetches.
         max_concurrent_deletes : int
-            Don't run more than this many concurrent delete requests.
+            Ceiling on concurrent delete requests. It is not the rate the run
+            uses: garbage collection starts at one request in flight and ramps
+            up until the store throttles it or this ceiling is reached, then
+            keeps adjusting. Raising it only helps on prefixes the store has
+            already partitioned, and never causes an abort.
         max_consecutive_delete_failures : int
             Give up, with an error, after this many delete requests fail in a row.
             Isolated failures are reported in the returned summary and don't stop
-            the run.
+            the run. Throttling is not a failure: it only counts here once the
+            store keeps throttling after the back-off between retries has grown
+            to its maximum.
         max_concurrent_listings : int | None
             How many object listings to run concurrently while looking for
             garbage. Must be at least 1. Defaults to eight per available core,
@@ -2041,7 +2054,8 @@ class Repository:
             Summary of objects deleted. Deletes that failed are counted in
             `objects_failed_to_delete`; if a phase had failures, later phases are
             skipped and listed in `skipped_phases`, so the next run can delete
-            them in a safe order.
+            them in a safe order. Requests the store asked us to slow down are
+            counted in `throttled_batches`; they were retried, not failed.
         """
 
         return await self._repository.garbage_collect_async(

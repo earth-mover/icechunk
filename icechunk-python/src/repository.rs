@@ -487,6 +487,8 @@ pub(crate) struct PyGCSummary {
     #[pyo3(get)]
     pub objects_failed_to_delete: u64,
     #[pyo3(get)]
+    pub throttled_batches: u64,
+    #[pyo3(get)]
     pub delete_errors: Vec<String>,
     #[pyo3(get)]
     pub skipped_phases: Vec<String>,
@@ -502,6 +504,7 @@ impl From<GCSummary> for PyGCSummary {
             attributes_deleted: value.attributes_deleted,
             transaction_logs_deleted: value.transaction_logs_deleted,
             objects_failed_to_delete: value.objects_failed_to_delete,
+            throttled_batches: value.throttled_batches,
             delete_errors: value.delete_errors,
             skipped_phases: value.skipped_phases,
         }
@@ -522,6 +525,7 @@ impl PyRepr for PyGCSummary {
             ("attributes_deleted", self.attributes_deleted.to_string()),
             ("transaction_logs_deleted", self.transaction_logs_deleted.to_string()),
             ("objects_failed_to_delete", self.objects_failed_to_delete.to_string()),
+            ("throttled_batches", self.throttled_batches.to_string()),
             ("delete_errors", format!("{:?}", self.delete_errors)),
             ("skipped_phases", format!("{:?}", self.skipped_phases)),
         ]

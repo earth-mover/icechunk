@@ -761,6 +761,13 @@ impl Storage for ObjectStorage {
             .get_client(settings, Role::Write)
             .await?
             .delete_stream(stream::iter(ids).boxed());
+        // FIXME: no throttle detection here. A key the store refused with a
+        // 429/503 (or a per-key transient error in a bulk delete) is only
+        // logged and shows up as a shortfall, which GC counts as a failure and
+        // uses to skip dependent phases. The S3 SDK backend classifies those as
+        // `StorageErrorKind::Throttled` so GC's deleter backs off and retries
+        // the batch; GCS and Azure through object_store get no such signal,
+        // because `delete_stream` yields untyped errors per key.
         let res = results
             .fold(DeleteObjectsResult::default(), |mut res, delete_result| {
                 if let Ok(deleted_path) = delete_result {

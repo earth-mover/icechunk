@@ -174,6 +174,7 @@ pub(crate) mod codes {
         CANNOT_PARSE_URL => "cannot-parse-url",
         BAD_REDIRECT => "bad-redirect",
         SEMAPHORE_ACQUIRE => "semaphore-acquire",
+        THROTTLED => "throttled",
         STORAGE_OTHER => "storage-other",
         VIRTUAL_CHUNK_FETCH => "virtual-chunk-fetch",
         VIRTUAL_CHUNK_MODIFIED => "virtual-chunk-modified",
@@ -400,6 +401,7 @@ fn classify_storage(kind: &StorageErrorKind) -> Classified {
         K::R2ConfigurationError(_) => class("StorageError", codes::STORAGE_CONFIG),
         K::CannotParseUrl { .. } => class("StorageError", codes::CANNOT_PARSE_URL),
         K::BadRedirect(_) => class("StorageError", codes::BAD_REDIRECT),
+        K::Throttled { .. } => class("StorageError", codes::THROTTLED),
         K::Other(_) => class("StorageError", codes::STORAGE_OTHER),
     }
 }
