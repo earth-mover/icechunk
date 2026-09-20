@@ -2870,6 +2870,7 @@ impl PyRepository {
         dry_run: bool,
         max_snapshots_in_memory: NonZeroU16,
         max_compressed_manifest_mem_bytes: NonZeroUsize,
+        max_decoded_manifest_mem_bytes: NonZeroUsize,
         max_concurrent_manifest_fetches: NonZeroU16,
         max_concurrent_deletes: NonZeroU16,
         max_consecutive_delete_failures: NonZeroU16,
@@ -2885,6 +2886,7 @@ impl PyRepository {
                         Default::default(),
                         max_snapshots_in_memory,
                         max_compressed_manifest_mem_bytes,
+                        max_decoded_manifest_mem_bytes,
                         max_concurrent_manifest_fetches,
                         max_concurrent_deletes,
                         max_consecutive_delete_failures,
@@ -2915,6 +2917,7 @@ impl PyRepository {
         dry_run: bool,
         max_snapshots_in_memory: NonZeroU16,
         max_compressed_manifest_mem_bytes: NonZeroUsize,
+        max_decoded_manifest_mem_bytes: NonZeroUsize,
         max_concurrent_manifest_fetches: NonZeroU16,
         max_concurrent_deletes: NonZeroU16,
         max_consecutive_delete_failures: NonZeroU16,
@@ -2928,6 +2931,7 @@ impl PyRepository {
                 Default::default(),
                 max_snapshots_in_memory,
                 max_compressed_manifest_mem_bytes,
+                max_decoded_manifest_mem_bytes,
                 max_concurrent_manifest_fetches,
                 max_concurrent_deletes,
                 max_consecutive_delete_failures,
@@ -2951,6 +2955,7 @@ impl PyRepository {
         py: Python<'_>,
         max_snapshots_in_memory: NonZeroU16,
         max_compressed_manifest_mem_bytes: NonZeroUsize,
+        max_decoded_manifest_mem_bytes: NonZeroUsize,
         max_concurrent_manifest_fetches: NonZeroU16,
     ) -> PyResult<PyChunkStorageStats> {
         // This function calls block_on, so we need to allow other thread python to make progress
@@ -2965,6 +2970,7 @@ impl PyRepository {
                         asset_manager,
                         max_snapshots_in_memory,
                         max_compressed_manifest_mem_bytes,
+                        max_decoded_manifest_mem_bytes,
                         max_concurrent_manifest_fetches,
                     )
                     .await
@@ -2981,6 +2987,7 @@ impl PyRepository {
         py: Python<'py>,
         max_snapshots_in_memory: NonZeroU16,
         max_compressed_manifest_mem_bytes: NonZeroUsize,
+        max_decoded_manifest_mem_bytes: NonZeroUsize,
         max_concurrent_manifest_fetches: NonZeroU16,
     ) -> PyResult<Bound<'py, PyAny>> {
         let repository = Arc::clone(&self.0);
@@ -2995,6 +3002,7 @@ impl PyRepository {
                     asset_manager,
                     max_snapshots_in_memory,
                     max_compressed_manifest_mem_bytes,
+                    max_decoded_manifest_mem_bytes,
                     max_concurrent_manifest_fetches,
                 )
                 .await

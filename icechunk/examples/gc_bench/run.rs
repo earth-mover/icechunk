@@ -54,11 +54,15 @@ fn non_zero_u16(v: u16, flag: &str) -> Result<NonZeroU16, BoxError> {
     NonZeroU16::new(v).ok_or_else(|| format!("{flag} must be > 0").into())
 }
 
-fn walk(w: &WalkArgs) -> Result<(NonZeroU16, NonZeroUsize, NonZeroU16), BoxError> {
+fn walk(
+    w: &WalkArgs,
+) -> Result<(NonZeroU16, NonZeroUsize, NonZeroUsize, NonZeroU16), BoxError> {
     Ok((
         non_zero_u16(w.max_snapshots_in_memory, "--max-snapshots-in-memory")?,
         NonZeroUsize::new(w.max_manifest_mem_bytes)
             .ok_or("--max-manifest-mem-bytes must be > 0")?,
+        NonZeroUsize::new(w.max_decoded_manifest_mem_bytes)
+            .ok_or("--max-decoded-manifest-mem-bytes must be > 0")?,
         non_zero_u16(
             w.max_concurrent_manifest_fetches,
             "--max-concurrent-manifest-fetches",
@@ -81,7 +85,7 @@ async fn finish(
 pub(crate) async fn gc(args: GcArgs) -> Result<(), BoxError> {
     let phases = report::install_tracing();
     let opened = open(&args.name, &args.net).await?;
-    let (snaps, mem, fetches) = walk(&args.walk)?;
+    let (snaps, mem, decoded_mem, fetches) = walk(&args.walk)?;
     let cutoff = Utc::now() - TimeDelta::seconds(args.cutoff_age_secs as i64);
     let deletes = non_zero_u16(args.max_concurrent_deletes, "--max-concurrent-deletes")?;
     let delete_failures = non_zero_u16(
@@ -94,6 +98,7 @@ pub(crate) async fn gc(args: GcArgs) -> Result<(), BoxError> {
         None,
         snaps,
         mem,
+        decoded_mem,
         fetches,
         deletes,
         delete_failures,
@@ -131,12 +136,14 @@ pub(crate) async fn gc(args: GcArgs) -> Result<(), BoxError> {
 pub(crate) async fn stats(args: StatsArgs) -> Result<(), BoxError> {
     let phases = report::install_tracing();
     let opened = open(&args.name, &args.net).await?;
-    let (snaps, mem, fetches) = walk(&args.walk)?;
+    let (snaps, mem, decoded_mem, fetches) = walk(&args.walk)?;
     println!("stats on {}", args.name);
 
     opened.metering.reset();
     let started = Instant::now();
-    let result = repo_chunks_storage(Arc::clone(&opened.am), snaps, mem, fetches).await;
+    let result =
+        repo_chunks_storage(Arc::clone(&opened.am), snaps, mem, decoded_mem, fetches)
+            .await;
     match &result {
         Ok(stats) => println!("{stats:#?}"),
         Err(err) => eprintln!("stats failed: {err}"),

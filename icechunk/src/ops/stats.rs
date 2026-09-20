@@ -136,6 +136,7 @@ pub async fn repo_chunks_storage(
     asset_manager: Arc<AssetManager>,
     max_snapshots_in_memory: NonZeroU16,
     max_compressed_manifest_mem_bytes: NonZeroUsize,
+    max_decoded_manifest_mem_bytes: NonZeroUsize,
     max_concurrent_manifest_fetches: NonZeroU16,
 ) -> RepositoryResult<ChunkStorageStats> {
     let extra_roots = HashSet::new();
@@ -149,6 +150,7 @@ pub async fn repo_chunks_storage(
     let limits = WalkLimits {
         max_concurrent_manifest_fetches,
         max_manifest_mem_bytes: max_compressed_manifest_mem_bytes,
+        max_decoded_manifest_mem_bytes,
         decode_workers: NonZeroU16::new(asset_manager.max_concurrent_decodes())
             .unwrap_or(NonZeroU16::MIN),
     };
