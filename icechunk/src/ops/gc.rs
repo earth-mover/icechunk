@@ -4,10 +4,8 @@ use std::{
     collections::{HashMap, HashSet},
     num::{NonZeroU16, NonZeroUsize},
     sync::Arc,
-    time::Duration,
 };
 
-use backon::{BackoffBuilder as _, ExponentialBuilder, Retryable as _};
 use chrono::{DateTime, TimeDelta, Utc};
 use futures::{Stream, StreamExt as _, TryStreamExt as _, stream};
 use itertools::Itertools as _;
@@ -21,7 +19,7 @@ use crate::{
         SnapshotId, TRANSACTION_LOGS_FILE_PATH,
         format_constants::SpecVersionBin,
         manifest::{ChunkPayload, Manifest},
-        repo_info::{RepoAvailability, RepoInfo, UpdateInfo, UpdateType},
+        repo_info::{RepoInfo, UpdateInfo, UpdateType},
         snapshot::{Snapshot, SnapshotInfo},
     },
     ops::{
@@ -29,14 +27,15 @@ use crate::{
             self, DELETE_BATCH_SIZE, DeleteBackoff, DeleteConfig, DeleteError,
             MAX_REPORTED_DELETE_ERRORS,
         },
-        pointed_snapshots, reachable_snapshots_v2, reparent_and_prune,
+        ensure_repo_writable, pointed_snapshots, reachable_snapshots_v2,
+        reparent_and_prune, retry_on_repo_info_update,
         sharded_set::ChunkIdSet,
         walker::{ManifestConsumer, WalkLimits, walk_manifests},
     },
     repository::{RepositoryError, RepositoryErrorKind, RepositoryResult},
     storage::{self, ListInfo},
 };
-use icechunk_types::{ICResultExt as _, error::ICResultCtxExt as _};
+use icechunk_types::error::ICResultCtxExt as _;
 
 pub use crate::ops::{
     GCError, GCResult,
@@ -257,6 +256,30 @@ pub struct GCSummary {
     pub skipped_phases: Vec<String>,
 }
 
+impl GCSummary {
+    /// Fold one phase's report in, crediting its deletions to
+    /// `deleted_counter`. Returns whether the phase had failed deletes, which
+    /// gates the phases that depend on it.
+    fn absorb(
+        &mut self,
+        report: DeleteReport,
+        deleted_counter: fn(&mut GCSummary) -> &mut u64,
+    ) -> bool {
+        *deleted_counter(self) += report.deleted_objects;
+        self.bytes_deleted += report.deleted_bytes;
+        self.objects_failed_to_delete += report.failed_objects;
+        self.throttled_batches += report.throttled_batches;
+        for message in report.errors {
+            if self.delete_errors.len() < MAX_REPORTED_DELETE_ERRORS
+                && !self.delete_errors.contains(&message)
+            {
+                self.delete_errors.push(message);
+            }
+        }
+        report.failed_objects > 0
+    }
+}
+
 impl From<DeleteError> for GCError {
     fn from(err: DeleteError) -> Self {
         match err {
@@ -333,63 +356,16 @@ pub async fn garbage_collect(
     repo_update_retries: Option<&RepoUpdateRetryConfig>,
     num_updates_per_repo_info_file: u16,
 ) -> GCResult<GCSummary> {
-    if !asset_manager.can_write_to_storage().await? {
-        return Err(RepositoryErrorKind::ReadonlyStorage(
-            "Cannot garbage collect".to_string(),
-        ))
-        .capture()
-        .map_err(GCError::Repository)?;
-    }
-
-    // Check repo status (only available on IC2+)
-    if asset_manager.spec_version() >= SpecVersionBin::V2 {
-        let (repo_info, _) = asset_manager.fetch_repo_info().await?;
-        if repo_info.status()?.availability != RepoAvailability::Online {
-            return Err(RepositoryErrorKind::ReadonlyRepository(
-                "Cannot garbage collect".to_string(),
-            ))
-            .capture()
-            .map_err(GCError::Repository)?;
-        }
-    }
-
-    let default_retry_config = RepoUpdateRetryConfig::default();
-    let retry_config = repo_update_retries.unwrap_or(&default_retry_config).retries();
-
-    let gc = async || {
+    ensure_repo_writable(asset_manager.as_ref(), "garbage collect").await?;
+    retry_on_repo_info_update(repo_update_retries, "GC", async || {
         garbage_collect_one_attempt(
             Arc::clone(&asset_manager),
             config,
             num_updates_per_repo_info_file,
         )
         .await
-    };
-
-    let backoff = ExponentialBuilder::new()
-        .with_min_delay(Duration::from_millis(retry_config.initial_backoff_ms() as u64))
-        .with_max_delay(Duration::from_millis(retry_config.max_backoff_ms() as u64))
-        .with_max_times(retry_config.max_tries().get() as usize)
-        .with_jitter()
-        .build();
-
-    gc.retry(backoff)
-        .sleep(tokio::time::sleep)
-        .when(|e| {
-            matches!(
-                e,
-                GCError::Repository(RepositoryError {
-                    kind: RepositoryErrorKind::RepoInfoUpdated,
-                    ..
-                })
-            )
-        })
-            .notify(|_, _|  {
-
-                    info!(
-                        "Repo info object was updated while GC was running, retrying with backoff..."
-                    );}
-        )
-        .await
+    })
+    .await
 }
 
 #[instrument(skip_all)]
@@ -398,7 +374,6 @@ async fn garbage_collect_one_attempt(
     config: &GCConfig,
     num_updates_per_repo_info_file: u16,
 ) -> GCResult<GCSummary> {
-    // TODO: this function could have much more parallelism
     if !config.action_needed() {
         info!("No action requested");
         return Ok(GCSummary::default());
@@ -496,25 +471,6 @@ async fn garbage_collect_one_attempt(
     let mut summary = GCSummary::default();
     let mut earlier_phase_failed = false;
 
-    fn absorb_phase(
-        summary: &mut GCSummary,
-        report: DeleteReport,
-        deleted_counter: fn(&mut GCSummary) -> &mut u64,
-    ) -> bool {
-        *deleted_counter(summary) += report.deleted_objects;
-        summary.bytes_deleted += report.deleted_bytes;
-        summary.objects_failed_to_delete += report.failed_objects;
-        summary.throttled_batches += report.throttled_batches;
-        for message in report.errors {
-            if summary.delete_errors.len() < MAX_REPORTED_DELETE_ERRORS
-                && !summary.delete_errors.contains(&message)
-            {
-                summary.delete_errors.push(message);
-            }
-        }
-        report.failed_objects > 0
-    }
-
     info!("Starting deletes");
 
     let drop_snapshots = all_snaps.difference(&keep_snapshots).cloned().collect();
@@ -549,8 +505,7 @@ async fn garbage_collect_one_attempt(
                     .await?
             }
         };
-        earlier_phase_failed |=
-            absorb_phase(&mut summary, report, |s| &mut s.snapshots_deleted);
+        earlier_phase_failed |= summary.absorb(report, |s| &mut s.snapshots_deleted);
     }
     drop(drop_snapshots);
     drop(all_snaps);
@@ -582,7 +537,7 @@ async fn garbage_collect_one_attempt(
                 gc_transaction_logs(asset_manager.as_ref(), config, &keep_tx_logs)
                     .await?;
             earlier_phase_failed |=
-                absorb_phase(&mut summary, report, |s| &mut s.transaction_logs_deleted);
+                summary.absorb(report, |s| &mut s.transaction_logs_deleted);
         }
     }
     if config.deletes_manifests() {
@@ -591,8 +546,7 @@ async fn garbage_collect_one_attempt(
         } else {
             let report =
                 gc_manifests(asset_manager.as_ref(), config, &keep_manifests).await?;
-            earlier_phase_failed |=
-                absorb_phase(&mut summary, report, |s| &mut s.manifests_deleted);
+            earlier_phase_failed |= summary.absorb(report, |s| &mut s.manifests_deleted);
         }
     }
     if config.deletes_chunks() {
@@ -601,7 +555,7 @@ async fn garbage_collect_one_attempt(
         } else {
             asset_manager.clear_chunk_cache();
             let report = gc_chunks(asset_manager.as_ref(), config, &keep_chunks).await?;
-            absorb_phase(&mut summary, report, |s| &mut s.chunks_deleted);
+            summary.absorb(report, |s| &mut s.chunks_deleted);
         }
     }
 
