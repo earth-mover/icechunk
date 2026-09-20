@@ -125,6 +125,11 @@
 
                 RUSTFLAGS = "-W unreachable-pub -W bare-trait-objects";
 
+                # mold can't link cc-rs's LTO object for `alloca` (via criterion),
+                # which breaks `just compile-tests` and `just shuttle-test`.
+                # CI doesn't use this shell, so it never hit this.
+                CFLAGS = "-fno-lto";
+
                 # `just wasm-build`: absolute paths to unwrapped clang; wrapped
                 # and Apple clang inject host flags that break the wasm32 build.
                 WASI_SYSROOT = "${wasiSysroot}";
