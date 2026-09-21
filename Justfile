@@ -293,7 +293,7 @@ run-all-examples:
 [doc("Fast Rust pre-commit: format + lint + doctest (~3s)")]
 pre-commit-fast:
   just format
-  just lint
+  just lint -- -D warnings
   just doctest
 
 [group('lint')]
