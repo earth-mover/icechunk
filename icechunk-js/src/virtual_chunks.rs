@@ -43,8 +43,11 @@ pub struct JsHttpVirtualChunkResponse {
     pub last_modified: Option<u32>,
 }
 
-pub struct JsHttpVirtualChunkFetcher(
-    pub ThreadsafeFunction<JsHttpVirtualChunkRequest, Promise<JsHttpVirtualChunkResponse>>,
+pub(crate) struct JsHttpVirtualChunkFetcher(
+    pub(crate)  ThreadsafeFunction<
+        JsHttpVirtualChunkRequest,
+        Promise<JsHttpVirtualChunkResponse>,
+    >,
 );
 impl std::fmt::Debug for JsHttpVirtualChunkFetcher {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
