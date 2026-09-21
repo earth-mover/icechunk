@@ -87,10 +87,6 @@ config.storage = ic.storage.StorageSettings(
 
 Icechunk allows repos to contain [virtual chunks](./virtual.md). To allow for referencing these virtual chunks, you must configure the `virtual_chunk_containers` parameter to specify the storage locations and configurations for any virtual chunks. Each virtual chunk container is specified by a [`VirtualChunkContainer`](../reference/virtual.md#icechunk.virtual.VirtualChunkContainer) object which contains a url prefix, and a storage configuration. When a container is added to the settings, any virtual chunks with a url that starts with the configured prefix will use the storage configuration for that matching container.
 
-!!! note
-
-    Currently only `s3` compatible storage, `gcs`, `local_filesystem` and `http[s]` storages are supported for virtual chunk containers. Other storage backends such as `azure` are on the roadmap.
-
 #### Example
 
 For example, if we wanted to configure an icechunk repo to be able to contain virtual chunks from an `s3` bucket called `my-s3-bucket` in `us-east-1`, we would do the following:
