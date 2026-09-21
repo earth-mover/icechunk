@@ -13,6 +13,7 @@ classifiers = [
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
   "Programming Language :: Python :: 3.14",
+  "Programming Language :: Python :: Free Threading :: 2 - Beta",
 ]
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -26,8 +27,10 @@ dependencies = ["zarr>=3.1.0"]
 [dependency-groups]
 dev = [
   { include-group = "test" },
-  "mypy",
-  "ruff==0.15.14",
+  "mypy==2.3.1",
+  # same reason as [tool.pixi.feature.dev.pypi-dependencies] below
+  "zarr<3.2",
+  "ruff==0.16.4",
   "maturin>=1.7,<2.0",
   "maturin-import-hook>=0.3.0",
   "third-wheel",
@@ -156,7 +159,7 @@ exclude = ["tests/data_generation/generate_expired_repos.py"]
 [tool.ruff]
 target-version = "py312"
 line-length = 90
-extend-exclude = ["*.ipynb", "doc", "_typed_ops.pyi"]
+extend-exclude = ["*.ipynb", "*.md", "doc", "_typed_ops.pyi"]
 
 [tool.ruff.lint]
 extend-select = [
@@ -226,6 +229,11 @@ python = "~=3.12.0"
 
 [tool.pixi.feature.py314t.dependencies]
 python-freethreading = "~=3.14.0"
+
+# numcodecs declared free-threaded support in 0.17.0. Older releases re-enable
+# the GIL when zarr imports them, which serializes every thread.
+[tool.pixi.feature.py314t.pypi-dependencies]
+numcodecs = ">=0.17.0"
 
 [tool.pixi.feature.rustc.dependencies]
 rust = "~=1.98.0"

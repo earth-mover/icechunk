@@ -66,7 +66,7 @@ def test_detect_conflicts(repo: icechunk.Repository) -> None:
             assert e.conflicts[2].conflicted_chunks
             assert len(e.conflicts[2].conflicted_chunks) == 100
 
-            raise e
+            raise
 
 
 def test_rebase_no_conflicts(repo: icechunk.Repository) -> None:
@@ -176,7 +176,7 @@ def test_rebase_chunks_with_ours(
                 ),
             )
 
-            raise e
+            raise
 
     solver = icechunk.BasicConflictSolver(
         on_chunk_conflict=on_chunk_conflict,
@@ -244,7 +244,7 @@ async def test_rebase_async(any_spec_version: int | None) -> None:
             assert e.conflicts[0].conflict_type == icechunk.ConflictType.ChunkDoubleUpdate
             assert e.conflicts[0].conflicted_chunks
             assert len(e.conflicts[0].conflicted_chunks) == 100
-            raise e
+            raise
 
     # Test successful rebase_async with BasicConflictSolver
     solver = icechunk.BasicConflictSolver(

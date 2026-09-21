@@ -282,18 +282,18 @@ check-deps *args:
 
 [group('test')]
 [script]
-[doc("Run all Rust examples (skips limits_chunk_refs, large_manifests)")]
+[doc("Run all Rust examples (skips limits_chunk_refs, large_manifests, and gc_bench which needs RustFS)")]
 run-all-examples:
   # Allow failing examples, fix in the future
   set +e
 
-  for example in icechunk/examples/*.rs; do case "$example" in *limits_chunk_refs*|*large_manifests*) continue;; esac; cargo run --profile {{profile}} --example "$(basename "${example%.rs}")"; done
+  for example in icechunk/examples/*; do case "$example" in *limits_chunk_refs*|*large_manifests*|*gc_bench*) continue;; esac; cargo run --profile {{profile}} --example "$(basename "${example%.rs}")"; done
 
 [group('lint')]
 [doc("Fast Rust pre-commit: format + lint + doctest (~3s)")]
 pre-commit-fast:
   just format
-  just lint
+  just lint -- -D warnings
   just doctest
 
 [group('lint')]
@@ -334,6 +334,11 @@ chrome-trace *args:
   ICECHUNK_TRACE=chrome cargo bench --features logs --bench main -- {{args}} --test
 
 [group('bench')]
+[doc("GC/stats benchmark tool: just gc-bench build|gc|stats --name <n> ... (needs RustFS and toxiproxy: just contup)")]
+gc-bench *args:
+  cargo run --profile bench --features logs --example gc_bench -- "$@"
+
+[group('bench')]
 [doc("Compare pytest-benchmark results")]
 bench-compare *args:
   pytest-benchmark compare --group=group,func,param --sort=fullname --columns=median --name=short "$@"
@@ -341,7 +346,7 @@ bench-compare *args:
 [group('lint')]
 [doc("Run ruff formatter on Python code")]
 ruff-format *args:
-  ruff format "$@"
+  ruff format icechunk-python/ "$@"
 
 [group('lint')]
 [doc("Run ruff linter on Python code (pass `--fix` for auto-fix)")]

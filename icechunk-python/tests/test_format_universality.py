@@ -132,6 +132,7 @@ def flatbuf_mod() -> Generator[ModuleType]:
             ],
             capture_output=True,
             text=True,
+            check=False,
         )
         assert result.returncode == 0, (
             f"flatc failed:\nstdout: {result.stdout}\nstderr: {result.stderr}"

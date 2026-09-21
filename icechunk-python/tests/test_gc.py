@@ -274,9 +274,11 @@ async def test_gc_deletes_only_unreferenced_expired_tx_logs(use_async: bool) -> 
 
     # Bracket the threshold with gaps so prior commits land strictly before it
     # and /c strictly after, clear of created_at (ms) vs flushed_at truncation.
-    time.sleep(0.05)
+    # The sleeps gate wall-clock order against the object store timestamps,
+    # so keep them blocking.
+    time.sleep(0.05)  # noqa: ASYNC251
     threshold = cutoff_past_second_boundary()
-    time.sleep(0.05)
+    time.sleep(0.05)  # noqa: ASYNC251
 
     commit_group("main", "c")  # survives, re-parented to root
 

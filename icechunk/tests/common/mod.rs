@@ -1,13 +1,15 @@
 use std::{env, sync::Arc};
 
-use chrono::Utc;
+use chrono::{DateTime, TimeDelta, Utc};
+use futures::TryStreamExt as _;
 use icechunk::{
-    Storage,
+    Repository, Storage,
     config::{S3Credentials, S3Options, S3StaticCredentials},
+    format::SnapshotId,
     new_s3_storage,
     storage::{
-        Settings, mk_client, new_hf_storage, new_r2_storage, new_tigris_storage,
-        r2_storage, s3_storage, tigris_storage,
+        ListInfo, Settings, mk_client, new_hf_storage, new_r2_storage,
+        new_tigris_storage, r2_storage, s3_storage, tigris_storage,
     },
 };
 
@@ -376,4 +378,20 @@ pub(crate) fn tigris_real_store() -> Option<RealStore> {
 pub(crate) fn get_random_prefix(base: &str) -> String {
     let suffix: u64 = rand::random();
     format!("{}_{}_{}", base, Utc::now().timestamp_micros(), suffix)
+}
+
+/// Cutoff past every listed snapshot, from the store clock.
+/// The extra second covers whole-second listings.
+pub(crate) async fn cutoff_after_all_listed(
+    repo: &Repository,
+) -> Result<DateTime<Utc>, Box<dyn std::error::Error>> {
+    let listed = listed_snapshots(repo).await?;
+    let newest = listed.iter().map(|s| s.created_at).max().expect("snapshots listed");
+    Ok(newest + TimeDelta::seconds(1))
+}
+
+pub(crate) async fn listed_snapshots(
+    repo: &Repository,
+) -> Result<Vec<ListInfo<SnapshotId>>, Box<dyn std::error::Error>> {
+    Ok(repo.asset_manager().list_snapshots().await?.try_collect().await?)
 }

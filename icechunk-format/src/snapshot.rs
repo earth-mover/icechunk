@@ -813,29 +813,23 @@ impl Iterator for NodeIterator {
                 return None;
             }
 
-            let node: IcechunkResult<NodeSnapshot> =
-                nodes.get(self.next_index).try_into();
+            // Compare the stored path, and only deserialize the node on a match.
+            let node = nodes.get(self.next_index);
+            let node_path = node.path();
 
-            match node {
-                Ok(res) => {
-                    let node_path = res.path.to_string();
-                    if let Some(after_prefix) =
-                        node_path.strip_prefix(self.prefix.as_str())
-                        && (after_prefix.is_empty() || after_prefix.starts_with('/'))
-                    {
-                        self.next_index += 1;
-                        return Some(Ok(res));
-                    } else if node_path.as_str() > self.prefix.as_str()
-                        && !node_path.starts_with(self.prefix.as_str())
-                    {
-                        // We've passed all possible children of the prefix
-                        return None;
-                    } else {
-                        // Not a match but there may be matches later (foo-bar" comes before "foo/bar")
-                        self.next_index += 1;
-                    }
-                }
-                Err(err) => return Some(Err(err)),
+            if let Some(after_prefix) = node_path.strip_prefix(self.prefix.as_str())
+                && (after_prefix.is_empty() || after_prefix.starts_with('/'))
+            {
+                self.next_index += 1;
+                return Some(node.try_into().inject());
+            } else if node_path > self.prefix.as_str()
+                && !node_path.starts_with(self.prefix.as_str())
+            {
+                // We've passed all possible children of the prefix
+                return None;
+            } else {
+                // Not a match but there may be matches later (foo-bar" comes before "foo/bar")
+                self.next_index += 1;
             }
         }
     }

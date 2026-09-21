@@ -55,7 +55,7 @@ class Session:
 
     def __setstate__(self, state: object) -> None:
         if not isinstance(state, dict):
-            raise ValueError("Invalid state")
+            raise ValueError("Invalid state")  # noqa: TRY004
         self._session = PySession.from_bytes(state["_session"])
 
     @property
@@ -706,5 +706,5 @@ class ForkSession(Session):
 
     def __setstate__(self, state: object) -> None:
         if not isinstance(state, dict):
-            raise ValueError("Invalid state")
+            raise ValueError("Invalid state")  # noqa: TRY004
         self._session = PySession.from_bytes(state["_session"])
