@@ -36,9 +36,6 @@ concurrency:
 permissions:
   contents: read
 
-env:
-  PYTHON_INTERPRETER: "python3.12"
-
 defaults:
   run:
     working-directory: ./icechunk-python
@@ -153,6 +150,8 @@ jobs:
           - runner: ubuntu-latest
             target: aarch64
             manylinux: 2_28
+        # free-threaded CPython has no stable ABI, so 3.14t needs its own wheel
+        python: ['3.12', '3.14t']
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -172,7 +171,7 @@ jobs:
           done
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: '3.12'
+          python-version: ${{ matrix.python }}
       - name: Update version in Cargo.toml
         if: ${{ github.event_name == 'schedule' || inputs.use_git_version == true }}
         env:
@@ -186,13 +185,13 @@ jobs:
         with:
           working-directory: icechunk-python
           target: ${{ matrix.platform.target }}
-          args: --release --sdist --out dist -i ${{ env.PYTHON_INTERPRETER }}
+          args: --release --out dist -i ${{ matrix.python }}
           rust-toolchain: stable
           manylinux: ${{ matrix.platform.manylinux }} # https://github.com/PyO3/maturin-action/issues/245
       - name: Upload wheels
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: wheels-linux-${{ matrix.branch == 'main' && 'main' || 'support-v1.x' }}-${{ matrix.platform.target }}
+          name: wheels-linux-${{ matrix.branch == 'main' && 'main' || 'support-v1.x' }}-${{ matrix.platform.target }}-py${{ matrix.python }}
           path: icechunk-python/dist
 
   musllinux:
@@ -210,6 +209,8 @@ jobs:
             target: x86_64
           - runner: ubuntu-latest
             target: aarch64
+        # free-threaded CPython has no stable ABI, so 3.14t needs its own wheel
+        python: ['3.12', '3.14t']
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -218,7 +219,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: 3.x
+          python-version: ${{ matrix.python }}
       - name: Update version in Cargo.toml
         if: ${{ github.event_name == 'schedule' || inputs.use_git_version == true }}
         env:
@@ -232,13 +233,13 @@ jobs:
         with:
           working-directory: icechunk-python
           target: ${{ matrix.platform.target }}
-          args: --release --out dist -i ${{ env.PYTHON_INTERPRETER }}
+          args: --release --out dist -i ${{ matrix.python }}
           rust-toolchain: stable
           manylinux: musllinux_1_2
       - name: Upload wheels
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: wheels-musllinux-${{ matrix.branch == 'main' && 'main' || 'support-v1.x' }}-${{ matrix.platform.target }}
+          name: wheels-musllinux-${{ matrix.branch == 'main' && 'main' || 'support-v1.x' }}-${{ matrix.platform.target }}-py${{ matrix.python }}
           path: icechunk-python/dist
 
   windows:
@@ -261,6 +262,8 @@ jobs:
         platform:
           - runner: windows-latest
             target: x64
+        # free-threaded CPython has no stable ABI, so 3.14t needs its own wheel
+        python: ['3.12', '3.14t']
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -269,7 +272,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: 3.x
+          python-version: ${{ matrix.python }}
           architecture: ${{ matrix.platform.target }}
       - name: Update version in Cargo.toml
         if: ${{ github.event_name == 'schedule' || inputs.use_git_version == true }}
@@ -285,12 +288,12 @@ jobs:
         with:
           working-directory: icechunk-python
           target: ${{ matrix.platform.target }}
-          args: --release --out dist -i ${{ env.PYTHON_INTERPRETER }}
+          args: --release --out dist -i ${{ matrix.python }}
           rust-toolchain: stable
       - name: Upload wheels
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: wheels-windows-${{ matrix.branch == 'main' && 'main' || 'support-v1.x' }}-${{ matrix.platform.target }}
+          name: wheels-windows-${{ matrix.branch == 'main' && 'main' || 'support-v1.x' }}-${{ matrix.platform.target }}-py${{ matrix.python }}
           path: icechunk-python/dist
 
   macos:
@@ -308,6 +311,8 @@ jobs:
             target: x86_64
           - runner: macos-14
             target: aarch64
+        # free-threaded CPython has no stable ABI, so 3.14t needs its own wheel
+        python: ['3.12', '3.14t']
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -316,7 +321,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: 3.x
+          python-version: ${{ matrix.python }}
       - name: Update version in Cargo.toml
         if: ${{ github.event_name == 'schedule' || inputs.use_git_version == true }}
         env:
@@ -330,12 +335,12 @@ jobs:
         with:
           working-directory: icechunk-python
           target: ${{ matrix.platform.target }}
-          args: --release --out dist -i ${{ env.PYTHON_INTERPRETER }}
+          args: --release --out dist -i ${{ matrix.python }}
           rust-toolchain: stable
       - name: Upload wheels
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: wheels-macos-${{ matrix.branch == 'main' && 'main' || 'support-v1.x' }}-${{ matrix.platform.target }}
+          name: wheels-macos-${{ matrix.branch == 'main' && 'main' || 'support-v1.x' }}-${{ matrix.platform.target }}-py${{ matrix.python }}
           path: icechunk-python/dist
 
   sdist:

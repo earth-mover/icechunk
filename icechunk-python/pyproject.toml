@@ -13,6 +13,7 @@ classifiers = [
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
   "Programming Language :: Python :: 3.14",
+  "Programming Language :: Python :: Free Threading :: 2 - Beta",
 ]
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -228,6 +229,11 @@ python = "~=3.12.0"
 
 [tool.pixi.feature.py314t.dependencies]
 python-freethreading = "~=3.14.0"
+
+# numcodecs declared free-threaded support in 0.17.0. Older releases re-enable
+# the GIL when zarr imports them, which serializes every thread.
+[tool.pixi.feature.py314t.pypi-dependencies]
+numcodecs = ">=0.17.0"
 
 [tool.pixi.feature.rustc.dependencies]
 rust = "~=1.98.0"
