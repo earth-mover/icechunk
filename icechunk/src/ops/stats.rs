@@ -9,7 +9,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 use tokio::task;
-use tracing::trace;
+use tracing::{instrument, trace};
 
 use crate::{
     asset_manager::AssetManager,
@@ -179,6 +179,7 @@ async fn unique_manifest_infos<'a>(
 
 /// Compute the total size in bytes of all committed repo chunks.
 /// The total for each type of chunk is computed separately.
+#[instrument(skip_all)]
 pub async fn repo_chunks_storage(
     asset_manager: Arc<AssetManager>,
     max_snapshots_in_memory: NonZeroU16,
