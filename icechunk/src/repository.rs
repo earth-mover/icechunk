@@ -4407,6 +4407,7 @@ mod tests {
         session.commit("init").execute().await?;
 
         async fn do_distributed_writes(
+            repo: &Repository,
             session: &mut Session,
             array_path: &Path,
         ) -> Result<(), Box<dyn Error>> {
@@ -4451,13 +4452,26 @@ mod tests {
                 SessionErrorKind::MergeNotAllowed
             ));
 
-            // flushing a fork session succeeds (anonymous snapshot)
-            let flush_result =
-                s1.clone().commit("fork-flush").anonymous().execute().await;
-            assert!(flush_result.is_ok());
+            // a fork session cannot be flushed, its snapshot is not part of the repo
+            assert!(matches!(
+                s1.clone()
+                    .commit("fork-flush")
+                    .anonymous()
+                    .execute()
+                    .await
+                    .unwrap_err()
+                    .kind,
+                SessionErrorKind::CannotFlushForkSession
+            ));
 
             // merge that in to the base
             session.merge(s1).await?;
+
+            // once merged, the base session flushes the fork's writes to an
+            // anonymous snapshot that is part of the repo
+            let flushed =
+                session.clone().commit("fork-flush").anonymous().execute().await?;
+            assert!(repo.lookup_snapshot(&flushed).await.is_ok());
 
             for i in 0..2 {
                 let reader = session
@@ -4490,7 +4504,7 @@ mod tests {
                 Bytes::from_static(b"{}"),
             )
             .await?;
-        do_distributed_writes(&mut session, &array_path).await?;
+        do_distributed_writes(&repo, &mut session, &array_path).await?;
 
         // delete all chunks then do distributed writes
         let mut session = repo.writable_session("main").await?;
@@ -4499,7 +4513,7 @@ mod tests {
                 .set_chunk_ref(array_path.clone(), ChunkIndices(vec![i]), None)
                 .await?;
         }
-        do_distributed_writes(&mut session, &array_path).await?;
+        do_distributed_writes(&repo, &mut session, &array_path).await?;
 
         Ok(())
     }

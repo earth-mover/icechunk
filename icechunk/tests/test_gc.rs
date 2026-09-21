@@ -1767,3 +1767,102 @@ async fn test_gc_completes_with_one_decode_slot() -> Result<(), Box<dyn std::err
     assert_eq!(summary.snapshots_deleted, 0);
     Ok(())
 }
+
+/// Forks write a snapshot only to materialize the base session's uncommitted
+/// changes, and that snapshot is never registered in the repo info: it is
+/// unreachable garbage as soon as the fork is merged back. GC doesn't see it
+/// among the repo's snapshots, it finds it by listing the object store and
+/// deletes it once it's older than the cutoff.
+#[tokio_test]
+async fn test_fork_snapshots_are_unregistered() -> Result<(), Box<dyn std::error::Error>>
+{
+    let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+    let repo = Repository::create(
+        None,
+        Arc::clone(&storage),
+        HashMap::new(),
+        Some(SpecVersionBin::V2),
+        true,
+    )
+    .await?;
+    let asset_manager = Arc::clone(repo.asset_manager());
+
+    let array_path: Path = "/array".to_string().try_into().unwrap();
+    let mut session = repo.writable_session("main").await?;
+    session
+        .add_array(
+            array_path.clone(),
+            ArrayShape::new(vec![(4, 4)]).unwrap(),
+            Some(vec!["t".into()]),
+            Bytes::from_static(b"{}"),
+        )
+        .await?;
+    let init = session.commit("initialized").execute().await?;
+
+    // a session with no changes forks onto its own snapshot, writing nothing
+    let mut session = repo.writable_session("main").await?;
+    let listed_before = listed_snapshots(&repo).await?.len();
+    let fork = session.fork().await?;
+    assert_eq!(fork.snapshot_id(), &init);
+    assert_eq!(listed_snapshots(&repo).await?.len(), listed_before);
+
+    // a dirty session forks onto a new snapshot that records its changes
+    session
+        .set_chunk_ref(
+            array_path.clone(),
+            ChunkIndices(vec![0]),
+            Some(ChunkPayload::Inline("base".into())),
+        )
+        .await?;
+    let mut fork = session.fork().await?;
+    let fork_snap = fork.snapshot_id().clone();
+    assert_ne!(fork_snap, init);
+
+    // the fork reads the base session's uncommitted changes from it ...
+    let reader = fork
+        .get_chunk_reader(&array_path, &ChunkIndices(vec![0]), &ByteRange::ALL)
+        .await?;
+    assert_eq!(get_chunk(reader).await?, Some("base".into()));
+    // ... but it's not part of the repo
+    let (repo_info, _) = asset_manager.fetch_repo_info().await?;
+    assert!(repo_info.find_snapshot(&fork_snap).is_err());
+    assert!(repo.ancestry(&VersionInfo::SnapshotId(fork_snap.clone())).await.is_err());
+    assert!(
+        repo.readonly_session(&VersionInfo::SnapshotId(fork_snap.clone())).await.is_err()
+    );
+
+    fork.set_chunk_ref(
+        array_path.clone(),
+        ChunkIndices(vec![1]),
+        Some(ChunkPayload::Inline("worker".into())),
+    )
+    .await?;
+    session.merge(fork).await?;
+    session.commit("merged").execute().await?;
+
+    // GC finds the fork snapshot by listing and deletes it, the repo is untouched
+    let cutoff = cutoff_after_all_listed(&repo).await?;
+    let gc_config = GCConfig::clean_all(
+        cutoff,
+        cutoff,
+        None,
+        NonZeroU16::new(50).unwrap(),
+        NonZeroUsize::new(512 * 1024 * 1024).unwrap(),
+        NonZeroU16::new(500).unwrap(),
+        false,
+    );
+    let summary =
+        garbage_collect(Arc::clone(&asset_manager), &gc_config, None, 100).await?;
+    assert_eq!(summary.snapshots_deleted, 1);
+    assert!(listed_snapshots(&repo).await?.iter().all(|s| s.id != fork_snap));
+
+    let session =
+        repo.readonly_session(&VersionInfo::BranchTipRef("main".to_string())).await?;
+    for (idx, expected) in [(0, "base"), (1, "worker")] {
+        let reader = session
+            .get_chunk_reader(&array_path, &ChunkIndices(vec![idx]), &ByteRange::ALL)
+            .await?;
+        assert_eq!(get_chunk(reader).await?, Some(expected.into()));
+    }
+    Ok(())
+}

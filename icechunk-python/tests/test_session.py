@@ -65,6 +65,9 @@ async def test_session_fork(use_async: bool, any_spec_version: int | None) -> No
         assert fork.has_uncommitted_changes
         with pytest.raises(IcechunkError, match="cannot commit"):
             session.commit("foo")
+        # forks dont allow flushes either, their snapshot is not part of the repo
+        with pytest.raises(IcechunkError, match="cannot flush a forked session"):
+            fork.flush("foo")
         if use_async:
             await session.merge_async(fork)
             await session.commit_async("foo")
