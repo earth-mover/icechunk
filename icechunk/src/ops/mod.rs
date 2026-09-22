@@ -18,6 +18,26 @@ use crate::{
 };
 use icechunk_types::error::ICResultCtxExt as _;
 
+/// Aborts the task it holds when dropped, so a cancelled or early-returning
+/// caller takes its background task down with it on every path.
+pub(crate) struct AbortOnDrop<T>(pub(crate) tokio::task::JoinHandle<T>);
+
+impl<T> AbortOnDrop<T> {
+    /// Abort the task and wait for it to actually stop. Dropping only requests
+    /// the abort; callers that need whatever the task captured to be dropped
+    /// first must wait.
+    pub(crate) async fn abort_and_wait(&mut self) {
+        self.0.abort();
+        let _ = (&mut self.0).await;
+    }
+}
+
+impl<T> Drop for AbortOnDrop<T> {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
 /// Expire old snapshots beyond a threshold.
 pub mod expiration_v1;
 /// Garbage collection to remove unreferenced data.

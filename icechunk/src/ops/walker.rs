@@ -15,7 +15,11 @@ use std::{
     collections::HashSet,
     num::{NonZeroU16, NonZeroUsize},
     pin::pin,
-    sync::Arc,
+    sync::{
+        Arc, Weak,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::{Duration, Instant},
 };
 
 use futures::{Stream, StreamExt as _};
@@ -23,7 +27,7 @@ use tokio::{
     sync::{Mutex, OwnedSemaphorePermit, Semaphore, mpsc},
     task::{AbortHandle, JoinSet},
 };
-use tracing::instrument;
+use tracing::{info, instrument};
 
 use crate::{
     asset_manager::{AssetManager, decode_manifest},
@@ -32,6 +36,7 @@ use crate::{
         manifest::Manifest,
         snapshot::{ManifestFileInfo, Snapshot},
     },
+    ops::AbortOnDrop,
     repository::{RepositoryError, RepositoryErrorKind, RepositoryResult},
 };
 use icechunk_types::{ICResultExt as _, error::ICResultCtxExt as _};
@@ -44,6 +49,70 @@ pub trait ManifestConsumer: Send + Sync + 'static {
     fn consume(&self, manifest: &Manifest) -> RepositoryResult<Self::Output>;
     /// Runs on the single fold task, once per manifest, in completion order.
     fn fold(acc: &mut Self::Acc, output: Self::Output);
+    /// A label and value to include in the walk's progress logs, if the
+    /// consumer has one worth watching. Called once per report, not per
+    /// manifest, so an implementation may take locks.
+    fn progress(&self) -> Option<(&'static str, u64)> {
+        None
+    }
+}
+
+/// How often a long-running walker logs its progress.
+pub(crate) const PROGRESS_INTERVAL: Duration = Duration::from_secs(10);
+
+const MIB: f64 = (1024 * 1024) as f64;
+
+fn round1(value: f64) -> f64 {
+    (value * 10.0).round() / 10.0
+}
+
+fn mib(bytes: u64) -> f64 {
+    round1(bytes as f64 / MIB)
+}
+
+/// MiB/s over a window, `0.0` for a window of no time.
+fn rate_mib_per_s(bytes_delta: u64, secs: f64) -> f64 {
+    if secs <= 0.0 { 0.0 } else { round1(bytes_delta as f64 / MIB / secs) }
+}
+
+/// A snapshot of [`WalkProgress`], as plain numbers.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct WalkStats {
+    /// Distinct snapshots the input stream yielded.
+    pub snapshots_seen: u64,
+    /// Distinct manifest ids the feeder forwarded.
+    pub manifests_seen: u64,
+    /// Their `size_bytes`, summed.
+    pub bytes_seen: u64,
+    pub manifests_fetched: u64,
+    /// Compressed bytes actually read from storage.
+    pub bytes_fetched: u64,
+    pub manifests_consumed: u64,
+}
+
+/// Live counters shared by the feeder, the fetch workers and the decode
+/// workers, read by the progress reporter.
+#[derive(Debug, Default)]
+struct WalkProgress {
+    snapshots_seen: AtomicU64,
+    manifests_seen: AtomicU64,
+    bytes_seen: AtomicU64,
+    manifests_fetched: AtomicU64,
+    bytes_fetched: AtomicU64,
+    manifests_consumed: AtomicU64,
+}
+
+impl WalkProgress {
+    fn read(&self) -> WalkStats {
+        WalkStats {
+            snapshots_seen: self.snapshots_seen.load(Ordering::Relaxed),
+            manifests_seen: self.manifests_seen.load(Ordering::Relaxed),
+            bytes_seen: self.bytes_seen.load(Ordering::Relaxed),
+            manifests_fetched: self.manifests_fetched.load(Ordering::Relaxed),
+            bytes_fetched: self.bytes_fetched.load(Ordering::Relaxed),
+            manifests_consumed: self.manifests_consumed.load(Ordering::Relaxed),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -61,6 +130,8 @@ pub struct WalkResult<Acc> {
     pub snapshots: HashSet<SnapshotId>,
     /// Every manifest referenced by those snapshots; each was fetched once.
     pub manifests: HashSet<ManifestId>,
+    /// The walk's final counters.
+    pub progress: WalkStats,
 }
 
 const KIB: usize = 1024;
@@ -100,6 +171,7 @@ async fn fetch_worker(
     budget: Arc<Semaphore>,
     total_permits: u32,
     tx: mpsc::Sender<Fetched>,
+    progress: Arc<WalkProgress>,
 ) -> RepositoryResult<()> {
     while let Some(info) = recv_shared(&rx).await {
         let permit = Arc::clone(&budget)
@@ -107,6 +179,8 @@ async fn fetch_worker(
             .await
             .capture()?;
         let bytes = asset_manager.fetch_manifest_bytes(&info.id, info.size_bytes).await?;
+        progress.manifests_fetched.fetch_add(1, Ordering::Relaxed);
+        progress.bytes_fetched.fetch_add(bytes.len() as u64, Ordering::Relaxed);
         if tx.send(Fetched { bytes, _permit: permit }).await.is_err() {
             // receivers are gone because a decode worker failed; that error
             // is reported through the JoinSet, not from here
@@ -125,6 +199,7 @@ async fn decode_worker<C: ManifestConsumer>(
     consumer: Arc<C>,
     rx: SharedRx<Fetched>,
     tx: mpsc::Sender<C::Output>,
+    progress: Arc<WalkProgress>,
 ) -> RepositoryResult<()> {
     while let Some(fetched) = recv_shared(&rx).await {
         let consumer = Arc::clone(&consumer);
@@ -139,6 +214,7 @@ async fn decode_worker<C: ManifestConsumer>(
         })
         .await
         .capture()??;
+        progress.manifests_consumed.fetch_add(1, Ordering::Relaxed);
         if tx.send(output).await.is_err() {
             return Ok(());
         }
@@ -175,6 +251,7 @@ async fn feed<S>(
     workers: &mut JoinSet<RepositoryResult<()>>,
     seen_snapshots: &mut HashSet<SnapshotId>,
     seen_manifests: &mut HashSet<ManifestId>,
+    progress: &WalkProgress,
 ) -> FeedOutcome
 where
     S: Stream<Item = RepositoryResult<Arc<Snapshot>>>,
@@ -188,6 +265,7 @@ where
         if !seen_snapshots.insert(snapshot.id()) {
             continue;
         }
+        progress.snapshots_seen.fetch_add(1, Ordering::Relaxed);
         for info in snapshot.manifest_files() {
             let info = match info.inject() {
                 Ok(info) => info,
@@ -196,6 +274,8 @@ where
             if !seen_manifests.insert(info.id.clone()) {
                 continue;
             }
+            progress.manifests_seen.fetch_add(1, Ordering::Relaxed);
+            progress.bytes_seen.fetch_add(info.size_bytes, Ordering::Relaxed);
             tokio::select! {
                 // poll the arms in order, not at random: a finished worker wins over a send
                 biased;
@@ -224,6 +304,51 @@ where
         }
     }
     FeedOutcome::Done
+}
+
+/// Log the walk's counters every [`PROGRESS_INTERVAL`], skipping ticks where
+/// nothing moved. Runs until aborted by [`walk_manifests`].
+async fn report_progress<C: ManifestConsumer>(
+    progress: Arc<WalkProgress>,
+    // a `Weak` so the reporter never keeps the consumer alive: callers unwrap
+    // the consumer's `Arc` as soon as the walk returns
+    consumer: Weak<C>,
+    started: Instant,
+) {
+    let mut ticker = tokio::time::interval(PROGRESS_INTERVAL);
+    // the first tick completes immediately
+    ticker.tick().await;
+    let mut last = WalkStats::default();
+    let mut last_at = started;
+    loop {
+        ticker.tick().await;
+        let now = progress.read();
+        if now == last {
+            continue;
+        }
+        let window = last_at.elapsed().as_secs_f64();
+        // tracing field names are static, so metric needs to be a value
+        let metric = consumer.upgrade().and_then(|c| c.progress());
+        info!(
+            snapshots = now.snapshots_seen,
+            manifests_seen = now.manifests_seen,
+            manifests_fetched = now.manifests_fetched,
+            manifests_consumed = now.manifests_consumed,
+            in_flight = now.manifests_fetched - now.manifests_consumed,
+            seen_mib = mib(now.bytes_seen),
+            fetched_mib = mib(now.bytes_fetched),
+            mib_per_s = rate_mib_per_s(
+                now.bytes_fetched.saturating_sub(last.bytes_fetched),
+                window,
+            ),
+            elapsed_s = round1(started.elapsed().as_secs_f64()),
+            consumer_metric = metric.map(|(label, _)| label),
+            consumer_value = metric.map(|(_, value)| value),
+            "manifest walk progress"
+        );
+        last = now;
+        last_at = Instant::now();
+    }
 }
 
 /// Visit every manifest referenced by the `snapshots` stream once, running
@@ -256,6 +381,15 @@ pub async fn walk_manifests<C: ManifestConsumer>(
     let infos_rx: SharedRx<ManifestFileInfo> = Arc::new(Mutex::new(infos_rx));
     let bytes_rx: SharedRx<Fetched> = Arc::new(Mutex::new(bytes_rx));
 
+    let progress = Arc::new(WalkProgress::default());
+    let started = Instant::now();
+    // held in a guard so every return path below, success or error, aborts it
+    let mut reporter = AbortOnDrop(tokio::spawn(report_progress(
+        Arc::clone(&progress),
+        Arc::downgrade(&consumer),
+        started,
+    )));
+
     let mut workers: JoinSet<RepositoryResult<()>> = JoinSet::new();
     let mut aborts: Vec<AbortHandle> = Vec::with_capacity(fetchers + decoders);
     for _ in 0..fetchers {
@@ -265,6 +399,7 @@ pub async fn walk_manifests<C: ManifestConsumer>(
             Arc::clone(&budget),
             total_permits,
             bytes_tx.clone(),
+            Arc::clone(&progress),
         )));
     }
     drop(bytes_tx);
@@ -273,6 +408,7 @@ pub async fn walk_manifests<C: ManifestConsumer>(
             Arc::clone(&consumer),
             Arc::clone(&bytes_rx),
             out_tx.clone(),
+            Arc::clone(&progress),
         )));
     }
     drop(out_tx);
@@ -299,6 +435,7 @@ pub async fn walk_manifests<C: ManifestConsumer>(
         &mut workers,
         &mut seen_snapshots,
         &mut seen_manifests,
+        &progress,
     )
     .await;
     drop(infos_tx);
@@ -336,7 +473,27 @@ pub async fn walk_manifests<C: ManifestConsumer>(
     }
 
     let acc = folder.await.capture()?;
-    Ok(WalkResult { acc, snapshots: seen_snapshots, manifests: seen_manifests })
+    // make sure the reporter has stopped
+    reporter.abort_and_wait().await;
+    let stats = progress.read();
+    let elapsed_s = started.elapsed().as_secs_f64();
+    info!(
+        snapshots = stats.snapshots_seen,
+        manifests_seen = stats.manifests_seen,
+        manifests_fetched = stats.manifests_fetched,
+        manifests_consumed = stats.manifests_consumed,
+        seen_mib = mib(stats.bytes_seen),
+        fetched_mib = mib(stats.bytes_fetched),
+        mib_per_s = rate_mib_per_s(stats.bytes_fetched, elapsed_s),
+        elapsed_s = round1(elapsed_s),
+        "manifest walk done"
+    );
+    Ok(WalkResult {
+        acc,
+        snapshots: seen_snapshots,
+        manifests: seen_manifests,
+        progress: stats,
+    })
 }
 
 #[cfg(test)]
@@ -491,6 +648,19 @@ mod tests {
         assert_eq!(result.acc.len(), expected.len(), "a manifest was consumed twice");
         // 5 group commits + initial + 1 array commit + 3 chunk commits
         assert_eq!(result.snapshots.len(), 10);
+
+        // the live counters must land exactly on the walk's own results
+        let stats = result.progress;
+        assert_eq!(stats.snapshots_seen, result.snapshots.len() as u64);
+        assert_eq!(stats.manifests_seen, expected.len() as u64);
+        assert_eq!(stats.manifests_fetched, expected.len() as u64);
+        assert_eq!(stats.manifests_consumed, expected.len() as u64);
+        assert!(stats.bytes_seen > 0);
+        assert_eq!(
+            stats.bytes_fetched, stats.bytes_seen,
+            "every manifest is read whole, so fetched bytes match the sizes the \
+             snapshots advertised"
+        );
 
         // distinct paths: a large object can be read as several ranges, but
         // every manifest path must appear, and each id appears once in the
@@ -725,5 +895,18 @@ mod tests {
             total_permits(NonZeroUsize::new(512 * 1024 * 1024).unwrap()),
             512 * 1024
         );
+    }
+
+    #[test]
+    fn progress_rate_arithmetic() {
+        // 10 MiB over 2 s
+        assert_eq!(rate_mib_per_s(20 * 1024 * 1024, 2.0), 10.0);
+        assert_eq!(rate_mib_per_s(1024 * 1024, 1.0), 1.0);
+        assert_eq!(rate_mib_per_s(0, 10.0), 0.0);
+        // a window of no time never divides by zero
+        assert_eq!(rate_mib_per_s(1024 * 1024, 0.0), 0.0);
+        assert_eq!(rate_mib_per_s(1024 * 1024, -1.0), 0.0);
+        // sub-second windows scale up
+        assert_eq!(rate_mib_per_s(1024 * 1024, 0.5), 2.0);
     }
 }

@@ -26,18 +26,55 @@ const TRACKED: &[&str] = &[
     "gc_chunks",
     "pointed_snapshots_v2",
     "repo_chunks_storage",
+    "walk_manifests",
 ];
+
+/// The walker's own completion event, whose fields the report prints.
+const WALK_DONE: &str = "manifest walk done";
 
 /// span name -> (times closed, total wall time)
 #[derive(Debug, Default)]
 pub(crate) struct PhaseTimes {
     spans: Mutex<BTreeMap<&'static str, (u64, Duration)>>,
+    /// Fields of the last [`WALK_DONE`] event, as rendered strings. Taken from
+    /// the event rather than the walk's result types, which stay free of it.
+    walk: Mutex<BTreeMap<&'static str, String>>,
 }
 
 struct Created(Instant);
 
 struct PhaseLayer {
     times: Arc<PhaseTimes>,
+}
+
+/// Renders every field of an event into a map, whatever its type.
+#[derive(Default)]
+struct FieldGrab(BTreeMap<&'static str, String>);
+
+impl tracing::field::Visit for FieldGrab {
+    fn record_u64(&mut self, field: &tracing::field::Field, value: u64) {
+        self.0.insert(field.name(), value.to_string());
+    }
+
+    fn record_i64(&mut self, field: &tracing::field::Field, value: i64) {
+        self.0.insert(field.name(), value.to_string());
+    }
+
+    fn record_f64(&mut self, field: &tracing::field::Field, value: f64) {
+        self.0.insert(field.name(), format!("{value:.2}"));
+    }
+
+    fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+        self.0.insert(field.name(), value.to_string());
+    }
+
+    fn record_debug(
+        &mut self,
+        field: &tracing::field::Field,
+        value: &dyn std::fmt::Debug,
+    ) {
+        self.0.insert(field.name(), format!("{value:?}"));
+    }
 }
 
 /// Wall time from span creation to close. `on_enter`/`on_exit` would measure
@@ -69,6 +106,16 @@ where
             entry.1 += start.elapsed();
         }
     }
+
+    fn on_event(&self, event: &tracing::Event<'_>, _ctx: Context<'_, S>) {
+        let mut grab = FieldGrab::default();
+        event.record(&mut grab);
+        if grab.0.get("message").map(String::as_str) != Some(WALK_DONE) {
+            return;
+        }
+        grab.0.remove("message");
+        *self.times.walk.lock().unwrap_or_else(|p| p.into_inner()) = grab.0;
+    }
 }
 
 /// Install the global subscriber: the phase layer plus stderr logs filtered by
@@ -96,7 +143,7 @@ fn peak_rss_mib() -> Option<u64> {
 }
 
 /// (user, system) CPU seconds from `/proc/self/stat`; `None` off Linux.
-fn cpu_seconds() -> Option<(f64, f64)> {
+pub(crate) fn cpu_seconds() -> Option<(f64, f64)> {
     let stat = std::fs::read_to_string("/proc/self/stat").ok()?;
     // comm may contain spaces; fields start after the closing paren
     let rest = &stat[stat.rfind(')')? + 1..];
@@ -129,35 +176,52 @@ pub(crate) fn print_report(
         }
     }
 
+    let walk = phases.walk.lock().unwrap_or_else(|p| p.into_inner());
+    if !walk.is_empty() {
+        println!();
+        println!("{:<32} {:>14}", "manifest walk", "value");
+        for (field, value) in walk.iter() {
+            println!("{field:<32} {value:>14}");
+        }
+    }
+
     println!();
     println!(
-        "{:<36} {:>10} {:>12} {:>12} {:>10}",
-        "operation", "requests", "MiB read", "MiB written", "deleted"
+        "{:<36} {:>10} {:>12} {:>12} {:>10} {:>12}",
+        "operation", "requests", "MiB read", "MiB written", "deleted", "keys listed"
     );
     for (op, stats) in &metering.per_op {
         println!(
-            "{op:<36} {:>10} {:>12.2} {:>12.2} {:>10}",
+            "{op:<36} {:>10} {:>12.2} {:>12.2} {:>10} {:>12}",
             stats.requests,
             mib(stats.bytes_read),
             mib(stats.bytes_written),
-            stats.objects_deleted
+            stats.objects_deleted,
+            stats.keys_listed
         );
     }
 
     println!();
-    println!("{:>6} {:>12} {:>10}", "second", "MiB read", "requests");
+    println!(
+        "{:>6} {:>12} {:>10} {:>12}",
+        "second", "MiB read", "requests", "keys listed"
+    );
     let mut idle = 0usize;
     for (second, stats) in metering.read_timeline.iter().enumerate() {
-        if stats.bytes_read == 0 {
+        if stats.bytes_read == 0 && stats.keys_listed == 0 {
             idle += 1;
         }
         println!(
-            "{second:>6} {:>12.2} {:>10}",
+            "{second:>6} {:>12.2} {:>10} {:>12}",
             mib(stats.bytes_read),
-            stats.requests_started
+            stats.requests_started,
+            stats.keys_listed
         );
     }
-    println!("idle seconds (no bytes read): {idle} of {}", metering.read_timeline.len());
+    println!(
+        "idle seconds (no bytes read, no keys listed): {idle} of {}",
+        metering.read_timeline.len()
+    );
 
     println!();
     match peak_rss_mib() {

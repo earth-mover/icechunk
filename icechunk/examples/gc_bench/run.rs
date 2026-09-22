@@ -97,6 +97,9 @@ pub(crate) async fn gc(args: GcArgs) -> Result<(), BoxError> {
         fetches,
         deletes,
         delete_failures,
+        args.max_concurrent_listings
+            .map(|n| non_zero_u16(n, "--max-concurrent-listings"))
+            .transpose()?,
         !args.delete,
     );
     println!(

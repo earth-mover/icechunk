@@ -15,9 +15,13 @@ use quick_cache::{Weighter, sync::Cache};
 use serde::{Deserialize, Serialize};
 use std::sync::{LazyLock, RwLock};
 use std::{
+    num::NonZeroU16,
     ops::Range,
     pin::Pin,
-    sync::{Arc, atomic::AtomicBool},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Duration,
 };
 
@@ -42,9 +46,8 @@ use crate::{
     config::CachingConfig,
     format::{
         CHUNKS_FILE_PATH, CONFIG_FILE_PATH, ChunkId, ChunkOffset, IcechunkFormatError,
-        IcechunkFormatErrorKind, MANIFESTS_FILE_PATH, ManifestId, OBJECT_ID_FIRST_CHARS,
-        OVERWRITTEN_FILES_PATH, REPO_INFO_FILE_PATH, SNAPSHOTS_FILE_PATH, SnapshotId,
-        TRANSACTION_LOGS_FILE_PATH,
+        IcechunkFormatErrorKind, MANIFESTS_FILE_PATH, ManifestId, OVERWRITTEN_FILES_PATH,
+        REPO_INFO_FILE_PATH, SNAPSHOTS_FILE_PATH, SnapshotId, TRANSACTION_LOGS_FILE_PATH,
         format_constants::{
             self, CompressionAlgorithmBin, FileHeader, FileTypeBin, SpecVersionBin,
             parse_file_header,
@@ -60,7 +63,9 @@ use crate::{
     },
     private,
     repository::{RepositoryError, RepositoryErrorKind, RepositoryResult},
-    storage::{self, ListInfo, StorageErrorKind, VersionInfo, VersionedUpdateResult},
+    storage::{
+        self, ListInfo, StorageErrorKind, VersionInfo, VersionedUpdateResult, listing,
+    },
 };
 
 /// Reads and writes Icechunk assets with caching and concurrency control.
@@ -396,13 +401,12 @@ impl AssetManager {
         let capacity = self.num_chunk_refs;
         // TODO: we may need a config to silence this warning
         if manifest_weight as u64 > capacity / 2
-            && !self.manifest_cache_size_warned.load(std::sync::atomic::Ordering::Relaxed)
+            && !self.manifest_cache_size_warned.load(Ordering::Relaxed)
         {
             warn!(
                 "A manifest with {manifest_weight} chunk references is being loaded into the cache that can only keep {capacity} references. Consider increasing the size of the manifest cache using the num_chunk_refs field in CachingConfig"
             );
-            self.manifest_cache_size_warned
-                .store(true, std::sync::atomic::Ordering::Relaxed);
+            self.manifest_cache_size_warned.store(true, Ordering::Relaxed);
         }
     }
 
@@ -411,13 +415,12 @@ impl AssetManager {
         let capacity = self.num_snapshot_nodes;
         // TODO: we may need a config to silence this warning
         if snap_weight as u64 > capacity / 5
-            && !self.snapshot_cache_size_warned.load(std::sync::atomic::Ordering::Relaxed)
+            && !self.snapshot_cache_size_warned.load(Ordering::Relaxed)
         {
             warn!(
                 "A snapshot with {snap_weight} nodes is being loaded into the cache that can only keep {capacity} nodes. Consider increasing the size of the snapshot cache using the num_snapshot_nodes field in CachingConfig"
             );
-            self.snapshot_cache_size_warned
-                .store(true, std::sync::atomic::Ordering::Relaxed);
+            self.snapshot_cache_size_warned.store(true, Ordering::Relaxed);
         }
     }
 
@@ -437,6 +440,7 @@ impl AssetManager {
         manifest_id: &ManifestId,
         size_bytes: u64,
     ) -> RepositoryResult<Vec<u8>> {
+        debug!(%manifest_id, size_bytes, "Downloading manifest");
         let path = format!("{MANIFESTS_FILE_PATH}/{manifest_id}");
         let range = 0..size_bytes;
         let range = if size_bytes > 0 { Some(&range) } else { None };
@@ -1064,49 +1068,78 @@ impl AssetManager {
     pub async fn list_chunks(
         &self,
     ) -> RepositoryResult<BoxStream<'_, RepositoryResult<ListInfo<ChunkId>>>> {
-        self.list_object_ids(CHUNKS_FILE_PATH).await
+        self.list_chunks_with_concurrency(listing::default_list_concurrency()).await
+    }
+
+    #[instrument(skip(self))]
+    pub async fn list_chunks_with_concurrency(
+        &self,
+        concurrency: NonZeroU16,
+    ) -> RepositoryResult<BoxStream<'_, RepositoryResult<ListInfo<ChunkId>>>> {
+        self.list_object_ids(CHUNKS_FILE_PATH, concurrency).await
     }
 
     #[instrument(skip(self))]
     pub async fn list_manifests(
         &self,
     ) -> RepositoryResult<BoxStream<'_, RepositoryResult<ListInfo<ManifestId>>>> {
-        self.list_object_ids(MANIFESTS_FILE_PATH).await
+        self.list_manifests_with_concurrency(listing::default_list_concurrency()).await
+    }
+
+    #[instrument(skip(self))]
+    pub async fn list_manifests_with_concurrency(
+        &self,
+        concurrency: NonZeroU16,
+    ) -> RepositoryResult<BoxStream<'_, RepositoryResult<ListInfo<ManifestId>>>> {
+        self.list_object_ids(MANIFESTS_FILE_PATH, concurrency).await
     }
 
     #[instrument(skip(self))]
     pub async fn list_snapshots(
         &self,
     ) -> RepositoryResult<BoxStream<'_, RepositoryResult<ListInfo<SnapshotId>>>> {
-        self.list_object_ids(SNAPSHOTS_FILE_PATH).await
+        self.list_snapshots_with_concurrency(listing::default_list_concurrency()).await
+    }
+
+    #[instrument(skip(self))]
+    pub async fn list_snapshots_with_concurrency(
+        &self,
+        concurrency: NonZeroU16,
+    ) -> RepositoryResult<BoxStream<'_, RepositoryResult<ListInfo<SnapshotId>>>> {
+        self.list_object_ids(SNAPSHOTS_FILE_PATH, concurrency).await
     }
 
     #[instrument(skip(self))]
     pub async fn list_transaction_logs(
         &self,
     ) -> RepositoryResult<BoxStream<'_, RepositoryResult<ListInfo<SnapshotId>>>> {
-        self.list_object_ids(TRANSACTION_LOGS_FILE_PATH).await
+        self.list_transaction_logs_with_concurrency(listing::default_list_concurrency())
+            .await
     }
 
-    /// Unordered: storage can list each possible first character of the id concurrently.
+    #[instrument(skip(self))]
+    pub async fn list_transaction_logs_with_concurrency(
+        &self,
+        concurrency: NonZeroU16,
+    ) -> RepositoryResult<BoxStream<'_, RepositoryResult<ListInfo<SnapshotId>>>> {
+        self.list_object_ids(TRANSACTION_LOGS_FILE_PATH, concurrency).await
+    }
+
     async fn list_object_ids<'a, Id>(
         &'a self,
         prefix: &str,
+        concurrency: NonZeroU16,
     ) -> RepositoryResult<BoxStream<'a, RepositoryResult<ListInfo<Id>>>>
     where
-        Id: for<'b> TryFrom<&'b str> + Send + std::fmt::Debug + 'a,
+        Id: for<'b> TryFrom<&'b str> + Send + std::fmt::Debug + 'static,
     {
-        Ok(translate_list_infos(
-            self.storage
-                .list_objects_with_id_first_chars(
-                    &self.storage_settings,
-                    prefix,
-                    &OBJECT_ID_FIRST_CHARS,
-                )
-                .await
-                .inject()?
-                .map(|r| r.inject()),
-        ))
+        listing::list_object_ids(
+            &self.storage,
+            &self.storage_settings,
+            prefix,
+            concurrency,
+        )
+        .await
     }
 
     pub async fn can_write_to_storage(&self) -> RepositoryResult<bool> {
@@ -1362,6 +1395,8 @@ where
     F: FnOnce(SpecVersionBin, Vec<u8>) -> Result<T, IcechunkFormatError> + Send + 'static,
 {
     let compressed = read_all(read, compressed_size_hint).await?;
+    // the caller's `#[instrument]` span carries which asset this is
+    debug!(?file_type, size_bytes = compressed.len(), "Downloaded asset");
 
     // on the async task: fail fast (no permit) and keep span ancestry on header errors
     let header = checked_header(&compressed, file_type)?;
@@ -1811,31 +1846,6 @@ impl Weighter<SnapshotId, Arc<TransactionLog>> for FileWeighter {
     fn weight(&self, _: &SnapshotId, val: &Arc<TransactionLog>) -> u64 {
         val.len() as u64
     }
-}
-
-fn convert_list_item<Id>(item: &ListInfo<String>) -> Option<ListInfo<Id>>
-where
-    Id: for<'b> TryFrom<&'b str>,
-{
-    let id = Id::try_from(item.id.as_str()).ok()?;
-    let created_at = item.created_at;
-    Some(ListInfo { created_at, id, size_bytes: item.size_bytes })
-}
-
-fn translate_list_infos<'a, Id>(
-    s: impl Stream<Item = RepositoryResult<ListInfo<String>>> + Send + 'a,
-) -> BoxStream<'a, RepositoryResult<ListInfo<Id>>>
-where
-    Id: for<'b> TryFrom<&'b str> + Send + std::fmt::Debug + 'a,
-{
-    s.try_filter_map(|info| async move {
-        let info = convert_list_item(&info);
-        if info.is_none() {
-            tracing::error!(list_info=?info, "Error processing list item metadata");
-        }
-        Ok(info)
-    })
-    .boxed()
 }
 
 pub async fn async_reader_to_bytes(

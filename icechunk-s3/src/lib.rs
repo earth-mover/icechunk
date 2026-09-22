@@ -4,14 +4,8 @@
 pub use aws_sdk_s3;
 
 use std::{
-    borrow::Cow,
-    collections::{HashMap, HashSet},
-    fmt,
-    future::ready,
-    ops::Range,
-    pin::Pin,
-    sync::Arc,
-    time::Duration,
+    borrow::Cow, collections::HashMap, fmt, future::ready, ops::Range, pin::Pin,
+    sync::Arc, time::Duration,
 };
 
 use async_trait::async_trait;
@@ -1129,25 +1123,29 @@ impl Storage for S3Storage {
         Ok(self.list_keys(settings, prefix.clone(), prefix).await)
     }
 
-    #[instrument(skip(self, settings, first_chars))]
-    async fn list_objects_with_id_first_chars<'a>(
+    #[instrument(skip(self, settings, id_prefixes))]
+    async fn list_objects_with_id_prefixes<'a>(
         &'a self,
         settings: &Settings,
         prefix: &str,
-        first_chars: &HashSet<char>,
+        id_prefixes: &[String],
     ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
         let layout = self.layout(settings).await?;
         let prefix = self.list_prefix(layout, prefix);
-        let mut listings = Vec::with_capacity(first_chars.len());
-        for first_char in first_chars {
+        let mut listings = Vec::with_capacity(id_prefixes.len());
+        for id_prefix in id_prefixes {
             let key_prefix = if prefix.is_empty() || prefix.ends_with('/') {
-                format!("{prefix}{first_char}")
+                format!("{prefix}{id_prefix}")
             } else {
-                format!("{prefix}/{first_char}")
+                format!("{prefix}/{id_prefix}")
             };
             listings.push(self.list_keys(settings, key_prefix, prefix.clone()).await);
         }
         Ok(stream::select_all(listings).boxed())
+    }
+
+    fn lists_id_prefixes_natively(&self) -> bool {
+        true
     }
 
     #[instrument(skip(self, batch))]
@@ -1846,6 +1844,24 @@ mod tests {
         ] {
             assert_eq!(endpoint_with_bucket_separator(input), expected, "{input}");
         }
+    }
+
+    /// GC fans its listing out over id prefixes only when the backend lists
+    /// them server-side; losing this override silently turns GC's listing
+    /// into a single stream.
+    #[test]
+    fn s3_lists_id_prefixes_natively() {
+        let storage = new_s3_storage(
+            S3Options::default(),
+            "my-bucket".to_string(),
+            Some("some/prefix".to_string()),
+            None,
+            Vec::new(),
+            Vec::new(),
+            None,
+        )
+        .unwrap();
+        assert!(storage.lists_id_prefixes_natively());
     }
 
     #[test]

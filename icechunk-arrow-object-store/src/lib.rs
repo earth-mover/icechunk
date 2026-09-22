@@ -18,7 +18,7 @@ use icechunk_storage::{
     ConcurrencySettings, DeleteObjectsResult, ETag, Generation, GetModifiedResult,
     ListInfo, RepositoryCreation, RetriesSettings, Settings, Storage, StorageError,
     StorageErrorKind, StorageInfo, StorageResult, VersionInfo, VersionedUpdateResult,
-    filter_ids_by_first_char, obj_not_found_res, obj_store_error, obj_store_error_res,
+    filter_ids_by_id_prefix, obj_not_found_res, obj_store_error, obj_store_error_res,
     other_error,
     readback::{
         ReadbackOutcome, WRITE_ID_METADATA_KEY, resolve_lost_response,
@@ -54,7 +54,7 @@ use object_store::{ClientOptions, HeaderMap};
 use object_store::{CredentialProvider, StaticCredentialProvider};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     fmt::{self, Debug, Display},
     future::ready,
     num::{NonZeroU16, NonZeroU64},
@@ -705,36 +705,42 @@ impl Storage for ObjectStorage {
         Ok(stream.boxed())
     }
 
-    #[instrument(skip(self, settings, first_chars))]
-    async fn list_objects_with_id_first_chars<'a>(
+    #[instrument(skip(self, settings, id_prefixes))]
+    async fn list_objects_with_id_prefixes<'a>(
         &'a self,
         settings: &Settings,
         prefix: &str,
-        first_chars: &HashSet<char>,
+        id_prefixes: &[String],
     ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
         if !self.backend.ordered_offset_listing() {
             let listing = self.list_objects(settings, prefix).await?;
-            return Ok(filter_ids_by_first_char(listing, first_chars));
+            return Ok(filter_ids_by_id_prefix(listing, id_prefixes));
         }
         let root = ObjectPath::from(format!("{}/{}", self.backend.prefix(), prefix));
         let client = self.get_client(settings, Role::Read).await?;
-        let listings: Vec<_> = first_chars
+        let listings: Vec<_> = id_prefixes
             .iter()
-            .map(|&first_char| {
-                let offset = ObjectPath::from(format!("{root}/{first_char}"));
+            .map(|id_prefix| {
+                let offset = ObjectPath::from(format!("{root}/{id_prefix}"));
                 let root = root.clone();
+                let id_prefix = id_prefix.clone();
                 client
                     .list_with_offset(Some(&root), &offset)
                     .map_err(obj_store_error)
                     .and_then(move |object| ready(object_to_list_info(&root, &object)))
-                    // Keys arrive in order, so another first character ends this listing.
+                    // Keys arrive in order, so ids with this prefix are contiguous
+                    // after the offset: the first miss ends this listing.
                     .try_take_while(move |info| {
-                        ready(Ok(info.id.starts_with(first_char)))
+                        ready(Ok(info.id.starts_with(id_prefix.as_str())))
                     })
                     .boxed()
             })
             .collect();
         Ok(stream::select_all(listings).boxed())
+    }
+
+    fn lists_id_prefixes_natively(&self) -> bool {
+        self.backend.ordered_offset_listing()
     }
 
     #[instrument(skip(self, batch))]
@@ -941,7 +947,7 @@ pub trait ObjectStoreBackend: Debug + Display + Sync + Send {
     fn prefix(&self) -> String;
 
     /// Whether `list_with_offset` runs server side and returns keys in lexicographic
-    /// order. Only then can [`ObjectStorage`] split an id listing by first character.
+    /// order. Only then can [`ObjectStorage`] split an id listing by id prefix.
     fn ordered_offset_listing(&self) -> bool {
         false
     }
@@ -1774,6 +1780,33 @@ mod tests {
     };
     #[cfg(feature = "http")]
     use super::{NonZeroU16, RetriesSettings, Url};
+
+    /// GC fans listings out per id prefix only where the store lists a prefix
+    /// natively. Backends that filter a full listing client-side must report
+    /// `false`, or that fan-out repeats the full listing once per prefix; GCS
+    /// must report `true`, or GC falls back to one serial listing.
+    #[tokio_test]
+    async fn native_prefix_listing_matches_the_backend() {
+        let tmp_dir = TempDir::new().unwrap();
+        let local = ObjectStorage::new_local_filesystem(tmp_dir.path()).await.unwrap();
+        assert!(!local.lists_id_prefixes_natively());
+        let memory = ObjectStorage::new_in_memory().await.unwrap();
+        assert!(!memory.lists_id_prefixes_natively());
+        #[cfg(feature = "gcs")]
+        {
+            // building the client makes no requests
+            let gcs = super::new_gcs_storage(
+                "bucket".to_string(),
+                None,
+                Some(super::GcsCredentials::Anonymous),
+                None,
+                Vec::new(),
+                Vec::new(),
+            )
+            .unwrap();
+            assert!(gcs.lists_id_prefixes_natively());
+        }
+    }
 
     #[tokio_test]
     async fn test_serialize_object_store() {

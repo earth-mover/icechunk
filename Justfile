@@ -334,7 +334,7 @@ chrome-trace *args:
   ICECHUNK_TRACE=chrome cargo bench --features logs --bench main -- {{args}} --test
 
 [group('bench')]
-[doc("GC/stats benchmark tool: just gc-bench build|gc|stats --name <n> ... (needs RustFS and toxiproxy: just contup)")]
+[doc("GC/stats benchmark tool: just gc-bench build|gc|stats|list --name <n> ... (needs RustFS and toxiproxy: just contup)")]
 gc-bench *args:
   cargo run --profile bench --features logs --example gc_bench -- "$@"
 

@@ -2482,6 +2482,7 @@ class PyRepository:
         max_concurrent_manifest_fetches: int = 500,
         max_concurrent_deletes: int = 10,
         max_consecutive_delete_failures: int = 50,
+        max_concurrent_listings: int | None = None,
     ) -> GCSummary: ...
     async def garbage_collect_async(
         self,
@@ -2493,6 +2494,7 @@ class PyRepository:
         max_concurrent_manifest_fetches: int = 500,
         max_concurrent_deletes: int = 10,
         max_consecutive_delete_failures: int = 50,
+        max_concurrent_listings: int | None = None,
     ) -> GCSummary: ...
     def chunk_storage_stats(
         self,

@@ -123,6 +123,10 @@ impl ManifestConsumer for ChunkStorage {
     }
 
     fn fold(_acc: &mut (), _output: ()) {}
+
+    fn progress(&self) -> Option<(&'static str, u64)> {
+        Some(("native_bytes", self.native_bytes.load(Ordering::Relaxed)))
+    }
 }
 
 /// Compute the total size in bytes of all committed repo chunks.
