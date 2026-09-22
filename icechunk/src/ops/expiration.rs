@@ -4,10 +4,8 @@ use std::{
     collections::{HashMap, HashSet},
     num::NonZeroU16,
     sync::Arc,
-    time::Duration,
 };
 
-use backon::{BackoffBuilder as _, ExponentialBuilder, Retryable as _};
 use chrono::{DateTime, Utc};
 use itertools::Itertools as _;
 use tracing::{debug, info, instrument};
@@ -18,15 +16,18 @@ use crate::{
     format::{
         SnapshotId,
         format_constants::SpecVersionBin,
-        repo_info::{RepoAvailability, RepoInfo, UpdateInfo, UpdateType},
+        repo_info::{RepoInfo, UpdateInfo, UpdateType},
         snapshot::{Snapshot, SnapshotInfo},
     },
-    ops::{GCError, GCResult, reparent_and_prune},
+    ops::{
+        GCError, GCResult, ensure_repo_writable, reparent_and_prune,
+        retry_on_repo_info_update,
+    },
     refs::Ref,
     repository::{RepositoryError, RepositoryErrorKind},
     storage,
 };
-use icechunk_types::{ICResultExt as _, error::ICResultCtxExt as _};
+use icechunk_types::error::ICResultCtxExt as _;
 
 mod v1;
 
@@ -70,23 +71,7 @@ pub async fn expire(
     repo_update_retries: Option<&RepoUpdateRetryConfig>,
     num_updates_per_repo_info_file: u16,
 ) -> GCResult<ExpireResult> {
-    if !asset_manager.can_write_to_storage().await? {
-        return Err(RepositoryErrorKind::ReadonlyStorage("Cannot expire".to_string()))
-            .capture()
-            .map_err(GCError::Repository)?;
-    }
-
-    // Check repo status (only available on IC2+)
-    if asset_manager.spec_version() >= SpecVersionBin::V2 {
-        let (repo_info, _) = asset_manager.fetch_repo_info().await?;
-        if repo_info.status()?.availability != RepoAvailability::Online {
-            return Err(RepositoryErrorKind::ReadonlyRepository(
-                "Cannot garbage collect".to_string(),
-            ))
-            .capture()
-            .map_err(GCError::Repository)?;
-        }
-    }
+    ensure_repo_writable(asset_manager.as_ref(), "expire").await?;
 
     match asset_manager.spec_version() {
         SpecVersionBin::V1 => {
@@ -117,17 +102,7 @@ pub async fn expire_v2(
     repo_update_retries: Option<&RepoUpdateRetryConfig>,
     num_updates_per_repo_info_file: u16,
 ) -> GCResult<ExpireResult> {
-    let default_retry_config = RepoUpdateRetryConfig::default();
-    let retry_config = repo_update_retries.unwrap_or(&default_retry_config).retries();
-
-    let backoff = ExponentialBuilder::new()
-        .with_min_delay(Duration::from_millis(retry_config.initial_backoff_ms() as u64))
-        .with_max_delay(Duration::from_millis(retry_config.max_backoff_ms() as u64))
-        .with_max_times(retry_config.max_tries().get() as usize)
-        .with_jitter()
-        .build();
-
-    let expire = async || {
+    retry_on_repo_info_update(repo_update_retries, "expire", async || {
         expire_v2_one_attempt(
             Arc::clone(&asset_manager),
             older_than,
@@ -136,26 +111,8 @@ pub async fn expire_v2(
             num_updates_per_repo_info_file,
         )
         .await
-    };
-
-    expire.retry(backoff)
-        .sleep(tokio::time::sleep)
-        .when(|e| {
-            matches!(
-                e,
-                GCError::Repository(RepositoryError {
-                    kind: RepositoryErrorKind::RepoInfoUpdated,
-                    ..
-                })
-            )
-        })
-            .notify(|_, _|  {
-
-                    info!(
-                        "Repo info object was updated while expire was running, retrying with backoff..."
-                    );}
-        )
-        .await
+    })
+    .await
 }
 
 #[instrument(skip(asset_manager))]

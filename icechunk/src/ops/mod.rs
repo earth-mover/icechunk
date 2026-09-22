@@ -1,25 +1,29 @@
 //! Repository maintenance operations.
 
-use std::{collections::HashSet, num::NonZeroU16, sync::Arc};
+use std::{
+    collections::HashSet, future::Future, num::NonZeroU16, sync::Arc, time::Duration,
+};
 
 use async_stream::try_stream;
+use backon::{BackoffBuilder as _, ExponentialBuilder, Retryable as _};
 use futures::{Stream, StreamExt as _, TryStreamExt as _, stream};
 use tokio::pin;
-use tracing::instrument;
+use tracing::{info, instrument};
 
 use crate::{
     StorageError,
     asset_manager::AssetManager,
+    config::RepoUpdateRetryConfig,
     format::{
         IcechunkFormatError, IcechunkResult, SnapshotId,
         format_constants::SpecVersionBin,
-        repo_info::RepoInfo,
+        repo_info::{RepoAvailability, RepoInfo},
         snapshot::{Snapshot, SnapshotInfo},
     },
     refs::{RefError, RefResult, list_refs},
-    repository::{RepositoryError, RepositoryResult},
+    repository::{RepositoryError, RepositoryErrorKind, RepositoryResult},
 };
-use icechunk_types::error::ICResultCtxExt as _;
+use icechunk_types::{ICResultExt as _, error::ICResultCtxExt as _};
 
 /// The error of every maintenance operation in this module.
 #[derive(Debug, thiserror::Error)]
@@ -37,6 +41,70 @@ pub enum GCError {
 }
 
 pub type GCResult<A> = Result<A, GCError>;
+
+/// Refuse to run a maintenance operation on read-only storage, or on a repo
+/// that is not online. `op_name` names the operation in the error message.
+pub(crate) async fn ensure_repo_writable(
+    asset_manager: &AssetManager,
+    op_name: &str,
+) -> GCResult<()> {
+    if !asset_manager.can_write_to_storage().await? {
+        return Err(RepositoryErrorKind::ReadonlyStorage(format!("Cannot {op_name}")))
+            .capture()
+            .map_err(GCError::Repository);
+    }
+    // repo status only exists on IC2+
+    if asset_manager.spec_version() >= SpecVersionBin::V2 {
+        let (repo_info, _) = asset_manager.fetch_repo_info().await?;
+        if repo_info.status()?.availability != RepoAvailability::Online {
+            return Err(RepositoryErrorKind::ReadonlyRepository(format!(
+                "Cannot {op_name}"
+            )))
+            .capture()
+            .map_err(GCError::Repository);
+        }
+    }
+    Ok(())
+}
+
+/// Run `op`, retrying with backoff while it fails because the repo info
+/// object changed under it. `op_name` names the operation in the retry log.
+pub(crate) async fn retry_on_repo_info_update<T, Fut>(
+    retries: Option<&RepoUpdateRetryConfig>,
+    op_name: &'static str,
+    op: impl FnMut() -> Fut,
+) -> GCResult<T>
+where
+    Fut: Future<Output = GCResult<T>>,
+{
+    let default_retry_config = RepoUpdateRetryConfig::default();
+    let retry_config = retries.unwrap_or(&default_retry_config).retries();
+
+    let backoff = ExponentialBuilder::new()
+        .with_min_delay(Duration::from_millis(retry_config.initial_backoff_ms() as u64))
+        .with_max_delay(Duration::from_millis(retry_config.max_backoff_ms() as u64))
+        .with_max_times(retry_config.max_tries().get() as usize)
+        .with_jitter()
+        .build();
+
+    op.retry(backoff)
+        .sleep(tokio::time::sleep)
+        .when(|e| {
+            matches!(
+                e,
+                GCError::Repository(RepositoryError {
+                    kind: RepositoryErrorKind::RepoInfoUpdated,
+                    ..
+                })
+            )
+        })
+        .notify(move |_, _| {
+            info!(
+                "Repo info object was updated while {op_name} was running, retrying with backoff..."
+            );
+        })
+        .await
+}
 
 /// Aborts the task it holds when dropped, so a cancelled or early-returning
 /// caller takes its background task down with it on every path.
