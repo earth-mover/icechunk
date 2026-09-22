@@ -2,6 +2,7 @@ use std::{
     collections::{HashMap, HashSet},
     env,
     future::Future,
+    num::NonZeroU16,
     pin::Pin,
     sync::Arc,
 };
@@ -236,6 +237,22 @@ where
     Ok(())
 }
 
+/// The storage's default settings with more patient retries: the cloud buckets used by
+/// [`with_storage`] are shared by all concurrent CI runs and can throttle with `SlowDown`.
+async fn with_storage_settings(
+    storage: &Arc<dyn Storage + Send + Sync>,
+) -> StorageResult<storage::Settings> {
+    let retries = storage::Settings {
+        retries: Some(storage::RetriesSettings {
+            max_tries: NonZeroU16::new(16),
+            initial_backoff_ms: Some(500),
+            max_backoff_ms: Some(30_000),
+        }),
+        ..Default::default()
+    };
+    Ok(storage.default_settings().await?.merge(retries))
+}
+
 async fn async_read_to_bytes(
     mut read: Pin<Box<dyn AsyncRead + Send>>,
 ) -> Result<Vec<u8>, std::io::Error> {
@@ -247,7 +264,7 @@ async fn async_read_to_bytes(
 #[tokio_test]
 async fn test_object_write_read() -> Result<(), Box<dyn std::error::Error>> {
     with_storage(Permission::Modify, |_, storage| async move {
-        let storage_settings = storage.default_settings().await?;
+        let storage_settings = with_storage_settings(&storage).await?;
         let id = SnapshotId::random();
         let mut bytes: [u8; 1024] = core::array::from_fn(|_| rand::random());
         bytes[42] = 42;
@@ -514,7 +531,7 @@ async fn create_refuses_empty_prefix_on_object_store()
 #[tokio_test]
 async fn test_list_objects() -> Result<(), Box<dyn std::error::Error>> {
     with_storage(Permission::Modify, |_, storage| async move {
-        let settings = storage.default_settings().await?;
+        let settings = with_storage_settings(&storage).await?;
         storage
             .put_object(
                 &settings,
@@ -615,7 +632,7 @@ async fn test_list_objects() -> Result<(), Box<dyn std::error::Error>> {
 async fn test_list_objects_with_id_first_chars() -> Result<(), Box<dyn std::error::Error>>
 {
     with_storage(Permission::Modify, |_, storage| async move {
-        let settings = storage.default_settings().await?;
+        let settings = with_storage_settings(&storage).await?;
         for path in
             ["foo/0a", "foo/0b", "foo/1a", "foo/Za", "foo/bar/0c", "foo0/0d", "0e"]
         {
@@ -756,7 +773,7 @@ async fn conditional_create_conflicts_with_existing()
     // backends) and the `NotStamped` branch (local_filesystem); both
     // must surface as `NotOnLatestVersion`.
     with_storage(Permission::Modify, |_, storage| async move {
-        let settings = storage.default_settings().await?;
+        let settings = with_storage_settings(&storage).await?;
         let path = "conditional-create-conflict";
 
         storage
@@ -910,7 +927,7 @@ async fn lost_response_conditional_create_recovers_requester_pays()
 #[tokio_test]
 async fn test_delete_objects() -> Result<(), Box<dyn std::error::Error>> {
     with_storage(Permission::Modify, |_, storage| async move {
-        let settings = storage.default_settings().await?;
+        let settings = with_storage_settings(&storage).await?;
         storage
             .put_object(
                 &settings,
@@ -1035,7 +1052,7 @@ async fn test_write_config_on_empty(
     #[case] spec_version: SpecVersionBin,
 ) -> Result<(), Box<dyn std::error::Error>> {
     with_storage(Permission::Modify, |_, storage| async move {
-        let storage_settings = storage.default_settings().await?;
+        let storage_settings = with_storage_settings(&storage).await?;
 
         let am = Arc::new(AssetManager::new_no_cache(
             storage,
@@ -1073,7 +1090,7 @@ async fn test_write_config_on_existing(
     with_storage(Permission::Modify, |_, storage| async move {
         let am = Arc::new(AssetManager::new_no_cache(
             Arc::clone(&storage),
-            storage.default_settings().await?,
+            with_storage_settings(&storage).await?,
             spec_version,
             1, // we are only reading, compression doesn't matter
             DEFAULT_MAX_CONCURRENT_REQUESTS,
@@ -1140,7 +1157,7 @@ async fn test_write_config_fails_on_bad_version_when_existing(
     #[case] spec_version: SpecVersionBin,
 ) -> Result<(), Box<dyn std::error::Error>> {
     with_storage(Permission::Modify, |storage_type, storage| async move {
-        let storage_settings = storage.default_settings().await?;
+        let storage_settings = with_storage_settings(&storage).await?;
         let am = Arc::new(AssetManager::new_no_cache(
             storage,
             storage_settings,
@@ -1197,7 +1214,7 @@ async fn test_write_config_can_overwrite_with_unsafe_config(
         let storage_settings = storage::Settings {
             unsafe_use_conditional_update: Some(false),
             unsafe_use_conditional_create: Some(false),
-            ..storage.default_settings().await?
+            ..with_storage_settings(&storage).await?
         };
         let am = Arc::new(AssetManager::new_no_cache(
             storage,
@@ -1316,7 +1333,7 @@ async fn test_write_object_larger_than_multipart_threshold()
     with_storage(Permission::Modify, |_, storage| async move {
         let custom_settings = storage::Settings {
             minimum_size_for_multipart_upload: Some(100),
-            ..storage.default_settings().await?
+            ..with_storage_settings(&storage).await?
         };
 
         let id = ChunkId::random();
@@ -1352,7 +1369,7 @@ async fn test_write_object_larger_than_multipart_threshold()
 #[tokio_test]
 async fn test_get_object_conditional() -> Result<(), Box<dyn std::error::Error>> {
     with_storage(Permission::Modify, |name, storage| async move {
-        let storage_settings = storage.default_settings().await?;
+        let storage_settings = with_storage_settings(&storage).await?;
         let id = SnapshotId::random();
         let bytes: [u8; 1024] = core::array::from_fn(|_| rand::random());
 
