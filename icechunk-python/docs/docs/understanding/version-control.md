@@ -18,7 +18,6 @@ To get started, we can create a new `Repository`.
 
     This example uses an in-memory storage backend, but you can also use any other storage backend instead.
 
-
 ```python exec="on" session="version" source="material-block"
 import icechunk as ic
 
@@ -87,6 +86,7 @@ print(repo.ancestry_graph(branch="main", plain=True))
 ### Empty Snapshots
 
 Set the `allow_empty` kwarg to create an "empty" snapshot --- one with no changes, just `metadata` and a `message`.
+
 ```python exec="on" session="version" source="material-block" result="code"
 session = repo.writable_session("main")
 snap = session.commit(
@@ -242,6 +242,12 @@ repo.reset_branch("dev", snapshot_id=snapshot_id)
 !!! note
 
     Unlike `commit`, `flush` does not support rebasing or amending. It is a simple, one-step save operation.
+
+!!! note
+
+    A [`ForkSession`](../reference/session.md#icechunk.session.ForkSession) cannot be flushed.
+    [Merge](../reference/session.md#icechunk.session.Session.merge) the fork back into the
+    session that created it and flush that one instead.
 
 !!! tip
 

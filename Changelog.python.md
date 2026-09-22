@@ -2,6 +2,15 @@
 
 ## Python Icechunk Library [unreleased]
 
+### Performance
+
+- `Session.fork` on a session with no changes (the most common case) no longer writes a snapshot. This removes a full snapshot write and a repo metadata update from every fork of a clean session.
+- The snapshot a fork is based on is no longer recorded in the repo metadata.
+
+### Breaking changes
+
+- `ForkSession.flush` now raises. Merge the fork back into the session that created it with `Session.merge` and flush that one instead. We don't expect anybody was relying on this.
+
 ## Python Icechunk Library 2.2.2
 
 ### Fixes

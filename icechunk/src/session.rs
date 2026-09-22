@@ -105,6 +105,10 @@ pub enum SessionErrorKind {
     )]
     CannotForkReadOnlySession,
     #[error(
+        "cannot flush a forked session, merge the fork back into the base session and flush that instead. See https://icechunk.io/en/latest/parallel/ for more"
+    )]
+    CannotFlushForkSession,
+    #[error(
         "This session was created to rearrange the hierarchy, other write operations cannot be executed. Commit or abandon the sessions and create a regular writable session"
     )]
     RearrangeSessionOnly,
@@ -294,7 +298,12 @@ pub type RebaseHook =
 #[derive(Debug, Clone, Copy)]
 enum CommitKind {
     NewCommit,
-    Flush,
+    /// Write a snapshot that no branch or tag points to.
+    ///
+    /// `register: false` keeps it out of the repo info.
+    Flush {
+        register: bool,
+    },
     RewriteManifests,
 }
 
@@ -362,7 +371,15 @@ impl<'a> CommitBuilder<'a> {
     }
 
     pub fn anonymous(mut self) -> Self {
-        self.kind = CommitKind::Flush;
+        self.kind = CommitKind::Flush { register: true };
+        self
+    }
+
+    /// Like [`CommitBuilder::anonymous`], but the snapshot is not added to the repo info.
+    ///
+    /// Used for fork snapshots, which are garbage as soon as the fork is merged back.
+    pub(crate) fn unregistered_anonymous(mut self) -> Self {
+        self.kind = CommitKind::Flush { register: false };
         self
     }
 
@@ -395,14 +412,21 @@ impl<'a> CommitBuilder<'a> {
         let has_rebase = self.rebase_solver.is_some();
         let has_hooks = self.before_rebase.is_some() || self.after_rebase.is_some();
 
-        if matches!(self.kind, CommitKind::Flush) && self.amend {
+        if matches!(self.kind, CommitKind::Flush { .. }) && self.amend {
             return Err(SessionError::capture(
                 SessionErrorKind::InvalidCommitConfiguration {
                     reason: "anonymous commits cannot be amended",
                 },
             ));
         }
-        if matches!(self.kind, CommitKind::Flush) && has_rebase {
+        // a fork's snapshot is not registered in the repo info, so nothing can be
+        // registered on top of it
+        if matches!(self.kind, CommitKind::Flush { register: true })
+            && self.session.is_fork()
+        {
+            return Err(SessionError::capture(SessionErrorKind::CannotFlushForkSession));
+        }
+        if matches!(self.kind, CommitKind::Flush { .. }) && has_rebase {
             return Err(SessionError::capture(
                 SessionErrorKind::InvalidCommitConfiguration {
                     reason: "anonymous commits cannot use rebase",
@@ -435,9 +459,14 @@ impl<'a> CommitBuilder<'a> {
             if self.amend { CommitMethod::Amend } else { CommitMethod::NewCommit };
 
         match self.kind {
-            CommitKind::Flush => {
+            CommitKind::Flush { register } => {
                 self.session
-                    .do_flush(&self.message, self.max_concurrent_nodes, self.properties)
+                    .do_flush(
+                        &self.message,
+                        self.max_concurrent_nodes,
+                        self.properties,
+                        register,
+                    )
                     .await
             }
             CommitKind::RewriteManifests => {
@@ -653,7 +682,13 @@ impl Session {
     /// Fork sessions:
     /// 1. contain an empty [`ChangeSet`]
     /// 2. Are built off an anonymous [`Snapshot`] that records the state of the base [`Session`].
+    ///    If the base [`Session`] has no changes, its own snapshot already records that state,
+    ///    and it is used directly instead of writing a new one.
     /// 3. Cannot be committed.
+    ///
+    /// The anonymous [`Snapshot`] is not registered in the repo info: it is unreachable garbage
+    /// as soon as the fork is merged back, and garbage collection can reclaim it once it's older
+    /// than the cutoff.
     ///
     /// Such Sessions are useful for distributed writes. You are expected to communicate the forked
     /// [`Session`] using [`Session.as_bytes()`] and [`Session.from_bytes`] methods to distributed workers,
@@ -666,8 +701,12 @@ impl Session {
                 SessionErrorKind::CannotForkReadOnlySession,
             ));
         }
-        // TODO: why do we allow Clone?
-        let snap = self.clone().commit("fork").anonymous().execute().await?;
+        let snap = if self.has_uncommitted_changes() {
+            // TODO: why do we allow Clone?
+            self.clone().commit("fork").unregistered_anonymous().execute().await?
+        } else {
+            self.snapshot_id.clone()
+        };
 
         Ok(Session::create_writable_session(
             self.config.clone(),
@@ -676,7 +715,7 @@ impl Session {
             Arc::clone(&self.asset_manager),
             Arc::clone(&self.virtual_resolver),
             None,
-            snap.clone(),
+            snap,
             self.default_commit_metadata.clone(),
         ))
     }
@@ -1602,6 +1641,19 @@ impl Session {
         Ok(())
     }
 
+    async fn raise_if_rearrange_disabled(&self) -> SessionResult<()> {
+        if self.mode() == SessionMode::Rearrange {
+            let (repo_info, _) = self.asset_manager.fetch_repo_info().await.inject()?;
+            raise_if_feature_flag_disabled(
+                repo_info.as_ref(),
+                MOVE_NODE_FLAG,
+                "flush rearrange session",
+            )
+            .inject()?;
+        }
+        Ok(())
+    }
+
     pub(crate) fn spec_version(&self) -> SpecVersionBin {
         self.asset_manager.spec_version()
     }
@@ -1627,6 +1679,7 @@ impl Session {
         message: &str,
         max_concurrent_nodes: usize,
         properties: Option<SnapshotProperties>,
+        register: bool,
     ) -> SessionResult<SnapshotId> {
         info!(old_snapshot_id=%self.snapshot_id(), "Flush started");
 
@@ -1649,9 +1702,12 @@ impl Session {
         )
         .await?;
 
-        match self.spec_version() {
-            SpecVersionBin::V1 => self.flush_v1(Arc::clone(&new_snap)).await,
-            SpecVersionBin::V2 => self.flush_v2(Arc::clone(&new_snap)).await,
+        match (self.spec_version(), register) {
+            (SpecVersionBin::V1, _) => self.flush_v1(Arc::clone(&new_snap)).await,
+            (SpecVersionBin::V2, true) => self.flush_v2(Arc::clone(&new_snap)).await,
+            // unregistered snapshots don't touch the repo info, but the feature flag
+            // guard `flush_v2` applies to rearrange sessions still has to run
+            (SpecVersionBin::V2, false) => self.raise_if_rearrange_disabled().await,
         }?;
 
         info!(

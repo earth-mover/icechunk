@@ -700,6 +700,12 @@ class Session:
 
 
 class ForkSession(Session):
+    """A `Session` that can be pickled to a worker, written to, and merged back.
+
+    Fork sessions can neither be committed nor flushed. Merge them back into
+    the `Session` that created them with `Session.merge`, and commit that one.
+    """
+
     def __getstate__(self) -> object:
         state = {"_session": self._session.as_bytes()}
         return state
