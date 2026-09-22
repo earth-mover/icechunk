@@ -12,6 +12,7 @@ use futures::{
     stream::{self, BoxStream},
 };
 use http::header::{HeaderName, HeaderValue};
+use icechunk_storage::fast_list::{self, ListPageFetcher};
 #[cfg(feature = "s3")]
 use icechunk_storage::s3_config::{S3Credentials, S3Options};
 use icechunk_storage::{
@@ -24,7 +25,7 @@ use icechunk_storage::{
         ReadbackOutcome, WRITE_ID_METADATA_KEY, resolve_lost_response,
         resolve_precondition, write_id_for,
     },
-    sealed,
+    sealed, sum_object_sizes_by_listing,
 };
 use icechunk_types::ICResultExt as _;
 #[cfg(any(feature = "s3", feature = "gcs", feature = "azure", feature = "http"))]
@@ -69,6 +70,11 @@ use tokio_util::io::StreamReader;
 use tracing::{instrument, warn};
 use url::Url;
 use uuid::Uuid;
+
+#[cfg(all(test, feature = "gcs"))]
+mod fast_list_test_server;
+#[cfg(feature = "gcs")]
+mod gcs_fast_list;
 
 /// Whether a storage operation reads from or writes to the object store.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -165,6 +171,71 @@ where
 fn sorted_headers(mut headers: Vec<(String, String)>) -> Vec<(String, String)> {
     headers.sort_unstable();
     headers
+}
+
+/// Used when [`Settings`] has no `operation_attempt_timeout_ms`.
+#[cfg(feature = "gcs")]
+const DEFAULT_LIST_REQUEST_TIMEOUT_SECS: u64 = 120;
+
+#[cfg(feature = "gcs")]
+fn parse_config_bool(value: &str) -> Option<bool> {
+    match value.to_ascii_lowercase().as_str() {
+        "1" | "true" | "on" | "yes" | "y" => Some(true),
+        "0" | "false" | "off" | "no" | "n" => Some(false),
+        _ => None,
+    }
+}
+
+/// Whether a configured endpoint is plaintext `http://`. A `None` endpoint means
+/// the provider default (`https://…`), so it is never plaintext.
+#[cfg(feature = "gcs")]
+fn endpoint_is_plaintext_http(endpoint: Option<&str>) -> bool {
+    endpoint.is_some_and(|e| {
+        e.trim_start().get(..7).is_some_and(|s| s.eq_ignore_ascii_case("http://"))
+    })
+}
+
+/// Shared by the GCS and Azure listers. Refuses plaintext HTTP unless `allow_http` is set,
+/// as `object_store` does, so credentials are never sent in the clear.
+#[cfg(feature = "gcs")]
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct FastListHttpConfig {
+    pub allow_http: bool,
+    pub connect_timeout: Option<std::time::Duration>,
+    pub request_timeout: std::time::Duration,
+    pub read_timeout: Option<std::time::Duration>,
+}
+
+#[cfg(feature = "gcs")]
+impl FastListHttpConfig {
+    fn from_settings(settings: &Settings, allow_http: bool) -> Self {
+        use std::time::Duration;
+        let timeouts = settings.timeouts();
+        let ms =
+            |value: Option<u32>| value.map(|ms| Duration::from_millis(u64::from(ms)));
+        Self {
+            allow_http,
+            connect_timeout: ms(timeouts.and_then(|t| t.connect_timeout_ms)),
+            request_timeout: ms(timeouts.and_then(|t| t.operation_attempt_timeout_ms))
+                .unwrap_or(Duration::from_secs(DEFAULT_LIST_REQUEST_TIMEOUT_SECS)),
+            read_timeout: ms(timeouts.and_then(|t| t.read_timeout_ms)),
+        }
+    }
+
+    /// `https_only` also guards a plaintext endpoint that gets past the config check.
+    pub(crate) fn build_client(&self) -> StorageResult<reqwest::Client> {
+        let mut builder = reqwest::Client::builder()
+            .pool_max_idle_per_host(fast_list::CONCURRENCY_CAP)
+            .https_only(!self.allow_http)
+            .timeout(self.request_timeout);
+        if let Some(connect) = self.connect_timeout {
+            builder = builder.connect_timeout(connect);
+        }
+        if let Some(read) = self.read_timeout {
+            builder = builder.read_timeout(read);
+        }
+        builder.build().map_err(|e| other_error(format!("building reqwest client: {e}")))
+    }
 }
 
 // --- GCS credential types ---
@@ -737,6 +808,36 @@ impl Storage for ObjectStorage {
         Ok(stream::select_all(listings).boxed())
     }
 
+    #[instrument(skip(self, settings))]
+    async fn sum_object_sizes(
+        &self,
+        settings: &Settings,
+        prefixes: &[(&str, bool)],
+    ) -> StorageResult<u64> {
+        let Some(fetcher) = self.backend.fast_list_fetcher(settings).await? else {
+            return sum_object_sizes_by_listing(self, settings, prefixes).await;
+        };
+        // `object_store` lists whole path segments, so plain prefixes get the slash here.
+        let prefixes: Vec<(String, bool)> = prefixes
+            .iter()
+            .map(|&(prefix, holds_ids)| {
+                let path =
+                    ObjectPath::from(format!("{}/{}", self.backend.prefix(), prefix));
+                if holds_ids {
+                    (path.to_string(), true)
+                } else {
+                    (format!("{path}/"), false)
+                }
+            })
+            .collect();
+        fast_list::sum(
+            fetcher,
+            &prefixes,
+            u32::from(settings.retries().max_tries().get()),
+        )
+        .await
+    }
+
     #[instrument(skip(self, batch))]
     async fn delete_batch(
         &self,
@@ -916,6 +1017,7 @@ impl ObjectStorage {
     }
 }
 
+#[async_trait]
 #[typetag::serde(tag = "object_store_provider_type")]
 pub trait ObjectStoreBackend: Debug + Display + Sync + Send {
     /// Build the underlying `object_store` client for the given `role`.
@@ -927,6 +1029,17 @@ pub trait ObjectStoreBackend: Debug + Display + Sync + Send {
         settings: &Settings,
         role: Role,
     ) -> Result<Arc<dyn ObjectStore>, StorageError>;
+
+    /// A raw-prefix lister for [`Storage::sum_object_sizes`], if this configuration
+    /// supports one. `None` uses the normal listing.
+    #[doc(hidden)]
+    async fn fast_list_fetcher(
+        &self,
+        settings: &Settings,
+    ) -> StorageResult<Option<Arc<dyn ListPageFetcher>>> {
+        let _ = settings;
+        Ok(None)
+    }
 
     /// Whether this backend's read and write header sets differ.
     ///
@@ -1509,8 +1622,51 @@ impl Display for GcsObjectStoreBackend {
 }
 
 #[cfg(feature = "gcs")]
+#[async_trait]
 #[typetag::serde(name = "gcs_object_store_provider")]
 impl ObjectStoreBackend for GcsObjectStoreBackend {
+    /// Only anonymous and bearer credentials, with at most an endpoint config and no extra
+    /// headers. `FromEnv` and service accounts would need OAuth token minting.
+    async fn fast_list_fetcher(
+        &self,
+        settings: &Settings,
+    ) -> StorageResult<Option<Arc<dyn ListPageFetcher>>> {
+        if !self.extra_read_headers.is_empty() {
+            return Ok(None);
+        }
+        let mut endpoint: Option<&str> = None;
+        let mut allow_http = false;
+        for (key, value) in self.config.iter().flatten() {
+            match key {
+                GoogleConfigKey::BaseUrl => endpoint = Some(value),
+                GoogleConfigKey::Client(ClientConfigKey::AllowHttp) => {
+                    allow_http = parse_config_bool(value).unwrap_or(false);
+                }
+                _ => return Ok(None),
+            }
+        }
+        if endpoint_is_plaintext_http(endpoint) && !allow_http {
+            return Ok(None);
+        }
+        let auth = match &self.credentials {
+            Some(GcsCredentials::Anonymous) => gcs_fast_list::GcsListAuth::Anonymous,
+            Some(GcsCredentials::Static(GcsStaticCredentials::BearerToken(cred))) => {
+                gcs_fast_list::GcsListAuth::Bearer(cred.bearer.clone())
+            }
+            Some(GcsCredentials::Refreshable(fetcher)) => {
+                gcs_fast_list::GcsListAuth::Refreshable(Arc::new(
+                    GcsRefreshableCredentialProvider::new(Arc::clone(fetcher)),
+                ))
+            }
+            None | Some(GcsCredentials::FromEnv | GcsCredentials::Static(_)) => {
+                return Ok(None);
+            }
+        };
+        let http =
+            FastListHttpConfig::from_settings(settings, allow_http).build_client()?;
+        gcs_fast_list::make_fetcher(endpoint, &self.bucket, auth, http).map(Some)
+    }
+
     fn storage_info(&self) -> StorageInfo {
         let mut fields = vec![("bucket", self.bucket.clone())];
         if let Some(prefix) = &self.prefix {
@@ -1642,24 +1798,43 @@ impl GcsRefreshableCredentialProvider {
     pub async fn get_or_update_credentials(
         &self,
     ) -> Result<GcsBearerCredential, StorageError> {
-        let last_credential = self.last_credential.read().await;
+        fn still_fresh(creds: &GcsBearerCredential) -> bool {
+            // No expiry: cache until a 401 invalidates it, so the split does not mint per page.
+            creds.expires_after.is_none_or(|expires_after| {
+                expires_after
+                    > Utc::now() + TimeDelta::seconds(rand::random_range(120..=180))
+            })
+        }
 
         // If we have a credential and it hasn't expired, return it
+        {
+            let last_credential = self.last_credential.read().await;
+            if let Some(creds) = last_credential.as_ref()
+                && still_fresh(creds)
+            {
+                return Ok(creds.clone());
+            }
+        }
+
+        let mut last_credential = self.last_credential.write().await;
+        // Check again under the write lock, so waiting requests do not all refresh.
         if let Some(creds) = last_credential.as_ref()
-            && let Some(expires_after) = creds.expires_after
-            && expires_after
-                > Utc::now() + TimeDelta::seconds(rand::random_range(120..=180))
+            && still_fresh(creds)
         {
             return Ok(creds.clone());
         }
-
-        drop(last_credential);
-        let mut last_credential = self.last_credential.write().await;
-
         // Otherwise, refresh the credential and cache it
         let creds = self.refresher.get().await.map_err(other_error)?;
         *last_credential = Some(creds.clone());
         Ok(creds)
+    }
+
+    /// Compares first, so a late 401 does not wipe a credential another request refreshed.
+    pub async fn invalidate_bearer(&self, stale_bearer: &str) {
+        let mut last_credential = self.last_credential.write().await;
+        if last_credential.as_ref().is_some_and(|c| c.bearer == stale_bearer) {
+            *last_credential = None;
+        }
     }
 }
 
@@ -2143,6 +2318,266 @@ mod s3_header_tests {
         let back: S3ObjectStoreBackend = serde_json::from_str(&json).unwrap();
         assert_eq!(back.extra_write_headers, with.extra_write_headers);
         assert!(back.extra_read_headers.is_empty());
+    }
+}
+
+#[cfg(all(test, feature = "gcs"))]
+mod gcs_fast_path_tests {
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    use async_trait::async_trait;
+    use icechunk_macros::tokio_test;
+    use object_store::{ClientConfigKey, gcp::GoogleConfigKey};
+
+    use super::{
+        GcsBearerCredential, GcsCredentials, GcsCredentialsFetcher,
+        GcsObjectStoreBackend, GcsRefreshableCredentialProvider, GcsStaticCredentials,
+        ObjectStoreBackend as _, Settings,
+    };
+
+    #[derive(Debug, serde::Serialize, serde::Deserialize)]
+    struct FixedFetcher;
+
+    #[async_trait]
+    #[typetag::serde]
+    impl GcsCredentialsFetcher for FixedFetcher {
+        async fn get(&self) -> Result<GcsBearerCredential, String> {
+            Ok(GcsBearerCredential { bearer: "tok".to_string(), expires_after: None })
+        }
+    }
+
+    fn backend(
+        credentials: Option<GcsCredentials>,
+        config: Option<HashMap<GoogleConfigKey, String>>,
+    ) -> GcsObjectStoreBackend {
+        GcsObjectStoreBackend {
+            bucket: "b".to_string(),
+            prefix: Some("p".to_string()),
+            credentials,
+            config,
+            extra_read_headers: vec![],
+            extra_write_headers: vec![],
+        }
+    }
+
+    fn cfg(
+        entries: &[(GoogleConfigKey, &str)],
+    ) -> Option<HashMap<GoogleConfigKey, String>> {
+        Some(entries.iter().map(|(k, v)| (*k, (*v).to_string())).collect())
+    }
+
+    async fn engages(b: &GcsObjectStoreBackend) -> bool {
+        #[expect(clippy::expect_used)]
+        b.fast_list_fetcher(&Settings::default()).await.expect("must not error").is_some()
+    }
+
+    #[tokio_test]
+    async fn test_fast_lister_engages_for_supported_credentials() {
+        let bearer = GcsCredentials::Static(GcsStaticCredentials::BearerToken(
+            GcsBearerCredential { bearer: "tok".to_string(), expires_after: None },
+        ));
+        assert!(engages(&backend(Some(bearer), None)).await);
+        assert!(engages(&backend(Some(GcsCredentials::Anonymous), None)).await);
+        assert!(
+            engages(&backend(
+                Some(GcsCredentials::Refreshable(Arc::new(FixedFetcher))),
+                None
+            ))
+            .await
+        );
+    }
+
+    #[tokio_test]
+    async fn test_fast_lister_falls_back_for_oauth_credentials() {
+        assert!(!engages(&backend(None, None)).await);
+        assert!(!engages(&backend(Some(GcsCredentials::FromEnv), None)).await);
+        assert!(
+            !engages(&backend(
+                Some(GcsCredentials::Static(GcsStaticCredentials::ServiceAccountKey(
+                    "k".to_string()
+                ))),
+                None
+            ))
+            .await
+        );
+    }
+
+    #[tokio_test]
+    async fn test_fast_lister_honors_endpoint_and_rejects_unknown_config() {
+        let anon = || Some(GcsCredentials::Anonymous);
+        assert!(
+            engages(&backend(
+                anon(),
+                cfg(&[
+                    (GoogleConfigKey::BaseUrl, "http://localhost:4443"),
+                    (GoogleConfigKey::Client(ClientConfigKey::AllowHttp), "true"),
+                ])
+            ))
+            .await
+        );
+        assert!(
+            !engages(&backend(anon(), cfg(&[(GoogleConfigKey::SkipSignature, "true")])))
+                .await
+        );
+        assert!(
+            !engages(&backend(
+                anon(),
+                cfg(&[(GoogleConfigKey::Client(ClientConfigKey::ProxyUrl), "http://p")])
+            ))
+            .await
+        );
+    }
+
+    // An http:// endpoint engages the fast path only with AllowHttp explicitly
+    // true; without it (or with it false) the fast path must refuse, matching
+    // object_store's plaintext-http refusal, so no bearer is sent in the clear.
+    #[tokio_test]
+    async fn test_fast_lister_refuses_plaintext_http_without_allow_http() {
+        let anon = || Some(GcsCredentials::Anonymous);
+        let base = (GoogleConfigKey::BaseUrl, "http://localhost:4443");
+        let allow = |v| (GoogleConfigKey::Client(ClientConfigKey::AllowHttp), v);
+        assert!(!engages(&backend(anon(), cfg(&[base]))).await);
+        assert!(!engages(&backend(anon(), cfg(&[base, allow("false")]))).await);
+        assert!(engages(&backend(anon(), cfg(&[base, allow("true")]))).await);
+        // An https endpoint engages regardless of AllowHttp.
+        assert!(
+            engages(&backend(
+                anon(),
+                cfg(&[(GoogleConfigKey::BaseUrl, "https://gcs.example")])
+            ))
+            .await
+        );
+    }
+
+    #[tokio_test]
+    async fn test_fast_lister_falls_back_on_extra_read_headers() {
+        let mut b = backend(Some(GcsCredentials::Anonymous), None);
+        b.extra_read_headers = vec![("x-goog-meta-a".to_string(), "1".to_string())];
+        assert!(!engages(&b).await);
+    }
+
+    #[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
+    struct CountingFetcher {
+        #[serde(skip)]
+        calls: Arc<std::sync::atomic::AtomicUsize>,
+        #[serde(skip)]
+        never_expires: bool,
+    }
+
+    #[async_trait]
+    #[typetag::serde]
+    impl GcsCredentialsFetcher for CountingFetcher {
+        async fn get(&self) -> Result<GcsBearerCredential, String> {
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            // Yield so concurrent callers pile up on the write lock, exercising
+            // the single-flight double-check rather than each fetching.
+            tokio::task::yield_now().await;
+            let expires_after = (!self.never_expires)
+                .then(|| chrono::Utc::now() + chrono::TimeDelta::hours(1));
+            Ok(GcsBearerCredential { bearer: "tok".to_string(), expires_after })
+        }
+    }
+
+    fn counting_provider()
+    -> (GcsRefreshableCredentialProvider, Arc<std::sync::atomic::AtomicUsize>) {
+        counting_provider_inner(false)
+    }
+
+    fn counting_provider_inner(
+        never_expires: bool,
+    ) -> (GcsRefreshableCredentialProvider, Arc<std::sync::atomic::AtomicUsize>) {
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let fetcher =
+            Arc::new(CountingFetcher { calls: Arc::clone(&calls), never_expires });
+        (GcsRefreshableCredentialProvider::new(fetcher), calls)
+    }
+
+    #[tokio_test]
+    async fn test_refreshable_provider_single_flights_concurrent_refreshes() {
+        use std::sync::atomic::Ordering::SeqCst;
+        let (provider, calls) = counting_provider();
+        let provider = Arc::new(provider);
+        let runs = (0..16).map(|_| {
+            let provider = Arc::clone(&provider);
+            async move {
+                provider.get_or_update_credentials().await.unwrap();
+            }
+        });
+        futures::future::join_all(runs).await;
+        // A cold cache hit by 16 workers at once mints exactly one token, not 16.
+        assert_eq!(calls.load(SeqCst), 1);
+        // A warm, unexpired cache serves further calls without re-minting.
+        provider.get_or_update_credentials().await.unwrap();
+        assert_eq!(calls.load(SeqCst), 1);
+    }
+
+    #[tokio_test]
+    async fn test_refreshable_provider_invalidate_only_clears_matching_bearer() {
+        use std::sync::atomic::Ordering::SeqCst;
+        let (provider, calls) = counting_provider();
+        provider.get_or_update_credentials().await.unwrap();
+        assert_eq!(calls.load(SeqCst), 1);
+
+        // A stale rejection of a different token must not wipe the live one.
+        provider.invalidate_bearer("other").await;
+        provider.get_or_update_credentials().await.unwrap();
+        assert_eq!(calls.load(SeqCst), 1);
+
+        // Invalidating the live token forces the next resolution to re-mint.
+        provider.invalidate_bearer("tok").await;
+        provider.get_or_update_credentials().await.unwrap();
+        assert_eq!(calls.load(SeqCst), 2);
+    }
+
+    #[tokio_test]
+    async fn test_refreshable_provider_caches_credential_without_expiry() {
+        use std::sync::atomic::Ordering::SeqCst;
+        let (provider, calls) = counting_provider_inner(true);
+        // A credential minted with expires_after=None is fresh indefinitely, so
+        // a many-page fan-out resolves it once rather than re-minting per page.
+        for _ in 0..64 {
+            provider.get_or_update_credentials().await.unwrap();
+        }
+        assert_eq!(calls.load(SeqCst), 1);
+    }
+}
+
+#[cfg(all(test, feature = "gcs"))]
+mod fast_list_http_config_tests {
+    use std::time::Duration;
+
+    use icechunk_storage::{Settings, TimeoutSettings};
+
+    use super::{DEFAULT_LIST_REQUEST_TIMEOUT_SECS, FastListHttpConfig};
+
+    #[test]
+    fn threads_configured_timeouts_and_defaults_the_attempt_timeout() {
+        let settings = Settings {
+            timeouts: Some(TimeoutSettings {
+                connect_timeout_ms: Some(1_000),
+                read_timeout_ms: Some(2_000),
+                operation_attempt_timeout_ms: Some(3_000),
+                operation_timeout_ms: Some(9_000),
+            }),
+            ..Default::default()
+        };
+        let cfg = FastListHttpConfig::from_settings(&settings, true);
+        assert!(cfg.allow_http);
+        assert_eq!(cfg.connect_timeout, Some(Duration::from_millis(1_000)));
+        assert_eq!(cfg.read_timeout, Some(Duration::from_millis(2_000)));
+        // operation_attempt_timeout_ms maps to the per-request timeout;
+        // operation_timeout_ms has no single-request equivalent and is ignored.
+        assert_eq!(cfg.request_timeout, Duration::from_millis(3_000));
+
+        let defaults = FastListHttpConfig::from_settings(&Settings::default(), false);
+        assert!(!defaults.allow_http);
+        assert_eq!(defaults.connect_timeout, None);
+        assert_eq!(defaults.read_timeout, None);
+        assert_eq!(
+            defaults.request_timeout,
+            Duration::from_secs(DEFAULT_LIST_REQUEST_TIMEOUT_SECS)
+        );
     }
 }
 

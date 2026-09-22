@@ -147,7 +147,6 @@ async fn test_total_nonvirtual_size_in_minio() -> Result<(), Box<dyn std::error:
     Ok(())
 }
 
-
 async fn do_test_repo_chunks_storage(
     storage: Arc<dyn Storage + Send + Sync>,
     spec_version: SpecVersionBin,

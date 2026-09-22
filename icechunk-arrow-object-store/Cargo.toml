@@ -22,8 +22,11 @@ bytes.workspace = true
 chrono.workspace = true
 futures.workspace = true
 http.workspace = true
+memchr = { workspace = true, optional = true }
 object_store.workspace = true
+percent-encoding = { workspace = true, optional = true }
 rand.workspace = true
+reqwest = { workspace = true, optional = true }
 serde.workspace = true
 tokio = { workspace = true, features = ["sync"] }
 tokio-util.workspace = true
@@ -39,11 +42,12 @@ rmp-serde.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
 test-log.workspace = true
+tokio = { workspace = true, features = ["net", "io-util", "rt", "macros", "time"] }
 
 [features]
 default = ["s3", "gcs", "azure", "http", "fs"]
 s3 = ["object_store/aws"]
-gcs = ["object_store/gcp"]
+gcs = ["object_store/gcp", "dep:memchr", "dep:percent-encoding", "dep:reqwest"]
 azure = ["object_store/azure"]
 http = ["object_store/http"]
 fs = ["object_store/fs"]
