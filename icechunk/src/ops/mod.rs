@@ -38,6 +38,8 @@ impl<T> Drop for AbortOnDrop<T> {
     }
 }
 
+/// Batched, rate-adaptive object deletion used by GC.
+pub mod deleter;
 /// Expire old snapshots beyond a threshold.
 pub mod expiration_v1;
 /// Garbage collection to remove unreferenced data.
