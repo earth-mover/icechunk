@@ -54,6 +54,7 @@ futures = "0.3.32"
 http = "1.4.0"
 itertools = "0.15.0"
 miette = { version = "7.6.0", features = ["fancy"] }
+mimalloc = { version = "0.1.52", features = ["local_dynamic_tls"] }
 noxious-client = "1.0"
 numpy = "0.29.0"
 object_store = { version = "0.14.0", default-features = false }

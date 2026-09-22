@@ -16,6 +16,13 @@ mod virtualrefs;
 
 use std::env;
 
+// glibc malloc retains 2-3x the live memory of a GC run
+// mimalloc seems to return it better. Local-dynamic
+// TLS because this library is dlopen'ed by Python.
+#[cfg(feature = "mimalloc")]
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 use config::{
     PyAzureCredentials, PyAzureRefreshableCredential, PyAzureStaticCredentials,
     PyCachingConfig, PyChecksumAlgorithm, PyCompressionAlgorithm, PyCompressionConfig,
