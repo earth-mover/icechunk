@@ -51,9 +51,19 @@ pub enum StorageErrorKind {
     },
     #[error("Redirect Storage error: {0}")]
     BadRedirect(String),
+    /// The store asked us to slow down (S3 `SlowDown` / HTTP 503 / 429). Retry with backoff.
+    #[error("storage throttled the request: {code}: {message}")]
+    Throttled { code: String, message: String },
     #[error("storage error: {0}")]
     Other(String),
 }
+
+impl StorageErrorKind {
+    pub fn is_throttled(&self) -> bool {
+        matches!(self, StorageErrorKind::Throttled { .. })
+    }
+}
+
 pub type StorageError = ICError<StorageErrorKind>;
 
 pub type StorageResult<A> = Result<A, StorageError>;
@@ -76,6 +86,17 @@ pub fn obj_not_found_res<T>() -> StorageResult<T> {
 
 pub fn other_error(s: impl Into<String>) -> StorageError {
     StorageError::capture(StorageErrorKind::Other(s.into()))
+}
+
+/// The store refused the request and asked for a lower request rate.
+pub fn throttled_error(
+    code: impl Into<String>,
+    message: impl Into<String>,
+) -> StorageError {
+    StorageError::capture(StorageErrorKind::Throttled {
+        code: code.into(),
+        message: message.into(),
+    })
 }
 
 #[derive(Debug)]
@@ -825,6 +846,18 @@ mod tests {
         block_on(filter_ids_by_id_prefix(listing(ids), &id_prefixes).try_collect())
             .map(|infos: Vec<ListInfo<String>>| infos.into_iter().map(|i| i.id).collect())
             .expect("listing cannot fail")
+    }
+
+    /// Only a throttle is back-pressure; every other error is a real failure.
+    #[test]
+    fn throttled_errors_are_distinguishable() {
+        assert!(throttled_error("SlowDown", "x").kind.is_throttled());
+        assert!(!other_error("x").kind.is_throttled());
+        assert!(
+            throttled_error("SlowDown", "Please reduce your request rate.")
+                .to_string()
+                .contains("SlowDown")
+        );
     }
 
     #[test]

@@ -1,14 +1,14 @@
 //! Garbage collection to remove unreferenced data.
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
     num::{NonZeroU16, NonZeroUsize},
     pin::pin,
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering as AtomicOrdering},
     },
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use backon::{BackoffBuilder as _, ExponentialBuilder, Retryable as _};
@@ -59,6 +59,20 @@ impl Action {
     }
 }
 
+/// The quiet period the deleter observes after a throttle: it starts at `base`
+/// and doubles up to `cap` while the store keeps asking for less traffic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct DeleteBackoff {
+    base: Duration,
+    cap: Duration,
+}
+
+impl Default for DeleteBackoff {
+    fn default() -> Self {
+        Self { base: Duration::from_secs(1), cap: Duration::from_secs(120) }
+    }
+}
+
 #[derive(Debug)]
 pub struct GCConfig {
     extra_roots: HashSet<SnapshotId>,
@@ -75,6 +89,7 @@ pub struct GCConfig {
     max_concurrent_deletes: NonZeroU16,
     max_consecutive_delete_failures: NonZeroU16,
     max_concurrent_listings: Option<NonZeroU16>,
+    delete_backoff: DeleteBackoff,
 
     dry_run: bool,
 }
@@ -111,9 +126,16 @@ impl GCConfig {
             max_concurrent_deletes,
             max_consecutive_delete_failures,
             max_concurrent_listings,
+            delete_backoff: DeleteBackoff::default(),
             dry_run,
         }
     }
+
+    #[cfg(all(test, not(feature = "shuttle")))]
+    pub(crate) fn with_delete_backoff(self, delete_backoff: DeleteBackoff) -> Self {
+        GCConfig { delete_backoff, ..self }
+    }
+
     #[expect(clippy::too_many_arguments)]
     pub fn clean_all(
         chunks_age: DateTime<Utc>,
@@ -227,6 +249,8 @@ pub struct GCSummary {
     pub transaction_logs_deleted: u64,
     /// Objects whose delete request failed; they stay garbage for the next run.
     pub objects_failed_to_delete: u64,
+    /// Delete requests the store throttled; each was retried, none failed.
+    pub throttled_batches: u64,
     /// First distinct delete error messages, at most 10.
     pub delete_errors: Vec<String>,
     /// Delete phases not run because an earlier phase had failed deletes, in
@@ -350,12 +374,8 @@ pub async fn garbage_collect(
     };
 
     let backoff = ExponentialBuilder::new()
-        .with_min_delay(std::time::Duration::from_millis(
-            retry_config.initial_backoff_ms() as u64,
-        ))
-        .with_max_delay(std::time::Duration::from_millis(
-            retry_config.max_backoff_ms() as u64
-        ))
+        .with_min_delay(Duration::from_millis(retry_config.initial_backoff_ms() as u64))
+        .with_max_delay(Duration::from_millis(retry_config.max_backoff_ms() as u64))
         .with_max_times(retry_config.max_tries().get() as usize)
         .with_jitter()
         .build();
@@ -492,6 +512,7 @@ async fn garbage_collect_one_attempt(
         *deleted_counter(summary) += report.deleted_objects;
         summary.bytes_deleted += report.deleted_bytes;
         summary.objects_failed_to_delete += report.failed_objects;
+        summary.throttled_batches += report.throttled_batches;
         for message in report.errors {
             if summary.delete_errors.len() < MAX_REPORTED_DELETE_ERRORS
                 && !summary.delete_errors.contains(&message)
@@ -764,6 +785,10 @@ pub struct DeleteReport {
     pub deleted_objects: u64,
     pub deleted_bytes: u64,
     pub failed_objects: u64,
+    /// Requests the store throttled; each one was retried, none failed.
+    pub throttled_batches: u64,
+    /// The highest number of delete requests this phase had in flight at once.
+    pub peak_in_flight: usize,
     /// First distinct error messages, at most `MAX_REPORTED_DELETE_ERRORS`.
     pub errors: Vec<String>,
 }
@@ -789,23 +814,52 @@ impl DeleteReport {
     }
 }
 
-/// What one delete batch task returns: how many keys it was asked to delete, and the backend's answer.
-type BatchOutcome = (usize, Result<DeleteObjectsResult, StorageError>);
+/// What one delete batch task returns.
+struct BatchOutcome {
+    /// The batch's spawn order within the phase, from [`Congestion::take_seq`].
+    seq: u64,
+    /// How many keys the request asked the store to delete
+    batch_len: usize,
+    /// The `(key, size)` pairs, carried back only when the store throttled, so
+    /// the deleter can re-queue them. Empty otherwise: the keys are no longer
+    /// needed and a batch of them can be large.
+    batch: Vec<(String, u64)>,
+    /// The store's answer: how much it deleted, or why it did not.
+    result: Result<DeleteObjectsResult, StorageError>,
+}
+
+/// What one finished batch means for the deleter.
+enum Absorbed {
+    /// Recorded: deleted, or failed in a way that counts as a failure.
+    Done,
+    /// The store asked for less traffic; the keys come back for a retry.
+    Throttled { batch: Vec<(String, u64)>, message: String },
+}
 
 /// Record one finished batch into the phase's [`DeleteReport`], and stop the
 /// phase once `threshold` batches in a row have failed. `consecutive_failures`
 /// is control state for the phase, not part of its reported outcome, so it
 /// lives outside the report.
+///
+/// A throttle is back-pressure rather than a failure: it is only counted, and
+/// the caller decides what it means for the delete rate.
 fn absorb_batch(
     report: &mut DeleteReport,
     consecutive_failures: &mut u32,
     prefix: &str,
     threshold: u32,
     joined: Result<BatchOutcome, tokio::task::JoinError>,
-) -> GCResult<()> {
-    let (batch_len, outcome) = joined.capture().map_err(GCError::Repository)?;
+) -> GCResult<(u64, Absorbed)> {
+    let BatchOutcome { seq, batch_len, batch, result } =
+        joined.capture().map_err(GCError::Repository)?;
+    if let Err(error) = &result
+        && error.kind.is_throttled()
+    {
+        report.throttled_batches += 1;
+        return Ok((seq, Absorbed::Throttled { batch, message: error.to_string() }));
+    }
     // (objects not deleted, why); `None` when the backend deleted the whole batch
-    let failure = match outcome {
+    let failure = match result {
         Ok(result) => {
             report.record_success(&result);
             // Backends answer `Ok` with fewer deleted objects
@@ -845,7 +899,114 @@ fn absorb_batch(
             }
         }
     }
-    Ok(())
+    Ok((seq, Absorbed::Done))
+}
+
+/// A TCP-style in-flight limit for one delete phase: slow start from a single
+/// request, one multiplicative decrease per throttle event, additive increase
+/// on every clean window. Every phase starts over, because the store's rate
+/// limits are per prefix.
+#[derive(Debug)]
+struct Congestion {
+    max: usize,
+    backoff: DeleteBackoff,
+    limit: usize,
+    slow_start: bool,
+    next_seq: u64,
+    /// Batches that came back un-throttled in the current window. A window is
+    /// `limit` of them; when it closes without a throttle the store is keeping
+    /// up and the limit grows.
+    window_done: usize,
+    /// `next_seq` at the last decrease. A batch older than this was already in
+    /// flight then, so its throttle belongs to that same event, and its success
+    /// says nothing about the reduced rate: neither counts.
+    decrease_floor: u64,
+    quiet: Duration,
+    quiet_until: Option<Instant>,
+}
+
+/// What a throttled batch means for the delete rate.
+#[derive(Debug, PartialEq, Eq)]
+enum Throttle {
+    /// Part of the throttle event that already lowered the limit.
+    SameEvent,
+    /// A new event: the limit halved and a quiet period started. `at_cap` says
+    /// the quiet period had already reached its maximum, so the store has been
+    /// throttling through the whole back-off ramp.
+    Event { at_cap: bool },
+}
+
+impl Congestion {
+    fn new(max: usize, backoff: DeleteBackoff) -> Self {
+        Congestion {
+            max: max.max(1),
+            backoff,
+            limit: 1,
+            slow_start: true,
+            next_seq: 0,
+            window_done: 0,
+            decrease_floor: 0,
+            quiet: Duration::ZERO,
+            quiet_until: None,
+        }
+    }
+
+    fn limit(&self) -> usize {
+        self.limit
+    }
+
+    fn quiet(&self) -> Duration {
+        self.quiet
+    }
+
+    /// Nothing may be spawned before this instant.
+    fn quiet_until(&self) -> Option<Instant> {
+        self.quiet_until
+    }
+
+    /// The sequence number for the batch about to be spawned.
+    fn take_seq(&mut self) -> u64 {
+        let seq = self.next_seq;
+        self.next_seq += 1;
+        seq
+    }
+
+    fn open_window(&mut self) {
+        self.window_done = 0;
+    }
+
+    fn on_throttle(&mut self, seq: u64, now: Instant) -> Throttle {
+        if seq < self.decrease_floor {
+            return Throttle::SameEvent;
+        }
+        self.slow_start = false;
+        self.limit = (self.limit / 2).max(1);
+        self.open_window();
+        self.decrease_floor = self.next_seq;
+        let at_cap = !self.quiet.is_zero() && self.quiet >= self.backoff.cap;
+        self.quiet = if self.quiet.is_zero() {
+            self.backoff.base
+        } else {
+            (self.quiet * 2).min(self.backoff.cap)
+        };
+        self.quiet_until = Some(now + self.quiet);
+        Throttle::Event { at_cap }
+    }
+
+    /// A batch finished without being throttled, deleted or not: a window that
+    /// ends without a throttle means the store is keeping up with the rate.
+    fn on_complete(&mut self, seq: u64) {
+        if seq < self.decrease_floor {
+            return;
+        }
+        self.window_done += 1;
+        if self.window_done >= self.limit {
+            let grown = if self.slow_start { self.limit * 2 } else { self.limit + 1 };
+            self.limit = grown.min(self.max);
+            self.open_window();
+            self.quiet = Duration::ZERO;
+        }
+    }
 }
 
 /// Batches queued between the listing collector and the deleter.
@@ -885,6 +1046,7 @@ where
         prefix,
         config.max_concurrent_deletes.get() as usize,
         config.max_consecutive_delete_failures.get() as u32,
+        config.delete_backoff,
         config.dry_run,
         rx,
         Arc::clone(&progress),
@@ -942,10 +1104,14 @@ struct DeleteProgress {
     batches_done: AtomicU64,
     deleted_objects: AtomicU64,
     failed_objects: AtomicU64,
+    throttled_batches: AtomicU64,
+    /// the deleter's current in-flight limit and quiet period
+    limit: AtomicU64,
+    quiet_ms: AtomicU64,
 }
 
 impl DeleteProgress {
-    fn read(&self) -> [u64; 6] {
+    fn read(&self) -> [u64; 9] {
         [
             self.candidates_listed.load(AtomicOrdering::Relaxed),
             self.candidates_accepted.load(AtomicOrdering::Relaxed),
@@ -953,6 +1119,9 @@ impl DeleteProgress {
             self.batches_done.load(AtomicOrdering::Relaxed),
             self.deleted_objects.load(AtomicOrdering::Relaxed),
             self.failed_objects.load(AtomicOrdering::Relaxed),
+            self.throttled_batches.load(AtomicOrdering::Relaxed),
+            self.limit.load(AtomicOrdering::Relaxed),
+            self.quiet_ms.load(AtomicOrdering::Relaxed),
         ]
     }
 }
@@ -964,14 +1133,24 @@ async fn report_delete_progress(progress: Arc<DeleteProgress>, prefix: &'static 
     let mut ticker = tokio::time::interval(PROGRESS_INTERVAL);
     // the first tick completes immediately
     ticker.tick().await;
-    let mut last = [0u64; 6];
+    let mut last = [0u64; 9];
     loop {
         ticker.tick().await;
         let now = progress.read();
         if now == last {
             continue;
         }
-        let [listed, accepted, batches_queued, batches_done, deleted, failed] = now;
+        let [
+            listed,
+            accepted,
+            batches_queued,
+            batches_done,
+            deleted,
+            failed,
+            throttled,
+            limit,
+            quiet_ms,
+        ] = now;
         info!(
             prefix,
             listed,
@@ -980,6 +1159,9 @@ async fn report_delete_progress(progress: Arc<DeleteProgress>, prefix: &'static 
             batches_done,
             deleted,
             failed,
+            throttled,
+            limit,
+            quiet_ms,
             elapsed_s = (started.elapsed().as_secs_f64() * 10.0).round() / 10.0,
             "delete phase progress"
         );
@@ -987,9 +1169,124 @@ async fn report_delete_progress(progress: Arc<DeleteProgress>, prefix: &'static 
     }
 }
 
-/// The deleter task: pulls batches, keeps at most `max_in_flight` delete
-/// requests running, and stops with `DeletesFailing` after `threshold`
-/// consecutive failed batches (dropping the `JoinSet` aborts the rest).
+/// The deleter's state for one phase: what it has recorded, what the store has
+/// said about the rate, and the batches waiting to be retried.
+struct Deleter {
+    prefix: &'static str,
+    threshold: u32,
+    progress: Arc<DeleteProgress>,
+    report: DeleteReport,
+    congestion: Congestion,
+    retry_queue: VecDeque<Vec<(String, u64)>>,
+    consecutive_failures: u32,
+    last_warn: Option<Instant>,
+}
+
+impl Deleter {
+    fn new(
+        prefix: &'static str,
+        threshold: u32,
+        max_in_flight: usize,
+        backoff: DeleteBackoff,
+        progress: Arc<DeleteProgress>,
+    ) -> Self {
+        Deleter {
+            prefix,
+            threshold,
+            progress,
+            report: DeleteReport::default(),
+            congestion: Congestion::new(max_in_flight, backoff),
+            retry_queue: VecDeque::new(),
+            consecutive_failures: 0,
+            last_warn: None,
+        }
+    }
+
+    /// Record one finished batch and let it steer the delete rate. Throttled
+    /// batches go back in the queue; only throttling that persists after the
+    /// quiet period has reached its cap counts toward `threshold`.
+    fn absorb(
+        &mut self,
+        joined: Result<BatchOutcome, tokio::task::JoinError>,
+    ) -> GCResult<()> {
+        let (seq, absorbed) = absorb_batch(
+            &mut self.report,
+            &mut self.consecutive_failures,
+            self.prefix,
+            self.threshold,
+            joined,
+        )?;
+        let batches_done = match absorbed {
+            Absorbed::Done => {
+                self.congestion.on_complete(seq);
+                1
+            }
+            Absorbed::Throttled { batch, message } => {
+                self.retry_queue.push_back(batch);
+                if let Throttle::Event { at_cap } =
+                    self.congestion.on_throttle(seq, Instant::now())
+                {
+                    self.warn_throttled(&message);
+                    if at_cap {
+                        self.consecutive_failures += 1;
+                        if self.consecutive_failures >= self.threshold {
+                            return Err(GCError::DeletesFailing {
+                                prefix: self.prefix.to_string(),
+                                last_error: message,
+                            });
+                        }
+                    }
+                }
+                0
+            }
+        };
+        self.publish(batches_done);
+        Ok(())
+    }
+
+    /// One line per second per phase: a throttled phase throttles in bursts.
+    fn warn_throttled(&mut self, message: &str) {
+        let now = Instant::now();
+        if self.last_warn.is_none_or(|last| now - last >= Duration::from_secs(1)) {
+            warn!(
+                prefix = self.prefix,
+                limit = self.congestion.limit(),
+                quiet_ms = self.congestion.quiet().as_millis() as u64,
+                error = message,
+                "store is throttling deletes, reducing the request rate"
+            );
+            self.last_warn = Some(now);
+        }
+    }
+
+    /// The report is the deleter's own state; the atomics mirror it for the
+    /// reporter, which cannot see across the task boundary.
+    fn publish(&self, batches_done: u64) {
+        let progress = self.progress.as_ref();
+        progress.batches_done.fetch_add(batches_done, AtomicOrdering::Relaxed);
+        progress
+            .deleted_objects
+            .store(self.report.deleted_objects, AtomicOrdering::Relaxed);
+        progress
+            .failed_objects
+            .store(self.report.failed_objects, AtomicOrdering::Relaxed);
+        progress
+            .throttled_batches
+            .store(self.report.throttled_batches, AtomicOrdering::Relaxed);
+        progress.limit.store(self.congestion.limit() as u64, AtomicOrdering::Relaxed);
+        progress
+            .quiet_ms
+            .store(self.congestion.quiet().as_millis() as u64, AtomicOrdering::Relaxed);
+    }
+}
+
+/// The deleter task: pulls batches, keeps at most `limit` delete requests
+/// running, and stops with `DeletesFailing` after `threshold` consecutive
+/// failed batches (dropping the `JoinSet` aborts the rest).
+///
+/// The limit is not `max_in_flight` but whatever rate the store sustains,
+/// discovered by [`Congestion`]: a throttled batch is re-queued rather than
+/// counted as a failure, and new requests wait out a quiet period.
 #[expect(clippy::too_many_arguments)]
 async fn run_deletes(
     storage: Arc<dyn Storage + Send + Sync>,
@@ -997,50 +1294,83 @@ async fn run_deletes(
     prefix: &'static str,
     max_in_flight: usize,
     threshold: u32,
+    backoff: DeleteBackoff,
     dry_run: bool,
     mut rx: mpsc::Receiver<Vec<(String, u64)>>,
     progress: Arc<DeleteProgress>,
 ) -> GCResult<DeleteReport> {
-    let mut report = DeleteReport::default();
-    let mut consecutive_failures = 0u32;
+    let mut deleter = Deleter::new(prefix, threshold, max_in_flight, backoff, progress);
     let mut in_flight: JoinSet<BatchOutcome> = JoinSet::new();
-    // the report is the deleter's own state; the atomics mirror it for the
-    // reporter, which cannot see across the task boundary
-    let publish = |report: &DeleteReport, batches_done: u64| {
-        progress.batches_done.fetch_add(batches_done, AtomicOrdering::Relaxed);
-        progress.deleted_objects.store(report.deleted_objects, AtomicOrdering::Relaxed);
-        progress.failed_objects.store(report.failed_objects, AtomicOrdering::Relaxed);
-    };
-    while let Some(batch) = rx.recv().await {
+    let mut queue_open = true;
+
+    loop {
+        // retries first: they are already past the listing filter
+        let batch = match deleter.retry_queue.pop_front() {
+            Some(batch) => batch,
+            None if queue_open => match rx.recv().await {
+                Some(batch) => batch,
+                None => {
+                    queue_open = false;
+                    continue;
+                }
+            },
+            // nothing more to spawn: drain what is still running, which may
+            // put throttled batches back in the queue
+            None => match in_flight.join_next().await {
+                Some(joined) => {
+                    deleter.absorb(joined)?;
+                    continue;
+                }
+                None => break,
+            },
+        };
+
         if dry_run {
-            report.record_dry_run(&batch);
-            publish(&report, 1);
+            deleter.report.record_dry_run(&batch);
+            deleter.publish(1);
             continue;
         }
-        while in_flight.len() >= max_in_flight {
-            if let Some(joined) = in_flight.join_next().await {
-                absorb_batch(
-                    &mut report,
-                    &mut consecutive_failures,
-                    prefix,
-                    threshold,
-                    joined,
-                )?;
-                publish(&report, 1);
+
+        while in_flight.len() >= deleter.congestion.limit() {
+            match in_flight.join_next().await {
+                Some(joined) => deleter.absorb(joined)?,
+                None => break,
             }
         }
+
+        // in-flight batches keep running through the quiet period; only new
+        // requests wait
+        if let Some(quiet_until) = deleter.congestion.quiet_until() {
+            let now = Instant::now();
+            if quiet_until > now {
+                tokio::time::sleep(quiet_until - now).await;
+            }
+        }
+
+        let seq = deleter.congestion.take_seq();
         let storage = Arc::clone(&storage);
         let settings = settings.clone();
         let batch_len = batch.len();
         in_flight.spawn(async move {
-            (batch_len, storage.delete_batch(&settings, prefix, batch).await)
+            // `delete_batch` consumes the keys, so a copy has to survive the
+            // call to be re-queued if the store throttles it
+            let retry = batch.clone();
+            match storage.delete_batch(&settings, prefix, batch).await {
+                Ok(result) => {
+                    BatchOutcome { seq, batch_len, batch: Vec::new(), result: Ok(result) }
+                }
+                Err(error) if error.kind.is_throttled() => {
+                    BatchOutcome { seq, batch_len, batch: retry, result: Err(error) }
+                }
+                Err(error) => {
+                    BatchOutcome { seq, batch_len, batch: Vec::new(), result: Err(error) }
+                }
+            }
         });
+        deleter.report.peak_in_flight =
+            deleter.report.peak_in_flight.max(in_flight.len());
     }
-    while let Some(joined) = in_flight.join_next().await {
-        absorb_batch(&mut report, &mut consecutive_failures, prefix, threshold, joined)?;
-        publish(&report, 1);
-    }
-    Ok(report)
+    Ok(deleter.report)
 }
 
 #[instrument(skip(asset_manager, config, keep_ids), fields(keep_ids.len = keep_ids.len()))]
@@ -1242,12 +1572,8 @@ pub async fn expire_v2(
     let retry_config = repo_update_retries.unwrap_or(&default_retry_config).retries();
 
     let backoff = ExponentialBuilder::new()
-        .with_min_delay(std::time::Duration::from_millis(
-            retry_config.initial_backoff_ms() as u64,
-        ))
-        .with_max_delay(std::time::Duration::from_millis(
-            retry_config.max_backoff_ms() as u64
-        ))
+        .with_min_delay(Duration::from_millis(retry_config.initial_backoff_ms() as u64))
+        .with_max_delay(Duration::from_millis(retry_config.max_backoff_ms() as u64))
         .with_max_times(retry_config.max_tries().get() as usize)
         .with_jitter()
         .build();
@@ -1590,9 +1916,11 @@ mod tests {
 
     use bytes::Bytes;
     use chrono::TimeZone as _;
+    // `Duration` is chrono's in this module under `cfg(not(shuttle))`
     use futures::stream::BoxStream;
     use icechunk_macros::tokio_test;
     use icechunk_storage::sealed::Sealed;
+    use std::time::Duration as StdDuration;
 
     use super::*;
     use crate::{
@@ -1688,6 +2016,76 @@ mod tests {
         assert!(!created_entirely_before(at(100, 400_000_000), at(100, 400_000_000)));
     }
 
+    fn ms(millis: u64) -> StdDuration {
+        StdDuration::from_millis(millis)
+    }
+
+    /// The control law on its own, with no store and no clock: slow start
+    /// doubles on every clean window, a throttle event halves the limit once
+    /// however many siblings report it, and the quiet period ramps to the cap
+    /// and resets when a window comes back clean.
+    #[test]
+    fn congestion_ramps_up_and_backs_off() {
+        let mut congestion =
+            Congestion::new(8, DeleteBackoff { base: ms(10), cap: ms(40) });
+        let now = Instant::now();
+        assert_eq!(congestion.limit(), 1);
+
+        let run_window = |congestion: &mut Congestion| {
+            let window: Vec<u64> =
+                (0..congestion.limit()).map(|_| congestion.take_seq()).collect();
+            window.into_iter().for_each(|seq| congestion.on_complete(seq));
+        };
+        for expected in [2usize, 4, 8, 8] {
+            run_window(&mut congestion);
+            assert_eq!(congestion.limit(), expected);
+        }
+        assert!(congestion.quiet().is_zero());
+        assert_eq!(congestion.quiet_until(), None);
+
+        // one event per window: the siblings of the first throttle are the
+        // same event, and must not halve the limit eight times
+        let siblings: Vec<u64> = (0..8).map(|_| congestion.take_seq()).collect();
+        assert_eq!(
+            congestion.on_throttle(siblings[0], now),
+            Throttle::Event { at_cap: false }
+        );
+        assert_eq!(congestion.limit(), 4);
+        for seq in &siblings[1..] {
+            assert_eq!(congestion.on_throttle(*seq, now), Throttle::SameEvent);
+        }
+        assert_eq!(congestion.limit(), 4);
+        assert_eq!(congestion.quiet(), ms(10));
+        assert_eq!(congestion.quiet_until(), Some(now + ms(10)));
+
+        // a clean window at the reduced limit: additive increase now, and the
+        // quiet period is over
+        run_window(&mut congestion);
+        assert_eq!(congestion.limit(), 5);
+        assert!(congestion.quiet().is_zero());
+
+        // sustained throttling: the quiet period doubles to the cap, and every
+        // event from then on is one the caller counts as a failure
+        let ramp: Vec<(StdDuration, Throttle)> = (0..5)
+            .map(|_| {
+                let seq = congestion.take_seq();
+                let event = congestion.on_throttle(seq, now);
+                (congestion.quiet(), event)
+            })
+            .collect();
+        assert_eq!(
+            ramp,
+            vec![
+                (ms(10), Throttle::Event { at_cap: false }),
+                (ms(20), Throttle::Event { at_cap: false }),
+                (ms(40), Throttle::Event { at_cap: false }),
+                (ms(40), Throttle::Event { at_cap: true }),
+                (ms(40), Throttle::Event { at_cap: true }),
+            ]
+        );
+        assert_eq!(congestion.limit(), 1);
+    }
+
     /// How `FlakyDeletes::delete_batch` misbehaves under the failing prefix.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
     enum FailMode {
@@ -1699,6 +2097,10 @@ mod tests {
         ShortByOne,
         /// every call waits for one permit from `gate` before delegating
         Gated,
+        /// the first `n` calls under the failing prefix are throttled
+        ThrottleFirst(usize),
+        /// every call under the failing prefix is throttled
+        ThrottleAlways,
     }
 
     /// What `delete_batch` should do with this call.
@@ -1706,6 +2108,7 @@ mod tests {
     enum Injected {
         Nothing,
         Fail,
+        Throttle,
         ReportOneFewer,
     }
 
@@ -1724,6 +2127,12 @@ mod tests {
         /// permits `FailMode::Gated` deletes wait on; ignored by every other mode
         #[serde(skip, default = "closed_gate")]
         gate: Arc<tokio::sync::Semaphore>,
+        /// `delete_batch` calls running right now, and the most ever at once:
+        /// the deleter's in-flight limit as the store sees it
+        #[serde(skip)]
+        in_flight: AtomicUsize,
+        #[serde(skip)]
+        peak_in_flight: AtomicUsize,
         /// what to report from `lists_id_prefixes_natively`: `None` defers to
         /// the backend, `Some` picks which `AssetManager` listing path runs
         #[serde(default)]
@@ -1760,7 +2169,34 @@ mod tests {
                 FailMode::Alternate => Injected::Nothing,
                 FailMode::ShortByOne => Injected::ReportOneFewer,
                 FailMode::Gated => Injected::Nothing,
+                FailMode::ThrottleFirst(first) if n < first => Injected::Throttle,
+                FailMode::ThrottleFirst(_) => Injected::Nothing,
+                FailMode::ThrottleAlways => Injected::Throttle,
             }
+        }
+
+        fn enter_delete(&self) -> InFlightGuard<'_> {
+            let now = self.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+            self.peak_in_flight.fetch_max(now, Ordering::SeqCst);
+            InFlightGuard(self)
+        }
+
+        #[cfg(not(feature = "shuttle"))]
+        fn running_deletes(&self) -> usize {
+            self.in_flight.load(Ordering::SeqCst)
+        }
+
+        #[cfg(not(feature = "shuttle"))]
+        fn peak_deletes(&self) -> usize {
+            self.peak_in_flight.load(Ordering::SeqCst)
+        }
+    }
+
+    struct InFlightGuard<'a>(&'a FlakyDeletes);
+
+    impl Drop for InFlightGuard<'_> {
+        fn drop(&mut self) {
+            self.0.in_flight.fetch_sub(1, Ordering::SeqCst);
         }
     }
 
@@ -1866,10 +2302,16 @@ mod tests {
             prefix: &str,
             batch: Vec<(String, u64)>,
         ) -> StorageResult<DeleteObjectsResult> {
+            let _in_flight = self.enter_delete();
             if matches!(self.mode, FailMode::Gated) {
-                let _permit = self.gate.acquire().await.map_err(|err| {
-                    StorageError::capture(StorageErrorKind::Other(err.to_string()))
-                })?;
+                // forget: one permit per batch, never handed back on drop
+                self.gate
+                    .acquire()
+                    .await
+                    .map_err(|err| {
+                        StorageError::capture(StorageErrorKind::Other(err.to_string()))
+                    })?
+                    .forget();
                 return self.backend.delete_batch(settings, prefix, batch).await;
             }
             match self.injected(prefix) {
@@ -1879,6 +2321,12 @@ mod tests {
                 Injected::Fail => Err(StorageError::capture(StorageErrorKind::Other(
                     "injected delete failure".to_string(),
                 ))),
+                Injected::Throttle => {
+                    Err(StorageError::capture(StorageErrorKind::Throttled {
+                        code: "SlowDown".to_string(),
+                        message: "Please reduce your request rate.".to_string(),
+                    }))
+                }
                 // the objects really are deleted; we only misreport the count,
                 // which is what S3 does from the caller's point of view when
                 // one key in the batch errors
@@ -1984,6 +2432,11 @@ mod tests {
             None,
             false,
         )
+        // milliseconds instead of seconds, so a throttled phase runs in test time
+        .with_delete_backoff(DeleteBackoff {
+            base: std::time::Duration::from_millis(10),
+            cap: std::time::Duration::from_millis(40),
+        })
     }
 
     #[cfg(not(feature = "shuttle"))]
@@ -2031,6 +2484,8 @@ mod tests {
             mode,
             list_error_prefix: list_error_prefix.map(str::to_string),
             gate: closed_gate(),
+            in_flight: AtomicUsize::new(0),
+            peak_in_flight: AtomicUsize::new(0),
             native_id_prefixes,
         });
         let storage: Arc<dyn Storage + Send + Sync> = Arc::clone(&flaky) as _;
@@ -2308,6 +2763,152 @@ mod tests {
             tokio::time::timeout(std::time::Duration::from_secs(5), run).await???;
         assert_eq!(report.deleted_objects, 4);
         assert_eq!(report.failed_objects, 0);
+        assert_eq!(am.list_chunks().await?.count().await, 0);
+        Ok(())
+    }
+
+    #[cfg(not(feature = "shuttle"))]
+    /// A repo whose only chunk objects are `n` uncommitted, hence garbage, chunks.
+    async fn repo_with_loose_chunks(
+        backend: &Arc<dyn Storage + Send + Sync>,
+        n: usize,
+    ) -> Result<crate::Repository, Box<dyn std::error::Error>> {
+        let repo = repo_with_converging_refs(backend).await?;
+        let session = repo.writable_session("main").await?;
+        for i in 0..n {
+            // above the inline threshold, so each chunk is its own object
+            session.get_chunk_writer()?(Bytes::from(vec![i as u8; 1024])).await?;
+        }
+        Ok(repo)
+    }
+
+    #[cfg(not(feature = "shuttle"))]
+    /// Poll until `done` holds, or fail the test.
+    async fn wait_for(
+        what: &str,
+        done: impl Fn() -> bool,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while !done() {
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+            }
+        })
+        .await
+        .map_err(|_| format!("timed out waiting for {what}"))?;
+        Ok(())
+    }
+
+    /// A throttle is back-pressure, not a failure: the batch is retried until
+    /// the store accepts it, and the phase completes even with a threshold of
+    /// one, which would abort at the first ordinary failure.
+    #[tokio_test]
+    async fn throttled_batches_are_retried_not_failed()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+        let repo = repo_with_garbage(&backend).await?;
+        let (am, flaky) = wrapped_asset_manager(
+            &repo,
+            &backend,
+            Some(CHUNKS_FILE_PATH),
+            FailMode::ThrottleFirst(3),
+        );
+
+        let summary = garbage_collect(Arc::clone(&am), &gc_config_with(1, 4), None, 10)
+            .await
+            .map_err(|err| format!("GC should survive throttling: {err}"))?;
+
+        assert_eq!(summary.chunks_deleted, 4);
+        assert_eq!(summary.throttled_batches, 3);
+        assert_eq!(summary.objects_failed_to_delete, 0);
+        assert!(summary.delete_errors.is_empty(), "{:?}", summary.delete_errors);
+        assert!(summary.skipped_phases.is_empty());
+        // three throttled attempts plus the one that went through
+        assert_eq!(flaky.calls.load(Ordering::SeqCst), 4);
+        assert_eq!(repo.asset_manager().list_chunks().await?.count().await, 0);
+        Ok(())
+    }
+
+    /// Only throttling that persists through the whole back-off ramp ends a
+    /// phase: the quiet period doubles 10 → 20 → 40 ms, and the two events
+    /// after it reaches the cap are the two failures the threshold allows.
+    #[tokio_test]
+    async fn sustained_throttling_aborts_after_the_backoff_cap()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+        let repo = repo_with_garbage(&backend).await?;
+        let (am, flaky) = wrapped_asset_manager(
+            &repo,
+            &backend,
+            Some(CHUNKS_FILE_PATH),
+            FailMode::ThrottleAlways,
+        );
+
+        let started = Instant::now();
+        let result = garbage_collect(Arc::clone(&am), &gc_config_with(2, 4), None, 10)
+            .await
+            .map(|summary| summary.chunks_deleted);
+        let elapsed = started.elapsed();
+
+        match result {
+            Err(GCError::DeletesFailing { prefix, last_error }) => {
+                assert_eq!(prefix, CHUNKS_FILE_PATH);
+                assert!(last_error.contains("SlowDown"), "{last_error}");
+            }
+            other => panic!("expected DeletesFailing, got {other:?}"),
+        }
+        assert_eq!(flaky.calls.load(Ordering::SeqCst), 5);
+        // the limit never leaves 1, so the store never sees two at once
+        assert_eq!(flaky.peak_deletes(), 1);
+        // 10 + 20 + 40 + 40 ms of quiet periods, not the production seconds
+        assert!(elapsed < std::time::Duration::from_millis(200), "{elapsed:?}");
+        Ok(())
+    }
+
+    /// Slow start doubles the in-flight limit on every clean window. With the
+    /// gate closed the store sees exactly `limit` requests at once, so the test
+    /// can watch 1, 2, 4, 8 by releasing one window at a time.
+    #[tokio_test]
+    async fn slow_start_doubles_the_limit_on_clean_windows()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+        // 15 = 1 + 2 + 4 + 8: four clean windows, the last one at the ceiling
+        let repo = repo_with_loose_chunks(&backend, 15).await?;
+        let (am, flaky) = wrapped_asset_manager(&repo, &backend, None, FailMode::Gated);
+        let gate = Arc::clone(&flaky.gate);
+        let candidates: Vec<ListInfo<ChunkId>> =
+            am.list_chunks().await?.try_collect().await?;
+        assert_eq!(candidates.len(), 15);
+
+        // one object per batch, ceiling of 8 concurrent requests
+        let config = gc_config_with(50, 8);
+        let am2 = Arc::clone(&am);
+        let run = tokio::spawn(async move {
+            delete_listed(
+                am2.as_ref(),
+                &config,
+                CHUNKS_FILE_PATH,
+                NonZeroUsize::MIN,
+                stream::iter(candidates.into_iter().map(Ok)),
+                |_| true,
+            )
+            .await
+        });
+
+        for expected in [1usize, 2, 4, 8] {
+            wait_for(&format!("{expected} deletes in flight"), || {
+                flaky.running_deletes() == expected
+            })
+            .await?;
+            assert_eq!(flaky.peak_deletes(), expected);
+            gate.add_permits(expected);
+        }
+
+        let report =
+            tokio::time::timeout(std::time::Duration::from_secs(5), run).await???;
+        assert_eq!(report.deleted_objects, 15);
+        assert_eq!(report.failed_objects, 0);
+        assert_eq!(report.throttled_batches, 0);
+        assert_eq!(report.peak_in_flight, 8);
         assert_eq!(am.list_chunks().await?.count().await, 0);
         Ok(())
     }

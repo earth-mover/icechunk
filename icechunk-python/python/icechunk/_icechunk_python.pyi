@@ -2005,6 +2005,12 @@ class GCSummary:
         They remain garbage for the next run.
         """
     @property
+    def throttled_batches(self) -> int:
+        """
+        How many delete requests the store throttled. Each one was retried
+        after a pause, and none of them counts as a failure.
+        """
+    @property
     def delete_errors(self) -> list[str]:
         """
         The first distinct delete error messages, at most ten.
