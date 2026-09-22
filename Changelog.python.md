@@ -2,10 +2,24 @@
 
 ## Python Icechunk Library [unreleased]
 
+## Python Icechunk Library 2.3.0a1
+
+### Features
+
+- Garbage collection and chunk statistics warn when the open file limit is too low ([#2413](https://github.com/earth-mover/icechunk/pull/2413)).
+- Garbage collection treats store throttling as back pressure. A congestion controller adapts the number of deletes in flight instead of failing the run ([#2408](https://github.com/earth-mover/icechunk/pull/2408)).
+- Garbage collection stops after `max_consecutive_delete_failures` delete batches fail in a row. Phases that depend on a failed phase are skipped and reported in `GCSummary.skipped_phases` ([#2405](https://github.com/earth-mover/icechunk/pull/2405)).
+- Manifest walks limit the memory of decoded manifests with a second budget, 4 GiB by default ([#2407](https://github.com/earth-mover/icechunk/pull/2407)).
+- Wheels are published for free threaded Python 3.14 ([#2421](https://github.com/earth-mover/icechunk/pull/2421)).
+
 ### Performance
 
 - `Session.fork` on a session with no changes (the most common case) no longer writes a snapshot. This removes a full snapshot write and a repo metadata update from every fork of a clean session.
 - The snapshot a fork is based on is no longer recorded in the repo metadata.
+- Garbage collection and chunk statistics share a parallel manifest walker. Fetch, decode and per manifest work run in separate worker pools ([#2404](https://github.com/earth-mover/icechunk/pull/2404)).
+- Object listing runs on a pool of tasks and deletes run on their own task. On an 8 core in-region instance against S3, listing rises from 130k to about 800k keys per second. A new `max_concurrent_listings` setting limits the pool ([#2406](https://github.com/earth-mover/icechunk/pull/2406)).
+- The garbage collection deleter absorbs completed batches while it waits for the collector ([#2415](https://github.com/earth-mover/icechunk/pull/2415)).
+- Nodes are decoded only when they are needed ([#2395](https://github.com/earth-mover/icechunk/pull/2395)).
 
 ### Breaking changes
 

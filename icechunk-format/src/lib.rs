@@ -567,6 +567,8 @@ pub mod format_constants {
     pub const LATEST_ICECHUNK_FORMAT_VERSION_METADATA_KEY_DEPRECATED: &str =
         "ic_spec_ver";
 
+    // The Cargo spelling, so a prerelease stamps `ic-2.3.0-alpha.1`. The PyPI version
+    // of that same build is `2.3.0a1`, so compare the two parsed, never as strings.
     pub const ICECHUNK_LIB_VERSION: &str = env!("CARGO_PKG_VERSION");
 
     pub static ICECHUNK_CLIENT_NAME: LazyLock<String> =
