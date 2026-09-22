@@ -80,6 +80,9 @@ tokio = { workspace = true, features = [
   "io-util",
 ] }
 
+[target.'cfg(unix)'.dependencies]
+rlimit.workspace = true
+
 [dev-dependencies]
 icechunk-macros.workspace = true
 # test-util exposes write-id injection for the lost-response regression tests.

@@ -21,7 +21,9 @@ use crate::{
     ops::{
         pointed_snapshots,
         sharded_set::{ChunkIdSet, ShardedSet},
+        walk_peak_requests,
         walker::{ManifestConsumer, WalkLimits, walk_manifests},
+        warn_on_low_fd_limit,
     },
     repository::{RepositoryError, RepositoryErrorKind, RepositoryResult},
 };
@@ -139,6 +141,10 @@ pub async fn repo_chunks_storage(
     max_decoded_manifest_mem_bytes: NonZeroUsize,
     max_concurrent_manifest_fetches: NonZeroU16,
 ) -> RepositoryResult<ChunkStorageStats> {
+    warn_on_low_fd_limit(
+        walk_peak_requests(max_concurrent_manifest_fetches, max_snapshots_in_memory),
+        "Chunk storage stats",
+    );
     let extra_roots = HashSet::new();
     let snaps = pointed_snapshots(
         Arc::clone(&asset_manager),
