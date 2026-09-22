@@ -94,7 +94,7 @@ async def test_write_minio_virtual_refs(use_async) -> None:
             location=f"s3://testbucket/{prefix}/chunk-1",
             offset=0,
             length=4,
-            etag_checksum="bad etag",
+            etag_checksum="00000000000000000000000000000000",
         ),
         VirtualChunkSpec(
             index=[3, 0, 0],
@@ -128,7 +128,7 @@ async def test_write_minio_virtual_refs(use_async) -> None:
             location=f"s3://testbucket/{prefix}/chunk-2",
             offset=1,
             length=4,
-            etag_checksum="bad etag",
+            etag_checksum="00000000000000000000000000000000",
         ),
         VirtualChunkSpec(
             index=[3, 0, 1],

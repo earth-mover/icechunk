@@ -74,8 +74,8 @@ async fn setup_toxiproxy(
 
     let listen = format!("0.0.0.0:{port}");
     let name = name.to_string();
-    client.create_proxy(&name, &listen, "minio:9000").await?;
-    println!("Created proxy: {} ({}) -> minio:9000", name, listen);
+    client.create_proxy(&name, &listen, "rustfs:9000").await?;
+    println!("Created proxy: {} ({}) -> rustfs:9000", name, listen);
 
     Ok((client, name))
 }

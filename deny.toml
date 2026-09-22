@@ -32,6 +32,10 @@ ignore = [
   # `PyCFunction::new_closure` closures (we don't use `new_closure`).
   "RUSTSEC-2026-0176",
   "RUSTSEC-2026-0177",
+  # h2 unbounded empty DATA frames (low severity): patched only in h2 >= 0.4.16.
+  # The h2 0.3 line is a transitive dep via aws-smithy-http-client -> hyper 0.14
+  # with no patched release. No upgrade path until the AWS SDK drops that stack.
+  "RUSTSEC-2026-0258",
 ]
 
 [licenses]
