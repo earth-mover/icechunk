@@ -30,7 +30,9 @@ use crate::{
         ensure_repo_writable, pointed_snapshots, reachable_snapshots_v2,
         reparent_and_prune, retry_on_repo_info_update,
         sharded_set::ChunkIdSet,
+        walk_peak_requests,
         walker::{ManifestConsumer, WalkLimits, walk_manifests},
+        warn_on_low_fd_limit,
     },
     repository::{RepositoryError, RepositoryErrorKind, RepositoryResult},
     storage::{self, ListInfo},
@@ -170,6 +172,20 @@ impl GCConfig {
     pub fn list_concurrency(&self) -> NonZeroU16 {
         self.max_concurrent_listings
             .unwrap_or_else(storage::listing::default_list_concurrency)
+    }
+
+    /// The most requests GC has in flight at once, and so the descriptors it
+    /// needs. Its phases run one after another: listing snapshots, then the
+    /// manifest walk (which fetches snapshots alongside manifests), then the
+    /// delete passes (which stream a listing into the deleter).
+    fn peak_concurrent_requests(&self) -> u64 {
+        let list = self.list_concurrency().get() as u64;
+        let walk = walk_peak_requests(
+            self.max_concurrent_manifest_fetches,
+            self.max_snapshots_in_memory,
+        );
+        let delete = list + self.max_concurrent_deletes.get() as u64;
+        list.max(walk).max(delete)
     }
 
     pub fn action_needed(&self) -> bool {
@@ -357,6 +373,7 @@ pub async fn garbage_collect(
     num_updates_per_repo_info_file: u16,
 ) -> GCResult<GCSummary> {
     ensure_repo_writable(asset_manager.as_ref(), "garbage collect").await?;
+    warn_on_low_fd_limit(config.peak_concurrent_requests(), "Garbage collection");
     retry_on_repo_info_update(repo_update_retries, "GC", async || {
         garbage_collect_one_attempt(
             Arc::clone(&asset_manager),
@@ -989,6 +1006,33 @@ mod tests {
             base: std::time::Duration::from_millis(10),
             cap: std::time::Duration::from_millis(40),
         })
+    }
+
+    #[test]
+    fn peak_concurrent_requests_takes_the_largest_phase() {
+        let cutoff = Utc::now();
+        let config = |listings: u16, snaps: u16, fetches: u16, deletes: u16| {
+            GCConfig::clean_all(
+                cutoff,
+                cutoff,
+                None,
+                NonZeroU16::new(snaps).unwrap(),
+                NonZeroUsize::new(1).unwrap(),
+                NonZeroUsize::new(1).unwrap(),
+                NonZeroU16::new(fetches).unwrap(),
+                NonZeroU16::new(deletes).unwrap(),
+                NonZeroU16::new(1).unwrap(),
+                Some(NonZeroU16::new(listings).unwrap()),
+                false,
+            )
+            .peak_concurrent_requests()
+        };
+
+        // the walk fetches manifests and snapshots at the same time
+        assert_eq!(config(32, 50, 500, 10), 550);
+        // deletes stream a listing, so both fan-outs are in flight
+        assert_eq!(config(200, 5, 10, 100), 300);
+        assert_eq!(config(200, 5, 10, 1), 201);
     }
 
     /// Chunks are the last phase, so a failure there skips nothing. The

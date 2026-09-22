@@ -103,3 +103,53 @@ Use `Repository.garbage_collect` to delete data associated with expired snapshot
 results = repo.garbage_collect(expiry_time)
 print(results)
 ```
+
+### Reading the summary
+
+The returned [`GCSummary`](../reference/ops.md#icechunk.ops.GCSummary) counts
+what was deleted, but also what wasn't:
+
+- `objects_failed_to_delete` counts objects whose delete request failed. They
+  stay garbage and the next run will try again; isolated failures do not stop
+  the run.
+- `delete_errors` holds the first few distinct error messages behind those
+  failures.
+- `skipped_phases` lists the phases that were not run at all. Garbage
+  collection deletes one kind of object per phase — snapshots, then transaction
+  logs, manifests and chunks — each kind only after the kind that references it.
+  If a phase has failures, the phases that depend on it are skipped, so a
+  surviving object is never left pointing at something that was deleted. Those
+  phases are simply picked up by the next run.
+- `throttled_batches` counts delete requests the store asked us to slow down.
+  Each was retried after a pause; none of them is a failure.
+
+A run only gives up with an error — a `StorageError` with
+`kind == ErrorKind.GC_DELETES_FAILING` — when deletes fail persistently, by
+default 50 in a row.
+
+### Tuning
+
+The defaults are meant to work unchanged, including on large repositories.
+The knobs worth knowing about, all keyword arguments of
+[`garbage_collect`](../reference/index.md#icechunk.Repository.garbage_collect):
+
+- **Memory.** The manifest walk holds decoded manifests in memory, bounded by
+  `max_decoded_manifest_mem_bytes` (4 GiB by default). Manifests grow many times
+  over when decoded, so this, rather than the compressed budget
+  (`max_compressed_manifest_mem_bytes`), is usually what bounds the memory a run
+  uses for manifests. It does not cover the set of chunk ids the walk
+  accumulates, which dominates on repositories with many millions of chunks.
+- **Delete rate.** Garbage collection does not delete at a fixed rate: it starts
+  with a single request in flight and ramps up until the store throttles it or
+  it reaches `max_concurrent_deletes`, then keeps adjusting. Raising that ceiling
+  only helps on prefixes the store has already partitioned.
+- **Listing.** `max_concurrent_listings` sets how many object listings run
+  concurrently while looking for garbage. It defaults to eight per available
+  core, clamped to between 32 and 256.
+- **Giving up.** `max_consecutive_delete_failures` (50) is how many delete
+  requests must fail in a row before the run aborts. Throttling only counts
+  towards it once the store keeps throttling after the back-off between retries
+  has grown to its maximum.
+
+See the [API reference](../reference/index.md#icechunk.Repository.garbage_collect)
+for the full list and the exact defaults.
