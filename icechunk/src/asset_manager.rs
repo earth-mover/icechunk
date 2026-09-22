@@ -44,7 +44,7 @@ use crate::{
         CHUNKS_FILE_PATH, CONFIG_FILE_PATH, ChunkId, ChunkOffset, IcechunkFormatError,
         IcechunkFormatErrorKind, MANIFESTS_FILE_PATH, ManifestId, OBJECT_ID_FIRST_CHARS,
         OVERWRITTEN_FILES_PATH, REPO_INFO_FILE_PATH, SNAPSHOTS_FILE_PATH, SnapshotId,
-        TRANSACTION_LOGS_FILE_PATH,
+        TRANSACTION_LOGS_FILE_PATH, V1_REFS_FILE_PATH,
         format_constants::{
             self, CompressionAlgorithmBin, FileHeader, FileTypeBin, SpecVersionBin,
             parse_file_header,
@@ -1110,6 +1110,40 @@ impl AssetManager {
                 .inject()?
                 .map(|r| r.inject()),
         ))
+    }
+
+    /// Experimental. Bytes of all native chunks and metadata files, from listings only.
+    /// Unlike [`crate::ops::stats::repo_chunks_storage`], it does not deduplicate across snapshots.
+    #[doc(hidden)]
+    #[instrument(skip(self))]
+    pub async fn _total_nonvirtual_size(&self) -> RepositoryResult<u64> {
+        let settings = &self.storage_settings;
+        let id_prefixes = [
+            CHUNKS_FILE_PATH,
+            MANIFESTS_FILE_PATH,
+            SNAPSHOTS_FILE_PATH,
+            TRANSACTION_LOGS_FILE_PATH,
+        ];
+        let listings = id_prefixes
+            .into_iter()
+            .map(|prefix| {
+                self.storage.list_objects_with_id_first_chars(
+                    settings,
+                    prefix,
+                    &OBJECT_ID_FIRST_CHARS,
+                )
+            })
+            .chain(
+                [V1_REFS_FILE_PATH, OVERWRITTEN_FILES_PATH]
+                    .map(|prefix| self.storage.list_objects(settings, prefix)),
+            );
+        let listings = futures::future::try_join_all(listings).await.inject()?;
+        futures::stream::select_all(listings)
+            .try_fold(0u64, |total, info| {
+                std::future::ready(Ok(total.saturating_add(info.size_bytes)))
+            })
+            .await
+            .inject()
     }
 
     pub async fn delete_chunks(

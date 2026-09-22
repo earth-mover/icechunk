@@ -18,8 +18,9 @@ use icechunk::{
     },
     error::ICError,
     format::{
-        CHUNKS_FILE_PATH, ChunkId, MANIFESTS_FILE_PATH, OBJECT_ID_FIRST_CHARS, Path,
-        SNAPSHOTS_FILE_PATH, SnapshotId, TRANSACTION_LOGS_FILE_PATH,
+        CHUNKS_FILE_PATH, ChunkId, MANIFESTS_FILE_PATH, ManifestId,
+        OBJECT_ID_FIRST_CHARS, OVERWRITTEN_FILES_PATH, Path, SNAPSHOTS_FILE_PATH,
+        SnapshotId, TRANSACTION_LOGS_FILE_PATH, V1_REFS_FILE_PATH,
         format_constants::SpecVersionBin, snapshot::Snapshot,
     },
     new_local_filesystem_storage,
@@ -640,6 +641,51 @@ async fn test_list_objects_with_id_first_chars() -> Result<(), Box<dyn std::erro
             assert_eq!(obs, vec!["0a".to_string(), "0b".to_string(), "Za".to_string()]);
         }
 
+        Ok(())
+    })
+    .await?;
+    Ok(())
+}
+
+#[tokio_test]
+async fn test_total_nonvirtual_size() -> Result<(), Box<dyn std::error::Error>> {
+    with_storage(Permission::Modify, |_, storage| async move {
+        let settings = storage.default_settings().await?;
+        let am = AssetManager::new_no_cache(
+            Arc::clone(&storage),
+            settings.clone(),
+            SpecVersionBin::current(),
+            1,
+            DEFAULT_MAX_CONCURRENT_REQUESTS,
+        );
+        assert_eq!(am._total_nonvirtual_size().await?, 0);
+
+        let objects = [
+            (format!("{CHUNKS_FILE_PATH}/{}", ChunkId::random()), 5),
+            (format!("{CHUNKS_FILE_PATH}/{}", ChunkId::random()), 7),
+            (format!("{MANIFESTS_FILE_PATH}/{}", ManifestId::random()), 11),
+            (format!("{SNAPSHOTS_FILE_PATH}/{}", SnapshotId::random()), 13),
+            (format!("{TRANSACTION_LOGS_FILE_PATH}/{}", SnapshotId::random()), 17),
+            (format!("{V1_REFS_FILE_PATH}/branch.main/ZZZZZZZZ.json"), 19),
+            (format!("{OVERWRITTEN_FILES_PATH}/config.yaml.123"), 23),
+            ("repo".to_string(), 1000),
+            ("config.yaml".to_string(), 1000),
+        ];
+        for (path, size) in &objects {
+            storage
+                .put_object(
+                    &settings,
+                    path,
+                    Bytes::from(vec![0u8; *size]),
+                    None,
+                    Default::default(),
+                    None,
+                )
+                .await?
+                .must_write()?;
+        }
+
+        assert_eq!(am._total_nonvirtual_size().await?, 5 + 7 + 11 + 13 + 17 + 19 + 23);
         Ok(())
     })
     .await?;
