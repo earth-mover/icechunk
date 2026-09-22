@@ -201,6 +201,10 @@ pub(crate) struct GcArgs {
     /// GC cutoff is now minus this many seconds
     #[arg(long, default_value_t = 0)]
     pub(crate) cutoff_age_secs: u64,
+    #[arg(long, default_value_t = 10)]
+    pub(crate) max_concurrent_deletes: u16,
+    #[arg(long, default_value_t = 50)]
+    pub(crate) max_consecutive_delete_failures: u16,
 }
 
 #[derive(Args, Debug)]

@@ -60,10 +60,7 @@ use crate::{
     },
     private,
     repository::{RepositoryError, RepositoryErrorKind, RepositoryResult},
-    storage::{
-        self, DeleteObjectsResult, ListInfo, StorageErrorKind, VersionInfo,
-        VersionedUpdateResult,
-    },
+    storage::{self, ListInfo, StorageErrorKind, VersionInfo, VersionedUpdateResult},
 };
 
 /// Reads and writes Icechunk assets with caching and concurrency control.
@@ -1110,62 +1107,6 @@ impl AssetManager {
                 .inject()?
                 .map(|r| r.inject()),
         ))
-    }
-
-    pub async fn delete_chunks(
-        &self,
-        chunks: BoxStream<'_, (ChunkId, u64)>,
-    ) -> RepositoryResult<DeleteObjectsResult> {
-        self.storage
-            .delete_objects(
-                &self.storage_settings,
-                CHUNKS_FILE_PATH,
-                chunks.map(|(id, size)| (id.to_string(), size)).boxed(),
-            )
-            .await
-            .inject()
-    }
-
-    pub async fn delete_manifests(
-        &self,
-        manifests: BoxStream<'_, (ManifestId, u64)>,
-    ) -> RepositoryResult<DeleteObjectsResult> {
-        self.storage
-            .delete_objects(
-                &self.storage_settings,
-                MANIFESTS_FILE_PATH,
-                manifests.map(|(id, size)| (id.to_string(), size)).boxed(),
-            )
-            .await
-            .inject()
-    }
-
-    pub async fn delete_snapshots(
-        &self,
-        snapshots: BoxStream<'_, (SnapshotId, u64)>,
-    ) -> RepositoryResult<DeleteObjectsResult> {
-        self.storage
-            .delete_objects(
-                &self.storage_settings,
-                SNAPSHOTS_FILE_PATH,
-                snapshots.map(|(id, size)| (id.to_string(), size)).boxed(),
-            )
-            .await
-            .inject()
-    }
-
-    pub async fn delete_transaction_logs(
-        &self,
-        transaction_logs: BoxStream<'_, (SnapshotId, u64)>,
-    ) -> RepositoryResult<DeleteObjectsResult> {
-        self.storage
-            .delete_objects(
-                &self.storage_settings,
-                TRANSACTION_LOGS_FILE_PATH,
-                transaction_logs.map(|(id, size)| (id.to_string(), size)).boxed(),
-            )
-            .await
-            .inject()
     }
 
     pub async fn can_write_to_storage(&self) -> RepositoryResult<bool> {

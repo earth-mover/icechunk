@@ -1908,6 +1908,8 @@ class Repository:
         max_snapshots_in_memory: int = 50,
         max_compressed_manifest_mem_bytes: int = 512 * 1024 * 1024,
         max_concurrent_manifest_fetches: int = 500,
+        max_concurrent_deletes: int = 10,
+        max_consecutive_delete_failures: int = 50,
     ) -> GCSummary:
         """Delete any objects no longer accessible from any branches or tags.
 
@@ -1932,11 +1934,20 @@ class Repository:
             Don't use more than this memory to store compressed in-flight manifests.
         max_concurrent_manifest_fetches : int
             Don't run more than this many concurrent manifest fetches.
+        max_concurrent_deletes : int
+            Don't run more than this many concurrent delete requests.
+        max_consecutive_delete_failures : int
+            Give up, with an error, after this many delete requests fail in a row.
+            Isolated failures are reported in the returned summary and don't stop
+            the run.
 
         Returns
         -------
         GCSummary
-            Summary of objects deleted.
+            Summary of objects deleted. Deletes that failed are counted in
+            `objects_failed_to_delete`; if a phase had failures, later phases are
+            skipped and listed in `skipped_phases`, so the next run can delete
+            them in a safe order.
         """
 
         return self._repository.garbage_collect(
@@ -1945,6 +1956,8 @@ class Repository:
             max_snapshots_in_memory=max_snapshots_in_memory,
             max_compressed_manifest_mem_bytes=max_compressed_manifest_mem_bytes,
             max_concurrent_manifest_fetches=max_concurrent_manifest_fetches,
+            max_concurrent_deletes=max_concurrent_deletes,
+            max_consecutive_delete_failures=max_consecutive_delete_failures,
         )
 
     async def garbage_collect_async(
@@ -1955,6 +1968,8 @@ class Repository:
         max_snapshots_in_memory: int = 50,
         max_compressed_manifest_mem_bytes: int = 512 * 1024 * 1024,
         max_concurrent_manifest_fetches: int = 500,
+        max_concurrent_deletes: int = 10,
+        max_consecutive_delete_failures: int = 50,
     ) -> GCSummary:
         """Delete any objects no longer accessible from any branches or tags (async version).
 
@@ -1979,11 +1994,20 @@ class Repository:
             Don't use more than this memory to store compressed in-flight manifests.
         max_concurrent_manifest_fetches : int
             Don't run more than this many concurrent manifest fetches.
+        max_concurrent_deletes : int
+            Don't run more than this many concurrent delete requests.
+        max_consecutive_delete_failures : int
+            Give up, with an error, after this many delete requests fail in a row.
+            Isolated failures are reported in the returned summary and don't stop
+            the run.
 
         Returns
         -------
         GCSummary
-            Summary of objects deleted.
+            Summary of objects deleted. Deletes that failed are counted in
+            `objects_failed_to_delete`; if a phase had failures, later phases are
+            skipped and listed in `skipped_phases`, so the next run can delete
+            them in a safe order.
         """
 
         return await self._repository.garbage_collect_async(
@@ -1992,6 +2016,8 @@ class Repository:
             max_snapshots_in_memory=max_snapshots_in_memory,
             max_compressed_manifest_mem_bytes=max_compressed_manifest_mem_bytes,
             max_concurrent_manifest_fetches=max_concurrent_manifest_fetches,
+            max_concurrent_deletes=max_concurrent_deletes,
+            max_consecutive_delete_failures=max_consecutive_delete_failures,
         )
 
     def chunk_storage_stats(
