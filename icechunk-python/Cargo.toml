@@ -43,15 +43,11 @@ typetag.workspace = true
 
 # Optional dependencies
 clap = { workspace = true, optional = true }
-mimalloc = { workspace = true, optional = true }
 
 [features]
 cli = ["clap", "icechunk/cli"]
 otel = ["icechunk/otel"]
-# mimalloc as the global allocator of the extension module. Build with
-# `--no-default-features --features cli,otel` to keep the system allocator.
-mimalloc = ["dep:mimalloc"]
-default = ["cli", "otel", "mimalloc"]
+default = ["cli", "otel"]
 
 [lints]
 workspace = true
