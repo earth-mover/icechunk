@@ -71,7 +71,9 @@ use tracing::{instrument, warn};
 use url::Url;
 use uuid::Uuid;
 
-#[cfg(all(test, feature = "gcs"))]
+#[cfg(feature = "azure")]
+mod azure_fast_list;
+#[cfg(all(test, any(feature = "gcs", feature = "azure")))]
 mod fast_list_test_server;
 #[cfg(feature = "gcs")]
 mod gcs_fast_list;
@@ -174,10 +176,10 @@ fn sorted_headers(mut headers: Vec<(String, String)>) -> Vec<(String, String)> {
 }
 
 /// Used when [`Settings`] has no `operation_attempt_timeout_ms`.
-#[cfg(feature = "gcs")]
+#[cfg(any(feature = "gcs", feature = "azure"))]
 const DEFAULT_LIST_REQUEST_TIMEOUT_SECS: u64 = 120;
 
-#[cfg(feature = "gcs")]
+#[cfg(any(feature = "gcs", feature = "azure"))]
 fn parse_config_bool(value: &str) -> Option<bool> {
     match value.to_ascii_lowercase().as_str() {
         "1" | "true" | "on" | "yes" | "y" => Some(true),
@@ -188,7 +190,7 @@ fn parse_config_bool(value: &str) -> Option<bool> {
 
 /// Whether a configured endpoint is plaintext `http://`. A `None` endpoint means
 /// the provider default (`https://…`), so it is never plaintext.
-#[cfg(feature = "gcs")]
+#[cfg(any(feature = "gcs", feature = "azure"))]
 fn endpoint_is_plaintext_http(endpoint: Option<&str>) -> bool {
     endpoint.is_some_and(|e| {
         e.trim_start().get(..7).is_some_and(|s| s.eq_ignore_ascii_case("http://"))
@@ -197,7 +199,7 @@ fn endpoint_is_plaintext_http(endpoint: Option<&str>) -> bool {
 
 /// Shared by the GCS and Azure listers. Refuses plaintext HTTP unless `allow_http` is set,
 /// as `object_store` does, so credentials are never sent in the clear.
-#[cfg(feature = "gcs")]
+#[cfg(any(feature = "gcs", feature = "azure"))]
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct FastListHttpConfig {
     pub allow_http: bool,
@@ -206,7 +208,7 @@ pub(crate) struct FastListHttpConfig {
     pub read_timeout: Option<std::time::Duration>,
 }
 
-#[cfg(feature = "gcs")]
+#[cfg(any(feature = "gcs", feature = "azure"))]
 impl FastListHttpConfig {
     fn from_settings(settings: &Settings, allow_http: bool) -> Self {
         use std::time::Duration;
@@ -1503,8 +1505,71 @@ impl Display for AzureObjectStoreBackend {
 }
 
 #[cfg(feature = "azure")]
+#[async_trait]
 #[typetag::serde(name = "azure_object_store_provider")]
 impl ObjectStoreBackend for AzureObjectStoreBackend {
+    /// Only SAS, bearer, account-key and anonymous credentials, with at most an endpoint
+    /// config. `FromEnv` would need `object_store`'s whole credential chain.
+    async fn fast_list_fetcher(
+        &self,
+        settings: &Settings,
+    ) -> StorageResult<Option<Arc<dyn ListPageFetcher>>> {
+        let mut endpoint: Option<&str> = None;
+        let mut use_emulator = false;
+        let mut allow_http = false;
+        for (key, value) in self.config.iter().flatten() {
+            match key {
+                AzureConfigKey::Endpoint => endpoint = Some(value),
+                AzureConfigKey::UseEmulator => match parse_config_bool(value) {
+                    Some(flag) => use_emulator = flag,
+                    None => return Ok(None),
+                },
+                AzureConfigKey::Client(ClientConfigKey::AllowHttp) => {
+                    allow_http = parse_config_bool(value).unwrap_or(false);
+                }
+                _ => return Ok(None),
+            }
+        }
+        // The emulator endpoint (from the environment) is always plaintext http,
+        // and object_store enables http for it implicitly.
+        let allow_http = allow_http || use_emulator;
+        let plaintext = use_emulator || endpoint_is_plaintext_http(endpoint);
+        if plaintext && !allow_http {
+            return Ok(None);
+        }
+        let auth = match &self.credentials {
+            Some(AzureCredentials::Anonymous) => {
+                azure_fast_list::AzureListAuth::Anonymous
+            }
+            Some(AzureCredentials::Static(AzureStaticCredentials::SASToken(token))) => {
+                azure_fast_list::AzureListAuth::sas(token)
+            }
+            Some(AzureCredentials::Static(AzureStaticCredentials::BearerToken(
+                token,
+            ))) => azure_fast_list::AzureListAuth::Bearer(token.clone()),
+            Some(AzureCredentials::Static(AzureStaticCredentials::AccessKey(key))) => {
+                azure_fast_list::AzureListAuth::shared_key(key)?
+            }
+            Some(AzureCredentials::Refreshable(fetcher)) => {
+                azure_fast_list::AzureListAuth::Refreshable(Arc::new(
+                    AzureRefreshableCredentialProvider::new(Arc::clone(fetcher)),
+                ))
+            }
+            None | Some(AzureCredentials::FromEnv) => return Ok(None),
+        };
+        let http =
+            FastListHttpConfig::from_settings(settings, allow_http).build_client()?;
+        azure_fast_list::make_fetcher(
+            endpoint,
+            use_emulator,
+            &self.account,
+            &self.container,
+            auth,
+            http,
+        )
+        .map(Some)
+    }
+
     fn storage_info(&self) -> StorageInfo {
         let mut fields = vec![
             ("account", self.account.clone()),
@@ -1867,24 +1932,43 @@ impl AzureRefreshableCredentialProvider {
     pub async fn get_or_update_credentials(
         &self,
     ) -> Result<AzureRefreshableCredential, StorageError> {
-        let last_credential = self.last_credential.read().await;
+        fn still_fresh(creds: &AzureRefreshableCredential) -> bool {
+            // No expiry: cache until a 401 or 403 invalidates it.
+            creds.expires_after().is_none_or(|expires_after| {
+                expires_after
+                    > Utc::now() + TimeDelta::seconds(rand::random_range(120..=180))
+            })
+        }
 
         // If we have a credential and it hasn't expired, return it
+        {
+            let last_credential = self.last_credential.read().await;
+            if let Some(creds) = last_credential.as_ref()
+                && still_fresh(creds)
+            {
+                return Ok(creds.clone());
+            }
+        }
+
+        let mut last_credential = self.last_credential.write().await;
+        // Check again under the write lock, so waiting requests do not all refresh.
         if let Some(creds) = last_credential.as_ref()
-            && let Some(expires_after) = creds.expires_after()
-            && expires_after
-                > Utc::now() + TimeDelta::seconds(rand::random_range(120..=180))
+            && still_fresh(creds)
         {
             return Ok(creds.clone());
         }
-
-        drop(last_credential);
-        let mut last_credential = self.last_credential.write().await;
-
         // Otherwise, refresh the credential and cache it
         let creds = self.refresher.get().await.map_err(other_error)?;
         *last_credential = Some(creds.clone());
         Ok(creds)
+    }
+
+    /// Compares first, so a late 401 does not wipe a credential another request refreshed.
+    pub async fn invalidate_if_matches(&self, stale: &AzureRefreshableCredential) {
+        let mut last_credential = self.last_credential.write().await;
+        if last_credential.as_ref() == Some(stale) {
+            *last_credential = None;
+        }
     }
 }
 
@@ -2543,7 +2627,240 @@ mod gcs_fast_path_tests {
     }
 }
 
-#[cfg(all(test, feature = "gcs"))]
+#[cfg(all(test, feature = "azure"))]
+mod azure_fast_path_tests {
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    use async_trait::async_trait;
+    use icechunk_macros::tokio_test;
+    use object_store::{ClientConfigKey, azure::AzureConfigKey};
+
+    use super::{
+        AzureCredentials, AzureCredentialsFetcher, AzureObjectStoreBackend,
+        AzureRefreshableCredential, AzureRefreshableCredentialProvider,
+        AzureStaticCredentials, ObjectStoreBackend as _, Settings,
+    };
+
+    #[derive(Debug, serde::Serialize, serde::Deserialize)]
+    struct FixedSasFetcher;
+
+    #[async_trait]
+    #[typetag::serde]
+    impl AzureCredentialsFetcher for FixedSasFetcher {
+        async fn get(&self) -> Result<AzureRefreshableCredential, String> {
+            Ok(AzureRefreshableCredential::SASToken {
+                token: "?sv=1&sig=s".to_string(),
+                expires_after: None,
+            })
+        }
+    }
+
+    fn backend(
+        credentials: Option<AzureCredentials>,
+        config: Option<HashMap<AzureConfigKey, String>>,
+    ) -> AzureObjectStoreBackend {
+        AzureObjectStoreBackend {
+            account: "a".to_string(),
+            container: "c".to_string(),
+            prefix: Some("p".to_string()),
+            credentials,
+            config,
+        }
+    }
+
+    fn cfg(
+        entries: &[(AzureConfigKey, &str)],
+    ) -> Option<HashMap<AzureConfigKey, String>> {
+        Some(entries.iter().map(|(k, v)| (*k, (*v).to_string())).collect())
+    }
+
+    async fn engages(b: &AzureObjectStoreBackend) -> bool {
+        #[expect(clippy::expect_used)]
+        b.fast_list_fetcher(&Settings::default()).await.expect("must not error").is_some()
+    }
+
+    #[tokio_test]
+    async fn test_fast_lister_engages_for_supported_credentials() {
+        let creds = [
+            AzureStaticCredentials::SASToken("sv=1&sig=s".to_string()),
+            AzureStaticCredentials::BearerToken("tok".to_string()),
+            AzureStaticCredentials::AccessKey("a2V5".to_string()),
+        ];
+        for cred in creds {
+            assert!(
+                engages(&backend(Some(AzureCredentials::Static(cred.clone())), None))
+                    .await,
+                "must engage: {cred:?}"
+            );
+        }
+        assert!(engages(&backend(Some(AzureCredentials::Anonymous), None)).await);
+        assert!(
+            engages(&backend(
+                Some(AzureCredentials::Refreshable(Arc::new(FixedSasFetcher))),
+                None
+            ))
+            .await
+        );
+    }
+
+    #[tokio_test]
+    async fn test_fast_lister_falls_back_for_env_credentials() {
+        assert!(!engages(&backend(None, None)).await);
+        assert!(!engages(&backend(Some(AzureCredentials::FromEnv), None)).await);
+    }
+
+    #[tokio_test]
+    async fn test_fast_lister_honors_endpoint_and_rejects_unknown_config() {
+        let anon = || Some(AzureCredentials::Anonymous);
+        assert!(
+            engages(&backend(
+                anon(),
+                cfg(&[
+                    (AzureConfigKey::Endpoint, "http://localhost:10000/a"),
+                    (AzureConfigKey::Client(ClientConfigKey::AllowHttp), "true"),
+                ])
+            ))
+            .await
+        );
+        assert!(
+            engages(&backend(anon(), cfg(&[(AzureConfigKey::UseEmulator, "true")])))
+                .await
+        );
+        assert!(
+            !engages(&backend(anon(), cfg(&[(AzureConfigKey::UseEmulator, "maybe")])))
+                .await
+        );
+        assert!(
+            !engages(&backend(anon(), cfg(&[(AzureConfigKey::SkipSignature, "true")])))
+                .await
+        );
+        assert!(
+            !engages(&backend(
+                anon(),
+                cfg(&[(AzureConfigKey::Client(ClientConfigKey::ProxyUrl), "http://p")])
+            ))
+            .await
+        );
+    }
+
+    // An http:// endpoint engages only with AllowHttp explicitly true (or the
+    // always-plaintext emulator); without it the fast path must refuse, matching
+    // object_store, so no SAS/bearer/SharedKey request is sent in the clear.
+    #[tokio_test]
+    async fn test_fast_lister_refuses_plaintext_http_without_allow_http() {
+        let anon = || Some(AzureCredentials::Anonymous);
+        let endpoint = (AzureConfigKey::Endpoint, "http://localhost:10000/a");
+        let allow = |v| (AzureConfigKey::Client(ClientConfigKey::AllowHttp), v);
+        assert!(!engages(&backend(anon(), cfg(&[endpoint]))).await);
+        assert!(!engages(&backend(anon(), cfg(&[endpoint, allow("false")]))).await);
+        assert!(engages(&backend(anon(), cfg(&[endpoint, allow("true")]))).await);
+        // The emulator is always plaintext and engages without AllowHttp.
+        assert!(
+            engages(&backend(anon(), cfg(&[(AzureConfigKey::UseEmulator, "true")])))
+                .await
+        );
+        // The default https endpoint engages regardless of AllowHttp.
+        assert!(engages(&backend(anon(), None)).await);
+    }
+
+    #[tokio_test]
+    async fn test_fast_lister_errors_on_invalid_access_key() {
+        let b = backend(
+            Some(AzureCredentials::Static(AzureStaticCredentials::AccessKey(
+                "not base64!".to_string(),
+            ))),
+            None,
+        );
+        assert!(b.fast_list_fetcher(&Settings::default()).await.is_err());
+    }
+
+    #[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
+    struct CountingFetcher {
+        #[serde(skip)]
+        calls: Arc<std::sync::atomic::AtomicUsize>,
+        #[serde(skip)]
+        never_expires: bool,
+    }
+
+    #[async_trait]
+    #[typetag::serde]
+    impl AzureCredentialsFetcher for CountingFetcher {
+        async fn get(&self) -> Result<AzureRefreshableCredential, String> {
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            tokio::task::yield_now().await;
+            let expires_after = (!self.never_expires)
+                .then(|| chrono::Utc::now() + chrono::TimeDelta::hours(1));
+            Ok(AzureRefreshableCredential::BearerToken {
+                bearer: "tok".to_string(),
+                expires_after,
+            })
+        }
+    }
+
+    fn counting_provider()
+    -> (AzureRefreshableCredentialProvider, Arc<std::sync::atomic::AtomicUsize>) {
+        counting_provider_inner(false)
+    }
+
+    fn counting_provider_inner(
+        never_expires: bool,
+    ) -> (AzureRefreshableCredentialProvider, Arc<std::sync::atomic::AtomicUsize>) {
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let fetcher =
+            Arc::new(CountingFetcher { calls: Arc::clone(&calls), never_expires });
+        (AzureRefreshableCredentialProvider::new(fetcher), calls)
+    }
+
+    #[tokio_test]
+    async fn test_refreshable_provider_single_flights_concurrent_refreshes() {
+        use std::sync::atomic::Ordering::SeqCst;
+        let (provider, calls) = counting_provider();
+        let provider = Arc::new(provider);
+        let runs = (0..16).map(|_| {
+            let provider = Arc::clone(&provider);
+            async move {
+                provider.get_or_update_credentials().await.unwrap();
+            }
+        });
+        futures::future::join_all(runs).await;
+        assert_eq!(calls.load(SeqCst), 1);
+    }
+
+    #[tokio_test]
+    async fn test_refreshable_provider_invalidate_only_clears_matching_credential() {
+        use std::sync::atomic::Ordering::SeqCst;
+        let (provider, calls) = counting_provider();
+        let live = provider.get_or_update_credentials().await.unwrap();
+        assert_eq!(calls.load(SeqCst), 1);
+
+        let stale = AzureRefreshableCredential::BearerToken {
+            bearer: "other".to_string(),
+            expires_after: None,
+        };
+        provider.invalidate_if_matches(&stale).await;
+        provider.get_or_update_credentials().await.unwrap();
+        assert_eq!(calls.load(SeqCst), 1);
+
+        provider.invalidate_if_matches(&live).await;
+        provider.get_or_update_credentials().await.unwrap();
+        assert_eq!(calls.load(SeqCst), 2);
+    }
+
+    #[tokio_test]
+    async fn test_refreshable_provider_caches_credential_without_expiry() {
+        use std::sync::atomic::Ordering::SeqCst;
+        let (provider, calls) = counting_provider_inner(true);
+        // A credential minted with expires_after=None is fresh indefinitely, so
+        // a many-page fan-out resolves it once rather than re-minting per page.
+        for _ in 0..64 {
+            provider.get_or_update_credentials().await.unwrap();
+        }
+        assert_eq!(calls.load(SeqCst), 1);
+    }
+}
+
+#[cfg(all(test, any(feature = "gcs", feature = "azure")))]
 mod fast_list_http_config_tests {
     use std::time::Duration;
 
