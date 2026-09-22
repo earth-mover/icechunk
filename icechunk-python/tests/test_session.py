@@ -120,6 +120,41 @@ async def test_session_fork(use_async: bool, any_spec_version: int | None) -> No
         assert groups == {"foo", "foo1", "foo2", "foo3", "foo4"}
 
 
+async def test_fork_chain(any_spec_version: int | None) -> None:
+    # a starter process dirties a session and forks it to a coordinator, which
+    # writes and forks again, once per worker
+    with tempfile.TemporaryDirectory() as tmpdir:
+        repo = Repository.create(
+            local_filesystem_storage(tmpdir),
+            spec_version=any_spec_version,
+        )
+        session = repo.writable_session("main")
+        zarr.create_group(session.store)
+        session.commit("init")
+
+        session = repo.writable_session("main")
+        zarr.create_group(session.store, path="/starter")
+
+        coordinator = pickle.loads(pickle.dumps(session.fork()))
+        zarr.create_group(coordinator.store, path="/coordinator")
+
+        workers = [pickle.loads(pickle.dumps(coordinator.fork())) for _ in range(2)]
+        for i, worker in enumerate(workers):
+            zarr.create_group(worker.store, path=f"/worker{i}")
+
+        coordinator.merge(*(pickle.loads(pickle.dumps(w)) for w in workers))
+        session.merge(pickle.loads(pickle.dumps(coordinator)))
+        session.commit("all done")
+
+        groups = set(
+            name
+            for name, _ in zarr.open_group(
+                repo.readonly_session("main").store, mode="r"
+            ).groups()
+        )
+        assert groups == {"starter", "coordinator", "worker0", "worker1"}
+
+
 @pytest.mark.parametrize(
     "inline_threshold,chunk_type",
     [(10_000, ChunkType.inline), (1, ChunkType.native)],
