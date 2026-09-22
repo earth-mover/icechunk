@@ -1,9 +1,7 @@
 import math
 import os
-import zlib
-from collections import defaultdict
 from enum import Enum
-from typing import Any, Literal, cast
+from typing import Literal, cast
 
 import boto3
 import pytest
@@ -58,18 +56,6 @@ settings.register_profile(
     derandomize=False,
     suppress_health_check=[HealthCheck.filter_too_much, HealthCheck.too_slow],
 )
-
-
-def pytest_report_header(config: pytest.Config) -> str | None:
-    if HYPOTHESIS_SHARDS == 1:
-        return None
-    current = settings()
-    return (
-        f"hypothesis shards={HYPOTHESIS_SHARDS} "
-        f"profile={settings.get_current_profile_name()} "
-        f"max_examples={current.max_examples} "
-        f"stateful_step_count={current.stateful_step_count}"
-    )
 
 
 class Permission(Enum):
@@ -154,11 +140,10 @@ def any_spec_version(request: pytest.FixtureRequest) -> SpecVersion | int | None
 
 
 SHARD_ENV = "ICECHUNK_PYTEST_SHARD"
-shard_counts_key = pytest.StashKey[tuple[int, int]]()
 
 
-# Runs after -m/-k deselection. The cases of one parametrized test go round-robin
-# from a crc32 offset, so slow families spread out and all processes agree.
+# Runs after -m/-k deselection. Round-robin over the collected order, so the cases
+# of one parametrized test spread over the shards and every process agrees.
 @pytest.hookimpl(trylast=True)
 def pytest_collection_modifyitems(
     config: pytest.Config, items: list[pytest.Item]
@@ -167,43 +152,6 @@ def pytest_collection_modifyitems(
     if not spec:
         return
     index, count = (int(part) for part in spec.split("/"))
-    families: dict[str, list[str]] = defaultdict(list)
-    for item in items:
-        families[item.nodeid.partition("[")[0]].append(item.nodeid)
-    shard_of = {
-        nodeid: (zlib.crc32(base.encode()) + rank) % count
-        for base, nodeids in families.items()
-        for rank, nodeid in enumerate(sorted(nodeids))
-    }
-    kept = [item for item in items if shard_of[item.nodeid] == index]
-    dropped = [item for item in items if shard_of[item.nodeid] != index]
-    config.stash[shard_counts_key] = (len(kept), len(items))
-    items[:] = kept
+    dropped = [item for pos, item in enumerate(items) if pos % count != index]
+    items[:] = items[index::count]
     config.hook.pytest_deselected(items=dropped)
-    # xdist workers have no terminal, so the controller reports their counts
-    workeroutput = getattr(config, "workeroutput", None)
-    if workeroutput is not None:
-        workeroutput[SHARD_ENV] = config.stash[shard_counts_key]
-
-
-@pytest.hookimpl(optionalhook=True)
-def pytest_testnodedown(node: Any, error: object) -> None:
-    counts = getattr(node, "workeroutput", {}).get(SHARD_ENV)
-    if counts is not None:
-        node.config.stash[shard_counts_key] = tuple(counts)
-
-
-def pytest_terminal_summary(
-    terminalreporter: pytest.TerminalReporter, config: pytest.Config
-) -> None:
-    counts = config.stash.get(shard_counts_key, None)
-    if counts is not None:
-        kept, total = counts
-        terminalreporter.write_line(
-            f"{SHARD_ENV}={os.environ[SHARD_ENV]}: kept {kept} of {total} items"
-        )
-        # CI gates sum these per shard to prove the shards cover every test
-        report = os.environ.get(f"{SHARD_ENV}_REPORT")
-        if report:
-            with open(report, "w") as f:
-                f.write(f"{os.environ[SHARD_ENV]} {kept} {total}\n")

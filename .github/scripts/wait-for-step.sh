@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-# Usage: wait-for-step.sh <job name> <step name> [seconds after job start before the step can finish]
+# Usage: wait-for-step.sh <job name> <step name>
 # Used instead of 'needs' so runner pickup and setup overlap the job waited on.
 set -euo pipefail
 
 job=$1
 step=$2
-earliest=${3:-0}
+# No job waited on reaches its step sooner than this many seconds after it starts
+earliest=90
 jobs_url="repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?filter=latest&per_page=100"
 
 deadline=$((SECONDS + 1200))

@@ -458,6 +458,33 @@ contup:
 rustfs-up:
   docker compose up -d rustfs_init
 
+# CI starts the services first and joins later, so the image pulls overlap the
+# build steps in between.
+[group('services')]
+[script]
+[doc("Start docker compose services in the background; join with contjoin or rustfs-join")]
+services-start *services:
+  state="${RUNNER_TEMP:-/tmp}/icechunk-services"
+  rm -f "$state.rc"
+  # set +e: errexit would end the subshell before it records a failed start
+  (set +e; docker compose up -d "$@"; echo $? > "$state.rc") > "$state.log" 2>&1 &
+
+[private]
+[script]
+services-join:
+  state="${RUNNER_TEMP:-/tmp}/icechunk-services"
+  for _ in $(seq 300); do [ -s "$state.rc" ] && break; sleep 1; done
+  cat "$state.log"
+  [ "$(cat "$state.rc")" = 0 ]
+
+[group('services')]
+[doc("Wait for a backgrounded services-start, then for RustFS to be ready")]
+rustfs-join: services-join rustfs-wait
+
+[group('services')]
+[doc("Wait for a backgrounded services-start, then for all services to be ready")]
+contjoin: services-join contwait
+
 [group('services')]
 [script]
 [doc("Wait for RustFS container to be ready")]

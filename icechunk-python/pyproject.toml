@@ -324,14 +324,9 @@ wheel-test-py314t = { features = [
   "py314t",
   "runner"
 ], no-default-feature = true, solve-group = "py314t" }
-# The Windows Rust tests need only cargo and nextest. A small env installs faster.
+# The Windows and macOS unit-test legs need cargo, nextest and the MSRV text
+# check. A small env installs faster than the default one.
 rust-test = { features = [
-  "runner",
-  "rustc",
-  "nextest"
-], no-default-feature = true, solve-group = "default" }
-# The macOS unit-test legs, which also run the MSRV text check
-rust-unit = { features = [
   "runner",
   "rustc",
   "nextest",

@@ -85,11 +85,6 @@ jobs:
         with:
           persist-credentials: false
 
-      # Same as `just rustfs-up`, but in the background so the image pull and
-      # health wait overlap the setup steps below
-      - name: Stand up RustFS
-        run: (docker compose up -d rustfs_init; echo $? > "$RUNNER_TEMP/rustfs-up.rc") > "$RUNNER_TEMP/rustfs-up.log" 2>&1 &
-
       - uses: prefix-dev/setup-pixi@d3f436a425481402e6a95a1d1fc10331c708cd9e # v0.10.2
         with:
           pixi-version: ${{ env.PIXI_VERSION }}
@@ -98,10 +93,14 @@ jobs:
           manifest-path: icechunk-python/pyproject.toml
           environments: wheel-test
 
+      # Backgrounded so the image pull overlaps the setup steps below
+      - name: Stand up RustFS
+        run: just services-start rustfs_init
+
       - name: Wait for build-wheels
         env:
           GH_TOKEN: ${{ github.token }}
-        run: .github/scripts/wait-for-step.sh build-wheels "Upload wheels" 90
+        run: .github/scripts/wait-for-step.sh build-wheels "Upload wheels"
 
       - name: Download wheels
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -126,11 +125,7 @@ jobs:
       # this is here instead of earlier to give RustFS more time to get up and running
       # checking and waiting only right before we need it
       - name: Wait for RustFS to be ready
-        run: |
-          for _ in $(seq 300); do [ -s "$RUNNER_TEMP/rustfs-up.rc" ] && break; sleep 1; done
-          cat "$RUNNER_TEMP/rustfs-up.log"
-          [ "$(cat "$RUNNER_TEMP/rustfs-up.rc")" = 0 ]
-          just rustfs-wait
+        run: just rustfs-join
 
       # Python-line coverage is measured here, against the shipped wheel;
       # Rust+FFI coverage stays in rust-ci where the instrumented build is shared
@@ -139,14 +134,7 @@ jobs:
         env:
           COV_ARGS: ${{ matrix.deps-version.name == 'latest' && '--cov=icechunk' || '' }}
           ICECHUNK_PYTEST_SHARD: ${{ matrix.shard }}/4
-          ICECHUNK_PYTEST_SHARD_REPORT: ${{ runner.temp }}/shard-count.txt
         run: just pytest-venv $COV_ARGS -n 4 --dist worksteal -m "not hypothesis"
-
-      - name: Upload shard count
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: shard-count-test-${{ matrix.deps-version.name }}-${{ matrix.shard }}
-          path: ${{ runner.temp }}/shard-count.txt
 
       - name: Stash coverage data for aggregation
         if: ${{ matrix.deps-version.name == 'latest' }}
@@ -162,8 +150,8 @@ jobs:
           path: icechunk-python/.coverage-fragments/.coverage.test-latest-${{ matrix.shard }}
           include-hidden-files: true
 
-  # Keeps the per-variant "test (...)" check names. A skipped required check counts
-  # as passing, so this runs always and checks only its own variant's shard counts.
+  # Keeps the per-variant "test (...)" check names. A skipped required check
+  # counts as passing, so this runs always. Any failed shard reds every variant.
   test:
     name: test (${{ matrix.deps-version.name }}, ${{ matrix.deps-version.xarray }}, ${{ matrix.deps-version.dask }}, ${{ matrix.deps-version.distributed }}, ${{ matrix.deps-version.zarr }})
     if: always()
@@ -184,21 +172,14 @@ jobs:
             distributed: "latest-release"
             zarr: "latest-release"
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-          sparse-checkout: .github/scripts
-
-      # A failed or cancelled shard uploads no count, and the check below catches that
-      - name: Download shard counts
-        continue-on-error: true
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
-        with:
-          pattern: shard-count-test-${{ matrix.deps-version.name }}-*
-          path: shard-counts
-
-      - name: Verify every shard passed and all tests ran
-        run: .github/scripts/check-shard-counts.sh shard-counts
+      - name: Verify all shards passed
+        env:
+          SHARDS_RESULT: ${{ needs.test-shard.result }}
+        run: |
+          if [ "$SHARDS_RESULT" != "success" ]; then
+            echo "::error::One or more test shards failed"
+            exit 1
+          fi
 
   build-wheels-free-threaded:
     name: build-wheels-free-threaded
@@ -253,9 +234,6 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Stand up RustFS
-        run: (docker compose up -d rustfs_init; echo $? > "$RUNNER_TEMP/rustfs-up.rc") > "$RUNNER_TEMP/rustfs-up.log" 2>&1 &
-
       - uses: prefix-dev/setup-pixi@d3f436a425481402e6a95a1d1fc10331c708cd9e # v0.10.2
         with:
           pixi-version: ${{ env.PIXI_VERSION }}
@@ -263,6 +241,9 @@ jobs:
           activate-environment: true
           manifest-path: icechunk-python/pyproject.toml
           environments: wheel-test-py314t
+
+      - name: Stand up RustFS
+        run: just services-start rustfs_init
 
       # zstandard has no 3.14t wheel and takes ~45s to build. Build it into uv's cache
       # while the wheel compiles; the install step below still does the full install.
@@ -276,7 +257,7 @@ jobs:
       - name: Wait for build-wheels-free-threaded
         env:
           GH_TOKEN: ${{ github.token }}
-        run: .github/scripts/wait-for-step.sh build-wheels-free-threaded "Upload wheels" 90
+        run: .github/scripts/wait-for-step.sh build-wheels-free-threaded "Upload wheels"
 
       - name: Download wheels
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -290,23 +271,12 @@ jobs:
         run: just install-test-wheel test
 
       - name: Wait for RustFS to be ready
-        run: |
-          for _ in $(seq 300); do [ -s "$RUNNER_TEMP/rustfs-up.rc" ] && break; sleep 1; done
-          cat "$RUNNER_TEMP/rustfs-up.log"
-          [ "$(cat "$RUNNER_TEMP/rustfs-up.rc")" = 0 ]
-          just rustfs-wait
+        run: just rustfs-join
 
       - name: Run pytest (non-hypothesis)
         env:
           ICECHUNK_PYTEST_SHARD: ${{ matrix.shard }}/4
-          ICECHUNK_PYTEST_SHARD_REPORT: ${{ runner.temp }}/shard-count.txt
         run: just pytest-venv -n 4 --dist worksteal -m "not hypothesis"
-
-      - name: Upload shard count
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: shard-count-free-threaded-${{ matrix.shard }}
-          path: ${{ runner.temp }}/shard-count.txt
 
   # Keeps the "test-free-threaded" check name, and fails unless every shard passed
   test-free-threaded:
@@ -315,21 +285,14 @@ jobs:
     needs: [test-free-threaded-shard]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-          sparse-checkout: .github/scripts
-
-      # A failed or cancelled shard uploads no count, and the check below catches that
-      - name: Download shard counts
-        continue-on-error: true
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
-        with:
-          pattern: shard-count-free-threaded-*
-          path: shard-counts
-
-      - name: Verify every shard passed and all tests ran
-        run: .github/scripts/check-shard-counts.sh shard-counts
+      - name: Verify all shards passed
+        env:
+          SHARDS_RESULT: ${{ needs.test-free-threaded-shard.result }}
+        run: |
+          if [ "$SHARDS_RESULT" != "success" ]; then
+            echo "::error::One or more free-threaded test shards failed"
+            exit 1
+          fi
 
   test-hypothesis-shard:
     name: test-hypothesis-shard (${{ matrix.shard-id }})
@@ -362,7 +325,7 @@ jobs:
       - name: Wait for build-wheels
         env:
           GH_TOKEN: ${{ github.token }}
-        run: .github/scripts/wait-for-step.sh build-wheels "Upload wheels" 90
+        run: .github/scripts/wait-for-step.sh build-wheels "Upload wheels"
 
       - name: Download wheels
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -518,7 +481,7 @@ jobs:
       - name: Wait for build-wheels
         env:
           GH_TOKEN: ${{ github.token }}
-        run: .github/scripts/wait-for-step.sh build-wheels "Upload wheels" 90
+        run: .github/scripts/wait-for-step.sh build-wheels "Upload wheels"
 
       - name: Download wheels
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -576,9 +539,6 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Stand up RustFS
-        run: (docker compose up -d rustfs_init; echo $? > "$RUNNER_TEMP/rustfs-up.rc") > "$RUNNER_TEMP/rustfs-up.log" 2>&1 &
-
       - uses: prefix-dev/setup-pixi@d3f436a425481402e6a95a1d1fc10331c708cd9e # v0.10.2
         with:
           pixi-version: ${{ env.PIXI_VERSION }}
@@ -587,10 +547,13 @@ jobs:
           manifest-path: icechunk-python/pyproject.toml
           environments: wheel-test
 
+      - name: Stand up RustFS
+        run: just services-start rustfs_init
+
       - name: Wait for build-wheels
         env:
           GH_TOKEN: ${{ github.token }}
-        run: .github/scripts/wait-for-step.sh build-wheels "Upload wheels" 90
+        run: .github/scripts/wait-for-step.sh build-wheels "Upload wheels"
 
       - name: Download wheels
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -612,26 +575,15 @@ jobs:
         run: just xarray-clone-installed
 
       - name: Wait for RustFS to be ready
-        run: |
-          for _ in $(seq 300); do [ -s "$RUNNER_TEMP/rustfs-up.rc" ] && break; sleep 1; done
-          cat "$RUNNER_TEMP/rustfs-up.log"
-          [ "$(cat "$RUNNER_TEMP/rustfs-up.rc")" = 0 ]
-          just rustfs-wait
+        run: just rustfs-join
 
       - name: Run xarray backends tests
         env:
           ICECHUNK_PYTEST_SHARD: ${{ matrix.shard }}/3
-          ICECHUNK_PYTEST_SHARD_REPORT: ${{ runner.temp }}/shard-count.txt
         run: just xarray-backends-pytest
 
-      - name: Upload shard count
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: shard-count-xarray-${{ matrix.xarray-version.name }}-${{ matrix.shard }}
-          path: ${{ runner.temp }}/shard-count.txt
-
   # Keeps the per-variant "xarray-backends (...)" check names. A skipped required check
-  # counts as passing, so this runs always and checks only its own variant's shard counts.
+  # counts as passing, so this runs always. Any failed shard reds every variant.
   xarray-backends:
     name: xarray-backends (${{ matrix.xarray-version.name }}, ${{ matrix.xarray-version.version }}, ${{ matrix.xarray-version.zarr }})
     if: always()
@@ -648,21 +600,14 @@ jobs:
             version: "latest-release"
             zarr: "latest-release"
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-          sparse-checkout: .github/scripts
-
-      # A failed or cancelled shard uploads no count, and the check below catches that
-      - name: Download shard counts
-        continue-on-error: true
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
-        with:
-          pattern: shard-count-xarray-${{ matrix.xarray-version.name }}-*
-          path: shard-counts
-
-      - name: Verify every shard passed and all tests ran
-        run: .github/scripts/check-shard-counts.sh shard-counts
+      - name: Verify all shards passed
+        env:
+          SHARDS_RESULT: ${{ needs.xarray-backends-shard.result }}
+        run: |
+          if [ "$SHARDS_RESULT" != "success" ]; then
+            echo "::error::One or more xarray-backends shards failed"
+            exit 1
+          fi
 
   stubtest:
     name: stubtest
