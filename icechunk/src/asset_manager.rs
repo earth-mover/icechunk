@@ -44,7 +44,7 @@ use crate::{
         CHUNKS_FILE_PATH, CONFIG_FILE_PATH, ChunkId, ChunkOffset, IcechunkFormatError,
         IcechunkFormatErrorKind, MANIFESTS_FILE_PATH, ManifestId, OBJECT_ID_FIRST_CHARS,
         OVERWRITTEN_FILES_PATH, REPO_INFO_FILE_PATH, SNAPSHOTS_FILE_PATH, SnapshotId,
-        TRANSACTION_LOGS_FILE_PATH,
+        TRANSACTION_LOGS_FILE_PATH, V1_REFS_FILE_PATH,
         format_constants::{
             self, CompressionAlgorithmBin, FileHeader, FileTypeBin, SpecVersionBin,
             parse_file_header,
@@ -1110,6 +1110,23 @@ impl AssetManager {
                 .inject()?
                 .map(|r| r.inject()),
         ))
+    }
+
+    /// Experimental. Bytes of all native chunks and metadata files, from listings only.
+    /// Unlike [`crate::ops::stats::repo_chunks_storage`], it does not deduplicate across snapshots.
+    #[doc(hidden)]
+    #[instrument(skip(self))]
+    pub async fn _total_nonvirtual_size(&self) -> RepositoryResult<u64> {
+        const PREFIXES: [(&str, bool); 6] = [
+            (CHUNKS_FILE_PATH, true),
+            (MANIFESTS_FILE_PATH, true),
+            (SNAPSHOTS_FILE_PATH, true),
+            (TRANSACTION_LOGS_FILE_PATH, true),
+            (V1_REFS_FILE_PATH, false),
+            (OVERWRITTEN_FILES_PATH, false),
+        ];
+
+        self.storage.sum_object_sizes(&self.storage_settings, &PREFIXES).await.inject()
     }
 
     pub async fn delete_chunks(

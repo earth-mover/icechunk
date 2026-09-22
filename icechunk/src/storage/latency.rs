@@ -145,6 +145,15 @@ impl Storage for LatencyStorage {
         self.backend.list_objects_with_id_first_chars(settings, prefix, first_chars).await
     }
 
+    async fn sum_object_sizes(
+        &self,
+        settings: &Settings,
+        prefixes: &[(&str, bool)],
+    ) -> StorageResult<u64> {
+        self.sleep_for_read().await;
+        self.backend.sum_object_sizes(settings, prefixes).await
+    }
+
     async fn delete_batch(
         &self,
         settings: &Settings,

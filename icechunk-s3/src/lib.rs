@@ -68,6 +68,10 @@ use tracing::{error, instrument, trace, warn};
 use typed_path::Utf8UnixPath;
 use uuid::Uuid;
 
+mod signed_lister;
+use icechunk_storage::{fast_list, sum_object_sizes_by_listing};
+use signed_lister::SignedLister;
+
 /// How object keys are laid out inside the bucket for a given repository.
 ///
 /// Native-S3 repositories written before the fix for
@@ -541,6 +545,29 @@ impl S3Storage {
                 )
             })
             .await
+    }
+
+    async fn make_signed_lister(
+        &self,
+        settings: &Settings,
+    ) -> StorageResult<SignedLister> {
+        let region = self
+            .get_client(settings)
+            .await
+            .config()
+            .region()
+            .map(|r| r.to_string())
+            .or_else(|| self.config.region.clone())
+            .unwrap_or_else(|| "us-east-1".to_string());
+        SignedLister::new(&self.config, &self.bucket, region, &self.credentials, settings)
+    }
+
+    /// The signed lister does not send requester-pays or extra headers, and it cannot
+    /// resolve FIPS or dualstack hosts.
+    fn signed_fast_list_available(&self) -> bool {
+        !self.config.requester_pays
+            && self.extra_read_headers.is_empty()
+            && signed_lister::signed_list_supported(&self.config)
     }
 
     /// Build the object key for a repository-relative path under the given layout.
@@ -1148,6 +1175,25 @@ impl Storage for S3Storage {
             listings.push(self.list_keys(settings, key_prefix, prefix.clone()).await);
         }
         Ok(stream::select_all(listings).boxed())
+    }
+
+    #[instrument(skip(self, settings))]
+    async fn sum_object_sizes(
+        &self,
+        settings: &Settings,
+        prefixes: &[(&str, bool)],
+    ) -> StorageResult<u64> {
+        if !self.signed_fast_list_available() {
+            return sum_object_sizes_by_listing(self, settings, prefixes).await;
+        }
+        let layout = self.layout(settings).await?;
+        let prefixes: Vec<(String, bool)> = prefixes
+            .iter()
+            .map(|&(prefix, holds_ids)| (self.list_prefix(layout, prefix), holds_ids))
+            .collect();
+        let lister = Arc::new(self.make_signed_lister(settings).await?);
+        fast_list::sum(lister, &prefixes, u32::from(settings.retries().max_tries().get()))
+            .await
     }
 
     #[instrument(skip(self, batch))]

@@ -127,6 +127,18 @@ impl Storage for LoggingStorage {
         self.backend.list_objects_with_id_first_chars(settings, prefix, first_chars).await
     }
 
+    async fn sum_object_sizes(
+        &self,
+        settings: &Settings,
+        prefixes: &[(&str, bool)],
+    ) -> StorageResult<u64> {
+        self.fetch_log.lock().expect("poison lock").push((
+            "sum_object_sizes".to_string(),
+            prefixes.iter().map(|(p, _)| *p).collect::<Vec<_>>().join(","),
+        ));
+        self.backend.sum_object_sizes(settings, prefixes).await
+    }
+
     async fn delete_batch(
         &self,
         settings: &Settings,
@@ -175,5 +187,34 @@ impl Storage for LoggingStorage {
             .expect("poison lock")
             .push(("get_object_range".to_string(), path.to_string()));
         self.backend.get_object_range(settings, path, range).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::storage::new_in_memory_storage;
+
+    #[tokio::test]
+    async fn sum_object_sizes_forwards_to_the_backend()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let backend = new_in_memory_storage().await?;
+        let settings = backend.default_settings().await?;
+        backend
+            .put_object(&settings, "chunks/AB", "hello".into(), None, vec![], None)
+            .await?;
+        backend.put_object(&settings, "refs/x", "yo".into(), None, vec![], None).await?;
+
+        let logging = LoggingStorage::new(backend);
+        let total = logging
+            .sum_object_sizes(&settings, &[("chunks", true), ("refs", false)])
+            .await?;
+        assert_eq!(total, 7);
+
+        // The trait default would go through this wrapper's own list methods.
+        let ops: Vec<String> =
+            logging.fetch_operations().into_iter().map(|(op, _)| op).collect();
+        assert_eq!(ops, vec!["sum_object_sizes".to_string()]);
+        Ok(())
     }
 }

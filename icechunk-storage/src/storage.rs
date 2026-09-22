@@ -472,6 +472,34 @@ pub enum RepositoryCreation {
     RefusedEmptyPrefix,
 }
 
+/// The default for [`Storage::sum_object_sizes`].
+pub async fn sum_object_sizes_by_listing<S: Storage + ?Sized>(
+    storage: &S,
+    settings: &Settings,
+    prefixes: &[(&str, bool)],
+) -> StorageResult<u64> {
+    let all_first_chars: HashSet<char> = crate::fast_list::CROCKFORD.chars().collect();
+    let all_first_chars = &all_first_chars;
+    let totals = futures::future::try_join_all(prefixes.iter().map(
+        |&(prefix, holds_ids)| async move {
+            let listing = if holds_ids {
+                storage
+                    .list_objects_with_id_first_chars(settings, prefix, all_first_chars)
+                    .await?
+            } else {
+                storage.list_objects(settings, prefix).await?
+            };
+            listing
+                .try_fold(0u64, |total, info| {
+                    ready(Ok(total.saturating_add(info.size_bytes)))
+                })
+                .await
+        },
+    ))
+    .await?;
+    Ok(totals.into_iter().fold(0u64, u64::saturating_add))
+}
+
 /// Keeps the listed objects whose id starts with a character in `first_chars`.
 pub fn filter_ids_by_first_char<'a>(
     listing: BoxStream<'a, StorageResult<ListInfo<String>>>,
@@ -589,6 +617,16 @@ pub trait Storage: fmt::Debug + Display + sealed::Sealed + Sync + Send {
             self.list_objects(settings, prefix).await?,
             first_chars,
         ))
+    }
+
+    /// Total size of all objects under each `(prefix, holds_ids)`. `holds_ids` promises
+    /// that every key is `{prefix}/{object id}`, so the listing can be split by id.
+    async fn sum_object_sizes(
+        &self,
+        settings: &Settings,
+        prefixes: &[(&str, bool)],
+    ) -> StorageResult<u64> {
+        sum_object_sizes_by_listing(self, settings, prefixes).await
     }
 
     async fn delete_batch(
