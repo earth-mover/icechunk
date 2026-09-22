@@ -104,7 +104,7 @@ pub(crate) fn warn_on_low_fd_limit(peak_requests: u64, op_name: &str) {
             needed,
             "{op_name} peaks at {peak_requests} concurrent requests, but this \
              process can only open {soft} files and will likely fail with \
-             \"too many open files\". Raise the limit (ulimit -n {needed}) or \
+             \"too many open files\". Raise the limit (ulimit -S -n {needed}) or \
              lower the concurrency settings."
         );
     }
