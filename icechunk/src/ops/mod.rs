@@ -8,15 +8,35 @@ use tokio::pin;
 use tracing::instrument;
 
 use crate::{
+    StorageError,
     asset_manager::AssetManager,
     format::{
-        SnapshotId, format_constants::SpecVersionBin, repo_info::RepoInfo,
-        snapshot::Snapshot,
+        IcechunkFormatError, IcechunkResult, SnapshotId,
+        format_constants::SpecVersionBin,
+        repo_info::RepoInfo,
+        snapshot::{Snapshot, SnapshotInfo},
     },
-    refs::{RefResult, list_refs},
-    repository::RepositoryResult,
+    refs::{RefError, RefResult, list_refs},
+    repository::{RepositoryError, RepositoryResult},
 };
 use icechunk_types::error::ICResultCtxExt as _;
+
+/// The error of every maintenance operation in this module.
+#[derive(Debug, thiserror::Error)]
+pub enum GCError {
+    #[error("ref error {0}")]
+    Ref(#[from] RefError),
+    #[error("repository error {0}")]
+    Repository(#[from] RepositoryError),
+    #[error("format error {0}")]
+    FormatError(#[from] IcechunkFormatError),
+    #[error("storage error {0}")]
+    StorageError(#[from] StorageError),
+    #[error("too many consecutive delete failures under {prefix}: {last_error}")]
+    DeletesFailing { prefix: String, last_error: String },
+}
+
+pub type GCResult<A> = Result<A, GCError>;
 
 /// Aborts the task it holds when dropped, so a cancelled or early-returning
 /// caller takes its background task down with it on every path.
@@ -41,7 +61,7 @@ impl<T> Drop for AbortOnDrop<T> {
 /// Batched, rate-adaptive object deletion used by GC.
 pub mod deleter;
 /// Expire old snapshots beyond a threshold.
-pub mod expiration_v1;
+pub mod expiration;
 /// Garbage collection to remove unreferenced data.
 pub mod gc;
 /// Manifest optimization and rebuilding.
@@ -165,6 +185,54 @@ pub async fn all_roots_v1<'a>(
         })
         .chain(stream::iter(extra_roots.iter().cloned()).map(Ok));
     Ok(roots)
+}
+
+/// Re-parent `edited` over a run of ancestors that are being expired,
+/// harvesting their tx logs so its delta from the new parent stays complete.
+///
+/// Returns `(new_parent, pruned)`. `new_parent` is the boundary ancestor, or
+/// `None` if the whole chain is collapsed (no ancestor satisfies `is_boundary`)
+/// `pruned` lists, oldest first, every collapsed ancestor's id with that ancestor's own
+/// `pruned_ancestor_tx_logs` spliced in, then `edited`'s own existing
+/// `pruned_ancestor_tx_logs` (newer than the collapsed run) appended last.
+///
+/// A collapsed ancestor can itself carry a non-empty `pruned_ancestor_tx_logs`
+/// (it was a boundary in an earlier pass), and several can sit in one chain.
+/// Hitting one does not end the walk — only `is_boundary` does; its pruned chain
+/// is spliced in and the walk keeps going. E.g. with boundary `s1`:
+///
+/// ```text
+/// INITIAL → s1 → s3 (pruned=[s2]) → s5 (pruned=[s4]) → edited
+/// ```
+///
+/// returns `new_parent = s1` and `pruned = [s2, s3, s4, s5]` (oldest first).
+pub(crate) fn reparent_and_prune(
+    repo_info: &RepoInfo,
+    edited: &SnapshotInfo,
+    is_boundary: impl Fn(&SnapshotInfo) -> bool,
+) -> IcechunkResult<(Option<SnapshotId>, Vec<SnapshotId>)> {
+    let mut new_parent = None;
+    let mut collapsed = Vec::new();
+    // ancestry() starts at `edited`. skip(1) drops it
+    for ancestor in repo_info.ancestry(&edited.id)?.skip(1) {
+        let ancestor = ancestor?;
+        if is_boundary(&ancestor) {
+            new_parent = Some(ancestor.id);
+            break;
+        }
+        collapsed.push((ancestor.id, ancestor.pruned_ancestor_tx_logs));
+    }
+    // Emit oldest first. `collapsed` is newest first, so walk it in reverse; an
+    // ancestor's own pruned logs (already oldest first) are older than it and so
+    // precede its id.
+    let mut pruned = Vec::new();
+    for (id, ancestor_pruned) in collapsed.into_iter().rev() {
+        pruned.extend(ancestor_pruned);
+        pruned.push(id);
+    }
+    // `edited`'s own pruned logs are newer than the collapsed run, so append last.
+    pruned.extend(edited.pruned_ancestor_tx_logs.iter().cloned());
+    Ok((new_parent, pruned))
 }
 
 /// `repo_info` is ignored for V1 repos, which have no repo info object. For V2
