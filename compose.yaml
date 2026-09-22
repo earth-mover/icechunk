@@ -5,7 +5,7 @@ volumes:
 services:
   rustfs:
     container_name: icechunk_rustfs
-    image: rustfs/rustfs:1.0.0-rc.6
+    image: rustfs/rustfs:1.0.0
     entrypoint: |
         /bin/sh -c '
         for bucket in testbucket
