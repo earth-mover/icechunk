@@ -4,14 +4,13 @@ use std::{
     collections::{HashMap, HashSet},
     future::ready,
     num::{NonZeroU16, NonZeroUsize},
-    sync::{Arc, Mutex},
+    sync::Arc,
 };
 
 use backon::{BackoffBuilder as _, ExponentialBuilder, Retryable as _};
 use chrono::{DateTime, TimeDelta, Utc};
-use futures::{Stream, StreamExt as _, TryStream, TryStreamExt as _, stream};
+use futures::{Stream, StreamExt as _, TryStreamExt as _, stream};
 use itertools::Itertools as _;
-use tokio::task::{self};
 use tracing::{debug, error, info, instrument, trace};
 
 use crate::{
@@ -24,13 +23,16 @@ use crate::{
         format_constants::SpecVersionBin,
         manifest::{ChunkPayload, Manifest},
         repo_info::{RepoAvailability, RepoInfo, UpdateInfo, UpdateType},
-        snapshot::{ManifestFileInfo, Snapshot, SnapshotInfo},
+        snapshot::{Snapshot, SnapshotInfo},
     },
-    ops::{pointed_snapshots, reachable_snapshots_v2},
+    ops::{
+        pointed_snapshots, reachable_snapshots_v2,
+        sharded_set::ChunkIdSet,
+        walker::{ManifestConsumer, WalkLimits, walk_manifests},
+    },
     refs::{Ref, RefError},
     repository::{RepositoryError, RepositoryErrorKind, RepositoryResult},
     storage::{self, DeleteObjectsResult, ListInfo},
-    stream_utils::{StreamLimiter, try_unique_stream},
 };
 use icechunk_types::{ICResultExt as _, error::ICResultCtxExt as _};
 
@@ -205,69 +207,32 @@ pub enum GCError {
 
 pub type GCResult<A> = Result<A, GCError>;
 
-async fn snapshot_retained(
-    keep_snapshots: Arc<Mutex<HashSet<SnapshotId>>>,
-    snap: Arc<Snapshot>,
-) -> RepositoryResult<impl TryStream<Ok = ManifestFileInfo, Error = RepositoryError>> {
-    // TODO: this could be slightly optimized by not collecting all manifest info records into a vec
-    // but we don't expect too many, and they are small anyway
-    keep_snapshots
-        .lock()
-        .map_err(|_| {
-            RepositoryErrorKind::Other("can't lock retained snapshots mutex".to_string())
-        })
-        .capture()?
-        .insert(snap.id());
-    let files: Vec<ManifestFileInfo> = snap.manifest_files().try_collect().inject()?;
-    Ok(stream::iter(files.into_iter().map(Ok)))
+/// Collects the ids of every native chunk any visited manifest references.
+#[derive(Default)]
+struct RetainedChunks {
+    retained: ChunkIdSet,
 }
 
-async fn manifest_retained(
-    keep_manifests: Arc<Mutex<HashSet<ManifestId>>>,
-    asset_manager: Arc<AssetManager>,
-    minfo: ManifestFileInfo,
-) -> RepositoryResult<(Arc<Manifest>, ManifestFileInfo)> {
-    keep_manifests
-        .lock()
-        .map_err(|_| {
-            RepositoryErrorKind::Other("can't lock retained manifests mutex".to_string())
-        })
-        .capture()?
-        .insert(minfo.id.clone());
-    let manifest = asset_manager.fetch_manifest(&minfo.id, minfo.size_bytes).await?;
-    Ok((manifest, minfo))
-}
+impl ManifestConsumer for RetainedChunks {
+    type Output = ();
+    type Acc = ();
 
-async fn chunks_retained(
-    keep_chunks: Arc<Mutex<HashSet<ChunkId>>>,
-    manifest: Arc<Manifest>,
-    minfo: ManifestFileInfo,
-) -> RepositoryResult<ManifestFileInfo> {
-    task::spawn_blocking(move || {
-        let chunk_ids =
+    fn consume(&self, manifest: &Manifest) -> RepositoryResult<()> {
+        // a payload we cannot read is a chunk we cannot prove retained:
+        // fail instead of deleting it
+        let ids =
             manifest.chunk_payloads().inject()?.filter_map(|payload| match payload {
-                Ok(ChunkPayload::Ref(chunk_ref)) => Some(chunk_ref.id.clone()),
+                Ok(ChunkPayload::Ref(chunk_ref)) => Some(Ok((chunk_ref.id, 0))),
                 Ok(_) => None,
-                Err(err) => {
-                    tracing::error!(
-                        error = %err,
-                        "Error in chunk payload iterator"
-                    );
-                    None
-                }
+                Err(err) => Some(Err(err)),
             });
-        keep_chunks
-            .lock()
-            .map_err(|_| {
-                RepositoryErrorKind::Other("can't lock retained chunks mutex".to_string())
-            })
-            .capture()?
-            .extend(chunk_ids);
-        Ok::<_, RepositoryError>(())
-    })
-    .await
-    .capture()??;
-    Ok(minfo)
+        self.retained.try_extend_weighted(ids).inject()?;
+        Ok(())
+    }
+
+    // Nothing to fold: `consume` already inserts every id into the shared
+    // sharded set from the decode workers in parallel.
+    fn fold(_acc: &mut (), _output: ()) {}
 }
 
 #[instrument(skip_all)]
@@ -275,61 +240,25 @@ pub async fn find_retained(
     asset_manager: Arc<AssetManager>,
     config: &GCConfig,
     snaps: impl Stream<Item = RepositoryResult<Arc<Snapshot>>>,
-) -> GCResult<(HashSet<ChunkId>, HashSet<ManifestId>, HashSet<SnapshotId>)> {
-    let keep_chunks = Arc::new(Mutex::new(HashSet::new()));
-    let keep_manifests = Arc::new(Mutex::new(HashSet::new()));
-    let keep_snapshots = Arc::new(Mutex::new(HashSet::new()));
-
-    let all_manifest_infos = snaps
-        .map(ready)
-        .buffer_unordered(config.max_snapshots_in_memory.get() as usize)
-        .and_then(|snap| snapshot_retained(Arc::clone(&keep_snapshots), snap))
-        .try_flatten();
-
-    let manifest_infos = try_unique_stream(|mi| mi.id.clone(), all_manifest_infos);
-
-    // we want to fetch many manifests in parallel, but not more than memory allows
-    // for this we use the StreamLimiter using the manifest size in bytes for usage
-    let limiter = &Arc::new(StreamLimiter::new(
-        "garbage_collect".to_string(),
-        config.max_compressed_manifest_mem_bytes.get(),
-    ));
-
-    let keep_chunks_ref = &keep_chunks;
-    let compute_stream = limiter
-        .limit_stream(manifest_infos, |minfo| minfo.size_bytes as usize)
-        .map_ok(|m| {
-            manifest_retained(Arc::clone(&keep_manifests), Arc::clone(&asset_manager), m)
-        })
-        // Now we can buffer a bunch of fetch_manifest operations. Because we are using
-        // StreamLimiter we know memory is not going to blow up
-        .try_buffer_unordered(config.max_concurrent_manifest_fetches.get() as usize)
-        .and_then(move |(manifest, minfo)| {
-            chunks_retained(Arc::clone(keep_chunks_ref), manifest, minfo)
-        });
-
-    limiter
-        .unlimit_stream(compute_stream, |minfo| minfo.size_bytes as usize)
-        .try_for_each(|_| ready(Ok(())))
-        .await?;
-
-    debug_assert_eq!(limiter.current_usage(), 0);
-
-    #[expect(clippy::expect_used)]
-    Ok((
-        Arc::try_unwrap(keep_chunks)
-            .expect("Logic error: multiple owners to retained chunks")
-            .into_inner()
-            .expect("Logic error: multiple owners to retained chunks"),
-        Arc::try_unwrap(keep_manifests)
-            .expect("Logic error: multiple owners to retained manifests")
-            .into_inner()
-            .expect("Logic error: multiple owners to retained manifests"),
-        Arc::try_unwrap(keep_snapshots)
-            .expect("Logic error: multiple owners to retained chunks")
-            .into_inner()
-            .expect("Logic error: multiple owners to retained chunks"),
-    ))
+) -> GCResult<(ChunkIdSet, HashSet<ManifestId>, HashSet<SnapshotId>)> {
+    let limits = WalkLimits {
+        max_concurrent_manifest_fetches: config.max_concurrent_manifest_fetches,
+        max_manifest_mem_bytes: config.max_compressed_manifest_mem_bytes,
+        decode_workers: NonZeroU16::new(asset_manager.max_concurrent_decodes())
+            .unwrap_or(NonZeroU16::MIN),
+    };
+    let consumer = Arc::new(RetainedChunks::default());
+    let result =
+        walk_manifests(asset_manager, limits, Arc::clone(&consumer), snaps).await?;
+    // the workers have all exited, so ours is the last reference
+    let retained = Arc::try_unwrap(consumer)
+        .map_err(|_| {
+            RepositoryError::capture(RepositoryErrorKind::Other(
+                "manifest walker still holds the consumer".to_string(),
+            ))
+        })?
+        .retained;
+    Ok((retained, result.manifests, result.snapshots))
 }
 
 pub async fn garbage_collect(
@@ -754,7 +683,7 @@ async fn fake_delete_result<const SIZE: usize, T: FileTypeTag>(
 pub async fn gc_chunks(
     asset_manager: &AssetManager,
     config: &GCConfig,
-    keep_ids: &HashSet<ChunkId>,
+    keep_ids: &ChunkIdSet,
 ) -> GCResult<DeleteObjectsResult> {
     info!("Deleting chunks");
     let to_delete = asset_manager

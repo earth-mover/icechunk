@@ -24,8 +24,12 @@ pub mod expiration_v1;
 pub mod gc;
 /// Manifest optimization and rebuilding.
 pub mod manifests;
+/// A hash set sharded across many locks, for parallel accumulation.
+pub mod sharded_set;
 /// Repository statistics.
 pub mod stats;
+/// Parallel manifest traversal shared by GC and stats.
+pub mod walker;
 
 #[instrument(skip_all)]
 pub fn all_roots_v2<'a>(
