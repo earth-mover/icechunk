@@ -191,6 +191,8 @@ pub(crate) struct WalkArgs {
     pub(crate) max_snapshots_in_memory: u16,
     #[arg(long, default_value_t = 512 * 1024 * 1024)]
     pub(crate) max_manifest_mem_bytes: usize,
+    #[arg(long, default_value_t = 4 * 1024 * 1024 * 1024)]
+    pub(crate) max_decoded_manifest_mem_bytes: usize,
     #[arg(long, default_value_t = 50)]
     pub(crate) max_concurrent_manifest_fetches: u16,
 }

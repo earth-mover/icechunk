@@ -2479,6 +2479,7 @@ class PyRepository:
         dry_run: bool = False,
         max_snapshots_in_memory: int = 50,
         max_compressed_manifest_mem_bytes: int = 512 * 1024 * 1024,
+        max_decoded_manifest_mem_bytes: int = 4 * 1024 * 1024 * 1024,
         max_concurrent_manifest_fetches: int = 500,
         max_concurrent_deletes: int = 10,
         max_consecutive_delete_failures: int = 50,
@@ -2491,6 +2492,7 @@ class PyRepository:
         dry_run: bool = False,
         max_snapshots_in_memory: int = 50,
         max_compressed_manifest_mem_bytes: int = 512 * 1024 * 1024,
+        max_decoded_manifest_mem_bytes: int = 4 * 1024 * 1024 * 1024,
         max_concurrent_manifest_fetches: int = 500,
         max_concurrent_deletes: int = 10,
         max_consecutive_delete_failures: int = 50,
@@ -2501,6 +2503,7 @@ class PyRepository:
         *,
         max_snapshots_in_memory: int = 50,
         max_compressed_manifest_mem_bytes: int = 512 * 1024 * 1024,
+        max_decoded_manifest_mem_bytes: int = 4 * 1024 * 1024 * 1024,
         max_concurrent_manifest_fetches: int = 500,
     ) -> ChunkStorageStats: ...
     async def chunk_storage_stats_async(
@@ -2508,6 +2511,7 @@ class PyRepository:
         *,
         max_snapshots_in_memory: int = 50,
         max_compressed_manifest_mem_bytes: int = 512 * 1024 * 1024,
+        max_decoded_manifest_mem_bytes: int = 4 * 1024 * 1024 * 1024,
         max_concurrent_manifest_fetches: int = 500,
     ) -> ChunkStorageStats: ...
     def inspect_snapshot(self, snapshot_id: str, *, pretty: bool = True) -> str: ...

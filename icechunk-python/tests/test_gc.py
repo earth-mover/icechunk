@@ -182,6 +182,7 @@ async def test_expire_and_gc(use_async: bool, any_spec_version: int | None) -> N
             max_concurrent_deletes=2,
             max_consecutive_delete_failures=3,
             max_concurrent_listings=4,
+            max_decoded_manifest_mem_bytes=64 * 1024 * 1024,
         )
     else:
         gc_result = repo.garbage_collect(
@@ -189,6 +190,7 @@ async def test_expire_and_gc(use_async: bool, any_spec_version: int | None) -> N
             max_concurrent_deletes=2,
             max_consecutive_delete_failures=3,
             max_concurrent_listings=4,
+            max_decoded_manifest_mem_bytes=64 * 1024 * 1024,
         )
 
     space_after = space_used()

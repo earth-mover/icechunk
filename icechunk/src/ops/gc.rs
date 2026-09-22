@@ -70,6 +70,7 @@ pub struct GCConfig {
 
     max_snapshots_in_memory: NonZeroU16,
     max_compressed_manifest_mem_bytes: NonZeroUsize,
+    max_decoded_manifest_mem_bytes: NonZeroUsize,
     max_concurrent_manifest_fetches: NonZeroU16,
     max_concurrent_deletes: NonZeroU16,
     max_consecutive_delete_failures: NonZeroU16,
@@ -89,6 +90,7 @@ impl GCConfig {
         dangling_snapshots: Action,
         max_snapshots_in_memory: NonZeroU16,
         max_compressed_manifest_mem_bytes: NonZeroUsize,
+        max_decoded_manifest_mem_bytes: NonZeroUsize,
         max_concurrent_manifest_fetches: NonZeroU16,
         max_concurrent_deletes: NonZeroU16,
         max_consecutive_delete_failures: NonZeroU16,
@@ -104,6 +106,7 @@ impl GCConfig {
             dangling_snapshots,
             max_snapshots_in_memory,
             max_compressed_manifest_mem_bytes,
+            max_decoded_manifest_mem_bytes,
             max_concurrent_manifest_fetches,
             max_concurrent_deletes,
             max_consecutive_delete_failures,
@@ -118,6 +121,7 @@ impl GCConfig {
         extra_roots: Option<HashSet<SnapshotId>>,
         max_snapshots_in_memory: NonZeroU16,
         max_compressed_manifest_mem_bytes: NonZeroUsize,
+        max_decoded_manifest_mem_bytes: NonZeroUsize,
         max_concurrent_manifest_fetches: NonZeroU16,
         max_concurrent_deletes: NonZeroU16,
         max_consecutive_delete_failures: NonZeroU16,
@@ -134,6 +138,7 @@ impl GCConfig {
             D(metadata_age),
             max_snapshots_in_memory,
             max_compressed_manifest_mem_bytes,
+            max_decoded_manifest_mem_bytes,
             max_concurrent_manifest_fetches,
             max_concurrent_deletes,
             max_consecutive_delete_failures,
@@ -288,6 +293,7 @@ pub async fn find_retained(
     let limits = WalkLimits {
         max_concurrent_manifest_fetches: config.max_concurrent_manifest_fetches,
         max_manifest_mem_bytes: config.max_compressed_manifest_mem_bytes,
+        max_decoded_manifest_mem_bytes: config.max_decoded_manifest_mem_bytes,
         decode_workers: NonZeroU16::new(asset_manager.max_concurrent_decodes())
             .unwrap_or(NonZeroU16::MIN),
     };
@@ -1633,6 +1639,7 @@ mod tests {
             None,
             NonZeroU16::new(10).unwrap(),
             NonZeroUsize::new(1_000_000_000).unwrap(),
+            NonZeroUsize::new(4 * 1024 * 1024 * 1024).unwrap(),
             NonZeroU16::new(10).unwrap(),
             NonZeroU16::new(10).unwrap(),
             NonZeroU16::new(50).unwrap(),
@@ -1970,6 +1977,7 @@ mod tests {
             None,
             NonZeroU16::new(10).unwrap(),
             NonZeroUsize::new(1_000_000_000).unwrap(),
+            NonZeroUsize::new(4 * 1024 * 1024 * 1024).unwrap(),
             NonZeroU16::new(10).unwrap(),
             NonZeroU16::new(max_concurrent_deletes).unwrap(),
             NonZeroU16::new(max_consecutive_delete_failures).unwrap(),
