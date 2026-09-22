@@ -22,7 +22,6 @@ icechunk-storage.workspace = true
 icechunk-types.workspace = true
 icechunk-s3 = { workspace = true, optional = true }
 
-async-compression.workspace = true
 async-recursion.workspace = true
 async-stream.workspace = true
 async-trait.workspace = true
@@ -80,6 +79,9 @@ tokio = { workspace = true, features = [
   "time",
   "io-util",
 ] }
+
+[target.'cfg(unix)'.dependencies]
+rlimit.workspace = true
 
 [dev-dependencies]
 icechunk-macros.workspace = true

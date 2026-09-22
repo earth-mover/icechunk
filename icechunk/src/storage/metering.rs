@@ -1,7 +1,7 @@
 //! Storage wrapper that counts requests and bytes per operation (for benchmarks).
 
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::BTreeMap,
     fmt,
     ops::Range,
     pin::Pin,
@@ -32,6 +32,8 @@ pub struct OpStats {
     pub bytes_written: u64,
     /// Only `delete_batch` counts deleted objects.
     pub objects_deleted: u64,
+    /// Only the `list_*` methods count keys, as they are yielded by the stream.
+    pub keys_listed: u64,
 }
 
 /// Activity during one wall-clock second since the wrapper was created.
@@ -39,6 +41,7 @@ pub struct OpStats {
 pub struct SecondStats {
     pub bytes_read: u64,
     pub requests_started: u64,
+    pub keys_listed: u64,
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -94,6 +97,11 @@ impl Meter {
     fn read(&self, op: &'static str, bytes: u64) {
         self.with_op(op, |s| s.bytes_read += bytes);
         self.with_second(|s| s.bytes_read += bytes);
+    }
+
+    fn listed(&self, op: &'static str, keys: u64) {
+        self.with_op(op, |s| s.keys_listed += keys);
+        self.with_second(|s| s.keys_listed += keys);
     }
 
     fn written(&self, op: &'static str, bytes: u64) {
@@ -211,17 +219,40 @@ impl Storage for MeteringStorage {
         prefix: &str,
     ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
         self.meter.request("list_objects");
-        self.backend.list_objects(settings, prefix).await
+        let stream = self.backend.list_objects(settings, prefix).await?;
+        let meter = Arc::clone(&self.meter);
+        Ok(stream
+            .inspect(move |item| {
+                if item.is_ok() {
+                    meter.listed("list_objects", 1);
+                }
+            })
+            .boxed())
     }
 
-    async fn list_objects_with_id_first_chars<'a>(
+    async fn list_objects_with_id_prefixes<'a>(
         &'a self,
         settings: &Settings,
         prefix: &str,
-        first_chars: &HashSet<char>,
+        id_prefixes: &[String],
     ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
-        self.meter.request("list_objects_with_id_first_chars");
-        self.backend.list_objects_with_id_first_chars(settings, prefix, first_chars).await
+        self.meter.request("list_objects_with_id_prefixes");
+        let stream = self
+            .backend
+            .list_objects_with_id_prefixes(settings, prefix, id_prefixes)
+            .await?;
+        let meter = Arc::clone(&self.meter);
+        Ok(stream
+            .inspect(move |item| {
+                if item.is_ok() {
+                    meter.listed("list_objects_with_id_prefixes", 1);
+                }
+            })
+            .boxed())
+    }
+
+    fn lists_id_prefixes_natively(&self) -> bool {
+        self.backend.lists_id_prefixes_natively()
     }
 
     async fn delete_batch(
@@ -329,11 +360,14 @@ mod tests {
         assert_eq!(del.objects_deleted, 1);
         let list = report.per_op["list_objects"];
         assert_eq!(list.requests, 1);
+        assert_eq!(list.keys_listed, 1);
 
         assert!(!report.read_timeline.is_empty());
         let total: u64 = report.read_timeline.iter().map(|s| s.bytes_read).sum();
         assert_eq!(total, 5);
         let started: u64 = report.read_timeline.iter().map(|s| s.requests_started).sum();
         assert_eq!(started, 4);
+        let keys: u64 = report.read_timeline.iter().map(|s| s.keys_listed).sum();
+        assert_eq!(keys, 1);
     }
 }

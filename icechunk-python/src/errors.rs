@@ -95,6 +95,7 @@ pub(crate) mod codes {
         CONFIG_UPDATED => "config-updated",
         REPO_INFO_UPDATED => "repo-info-updated",
         UPDATE_ATTEMPTS_EXHAUSTED => "update-attempts-exhausted",
+        GC_DELETES_FAILING => "gc-deletes-failing",
         // not found
         NODE_NOT_FOUND => "node-not-found",
         ANCESTOR_NODE_NOT_FOUND => "ancestor-node-not-found",
@@ -173,6 +174,7 @@ pub(crate) mod codes {
         CANNOT_PARSE_URL => "cannot-parse-url",
         BAD_REDIRECT => "bad-redirect",
         SEMAPHORE_ACQUIRE => "semaphore-acquire",
+        THROTTLED => "throttled",
         STORAGE_OTHER => "storage-other",
         VIRTUAL_CHUNK_FETCH => "virtual-chunk-fetch",
         VIRTUAL_CHUNK_MODIFIED => "virtual-chunk-modified",
@@ -399,6 +401,7 @@ fn classify_storage(kind: &StorageErrorKind) -> Classified {
         K::R2ConfigurationError(_) => class("StorageError", codes::STORAGE_CONFIG),
         K::CannotParseUrl { .. } => class("StorageError", codes::CANNOT_PARSE_URL),
         K::BadRedirect(_) => class("StorageError", codes::BAD_REDIRECT),
+        K::Throttled { .. } => class("StorageError", codes::THROTTLED),
         K::Other(_) => class("StorageError", codes::STORAGE_OTHER),
     }
 }
@@ -582,6 +585,9 @@ fn classify_gc(error: &GCError) -> Classified {
         GCError::Repository(e) => classify_repository(e.kind()),
         GCError::FormatError(e) => classify_format(e.kind()),
         GCError::StorageError(e) => classify_storage(e.kind()),
+        GCError::DeletesFailing { .. } => {
+            class("StorageError", codes::GC_DELETES_FAILING)
+        }
     }
 }
 

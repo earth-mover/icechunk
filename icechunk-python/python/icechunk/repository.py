@@ -1907,7 +1907,11 @@ class Repository:
         dry_run: bool = False,
         max_snapshots_in_memory: int = 50,
         max_compressed_manifest_mem_bytes: int = 512 * 1024 * 1024,
+        max_decoded_manifest_mem_bytes: int = 4 * 1024 * 1024 * 1024,
         max_concurrent_manifest_fetches: int = 500,
+        max_concurrent_deletes: int = 10,
+        max_consecutive_delete_failures: int = 50,
+        max_concurrent_listings: int | None = None,
     ) -> GCSummary:
         """Delete any objects no longer accessible from any branches or tags.
 
@@ -1929,14 +1933,44 @@ class Repository:
         max_snapshots_in_memory : int
             Don't prefetch more than this many Snapshots to memory.
         max_compressed_manifest_mem_bytes : int
-            Don't use more than this memory to store compressed in-flight manifests.
+            Don't use more than this memory to store compressed in-flight
+            manifests; see also `max_decoded_manifest_mem_bytes`.
+        max_decoded_manifest_mem_bytes : int
+            Keep the decoded manifests held in memory around this budget.
+            Manifests can grow many times over when decoded, so this, not the
+            compressed budget, is usually what bounds the memory manifests use.
+            The bound is approximate: the reservations are estimates, and a
+            single manifest larger than the whole budget is still processed, on
+            its own. It covers manifest bytes only, not the chunk id set the
+            walk accumulates, which dominates on repositories with millions of
+            chunks.
         max_concurrent_manifest_fetches : int
             Don't run more than this many concurrent manifest fetches.
+        max_concurrent_deletes : int
+            Ceiling on concurrent delete requests. It is not the rate the run
+            uses: garbage collection starts at one request in flight and ramps
+            up until the store throttles it or this ceiling is reached, then
+            keeps adjusting. Raising it only helps on prefixes the store has
+            already partitioned, and never causes an abort.
+        max_consecutive_delete_failures : int
+            Give up, with an error, after this many delete requests fail in a row.
+            Isolated failures are reported in the returned summary and don't stop
+            the run. Throttling is not a failure: it only counts here once the
+            store keeps throttling after the back-off between retries has grown
+            to its maximum.
+        max_concurrent_listings : int | None
+            How many object listings to run concurrently while looking for
+            garbage. Must be at least 1. Defaults to eight per available core,
+            between 32 and 256.
 
         Returns
         -------
         GCSummary
-            Summary of objects deleted.
+            Summary of objects deleted. Deletes that failed are counted in
+            `objects_failed_to_delete`; if a phase had failures, later phases are
+            skipped and listed in `skipped_phases`, so the next run can delete
+            them in a safe order. Requests the store asked us to slow down are
+            counted in `throttled_batches`; they were retried, not failed.
         """
 
         return self._repository.garbage_collect(
@@ -1944,7 +1978,11 @@ class Repository:
             dry_run=dry_run,
             max_snapshots_in_memory=max_snapshots_in_memory,
             max_compressed_manifest_mem_bytes=max_compressed_manifest_mem_bytes,
+            max_decoded_manifest_mem_bytes=max_decoded_manifest_mem_bytes,
             max_concurrent_manifest_fetches=max_concurrent_manifest_fetches,
+            max_concurrent_deletes=max_concurrent_deletes,
+            max_consecutive_delete_failures=max_consecutive_delete_failures,
+            max_concurrent_listings=max_concurrent_listings,
         )
 
     async def garbage_collect_async(
@@ -1954,7 +1992,11 @@ class Repository:
         dry_run: bool = False,
         max_snapshots_in_memory: int = 50,
         max_compressed_manifest_mem_bytes: int = 512 * 1024 * 1024,
+        max_decoded_manifest_mem_bytes: int = 4 * 1024 * 1024 * 1024,
         max_concurrent_manifest_fetches: int = 500,
+        max_concurrent_deletes: int = 10,
+        max_consecutive_delete_failures: int = 50,
+        max_concurrent_listings: int | None = None,
     ) -> GCSummary:
         """Delete any objects no longer accessible from any branches or tags (async version).
 
@@ -1976,14 +2018,44 @@ class Repository:
         max_snapshots_in_memory : int
             Don't prefetch more than this many Snapshots to memory.
         max_compressed_manifest_mem_bytes : int
-            Don't use more than this memory to store compressed in-flight manifests.
+            Don't use more than this memory to store compressed in-flight
+            manifests; see also `max_decoded_manifest_mem_bytes`.
+        max_decoded_manifest_mem_bytes : int
+            Keep the decoded manifests held in memory around this budget.
+            Manifests can grow many times over when decoded, so this, not the
+            compressed budget, is usually what bounds the memory manifests use.
+            The bound is approximate: the reservations are estimates, and a
+            single manifest larger than the whole budget is still processed, on
+            its own. It covers manifest bytes only, not the chunk id set the
+            walk accumulates, which dominates on repositories with millions of
+            chunks.
         max_concurrent_manifest_fetches : int
             Don't run more than this many concurrent manifest fetches.
+        max_concurrent_deletes : int
+            Ceiling on concurrent delete requests. It is not the rate the run
+            uses: garbage collection starts at one request in flight and ramps
+            up until the store throttles it or this ceiling is reached, then
+            keeps adjusting. Raising it only helps on prefixes the store has
+            already partitioned, and never causes an abort.
+        max_consecutive_delete_failures : int
+            Give up, with an error, after this many delete requests fail in a row.
+            Isolated failures are reported in the returned summary and don't stop
+            the run. Throttling is not a failure: it only counts here once the
+            store keeps throttling after the back-off between retries has grown
+            to its maximum.
+        max_concurrent_listings : int | None
+            How many object listings to run concurrently while looking for
+            garbage. Must be at least 1. Defaults to eight per available core,
+            between 32 and 256.
 
         Returns
         -------
         GCSummary
-            Summary of objects deleted.
+            Summary of objects deleted. Deletes that failed are counted in
+            `objects_failed_to_delete`; if a phase had failures, later phases are
+            skipped and listed in `skipped_phases`, so the next run can delete
+            them in a safe order. Requests the store asked us to slow down are
+            counted in `throttled_batches`; they were retried, not failed.
         """
 
         return await self._repository.garbage_collect_async(
@@ -1991,7 +2063,11 @@ class Repository:
             dry_run=dry_run,
             max_snapshots_in_memory=max_snapshots_in_memory,
             max_compressed_manifest_mem_bytes=max_compressed_manifest_mem_bytes,
+            max_decoded_manifest_mem_bytes=max_decoded_manifest_mem_bytes,
             max_concurrent_manifest_fetches=max_concurrent_manifest_fetches,
+            max_concurrent_deletes=max_concurrent_deletes,
+            max_consecutive_delete_failures=max_consecutive_delete_failures,
+            max_concurrent_listings=max_concurrent_listings,
         )
 
     def chunk_storage_stats(
@@ -1999,6 +2075,7 @@ class Repository:
         *,
         max_snapshots_in_memory: int = 50,
         max_compressed_manifest_mem_bytes: int = 512 * 1024 * 1024,
+        max_decoded_manifest_mem_bytes: int = 4 * 1024 * 1024 * 1024,
         max_concurrent_manifest_fetches: int = 500,
     ) -> ChunkStorageStats:
         """Calculate the total storage used for chunks, in bytes.
@@ -2017,13 +2094,24 @@ class Repository:
         max_snapshots_in_memory: int
             Don't prefetch more than this many Snapshots to memory.
         max_compressed_manifest_mem_bytes : int
-            Don't use more than this memory to store compressed in-flight manifests.
+            Don't use more than this memory to store compressed in-flight
+            manifests; see also `max_decoded_manifest_mem_bytes`.
+        max_decoded_manifest_mem_bytes : int
+            Keep the decoded manifests held in memory around this budget.
+            Manifests can grow many times over when decoded, so this, not the
+            compressed budget, is usually what bounds the memory manifests use.
+            The bound is approximate: the reservations are estimates, and a
+            single manifest larger than the whole budget is still processed, on
+            its own. It covers manifest bytes only, not the chunk id set the
+            walk accumulates, which dominates on repositories with millions of
+            chunks.
         max_concurrent_manifest_fetches : int
             Don't run more than this many concurrent manifest fetches.
         """
         return self._repository.chunk_storage_stats(
             max_snapshots_in_memory=max_snapshots_in_memory,
             max_compressed_manifest_mem_bytes=max_compressed_manifest_mem_bytes,
+            max_decoded_manifest_mem_bytes=max_decoded_manifest_mem_bytes,
             max_concurrent_manifest_fetches=max_concurrent_manifest_fetches,
         )
 
@@ -2032,6 +2120,7 @@ class Repository:
         *,
         max_snapshots_in_memory: int = 50,
         max_compressed_manifest_mem_bytes: int = 512 * 1024 * 1024,
+        max_decoded_manifest_mem_bytes: int = 4 * 1024 * 1024 * 1024,
         max_concurrent_manifest_fetches: int = 500,
     ) -> ChunkStorageStats:
         """Calculate the total storage used for chunks, in bytes (async version).
@@ -2050,13 +2139,24 @@ class Repository:
         max_snapshots_in_memory: int
             Don't prefetch more than this many Snapshots to memory.
         max_compressed_manifest_mem_bytes : int
-            Don't use more than this memory to store compressed in-flight manifests.
+            Don't use more than this memory to store compressed in-flight
+            manifests; see also `max_decoded_manifest_mem_bytes`.
+        max_decoded_manifest_mem_bytes : int
+            Keep the decoded manifests held in memory around this budget.
+            Manifests can grow many times over when decoded, so this, not the
+            compressed budget, is usually what bounds the memory manifests use.
+            The bound is approximate: the reservations are estimates, and a
+            single manifest larger than the whole budget is still processed, on
+            its own. It covers manifest bytes only, not the chunk id set the
+            walk accumulates, which dominates on repositories with millions of
+            chunks.
         max_concurrent_manifest_fetches : int
             Don't run more than this many concurrent manifest fetches.
         """
         return await self._repository.chunk_storage_stats_async(
             max_snapshots_in_memory=max_snapshots_in_memory,
             max_compressed_manifest_mem_bytes=max_compressed_manifest_mem_bytes,
+            max_decoded_manifest_mem_bytes=max_decoded_manifest_mem_bytes,
             max_concurrent_manifest_fetches=max_concurrent_manifest_fetches,
         )
 
@@ -2065,6 +2165,7 @@ class Repository:
         *,
         max_snapshots_in_memory: int = 50,
         max_compressed_manifest_mem_bytes: int = 512 * 1024 * 1024,
+        max_decoded_manifest_mem_bytes: int = 4 * 1024 * 1024 * 1024,
         max_concurrent_manifest_fetches: int = 500,
     ) -> int:
         """Calculate the total storage used for chunks, in bytes.
@@ -2082,7 +2183,17 @@ class Repository:
         max_snapshots_in_memory: int
             Don't prefetch more than this many Snapshots to memory.
         max_compressed_manifest_mem_bytes : int
-            Don't use more than this memory to store compressed in-flight manifests.
+            Don't use more than this memory to store compressed in-flight
+            manifests; see also `max_decoded_manifest_mem_bytes`.
+        max_decoded_manifest_mem_bytes : int
+            Keep the decoded manifests held in memory around this budget.
+            Manifests can grow many times over when decoded, so this, not the
+            compressed budget, is usually what bounds the memory manifests use.
+            The bound is approximate: the reservations are estimates, and a
+            single manifest larger than the whole budget is still processed, on
+            its own. It covers manifest bytes only, not the chunk id set the
+            walk accumulates, which dominates on repositories with millions of
+            chunks.
         max_concurrent_manifest_fetches : int
             Don't run more than this many concurrent manifest fetches.
         """
@@ -2099,6 +2210,7 @@ class Repository:
         stats = self._repository.chunk_storage_stats(
             max_snapshots_in_memory=max_snapshots_in_memory,
             max_compressed_manifest_mem_bytes=max_compressed_manifest_mem_bytes,
+            max_decoded_manifest_mem_bytes=max_decoded_manifest_mem_bytes,
             max_concurrent_manifest_fetches=max_concurrent_manifest_fetches,
         )
         return stats.native_bytes
@@ -2108,6 +2220,7 @@ class Repository:
         *,
         max_snapshots_in_memory: int = 50,
         max_compressed_manifest_mem_bytes: int = 512 * 1024 * 1024,
+        max_decoded_manifest_mem_bytes: int = 4 * 1024 * 1024 * 1024,
         max_concurrent_manifest_fetches: int = 500,
     ) -> int:
         """Calculate the total storage used for chunks, in bytes (async version).
@@ -2125,7 +2238,17 @@ class Repository:
         max_snapshots_in_memory: int
             Don't prefetch more than this many Snapshots to memory.
         max_compressed_manifest_mem_bytes : int
-            Don't use more than this memory to store compressed in-flight manifests.
+            Don't use more than this memory to store compressed in-flight
+            manifests; see also `max_decoded_manifest_mem_bytes`.
+        max_decoded_manifest_mem_bytes : int
+            Keep the decoded manifests held in memory around this budget.
+            Manifests can grow many times over when decoded, so this, not the
+            compressed budget, is usually what bounds the memory manifests use.
+            The bound is approximate: the reservations are estimates, and a
+            single manifest larger than the whole budget is still processed, on
+            its own. It covers manifest bytes only, not the chunk id set the
+            walk accumulates, which dominates on repositories with millions of
+            chunks.
         max_concurrent_manifest_fetches : int
             Don't run more than this many concurrent manifest fetches.
         """
@@ -2142,6 +2265,7 @@ class Repository:
         stats = await self._repository.chunk_storage_stats_async(
             max_snapshots_in_memory=max_snapshots_in_memory,
             max_compressed_manifest_mem_bytes=max_compressed_manifest_mem_bytes,
+            max_decoded_manifest_mem_bytes=max_decoded_manifest_mem_bytes,
             max_concurrent_manifest_fetches=max_concurrent_manifest_fetches,
         )
         return stats.native_bytes

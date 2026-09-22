@@ -26,8 +26,41 @@ env:
   UPSTREAM_ISSUE_TITLE: "⚠️ Nightly upstream-dev CI failed ⚠️"
 
 jobs:
+  build-wheels:
+    name: build-wheels
+    # Two jobs wait on this compile, so it gets the paid 8-core runner; forks do not
+    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || 'ubuntu24-8-core-amd64' }}
+    if: ${{
+      (contains(github.event.pull_request.labels.*.name, 'test-upstream') && github.event_name == 'pull_request')
+      || github.event_name == 'workflow_dispatch'
+      || github.event_name == 'schedule'
+      }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: prefix-dev/setup-pixi@d3f436a425481402e6a95a1d1fc10331c708cd9e # v0.10.2
+        with:
+          pixi-version: ${{ env.PIXI_VERSION }}
+          cache: false
+          activate-environment: true
+          manifest-path: icechunk-python/pyproject.toml
+
+      # ci-wheel, as in python-check: these jobs test compatibility, not speed,
+      # and it builds much faster than the release profile
+      - name: Build wheels
+        run: just profile=ci-wheel build-wheels
+
+      - name: Upload wheels
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: upstream-wheels
+          path: icechunk-python/dist
+
   build:
     name: upstream-dev
+    needs: [build-wheels]
     runs-on: ubuntu-latest
     continue-on-error: true
     outputs:
@@ -57,8 +90,11 @@ jobs:
       - name: Wait for RustFS to be ready
         run: just rustfs-wait
 
-      - name: Build wheels
-        run: just build-wheels
+      - name: Download wheels
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: upstream-wheels
+          path: icechunk-python/dist
 
       - name: setup
         id: setup
@@ -255,6 +291,7 @@ jobs:
 
   xarray-backends:
     name: xarray-tests-upstream
+    needs: [build-wheels]
     runs-on: ubuntu-latest
     continue-on-error: true
     outputs:
@@ -276,8 +313,11 @@ jobs:
           activate-environment: true
           manifest-path: icechunk-python/pyproject.toml
 
-      - name: Build wheels
-        run: just build-wheels
+      - name: Download wheels
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: upstream-wheels
+          path: icechunk-python/dist
 
       - name: setup
         run: |
@@ -350,7 +390,7 @@ jobs:
   nightly-status:
     name: nightly-status
     runs-on: ubuntu-latest
-    needs: [build, xarray-backends]
+    needs: [build-wheels, build, xarray-backends]
     if: always() && github.event_name == 'schedule'
     steps:
       - name: Fail the run if any nightly job failed
@@ -360,6 +400,7 @@ jobs:
           PYTEST_OUTCOME: ${{ needs.build.outputs.pytest-outcome }}
           XARRAY_OUTCOME: ${{ needs.xarray-backends.outputs.pytest-outcome }}
           # A job can also die before those steps run — a broken wheel build, say
+          WHEELS_RESULT: ${{ needs.build-wheels.result }}
           BUILD_RESULT: ${{ needs.build.result }}
           XARRAY_RESULT: ${{ needs.xarray-backends.result }}
         run: |
@@ -368,6 +409,7 @@ jobs:
           [ "$MYPY_OUTCOME" != failure ] || failed="$failed mypy"
           [ "$PYTEST_OUTCOME" != failure ] || failed="$failed pytest"
           [ "$XARRAY_OUTCOME" != failure ] || failed="$failed xarray-backends"
+          [ "$WHEELS_RESULT" = success ] || failed="$failed build-wheels"
           [ "$BUILD_RESULT" != failure ] || failed="$failed upstream-dev-job"
           [ "$XARRAY_RESULT" != failure ] || failed="$failed xarray-backends-job"
           if [ -n "$failed" ]; then

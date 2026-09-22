@@ -7,15 +7,16 @@ use futures::{StreamExt as _, TryStreamExt as _, stream};
 use tokio::pin;
 use tracing::instrument;
 
+use super::{ExpireResult, ExpiredRefAction};
 use crate::{
     asset_manager::AssetManager,
     format::SnapshotId,
-    ops::gc::{ExpireResult, ExpiredRefAction, GCError, GCResult},
+    ops::{GCError, GCResult},
     refs::{Ref, delete_branch, delete_tag, list_refs},
 };
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub enum ExpireRefResult {
+pub(super) enum ExpireRefResult {
     NothingToDo {
         ref_is_expired: bool,
     },
@@ -46,7 +47,7 @@ pub enum ExpireRefResult {
 ///
 /// See: <https://github.com/earth-mover/icechunk/blob/main/design-docs/007-basic-expiration.md>
 #[instrument(skip(asset_manager))]
-pub async fn expire_ref(
+pub(super) async fn expire_ref(
     asset_manager: Arc<AssetManager>,
     reference: &Ref,
     older_than: DateTime<Utc>,
@@ -160,7 +161,7 @@ pub async fn expire_ref(
 ///
 /// See: <https://github.com/earth-mover/icechunk/blob/main/design-docs/007-basic-expiration.md>
 #[instrument(skip(asset_manager))]
-pub async fn expire(
+pub(super) async fn expire(
     asset_manager: Arc<AssetManager>,
     older_than: DateTime<Utc>,
     expired_branches: ExpiredRefAction,

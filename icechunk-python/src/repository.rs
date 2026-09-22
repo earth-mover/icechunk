@@ -484,6 +484,14 @@ pub(crate) struct PyGCSummary {
     pub attributes_deleted: u64,
     #[pyo3(get)]
     pub transaction_logs_deleted: u64,
+    #[pyo3(get)]
+    pub objects_failed_to_delete: u64,
+    #[pyo3(get)]
+    pub throttled_batches: u64,
+    #[pyo3(get)]
+    pub delete_errors: Vec<String>,
+    #[pyo3(get)]
+    pub skipped_phases: Vec<String>,
 }
 
 impl From<GCSummary> for PyGCSummary {
@@ -495,6 +503,10 @@ impl From<GCSummary> for PyGCSummary {
             snapshots_deleted: value.snapshots_deleted,
             attributes_deleted: value.attributes_deleted,
             transaction_logs_deleted: value.transaction_logs_deleted,
+            objects_failed_to_delete: value.objects_failed_to_delete,
+            throttled_batches: value.throttled_batches,
+            delete_errors: value.delete_errors,
+            skipped_phases: value.skipped_phases,
         }
     }
 }
@@ -512,6 +524,10 @@ impl PyRepr for PyGCSummary {
             ("snapshots_deleted", self.snapshots_deleted.to_string()),
             ("attributes_deleted", self.attributes_deleted.to_string()),
             ("transaction_logs_deleted", self.transaction_logs_deleted.to_string()),
+            ("objects_failed_to_delete", self.objects_failed_to_delete.to_string()),
+            ("throttled_batches", self.throttled_batches.to_string()),
+            ("delete_errors", format!("{:?}", self.delete_errors)),
+            ("skipped_phases", format!("{:?}", self.skipped_phases)),
         ]
     }
 }
@@ -2850,6 +2866,7 @@ impl PyRepository {
         })
     }
 
+    #[expect(clippy::too_many_arguments)]
     pub(crate) fn garbage_collect(
         &self,
         py: Python<'_>,
@@ -2857,7 +2874,11 @@ impl PyRepository {
         dry_run: bool,
         max_snapshots_in_memory: NonZeroU16,
         max_compressed_manifest_mem_bytes: NonZeroUsize,
+        max_decoded_manifest_mem_bytes: NonZeroUsize,
         max_concurrent_manifest_fetches: NonZeroU16,
+        max_concurrent_deletes: NonZeroU16,
+        max_consecutive_delete_failures: NonZeroU16,
+        max_concurrent_listings: Option<NonZeroU16>,
     ) -> PyResult<PyGCSummary> {
         // This function calls block_on, so we need to allow other thread python to make progress
         py.detach(move || {
@@ -2869,7 +2890,11 @@ impl PyRepository {
                         Default::default(),
                         max_snapshots_in_memory,
                         max_compressed_manifest_mem_bytes,
+                        max_decoded_manifest_mem_bytes,
                         max_concurrent_manifest_fetches,
+                        max_concurrent_deletes,
+                        max_consecutive_delete_failures,
+                        max_concurrent_listings,
                         dry_run,
                     );
                     let (asset_manager, num_updates) = {
@@ -2888,6 +2913,7 @@ impl PyRepository {
         })
     }
 
+    #[expect(clippy::too_many_arguments)]
     fn garbage_collect_async<'py>(
         &'py self,
         py: Python<'py>,
@@ -2895,7 +2921,11 @@ impl PyRepository {
         dry_run: bool,
         max_snapshots_in_memory: NonZeroU16,
         max_compressed_manifest_mem_bytes: NonZeroUsize,
+        max_decoded_manifest_mem_bytes: NonZeroUsize,
         max_concurrent_manifest_fetches: NonZeroU16,
+        max_concurrent_deletes: NonZeroU16,
+        max_consecutive_delete_failures: NonZeroU16,
+        max_concurrent_listings: Option<NonZeroU16>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let repository = Arc::clone(&self.0);
         pyo3_async_runtimes::tokio::future_into_py::<_, PyGCSummary>(py, async move {
@@ -2905,7 +2935,11 @@ impl PyRepository {
                 Default::default(),
                 max_snapshots_in_memory,
                 max_compressed_manifest_mem_bytes,
+                max_decoded_manifest_mem_bytes,
                 max_concurrent_manifest_fetches,
+                max_concurrent_deletes,
+                max_consecutive_delete_failures,
+                max_concurrent_listings,
                 dry_run,
             );
             let (asset_manager, num_updates) = {
@@ -2925,6 +2959,7 @@ impl PyRepository {
         py: Python<'_>,
         max_snapshots_in_memory: NonZeroU16,
         max_compressed_manifest_mem_bytes: NonZeroUsize,
+        max_decoded_manifest_mem_bytes: NonZeroUsize,
         max_concurrent_manifest_fetches: NonZeroU16,
     ) -> PyResult<PyChunkStorageStats> {
         // This function calls block_on, so we need to allow other thread python to make progress
@@ -2939,6 +2974,7 @@ impl PyRepository {
                         asset_manager,
                         max_snapshots_in_memory,
                         max_compressed_manifest_mem_bytes,
+                        max_decoded_manifest_mem_bytes,
                         max_concurrent_manifest_fetches,
                     )
                     .await
@@ -2955,6 +2991,7 @@ impl PyRepository {
         py: Python<'py>,
         max_snapshots_in_memory: NonZeroU16,
         max_compressed_manifest_mem_bytes: NonZeroUsize,
+        max_decoded_manifest_mem_bytes: NonZeroUsize,
         max_concurrent_manifest_fetches: NonZeroU16,
     ) -> PyResult<Bound<'py, PyAny>> {
         let repository = Arc::clone(&self.0);
@@ -2969,6 +3006,7 @@ impl PyRepository {
                     asset_manager,
                     max_snapshots_in_memory,
                     max_compressed_manifest_mem_bytes,
+                    max_decoded_manifest_mem_bytes,
                     max_concurrent_manifest_fetches,
                 )
                 .await

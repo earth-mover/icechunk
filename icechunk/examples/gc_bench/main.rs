@@ -6,6 +6,7 @@
 
 mod build;
 mod cli;
+mod list;
 mod report;
 mod run;
 mod storage;
@@ -22,5 +23,6 @@ async fn main() -> Result<(), BoxError> {
         cli::Command::Build(args) => build::build(args).await,
         cli::Command::Gc(args) => run::gc(args).await,
         cli::Command::Stats(args) => run::stats(args).await,
+        cli::Command::List(args) => list::list(args).await,
     }
 }

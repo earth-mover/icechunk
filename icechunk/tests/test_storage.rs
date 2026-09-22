@@ -2,6 +2,7 @@ use std::{
     collections::{HashMap, HashSet},
     env,
     future::Future,
+    num::NonZeroU16,
     pin::Pin,
     sync::Arc,
 };
@@ -18,9 +19,9 @@ use icechunk::{
     },
     error::ICError,
     format::{
-        CHUNKS_FILE_PATH, ChunkId, MANIFESTS_FILE_PATH, OBJECT_ID_FIRST_CHARS, Path,
-        SNAPSHOTS_FILE_PATH, SnapshotId, TRANSACTION_LOGS_FILE_PATH,
-        format_constants::SpecVersionBin, snapshot::Snapshot,
+        CHUNKS_FILE_PATH, ChunkId, MANIFESTS_FILE_PATH, OBJECT_ID_FIRST_CHARS,
+        OBJECT_ID_ONE_CHAR_PREFIXES, Path, SNAPSHOTS_FILE_PATH, SnapshotId,
+        TRANSACTION_LOGS_FILE_PATH, format_constants::SpecVersionBin, snapshot::Snapshot,
     },
     new_local_filesystem_storage,
     refs::{RefData, RefErrorKind},
@@ -236,6 +237,22 @@ where
     Ok(())
 }
 
+/// The storage's default settings with more patient retries: the cloud buckets used by
+/// [`with_storage`] are shared by all concurrent CI runs and can throttle with `SlowDown`.
+async fn with_storage_settings(
+    storage: &Arc<dyn Storage + Send + Sync>,
+) -> StorageResult<storage::Settings> {
+    let retries = storage::Settings {
+        retries: Some(storage::RetriesSettings {
+            max_tries: NonZeroU16::new(16),
+            initial_backoff_ms: Some(500),
+            max_backoff_ms: Some(30_000),
+        }),
+        ..Default::default()
+    };
+    Ok(storage.default_settings().await?.merge(retries))
+}
+
 async fn async_read_to_bytes(
     mut read: Pin<Box<dyn AsyncRead + Send>>,
 ) -> Result<Vec<u8>, std::io::Error> {
@@ -247,7 +264,7 @@ async fn async_read_to_bytes(
 #[tokio_test]
 async fn test_object_write_read() -> Result<(), Box<dyn std::error::Error>> {
     with_storage(Permission::Modify, |_, storage| async move {
-        let storage_settings = storage.default_settings().await?;
+        let storage_settings = with_storage_settings(&storage).await?;
         let id = SnapshotId::random();
         let mut bytes: [u8; 1024] = core::array::from_fn(|_| rand::random());
         bytes[42] = 42;
@@ -514,7 +531,7 @@ async fn create_refuses_empty_prefix_on_object_store()
 #[tokio_test]
 async fn test_list_objects() -> Result<(), Box<dyn std::error::Error>> {
     with_storage(Permission::Modify, |_, storage| async move {
-        let settings = storage.default_settings().await?;
+        let settings = with_storage_settings(&storage).await?;
         storage
             .put_object(
                 &settings,
@@ -611,14 +628,25 @@ async fn test_list_objects() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+fn prefixes(prefixes: &[&str]) -> Vec<String> {
+    prefixes.iter().map(|p| (*p).to_string()).collect()
+}
+
 #[tokio_test]
-async fn test_list_objects_with_id_first_chars() -> Result<(), Box<dyn std::error::Error>>
-{
+async fn test_list_objects_with_id_prefixes() -> Result<(), Box<dyn std::error::Error>> {
     with_storage(Permission::Modify, |_, storage| async move {
-        let settings = storage.default_settings().await?;
-        for path in
-            ["foo/0a", "foo/0b", "foo/1a", "foo/Za", "foo/bar/0c", "foo0/0d", "0e"]
-        {
+        let settings = with_storage_settings(&storage).await?;
+        for path in [
+            "foo/0a",
+            "foo/0b",
+            "foo/1a",
+            "foo/Za",
+            "foo/0abc",
+            "foo/0abd",
+            "foo/bar/0c",
+            "foo0/0d",
+            "0e",
+        ] {
             storage
                 .put_object(&settings, path, Bytes::new(), None, Default::default(), None)
                 .await?
@@ -627,17 +655,49 @@ async fn test_list_objects_with_id_first_chars() -> Result<(), Box<dyn std::erro
 
         for prefix in ["foo", "foo/"] {
             let mut obs: Vec<_> = storage
-                .list_objects_with_id_first_chars(
+                .list_objects_with_id_prefixes(&settings, prefix, &prefixes(&["0", "Z"]))
+                .await?
+                .map_ok(|li| li.id)
+                .try_collect()
+                .await?;
+            obs.sort();
+            assert_eq!(
+                obs,
+                vec![
+                    "0a".to_string(),
+                    "0abc".to_string(),
+                    "0abd".to_string(),
+                    "0b".to_string(),
+                    "Za".to_string(),
+                ]
+            );
+
+            // Prefixes longer than one character. `0ab` is deliberately
+            // shorter than every id it matches: an id equal to the prefix
+            // falls outside the offset listing the backends use.
+            let mut obs: Vec<_> = storage
+                .list_objects_with_id_prefixes(
                     &settings,
                     prefix,
-                    &HashSet::from(['0', 'Z']),
+                    &prefixes(&["0ab", "1"]),
                 )
                 .await?
                 .map_ok(|li| li.id)
                 .try_collect()
                 .await?;
             obs.sort();
-            assert_eq!(obs, vec!["0a".to_string(), "0b".to_string(), "Za".to_string()]);
+            assert_eq!(
+                obs,
+                vec!["0abc".to_string(), "0abd".to_string(), "1a".to_string()]
+            );
+
+            let obs: Vec<_> = storage
+                .list_objects_with_id_prefixes(&settings, prefix, &[])
+                .await?
+                .map_ok(|li| li.id)
+                .try_collect()
+                .await?;
+            assert!(obs.is_empty(), "empty prefix list returned {obs:?}");
         }
 
         Ok(())
@@ -646,8 +706,61 @@ async fn test_list_objects_with_id_first_chars() -> Result<(), Box<dyn std::erro
     Ok(())
 }
 
+/// The 1024 two-character prefixes cover the same keys as a plain listing.
 #[tokio_test]
-async fn test_list_objects_with_id_first_chars_at_bucket_root()
+async fn test_list_objects_with_all_two_char_id_prefixes()
+-> Result<(), Box<dyn std::error::Error>> {
+    let two_chars: Vec<String> = {
+        let mut chars: Vec<char> = OBJECT_ID_FIRST_CHARS.iter().copied().collect();
+        chars.sort_unstable();
+        chars.iter().flat_map(|a| chars.iter().map(move |b| format!("{a}{b}"))).collect()
+    };
+    assert_eq!(two_chars.len(), 1024);
+
+    let in_memory = new_in_memory_storage().await?;
+    let s3 = mk_s3_storage(
+        common::get_random_prefix("two_char_prefixes").as_str(),
+        &Permission::Modify,
+    )
+    .await?;
+    for storage in [in_memory, s3] {
+        let settings = storage.default_settings().await?;
+        let ids = ["00ABCD", "0ZABCD", "A0ABCD", "MKZZZZ", "Z0ABCD", "ZZABCD"];
+        for id in ids {
+            storage
+                .put_object(
+                    &settings,
+                    &format!("{CHUNKS_FILE_PATH}/{id}"),
+                    Bytes::new(),
+                    None,
+                    Default::default(),
+                    None,
+                )
+                .await?
+                .must_write()?;
+        }
+
+        let all: HashSet<String> = storage
+            .list_objects(&settings, CHUNKS_FILE_PATH)
+            .await?
+            .map_ok(|li| li.id)
+            .try_collect()
+            .await?;
+        assert_eq!(all, ids.iter().map(|id| (*id).to_string()).collect());
+
+        let split: HashSet<String> = storage
+            .list_objects_with_id_prefixes(&settings, CHUNKS_FILE_PATH, &two_chars)
+            .await?
+            .map_ok(|li| li.id)
+            .try_collect()
+            .await?;
+        assert_eq!(split, all);
+    }
+    Ok(())
+}
+
+#[tokio_test]
+async fn test_list_objects_with_id_prefixes_at_bucket_root()
 -> Result<(), Box<dyn std::error::Error>> {
     let (access_key_id, secret_access_key) = Permission::Modify.keys();
     let storage = ObjectStorage::new_s3(
@@ -687,7 +800,7 @@ async fn test_list_objects_with_id_first_chars_at_bucket_root()
     }
 
     let mut obs: Vec<_> = storage
-        .list_objects_with_id_first_chars(&settings, &dir, &HashSet::from(['0', 'Z']))
+        .list_objects_with_id_prefixes(&settings, &dir, &prefixes(&["0", "Z"]))
         .await?
         .map_ok(|li| li.id)
         .try_collect()
@@ -698,8 +811,8 @@ async fn test_list_objects_with_id_first_chars_at_bucket_root()
 }
 
 #[tokio_test]
-async fn test_gcs_list_objects_with_id_first_chars()
--> Result<(), Box<dyn std::error::Error>> {
+async fn test_gcs_list_objects_with_id_prefixes() -> Result<(), Box<dyn std::error::Error>>
+{
     let storage = new_gcs_storage(
         "al-public-test-bucket".to_string(),
         Some("verification-copy".to_string()),
@@ -708,6 +821,9 @@ async fn test_gcs_list_objects_with_id_first_chars()
         Vec::new(),
         Vec::new(),
     )?;
+    // GC fans listings out per id prefix only on backends that list a prefix
+    // natively; GCS must be one of them or GC repeats the full listing per prefix
+    assert!(storage.lists_id_prefixes_natively());
     let settings = storage.default_settings().await?;
     for prefix in [
         CHUNKS_FILE_PATH,
@@ -723,7 +839,11 @@ async fn test_gcs_list_objects_with_id_first_chars()
             .await?;
         assert!(!all.is_empty(), "no objects under {prefix}");
         let split: HashSet<String> = storage
-            .list_objects_with_id_first_chars(&settings, prefix, &OBJECT_ID_FIRST_CHARS)
+            .list_objects_with_id_prefixes(
+                &settings,
+                prefix,
+                &OBJECT_ID_ONE_CHAR_PREFIXES,
+            )
             .await?
             .map_ok(|li| li.id)
             .try_collect()
@@ -733,18 +853,42 @@ async fn test_gcs_list_objects_with_id_first_chars()
         let first_char =
             all.iter().filter_map(|id| id.chars().next()).min().unwrap_or('0');
         let one_char: HashSet<String> = storage
-            .list_objects_with_id_first_chars(
+            .list_objects_with_id_prefixes(
                 &settings,
                 prefix,
-                &HashSet::from([first_char]),
+                &prefixes(&[first_char.to_string().as_str()]),
             )
             .await?
             .map_ok(|li| li.id)
             .try_collect()
             .await?;
         let expected: HashSet<String> =
-            all.into_iter().filter(|id| id.starts_with(first_char)).collect();
+            all.iter().filter(|id| id.starts_with(first_char)).cloned().collect();
         assert_eq!(one_char, expected);
+
+        // A two-character prefix of one of those ids.
+        if let Some(two_chars) = expected
+            .iter()
+            .find(|id| id.chars().count() > 2)
+            .map(|id| id.chars().take(2).collect::<String>())
+        {
+            let two: HashSet<String> = storage
+                .list_objects_with_id_prefixes(
+                    &settings,
+                    prefix,
+                    &prefixes(&[two_chars.as_str()]),
+                )
+                .await?
+                .map_ok(|li| li.id)
+                .try_collect()
+                .await?;
+            let expected: HashSet<String> = all
+                .iter()
+                .filter(|id| id.starts_with(two_chars.as_str()))
+                .cloned()
+                .collect();
+            assert_eq!(two, expected);
+        }
     }
     Ok(())
 }
@@ -756,7 +900,7 @@ async fn conditional_create_conflicts_with_existing()
     // backends) and the `NotStamped` branch (local_filesystem); both
     // must surface as `NotOnLatestVersion`.
     with_storage(Permission::Modify, |_, storage| async move {
-        let settings = storage.default_settings().await?;
+        let settings = with_storage_settings(&storage).await?;
         let path = "conditional-create-conflict";
 
         storage
@@ -910,7 +1054,7 @@ async fn lost_response_conditional_create_recovers_requester_pays()
 #[tokio_test]
 async fn test_delete_objects() -> Result<(), Box<dyn std::error::Error>> {
     with_storage(Permission::Modify, |_, storage| async move {
-        let settings = storage.default_settings().await?;
+        let settings = with_storage_settings(&storage).await?;
         storage
             .put_object(
                 &settings,
@@ -1035,7 +1179,7 @@ async fn test_write_config_on_empty(
     #[case] spec_version: SpecVersionBin,
 ) -> Result<(), Box<dyn std::error::Error>> {
     with_storage(Permission::Modify, |_, storage| async move {
-        let storage_settings = storage.default_settings().await?;
+        let storage_settings = with_storage_settings(&storage).await?;
 
         let am = Arc::new(AssetManager::new_no_cache(
             storage,
@@ -1073,7 +1217,7 @@ async fn test_write_config_on_existing(
     with_storage(Permission::Modify, |_, storage| async move {
         let am = Arc::new(AssetManager::new_no_cache(
             Arc::clone(&storage),
-            storage.default_settings().await?,
+            with_storage_settings(&storage).await?,
             spec_version,
             1, // we are only reading, compression doesn't matter
             DEFAULT_MAX_CONCURRENT_REQUESTS,
@@ -1140,7 +1284,7 @@ async fn test_write_config_fails_on_bad_version_when_existing(
     #[case] spec_version: SpecVersionBin,
 ) -> Result<(), Box<dyn std::error::Error>> {
     with_storage(Permission::Modify, |storage_type, storage| async move {
-        let storage_settings = storage.default_settings().await?;
+        let storage_settings = with_storage_settings(&storage).await?;
         let am = Arc::new(AssetManager::new_no_cache(
             storage,
             storage_settings,
@@ -1197,7 +1341,7 @@ async fn test_write_config_can_overwrite_with_unsafe_config(
         let storage_settings = storage::Settings {
             unsafe_use_conditional_update: Some(false),
             unsafe_use_conditional_create: Some(false),
-            ..storage.default_settings().await?
+            ..with_storage_settings(&storage).await?
         };
         let am = Arc::new(AssetManager::new_no_cache(
             storage,
@@ -1316,7 +1460,7 @@ async fn test_write_object_larger_than_multipart_threshold()
     with_storage(Permission::Modify, |_, storage| async move {
         let custom_settings = storage::Settings {
             minimum_size_for_multipart_upload: Some(100),
-            ..storage.default_settings().await?
+            ..with_storage_settings(&storage).await?
         };
 
         let id = ChunkId::random();
@@ -1352,7 +1496,7 @@ async fn test_write_object_larger_than_multipart_threshold()
 #[tokio_test]
 async fn test_get_object_conditional() -> Result<(), Box<dyn std::error::Error>> {
     with_storage(Permission::Modify, |name, storage| async move {
-        let storage_settings = storage.default_settings().await?;
+        let storage_settings = with_storage_settings(&storage).await?;
         let id = SnapshotId::random();
         let bytes: [u8; 1024] = core::array::from_fn(|_| rand::random());
 

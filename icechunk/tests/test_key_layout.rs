@@ -331,7 +331,11 @@ async fn empty_prefix_gc_actually_deletes_chunks()
         None,
         NonZeroU16::new(50).unwrap(),
         NonZeroUsize::new(512 * 1024 * 1024).unwrap(),
+        NonZeroUsize::new(4 * 1024 * 1024 * 1024).unwrap(),
         NonZeroU16::new(500).unwrap(),
+        NonZeroU16::new(10).unwrap(),
+        NonZeroU16::new(50).unwrap(),
+        None,
         false,
     );
     let summary =
@@ -413,7 +417,11 @@ async fn rooted_roundtrip_body(
         None,
         NonZeroU16::new(50).unwrap(),
         NonZeroUsize::new(512 * 1024 * 1024).unwrap(),
+        NonZeroUsize::new(4 * 1024 * 1024 * 1024).unwrap(),
         NonZeroU16::new(500).unwrap(),
+        NonZeroU16::new(10).unwrap(),
+        NonZeroU16::new(50).unwrap(),
+        None,
         false,
     );
     garbage_collect(Arc::clone(repo.asset_manager()), &gc_config, None, 100).await?;

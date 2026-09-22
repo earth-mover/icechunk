@@ -1998,6 +1998,29 @@ class GCSummary:
         """
         How many transaction logs were deleted.
         """
+    @property
+    def objects_failed_to_delete(self) -> int:
+        """
+        How many objects could not be deleted because the delete request failed.
+        They remain garbage for the next run.
+        """
+    @property
+    def throttled_batches(self) -> int:
+        """
+        How many delete requests the store throttled. Each one was retried
+        after a pause, and none of them counts as a failure.
+        """
+    @property
+    def delete_errors(self) -> list[str]:
+        """
+        The first distinct delete error messages, at most ten.
+        """
+    @property
+    def skipped_phases(self) -> list[str]:
+        """
+        Delete phases skipped because an earlier phase had failures, in order.
+        Possible values: "transaction_logs", "manifests", "chunks".
+        """
     def _repr_html_(self) -> str: ...
 
 @final
@@ -2462,7 +2485,11 @@ class PyRepository:
         dry_run: bool = False,
         max_snapshots_in_memory: int = 50,
         max_compressed_manifest_mem_bytes: int = 512 * 1024 * 1024,
+        max_decoded_manifest_mem_bytes: int = 4 * 1024 * 1024 * 1024,
         max_concurrent_manifest_fetches: int = 500,
+        max_concurrent_deletes: int = 10,
+        max_consecutive_delete_failures: int = 50,
+        max_concurrent_listings: int | None = None,
     ) -> GCSummary: ...
     async def garbage_collect_async(
         self,
@@ -2471,13 +2498,18 @@ class PyRepository:
         dry_run: bool = False,
         max_snapshots_in_memory: int = 50,
         max_compressed_manifest_mem_bytes: int = 512 * 1024 * 1024,
+        max_decoded_manifest_mem_bytes: int = 4 * 1024 * 1024 * 1024,
         max_concurrent_manifest_fetches: int = 500,
+        max_concurrent_deletes: int = 10,
+        max_consecutive_delete_failures: int = 50,
+        max_concurrent_listings: int | None = None,
     ) -> GCSummary: ...
     def chunk_storage_stats(
         self,
         *,
         max_snapshots_in_memory: int = 50,
         max_compressed_manifest_mem_bytes: int = 512 * 1024 * 1024,
+        max_decoded_manifest_mem_bytes: int = 4 * 1024 * 1024 * 1024,
         max_concurrent_manifest_fetches: int = 500,
     ) -> ChunkStorageStats: ...
     async def chunk_storage_stats_async(
@@ -2485,6 +2517,7 @@ class PyRepository:
         *,
         max_snapshots_in_memory: int = 50,
         max_compressed_manifest_mem_bytes: int = 512 * 1024 * 1024,
+        max_decoded_manifest_mem_bytes: int = 4 * 1024 * 1024 * 1024,
         max_concurrent_manifest_fetches: int = 500,
     ) -> ChunkStorageStats: ...
     def inspect_snapshot(self, snapshot_id: str, *, pretty: bool = True) -> str: ...

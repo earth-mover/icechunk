@@ -57,6 +57,7 @@ class ErrorKind(StrEnum):
     CONFIG_UPDATED = "config-updated"
     REPO_INFO_UPDATED = "repo-info-updated"
     UPDATE_ATTEMPTS_EXHAUSTED = "update-attempts-exhausted"
+    GC_DELETES_FAILING = "gc-deletes-failing"
     # not found
     NODE_NOT_FOUND = "node-not-found"
     ANCESTOR_NODE_NOT_FOUND = "ancestor-node-not-found"
@@ -135,6 +136,7 @@ class ErrorKind(StrEnum):
     CANNOT_PARSE_URL = "cannot-parse-url"
     BAD_REDIRECT = "bad-redirect"
     SEMAPHORE_ACQUIRE = "semaphore-acquire"
+    THROTTLED = "throttled"
     STORAGE_OTHER = "storage-other"
     VIRTUAL_CHUNK_FETCH = "virtual-chunk-fetch"
     VIRTUAL_CHUNK_MODIFIED = "virtual-chunk-modified"

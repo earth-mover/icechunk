@@ -25,7 +25,8 @@ env:
 jobs:
   build-wheels:
     name: build-wheels
-    runs-on: ubuntu-latest
+    # Three required checks wait on this compile, so it gets the paid 8-core runner; forks do not
+    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || 'ubuntu24-8-core-amd64' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -57,11 +58,12 @@ jobs:
           name: test-wheels
           path: icechunk-python/dist
 
-  test:
-    name: test (${{ matrix.deps-version.name }}, ${{ matrix.deps-version.xarray }}, ${{ matrix.deps-version.dask }}, ${{ matrix.deps-version.distributed }}, ${{ matrix.deps-version.zarr }})
+  test-shard:
+    name: test-shard (${{ matrix.deps-version.name }}, ${{ matrix.shard }})
     runs-on: ubuntu-latest
     needs: [build-wheels]
     strategy:
+      fail-fast: false
       matrix:
         deps-version:
           - name: minimum
@@ -74,6 +76,8 @@ jobs:
             dask: "latest-release"
             distributed: "latest-release"
             zarr: "latest-release"
+        # list every id below the shard count in ICECHUNK_PYTEST_SHARD
+        shard: [0, 1, 2, 3]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -85,9 +89,11 @@ jobs:
           cache: false
           activate-environment: true
           manifest-path: icechunk-python/pyproject.toml
+          environments: wheel-test
 
+      # Backgrounded so the image pull overlaps the setup steps below
       - name: Stand up RustFS
-        run: just rustfs-up
+        run: just services-start rustfs_init
 
       - name: Download wheels
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -112,30 +118,66 @@ jobs:
       # this is here instead of earlier to give RustFS more time to get up and running
       # checking and waiting only right before we need it
       - name: Wait for RustFS to be ready
-        run: just rustfs-wait
+        run: just rustfs-join
 
       # Python-line coverage is measured here, against the shipped wheel;
       # Rust+FFI coverage stays in rust-ci where the instrumented build is shared
+      # --cov, not coverage=true: that also sets up llvm-cov, which needs cargo
       - name: Run pytest (non-hypothesis)
         env:
-          coverage: ${{ matrix.deps-version.name == 'latest' }}
-        run: just coverage=${coverage} pytest-venv -n 4 -m "not hypothesis"
+          COV_ARGS: ${{ matrix.deps-version.name == 'latest' && '--cov=icechunk' || '' }}
+          ICECHUNK_PYTEST_SHARD: ${{ matrix.shard }}/4
+        run: just pytest-venv $COV_ARGS -n 4 --dist worksteal -m "not hypothesis"
 
       - name: Stash coverage data for aggregation
         if: ${{ matrix.deps-version.name == 'latest' }}
-        run: just coverage-stash test-latest
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: just coverage-stash "test-latest-$SHARD"
 
       - name: Upload coverage data
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         if: ${{ matrix.deps-version.name == 'latest' }}
         with:
-          name: python-coverage-data-test-latest
-          path: icechunk-python/.coverage-fragments/.coverage.test-latest
+          name: python-coverage-data-test-latest-${{ matrix.shard }}
+          path: icechunk-python/.coverage-fragments/.coverage.test-latest-${{ matrix.shard }}
           include-hidden-files: true
+
+  # Keeps the per-variant "test (...)" check names. A skipped required check
+  # counts as passing, so this runs always. Any failed shard reds every variant.
+  test:
+    name: test (${{ matrix.deps-version.name }}, ${{ matrix.deps-version.xarray }}, ${{ matrix.deps-version.dask }}, ${{ matrix.deps-version.distributed }}, ${{ matrix.deps-version.zarr }})
+    if: always()
+    needs: [test-shard]
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        # same entries as test-shard, so the check names stay the same
+        deps-version:
+          - name: minimum
+            xarray: "2025.07.1"
+            dask: "2025.2.0"
+            distributed: "2025.2.0"
+            zarr: "3.1.0"
+          - name: latest
+            xarray: "latest-release"
+            dask: "latest-release"
+            distributed: "latest-release"
+            zarr: "latest-release"
+    steps:
+      - name: Verify all shards passed
+        env:
+          SHARDS_RESULT: ${{ needs.test-shard.result }}
+        run: |
+          if [ "$SHARDS_RESULT" != "success" ]; then
+            echo "::error::One or more test shards failed"
+            exit 1
+          fi
 
   build-wheels-free-threaded:
     name: build-wheels-free-threaded
-    runs-on: ubuntu-latest
+    # test-free-threaded waits on this compile, so it gets the paid 8-core runner; forks do not
+    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || 'ubuntu24-8-core-amd64' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -144,7 +186,9 @@ jobs:
       - uses: prefix-dev/setup-pixi@d3f436a425481402e6a95a1d1fc10331c708cd9e # v0.10.2
         with:
           pixi-version: ${{ env.PIXI_VERSION }}
-          cache: false
+          # py314t builds some PyPI deps from source, so a restore beats a fresh install
+          cache: true
+          cache-write: ${{ github.ref == 'refs/heads/main' }}
           activate-environment: true
           manifest-path: icechunk-python/pyproject.toml
           environments: py314t
@@ -167,10 +211,17 @@ jobs:
           name: test-wheels-free-threaded
           path: icechunk-python/dist
 
-  test-free-threaded:
-    name: test-free-threaded
+  test-free-threaded-shard:
+    name: test-free-threaded-shard (${{ matrix.shard }})
     runs-on: ubuntu-latest
-    needs: [build-wheels-free-threaded]
+    permissions:
+      contents: read
+      actions: read # wait-for-step.sh reads the job states of this run
+    strategy:
+      fail-fast: false
+      matrix:
+        # list every id below the shard count in ICECHUNK_PYTEST_SHARD
+        shard: [0, 1, 2, 3]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -182,10 +233,26 @@ jobs:
           cache: false
           activate-environment: true
           manifest-path: icechunk-python/pyproject.toml
-          environments: py314t
+          environments: wheel-test-py314t
 
       - name: Stand up RustFS
-        run: just rustfs-up
+        run: just services-start rustfs_init
+
+      # zstandard has no 3.14t wheel and takes ~45s to build. Build it into uv's cache
+      # while the wheel compiles; the install step below still does the full install.
+      - name: Prefetch test dependencies
+        continue-on-error: true
+        working-directory: icechunk-python
+        run: |
+          uv venv "$RUNNER_TEMP/prefetch" --python 3.14t
+          uv pip install --python "$RUNNER_TEMP/prefetch" --group test
+
+      # Only this lane polls instead of using `needs`: its setup above takes ~90s,
+      # which the poll overlaps. The other lanes are ready in seconds.
+      - name: Wait for build-wheels-free-threaded
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: .github/scripts/wait-for-step.sh build-wheels-free-threaded "Upload wheels"
 
       - name: Download wheels
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -199,40 +266,42 @@ jobs:
         run: just install-test-wheel test
 
       - name: Wait for RustFS to be ready
-        run: just rustfs-wait
+        run: just rustfs-join
 
       - name: Run pytest (non-hypothesis)
-        run: just pytest-venv -n 4 -m "not hypothesis"
+        env:
+          ICECHUNK_PYTEST_SHARD: ${{ matrix.shard }}/4
+        run: just pytest-venv -n 4 --dist worksteal -m "not hypothesis"
+
+  # Keeps the "test-free-threaded" check name, and fails unless every shard passed
+  test-free-threaded:
+    name: test-free-threaded
+    if: always()
+    needs: [test-free-threaded-shard]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify all shards passed
+        env:
+          SHARDS_RESULT: ${{ needs.test-free-threaded-shard.result }}
+        run: |
+          if [ "$SHARDS_RESULT" != "success" ]; then
+            echo "::error::One or more free-threaded test shards failed"
+            exit 1
+          fi
 
   test-hypothesis-shard:
     name: test-hypothesis-shard (${{ matrix.shard-id }})
     runs-on: ubuntu-latest
+    needs: [build-wheels]
     # PRs and main already run hypothesis on these exact commits; skipping in
     # the merge queue keeps it off the merge-gating critical path
     if: github.event_name != 'merge_group'
-    needs: [build-wheels]
     strategy:
       fail-fast: false
       matrix:
-        # Explicit partition keyed on test cost: each heavy stateful machine
-        # anchors a shard, cheap property tests ride along on the second
-        # xdist worker. The last shard collects everything not claimed by the
-        # others, so new hypothesis tests always run somewhere.
-        # Ids stay numeric to keep the shard artifact names keyed on them.
-        include:
-          - shard-id: 0
-            label: zarr-hierarchy
-            targets: tests/test_zarr/test_stateful.py
-          - shard-id: 1
-            label: repo-ops
-            targets: tests/test_stateful_repo_ops.py tests/test_store_properties.py
-          - shard-id: 2
-            label: rest
-            targets: >-
-              --ignore=tests/test_zarr/test_stateful.py
-              --ignore=tests/test_stateful_repo_ops.py
-              --ignore=tests/test_store_properties.py
-              tests integration_tests
+        # Every shard runs every hypothesis test with 1/N of the example budget
+        # (see tests/conftest.py) and its own random seeds. N is the matrix size.
+        shard-id: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -244,6 +313,7 @@ jobs:
           cache: false
           activate-environment: true
           manifest-path: icechunk-python/pyproject.toml
+          environments: wheel-test
 
       - name: Download wheels
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -251,9 +321,10 @@ jobs:
           name: test-wheels
           path: icechunk-python/dist
 
+      # Replayed examples count against max_examples, so only one shard replays them
       - name: Restore cached hypothesis examples
         id: restore-hypothesis-cache
-        if: github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main' && matrix.shard-id == 0
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: icechunk-python/.hypothesis/examples/
@@ -264,14 +335,15 @@ jobs:
       - name: Install dependencies
         run: just install-test-wheel test
 
-      - name: "Run hypothesis tests (shard ${{ matrix.shard-id }}: ${{ matrix.label }})"
+      - name: "Run hypothesis tests (shard ${{ matrix.shard-id }})"
         env:
           HYPOTHESIS_EXPERIMENTAL_OBSERVABILITY: "1"
           NOCOLOR: 1
-          PYTEST_TARGETS: ${{ matrix.targets }}
+          ICECHUNK_HYPOTHESIS_SHARDS: ${{ strategy.job-total }}
           # sysmon core: coverage's default C tracer slows hypothesis workloads badly
           COVERAGE_CORE: sysmon
-        run: just coverage=true pytest-venv -m hypothesis $PYTEST_TARGETS
+        # worksteal: an idle worker takes tests queued behind a slow state machine example
+        run: just pytest-venv --cov=icechunk -m hypothesis --dist worksteal --durations=10 tests integration_tests
 
       - name: Stash coverage data for aggregation
         env:
@@ -369,15 +441,22 @@ jobs:
           name: python-coverage
           fail_ci_if_error: false
 
-  compat-stateful:
-    name: compat-stateful
+  compat-stateful-shard:
+    name: compat-stateful-shard (${{ matrix.shard-id }})
     runs-on: ubuntu-latest
     needs: [build-wheels]
+    strategy:
+      fail-fast: false
+      matrix:
+        # Every shard runs every test with 1/N of the example budget
+        # (see tests/conftest.py) and its own random seeds. N is the matrix size.
+        shard-id: [0, 1, 2, 3, 4, 5]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
+      # the default env, because install-ic-v1 needs third-wheel
       - uses: prefix-dev/setup-pixi@d3f436a425481402e6a95a1d1fc10331c708cd9e # v0.10.2
         with:
           pixi-version: ${{ env.PIXI_VERSION }}
@@ -397,13 +476,33 @@ jobs:
           just install-ic-v1
 
       - name: Run cross-version stateful tests
-        run: just pytest-venv tests/test_stateful_compat.py -v
+        env:
+          ICECHUNK_HYPOTHESIS_SHARDS: ${{ strategy.job-total }}
+        # -n 3: one worker per test. auto gives 2 here, so two tests would run one after the other
+        run: just pytest-venv tests/test_stateful_compat.py -v -n 3 --durations=10
 
-  xarray-backends:
-    name: xarray-backends (${{ matrix.xarray-version.name }}, ${{ matrix.xarray-version.version }}, ${{ matrix.xarray-version.zarr }})
+  # Keeps the "compat-stateful" check name
+  compat-stateful:
+    name: compat-stateful
+    if: always()
+    needs: [compat-stateful-shard]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify all shards passed
+        env:
+          SHARDS_RESULT: ${{ needs.compat-stateful-shard.result }}
+        run: |
+          if [ "$SHARDS_RESULT" != "success" ]; then
+            echo "::error::One or more compat-stateful shards failed"
+            exit 1
+          fi
+
+  xarray-backends-shard:
+    name: xarray-backends-shard (${{ matrix.xarray-version.name }}, ${{ matrix.shard }})
     runs-on: ubuntu-latest
     needs: [build-wheels]
     strategy:
+      fail-fast: false
       matrix:
         xarray-version:
           - name: minimum
@@ -412,6 +511,8 @@ jobs:
           - name: latest-release
             version: "latest-release"
             zarr: "latest-release"
+        # list every id below the shard count in ICECHUNK_PYTEST_SHARD
+        shard: [0, 1, 2]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -423,9 +524,10 @@ jobs:
           cache: false
           activate-environment: true
           manifest-path: icechunk-python/pyproject.toml
+          environments: wheel-test
 
       - name: Stand up RustFS
-        run: just rustfs-up
+        run: just services-start rustfs_init
 
       - name: Download wheels
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -447,10 +549,39 @@ jobs:
         run: just xarray-clone-installed
 
       - name: Wait for RustFS to be ready
-        run: just rustfs-wait
+        run: just rustfs-join
 
       - name: Run xarray backends tests
+        env:
+          ICECHUNK_PYTEST_SHARD: ${{ matrix.shard }}/3
         run: just xarray-backends-pytest
+
+  # Keeps the per-variant "xarray-backends (...)" check names. A skipped required check
+  # counts as passing, so this runs always. Any failed shard reds every variant.
+  xarray-backends:
+    name: xarray-backends (${{ matrix.xarray-version.name }}, ${{ matrix.xarray-version.version }}, ${{ matrix.xarray-version.zarr }})
+    if: always()
+    needs: [xarray-backends-shard]
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        # same entries as xarray-backends-shard, so the check names stay the same
+        xarray-version:
+          - name: minimum
+            version: "2025.07.1"
+            zarr: "3.1.0"
+          - name: latest-release
+            version: "latest-release"
+            zarr: "latest-release"
+    steps:
+      - name: Verify all shards passed
+        env:
+          SHARDS_RESULT: ${{ needs.xarray-backends-shard.result }}
+        run: |
+          if [ "$SHARDS_RESULT" != "success" ]; then
+            echo "::error::One or more xarray-backends shards failed"
+            exit 1
+          fi
 
   stubtest:
     name: stubtest

@@ -59,6 +59,8 @@ pub use icechunk_arrow_object_store::HttpObjectStoreBackend;
 
 pub use icechunk_arrow_object_store::{ObjectStoreBackend, Role};
 
+/// Parallel listing of object ids by prefix.
+pub mod listing;
 #[cfg(test)]
 pub mod logging;
 

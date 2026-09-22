@@ -1,3 +1,5 @@
+import math
+import os
 from enum import Enum
 from typing import Literal, cast
 
@@ -23,6 +25,10 @@ if zarr_has_rectilinear_chunks:
 # hypothesis auto-selects "ci" when the CI env var is set.
 # Select with: pytest --hypothesis-profile=nightly
 # ---------------------------------------------------------------------------
+# CI runs every hypothesis test in each of N shards, so each shard gets 1/N of the examples
+HYPOTHESIS_SHARDS = max(1, int(os.environ.get("ICECHUNK_HYPOTHESIS_SHARDS", "1")))
+CI_MAX_EXAMPLES = 200
+
 settings.register_profile(
     "default",
     parent=settings.get_profile("default"),
@@ -32,7 +38,9 @@ settings.register_profile(
 settings.register_profile(
     "ci",
     parent=settings.get_profile("ci"),
-    max_examples=200,
+    # +1 per shard: every run tries the same simplest example first
+    max_examples=math.ceil(CI_MAX_EXAMPLES / HYPOTHESIS_SHARDS)
+    + (1 if HYPOTHESIS_SHARDS > 1 else 0),
     stateful_step_count=75,
     suppress_health_check=[HealthCheck.filter_too_much, HealthCheck.too_slow],
     # The built-in "ci" profile sets derandomize=True and database=None.
@@ -129,3 +137,21 @@ def write_chunks_to_minio(
 )
 def any_spec_version(request: pytest.FixtureRequest) -> SpecVersion | int | None:
     return cast(SpecVersion | int | None, request.param)
+
+
+SHARD_ENV = "ICECHUNK_PYTEST_SHARD"
+
+
+# Runs after -m/-k deselection. Round-robin over the collected order, so the cases
+# of one parametrized test spread over the shards and every process agrees.
+@pytest.hookimpl(trylast=True)
+def pytest_collection_modifyitems(
+    config: pytest.Config, items: list[pytest.Item]
+) -> None:
+    spec = os.environ.get(SHARD_ENV)
+    if not spec:
+        return
+    index, count = (int(part) for part in spec.split("/"))
+    dropped = [item for pos, item in enumerate(items) if pos % count != index]
+    items[:] = items[index::count]
+    config.hook.pytest_deselected(items=dropped)
