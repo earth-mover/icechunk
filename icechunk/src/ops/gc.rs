@@ -231,8 +231,7 @@ impl ManifestConsumer for RetainedChunks {
     }
 
     // Nothing to fold: `consume` already inserts every id into the shared
-    // sharded set from the decode workers in parallel. Funnelling millions of ids
-    // was a bottleneck.
+    // sharded set from the decode workers in parallel.
     fn fold(_acc: &mut (), _output: ()) {}
 }
 
