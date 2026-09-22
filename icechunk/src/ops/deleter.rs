@@ -600,12 +600,24 @@ async fn run_deletes(
         // retries first: they are already past the listing filter
         let batch = match deleter.retry_queue.pop_front() {
             Some(batch) => batch,
-            None if queue_open => match rx.recv().await {
-                Some(batch) => batch,
-                None => {
-                    queue_open = false;
+            // Whichever comes first: a finished request or a new batch. Waiting
+            // on the channel alone would leave a throttle unabsorbed, its limit
+            // decrease and retry deferred, for as long as listing yields no
+            // deletable candidate.
+            None if queue_open => tokio::select! {
+                // a completion first: it steers the rate the next spawn obeys
+                biased;
+                Some(joined) = in_flight.join_next() => {
+                    deleter.absorb(joined)?;
                     continue;
                 }
+                received = rx.recv() => match received {
+                    Some(batch) => batch,
+                    None => {
+                        queue_open = false;
+                        continue;
+                    }
+                },
             },
             // nothing more to spawn: drain what is still running, which may
             // put throttled batches back in the queue
@@ -1291,6 +1303,60 @@ mod tests {
         gate.add_permits(4);
         let report = tokio::time::timeout(Duration::from_secs(5), run).await???;
         assert_eq!(report.deleted_objects, 4);
+        assert_eq!(report.failed_objects, 0);
+        assert_eq!(am.list_chunks().await?.count().await, 0);
+        Ok(())
+    }
+
+    /// A throttle must steer the rate the moment the store answers, not when
+    /// listing next produces a batch: with the collector stalled after one
+    /// batch, the throttled result is absorbed (counted, limit lowered, batch
+    /// re-queued) while the channel is still open and idle.
+    #[tokio_test]
+    async fn throttles_are_absorbed_while_the_collector_is_idle()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+        let repo = repo_with_loose_chunks(&backend, 2).await?;
+        let (am, flaky) = wrapped_asset_manager(
+            &repo,
+            &backend,
+            Some(CHUNKS_FILE_PATH),
+            FailMode::ThrottleFirst(1),
+        );
+        let candidates: Vec<ListInfo<ChunkId>> =
+            am.list_chunks().await?.try_collect().await?;
+        assert_eq!(candidates.len(), 2);
+        let mut batches = candidates
+            .into_iter()
+            .map(|info| vec![(info.id.to_string(), info.size_bytes)]);
+
+        // drive the deleter task by hand, standing in for the collector
+        let progress = Arc::new(DeleteProgress::default());
+        let (tx, rx) = mpsc::channel::<Vec<(String, u64)>>(DELETE_QUEUE_BATCHES);
+        let run = tokio::spawn(run_deletes(
+            Arc::clone(am.storage()),
+            am.storage_settings().clone(),
+            CHUNKS_FILE_PATH,
+            delete_config(50, 4),
+            rx,
+            Arc::clone(&progress),
+        ));
+
+        // the store throttles this first request; the collector then goes quiet
+        tx.send(batches.next().unwrap()).await?;
+        wait_for("the throttle to be absorbed", || {
+            progress.throttled_batches.load(AtomicOrdering::Relaxed) == 1
+        })
+        .await?;
+        // and the re-queued batch is retried without waiting for more listing
+        wait_for("the retry to be sent", || flaky.calls.load(Ordering::SeqCst) == 2)
+            .await?;
+
+        tx.send(batches.next().unwrap()).await?;
+        drop(tx);
+        let report = tokio::time::timeout(Duration::from_secs(5), run).await???;
+        assert_eq!(report.throttled_batches, 1);
+        assert_eq!(report.deleted_objects, 2);
         assert_eq!(report.failed_objects, 0);
         assert_eq!(am.list_chunks().await?.count().await, 0);
         Ok(())
