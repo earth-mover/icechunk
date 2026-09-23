@@ -293,42 +293,6 @@ jobs:
           [ "$MYPY_OUTCOME" != failure ] || comment_on "$MYPY_ISSUE_TITLE"
           [ "$PYTEST_OUTCOME" != failure ] || comment_on "$UPSTREAM_ISSUE_TITLE"
 
-  build-close:
-    name: upstream-dev-close
-    runs-on: ubuntu-latest
-    continue-on-error: true
-    needs: build
-    permissions:
-      issues: write # needed to close the failure issues once the nightly passes again
-    if: |
-      always()
-      && (needs.build.outputs.setup-outcome == 'success' || needs.build.outputs.mypy-outcome == 'success' || needs.build.outputs.pytest-outcome == 'success')
-      && github.event_name == 'schedule'
-      && github.repository_owner == 'earth-mover'
-    steps:
-      - name: Close the failure issues
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          SETUP_OUTCOME: ${{ needs.build.outputs.setup-outcome }}
-          MYPY_OUTCOME: ${{ needs.build.outputs.mypy-outcome }}
-          PYTEST_OUTCOME: ${{ needs.build.outputs.pytest-outcome }}
-        run: |
-          close() {
-            number=$(gh issue list --state open --limit 200 --json number,title |
-              jq -r --arg t "$1" 'map(select(.title == $t)) | .[0].number // empty')
-            if [ -z "$number" ]; then
-              echo "no open issue titled '$1'"
-              return
-            fi
-            gh issue close "$number" --comment \
-              "The nightly passed this step again: $RUN_URL. Closing. A later failure opens a new issue."
-          }
-          [ "$SETUP_OUTCOME" != success ] || close "$SETUP_ISSUE_TITLE"
-          [ "$MYPY_OUTCOME" != success ] || close "$MYPY_ISSUE_TITLE"
-          [ "$PYTEST_OUTCOME" != success ] || close "$UPSTREAM_ISSUE_TITLE"
-
   xarray-backends:
     name: xarray-tests-upstream
     needs: [build-wheels]
@@ -424,33 +388,39 @@ jobs:
           gh issue comment "$number" --body \
             "Failed again in tonight's run: $RUN_URL — the issue body has the current failures."
 
-  xarray-close:
-    name: xarray-tests-upstream-close
+  close-issues:
+    name: nightly-close
     runs-on: ubuntu-latest
     continue-on-error: true
-    needs: xarray-backends
+    needs: [build, xarray-backends]
     permissions:
-      issues: write # needed to close the failure issue once the nightly passes again
-    if: |
-      always()
-      && needs.xarray-backends.outputs.pytest-outcome == 'success'
-      && github.event_name == 'schedule'
-      && github.repository_owner == 'earth-mover'
+      issues: write # needed to close the failure issues once the nightly passes again
+    if: always() && github.event_name == 'schedule' && github.repository_owner == 'earth-mover'
     steps:
-      - name: Close the failure issue
+      - name: Close the failure issues
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          SETUP_OUTCOME: ${{ needs.build.outputs.setup-outcome }}
+          MYPY_OUTCOME: ${{ needs.build.outputs.mypy-outcome }}
+          PYTEST_OUTCOME: ${{ needs.build.outputs.pytest-outcome }}
+          XARRAY_OUTCOME: ${{ needs.xarray-backends.outputs.pytest-outcome }}
         run: |
-          number=$(gh issue list --state open --limit 200 --json number,title |
-            jq -r --arg t "$XARRAY_ISSUE_TITLE" 'map(select(.title == $t)) | .[0].number // empty')
-          if [ -z "$number" ]; then
-            echo "no open issue titled '$XARRAY_ISSUE_TITLE'"
-            exit 0
-          fi
-          gh issue close "$number" --comment \
-            "The nightly passed again: $RUN_URL. Closing. A later failure opens a new issue."
+          close() {
+            number=$(gh issue list --state open --limit 200 --json number,title |
+              jq -r --arg t "$1" 'map(select(.title == $t)) | .[0].number // empty')
+            if [ -z "$number" ]; then
+              echo "no open issue titled '$1'"
+              return
+            fi
+            gh issue close "$number" --comment \
+              "The nightly passed this step again: $RUN_URL. Closing. A later failure opens a new issue."
+          }
+          [ "$SETUP_OUTCOME" != success ] || close "$SETUP_ISSUE_TITLE"
+          [ "$MYPY_OUTCOME" != success ] || close "$MYPY_ISSUE_TITLE"
+          [ "$PYTEST_OUTCOME" != success ] || close "$UPSTREAM_ISSUE_TITLE"
+          [ "$XARRAY_OUTCOME" != success ] || close "$XARRAY_ISSUE_TITLE"
 
     # The jobs above are `continue-on-error` so upstream breakage does not block
     # anything, which also leaves the run itself green: a nightly failing for days
