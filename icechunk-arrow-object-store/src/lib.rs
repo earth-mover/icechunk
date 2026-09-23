@@ -492,6 +492,15 @@ impl ObjectStorage {
         }
     }
 
+    fn add_storage_class(&self, settings: &Settings, attributes: &mut Attributes) {
+        if let Some(klass) = settings.storage_class()
+            && self.backend.supports_storage_class()
+        {
+            attributes
+                .insert(Attribute::StorageClass, AttributeValue::from(klass.clone()));
+        }
+    }
+
     fn get_put_mode(
         &self,
         settings: &Settings,
@@ -579,17 +588,7 @@ impl Storage for ObjectStorage {
                 attributes.insert(att.clone(), value.clone());
             }
         };
-
-        // The storage class is not user metadata, so it is sent regardless of
-        // `unsafe_use_metadata`, as the native S3 backend does. `object_store`
-        // maps it to the provider's header (`x-amz-storage-class`,
-        // `x-goog-storage-class`, `x-ms-access-tier`).
-        if let Some(klass) = settings.storage_class()
-            && self.backend.supports_storage_class()
-        {
-            attributes
-                .insert(Attribute::StorageClass, AttributeValue::from(klass.clone()));
-        }
+        self.add_storage_class(settings, &mut attributes);
 
         let mode = self.get_put_mode(settings, previous_version);
         let is_conditional = !matches!(mode, PutMode::Overwrite);
@@ -672,9 +671,12 @@ impl Storage for ObjectStorage {
                         .await
                         .map_err(|e| StorageErrorKind::ObjectStore(Box::new(e)))
                         .capture()?;
+                    let mut attributes = Attributes::new();
+                    self.add_storage_class(settings, &mut attributes);
+                    let options = PutOptions { attributes, ..PutOptions::default() };
                     self.get_client(settings, Role::Write)
                         .await?
-                        .put(&to, bytes.into())
+                        .put_opts(&to, bytes.into(), options)
                         .await
                         .map_err(|e| StorageErrorKind::ObjectStore(Box::new(e)))
                         .capture()?;
@@ -687,6 +689,8 @@ impl Storage for ObjectStorage {
                 Err(err) => Err(obj_store_error(err)),
             }
         } else {
+            // FIXME: `settings.storage_class()` is dropped, the copy lands in the
+            // default class. object_store's `CopyOptions` has no attributes to carry it.
             match self.get_client(settings, Role::Write).await?.copy(&from, &to).await {
                 Ok(_) => {
                     Ok(VersionedUpdateResult::Updated { new_version: version.clone() })
@@ -2040,6 +2044,42 @@ mod tests {
         let on_disk =
             std::fs::read(tmp_dir.path().join("chunks").join("on-disk")).unwrap();
         assert_eq!(on_disk, b"payload");
+    }
+
+    #[tokio_test]
+    async fn conditional_copy_keeps_storage_class() {
+        let store = ObjectStorage::new_in_memory().await.unwrap();
+        let settings = Settings {
+            storage_class: Some("STANDARD_IA".to_string()),
+            ..store.default_settings().await.unwrap()
+        };
+        let version = store
+            .put_object(
+                &settings,
+                "config",
+                Bytes::from_static(b"payload"),
+                None,
+                vec![],
+                None,
+            )
+            .await
+            .unwrap()
+            .must_write()
+            .unwrap();
+        assert!(version.etag().is_some());
+
+        store
+            .copy_object(&settings, "config", "config-backup", None, &version)
+            .await
+            .unwrap()
+            .must_write()
+            .unwrap();
+
+        let attributes = stored_attributes(&store, &settings, "config-backup").await;
+        assert_eq!(
+            attributes.get(&Attribute::StorageClass).map(|v| v.as_ref()),
+            Some("STANDARD_IA")
+        );
     }
 
     #[cfg(feature = "http")]
