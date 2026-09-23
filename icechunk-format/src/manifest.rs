@@ -800,17 +800,20 @@ fn ref_to_payload(
         let decompressor = decompressor
             .ok_or(IcechunkFormatErrorKind::MissingLocationCompressionDictionary)
             .capture()?;
-        let decompressed = decompressor
-            .decompress(compressed.bytes(), MAX_DECOMPRESSED_LOCATION_SIZE)
+        // Carefully so we don't keep the whole string buffer in memory
+        let mut buffer = [0u8; MAX_DECOMPRESSED_LOCATION_SIZE];
+        let len = decompressor
+            .decompress_to_buffer(compressed.bytes(), &mut buffer)
             .capture()?;
-        let location_string = String::from_utf8(decompressed)
+        let location_string = std::str::from_utf8(&buffer[..len])
             .map_err(|e| {
                 IcechunkFormatErrorKind::IO(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
                     e,
                 ))
             })
-            .capture()?;
+            .capture()?
+            .to_owned();
         let location = VirtualChunkLocation::from_trusted(location_string);
         Ok(ChunkPayload::Virtual(VirtualChunkRef {
             location,
@@ -1597,6 +1600,41 @@ mod tests {
             let (coord, payload) = result?;
             assert_eq!(coord, chunks[i].coord);
             assert_eq!(payload, chunks[i].payload);
+        }
+        Ok(())
+    }
+
+    /// Walks like GC and stats hold millions of decoded locations at once, so a
+    /// location must not keep the decompression buffer's spare capacity.
+    #[tokio_test]
+    async fn test_decompressed_locations_are_exact_size() -> Result<(), Box<dyn Error>> {
+        let chunks = make_virtual_chunks(50);
+        let node = chunks[0].node.clone();
+        let manifest = Arc::new(
+            Manifest::from_iter(
+                &ManifestId::random(),
+                chunks.clone(),
+                Some(&COMPRESS_CONFIG),
+            )
+            .await?
+            .unwrap(),
+        );
+        assert!(manifest.root().location_dictionary().is_some());
+
+        let assert_exact = |payload: ChunkPayload| match payload {
+            ChunkPayload::Virtual(v) => {
+                assert_eq!(v.location.0.capacity(), v.location.0.len());
+            }
+            other => panic!("expected a virtual payload, got {other:?}"),
+        };
+        for payload in manifest.chunk_payloads()? {
+            assert_exact(payload?);
+        }
+        for result in Arc::clone(&manifest).iter(node)? {
+            assert_exact(result?.1);
+        }
+        for chunk in &chunks {
+            assert_exact(manifest.get_chunk_payload(&chunk.node, &chunk.coord)?);
         }
         Ok(())
     }
