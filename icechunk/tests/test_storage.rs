@@ -1378,49 +1378,43 @@ async fn test_write_config_can_overwrite_with_unsafe_config(
 
 #[tokio_test]
 async fn test_storage_classes() -> Result<(), Box<dyn std::error::Error>> {
-    if let Ok(e) = env::var("AWS_BUCKET")
-        && !e.is_empty()
-    {
-    } else {
+    let Some(store) = common::aws_real_store() else {
         return Ok(());
-    }
+    };
     let prefix = common::get_random_prefix("test_storage_classes");
     let st = common::make_aws_integration_storage(prefix.clone())?;
-    check_storage_classes(st, &prefix).await
+    check_storage_classes(st, &store, &prefix).await
 }
 
-/// Same as [`test_storage_classes`] but through the `object_store` backend,
-/// which used to drop the storage class on the floor.
+/// Same as [`test_storage_classes`] but through the `object_store` backend.
 #[tokio_test]
 async fn test_storage_classes_object_store() -> Result<(), Box<dyn std::error::Error>> {
-    if let Ok(e) = env::var("AWS_BUCKET")
-        && !e.is_empty()
-    {
-    } else {
+    let Some(store) = common::aws_real_store() else {
         return Ok(());
-    }
+    };
     let prefix = common::get_random_prefix("test_storage_classes_object_store");
     let st = new_s3_object_store_storage(
-        common::get_aws_integration_options()?,
-        common::get_aws_integration_bucket()?,
+        store.options().clone(),
+        store.bucket().to_string(),
         Some(prefix.clone()),
-        Some(common::get_aws_integration_credentials()?),
+        Some(store.credentials().clone()),
         Vec::new(),
         Vec::new(),
     )
     .await?;
-    check_storage_classes(st, &prefix).await
+    check_storage_classes(st, &store, &prefix).await
 }
 
 /// Write two objects as `STANDARD_IA` and one with the default class, then
 /// list the prefix with the AWS SDK and check the classes S3 recorded.
 async fn check_storage_classes(
     st: Arc<dyn Storage + Send + Sync>,
+    store: &common::RealStore,
     prefix: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let client = mk_client(
-        &common::get_aws_integration_options()?,
-        common::get_aws_integration_credentials()?,
+        store.options(),
+        store.credentials().clone(),
         Vec::new(),
         Vec::new(),
         &storage::Settings::default(),
@@ -1466,7 +1460,7 @@ async fn check_storage_classes(
     .must_write()?;
     let out = client
         .list_objects_v2()
-        .bucket(common::get_aws_integration_bucket()?)
+        .bucket(store.bucket())
         .prefix(format!("{prefix}/chunks"))
         .into_paginator()
         .send()

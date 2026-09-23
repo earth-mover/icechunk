@@ -995,9 +995,8 @@ pub trait ObjectStoreBackend: Debug + Display + Sync + Send {
         false
     }
 
-    /// Whether `Settings::storage_class` is sent with writes. Backends without
-    /// storage tiers return `false` and the setting is ignored; the local
-    /// filesystem must, because `object_store` rejects any put attribute there.
+    /// Whether writes send `Settings::storage_class`. `false` only where
+    /// `object_store` rejects the attribute: the local filesystem fails any put that has one.
     fn supports_storage_class(&self) -> bool {
         true
     }
@@ -1960,8 +1959,7 @@ mod tests {
     #[tokio_test]
     async fn storage_class_is_sent_even_without_metadata() {
         // The storage class is not user metadata: it must reach the object
-        // store even when `unsafe_use_metadata` is off, which is the case that
-        // used to drop it (attributes were only set inside that guard).
+        // store even when `unsafe_use_metadata` is off.
         let store = ObjectStorage::new_in_memory().await.unwrap();
         let settings = Settings {
             storage_class: Some("STANDARD_IA".to_string()),
