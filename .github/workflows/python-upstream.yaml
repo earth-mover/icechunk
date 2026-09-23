@@ -24,6 +24,10 @@ env:
   # Title of the issue the pytest reporter keeps up to date. Pinned here (it is
   # also the action's default) so the comment step below can find that issue.
   UPSTREAM_ISSUE_TITLE: "⚠️ Nightly upstream-dev CI failed ⚠️"
+  # Titles of the issues the setup, mypy and xarray backends reporters keep up to date
+  SETUP_ISSUE_TITLE: "Nightly upstream dependency installation failed"
+  MYPY_ISSUE_TITLE: "Nightly MyPy type checking failed with upstream dependencies"
+  XARRAY_ISSUE_TITLE: "Nightly Xarray backends tests failed"
 
 jobs:
   build-wheels:
@@ -193,7 +197,7 @@ jobs:
           issue_body="${issue_body//\{\{SETUP_OUTPUT\}\}/$setup_output}"
 
           # Check for existing open issue with same title
-          issue_title="Nightly upstream dependency installation failed"
+          issue_title="$SETUP_ISSUE_TITLE"
           existing_issue=$(gh issue list --state open --label "CI" --search "\"$issue_title\" in:title" --json number --jq '.[0].number // empty')
 
           if [ -n "$existing_issue" ]; then
@@ -234,7 +238,7 @@ jobs:
           issue_body="${issue_body//\{\{MYPY_OUTPUT\}\}/$mypy_output}"
 
           # Check for existing open issue with same title
-          issue_title="Nightly MyPy type checking failed with upstream dependencies"
+          issue_title="$MYPY_ISSUE_TITLE"
           existing_issue=$(gh issue list --state open --label "CI" --search "\"$issue_title\" in:title" --json number --jq '.[0].number // empty')
 
           if [ -n "$existing_issue" ]; then
@@ -285,9 +289,43 @@ jobs:
             gh issue comment "$number" --body \
               "Failed again in tonight's run: $RUN_URL — the issue body has the current failures."
           }
-          [ "$SETUP_OUTCOME" != failure ] || comment_on "Nightly upstream dependency installation failed"
-          [ "$MYPY_OUTCOME" != failure ] || comment_on "Nightly MyPy type checking failed with upstream dependencies"
+          [ "$SETUP_OUTCOME" != failure ] || comment_on "$SETUP_ISSUE_TITLE"
+          [ "$MYPY_OUTCOME" != failure ] || comment_on "$MYPY_ISSUE_TITLE"
           [ "$PYTEST_OUTCOME" != failure ] || comment_on "$UPSTREAM_ISSUE_TITLE"
+
+  build-close:
+    name: upstream-dev-close
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    needs: build
+    permissions:
+      issues: write # needed to close the failure issues once the nightly passes again
+    if: |
+      always()
+      && (needs.build.outputs.setup-outcome == 'success' || needs.build.outputs.mypy-outcome == 'success')
+      && github.event_name == 'schedule'
+      && github.repository_owner == 'earth-mover'
+    steps:
+      - name: Close the failure issues
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          SETUP_OUTCOME: ${{ needs.build.outputs.setup-outcome }}
+          MYPY_OUTCOME: ${{ needs.build.outputs.mypy-outcome }}
+        run: |
+          close() {
+            number=$(gh issue list --state open --limit 200 --json number,title |
+              jq -r --arg t "$1" 'map(select(.title == $t)) | .[0].number // empty')
+            if [ -z "$number" ]; then
+              echo "no open issue titled '$1'"
+              return
+            fi
+            gh issue close "$number" --comment \
+              "The nightly passed this step again: $RUN_URL. Closing. A later failure opens a new issue."
+          }
+          [ "$SETUP_OUTCOME" != success ] || close "$SETUP_ISSUE_TITLE"
+          [ "$MYPY_OUTCOME" != success ] || close "$MYPY_ISSUE_TITLE"
 
   xarray-backends:
     name: xarray-tests-upstream
@@ -366,7 +404,7 @@ jobs:
         uses: xarray-contrib/issue-from-pytest-log@35b4e0a9e06f8e7e261778289cf4b968b722662d # v1.6.2
         with:
           log-path: xarray-backends-logs/output-pytest-log.jsonl
-          issue-title: "Nightly Xarray backends tests failed"
+          issue-title: ${{ env.XARRAY_ISSUE_TITLE }}
 
         # The report only rewrites the issue body, which notifies nobody
       - name: Comment on the failure issue
@@ -376,13 +414,41 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           number=$(gh issue list --state open --limit 200 --json number,title |
-            jq -r 'map(select(.title == "Nightly Xarray backends tests failed")) | .[0].number // empty')
+            jq -r --arg t "$XARRAY_ISSUE_TITLE" 'map(select(.title == $t)) | .[0].number // empty')
           if [ -z "$number" ]; then
             echo "no open issue for the xarray backends failure"
             exit 0
           fi
           gh issue comment "$number" --body \
             "Failed again in tonight's run: $RUN_URL — the issue body has the current failures."
+
+  xarray-close:
+    name: xarray-tests-upstream-close
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    needs: xarray-backends
+    permissions:
+      issues: write # needed to close the failure issue once the nightly passes again
+    if: |
+      always()
+      && needs.xarray-backends.outputs.pytest-outcome == 'success'
+      && github.event_name == 'schedule'
+      && github.repository_owner == 'earth-mover'
+    steps:
+      - name: Close the failure issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          number=$(gh issue list --state open --limit 200 --json number,title |
+            jq -r --arg t "$XARRAY_ISSUE_TITLE" 'map(select(.title == $t)) | .[0].number // empty')
+          if [ -z "$number" ]; then
+            echo "no open issue titled '$XARRAY_ISSUE_TITLE'"
+            exit 0
+          fi
+          gh issue close "$number" --comment \
+            "The nightly passed again: $RUN_URL. Closing. A later failure opens a new issue."
 
     # The jobs above are `continue-on-error` so upstream breakage does not block
     # anything, which also leaves the run itself green: a nightly failing for days
