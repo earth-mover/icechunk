@@ -172,12 +172,18 @@ build-release *args:
 
 # WASI toolchain for wasm-build / js-build-wasi; inert for other targets.
 # wasi-sdk sysroots have a per-target include dir; Debian's wasi-libc doesn't.
+# conda's linux-64 CFLAGS carry -march=nocona. clang rejects that option for wasm.
+# cc-rs applies CFLAGS alongside the suffixed variables. Both wasm recipes clear CFLAGS.
+# Without a wasi sysroot, as in the pixi js env, clang still searches /usr/include.
+# The host glibc headers then fail the wasm compile.
+# -nostdlibinc drops the system include paths and keeps clang's builtin ones.
+# Those headers plus zstd's own wasm-shim cover the build.
 export WASI_SYSROOT := env("WASI_SYSROOT", "/usr")
 export CC_wasm32_wasip1_threads := env("CC_wasm32_wasip1_threads", "clang")
 export CXX_wasm32_wasip1_threads := env("CXX_wasm32_wasip1_threads", "clang++")
 export AR_wasm32_wasip1_threads := env("AR_wasm32_wasip1_threads", "llvm-ar")
-wasi_include := if path_exists(WASI_SYSROOT / "include/wasm32-wasip1-threads") == "true" { WASI_SYSROOT / "include/wasm32-wasip1-threads" } else { WASI_SYSROOT / "include/wasm32-wasi" }
-export CFLAGS_wasm32_wasip1_threads := "--sysroot=" + WASI_SYSROOT + " -isystem " + wasi_include
+wasi_include := if path_exists(WASI_SYSROOT / "include/wasm32-wasip1-threads") == "true" { WASI_SYSROOT / "include/wasm32-wasip1-threads" } else if path_exists(WASI_SYSROOT / "include/wasm32-wasi") == "true" { WASI_SYSROOT / "include/wasm32-wasi" } else { "" }
+export CFLAGS_wasm32_wasip1_threads := if wasi_include == "" { "-nostdlibinc" } else { "--sysroot=" + WASI_SYSROOT + " -isystem " + wasi_include }
 export CXXFLAGS_wasm32_wasip1_threads := CFLAGS_wasm32_wasip1_threads
 
 [group('build')]
@@ -186,6 +192,7 @@ export CXXFLAGS_wasm32_wasip1_threads := CFLAGS_wasm32_wasip1_threads
 wasm-build:
   # compile smoke test: don't fail on existing warnings in no-default-features wasm cfgs
   export RUSTFLAGS=""
+  export CFLAGS="" CXXFLAGS=""
   cargo build -p icechunk --no-default-features --target wasm32-wasip1-threads
 
 [group('test')]
@@ -275,18 +282,18 @@ check-deps *args:
 
 [group('test')]
 [script]
-[doc("Run all Rust examples (skips limits_chunk_refs, large_manifests)")]
+[doc("Run all Rust examples (skips limits_chunk_refs, large_manifests, and gc_bench which needs RustFS)")]
 run-all-examples:
   # Allow failing examples, fix in the future
   set +e
 
-  for example in icechunk/examples/*.rs; do case "$example" in *limits_chunk_refs*|*large_manifests*) continue;; esac; cargo run --profile {{profile}} --example "$(basename "${example%.rs}")"; done
+  for example in icechunk/examples/*; do case "$example" in *limits_chunk_refs*|*large_manifests*|*gc_bench*) continue;; esac; cargo run --profile {{profile}} --example "$(basename "${example%.rs}")"; done
 
 [group('lint')]
 [doc("Fast Rust pre-commit: format + lint + doctest (~3s)")]
 pre-commit-fast:
   just format
-  just lint
+  just lint -- -D warnings
   just doctest
 
 [group('lint')]
@@ -327,6 +334,11 @@ chrome-trace *args:
   ICECHUNK_TRACE=chrome cargo bench --features logs --bench main -- {{args}} --test
 
 [group('bench')]
+[doc("GC/stats benchmark tool: just gc-bench build|gc|stats|list --name <n> ... (needs RustFS and toxiproxy: just contup)")]
+gc-bench *args:
+  cargo run --profile bench --features logs --example gc_bench -- "$@"
+
+[group('bench')]
 [doc("Compare pytest-benchmark results")]
 bench-compare *args:
   pytest-benchmark compare --group=group,func,param --sort=fullname --columns=median --name=short "$@"
@@ -334,7 +346,7 @@ bench-compare *args:
 [group('lint')]
 [doc("Run ruff formatter on Python code")]
 ruff-format *args:
-  ruff format "$@"
+  ruff format icechunk-python/ "$@"
 
 [group('lint')]
 [doc("Run ruff linter on Python code (pass `--fix` for auto-fix)")]
@@ -446,6 +458,33 @@ contup:
 rustfs-up:
   docker compose up -d rustfs_init
 
+# CI starts the services first and joins later, so the image pulls overlap the
+# build steps in between.
+[group('services')]
+[script]
+[doc("Start docker compose services in the background; join with contjoin or rustfs-join")]
+services-start *services:
+  state="${RUNNER_TEMP:-/tmp}/icechunk-services"
+  rm -f "$state.rc"
+  # set +e: errexit would end the subshell before it records a failed start
+  (set +e; docker compose up -d "$@"; echo $? > "$state.rc") > "$state.log" 2>&1 &
+
+[private]
+[script]
+services-join:
+  state="${RUNNER_TEMP:-/tmp}/icechunk-services"
+  for _ in $(seq 300); do [ -s "$state.rc" ] && break; sleep 1; done
+  cat "$state.log"
+  [ "$(cat "$state.rc")" = 0 ]
+
+[group('services')]
+[doc("Wait for a backgrounded services-start, then for RustFS to be ready")]
+rustfs-join: services-join rustfs-wait
+
+[group('services')]
+[doc("Wait for a backgrounded services-start, then for all services to be ready")]
+contjoin: services-join contwait
+
 [group('services')]
 [script]
 [doc("Wait for RustFS container to be ready")]
@@ -475,8 +514,7 @@ wait-http name url:
 [group('services')]
 [doc("Wait for all docker compose services to be ready")]
 contwait: rustfs-wait \
-  (wait-http "Azurite" "http://localhost:10000/devstoreaccount1/testcontainer?sv=2023-01-03&ss=btqf&srt=sco&spr=https%2Chttp&st=2025-01-06T14%3A53%3A30Z&se=2035-01-07T14%3A53%3A00Z&sp=rwdftlacup&sig=jclETGilOzONYp4Y0iK9SpVRLGyehaS5lg5booJ9VYA%3D&restype=container") \
-  (wait-http "MinIO" "http://localhost:4202/minio/health/live")
+  (wait-http "Azurite" "http://localhost:10000/devstoreaccount1/testcontainer?sv=2023-01-03&ss=btqf&srt=sco&spr=https%2Chttp&st=2025-01-06T14%3A53%3A30Z&se=2035-01-07T14%3A53%3A00Z&sp=rwdftlacup&sig=jclETGilOzONYp4Y0iK9SpVRLGyehaS5lg5booJ9VYA%3D&restype=container")
 
 [group('services')]
 [doc("Start Jaeger for local OpenTelemetry tracing (UI http://localhost:16686, OTLP gRPC localhost:4317)")]
@@ -562,7 +600,7 @@ python-upstream-setup:
   uv pip install "$WHEEL" --group dev \
     --resolution highest \
     --index-strategy unsafe-best-match 2>&1 | tee setup-output.log
-  uv pip install "hypothesis @ git+https://github.com/ianhi/hypothesis.git@flaky-feedback#subdirectory=hypothesis-python"
+  uv pip install hypothesis
   uv pip list
 
 [private]
@@ -726,12 +764,17 @@ js-test *args: js-install
 [doc("Build icechunk-js for wasm32-wasip1-threads (same WASI toolchain env as wasm-build)")]
 js-build-wasi *args: js-install
   cd icechunk-js
+  export CFLAGS="" CXXFLAGS=""
+  # napi-build 2.3.x derives the wasi sysroot from the RUSTC path. cargo passes a bare name.
+  # napi-build then drops crt1-reactor.o. The module loses the _initialize export.
+  # A module without _initialize hangs on require().
+  export RUSTC="$(command -v rustc)"
   yarn build --target wasm32-wasip1-threads "$@"
 
 [group('js')]
 [script]
 [doc("Run icechunk-js tests under WASI like CI's test-wasi lane (needs js-build-wasi)")]
-js-test-wasi *args:
+js-test-wasi *args: js-install
   cd icechunk-js
   # `yarn config set` writes .yarnrc.yml; restore host setup on exit
   yarn config set supportedArchitectures.cpu "wasm32"

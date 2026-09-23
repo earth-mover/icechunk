@@ -52,7 +52,7 @@ use icechunk_storage::{
         ReadbackOutcome, WRITE_ID_METADATA_KEY, resolve_lost_response,
         resolve_precondition, write_id_for,
     },
-    sealed, split_in_multiple_equal_requests, strip_quotes,
+    sealed, split_in_multiple_equal_requests, strip_quotes, throttled_error,
 };
 use icechunk_types::ICResultExt as _;
 use serde::{Deserialize, Serialize};
@@ -452,6 +452,30 @@ fn is_precondition_code(code: &str) -> bool {
     )
 }
 
+/// Identify a retryable error: any 5xx, HTTP 429, or an S3 code that means "try again"
+fn is_transient_s3_error(status: Option<u16>, code: &str) -> bool {
+    matches!(status, Some(s) if s >= 500 || s == 429)
+        || matches!(
+            code,
+            "InternalError"
+                | "ServiceUnavailable"
+                | "SlowDown"
+                | "RequestLimitExceeded"
+                | "Throttling"
+                | "ThrottlingException"
+        )
+}
+
+/// The code to report when a partial `DeleteObjects` response should be
+/// retried whole: `Some` only if every per-key error is transient.
+fn transient_per_key_code(errors: &[aws_sdk_s3::types::Error]) -> Option<&str> {
+    let first = errors.first()?.code()?;
+    errors
+        .iter()
+        .all(|e| e.code().is_some_and(|c| is_transient_s3_error(None, c)))
+        .then_some(first)
+}
+
 impl S3Storage {
     /// Build an [`S3Storage`].
     ///
@@ -553,6 +577,37 @@ impl S3Storage {
     /// An interior `//` is left intact.
     fn list_prefix(&self, layout: KeyLayout, relpath: &str) -> String {
         self.key_for(layout, relpath.strip_prefix('/').unwrap_or(relpath))
+    }
+
+    /// Lists the keys that start with `key_prefix`. Ids are relative to `id_root`.
+    async fn list_keys(
+        &self,
+        settings: &Settings,
+        key_prefix: String,
+        id_root: String,
+    ) -> BoxStream<'static, StorageResult<ListInfo<String>>> {
+        let mut req = self
+            .get_client(settings)
+            .await
+            .list_objects_v2()
+            .bucket(self.bucket.clone())
+            .prefix(key_prefix);
+
+        if self.config.requester_pays {
+            req = req.request_payer(aws_sdk_s3::types::RequestPayer::Requester);
+        }
+
+        req.into_paginator()
+            .send()
+            .into_stream_03x()
+            .map_err(obj_store_error)
+            .try_filter_map(|page| {
+                let contents = page.contents.map(|cont| stream::iter(cont).map(Ok));
+                ready(Ok(contents))
+            })
+            .try_flatten()
+            .and_then(move |object| ready(object_to_list_info(id_root.as_str(), &object)))
+            .boxed()
     }
 
     /// Resolve this repository's [`KeyLayout`], probing storage at most once.
@@ -1089,32 +1144,32 @@ impl Storage for S3Storage {
     ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
         let layout = self.layout(settings).await?;
         let prefix = self.list_prefix(layout, prefix);
-        let mut req = self
-            .get_client(settings)
-            .await
-            .list_objects_v2()
-            .bucket(self.bucket.clone())
-            .prefix(prefix.clone());
+        Ok(self.list_keys(settings, prefix.clone(), prefix).await)
+    }
 
-        if self.config.requester_pays {
-            req = req.request_payer(aws_sdk_s3::types::RequestPayer::Requester);
+    #[instrument(skip(self, settings, id_prefixes))]
+    async fn list_objects_with_id_prefixes<'a>(
+        &'a self,
+        settings: &Settings,
+        prefix: &str,
+        id_prefixes: &[String],
+    ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
+        let layout = self.layout(settings).await?;
+        let prefix = self.list_prefix(layout, prefix);
+        let mut listings = Vec::with_capacity(id_prefixes.len());
+        for id_prefix in id_prefixes {
+            let key_prefix = if prefix.is_empty() || prefix.ends_with('/') {
+                format!("{prefix}{id_prefix}")
+            } else {
+                format!("{prefix}/{id_prefix}")
+            };
+            listings.push(self.list_keys(settings, key_prefix, prefix.clone()).await);
         }
+        Ok(stream::select_all(listings).boxed())
+    }
 
-        let stream = req
-            .into_paginator()
-            .send()
-            .into_stream_03x()
-            .map_err(obj_store_error)
-            .try_filter_map(|page| {
-                let contents = page.contents.map(|cont| stream::iter(cont).map(Ok));
-                ready(Ok(contents))
-            })
-            .try_flatten()
-            .and_then(move |object| {
-                let prefix = prefix.clone();
-                ready(object_to_list_info(prefix.as_str(), &object))
-            });
-        Ok(stream.boxed())
+    fn lists_id_prefixes_natively(&self) -> bool {
+        true
     }
 
     #[instrument(skip(self, batch))]
@@ -1143,6 +1198,7 @@ impl Storage for S3Storage {
             }
         }
 
+        let requested = ids.len();
         let delete = Delete::builder()
             .set_objects(Some(ids))
             .build()
@@ -1163,11 +1219,50 @@ impl Storage for S3Storage {
             req = req.request_payer(aws_sdk_s3::types::RequestPayer::Requester);
         }
 
-        let res = req.send().await.capture_box()?;
+        // A throttle gets its own kind, so the caller can back off instead of
+        // counting it as a failure. The SDK has already retried it `max_tries`
+        // times with its own backoff by then.
+        let res = match req.send().await {
+            Ok(res) => res,
+            Err(SdkError::ServiceError(err)) => {
+                use aws_sdk_s3::operation::RequestId as _;
+                let meta = err.err().meta();
+                let status = err.raw().status().as_u16();
+                let code = meta.code().unwrap_or("?");
+                let message = format!(
+                    "DeleteObjects failed: status {status}, code {code}, message {}, request id {}",
+                    meta.message().unwrap_or("?"),
+                    meta.request_id().unwrap_or("?"),
+                );
+                return Err(if is_transient_s3_error(Some(status), code) {
+                    throttled_error(code, message)
+                } else {
+                    other_error(message)
+                });
+            }
+            Err(SdkError::ResponseError(err)) => {
+                return Err(other_error(format!(
+                    "DeleteObjects failed: unparsable response, status {}",
+                    err.raw().status().as_u16()
+                )));
+            }
+            Err(err) => return Err(obj_store_error(err)),
+        };
 
-        if let Some(err) = res.errors.as_ref().and_then(|e| e.first()) {
+        if let Some(errors) = res.errors.as_deref().filter(|e| !e.is_empty()) {
+            if let Some(code) = transient_per_key_code(errors) {
+                return Err(throttled_error(
+                    code,
+                    format!(
+                        "DeleteObjects: {} of {requested} keys failed with {code}: {}",
+                        errors.len(),
+                        errors.first().and_then(|e| e.message()).unwrap_or("?"),
+                    ),
+                ));
+            }
             tracing::error!(
-                error = ?err,
+                error = ?errors[0],
+                failed = errors.len(),
                 "Errors deleting objects",
             );
         }
@@ -1788,6 +1883,50 @@ mod tests {
     // Readback classification is unit-tested in `icechunk_storage::readback`.
 
     #[test]
+    fn transient_delete_errors_are_throttles() {
+        for (status, code) in [
+            (Some(500), "InternalError"),
+            (Some(503), "SlowDown"),
+            (Some(503), "ServiceUnavailable"),
+            (Some(429), "?"),
+            (Some(502), "?"),
+            (None, "InternalError"),
+            (None, "SlowDown"),
+        ] {
+            assert!(is_transient_s3_error(status, code), "{status:?} {code}");
+        }
+        for (status, code) in [
+            (Some(403), "AccessDenied"),
+            (Some(404), "NoSuchKey"),
+            (Some(400), "MalformedXML"),
+            (None, "AccessDenied"),
+            (None, "?"),
+        ] {
+            assert!(!is_transient_s3_error(status, code), "{status:?} {code}");
+        }
+    }
+
+    fn per_key_error(code: Option<&str>) -> aws_sdk_s3::types::Error {
+        let mut b = aws_sdk_s3::types::Error::builder().key("k").message("m");
+        if let Some(code) = code {
+            b = b.code(code);
+        }
+        b.build()
+    }
+
+    #[test]
+    fn partial_delete_is_retried_whole_only_when_every_key_error_is_transient() {
+        let errs =
+            [per_key_error(Some("InternalError")), per_key_error(Some("SlowDown"))];
+        assert_eq!(transient_per_key_code(&errs), Some("InternalError"));
+        let errs =
+            [per_key_error(Some("InternalError")), per_key_error(Some("AccessDenied"))];
+        assert_eq!(transient_per_key_code(&errs), None);
+        assert_eq!(transient_per_key_code(&[per_key_error(None)]), None);
+        assert_eq!(transient_per_key_code(&[]), None);
+    }
+
+    #[test]
     fn precondition_codes() {
         for code in
             ["PreconditionFailed", "ConditionalRequestConflict", "ConcurrentModification"]
@@ -1813,6 +1952,24 @@ mod tests {
         ] {
             assert_eq!(endpoint_with_bucket_separator(input), expected, "{input}");
         }
+    }
+
+    /// GC fans its listing out over id prefixes only when the backend lists
+    /// them server-side; losing this override silently turns GC's listing
+    /// into a single stream.
+    #[test]
+    fn s3_lists_id_prefixes_natively() {
+        let storage = new_s3_storage(
+            S3Options::default(),
+            "my-bucket".to_string(),
+            Some("some/prefix".to_string()),
+            None,
+            Vec::new(),
+            Vec::new(),
+            None,
+        )
+        .unwrap();
+        assert!(storage.lists_id_prefixes_natively());
     }
 
     #[test]

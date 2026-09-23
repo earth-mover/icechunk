@@ -55,7 +55,7 @@ class Session:
 
     def __setstate__(self, state: object) -> None:
         if not isinstance(state, dict):
-            raise ValueError("Invalid state")
+            raise ValueError("Invalid state")  # noqa: TRY004
         self._session = PySession.from_bytes(state["_session"])
 
     @property
@@ -700,11 +700,17 @@ class Session:
 
 
 class ForkSession(Session):
+    """A `Session` that can be pickled to a worker, written to, and merged back.
+
+    Fork sessions can neither be committed nor flushed. Merge them back into
+    the `Session` that created them with `Session.merge`, and commit that one.
+    """
+
     def __getstate__(self) -> object:
         state = {"_session": self._session.as_bytes()}
         return state
 
     def __setstate__(self, state: object) -> None:
         if not isinstance(state, dict):
-            raise ValueError("Invalid state")
+            raise ValueError("Invalid state")  # noqa: TRY004
         self._session = PySession.from_bytes(state["_session"])

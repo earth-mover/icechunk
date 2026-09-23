@@ -248,6 +248,7 @@ impl Repository {
             config.caching(),
             config.compression().level(),
             config.max_concurrent_requests(),
+            config.max_concurrent_decodes(),
         ));
 
         if check_clean_root && !storage.root_is_clean(&storage_settings).await.inject()? {
@@ -447,6 +448,7 @@ impl Repository {
             final_config.caching(),
             final_config.compression().level(),
             final_config.max_concurrent_requests(),
+            final_config.max_concurrent_decodes(),
         ));
 
         Self::new(
@@ -514,6 +516,16 @@ impl Repository {
             authorized_virtual_containers,
             default_commit_metadata: SnapshotProperties::default(),
         })
+    }
+
+    /// Set the HTTP transport for sessions opened after this call. The callback
+    /// is runtime-only and is not persisted or serialized with the repository.
+    pub fn set_http_virtual_chunk_fetcher(
+        &mut self,
+        fetcher: Arc<dyn crate::virtual_chunks::HttpVirtualChunkFetcher>,
+    ) {
+        self.virtual_resolver =
+            Arc::new(self.virtual_resolver.with_http_fetcher(fetcher));
     }
 
     #[instrument(skip_all)]
@@ -1237,7 +1249,7 @@ impl Repository {
         Ok(branch_version.snapshot)
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip(self, repo_info))]
     async fn lookup_branch_v2(
         &self,
         branch: &str,
@@ -1622,7 +1634,7 @@ impl Repository {
         Ok(ref_data.snapshot)
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip(self, repo_info))]
     async fn lookup_tag_v2(
         &self,
         tag: &str,
@@ -2249,7 +2261,6 @@ fn raise_if_invalid_snapshot_id_v2(
 
 #[cfg(test)]
 mod tests {
-    use futures::TryStreamExt as _;
     use std::{
         collections::HashMap, error::Error, iter::zip, num::NonZeroU16, path::PathBuf,
         sync::Arc,
@@ -3301,7 +3312,7 @@ mod tests {
                 )
                 .await
                 .unwrap()
-                .unwrap_or_else(|| panic!("getting chunk ref failed for {:?}", &ic));
+                .unwrap_or_else(|| panic!("getting chunk ref failed for {ic:?}"));
                 let expected_value =
                     ravel_multi_index(ic.as_slice(), array_shape.as_slice());
                 let expected =
@@ -3592,7 +3603,7 @@ mod tests {
             )
             .await
             .unwrap()
-            .unwrap_or_else(|| panic!("getting chunk ref failed for {:?}", &idx));
+            .unwrap_or_else(|| panic!("getting chunk ref failed for {idx:?}"));
             let expected = Bytes::copy_from_slice(format!("{val}").as_bytes());
             assert_eq!(actual, expected);
         }
@@ -3756,7 +3767,7 @@ mod tests {
             )
             .await
             .unwrap()
-            .unwrap_or_else(|| panic!("getting chunk ref failed for {:?}", &idx));
+            .unwrap_or_else(|| panic!("getting chunk ref failed for {idx:?}"));
             let expected = Bytes::copy_from_slice(format!("{val}").as_bytes());
             assert_eq!(actual, expected);
         }
@@ -4396,6 +4407,7 @@ mod tests {
         session.commit("init").execute().await?;
 
         async fn do_distributed_writes(
+            repo: &Repository,
             session: &mut Session,
             array_path: &Path,
         ) -> Result<(), Box<dyn Error>> {
@@ -4440,13 +4452,26 @@ mod tests {
                 SessionErrorKind::MergeNotAllowed
             ));
 
-            // flushing a fork session succeeds (anonymous snapshot)
-            let flush_result =
-                s1.clone().commit("fork-flush").anonymous().execute().await;
-            assert!(flush_result.is_ok());
+            // a fork session cannot be flushed, its snapshot is not part of the repo
+            assert!(matches!(
+                s1.clone()
+                    .commit("fork-flush")
+                    .anonymous()
+                    .execute()
+                    .await
+                    .unwrap_err()
+                    .kind,
+                SessionErrorKind::CannotFlushForkSession
+            ));
 
             // merge that in to the base
             session.merge(s1).await?;
+
+            // once merged, the base session flushes the fork's writes to an
+            // anonymous snapshot that is part of the repo
+            let flushed =
+                session.clone().commit("fork-flush").anonymous().execute().await?;
+            assert!(repo.lookup_snapshot(&flushed).await.is_ok());
 
             for i in 0..2 {
                 let reader = session
@@ -4479,7 +4504,7 @@ mod tests {
                 Bytes::from_static(b"{}"),
             )
             .await?;
-        do_distributed_writes(&mut session, &array_path).await?;
+        do_distributed_writes(&repo, &mut session, &array_path).await?;
 
         // delete all chunks then do distributed writes
         let mut session = repo.writable_session("main").await?;
@@ -4488,7 +4513,7 @@ mod tests {
                 .set_chunk_ref(array_path.clone(), ChunkIndices(vec![i]), None)
                 .await?;
         }
-        do_distributed_writes(&mut session, &array_path).await?;
+        do_distributed_writes(&repo, &mut session, &array_path).await?;
 
         Ok(())
     }

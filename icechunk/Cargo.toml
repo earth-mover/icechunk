@@ -1,6 +1,6 @@
 [package]
 name = "icechunk"
-version = "2.2.0"
+version = "2.3.0-alpha.1"
 description = "Transactional storage engine for Zarr designed for use on cloud object storage"
 readme = "README.md"
 repository = "https://github.com/earth-mover/icechunk"
@@ -22,7 +22,6 @@ icechunk-storage.workspace = true
 icechunk-types.workspace = true
 icechunk-s3 = { workspace = true, optional = true }
 
-async-compression.workspace = true
 async-recursion.workspace = true
 async-stream.workspace = true
 async-trait.workspace = true
@@ -80,6 +79,9 @@ tokio = { workspace = true, features = [
   "time",
   "io-util",
 ] }
+
+[target.'cfg(unix)'.dependencies]
+rlimit.workspace = true
 
 [dev-dependencies]
 icechunk-macros.workspace = true
@@ -143,6 +145,12 @@ shuttle = ["dep:shuttle-tokio", "shuttle-tokio/shuttle"]
 name = "icechunk"
 path = "src/bin/icechunk/main.rs"
 required-features = ["cli"]
+
+# the report layer needs tracing_subscriber, which only `logs` pulls in
+[[example]]
+name = "gc_bench"
+path = "examples/gc_bench/main.rs"
+required-features = ["logs"]
 
 [[test]]
 name = "main"

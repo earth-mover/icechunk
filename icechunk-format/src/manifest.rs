@@ -111,9 +111,7 @@ impl ManifestExtents {
         }
         debug_assert!(
             self.len() == other.len(),
-            "Length mismatch: self = {:?}, other = {:?}",
-            &self,
-            &other
+            "Length mismatch: self = {self:?}, other = {other:?}"
         );
         let mut overlap = Overlap::Complete;
         for (a, b) in zip(other.iter(), self.iter()) {
@@ -511,12 +509,16 @@ impl Manifest {
         self.buffer.as_slice()
     }
 
+    /// Check that `buffer` passes every check [`Manifest::from_buffer`] applies.
+    pub fn verify_buffer(buffer: &[u8]) -> Result<(), IcechunkFormatError> {
+        let _ =
+            flatbuffers::root_with_opts::<generated::Manifest<'_>>(&ROOT_OPTIONS, buffer)
+                .capture()?;
+        Ok(())
+    }
+
     pub fn from_buffer(buffer: Vec<u8>) -> Result<Manifest, IcechunkFormatError> {
-        let _ = flatbuffers::root_with_opts::<generated::Manifest<'_>>(
-            &ROOT_OPTIONS,
-            buffer.as_slice(),
-        )
-        .capture()?;
+        Self::verify_buffer(buffer.as_slice())?;
         Ok(Manifest { buffer })
     }
 
@@ -1064,9 +1066,21 @@ fn mk_chunk_ref<'bldr>(
 static ROOT_OPTIONS: VerifierOptions = VerifierOptions {
     max_depth: 64,
     max_tables: 500_000_000,
-    max_apparent_size: 1 << 31, // taken from the default
+    // Large enough that any buffer the builder can produce is readable: the
+    // builder refuses to grow past FLATBUFFERS_MAX_BUFFER_SIZE, and the
+    // verifier's counter runs at most MAX_APPARENT_SIZE_INFLATION times the
+    // buffer it walks. Saturating because the product doesn't fit a 32 bit
+    // usize (wasm32), where it lands on usize::MAX instead.
+    max_apparent_size: crate::serializers::MAX_APPARENT_SIZE_INFLATION
+        .saturating_mul(flatbuffers::FLATBUFFERS_MAX_BUFFER_SIZE),
     ignore_missing_null_terminator: true,
 };
+
+/// The verifier limits applied to every manifest buffer we read.
+#[cfg(test)]
+pub(crate) fn root_options() -> &'static VerifierOptions {
+    &ROOT_OPTIONS
+}
 
 #[cfg(test)]
 #[expect(unused_qualifications)] // proptest macros generate fully qualified paths

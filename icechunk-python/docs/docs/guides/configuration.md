@@ -38,6 +38,10 @@ The number of concurrent requests to make when getting partial values from stora
 The maximum total number of concurrent requests this repo will allow.
 See [Performance | Concurrency](performance.md#Concurrency) for details.
 
+### [`max_concurrent_decodes`](../reference/config.md#icechunk.config.RepositoryConfig.max_concurrent_decodes)
+
+The maximum number of metadata files (snapshots, manifests, transaction logs) this repo will decompress and parse at the same time. Defaults to the number of CPUs available to the process.
+
 ### [`compression`](../reference/config.md#icechunk.config.RepositoryConfig.compression)
 
 Icechunk uses Zstd compression to compress its metadata files. [`CompressionConfig`](../reference/config.md#icechunk.config.CompressionConfig) allows you to configure the [compression level](../reference/config.md#icechunk.config.CompressionConfig.level) and [algorithm](../reference/config.md#icechunk.config.CompressionConfig.algorithm). Currently, the only algorithm available is [`Zstd`](https://facebook.github.io/zstd/).
@@ -82,10 +86,6 @@ config.storage = ic.storage.StorageSettings(
 ### [`virtual_chunk_containers`](../reference/config.md#icechunk.config.RepositoryConfig.virtual_chunk_containers)
 
 Icechunk allows repos to contain [virtual chunks](./virtual.md). To allow for referencing these virtual chunks, you must configure the `virtual_chunk_containers` parameter to specify the storage locations and configurations for any virtual chunks. Each virtual chunk container is specified by a [`VirtualChunkContainer`](../reference/virtual.md#icechunk.virtual.VirtualChunkContainer) object which contains a url prefix, and a storage configuration. When a container is added to the settings, any virtual chunks with a url that starts with the configured prefix will use the storage configuration for that matching container.
-
-!!! note
-
-    Currently only `s3` compatible storage, `gcs`, `local_filesystem` and `http[s]` storages are supported for virtual chunk containers. Other storage backends such as `azure` are on the roadmap.
 
 #### Example
 

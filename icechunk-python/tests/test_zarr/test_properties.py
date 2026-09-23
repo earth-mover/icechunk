@@ -54,7 +54,7 @@ def test_roundtrip(data: st.DataObject, nparray: Any, spec_version: int | None) 
         ):
             pass
         else:
-            raise e
+            raise
     else:
         assert_array_equal(nparray, zarray[:])
 

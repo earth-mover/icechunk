@@ -4,8 +4,58 @@
 
 ### Fixes
 
-- Update tests to deal with Tigris and other stores listing whole-second timestamps ([#2368](https://github.com/earth-mover/icechunk/pull/2368)).
 - `storage_class`, `metadata_storage_class` and `chunks_storage_class` now apply to the `object_store` backends — `gcs_storage`, `azure_storage` and `s3_object_store_storage`. They were silently ignored there; only `s3_storage`, `tigris_storage` and `r2_storage` honored them. The value is passed to the provider unchanged, so use its own names (`NEARLINE` on GCS, `Cool` on Azure). The local filesystem backend has no storage classes and keeps ignoring the setting ([#904](https://github.com/earth-mover/icechunk/issues/904), [#2364](https://github.com/earth-mover/icechunk/issues/2364)).
+
+## Python Icechunk Library 2.3.0a1
+
+### Features
+
+- Garbage collection and chunk statistics warn when the open file limit is too low ([#2413](https://github.com/earth-mover/icechunk/pull/2413)).
+- Garbage collection treats store throttling as back pressure. A congestion controller adapts the number of deletes in flight instead of failing the run ([#2408](https://github.com/earth-mover/icechunk/pull/2408)).
+- Garbage collection stops after `max_consecutive_delete_failures` delete batches fail in a row. Phases that depend on a failed phase are skipped and reported in `GCSummary.skipped_phases` ([#2405](https://github.com/earth-mover/icechunk/pull/2405)).
+- Manifest walks limit the memory of decoded manifests with a second budget, 4 GiB by default ([#2407](https://github.com/earth-mover/icechunk/pull/2407)).
+- Wheels are published for free threaded Python 3.14 ([#2421](https://github.com/earth-mover/icechunk/pull/2421)).
+
+### Performance
+
+- `Session.fork` on a session with no changes (the most common case) no longer writes a snapshot. This removes a full snapshot write and a repo metadata update from every fork of a clean session.
+- The snapshot a fork is based on is no longer recorded in the repo metadata.
+- Garbage collection and chunk statistics share a parallel manifest walker. Fetch, decode and per manifest work run in separate worker pools ([#2404](https://github.com/earth-mover/icechunk/pull/2404)).
+- Object listing runs on a pool of tasks and deletes run on their own task. On an 8 core in-region instance against S3, listing rises from 130k to about 800k keys per second. A new `max_concurrent_listings` setting limits the pool ([#2406](https://github.com/earth-mover/icechunk/pull/2406)).
+- The garbage collection deleter absorbs completed batches while it waits for the collector ([#2415](https://github.com/earth-mover/icechunk/pull/2415)).
+- Nodes are decoded only when they are needed ([#2395](https://github.com/earth-mover/icechunk/pull/2395)).
+
+### Breaking changes
+
+- `ForkSession.flush` now raises. Merge the fork back into the session that created it with `Session.merge` and flush that one instead. We don't expect anybody was relying on this.
+
+## Python Icechunk Library 2.2.2
+
+### Fixes
+
+- Fix a garbage collection deadlock on machines with few CPUs ([#2389](https://github.com/earth-mover/icechunk/pull/2389)).
+
+## Python Icechunk Library 2.2.1
+
+### Features
+
+- `icechunk-js` can read HTTP(S) virtual chunks in the browser via `Repository.setHttpVirtualChunkFetcher()` and `createHttpVirtualChunkFetcher()` ([#2363](https://github.com/earth-mover/icechunk/pull/2363)).
+
+### Fixes
+
+- Update tests to deal with Tigris and other stores listing whole-second timestamps ([#2368](https://github.com/earth-mover/icechunk/pull/2368)).
+- `reset_branch` conflict errors report the actual branch tip instead of the expected parent twice ([#2360](https://github.com/earth-mover/icechunk/pull/2360)).
+- Repositories with more than one million snapshots are readable again ([#2388](https://github.com/earth-mover/icechunk/pull/2388)).
+- Metadata files that could not be read back are no longer written: large files are validated before upload ([#2388](https://github.com/earth-mover/icechunk/pull/2388)).
+
+### Performance
+
+- Speed up manifest metadata lookups during commits, reads, and manifest preloading in repositories with many manifests by using binary search instead of linear scans ([#2381](https://github.com/earth-mover/icechunk/pull/2381)).
+- Garbage collection lists 32 ways in parallel on S3 and GCS, one listing per possible first character of an object id. Listing a 2.8 million object repository drops from 299 s to 15 s. Azure and local storage keep a single listing ([#2371](https://github.com/earth-mover/icechunk/pull/2371), [#2385](https://github.com/earth-mover/icechunk/pull/2385)).
+- Garbage collection fetches each snapshot once, concurrently, and lists the snapshots prefix once ([#2358](https://github.com/earth-mover/icechunk/pull/2358)).
+- Branch and tag lookups no longer deserialize every snapshot's metadata ([#2377](https://github.com/earth-mover/icechunk/pull/2377)).
+- `upgrade_icechunk_repository` walks the v1 ancestry from prefetched snapshot infos. A 285,824 snapshot migration drops from 451 s to 209 s ([#2383](https://github.com/earth-mover/icechunk/pull/2383)).
+- Repo info accessors no longer re-validate the whole file on every call ([#2388](https://github.com/earth-mover/icechunk/pull/2388)).
 
 ## Python Icechunk Library 2.2.0
 

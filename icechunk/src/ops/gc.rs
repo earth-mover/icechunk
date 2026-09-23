@@ -2,37 +2,48 @@
 
 use std::{
     collections::{HashMap, HashSet},
-    future::ready,
     num::{NonZeroU16, NonZeroUsize},
-    sync::{Arc, Mutex},
+    sync::Arc,
 };
 
-use backon::{BackoffBuilder as _, ExponentialBuilder, Retryable as _};
 use chrono::{DateTime, TimeDelta, Utc};
-use futures::{Stream, StreamExt as _, TryStream, TryStreamExt as _, stream};
+use futures::{Stream, StreamExt as _, TryStreamExt as _, stream};
 use itertools::Itertools as _;
-use tokio::task::{self};
-use tracing::{debug, error, info, instrument, trace};
+use tracing::{debug, info, instrument, trace};
 
 use crate::{
-    StorageError,
     asset_manager::AssetManager,
     config::RepoUpdateRetryConfig,
     format::{
-        ChunkId, FileTypeTag, IcechunkFormatError, IcechunkResult, ManifestId, ObjectId,
-        SnapshotId,
+        CHUNKS_FILE_PATH, ChunkId, MANIFESTS_FILE_PATH, ManifestId, SNAPSHOTS_FILE_PATH,
+        SnapshotId, TRANSACTION_LOGS_FILE_PATH,
         format_constants::SpecVersionBin,
         manifest::{ChunkPayload, Manifest},
-        repo_info::{RepoAvailability, RepoInfo, UpdateInfo, UpdateType},
-        snapshot::{ManifestFileInfo, Snapshot, SnapshotInfo},
+        repo_info::{RepoInfo, UpdateInfo, UpdateType},
+        snapshot::{Snapshot, SnapshotInfo},
     },
-    ops::{pointed_snapshots, reachable_snapshots_v2},
-    refs::{Ref, RefError},
+    ops::{
+        deleter::{
+            self, DELETE_BATCH_SIZE, DeleteBackoff, DeleteConfig, DeleteError,
+            MAX_REPORTED_DELETE_ERRORS,
+        },
+        ensure_repo_writable, pointed_snapshots, reachable_snapshots_v2,
+        reparent_and_prune, retry_on_repo_info_update,
+        sharded_set::ChunkIdSet,
+        walk_peak_requests,
+        walker::{ManifestConsumer, WalkLimits, walk_manifests},
+        warn_on_low_fd_limit,
+    },
     repository::{RepositoryError, RepositoryErrorKind, RepositoryResult},
-    storage::{self, DeleteObjectsResult, ListInfo},
-    stream_utils::{StreamLimiter, try_unique_stream},
+    storage::{self, ListInfo},
 };
-use icechunk_types::{ICResultExt as _, error::ICResultCtxExt as _};
+use icechunk_types::error::ICResultCtxExt as _;
+
+pub use crate::ops::{
+    GCError, GCResult,
+    deleter::DeleteReport,
+    expiration::{ExpireResult, ExpiredRefAction, expire, expire_v2},
+};
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Action {
@@ -62,7 +73,12 @@ pub struct GCConfig {
 
     max_snapshots_in_memory: NonZeroU16,
     max_compressed_manifest_mem_bytes: NonZeroUsize,
+    max_decoded_manifest_mem_bytes: NonZeroUsize,
     max_concurrent_manifest_fetches: NonZeroU16,
+    max_concurrent_deletes: NonZeroU16,
+    max_consecutive_delete_failures: NonZeroU16,
+    max_concurrent_listings: Option<NonZeroU16>,
+    delete_backoff: DeleteBackoff,
 
     dry_run: bool,
 }
@@ -78,7 +94,11 @@ impl GCConfig {
         dangling_snapshots: Action,
         max_snapshots_in_memory: NonZeroU16,
         max_compressed_manifest_mem_bytes: NonZeroUsize,
+        max_decoded_manifest_mem_bytes: NonZeroUsize,
         max_concurrent_manifest_fetches: NonZeroU16,
+        max_concurrent_deletes: NonZeroU16,
+        max_consecutive_delete_failures: NonZeroU16,
+        max_concurrent_listings: Option<NonZeroU16>,
         dry_run: bool,
     ) -> Self {
         GCConfig {
@@ -90,17 +110,33 @@ impl GCConfig {
             dangling_snapshots,
             max_snapshots_in_memory,
             max_compressed_manifest_mem_bytes,
+            max_decoded_manifest_mem_bytes,
             max_concurrent_manifest_fetches,
+            max_concurrent_deletes,
+            max_consecutive_delete_failures,
+            max_concurrent_listings,
+            delete_backoff: DeleteBackoff::default(),
             dry_run,
         }
     }
+
+    #[cfg(all(test, not(feature = "shuttle")))]
+    pub(crate) fn with_delete_backoff(self, delete_backoff: DeleteBackoff) -> Self {
+        GCConfig { delete_backoff, ..self }
+    }
+
+    #[expect(clippy::too_many_arguments)]
     pub fn clean_all(
         chunks_age: DateTime<Utc>,
         metadata_age: DateTime<Utc>,
         extra_roots: Option<HashSet<SnapshotId>>,
         max_snapshots_in_memory: NonZeroU16,
         max_compressed_manifest_mem_bytes: NonZeroUsize,
+        max_decoded_manifest_mem_bytes: NonZeroUsize,
         max_concurrent_manifest_fetches: NonZeroU16,
+        max_concurrent_deletes: NonZeroU16,
+        max_consecutive_delete_failures: NonZeroU16,
+        max_concurrent_listings: Option<NonZeroU16>,
         dry_run: bool,
     ) -> Self {
         use Action::DeleteIfCreatedBefore as D;
@@ -113,9 +149,43 @@ impl GCConfig {
             D(metadata_age),
             max_snapshots_in_memory,
             max_compressed_manifest_mem_bytes,
+            max_decoded_manifest_mem_bytes,
             max_concurrent_manifest_fetches,
+            max_concurrent_deletes,
+            max_consecutive_delete_failures,
+            max_concurrent_listings,
             dry_run,
         )
+    }
+
+    pub(crate) fn delete_config(&self) -> DeleteConfig {
+        DeleteConfig {
+            max_in_flight: self.max_concurrent_deletes,
+            max_consecutive_failures: self.max_consecutive_delete_failures,
+            backoff: self.delete_backoff,
+            dry_run: self.dry_run,
+        }
+    }
+
+    /// How many id prefixes GC lists concurrently, defaulting to a value
+    /// derived from the machine's cores.
+    pub fn list_concurrency(&self) -> NonZeroU16 {
+        self.max_concurrent_listings
+            .unwrap_or_else(storage::listing::default_list_concurrency)
+    }
+
+    /// The most requests GC has in flight at once, and so the descriptors it
+    /// needs. Its phases run one after another: listing snapshots, then the
+    /// manifest walk (which fetches snapshots alongside manifests), then the
+    /// delete passes (which stream a listing into the deleter).
+    fn peak_concurrent_requests(&self) -> u64 {
+        let list = self.list_concurrency().get() as u64;
+        let walk = walk_peak_requests(
+            self.max_concurrent_manifest_fetches,
+            self.max_snapshots_in_memory,
+        );
+        let delete = list + self.max_concurrent_deletes.get() as u64;
+        list.max(walk).max(delete)
     }
 
     pub fn action_needed(&self) -> bool {
@@ -189,85 +259,84 @@ pub struct GCSummary {
     pub snapshots_deleted: u64,
     pub attributes_deleted: u64,
     pub transaction_logs_deleted: u64,
+    /// Objects whose delete request failed; they stay garbage for the next run.
+    pub objects_failed_to_delete: u64,
+    /// Delete requests the store throttled; each was retried, none failed.
+    pub throttled_batches: u64,
+    /// First distinct delete error messages, at most 10.
+    pub delete_errors: Vec<String>,
+    /// Delete phases not run because an earlier phase had failed deletes, in
+    /// order. GC deletes one kind of object per phase: snapshots, then
+    /// transaction logs, manifests and chunks, each kind only after the kind
+    /// that references it. Values: `transaction_logs`, `manifests`, `chunks`.
+    pub skipped_phases: Vec<String>,
 }
 
-#[derive(Debug, thiserror::Error)]
-pub enum GCError {
-    #[error("ref error {0}")]
-    Ref(#[from] RefError),
-    #[error("repository error {0}")]
-    Repository(#[from] RepositoryError),
-    #[error("format error {0}")]
-    FormatError(#[from] IcechunkFormatError),
-    #[error("storage error {0}")]
-    StorageError(#[from] StorageError),
+impl GCSummary {
+    /// Fold one phase's report in, crediting its deletions to
+    /// `deleted_counter`. Returns whether the phase had failed deletes, which
+    /// gates the phases that depend on it.
+    fn absorb(
+        &mut self,
+        report: DeleteReport,
+        deleted_counter: fn(&mut GCSummary) -> &mut u64,
+    ) -> bool {
+        *deleted_counter(self) += report.deleted_objects;
+        self.bytes_deleted += report.deleted_bytes;
+        self.objects_failed_to_delete += report.failed_objects;
+        self.throttled_batches += report.throttled_batches;
+        for message in report.errors {
+            if self.delete_errors.len() < MAX_REPORTED_DELETE_ERRORS
+                && !self.delete_errors.contains(&message)
+            {
+                self.delete_errors.push(message);
+            }
+        }
+        report.failed_objects > 0
+    }
 }
 
-pub type GCResult<A> = Result<A, GCError>;
-
-async fn snapshot_retained(
-    keep_snapshots: Arc<Mutex<HashSet<SnapshotId>>>,
-    snap: Arc<Snapshot>,
-) -> RepositoryResult<impl TryStream<Ok = ManifestFileInfo, Error = RepositoryError>> {
-    // TODO: this could be slightly optimized by not collecting all manifest info records into a vec
-    // but we don't expect too many, and they are small anyway
-    keep_snapshots
-        .lock()
-        .map_err(|_| {
-            RepositoryErrorKind::Other("can't lock retained snapshots mutex".to_string())
-        })
-        .capture()?
-        .insert(snap.id());
-    let files: Vec<ManifestFileInfo> = snap.manifest_files().try_collect().inject()?;
-    Ok(stream::iter(files.into_iter().map(Ok)))
+impl From<DeleteError> for GCError {
+    fn from(err: DeleteError) -> Self {
+        match err {
+            DeleteError::DeletesFailing { prefix, last_error } => {
+                GCError::DeletesFailing { prefix, last_error }
+            }
+            DeleteError::Repository(err) => GCError::Repository(err),
+        }
+    }
 }
 
-async fn manifest_retained(
-    keep_manifests: Arc<Mutex<HashSet<ManifestId>>>,
-    asset_manager: Arc<AssetManager>,
-    minfo: ManifestFileInfo,
-) -> RepositoryResult<(Arc<Manifest>, ManifestFileInfo)> {
-    keep_manifests
-        .lock()
-        .map_err(|_| {
-            RepositoryErrorKind::Other("can't lock retained manifests mutex".to_string())
-        })
-        .capture()?
-        .insert(minfo.id.clone());
-    let manifest = asset_manager.fetch_manifest(&minfo.id, minfo.size_bytes).await?;
-    Ok((manifest, minfo))
+/// Collects the ids of every native chunk any visited manifest references.
+#[derive(Default)]
+struct RetainedChunks {
+    retained: ChunkIdSet,
 }
 
-async fn chunks_retained(
-    keep_chunks: Arc<Mutex<HashSet<ChunkId>>>,
-    manifest: Arc<Manifest>,
-    minfo: ManifestFileInfo,
-) -> RepositoryResult<ManifestFileInfo> {
-    task::spawn_blocking(move || {
-        let chunk_ids =
+impl ManifestConsumer for RetainedChunks {
+    type Output = ();
+    type Acc = ();
+
+    fn consume(&self, manifest: &Manifest) -> RepositoryResult<()> {
+        // a payload we cannot read is a chunk we cannot prove retained:
+        // fail instead of deleting it
+        let ids =
             manifest.chunk_payloads().inject()?.filter_map(|payload| match payload {
-                Ok(ChunkPayload::Ref(chunk_ref)) => Some(chunk_ref.id.clone()),
+                Ok(ChunkPayload::Ref(chunk_ref)) => Some(Ok((chunk_ref.id, 0))),
                 Ok(_) => None,
-                Err(err) => {
-                    tracing::error!(
-                        error = %err,
-                        "Error in chunk payload iterator"
-                    );
-                    None
-                }
+                Err(err) => Some(Err(err)),
             });
-        keep_chunks
-            .lock()
-            .map_err(|_| {
-                RepositoryErrorKind::Other("can't lock retained chunks mutex".to_string())
-            })
-            .capture()?
-            .extend(chunk_ids);
-        Ok::<_, RepositoryError>(())
-    })
-    .await
-    .capture()??;
-    Ok(minfo)
+        self.retained.try_extend_weighted(ids).inject()?;
+        Ok(())
+    }
+
+    // Nothing to fold: `consume` already inserts every id into the shared
+    // sharded set from the decode workers in parallel.
+    fn fold(_acc: &mut (), _output: ()) {}
+
+    fn progress(&self) -> Option<(&'static str, u64)> {
+        Some(("retained_chunks", self.retained.len() as u64))
+    }
 }
 
 #[instrument(skip_all)]
@@ -275,61 +344,26 @@ pub async fn find_retained(
     asset_manager: Arc<AssetManager>,
     config: &GCConfig,
     snaps: impl Stream<Item = RepositoryResult<Arc<Snapshot>>>,
-) -> GCResult<(HashSet<ChunkId>, HashSet<ManifestId>, HashSet<SnapshotId>)> {
-    let keep_chunks = Arc::new(Mutex::new(HashSet::new()));
-    let keep_manifests = Arc::new(Mutex::new(HashSet::new()));
-    let keep_snapshots = Arc::new(Mutex::new(HashSet::new()));
-
-    let all_manifest_infos = snaps
-        .map(ready)
-        .buffer_unordered(config.max_snapshots_in_memory.get() as usize)
-        .and_then(|snap| snapshot_retained(Arc::clone(&keep_snapshots), snap))
-        .try_flatten();
-
-    let manifest_infos = try_unique_stream(|mi| mi.id.clone(), all_manifest_infos);
-
-    // we want to fetch many manifests in parallel, but not more than memory allows
-    // for this we use the StreamLimiter using the manifest size in bytes for usage
-    let limiter = &Arc::new(StreamLimiter::new(
-        "garbage_collect".to_string(),
-        config.max_compressed_manifest_mem_bytes.get(),
-    ));
-
-    let keep_chunks_ref = &keep_chunks;
-    let compute_stream = limiter
-        .limit_stream(manifest_infos, |minfo| minfo.size_bytes as usize)
-        .map_ok(|m| {
-            manifest_retained(Arc::clone(&keep_manifests), Arc::clone(&asset_manager), m)
-        })
-        // Now we can buffer a bunch of fetch_manifest operations. Because we are using
-        // StreamLimiter we know memory is not going to blow up
-        .try_buffer_unordered(config.max_concurrent_manifest_fetches.get() as usize)
-        .and_then(move |(manifest, minfo)| {
-            chunks_retained(Arc::clone(keep_chunks_ref), manifest, minfo)
-        });
-
-    limiter
-        .unlimit_stream(compute_stream, |minfo| minfo.size_bytes as usize)
-        .try_for_each(|_| ready(Ok(())))
-        .await?;
-
-    debug_assert_eq!(limiter.current_usage(), 0);
-
-    #[expect(clippy::expect_used)]
-    Ok((
-        Arc::try_unwrap(keep_chunks)
-            .expect("Logic error: multiple owners to retained chunks")
-            .into_inner()
-            .expect("Logic error: multiple owners to retained chunks"),
-        Arc::try_unwrap(keep_manifests)
-            .expect("Logic error: multiple owners to retained manifests")
-            .into_inner()
-            .expect("Logic error: multiple owners to retained manifests"),
-        Arc::try_unwrap(keep_snapshots)
-            .expect("Logic error: multiple owners to retained chunks")
-            .into_inner()
-            .expect("Logic error: multiple owners to retained chunks"),
-    ))
+) -> GCResult<(ChunkIdSet, HashSet<ManifestId>, HashSet<SnapshotId>)> {
+    let limits = WalkLimits {
+        max_concurrent_manifest_fetches: config.max_concurrent_manifest_fetches,
+        max_manifest_mem_bytes: config.max_compressed_manifest_mem_bytes,
+        max_decoded_manifest_mem_bytes: config.max_decoded_manifest_mem_bytes,
+        decode_workers: NonZeroU16::new(asset_manager.max_concurrent_decodes())
+            .unwrap_or(NonZeroU16::MIN),
+    };
+    let consumer = Arc::new(RetainedChunks::default());
+    let result =
+        walk_manifests(asset_manager, limits, Arc::clone(&consumer), snaps).await?;
+    // the workers have all exited, so ours is the last reference
+    let retained = Arc::try_unwrap(consumer)
+        .map_err(|_| {
+            RepositoryError::capture(RepositoryErrorKind::Other(
+                "manifest walker still holds the consumer".to_string(),
+            ))
+        })?
+        .retained;
+    Ok((retained, result.manifests, result.snapshots))
 }
 
 pub async fn garbage_collect(
@@ -338,75 +372,25 @@ pub async fn garbage_collect(
     repo_update_retries: Option<&RepoUpdateRetryConfig>,
     num_updates_per_repo_info_file: u16,
 ) -> GCResult<GCSummary> {
-    if !asset_manager.can_write_to_storage().await? {
-        return Err(RepositoryErrorKind::ReadonlyStorage(
-            "Cannot garbage collect".to_string(),
-        ))
-        .capture()
-        .map_err(GCError::Repository)?;
-    }
-
-    // Check repo status (only available on IC2+)
-    if asset_manager.spec_version() >= SpecVersionBin::V2 {
-        let (repo_info, _) = asset_manager.fetch_repo_info().await?;
-        if repo_info.status()?.availability != RepoAvailability::Online {
-            return Err(RepositoryErrorKind::ReadonlyRepository(
-                "Cannot garbage collect".to_string(),
-            ))
-            .capture()
-            .map_err(GCError::Repository)?;
-        }
-    }
-
-    let default_retry_config = RepoUpdateRetryConfig::default();
-    let retry_config = repo_update_retries.unwrap_or(&default_retry_config).retries();
-
-    let gc = async || {
+    ensure_repo_writable(asset_manager.as_ref(), "garbage collect").await?;
+    warn_on_low_fd_limit(config.peak_concurrent_requests(), "Garbage collection");
+    retry_on_repo_info_update(repo_update_retries, "GC", async || {
         garbage_collect_one_attempt(
             Arc::clone(&asset_manager),
             config,
             num_updates_per_repo_info_file,
         )
         .await
-    };
-
-    let backoff = ExponentialBuilder::new()
-        .with_min_delay(std::time::Duration::from_millis(
-            retry_config.initial_backoff_ms() as u64,
-        ))
-        .with_max_delay(std::time::Duration::from_millis(
-            retry_config.max_backoff_ms() as u64
-        ))
-        .with_max_times(retry_config.max_tries().get() as usize)
-        .with_jitter()
-        .build();
-
-    gc.retry(backoff)
-        .sleep(tokio::time::sleep)
-        .when(|e| {
-            matches!(
-                e,
-                GCError::Repository(RepositoryError {
-                    kind: RepositoryErrorKind::RepoInfoUpdated,
-                    ..
-                })
-            )
-        })
-            .notify(|_, _|  {
-
-                    info!(
-                        "Repo info object was updated while GC was running, retrying with backoff..."
-                    );}
-        )
-        .await
+    })
+    .await
 }
 
+#[instrument(skip_all)]
 async fn garbage_collect_one_attempt(
     asset_manager: Arc<AssetManager>,
     config: &GCConfig,
     num_updates_per_repo_info_file: u16,
 ) -> GCResult<GCSummary> {
-    // TODO: this function could have much more parallelism
     if !config.action_needed() {
         info!("No action requested");
         return Ok(GCSummary::default());
@@ -440,7 +424,7 @@ async fn garbage_collect_one_attempt(
         if config.deletes_snapshots() {
             listed_snaps = Some(
                 asset_manager
-                    .list_snapshots()
+                    .list_snapshots_with_concurrency(config.list_concurrency())
                     .await?
                     .map_ok(|s| (s.id, (s.created_at, s.size_bytes)))
                     .try_collect()
@@ -502,12 +486,10 @@ async fn garbage_collect_one_attempt(
     );
 
     let mut summary = GCSummary::default();
+    let mut earlier_phase_failed = false;
 
     info!("Starting deletes");
 
-    // TODO: this could use more parallelization.
-    // The trivial approach of parallelizing the deletes of the different types of objects doesn't
-    // work: we want to dolete snapshots before deleting chunks, etc
     let drop_snapshots = all_snaps.difference(&keep_snapshots).cloned().collect();
 
     let mut written_repo_info: Option<Arc<RepoInfo>> = None;
@@ -522,7 +504,7 @@ async fn garbage_collect_one_attempt(
             .await?;
         }
         debug!("Garbage collecting snapshots");
-        let res = match listed_snaps.take() {
+        let report = match listed_snaps.take() {
             Some(listed) => {
                 let candidates = stream::iter(listed.into_iter().map(
                     |(id, (created_at, size_bytes))| {
@@ -533,47 +515,65 @@ async fn garbage_collect_one_attempt(
                     .await?
             }
             None => {
-                let candidates = asset_manager.list_snapshots().await?;
+                let candidates = asset_manager
+                    .list_snapshots_with_concurrency(config.list_concurrency())
+                    .await?;
                 gc_snapshots(asset_manager.as_ref(), config, &keep_snapshots, candidates)
                     .await?
             }
         };
-        summary.snapshots_deleted = res.deleted_objects;
-        summary.bytes_deleted += res.deleted_bytes;
+        earlier_phase_failed |= summary.absorb(report, |s| &mut s.snapshots_deleted);
     }
     drop(drop_snapshots);
     drop(all_snaps);
+
+    // FIXME: with `dangling_snapshots == Action::Keep` but manifests or tx logs set to
+    // delete, `keep_snapshots` covers only snapshots listed in repo info. A snapshot
+    // *object* that an earlier run failed to delete is already out of repo info, so its
+    // manifests and tx log get deleted here while the object survives
     if config.deletes_transaction_logs() {
-        // We need to retain tx logs of snapshots if any surviving
-        // snapshot still references them in pruned_ancestor_tx_logs.
-        // So keep_tx_logs is keep_snapshots plus those ids.
-        let mut keep_tx_logs = keep_snapshots;
+        if earlier_phase_failed {
+            summary.skipped_phases.push("transaction_logs".to_string());
+        } else {
+            // We need to retain tx logs of snapshots if any surviving
+            // snapshot still references them in pruned_ancestor_tx_logs.
+            // So keep_tx_logs is keep_snapshots plus those ids.
+            let mut keep_tx_logs = keep_snapshots.clone();
 
-        // use the most up to date repo info available
-        let pruned_source = written_repo_info.as_ref().or(repo_info.as_ref());
+            // use the most up to date repo info available
+            let pruned_source = written_repo_info.as_ref().or(repo_info.as_ref());
 
-        if let Some(repo_info) = pruned_source {
-            let pruned = repo_info
-                .all_snapshots()?
-                .map_ok(|si| si.pruned_ancestor_tx_logs)
-                .flatten_ok();
-            itertools::process_results(pruned, |ids| keep_tx_logs.extend(ids))?;
+            if let Some(repo_info) = pruned_source {
+                let pruned = repo_info
+                    .all_snapshots()?
+                    .map_ok(|si| si.pruned_ancestor_tx_logs)
+                    .flatten_ok();
+                itertools::process_results(pruned, |ids| keep_tx_logs.extend(ids))?;
+            }
+            let report =
+                gc_transaction_logs(asset_manager.as_ref(), config, &keep_tx_logs)
+                    .await?;
+            earlier_phase_failed |=
+                summary.absorb(report, |s| &mut s.transaction_logs_deleted);
         }
-        let res =
-            gc_transaction_logs(asset_manager.as_ref(), config, &keep_tx_logs).await?;
-        summary.transaction_logs_deleted = res.deleted_objects;
-        summary.bytes_deleted += res.deleted_bytes;
     }
     if config.deletes_manifests() {
-        let res = gc_manifests(asset_manager.as_ref(), config, &keep_manifests).await?;
-        summary.manifests_deleted = res.deleted_objects;
-        summary.bytes_deleted += res.deleted_bytes;
+        if earlier_phase_failed {
+            summary.skipped_phases.push("manifests".to_string());
+        } else {
+            let report =
+                gc_manifests(asset_manager.as_ref(), config, &keep_manifests).await?;
+            earlier_phase_failed |= summary.absorb(report, |s| &mut s.manifests_deleted);
+        }
     }
     if config.deletes_chunks() {
-        asset_manager.clear_chunk_cache();
-        let res = gc_chunks(asset_manager.as_ref(), config, &keep_chunks).await?;
-        summary.chunks_deleted = res.deleted_objects;
-        summary.bytes_deleted += res.deleted_bytes;
+        if earlier_phase_failed {
+            summary.skipped_phases.push("chunks".to_string());
+        } else {
+            asset_manager.clear_chunk_cache();
+            let report = gc_chunks(asset_manager.as_ref(), config, &keep_chunks).await?;
+            summary.absorb(report, |s| &mut s.chunks_deleted);
+        }
     }
 
     Ok(summary)
@@ -737,44 +737,24 @@ async fn delete_snapshots_from_repo_info(
     Ok(written_repo_info)
 }
 
-async fn fake_delete_result<const SIZE: usize, T: FileTypeTag>(
-    to_delete: impl Stream<Item = (ObjectId<SIZE, T>, u64)>,
-) -> DeleteObjectsResult {
-    to_delete
-        .fold(DeleteObjectsResult::default(), |mut res, (_, size)| {
-            res.deleted_objects += 1;
-            res.deleted_bytes += size;
-            ready(res)
-        })
-        .await
-}
-
 #[instrument(skip(asset_manager, config, keep_ids), fields(keep_ids.len = keep_ids.len()))]
 pub async fn gc_chunks(
     asset_manager: &AssetManager,
     config: &GCConfig,
-    keep_ids: &HashSet<ChunkId>,
-) -> GCResult<DeleteObjectsResult> {
+    keep_ids: &ChunkIdSet,
+) -> GCResult<DeleteReport> {
     info!("Deleting chunks");
-    let to_delete = asset_manager
-        .list_chunks()
-        .await?
-        .inspect_err(|e| error!("Deleting chunks: {e}"))
-        .filter_map(move |chunk| {
-            ready(chunk.ok().and_then(|chunk| {
-                if config.must_delete_chunk(&chunk) && !keep_ids.contains(&chunk.id) {
-                    Some((chunk.id.clone(), chunk.size_bytes))
-                } else {
-                    None
-                }
-            }))
-        })
-        .boxed();
-    if config.dry_run {
-        Ok(fake_delete_result(to_delete).await)
-    } else {
-        Ok(asset_manager.delete_chunks(to_delete).await?)
-    }
+    let candidates =
+        asset_manager.list_chunks_with_concurrency(config.list_concurrency()).await?;
+    Ok(deleter::delete_listed(
+        asset_manager,
+        config.delete_config(),
+        CHUNKS_FILE_PATH,
+        DELETE_BATCH_SIZE,
+        candidates,
+        |chunk| config.must_delete_chunk(chunk) && !keep_ids.contains(&chunk.id),
+    )
+    .await?)
 }
 
 #[instrument(skip(asset_manager, config, keep_ids), fields(keep_ids.len = keep_ids.len()))]
@@ -782,540 +762,110 @@ pub async fn gc_manifests(
     asset_manager: &AssetManager,
     config: &GCConfig,
     keep_ids: &HashSet<ManifestId>,
-) -> GCResult<DeleteObjectsResult> {
+) -> GCResult<DeleteReport> {
     info!("Deleting manifests");
-    let to_delete = asset_manager
-        .list_manifests()
-        .await?
-        .inspect_err(|e| error!("Deleting manifests: {e}"))
-        .filter_map(move |manifest| {
-            ready(manifest.ok().and_then(|manifest| {
-                if config.must_delete_manifest(&manifest)
-                    && !keep_ids.contains(&manifest.id)
-                {
-                    asset_manager.remove_cached_manifest(&manifest.id);
-                    Some((manifest.id.clone(), manifest.size_bytes))
-                } else {
-                    None
-                }
-            }))
-        })
-        .boxed();
-    if config.dry_run {
-        Ok(fake_delete_result(to_delete).await)
-    } else {
-        Ok(asset_manager.delete_manifests(to_delete).await?)
-    }
+    let candidates =
+        asset_manager.list_manifests_with_concurrency(config.list_concurrency()).await?;
+    Ok(deleter::delete_listed(
+        asset_manager,
+        config.delete_config(),
+        MANIFESTS_FILE_PATH,
+        DELETE_BATCH_SIZE,
+        candidates,
+        |manifest| {
+            let delete =
+                config.must_delete_manifest(manifest) && !keep_ids.contains(&manifest.id);
+            if delete {
+                asset_manager.remove_cached_manifest(&manifest.id);
+            }
+            delete
+        },
+    )
+    .await?)
 }
 
 /// `snapshots` are the delete candidates
-#[instrument(skip(asset_manager,  config, keep_ids, snapshots), fields(keep_ids.len = keep_ids.len()))]
+#[instrument(skip(asset_manager, config, keep_ids, snapshots), fields(keep_ids.len = keep_ids.len()))]
 pub async fn gc_snapshots(
     asset_manager: &AssetManager,
     config: &GCConfig,
     keep_ids: &HashSet<SnapshotId>,
     snapshots: impl Stream<Item = RepositoryResult<ListInfo<SnapshotId>>> + Send,
-) -> GCResult<DeleteObjectsResult> {
+) -> GCResult<DeleteReport> {
     info!("Deleting snapshots");
-    let to_delete = snapshots
-        .inspect_err(|e| error!("Deleting snapshots: {e}"))
-        .filter_map(move |snapshot| {
-            ready(snapshot.ok().and_then(|snapshot| {
-                if config.must_delete_snapshot(&snapshot)
-                    && !keep_ids.contains(&snapshot.id)
-                {
-                    asset_manager.remove_cached_snapshot(&snapshot.id);
-                    Some((snapshot.id.clone(), snapshot.size_bytes))
-                } else {
-                    None
-                }
-            }))
-        })
-        .boxed();
-    if config.dry_run {
-        Ok(fake_delete_result(to_delete).await)
-    } else {
-        Ok(asset_manager.delete_snapshots(to_delete).await?)
-    }
+    Ok(deleter::delete_listed(
+        asset_manager,
+        config.delete_config(),
+        SNAPSHOTS_FILE_PATH,
+        DELETE_BATCH_SIZE,
+        snapshots,
+        |snapshot| {
+            let delete =
+                config.must_delete_snapshot(snapshot) && !keep_ids.contains(&snapshot.id);
+            if delete {
+                asset_manager.remove_cached_snapshot(&snapshot.id);
+            }
+            delete
+        },
+    )
+    .await?)
 }
 
-#[instrument(skip(asset_manager,  config, keep_ids), fields(keep_ids.len = keep_ids.len()))]
+#[instrument(skip(asset_manager, config, keep_ids), fields(keep_ids.len = keep_ids.len()))]
 pub async fn gc_transaction_logs(
     asset_manager: &AssetManager,
     config: &GCConfig,
     keep_ids: &HashSet<SnapshotId>,
-) -> GCResult<DeleteObjectsResult> {
+) -> GCResult<DeleteReport> {
     info!("Deleting transaction logs");
-    let to_delete = asset_manager
-        .list_transaction_logs()
-        .await?
-        .inspect_err(|e| error!("Deleting transaction logs: {e}"))
-        .filter_map(move |tx| {
-            ready(tx.ok().and_then(|tx| {
-                if config.must_delete_transaction_log(&tx) && !keep_ids.contains(&tx.id) {
-                    asset_manager.remove_cached_tx_log(&tx.id);
-                    Some((tx.id.clone(), tx.size_bytes))
-                } else {
-                    None
-                }
-            }))
-        })
-        .boxed();
-    if config.dry_run {
-        Ok(fake_delete_result(to_delete).await)
-    } else {
-        Ok(asset_manager.delete_transaction_logs(to_delete).await?)
-    }
-}
-
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub enum ExpiredRefAction {
-    Delete,
-    Ignore,
-}
-
-#[derive(Debug, PartialEq, Eq, Clone, Default)]
-pub struct ExpireResult {
-    pub released_snapshots: HashSet<SnapshotId>,
-    pub edited_snapshots: HashSet<SnapshotId>,
-    pub deleted_refs: HashSet<Ref>,
-}
-
-/// Expire all snapshots older than a threshold.
-///
-/// This processes snapshots found by navigating all references in
-/// the repo, tags first, branches leter, both in lexicographical order.
-///
-/// The operation will edit in place the oldest non-expired snapshot,
-/// in every ancestry, changing its parent to be the root of the repo.
-///
-/// For this reasons, it's recommended to invalidate any snapshot
-/// caches before traversing history againg. The cache in the
-/// passed `asset_manager` is invalidated here, but other caches
-/// may exist, for example, in [`crate::Repository`] instances.
-///
-/// Notice that the snapshot returned as released, are not necessarily
-/// available for garbage collection, they could still be pointed by
-/// ether refs.
-///
-/// See: <https://github.com/earth-mover/icechunk/blob/main/design-docs/007-basic-expiration.md>
-#[instrument(skip(asset_manager))]
-pub async fn expire(
-    asset_manager: Arc<AssetManager>,
-    older_than: DateTime<Utc>,
-    expired_branches: ExpiredRefAction,
-    expired_tags: ExpiredRefAction,
-    repo_update_retries: Option<&RepoUpdateRetryConfig>,
-    num_updates_per_repo_info_file: u16,
-) -> GCResult<ExpireResult> {
-    if !asset_manager.can_write_to_storage().await? {
-        return Err(RepositoryErrorKind::ReadonlyStorage("Cannot expire".to_string()))
-            .capture()
-            .map_err(GCError::Repository)?;
-    }
-
-    // Check repo status (only available on IC2+)
-    if asset_manager.spec_version() >= SpecVersionBin::V2 {
-        let (repo_info, _) = asset_manager.fetch_repo_info().await?;
-        if repo_info.status()?.availability != RepoAvailability::Online {
-            return Err(RepositoryErrorKind::ReadonlyRepository(
-                "Cannot garbage collect".to_string(),
-            ))
-            .capture()
-            .map_err(GCError::Repository)?;
-        }
-    }
-
-    match asset_manager.spec_version() {
-        SpecVersionBin::V1 => {
-            super::expiration_v1::expire(
-                asset_manager,
-                older_than,
-                expired_branches,
-                expired_tags,
-            )
-            .await
-        }
-        SpecVersionBin::V2 => {
-            expire_v2(
-                asset_manager,
-                older_than,
-                expired_branches,
-                expired_tags,
-                repo_update_retries,
-                num_updates_per_repo_info_file,
-            )
-            .await
-        }
-    }
-}
-
-/// Since `expire_v2` is a relatively fast operation (repo object only) we retry it if the repo info
-/// object was modified since it started
-#[instrument(skip(asset_manager))]
-pub async fn expire_v2(
-    asset_manager: Arc<AssetManager>,
-    older_than: DateTime<Utc>,
-    expired_branches: ExpiredRefAction,
-    expired_tags: ExpiredRefAction,
-    repo_update_retries: Option<&RepoUpdateRetryConfig>,
-    num_updates_per_repo_info_file: u16,
-) -> GCResult<ExpireResult> {
-    let default_retry_config = RepoUpdateRetryConfig::default();
-    let retry_config = repo_update_retries.unwrap_or(&default_retry_config).retries();
-
-    let backoff = ExponentialBuilder::new()
-        .with_min_delay(std::time::Duration::from_millis(
-            retry_config.initial_backoff_ms() as u64,
-        ))
-        .with_max_delay(std::time::Duration::from_millis(
-            retry_config.max_backoff_ms() as u64
-        ))
-        .with_max_times(retry_config.max_tries().get() as usize)
-        .with_jitter()
-        .build();
-
-    let expire = async || {
-        expire_v2_one_attempt(
-            Arc::clone(&asset_manager),
-            older_than,
-            expired_branches,
-            expired_tags,
-            num_updates_per_repo_info_file,
-        )
-        .await
-    };
-
-    expire.retry(backoff)
-        .sleep(tokio::time::sleep)
-        .when(|e| {
-            matches!(
-                e,
-                GCError::Repository(RepositoryError {
-                    kind: RepositoryErrorKind::RepoInfoUpdated,
-                    ..
-                })
-            )
-        })
-            .notify(|_, _|  {
-
-                    info!(
-                        "Repo info object was updated while expire was running, retrying with backoff..."
-                    );}
-        )
-        .await
-}
-
-/// Re-parent `edited` over a run of ancestors that are being expired,
-/// harvesting their tx logs so its delta from the new parent stays complete.
-///
-/// Returns `(new_parent, pruned)`. `new_parent` is the boundary ancestor, or
-/// `None` if the whole chain is collapsed (no ancestor satisfies `is_boundary`)
-/// `pruned` lists, oldest first, every collapsed ancestor's id with that ancestor's own
-/// `pruned_ancestor_tx_logs` spliced in, then `edited`'s own existing
-/// `pruned_ancestor_tx_logs` (newer than the collapsed run) appended last.
-///
-/// A collapsed ancestor can itself carry a non-empty `pruned_ancestor_tx_logs`
-/// (it was a boundary in an earlier pass), and several can sit in one chain.
-/// Hitting one does not end the walk — only `is_boundary` does; its pruned chain
-/// is spliced in and the walk keeps going. E.g. with boundary `s1`:
-///
-/// ```text
-/// INITIAL → s1 → s3 (pruned=[s2]) → s5 (pruned=[s4]) → edited
-/// ```
-///
-/// returns `new_parent = s1` and `pruned = [s2, s3, s4, s5]` (oldest first).
-fn reparent_and_prune(
-    repo_info: &RepoInfo,
-    edited: &SnapshotInfo,
-    is_boundary: impl Fn(&SnapshotInfo) -> bool,
-) -> IcechunkResult<(Option<SnapshotId>, Vec<SnapshotId>)> {
-    let mut new_parent = None;
-    let mut collapsed = Vec::new();
-    // ancestry() starts at `edited`. skip(1) drops it
-    for ancestor in repo_info.ancestry(&edited.id)?.skip(1) {
-        let ancestor = ancestor?;
-        if is_boundary(&ancestor) {
-            new_parent = Some(ancestor.id);
-            break;
-        }
-        collapsed.push((ancestor.id, ancestor.pruned_ancestor_tx_logs));
-    }
-    // Emit oldest first. `collapsed` is newest first, so walk it in reverse; an
-    // ancestor's own pruned logs (already oldest first) are older than it and so
-    // precede its id.
-    let mut pruned = Vec::new();
-    for (id, ancestor_pruned) in collapsed.into_iter().rev() {
-        pruned.extend(ancestor_pruned);
-        pruned.push(id);
-    }
-    // `edited`'s own pruned logs are newer than the collapsed run, so append last.
-    pruned.extend(edited.pruned_ancestor_tx_logs.iter().cloned());
-    Ok((new_parent, pruned))
-}
-
-#[instrument(skip(asset_manager))]
-async fn expire_v2_one_attempt(
-    asset_manager: Arc<AssetManager>,
-    older_than: DateTime<Utc>,
-    expired_branches: ExpiredRefAction,
-    expired_tags: ExpiredRefAction,
-    num_updates_per_repo_info_file: u16,
-) -> GCResult<ExpireResult> {
-    info!("Expiration started");
-    let (repo_info, repo_info_version_at_start) = asset_manager.fetch_repo_info().await?;
-    let tags: Vec<(Ref, SnapshotId)> = repo_info
-        .tags()?
-        .map(|(name, snap)| Ok::<_, GCError>((Ref::Tag(name.to_string()), snap)))
-        .try_collect()?;
-    let branches: Vec<(Ref, SnapshotId)> = repo_info
-        .branches()?
-        .map(|(name, snap)| Ok::<_, GCError>((Ref::Branch(name.to_string()), snap)))
-        .try_collect()?;
-
-    fn split_root<E>(
-        mut iter: impl Iterator<Item = Result<SnapshotInfo, E>>,
-    ) -> Result<(HashSet<SnapshotId>, Option<SnapshotId>), E> {
-        iter.try_fold((HashSet::new(), None), |(mut all, root), snap| match snap {
-            Ok(snap) if snap.parent_id.is_some() => {
-                all.insert(snap.id);
-                Ok((all, root))
+    let candidates = asset_manager
+        .list_transaction_logs_with_concurrency(config.list_concurrency())
+        .await?;
+    Ok(deleter::delete_listed(
+        asset_manager,
+        config.delete_config(),
+        TRANSACTION_LOGS_FILE_PATH,
+        DELETE_BATCH_SIZE,
+        candidates,
+        |tx| {
+            let delete =
+                config.must_delete_transaction_log(tx) && !keep_ids.contains(&tx.id);
+            if delete {
+                asset_manager.remove_cached_tx_log(&tx.id);
             }
-            Ok(snap) => Ok((all, Some(snap.id))),
-            Err(err) => Err(err),
-        })
-    }
-
-    debug!("Finding roots");
-    let mut all_tips = tags.iter().chain(branches.iter());
-    let root_to_snaps = all_tips.try_fold(
-        HashMap::new(),
-        |mut res: HashMap<SnapshotId, HashSet<SnapshotId>>, (_, tip_snap)| {
-            let ancestry = repo_info.ancestry(tip_snap)?;
-            let (branch_snaps, root) = split_root(ancestry)?;
-            let root = root.unwrap_or(Snapshot::INITIAL_SNAPSHOT_ID);
-            match res.get_mut(&root) {
-                Some(s) => {
-                    s.extend(branch_snaps);
-                }
-                None => {
-                    res.insert(root, branch_snaps);
-                }
-            };
-
-            Ok::<_, GCError>(res)
+            delete
         },
-    )?;
-
-    let new_parent = move |id: &SnapshotId| {
-        for (new_parent, all) in root_to_snaps.iter() {
-            if all.contains(id) {
-                return Some(new_parent.clone());
-            }
-        }
-        None
-    };
-
-    debug!("Finding ref tips");
-    let tag_tip_ids: HashSet<SnapshotId> = repo_info.tags()?.map(|(_, id)| id).collect();
-    let branch_tip_ids: HashSet<SnapshotId> =
-        repo_info.branches()?.map(|(_, id)| id).collect();
-    let main_pointee = repo_info.resolve_branch(Ref::DEFAULT_BRANCH)?;
-
-    // All non-root snapshots old enough to be considered expired, regardless of
-    // ref protection. Used to determine which branch/tag refs should be deleted.
-    // Unlike released_snapshots, this does not exclude snapshots protected by
-    // branch/tag tips (e.g. main), so a feature branch sharing main's tip can
-    // still be deleted (#1520). Root snapshots (no parent) are always excluded
-    // so tags/branches pointing to the initial commit are never deleted (#1534).
-    let expired_snapshot_infos: Vec<SnapshotInfo> = repo_info
-        .all_snapshots()?
-        .filter_map(|si| match si {
-            Ok(si) if si.flushed_at < older_than && si.parent_id.is_some() => {
-                Some(Ok(si))
-            }
-            Ok(_) => None,
-            Err(e) => Some(Err(e)),
-        })
-        .try_collect()?;
-
-    debug!("Calculating released snapshots");
-    let released_snapshots: HashSet<SnapshotId> = expired_snapshot_infos
-        .iter()
-        .filter_map(|si| {
-            // we retain all roots
-            if si.flushed_at < older_than && si.parent_id.is_some() {
-                use ExpiredRefAction::*;
-                if expired_tags == Ignore && tag_tip_ids.contains(&si.id)
-                    || (expired_branches == Ignore || si.id == main_pointee)
-                        && branch_tip_ids.contains(&si.id)
-                {
-                    None
-                } else {
-                    Some(si.id.clone())
-                }
-            } else {
-                None
-            }
-        })
-        .collect();
-
-    let expired_snapshots: HashSet<SnapshotId> =
-        expired_snapshot_infos.into_iter().map(|x| x.id).collect();
-
-    let num_released_snapshots = released_snapshots.len();
-
-    debug!("Calculating retained snapshots");
-    let mut edited_snapshots = HashSet::new();
-    let retained: Vec<_> = repo_info
-        .all_snapshots()?
-        .filter_map(|si| match si {
-            // remove expired snapshots
-            Ok(si) if released_snapshots.contains(&si.id) => None,
-
-            // non expired snapshots could need editing to change their parent
-            Ok(si) => match si.parent_id.as_ref() {
-                Some(parent_id) => {
-                    if released_snapshots.contains(parent_id) {
-                        // parent is expired, so we change it to the root in that branch/tag
-                        edited_snapshots.insert(si.id.clone());
-                        // Re-parenting to the root drops every ancestor below
-                        // si from its path. Those ancestors carry the tx logs
-                        // describing the deltas si now spans (root..si), so
-                        // harvest their ids into si.
-                        match reparent_and_prune(&repo_info, &si, |a| {
-                            // go all the way to the branch root
-                            a.parent_id.is_none()
-                        }) {
-                            Ok((_, pruned_ancestor_tx_logs)) => Some(Ok(SnapshotInfo {
-                                parent_id: Some(
-                                    new_parent(&si.id)
-                                        .unwrap_or(Snapshot::INITIAL_SNAPSHOT_ID),
-                                ),
-                                pruned_ancestor_tx_logs,
-                                ..si
-                            })),
-                            Err(e) => Some(Err(e)),
-                        }
-                    } else {
-                        // parent is retained, so we retain the snapshot as is
-                        Some(Ok(si))
-                    }
-                }
-                // we retain all roots
-                None => Some(Ok(si)),
-            },
-            Err(e) => Some(Err(e)),
-        })
-        .try_collect()?;
-
-    debug!("Calculating deleted refs");
-    let mut deleted_tags: HashSet<_> = tags
-        .into_iter()
-        .filter_map(|(r, snap_id)| {
-            if expired_tags == ExpiredRefAction::Delete
-                && expired_snapshots.contains(&snap_id)
-            {
-                Some(r)
-            } else {
-                None
-            }
-        })
-        .collect();
-
-    let deleted_branches: HashSet<_> = branches
-        .into_iter()
-        .filter_map(|(r, snap_id)| {
-            if expired_branches == ExpiredRefAction::Delete
-                && r.name() != Ref::DEFAULT_BRANCH
-                && expired_snapshots.contains(&snap_id)
-            {
-                Some(r)
-            } else {
-                None
-            }
-        })
-        .collect();
-
-    info!(
-        snapshots = num_released_snapshots,
-        branches = deleted_branches.iter().map(|r| r.name()).join("/"),
-        tags = deleted_tags.iter().map(|r| r.name()).join("/"),
-        "Releasing objects"
-    );
-
-    let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str, version| {
-        // we retry if the repo info object was modified since we started
-        if version != repo_info_version_at_start {
-            return Err(RepositoryError::capture(RepositoryErrorKind::RepoInfoUpdated));
-        }
-
-        let tags = repo_info
-            .tags()
-            .inject()?
-            .filter(|(name, _)| !deleted_tags.contains(&Ref::Tag(name.to_string())));
-
-        let branches = repo_info.branches().inject()?.filter(|(name, _)| {
-            !deleted_branches.contains(&Ref::Branch(name.to_string()))
-        });
-
-        let deleted_tag_names = repo_info.deleted_tags().inject()?.chain(
-            deleted_tags.iter().filter_map(|r| match r {
-                Ref::Tag(name) => Some(name.as_str()),
-                Ref::Branch(_) => None,
-            }),
-        );
-        let config_bytes = repo_info.config_bytes_raw().inject()?;
-        let new_repo_info = RepoInfo::new(
-            asset_manager.spec_version(),
-            tags,
-            branches,
-            deleted_tag_names,
-            retained.clone(),
-            &repo_info.metadata().inject()?,
-            UpdateInfo {
-                update_type: UpdateType::ExpirationRanUpdate,
-                update_time: Utc::now(),
-                previous_updates: repo_info.latest_updates().inject()?,
-            },
-            Some(backup_path),
-            num_updates_per_repo_info_file,
-            repo_info.repo_before_updates().inject()?,
-            config_bytes.as_deref(),
-            repo_info.enabled_feature_flags().inject()?,
-            repo_info.disabled_feature_flags().inject()?,
-            &repo_info.status().inject()?,
-        )
-        .inject()?;
-
-        Ok(Arc::new(new_repo_info))
-    };
-
-    let retry_settings = storage::RetriesSettings {
-        max_tries: Some(NonZeroU16::MIN),
-        ..Default::default()
-    };
-    let _ = asset_manager.update_repo_info(&retry_settings, do_update).await?;
-
-    deleted_tags.extend(deleted_branches);
-
-    debug!("Expiration done");
-    Ok(ExpireResult { released_snapshots, edited_snapshots, deleted_refs: deleted_tags })
+    )
+    .await?)
 }
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap as StdHashMap;
-
-    use chrono::{Duration, TimeZone as _};
+    use chrono::TimeZone as _;
     use icechunk_macros::tokio_test;
 
     use super::*;
+
+    // `tokio_test` expands to nothing under shuttle, leaving the async tests
+    // and everything only they use unreferenced.
+    #[cfg(not(feature = "shuttle"))]
     use crate::{
         Storage,
-        format::SNAPSHOTS_FILE_PATH,
+        format::{CHUNKS_FILE_PATH, SNAPSHOTS_FILE_PATH},
+        ops::deleter::testing::{
+            FailMode, wrapped_asset_manager, wrapped_asset_manager_listing,
+        },
         storage::new_in_memory_storage,
         test_utils::{logging_asset_manager, repo_with_converging_refs},
+    };
+    #[cfg(not(feature = "shuttle"))]
+    use bytes::Bytes;
+    // `Duration` is chrono's in this module under `cfg(not(shuttle))`
+    #[cfg(not(feature = "shuttle"))]
+    use chrono::Duration;
+    #[cfg(not(feature = "shuttle"))]
+    use std::{
+        collections::HashMap as StdHashMap, sync::atomic::Ordering, time::Instant,
     };
 
     /// GC must read each snapshot at most once. Snapshots newer than the
@@ -1341,7 +891,11 @@ mod tests {
             None,
             NonZeroU16::new(10).unwrap(),
             NonZeroUsize::new(1_000_000_000).unwrap(),
+            NonZeroUsize::new(4 * 1024 * 1024 * 1024).unwrap(),
             NonZeroU16::new(10).unwrap(),
+            NonZeroU16::new(10).unwrap(),
+            NonZeroU16::new(50).unwrap(),
+            None,
             true,
         );
         garbage_collect(Arc::clone(&asset_manager), &config, None, 10).await?;
@@ -1350,7 +904,7 @@ mod tests {
         let mut reads_per_snapshot: StdHashMap<String, usize> = StdHashMap::new();
         let mut snapshot_listings = 0;
         for (op, path) in logging.fetch_operations() {
-            if op == "list_objects" {
+            if matches!(op.as_str(), "list_objects" | "list_objects_with_id_prefixes") {
                 if path == SNAPSHOTS_FILE_PATH {
                     snapshot_listings += 1;
                 }
@@ -1358,7 +912,12 @@ mod tests {
                 *reads_per_snapshot.entry(path).or_default() += 1;
             }
         }
-        assert_eq!(snapshot_listings, 1, "the snapshots prefix was listed twice");
+        // the in-memory backend has no server-side prefix listing, so one pass
+        // over the snapshots is a single full listing
+        assert_eq!(
+            snapshot_listings, 1,
+            "expected one listing pass over the snapshots prefix, got {snapshot_listings} calls"
+        );
         let repeated: Vec<_> =
             reads_per_snapshot.iter().filter(|(_, n)| **n > 1).collect();
         assert!(repeated.is_empty(), "snapshots read more than once: {repeated:?}");
@@ -1379,5 +938,356 @@ mod tests {
         assert!(created_entirely_before(at(100, 0), at(101, 0)));
         assert!(created_entirely_before(at(100, 399_000_000), at(100, 400_000_000)));
         assert!(!created_entirely_before(at(100, 400_000_000), at(100, 400_000_000)));
+    }
+
+    #[cfg(not(feature = "shuttle"))]
+    /// A V2 repo with exactly 3 garbage snapshots, 3 garbage tx logs,
+    /// 1 garbage manifest and 4 garbage chunks.
+    async fn repo_with_garbage(
+        backend: &Arc<dyn Storage + Send + Sync>,
+    ) -> Result<crate::Repository, Box<dyn std::error::Error>> {
+        use crate::format::{ChunkIndices, Path, snapshot::ArrayShape};
+        use Bytes;
+        let repo = repo_with_converging_refs(backend).await?;
+        let array_path: Path = "/arr".try_into()?;
+        let mut session = repo.writable_session("main").await?;
+        session
+            .add_array(
+                array_path.clone(),
+                ArrayShape::new([(4, 4)]).unwrap(),
+                None,
+                Bytes::from_static(br#"{"zarr_format":3}"#),
+            )
+            .await?;
+        for i in 0..4u32 {
+            // above the inline threshold, so each chunk is its own object
+            let payload =
+                session.get_chunk_writer()?(Bytes::from(vec![i as u8; 1024])).await?;
+            session
+                .set_chunk_ref(array_path.clone(), ChunkIndices(vec![i]), Some(payload))
+                .await?;
+        }
+        session.commit("c5").max_concurrent_nodes(8).execute().await?;
+
+        let mid = repo.lookup_tag("mid").await?;
+        repo.delete_tag("tip").await?;
+        repo.delete_branch("other").await?;
+        repo.reset_branch("main", &mid, None).await?;
+        Ok(repo)
+    }
+
+    #[cfg(not(feature = "shuttle"))]
+    fn gc_config(max_consecutive_delete_failures: u16) -> GCConfig {
+        gc_config_with(max_consecutive_delete_failures, 2)
+    }
+
+    #[cfg(not(feature = "shuttle"))]
+    fn gc_config_with(
+        max_consecutive_delete_failures: u16,
+        max_concurrent_deletes: u16,
+    ) -> GCConfig {
+        // cutoff in the future: everything unreachable is old enough
+        let cutoff = Utc::now() + Duration::hours(1);
+        GCConfig::clean_all(
+            cutoff,
+            cutoff,
+            None,
+            NonZeroU16::new(10).unwrap(),
+            NonZeroUsize::new(1_000_000_000).unwrap(),
+            NonZeroUsize::new(4 * 1024 * 1024 * 1024).unwrap(),
+            NonZeroU16::new(10).unwrap(),
+            NonZeroU16::new(max_concurrent_deletes).unwrap(),
+            NonZeroU16::new(max_consecutive_delete_failures).unwrap(),
+            None,
+            false,
+        )
+        // milliseconds instead of seconds, so a throttled phase runs in test time
+        .with_delete_backoff(DeleteBackoff {
+            base: std::time::Duration::from_millis(10),
+            cap: std::time::Duration::from_millis(40),
+        })
+    }
+
+    #[test]
+    fn peak_concurrent_requests_takes_the_largest_phase() {
+        let cutoff = Utc::now();
+        let config = |listings: u16, snaps: u16, fetches: u16, deletes: u16| {
+            GCConfig::clean_all(
+                cutoff,
+                cutoff,
+                None,
+                NonZeroU16::new(snaps).unwrap(),
+                NonZeroUsize::new(1).unwrap(),
+                NonZeroUsize::new(1).unwrap(),
+                NonZeroU16::new(fetches).unwrap(),
+                NonZeroU16::new(deletes).unwrap(),
+                NonZeroU16::new(1).unwrap(),
+                Some(NonZeroU16::new(listings).unwrap()),
+                false,
+            )
+            .peak_concurrent_requests()
+        };
+
+        // the walk fetches manifests and snapshots at the same time
+        assert_eq!(config(32, 50, 500, 10), 550);
+        // deletes stream a listing, so both fan-outs are in flight
+        assert_eq!(config(200, 5, 10, 100), 300);
+        assert_eq!(config(200, 5, 10, 1), 201);
+    }
+
+    /// Chunks are the last phase, so a failure there skips nothing. The
+    /// wrapper fails the first chunk delete call and succeeds on the second,
+    /// which is the next GC run.
+    #[tokio_test]
+    async fn partial_chunk_delete_failures_are_reported_and_gc_completes()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+        let repo = repo_with_garbage(&backend).await?;
+        let (am, _flaky) = wrapped_asset_manager(
+            &repo,
+            &backend,
+            Some(CHUNKS_FILE_PATH),
+            FailMode::Alternate,
+        );
+
+        let summary = garbage_collect(Arc::clone(&am), &gc_config(50), None, 10).await?;
+        assert_eq!(summary.snapshots_deleted, 3);
+        assert_eq!(summary.transaction_logs_deleted, 3);
+        assert_eq!(summary.manifests_deleted, 1);
+        assert_eq!(summary.chunks_deleted, 0);
+        assert_eq!(summary.objects_failed_to_delete, 4);
+        assert_eq!(summary.delete_errors.len(), 1);
+        assert!(summary.delete_errors[0].contains("injected delete failure"));
+        assert!(summary.skipped_phases.is_empty());
+        assert_eq!(repo.asset_manager().list_chunks().await?.count().await, 4);
+
+        let second = garbage_collect(Arc::clone(&am), &gc_config(50), None, 10).await?;
+        assert_eq!(second.chunks_deleted, 4);
+        assert_eq!(second.objects_failed_to_delete, 0);
+        assert_eq!(repo.asset_manager().list_chunks().await?.count().await, 0);
+        Ok(())
+    }
+
+    #[tokio_test]
+    async fn snapshot_delete_failures_skip_dependent_phases()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+        let repo = repo_with_garbage(&backend).await?;
+        let manifests_before = repo.asset_manager().list_manifests().await?.count().await;
+        let tx_logs_before =
+            repo.asset_manager().list_transaction_logs().await?.count().await;
+        let (am, _flaky) = wrapped_asset_manager(
+            &repo,
+            &backend,
+            Some(SNAPSHOTS_FILE_PATH),
+            FailMode::Always,
+        );
+
+        let summary = garbage_collect(Arc::clone(&am), &gc_config(50), None, 10).await?;
+
+        assert_eq!(summary.snapshots_deleted, 0);
+        assert_eq!(summary.objects_failed_to_delete, 3);
+        assert_eq!(
+            summary.skipped_phases,
+            vec![
+                "transaction_logs".to_string(),
+                "manifests".to_string(),
+                "chunks".to_string()
+            ]
+        );
+        // nothing downstream was touched
+        assert_eq!(
+            repo.asset_manager().list_manifests().await?.count().await,
+            manifests_before
+        );
+        assert_eq!(
+            repo.asset_manager().list_transaction_logs().await?.count().await,
+            tx_logs_before
+        );
+        assert_eq!(repo.asset_manager().list_chunks().await?.count().await, 4);
+        // but repo info no longer lists the garbage snapshots
+        let (info, _) = am.fetch_repo_info().await?;
+        assert_eq!(info.all_snapshots()?.count(), 4); // initial + c0..c2
+        Ok(())
+    }
+
+    #[tokio_test]
+    async fn total_delete_failure_aborts_after_the_threshold()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+        let repo = repo_with_garbage(&backend).await?;
+        let (am, flaky) = wrapped_asset_manager(&repo, &backend, None, FailMode::Always);
+        // threshold 1: the first failed batch aborts
+        let result = garbage_collect(Arc::clone(&am), &gc_config(1), None, 10).await;
+        match result {
+            Err(GCError::DeletesFailing { prefix, last_error }) => {
+                assert_eq!(prefix, SNAPSHOTS_FILE_PATH);
+                assert!(last_error.contains("injected delete failure"));
+            }
+            other => panic!("expected DeletesFailing, got {other:?}"),
+        }
+        // exactly one delete request was made before giving up
+        assert_eq!(flaky.calls.load(Ordering::SeqCst), 1);
+        Ok(())
+    }
+
+    /// A backend that deletes but reports a per-key failure inside `Ok` must
+    /// gate later phases exactly like a failed request.
+    #[tokio_test]
+    async fn short_delete_count_skips_dependent_phases()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+        let repo = repo_with_garbage(&backend).await?;
+        let manifests_before = repo.asset_manager().list_manifests().await?.count().await;
+        let (am, _flaky) = wrapped_asset_manager(
+            &repo,
+            &backend,
+            Some(SNAPSHOTS_FILE_PATH),
+            FailMode::ShortByOne,
+        );
+
+        let summary = garbage_collect(Arc::clone(&am), &gc_config(50), None, 10).await?;
+
+        assert_eq!(summary.snapshots_deleted, 2); // backend reported 3 - 1
+        assert_eq!(summary.objects_failed_to_delete, 1);
+        assert_eq!(
+            summary.skipped_phases,
+            vec![
+                "transaction_logs".to_string(),
+                "manifests".to_string(),
+                "chunks".to_string()
+            ]
+        );
+        assert!(!summary.delete_errors.is_empty());
+        assert_eq!(
+            repo.asset_manager().list_manifests().await?.count().await,
+            manifests_before
+        );
+        assert_eq!(repo.asset_manager().list_chunks().await?.count().await, 4);
+        Ok(())
+    }
+
+    /// A throttle is back-pressure, not a failure: the batch is retried until
+    /// the store accepts it, and the phase completes even with a threshold of
+    /// one, which would abort at the first ordinary failure.
+    #[tokio_test]
+    async fn throttled_batches_are_retried_not_failed()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+        let repo = repo_with_garbage(&backend).await?;
+        let (am, flaky) = wrapped_asset_manager(
+            &repo,
+            &backend,
+            Some(CHUNKS_FILE_PATH),
+            FailMode::ThrottleFirst(3),
+        );
+
+        let summary = garbage_collect(Arc::clone(&am), &gc_config_with(1, 4), None, 10)
+            .await
+            .map_err(|err| format!("GC should survive throttling: {err}"))?;
+
+        assert_eq!(summary.chunks_deleted, 4);
+        assert_eq!(summary.throttled_batches, 3);
+        assert_eq!(summary.objects_failed_to_delete, 0);
+        assert!(summary.delete_errors.is_empty(), "{:?}", summary.delete_errors);
+        assert!(summary.skipped_phases.is_empty());
+        // three throttled attempts plus the one that went through
+        assert_eq!(flaky.calls.load(Ordering::SeqCst), 4);
+        assert_eq!(repo.asset_manager().list_chunks().await?.count().await, 0);
+        Ok(())
+    }
+
+    /// Only throttling that persists through the whole back-off ramp ends a
+    /// phase: the quiet period doubles 10 → 20 → 40 ms, and the two events
+    /// after it reaches the cap are the two failures the threshold allows.
+    #[tokio_test]
+    async fn sustained_throttling_aborts_after_the_backoff_cap()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+        let repo = repo_with_garbage(&backend).await?;
+        let (am, flaky) = wrapped_asset_manager(
+            &repo,
+            &backend,
+            Some(CHUNKS_FILE_PATH),
+            FailMode::ThrottleAlways,
+        );
+
+        let started = Instant::now();
+        let result = garbage_collect(Arc::clone(&am), &gc_config_with(2, 4), None, 10)
+            .await
+            .map(|summary| summary.chunks_deleted);
+        let elapsed = started.elapsed();
+
+        match result {
+            Err(GCError::DeletesFailing { prefix, last_error }) => {
+                assert_eq!(prefix, CHUNKS_FILE_PATH);
+                assert!(last_error.contains("SlowDown"), "{last_error}");
+            }
+            other => panic!("expected DeletesFailing, got {other:?}"),
+        }
+        assert_eq!(flaky.calls.load(Ordering::SeqCst), 5);
+        // the limit never leaves 1, so the store never sees two at once
+        assert_eq!(flaky.peak_deletes(), 1);
+        // 10 + 20 + 40 + 40 ms of quiet periods, not the production seconds
+        assert!(elapsed < std::time::Duration::from_millis(200), "{elapsed:?}");
+        Ok(())
+    }
+
+    /// A listing that breaks mid-stream aborts the whole run: no phase gets a
+    /// complete candidate set, so nothing may be deleted. `fan_out` picks which
+    /// listing path breaks: a prefix worker, or the single full listing that
+    /// backends without server-side prefix listing use. Both are forced, so
+    /// the choice does not depend on what the in-memory backend reports.
+    #[cfg(not(feature = "shuttle"))]
+    async fn listing_error_aborts_the_run(
+        fan_out: bool,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+        let repo = repo_with_garbage(&backend).await?;
+        let manifests_before = repo.asset_manager().list_manifests().await?.count().await;
+        let tx_logs_before =
+            repo.asset_manager().list_transaction_logs().await?.count().await;
+        let (am, _flaky) = wrapped_asset_manager_listing(
+            &repo,
+            &backend,
+            None,
+            FailMode::Alternate,
+            Some(SNAPSHOTS_FILE_PATH),
+            Some(fan_out),
+        );
+
+        let result = garbage_collect(Arc::clone(&am), &gc_config(50), None, 10).await;
+        match result {
+            Err(err) => {
+                assert!(err.to_string().contains("injected listing failure"), "{err}");
+            }
+            Ok(summary) => panic!("expected the listing error, got {summary:?}"),
+        }
+
+        assert_eq!(
+            repo.asset_manager().list_transaction_logs().await?.count().await,
+            tx_logs_before
+        );
+        assert_eq!(
+            repo.asset_manager().list_manifests().await?.count().await,
+            manifests_before
+        );
+        assert_eq!(repo.asset_manager().list_chunks().await?.count().await, 4);
+        Ok(())
+    }
+
+    /// The error surfaces from a prefix worker, through the channel and the
+    /// stream, and aborts the run.
+    #[tokio_test]
+    async fn listing_errors_abort_the_run_fanning_out()
+    -> Result<(), Box<dyn std::error::Error>> {
+        listing_error_aborts_the_run(true).await
+    }
+
+    /// The same, on the single-listing path a non-native backend takes.
+    #[tokio_test]
+    async fn listing_errors_abort_the_run_single_listing()
+    -> Result<(), Box<dyn std::error::Error>> {
+        listing_error_aborts_the_run(false).await
     }
 }

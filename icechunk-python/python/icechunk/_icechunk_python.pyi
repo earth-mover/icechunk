@@ -8,7 +8,7 @@ from collections.abc import (
 )
 from enum import Enum, IntEnum
 from functools import total_ordering
-from typing import Any, TypeVar, final
+from typing import Any, Self, TypeVar, final
 
 import numpy as np
 
@@ -69,7 +69,7 @@ class S3Options:
         network_stream_timeout_seconds: int | None = None,
         requester_pays: bool = False,
         checksum_algorithm: ChecksumAlgorithm | None = None,
-    ) -> S3Options:
+    ) -> Self:
         """
         Create a new `S3Options` object
 
@@ -116,7 +116,6 @@ class S3Options:
         str | None
             The region configured for the storage backend.
         """
-        ...
 
     @region.setter
     def region(self, value: str | None) -> None:
@@ -128,7 +127,6 @@ class S3Options:
         value: str | None
             The region to use for the storage backend.
         """
-        ...
 
     @property
     def endpoint_url(self) -> str | None:
@@ -142,7 +140,6 @@ class S3Options:
         str | None
             The endpoint URL configured for the storage backend.
         """
-        ...
 
     @endpoint_url.setter
     def endpoint_url(self, value: str | None) -> None:
@@ -154,7 +151,6 @@ class S3Options:
         value: str | None
             The endpoint URL to use for the storage backend.
         """
-        ...
 
     @property
     def allow_http(self) -> bool:
@@ -168,7 +164,6 @@ class S3Options:
         bool
             ``True`` when HTTP requests to the storage backend are permitted.
         """
-        ...
 
     @allow_http.setter
     def allow_http(self, value: bool) -> None:
@@ -180,7 +175,6 @@ class S3Options:
         value: bool
             ``True`` to allow HTTP requests to the storage backend, ``False`` otherwise.
         """
-        ...
 
     @property
     def anonymous(self) -> bool:
@@ -194,7 +188,6 @@ class S3Options:
         bool
             ``True`` when anonymous access is configured.
         """
-        ...
 
     @anonymous.setter
     def anonymous(self, value: bool) -> None:
@@ -206,7 +199,6 @@ class S3Options:
         value: bool
             ``True`` to perform unsigned requests, ``False`` to sign requests.
         """
-        ...
 
     @property
     def force_path_style(self) -> bool:
@@ -220,7 +212,6 @@ class S3Options:
         bool
             ``True`` when path-style addressing is forced.
         """
-        ...
 
     @force_path_style.setter
     def force_path_style(self, value: bool) -> None:
@@ -232,7 +223,6 @@ class S3Options:
         value: bool
             ``True`` to always use path-style addressing, ``False`` to allow virtual-host style.
         """
-        ...
 
     @property
     def network_stream_timeout_seconds(self) -> int | None:
@@ -246,7 +236,6 @@ class S3Options:
         int | None
             The timeout duration; ``0`` disables the timeout and ``None`` uses the default.
         """
-        ...
 
     @network_stream_timeout_seconds.setter
     def network_stream_timeout_seconds(self, value: int | None) -> None:
@@ -258,53 +247,38 @@ class S3Options:
         value: int | None
             Timeout duration in seconds. Use ``0`` to disable or ``None`` for the default.
         """
-        ...
 
 class ObjectStoreConfig:
     class InMemory:
         def __new__(cls) -> ObjectStoreConfig.InMemory: ...
-        def __repr__(self) -> str: ...
-        def __str__(self) -> str: ...
         def _repr_html_(self) -> str: ...
 
     class LocalFileSystem:
         def __new__(cls, path: str) -> ObjectStoreConfig.LocalFileSystem: ...
-        def __repr__(self) -> str: ...
-        def __str__(self) -> str: ...
         def _repr_html_(self) -> str: ...
 
     class S3Compatible:
         def __new__(cls, options: S3Options) -> ObjectStoreConfig.S3Compatible: ...
-        def __repr__(self) -> str: ...
-        def __str__(self) -> str: ...
         def _repr_html_(self) -> str: ...
 
     class S3:
         def __new__(cls, options: S3Options) -> ObjectStoreConfig.S3: ...
-        def __repr__(self) -> str: ...
-        def __str__(self) -> str: ...
         def _repr_html_(self) -> str: ...
 
     class Gcs:
         def __new__(
             cls, opts: Mapping[str, str] | None = None
         ) -> ObjectStoreConfig.Gcs: ...
-        def __repr__(self) -> str: ...
-        def __str__(self) -> str: ...
         def _repr_html_(self) -> str: ...
 
     class Azure:
         def __new__(
             cls, opts: Mapping[str, str] | None = None
         ) -> ObjectStoreConfig.Azure: ...
-        def __repr__(self) -> str: ...
-        def __str__(self) -> str: ...
         def _repr_html_(self) -> str: ...
 
     class Tigris:
         def __new__(cls, opts: S3Options) -> ObjectStoreConfig.Tigris: ...
-        def __repr__(self) -> str: ...
-        def __str__(self) -> str: ...
         def _repr_html_(self) -> str: ...
 
     class Http:
@@ -313,15 +287,11 @@ class ObjectStoreConfig:
             opts: Mapping[str, str] | None = None,
             headers: Mapping[str, str] | None = None,
         ) -> ObjectStoreConfig.Http: ...
-        def __repr__(self) -> str: ...
-        def __str__(self) -> str: ...
         def _repr_html_(self) -> str: ...
 
-    def __repr__(self) -> str: ...
-    def __str__(self) -> str: ...
     def _repr_html_(self) -> str: ...
 
-_AnyObjectStoreConfig = (
+type _AnyObjectStoreConfig = (
     ObjectStoreConfig.InMemory
     | ObjectStoreConfig.LocalFileSystem
     | ObjectStoreConfig.S3
@@ -355,7 +325,7 @@ class VirtualChunkContainer:
         url_prefix: str,
         store: _AnyObjectStoreConfig,
         name: str | None = None,
-    ) -> VirtualChunkContainer:
+    ) -> Self:
         """
         Create a new `VirtualChunkContainer` object
 
@@ -370,8 +340,6 @@ class VirtualChunkContainer:
             locations instead of full absolute URLs.
         """
 
-    def __repr__(self) -> str: ...
-    def __str__(self) -> str: ...
     def _repr_html_(self) -> str: ...
 
 class VirtualChunkSpec:
@@ -379,7 +347,6 @@ class VirtualChunkSpec:
     @property
     def index(self) -> list[int]:
         """The chunk index, in chunk coordinates space"""
-        ...
     @property
     def location(self) -> str:
         """The URL to the virtual chunk data, something like 's3://bucket/foo.nc'.
@@ -392,29 +359,24 @@ class VirtualChunkSpec:
         key) and a literal ``%``. For example, the key ``a?b#c`` must be written
         ``s3://bucket/a%3Fb%23c`` (and ``%`` as ``%25``).
         """
-        ...
     @property
     def offset(self) -> int:
         """The chunk offset within the pointed object, in bytes"""
-        ...
     @property
     def length(self) -> int:
         """The length of the chunk in bytes"""
-        ...
     @property
     def etag_checksum(self) -> str | None:
         """Optional object store e-tag for the containing object.
 
         Icechunk will refuse to serve data from this chunk if the etag has changed.
         """
-        ...
     @property
     def last_updated_at_checksum(self) -> datetime.datetime | None:
         """Optional timestamp for the containing object.
 
         Icechunk will refuse to serve data from this chunk if it has been modified in object store after this time.
         """
-        ...
 
     def __new__(
         cls,
@@ -424,7 +386,7 @@ class VirtualChunkSpec:
         length: int,
         etag_checksum: str | None = None,
         last_updated_at_checksum: datetime.datetime | None = None,
-    ) -> VirtualChunkSpec: ...
+    ) -> Self: ...
 
 class CompressionAlgorithm(Enum):
     """Enum for selecting the compression algorithm used by Icechunk to write its metadata files
@@ -437,7 +399,7 @@ class CompressionAlgorithm(Enum):
 
     Zstd = 0
 
-    def __new__(cls) -> CompressionAlgorithm: ...
+    def __new__(cls) -> Self: ...
     @staticmethod
     def default() -> CompressionAlgorithm:
         """
@@ -448,14 +410,13 @@ class CompressionAlgorithm(Enum):
         CompressionAlgorithm
             The default compression algorithm.
         """
-        ...
 
 class CompressionConfig:
     """Configuration for how Icechunk compresses its metadata files"""
 
     def __new__(
         cls, algorithm: CompressionAlgorithm | None = None, level: int | None = None
-    ) -> CompressionConfig:
+    ) -> Self:
         """
         Create a new `CompressionConfig` object
 
@@ -468,7 +429,6 @@ class CompressionConfig:
             The compression level to use.
             Default: 3
         """
-        ...
     @property
     def algorithm(self) -> CompressionAlgorithm | None:
         """
@@ -481,7 +441,6 @@ class CompressionConfig:
         CompressionAlgorithm | None
             The compression algorithm used by Icechunk to write its metadata files.
         """
-        ...
     @algorithm.setter
     def algorithm(self, value: CompressionAlgorithm | None) -> None:
         """
@@ -492,7 +451,6 @@ class CompressionConfig:
         value: CompressionAlgorithm | None
             The compression algorithm to use.
         """
-        ...
     @property
     def level(self) -> int | None:
         """
@@ -505,7 +463,6 @@ class CompressionConfig:
         int | None
             The compression level used by Icechunk to write its metadata files.
         """
-        ...
     @level.setter
     def level(self, value: int | None) -> None:
         """
@@ -516,7 +473,6 @@ class CompressionConfig:
         value: int | None
             The compression level to use.
         """
-        ...
     @staticmethod
     def default() -> CompressionConfig:
         """
@@ -537,7 +493,7 @@ class CachingConfig:
         num_transaction_changes: int | None = None,
         num_bytes_attributes: int | None = None,
         num_bytes_chunks: int | None = None,
-    ) -> CachingConfig:
+    ) -> Self:
         """
         Create a new `CachingConfig` object
 
@@ -559,9 +515,6 @@ class CachingConfig:
             The number of bytes of chunks to cache.
             Default: 0
         """
-        ...
-    def __repr__(self, /) -> str: ...
-    def __str__(self, /) -> str: ...
     def _repr_html_(self, /) -> str: ...
     @property
     def num_snapshot_nodes(self) -> int | None:
@@ -575,7 +528,6 @@ class CachingConfig:
         int | None
             The number of snapshot nodes to cache.
         """
-        ...
     @num_snapshot_nodes.setter
     def num_snapshot_nodes(self, value: int | None) -> None:
         """
@@ -586,7 +538,6 @@ class CachingConfig:
         value: int | None
             The number of snapshot nodes to cache.
         """
-        ...
     @property
     def num_chunk_refs(self) -> int | None:
         """
@@ -599,7 +550,6 @@ class CachingConfig:
         int | None
             The number of chunk references to cache.
         """
-        ...
     @num_chunk_refs.setter
     def num_chunk_refs(self, value: int | None) -> None:
         """
@@ -610,7 +560,6 @@ class CachingConfig:
         value: int | None
             The number of chunk references to cache.
         """
-        ...
     @property
     def num_transaction_changes(self) -> int | None:
         """
@@ -623,7 +572,6 @@ class CachingConfig:
         int | None
             The number of transaction changes to cache.
         """
-        ...
     @num_transaction_changes.setter
     def num_transaction_changes(self, value: int | None) -> None:
         """
@@ -634,7 +582,6 @@ class CachingConfig:
         value: int | None
             The number of transaction changes to cache.
         """
-        ...
     @property
     def num_bytes_attributes(self) -> int | None:
         """
@@ -647,7 +594,6 @@ class CachingConfig:
         int | None
             The number of bytes of attributes to cache.
         """
-        ...
     @num_bytes_attributes.setter
     def num_bytes_attributes(self, value: int | None) -> None:
         """
@@ -658,7 +604,6 @@ class CachingConfig:
         value: int | None
             The number of bytes of attributes to cache.
         """
-        ...
     @property
     def num_bytes_chunks(self) -> int | None:
         """
@@ -671,7 +616,6 @@ class CachingConfig:
         int | None
             The number of bytes of chunks to cache.
         """
-        ...
     @num_bytes_chunks.setter
     def num_bytes_chunks(self, value: int | None) -> None:
         """
@@ -682,7 +626,6 @@ class CachingConfig:
         value: int | None
             The number of bytes of chunks to cache.
         """
-        ...
 
 class ManifestPreloadCondition:
     """Configuration for conditions under which manifests will preload on session creation"""
@@ -692,20 +635,17 @@ class ManifestPreloadCondition:
         conditions: list[ManifestPreloadCondition],
     ) -> ManifestPreloadCondition:
         """Create a preload condition that matches if any of `conditions` matches"""
-        ...
     @staticmethod
     def and_conditions(
         conditions: list[ManifestPreloadCondition],
     ) -> ManifestPreloadCondition:
         """Create a preload condition that matches only if all passed `conditions` match"""
-        ...
     @staticmethod
     def path_matches(regex: str) -> ManifestPreloadCondition:
         """Create a preload condition that matches if the full path to the array matches the passed regex.
 
         Array paths are absolute, as in `/path/to/my/array`
         """
-        ...
     @staticmethod
     def name_matches(regex: str) -> ManifestPreloadCondition:
         """Create a preload condition that matches if the array's name matches the passed regex.
@@ -715,28 +655,22 @@ class ManifestPreloadCondition:
         name_matches(".*temp.*")
         ```
         """
-        ...
     @staticmethod
     def num_refs(from_refs: int | None, to_refs: int | None) -> ManifestPreloadCondition:
         """Create a preload condition that matches only if the number of chunk references in the manifest is within the given range.
 
         from_refs is inclusive, to_refs is exclusive.
         """
-        ...
     @staticmethod
     def true() -> ManifestPreloadCondition:
         """Create a preload condition that always matches any manifest"""
-        ...
     @staticmethod
     def false() -> ManifestPreloadCondition:
         """Create a preload condition that never matches any manifests"""
-        ...
     def __and__(self, other: ManifestPreloadCondition, /) -> ManifestPreloadCondition:
         """Create a preload condition that matches if both this condition and `other` match."""
-        ...
     def __or__(self, other: ManifestPreloadCondition, /) -> ManifestPreloadCondition:
         """Create a preload condition that matches if either this condition or `other` match."""
-        ...
 
 class ManifestPreloadConfig:
     """Configuration for how Icechunk manifest preload on session creation"""
@@ -746,7 +680,7 @@ class ManifestPreloadConfig:
         max_total_refs: int | None = None,
         preload_if: ManifestPreloadCondition | None = None,
         max_arrays_to_scan: int | None = None,
-    ) -> ManifestPreloadConfig:
+    ) -> Self:
         """
         Create a new `ManifestPreloadConfig` object
 
@@ -768,7 +702,6 @@ class ManifestPreloadConfig:
             Increase for repositories with many nested groups.
             Default: 50
         """
-        ...
     @property
     def max_total_refs(self) -> int | None:
         """
@@ -781,7 +714,6 @@ class ManifestPreloadConfig:
         int | None
             The maximum number of references to preload.
         """
-        ...
     @max_total_refs.setter
     def max_total_refs(self, value: int | None) -> None:
         """
@@ -792,7 +724,6 @@ class ManifestPreloadConfig:
         value: int | None
             The maximum number of references to preload.
         """
-        ...
     @property
     def preload_if(self) -> ManifestPreloadCondition | None:
         """
@@ -805,7 +736,6 @@ class ManifestPreloadConfig:
         ManifestPreloadCondition | None
             The condition under which manifests will be preloaded.
         """
-        ...
     @preload_if.setter
     def preload_if(self, value: ManifestPreloadCondition | None) -> None:
         """
@@ -816,7 +746,6 @@ class ManifestPreloadConfig:
         value: ManifestPreloadCondition | None
             The condition under which manifests will be preloaded.
         """
-        ...
     @property
     def max_arrays_to_scan(self) -> int | None:
         """
@@ -829,7 +758,6 @@ class ManifestPreloadConfig:
         int | None
             The maximum number of arrays to scan.
         """
-        ...
     @max_arrays_to_scan.setter
     def max_arrays_to_scan(self, value: int | None) -> None:
         """
@@ -840,7 +768,6 @@ class ManifestPreloadConfig:
         value: int | None
             The maximum number of arrays to scan.
         """
-        ...
 
 class ManifestSplitCondition:
     """Configuration for conditions under which manifests will be split into splits"""
@@ -850,20 +777,17 @@ class ManifestSplitCondition:
         conditions: list[ManifestSplitCondition],
     ) -> ManifestSplitCondition:
         """Create a splitting condition that matches if any of `conditions` matches"""
-        ...
     @staticmethod
     def and_conditions(
         conditions: list[ManifestSplitCondition],
     ) -> ManifestSplitCondition:
         """Create a splitting condition that matches only if all passed `conditions` match"""
-        ...
     @staticmethod
     def path_matches(regex: str) -> ManifestSplitCondition:
         """Create a splitting condition that matches if the full path to the array matches the passed regex.
 
         Array paths are absolute, as in `/path/to/my/array`
         """
-        ...
     @staticmethod
     def name_matches(regex: str) -> ManifestSplitCondition:
         """Create a splitting condition that matches if the array's name matches the passed regex.
@@ -873,20 +797,16 @@ class ManifestSplitCondition:
         name_matches(".*temp.*")
         ```
         """
-        ...
 
     @staticmethod
     def AnyArray() -> ManifestSplitCondition:
         """Create a splitting condition that matches any array."""
-        ...
 
     def __or__(self, other: ManifestSplitCondition, /) -> ManifestSplitCondition:
         """Create a splitting condition that matches if either this condition or `other` matches"""
-        ...
 
     def __and__(self, other: ManifestSplitCondition, /) -> ManifestSplitCondition:
         """Create a splitting condition that matches if both this condition and `other` match"""
-        ...
 
 class ManifestSplitDimCondition:
     """Conditions for specifying dimensions along which to shard manifests."""
@@ -945,7 +865,7 @@ class ManifestSplittingConfig:
             int,
         ],
     ]: ...
-    def __new__(cls, split_sizes: _SplitSizes | None = None) -> ManifestSplittingConfig:
+    def __new__(cls, split_sizes: _SplitSizes | None = None) -> Self:
         """Configuration for how Icechunk manifests will be split.
 
         Parameters
@@ -966,7 +886,6 @@ class ManifestSplittingConfig:
         ...     }
         ... )
         """
-        pass
 
     @property
     def split_sizes(self) -> _SplitSizes:
@@ -980,7 +899,6 @@ class ManifestSplittingConfig:
         tuple[tuple[ManifestSplitCondition, tuple[tuple[ManifestSplitDimCondition, int], ...]], ...]
             The configuration for how Icechunk manifests will be split.
         """
-        ...
 
     @split_sizes.setter
     def split_sizes(self, value: _SplitSizes) -> None:
@@ -992,7 +910,6 @@ class ManifestSplittingConfig:
         value: tuple[tuple[ManifestSplitCondition, tuple[tuple[ManifestSplitDimCondition, int], ...]], ...]
             The configuration for how Icechunk manifests will be preloaded.
         """
-        ...
 
 class ManifestVirtualChunkLocationCompressionConfig:
     """Configuration for zstd dictionary-based compression of virtual chunk location URLs in manifests."""
@@ -1004,7 +921,7 @@ class ManifestVirtualChunkLocationCompressionConfig:
         dictionary_max_training_samples: int | None = None,
         dictionary_max_size_bytes: int | None = None,
         compression_level: int | None = None,
-    ) -> ManifestVirtualChunkLocationCompressionConfig:
+    ) -> Self:
         """
         Create a new `ManifestVirtualChunkLocationCompressionConfig` object
 
@@ -1023,7 +940,6 @@ class ManifestVirtualChunkLocationCompressionConfig:
             Zstd compression level.
             Default: 3
         """
-        ...
 
     @property
     def min_num_chunks(self) -> int | None:
@@ -1037,7 +953,6 @@ class ManifestVirtualChunkLocationCompressionConfig:
         int | None
             The threshold below which virtual chunk locations are not compressed.
         """
-        ...
     @min_num_chunks.setter
     def min_num_chunks(self, value: int | None) -> None: ...
     @property
@@ -1052,7 +967,6 @@ class ManifestVirtualChunkLocationCompressionConfig:
         int | None
             The maximum number of URL samples used during dictionary training.
         """
-        ...
     @dictionary_max_training_samples.setter
     def dictionary_max_training_samples(self, value: int | None) -> None: ...
     @property
@@ -1067,7 +981,6 @@ class ManifestVirtualChunkLocationCompressionConfig:
         int | None
             The maximum dictionary size in bytes.
         """
-        ...
     @dictionary_max_size_bytes.setter
     def dictionary_max_size_bytes(self, value: int | None) -> None: ...
     @property
@@ -1082,7 +995,6 @@ class ManifestVirtualChunkLocationCompressionConfig:
         int | None
             The zstd compression level.
         """
-        ...
     @compression_level.setter
     def compression_level(self, value: int | None) -> None: ...
 
@@ -1096,7 +1008,7 @@ class ManifestConfig:
         virtual_chunk_location_compression: ManifestVirtualChunkLocationCompressionConfig
         | None = None,
         max_concurrent_manifest_fetches_during_commit: int | None = None,
-    ) -> ManifestConfig:
+    ) -> Self:
         """
         Create a new `ManifestConfig` object
 
@@ -1119,7 +1031,6 @@ class ManifestConfig:
             commit, amend, flush, or rewrite_manifests.
             Default: 1
         """
-        ...
     @property
     def preload(self) -> ManifestPreloadConfig | None:
         """
@@ -1132,7 +1043,6 @@ class ManifestConfig:
         ManifestPreloadConfig | None
             The configuration for how Icechunk manifests will be preloaded.
         """
-        ...
     @preload.setter
     def preload(self, value: ManifestPreloadConfig | None) -> None:
         """
@@ -1143,7 +1053,6 @@ class ManifestConfig:
         value: ManifestPreloadConfig | None
             The configuration for how Icechunk manifests will be preloaded.
         """
-        ...
 
     @property
     def splitting(self) -> ManifestSplittingConfig | None:
@@ -1157,7 +1066,6 @@ class ManifestConfig:
         ManifestSplittingConfig | None
             The configuration for how Icechunk manifests will be split.
         """
-        ...
 
     @splitting.setter
     def splitting(self, value: ManifestSplittingConfig | None) -> None:
@@ -1169,7 +1077,6 @@ class ManifestConfig:
         value: ManifestSplittingConfig | None
             The configuration for how Icechunk manifests will be split.
         """
-        ...
 
     @property
     def virtual_chunk_location_compression(
@@ -1185,7 +1092,6 @@ class ManifestConfig:
         ManifestVirtualChunkLocationCompressionConfig | None
             The compression configuration.
         """
-        ...
 
     @virtual_chunk_location_compression.setter
     def virtual_chunk_location_compression(
@@ -1199,7 +1105,6 @@ class ManifestConfig:
         value: ManifestVirtualChunkLocationCompressionConfig | None
             The compression configuration.
         """
-        ...
 
     @property
     def max_concurrent_manifest_fetches_during_commit(self) -> int | None:
@@ -1214,7 +1119,6 @@ class ManifestConfig:
         int | None
             The number of manifests fetched and updated concurrently during a commit.
         """
-        ...
 
     @max_concurrent_manifest_fetches_during_commit.setter
     def max_concurrent_manifest_fetches_during_commit(self, value: int | None) -> None:
@@ -1227,7 +1131,6 @@ class ManifestConfig:
         value: int | None
             The number of manifests to fetch and update concurrently.
         """
-        ...
 
 class StorageRetriesSettings:
     """Configuration for how Icechunk retries requests.
@@ -1239,7 +1142,7 @@ class StorageRetriesSettings:
         max_tries: int | None = None,
         initial_backoff_ms: int | None = None,
         max_backoff_ms: int | None = None,
-    ) -> StorageRetriesSettings:
+    ) -> Self:
         """
         Create a new `StorageRetriesSettings` object
 
@@ -1255,7 +1158,6 @@ class StorageRetriesSettings:
             The limit to backoff duration in milliseconds.
             Default: 180,000 (3 minutes)
         """
-        ...
     @property
     def max_tries(self) -> int | None:
         """
@@ -1268,7 +1170,6 @@ class StorageRetriesSettings:
         int | None
             The maximum number of tries.
         """
-        ...
     @max_tries.setter
     def max_tries(self, value: int | None) -> None:
         """
@@ -1279,7 +1180,6 @@ class StorageRetriesSettings:
         value: int | None
             The maximum number of tries
         """
-        ...
     @property
     def initial_backoff_ms(self) -> int | None:
         """
@@ -1292,7 +1192,6 @@ class StorageRetriesSettings:
         int | None
             The initial backoff duration in milliseconds.
         """
-        ...
     @initial_backoff_ms.setter
     def initial_backoff_ms(self, value: int | None) -> None:
         """
@@ -1303,7 +1202,6 @@ class StorageRetriesSettings:
         value: int | None
             The initial backoff duration in milliseconds.
         """
-        ...
     @property
     def max_backoff_ms(self) -> int | None:
         """
@@ -1316,7 +1214,6 @@ class StorageRetriesSettings:
         int | None
             The maximum backoff duration in milliseconds.
         """
-        ...
     @max_backoff_ms.setter
     def max_backoff_ms(self, value: int | None) -> None:
         """
@@ -1327,7 +1224,6 @@ class StorageRetriesSettings:
         value: int | None
             The maximum backoff duration in milliseconds.
         """
-        ...
 
 @final
 class StorageTimeoutSettings:
@@ -1364,7 +1260,6 @@ class StorageTimeoutSettings:
             The timeout for a single attempt of an operation in milliseconds.
             Default: None (AWS SDK default)
         """
-        ...
     @property
     def connect_timeout_ms(self) -> int | None:
         """
@@ -1377,7 +1272,6 @@ class StorageTimeoutSettings:
         int | None
             The connect timeout in milliseconds.
         """
-        ...
     @connect_timeout_ms.setter
     def connect_timeout_ms(self, value: int | None) -> None: ...
     @property
@@ -1392,7 +1286,6 @@ class StorageTimeoutSettings:
         int | None
             The read timeout in milliseconds.
         """
-        ...
     @read_timeout_ms.setter
     def read_timeout_ms(self, value: int | None) -> None: ...
     @property
@@ -1407,7 +1300,6 @@ class StorageTimeoutSettings:
         int | None
             The operation timeout in milliseconds.
         """
-        ...
     @operation_timeout_ms.setter
     def operation_timeout_ms(self, value: int | None) -> None: ...
     @property
@@ -1422,7 +1314,6 @@ class StorageTimeoutSettings:
         int | None
             The per-attempt operation timeout in milliseconds.
         """
-        ...
     @operation_attempt_timeout_ms.setter
     def operation_attempt_timeout_ms(self, value: int | None) -> None: ...
 
@@ -1433,7 +1324,7 @@ class StorageConcurrencySettings:
         cls,
         max_concurrent_requests_for_object: int | None = None,
         ideal_concurrent_request_size: int | None = None,
-    ) -> StorageConcurrencySettings:
+    ) -> Self:
         """
         Create a new `StorageConcurrencySettings` object
 
@@ -1446,7 +1337,6 @@ class StorageConcurrencySettings:
             The ideal concurrent request size in bytes.
             Default: 12,582,912 (12 MB)
         """
-        ...
     @property
     def max_concurrent_requests_for_object(self) -> int | None:
         """
@@ -1459,7 +1349,6 @@ class StorageConcurrencySettings:
         int | None
             The maximum number of concurrent requests for an object.
         """
-        ...
     @max_concurrent_requests_for_object.setter
     def max_concurrent_requests_for_object(self, value: int | None) -> None:
         """
@@ -1470,7 +1359,6 @@ class StorageConcurrencySettings:
         value: int | None
             The maximum number of concurrent requests for an object.
         """
-        ...
     @property
     def ideal_concurrent_request_size(self) -> int | None:
         """
@@ -1483,7 +1371,6 @@ class StorageConcurrencySettings:
         int | None
             The ideal concurrent request size in bytes.
         """
-        ...
     @ideal_concurrent_request_size.setter
     def ideal_concurrent_request_size(self, value: int | None) -> None:
         """
@@ -1494,7 +1381,6 @@ class StorageConcurrencySettings:
         value: int | None
             The ideal concurrent request size.
         """
-        ...
 
 class StorageSettings:
     """Configuration for how Icechunk uses its Storage instance"""
@@ -1511,7 +1397,7 @@ class StorageSettings:
         chunks_storage_class: str | None = None,
         minimum_size_for_multipart_upload: int | None = None,
         timeouts: StorageTimeoutSettings | None = None,
-    ) -> StorageSettings:
+    ) -> Self:
         """
         Create a new `StorageSettings` object
 
@@ -1571,9 +1457,6 @@ class StorageSettings:
             timeouts use the AWS SDK defaults.
             Default: None
         """
-        ...
-    def __repr__(self, /) -> str: ...
-    def __str__(self, /) -> str: ...
     def _repr_html_(self, /) -> str: ...
     @property
     def concurrency(self) -> StorageConcurrencySettings | None:
@@ -1626,7 +1509,6 @@ class StorageSettings:
 
         Default: True
         """
-        ...
 
     @unsafe_use_conditional_update.setter
     def unsafe_use_conditional_update(self, value: bool) -> None: ...
@@ -1636,7 +1518,6 @@ class StorageSettings:
 
         Default: True
         """
-        ...
 
     @unsafe_use_conditional_create.setter
     def unsafe_use_conditional_create(self, value: bool) -> None: ...
@@ -1646,7 +1527,6 @@ class StorageSettings:
 
         Default: True
         """
-        ...
 
     @unsafe_use_metadata.setter
     def unsafe_use_metadata(self, value: bool) -> None: ...
@@ -1656,7 +1536,6 @@ class StorageSettings:
 
         Default: None
         """
-        ...
 
     @storage_class.setter
     def storage_class(self, value: str) -> None: ...
@@ -1666,7 +1545,6 @@ class StorageSettings:
 
         Default: None (falls back to `storage_class`)
         """
-        ...
 
     @metadata_storage_class.setter
     def metadata_storage_class(self, value: str) -> None: ...
@@ -1676,7 +1554,6 @@ class StorageSettings:
 
         Default: None (falls back to `storage_class`)
         """
-        ...
 
     @chunks_storage_class.setter
     def chunks_storage_class(self, value: str) -> None: ...
@@ -1686,7 +1563,6 @@ class StorageSettings:
 
         Default: 104,857,600 (100 MB)
         """
-        ...
 
     @minimum_size_for_multipart_upload.setter
     def minimum_size_for_multipart_upload(self, value: int) -> None: ...
@@ -1697,7 +1573,7 @@ class RepoUpdateRetryConfig:
     def __new__(
         cls,
         default: StorageRetriesSettings | None = None,
-    ) -> RepoUpdateRetryConfig:
+    ) -> Self:
         """
         Create a new `RepoUpdateRetryConfig` object
 
@@ -1709,7 +1585,6 @@ class RepoUpdateRetryConfig:
             `max_backoff_ms`=30,000.
             Default: None
         """
-        ...
     @property
     def default(self) -> StorageRetriesSettings | None:
         """
@@ -1722,7 +1597,6 @@ class RepoUpdateRetryConfig:
         StorageRetriesSettings | None
             The retry settings used for repo info updates.
         """
-        ...
     @default.setter
     def default(self, value: StorageRetriesSettings | None) -> None: ...
 
@@ -1741,7 +1615,8 @@ class RepositoryConfig:
         manifest: ManifestConfig | None = None,
         repo_update_retries: RepoUpdateRetryConfig | None = None,
         num_updates_per_repo_info_file: int | None = None,
-    ) -> RepositoryConfig:
+        max_concurrent_decodes: int | None = None,
+    ) -> Self:
         """
         Create a new `RepositoryConfig` object
 
@@ -1760,6 +1635,10 @@ class RepositoryConfig:
         max_concurrent_requests: int | None
             The maximum number of concurrent HTTP requests Icechunk will do for this repo.
             Default: 256
+        max_concurrent_decodes: int | None
+            The maximum number of metadata files Icechunk will decompress and parse at the
+            same time for this repo.
+            Default: the number of CPUs available to the process
         caching: CachingConfig | None
             The caching configuration for the repository. When None, the default
             `CachingConfig` is used.
@@ -1786,14 +1665,10 @@ class RepositoryConfig:
             reconstruct the ops log.
             Default: 1,000
         """
-        ...
-    def __repr__(self, /) -> str: ...
-    def __str__(self, /) -> str: ...
     def _repr_html_(self, /) -> str: ...
     @staticmethod
     def default() -> RepositoryConfig:
         """Create a default repository config instance"""
-        ...
     @property
     def inline_chunk_threshold_bytes(self) -> int | None:
         """
@@ -1801,13 +1676,11 @@ class RepositoryConfig:
 
         Default: 512
         """
-        ...
     @inline_chunk_threshold_bytes.setter
     def inline_chunk_threshold_bytes(self, value: int | None) -> None:
         """
         Set the maximum size of a chunk that will be stored inline in the repository. Chunks larger than this size will be written to storage.
         """
-        ...
     @property
     def get_partial_values_concurrency(self) -> int | None:
         """
@@ -1820,7 +1693,6 @@ class RepositoryConfig:
         int | None
             The number of concurrent requests to make when getting partial values from storage.
         """
-        ...
     @get_partial_values_concurrency.setter
     def get_partial_values_concurrency(self, value: int | None) -> None:
         """
@@ -1831,7 +1703,6 @@ class RepositoryConfig:
         value: int | None
             The number of concurrent requests to make when getting partial values from storage.
         """
-        ...
     @property
     def compression(self) -> CompressionConfig | None:
         """
@@ -1844,7 +1715,6 @@ class RepositoryConfig:
         CompressionConfig | None
             The compression configuration for the repository.
         """
-        ...
     @compression.setter
     def compression(self, value: CompressionConfig | None) -> None:
         """
@@ -1855,7 +1725,6 @@ class RepositoryConfig:
         value: CompressionConfig | None
             The compression configuration for the repository.
         """
-        ...
     @property
     def max_concurrent_requests(self) -> int | None:
         """
@@ -1868,7 +1737,6 @@ class RepositoryConfig:
         int | None
             The maximum number of concurrent HTTP requests Icechunk will do for this repo.
         """
-        ...
     @max_concurrent_requests.setter
     def max_concurrent_requests(self, value: int | None) -> None:
         """
@@ -1879,7 +1747,30 @@ class RepositoryConfig:
         value: int | None
             The maximum allowed.
         """
-        ...
+    @property
+    def max_concurrent_decodes(self) -> int | None:
+        """
+        The maximum number of metadata files Icechunk will decompress and parse at the same
+        time for this repo.
+
+        Default: the number of CPUs available to the process
+
+        Returns
+        -------
+        int | None
+            The maximum number of concurrent metadata decodes for this repo.
+        """
+    @max_concurrent_decodes.setter
+    def max_concurrent_decodes(self, value: int | None) -> None:
+        """
+        Set the maximum number of metadata files Icechunk should decompress and parse at
+        the same time for this repo.
+
+        Parameters
+        ----------
+        value: int | None
+            The maximum allowed.
+        """
     @property
     def caching(self) -> CachingConfig | None:
         """
@@ -1892,7 +1783,6 @@ class RepositoryConfig:
         CachingConfig | None
             The caching configuration for the repository.
         """
-        ...
     @caching.setter
     def caching(self, value: CachingConfig | None) -> None:
         """
@@ -1903,7 +1793,6 @@ class RepositoryConfig:
         value: CachingConfig | None
             The caching configuration for the repository.
         """
-        ...
     @property
     def storage(self) -> StorageSettings | None:
         """
@@ -1916,7 +1805,6 @@ class RepositoryConfig:
         StorageSettings | None
             The storage configuration for the repository.
         """
-        ...
     @storage.setter
     def storage(self, value: StorageSettings | None) -> None:
         """
@@ -1927,7 +1815,6 @@ class RepositoryConfig:
         value: StorageSettings | None
             The storage configuration for the repository.
         """
-        ...
     @property
     def manifest(self) -> ManifestConfig | None:
         """
@@ -1940,7 +1827,6 @@ class RepositoryConfig:
         ManifestConfig | None
             The manifest configuration for the repository.
         """
-        ...
     @manifest.setter
     def manifest(self, value: ManifestConfig | None) -> None:
         """
@@ -1951,7 +1837,6 @@ class RepositoryConfig:
         value: ManifestConfig | None
             The manifest configuration for the repository.
         """
-        ...
     @property
     def virtual_chunk_containers(self) -> dict[str, VirtualChunkContainer] | None:
         """
@@ -1964,7 +1849,6 @@ class RepositoryConfig:
         dict[str, VirtualChunkContainer] | None
             The virtual chunk containers for the repository.
         """
-        ...
     def get_virtual_chunk_container(self, name: str) -> VirtualChunkContainer | None:
         """
         Get the virtual chunk container for the repository associated with the given name.
@@ -1979,7 +1863,6 @@ class RepositoryConfig:
         VirtualChunkContainer | None
             The virtual chunk container for the repository associated with the given name.
         """
-        ...
     def set_virtual_chunk_container(self, cont: VirtualChunkContainer) -> None:
         """
         Add or update a virtual chunk container in the repository configuration.
@@ -1993,19 +1876,16 @@ class RepositoryConfig:
         cont: VirtualChunkContainer
             The virtual chunk container to set.
         """
-        ...
     def clear_virtual_chunk_containers(self) -> None:
         """
         Clear all virtual chunk containers from the repository.
         """
-        ...
     @property
     def repo_update_retries(self) -> RepoUpdateRetryConfig | None:
         """Retry configuration for repo info update operations.
 
         Default: None (uses the default `RepoUpdateRetryConfig`)
         """
-        ...
     @repo_update_retries.setter
     def repo_update_retries(self, value: RepoUpdateRetryConfig | None) -> None: ...
     @property
@@ -2017,7 +1897,6 @@ class RepositoryConfig:
 
         Default: 1,000
         """
-        ...
     @num_updates_per_repo_info_file.setter
     def num_updates_per_repo_info_file(self, value: int | None) -> None: ...
     def merge(self, other: RepositoryConfig) -> RepositoryConfig:
@@ -2038,7 +1917,6 @@ class RepositoryConfig:
         RepositoryConfig
             A new merged configuration.
         """
-        ...
 
 class Diff:
     """The result of comparing two snapshots"""
@@ -2046,57 +1924,46 @@ class Diff:
         """
         Returns True if the diff contains no changes.
         """
-        ...
     @property
     def new_groups(self) -> set[str]:
         """
         The groups that were added to the target ref.
         """
-        ...
     @property
     def new_arrays(self) -> set[str]:
         """
         The arrays that were added to the target ref.
         """
-        ...
     @property
     def deleted_groups(self) -> set[str]:
         """
         The groups that were deleted in the target ref.
         """
-        ...
     @property
     def deleted_arrays(self) -> set[str]:
         """
         The arrays that were deleted in the target ref.
         """
-        ...
     @property
     def updated_groups(self) -> set[str]:
         """
         The groups that were updated via zarr metadata in the target ref.
         """
-        ...
     @property
     def updated_arrays(self) -> set[str]:
         """
         The arrays that were updated via zarr metadata in the target ref.
         """
-        ...
     @property
     def updated_chunks(self) -> dict[str, list[list[int]]]:
         """
         The chunks indices that had data updated in the target ref, keyed by the path to the array.
         """
-        ...
     @property
     def moved_nodes(self) -> list[tuple[str, str]]:
         """
         The list of node moves, in order of application, as tuples (from_path, to_path).
         """
-        ...
-    def __repr__(self) -> str: ...
-    def __str__(self) -> str: ...
     def _repr_html_(self) -> str: ...
 
 class GCSummary:
@@ -2106,39 +1973,54 @@ class GCSummary:
         """
         How many bytes were deleted.
         """
-        ...
     @property
     def chunks_deleted(self) -> int:
         """
         How many chunks were deleted.
         """
-        ...
     @property
     def manifests_deleted(self) -> int:
         """
         How many manifests were deleted.
         """
-        ...
     @property
     def snapshots_deleted(self) -> int:
         """
         How many snapshots were deleted.
         """
-        ...
     @property
     def attributes_deleted(self) -> int:
         """
         How many attributes were deleted.
         """
-        ...
     @property
     def transaction_logs_deleted(self) -> int:
         """
         How many transaction logs were deleted.
         """
-        ...
-    def __repr__(self) -> str: ...
-    def __str__(self) -> str: ...
+    @property
+    def objects_failed_to_delete(self) -> int:
+        """
+        How many objects could not be deleted because the delete request failed.
+        They remain garbage for the next run.
+        """
+    @property
+    def throttled_batches(self) -> int:
+        """
+        How many delete requests the store throttled. Each one was retried
+        after a pause, and none of them counts as a failure.
+        """
+    @property
+    def delete_errors(self) -> list[str]:
+        """
+        The first distinct delete error messages, at most ten.
+        """
+    @property
+    def skipped_phases(self) -> list[str]:
+        """
+        Delete phases skipped because an earlier phase had failures, in order.
+        Possible values: "transaction_logs", "manifests", "chunks".
+        """
     def _repr_html_(self) -> str: ...
 
 @final
@@ -2182,9 +2064,6 @@ class RepoStatus:
         limited_availability_reason: str | None
             An optional reason for limited availability.
         """
-        ...
-    def __repr__(self) -> str: ...
-    def __str__(self) -> str: ...
     def _repr_html_(self) -> str: ...
 
 @final
@@ -2209,8 +2088,6 @@ class Update:
     def updated_at(self) -> datetime.datetime: ...
     @property
     def backup_path(self) -> str | None: ...
-    def __repr__(self) -> str: ...
-    def __str__(self) -> str: ...
     def _repr_html_(self) -> str: ...
 
 class UpdateType:
@@ -2255,13 +2132,9 @@ class UpdateType:
     class ConfigChanged(UpdateType):
         """The repository configuration was changed."""
 
-        ...
-
     @final
     class ExpirationRan(UpdateType):
         """Snapshot expiration was run."""
-
-        ...
 
     @final
     class FeatureFlagChanged(UpdateType):
@@ -2275,13 +2148,9 @@ class UpdateType:
     class GCRan(UpdateType):
         """Garbage collection was run."""
 
-        ...
-
     @final
     class MetadataChanged(UpdateType):
         """Repository metadata was changed."""
-
-        ...
 
     @final
     class NewCommit(UpdateType):
@@ -2300,8 +2169,6 @@ class UpdateType:
     @final
     class RepoInitialized(UpdateType):
         """The repository was initialized."""
-
-        ...
 
     @final
     class RepoMigrated(UpdateType):
@@ -2342,28 +2209,21 @@ class FeatureFlag:
     def setting(self) -> bool | None: ...
     @property
     def enabled(self) -> bool: ...
-    def __repr__(self) -> str: ...
-    def __str__(self) -> str: ...
     def _repr_html_(self) -> str: ...
 
 class ManifestFileInfo:
     """Manifest file metadata"""
 
-    def __repr__(self, /) -> str: ...
-    def __str__(self, /) -> str: ...
     def _repr_html_(self, /) -> str: ...
     @property
     def id(self) -> str:
         """The manifest id"""
-        ...
     @property
     def size_bytes(self) -> int:
         """The size in bytes of the"""
-        ...
     @property
     def num_chunk_refs(self) -> int:
         """The number of chunk references contained in this manifest"""
-        ...
 
 @final
 @total_ordering
@@ -2625,7 +2485,11 @@ class PyRepository:
         dry_run: bool = False,
         max_snapshots_in_memory: int = 50,
         max_compressed_manifest_mem_bytes: int = 512 * 1024 * 1024,
+        max_decoded_manifest_mem_bytes: int = 4 * 1024 * 1024 * 1024,
         max_concurrent_manifest_fetches: int = 500,
+        max_concurrent_deletes: int = 10,
+        max_consecutive_delete_failures: int = 50,
+        max_concurrent_listings: int | None = None,
     ) -> GCSummary: ...
     async def garbage_collect_async(
         self,
@@ -2634,13 +2498,18 @@ class PyRepository:
         dry_run: bool = False,
         max_snapshots_in_memory: int = 50,
         max_compressed_manifest_mem_bytes: int = 512 * 1024 * 1024,
+        max_decoded_manifest_mem_bytes: int = 4 * 1024 * 1024 * 1024,
         max_concurrent_manifest_fetches: int = 500,
+        max_concurrent_deletes: int = 10,
+        max_consecutive_delete_failures: int = 50,
+        max_concurrent_listings: int | None = None,
     ) -> GCSummary: ...
     def chunk_storage_stats(
         self,
         *,
         max_snapshots_in_memory: int = 50,
         max_compressed_manifest_mem_bytes: int = 512 * 1024 * 1024,
+        max_decoded_manifest_mem_bytes: int = 4 * 1024 * 1024 * 1024,
         max_concurrent_manifest_fetches: int = 500,
     ) -> ChunkStorageStats: ...
     async def chunk_storage_stats_async(
@@ -2648,6 +2517,7 @@ class PyRepository:
         *,
         max_snapshots_in_memory: int = 50,
         max_compressed_manifest_mem_bytes: int = 512 * 1024 * 1024,
+        max_decoded_manifest_mem_bytes: int = 4 * 1024 * 1024 * 1024,
         max_concurrent_manifest_fetches: int = 500,
     ) -> ChunkStorageStats: ...
     def inspect_snapshot(self, snapshot_id: str, *, pretty: bool = True) -> str: ...
@@ -2760,7 +2630,6 @@ class PySession:
             ``backward`` returns ``None`` (out of bounds) or points to a position
             with no chunk, that position is reset to the fill value.
         """
-        ...
     def shift_array(self, array_path: str, chunk_offset: Iterable[int]) -> None: ...
     async def move_node_async(self, from_path: str, to_path: str) -> None: ...
     def all_virtual_chunk_locations(self) -> list[str]: ...
@@ -2935,31 +2804,24 @@ class SnapshotInfo:
     @property
     def id(self) -> str:
         """The snapshot ID"""
-        ...
     @property
     def parent_id(self) -> str | None:
         """The snapshot ID"""
-        ...
     @property
     def written_at(self) -> datetime.datetime:
         """
         The timestamp when the snapshot was written
         """
-        ...
     @property
     def message(self) -> str:
         """
         The commit message of the snapshot
         """
-        ...
     @property
     def metadata(self) -> dict[str, Any]:
         """
         The metadata of the snapshot
         """
-        ...
-    def __repr__(self) -> str: ...
-    def __str__(self) -> str: ...
     def _repr_html_(self) -> str: ...
 
 @final
@@ -2974,11 +2836,8 @@ class AncestryGraph:
     Note: only commits reachable from branches are included. Anonymous/detached
     snapshots are not attached to any branch and will not appear.
     """
-    def __str__(self) -> str: ...
-    def __repr__(self) -> str: ...
     def _repr_svg_(self) -> str:
         """Return a raw SVG string for Jupyter notebooks."""
-        ...
 
 class S3StaticCredentials:
     """Credentials for an S3 storage backend
@@ -3005,7 +2864,7 @@ class S3StaticCredentials:
         secret_access_key: str,
         session_token: str | None = None,
         expires_after: datetime.datetime | None = None,
-    ) -> S3StaticCredentials:
+    ) -> Self:
         """
         Create a new `S3StaticCredentials` object
 
@@ -3020,7 +2879,6 @@ class S3StaticCredentials:
         expires_after: datetime.datetime | None
             Optional, the expiration time of the credentials.
         """
-        ...
 
 class S3Credentials:
     """Credentials for an S3 storage backend"""
@@ -3042,7 +2900,6 @@ class S3Credentials:
             credentials: S3StaticCredentials
                 The credentials to use for authentication.
             """
-            ...
 
     class Refreshable:
         """Allows for an outside authority to pass in a function that can be used to provide credentials.
@@ -3062,9 +2919,8 @@ class S3Credentials:
                 The initial credentials. They will be returned the first time credentials
                 are requested and then deleted.
             """
-            ...
 
-_AnyS3Credential = (
+type _AnyS3Credential = (
     S3Credentials.Static
     | S3Credentials.Anonymous
     | S3Credentials.FromEnv
@@ -3079,7 +2935,7 @@ class GcsBearerCredential:
 
     def __new__(
         cls, bearer: str, *, expires_after: datetime.datetime | None = None
-    ) -> GcsBearerCredential:
+    ) -> Self:
         """Create a GcsBearerCredential object
 
         Parameters
@@ -3107,7 +2963,6 @@ class GcsStaticCredentials:
             path: str
                 The path to the service account json file.
             """
-            ...
 
     class ServiceAccountKey:
         """Credentials for a google cloud storage backend using a serialized service account key"""
@@ -3119,7 +2974,6 @@ class GcsStaticCredentials:
             key: str
                 The serialized service account key.
             """
-            ...
 
     class ApplicationCredentials:
         """Credentials for a google cloud storage backend using application default credentials"""
@@ -3131,7 +2985,6 @@ class GcsStaticCredentials:
             path: str
                 The path to the application default credentials (ADC) file.
             """
-            ...
 
     class BearerToken:
         """Credentials for a google cloud storage backend using a bearer token"""
@@ -3143,9 +2996,8 @@ class GcsStaticCredentials:
             token: str
                 The bearer token to use for authentication.
             """
-            ...
 
-_AnyGcsStaticCredential = (
+type _AnyGcsStaticCredential = (
     GcsStaticCredentials.ServiceAccount
     | GcsStaticCredentials.ServiceAccountKey
     | GcsStaticCredentials.ApplicationCredentials
@@ -3180,7 +3032,7 @@ class GcsCredentials:
             cls, pickled_function: bytes, current: GcsBearerCredential | None = None
         ) -> GcsCredentials.Refreshable: ...
 
-_AnyGcsCredential = (
+type _AnyGcsCredential = (
     GcsCredentials.Anonymous
     | GcsCredentials.FromEnv
     | GcsCredentials.Static
@@ -3208,7 +3060,9 @@ class AzureRefreshableCredential:
             cls, bearer: str, *, expires_after: datetime.datetime | None = None
         ) -> AzureRefreshableCredential.BearerToken: ...
 
-_AnyAzureRefreshableCredential = (
+# The annotation of azure_refreshable_credentials needs this union: see
+# https://github.com/earth-mover/icechunk/issues/2137.
+type _AnyAzureRefreshableCredential = (  # noqa: PYI047
     AzureRefreshableCredential.AccessKey
     | AzureRefreshableCredential.SasToken
     | AzureRefreshableCredential.BearerToken
@@ -3226,7 +3080,6 @@ class AzureStaticCredentials:
             key: str
                 The access key to use for authentication.
             """
-            ...
 
     class SasToken:
         """Credentials for an azure storage backend using a shared access signature token"""
@@ -3238,7 +3091,6 @@ class AzureStaticCredentials:
             token: str
                 The shared access signature token to use for authentication.
             """
-            ...
 
     class BearerToken:
         """Credentials for an azure storage backend using a bearer token"""
@@ -3250,9 +3102,8 @@ class AzureStaticCredentials:
             token: str
                 The bearer token to use for authentication.
             """
-            ...
 
-_AnyAzureStaticCredential = (
+type _AnyAzureStaticCredential = (
     AzureStaticCredentials.AccessKey
     | AzureStaticCredentials.SasToken
     | AzureStaticCredentials.BearerToken
@@ -3288,7 +3139,7 @@ class AzureCredentials:
             current: AzureRefreshableCredential | None = None,
         ) -> AzureCredentials.Refreshable: ...
 
-_AnyAzureCredential = (
+type _AnyAzureCredential = (
     AzureCredentials.Anonymous
     | AzureCredentials.FromEnv
     | AzureCredentials.Static
@@ -3318,7 +3169,7 @@ class Credentials:
 
         def __new__(cls) -> Credentials.HttpAccess: ...
 
-_AnyCredential = (
+type _AnyCredential = (
     Credentials.S3
     | Credentials.Gcs
     | Credentials.Azure
@@ -3509,8 +3360,6 @@ class Storage:
         cls,
         base_url: str,
     ) -> Storage: ...
-    def __repr__(self) -> str: ...
-    def __str__(self) -> str: ...
     def _repr_html_(self) -> str: ...
     def default_settings(self) -> StorageSettings: ...
     def list_objects(
@@ -3534,7 +3383,6 @@ class Storage:
         list[tuple[str, int]]
             A list of ``(key, size_in_bytes)`` tuples for each object found.
         """
-        ...
     def list_objects_metadata(
         self, settings: StorageSettings | None = None, prefix: str | None = None
     ) -> list[StorageObjectInfo]:
@@ -3552,7 +3400,6 @@ class Storage:
         list[StorageObjectInfo]
             A list of :class:`StorageObjectInfo` objects.
         """
-        ...
 
 class VersionSelection(Enum):
     """Enum for selecting the which version of a conflict
@@ -3577,8 +3424,6 @@ class ConflictSolver:
     This should never be used directly, but should be subclassed to provide specific conflict resolution behavior
     """
 
-    ...
-
 class BasicConflictSolver(ConflictSolver):
     """A basic conflict solver that allows for simple configuration of resolution behavior
 
@@ -3596,7 +3441,7 @@ class BasicConflictSolver(ConflictSolver):
         on_chunk_conflict: VersionSelection = VersionSelection.UseOurs,
         fail_on_delete_of_updated_array: bool = False,
         fail_on_delete_of_updated_group: bool = False,
-    ) -> BasicConflictSolver:
+    ) -> Self:
         """Create a BasicConflictSolver object with the given configuration options
 
         Parameters
@@ -3608,7 +3453,6 @@ class BasicConflictSolver(ConflictSolver):
         fail_on_delete_of_updated_group: bool
             Whether to fail when a group is deleted that has been updated, by default False
         """
-        ...
 
 class ConflictDetector(ConflictSolver):
     """A conflict solver that can be used to detect conflicts between two stores, but does not resolve them
@@ -3619,18 +3463,17 @@ class ConflictDetector(ConflictSolver):
     the rebase operation will succeed.
     """
 
-    def __new__(cls) -> ConflictDetector: ...
+    def __new__(cls) -> Self: ...
 
 class IcechunkError(Exception):
     """Base class for all Icechunk errors"""
 
-    def __new__(cls, message: str, kind: str | None = None) -> IcechunkError: ...
+    def __new__(cls, message: str, kind: str | None = None) -> Self: ...
     @property
     def message(self) -> str: ...
     @property
     def kind(self) -> str:
         """Stable machine-readable error code, see `icechunk.ErrorKind`"""
-        ...
 
 class ConflictError(IcechunkError):
     """An error that occurs when a conflict is detected"""
@@ -3641,7 +3484,7 @@ class ConflictError(IcechunkError):
         actual_parent: str | None = None,
         message: str | None = None,
         kind: str | None = None,
-    ) -> ConflictError:
+    ) -> Self:
         """
         Create a new ConflictError.
 
@@ -3656,7 +3499,6 @@ class ConflictError(IcechunkError):
         kind: str | None
             Machine-readable error code, see `icechunk.ErrorKind`.
         """
-        ...
 
     @property
     def expected_parent(self) -> str:
@@ -3665,7 +3507,6 @@ class ConflictError(IcechunkError):
         This is the snapshot ID that the session was based on when the
         commit operation was called.
         """
-        ...
     @property
     def actual_parent(self) -> str:
         """
@@ -3675,8 +3516,6 @@ class ConflictError(IcechunkError):
         error is raised, it means the branch was modified and committed by another session after
         the session was created.
         """
-        ...
-    ...
 
 __version__: str
 
@@ -3713,7 +3552,7 @@ class ConflictType(Enum):
     DeleteOfUpdatedGroup = (10,)
     """A delete is attempted on an updated group"""
 
-    (MoveOperationCannotBeRebased,) = (11,)
+    MoveOperationCannotBeRebased = (11,)
     """Move operation cannot be rebased"""
 
 class Conflict:
@@ -3724,7 +3563,7 @@ class Conflict:
         conflict_type: ConflictType,
         path: str,
         conflicted_chunks: list[list[int]] | None = None,
-    ) -> Conflict:
+    ) -> Self:
         """
         Create a new Conflict.
 
@@ -3737,7 +3576,6 @@ class Conflict:
         conflicted_chunks: list[list[int]] | None
             If the conflict is a chunk conflict, the list of chunk indices in conflict.
         """
-        ...
 
     @property
     def conflict_type(self) -> ConflictType:
@@ -3746,7 +3584,6 @@ class Conflict:
         Returns:
             ConflictType: The type of conflict detected
         """
-        ...
 
     @property
     def path(self) -> str:
@@ -3755,7 +3592,6 @@ class Conflict:
         Returns:
             str: The path of the node that caused the conflict
         """
-        ...
 
     @property
     def conflicted_chunks(self) -> list[list[int]] | None:
@@ -3764,12 +3600,11 @@ class Conflict:
         Returns:
             list[list[int]] | None: The list of chunk indices that are in conflict
         """
-        ...
 
 class RebaseFailedError(ConflictError):
     """An error that occurs when a rebase operation fails"""
 
-    def __new__(cls, snapshot: str, conflicts: list[Conflict]) -> RebaseFailedError:
+    def __new__(cls, snapshot: str, conflicts: list[Conflict]) -> Self:
         """
         Create a new RebaseFailedError.
 
@@ -3780,12 +3615,10 @@ class RebaseFailedError(ConflictError):
         conflicts: list[Conflict]
             The conflicts that occurred during the rebase operation.
         """
-        ...
 
     @property
     def snapshot(self) -> str:
         """The snapshot ID that the session was rebased to"""
-        ...
 
     @property
     def conflicts(self) -> list[Conflict]:
@@ -3794,7 +3627,6 @@ class RebaseFailedError(ConflictError):
         Returns:
             list[Conflict]: The conflicts that occurred during the rebase operation
         """
-    ...
 
 def initialize_logs() -> None:
     """
@@ -3806,7 +3638,6 @@ def initialize_logs() -> None:
     Logs are written to stderr by default. Set ICECHUNK_LOG_TO_STDOUT (to any value)
     before importing icechunk to write them to stdout instead.
     """
-    ...
 
 def set_logs_filter(log_filter_directive: str | None) -> None:
     """
@@ -3827,7 +3658,6 @@ def set_logs_filter(log_filter_directive: str | None) -> None:
         If None, the directive will be read from the environment variable
         ICECHUNK_LOG
     """
-    ...
 
 def shutdown_telemetry() -> None:
     """
@@ -3851,7 +3681,6 @@ def shutdown_telemetry() -> None:
     - ICECHUNK_OTEL_FILTER: which spans are exported, in `tracing-subscriber` filter
       syntax. Defaults to "icechunk=info".
     """
-    ...
 
 def spec_version() -> SpecVersion:
     """
@@ -3860,7 +3689,6 @@ def spec_version() -> SpecVersion:
     Returns:
         int: The version of the Icechunk specification that the library is compatible with
     """
-    ...
 
 def user_agent() -> str:
     """
@@ -3869,11 +3697,9 @@ def user_agent() -> str:
     Returns:
         str: The user-agent string (e.g., "icechunk-rust-2.0.0-alpha.3")
     """
-    ...
 
 def _all_error_kinds() -> list[str]:
     """All `kind` codes raised exceptions can carry; mirrored by `icechunk.ErrorKind`."""
-    ...
 
 def _upgrade_icechunk_repository(
     repo: PyRepository,
@@ -3895,7 +3721,6 @@ def _upgrade_icechunk_repository(
     The operation is usually fast, but it can take several minutes if there is a very
     large version history (thousands of snapshots).
     """
-    ...
 
 class ChunkStorageStats:
     """Statistics about chunk storage across different chunk types."""
@@ -3903,17 +3728,14 @@ class ChunkStorageStats:
     @property
     def native_bytes(self) -> int:
         """Total bytes stored in native chunks (stored in icechunk's chunk storage)"""
-        ...
 
     @property
     def virtual_bytes(self) -> int:
         """Total bytes stored in virtual chunks (references to external data)"""
-        ...
 
     @property
     def inlined_bytes(self) -> int:
         """Total bytes stored in inline chunks (stored directly in manifests)"""
-        ...
 
     def non_virtual_bytes(self) -> int:
         """
@@ -3926,7 +3748,6 @@ class ChunkStorageStats:
         Returns:
             int: The sum of native_bytes and inlined_bytes
         """
-        ...
 
     def total_bytes(self) -> int:
         """
@@ -3939,9 +3760,6 @@ class ChunkStorageStats:
         Returns:
             int: The sum of all chunk storage bytes
         """
-        ...
 
-    def __repr__(self) -> str: ...
-    def __str__(self) -> str: ...
     def _repr_html_(self) -> str: ...
     def __add__(self, other: ChunkStorageStats, /) -> ChunkStorageStats: ...

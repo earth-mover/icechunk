@@ -38,6 +38,29 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
+      # The rust-cache restore and cargo's crate unpacking run about 3x faster
+      # on D: (the workspace disk) than on the C: OS disk.
+      - name: Keep the cargo home on the D drive
+        shell: pwsh
+        run: Add-Content $env:GITHUB_ENV "CARGO_HOME=$env:RUNNER_TEMP\cargo-home"
+
+      - uses: prefix-dev/setup-pixi@d3f436a425481402e6a95a1d1fc10331c708cd9e # v0.10.2
+        with:
+          pixi-version: ${{ env.PIXI_VERSION }}
+          cache: true
+          cache-write: ${{ github.ref == 'refs/heads/main' }}
+          environments: rust-test
+          manifest-path: icechunk-python/pyproject.toml
+          # environment activation doesn't work on windows
+          # https://github.com/prefix-dev/setup-pixi/issues/122#issuecomment-2326495414
+          # activate-environment: true
+
+      # rust-cache keys on the rustc it finds on PATH, which here is not pixi's
+      - name: Get the pixi rustc version
+        id: rustc
+        shell: bash
+        run: echo "version=$(pixi run -m icechunk-python/pyproject.toml -e rust-test rustc -V | cut -d' ' -f2)" >> "$GITHUB_OUTPUT"
+
       - name: Cache Dependencies
         uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
         with:
@@ -45,19 +68,18 @@ jobs:
           # so we need to bump the version here whenever Python version is updated
           # Currently: 3.12
           prefix-key: "rust-py312"
-          shared-key: "rust"
+          shared-key: "rust-${{ steps.rustc.outputs.version }}"
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      - uses: prefix-dev/setup-pixi@f00437f565399d418b0acc85936d12c1fb668347 # v0.10.1
-        with:
-          pixi-version: ${{ env.PIXI_VERSION }}
-          cache: false
-          manifest-path: icechunk-python/pyproject.toml
-          # environment activation doesn't work on windows
-          # https://github.com/prefix-dev/setup-pixi/issues/122#issuecomment-2326495414
-          # activate-environment: true
+      - name: Unshadow the MSVC linker
+        # Git bash puts a GNU `link` ahead of MSVC's link.exe on PATH, and rustc
+        # picks the wrong one.
+        shell: bash
+        run: rm -f /usr/bin/link.exe
 
       - name: Run tests
-        shell: pixi run -m icechunk-python/pyproject.toml pwsh -Command {0}
+        # `pwsh -Command {0}` runs nothing and still exits 0. bash also gives
+        # just the `sh` it needs for recipes.
+        shell: pixi run -m icechunk-python/pyproject.toml -e rust-test bash -e {0}
         run: |
           just profile=ci unit-test

@@ -28,7 +28,7 @@ use crate::{
         snapshot::SnapshotInfo,
     },
     refs::{Ref, RefData, RefErrorKind, RefResult, list_deleted_tags, list_refs},
-    repository::{RepositoryErrorKind, VersionInfo},
+    repository::RepositoryErrorKind,
     storage::StorageErrorKind,
 };
 
@@ -346,65 +346,61 @@ pub async fn migrate_1_to_2(
 
     info!("Collecting non-dangling snapshots, this may take a few minutes");
 
-    // Prefetch snapshots concurrently to warm the asset manager cache.
-    // We list all snapshot objects, sort by creation time (latest first),
-    // and fetch them N-at-a-time in the background while the ancestry
-    // walk proceeds. This turns what would be sequential network
-    // round-trips into mostly cache hits.
+    // Keep each SnapshotInfo so the serial ancestry walk runs in memory. Warming the LRU
+    // cache instead fails: the concurrent prefetch outruns the walk and evicts every entry.
     let asset_manager = Arc::clone(repo.asset_manager());
-    let prefetch_handle = {
+    let snapshot_infos: HashMap<SnapshotId, SnapshotInfo> = {
         let am = Arc::clone(&asset_manager);
-        tokio::spawn(async move {
-            let concurrency = prefetch_concurrency;
-            match am.list_snapshots().await {
-                Ok(snapshot_list) => {
-                    let mut snap_infos: Vec<_> = match snapshot_list
-                        .try_collect::<Vec<_>>()
-                        .await
-                    {
-                        Ok(v) => v,
-                        Err(e) => {
-                            warn!(
-                                "Snapshot prefetch: failed to collect snapshot list: {e}"
-                            );
-                            return;
-                        }
-                    };
-                    snap_infos.sort_by_key(|b| std::cmp::Reverse(b.created_at));
-                    info!(
-                        "Snapshot prefetch: warming cache for {} snapshots with concurrency {}",
-                        snap_infos.len(),
-                        concurrency,
-                    );
-                    let fetches = stream::iter(snap_infos.into_iter().map(|info| {
-                        let am = Arc::clone(&am);
-                        async move {
-                            if let Err(e) = am.fetch_snapshot(&info.id).await {
-                                debug!(
-                                    "Snapshot prefetch: failed to fetch {}: {e}",
-                                    info.id
-                                );
-                            }
-                        }
-                    }))
-                    .buffer_unordered(concurrency)
-                    .count()
-                    .await;
-                    info!("Snapshot prefetch: completed {fetches} fetches");
-                }
+        let ids: Vec<SnapshotId> = match am.list_snapshots().await {
+            Ok(snapshot_list) => match snapshot_list.try_collect::<Vec<_>>().await {
+                Ok(v) => v.into_iter().map(|info| info.id).collect(),
                 Err(e) => {
-                    warn!("Snapshot prefetch: failed to list snapshots: {e}");
+                    warn!("Snapshot prefetch: failed to collect snapshot list: {e}");
+                    Vec::new()
                 }
+            },
+            Err(e) => {
+                warn!("Snapshot prefetch: failed to list snapshots: {e}");
+                Vec::new()
             }
-        })
+        };
+        info!(
+            "Snapshot prefetch: loading {} snapshots with concurrency {}",
+            ids.len(),
+            prefetch_concurrency,
+        );
+        let infos: HashMap<SnapshotId, SnapshotInfo> =
+            stream::iter(ids.into_iter().map(|id| {
+                let am = Arc::clone(&am);
+                async move {
+                    match am.fetch_snapshot(&id).await {
+                        Ok(snap) => SnapshotInfo::from_snapshot_file(snap.as_ref())
+                            .ok()
+                            .map(|info| (id, info)),
+                        Err(e) => {
+                            debug!("Snapshot prefetch: failed to fetch {id}: {e}");
+                            None
+                        }
+                    }
+                }
+            }))
+            .buffer_unordered(prefetch_concurrency)
+            .filter_map(|entry| async move { entry })
+            .collect()
+            .await;
+        info!("Snapshot prefetch: loaded {} snapshots", infos.len());
+        infos
     };
 
     let snap_ids = refs.iter().map(|(_, id)| id);
-    let all_snapshots =
-        pointed_snapshots(&repo, snap_ids).await?.try_collect::<Vec<_>>().await?;
+    let all_snapshots = pointed_snapshots_from_map(&repo, snap_ids, &snapshot_infos)
+        .await?
+        .try_collect::<Vec<_>>()
+        .await?;
 
-    // Cancel the prefetch if it's still running — we have all the snapshots we need.
-    prefetch_handle.abort();
+    // The reachable set is now in all_snapshots, so release the second copy before the
+    // ops log builds. Repos with long commit messages keep a lot of memory here.
+    drop(snapshot_infos);
 
     info!("Found {} non-dangling snapshots", all_snapshots.len());
 
@@ -631,31 +627,33 @@ async fn all_roots<'a>(
     Ok(roots)
 }
 
-/// Function copied from IC 1.0 with some changes
-async fn pointed_snapshots<'a>(
+/// Walk the ancestry of every ref, newest first, yielding each snapshot once.
+/// Parents come from `infos`; a snapshot missing there is fetched, so a racing
+/// writer cannot truncate the ancestry.
+async fn pointed_snapshots_from_map<'a>(
     repo: &'a Repository,
-    leaves: impl Iterator<Item = &SnapshotId> + 'a,
+    leaves: impl Iterator<Item = &'a SnapshotId> + 'a,
+    infos: &'a HashMap<SnapshotId, SnapshotInfo>,
 ) -> MigrationResult<impl Stream<Item = MigrationResult<SnapshotInfo>> + 'a> {
     let mut seen: HashSet<SnapshotId> = HashSet::new();
     let res = try_stream! {
-
         for pointed_snap_id in leaves {
             if ! seen.contains(pointed_snap_id) {
-                let parents = repo.ancestry(&VersionInfo::SnapshotId(pointed_snap_id.clone())).await.inject()?;
-                //let parents = Arc::clone(&asset_manager).snapshot_ancestry(&pointed_snap_id).await?;
-                for await parent in parents {
-                    let parent = parent.inject()?;
-                    if seen.insert(parent.id.clone()) {
-                        debug!("Found snapshot {}", parent.id);
-                        // it's a new snapshot
-                        yield parent
-                    } else {
-                        // as soon as we find a repeated snapshot
-                        // there is no point in continuing to retrieve
-                        // the rest of the ancestry, it must be already
-                        // retrieved from other ref
+                let mut current = Some(pointed_snap_id.clone());
+                while let Some(id) = current {
+                    let info = match infos.get(&id) {
+                        Some(info) => info.clone(),
+                        None => {
+                            let snap = repo.asset_manager().fetch_snapshot(&id).await.inject()?;
+                            SnapshotInfo::from_snapshot_file(snap.as_ref()).inject()?
+                        }
+                    };
+                    if ! seen.insert(id.clone()) {
                         break
                     }
+                    debug!("Found snapshot {}", info.id);
+                    current = info.parent_id.clone();
+                    yield info;
                 }
             }
         }
@@ -671,9 +669,9 @@ mod tests {
     use icechunk_macros::tokio_test;
     use tempfile::{TempDir, tempdir};
 
-    use futures::TryStreamExt as _;
-
-    use crate::{RepositoryConfig, new_local_filesystem_storage, refs};
+    use crate::{
+        RepositoryConfig, new_local_filesystem_storage, refs, repository::VersionInfo,
+    };
 
     use super::*;
 

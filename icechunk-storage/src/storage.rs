@@ -4,6 +4,7 @@ use chrono::{DateTime, Utc};
 use core::fmt;
 use futures::{
     Stream, StreamExt as _, TryStreamExt as _,
+    future::ready,
     stream::{self, BoxStream, FuturesOrdered},
 };
 use itertools::Itertools as _;
@@ -50,9 +51,19 @@ pub enum StorageErrorKind {
     },
     #[error("Redirect Storage error: {0}")]
     BadRedirect(String),
+    /// The store asked us to slow down (S3 `SlowDown` / HTTP 503 / 429). Retry with backoff.
+    #[error("storage throttled the request: {code}: {message}")]
+    Throttled { code: String, message: String },
     #[error("storage error: {0}")]
     Other(String),
 }
+
+impl StorageErrorKind {
+    pub fn is_throttled(&self) -> bool {
+        matches!(self, StorageErrorKind::Throttled { .. })
+    }
+}
+
 pub type StorageError = ICError<StorageErrorKind>;
 
 pub type StorageResult<A> = Result<A, StorageError>;
@@ -75,6 +86,17 @@ pub fn obj_not_found_res<T>() -> StorageResult<T> {
 
 pub fn other_error(s: impl Into<String>) -> StorageError {
     StorageError::capture(StorageErrorKind::Other(s.into()))
+}
+
+/// The store refused the request and asked for a lower request rate.
+pub fn throttled_error(
+    code: impl Into<String>,
+    message: impl Into<String>,
+) -> StorageError {
+    StorageError::capture(StorageErrorKind::Throttled {
+        code: code.into(),
+        message: message.into(),
+    })
 }
 
 #[derive(Debug)]
@@ -470,6 +492,19 @@ pub enum RepositoryCreation {
     RefusedEmptyPrefix,
 }
 
+/// Keeps the listed objects whose id starts with one of `id_prefixes`.
+pub fn filter_ids_by_id_prefix<'a>(
+    listing: BoxStream<'a, StorageResult<ListInfo<String>>>,
+    id_prefixes: &[String],
+) -> BoxStream<'a, StorageResult<ListInfo<String>>> {
+    let id_prefixes = id_prefixes.to_vec();
+    listing
+        .try_filter(move |info| {
+            ready(id_prefixes.iter().any(|p| info.id.starts_with(p.as_str())))
+        })
+        .boxed()
+}
+
 /// Implementations are free to assume files are never overwritten.
 #[async_trait]
 #[typetag::serde(tag = "type")]
@@ -562,6 +597,26 @@ pub trait Storage: fmt::Debug + Display + sealed::Sealed + Sync + Send {
         prefix: &str,
     ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>>;
 
+    /// Like [`Storage::list_objects`], limited to ids that start with one of `id_prefixes`.
+    /// Unordered. Override to list each prefix concurrently; the default filters.
+    async fn list_objects_with_id_prefixes<'a>(
+        &'a self,
+        settings: &Settings,
+        prefix: &str,
+        id_prefixes: &[String],
+    ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
+        Ok(filter_ids_by_id_prefix(
+            self.list_objects(settings, prefix).await?,
+            id_prefixes,
+        ))
+    }
+
+    /// Whether `list_objects_with_id_prefixes` lists each prefix on the server
+    /// rather than filtering a full listing. Callers fan out only when true.
+    fn lists_id_prefixes_natively(&self) -> bool {
+        false
+    }
+
     async fn delete_batch(
         &self,
         settings: &Settings,
@@ -584,6 +639,10 @@ pub trait Storage: fmt::Debug + Display + sealed::Sealed + Sync + Send {
 
     /// Delete a stream of objects, by their id string representations
     /// Input stream includes sizes to get as result the total number of bytes deleted
+    // FIXME: fixed 10-way concurrency, and per-batch errors are logged and
+    // swallowed (the result under-counts silently). Migrations and ref
+    // deletion still use this method and should move to the new
+    // style using listing.rs
     #[instrument(skip(self, settings, ids))]
     async fn delete_objects(
         &self,
@@ -758,4 +817,58 @@ pub fn split_in_multiple_equal_requests(
 
 pub fn strip_quotes(s: &str) -> &str {
     s.strip_prefix('"').and_then(|s| s.strip_suffix('"')).unwrap_or(s)
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::Utc;
+    use futures::executor::block_on;
+
+    use super::*;
+
+    fn listing(ids: &[&str]) -> BoxStream<'static, StorageResult<ListInfo<String>>> {
+        let infos: Vec<_> = ids
+            .iter()
+            .map(|id| {
+                Ok(ListInfo {
+                    id: (*id).to_string(),
+                    created_at: Utc::now(),
+                    size_bytes: 0,
+                })
+            })
+            .collect();
+        stream::iter(infos).boxed()
+    }
+
+    fn filtered(ids: &[&str], id_prefixes: &[&str]) -> Vec<String> {
+        let id_prefixes: Vec<String> =
+            id_prefixes.iter().map(|p| (*p).to_string()).collect();
+        block_on(filter_ids_by_id_prefix(listing(ids), &id_prefixes).try_collect())
+            .map(|infos: Vec<ListInfo<String>>| infos.into_iter().map(|i| i.id).collect())
+            .expect("listing cannot fail")
+    }
+
+    /// Only a throttle is back-pressure; every other error is a real failure.
+    #[test]
+    fn throttled_errors_are_distinguishable() {
+        assert!(throttled_error("SlowDown", "x").kind.is_throttled());
+        assert!(!other_error("x").kind.is_throttled());
+        assert!(
+            throttled_error("SlowDown", "Please reduce your request rate.")
+                .to_string()
+                .contains("SlowDown")
+        );
+    }
+
+    #[test]
+    fn filters_ids_by_prefix() {
+        let ids = ["0AB", "0AC", "0B", "ZZZ"];
+        assert_eq!(filtered(&ids, &["0"]), vec!["0AB", "0AC", "0B"]);
+        assert_eq!(filtered(&ids, &["0A"]), vec!["0AB", "0AC"]);
+        assert_eq!(filtered(&ids, &["0AB", "Z"]), vec!["0AB", "ZZZ"]);
+        // a prefix equal to an id keeps it, unlike the offset listing backends
+        assert_eq!(filtered(&ids, &["0B"]), vec!["0B"]);
+        assert!(filtered(&ids, &[]).is_empty());
+        assert!(filtered(&ids, &["1"]).is_empty());
+    }
 }

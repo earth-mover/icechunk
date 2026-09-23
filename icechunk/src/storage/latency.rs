@@ -134,6 +134,20 @@ impl Storage for LatencyStorage {
         self.backend.list_objects(settings, prefix).await
     }
 
+    async fn list_objects_with_id_prefixes<'a>(
+        &'a self,
+        settings: &Settings,
+        prefix: &str,
+        id_prefixes: &[String],
+    ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
+        self.sleep_for_read().await;
+        self.backend.list_objects_with_id_prefixes(settings, prefix, id_prefixes).await
+    }
+
+    fn lists_id_prefixes_natively(&self) -> bool {
+        self.backend.lists_id_prefixes_natively()
+    }
+
     async fn delete_batch(
         &self,
         settings: &Settings,

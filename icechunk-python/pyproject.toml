@@ -13,19 +13,24 @@ classifiers = [
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
   "Programming Language :: Python :: 3.14",
+  "Programming Language :: Python :: Free Threading :: 2 - Beta",
 ]
 readme = "README.md"
 license = { file = "LICENSE" }
 dynamic = ["version"]
 authors = [{ name = "Earthmover", email = "info@earthmover.io" }]
 
+# This is the minimum zarr version for users. The pixi dev environments set a
+# maximum version. See [tool.pixi.feature.dev.pypi-dependencies] below.
 dependencies = ["zarr>=3.1.0"]
 
 [dependency-groups]
 dev = [
   { include-group = "test" },
-  "mypy",
-  "ruff==0.15.14",
+  "mypy==2.3.1",
+  # same reason as [tool.pixi.feature.dev.pypi-dependencies] below
+  "zarr<3.2",
+  "ruff==0.16.4",
   "maturin>=1.7,<2.0",
   "maturin-import-hook>=0.3.0",
   "third-wheel",
@@ -41,7 +46,7 @@ test = [
   "dask>=2025.2.0",
   "distributed>=2025.2.0",
   "xarray>=2025.07.1",
-  "hypothesis @ git+https://github.com/ianhi/hypothesis.git@flaky-feedback#subdirectory=hypothesis-python",
+  "hypothesis",
   "pandas-stubs",
   "boto3-stubs[s3]",
   "termcolor",
@@ -154,7 +159,7 @@ exclude = ["tests/data_generation/generate_expired_repos.py"]
 [tool.ruff]
 target-version = "py312"
 line-length = 90
-extend-exclude = ["*.ipynb", "doc", "_typed_ops.pyi"]
+extend-exclude = ["*.ipynb", "*.md", "doc", "_typed_ops.pyi"]
 
 [tool.ruff.lint]
 extend-select = [
@@ -211,6 +216,11 @@ platforms = [
   "osx-64",
 ]
 
+# zarr 3.2 changed the type hints that the zarr test overrides suppress.
+# mypy then reports unused suppressions. A separate change adds zarr 3.2 support.
+[tool.pixi.feature.dev.pypi-dependencies]
+zarr = "<3.2"
+
 [tool.pixi.feature.docs.dependencies]
 cairo = ">=1.18.4,<2"
 
@@ -220,28 +230,49 @@ python = "~=3.12.0"
 [tool.pixi.feature.py314t.dependencies]
 python-freethreading = "~=3.14.0"
 
+# numcodecs declared free-threaded support in 0.17.0. Older releases re-enable
+# the GIL when zarr imports them, which serializes every thread.
+[tool.pixi.feature.py314t.pypi-dependencies]
+numcodecs = ">=0.17.0"
+
 [tool.pixi.feature.rustc.dependencies]
-rust = "~=1.96.0"
+rust = "~=1.98.0"
+
+# CI jobs that only test a prebuilt wheel install just this and python.
+[tool.pixi.feature.runner.dependencies]
+just = ">=1.58.0,<2"
+uv = ">=0.12.5,<0.13"
+flatbuffers = ">=25.12.19,<26"
 
 [tool.pixi.feature.build.dependencies]
-just = ">=1.51.0,<2"
 compilers = ">=1.11.0,<2"
-uv = ">=0.11.17,<0.12"
-openssl = ">=3.6.2,<4"
+openssl = ">=3.6.3,<4"
 pkgconfig = ">=1.5.5,<2"
-cargo-deny = ">=0.19.7,<0.20"
-prek = ">=0.3.3,<0.4"
+cargo-deny = ">=0.20.2,<0.21"
+prek = ">=0.4.14,<0.5"
 netcdf4 = ">=1.7.4,<2"
-cargo-nextest = ">=0.9.137,<0.10"
-flatbuffers = ">=25.12.19,<26"
+cargo-nextest = ">=0.9.143,<0.10"
 samply = ">=0.13.1,<0.14"
-cargo-release = ">=1.1.2,<2"
-cargo-llvm-cov = ">=0.8.4,<0.9"
-nodejs = ">=22.23.1,<23"
+cargo-release = ">=1.1.3,<2"
+cargo-llvm-cov = ">=0.9.0,<0.10"
+nodejs = ">=22.23.2,<23"
 semver = ">=3.0.4,<4"
+
+# This feature holds the WASI toolchain for the wasm32-wasip1-threads target.
+[tool.pixi.feature.js.dependencies]
+rust-std-wasm32-wasip1-threads = "~=1.98.1"
+clang = ">=19.1.7"
+llvm-tools = ">=19.1.7"
 
 [tool.pixi.feature.msrv.dependencies]
 rust = "~=1.91.1"
+
+[tool.pixi.feature.nextest.dependencies]
+cargo-nextest = ">=0.9.143,<0.10"
+
+# pysemver, for `just check-msrv`
+[tool.pixi.feature.msrv-check.dependencies]
+semver = ">=3.0.4,<4"
 
 [tool.pixi.feature.build.target.linux-64.dependencies]
 sysroot_linux-64 = ">=2.34"
@@ -252,6 +283,7 @@ sysroot_linux-aarch64 = ">=2.34"
 [tool.pixi.environments]
 default = { features = [
   "py312",
+  "runner",
   "build",
   "dev",
   "docs",
@@ -261,12 +293,42 @@ default = { features = [
 benchmark = { features = ["benchmark"], solve-group = "default" }
 py314t = { features = [
   "py314t",
+  "runner",
   "build",
   "dev",
   "test",
   "rustc"
-]}
+], solve-group = "py314t" }
+# The MSRV check only runs cargo. The default feature's PyPI deps get built
+# from source for the free-threaded python this env resolves to.
 msrv = { features = [
+  "runner",
   "build",
   "msrv"
-]}
+], no-default-feature = true }
+# The js lanes build no python.
+# The default feature pulls the project's pypi dependencies.
+# Those dependencies have no free-threaded wheels on windows.
+js = { features = [
+  "runner",
+  "build",
+  "rustc",
+  "js"
+], no-default-feature = true }
+wheel-test = { features = [
+  "py312",
+  "runner"
+], no-default-feature = true, solve-group = "default" }
+# Same solve group as py314t, so the wheel is tested on the interpreter that built it
+wheel-test-py314t = { features = [
+  "py314t",
+  "runner"
+], no-default-feature = true, solve-group = "py314t" }
+# The Windows and macOS unit-test legs need cargo, nextest and the MSRV text
+# check. A small env installs faster than the default one.
+rust-test = { features = [
+  "runner",
+  "rustc",
+  "nextest",
+  "msrv-check"
+], no-default-feature = true, solve-group = "default" }

@@ -87,8 +87,24 @@ impl RepoStatus {
 
 // TODO: should we not implement serialize and let the session fetch the repo info?
 #[derive(PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "RepoInfoDeserializer")]
 pub struct RepoInfo {
     buffer: Vec<u8>,
+}
+
+/// Deserialization goes through [`RepoInfo::from_buffer`] so that a `RepoInfo`
+/// can never hold an unverified buffer, which the unchecked accessors rely on.
+#[derive(Deserialize)]
+struct RepoInfoDeserializer {
+    buffer: Vec<u8>,
+}
+
+impl TryFrom<RepoInfoDeserializer> for RepoInfo {
+    type Error = IcechunkFormatError;
+
+    fn try_from(value: RepoInfoDeserializer) -> Result<Self, Self::Error> {
+        RepoInfo::from_buffer(value.buffer)
+    }
 }
 
 impl std::fmt::Debug for RepoInfo {
@@ -101,16 +117,16 @@ impl std::fmt::Debug for RepoInfo {
             .into_iter()
             .map(|(name, snap)| format!("{name} -> {snap}"))
             .join(", ");
-        let snaps = self.all_snapshots().map(Vec::from_iter).unwrap_or_default();
+        let snaps =
+            self.snapshot_and_parent_ids().map(Vec::from_iter).unwrap_or_default();
         let snaps = snaps
             .into_iter()
-            .map(|ms| match ms {
-                Ok(snap) => format!(
+            .map(|(id, parent_id)| {
+                format!(
                     "{} -> {}",
-                    snap.id,
-                    snap.parent_id.map(|s| s.to_string()).unwrap_or_default()
-                ),
-                Err(_) => "#err".to_string(),
+                    id,
+                    parent_id.map(|s| s.to_string()).unwrap_or_default()
+                )
             })
             .join(", ");
         // FIXME: add other fields
@@ -174,10 +190,22 @@ pub enum UpdateType {
 
 static ROOT_OPTIONS: VerifierOptions = VerifierOptions {
     max_depth: 10,
-    max_tables: 5_000_000,
-    max_apparent_size: 1 << 31, // taken from the default
+    max_tables: 50_000_000,
+    // Large enough that any buffer the builder can produce is readable: the
+    // builder refuses to grow past FLATBUFFERS_MAX_BUFFER_SIZE, and the
+    // verifier's counter runs at most MAX_APPARENT_SIZE_INFLATION times the
+    // buffer it walks. Saturating because the product doesn't fit a 32 bit
+    // usize (wasm32), where it lands on usize::MAX instead.
+    max_apparent_size: crate::serializers::MAX_APPARENT_SIZE_INFLATION
+        .saturating_mul(flatbuffers::FLATBUFFERS_MAX_BUFFER_SIZE),
     ignore_missing_null_terminator: true,
 };
+
+/// The verifier limits applied to every repo info buffer we read.
+#[cfg(test)]
+pub(crate) fn root_options() -> &'static VerifierOptions {
+    &ROOT_OPTIONS
+}
 
 #[derive(Debug, Clone)]
 pub struct UpdateInfo<I> {
@@ -186,7 +214,8 @@ pub struct UpdateInfo<I> {
     pub previous_updates: I,
 }
 
-type UpdateTuple<'a> = IcechunkResult<(UpdateType, DateTime<Utc>, Option<&'a str>)>;
+pub(crate) type UpdateTuple<'a> =
+    IcechunkResult<(UpdateType, DateTime<Utc>, Option<&'a str>)>;
 
 type LatestUpdatesResult<'bldr> = IcechunkResult<(
     WIPOffset<
@@ -719,6 +748,22 @@ impl RepoInfo {
     ) -> IcechunkResult<impl Iterator<Item = IcechunkResult<SnapshotInfo>>> {
         let root = self.root()?;
         Ok(root.snapshots().iter().map(move |snap| mk_snapshot_info(&root, &snap)))
+    }
+
+    /// Reads the ids from the flatbuffer. It does not deserialize snapshot metadata.
+    fn snapshot_and_parent_ids(
+        &self,
+    ) -> IcechunkResult<impl Iterator<Item = (SnapshotId, Option<SnapshotId>)>> {
+        let root = self.root()?;
+        Ok(root.snapshots().iter().map(move |snap| {
+            let parent_id = if snap.parent_offset() >= 0 {
+                let parent = root.snapshots().get(snap.parent_offset() as usize).id();
+                Some(SnapshotId::new(parent.0))
+            } else {
+                None
+            };
+            (SnapshotId::new(snap.id().0), parent_id)
+        }))
     }
 
     /// Doesn't check the validity of `flag_id`
@@ -1295,12 +1340,15 @@ impl RepoInfo {
         }
     }
 
+    /// Check that `buffer` passes every check [`RepoInfo::from_buffer`] applies.
+    pub fn verify_buffer(buffer: &[u8]) -> IcechunkResult<()> {
+        let _ = flatbuffers::root_with_opts::<generated::Repo<'_>>(&ROOT_OPTIONS, buffer)
+            .capture()?;
+        Ok(())
+    }
+
     pub fn from_buffer(buffer: Vec<u8>) -> IcechunkResult<RepoInfo> {
-        let _ = flatbuffers::root_with_opts::<generated::Repo<'_>>(
-            &ROOT_OPTIONS,
-            buffer.as_slice(),
-        )
-        .capture()?;
+        Self::verify_buffer(buffer.as_slice())?;
         Ok(RepoInfo { buffer })
     }
 
@@ -1308,8 +1356,13 @@ impl RepoInfo {
         self.buffer.as_slice()
     }
 
+    #[expect(unsafe_code)]
     fn root(&self) -> IcechunkResult<generated::Repo<'_>> {
-        flatbuffers::root::<generated::Repo<'_>>(&self.buffer).capture()
+        // SAFETY: every RepoInfo holds a verified buffer: `from_buffer` and the
+        // `Deserialize` impl verify, and `from_parts` builds with our own
+        // serialization code. We skip validation here because these accessors are
+        // called many times per repo info, and each check is O(file).
+        Ok(unsafe { flatbuffers::root_unchecked::<generated::Repo<'_>>(&self.buffer) })
     }
 
     pub fn tag_names(&self) -> IcechunkResult<impl Iterator<Item = &str>> {
@@ -1848,14 +1901,81 @@ mod tests {
     use proptest::prelude::*;
     use std::collections::HashSet;
 
-    // Generates an instance of RepoInfo which may not deserialize to a valid repository
-    fn potentially_invalid_repo_info() -> impl Strategy<Value = RepoInfo> {
-        any::<Vec<u8>>().prop_map(|buffer| RepoInfo { buffer })
+    fn a_snapshot_info(message: &str) -> SnapshotInfo {
+        SnapshotInfo {
+            id: SnapshotId::random(),
+            parent_id: None,
+            flushed_at: DateTime::from_timestamp_micros(1_000_000).unwrap(),
+            message: message.to_string(),
+            metadata: Default::default(),
+            pruned_ancestor_tx_logs: vec![],
+        }
     }
 
-    roundtrip_serialization_tests!(
-        serialize_and_deserialize_repo_info - potentially_invalid_repo_info
-    );
+    // Every RepoInfo holds a buffer that was verified, either on read or when we
+    // built it, which is what makes the unchecked accessors sound.
+    fn valid_repo_info() -> impl Strategy<Value = RepoInfo> {
+        proptest::collection::vec(any::<String>(), 1..5).prop_map(|messages| {
+            RepoInfo::initial(
+                SpecVersionBin::current(),
+                a_snapshot_info(messages.first().map_or("initial", |m| m.as_str())),
+                100,
+                None::<&()>,
+                None,
+            )
+        })
+    }
+
+    roundtrip_serialization_tests!(serialize_and_deserialize_repo_info - valid_repo_info);
+
+    #[test]
+    fn deserializing_an_unverified_buffer_fails() {
+        // a RepoInfo whose buffer is not a repo file at all
+        let bytes = rmp_serde::to_vec(&RepoInfo { buffer: vec![0u8; 64] }).unwrap();
+        assert!(
+            rmp_serde::from_slice::<RepoInfo>(bytes.as_slice()).is_err(),
+            "deserialization must not produce a RepoInfo with an unverified buffer"
+        );
+    }
+
+    #[test]
+    fn repo_info_with_more_than_ten_million_snapshots_is_usable()
+    -> Result<(), Box<dyn std::error::Error>> {
+        // flatbuffers' default verifier options cap a buffer at 1M tables, and
+        // every snapshot is one table. Repos this size must still be readable.
+        let n = 10_000_001;
+        let snapshots: Vec<_> = (0..n).map(|_| a_snapshot_info("")).collect();
+        let branch_target = snapshots[0].id.clone();
+        let info = RepoInfo::new(
+            SpecVersionBin::current(),
+            [],
+            [("main", branch_target)],
+            [],
+            snapshots,
+            &Default::default(),
+            UpdateInfo {
+                update_type: UpdateType::RepoInitializedUpdate,
+                update_time: Utc::now(),
+                previous_updates: Vec::<UpdateTuple<'_>>::new(),
+            },
+            None,
+            10,
+            None,
+            None,
+            None::<std::iter::Empty<u16>>,
+            None::<std::iter::Empty<u16>>,
+            &RepoStatus {
+                availability: RepoAvailability::Online,
+                set_at: Utc::now(),
+                limited_availability_reason: None,
+            },
+        )?;
+
+        let info = RepoInfo::from_buffer(info.bytes().to_vec())?;
+        assert_eq!(info.all_snapshots()?.count(), n);
+        assert!(info.branch_names()?.any(|name| name == "main"));
+        Ok(())
+    }
 
     #[test]
     fn test_add_snapshot() -> Result<(), Box<dyn std::error::Error>> {

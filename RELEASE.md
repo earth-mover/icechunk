@@ -29,6 +29,26 @@ All internal crates are versioned in lockstep with the JS package: bump every wo
 1. After the previous point completes, [create a new release in GitHub](https://github.com/earth-mover/icechunk/releases/new). Ask it to create the tag, and generate the release notes. Once you hit release, this step will upload the new version to [PyPI](https://pypi.org/project/icechunk/), and notify the community slack of the new release.
 1. After an hour or so an automated PR should appear to update the [conda-forge feedstock](https://github.com/conda-forge/icechunk-feedstock). Merge that and the new version will appear on conda-forge.
 
+## Issuing an icechunk JS release
+
+The package is [`@earthmover/icechunk`](https://www.npmjs.com/package/@earthmover/icechunk) on npm.
+
+1. Wait until any previous workflow completes.
+1. Go to the [`JS CI` github action](https://github.com/earth-mover/icechunk/actions/workflows/js-ci.yaml).
+1. Click `Run workflow` and select the branch to run the workflow from (you most likely want to use `main`).
+1. Click the green `Run workflow` button to launch.
+1. The workflow builds the native binaries for macOS, Windows, Linux, and WASI, tests each one, then publishes to npm.
+
+The `publish` job only runs on a manual `workflow_dispatch`. Push and pull request runs build and test but never publish. Every manual run publishes to npm, so do not dispatch this workflow for any other reason.
+
+The npm dist-tag comes from the version in `icechunk-js/package.json`:
+
+| Version in `package.json` | npm dist-tag |
+|---------------------------|--------------|
+| `2.2.2` | `latest` |
+| `2.3.0-alpha.0` | `alpha` |
+| `2.3.0-rc.1` | `rc` |
+
 ## Understanding the Python CI workflow options
 
 The [`Python CI and library release` workflow](https://github.com/earth-mover/icechunk/actions/workflows/python-ci.yaml) has three inputs that control what gets built and where it goes:

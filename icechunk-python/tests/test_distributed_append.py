@@ -20,7 +20,7 @@ DIMS = ("x", "y")
 
 def mk_ic_storage() -> ic.Storage:
     return ic.local_filesystem_storage(
-        f"/tmp/test/icechunk_data_corrupted/{str(datetime.datetime.now()).split(' ')[-1]}",
+        f"/tmp/test/icechunk_data_corrupted/{str(datetime.datetime.now(datetime.UTC)).split(' ')[-1]}",
     )
 
 

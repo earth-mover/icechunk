@@ -157,6 +157,7 @@ async fn do_test_repo_chunks_storage(
         Arc::clone(&asset_manager),
         NonZeroU16::new(5).unwrap(),
         NonZeroUsize::MIN,
+        NonZeroUsize::new(4 * 1024 * 1024 * 1024).unwrap(),
         NonZeroU16::try_from(10).unwrap(),
     )
     .await
@@ -171,6 +172,7 @@ async fn do_test_repo_chunks_storage(
         Arc::clone(&asset_manager),
         NonZeroU16::new(5).unwrap(),
         NonZeroUsize::MAX,
+        NonZeroUsize::new(4 * 1024 * 1024 * 1024).unwrap(),
         NonZeroU16::try_from(10).unwrap(),
     )
     .await
@@ -198,6 +200,7 @@ async fn do_test_repo_chunks_storage(
         Arc::clone(&asset_manager),
         NonZeroU16::new(5).unwrap(),
         NonZeroUsize::MIN,
+        NonZeroUsize::new(4 * 1024 * 1024 * 1024).unwrap(),
         NonZeroU16::try_from(10).unwrap(),
     )
     .await
@@ -233,6 +236,7 @@ async fn do_test_repo_chunks_storage(
         Arc::clone(&asset_manager),
         NonZeroU16::new(5).unwrap(),
         NonZeroUsize::MAX,
+        NonZeroUsize::new(4 * 1024 * 1024 * 1024).unwrap(),
         NonZeroU16::try_from(10).unwrap(),
     )
     .await
@@ -312,6 +316,7 @@ async fn test_virtual_chunk_deduplication(
         Arc::clone(&asset_manager),
         NonZeroU16::new(5).unwrap(),
         NonZeroUsize::MAX,
+        NonZeroUsize::new(4 * 1024 * 1024 * 1024).unwrap(),
         NonZeroU16::try_from(10).unwrap(),
     )
     .await

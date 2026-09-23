@@ -1,5 +1,7 @@
 from typing import Any
 
+from packaging.version import Version
+
 import icechunk as ic
 import zarr
 
@@ -91,7 +93,17 @@ async def test_inspect_reports_writing_library_version() -> None:
     zarr.group(store=session.store, overwrite=True)
     snap = session.commit("commit")
 
-    version = f"ic-{ic.__version__}"
-    assert repo.inspect_repo_info()["header"]["written_by"] == version
-    assert repo.inspect_snapshot(snap)["header"]["written_by"] == version
-    assert repo.inspect_transaction_log(snap)["header"]["written_by"] == version
+    # The header carries the Cargo spelling, `ic.__version__` the PEP 440 one.
+    # They differ for a prerelease, so compare parsed versions.
+    version = Version(ic.__version__)
+
+    def stamped(header: dict[str, Any]) -> Version:
+        written_by = header["written_by"]
+        assert written_by.startswith("ic-"), (
+            f"written_by doesn't start with 'ic-': {written_by!r}"
+        )
+        return Version(written_by.removeprefix("ic-"))
+
+    assert stamped(repo.inspect_repo_info()["header"]) == version
+    assert stamped(repo.inspect_snapshot(snap)["header"]) == version
+    assert stamped(repo.inspect_transaction_log(snap)["header"]) == version

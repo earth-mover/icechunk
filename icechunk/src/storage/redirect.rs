@@ -99,7 +99,7 @@ impl RedirectStorage {
         let res = client.execute(req).await.map_err(|e| {
             StorageErrorKind::BadRedirect(format!(
                 "Request to redirect url ({}) failed, cannot find target Storage instance: {e}",
-                &self.url
+                self.url
             ))
         }).capture()?;
         let storage_url = res.headers().get("location").ok_or_else(|| {
@@ -108,7 +108,7 @@ impl RedirectStorage {
             )
         }).capture()?.to_str().map_err(|e| {
             StorageErrorKind::BadRedirect(format!(
-                "Request to redirect url ({}) doesn't return a proper redirect to a known Storage protocol: {e}", &self.url
+                "Request to redirect url ({}) doesn't return a proper redirect to a known Storage protocol: {e}", self.url
             ))
         }).capture()?;
 
@@ -377,6 +377,24 @@ impl Storage for RedirectStorage {
         prefix: &str,
     ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
         self.backend().await?.list_objects(settings, prefix).await
+    }
+
+    async fn list_objects_with_id_prefixes<'a>(
+        &'a self,
+        settings: &Settings,
+        prefix: &str,
+        id_prefixes: &[String],
+    ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
+        self.backend()
+            .await?
+            .list_objects_with_id_prefixes(settings, prefix, id_prefixes)
+            .await
+    }
+
+    fn lists_id_prefixes_natively(&self) -> bool {
+        // the backend resolves lazily and this is sync: before it is resolved
+        // we report the conservative answer, one listing instead of a fan-out
+        self.backend.get().is_some_and(|b| b.lists_id_prefixes_natively())
     }
 
     async fn delete_batch(

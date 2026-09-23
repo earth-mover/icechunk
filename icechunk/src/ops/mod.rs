@@ -1,31 +1,188 @@
 //! Repository maintenance operations.
 
-use std::{collections::HashSet, num::NonZeroU16, sync::Arc};
+use std::{
+    collections::HashSet, future::Future, num::NonZeroU16, sync::Arc, time::Duration,
+};
 
 use async_stream::try_stream;
+use backon::{BackoffBuilder as _, ExponentialBuilder, Retryable as _};
 use futures::{Stream, StreamExt as _, TryStreamExt as _, stream};
 use tokio::pin;
-use tracing::instrument;
+use tracing::{info, instrument, warn};
 
 use crate::{
+    StorageError,
     asset_manager::AssetManager,
+    config::RepoUpdateRetryConfig,
     format::{
-        SnapshotId, format_constants::SpecVersionBin, repo_info::RepoInfo,
-        snapshot::Snapshot,
+        IcechunkFormatError, IcechunkResult, SnapshotId,
+        format_constants::SpecVersionBin,
+        repo_info::{RepoAvailability, RepoInfo},
+        snapshot::{Snapshot, SnapshotInfo},
     },
-    refs::{RefResult, list_refs},
-    repository::RepositoryResult,
+    refs::{RefError, RefResult, list_refs},
+    repository::{RepositoryError, RepositoryErrorKind, RepositoryResult},
 };
-use icechunk_types::error::ICResultCtxExt as _;
+use icechunk_types::{ICResultExt as _, error::ICResultCtxExt as _};
 
+/// The error of every maintenance operation in this module.
+#[derive(Debug, thiserror::Error)]
+pub enum GCError {
+    #[error("ref error {0}")]
+    Ref(#[from] RefError),
+    #[error("repository error {0}")]
+    Repository(#[from] RepositoryError),
+    #[error("format error {0}")]
+    FormatError(#[from] IcechunkFormatError),
+    #[error("storage error {0}")]
+    StorageError(#[from] StorageError),
+    #[error("too many consecutive delete failures under {prefix}: {last_error}")]
+    DeletesFailing { prefix: String, last_error: String },
+}
+
+pub type GCResult<A> = Result<A, GCError>;
+
+/// Refuse to run a maintenance operation on read-only storage, or on a repo
+/// that is not online. `op_name` names the operation in the error message.
+pub(crate) async fn ensure_repo_writable(
+    asset_manager: &AssetManager,
+    op_name: &str,
+) -> GCResult<()> {
+    if !asset_manager.can_write_to_storage().await? {
+        return Err(RepositoryErrorKind::ReadonlyStorage(format!("Cannot {op_name}")))
+            .capture()
+            .map_err(GCError::Repository);
+    }
+    // repo status only exists on IC2+
+    if asset_manager.spec_version() >= SpecVersionBin::V2 {
+        let (repo_info, _) = asset_manager.fetch_repo_info().await?;
+        if repo_info.status()?.availability != RepoAvailability::Online {
+            return Err(RepositoryErrorKind::ReadonlyRepository(format!(
+                "Cannot {op_name}"
+            )))
+            .capture()
+            .map_err(GCError::Repository);
+        }
+    }
+    Ok(())
+}
+
+/// Descriptors an operation needs beyond its concurrent requests: the runtime's
+/// own, stdio, and the object store's idle connection pool.
+const FD_HEADROOM: u64 = 64;
+
+/// The process' soft `RLIMIT_NOFILE`, or `None` where the limit doesn't exist
+/// or is unbounded.
+#[cfg(unix)]
+fn nofile_soft_limit() -> Option<u64> {
+    let (soft, _hard) = rlimit::Resource::NOFILE.get().ok()?;
+    (soft != rlimit::INFINITY).then_some(soft)
+}
+
+#[cfg(not(unix))]
+fn nofile_soft_limit() -> Option<u64> {
+    None
+}
+
+/// The requests a manifest walk has in flight at once: it fetches the
+/// snapshots it walks alongside their manifests.
+pub(crate) fn walk_peak_requests(
+    max_concurrent_manifest_fetches: NonZeroU16,
+    max_snapshots_in_memory: NonZeroU16,
+) -> u64 {
+    max_concurrent_manifest_fetches.get() as u64 + max_snapshots_in_memory.get() as u64
+}
+
+/// Warn when the process cannot open enough files for `peak_requests`
+/// concurrent requests. `op_name` names the operation in the warning.
+pub(crate) fn warn_on_low_fd_limit(peak_requests: u64, op_name: &str) {
+    let Some(soft) = nofile_soft_limit() else { return };
+    let needed = peak_requests + FD_HEADROOM;
+    if soft < needed {
+        warn!(
+            soft_limit = soft,
+            needed,
+            "{op_name} peaks at {peak_requests} concurrent requests, but this \
+             process can only open {soft} files and will likely fail with \
+             \"too many open files\". Raise the limit (ulimit -S -n {needed}) or \
+             lower the concurrency settings."
+        );
+    }
+}
+
+/// Run `op`, retrying with backoff while it fails because the repo info
+/// object changed under it. `op_name` names the operation in the retry log.
+pub(crate) async fn retry_on_repo_info_update<T, Fut>(
+    retries: Option<&RepoUpdateRetryConfig>,
+    op_name: &'static str,
+    op: impl FnMut() -> Fut,
+) -> GCResult<T>
+where
+    Fut: Future<Output = GCResult<T>>,
+{
+    let default_retry_config = RepoUpdateRetryConfig::default();
+    let retry_config = retries.unwrap_or(&default_retry_config).retries();
+
+    let backoff = ExponentialBuilder::new()
+        .with_min_delay(Duration::from_millis(retry_config.initial_backoff_ms() as u64))
+        .with_max_delay(Duration::from_millis(retry_config.max_backoff_ms() as u64))
+        .with_max_times(retry_config.max_tries().get() as usize)
+        .with_jitter()
+        .build();
+
+    op.retry(backoff)
+        .sleep(tokio::time::sleep)
+        .when(|e| {
+            matches!(
+                e,
+                GCError::Repository(RepositoryError {
+                    kind: RepositoryErrorKind::RepoInfoUpdated,
+                    ..
+                })
+            )
+        })
+        .notify(move |_, _| {
+            info!(
+                "Repo info object was updated while {op_name} was running, retrying with backoff..."
+            );
+        })
+        .await
+}
+
+/// Aborts the task it holds when dropped, so a cancelled or early-returning
+/// caller takes its background task down with it on every path.
+pub(crate) struct AbortOnDrop<T>(pub(crate) tokio::task::JoinHandle<T>);
+
+impl<T> AbortOnDrop<T> {
+    /// Abort the task and wait for it to actually stop. Dropping only requests
+    /// the abort; callers that need whatever the task captured to be dropped
+    /// first must wait.
+    pub(crate) async fn abort_and_wait(&mut self) {
+        self.0.abort();
+        let _ = (&mut self.0).await;
+    }
+}
+
+impl<T> Drop for AbortOnDrop<T> {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+/// Batched, rate-adaptive object deletion used by GC.
+pub mod deleter;
 /// Expire old snapshots beyond a threshold.
-pub mod expiration_v1;
+pub mod expiration;
 /// Garbage collection to remove unreferenced data.
 pub mod gc;
 /// Manifest optimization and rebuilding.
 pub mod manifests;
+/// A hash set sharded across many locks, for parallel accumulation.
+pub mod sharded_set;
 /// Repository statistics.
 pub mod stats;
+/// Parallel manifest traversal shared by GC and stats.
+pub mod walker;
 
 #[instrument(skip_all)]
 pub fn all_roots_v2<'a>(
@@ -139,6 +296,54 @@ pub async fn all_roots_v1<'a>(
         })
         .chain(stream::iter(extra_roots.iter().cloned()).map(Ok));
     Ok(roots)
+}
+
+/// Re-parent `edited` over a run of ancestors that are being expired,
+/// harvesting their tx logs so its delta from the new parent stays complete.
+///
+/// Returns `(new_parent, pruned)`. `new_parent` is the boundary ancestor, or
+/// `None` if the whole chain is collapsed (no ancestor satisfies `is_boundary`)
+/// `pruned` lists, oldest first, every collapsed ancestor's id with that ancestor's own
+/// `pruned_ancestor_tx_logs` spliced in, then `edited`'s own existing
+/// `pruned_ancestor_tx_logs` (newer than the collapsed run) appended last.
+///
+/// A collapsed ancestor can itself carry a non-empty `pruned_ancestor_tx_logs`
+/// (it was a boundary in an earlier pass), and several can sit in one chain.
+/// Hitting one does not end the walk — only `is_boundary` does; its pruned chain
+/// is spliced in and the walk keeps going. E.g. with boundary `s1`:
+///
+/// ```text
+/// INITIAL → s1 → s3 (pruned=[s2]) → s5 (pruned=[s4]) → edited
+/// ```
+///
+/// returns `new_parent = s1` and `pruned = [s2, s3, s4, s5]` (oldest first).
+pub(crate) fn reparent_and_prune(
+    repo_info: &RepoInfo,
+    edited: &SnapshotInfo,
+    is_boundary: impl Fn(&SnapshotInfo) -> bool,
+) -> IcechunkResult<(Option<SnapshotId>, Vec<SnapshotId>)> {
+    let mut new_parent = None;
+    let mut collapsed = Vec::new();
+    // ancestry() starts at `edited`. skip(1) drops it
+    for ancestor in repo_info.ancestry(&edited.id)?.skip(1) {
+        let ancestor = ancestor?;
+        if is_boundary(&ancestor) {
+            new_parent = Some(ancestor.id);
+            break;
+        }
+        collapsed.push((ancestor.id, ancestor.pruned_ancestor_tx_logs));
+    }
+    // Emit oldest first. `collapsed` is newest first, so walk it in reverse; an
+    // ancestor's own pruned logs (already oldest first) are older than it and so
+    // precede its id.
+    let mut pruned = Vec::new();
+    for (id, ancestor_pruned) in collapsed.into_iter().rev() {
+        pruned.extend(ancestor_pruned);
+        pruned.push(id);
+    }
+    // `edited`'s own pruned logs are newer than the collapsed run, so append last.
+    pruned.extend(edited.pruned_ancestor_tx_logs.iter().cloned());
+    Ok((new_parent, pruned))
 }
 
 /// `repo_info` is ignored for V1 repos, which have no repo info object. For V2

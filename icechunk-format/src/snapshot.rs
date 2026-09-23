@@ -1,6 +1,6 @@
 //! Repository state at a point in time (arrays, groups, and manifest references).
 
-use std::{borrow::Cow, collections::BTreeMap, ops::Range, sync::Arc};
+use std::{borrow::Cow, cmp::Ordering, collections::BTreeMap, ops::Range, sync::Arc};
 
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
@@ -421,9 +421,21 @@ impl SnapshotId {
 static ROOT_OPTIONS: VerifierOptions = VerifierOptions {
     max_depth: 64,
     max_tables: 50_000_000,
-    max_apparent_size: 1 << 31, // taken from the default
+    // Large enough that any buffer the builder can produce is readable: the
+    // builder refuses to grow past FLATBUFFERS_MAX_BUFFER_SIZE, and the
+    // verifier's counter runs at most MAX_APPARENT_SIZE_INFLATION times the
+    // buffer it walks. Saturating because the product doesn't fit a 32 bit
+    // usize (wasm32), where it lands on usize::MAX instead.
+    max_apparent_size: crate::serializers::MAX_APPARENT_SIZE_INFLATION
+        .saturating_mul(flatbuffers::FLATBUFFERS_MAX_BUFFER_SIZE),
     ignore_missing_null_terminator: true,
 };
+
+/// The verifier limits applied to every snapshot buffer we read.
+#[cfg(test)]
+pub(crate) fn root_options() -> &'static VerifierOptions {
+    &ROOT_OPTIONS
+}
 
 impl Snapshot {
     pub const INITIAL_COMMIT_MESSAGE: &'static str = "Repository initialized";
@@ -432,15 +444,19 @@ impl Snapshot {
         0x34, // Decodes as 1CECHNKREP0F1RSTCMT0
     ]);
 
+    /// Check that `buffer` passes every check [`Snapshot::from_buffer`] applies.
+    pub fn verify_buffer(buffer: &[u8]) -> IcechunkResult<()> {
+        let _ =
+            flatbuffers::root_with_opts::<generated::Snapshot<'_>>(&ROOT_OPTIONS, buffer)
+                .capture()?;
+        Ok(())
+    }
+
     pub fn from_buffer(
         spec_version: SpecVersionBin,
         buffer: Vec<u8>,
     ) -> IcechunkResult<Snapshot> {
-        let _ = flatbuffers::root_with_opts::<generated::Snapshot<'_>>(
-            &ROOT_OPTIONS,
-            buffer.as_slice(),
-        )
-        .capture()?;
+        Self::verify_buffer(buffer.as_slice())?;
         Ok(Snapshot {
             buffer,
             spec_version,
@@ -731,19 +747,43 @@ impl Snapshot {
         id: &ManifestId,
     ) -> IcechunkResult<Option<ManifestFileInfo>> {
         let root = self.root();
+        // Both manifest vectors are sorted by id in from_iter, as required by snapshot.fbs.
         if let Some(mf2) = root.manifest_files_v2() {
-            mf2.iter()
-                .find(|mf| mf.id().is_some_and(|mid| mid.0 == id.0))
-                .map(|mf| (&mf).try_into())
-                .transpose()
+            lookup_first_manifest_index(mf2.len(), |index| {
+                mf2.get(index).id().map(|mid| mid.0).cmp(&Some(id.0))
+            })
+            .map(|index| (&mf2.get(index)).try_into())
+            .transpose()
         } else {
-            Ok(root
-                .manifest_files()
-                .iter()
-                .find(|mi| mi.id().0 == id.0)
-                .map(|man| man.into()))
+            let mf1 = root.manifest_files();
+            Ok(lookup_first_manifest_index(mf1.len(), |index| {
+                mf1.get(index).id().0.cmp(&id.0)
+            })
+            .map(|index| mf1.get(index).into()))
         }
     }
+}
+
+// Return the first matching entry when multiple manifests have the same ID.
+// Continuing left after a match keeps even an all-equal vector logarithmic.
+fn lookup_first_manifest_index(
+    len: usize,
+    compare: impl Fn(usize) -> Ordering,
+) -> Option<usize> {
+    let (mut left, mut right) = (0, len);
+    let mut found = None;
+    while left < right {
+        let mid = left + (right - left) / 2;
+        match compare(mid) {
+            Ordering::Less => left = mid + 1,
+            Ordering::Equal => {
+                found = Some(mid);
+                right = mid;
+            }
+            Ordering::Greater => right = mid,
+        }
+    }
+    found
 }
 
 struct NodeIterator {
@@ -773,29 +813,23 @@ impl Iterator for NodeIterator {
                 return None;
             }
 
-            let node: IcechunkResult<NodeSnapshot> =
-                nodes.get(self.next_index).try_into();
+            // Compare the stored path, and only deserialize the node on a match.
+            let node = nodes.get(self.next_index);
+            let node_path = node.path();
 
-            match node {
-                Ok(res) => {
-                    let node_path = res.path.to_string();
-                    if let Some(after_prefix) =
-                        node_path.strip_prefix(self.prefix.as_str())
-                        && (after_prefix.is_empty() || after_prefix.starts_with('/'))
-                    {
-                        self.next_index += 1;
-                        return Some(Ok(res));
-                    } else if node_path.as_str() > self.prefix.as_str()
-                        && !node_path.starts_with(self.prefix.as_str())
-                    {
-                        // We've passed all possible children of the prefix
-                        return None;
-                    } else {
-                        // Not a match but there may be matches later (foo-bar" comes before "foo/bar")
-                        self.next_index += 1;
-                    }
-                }
-                Err(err) => return Some(Err(err)),
+            if let Some(after_prefix) = node_path.strip_prefix(self.prefix.as_str())
+                && (after_prefix.is_empty() || after_prefix.starts_with('/'))
+            {
+                self.next_index += 1;
+                return Some(node.try_into().inject());
+            } else if node_path > self.prefix.as_str()
+                && !node_path.starts_with(self.prefix.as_str())
+            {
+                // We've passed all possible children of the prefix
+                return None;
+            } else {
+                // Not a match but there may be matches later (foo-bar" comes before "foo/bar")
+                self.next_index += 1;
             }
         }
     }
@@ -971,6 +1005,92 @@ mod tests {
         serialize_and_deserialize_node_snapshot - node_snapshot,
         serialize_and_deserialize_manifest_file_info - manifest_file_info
     );
+
+    #[icechunk_macros::test]
+    fn test_manifest_info() -> IcechunkResult<()> {
+        let manifest_id = |value: u32| {
+            let mut bytes = [0; 12];
+            bytes[8..].copy_from_slice(&value.to_be_bytes());
+            ManifestId::new(bytes)
+        };
+
+        for spec_version in [SpecVersionBin::V1, SpecVersionBin::V2] {
+            for count in [0, 1, 2, 3, 5, 4096] {
+                // Reverse the input to exercise snapshot construction's ID sorting.
+                let manifests: Vec<_> = (1..=count)
+                    .rev()
+                    .map(|i| ManifestFileInfo {
+                        id: manifest_id(2 * i),
+                        size_bytes: u64::from(i) * 100,
+                        num_chunk_refs: i,
+                    })
+                    .collect();
+                let snapshot = Snapshot::from_iter(
+                    None,
+                    None,
+                    spec_version,
+                    "",
+                    None,
+                    manifests.clone(),
+                    None,
+                    iter::empty(),
+                )?;
+
+                for manifest in manifests {
+                    assert_eq!(snapshot.manifest_info(&manifest.id)?, Some(manifest));
+                }
+                // Misses before, between, and after the stored IDs.
+                assert_eq!(snapshot.manifest_info(&manifest_id(0))?, None);
+                for i in 0..=count {
+                    assert_eq!(snapshot.manifest_info(&manifest_id(2 * i + 1))?, None);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[icechunk_macros::test]
+    fn test_manifest_info_returns_first_duplicate() -> IcechunkResult<()> {
+        for spec_version in [SpecVersionBin::V1, SpecVersionBin::V2] {
+            for ids in
+                [vec![2, 2, 2], vec![2, 2, 4], vec![2, 4, 4, 4, 6], vec![2, 4, 4, 4]]
+            {
+                // Distinct metadata makes selection among equal IDs observable.
+                // Reverse the IDs to also exercise the constructor's stable sort.
+                let manifests: Vec<_> = ids
+                    .into_iter()
+                    .rev()
+                    .zip(1u32..)
+                    .map(|(id, i)| ManifestFileInfo {
+                        id: ManifestId::new([id; 12]),
+                        size_bytes: u64::from(i) * 100,
+                        num_chunk_refs: i,
+                    })
+                    .collect();
+                let snapshot = Snapshot::from_iter(
+                    None,
+                    None,
+                    spec_version,
+                    "",
+                    None,
+                    manifests.clone(),
+                    None,
+                    iter::empty(),
+                )?;
+                let loaded =
+                    Snapshot::from_buffer(spec_version, snapshot.bytes().to_vec())?;
+
+                for snapshot in [&snapshot, &loaded] {
+                    for id in 0..=7 {
+                        let id = ManifestId::new([id; 12]);
+                        let expected = manifests.iter().find(|mf| mf.id == id).cloned();
+                        assert_eq!(snapshot.manifest_info(&id)?, expected);
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
 
     #[icechunk_macros::test]
     fn test_get_node() -> Result<(), Box<dyn std::error::Error>> {

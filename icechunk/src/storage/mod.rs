@@ -59,11 +59,16 @@ pub use icechunk_arrow_object_store::HttpObjectStoreBackend;
 
 pub use icechunk_arrow_object_store::{ObjectStoreBackend, Role};
 
+/// Parallel listing of object ids by prefix.
+pub mod listing;
 #[cfg(test)]
 pub mod logging;
 
 /// Storage wrapper that adds artificial read/write latency (for testing).
 pub mod latency;
+
+/// Storage wrapper that counts requests and bytes per operation (for benchmarks).
+pub mod metering;
 
 /// HTTP redirect-based storage for read-only access.
 #[cfg(feature = "redirect")]

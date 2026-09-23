@@ -24,12 +24,23 @@ use icechunk_storage::sealed;
 pub struct LoggingStorage {
     backend: Arc<dyn Storage + Send + Sync>,
     fetch_log: Mutex<Vec<(String, String)>>,
+    /// What to report from `lists_id_prefixes_natively`: `None` defers to the
+    /// backend, `Some` overrides it either way.
+    #[serde(default)]
+    native_id_prefixes: Option<bool>,
 }
 
 #[cfg(test)]
 impl LoggingStorage {
     pub fn new(backend: Arc<dyn Storage + Send + Sync>) -> Self {
-        Self { backend, fetch_log: Mutex::new(Vec::new()) }
+        Self { backend, fetch_log: Mutex::new(Vec::new()), native_id_prefixes: None }
+    }
+
+    /// Report `native` from `lists_id_prefixes_natively` instead of what the
+    /// backend says.
+    pub fn with_native_id_prefixes(mut self, native: bool) -> Self {
+        self.native_id_prefixes = Some(native);
+        self
     }
 
     pub fn fetch_operations(&self) -> Vec<(String, String)> {
@@ -111,6 +122,24 @@ impl Storage for LoggingStorage {
             .expect("poison lock")
             .push(("list_objects".to_string(), prefix.to_string()));
         self.backend.list_objects(settings, prefix).await
+    }
+
+    async fn list_objects_with_id_prefixes<'a>(
+        &'a self,
+        settings: &Settings,
+        prefix: &str,
+        id_prefixes: &[String],
+    ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
+        self.fetch_log
+            .lock()
+            .expect("poison lock")
+            .push(("list_objects_with_id_prefixes".to_string(), prefix.to_string()));
+        self.backend.list_objects_with_id_prefixes(settings, prefix, id_prefixes).await
+    }
+
+    fn lists_id_prefixes_natively(&self) -> bool {
+        self.native_id_prefixes
+            .unwrap_or_else(|| self.backend.lists_id_prefixes_natively())
     }
 
     async fn delete_batch(

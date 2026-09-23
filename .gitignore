@@ -1,4 +1,5 @@
 /target
+/msrv-target
 
 # macOS
 .DS_Store

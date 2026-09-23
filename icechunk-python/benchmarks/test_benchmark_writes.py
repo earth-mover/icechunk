@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 # pytest -s test_benchmark_writes.py::test_write_chunks
 import numpy as np
 import pytest

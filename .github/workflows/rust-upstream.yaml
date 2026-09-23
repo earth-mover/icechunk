@@ -24,6 +24,9 @@ env:
   RUST_BACKTRACE: short
   RUSTFLAGS: "-D warnings"
   PIXI_VERSION: "v0.72.0"
+  # Title of the issue the report job keeps up to date. Pinned here so the
+  # comment step below can find that issue.
+  ZARRS_ISSUE_TITLE: "Nightly zarrs upstream test failed"
 
 jobs:
   zarrs:
@@ -47,7 +50,7 @@ jobs:
 
       # No cargo cache: the build is dominated by icechunk itself, which is a path
       # dependency and never cached, so the 800 MB entry saved no measurable time.
-      - uses: prefix-dev/setup-pixi@f00437f565399d418b0acc85936d12c1fb668347 # v0.10.1
+      - uses: prefix-dev/setup-pixi@d3f436a425481402e6a95a1d1fc10331c708cd9e # v0.10.2
         with:
           pixi-version: ${{ env.PIXI_VERSION }}
           cache: false
@@ -108,9 +111,6 @@ jobs:
       - name: Create or update failure issue
         shell: bash
         run: |
-          # Read the template
-          template=$(cat .github/zarrs-upstream-failure-template.md)
-
           # Combine build and test output
           test_output="=== Build Output ===
           "
@@ -130,15 +130,22 @@ jobs:
             test_output+="No test output captured"
           fi
 
-          # Replace placeholders
-          issue_body="${template//\{\{WORKFLOW\}\}/$WORKFLOW_NAME}"
-          issue_body="${issue_body//\{\{RUN_ID\}\}/$RUN_ID}"
-          issue_body="${issue_body//\{\{RUN_URL\}\}/$RUN_URL}"
-          issue_body="${issue_body//\{\{DATE\}\}/$(date -u)}"
-          issue_body="${issue_body//\{\{TEST_OUTPUT\}\}/$test_output}"
+          # Fill the template. Bash ${var//pat/repl} expands an `&` in the
+          # replacement to the matched text, which corrupts compiler output.
+          issue_body=$(
+            WORKFLOW="$WORKFLOW_NAME" DATE="$(date -u)" TEST_OUTPUT="$test_output" \
+            python3 - <<'PY'
+          import os
+
+          template = open(".github/zarrs-upstream-failure-template.md").read()
+          for key in ("WORKFLOW", "RUN_ID", "RUN_URL", "DATE", "TEST_OUTPUT"):
+              template = template.replace("{{%s}}" % key, os.environ[key])
+          print(template, end="")
+          PY
+          )
 
           # Check for existing open issue with same title
-          issue_title="Nightly zarrs upstream test failed"
+          issue_title="$ZARRS_ISSUE_TITLE"
           existing_issue=$(gh issue list --state open --label "CI" --search "\"$issue_title\" in:title" --json number --jq '.[0].number // empty')
 
           if [ -n "$existing_issue" ]; then
@@ -158,3 +165,48 @@ jobs:
           WORKFLOW_NAME: ${{ github.workflow }}
           RUN_ID: ${{ github.run_id }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+        # The step above rewrites the issue body. GitHub notifies nobody of that
+        # change. Post a comment so the issue watchers see the new failure.
+      - name: Comment on the failure issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          number=$(gh issue list --state open --limit 200 --json number,title |
+            jq -r --arg t "$ZARRS_ISSUE_TITLE" 'map(select(.title == $t)) | .[0].number // empty')
+          if [ -z "$number" ]; then
+            echo "no open issue titled '$ZARRS_ISSUE_TITLE'"
+            exit 0
+          fi
+          gh issue comment "$number" --body \
+            "Failed again in tonight's run: $RUN_URL. The issue body has the current failures."
+
+  zarrs-close:
+    name: zarrs-upstream-close
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    needs: zarrs
+    permissions:
+      issues: write # needed to close the failure issue once the nightly passes again
+    if: |
+      needs.zarrs.outputs.build-outcome == 'success'
+      && needs.zarrs.outputs.test-outcome == 'success'
+      && github.event_name == 'schedule'
+      && github.repository_owner == 'earth-mover'
+    steps:
+      - name: Close the failure issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          number=$(gh issue list --state open --limit 200 --json number,title |
+            jq -r --arg t "$ZARRS_ISSUE_TITLE" 'map(select(.title == $t)) | .[0].number // empty')
+          if [ -z "$number" ]; then
+            echo "no open issue titled '$ZARRS_ISSUE_TITLE'"
+            exit 0
+          fi
+          gh issue close "$number" --comment \
+            "The nightly passed again: $RUN_URL. Closing. A later failure opens a new issue."
