@@ -22,7 +22,7 @@ permissions:
 env:
   PIXI_VERSION: "v0.72.0"
   # Title of the issue the pytest reporter keeps up to date. Pinned here (it is
-  # also the action's default) so the comment step below can find that issue.
+  # also the action's default) so the comment and close steps below can find that issue.
   UPSTREAM_ISSUE_TITLE: "⚠️ Nightly upstream-dev CI failed ⚠️"
   # Titles of the issues the setup, mypy and xarray backends reporters keep up to date
   SETUP_ISSUE_TITLE: "Nightly upstream dependency installation failed"
@@ -302,7 +302,7 @@ jobs:
       issues: write # needed to close the failure issues once the nightly passes again
     if: |
       always()
-      && (needs.build.outputs.setup-outcome == 'success' || needs.build.outputs.mypy-outcome == 'success')
+      && (needs.build.outputs.setup-outcome == 'success' || needs.build.outputs.mypy-outcome == 'success' || needs.build.outputs.pytest-outcome == 'success')
       && github.event_name == 'schedule'
       && github.repository_owner == 'earth-mover'
     steps:
@@ -313,6 +313,7 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           SETUP_OUTCOME: ${{ needs.build.outputs.setup-outcome }}
           MYPY_OUTCOME: ${{ needs.build.outputs.mypy-outcome }}
+          PYTEST_OUTCOME: ${{ needs.build.outputs.pytest-outcome }}
         run: |
           close() {
             number=$(gh issue list --state open --limit 200 --json number,title |
@@ -326,6 +327,7 @@ jobs:
           }
           [ "$SETUP_OUTCOME" != success ] || close "$SETUP_ISSUE_TITLE"
           [ "$MYPY_OUTCOME" != success ] || close "$MYPY_ISSUE_TITLE"
+          [ "$PYTEST_OUTCOME" != success ] || close "$UPSTREAM_ISSUE_TITLE"
 
   xarray-backends:
     name: xarray-tests-upstream
