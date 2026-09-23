@@ -1486,6 +1486,58 @@ async fn check_storage_classes(
     Ok(())
 }
 
+/// Backends with storage classes accept a valid class and reject a bogus one; a
+/// bogus class that writes fine was never sent. Backends without classes accept any.
+#[tokio_test]
+async fn test_storage_class_reaches_backend() -> Result<(), Box<dyn std::error::Error>> {
+    with_storage(Permission::Modify, |name, storage| async move {
+        let valid_class = match name {
+            "in_memory" | "local_filesystem" => None,
+            // rustfs only accepts REDUCED_REDUNDANCY
+            n if n.starts_with("s3_") => Some("REDUCED_REDUNDANCY"),
+            n if n.starts_with("azure_blob") => Some("Cool"),
+            n if n.starts_with("AWS") || n.starts_with("R2") => Some("STANDARD_IA"),
+            // the HF gateway's storage class support is unknown
+            n if n.starts_with("HF") => return Ok(()),
+            _ => panic!("add backend {name} to this test"),
+        };
+        const BOGUS: &str = "NOT_A_STORAGE_CLASS";
+        let settings = with_storage_settings(&storage).await?;
+        match valid_class {
+            Some(class) => {
+                put_with_storage_class(&storage, &settings, class).await?.must_write()?;
+                let bogus = put_with_storage_class(&storage, &settings, BOGUS).await;
+                assert!(bogus.is_err(), "{name}: storage class was not sent");
+            }
+            None => {
+                put_with_storage_class(&storage, &settings, BOGUS).await?.must_write()?;
+            }
+        }
+        Ok(())
+    })
+    .await
+}
+
+async fn put_with_storage_class(
+    storage: &Arc<dyn Storage + Send + Sync>,
+    settings: &storage::Settings,
+    class: &str,
+) -> StorageResult<VersionedUpdateResult> {
+    let settings =
+        storage::Settings { storage_class: Some(class.to_string()), ..settings.clone() };
+    let key = format!("{CHUNKS_FILE_PATH}/{}", ChunkId::random());
+    storage
+        .put_object(
+            &settings,
+            &key,
+            Bytes::from_static(b"storage class"),
+            None,
+            vec![],
+            None,
+        )
+        .await
+}
+
 #[tokio::test]
 async fn test_write_object_larger_than_multipart_threshold()
 -> Result<(), Box<dyn std::error::Error>> {
