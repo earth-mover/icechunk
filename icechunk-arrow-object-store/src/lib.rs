@@ -492,6 +492,15 @@ impl ObjectStorage {
         }
     }
 
+    fn add_storage_class(&self, settings: &Settings, attributes: &mut Attributes) {
+        if let Some(klass) = settings.storage_class()
+            && self.backend.supports_storage_class()
+        {
+            attributes
+                .insert(Attribute::StorageClass, AttributeValue::from(klass.clone()));
+        }
+    }
+
     fn get_put_mode(
         &self,
         settings: &Settings,
@@ -579,6 +588,7 @@ impl Storage for ObjectStorage {
                 attributes.insert(att.clone(), value.clone());
             }
         };
+        self.add_storage_class(settings, &mut attributes);
 
         let mode = self.get_put_mode(settings, previous_version);
         let is_conditional = !matches!(mode, PutMode::Overwrite);
@@ -661,9 +671,12 @@ impl Storage for ObjectStorage {
                         .await
                         .map_err(|e| StorageErrorKind::ObjectStore(Box::new(e)))
                         .capture()?;
+                    let mut attributes = Attributes::new();
+                    self.add_storage_class(settings, &mut attributes);
+                    let options = PutOptions { attributes, ..PutOptions::default() };
                     self.get_client(settings, Role::Write)
                         .await?
-                        .put(&to, bytes.into())
+                        .put_opts(&to, bytes.into(), options)
                         .await
                         .map_err(|e| StorageErrorKind::ObjectStore(Box::new(e)))
                         .capture()?;
@@ -676,6 +689,8 @@ impl Storage for ObjectStorage {
                 Err(err) => Err(obj_store_error(err)),
             }
         } else {
+            // FIXME: `settings.storage_class()` is dropped, the copy lands in the
+            // default class. object_store's `CopyOptions` has no attributes to carry it.
             match self.get_client(settings, Role::Write).await?.copy(&from, &to).await {
                 Ok(_) => {
                     Ok(VersionedUpdateResult::Updated { new_version: version.clone() })
@@ -980,6 +995,12 @@ pub trait ObjectStoreBackend: Debug + Display + Sync + Send {
         false
     }
 
+    /// Whether writes send `Settings::storage_class`. `false` only where
+    /// `object_store` rejects the attribute: the local filesystem fails any put that has one.
+    fn supports_storage_class(&self) -> bool {
+        true
+    }
+
     fn create_location_if_needed(&self) -> Result<(), StorageError> {
         Ok(())
     }
@@ -1079,6 +1100,10 @@ impl ObjectStoreBackend for LocalFileSystemObjectStoreBackend {
 
     fn artificially_sort_refs_in_mem(&self) -> bool {
         true
+    }
+
+    fn supports_storage_class(&self) -> bool {
+        false
     }
 
     fn default_settings(&self) -> Settings {
@@ -1782,8 +1807,8 @@ mod tests {
     use tempfile::TempDir;
 
     use super::{
-        Bytes, ObjectPath, ObjectStorage, ReadbackOutcome, Settings, Storage as _,
-        VersionedUpdateResult,
+        Attribute, Attributes, Bytes, GetOptions, ObjectPath, ObjectStorage,
+        ReadbackOutcome, Role, Settings, Storage as _, VersionedUpdateResult,
     };
     #[cfg(feature = "http")]
     use super::{NonZeroU16, RetriesSettings, Url};
@@ -1915,6 +1940,144 @@ mod tests {
             .await
             .unwrap();
         assert!(not_modified.is_none());
+    }
+
+    /// HEAD `path` on the underlying `object_store` and return the attributes
+    /// it holds. The in-memory store keeps put attributes, so this observes
+    /// exactly what `put_object` sent.
+    #[expect(clippy::unwrap_used)]
+    async fn stored_attributes(
+        store: &ObjectStorage,
+        settings: &Settings,
+        path: &str,
+    ) -> Attributes {
+        let client = store.get_client(settings, Role::Read).await.unwrap();
+        let opts = GetOptions { head: true, ..Default::default() };
+        client.get_opts(&store.prefixed_path(path), opts).await.unwrap().attributes
+    }
+
+    #[tokio_test]
+    async fn storage_class_is_sent_even_without_metadata() {
+        // The storage class is not user metadata: it must reach the object
+        // store even when `unsafe_use_metadata` is off.
+        let store = ObjectStorage::new_in_memory().await.unwrap();
+        let settings = Settings {
+            storage_class: Some("STANDARD_IA".to_string()),
+            unsafe_use_metadata: Some(false),
+            ..Settings::default()
+        };
+        let path = "chunks/with-class";
+        store
+            .put_object(
+                &settings,
+                path,
+                Bytes::from_static(b"payload"),
+                Some("application/octet-stream"),
+                vec![("k".to_string(), "v".to_string())],
+                None,
+            )
+            .await
+            .unwrap()
+            .must_write()
+            .unwrap();
+
+        let attributes = stored_attributes(&store, &settings, path).await;
+        assert_eq!(
+            attributes.get(&Attribute::StorageClass).map(|v| v.as_ref()),
+            Some("STANDARD_IA")
+        );
+        // ...while everything that *is* metadata stayed behind the guard.
+        assert_eq!(attributes.len(), 1);
+    }
+
+    #[tokio_test]
+    async fn no_storage_class_attribute_when_unset() {
+        let store = ObjectStorage::new_in_memory().await.unwrap();
+        let settings = store.default_settings().await.unwrap();
+        let path = "chunks/without-class";
+        store
+            .put_object(
+                &settings,
+                path,
+                Bytes::from_static(b"payload"),
+                None,
+                vec![],
+                None,
+            )
+            .await
+            .unwrap()
+            .must_write()
+            .unwrap();
+
+        let attributes = stored_attributes(&store, &settings, path).await;
+        assert!(attributes.get(&Attribute::StorageClass).is_none());
+    }
+
+    #[tokio_test]
+    async fn local_filesystem_ignores_storage_class() {
+        // `object_store`'s `LocalFileSystem` rejects any put attribute with
+        // `NotImplemented`, and a filesystem has no storage tiers anyway, so a
+        // configured class must be dropped rather than fail every write.
+        let tmp_dir = TempDir::new().unwrap();
+        let store = ObjectStorage::new_local_filesystem(tmp_dir.path()).await.unwrap();
+        let settings = Settings {
+            storage_class: Some("STANDARD_IA".to_string()),
+            ..store.default_settings().await.unwrap()
+        };
+        let path = "chunks/on-disk";
+        store
+            .put_object(
+                &settings,
+                path,
+                Bytes::from_static(b"payload"),
+                None,
+                vec![],
+                None,
+            )
+            .await
+            .unwrap()
+            .must_write()
+            .unwrap();
+
+        let on_disk =
+            std::fs::read(tmp_dir.path().join("chunks").join("on-disk")).unwrap();
+        assert_eq!(on_disk, b"payload");
+    }
+
+    #[tokio_test]
+    async fn conditional_copy_keeps_storage_class() {
+        let store = ObjectStorage::new_in_memory().await.unwrap();
+        let settings = Settings {
+            storage_class: Some("STANDARD_IA".to_string()),
+            ..store.default_settings().await.unwrap()
+        };
+        let version = store
+            .put_object(
+                &settings,
+                "config",
+                Bytes::from_static(b"payload"),
+                None,
+                vec![],
+                None,
+            )
+            .await
+            .unwrap()
+            .must_write()
+            .unwrap();
+        assert!(version.etag().is_some());
+
+        store
+            .copy_object(&settings, "config", "config-backup", None, &version)
+            .await
+            .unwrap()
+            .must_write()
+            .unwrap();
+
+        let attributes = stored_attributes(&store, &settings, "config-backup").await;
+        assert_eq!(
+            attributes.get(&Attribute::StorageClass).map(|v| v.as_ref()),
+            Some("STANDARD_IA")
+        );
     }
 
     #[cfg(feature = "http")]

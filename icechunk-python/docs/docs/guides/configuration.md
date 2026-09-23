@@ -77,11 +77,30 @@ config.storage = ic.storage.StorageSettings(
         max_concurrent_requests_for_object=10,
         ideal_concurrent_request_size=1_000_000,
     ),
-    storage_class="STANDARD",
-    metadata_storage_class="STANDARD_IA",
-    chunks_storage_class="STANDARD_IA",
 )
 ```
+
+#### Storage classes
+
+`storage_class`, `metadata_storage_class` and `chunks_storage_class` set the storage class that objects are written with. The value is passed to the provider unchanged, so use that provider's names; a name the provider doesn't recognize makes writes fail. The local filesystem has no storage classes and ignores these settings.
+
+=== "S3"
+
+    ```python
+    config.storage.storage_class = "STANDARD_IA"
+    ```
+
+=== "Google Cloud Storage"
+
+    ```python
+    config.storage.storage_class = "NEARLINE"
+    ```
+
+=== "Azure Blob Storage"
+
+    ```python
+    config.storage.storage_class = "Cool"
+    ```
 
 ### [`virtual_chunk_containers`](../reference/config.md#icechunk.config.RepositoryConfig.virtual_chunk_containers)
 
