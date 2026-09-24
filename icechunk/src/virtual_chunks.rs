@@ -1153,15 +1153,10 @@ impl private::Sealed for ObjectStoreFetcher {}
 ))]
 impl ObjectStoreFetcher {
     #[cfg(feature = "object-store-fs")]
-    fn new_local(settings: storage::Settings) -> Self {
-        ObjectStoreFetcher {
-            client: Arc::new(LocalFileSystem::new()),
-            settings: storage::Settings {
-                unsafe_use_conditional_update: Some(false),
-                unsafe_use_metadata: Some(false),
-                ..settings
-            },
-        }
+    fn new_local(mut settings: storage::Settings) -> Self {
+        settings.unsafe_use_conditional_update = Some(false);
+        settings.unsafe_use_metadata = Some(false);
+        ObjectStoreFetcher { client: Arc::new(LocalFileSystem::new()), settings }
     }
 
     #[cfg(all(not(feature = "s3"), feature = "object-store-s3"))]
@@ -1770,13 +1765,12 @@ mod tests {
         use std::num::{NonZeroU16, NonZeroU64};
         use url::Url;
 
-        let custom_settings = crate::storage::Settings {
-            concurrency: Some(crate::storage::ConcurrencySettings {
-                max_concurrent_requests_for_object: Some(NonZeroU16::new(42).unwrap()),
-                ideal_concurrent_request_size: Some(NonZeroU64::new(8192).unwrap()),
-            }),
-            ..Default::default()
-        };
+        let mut concurrency = crate::storage::ConcurrencySettings::default();
+        concurrency.max_concurrent_requests_for_object =
+            Some(NonZeroU16::new(42).unwrap());
+        concurrency.ideal_concurrent_request_size = Some(NonZeroU64::new(8192).unwrap());
+        let mut custom_settings = crate::storage::Settings::default();
+        custom_settings.concurrency = Some(concurrency);
 
         let container = VirtualChunkContainer::new(
             "file:///example/".to_string(),

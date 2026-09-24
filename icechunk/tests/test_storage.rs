@@ -241,14 +241,12 @@ where
 async fn with_storage_settings(
     storage: &Arc<dyn Storage + Send + Sync>,
 ) -> StorageResult<storage::Settings> {
-    let retries = storage::Settings {
-        retries: Some(storage::RetriesSettings {
-            max_tries: NonZeroU16::new(16),
-            initial_backoff_ms: Some(500),
-            max_backoff_ms: Some(30_000),
-        }),
-        ..Default::default()
-    };
+    let mut retry_settings = storage::RetriesSettings::default();
+    retry_settings.max_tries = NonZeroU16::new(16);
+    retry_settings.initial_backoff_ms = Some(500);
+    retry_settings.max_backoff_ms = Some(30_000);
+    let mut retries = storage::Settings::default();
+    retries.retries = Some(retry_settings);
     Ok(storage.default_settings().await?.merge(retries))
 }
 
@@ -1325,11 +1323,9 @@ async fn test_write_config_can_overwrite_with_unsafe_config(
     #[case] spec_version: SpecVersionBin,
 ) -> Result<(), Box<dyn std::error::Error>> {
     with_storage(Permission::Modify, |_, storage| async move {
-        let storage_settings = storage::Settings {
-            unsafe_use_conditional_update: Some(false),
-            unsafe_use_conditional_create: Some(false),
-            ..with_storage_settings(&storage).await?
-        };
+        let mut storage_settings = with_storage_settings(&storage).await?;
+        storage_settings.unsafe_use_conditional_update = Some(false);
+        storage_settings.unsafe_use_conditional_create = Some(false);
         let am = Arc::new(AssetManager::new(
             storage,
             storage_settings,
@@ -1408,11 +1404,10 @@ async fn check_storage_classes(
     .await;
 
     // we write 2 chunks in IA and one in standard, in ascending order of id
+    let mut ia_settings = storage::Settings::default();
+    ia_settings.storage_class = Some("STANDARD_IA".to_string());
     st.put_object(
-        &storage::Settings {
-            storage_class: Some("STANDARD_IA".to_string()),
-            ..storage::Settings::default()
-        },
+        &ia_settings,
         "chunks/000000000000",
         Bytes::new(),
         None,
@@ -1422,10 +1417,7 @@ async fn check_storage_classes(
     .await?
     .must_write()?;
     st.put_object(
-        &storage::Settings {
-            storage_class: Some("STANDARD_IA".to_string()),
-            ..storage::Settings::default()
-        },
+        &ia_settings,
         "chunks/000000000001",
         Bytes::new(),
         None,
@@ -1503,8 +1495,8 @@ async fn put_with_storage_class(
     settings: &storage::Settings,
     class: &str,
 ) -> StorageResult<VersionedUpdateResult> {
-    let settings =
-        storage::Settings { storage_class: Some(class.to_string()), ..settings.clone() };
+    let mut settings = settings.clone();
+    settings.storage_class = Some(class.to_string());
     let key = format!("{CHUNKS_FILE_PATH}/{}", ChunkId::random());
     storage
         .put_object(
@@ -1522,10 +1514,8 @@ async fn put_with_storage_class(
 async fn test_write_object_larger_than_multipart_threshold()
 -> Result<(), Box<dyn std::error::Error>> {
     with_storage(Permission::Modify, |_, storage| async move {
-        let custom_settings = storage::Settings {
-            minimum_size_for_multipart_upload: Some(100),
-            ..with_storage_settings(&storage).await?
-        };
+        let mut custom_settings = with_storage_settings(&storage).await?;
+        custom_settings.minimum_size_for_multipart_upload = Some(100);
 
         let id = ChunkId::random();
         let path = format!("{MANIFESTS_FILE_PATH}/{id}");
@@ -1654,13 +1644,11 @@ async fn test_http_storage() -> Result<(), Box<dyn std::error::Error>> {
         assert_eq!(expected, data.len() as u64);
 
         let mut data = Vec::with_capacity(1_024);
-        let conc_settings = storage::Settings {
-            concurrency: Some(ConcurrencySettings {
-                max_concurrent_requests_for_object: Some(100.try_into()?),
-                ideal_concurrent_request_size: Some(10.try_into()?),
-            }),
-            ..settings.clone()
-        };
+        let mut concurrency = ConcurrencySettings::default();
+        concurrency.max_concurrent_requests_for_object = Some(100.try_into()?);
+        concurrency.ideal_concurrent_request_size = Some(10.try_into()?);
+        let mut conc_settings = settings.clone();
+        conc_settings.concurrency = Some(concurrency);
         let mut read =
             storage.get_object(&conc_settings, "repo", Some(&(0..100))).await?.0;
         read.read_to_end(&mut data).await?;

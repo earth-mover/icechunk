@@ -3021,15 +3021,13 @@ mod tests {
         let logging2 = Arc::new(LoggingStorage::new(Arc::clone(&backend)));
         let storage2 = Arc::clone(&logging2);
         let storage2: Arc<dyn Storage + Send + Sync> = storage2;
+        let mut concurrency = storage::ConcurrencySettings::default();
+        concurrency.max_concurrent_requests_for_object = NonZeroU16::new(1);
+        let mut storage_settings = storage::Settings::default();
+        storage_settings.concurrency = Some(concurrency);
         let config = RepositoryConfig {
             manifest: Some(ManifestConfig::empty()),
-            storage: Some(storage::Settings {
-                concurrency: Some(storage::ConcurrencySettings {
-                    max_concurrent_requests_for_object: NonZeroU16::new(1),
-                    ..Default::default()
-                }),
-                ..Default::default()
-            }),
+            storage: Some(storage_settings),
             ..RepositoryConfig::default()
         };
         let read_repo = Repository::open(Some(config), storage2, HashMap::new()).await?;
@@ -3901,15 +3899,13 @@ mod tests {
             }),
             ..ManifestConfig::default()
         };
+        let mut concurrency = storage::ConcurrencySettings::default();
+        concurrency.max_concurrent_requests_for_object = NonZeroU16::new(1);
+        let mut storage_settings = storage::Settings::default();
+        storage_settings.concurrency = Some(concurrency);
         let config = RepositoryConfig {
             manifest: Some(man_config),
-            storage: Some(storage::Settings {
-                concurrency: Some(storage::ConcurrencySettings {
-                    max_concurrent_requests_for_object: NonZeroU16::new(1),
-                    ..Default::default()
-                }),
-                ..Default::default()
-            }),
+            storage: Some(storage_settings),
             ..RepositoryConfig::default()
         };
         let repository = Repository::open(Some(config), storage, HashMap::new()).await?;

@@ -1008,24 +1008,20 @@ impl ObjectStoreBackend for InMemoryObjectStoreBackend {
     }
 
     fn default_settings(&self) -> Settings {
-        Settings {
-            concurrency: Some(ConcurrencySettings {
-                // we do != 1 because we use this store for tests
-                max_concurrent_requests_for_object: Some(
-                    NonZeroU16::new(5).unwrap_or(NonZeroU16::MIN),
-                ),
-                ideal_concurrent_request_size: Some(
-                    NonZeroU64::new(1).unwrap_or(NonZeroU64::MIN),
-                ),
-            }),
-            retries: Some(RetriesSettings {
-                max_tries: Some(NonZeroU16::MIN),
-                initial_backoff_ms: Some(0),
-                max_backoff_ms: Some(0),
-            }),
-
-            ..Default::default()
-        }
+        let mut concurrency = ConcurrencySettings::default();
+        // we do != 1 because we use this store for tests
+        concurrency.max_concurrent_requests_for_object =
+            Some(NonZeroU16::new(5).unwrap_or(NonZeroU16::MIN));
+        concurrency.ideal_concurrent_request_size =
+            Some(NonZeroU64::new(1).unwrap_or(NonZeroU64::MIN));
+        let mut retries = RetriesSettings::default();
+        retries.max_tries = Some(NonZeroU16::MIN);
+        retries.initial_backoff_ms = Some(0);
+        retries.max_backoff_ms = Some(0);
+        let mut settings = Settings::default();
+        settings.concurrency = Some(concurrency);
+        settings.retries = Some(retries);
+        settings
     }
 }
 
@@ -1081,24 +1077,21 @@ impl ObjectStoreBackend for LocalFileSystemObjectStoreBackend {
     }
 
     fn default_settings(&self) -> Settings {
-        Settings {
-            concurrency: Some(ConcurrencySettings {
-                max_concurrent_requests_for_object: Some(
-                    NonZeroU16::new(5).unwrap_or(NonZeroU16::MIN),
-                ),
-                ideal_concurrent_request_size: Some(
-                    NonZeroU64::new(4 * 1024).unwrap_or(NonZeroU64::MIN),
-                ),
-            }),
-            unsafe_use_conditional_update: Some(false),
-            unsafe_use_metadata: Some(false),
-            retries: Some(RetriesSettings {
-                max_tries: Some(NonZeroU16::new(1).unwrap_or(NonZeroU16::MIN)),
-                initial_backoff_ms: Some(0),
-                max_backoff_ms: Some(0),
-            }),
-            ..Default::default()
-        }
+        let mut concurrency = ConcurrencySettings::default();
+        concurrency.max_concurrent_requests_for_object =
+            Some(NonZeroU16::new(5).unwrap_or(NonZeroU16::MIN));
+        concurrency.ideal_concurrent_request_size =
+            Some(NonZeroU64::new(4 * 1024).unwrap_or(NonZeroU64::MIN));
+        let mut retries = RetriesSettings::default();
+        retries.max_tries = Some(NonZeroU16::new(1).unwrap_or(NonZeroU16::MIN));
+        retries.initial_backoff_ms = Some(0);
+        retries.max_backoff_ms = Some(0);
+        let mut settings = Settings::default();
+        settings.concurrency = Some(concurrency);
+        settings.unsafe_use_conditional_update = Some(false);
+        settings.unsafe_use_metadata = Some(false);
+        settings.retries = Some(retries);
+        settings
     }
 
     fn create_location_if_needed(&self) -> Result<(), StorageError> {
@@ -2104,11 +2097,9 @@ mod tests {
         // The storage class is not user metadata: it must reach the object
         // store even when `unsafe_use_metadata` is off.
         let store = ObjectStorage::new_in_memory().await.unwrap();
-        let settings = Settings {
-            storage_class: Some("STANDARD_IA".to_string()),
-            unsafe_use_metadata: Some(false),
-            ..Settings::default()
-        };
+        let mut settings = Settings::default();
+        settings.storage_class = Some("STANDARD_IA".to_string());
+        settings.unsafe_use_metadata = Some(false);
         let path = "chunks/with-class";
         store
             .put_object(
@@ -2163,10 +2154,8 @@ mod tests {
         // configured class must be dropped rather than fail every write.
         let tmp_dir = TempDir::new().unwrap();
         let store = ObjectStorage::new_local_filesystem(tmp_dir.path()).await.unwrap();
-        let settings = Settings {
-            storage_class: Some("STANDARD_IA".to_string()),
-            ..store.default_settings().await.unwrap()
-        };
+        let mut settings = store.default_settings().await.unwrap();
+        settings.storage_class = Some("STANDARD_IA".to_string());
         let path = "chunks/on-disk";
         store
             .put_object(
@@ -2190,10 +2179,8 @@ mod tests {
     #[tokio_test]
     async fn conditional_copy_keeps_storage_class() {
         let store = ObjectStorage::new_in_memory().await.unwrap();
-        let settings = Settings {
-            storage_class: Some("STANDARD_IA".to_string()),
-            ..store.default_settings().await.unwrap()
-        };
+        let mut settings = store.default_settings().await.unwrap();
+        settings.storage_class = Some("STANDARD_IA".to_string());
         let version = store
             .put_object(
                 &settings,
@@ -2234,14 +2221,12 @@ mod tests {
             None,
         )
         .unwrap();
-        let settings = Settings {
-            retries: Some(RetriesSettings {
-                max_tries: Some(NonZeroU16::new(1).unwrap()),
-                initial_backoff_ms: Some(1),
-                max_backoff_ms: Some(1),
-            }),
-            ..Default::default()
-        };
+        let mut retries = RetriesSettings::default();
+        retries.max_tries = Some(NonZeroU16::new(1).unwrap());
+        retries.initial_backoff_ms = Some(1);
+        retries.max_backoff_ms = Some(1);
+        let mut settings = Settings::default();
+        settings.retries = Some(retries);
         store
             .read_back_after_conditional_failure(
                 &settings,

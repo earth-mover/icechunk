@@ -152,6 +152,7 @@ impl Display for VersionInfo {
 }
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Copy, Default)]
+#[non_exhaustive]
 pub struct RetriesSettings {
     pub max_tries: Option<NonZeroU16>,
     pub initial_backoff_ms: Option<u32>,
@@ -181,6 +182,7 @@ impl RetriesSettings {
 }
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Copy, Default)]
+#[non_exhaustive]
 pub struct TimeoutSettings {
     pub connect_timeout_ms: Option<u32>,
     pub read_timeout_ms: Option<u32>,
@@ -204,6 +206,7 @@ impl TimeoutSettings {
 }
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Copy, Default)]
+#[non_exhaustive]
 pub struct ConcurrencySettings {
     pub max_concurrent_requests_for_object: Option<NonZeroU16>,
     pub ideal_concurrent_request_size: Option<NonZeroU64>,
@@ -239,6 +242,7 @@ impl ConcurrencySettings {
 
 /// Configuration for storage operations (retries, concurrency, storage classes).
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Default)]
+#[non_exhaustive]
 pub struct Settings {
     #[serde(default)]
     pub concurrency: Option<ConcurrencySettings>,

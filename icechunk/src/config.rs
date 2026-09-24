@@ -492,10 +492,12 @@ static DEFAULT_REPO_UPDATE_RETRIES: OnceLock<RetriesSettings> = OnceLock::new();
 
 impl RepoUpdateRetryConfig {
     fn default_retries() -> &'static RetriesSettings {
-        DEFAULT_REPO_UPDATE_RETRIES.get_or_init(|| RetriesSettings {
-            max_tries: Some(NonZeroU16::new(100).unwrap_or(NonZeroU16::MIN)),
-            initial_backoff_ms: Some(50),
-            max_backoff_ms: Some(30_000),
+        DEFAULT_REPO_UPDATE_RETRIES.get_or_init(|| {
+            let mut retries = RetriesSettings::default();
+            retries.max_tries = Some(NonZeroU16::new(100).unwrap_or(NonZeroU16::MIN));
+            retries.initial_backoff_ms = Some(50);
+            retries.max_backoff_ms = Some(30_000);
+            retries
         })
     }
 

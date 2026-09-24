@@ -479,8 +479,8 @@ pub(crate) async fn build(args: BuildArgs) -> Result<(), BoxError> {
     // ---- register the chain in repo info
     println!("Updating repo info");
     let tip = snap_ids.last().cloned().ok_or("no reachable snapshots")?;
-    let retries =
-        RetriesSettings { max_tries: Some(NonZeroU16::MIN), ..Default::default() };
+    let mut retries = RetriesSettings::default();
+    retries.max_tries = Some(NonZeroU16::MIN);
     am.update_repo_info(
         &retries,
         |repo_info: Arc<RepoInfo>, backup_path: &str, _version| {

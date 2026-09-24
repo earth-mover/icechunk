@@ -412,7 +412,10 @@ prop_compose! {
         (max_concurrent_requests_for_object in option::of(any::<NonZeroU16>()),
         ideal_concurrent_request_size in option::of(any::<NonZeroU64>())
     ) -> ConcurrencySettings  {
-        ConcurrencySettings  {max_concurrent_requests_for_object, ideal_concurrent_request_size}
+        let mut settings = ConcurrencySettings::default();
+        settings.max_concurrent_requests_for_object = max_concurrent_requests_for_object;
+        settings.ideal_concurrent_request_size = ideal_concurrent_request_size;
+        settings
     }
 }
 
@@ -422,7 +425,11 @@ prop_compose! {
         initial_backoff_ms in option::of(any::<u32>()),
         max_backoff_ms in option::of(any::<u32>()),
     ) -> RetriesSettings  {
-        RetriesSettings {initial_backoff_ms,max_backoff_ms, max_tries }
+        let mut settings = RetriesSettings::default();
+        settings.initial_backoff_ms = initial_backoff_ms;
+        settings.max_backoff_ms = max_backoff_ms;
+        settings.max_tries = max_tries;
+        settings
     }
 }
 
@@ -447,18 +454,18 @@ prop_compose! {
         chunks_storage_class in option::of(".*"),
         minimum_size_for_multipart_upload in option::of(any::<u64>()),
     ) -> Settings  {
-        Settings {
-            concurrency,
-            retries,
-            timeouts: None,
-            unsafe_use_conditional_update,
-            unsafe_use_conditional_create,
-            unsafe_use_metadata,
-            storage_class,
-            metadata_storage_class,
-            chunks_storage_class,
-            minimum_size_for_multipart_upload,
-        }
+        let mut settings = Settings::default();
+        settings.concurrency = concurrency;
+        settings.retries = retries;
+        settings.timeouts = None;
+        settings.unsafe_use_conditional_update = unsafe_use_conditional_update;
+        settings.unsafe_use_conditional_create = unsafe_use_conditional_create;
+        settings.unsafe_use_metadata = unsafe_use_metadata;
+        settings.storage_class = storage_class;
+        settings.metadata_storage_class = metadata_storage_class;
+        settings.chunks_storage_class = chunks_storage_class;
+        settings.minimum_size_for_multipart_upload = minimum_size_for_multipart_upload;
+        settings
     }
 }
 

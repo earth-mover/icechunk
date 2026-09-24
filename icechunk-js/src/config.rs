@@ -82,14 +82,13 @@ pub struct JsStorageConcurrencySettings {
 
 impl From<JsStorageConcurrencySettings> for ConcurrencySettings {
     fn from(value: JsStorageConcurrencySettings) -> Self {
-        ConcurrencySettings {
-            max_concurrent_requests_for_object: value
-                .max_concurrent_requests_for_object
-                .and_then(|v| NonZeroU16::new(v as u16)),
-            ideal_concurrent_request_size: value
-                .ideal_concurrent_request_size
-                .and_then(|v| NonZeroU64::new(v as u64)),
-        }
+        let mut settings = Self::default();
+        settings.max_concurrent_requests_for_object = value
+            .max_concurrent_requests_for_object
+            .and_then(|v| NonZeroU16::new(v as u16));
+        settings.ideal_concurrent_request_size =
+            value.ideal_concurrent_request_size.and_then(|v| NonZeroU64::new(v as u64));
+        settings
     }
 }
 
@@ -104,11 +103,11 @@ pub struct JsStorageRetriesSettings {
 
 impl From<JsStorageRetriesSettings> for RetriesSettings {
     fn from(value: JsStorageRetriesSettings) -> Self {
-        RetriesSettings {
-            max_tries: value.max_tries.and_then(|v| NonZeroU16::new(v as u16)),
-            initial_backoff_ms: value.initial_backoff_ms,
-            max_backoff_ms: value.max_backoff_ms,
-        }
+        let mut settings = Self::default();
+        settings.max_tries = value.max_tries.and_then(|v| NonZeroU16::new(v as u16));
+        settings.initial_backoff_ms = value.initial_backoff_ms;
+        settings.max_backoff_ms = value.max_backoff_ms;
+        settings
     }
 }
 
@@ -124,12 +123,12 @@ pub struct JsStorageTimeoutSettings {
 
 impl From<JsStorageTimeoutSettings> for TimeoutSettings {
     fn from(value: JsStorageTimeoutSettings) -> Self {
-        TimeoutSettings {
-            connect_timeout_ms: value.connect_timeout_ms,
-            read_timeout_ms: value.read_timeout_ms,
-            operation_timeout_ms: value.operation_timeout_ms,
-            operation_attempt_timeout_ms: value.operation_attempt_timeout_ms,
-        }
+        let mut settings = Self::default();
+        settings.connect_timeout_ms = value.connect_timeout_ms;
+        settings.read_timeout_ms = value.read_timeout_ms;
+        settings.operation_timeout_ms = value.operation_timeout_ms;
+        settings.operation_attempt_timeout_ms = value.operation_attempt_timeout_ms;
+        settings
     }
 }
 
@@ -151,20 +150,19 @@ pub struct JsStorageSettings {
 
 impl From<JsStorageSettings> for Settings {
     fn from(value: JsStorageSettings) -> Self {
-        Settings {
-            concurrency: value.concurrency.map(|c| c.into()),
-            retries: value.retries.map(|r| r.into()),
-            timeouts: value.timeouts.map(|t| t.into()),
-            unsafe_use_conditional_update: value.unsafe_use_conditional_update,
-            unsafe_use_conditional_create: value.unsafe_use_conditional_create,
-            unsafe_use_metadata: value.unsafe_use_metadata,
-            storage_class: value.storage_class,
-            metadata_storage_class: value.metadata_storage_class,
-            chunks_storage_class: value.chunks_storage_class,
-            minimum_size_for_multipart_upload: value
-                .minimum_size_for_multipart_upload
-                .map(|v| v as u64),
-        }
+        let mut settings = Self::default();
+        settings.concurrency = value.concurrency.map(|c| c.into());
+        settings.retries = value.retries.map(|r| r.into());
+        settings.timeouts = value.timeouts.map(|t| t.into());
+        settings.unsafe_use_conditional_update = value.unsafe_use_conditional_update;
+        settings.unsafe_use_conditional_create = value.unsafe_use_conditional_create;
+        settings.unsafe_use_metadata = value.unsafe_use_metadata;
+        settings.storage_class = value.storage_class;
+        settings.metadata_storage_class = value.metadata_storage_class;
+        settings.chunks_storage_class = value.chunks_storage_class;
+        settings.minimum_size_for_multipart_upload =
+            value.minimum_size_for_multipart_upload.map(|v| v as u64);
+        settings
     }
 }
 

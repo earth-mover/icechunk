@@ -999,10 +999,8 @@ impl AssetManager {
 
         let path = format!("{CHUNKS_FILE_PATH}/{chunk_id}");
         let _permit = self.request_semaphore.acquire().await.capture()?;
-        let settings = storage::Settings {
-            storage_class: self.storage_settings.chunks_storage_class().cloned(),
-            ..self.storage_settings.clone()
-        };
+        let mut settings = self.storage_settings.clone();
+        settings.storage_class = self.storage_settings.chunks_storage_class().cloned();
         // we don't pre-populate the chunk cache, there are too many of them for this to be useful
         self.storage
             .put_object(&settings, path.as_str(), bytes, None, Default::default(), None)
@@ -1312,10 +1310,8 @@ async fn write_new_manifest(
     let len = buffer.len() as u64;
     debug!(%id, size_bytes=len, "Writing manifest");
     let path = format!("{MANIFESTS_FILE_PATH}/{id}");
-    let settings = storage::Settings {
-        storage_class: storage_settings.metadata_storage_class().cloned(),
-        ..storage_settings.clone()
-    };
+    let mut settings = storage_settings.clone();
+    settings.storage_class = storage_settings.metadata_storage_class().cloned();
 
     let _permit = semaphore.acquire().await.capture()?;
     storage
@@ -1602,10 +1598,8 @@ async fn write_new_snapshot(
 
     debug!(%id, size_bytes=buffer.len(), "Writing snapshot");
     let path = format!("{SNAPSHOTS_FILE_PATH}/{id}");
-    let settings = storage::Settings {
-        storage_class: storage_settings.metadata_storage_class().cloned(),
-        ..storage_settings.clone()
-    };
+    let mut settings = storage_settings.clone();
+    settings.storage_class = storage_settings.metadata_storage_class().cloned();
     let _permit = semaphore.acquire().await.capture()?;
     storage
         .put_object(&settings, path.as_str(), buffer.into(), None, metadata, None)
@@ -1682,10 +1676,8 @@ async fn write_new_tx_log(
 
     debug!(%transaction_id, size_bytes=buffer.len(), "Writing transaction log");
     let path = format!("{TRANSACTION_LOGS_FILE_PATH}/{transaction_id}");
-    let settings = storage::Settings {
-        storage_class: storage_settings.metadata_storage_class().cloned(),
-        ..storage_settings.clone()
-    };
+    let mut settings = storage_settings.clone();
+    settings.storage_class = storage_settings.metadata_storage_class().cloned();
 
     let _permit = semaphore.acquire().await.capture()?;
     storage

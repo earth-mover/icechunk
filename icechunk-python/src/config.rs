@@ -1150,11 +1150,11 @@ impl From<RetriesSettings> for PyStorageRetriesSettings {
 
 impl From<&PyStorageRetriesSettings> for RetriesSettings {
     fn from(value: &PyStorageRetriesSettings) -> Self {
-        Self {
-            max_tries: value.max_tries,
-            initial_backoff_ms: value.initial_backoff_ms,
-            max_backoff_ms: value.max_backoff_ms,
-        }
+        let mut settings = Self::default();
+        settings.max_tries = value.max_tries;
+        settings.initial_backoff_ms = value.initial_backoff_ms;
+        settings.max_backoff_ms = value.max_backoff_ms;
+        settings
     }
 }
 
@@ -1239,12 +1239,12 @@ impl From<storage::TimeoutSettings> for PyStorageTimeoutSettings {
 
 impl From<&PyStorageTimeoutSettings> for storage::TimeoutSettings {
     fn from(value: &PyStorageTimeoutSettings) -> Self {
-        Self {
-            connect_timeout_ms: value.connect_timeout_ms,
-            read_timeout_ms: value.read_timeout_ms,
-            operation_timeout_ms: value.operation_timeout_ms,
-            operation_attempt_timeout_ms: value.operation_attempt_timeout_ms,
-        }
+        let mut settings = Self::default();
+        settings.connect_timeout_ms = value.connect_timeout_ms;
+        settings.read_timeout_ms = value.read_timeout_ms;
+        settings.operation_timeout_ms = value.operation_timeout_ms;
+        settings.operation_attempt_timeout_ms = value.operation_attempt_timeout_ms;
+        settings
     }
 }
 
@@ -1384,10 +1384,11 @@ impl From<ConcurrencySettings> for PyStorageConcurrencySettings {
 
 impl From<&PyStorageConcurrencySettings> for ConcurrencySettings {
     fn from(value: &PyStorageConcurrencySettings) -> Self {
-        Self {
-            max_concurrent_requests_for_object: value.max_concurrent_requests_for_object,
-            ideal_concurrent_request_size: value.ideal_concurrent_request_size,
-        }
+        let mut settings = Self::default();
+        settings.max_concurrent_requests_for_object =
+            value.max_concurrent_requests_for_object;
+        settings.ideal_concurrent_request_size = value.ideal_concurrent_request_size;
+        settings
     }
 }
 
@@ -1497,17 +1498,21 @@ impl From<storage::Settings> for PyStorageSettings {
 
 impl From<&PyStorageSettings> for storage::Settings {
     fn from(value: &PyStorageSettings) -> Self {
-        Python::attach(|py| Self {
-            concurrency: value.concurrency.as_ref().map(|c| (&*c.borrow(py)).into()),
-            retries: value.retries.as_ref().map(|c| (&*c.borrow(py)).into()),
-            timeouts: value.timeouts.as_ref().map(|c| (&*c.borrow(py)).into()),
-            unsafe_use_conditional_create: value.unsafe_use_conditional_create,
-            unsafe_use_conditional_update: value.unsafe_use_conditional_update,
-            unsafe_use_metadata: value.unsafe_use_metadata,
-            storage_class: value.storage_class.clone(),
-            metadata_storage_class: value.metadata_storage_class.clone(),
-            chunks_storage_class: value.chunks_storage_class.clone(),
-            minimum_size_for_multipart_upload: value.minimum_size_for_multipart_upload,
+        Python::attach(|py| {
+            let mut settings = Self::default();
+            settings.concurrency =
+                value.concurrency.as_ref().map(|c| (&*c.borrow(py)).into());
+            settings.retries = value.retries.as_ref().map(|c| (&*c.borrow(py)).into());
+            settings.timeouts = value.timeouts.as_ref().map(|c| (&*c.borrow(py)).into());
+            settings.unsafe_use_conditional_create = value.unsafe_use_conditional_create;
+            settings.unsafe_use_conditional_update = value.unsafe_use_conditional_update;
+            settings.unsafe_use_metadata = value.unsafe_use_metadata;
+            settings.storage_class = value.storage_class.clone();
+            settings.metadata_storage_class = value.metadata_storage_class.clone();
+            settings.chunks_storage_class = value.chunks_storage_class.clone();
+            settings.minimum_size_for_multipart_upload =
+                value.minimum_size_for_multipart_upload;
+            settings
         })
     }
 }

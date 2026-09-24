@@ -99,15 +99,14 @@ async fn setup_toxiproxy(
 
 /// Create an `AssetManager` with fast retry settings for testing
 fn create_test_manager(storage: Arc<S3Storage>) -> AssetManager {
-    let settings = icechunk::storage::Settings {
-        retries: Some(RetriesSettings {
-            #[expect(clippy::unwrap_used)]
-            max_tries: Some(NonZeroU16::new(3).unwrap()),
-            initial_backoff_ms: Some(100),
-            max_backoff_ms: Some(1000),
-        }),
-        ..Default::default()
-    };
+    let mut retries = RetriesSettings::default();
+    #[expect(clippy::unwrap_used)]
+    let max_tries = NonZeroU16::new(3).unwrap();
+    retries.max_tries = Some(max_tries);
+    retries.initial_backoff_ms = Some(100);
+    retries.max_backoff_ms = Some(1000);
+    let mut settings = icechunk::storage::Settings::default();
+    settings.retries = Some(retries);
 
     AssetManager::new(
         storage as Arc<dyn Storage + Send + Sync>,
@@ -361,20 +360,19 @@ async fn build_proxied_storage(
 /// healthy machine, generous enough for the readback's retry budget to
 /// outlast the modelled blip.
 fn default_lost_response_settings() -> icechunk::storage::Settings {
-    icechunk::storage::Settings {
-        retries: Some(RetriesSettings {
-            #[expect(clippy::unwrap_used)]
-            max_tries: Some(NonZeroU16::new(5).unwrap()),
-            initial_backoff_ms: Some(50),
-            max_backoff_ms: Some(500),
-        }),
-        timeouts: Some(TimeoutSettings {
-            read_timeout_ms: Some(2000),
-            operation_attempt_timeout_ms: Some(3000),
-            ..Default::default()
-        }),
-        ..Default::default()
-    }
+    let mut retries = RetriesSettings::default();
+    #[expect(clippy::unwrap_used)]
+    let max_tries = NonZeroU16::new(5).unwrap();
+    retries.max_tries = Some(max_tries);
+    retries.initial_backoff_ms = Some(50);
+    retries.max_backoff_ms = Some(500);
+    let mut timeouts = TimeoutSettings::default();
+    timeouts.read_timeout_ms = Some(2000);
+    timeouts.operation_attempt_timeout_ms = Some(3000);
+    let mut settings = icechunk::storage::Settings::default();
+    settings.retries = Some(retries);
+    settings.timeouts = Some(timeouts);
+    settings
 }
 
 async fn install_limit_data_toxic(

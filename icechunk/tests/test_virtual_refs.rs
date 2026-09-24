@@ -750,13 +750,12 @@ async fn test_repository_with_minio_virtual_refs(
     ds.commit("done").max_concurrent_nodes(8).execute().await?;
 
     let mut config = repo.config().clone();
-    config.storage = Some(storage::Settings {
-        concurrency: Some(ConcurrencySettings {
-            max_concurrent_requests_for_object: Some(100.try_into()?),
-            ideal_concurrent_request_size: Some(1.try_into()?),
-        }),
-        ..repo.storage().default_settings().await?
-    });
+    let mut concurrency = ConcurrencySettings::default();
+    concurrency.max_concurrent_requests_for_object = Some(100.try_into()?);
+    concurrency.ideal_concurrent_request_size = Some(1.try_into()?);
+    let mut storage_settings = repo.storage().default_settings().await?;
+    storage_settings.concurrency = Some(concurrency);
+    config.storage = Some(storage_settings);
     let repo = repo.reopen(Some(config), None).await?;
     assert_eq!(
         repo.config()
