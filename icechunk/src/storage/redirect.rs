@@ -22,7 +22,7 @@ use crate::{config::GcsCredentials, storage::new_gcs_storage};
 #[cfg(feature = "s3")]
 use crate::{
     new_s3_storage,
-    storage::{new_r2_storage, new_tigris_storage},
+    storage::{S3StorageOptions, new_r2_storage, new_tigris_storage},
 };
 use icechunk_storage::sealed;
 use icechunk_types::ICResultExt as _;
@@ -139,10 +139,9 @@ impl RedirectStorage {
                     S3Options::default().with_region(region).with_anonymous(true),
                     bucket,
                     Some(prefix),
-                    Some(S3Credentials::Anonymous),
-                    Vec::new(),
-                    Vec::new(),
-                    None, // auto-detect key layout
+                    // key layout is auto-detected
+                    S3StorageOptions::default()
+                        .with_credentials(S3Credentials::Anonymous),
                 )
             }
             #[cfg(not(feature = "s3"))]
@@ -167,10 +166,9 @@ impl RedirectStorage {
                     Some(bucket),
                     Some(prefix),
                     Some(account_id),
-                    Some(S3Credentials::Anonymous),
-                    Vec::new(),
-                    Vec::new(),
-                    None, // auto-detect key layout
+                    // key layout is auto-detected
+                    S3StorageOptions::default()
+                        .with_credentials(S3Credentials::Anonymous),
                 )
             }
             #[cfg(not(feature = "s3"))]
@@ -193,11 +191,10 @@ impl RedirectStorage {
                     opts,
                     bucket,
                     Some(prefix),
-                    Some(S3Credentials::Anonymous),
                     true,
-                    Vec::new(),
-                    Vec::new(),
-                    None, // auto-detect key layout
+                    // key layout is auto-detected
+                    S3StorageOptions::default()
+                        .with_credentials(S3Credentials::Anonymous),
                 )
             }
             #[cfg(not(feature = "s3"))]

@@ -16,8 +16,8 @@ use std::sync::Arc;
 use anyhow::{Context as _, Result};
 
 use crate::storage::{
-    new_azure_blob_storage, new_gcs_storage, new_local_filesystem_storage,
-    new_tigris_storage,
+    S3StorageOptions, new_azure_blob_storage, new_gcs_storage,
+    new_local_filesystem_storage, new_tigris_storage,
 };
 use crate::{Repository, RepositoryConfig, Storage, new_s3_storage};
 
@@ -220,10 +220,8 @@ async fn get_storage(
                 object_store_config.clone(),
                 location.bucket.clone(),
                 location.prefix.clone(),
-                Some(credentials.clone()),
-                Vec::new(),
-                Vec::new(),
-                None, // auto-detect key layout
+                // key layout is auto-detected
+                S3StorageOptions::default().with_credentials(credentials.clone()),
             )
             .context("Failed to create S3 storage")?;
             Ok(storage)
@@ -238,11 +236,9 @@ async fn get_storage(
                 object_store_config.clone(),
                 location.bucket.clone(),
                 location.prefix.clone(),
-                Some(credentials.clone()),
                 false,
-                Vec::new(),
-                Vec::new(),
-                None, // auto-detect key layout
+                // key layout is auto-detected
+                S3StorageOptions::default().with_credentials(credentials.clone()),
             )
             .context("Failed to create Tigris storage")?;
             Ok(storage)

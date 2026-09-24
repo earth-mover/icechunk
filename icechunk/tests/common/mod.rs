@@ -8,7 +8,7 @@ use icechunk::{
     format::SnapshotId,
     new_s3_storage,
     storage::{
-        ListInfo, Settings, mk_client, new_hf_storage, new_r2_storage,
+        ListInfo, S3StorageOptions, Settings, mk_client, new_hf_storage, new_r2_storage,
         new_tigris_storage, r2_storage, s3_storage, tigris_storage,
     },
 };
@@ -42,15 +42,14 @@ pub(crate) fn make_minio_integration_storage(
             .with_force_path_style(true),
         "testbucket".to_string(),
         Some(prefix),
-        Some(S3Credentials::Static(S3StaticCredentials {
-            access_key_id: access_key_id.into(),
-            secret_access_key: secret_access_key.into(),
-            session_token: None,
-            expires_after: None,
-        })),
-        Vec::new(),
-        Vec::new(),
-        None,
+        S3StorageOptions::default().with_credentials(S3Credentials::Static(
+            S3StaticCredentials {
+                access_key_id: access_key_id.into(),
+                secret_access_key: secret_access_key.into(),
+                session_token: None,
+                expires_after: None,
+            },
+        )),
     )?;
     Ok(storage)
 }
@@ -71,11 +70,8 @@ pub(crate) fn make_tigris_integration_storage(
         S3Options::default().with_region(region),
         bucket,
         Some(prefix),
-        Some(credentials),
         false,
-        Vec::new(),
-        Vec::new(),
-        None,
+        S3StorageOptions::default().with_credentials(credentials),
     )?;
     Ok(storage)
 }
@@ -96,10 +92,7 @@ pub(crate) fn make_r2_integration_storage(
         Some(bucket),
         Some(prefix),
         Some(env::var("R2_ACCOUNT_ID")?),
-        Some(credentials),
-        Vec::new(),
-        Vec::new(),
-        None,
+        S3StorageOptions::default().with_credentials(credentials),
     )?;
     Ok(storage)
 }
@@ -120,10 +113,7 @@ pub(crate) fn make_hf_integration_storage(
         bucket,
         Some(prefix),
         &env::var("HF_NAMESPACE")?,
-        Some(credentials),
-        Vec::new(),
-        Vec::new(),
-        None,
+        S3StorageOptions::default().with_credentials(credentials),
     )?;
     Ok(storage)
 }
@@ -160,10 +150,7 @@ pub(crate) fn make_aws_integration_storage(
         get_aws_integration_options()?,
         get_aws_integration_bucket()?,
         Some(prefix),
-        Some(get_aws_integration_credentials()?),
-        Vec::new(),
-        Vec::new(),
-        None,
+        S3StorageOptions::default().with_credentials(get_aws_integration_credentials()?),
     )?;
     Ok(storage)
 }
@@ -198,18 +185,13 @@ impl RealStore {
     ) -> Result<Arc<dyn Storage + Send + Sync>, Box<dyn std::error::Error>> {
         let prefix = Some(String::new());
         let creds = Some(self.credentials.clone());
+        let mut options = S3StorageOptions::default();
+        options.credentials = creds;
+        options.legacy_rooted_keys = legacy_rooted_keys.then_some(true);
         let storage: Arc<dyn Storage + Send + Sync> = match self.kind {
             RealStoreKind::Aws => Arc::new(
-                s3_storage(
-                    self.options.clone(),
-                    self.bucket.clone(),
-                    prefix,
-                    creds,
-                    Vec::new(),
-                    Vec::new(),
-                    legacy_rooted_keys.then_some(true),
-                )?
-                .unsafe_allow_empty_prefix_creation(),
+                s3_storage(self.options.clone(), self.bucket.clone(), prefix, options)?
+                    .unsafe_allow_empty_prefix_creation(),
             ),
             RealStoreKind::R2 => Arc::new(
                 r2_storage(
@@ -217,10 +199,7 @@ impl RealStore {
                     Some(self.bucket.clone()),
                     prefix,
                     None, // endpoint already resolved into options
-                    creds,
-                    Vec::new(),
-                    Vec::new(),
-                    legacy_rooted_keys.then_some(true),
+                    options,
                 )?
                 .unsafe_allow_empty_prefix_creation(),
             ),
@@ -229,11 +208,8 @@ impl RealStore {
                     self.options.clone(),
                     self.bucket.clone(),
                     prefix,
-                    creds,
                     false,
-                    Vec::new(),
-                    Vec::new(),
-                    legacy_rooted_keys.then_some(true),
+                    options,
                 )?
                 .unsafe_allow_empty_prefix_creation(),
             ),
@@ -262,35 +238,29 @@ impl RealStore {
     ) -> Result<Arc<dyn Storage + Send + Sync>, Box<dyn std::error::Error>> {
         let creds = Some(self.credentials.clone());
         let prefix = Some(prefix);
+        let mut options =
+            S3StorageOptions::default().with_extra_write_headers(write_headers);
+        options.credentials = creds;
         let storage: Arc<dyn Storage + Send + Sync> = match self.kind {
             RealStoreKind::Aws => new_s3_storage(
                 self.options.clone(),
                 self.bucket.clone(),
                 prefix,
-                creds,
-                Vec::new(),
-                write_headers,
-                None,
+                options,
             )?,
             RealStoreKind::R2 => new_r2_storage(
                 self.options.clone(),
                 Some(self.bucket.clone()),
                 prefix,
                 None, // endpoint already resolved into options
-                creds,
-                Vec::new(),
-                write_headers,
-                None,
+                options,
             )?,
             RealStoreKind::Tigris => new_tigris_storage(
                 self.options.clone(),
                 self.bucket.clone(),
                 prefix,
-                creds,
                 false,
-                Vec::new(),
-                write_headers,
-                None,
+                options,
             )?,
         };
         Ok(storage)

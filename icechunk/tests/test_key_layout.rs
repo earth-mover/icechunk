@@ -20,7 +20,7 @@ use icechunk::{
     ops::gc::{GCConfig, garbage_collect},
     repository::{RepositoryError, RepositoryErrorKind, VersionInfo},
     session::get_chunk,
-    storage::{Settings, mk_client, s3_storage},
+    storage::{S3StorageOptions, Settings, mk_client, s3_storage},
 };
 use icechunk_macros::tokio_test;
 
@@ -55,6 +55,8 @@ fn root_storage(
     prefix: Option<&str>,
     legacy_rooted_keys: bool,
 ) -> Arc<dyn Storage + Send + Sync> {
+    let mut options = S3StorageOptions::default().with_credentials(root_credentials());
+    options.legacy_rooted_keys = legacy_rooted_keys.then_some(true);
     // These tests deliberately create empty-prefix (bucket-root) repos, which is
     // normally refused, so apply the escape hatch before erasing the type.
     Arc::new(
@@ -62,10 +64,7 @@ fn root_storage(
             rustfs_options(),
             bucket.to_string(),
             prefix.map(str::to_string),
-            Some(root_credentials()),
-            Vec::new(),
-            Vec::new(),
-            legacy_rooted_keys.then_some(true),
+            options,
         )
         .unwrap()
         .unsafe_allow_empty_prefix_creation(),

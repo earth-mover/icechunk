@@ -25,9 +25,10 @@ use icechunk::{
     repository::{RepositoryError, RepositoryErrorKind},
     storage::{
         self, ConcurrencySettings, ETag, Generation, RepositoryCreation, S3Storage,
-        StorageErrorKind, StorageResult, VersionInfo, VersionedUpdateResult, mk_client,
-        new_gcs_storage, new_http_storage, new_in_memory_storage, new_redirect_storage,
-        new_s3_object_store_storage, new_s3_storage, s3_storage,
+        S3StorageOptions, StorageErrorKind, StorageResult, VersionInfo,
+        VersionedUpdateResult, mk_client, new_gcs_storage, new_http_storage,
+        new_in_memory_storage, new_redirect_storage, new_s3_object_store_storage,
+        new_s3_storage, s3_storage,
     },
 };
 use icechunk_arrow_object_store::object_store::azure::AzureConfigKey;
@@ -66,15 +67,14 @@ async fn mk_s3_storage(
             .with_force_path_style(true),
         "testbucket".to_string(),
         Some(prefix.to_string()),
-        Some(S3Credentials::Static(S3StaticCredentials {
-            access_key_id: access_key_id.into(),
-            secret_access_key: secret_access_key.into(),
-            session_token: None,
-            expires_after: None,
-        })),
-        Vec::new(),
-        Vec::new(),
-        None,
+        S3StorageOptions::default().with_credentials(S3Credentials::Static(
+            S3StaticCredentials {
+                access_key_id: access_key_id.into(),
+                secret_access_key: secret_access_key.into(),
+                session_token: None,
+                expires_after: None,
+            },
+        )),
     )
     .expect("Creating S3 storage failed");
 
@@ -446,10 +446,7 @@ async fn create_refuses_empty_prefix_on_object_store()
             S3Options::default().with_region("us-east-1"),
             "testbucket".to_string(),
             Some(prefix.to_string()),
-            Some(s3_creds()),
-            Vec::new(),
-            Vec::new(),
-            None,
+            S3StorageOptions::default().with_credentials(s3_creds()),
         )
     }
 
@@ -951,15 +948,14 @@ async fn assert_lost_response_recovers_with_fresh_etag(
             .with_requester_pays(requester_pays),
         "testbucket".to_string(),
         Some(common::get_random_prefix(label)),
-        Some(S3Credentials::Static(S3StaticCredentials {
-            access_key_id: access_key_id.into(),
-            secret_access_key: secret_access_key.into(),
-            session_token: None,
-            expires_after: None,
-        })),
-        Vec::new(),
-        Vec::new(),
-        None,
+        S3StorageOptions::default().with_credentials(S3Credentials::Static(
+            S3StaticCredentials {
+                access_key_id: access_key_id.into(),
+                secret_access_key: secret_access_key.into(),
+                session_token: None,
+                expires_after: None,
+            },
+        )),
     )?;
     let mut settings = storage.default_settings().await?;
     if multipart {
@@ -1942,10 +1938,9 @@ async fn test_write_headers_reach_s3_compatible_storage()
             options.clone(),
             "testbucket".to_string(),
             Some(prefix.clone()),
-            Some(credentials.clone()),
-            Vec::new(),
-            write_header(),
-            None,
+            S3StorageOptions::default()
+                .with_credentials(credentials.clone())
+                .with_extra_write_headers(write_header()),
         )?;
         let key = put_probe_object(&native).await?;
         assert_write_header_round_trips(
@@ -2072,10 +2067,12 @@ async fn test_invalid_native_s3_header_errors_not_panics()
         options,
         "testbucket".to_string(),
         Some(common::get_random_prefix("invalid_header")),
-        Some(credentials),
-        Vec::new(),
-        vec![("bad header name".to_string(), "v".to_string())],
-        None,
+        S3StorageOptions::default()
+            .with_credentials(credentials)
+            .with_extra_write_headers(vec![(
+                "bad header name".to_string(),
+                "v".to_string(),
+            )]),
     )?;
     let settings = storage.default_settings().await?;
     let result = storage

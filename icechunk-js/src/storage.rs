@@ -978,16 +978,10 @@ impl JsStorage {
         let opts = options.map(|o| o.into()).unwrap_or_default();
         // legacy_rooted_keys is not exposed to JS: pre-fix empty-prefix repos are
         // handled transparently by auto-detection in the storage backend.
-        let storage = icechunk::storage::new_s3_storage(
-            opts,
-            bucket,
-            prefix,
-            creds,
-            Vec::new(),
-            Vec::new(),
-            None,
-        )
-        .map_napi_err()?;
+        let mut options = icechunk::storage::S3StorageOptions::default();
+        options.credentials = creds;
+        let storage = icechunk::storage::new_s3_storage(opts, bucket, prefix, options)
+            .map_napi_err()?;
         Ok(JsStorage(storage))
     }
 
@@ -1001,17 +995,11 @@ impl JsStorage {
     ) -> napi::Result<JsStorage> {
         let creds = credentials.map(|c| c.into());
         let opts = options.map(|o| o.into()).unwrap_or_default();
-        let storage = icechunk::storage::new_r2_storage(
-            opts,
-            bucket,
-            prefix,
-            account_id,
-            creds,
-            Vec::new(),
-            Vec::new(),
-            None,
-        )
-        .map_napi_err()?;
+        let mut options = icechunk::storage::S3StorageOptions::default();
+        options.credentials = creds;
+        let storage =
+            icechunk::storage::new_r2_storage(opts, bucket, prefix, account_id, options)
+                .map_napi_err()?;
         Ok(JsStorage(storage))
     }
 
@@ -1026,15 +1014,14 @@ impl JsStorage {
         let creds = credentials.map(|c| c.into());
         let opts = options.map(|o| o.into()).unwrap_or_default();
         let weak_consistency = use_weak_consistency.unwrap_or(false);
+        let mut options = icechunk::storage::S3StorageOptions::default();
+        options.credentials = creds;
         let storage = icechunk::storage::new_tigris_storage(
             opts,
             bucket,
             prefix,
-            creds,
             weak_consistency,
-            Vec::new(),
-            Vec::new(),
-            None,
+            options,
         )
         .map_napi_err()?;
         Ok(JsStorage(storage))
@@ -1133,16 +1120,10 @@ impl JsStorage {
         let creds =
             icechunk::config::S3Credentials::Refreshable(std::sync::Arc::new(fetcher));
         let opts = options.map(|o| o.into()).unwrap_or(default_s3_options());
-        let storage = icechunk::storage::new_s3_storage(
-            opts,
-            bucket,
-            prefix,
-            Some(creds),
-            Vec::new(),
-            Vec::new(),
-            None,
-        )
-        .map_napi_err()?;
+        let options =
+            icechunk::storage::S3StorageOptions::default().with_credentials(creds);
+        let storage = icechunk::storage::new_s3_storage(opts, bucket, prefix, options)
+            .map_napi_err()?;
         Ok(JsStorage(storage))
     }
 
@@ -1168,17 +1149,11 @@ impl JsStorage {
         let creds =
             icechunk::config::S3Credentials::Refreshable(std::sync::Arc::new(fetcher));
         let opts = options.map(|o| o.into()).unwrap_or(default_s3_options());
-        let storage = icechunk::storage::new_r2_storage(
-            opts,
-            bucket,
-            prefix,
-            account_id,
-            Some(creds),
-            Vec::new(),
-            Vec::new(),
-            None,
-        )
-        .map_napi_err()?;
+        let options =
+            icechunk::storage::S3StorageOptions::default().with_credentials(creds);
+        let storage =
+            icechunk::storage::new_r2_storage(opts, bucket, prefix, account_id, options)
+                .map_napi_err()?;
         Ok(JsStorage(storage))
     }
 
@@ -1205,15 +1180,14 @@ impl JsStorage {
             icechunk::config::S3Credentials::Refreshable(std::sync::Arc::new(fetcher));
         let opts = options.map(|o| o.into()).unwrap_or(default_s3_options());
         let weak_consistency = use_weak_consistency.unwrap_or(false);
+        let options =
+            icechunk::storage::S3StorageOptions::default().with_credentials(creds);
         let storage = icechunk::storage::new_tigris_storage(
             opts,
             bucket,
             prefix,
-            Some(creds),
             weak_consistency,
-            Vec::new(),
-            Vec::new(),
-            None,
+            options,
         )
         .map_napi_err()?;
         Ok(JsStorage(storage))

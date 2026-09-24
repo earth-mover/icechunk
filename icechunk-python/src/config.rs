@@ -2957,16 +2957,13 @@ impl PyStorage {
     ) -> PyResult<Self> {
         let (read_headers, write_headers) =
             resolve_request_headers(headers, read_headers, write_headers)?;
-        let storage = storage::new_s3_storage(
-            config.into(),
-            bucket,
-            prefix,
-            credentials.map(|cred| cred.into()),
-            read_headers,
-            write_headers,
-            legacy_rooted_keys,
-        )
-        .map_err(PyIcechunkStoreError::StorageError)?;
+        let mut options = storage::S3StorageOptions::default()
+            .with_extra_read_headers(read_headers)
+            .with_extra_write_headers(write_headers);
+        options.credentials = credentials.map(|cred| cred.into());
+        options.legacy_rooted_keys = legacy_rooted_keys;
+        let storage = storage::new_s3_storage(config.into(), bucket, prefix, options)
+            .map_err(PyIcechunkStoreError::StorageError)?;
 
         Ok(PyStorage(storage))
     }
@@ -3022,15 +3019,17 @@ impl PyStorage {
     ) -> PyResult<Self> {
         let (read_headers, write_headers) =
             resolve_request_headers(headers, read_headers, write_headers)?;
+        let mut options = storage::S3StorageOptions::default()
+            .with_extra_read_headers(read_headers)
+            .with_extra_write_headers(write_headers);
+        options.credentials = credentials.map(|cred| cred.into());
+        options.legacy_rooted_keys = legacy_rooted_keys;
         let storage = storage::new_tigris_storage(
             config.into(),
             bucket,
             prefix,
-            credentials.map(|cred| cred.into()),
             use_weak_consistency,
-            read_headers,
-            write_headers,
-            legacy_rooted_keys,
+            options,
         )
         .map_err(PyIcechunkStoreError::StorageError)?;
 
@@ -3054,17 +3053,14 @@ impl PyStorage {
     ) -> PyResult<Self> {
         let (read_headers, write_headers) =
             resolve_request_headers(headers, read_headers, write_headers)?;
-        let storage = storage::new_r2_storage(
-            config.into(),
-            bucket,
-            prefix,
-            account_id,
-            credentials.map(|cred| cred.into()),
-            read_headers,
-            write_headers,
-            legacy_rooted_keys,
-        )
-        .map_err(PyIcechunkStoreError::StorageError)?;
+        let mut options = storage::S3StorageOptions::default()
+            .with_extra_read_headers(read_headers)
+            .with_extra_write_headers(write_headers);
+        options.credentials = credentials.map(|cred| cred.into());
+        options.legacy_rooted_keys = legacy_rooted_keys;
+        let storage =
+            storage::new_r2_storage(config.into(), bucket, prefix, account_id, options)
+                .map_err(PyIcechunkStoreError::StorageError)?;
 
         Ok(PyStorage(storage))
     }
@@ -3086,17 +3082,14 @@ impl PyStorage {
     ) -> PyResult<Self> {
         let (read_headers, write_headers) =
             resolve_request_headers(headers, read_headers, write_headers)?;
-        let storage = storage::new_hf_storage(
-            config.into(),
-            bucket,
-            prefix,
-            &namespace,
-            credentials.map(|cred| cred.into()),
-            read_headers,
-            write_headers,
-            legacy_rooted_keys,
-        )
-        .map_err(PyIcechunkStoreError::StorageError)?;
+        let mut options = storage::S3StorageOptions::default()
+            .with_extra_read_headers(read_headers)
+            .with_extra_write_headers(write_headers);
+        options.credentials = credentials.map(|cred| cred.into());
+        options.legacy_rooted_keys = legacy_rooted_keys;
+        let storage =
+            storage::new_hf_storage(config.into(), bucket, prefix, &namespace, options)
+                .map_err(PyIcechunkStoreError::StorageError)?;
 
         Ok(PyStorage(storage))
     }

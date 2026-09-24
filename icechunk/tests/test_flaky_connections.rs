@@ -19,7 +19,7 @@ use icechunk::{
     asset_manager::{AssetManager, AssetManagerOptions},
     config::{S3Credentials, S3Options, S3StaticCredentials},
     format::{ChunkId, format_constants::SpecVersionBin},
-    storage::{RetriesSettings, S3Storage, TimeoutSettings},
+    storage::{RetriesSettings, S3Storage, S3StorageOptions, TimeoutSettings},
 };
 use noxious_client::{Client, StreamDirection, Toxic, ToxicKind};
 
@@ -41,16 +41,14 @@ fn create_proxied_storage(
             .with_network_stream_timeout_seconds(timeout_seconds),
         "testbucket".to_string(),
         Some(format!("{}-{}", prefix, uuid::Uuid::new_v4())),
-        S3Credentials::Static(S3StaticCredentials {
-            access_key_id: access_key_id.into(),
-            secret_access_key: secret_access_key.into(),
-            session_token: None,
-            expires_after: None,
-        }),
-        true,
-        Vec::new(),
-        Vec::new(),
-        None,
+        S3StorageOptions::default().with_credentials(S3Credentials::Static(
+            S3StaticCredentials {
+                access_key_id: access_key_id.into(),
+                secret_access_key: secret_access_key.into(),
+                session_token: None,
+                expires_after: None,
+            },
+        )),
     )?;
 
     Ok(Arc::new(storage))
@@ -341,11 +339,7 @@ async fn build_proxied_storage(
             s3_options,
             "testbucket".to_string(),
             Some(prefix),
-            credentials,
-            true,
-            Vec::new(),
-            Vec::new(),
-            None,
+            S3StorageOptions::default().with_credentials(credentials),
         )?),
         ConditionalPutBackend::ArrowObjectStore => Arc::new(
             icechunk::ObjectStorage::new_s3(

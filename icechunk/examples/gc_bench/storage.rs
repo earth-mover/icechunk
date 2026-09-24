@@ -6,6 +6,7 @@ use icechunk::{
     Storage,
     config::{S3Credentials, S3Options, S3StaticCredentials},
     new_s3_storage,
+    storage::S3StorageOptions,
 };
 
 use crate::BoxError;
@@ -38,10 +39,7 @@ pub(crate) fn rustfs_storage(
         options,
         BUCKET.to_string(),
         Some(dataset_prefix(name)),
-        Some(credentials),
-        Vec::new(),
-        Vec::new(),
-        None,
+        S3StorageOptions::default().with_credentials(credentials),
     )?)
 }
 
@@ -101,10 +99,7 @@ pub(crate) fn s3_storage(
         options,
         bucket.to_string(),
         Some(prefix.to_string()),
-        Some(credentials),
-        Vec::new(),
-        Vec::new(),
-        None,
+        S3StorageOptions::default().with_credentials(credentials),
     )?;
     Ok((storage, source))
 }

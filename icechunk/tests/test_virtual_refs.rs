@@ -17,7 +17,8 @@ use icechunk::{
     repository::VersionInfo,
     session::{SessionError, SessionErrorKind, get_chunk},
     storage::{
-        self, ConcurrencySettings, ETag, ObjectStorage, mk_client, new_s3_storage,
+        self, ConcurrencySettings, ETag, ObjectStorage, S3StorageOptions, mk_client,
+        new_s3_storage,
     },
     store::{StoreError, StoreErrorKind},
     virtual_chunks::VirtualChunkContainer,
@@ -207,10 +208,7 @@ async fn create_minio_repository(spec_version: SpecVersionBin) -> Repository {
         config,
         "testbucket".to_string(),
         Some(prefix),
-        Some(credentials),
-        Vec::new(),
-        Vec::new(),
-        None,
+        S3StorageOptions::default().with_credentials(credentials),
     )
     .expect("Creating minio storage failed");
 
@@ -1172,10 +1170,7 @@ async fn test_zarr_store_with_multiple_virtual_chunk_containers(
         config,
         "testbucket".to_string(),
         Some(prefix),
-        Some(credentials),
-        Vec::new(),
-        Vec::new(),
-        None,
+        S3StorageOptions::default().with_credentials(credentials),
     )
     .expect("Creating minio storage failed");
 

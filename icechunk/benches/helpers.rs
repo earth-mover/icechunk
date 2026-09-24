@@ -97,7 +97,7 @@ use icechunk::format::{ChunkIndices, Path};
 use icechunk::new_s3_storage;
 use icechunk::repository::Repository;
 use icechunk::session::Session;
-use icechunk::storage::new_in_memory_storage;
+use icechunk::storage::{S3StorageOptions, new_in_memory_storage};
 use icechunk::virtual_chunks::VirtualChunkContainer;
 use icechunk::{RepositoryConfig, Storage};
 use icechunk_arrow_object_store::object_store::ObjectStoreExt as _;
@@ -233,10 +233,7 @@ pub(crate) fn make_s3_storage(
         rustfs_s3_options(port),
         "testbucket".to_string(),
         Some(format!("bench-{}", uuid::Uuid::new_v4())),
-        Some(rustfs_credentials()),
-        Vec::new(),
-        Vec::new(),
-        None,
+        S3StorageOptions::default().with_credentials(rustfs_credentials()),
     )?;
     Ok(storage)
 }
