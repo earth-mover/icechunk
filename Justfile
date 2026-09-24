@@ -280,6 +280,11 @@ format-nix *args:
 check-deps *args:
   cargo deny --all-features check "$@"
 
+[group('lint')]
+[doc("Check the published crates for semver breaks against their latest crates.io release via cargo-semver-checks (to compare with a git revision pass `--baseline-rev <rev> --release-type minor`; with the same version on both sides the tool skips every check unless a release type is given)")]
+check-semver *args:
+  cargo semver-checks check-release --workspace "$@"
+
 [group('test')]
 [script]
 [doc("Run all Rust examples (skips limits_chunk_refs, large_manifests, and gc_bench which needs RustFS)")]
