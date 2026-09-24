@@ -16,7 +16,7 @@ use bytes::Bytes;
 use futures::TryStreamExt as _;
 use icechunk::{
     Storage,
-    asset_manager::AssetManager,
+    asset_manager::{AssetManager, AssetManagerOptions},
     config::{S3Credentials, S3Options, S3StaticCredentials},
     format::{ChunkId, format_constants::SpecVersionBin},
     storage::{RetriesSettings, S3Storage, TimeoutSettings},
@@ -108,12 +108,13 @@ fn create_test_manager(storage: Arc<S3Storage>) -> AssetManager {
         ..Default::default()
     };
 
-    AssetManager::new_no_cache(
+    AssetManager::new(
         storage as Arc<dyn Storage + Send + Sync>,
         settings,
         SpecVersionBin::default(),
-        1,
-        100,
+        &AssetManagerOptions::no_cache()
+            .with_compression_level(1)
+            .with_max_concurrent_requests(100),
     )
 }
 

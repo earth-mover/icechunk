@@ -695,6 +695,8 @@ pub(crate) mod testing {
 
     use super::*;
     #[cfg(not(feature = "shuttle"))]
+    use crate::asset_manager::AssetManagerOptions;
+    #[cfg(not(feature = "shuttle"))]
     use crate::format::format_constants::SpecVersionBin;
     use crate::storage::{
         GetModifiedResult, RepositoryCreation, Settings, StorageErrorKind, StorageInfo,
@@ -1036,12 +1038,13 @@ pub(crate) mod testing {
             native_id_prefixes,
         });
         let storage: Arc<dyn Storage + Send + Sync> = Arc::clone(&flaky) as _;
-        let am = Arc::new(AssetManager::new_no_cache(
+        let am = Arc::new(AssetManager::new(
             storage,
             repo.storage_settings().clone(),
             SpecVersionBin::V2,
-            1,
-            100,
+            &AssetManagerOptions::no_cache()
+                .with_compression_level(1)
+                .with_max_concurrent_requests(100),
         ));
         (am, flaky)
     }

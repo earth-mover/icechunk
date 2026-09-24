@@ -43,7 +43,10 @@ use crate::format::repo_info::RepoAvailability;
 use crate::storage::GetModifiedResult;
 use crate::{
     RepositoryConfig, Storage, StorageError,
-    config::CachingConfig,
+    config::{
+        CachingConfig, CompressionConfig, DEFAULT_MAX_CONCURRENT_REQUESTS,
+        default_max_concurrent_decodes,
+    },
     format::{
         CHUNKS_FILE_PATH, CONFIG_FILE_PATH, ChunkId, ChunkOffset, IcechunkFormatError,
         IcechunkFormatErrorKind, MANIFESTS_FILE_PATH, ManifestId, OVERWRITTEN_FILES_PATH,
@@ -136,48 +139,114 @@ struct AssetManagerSerializer {
 
 impl From<AssetManagerSerializer> for AssetManager {
     fn from(value: AssetManagerSerializer) -> Self {
+        let options = AssetManagerOptions {
+            caching: CachingConfig {
+                num_snapshot_nodes: Some(value.num_snapshot_nodes),
+                num_chunk_refs: Some(value.num_chunk_refs),
+                num_transaction_changes: Some(value.num_transaction_changes),
+                num_bytes_attributes: Some(value.num_bytes_attributes),
+                num_bytes_chunks: Some(value.num_bytes_chunks),
+            },
+            compression_level: value.compression_level,
+            max_concurrent_requests: value.max_concurrent_requests,
+            max_concurrent_decodes: value.max_concurrent_decodes,
+            use_repo_info_cache: value.use_repo_info_cache,
+        };
         AssetManager::new(
             value.storage,
             value.storage_settings,
             value.spec_version,
-            value.num_snapshot_nodes,
-            value.num_chunk_refs,
-            value.num_transaction_changes,
-            value.num_bytes_attributes,
-            value.num_bytes_chunks,
-            value.compression_level,
-            value.max_concurrent_requests,
-            value.max_concurrent_decodes,
-            value.use_repo_info_cache,
+            &options,
         )
     }
 }
 
+/// Cache sizes, compression, and concurrency for an [`AssetManager`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct AssetManagerOptions {
+    pub caching: CachingConfig,
+    pub compression_level: u8,
+    pub max_concurrent_requests: u16,
+    pub max_concurrent_decodes: u16,
+    pub use_repo_info_cache: bool,
+}
+
+impl Default for AssetManagerOptions {
+    fn default() -> Self {
+        Self {
+            caching: CachingConfig::default(),
+            compression_level: CompressionConfig::default().level(),
+            max_concurrent_requests: DEFAULT_MAX_CONCURRENT_REQUESTS,
+            max_concurrent_decodes: default_max_concurrent_decodes(),
+            use_repo_info_cache: true,
+        }
+    }
+}
+
+impl AssetManagerOptions {
+    /// Every cache empty, including the repo info cache. For one-shot readers and tests.
+    pub fn no_cache() -> Self {
+        Self {
+            caching: CachingConfig {
+                num_snapshot_nodes: Some(0),
+                num_chunk_refs: Some(0),
+                num_transaction_changes: Some(0),
+                num_bytes_attributes: Some(0),
+                num_bytes_chunks: Some(0),
+            },
+            use_repo_info_cache: false,
+            ..Self::default()
+        }
+    }
+
+    pub fn with_caching(mut self, value: CachingConfig) -> Self {
+        self.caching = value;
+        self
+    }
+
+    pub fn with_compression_level(mut self, value: u8) -> Self {
+        self.compression_level = value;
+        self
+    }
+
+    pub fn with_max_concurrent_requests(mut self, value: u16) -> Self {
+        self.max_concurrent_requests = value;
+        self
+    }
+
+    pub fn with_max_concurrent_decodes(mut self, value: u16) -> Self {
+        self.max_concurrent_decodes = value;
+        self
+    }
+
+    pub fn with_use_repo_info_cache(mut self, value: bool) -> Self {
+        self.use_repo_info_cache = value;
+        self
+    }
+}
+
 impl AssetManager {
-    #[expect(clippy::too_many_arguments)]
     pub fn new(
         storage: Arc<dyn Storage + Send + Sync>,
         storage_settings: storage::Settings,
         spec_version: SpecVersionBin,
-        num_snapshot_nodes: u64,
-        num_chunk_refs: u64,
-        num_transaction_changes: u64,
-        num_bytes_attributes: u64,
-        num_bytes_chunks: u64,
-        compression_level: u8,
-        max_concurrent_requests: u16,
-        max_concurrent_decodes: u16,
-        use_repo_info_cache: bool,
+        options: &AssetManagerOptions,
     ) -> Self {
+        let num_snapshot_nodes = options.caching.num_snapshot_nodes();
+        let num_chunk_refs = options.caching.num_chunk_refs();
+        let num_transaction_changes = options.caching.num_transaction_changes();
+        let num_bytes_attributes = options.caching.num_bytes_attributes();
+        let num_bytes_chunks = options.caching.num_bytes_chunks();
         Self {
             num_snapshot_nodes,
             num_chunk_refs,
             num_transaction_changes,
             num_bytes_attributes,
             num_bytes_chunks,
-            compression_level,
-            max_concurrent_requests,
-            max_concurrent_decodes,
+            compression_level: options.compression_level,
+            max_concurrent_requests: options.max_concurrent_requests,
+            max_concurrent_decodes: options.max_concurrent_decodes,
             storage,
             storage_settings,
             spec_version,
@@ -191,75 +260,34 @@ impl AssetManager {
             chunk_cache: Cache::with_weighter(0, num_bytes_chunks, FileWeighter),
             snapshot_cache_size_warned: AtomicBool::new(false),
             manifest_cache_size_warned: AtomicBool::new(false),
-            request_semaphore: Semaphore::new(max_concurrent_requests as usize),
-            decode_semaphore: Arc::new(Semaphore::new(max_concurrent_decodes as usize)),
+            request_semaphore: Semaphore::new(options.max_concurrent_requests as usize),
+            decode_semaphore: Arc::new(Semaphore::new(
+                options.max_concurrent_decodes as usize,
+            )),
             repo_cache: RwLock::new(None),
-            use_repo_info_cache,
+            use_repo_info_cache: options.use_repo_info_cache,
         }
     }
 
-    pub fn new_no_cache(
-        storage: Arc<dyn Storage + Send + Sync>,
-        storage_settings: storage::Settings,
-        spec_version: SpecVersionBin,
-        compression_level: u8,
-        max_concurrent_requests: u16,
-    ) -> Self {
-        Self::new(
-            storage,
-            storage_settings,
-            spec_version,
-            0,
-            0,
-            0,
-            0,
-            0,
-            compression_level,
-            max_concurrent_requests,
-            crate::config::default_max_concurrent_decodes(),
-            false,
-        )
-    }
-
-    pub fn new_with_config(
-        storage: Arc<dyn Storage + Send + Sync>,
-        storage_settings: storage::Settings,
-        spec_version: SpecVersionBin,
-        config: &CachingConfig,
-        compression_level: u8,
-        max_concurrent_requests: u16,
-        max_concurrent_decodes: u16,
-    ) -> Self {
-        Self::new(
-            storage,
-            storage_settings,
-            spec_version,
-            config.num_snapshot_nodes(),
-            config.num_chunk_refs(),
-            config.num_transaction_changes(),
-            config.num_bytes_attributes(),
-            config.num_bytes_chunks(),
-            compression_level,
-            max_concurrent_requests,
-            max_concurrent_decodes,
-            true,
-        )
-    }
-
     pub fn clone_for_spec_version(&self, spec_version: SpecVersionBin) -> Self {
+        let options = AssetManagerOptions {
+            caching: CachingConfig {
+                num_snapshot_nodes: Some(self.num_snapshot_nodes),
+                num_chunk_refs: Some(self.num_chunk_refs),
+                num_transaction_changes: Some(self.num_transaction_changes),
+                num_bytes_attributes: Some(self.num_bytes_attributes),
+                num_bytes_chunks: Some(self.num_bytes_chunks),
+            },
+            compression_level: self.compression_level,
+            max_concurrent_requests: self.max_concurrent_requests,
+            max_concurrent_decodes: self.max_concurrent_decodes,
+            use_repo_info_cache: true,
+        };
         Self::new(
             Arc::clone(&self.storage),
             self.storage_settings.clone(),
             spec_version,
-            self.num_snapshot_nodes,
-            self.num_chunk_refs,
-            self.num_transaction_changes,
-            self.num_bytes_attributes,
-            self.num_bytes_chunks,
-            self.compression_level,
-            self.max_concurrent_requests,
-            self.max_concurrent_decodes,
-            true,
+            &options,
         )
     }
 
@@ -1968,6 +1996,45 @@ mod test {
     };
     use std::collections::HashMap;
 
+    #[test]
+    fn asset_manager_options_defaults_match_repository_config() {
+        let o = AssetManagerOptions::default();
+        assert_eq!(o.caching, CachingConfig::default());
+        assert_eq!(o.compression_level, CompressionConfig::default().level());
+        assert_eq!(o.max_concurrent_requests, DEFAULT_MAX_CONCURRENT_REQUESTS);
+        assert_eq!(o.max_concurrent_decodes, default_max_concurrent_decodes());
+        assert!(o.use_repo_info_cache);
+    }
+
+    #[test]
+    fn asset_manager_options_no_cache_disables_every_cache() {
+        let o = AssetManagerOptions::no_cache();
+        assert_eq!(o.caching.num_snapshot_nodes(), 0);
+        assert_eq!(o.caching.num_chunk_refs(), 0);
+        assert_eq!(o.caching.num_transaction_changes(), 0);
+        assert_eq!(o.caching.num_bytes_attributes(), 0);
+        assert_eq!(o.caching.num_bytes_chunks(), 0);
+        assert!(!o.use_repo_info_cache);
+        assert_eq!(o.compression_level, AssetManagerOptions::default().compression_level);
+    }
+
+    #[test]
+    fn asset_manager_options_setters_set_fields() {
+        let caching =
+            CachingConfig { num_snapshot_nodes: Some(1), ..CachingConfig::default() };
+        let o = AssetManagerOptions::default()
+            .with_caching(caching)
+            .with_compression_level(9)
+            .with_max_concurrent_requests(11)
+            .with_max_concurrent_decodes(12)
+            .with_use_repo_info_cache(false);
+        assert_eq!(o.caching, caching);
+        assert_eq!(o.compression_level, 9);
+        assert_eq!(o.max_concurrent_requests, 11);
+        assert_eq!(o.max_concurrent_decodes, 12);
+        assert!(!o.use_repo_info_cache);
+    }
+
     /// A buffer no serializer of ours would ever produce.
     fn unreadable_buffer(size: usize) -> Vec<u8> {
         vec![0u8; size]
@@ -2223,12 +2290,13 @@ mod test {
     async fn test_caching_caches() -> Result<(), Box<dyn std::error::Error>> {
         let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
         let settings = storage::Settings::default();
-        let manager = AssetManager::new_no_cache(
+        let manager = AssetManager::new(
             Arc::clone(&backend),
             settings.clone(),
             SpecVersionBin::default(),
-            1,
-            100,
+            &AssetManagerOptions::no_cache()
+                .with_compression_level(1)
+                .with_max_concurrent_requests(100),
         );
 
         let node1 = NodeId::random();
@@ -2254,14 +2322,14 @@ mod test {
         let logging = Arc::new(LoggingStorage::new(Arc::clone(&backend)));
         let logging_c = Arc::clone(&logging);
         let logging_c: Arc<dyn Storage + Send + Sync> = logging_c;
-        let caching = AssetManager::new_with_config(
+        let caching = AssetManager::new(
             Arc::clone(&logging_c),
             settings,
             SpecVersionBin::default(),
-            &CachingConfig::default(),
-            1,
-            100,
-            8,
+            &AssetManagerOptions::default()
+                .with_compression_level(1)
+                .with_max_concurrent_requests(100)
+                .with_max_concurrent_decodes(8),
         );
 
         let compression: LocationCompressionConfig =
@@ -2338,12 +2406,13 @@ mod test {
     async fn test_caching_storage_has_limit() -> Result<(), Box<dyn std::error::Error>> {
         let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
         let settings = storage::Settings::default();
-        let manager = AssetManager::new_no_cache(
+        let manager = AssetManager::new(
             Arc::clone(&backend),
             settings.clone(),
             SpecVersionBin::default(),
-            1,
-            100,
+            &AssetManagerOptions::no_cache()
+                .with_compression_level(1)
+                .with_max_concurrent_requests(100),
         );
 
         let ci1 = ChunkInfo {
@@ -2391,21 +2460,22 @@ mod test {
         let logging = Arc::new(LoggingStorage::new(Arc::clone(&backend)));
         let logging_c = Arc::clone(&logging);
         let logging_c: Arc<dyn Storage + Send + Sync> = logging_c;
-        let caching = AssetManager::new_with_config(
+        let caching = AssetManager::new(
             logging_c,
             settings,
             SpecVersionBin::default(),
-            // the cache can only fit 6 refs.
-            &CachingConfig {
-                num_snapshot_nodes: Some(0),
-                num_chunk_refs: Some(7),
-                num_transaction_changes: Some(0),
-                num_bytes_attributes: Some(0),
-                num_bytes_chunks: Some(0),
-            },
-            1,
-            100,
-            8,
+            &AssetManagerOptions::default()
+                // the cache can only fit 6 refs.
+                .with_caching(CachingConfig {
+                    num_snapshot_nodes: Some(0),
+                    num_chunk_refs: Some(7),
+                    num_transaction_changes: Some(0),
+                    num_bytes_attributes: Some(0),
+                    num_bytes_chunks: Some(0),
+                })
+                .with_compression_level(1)
+                .with_max_concurrent_requests(100)
+                .with_max_concurrent_decodes(8),
         );
 
         // we keep asking for all 3 items, but the cache can only fit 2
@@ -2426,12 +2496,13 @@ mod test {
         // object_store requests, one of them must wait
         let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
         let settings = storage::Settings::default();
-        let manager = Arc::new(AssetManager::new_no_cache(
+        let manager = Arc::new(AssetManager::new(
             Arc::clone(&storage),
             settings.clone(),
             SpecVersionBin::default(),
-            1,
-            100,
+            &AssetManagerOptions::no_cache()
+                .with_compression_level(1)
+                .with_max_concurrent_requests(100),
         ));
 
         // some reasonable size so it takes some time to parse
@@ -2453,14 +2524,14 @@ mod test {
         let logging = Arc::new(LoggingStorage::new(Arc::clone(&storage)));
         let logging_c = Arc::clone(&logging);
         let logging_c: Arc<dyn Storage + Send + Sync> = logging_c;
-        let manager = Arc::new(AssetManager::new_with_config(
+        let manager = Arc::new(AssetManager::new(
             Arc::clone(&logging_c),
             settings,
             SpecVersionBin::default(),
-            &CachingConfig::default(),
-            1,
-            100,
-            8,
+            &AssetManagerOptions::default()
+                .with_compression_level(1)
+                .with_max_concurrent_requests(100)
+                .with_max_concurrent_decodes(8),
         ));
 
         let manager_c = Arc::new(manager);
@@ -2484,12 +2555,13 @@ mod test {
     async fn test_repo_info_caching_no_cache() -> Result<(), Box<dyn std::error::Error>> {
         let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
         let settings = storage::Settings::default();
-        let manager = AssetManager::new_no_cache(
+        let manager = AssetManager::new(
             Arc::clone(&backend),
             settings.clone(),
             SpecVersionBin::default(),
-            1,
-            100,
+            &AssetManagerOptions::no_cache()
+                .with_compression_level(1)
+                .with_max_concurrent_requests(100),
         );
         let initial = Snapshot::initial(SpecVersionBin::current()).unwrap();
         let repo_info = Arc::new(RepoInfo::initial(
@@ -2519,14 +2591,14 @@ mod test {
     {
         let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
         let settings = storage::Settings::default();
-        let manager = AssetManager::new_with_config(
+        let manager = AssetManager::new(
             Arc::clone(&backend),
             settings.clone(),
             SpecVersionBin::default(),
-            &CachingConfig::default(),
-            1,
-            100,
-            8,
+            &AssetManagerOptions::default()
+                .with_compression_level(1)
+                .with_max_concurrent_requests(100)
+                .with_max_concurrent_decodes(8),
         );
         let initial = Snapshot::initial(SpecVersionBin::current()).unwrap();
         let repo_info = Arc::new(RepoInfo::initial(

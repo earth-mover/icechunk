@@ -3,7 +3,7 @@
 use chrono::{DateTime, TimeDelta, Utc};
 use icechunk::{
     Storage,
-    asset_manager::AssetManager,
+    asset_manager::{AssetManager, AssetManagerOptions},
     format::{
         IcechunkFormatError, REPO_INFO_FILE_PATH, SnapshotId,
         format_constants::SpecVersionBin,
@@ -83,12 +83,13 @@ async fn measure_size(
 
     let stor: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
     let settings = storage::Settings::default();
-    let am = AssetManager::new_no_cache(
+    let am = AssetManager::new(
         Arc::clone(&stor),
         settings.clone(),
         SpecVersionBin::V2,
-        3,
-        16,
+        &AssetManagerOptions::no_cache()
+            .with_compression_level(3)
+            .with_max_concurrent_requests(16),
     );
     am.create_repo_info(Arc::new(repo_info)).await?;
 

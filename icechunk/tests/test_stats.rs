@@ -8,8 +8,7 @@ use chrono::Utc;
 use icechunk::ops::walker::ManifestWalkOptions;
 use icechunk::{
     Repository, RepositoryConfig, Storage,
-    asset_manager::AssetManager,
-    config::DEFAULT_MAX_CONCURRENT_REQUESTS,
+    asset_manager::{AssetManager, AssetManagerOptions},
     format::{
         ChunkIndices, Path,
         format_constants::SpecVersionBin,
@@ -93,12 +92,11 @@ async fn do_test_repo_chunks_storage(
     spec_version: SpecVersionBin,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let storage_settings = storage.default_settings().await?;
-    let asset_manager = Arc::new(AssetManager::new_no_cache(
+    let asset_manager = Arc::new(AssetManager::new(
         Arc::clone(&storage),
         storage_settings.clone(),
         spec_version,
-        1,
-        DEFAULT_MAX_CONCURRENT_REQUESTS,
+        &AssetManagerOptions::no_cache().with_compression_level(1),
     ));
 
     let repo = Repository::create(
@@ -258,12 +256,11 @@ async fn test_virtual_chunk_deduplication(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let storage = new_in_memory_storage().await?;
     let storage_settings = storage.default_settings().await?;
-    let asset_manager = Arc::new(AssetManager::new_no_cache(
+    let asset_manager = Arc::new(AssetManager::new(
         Arc::clone(&storage),
         storage_settings.clone(),
         spec_version,
-        1,
-        DEFAULT_MAX_CONCURRENT_REQUESTS,
+        &AssetManagerOptions::no_cache().with_compression_level(1),
     ));
 
     let repo = Repository::create(

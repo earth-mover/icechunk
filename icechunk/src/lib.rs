@@ -83,7 +83,10 @@ pub(crate) mod test_utils {
     use bytes::Bytes;
 
     use crate::{
-        Repository, Storage, asset_manager::AssetManager, format::Path, storage,
+        Repository, Storage,
+        asset_manager::{AssetManager, AssetManagerOptions},
+        format::Path,
+        storage,
         storage::logging::LoggingStorage,
     };
 
@@ -159,12 +162,13 @@ pub(crate) mod test_utils {
             None => logging,
         });
         let logging_dyn: Arc<dyn Storage + Send + Sync> = Arc::clone(&logging) as _;
-        let asset_manager = Arc::new(AssetManager::new_no_cache(
+        let asset_manager = Arc::new(AssetManager::new(
             logging_dyn,
             storage_settings,
             spec_version,
-            1,
-            100,
+            &AssetManagerOptions::no_cache()
+                .with_compression_level(1)
+                .with_max_concurrent_requests(100),
         ));
         (logging, asset_manager)
     }

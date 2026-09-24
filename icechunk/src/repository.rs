@@ -30,12 +30,9 @@ use tracing::{Instrument as _, debug, error, instrument, trace, warn};
 
 use crate::{
     Storage,
-    asset_manager::AssetManager,
+    asset_manager::{AssetManager, AssetManagerOptions},
     change_set::{ChangeSet, transaction_log_from_change_set},
-    config::{
-        Credentials, DEFAULT_MAX_CONCURRENT_REQUESTS, ManifestPreloadCondition,
-        RepositoryConfig,
-    },
+    config::{Credentials, ManifestPreloadCondition, RepositoryConfig},
     diff::{Diff, DiffBuilder},
     display::AncestryGraph,
     error::ICError,
@@ -241,14 +238,15 @@ impl Repository {
 
         let spec_version = spec_version.unwrap_or_default();
 
-        let asset_manager = Arc::new(AssetManager::new_with_config(
+        let asset_manager = Arc::new(AssetManager::new(
             Arc::clone(&storage),
             storage_settings.clone(),
             spec_version,
-            config.caching(),
-            config.compression().level(),
-            config.max_concurrent_requests(),
-            config.max_concurrent_decodes(),
+            &AssetManagerOptions::default()
+                .with_caching(*config.caching())
+                .with_compression_level(config.compression().level())
+                .with_max_concurrent_requests(config.max_concurrent_requests())
+                .with_max_concurrent_decodes(config.max_concurrent_decodes()),
         ));
 
         if check_clean_root && !storage.root_is_clean(&storage_settings).await.inject()? {
@@ -377,12 +375,12 @@ impl Repository {
         // result is ignored (config lives in the repo info object instead).
         // Note: for V2+ repos, fetch_spec_version already fetches the RepoInfo
         // internally, so we reuse it to avoid a redundant round-trip.
-        let temp_am = AssetManager::new_no_cache(
+        let temp_am = AssetManager::new(
             Arc::clone(&storage),
             settings.clone(),
             SpecVersionBin::current(),
-            1,
-            DEFAULT_MAX_CONCURRENT_REQUESTS,
+            // compression level does not matter for a reader
+            &AssetManagerOptions::no_cache().with_compression_level(1),
         );
 
         let storage_c = Arc::clone(&storage);
@@ -441,14 +439,15 @@ impl Repository {
         let final_config =
             RepositoryConfig { storage: Some(storage_settings.clone()), ..merged_config };
 
-        let asset_manager = Arc::new(AssetManager::new_with_config(
+        let asset_manager = Arc::new(AssetManager::new(
             Arc::clone(&storage),
             storage_settings.clone(),
             spec_version,
-            final_config.caching(),
-            final_config.compression().level(),
-            final_config.max_concurrent_requests(),
-            final_config.max_concurrent_decodes(),
+            &AssetManagerOptions::default()
+                .with_caching(*final_config.caching())
+                .with_compression_level(final_config.compression().level())
+                .with_max_concurrent_requests(final_config.max_concurrent_requests())
+                .with_max_concurrent_decodes(final_config.max_concurrent_decodes()),
         ));
 
         Self::new(
@@ -564,12 +563,12 @@ impl Repository {
         .in_current_span();
 
         let after_v1 = async move {
-            let temp_asset_manager = Arc::new(AssetManager::new_no_cache(
+            let temp_asset_manager = Arc::new(AssetManager::new(
                 Arc::clone(&storage),
                 settings,
                 SpecVersionBin::current(),
-                1, // we are only reading, compression doesn't matter
-                DEFAULT_MAX_CONCURRENT_REQUESTS,
+                // compression level does not matter for a reader
+                &AssetManagerOptions::no_cache().with_compression_level(1),
             ));
 
             let res = temp_asset_manager.fetch_repo_info().await;
@@ -661,12 +660,12 @@ impl Repository {
                 .inject()?
                 .map(|config| (config, storage::VersionInfo::for_creation()))),
             Some(DetectedSpecVersion::V1) => {
-                let am = AssetManager::new_no_cache(
+                let am = AssetManager::new(
                     Arc::clone(&storage),
                     settings,
                     SpecVersionBin::V1,
-                    1, // we are only reading, compression doesn't matter
-                    DEFAULT_MAX_CONCURRENT_REQUESTS,
+                    // compression level does not matter for a reader
+                    &AssetManagerOptions::no_cache().with_compression_level(1),
                 );
                 am.fetch_config().await
             }
@@ -904,12 +903,12 @@ impl Repository {
     ) -> RepositoryResult<storage::VersionInfo> {
         raise_if_cant_write(storage.as_ref(), "Cannot save configuration").await?;
         let settings = storage.default_settings().await.inject()?;
-        let am = AssetManager::new_no_cache(
+        let am = AssetManager::new(
             storage,
             settings,
             SpecVersionBin::current(),
-            1, // we are only reading, compression doesn't matter
-            DEFAULT_MAX_CONCURRENT_REQUESTS,
+            // compression level does not matter for a reader
+            &AssetManagerOptions::no_cache().with_compression_level(1),
         );
         let backup_path = if previous_version.is_create() {
             None

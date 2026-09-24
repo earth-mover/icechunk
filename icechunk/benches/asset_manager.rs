@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group};
-use icechunk::asset_manager::AssetManager;
+use icechunk::asset_manager::{AssetManager, AssetManagerOptions};
 use icechunk::format::format_constants::SpecVersionBin;
 use icechunk::format::manifest::{ChunkInfo, ChunkPayload, Manifest};
 use icechunk::format::snapshot::{ArrayShape, NodeData, NodeSnapshot, Snapshot};
@@ -64,12 +64,14 @@ fn benchmark_write_new_snapshot(c: &mut Criterion) {
     let storage = rt.block_on(new_local_filesystem_storage(tmp_dir.path())).unwrap();
     let settings =
         storage::Settings { unsafe_use_metadata: Some(false), ..Default::default() };
-    let asset_manager = AssetManager::new_no_cache(
+    let asset_manager = AssetManager::new(
         storage,
         settings,
         SpecVersionBin::current(),
-        3, // compression level
-        16,
+        // compression level
+        &AssetManagerOptions::no_cache()
+            .with_compression_level(3)
+            .with_max_concurrent_requests(16),
     );
 
     for num_nodes in [1000, 100_000] {
@@ -120,8 +122,14 @@ fn benchmark_write_new_manifest(c: &mut Criterion) {
     let storage = rt.block_on(new_local_filesystem_storage(tmp_dir.path())).unwrap();
     let settings =
         storage::Settings { unsafe_use_metadata: Some(false), ..Default::default() };
-    let asset_manager =
-        AssetManager::new_no_cache(storage, settings, SpecVersionBin::current(), 3, 16);
+    let asset_manager = AssetManager::new(
+        storage,
+        settings,
+        SpecVersionBin::current(),
+        &AssetManagerOptions::no_cache()
+            .with_compression_level(3)
+            .with_max_concurrent_requests(16),
+    );
 
     group.throughput(Throughput::Bytes(num_chunks as u64 * inline_size as u64));
     group.bench_function(BenchmarkId::new("inline", num_chunks), |b| {

@@ -12,11 +12,8 @@ use chrono::Utc;
 use futures::{StreamExt as _, TryStreamExt as _, stream};
 use icechunk::{
     ObjectStorage, Repository, RepositoryConfig, Storage,
-    asset_manager::AssetManager,
-    config::{
-        DEFAULT_MAX_CONCURRENT_REQUESTS, GcsCredentials, S3Credentials, S3Options,
-        S3StaticCredentials,
-    },
+    asset_manager::{AssetManager, AssetManagerOptions},
+    config::{GcsCredentials, S3Credentials, S3Options, S3StaticCredentials},
     error::ICError,
     format::{
         CHUNKS_FILE_PATH, ChunkId, MANIFESTS_FILE_PATH, OBJECT_ID_FIRST_CHARS,
@@ -1181,12 +1178,12 @@ async fn test_write_config_on_empty(
     with_storage(Permission::Modify, |_, storage| async move {
         let storage_settings = with_storage_settings(&storage).await?;
 
-        let am = Arc::new(AssetManager::new_no_cache(
+        let am = Arc::new(AssetManager::new(
             storage,
             storage_settings,
             spec_version,
-            1, // we are only reading, compression doesn't matter
-            DEFAULT_MAX_CONCURRENT_REQUESTS,
+            // compression level does not matter for a reader
+            &AssetManagerOptions::no_cache().with_compression_level(1),
         ));
         let config = RepositoryConfig::default();
         let Some(version) =
@@ -1215,12 +1212,12 @@ async fn test_write_config_on_existing(
     #[case] spec_version: SpecVersionBin,
 ) -> Result<(), Box<dyn std::error::Error>> {
     with_storage(Permission::Modify, |_, storage| async move {
-        let am = Arc::new(AssetManager::new_no_cache(
+        let am = Arc::new(AssetManager::new(
             Arc::clone(&storage),
             with_storage_settings(&storage).await?,
             spec_version,
-            1, // we are only reading, compression doesn't matter
-            DEFAULT_MAX_CONCURRENT_REQUESTS,
+            // compression level does not matter for a reader
+            &AssetManagerOptions::no_cache().with_compression_level(1),
         ));
         let config1 = RepositoryConfig::default();
         let Some(first_version) =
@@ -1253,12 +1250,12 @@ async fn test_write_config_fails_on_bad_version_when_non_existing(
     // FIXME: this test fails in MinIO but seems to work on S3
     let storage = new_in_memory_storage().await.unwrap();
     let storage_settings = storage.default_settings().await?;
-    let am = Arc::new(AssetManager::new_no_cache(
+    let am = Arc::new(AssetManager::new(
         storage,
         storage_settings,
         spec_version,
-        1, // we are only reading, compression doesn't matter
-        DEFAULT_MAX_CONCURRENT_REQUESTS,
+        // compression level does not matter for a reader
+        &AssetManagerOptions::no_cache().with_compression_level(1),
     ));
     let config = RepositoryConfig::default();
     let err = am
@@ -1285,12 +1282,12 @@ async fn test_write_config_fails_on_bad_version_when_existing(
 ) -> Result<(), Box<dyn std::error::Error>> {
     with_storage(Permission::Modify, |storage_type, storage| async move {
         let storage_settings = with_storage_settings(&storage).await?;
-        let am = Arc::new(AssetManager::new_no_cache(
+        let am = Arc::new(AssetManager::new(
             storage,
             storage_settings,
             spec_version,
-            1, // we are only reading, compression doesn't matter
-            DEFAULT_MAX_CONCURRENT_REQUESTS,
+            // compression level does not matter for a reader
+            &AssetManagerOptions::no_cache().with_compression_level(1),
         ));
 
         let config1 = RepositoryConfig::default();
@@ -1343,12 +1340,12 @@ async fn test_write_config_can_overwrite_with_unsafe_config(
             unsafe_use_conditional_create: Some(false),
             ..with_storage_settings(&storage).await?
         };
-        let am = Arc::new(AssetManager::new_no_cache(
+        let am = Arc::new(AssetManager::new(
             storage,
             storage_settings,
             spec_version,
-            1, // we are only reading, compression doesn't matter
-            DEFAULT_MAX_CONCURRENT_REQUESTS,
+            // compression level does not matter for a reader
+            &AssetManagerOptions::no_cache().with_compression_level(1),
         ));
 
         let config1 = RepositoryConfig::default();

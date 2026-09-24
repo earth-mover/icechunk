@@ -3558,6 +3558,7 @@ mod tests {
 
     use crate::{
         ObjectStorage, Repository,
+        asset_manager::AssetManagerOptions,
         config::{ManifestConfig, ManifestSplitCondition},
         conflicts::{
             basic_solver::{BasicConflictSolver, VersionSelection},
@@ -4108,12 +4109,13 @@ mod tests {
     async fn test_repository_with_updates() -> Result<(), Box<dyn Error>> {
         let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
         let storage_settings = storage.default_settings().await?;
-        let asset_manager = AssetManager::new_no_cache(
+        let asset_manager = AssetManager::new(
             Arc::clone(&storage),
             storage_settings.clone(),
             SpecVersionBin::current(),
-            1,
-            100,
+            &AssetManagerOptions::no_cache()
+                .with_compression_level(1)
+                .with_max_concurrent_requests(100),
         );
 
         let array_id = NodeId::random();
