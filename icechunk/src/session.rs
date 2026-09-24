@@ -539,7 +539,7 @@ impl Session {
     /// Create a read-only session pinned to a specific snapshot.
     ///
     /// The returned session can read chunks and metadata but cannot write or commit.
-    pub fn create_readonly_session(
+    pub(crate) fn create_readonly_session(
         config: RepositoryConfig,
         storage_settings: storage::Settings,
         storage: Arc<dyn Storage + Send + Sync>,
@@ -570,7 +570,7 @@ impl Session {
     /// They should be merged back with a base writable Session (show `branch_name` is `Some`)
     /// using [`Session::merge`], which can then be committed.
     #[expect(clippy::too_many_arguments)]
-    pub fn create_writable_session(
+    pub(crate) fn create_writable_session(
         config: RepositoryConfig,
         storage_settings: storage::Settings,
         storage: Arc<dyn Storage + Send + Sync>,
@@ -598,7 +598,7 @@ impl Session {
     ///
     /// A branch name is required and modifications other than move are disallowed..
     #[expect(clippy::too_many_arguments)]
-    pub fn create_rearrange_session(
+    pub(crate) fn create_rearrange_session(
         config: RepositoryConfig,
         storage_settings: storage::Settings,
         storage: Arc<dyn Storage + Send + Sync>,

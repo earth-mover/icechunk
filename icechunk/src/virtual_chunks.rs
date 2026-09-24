@@ -58,20 +58,20 @@ use crate::storage::GcsObjectStoreBackend;
 #[cfg(feature = "object-store-http")]
 use crate::storage::HttpObjectStoreBackend;
 #[cfg(any(
-    feature = "object-store-s3",
+    all(not(feature = "s3"), feature = "object-store-s3"),
     feature = "object-store-gcs",
     feature = "object-store-azure",
     feature = "object-store-http"
 ))]
 use crate::storage::ObjectStoreBackend as _;
 #[cfg(any(
-    feature = "object-store-s3",
+    all(not(feature = "s3"), feature = "object-store-s3"),
     feature = "object-store-gcs",
     feature = "object-store-azure",
     feature = "object-store-http"
 ))]
 use crate::storage::Role;
-#[cfg(feature = "object-store-s3")]
+#[cfg(all(not(feature = "s3"), feature = "object-store-s3"))]
 use crate::storage::S3ObjectStoreBackend;
 use crate::{
     ObjectStoreConfig,
@@ -1167,8 +1167,8 @@ impl ObjectStoreFetcher {
         }
     }
 
-    #[cfg(feature = "object-store-s3")]
-    pub async fn new_s3(
+    #[cfg(all(not(feature = "s3"), feature = "object-store-s3"))]
+    pub(crate) async fn new_s3(
         bucket: String,
         prefix: Option<String>,
         credentials: Option<S3Credentials>,
@@ -1191,7 +1191,7 @@ impl ObjectStoreFetcher {
     }
 
     #[cfg(feature = "object-store-http")]
-    pub async fn new_http(
+    pub(crate) async fn new_http(
         url: &str,
         opts: &HashMap<String, String>,
         headers: &HashMap<String, String>,
@@ -1216,7 +1216,7 @@ impl ObjectStoreFetcher {
     }
 
     #[cfg(feature = "object-store-gcs")]
-    pub async fn new_gcs(
+    pub(crate) async fn new_gcs(
         bucket: String,
         prefix: Option<String>,
         credentials: Option<GcsCredentials>,
@@ -1246,7 +1246,7 @@ impl ObjectStoreFetcher {
     }
 
     #[cfg(feature = "object-store-azure")]
-    pub async fn new_azure(
+    pub(crate) async fn new_azure(
         account: String,
         container: String,
         prefix: Option<String>,
