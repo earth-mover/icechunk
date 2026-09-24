@@ -2,7 +2,7 @@
 
 use std::{
     collections::HashSet,
-    num::{NonZeroU16, NonZeroUsize},
+    num::NonZeroU16,
     ops::Add,
     sync::{
         Arc,
@@ -22,7 +22,7 @@ use crate::{
         pointed_snapshots,
         sharded_set::{ChunkIdSet, ShardedSet},
         walk_peak_requests,
-        walker::{ManifestConsumer, WalkLimits, walk_manifests},
+        walker::{ManifestConsumer, ManifestWalkOptions, walk_manifests},
         warn_on_low_fd_limit,
     },
     repository::{RepositoryError, RepositoryErrorKind, RepositoryResult},
@@ -136,13 +136,13 @@ impl ManifestConsumer for ChunkStorage {
 #[instrument(skip_all)]
 pub async fn repo_chunks_storage(
     asset_manager: Arc<AssetManager>,
-    max_snapshots_in_memory: NonZeroU16,
-    max_compressed_manifest_mem_bytes: NonZeroUsize,
-    max_decoded_manifest_mem_bytes: NonZeroUsize,
-    max_concurrent_manifest_fetches: NonZeroU16,
+    walk: &ManifestWalkOptions,
 ) -> RepositoryResult<ChunkStorageStats> {
     warn_on_low_fd_limit(
-        walk_peak_requests(max_concurrent_manifest_fetches, max_snapshots_in_memory),
+        walk_peak_requests(
+            walk.max_concurrent_manifest_fetches,
+            walk.max_snapshots_in_memory,
+        ),
         "Chunk storage stats",
     );
     let extra_roots = HashSet::new();
@@ -150,16 +150,13 @@ pub async fn repo_chunks_storage(
         Arc::clone(&asset_manager),
         None,
         &extra_roots,
-        max_snapshots_in_memory,
+        walk.max_snapshots_in_memory,
     )
     .await?;
-    let limits = WalkLimits {
-        max_concurrent_manifest_fetches,
-        max_manifest_mem_bytes: max_compressed_manifest_mem_bytes,
-        max_decoded_manifest_mem_bytes,
-        decode_workers: NonZeroU16::new(asset_manager.max_concurrent_decodes())
+    let limits = walk.limits(
+        NonZeroU16::new(asset_manager.max_concurrent_decodes())
             .unwrap_or(NonZeroU16::MIN),
-    };
+    );
     let consumer = Arc::new(ChunkStorage::default());
     walk_manifests(asset_manager, limits, Arc::clone(&consumer), snaps).await?;
     let consumer = Arc::try_unwrap(consumer).map_err(|_| {

@@ -43,6 +43,7 @@ pub use crate::ops::{
     GCError, GCResult,
     deleter::DeleteReport,
     expiration::{ExpireResult, ExpiredRefAction, expire, expire_v2},
+    walker::ManifestWalkOptions,
 };
 
 #[derive(Debug, PartialEq, Eq)]

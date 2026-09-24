@@ -207,6 +207,66 @@ pub struct WalkLimits {
     pub decode_workers: NonZeroU16,
 }
 
+/// Memory and concurrency budget for a walk over the manifests of a set of snapshots.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ManifestWalkOptions {
+    pub max_snapshots_in_memory: NonZeroU16,
+    /// Budget for compressed manifest bytes in flight.
+    pub max_compressed_manifest_mem_bytes: NonZeroUsize,
+    /// Budget for decoded manifest bytes.
+    pub max_decoded_manifest_mem_bytes: NonZeroUsize,
+    pub max_concurrent_manifest_fetches: NonZeroU16,
+}
+
+impl Default for ManifestWalkOptions {
+    fn default() -> Self {
+        // 4 GiB does not fit a 32-bit usize; saturate instead of a compile-time overflow.
+        let decoded = usize::try_from(4u64 * 1024 * 1024 * 1024).unwrap_or(usize::MAX);
+        Self {
+            max_snapshots_in_memory: NonZeroU16::new(50).unwrap_or(NonZeroU16::MIN),
+            max_compressed_manifest_mem_bytes: NonZeroUsize::new(512 * 1024 * 1024)
+                .unwrap_or(NonZeroUsize::MIN),
+            max_decoded_manifest_mem_bytes: NonZeroUsize::new(decoded)
+                .unwrap_or(NonZeroUsize::MIN),
+            max_concurrent_manifest_fetches: NonZeroU16::new(500)
+                .unwrap_or(NonZeroU16::MIN),
+        }
+    }
+}
+
+impl ManifestWalkOptions {
+    pub fn with_max_snapshots_in_memory(mut self, value: NonZeroU16) -> Self {
+        self.max_snapshots_in_memory = value;
+        self
+    }
+
+    pub fn with_max_compressed_manifest_mem_bytes(mut self, value: NonZeroUsize) -> Self {
+        self.max_compressed_manifest_mem_bytes = value;
+        self
+    }
+
+    pub fn with_max_decoded_manifest_mem_bytes(mut self, value: NonZeroUsize) -> Self {
+        self.max_decoded_manifest_mem_bytes = value;
+        self
+    }
+
+    pub fn with_max_concurrent_manifest_fetches(mut self, value: NonZeroU16) -> Self {
+        self.max_concurrent_manifest_fetches = value;
+        self
+    }
+
+    /// Walker limits for this budget. `decode_workers` comes from the asset manager.
+    pub(crate) fn limits(&self, decode_workers: NonZeroU16) -> WalkLimits {
+        WalkLimits {
+            max_concurrent_manifest_fetches: self.max_concurrent_manifest_fetches,
+            max_manifest_mem_bytes: self.max_compressed_manifest_mem_bytes,
+            max_decoded_manifest_mem_bytes: self.max_decoded_manifest_mem_bytes,
+            decode_workers,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct WalkResult<Acc> {
     pub acc: Acc,
@@ -1507,5 +1567,48 @@ mod tests {
         assert_eq!(rate_mib_per_s(1024 * 1024, -1.0), 0.0);
         // sub-second windows scale up
         assert_eq!(rate_mib_per_s(1024 * 1024, 0.5), 2.0);
+    }
+}
+
+#[cfg(test)]
+mod options_tests {
+    use super::*;
+
+    #[test]
+    fn manifest_walk_options_defaults_match_python() {
+        let o = ManifestWalkOptions::default();
+        assert_eq!(o.max_snapshots_in_memory.get(), 50);
+        assert_eq!(o.max_compressed_manifest_mem_bytes.get(), 512 * 1024 * 1024);
+        assert_eq!(o.max_decoded_manifest_mem_bytes.get() as u64, 4 * 1024 * 1024 * 1024);
+        assert_eq!(o.max_concurrent_manifest_fetches.get(), 500);
+    }
+
+    #[test]
+    fn manifest_walk_options_setters_set_fields() {
+        let o = ManifestWalkOptions::default()
+            .with_max_snapshots_in_memory(NonZeroU16::new(7).unwrap())
+            .with_max_compressed_manifest_mem_bytes(NonZeroUsize::new(8).unwrap())
+            .with_max_decoded_manifest_mem_bytes(NonZeroUsize::new(9).unwrap())
+            .with_max_concurrent_manifest_fetches(NonZeroU16::new(10).unwrap());
+        assert_eq!(o.max_snapshots_in_memory.get(), 7);
+        assert_eq!(o.max_compressed_manifest_mem_bytes.get(), 8);
+        assert_eq!(o.max_decoded_manifest_mem_bytes.get(), 9);
+        assert_eq!(o.max_concurrent_manifest_fetches.get(), 10);
+    }
+
+    #[test]
+    fn manifest_walk_options_limits_copy_fields() {
+        let o = ManifestWalkOptions::default();
+        let limits = o.limits(NonZeroU16::new(3).unwrap());
+        assert_eq!(
+            limits.max_concurrent_manifest_fetches,
+            o.max_concurrent_manifest_fetches
+        );
+        assert_eq!(limits.max_manifest_mem_bytes, o.max_compressed_manifest_mem_bytes);
+        assert_eq!(
+            limits.max_decoded_manifest_mem_bytes,
+            o.max_decoded_manifest_mem_bytes
+        );
+        assert_eq!(limits.decode_workers.get(), 3);
     }
 }

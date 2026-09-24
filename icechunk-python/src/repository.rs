@@ -28,6 +28,7 @@ use icechunk::{
         gc::{ExpiredRefAction, GCConfig, GCSummary, expire, garbage_collect},
         manifests::rewrite_manifests,
         stats::repo_chunks_storage,
+        walker::ManifestWalkOptions,
     },
     repository::{RepositoryError, RepositoryErrorKind, VersionInfo},
 };
@@ -2970,15 +2971,20 @@ impl PyRepository {
                         let lock = self.0.read().await;
                         Arc::clone(lock.asset_manager())
                     };
-                    let stats = repo_chunks_storage(
-                        asset_manager,
-                        max_snapshots_in_memory,
-                        max_compressed_manifest_mem_bytes,
-                        max_decoded_manifest_mem_bytes,
-                        max_concurrent_manifest_fetches,
-                    )
-                    .await
-                    .map_err(PyIcechunkStoreError::RepositoryError)?;
+                    let walk = ManifestWalkOptions::default()
+                        .with_max_snapshots_in_memory(max_snapshots_in_memory)
+                        .with_max_compressed_manifest_mem_bytes(
+                            max_compressed_manifest_mem_bytes,
+                        )
+                        .with_max_decoded_manifest_mem_bytes(
+                            max_decoded_manifest_mem_bytes,
+                        )
+                        .with_max_concurrent_manifest_fetches(
+                            max_concurrent_manifest_fetches,
+                        );
+                    let stats = repo_chunks_storage(asset_manager, &walk)
+                        .await
+                        .map_err(PyIcechunkStoreError::RepositoryError)?;
                     Ok::<_, PyIcechunkStoreError>(stats)
                 })?;
 
@@ -3002,15 +3008,18 @@ impl PyRepository {
                     let lock = repository.read().await;
                     Arc::clone(lock.asset_manager())
                 };
-                let stats = repo_chunks_storage(
-                    asset_manager,
-                    max_snapshots_in_memory,
-                    max_compressed_manifest_mem_bytes,
-                    max_decoded_manifest_mem_bytes,
-                    max_concurrent_manifest_fetches,
-                )
-                .await
-                .map_err(PyIcechunkStoreError::RepositoryError)?;
+                let walk = ManifestWalkOptions::default()
+                    .with_max_snapshots_in_memory(max_snapshots_in_memory)
+                    .with_max_compressed_manifest_mem_bytes(
+                        max_compressed_manifest_mem_bytes,
+                    )
+                    .with_max_decoded_manifest_mem_bytes(max_decoded_manifest_mem_bytes)
+                    .with_max_concurrent_manifest_fetches(
+                        max_concurrent_manifest_fetches,
+                    );
+                let stats = repo_chunks_storage(asset_manager, &walk)
+                    .await
+                    .map_err(PyIcechunkStoreError::RepositoryError)?;
                 Ok(stats.into())
             },
         )

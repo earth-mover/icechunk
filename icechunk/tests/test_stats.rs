@@ -5,6 +5,7 @@ use std::{
 
 use bytes::Bytes;
 use chrono::Utc;
+use icechunk::ops::walker::ManifestWalkOptions;
 use icechunk::{
     Repository, RepositoryConfig, Storage,
     asset_manager::AssetManager,
@@ -155,10 +156,10 @@ async fn do_test_repo_chunks_storage(
 
     let stats = repo_chunks_storage(
         Arc::clone(&asset_manager),
-        NonZeroU16::new(5).unwrap(),
-        NonZeroUsize::MIN,
-        NonZeroUsize::new(4 * 1024 * 1024 * 1024).unwrap(),
-        NonZeroU16::try_from(10).unwrap(),
+        &ManifestWalkOptions::default()
+            .with_max_snapshots_in_memory(NonZeroU16::new(5).unwrap())
+            .with_max_compressed_manifest_mem_bytes(NonZeroUsize::MIN)
+            .with_max_concurrent_manifest_fetches(NonZeroU16::try_from(10).unwrap()),
     )
     .await
     .unwrap();
@@ -170,10 +171,10 @@ async fn do_test_repo_chunks_storage(
     let _ = session.commit("first").max_concurrent_nodes(8).execute().await?;
     let stats = repo_chunks_storage(
         Arc::clone(&asset_manager),
-        NonZeroU16::new(5).unwrap(),
-        NonZeroUsize::MAX,
-        NonZeroUsize::new(4 * 1024 * 1024 * 1024).unwrap(),
-        NonZeroU16::try_from(10).unwrap(),
+        &ManifestWalkOptions::default()
+            .with_max_snapshots_in_memory(NonZeroU16::new(5).unwrap())
+            .with_max_compressed_manifest_mem_bytes(NonZeroUsize::MAX)
+            .with_max_concurrent_manifest_fetches(NonZeroU16::try_from(10).unwrap()),
     )
     .await
     .unwrap();
@@ -198,10 +199,10 @@ async fn do_test_repo_chunks_storage(
         session.commit("second").max_concurrent_nodes(8).execute().await?;
     let stats = repo_chunks_storage(
         Arc::clone(&asset_manager),
-        NonZeroU16::new(5).unwrap(),
-        NonZeroUsize::MIN,
-        NonZeroUsize::new(4 * 1024 * 1024 * 1024).unwrap(),
-        NonZeroU16::try_from(10).unwrap(),
+        &ManifestWalkOptions::default()
+            .with_max_snapshots_in_memory(NonZeroU16::new(5).unwrap())
+            .with_max_compressed_manifest_mem_bytes(NonZeroUsize::MIN)
+            .with_max_concurrent_manifest_fetches(NonZeroU16::try_from(10).unwrap()),
     )
     .await
     .unwrap();
@@ -234,10 +235,10 @@ async fn do_test_repo_chunks_storage(
     let _ = session.commit("third").max_concurrent_nodes(8).execute().await?;
     let stats = repo_chunks_storage(
         Arc::clone(&asset_manager),
-        NonZeroU16::new(5).unwrap(),
-        NonZeroUsize::MAX,
-        NonZeroUsize::new(4 * 1024 * 1024 * 1024).unwrap(),
-        NonZeroU16::try_from(10).unwrap(),
+        &ManifestWalkOptions::default()
+            .with_max_snapshots_in_memory(NonZeroU16::new(5).unwrap())
+            .with_max_compressed_manifest_mem_bytes(NonZeroUsize::MAX)
+            .with_max_concurrent_manifest_fetches(NonZeroU16::try_from(10).unwrap()),
     )
     .await
     .unwrap();
@@ -314,10 +315,10 @@ async fn test_virtual_chunk_deduplication(
 
     let stats = repo_chunks_storage(
         Arc::clone(&asset_manager),
-        NonZeroU16::new(5).unwrap(),
-        NonZeroUsize::MAX,
-        NonZeroUsize::new(4 * 1024 * 1024 * 1024).unwrap(),
-        NonZeroU16::try_from(10).unwrap(),
+        &ManifestWalkOptions::default()
+            .with_max_snapshots_in_memory(NonZeroU16::new(5).unwrap())
+            .with_max_compressed_manifest_mem_bytes(NonZeroUsize::MAX)
+            .with_max_concurrent_manifest_fetches(NonZeroU16::try_from(10).unwrap()),
     )
     .await
     .unwrap();

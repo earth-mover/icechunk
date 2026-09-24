@@ -14,6 +14,7 @@ use icechunk::{
     ops::{
         gc::{GCConfig, garbage_collect},
         stats::repo_chunks_storage,
+        walker::ManifestWalkOptions,
     },
     storage::metering::MeteringStorage,
 };
@@ -141,9 +142,12 @@ pub(crate) async fn stats(args: StatsArgs) -> Result<(), BoxError> {
 
     opened.metering.reset();
     let started = Instant::now();
-    let result =
-        repo_chunks_storage(Arc::clone(&opened.am), snaps, mem, decoded_mem, fetches)
-            .await;
+    let walk_options = ManifestWalkOptions::default()
+        .with_max_snapshots_in_memory(snaps)
+        .with_max_compressed_manifest_mem_bytes(mem)
+        .with_max_decoded_manifest_mem_bytes(decoded_mem)
+        .with_max_concurrent_manifest_fetches(fetches);
+    let result = repo_chunks_storage(Arc::clone(&opened.am), &walk_options).await;
     match &result {
         Ok(stats) => println!("{stats:#?}"),
         Err(err) => eprintln!("stats failed: {err}"),
