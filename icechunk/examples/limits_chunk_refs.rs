@@ -68,24 +68,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ManifestSplitCondition::PathMatches { regex: r".*".to_string() },
         vec![ManifestSplitDim { condition: ManifestSplitDimCondition::Any, num_chunks }],
     )]);
-    let manifest_config = ManifestConfig {
-        splitting: Some(ManifestSplittingConfig { split_sizes }),
-        ..ManifestConfig::default()
-    };
+    let mut splitting = ManifestSplittingConfig::default();
+    splitting.split_sizes = split_sizes;
+    let mut manifest_config = ManifestConfig::default();
+    manifest_config.splitting = Some(splitting);
 
-    let repo = Repository::create(
-        Some(RepositoryConfig {
-            inline_chunk_threshold_bytes: Some(0),
-            manifest: Some(manifest_config),
-            ..Default::default()
-        }),
-        storage,
-        creds,
-        None,
-        true,
-    )
-    .await
-    .expect("Failed to initialize repository");
+    let mut config = RepositoryConfig::default();
+    config.inline_chunk_threshold_bytes = Some(0);
+    config.manifest = Some(manifest_config);
+    let repo = Repository::create(Some(config), storage, creds, None, true)
+        .await
+        .expect("Failed to initialize repository");
 
     let ds = Arc::new(RwLock::new(repo.writable_session("main").await?));
 

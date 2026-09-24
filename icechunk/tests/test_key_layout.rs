@@ -115,12 +115,11 @@ async fn create_repo_with_one_chunk(
     spec_version: SpecVersionBin,
     value: i8,
 ) -> Result<Repository, Box<dyn std::error::Error>> {
+    let mut config = RepositoryConfig::default();
+    // force chunks to be written as separate objects (not inlined)
+    config.inline_chunk_threshold_bytes = Some(0);
     let repo = Repository::create(
-        Some(RepositoryConfig {
-            // force chunks to be written as separate objects (not inlined)
-            inline_chunk_threshold_bytes: Some(0),
-            ..Default::default()
-        }),
+        Some(config),
         storage,
         HashMap::new(),
         Some(spec_version),
@@ -366,11 +365,10 @@ async fn rooted_roundtrip_body(
     // Create a rooted repo (empty prefix + forced legacy layout). check_clean_root
     // is false because the bucket is shared with other integration tests' objects
     // (which live under non-slash prefixes, a disjoint key space).
+    let mut config = RepositoryConfig::default();
+    config.inline_chunk_threshold_bytes = Some(0);
     let repo = Repository::create(
-        Some(RepositoryConfig {
-            inline_chunk_threshold_bytes: Some(0),
-            ..Default::default()
-        }),
+        Some(config),
         store.rooted_storage(true)?,
         HashMap::new(),
         Some(SpecVersionBin::V2),

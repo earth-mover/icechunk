@@ -697,10 +697,10 @@ impl From<&PyObjectStoreConfig> for ObjectStoreConfig {
             }
             PyObjectStoreConfig::Tigris(opts) => ObjectStoreConfig::Tigris(opts.into()),
             PyObjectStoreConfig::Http(opts, headers) => {
-                ObjectStoreConfig::Http(icechunk::config::HttpConfig {
-                    opts: opts.clone().unwrap_or_default(),
-                    headers: headers.clone().unwrap_or_default(),
-                })
+                let mut http = icechunk::config::HttpConfig::default();
+                http.opts = opts.clone().unwrap_or_default();
+                http.headers = headers.clone().unwrap_or_default();
+                ObjectStoreConfig::Http(http)
             }
         }
     }
@@ -988,10 +988,10 @@ impl From<CompressionConfig> for PyCompressionConfig {
 
 impl From<&PyCompressionConfig> for CompressionConfig {
     fn from(value: &PyCompressionConfig) -> Self {
-        Self {
-            algorithm: value.algorithm.as_ref().map(|a| a.clone().into()),
-            level: value.level,
-        }
+        let mut config = Self::default();
+        config.algorithm = value.algorithm.as_ref().map(|a| a.clone().into());
+        config.level = value.level;
+        config
     }
 }
 
@@ -1105,13 +1105,13 @@ impl PyCachingConfig {
 
 impl From<&PyCachingConfig> for CachingConfig {
     fn from(value: &PyCachingConfig) -> Self {
-        Self {
-            num_snapshot_nodes: value.num_snapshot_nodes,
-            num_chunk_refs: value.num_chunk_refs,
-            num_transaction_changes: value.num_transaction_changes,
-            num_bytes_attributes: value.num_bytes_attributes,
-            num_bytes_chunks: value.num_bytes_chunks,
-        }
+        let mut config = Self::default();
+        config.num_snapshot_nodes = value.num_snapshot_nodes;
+        config.num_chunk_refs = value.num_chunk_refs;
+        config.num_transaction_changes = value.num_transaction_changes;
+        config.num_bytes_attributes = value.num_bytes_attributes;
+        config.num_bytes_chunks = value.num_bytes_chunks;
+        config
     }
 }
 
@@ -1324,8 +1324,10 @@ impl From<RepoUpdateRetryConfig> for PyRepoUpdateRetryConfig {
 
 impl From<&PyRepoUpdateRetryConfig> for RepoUpdateRetryConfig {
     fn from(value: &PyRepoUpdateRetryConfig) -> Self {
-        Python::attach(|py| Self {
-            default: value.default.as_ref().map(|r| (&*r.borrow(py)).into()),
+        Python::attach(|py| {
+            let mut config = Self::default();
+            config.default = value.default.as_ref().map(|r| (&*r.borrow(py)).into());
+            config
         })
     }
 }
@@ -1866,10 +1868,13 @@ impl PartialEq for PyManifestPreloadConfig {
 
 impl From<&PyManifestPreloadConfig> for ManifestPreloadConfig {
     fn from(value: &PyManifestPreloadConfig) -> Self {
-        Python::attach(|py| Self {
-            max_total_refs: value.max_total_refs,
-            preload_if: value.preload_if.as_ref().map(|c| (&*c.borrow(py)).into()),
-            max_arrays_to_scan: value.max_arrays_to_scan,
+        Python::attach(|py| {
+            let mut config = Self::default();
+            config.max_total_refs = value.max_total_refs;
+            config.preload_if =
+                value.preload_if.as_ref().map(|c| (&*c.borrow(py)).into());
+            config.max_arrays_to_scan = value.max_arrays_to_scan;
+            config
         })
     }
 }
@@ -2161,23 +2166,23 @@ impl From<ManifestSplittingConfig> for PyManifestSplittingConfig {
 
 impl From<&PyManifestSplittingConfig> for ManifestSplittingConfig {
     fn from(value: &PyManifestSplittingConfig) -> Self {
-        Self {
-            split_sizes: value.split_sizes.as_ref().map(|c| {
-                c.iter()
-                    .map(|(x, v)| {
-                        (
-                            x.into(),
-                            v.iter()
-                                .map(|(cond, size)| ManifestSplitDim {
-                                    condition: cond.into(),
-                                    num_chunks: *size,
-                                })
-                                .collect(),
-                        )
-                    })
-                    .collect()
-            }),
-        }
+        let mut config = Self::default();
+        config.split_sizes = value.split_sizes.as_ref().map(|c| {
+            c.iter()
+                .map(|(x, v)| {
+                    (
+                        x.into(),
+                        v.iter()
+                            .map(|(cond, size)| ManifestSplitDim {
+                                condition: cond.into(),
+                                num_chunks: *size,
+                            })
+                            .collect(),
+                    )
+                })
+                .collect()
+        });
+        config
     }
 }
 
@@ -2279,12 +2284,12 @@ impl From<&PyManifestVirtualChunkLocationCompressionConfig>
     for ManifestVirtualChunkLocationCompressionConfig
 {
     fn from(value: &PyManifestVirtualChunkLocationCompressionConfig) -> Self {
-        Self {
-            min_num_chunks: value.min_num_chunks,
-            dictionary_max_training_samples: value.dictionary_max_training_samples,
-            dictionary_max_size_bytes: value.dictionary_max_size_bytes,
-            compression_level: value.compression_level,
-        }
+        let mut config = Self::default();
+        config.min_num_chunks = value.min_num_chunks;
+        config.dictionary_max_training_samples = value.dictionary_max_training_samples;
+        config.dictionary_max_size_bytes = value.dictionary_max_size_bytes;
+        config.compression_level = value.compression_level;
+        config
     }
 }
 
@@ -2397,15 +2402,17 @@ impl PartialEq for PyManifestConfig {
 
 impl From<&PyManifestConfig> for ManifestConfig {
     fn from(value: &PyManifestConfig) -> Self {
-        Python::attach(|py| Self {
-            preload: value.preload.as_ref().map(|c| (&*c.borrow(py)).into()),
-            splitting: value.splitting.as_ref().map(|c| (&*c.borrow(py)).into()),
-            virtual_chunk_location_compression: value
+        Python::attach(|py| {
+            let mut config = Self::default();
+            config.preload = value.preload.as_ref().map(|c| (&*c.borrow(py)).into());
+            config.splitting = value.splitting.as_ref().map(|c| (&*c.borrow(py)).into());
+            config.virtual_chunk_location_compression = value
                 .virtual_chunk_location_compression
                 .as_ref()
-                .map(|c| (&*c.borrow(py)).into()),
-            max_concurrent_manifest_fetches_during_commit: value
-                .max_concurrent_manifest_fetches_during_commit,
+                .map(|c| (&*c.borrow(py)).into());
+            config.max_concurrent_manifest_fetches_during_commit =
+                value.max_concurrent_manifest_fetches_during_commit;
+            config
         })
     }
 }
@@ -2492,23 +2499,22 @@ impl TryFrom<&PyRepositoryConfig> for RepositoryConfig {
             })
             .transpose()?;
         Python::attach(|py| {
-            Ok(Self {
-                inline_chunk_threshold_bytes: value.inline_chunk_threshold_bytes,
-                get_partial_values_concurrency: value.get_partial_values_concurrency,
-                compression: value.compression.as_ref().map(|c| (&*c.borrow(py)).into()),
-                max_concurrent_requests: value.max_concurrent_requests,
-                max_concurrent_decodes: value.max_concurrent_decodes,
-                caching: value.caching.as_ref().map(|c| (&*c.borrow(py)).into()),
-                storage: value.storage.as_ref().map(|s| (&*s.borrow(py)).into()),
-                virtual_chunk_containers: cont,
-                manifest: value.manifest.as_ref().map(|c| (&*c.borrow(py)).into()),
-                previous_file: value.previous_file.clone(),
-                repo_update_retries: value
-                    .repo_update_retries
-                    .as_ref()
-                    .map(|r| (&*r.borrow(py)).into()),
-                num_updates_per_repo_info_file: value.num_updates_per_repo_info_file,
-            })
+            let mut config = Self::default();
+            config.inline_chunk_threshold_bytes = value.inline_chunk_threshold_bytes;
+            config.get_partial_values_concurrency = value.get_partial_values_concurrency;
+            config.compression =
+                value.compression.as_ref().map(|c| (&*c.borrow(py)).into());
+            config.max_concurrent_requests = value.max_concurrent_requests;
+            config.max_concurrent_decodes = value.max_concurrent_decodes;
+            config.caching = value.caching.as_ref().map(|c| (&*c.borrow(py)).into());
+            config.storage = value.storage.as_ref().map(|s| (&*s.borrow(py)).into());
+            config.virtual_chunk_containers = cont;
+            config.manifest = value.manifest.as_ref().map(|c| (&*c.borrow(py)).into());
+            config.previous_file = value.previous_file.clone();
+            config.repo_update_retries =
+                value.repo_update_retries.as_ref().map(|r| (&*r.borrow(py)).into());
+            config.num_updates_per_repo_info_file = value.num_updates_per_repo_info_file;
+            Ok(config)
         })
     }
 }

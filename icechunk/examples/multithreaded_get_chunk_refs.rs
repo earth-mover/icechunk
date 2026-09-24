@@ -45,13 +45,10 @@ async fn mk_repo(
     path: &std::path::Path,
 ) -> Result<Repository, Box<dyn std::error::Error>> {
     let storage = new_local_filesystem_storage(path).await?;
-    let config = RepositoryConfig {
-        compression: Some(CompressionConfig {
-            level: Some(3),
-            ..CompressionConfig::default()
-        }),
-        ..RepositoryConfig::default()
-    };
+    let mut compression = CompressionConfig::default();
+    compression.level = Some(3);
+    let mut config = RepositoryConfig::default();
+    config.compression = Some(compression);
     let repo =
         Repository::open_or_create(Some(config), storage, HashMap::new(), None, true)
             .await?;

@@ -89,17 +89,16 @@ async fn do_test_gc(
             num_chunks: manifest_split_size,
         }],
     )]);
-    let man_config = ManifestConfig {
-        splitting: Some(ManifestSplittingConfig { split_sizes }),
-        ..ManifestConfig::default()
-    };
+    let mut splitting = ManifestSplittingConfig::default();
+    splitting.split_sizes = split_sizes;
+    let mut man_config = ManifestConfig::default();
+    man_config.splitting = Some(splitting);
+    let mut config = RepositoryConfig::default();
+    config.inline_chunk_threshold_bytes = Some(0);
+    config.manifest = Some(man_config);
 
     let repo = Repository::create(
-        Some(RepositoryConfig {
-            inline_chunk_threshold_bytes: Some(0),
-            manifest: Some(man_config),
-            ..Default::default()
-        }),
+        Some(config),
         Arc::clone(&storage),
         HashMap::new(),
         spec_version,
@@ -1564,11 +1563,10 @@ async fn test_gc_completes_with_one_decode_slot() -> Result<(), Box<dyn std::err
     // Without read latency every fetch completes at once and the deadlock never forms.
     let storage: Arc<dyn Storage + Send + Sync> =
         Arc::new(LatencyStorage::new(inner, 0, 5));
+    let mut create_config = RepositoryConfig::default();
+    create_config.inline_chunk_threshold_bytes = Some(0);
     let repo = Repository::create(
-        Some(RepositoryConfig {
-            inline_chunk_threshold_bytes: Some(0),
-            ..Default::default()
-        }),
+        Some(create_config),
         Arc::clone(&storage),
         HashMap::new(),
         None,
@@ -1603,12 +1601,10 @@ async fn test_gc_completes_with_one_decode_slot() -> Result<(), Box<dyn std::err
     }
 
     // The writing repository has everything cached; GC must fetch and decode.
-    let repo = Repository::open(
-        Some(RepositoryConfig { max_concurrent_decodes: Some(1), ..Default::default() }),
-        Arc::clone(&storage),
-        HashMap::new(),
-    )
-    .await?;
+    let mut open_config = RepositoryConfig::default();
+    open_config.max_concurrent_decodes = Some(1);
+    let repo =
+        Repository::open(Some(open_config), Arc::clone(&storage), HashMap::new()).await?;
     let config = GCConfig::clean_all(Utc::now(), Utc::now())
         .with_walk(
             ManifestWalkOptions::default()

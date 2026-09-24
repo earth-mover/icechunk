@@ -50,6 +50,7 @@ pub use icechunk_arrow_object_store::object_store::gcp::GcpCredential;
 /// Header values are **not** included in `Debug`/`Display` output to avoid leaking
 /// credentials in logs.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub struct HttpConfig {
     /// Generic transport options (`ClientConfigKey` names → values).
     #[serde(default, flatten)]
@@ -86,6 +87,7 @@ pub enum CompressionAlgorithm {
 }
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Copy, Default)]
+#[non_exhaustive]
 pub struct CompressionConfig {
     #[serde(default)]
     pub algorithm: Option<CompressionAlgorithm>,
@@ -112,6 +114,7 @@ impl CompressionConfig {
 
 /// Cache size configuration for in-memory caches.
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Copy, Default)]
+#[non_exhaustive]
 pub struct CachingConfig {
     #[serde(default)]
     pub num_snapshot_nodes: Option<u64>,
@@ -229,6 +232,7 @@ pub struct ManifestSplitDim {
 }
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone)]
+#[non_exhaustive]
 pub struct ManifestSplittingConfig {
     // need to preserve insertion order of conditions, so hashmap doesn't work
     pub split_sizes: Option<Vec<(ManifestSplitCondition, Vec<ManifestSplitDim>)>>,
@@ -274,6 +278,7 @@ pub enum ManifestPreloadCondition {
 }
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Default)]
+#[non_exhaustive]
 pub struct ManifestPreloadConfig {
     pub max_total_refs: Option<u32>,
     pub preload_if: Option<ManifestPreloadCondition>,
@@ -343,6 +348,7 @@ static DEFAULT_MANIFEST_PRELOAD_CONDITION: OnceLock<ManifestPreloadCondition> =
     OnceLock::new();
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Copy, Default)]
+#[non_exhaustive]
 pub struct ManifestVirtualChunkLocationCompressionConfig {
     #[serde(default)]
     pub min_num_chunks: Option<u16>,
@@ -399,6 +405,7 @@ impl From<&ManifestVirtualChunkLocationCompressionConfig>
 }
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Default)]
+#[non_exhaustive]
 pub struct ManifestConfig {
     #[serde(default)]
     pub preload: Option<ManifestPreloadConfig>,
@@ -482,6 +489,7 @@ impl ManifestConfig {
 
 /// Retry configuration for repo info update operations.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub struct RepoUpdateRetryConfig {
     /// Default retry settings for all repo update operations.
     #[serde(default)]
@@ -519,6 +527,7 @@ impl RepoUpdateRetryConfig {
 
 /// Configuration options for a repository.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub struct RepositoryConfig {
     /// Chunks smaller than this will be stored inline in the manifest
     #[serde(default)]

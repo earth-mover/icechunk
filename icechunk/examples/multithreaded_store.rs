@@ -11,10 +11,8 @@ use tokio::{sync::RwLock, task::JoinSet, time::sleep};
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let storage = new_in_memory_storage().await?;
-    let config = RepositoryConfig {
-        inline_chunk_threshold_bytes: Some(128),
-        ..Default::default()
-    };
+    let mut config = RepositoryConfig::default();
+    config.inline_chunk_threshold_bytes = Some(128);
     let repo =
         Repository::create(Some(config), storage, HashMap::new(), None, true).await?;
     let ds = Arc::new(RwLock::new(repo.writable_session("main").await?));

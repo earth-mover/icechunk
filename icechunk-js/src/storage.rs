@@ -726,10 +726,10 @@ mod native {
                     icechunk::ObjectStoreConfig::LocalFileSystem(path.into())
                 }
                 JsObjectStoreConfig::Http(js_config) => {
-                    icechunk::ObjectStoreConfig::Http(icechunk::config::HttpConfig {
-                        opts: js_config.opts,
-                        headers: js_config.headers,
-                    })
+                    let mut http = icechunk::config::HttpConfig::default();
+                    http.opts = js_config.opts;
+                    http.headers = js_config.headers;
+                    icechunk::ObjectStoreConfig::Http(http)
                 }
                 JsObjectStoreConfig::S3Compatible(opts) => {
                     icechunk::ObjectStoreConfig::S3Compatible(opts.into())

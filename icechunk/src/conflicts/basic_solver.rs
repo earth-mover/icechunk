@@ -18,6 +18,7 @@ pub enum VersionSelection {
 }
 
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct BasicConflictSolver {
     pub on_chunk_conflict: VersionSelection,
     pub fail_on_delete_of_updated_array: bool,

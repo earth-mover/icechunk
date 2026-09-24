@@ -75,18 +75,11 @@ async fn create_repository(
         .map(|cont| (cont.url_prefix().to_string(), cont))
         .collect();
 
-    Repository::create(
-        Some(RepositoryConfig {
-            virtual_chunk_containers: Some(virtual_chunk_containers),
-            ..Default::default()
-        }),
-        storage,
-        credentials,
-        Some(spec_version),
-        true,
-    )
-    .await
-    .expect("Failed to initialize repository")
+    let mut config = RepositoryConfig::default();
+    config.virtual_chunk_containers = Some(virtual_chunk_containers);
+    Repository::create(Some(config), storage, credentials, Some(spec_version), true)
+        .await
+        .expect("Failed to initialize repository")
 }
 
 async fn write_chunks_to_store(
@@ -888,13 +881,11 @@ async fn test_zarr_store_virtual_refs_http_non_default_port() -> Result<(), Box<
     let join = tokio::task::spawn(server.run());
 
     let url_prefix = format!("http://127.0.0.1:{port}/");
-    let container = VirtualChunkContainer::new(
-        url_prefix.clone(),
-        ObjectStoreConfig::Http(HttpConfig {
-            opts: HashMap::from([("allow_http".to_string(), "true".to_string())]),
-            headers: HashMap::new(),
-        }),
-    )?;
+    let mut http = HttpConfig::default();
+    http.opts = HashMap::from([("allow_http".to_string(), "true".to_string())]);
+    http.headers = HashMap::new();
+    let container =
+        VirtualChunkContainer::new(url_prefix.clone(), ObjectStoreConfig::Http(http))?;
     let credentials = HashMap::from([(url_prefix.clone(), None)]);
 
     let storage = storage::new_in_memory_storage().await?;

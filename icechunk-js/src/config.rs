@@ -42,10 +42,10 @@ pub struct JsCompressionConfig {
 
 impl From<JsCompressionConfig> for CompressionConfig {
     fn from(value: JsCompressionConfig) -> Self {
-        CompressionConfig {
-            algorithm: value.algorithm.map(|a| a.into()),
-            level: value.level.map(|l| l as u8),
-        }
+        let mut config = Self::default();
+        config.algorithm = value.algorithm.map(|a| a.into());
+        config.level = value.level.map(|l| l as u8);
+        config
     }
 }
 
@@ -62,13 +62,13 @@ pub struct JsCachingConfig {
 
 impl From<JsCachingConfig> for CachingConfig {
     fn from(value: JsCachingConfig) -> Self {
-        CachingConfig {
-            num_snapshot_nodes: value.num_snapshot_nodes.map(|v| v as u64),
-            num_chunk_refs: value.num_chunk_refs.map(|v| v as u64),
-            num_transaction_changes: value.num_transaction_changes.map(|v| v as u64),
-            num_bytes_attributes: value.num_bytes_attributes.map(|v| v as u64),
-            num_bytes_chunks: value.num_bytes_chunks.map(|v| v as u64),
-        }
+        let mut config = Self::default();
+        config.num_snapshot_nodes = value.num_snapshot_nodes.map(|v| v as u64);
+        config.num_chunk_refs = value.num_chunk_refs.map(|v| v as u64);
+        config.num_transaction_changes = value.num_transaction_changes.map(|v| v as u64);
+        config.num_bytes_attributes = value.num_bytes_attributes.map(|v| v as u64);
+        config.num_bytes_chunks = value.num_bytes_chunks.map(|v| v as u64);
+        config
     }
 }
 
@@ -318,23 +318,18 @@ impl TryFrom<JsRepositoryConfig> for RepositoryConfig {
         #[cfg(target_family = "wasm")]
         let virtual_chunk_containers = None;
 
-        Ok(RepositoryConfig {
-            inline_chunk_threshold_bytes: value
-                .inline_chunk_threshold_bytes
-                .map(|v| v as u16),
-            get_partial_values_concurrency: value
-                .get_partial_values_concurrency
-                .map(|v| v as u16),
-            compression: value.compression.map(|c| c.into()),
-            max_concurrent_requests: value.max_concurrent_requests.map(|v| v as u16),
-            max_concurrent_decodes: value.max_concurrent_decodes.map(|v| v as u16),
-            caching: value.caching.map(|c| c.into()),
-            storage: value.storage.map(|s| s.into()),
-            virtual_chunk_containers,
-            manifest,
-            previous_file: None,
-            repo_update_retries: None,
-            num_updates_per_repo_info_file: None,
-        })
+        let mut config = RepositoryConfig::default();
+        config.inline_chunk_threshold_bytes =
+            value.inline_chunk_threshold_bytes.map(|v| v as u16);
+        config.get_partial_values_concurrency =
+            value.get_partial_values_concurrency.map(|v| v as u16);
+        config.compression = value.compression.map(|c| c.into());
+        config.max_concurrent_requests = value.max_concurrent_requests.map(|v| v as u16);
+        config.max_concurrent_decodes = value.max_concurrent_decodes.map(|v| v as u16);
+        config.caching = value.caching.map(|c| c.into());
+        config.storage = value.storage.map(|s| s.into());
+        config.virtual_chunk_containers = virtual_chunk_containers;
+        config.manifest = manifest;
+        Ok(config)
     }
 }

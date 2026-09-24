@@ -99,11 +99,10 @@ async fn do_test_repo_chunks_storage(
         &AssetManagerOptions::no_cache().with_compression_level(1),
     ));
 
+    let mut config = RepositoryConfig::default();
+    config.inline_chunk_threshold_bytes = Some(5);
     let repo = Repository::create(
-        Some(RepositoryConfig {
-            inline_chunk_threshold_bytes: Some(5),
-            ..Default::default()
-        }),
+        Some(config),
         Arc::clone(&storage),
         Default::default(),
         Some(spec_version),
@@ -263,11 +262,10 @@ async fn test_virtual_chunk_deduplication(
         &AssetManagerOptions::no_cache().with_compression_level(1),
     ));
 
+    let mut config = RepositoryConfig::default();
+    config.inline_chunk_threshold_bytes = Some(5);
     let repo = Repository::create(
-        Some(RepositoryConfig {
-            inline_chunk_threshold_bytes: Some(5),
-            ..Default::default()
-        }),
+        Some(config),
         storage,
         Default::default(),
         Some(spec_version),

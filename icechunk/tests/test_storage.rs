@@ -1213,8 +1213,8 @@ async fn test_write_config_on_existing(
         else {
             panic!()
         };
-        let config2 =
-            RepositoryConfig { inline_chunk_threshold_bytes: Some(42), ..config1 };
+        let mut config2 = config1;
+        config2.inline_chunk_threshold_bytes = Some(42);
         let Some(second_version) =
             am.try_update_config(&config2, &first_version, Some("foo/baz")).await?
         else {
