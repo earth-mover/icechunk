@@ -12,7 +12,7 @@ use tracing::{debug, info, instrument};
 
 use crate::{
     asset_manager::AssetManager,
-    config::RepoUpdateRetryConfig,
+    config::{DEFAULT_NUM_UPDATES_PER_REPO_INFO_FILE, RepoUpdateRetryConfig},
     format::{
         SnapshotId,
         format_constants::SpecVersionBin,
@@ -35,6 +35,49 @@ mod v1;
 pub enum ExpiredRefAction {
     Delete,
     Ignore,
+}
+
+/// Which expired refs to delete and how the repo info update retries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ExpireOptions {
+    pub expired_branches: ExpiredRefAction,
+    pub expired_tags: ExpiredRefAction,
+    pub repo_update_retries: Option<RepoUpdateRetryConfig>,
+    pub num_updates_per_repo_info_file: u16,
+}
+
+impl Default for ExpireOptions {
+    fn default() -> Self {
+        Self {
+            expired_branches: ExpiredRefAction::Ignore,
+            expired_tags: ExpiredRefAction::Ignore,
+            repo_update_retries: None,
+            num_updates_per_repo_info_file: DEFAULT_NUM_UPDATES_PER_REPO_INFO_FILE,
+        }
+    }
+}
+
+impl ExpireOptions {
+    pub fn with_expired_branches(mut self, value: ExpiredRefAction) -> Self {
+        self.expired_branches = value;
+        self
+    }
+
+    pub fn with_expired_tags(mut self, value: ExpiredRefAction) -> Self {
+        self.expired_tags = value;
+        self
+    }
+
+    pub fn with_repo_update_retries(mut self, value: RepoUpdateRetryConfig) -> Self {
+        self.repo_update_retries = Some(value);
+        self
+    }
+
+    pub fn with_num_updates_per_repo_info_file(mut self, value: u16) -> Self {
+        self.num_updates_per_repo_info_file = value;
+        self
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Default)]
@@ -66,52 +109,46 @@ pub struct ExpireResult {
 pub async fn expire(
     asset_manager: Arc<AssetManager>,
     older_than: DateTime<Utc>,
-    expired_branches: ExpiredRefAction,
-    expired_tags: ExpiredRefAction,
-    repo_update_retries: Option<&RepoUpdateRetryConfig>,
-    num_updates_per_repo_info_file: u16,
+    options: &ExpireOptions,
 ) -> GCResult<ExpireResult> {
     ensure_repo_writable(asset_manager.as_ref(), "expire").await?;
 
     match asset_manager.spec_version() {
         SpecVersionBin::V1 => {
-            v1::expire(asset_manager, older_than, expired_branches, expired_tags).await
-        }
-        SpecVersionBin::V2 => {
-            expire_v2(
+            v1::expire(
                 asset_manager,
                 older_than,
-                expired_branches,
-                expired_tags,
-                repo_update_retries,
-                num_updates_per_repo_info_file,
+                options.expired_branches,
+                options.expired_tags,
             )
             .await
         }
+        SpecVersionBin::V2 => expire_v2(asset_manager, older_than, options).await,
     }
 }
 
 /// Since `expire_v2` is a relatively fast operation (repo object only) we retry it if the repo info
 /// object was modified since it started
 #[instrument(skip(asset_manager))]
-pub async fn expire_v2(
+pub(crate) async fn expire_v2(
     asset_manager: Arc<AssetManager>,
     older_than: DateTime<Utc>,
-    expired_branches: ExpiredRefAction,
-    expired_tags: ExpiredRefAction,
-    repo_update_retries: Option<&RepoUpdateRetryConfig>,
-    num_updates_per_repo_info_file: u16,
+    options: &ExpireOptions,
 ) -> GCResult<ExpireResult> {
-    retry_on_repo_info_update(repo_update_retries, "expire", async || {
-        expire_v2_one_attempt(
-            Arc::clone(&asset_manager),
-            older_than,
-            expired_branches,
-            expired_tags,
-            num_updates_per_repo_info_file,
-        )
-        .await
-    })
+    retry_on_repo_info_update(
+        options.repo_update_retries.as_ref(),
+        "expire",
+        async || {
+            expire_v2_one_attempt(
+                Arc::clone(&asset_manager),
+                older_than,
+                options.expired_branches,
+                options.expired_tags,
+                options.num_updates_per_repo_info_file,
+            )
+            .await
+        },
+    )
     .await
 }
 
@@ -362,4 +399,35 @@ async fn expire_v2_one_attempt(
 
     debug!("Expiration done");
     Ok(ExpireResult { released_snapshots, edited_snapshots, deleted_refs: deleted_tags })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn expire_options_default_keeps_refs() {
+        let o = ExpireOptions::default();
+        assert_eq!(o.expired_branches, ExpiredRefAction::Ignore);
+        assert_eq!(o.expired_tags, ExpiredRefAction::Ignore);
+        assert_eq!(o.repo_update_retries, None);
+        assert_eq!(
+            o.num_updates_per_repo_info_file,
+            DEFAULT_NUM_UPDATES_PER_REPO_INFO_FILE
+        );
+    }
+
+    #[test]
+    fn expire_options_setters_set_fields() {
+        let retries = RepoUpdateRetryConfig::default();
+        let o = ExpireOptions::default()
+            .with_expired_branches(ExpiredRefAction::Delete)
+            .with_expired_tags(ExpiredRefAction::Delete)
+            .with_repo_update_retries(retries)
+            .with_num_updates_per_repo_info_file(7);
+        assert_eq!(o.expired_branches, ExpiredRefAction::Delete);
+        assert_eq!(o.expired_tags, ExpiredRefAction::Delete);
+        assert_eq!(o.repo_update_retries, Some(retries));
+        assert_eq!(o.num_updates_per_repo_info_file, 7);
+    }
 }

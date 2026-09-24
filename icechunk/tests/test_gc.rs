@@ -20,8 +20,8 @@ use icechunk::{
     },
     new_in_memory_storage,
     ops::gc::{
-        ExpiredRefAction, GCConfig, GCSummary, ManifestWalkOptions, expire,
-        garbage_collect,
+        ExpireOptions, ExpiredRefAction, GCConfig, GCSummary, ManifestWalkOptions,
+        expire, garbage_collect,
     },
     refs::Ref,
     repository::VersionInfo,
@@ -436,10 +436,7 @@ async fn do_test_expire_and_garbage_collect(
     let result = expire(
         Arc::clone(&asset_manager),
         expire_older_than,
-        ExpiredRefAction::Ignore,
-        ExpiredRefAction::Ignore,
-        None,
-        100,
+        &ExpireOptions::default().with_num_updates_per_repo_info_file(100),
     )
     .await?;
 
@@ -543,10 +540,10 @@ async fn test_expire_and_garbage_collect_deleting_expired_refs()
         Arc::clone(&asset_manager),
         expire_older_than,
         // This is different compared to the previous test
-        ExpiredRefAction::Delete,
-        ExpiredRefAction::Delete,
-        None,
-        100,
+        &ExpireOptions::default()
+            .with_expired_branches(ExpiredRefAction::Delete)
+            .with_expired_tags(ExpiredRefAction::Delete)
+            .with_num_updates_per_repo_info_file(100),
     )
     .await?;
 
@@ -617,10 +614,7 @@ async fn test_diff_complete_after_expire_and_gc() -> Result<(), Box<dyn std::err
     let result = expire(
         Arc::clone(&asset_manager),
         expire_older_than,
-        ExpiredRefAction::Ignore,
-        ExpiredRefAction::Ignore,
-        None,
-        100,
+        &ExpireOptions::default().with_num_updates_per_repo_info_file(100),
     )
     .await?;
     assert_eq!(result.released_snapshots.len(), 3); // root group, /a, /b
@@ -697,10 +691,9 @@ async fn test_gc_deletes_only_unreferenced_expired_tx_logs()
     let result = expire(
         Arc::clone(&asset_manager),
         expire_older_than,
-        ExpiredRefAction::Delete,
-        ExpiredRefAction::Ignore,
-        None,
-        100,
+        &ExpireOptions::default()
+            .with_expired_branches(ExpiredRefAction::Delete)
+            .with_num_updates_per_repo_info_file(100),
     )
     .await?;
     // root group, /a, /b on main + /d, /e on doomed
@@ -756,10 +749,7 @@ async fn test_gc_retains_snapshot_between_flushed_and_created_at()
     let result = expire(
         Arc::clone(&am),
         Utc::now() + chrono::Duration::days(1),
-        ExpiredRefAction::Ignore,
-        ExpiredRefAction::Ignore,
-        None,
-        100,
+        &ExpireOptions::default().with_num_updates_per_repo_info_file(100),
     )
     .await?;
     assert_eq!(result.released_snapshots.len(), 1);
@@ -827,10 +817,7 @@ async fn test_gc_deletes_pruned_tx_logs_of_expire_released_snapshot()
     let result = expire(
         Arc::clone(&am),
         Utc::now() + chrono::Duration::days(1),
-        ExpiredRefAction::Ignore,
-        ExpiredRefAction::Ignore,
-        None,
-        100,
+        &ExpireOptions::default().with_num_updates_per_repo_info_file(100),
     )
     .await?;
     assert_eq!(result.released_snapshots.len(), 1);
@@ -860,10 +847,7 @@ async fn test_gc_deletes_pruned_tx_logs_of_expire_released_snapshot()
     let result = expire(
         Arc::clone(&am),
         Utc::now() + chrono::Duration::days(1),
-        ExpiredRefAction::Ignore,
-        ExpiredRefAction::Ignore,
-        None,
-        100,
+        &ExpireOptions::default().with_num_updates_per_repo_info_file(100),
     )
     .await?;
     assert!(result.released_snapshots.contains(&c));
@@ -983,10 +967,7 @@ async fn test_repeated_expiration_accumulates_pruned_logs()
     let r1 = expire(
         Arc::clone(&am),
         threshold1,
-        ExpiredRefAction::Ignore,
-        ExpiredRefAction::Ignore,
-        None,
-        100,
+        &ExpireOptions::default().with_num_updates_per_repo_info_file(100),
     )
     .await?;
     assert_eq!(r1.released_snapshots.len(), 3); // g0, a, b
@@ -1000,10 +981,7 @@ async fn test_repeated_expiration_accumulates_pruned_logs()
     let r2 = expire(
         Arc::clone(&am),
         threshold2,
-        ExpiredRefAction::Ignore,
-        ExpiredRefAction::Ignore,
-        None,
-        100,
+        &ExpireOptions::default().with_num_updates_per_repo_info_file(100),
     )
     .await?;
     assert_eq!(r2.released_snapshots.len(), 1); // c
@@ -1080,10 +1058,7 @@ async fn test_reparent_accumulates_existing_pruned_logs()
     expire(
         Arc::clone(&am),
         expire_threshold,
-        ExpiredRefAction::Ignore,
-        ExpiredRefAction::Ignore,
-        None,
-        100,
+        &ExpireOptions::default().with_num_updates_per_repo_info_file(100),
     )
     .await?;
 
@@ -1133,10 +1108,7 @@ async fn test_amend_preserves_pruned_logs() -> Result<(), Box<dyn std::error::Er
     let r = expire(
         Arc::clone(&am),
         threshold,
-        ExpiredRefAction::Ignore,
-        ExpiredRefAction::Ignore,
-        None,
-        100,
+        &ExpireOptions::default().with_num_updates_per_repo_info_file(100),
     )
     .await?;
     assert!(r.edited_snapshots.contains(&c));
@@ -1218,10 +1190,7 @@ async fn test_rebase_detects_conflict_in_pruned_ancestor()
     let r = expire(
         Arc::clone(&am),
         threshold,
-        ExpiredRefAction::Ignore,
-        ExpiredRefAction::Ignore,
-        None,
-        100,
+        &ExpireOptions::default().with_num_updates_per_repo_info_file(100),
     )
     .await?;
     assert!(r.released_snapshots.contains(&x));
@@ -1282,10 +1251,7 @@ async fn test_rebase_errors_on_missing_pruned_ancestor_log()
     expire(
         Arc::clone(&am),
         threshold,
-        ExpiredRefAction::Ignore,
-        ExpiredRefAction::Ignore,
-        None,
-        100,
+        &ExpireOptions::default().with_num_updates_per_repo_info_file(100),
     )
     .await?;
     garbage_collect(Arc::clone(&am), &clean_all_now()).await?;
@@ -1336,10 +1302,7 @@ async fn test_diff_skips_missing_pruned_log() -> Result<(), Box<dyn std::error::
     expire(
         Arc::clone(&am),
         threshold,
-        ExpiredRefAction::Ignore,
-        ExpiredRefAction::Ignore,
-        None,
-        100,
+        &ExpireOptions::default().with_num_updates_per_repo_info_file(100),
     )
     .await?;
     garbage_collect(Arc::clone(&am), &clean_all_now()).await?;
@@ -1400,10 +1363,7 @@ async fn test_inspect_shows_synthetic_composite() -> Result<(), Box<dyn std::err
     let r = expire(
         Arc::clone(&am),
         threshold,
-        ExpiredRefAction::Ignore,
-        ExpiredRefAction::Ignore,
-        None,
-        100,
+        &ExpireOptions::default().with_num_updates_per_repo_info_file(100),
     )
     .await?;
     assert!(r.edited_snapshots.contains(&c));
@@ -1587,10 +1547,9 @@ async fn test_expire_deletes_branch_sharing_tip_with_main()
     let result = expire(
         Arc::clone(&asset_manager),
         expire_older_than,
-        ExpiredRefAction::Delete,
-        ExpiredRefAction::Ignore,
-        None,
-        100,
+        &ExpireOptions::default()
+            .with_expired_branches(ExpiredRefAction::Delete)
+            .with_num_updates_per_repo_info_file(100),
     )
     .await?;
 
