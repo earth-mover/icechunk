@@ -597,7 +597,9 @@ python-upstream-setup:
   WHEEL=$(ls dist/*-abi3-*.whl)
   export UV_INDEX="https://pypi.anaconda.org/scientific-python-nightly-wheels/simple/"
   export UV_PRERELEASE=allow
+  # The override drops the dev group's zarr cap, so the job tests zarr nightly.
   uv pip install "$WHEEL" --group dev \
+    --override <(echo zarr) \
     --resolution highest \
     --index-strategy unsafe-best-match 2>&1 | tee setup-output.log
   uv pip install hypothesis
