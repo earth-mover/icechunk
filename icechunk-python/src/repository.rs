@@ -2885,28 +2885,36 @@ impl PyRepository {
         py.detach(move || {
             let result =
                 pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
-                    let gc_config = GCConfig::clean_all(
-                        delete_object_older_than,
-                        delete_object_older_than,
-                        Default::default(),
-                        max_snapshots_in_memory,
-                        max_compressed_manifest_mem_bytes,
-                        max_decoded_manifest_mem_bytes,
-                        max_concurrent_manifest_fetches,
-                        max_concurrent_deletes,
-                        max_consecutive_delete_failures,
-                        max_concurrent_listings,
-                        dry_run,
-                    );
                     let (asset_manager, num_updates) = {
                         let lock = self.0.read().await;
                         let num_updates = lock.config().num_updates_per_repo_info_file();
                         (Arc::clone(lock.asset_manager()), num_updates)
                     };
-                    let result =
-                        garbage_collect(asset_manager, &gc_config, None, num_updates)
-                            .await
-                            .map_err(PyIcechunkStoreError::GCError)?;
+                    let mut gc_config = GCConfig::clean_all(
+                        delete_object_older_than,
+                        delete_object_older_than,
+                    )
+                    .with_walk(
+                        ManifestWalkOptions::default()
+                            .with_max_snapshots_in_memory(max_snapshots_in_memory)
+                            .with_max_compressed_manifest_mem_bytes(
+                                max_compressed_manifest_mem_bytes,
+                            )
+                            .with_max_decoded_manifest_mem_bytes(
+                                max_decoded_manifest_mem_bytes,
+                            )
+                            .with_max_concurrent_manifest_fetches(
+                                max_concurrent_manifest_fetches,
+                            ),
+                    )
+                    .with_max_concurrent_deletes(max_concurrent_deletes)
+                    .with_max_consecutive_delete_failures(max_consecutive_delete_failures)
+                    .with_num_updates_per_repo_info_file(num_updates)
+                    .with_dry_run(dry_run);
+                    gc_config.max_concurrent_listings = max_concurrent_listings;
+                    let result = garbage_collect(asset_manager, &gc_config)
+                        .await
+                        .map_err(PyIcechunkStoreError::GCError)?;
                     Ok::<_, PyIcechunkStoreError>(result.into())
                 })?;
 
@@ -2930,25 +2938,32 @@ impl PyRepository {
     ) -> PyResult<Bound<'py, PyAny>> {
         let repository = Arc::clone(&self.0);
         pyo3_async_runtimes::tokio::future_into_py::<_, PyGCSummary>(py, async move {
-            let gc_config = GCConfig::clean_all(
-                delete_object_older_than,
-                delete_object_older_than,
-                Default::default(),
-                max_snapshots_in_memory,
-                max_compressed_manifest_mem_bytes,
-                max_decoded_manifest_mem_bytes,
-                max_concurrent_manifest_fetches,
-                max_concurrent_deletes,
-                max_consecutive_delete_failures,
-                max_concurrent_listings,
-                dry_run,
-            );
             let (asset_manager, num_updates) = {
                 let lock = repository.read().await;
                 let num_updates = lock.config().num_updates_per_repo_info_file();
                 (Arc::clone(lock.asset_manager()), num_updates)
             };
-            let result = garbage_collect(asset_manager, &gc_config, None, num_updates)
+            let mut gc_config =
+                GCConfig::clean_all(delete_object_older_than, delete_object_older_than)
+                    .with_walk(
+                        ManifestWalkOptions::default()
+                            .with_max_snapshots_in_memory(max_snapshots_in_memory)
+                            .with_max_compressed_manifest_mem_bytes(
+                                max_compressed_manifest_mem_bytes,
+                            )
+                            .with_max_decoded_manifest_mem_bytes(
+                                max_decoded_manifest_mem_bytes,
+                            )
+                            .with_max_concurrent_manifest_fetches(
+                                max_concurrent_manifest_fetches,
+                            ),
+                    )
+                    .with_max_concurrent_deletes(max_concurrent_deletes)
+                    .with_max_consecutive_delete_failures(max_consecutive_delete_failures)
+                    .with_num_updates_per_repo_info_file(num_updates)
+                    .with_dry_run(dry_run);
+            gc_config.max_concurrent_listings = max_concurrent_listings;
+            let result = garbage_collect(asset_manager, &gc_config)
                 .await
                 .map_err(PyIcechunkStoreError::GCError)?;
             Ok(result.into())

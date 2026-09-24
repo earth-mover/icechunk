@@ -5,12 +5,7 @@
 //! silently orphaned objects (delete used a different join than write). These
 //! tests verify the fix against local rustfs.
 
-use std::{
-    collections::HashMap,
-    num::{NonZeroU16, NonZeroUsize},
-    panic::AssertUnwindSafe,
-    sync::Arc,
-};
+use std::{collections::HashMap, panic::AssertUnwindSafe, sync::Arc};
 
 use bytes::Bytes;
 use chrono::Utc;
@@ -325,21 +320,9 @@ async fn empty_prefix_gc_actually_deletes_chunks()
     repo.reset_branch("main", &first, None).await?;
 
     let now = common::cutoff_after_all_listed(&repo).await?;
-    let gc_config = GCConfig::clean_all(
-        now,
-        now,
-        None,
-        NonZeroU16::new(50).unwrap(),
-        NonZeroUsize::new(512 * 1024 * 1024).unwrap(),
-        NonZeroUsize::new(4 * 1024 * 1024 * 1024).unwrap(),
-        NonZeroU16::new(500).unwrap(),
-        NonZeroU16::new(10).unwrap(),
-        NonZeroU16::new(50).unwrap(),
-        None,
-        false,
-    );
-    let summary =
-        garbage_collect(Arc::clone(repo.asset_manager()), &gc_config, None, 100).await?;
+    let gc_config =
+        GCConfig::clean_all(now, now).with_num_updates_per_repo_info_file(100);
+    let summary = garbage_collect(Arc::clone(repo.asset_manager()), &gc_config).await?;
     assert_eq!(summary.chunks_deleted, 1, "GC should report one deleted chunk");
 
     let chunks_after =
@@ -411,20 +394,9 @@ async fn rooted_roundtrip_body(
 
     // GC must run cleanly under the detected (rooted) layout.
     let now = Utc::now();
-    let gc_config = GCConfig::clean_all(
-        now,
-        now,
-        None,
-        NonZeroU16::new(50).unwrap(),
-        NonZeroUsize::new(512 * 1024 * 1024).unwrap(),
-        NonZeroUsize::new(4 * 1024 * 1024 * 1024).unwrap(),
-        NonZeroU16::new(500).unwrap(),
-        NonZeroU16::new(10).unwrap(),
-        NonZeroU16::new(50).unwrap(),
-        None,
-        false,
-    );
-    garbage_collect(Arc::clone(repo.asset_manager()), &gc_config, None, 100).await?;
+    let gc_config =
+        GCConfig::clean_all(now, now).with_num_updates_per_repo_info_file(100);
+    garbage_collect(Arc::clone(repo.asset_manager()), &gc_config).await?;
     Ok(())
 }
 

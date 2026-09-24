@@ -184,7 +184,7 @@ pub(crate) struct NetArgs {
     pub(crate) bandwidth_kbps: Option<u64>,
 }
 
-/// Maps one to one onto the parameters of `garbage_collect` and `repo_chunks_storage`.
+/// Walk budget limits that the bench passes into `ManifestWalkOptions`.
 #[derive(Args, Debug, Clone)]
 pub(crate) struct WalkArgs {
     #[arg(long, default_value_t = 50)]
