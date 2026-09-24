@@ -208,7 +208,7 @@ pub struct WalkLimits {
 }
 
 /// Memory and concurrency budget for a walk over the manifests of a set of snapshots.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct ManifestWalkOptions {
     pub max_snapshots_in_memory: NonZeroU16,

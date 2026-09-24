@@ -67,7 +67,7 @@ impl Action {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct GCConfig {
-    /// Snapshots kept alive in addition to the ones reachable from refs.
+    /// Snapshots that GC keeps in addition to the snapshots that refs reach.
     pub extra_roots: HashSet<SnapshotId>,
     pub dangling_chunks: Action,
     pub dangling_manifests: Action,
@@ -1080,7 +1080,7 @@ mod tests {
     #[test]
     fn gc_config_clean_all_sets_every_action() {
         let chunks = Utc::now();
-        let metadata = chunks - Duration::hours(1);
+        let metadata = chunks - TimeDelta::hours(1);
         let config = GCConfig::clean_all(chunks, metadata);
         assert_eq!(config.dangling_chunks, Action::DeleteIfCreatedBefore(chunks));
         assert_eq!(config.dangling_manifests, Action::DeleteIfCreatedBefore(metadata));
@@ -1118,6 +1118,9 @@ mod tests {
             .with_dry_run(true);
         assert_eq!(config.extra_roots, HashSet::from([root]));
         assert_eq!(config.dangling_chunks, Action::DeleteIfCreatedBefore(now));
+        assert_eq!(config.dangling_manifests, Action::DeleteIfCreatedBefore(now));
+        assert_eq!(config.dangling_attributes, Action::DeleteIfCreatedBefore(now));
+        assert_eq!(config.dangling_transaction_logs, Action::DeleteIfCreatedBefore(now));
         assert_eq!(config.dangling_snapshots, Action::DeleteIfCreatedBefore(now));
         assert_eq!(config.walk.max_snapshots_in_memory, NonZeroU16::MIN);
         assert_eq!(config.max_concurrent_deletes.get(), 2);

@@ -301,8 +301,8 @@ async fn do_migrate(
     Ok(())
 }
 
-/// Controls for the V1 to V2 migration.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Controls for the V1 to V2 migration. The default is a dry run.
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct MigrateOptions {
     pub dry_run: bool,
@@ -313,7 +313,7 @@ pub struct MigrateOptions {
 
 impl Default for MigrateOptions {
     fn default() -> Self {
-        Self { dry_run: false, delete_unused_v1_files: false, prefetch_concurrency: 64 }
+        Self { dry_run: true, delete_unused_v1_files: true, prefetch_concurrency: 64 }
     }
 }
 
@@ -336,7 +336,7 @@ impl MigrateOptions {
 
 pub async fn migrate_1_to_2(
     repo: Repository,
-    options: MigrateOptions,
+    options: &MigrateOptions,
 ) -> MigrationResult<()> {
     let MigrateOptions { dry_run, delete_unused_v1_files, prefetch_concurrency, .. } =
         options;
@@ -397,7 +397,7 @@ pub async fn migrate_1_to_2(
         info!(
             "Snapshot prefetch: loading {} snapshots with concurrency {}",
             ids.len(),
-            prefetch_concurrency,
+            *prefetch_concurrency,
         );
         let infos: HashMap<SnapshotId, SnapshotInfo> =
             stream::iter(ids.into_iter().map(|id| {
@@ -414,7 +414,7 @@ pub async fn migrate_1_to_2(
                     }
                 }
             }))
-            .buffer_unordered(prefetch_concurrency)
+            .buffer_unordered(*prefetch_concurrency)
             .filter_map(|entry| async move { entry })
             .collect()
             .await;
@@ -543,14 +543,14 @@ pub async fn migrate_1_to_2(
         .inject()?,
     );
 
-    if dry_run {
+    if *dry_run {
         info!(
             "Migration dry-run completed in {} seconds, your repository wasn't modified, run with `dry_run=False` to actually migrate",
             start_time.elapsed().as_secs()
         );
         Ok(())
     } else {
-        do_migrate(&repo, repo_info, start_time, delete_unused_v1_files).await
+        do_migrate(&repo, repo_info, start_time, *delete_unused_v1_files).await
     }
 }
 
@@ -773,7 +773,7 @@ mod tests {
             branch_ancestries_before.insert(branch, anc);
         }
 
-        migrate_1_to_2(repo, MigrateOptions::default().with_delete_unused_v1_files(true))
+        migrate_1_to_2(repo, &MigrateOptions::default().with_dry_run(false))
             .await
             .unwrap();
         let repo = Repository::open(storage, OpenOptions::default()).await?;
@@ -924,17 +924,14 @@ mod tests {
         let (repo, _tmp) = prepare_v1_repo().await?;
         let storage = Arc::clone(repo.storage());
 
-        migrate_1_to_2(repo, MigrateOptions::default().with_delete_unused_v1_files(true))
+        migrate_1_to_2(repo, &MigrateOptions::default().with_dry_run(false))
             .await
             .unwrap();
 
         // Reopen the now-V2 repo and try to migrate again
         let repo = Repository::open(storage, OpenOptions::default()).await?;
-        let result = migrate_1_to_2(
-            repo,
-            MigrateOptions::default().with_delete_unused_v1_files(true),
-        )
-        .await;
+        let result =
+            migrate_1_to_2(repo, &MigrateOptions::default().with_dry_run(false)).await;
         assert!(result.is_err(), "migrating an already-V2 repo should return an error");
 
         Ok(())
@@ -946,14 +943,9 @@ mod tests {
         let (repo, _tmp) = prepare_v1_repo().await?;
         let storage = Arc::clone(repo.storage());
 
-        migrate_1_to_2(
-            repo,
-            MigrateOptions::default()
-                .with_dry_run(true)
-                .with_delete_unused_v1_files(true),
-        )
-        .await
-        .unwrap();
+        migrate_1_to_2(repo, &MigrateOptions::default().with_dry_run(true))
+            .await
+            .unwrap();
         let repo = Repository::open(storage, OpenOptions::default()).await?;
 
         assert_eq!(repo.spec_version(), SpecVersionBin::V1);
@@ -967,7 +959,14 @@ mod tests {
         let (repo, _tmp) = prepare_v1_repo().await?;
         let storage = Arc::clone(repo.storage());
 
-        migrate_1_to_2(repo, MigrateOptions::default()).await.unwrap();
+        migrate_1_to_2(
+            repo,
+            &MigrateOptions::default()
+                .with_dry_run(false)
+                .with_delete_unused_v1_files(false),
+        )
+        .await
+        .unwrap();
         let repo = Repository::open(storage, OpenOptions::default()).await?;
 
         assert_eq!(repo.spec_version(), SpecVersionBin::V2);
@@ -987,7 +986,7 @@ mod tests {
         let (repo, _tmp) = prepare_v1_repo().await?;
         let storage = Arc::clone(repo.storage());
 
-        migrate_1_to_2(repo, MigrateOptions::default().with_delete_unused_v1_files(true))
+        migrate_1_to_2(repo, &MigrateOptions::default().with_dry_run(false))
             .await
             .unwrap();
 
@@ -1049,21 +1048,21 @@ mod tests {
     }
 
     #[test]
-    fn migrate_options_default_is_a_safe_real_run() {
+    fn migrate_options_default_is_a_dry_run() {
         let o = MigrateOptions::default();
-        assert!(!o.dry_run);
-        assert!(!o.delete_unused_v1_files);
+        assert!(o.dry_run);
+        assert!(o.delete_unused_v1_files);
         assert_eq!(o.prefetch_concurrency, 64);
     }
 
     #[test]
     fn migrate_options_setters_set_fields() {
         let o = MigrateOptions::default()
-            .with_dry_run(true)
-            .with_delete_unused_v1_files(true)
+            .with_dry_run(false)
+            .with_delete_unused_v1_files(false)
             .with_prefetch_concurrency(3);
-        assert!(o.dry_run);
-        assert!(o.delete_unused_v1_files);
+        assert!(!o.dry_run);
+        assert!(!o.delete_unused_v1_files);
         assert_eq!(o.prefetch_concurrency, 3);
     }
 }

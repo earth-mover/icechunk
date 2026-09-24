@@ -1147,7 +1147,7 @@ impl PyRepository {
                 if let Some(n) = prefetch_concurrency {
                     options = options.with_prefetch_concurrency(n);
                 }
-                migrations::migrate_1_to_2(fresh, options)
+                migrations::migrate_1_to_2(fresh, &options)
                     .await
                     .map_err(PyIcechunkStoreError::MigrationError)?;
 

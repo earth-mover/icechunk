@@ -1755,7 +1755,7 @@ async fn prepare_repo_info(
 }
 
 #[expect(clippy::too_many_arguments)]
-pub async fn write_repo_info(
+pub(crate) async fn write_repo_info(
     info: Arc<RepoInfo>,
     spec_version: SpecVersionBin,
     version: &VersionInfo,

@@ -483,6 +483,7 @@ fn transient_per_key_code(errors: &[aws_sdk_s3::types::Error]) -> Option<&str> {
 pub struct S3StorageOptions {
     /// `None` reads credentials from the environment.
     pub credentials: Option<S3Credentials>,
+    /// False makes a read-only store. Tigris weak consistency also forces false.
     pub can_write: bool,
     /// Extra HTTP headers on `GET`/`HEAD`/`OPTIONS`/`TRACE` requests.
     pub extra_read_headers: Vec<(String, String)>,
@@ -1725,6 +1726,7 @@ fn hf_storage(
 ///
 /// Credentials, headers, write access, and key layout come from `options`, see
 /// [`S3StorageOptions`].
+/// `use_weak_consistency = true` forces a read-only store, whatever `options.can_write` says.
 /// The required `X-Tigris-*` consistency headers take precedence on a name
 /// conflict.
 pub fn new_tigris_storage(
@@ -1757,6 +1759,7 @@ fn merge_required_headers(
 ///
 /// Credentials, headers, write access, and key layout come from `options`, see
 /// [`S3StorageOptions`].
+/// `use_weak_consistency = true` forces a read-only store, whatever `options.can_write` says.
 /// The required `X-Tigris-*` consistency headers take precedence on a name
 /// conflict.
 pub fn tigris_storage(
@@ -1967,6 +1970,18 @@ mod tests {
             None,
             true,
             S3StorageOptions::default().with_can_write(true),
+        )
+        .unwrap();
+        assert!(!storage.can_write().await.unwrap());
+    }
+
+    #[tokio_test]
+    async fn with_can_write_false_makes_a_read_only_store() {
+        let storage = S3Storage::new(
+            S3Options::default(),
+            "bucket".to_string(),
+            None,
+            S3StorageOptions::default().with_can_write(false),
         )
         .unwrap();
         assert!(!storage.can_write().await.unwrap());

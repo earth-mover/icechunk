@@ -37,8 +37,9 @@ pub enum ExpiredRefAction {
     Ignore,
 }
 
-/// Which expired refs to delete and how the repo info update retries.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Which expired refs to delete, and how the repo info update retries and rolls over.
+/// `num_updates_per_repo_info_file` defaults to 1000, not to the repository setting.
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct ExpireOptions {
     pub expired_branches: ExpiredRefAction,

@@ -204,7 +204,7 @@ pub struct Repository {
 #[derive(Debug, Clone, Default)]
 #[non_exhaustive]
 pub struct OpenOptions {
-    /// Overrides layered on top of the persisted config. `None` uses the persisted config.
+    /// Values that replace the persisted config's values. `None` uses the persisted config.
     pub config: Option<RepositoryConfig>,
     /// Virtual chunk containers this repository may read, with their credentials.
     pub authorize_virtual_chunk_access: HashMap<String, Option<Credentials>>,
@@ -4324,7 +4324,7 @@ mod tests {
         }
 
         // Migrate to IC2
-        migrate_1_to_2(repo, MigrateOptions::default().with_delete_unused_v1_files(true))
+        migrate_1_to_2(repo, &MigrateOptions::default().with_dry_run(false))
             .await
             .unwrap();
         let repo = Repository::open(

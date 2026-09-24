@@ -1246,12 +1246,13 @@ pub struct S3ObjectStoreBackend {
     pub extra_write_headers: Vec<(String, String)>,
 }
 
-/// Location-independent knobs for an S3 object-store backend.
+/// Client options for an S3 object-store backend, without the location.
 #[cfg(feature = "s3")]
 #[derive(Debug, Clone, Default)]
 #[non_exhaustive]
 pub struct S3ObjectStoreOptions {
-    /// `None` builds the client from the environment.
+    /// `None` applies no client options; `Some(S3Options::default())` applies the default
+    /// options, which differ.
     pub config: Option<S3Options>,
     /// `None` reads credentials from the environment.
     pub credentials: Option<S3Credentials>,
