@@ -39,7 +39,10 @@ use crate::{
     conflicts::{Conflict, ConflictResolution, ConflictSolver},
     diff::{Diff, DiffBuilder},
     error::ICError,
-    feature_flags::{MOVE_NODE_FLAG, raise_if_feature_flag_disabled},
+    feature_flags::{
+        REBASE_FLAG, commit_required_flags, raise_if_commit_flags_disabled,
+        raise_if_feature_flag_disabled,
+    },
     format::{
         ByteRange, ChunkIndices, ChunkOffset, IcechunkFormatError,
         IcechunkFormatErrorKind, ManifestId, NodeId, ObjectId, Path, SnapshotId,
@@ -1595,20 +1598,17 @@ impl Session {
         CommitBuilder::new(self, message.into())
     }
 
-    async fn flush_v2(&mut self, new_snap: Arc<Snapshot>) -> SessionResult<()> {
+    async fn flush_v2(
+        &mut self,
+        new_snap: Arc<Snapshot>,
+        required_flags: &[(u16, &'static str)],
+    ) -> SessionResult<()> {
         let update_type =
             UpdateType::NewDetachedSnapshotUpdate { new_snap_id: new_snap.id().clone() };
         let num_updates = self.config.num_updates_per_repo_info_file();
-        let is_rearrange = self.mode() == SessionMode::Rearrange;
         let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str, _| {
-            if is_rearrange {
-                raise_if_feature_flag_disabled(
-                    repo_info.as_ref(),
-                    MOVE_NODE_FLAG,
-                    "flush rearrange session",
-                )
+            raise_if_commit_flags_disabled(repo_info.as_ref(), "flush", required_flags)
                 .inject()?;
-            }
             let new_snapshot_info = SnapshotInfo {
                 parent_id: Some(self.snapshot_id().clone()),
                 ..SnapshotInfo::from_snapshot_file(new_snap.as_ref()).inject()?
@@ -1641,16 +1641,14 @@ impl Session {
         Ok(())
     }
 
-    async fn raise_if_rearrange_disabled(&self) -> SessionResult<()> {
-        if self.mode() == SessionMode::Rearrange {
-            let (repo_info, _) = self.asset_manager.fetch_repo_info().await.inject()?;
-            raise_if_feature_flag_disabled(
-                repo_info.as_ref(),
-                MOVE_NODE_FLAG,
-                "flush rearrange session",
-            )
+    /// The feature flag check `flush_v2` runs, for flushes that skip the repo info update.
+    async fn raise_if_flush_flags_disabled(
+        &self,
+        required_flags: &[(u16, &'static str)],
+    ) -> SessionResult<()> {
+        let (repo_info, _) = self.asset_manager.fetch_repo_info().await.inject()?;
+        raise_if_commit_flags_disabled(repo_info.as_ref(), "flush", required_flags)
             .inject()?;
-        }
         Ok(())
     }
 
@@ -1685,6 +1683,13 @@ impl Session {
 
         let properties = self.resolve_properties(properties);
 
+        let required_flags = commit_required_flags(
+            &self.change_set,
+            CommitMethod::NewCommit,
+            false,
+            !self.default_commit_metadata.is_empty(),
+        );
+
         let flush_data = FlushProcess::new(
             Arc::clone(&self.asset_manager),
             &self.change_set,
@@ -1704,10 +1709,14 @@ impl Session {
 
         match (self.spec_version(), register) {
             (SpecVersionBin::V1, _) => self.flush_v1(Arc::clone(&new_snap)).await,
-            (SpecVersionBin::V2, true) => self.flush_v2(Arc::clone(&new_snap)).await,
+            (SpecVersionBin::V2, true) => {
+                self.flush_v2(Arc::clone(&new_snap), &required_flags).await
+            }
             // unregistered snapshots don't touch the repo info, but the feature flag
-            // guard `flush_v2` applies to rearrange sessions still has to run
-            (SpecVersionBin::V2, false) => self.raise_if_rearrange_disabled().await,
+            // guard `flush_v2` applies still has to run
+            (SpecVersionBin::V2, false) => {
+                self.raise_if_flush_flags_disabled(&required_flags).await
+            }
         }?;
 
         info!(
@@ -1802,8 +1811,14 @@ impl Session {
             // without referencing self, only the field
             let _ = self.change_set_mut()?;
         }
+        let has_default_commit_metadata = !self.default_commit_metadata.is_empty();
         let change_set = &mut self.change_set;
-        let is_rearrange = matches!(change_set, ChangeSet::Rearrange(_));
+        let required_flags = commit_required_flags(
+            change_set,
+            commit_method,
+            rewrite_manifests,
+            has_default_commit_metadata,
+        );
 
         let id = do_commit(
             Arc::clone(&self.asset_manager),
@@ -1817,7 +1832,7 @@ impl Session {
             commit_method,
             self.config.manifest(),
             allow_empty,
-            is_rearrange,
+            &required_flags,
             self.config.repo_update_retries().retries(),
             num_updates,
         )
@@ -2018,6 +2033,11 @@ impl Session {
                 (commits, Some(repo_info))
             }
         };
+
+        if let Some(ri) = &repo_info {
+            raise_if_feature_flag_disabled(ri.as_ref(), REBASE_FLAG, "rebase session")
+                .inject()?;
+        }
 
         trace!("Found {} commits to rebase over", new_commits.len());
 
@@ -3276,7 +3296,7 @@ async fn do_commit(
     commit_method: CommitMethod,
     manifest_config: &ManifestConfig,
     allow_empty: bool,
-    is_rearrange: bool,
+    required_flags: &[(u16, &'static str)],
     retry_settings: &storage::RetriesSettings,
     num_updates_per_repo_info_file: u16,
 ) -> SessionResult<SnapshotId> {
@@ -3328,7 +3348,7 @@ async fn do_commit(
                 snapshot_id,
                 new_snapshot,
                 commit_method,
-                is_rearrange,
+                required_flags,
                 retry_settings,
                 num_updates_per_repo_info_file,
             )
@@ -3397,21 +3417,15 @@ async fn do_commit_v2(
     parent_snapshot_id: &SnapshotId,
     new_snapshot: Arc<Snapshot>,
     commit_method: CommitMethod,
-    is_rearrange: bool,
+    required_flags: &[(u16, &'static str)],
     retry_settings: &storage::RetriesSettings,
     num_updates_per_repo_info_file: u16,
 ) -> RepositoryResult<storage::VersionInfo> {
     let mut attempt = 0;
     let new_snapshot_id = new_snapshot.id();
     let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str, _| {
-        if is_rearrange {
-            raise_if_feature_flag_disabled(
-                repo_info.as_ref(),
-                MOVE_NODE_FLAG,
-                "commit rearrange session",
-            )
+        raise_if_commit_flags_disabled(repo_info.as_ref(), "commit", required_flags)
             .inject()?;
-        }
         attempt += 1;
         let actual_parent = repo_info.resolve_branch(branch_name).inject()?;
         if &actual_parent != parent_snapshot_id {
