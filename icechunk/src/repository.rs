@@ -2289,7 +2289,7 @@ mod tests {
             snapshot::{ArrayShape, DimensionName},
         },
         migrations::migrate_1_to_2,
-        ops::manifests::rewrite_manifests,
+        ops::manifests::{RewriteManifestsOptions, rewrite_manifests},
         session::{CommitMethod, SessionError, get_chunk},
         storage::new_in_memory_storage,
         test_utils::spec_version_cases,
@@ -2898,9 +2898,9 @@ mod tests {
             &new_repo,
             "main",
             "rewrite_manifests with split-size=12",
-            Some(8),
-            None,
-            commit_method,
+            RewriteManifestsOptions::default()
+                .with_max_concurrent_manifests(8)
+                .with_commit_method(commit_method),
         )
         .await?;
         total_manifests += 1;
@@ -2932,9 +2932,9 @@ mod tests {
             &new_repo,
             "main",
             "rewrite_manifests with split-size=4",
-            Some(8),
-            None,
-            commit_method,
+            RewriteManifestsOptions::default()
+                .with_max_concurrent_manifests(8)
+                .with_commit_method(commit_method),
         )
         .await?;
         total_manifests += 3;
@@ -4285,9 +4285,7 @@ mod tests {
             &repo,
             "main",
             "rewrite manifests",
-            Some(8),
-            None,
-            CommitMethod::NewCommit,
+            RewriteManifestsOptions::default().with_max_concurrent_manifests(8),
         )
         .await
         .unwrap();
@@ -4350,9 +4348,9 @@ mod tests {
             &repo2,
             "main",
             "rewriting manifests",
-            Some(8),
-            None,
-            CommitMethod::Amend,
+            RewriteManifestsOptions::default()
+                .with_max_concurrent_manifests(8)
+                .with_commit_method(CommitMethod::Amend),
         )
         .await;
         assert!(result.is_err());
@@ -4362,9 +4360,7 @@ mod tests {
             &repo2,
             "main",
             "rewriting manifests",
-            Some(8),
-            None,
-            CommitMethod::NewCommit,
+            RewriteManifestsOptions::default().with_max_concurrent_manifests(8),
         )
         .await;
         assert!(result.is_ok());

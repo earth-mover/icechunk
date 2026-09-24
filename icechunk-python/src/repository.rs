@@ -28,7 +28,7 @@ use icechunk::{
         gc::{
             ExpireOptions, ExpiredRefAction, GCConfig, GCSummary, expire, garbage_collect,
         },
-        manifests::rewrite_manifests,
+        manifests::{RewriteManifestsOptions, rewrite_manifests},
         stats::repo_chunks_storage,
         walker::ManifestWalkOptions,
     },
@@ -2736,16 +2736,12 @@ impl PyRepository {
             let result =
                 pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
                     let lock = self.0.read().await;
-                    rewrite_manifests(
-                        &lock,
-                        branch,
-                        message,
-                        None,
-                        metadata,
-                        commit_method,
-                    )
-                    .await
-                    .map_err(PyIcechunkStoreError::ManifestOpsError)
+                    let mut options = RewriteManifestsOptions::default()
+                        .with_commit_method(commit_method);
+                    options.properties = metadata;
+                    rewrite_manifests(&lock, branch, message, options)
+                        .await
+                        .map_err(PyIcechunkStoreError::ManifestOpsError)
                 })?;
             Ok(result.to_string())
         })
@@ -2768,16 +2764,12 @@ impl PyRepository {
 
         pyo3_async_runtimes::tokio::future_into_py::<_, String>(py, async move {
             let repository = repository.read().await;
-            let result = rewrite_manifests(
-                &repository,
-                &branch,
-                &message,
-                None,
-                metadata,
-                commit_method,
-            )
-            .await
-            .map_err(PyIcechunkStoreError::ManifestOpsError)?;
+            let mut options =
+                RewriteManifestsOptions::default().with_commit_method(commit_method);
+            options.properties = metadata;
+            let result = rewrite_manifests(&repository, &branch, &message, options)
+                .await
+                .map_err(PyIcechunkStoreError::ManifestOpsError)?;
             Ok(result.to_string())
         })
     }
