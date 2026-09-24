@@ -23,7 +23,7 @@ use icechunk::{
         snapshot::{ManifestFileInfo, SnapshotInfo, SnapshotProperties},
     },
     inspect::{manifest_json, repo_info_json, snapshot_json, transaction_log_json},
-    migrations,
+    migrations::{self, MigrateOptions},
     ops::{
         gc::{
             ExpireOptions, ExpiredRefAction, GCConfig, GCSummary, expire, garbage_collect,
@@ -1140,14 +1140,15 @@ impl PyRepository {
                     Repository::open(config, Arc::clone(&storage), Default::default())
                         .await
                         .map_err(PyIcechunkStoreError::RepositoryError)?;
-                migrations::migrate_1_to_2(
-                    fresh,
-                    dry_run,
-                    delete_unused_v1_files,
-                    prefetch_concurrency,
-                )
-                .await
-                .map_err(PyIcechunkStoreError::MigrationError)?;
+                let mut options = MigrateOptions::default()
+                    .with_dry_run(dry_run)
+                    .with_delete_unused_v1_files(delete_unused_v1_files);
+                if let Some(n) = prefetch_concurrency {
+                    options = options.with_prefetch_concurrency(n);
+                }
+                migrations::migrate_1_to_2(fresh, options)
+                    .await
+                    .map_err(PyIcechunkStoreError::MigrationError)?;
 
                 // Reopen to get a fresh repo with the correct spec version
                 let reopened = Repository::open(None, storage, Default::default())

@@ -2288,7 +2288,7 @@ mod tests {
             },
             snapshot::{ArrayShape, DimensionName},
         },
-        migrations::migrate_1_to_2,
+        migrations::{MigrateOptions, migrate_1_to_2},
         ops::manifests::{RewriteManifestsOptions, rewrite_manifests},
         session::{CommitMethod, SessionError, get_chunk},
         storage::new_in_memory_storage,
@@ -4275,7 +4275,9 @@ mod tests {
         }
 
         // Migrate to IC2
-        migrate_1_to_2(repo, false, true, None).await.unwrap();
+        migrate_1_to_2(repo, MigrateOptions::default().with_delete_unused_v1_files(true))
+            .await
+            .unwrap();
         let repo =
             Repository::open(Some(config), Arc::clone(&storage), HashMap::new()).await?;
         assert_eq!(repo.spec_version(), SpecVersionBin::V2);
