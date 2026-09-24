@@ -40,19 +40,20 @@ pub use icechunk_arrow_object_store::new_http_storage;
 
 #[cfg(feature = "object-store-s3")]
 pub use icechunk_arrow_object_store::{
-    S3ObjectStoreBackend, new_s3_object_store_storage,
+    S3ObjectStoreBackend, S3ObjectStoreOptions, new_s3_object_store_storage,
 };
 
 #[cfg(feature = "object-store-azure")]
 pub use icechunk_arrow_object_store::{
     AzureCredentials, AzureCredentialsFetcher, AzureObjectStoreBackend,
-    AzureRefreshableCredential, AzureStaticCredentials, new_azure_blob_storage,
+    AzureRefreshableCredential, AzureStaticCredentials, AzureStorageOptions,
+    new_azure_blob_storage,
 };
 
 #[cfg(feature = "object-store-gcs")]
 pub use icechunk_arrow_object_store::{
     GcsBearerCredential, GcsCredentials, GcsCredentialsFetcher, GcsObjectStoreBackend,
-    GcsStaticCredentials, new_gcs_storage,
+    GcsStaticCredentials, GcsStorageOptions, new_gcs_storage,
 };
 
 #[cfg(feature = "object-store-http")]
@@ -129,15 +130,12 @@ mod tests {
         let storage = new_gcs_storage(
             "bucket".to_string(),
             Some("prefix".to_string()),
-            Some(GcsCredentials::Static(GcsStaticCredentials::BearerToken(
-                GcsBearerCredential {
+            GcsStorageOptions::default().with_credentials(GcsCredentials::Static(
+                GcsStaticCredentials::BearerToken(GcsBearerCredential {
                     bearer: "the token".to_string(),
                     expires_after: None,
-                },
-            ))),
-            None,
-            Vec::new(),
-            Vec::new(),
+                }),
+            )),
         )
         .unwrap();
         let bytes = rmp_serde::to_vec(&storage).unwrap();

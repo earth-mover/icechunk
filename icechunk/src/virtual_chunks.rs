@@ -9,7 +9,6 @@ use std::{
     collections::HashMap,
     num::{NonZeroU16, NonZeroU64},
     ops::Range,
-    str::FromStr as _,
     sync::Arc,
 };
 
@@ -23,10 +22,6 @@ use futures::{TryStreamExt as _, stream::FuturesOrdered};
     feature = "object-store-http"
 ))]
 use icechunk_arrow_object_store::object_store::ClientConfigKey;
-#[cfg(feature = "object-store-azure")]
-use icechunk_arrow_object_store::object_store::azure::AzureConfigKey;
-#[cfg(feature = "object-store-gcs")]
-use icechunk_arrow_object_store::object_store::gcp::GoogleConfigKey;
 #[cfg(feature = "object-store-fs")]
 use icechunk_arrow_object_store::object_store::local::LocalFileSystem;
 #[cfg(any(
@@ -44,6 +39,8 @@ use icechunk_s3::aws_sdk_s3::{
 use icechunk_types::ICResultExt as _;
 use quick_cache::sync::Cache;
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "object-store-http")]
+use std::str::FromStr as _;
 use url::Url;
 
 #[cfg(feature = "object-store-azure")]
@@ -51,10 +48,6 @@ use crate::config::AzureCredentials;
 #[cfg(feature = "object-store-gcs")]
 use crate::config::GcsCredentials;
 use crate::config::{S3Credentials, S3Options};
-#[cfg(feature = "object-store-azure")]
-use crate::storage::AzureObjectStoreBackend;
-#[cfg(feature = "object-store-gcs")]
-use crate::storage::GcsObjectStoreBackend;
 #[cfg(feature = "object-store-http")]
 use crate::storage::HttpObjectStoreBackend;
 #[cfg(any(
@@ -71,8 +64,12 @@ use crate::storage::ObjectStoreBackend as _;
     feature = "object-store-http"
 ))]
 use crate::storage::Role;
+#[cfg(feature = "object-store-azure")]
+use crate::storage::{AzureObjectStoreBackend, AzureStorageOptions};
+#[cfg(feature = "object-store-gcs")]
+use crate::storage::{GcsObjectStoreBackend, GcsStorageOptions};
 #[cfg(all(not(feature = "s3"), feature = "object-store-s3"))]
-use crate::storage::S3ObjectStoreBackend;
+use crate::storage::{S3ObjectStoreBackend, S3ObjectStoreOptions};
 use crate::{
     ObjectStoreConfig,
     config::Credentials,
@@ -1175,14 +1172,10 @@ impl ObjectStoreFetcher {
         config: Option<S3Options>,
         settings: storage::Settings,
     ) -> Result<Self, VirtualReferenceError> {
-        let backend = S3ObjectStoreBackend {
-            bucket,
-            prefix,
-            credentials,
-            config,
-            extra_read_headers: Vec::new(),
-            extra_write_headers: Vec::new(),
-        };
+        let mut options = S3ObjectStoreOptions::default();
+        options.credentials = credentials;
+        options.config = config;
+        let backend = S3ObjectStoreBackend::new(bucket, prefix, options);
         let client = backend
             .mk_object_store(&settings, Role::Read)
             .map_err(|e| VirtualReferenceErrorKind::OtherError(Box::new(e)))
@@ -1203,11 +1196,11 @@ impl ObjectStoreFetcher {
                 ClientConfigKey::from_str(k).ok().map(|key| (key, v.clone()))
             })
             .collect();
-        let backend = HttpObjectStoreBackend {
-            url: url.to_string(),
-            config: Some(config),
-            headers: if headers.is_empty() { None } else { Some(headers.clone()) },
-        };
+        let backend = HttpObjectStoreBackend::new(
+            url.to_string(),
+            Some(config),
+            if headers.is_empty() { None } else { Some(headers.clone()) },
+        );
         let client = backend
             .mk_object_store(&settings, Role::Read)
             .map_err(|e| VirtualReferenceErrorKind::OtherError(Box::new(e)))
@@ -1223,20 +1216,9 @@ impl ObjectStoreFetcher {
         config: HashMap<String, String>,
         settings: storage::Settings,
     ) -> Result<Self, VirtualReferenceError> {
-        let config = config
-            .into_iter()
-            .filter_map(|(k, v)| {
-                GoogleConfigKey::from_str(&k).ok().map(|key| (key, v.clone()))
-            })
-            .collect();
-        let backend = GcsObjectStoreBackend {
-            bucket,
-            prefix,
-            credentials,
-            config: Some(config),
-            extra_read_headers: Vec::new(),
-            extra_write_headers: Vec::new(),
-        };
+        let mut options = GcsStorageOptions::default().with_config(config);
+        options.credentials = credentials;
+        let backend = GcsObjectStoreBackend::new(bucket, prefix, options);
         let client = backend
             .mk_object_store(&settings, Role::Read)
             .map_err(|e| VirtualReferenceErrorKind::OtherError(Box::new(e)))
@@ -1254,19 +1236,9 @@ impl ObjectStoreFetcher {
         config: HashMap<String, String>,
         settings: storage::Settings,
     ) -> Result<Self, VirtualReferenceError> {
-        let config = config
-            .into_iter()
-            .filter_map(|(k, v)| {
-                AzureConfigKey::from_str(&k).ok().map(|key| (key, v.clone()))
-            })
-            .collect();
-        let backend = AzureObjectStoreBackend {
-            account,
-            container,
-            prefix,
-            credentials,
-            config: Some(config),
-        };
+        let mut options = AzureStorageOptions::default().with_config(config);
+        options.credentials = credentials;
+        let backend = AzureObjectStoreBackend::new(account, container, prefix, options);
 
         let client = backend
             .mk_object_store(&settings, Role::Read)

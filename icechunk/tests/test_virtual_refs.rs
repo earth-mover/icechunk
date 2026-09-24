@@ -17,8 +17,8 @@ use icechunk::{
     repository::VersionInfo,
     session::{SessionError, SessionErrorKind, get_chunk},
     storage::{
-        self, ConcurrencySettings, ETag, ObjectStorage, S3StorageOptions, mk_client,
-        new_s3_storage,
+        self, AzureStorageOptions, ConcurrencySettings, ETag, ObjectStorage,
+        S3StorageOptions, mk_client, new_s3_storage,
     },
     store::{StoreError, StoreErrorKind},
     virtual_chunks::VirtualChunkContainer,
@@ -308,8 +308,10 @@ async fn write_chunks_to_azure(
             "devstoreaccount1".to_string(),
             "testcontainer".to_string(),
             Some(prefix),
-            None,
-            Some(HashMap::from([(AzureConfigKey::UseEmulator, "true".to_string())])),
+            AzureStorageOptions::default().with_config(HashMap::from([(
+                AzureConfigKey::UseEmulator.as_ref().to_string(),
+                "true".to_string(),
+            )])),
         )
         .await
         .unwrap(),

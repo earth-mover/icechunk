@@ -18,7 +18,10 @@ use crate::storage::StorageErrorKind;
 #[cfg(feature = "object-store-http")]
 use crate::storage::new_http_storage;
 #[cfg(feature = "object-store-gcs")]
-use crate::{config::GcsCredentials, storage::new_gcs_storage};
+use crate::{
+    config::GcsCredentials,
+    storage::{GcsStorageOptions, new_gcs_storage},
+};
 #[cfg(feature = "s3")]
 use crate::{
     new_s3_storage,
@@ -229,10 +232,8 @@ impl RedirectStorage {
                 new_gcs_storage(
                     bucket,
                     Some(prefix),
-                    Some(GcsCredentials::Anonymous),
-                    None,
-                    Vec::new(),
-                    Vec::new(),
+                    GcsStorageOptions::default()
+                        .with_credentials(GcsCredentials::Anonymous),
                 )
             }
             #[cfg(not(feature = "object-store-gcs"))]

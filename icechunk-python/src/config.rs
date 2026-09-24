@@ -2986,16 +2986,15 @@ impl PyStorage {
             resolve_request_headers(headers, read_headers, write_headers)?;
         py.detach(move || {
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
-                let storage = storage::new_s3_object_store_storage(
-                    config.into(),
-                    bucket,
-                    prefix,
-                    credentials.map(|cred| cred.into()),
-                    read_headers,
-                    write_headers,
-                )
-                .await
-                .map_err(PyIcechunkStoreError::StorageError)?;
+                let mut options = storage::S3ObjectStoreOptions::default()
+                    .with_config(config.into())
+                    .with_extra_read_headers(read_headers)
+                    .with_extra_write_headers(write_headers);
+                options.credentials = credentials.map(|cred| cred.into());
+                let storage =
+                    storage::new_s3_object_store_storage(bucket, prefix, options)
+                        .await
+                        .map_err(PyIcechunkStoreError::StorageError)?;
 
                 Ok(PyStorage(storage))
             })
@@ -3144,15 +3143,13 @@ impl PyStorage {
         let (read_headers, write_headers) =
             resolve_request_headers(headers, read_headers, write_headers)?;
         py.detach(move || {
-            let storage = storage::new_gcs_storage(
-                bucket,
-                prefix,
-                credentials.map(|cred| cred.into()),
-                config,
-                read_headers,
-                write_headers,
-            )
-            .map_err(PyIcechunkStoreError::StorageError)?;
+            let mut options = storage::GcsStorageOptions::default()
+                .with_config(config.unwrap_or_default())
+                .with_extra_read_headers(read_headers)
+                .with_extra_write_headers(write_headers);
+            options.credentials = credentials.map(|cred| cred.into());
+            let storage = storage::new_gcs_storage(bucket, prefix, options)
+                .map_err(PyIcechunkStoreError::StorageError)?;
 
             Ok(PyStorage(storage))
         })
@@ -3171,12 +3168,14 @@ impl PyStorage {
     ) -> PyResult<Self> {
         py.detach(move || {
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+                let mut options = storage::AzureStorageOptions::default()
+                    .with_config(config.unwrap_or_default());
+                options.credentials = credentials.map(|cred| cred.into());
                 let storage = storage::new_azure_blob_storage(
                     account,
                     container,
                     Some(prefix),
-                    credentials.map(|cred| cred.into()),
-                    config,
+                    options,
                 )
                 .await
                 .map_err(PyIcechunkStoreError::StorageError)?;

@@ -24,7 +24,8 @@ use icechunk::{
     refs::{RefData, RefErrorKind},
     repository::{RepositoryError, RepositoryErrorKind},
     storage::{
-        self, ConcurrencySettings, ETag, Generation, RepositoryCreation, S3Storage,
+        self, AzureStorageOptions, ConcurrencySettings, ETag, GcsStorageOptions,
+        Generation, RepositoryCreation, S3ObjectStoreOptions, S3Storage,
         S3StorageOptions, StorageErrorKind, StorageResult, VersionInfo,
         VersionedUpdateResult, mk_client, new_gcs_storage, new_http_storage,
         new_in_memory_storage, new_redirect_storage, new_s3_object_store_storage,
@@ -91,21 +92,20 @@ async fn mk_s3_object_store_storage(
         ObjectStorage::new_s3(
             "testbucket".to_string(),
             Some(prefix.to_string()),
-            Some(S3Credentials::Static(S3StaticCredentials {
-                access_key_id: access_key_id.into(),
-                secret_access_key: secret_access_key.into(),
-                session_token: None,
-                expires_after: None,
-            })),
-            Some(
-                S3Options::default()
-                    .with_region("us-east-1")
-                    .with_endpoint_url("http://localhost:4200")
-                    .with_allow_http(true)
-                    .with_force_path_style(true),
-            ),
-            Vec::new(),
-            Vec::new(),
+            S3ObjectStoreOptions::default()
+                .with_credentials(S3Credentials::Static(S3StaticCredentials {
+                    access_key_id: access_key_id.into(),
+                    secret_access_key: secret_access_key.into(),
+                    session_token: None,
+                    expires_after: None,
+                }))
+                .with_config(
+                    S3Options::default()
+                        .with_region("us-east-1")
+                        .with_endpoint_url("http://localhost:4200")
+                        .with_allow_http(true)
+                        .with_force_path_style(true),
+                ),
         )
         .await?,
     );
@@ -121,8 +121,10 @@ async fn mk_azure_blob_storage(
             "devstoreaccount1".to_string(),
             "testcontainer".to_string(),
             Some(prefix.to_string()),
-            None,
-            Some(HashMap::from([(AzureConfigKey::UseEmulator, "true".to_string())])),
+            AzureStorageOptions::default().with_config(HashMap::from([(
+                AzureConfigKey::UseEmulator.as_ref().to_string(),
+                "true".to_string(),
+            )])),
         )
         .await?,
     );
@@ -462,10 +464,7 @@ async fn create_refuses_empty_prefix_on_object_store()
             Arc::new(ObjectStorage::new_gcs(
                 "testbucket".to_string(),
                 Some(String::new()),
-                None,
-                None,
-                Vec::new(),
-                Vec::new(),
+                GcsStorageOptions::default(),
             )?),
         ),
     ];
@@ -499,10 +498,9 @@ async fn create_refuses_empty_prefix_on_object_store()
                 ObjectStorage::new_s3(
                     "testbucket".to_string(),
                     Some(String::new()),
-                    Some(s3_creds()),
-                    Some(S3Options::default().with_region("us-east-1")),
-                    Vec::new(),
-                    Vec::new(),
+                    S3ObjectStoreOptions::default()
+                        .with_credentials(s3_creds())
+                        .with_config(S3Options::default().with_region("us-east-1")),
                 )
                 .await?
                 .unsafe_allow_empty_prefix_creation(),
@@ -760,21 +758,20 @@ async fn test_list_objects_with_id_prefixes_at_bucket_root()
     let storage = ObjectStorage::new_s3(
         "testbucket".to_string(),
         None,
-        Some(S3Credentials::Static(S3StaticCredentials {
-            access_key_id: access_key_id.into(),
-            secret_access_key: secret_access_key.into(),
-            session_token: None,
-            expires_after: None,
-        })),
-        Some(
-            S3Options::default()
-                .with_region("us-east-1")
-                .with_endpoint_url("http://localhost:4200")
-                .with_allow_http(true)
-                .with_force_path_style(true),
-        ),
-        Vec::new(),
-        Vec::new(),
+        S3ObjectStoreOptions::default()
+            .with_credentials(S3Credentials::Static(S3StaticCredentials {
+                access_key_id: access_key_id.into(),
+                secret_access_key: secret_access_key.into(),
+                session_token: None,
+                expires_after: None,
+            }))
+            .with_config(
+                S3Options::default()
+                    .with_region("us-east-1")
+                    .with_endpoint_url("http://localhost:4200")
+                    .with_allow_http(true)
+                    .with_force_path_style(true),
+            ),
     )
     .await?;
     let settings = storage.default_settings().await?;
@@ -810,10 +807,7 @@ async fn test_gcs_list_objects_with_id_prefixes() -> Result<(), Box<dyn std::err
     let storage = new_gcs_storage(
         "al-public-test-bucket".to_string(),
         Some("verification-copy".to_string()),
-        Some(GcsCredentials::Anonymous),
-        None,
-        Vec::new(),
-        Vec::new(),
+        GcsStorageOptions::default().with_credentials(GcsCredentials::Anonymous),
     )?;
     // GC fans listings out per id prefix only on backends that list a prefix
     // natively; GCS must be one of them or GC repeats the full listing per prefix
@@ -1387,12 +1381,11 @@ async fn test_storage_classes_object_store() -> Result<(), Box<dyn std::error::E
     };
     let prefix = common::get_random_prefix("test_storage_classes_object_store");
     let st = new_s3_object_store_storage(
-        store.options().clone(),
         store.bucket().to_string(),
         Some(prefix.clone()),
-        Some(store.credentials().clone()),
-        Vec::new(),
-        Vec::new(),
+        S3ObjectStoreOptions::default()
+            .with_config(store.options().clone())
+            .with_credentials(store.credentials().clone()),
     )
     .await?;
     check_storage_classes(st, &store, &prefix).await
@@ -1959,10 +1952,10 @@ async fn test_write_headers_reach_s3_compatible_storage()
             ObjectStorage::new_s3(
                 "testbucket".to_string(),
                 Some(prefix.clone()),
-                Some(credentials.clone()),
-                Some(options.clone()),
-                Vec::new(),
-                write_header(),
+                S3ObjectStoreOptions::default()
+                    .with_credentials(credentials.clone())
+                    .with_config(options.clone())
+                    .with_extra_write_headers(write_header()),
             )
             .await?,
         );
@@ -2013,10 +2006,10 @@ async fn test_write_headers_reach_aws() -> Result<(), Box<dyn std::error::Error>
         ObjectStorage::new_s3(
             store.bucket().to_string(),
             Some(prefix.clone()),
-            Some(store.credentials().clone()),
-            Some(store.options().clone()),
-            Vec::new(),
-            write_header(),
+            S3ObjectStoreOptions::default()
+                .with_credentials(store.credentials().clone())
+                .with_config(store.options().clone())
+                .with_extra_write_headers(write_header()),
         )
         .await?,
     );

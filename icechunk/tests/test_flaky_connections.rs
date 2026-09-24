@@ -19,7 +19,10 @@ use icechunk::{
     asset_manager::{AssetManager, AssetManagerOptions},
     config::{S3Credentials, S3Options, S3StaticCredentials},
     format::{ChunkId, format_constants::SpecVersionBin},
-    storage::{RetriesSettings, S3Storage, S3StorageOptions, TimeoutSettings},
+    storage::{
+        RetriesSettings, S3ObjectStoreOptions, S3Storage, S3StorageOptions,
+        TimeoutSettings,
+    },
 };
 use noxious_client::{Client, StreamDirection, Toxic, ToxicKind};
 
@@ -345,10 +348,9 @@ async fn build_proxied_storage(
             icechunk::ObjectStorage::new_s3(
                 "testbucket".to_string(),
                 Some(prefix),
-                Some(credentials),
-                Some(s3_options),
-                Vec::new(),
-                Vec::new(),
+                S3ObjectStoreOptions::default()
+                    .with_credentials(credentials)
+                    .with_config(s3_options),
             )
             .await?,
         ),

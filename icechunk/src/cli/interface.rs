@@ -16,8 +16,8 @@ use std::sync::Arc;
 use anyhow::{Context as _, Result};
 
 use crate::storage::{
-    S3StorageOptions, new_azure_blob_storage, new_gcs_storage,
-    new_local_filesystem_storage, new_tigris_storage,
+    AzureStorageOptions, GcsStorageOptions, S3StorageOptions, new_azure_blob_storage,
+    new_gcs_storage, new_local_filesystem_storage, new_tigris_storage,
 };
 use crate::{Repository, RepositoryConfig, Storage, new_s3_storage};
 
@@ -249,10 +249,9 @@ async fn get_storage(
             let storage = new_gcs_storage(
                 location.bucket.clone(),
                 location.prefix.clone(),
-                Some(credentials.clone()),
-                Some(object_store_config.clone()),
-                Vec::new(),
-                Vec::new(),
+                GcsStorageOptions::default()
+                    .with_credentials(credentials.clone())
+                    .with_config(object_store_config.clone()),
             )
             .context("Failed to create GCS storage")?;
             Ok(storage)
@@ -267,8 +266,9 @@ async fn get_storage(
                 location.account.clone(),
                 location.container.clone(),
                 location.prefix.clone(),
-                Some(credentials.clone()),
-                Some(object_store_config.clone()),
+                AzureStorageOptions::default()
+                    .with_credentials(credentials.clone())
+                    .with_config(object_store_config.clone()),
             )
             .await
             .context("Failed to create Azure storage")?;
