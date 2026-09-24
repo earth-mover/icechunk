@@ -1977,7 +1977,7 @@ mod test {
 
     use super::*;
     use crate::{
-        Repository,
+        CreateOptions, Repository,
         config::ManifestVirtualChunkLocationCompressionConfig,
         format::{
             ChunkIndices, NodeId, Path,
@@ -1986,7 +1986,6 @@ mod test {
         },
         storage::{Storage, logging::LoggingStorage, new_in_memory_storage},
     };
-    use std::collections::HashMap;
 
     #[test]
     fn asset_manager_options_defaults_match_repository_config() {
@@ -2636,17 +2635,16 @@ mod test {
     async fn test_header_methods() -> Result<(), Box<dyn std::error::Error>> {
         let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
         let repo = Repository::create(
-            Some(RepositoryConfig {
-                // force a non-inline chunk so a manifest file is written
-                inline_chunk_threshold_bytes: Some(0),
-                // tiny batch size so a couple commits leave a repo-info backup chain
-                num_updates_per_repo_info_file: Some(1),
-                ..Default::default()
-            }),
             Arc::clone(&storage),
-            HashMap::new(),
-            Some(SpecVersionBin::current()),
-            true,
+            CreateOptions::default()
+                .with_config(RepositoryConfig {
+                    // force a non-inline chunk so a manifest file is written
+                    inline_chunk_threshold_bytes: Some(0),
+                    // tiny batch size so a couple commits leave a repo-info backup chain
+                    num_updates_per_repo_info_file: Some(1),
+                    ..Default::default()
+                })
+                .with_spec_version(SpecVersionBin::current()),
         )
         .await?;
 
@@ -2738,15 +2736,12 @@ mod test {
     -> Result<(Repository, SnapshotId), Box<dyn std::error::Error>> {
         let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
         let repo = Repository::create(
-            Some(RepositoryConfig {
+            storage,
+            CreateOptions::default().with_config(RepositoryConfig {
                 // force non-inline chunks so a manifest file is written
                 inline_chunk_threshold_bytes: Some(0),
                 ..Default::default()
             }),
-            storage,
-            HashMap::new(),
-            None,
-            true,
         )
         .await?;
         let mut session = repo.writable_session("main").await?;

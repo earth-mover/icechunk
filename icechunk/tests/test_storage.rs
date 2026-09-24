@@ -11,7 +11,7 @@ use bytes::Bytes;
 use chrono::Utc;
 use futures::{StreamExt as _, TryStreamExt as _, stream};
 use icechunk::{
-    ObjectStorage, Repository, RepositoryConfig, Storage,
+    CreateOptions, ObjectStorage, OpenOptions, Repository, RepositoryConfig, Storage,
     asset_manager::{AssetManager, AssetManagerOptions},
     config::{GcsCredentials, S3Credentials, S3Options, S3StaticCredentials},
     error::ICError,
@@ -320,11 +320,8 @@ async fn test_tag_write_get(
 ) -> Result<(), Box<dyn std::error::Error>> {
     with_storage(Permission::Modify, |_, storage| async move {
         let repo = Repository::create(
-            None,
             storage,
-            Default::default(),
-            Some(spec_version),
-            true,
+            CreateOptions::default().with_spec_version(spec_version),
         )
         .await?;
         repo.create_tag("mytag", &Snapshot::INITIAL_SNAPSHOT_ID).await?;
@@ -343,7 +340,7 @@ async fn test_fetch_non_existing_tag(
 ) -> Result<(), Box<dyn std::error::Error>> {
     with_storage(Permission::Modify, |_, storage| async move {
         let repo =
-            Repository::create(None, storage, Default::default(), Some(spec_version), true).await?;
+            Repository::create(storage, CreateOptions::default().with_spec_version(spec_version)).await?;
         repo.create_tag("mytag", &Snapshot::INITIAL_SNAPSHOT_ID).await?;
         let back = repo.lookup_tag("non-existing-tag").await;
         assert!(
@@ -366,7 +363,7 @@ async fn test_create_existing_tag(
 ) -> Result<(), Box<dyn std::error::Error>> {
     with_storage(Permission::Modify, |_, storage| async move {
         let repo =
-            Repository::create(None, storage, Default::default(), Some(spec_version), true).await?;
+            Repository::create(storage, CreateOptions::default().with_spec_version(spec_version)).await?;
         repo.create_tag("mytag", &Snapshot::INITIAL_SNAPSHOT_ID).await?;
         let res  = repo.create_tag("mytag", &Snapshot::INITIAL_SNAPSHOT_ID).await;
         assert!(
@@ -384,25 +381,13 @@ async fn test_create_existing_tag(
 #[tokio_test]
 async fn check_clean_repo() -> Result<(), Box<dyn std::error::Error>> {
     with_storage(Permission::Modify, |_, storage| async move {
-        let _repo = Repository::create(
-            None,
-            Arc::clone(&storage),
-            Default::default(),
-            None,
-            true,
-        )
-        .await?;
+        let _repo =
+            Repository::create(Arc::clone(&storage), CreateOptions::default()).await?;
 
         // creating repo with check_clean_repo = true
         // should fail because we wrote data above
-        let res = Repository::create(
-            None,
-            Arc::clone(&storage),
-            Default::default(),
-            None,
-            true,
-        )
-        .await;
+        let res =
+            Repository::create(Arc::clone(&storage), CreateOptions::default()).await;
         assert!(res.is_err());
         assert!(matches!(
             res,
@@ -411,8 +396,11 @@ async fn check_clean_repo() -> Result<(), Box<dyn std::error::Error>> {
 
         // creating repo with check_clean_repo = false
         // fails because it tries to overwrite a repo info that is not up to date
-        let res =
-            Repository::create(None, storage, Default::default(), None, false).await;
+        let res = Repository::create(
+            storage,
+            CreateOptions::default().with_check_clean_root(false),
+        )
+        .await;
         assert!(res.is_err());
         assert!(matches!(
             res,
@@ -474,7 +462,7 @@ async fn create_refuses_empty_prefix_on_object_store()
         );
         assert!(
             matches!(
-                Repository::create(None, storage, Default::default(), None, true).await,
+                Repository::create(storage, CreateOptions::default()).await,
                 Err(ICError { kind: RepositoryErrorKind::EmptyPrefixCreation, .. })
             ),
             "{name}: Repository::create should fail with EmptyPrefixCreation",
@@ -1144,7 +1132,7 @@ async fn test_fetch_non_existing_branch(
 ) -> Result<(), Box<dyn std::error::Error>> {
     with_storage(Permission::Modify, |_, storage| async move {
         let repo =
-            Repository::create(None, storage, Default::default(), Some(spec_version), true).await?;
+            Repository::create(storage, CreateOptions::default().with_spec_version(spec_version)).await?;
         let back = repo.lookup_branch("non-existing-branch").await;
         assert!(
             matches!(
@@ -1778,7 +1766,7 @@ async fn test_redirect_storage() -> Result<(), Box<dyn std::error::Error>> {
     read.read_to_end(&mut data).await?;
     let _: RefData = serde_json::from_slice(&data)?;
 
-    let repo = Repository::open(None, storage, Default::default()).await?;
+    let repo = Repository::open(storage, OpenOptions::default()).await?;
     let session = repo
         .readonly_session(&icechunk::repository::VersionInfo::BranchTipRef(
             "main".to_string(),
@@ -1796,11 +1784,8 @@ async fn test_basic_repo_ops(
 ) -> Result<(), Box<dyn std::error::Error>> {
     with_storage(Permission::Modify, |_, storage| async move {
         let repo = Repository::create(
-            None,
             Arc::clone(&storage),
-            Default::default(),
-            Some(spec_version),
-            true,
+            CreateOptions::default().with_spec_version(spec_version),
         )
         .await?;
 
@@ -1815,7 +1800,7 @@ async fn test_basic_repo_ops(
         assert_eq!(session.list_nodes(&Path::root()).await?.count(), 0);
 
         // reopen from storage
-        let repo = Repository::open(None, storage, Default::default()).await?;
+        let repo = Repository::open(storage, OpenOptions::default()).await?;
 
         let branches = repo.list_branches().await?;
         assert!(branches.contains("main"));

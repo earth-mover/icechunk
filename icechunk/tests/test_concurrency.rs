@@ -3,7 +3,7 @@
 use bytes::Bytes;
 use chrono::Utc;
 use icechunk::{
-    Repository, RepositoryConfig, Storage,
+    CreateOptions, Repository, RepositoryConfig, Storage,
     config::{ManifestConfig, ManifestSplittingConfig},
     format::{ByteRange, ChunkIndices, Path, snapshot::ArrayShape},
     session::{Session, get_chunk},
@@ -12,11 +12,7 @@ use icechunk::{
 use icechunk_macros::tokio_test;
 use pretty_assertions::assert_eq;
 use rand::{RngExt as _, rng};
-use std::{
-    collections::{HashMap, HashSet},
-    sync::Arc,
-    time::Duration,
-};
+use std::{collections::HashSet, sync::Arc, time::Duration};
 use tokio::{
     sync::{Barrier, RwLock},
     task::{self, JoinSet},
@@ -79,7 +75,7 @@ async fn do_test_concurrency(
     let mut config = RepositoryConfig::default();
     config.manifest = Some(man_config);
     let repo =
-        Repository::create(Some(config), storage, HashMap::new(), None, true).await?;
+        Repository::create(storage, CreateOptions::default().with_config(config)).await?;
 
     let mut ds = repo.writable_session("main").await?;
 

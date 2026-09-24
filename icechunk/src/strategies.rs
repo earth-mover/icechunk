@@ -28,7 +28,7 @@ use crate::storage::{
     ConcurrencySettings, ETag, RetriesSettings, Settings, new_in_memory_storage,
 };
 use crate::virtual_chunks::VirtualChunkContainer;
-use crate::{ObjectStoreConfig, Repository, RepositoryConfig};
+use crate::{CreateOptions, ObjectStoreConfig, Repository, RepositoryConfig};
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use prop::string::string_regex;
@@ -67,7 +67,7 @@ prop_compose! {
 
         runtime.block_on(async {
             let storage = new_in_memory_storage().await.expect("Cannot create in memory storage");
-            Repository::create(None, storage, HashMap::new(), Some(version), true)
+            Repository::create(storage, CreateOptions::default().with_spec_version(version))
                 .await
                 .expect("Failed to initialize repository")
         })
@@ -85,7 +85,7 @@ prop_compose! {
 
     runtime.block_on(async {
         let storage = new_in_memory_storage().await.expect("Cannot create in memory storage");
-        let repository = Repository::create(None, storage, HashMap::new(), Some(version), true)
+        let repository = Repository::create(storage, CreateOptions::default().with_spec_version(version))
             .await
             .expect("Failed to initialize repository");
         repository.writable_session("main").await.expect("Failed to create session")

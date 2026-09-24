@@ -95,7 +95,7 @@ use icechunk::format::manifest::{ChunkPayload, VirtualChunkLocation, VirtualChun
 use icechunk::format::snapshot::{ArrayShape, DimensionName};
 use icechunk::format::{ChunkIndices, Path};
 use icechunk::new_s3_storage;
-use icechunk::repository::Repository;
+use icechunk::repository::{CreateOptions, Repository};
 use icechunk::session::Session;
 use icechunk::storage::{S3StorageOptions, new_in_memory_storage};
 use icechunk::virtual_chunks::VirtualChunkContainer;
@@ -338,7 +338,14 @@ pub(crate) async fn setup_repo(
         auth.insert(url_prefix, cred);
     }
 
-    let repository = Repository::create(Some(config), storage, auth, None, false).await?;
+    let repository = Repository::create(
+        storage,
+        CreateOptions::default()
+            .with_config(config)
+            .with_authorize_virtual_chunk_access(auth)
+            .with_check_clean_root(false),
+    )
+    .await?;
 
     let mut session = repository.writable_session("main").await?;
 

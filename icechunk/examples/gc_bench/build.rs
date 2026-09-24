@@ -1,6 +1,6 @@
 //! The `build` subcommand: writes a synthetic repository directly through the `AssetManager`.
 
-use std::{collections::HashMap, num::NonZeroU16, sync::Arc, time::Instant};
+use std::{num::NonZeroU16, sync::Arc, time::Instant};
 
 use bytes::Bytes;
 use chrono::Utc;
@@ -9,7 +9,7 @@ use futures::{
     future::{BoxFuture, Shared, ready},
 };
 use icechunk::{
-    Repository, Storage,
+    CreateOptions, Repository, Storage,
     asset_manager::AssetManager,
     format::{
         ChunkId, ChunkIndices, ManifestId, Move, NodeId, Path, SnapshotId,
@@ -304,11 +304,8 @@ pub(crate) async fn build(args: BuildArgs) -> Result<(), BoxError> {
     }
 
     let repo = Repository::create(
-        None,
         Arc::clone(&storage),
-        HashMap::new(),
-        Some(SpecVersionBin::V2),
-        true,
+        CreateOptions::default().with_spec_version(SpecVersionBin::V2),
     )
     .await?;
     let num_updates_per_file = repo.config().num_updates_per_repo_info_file();

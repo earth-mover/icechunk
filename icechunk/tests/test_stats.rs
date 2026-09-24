@@ -7,7 +7,7 @@ use bytes::Bytes;
 use chrono::Utc;
 use icechunk::ops::walker::ManifestWalkOptions;
 use icechunk::{
-    Repository, RepositoryConfig, Storage,
+    CreateOptions, Repository, RepositoryConfig, Storage,
     asset_manager::{AssetManager, AssetManagerOptions},
     format::{
         ChunkIndices, Path,
@@ -102,11 +102,8 @@ async fn do_test_repo_chunks_storage(
     let mut config = RepositoryConfig::default();
     config.inline_chunk_threshold_bytes = Some(5);
     let repo = Repository::create(
-        Some(config),
         Arc::clone(&storage),
-        Default::default(),
-        Some(spec_version),
-        true,
+        CreateOptions::default().with_config(config).with_spec_version(spec_version),
     )
     .await?;
 
@@ -265,11 +262,8 @@ async fn test_virtual_chunk_deduplication(
     let mut config = RepositoryConfig::default();
     config.inline_chunk_threshold_bytes = Some(5);
     let repo = Repository::create(
-        Some(config),
         storage,
-        Default::default(),
-        Some(spec_version),
-        true,
+        CreateOptions::default().with_config(config).with_spec_version(spec_version),
     )
     .await?;
 

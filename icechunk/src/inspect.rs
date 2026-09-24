@@ -693,7 +693,7 @@ pub async fn transaction_log_json(
 #[cfg(all(test, feature = "object-store-fs"))]
 mod tests {
     use super::*;
-    use crate::{ObjectStorage, Repository, repository::VersionInfo};
+    use crate::{ObjectStorage, OpenOptions, Repository, repository::VersionInfo};
     use futures::{StreamExt as _, TryStreamExt as _};
     use std::{path::PathBuf, sync::Arc};
 
@@ -705,7 +705,7 @@ mod tests {
             ))
             .await?,
         );
-        let repo = Repository::open(None, st, Default::default()).await?;
+        let repo = Repository::open(st, OpenOptions::default()).await?;
         let snap_id = repo
             .ancestry(&VersionInfo::BranchTipRef("main".to_string()))
             .await?
@@ -734,7 +734,7 @@ mod tests {
             ))
             .await?,
         );
-        let repo = Repository::open(None, st, Default::default()).await?;
+        let repo = Repository::open(st, OpenOptions::default()).await?;
 
         let json = repo_info_json(repo.asset_manager(), true).await?;
         let info: RepoInfoInspect = serde_json::from_str(json.as_str())?;

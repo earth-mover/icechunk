@@ -1448,10 +1448,8 @@ impl From<Vec<u64>> for ChunkGridSerializer {
 #[cfg(test)]
 mod tests {
 
-    use std::collections::HashMap;
-
     use crate::{
-        ObjectStorage, Repository, repository::VersionInfo,
+        CreateOptions, ObjectStorage, Repository, repository::VersionInfo,
         storage::new_in_memory_storage,
     };
 
@@ -1513,7 +1511,7 @@ mod tests {
     ) -> Repository {
         let storage =
             new_in_memory_storage().await.expect("failed to create in-memory store");
-        Repository::create(None, storage, HashMap::new(), spec_version, true)
+        Repository::create(storage, CreateOptions { spec_version, ..Default::default() })
             .await
             .unwrap()
     }
@@ -2928,8 +2926,7 @@ mod tests {
                 .expect("could not create storage"),
         );
 
-        let repo =
-            Repository::create(None, storage, HashMap::new(), None, true).await.unwrap();
+        let repo = Repository::create(storage, CreateOptions::default()).await.unwrap();
         let ds = Arc::new(RwLock::new(repo.writable_session("main").await.unwrap()));
         let store = Store::from_session(Arc::clone(&ds)).await;
         store

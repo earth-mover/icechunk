@@ -16,7 +16,7 @@ use icechunk::format::repo_info::UpdateType;
 use icechunk::format::snapshot::ArrayShape;
 use icechunk::format::{ChunkIndices, Path, SnapshotId};
 use icechunk::repository::VersionInfo;
-use icechunk::{Repository, new_in_memory_storage};
+use icechunk::{CreateOptions, Repository, new_in_memory_storage};
 use proptest::collection::vec;
 use proptest::prelude::*;
 use shuttle::future::{block_on, spawn};
@@ -87,7 +87,11 @@ async fn mk_commit(
 async fn mk_concurrent_commits_same_branch() -> Result<(), Box<dyn Error + Send + Sync>> {
     let storage = new_in_memory_storage().await?;
     let repo = Arc::new(
-        Repository::create(None, storage, Default::default(), None, false).await?,
+        Repository::create(
+            storage,
+            CreateOptions::default().with_check_clean_root(false),
+        )
+        .await?,
     );
 
     let mut session = repo.writable_session("main").await?;
@@ -353,7 +357,11 @@ async fn execute_concurrent_actions(
         (0..actions.len()).map(|i| format!("branch-{i}")).collect();
     let storage = new_in_memory_storage().await?;
     let repo = Arc::new(
-        Repository::create(None, storage, Default::default(), None, false).await?,
+        Repository::create(
+            storage,
+            CreateOptions::default().with_check_clean_root(false),
+        )
+        .await?,
     );
 
     let mut session = repo.writable_session("main").await?;

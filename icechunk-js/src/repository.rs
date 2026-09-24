@@ -7,7 +7,7 @@ use icechunk::feature_flags::FeatureFlag;
 use icechunk::format::SnapshotId;
 use icechunk::format::format_constants::SpecVersionBin;
 use icechunk::format::snapshot::SnapshotInfo;
-use icechunk::repository::{Repository, VersionInfo};
+use icechunk::repository::{CreateOptions, OpenOptions, Repository, VersionInfo};
 use napi_derive::napi;
 use tokio::sync::RwLock;
 
@@ -245,21 +245,17 @@ impl JsRepository {
         authorize_virtual_chunk_access: Option<HashMap<String, Option<JsCredentials>>>,
         check_clean_root: Option<bool>,
     ) -> napi::Result<JsRepository> {
-        let config = convert_config(config)?;
-        let version = spec_version
+        let mut options = CreateOptions::default()
+            .with_check_clean_root(check_clean_root.unwrap_or(true));
+        options.config = convert_config(config)?;
+        options.spec_version = spec_version
             .map(|v| SpecVersionBin::try_from(v as u8))
             .transpose()
             .map_napi_err()?;
-        let creds = convert_credentials(authorize_virtual_chunk_access)?;
-        let repo = Repository::create(
-            config,
-            Arc::clone(&storage.0),
-            creds,
-            version,
-            check_clean_root.unwrap_or(true),
-        )
-        .await
-        .map_napi_err()?;
+        options.authorize_virtual_chunk_access =
+            convert_credentials(authorize_virtual_chunk_access)?;
+        let repo =
+            Repository::create(Arc::clone(&storage.0), options).await.map_napi_err()?;
         Ok(JsRepository(Arc::new(RwLock::new(repo))))
     }
 
@@ -269,11 +265,12 @@ impl JsRepository {
         config: Option<JsRepositoryConfig>,
         authorize_virtual_chunk_access: Option<HashMap<String, Option<JsCredentials>>>,
     ) -> napi::Result<JsRepository> {
-        let config = convert_config(config)?;
-        let creds = convert_credentials(authorize_virtual_chunk_access)?;
-        let repo = Repository::open(config, Arc::clone(&storage.0), creds)
-            .await
-            .map_napi_err()?;
+        let mut options = OpenOptions::default();
+        options.config = convert_config(config)?;
+        options.authorize_virtual_chunk_access =
+            convert_credentials(authorize_virtual_chunk_access)?;
+        let repo =
+            Repository::open(Arc::clone(&storage.0), options).await.map_napi_err()?;
         Ok(JsRepository(Arc::new(RwLock::new(repo))))
     }
 
@@ -285,21 +282,18 @@ impl JsRepository {
         authorize_virtual_chunk_access: Option<HashMap<String, Option<JsCredentials>>>,
         check_clean_root: Option<bool>,
     ) -> napi::Result<JsRepository> {
-        let config = convert_config(config)?;
-        let version = spec_version
+        let mut options = CreateOptions::default()
+            .with_check_clean_root(check_clean_root.unwrap_or(true));
+        options.config = convert_config(config)?;
+        options.spec_version = spec_version
             .map(|v| SpecVersionBin::try_from(v as u8))
             .transpose()
             .map_napi_err()?;
-        let creds = convert_credentials(authorize_virtual_chunk_access)?;
-        let repo = Repository::open_or_create(
-            config,
-            Arc::clone(&storage.0),
-            creds,
-            version,
-            check_clean_root.unwrap_or(true),
-        )
-        .await
-        .map_napi_err()?;
+        options.authorize_virtual_chunk_access =
+            convert_credentials(authorize_virtual_chunk_access)?;
+        let repo = Repository::open_or_create(Arc::clone(&storage.0), options)
+            .await
+            .map_napi_err()?;
         Ok(JsRepository(Arc::new(RwLock::new(repo))))
     }
 

@@ -1,7 +1,7 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 use bytes::Bytes;
 use icechunk::{
-    Repository, RepositoryConfig, Store,
+    CreateOptions, Repository, RepositoryConfig, Store,
     config::{ManifestConfig, ManifestSplittingConfig},
     format::{
         ChunkIndices,
@@ -11,7 +11,7 @@ use icechunk::{
     session::Session,
     storage::new_in_memory_storage,
 };
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 use tokio::{
     sync::{RwLock, Semaphore},
     task::JoinSet,
@@ -33,11 +33,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     config.inline_chunk_threshold_bytes = Some(128);
     config.manifest = Some(man_config);
     let repo = Repository::create(
-        Some(config),
         storage,
-        HashMap::new(),
-        Some(SpecVersionBin::V2),
-        true,
+        CreateOptions::default()
+            .with_config(config)
+            .with_spec_version(SpecVersionBin::V2),
     )
     .await?;
     let session = Arc::new(RwLock::new(repo.writable_session("main").await?));

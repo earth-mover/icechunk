@@ -1,9 +1,9 @@
-use std::{collections::HashMap, ops::Range, sync::Arc, time::Duration};
+use std::{ops::Range, sync::Arc, time::Duration};
 
 use bytes::Bytes;
 use futures::StreamExt as _;
 use icechunk::{
-    Repository, RepositoryConfig, Store, format::ByteRange,
+    CreateOptions, Repository, RepositoryConfig, Store, format::ByteRange,
     storage::new_in_memory_storage,
 };
 use tokio::{sync::RwLock, task::JoinSet, time::sleep};
@@ -14,7 +14,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut config = RepositoryConfig::default();
     config.inline_chunk_threshold_bytes = Some(128);
     let repo =
-        Repository::create(Some(config), storage, HashMap::new(), None, true).await?;
+        Repository::create(storage, CreateOptions::default().with_config(config)).await?;
     let ds = Arc::new(RwLock::new(repo.writable_session("main").await?));
     let store = Store::from_session(Arc::clone(&ds)).await;
 
