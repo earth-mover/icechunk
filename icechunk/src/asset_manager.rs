@@ -47,7 +47,8 @@ use crate::{
     format::{
         CHUNKS_FILE_PATH, CONFIG_FILE_PATH, ChunkId, ChunkOffset, IcechunkFormatError,
         IcechunkFormatErrorKind, MANIFESTS_FILE_PATH, ManifestId, OVERWRITTEN_FILES_PATH,
-        REPO_INFO_FILE_PATH, SNAPSHOTS_FILE_PATH, SnapshotId, TRANSACTION_LOGS_FILE_PATH,
+        Path, REPO_INFO_FILE_PATH, SNAPSHOTS_FILE_PATH, SnapshotId,
+        TRANSACTION_LOGS_FILE_PATH,
         format_constants::{
             self, CompressionAlgorithmBin, FileHeader, FileTypeBin, SpecVersionBin,
             parse_file_header,
@@ -64,7 +65,8 @@ use crate::{
     private,
     repository::{RepositoryError, RepositoryErrorKind, RepositoryResult},
     storage::{
-        self, ListInfo, StorageErrorKind, VersionInfo, VersionedUpdateResult, listing,
+        self, Attribution, AttributionLabels, ListInfo, RequestAttribution,
+        StorageContext, StorageErrorKind, VersionInfo, VersionedUpdateResult, listing,
     },
 };
 
@@ -109,6 +111,12 @@ pub struct AssetManager {
 
     #[serde(skip)]
     repo_cache: RwLock<Option<(Arc<RepoInfo>, VersionInfo)>>,
+
+    #[serde(default)]
+    attribution: Attribution,
+    /// Rendered from `attribution` at construction.
+    #[serde(skip)]
+    attribution_labels: AttributionLabels,
 }
 
 const fn _default_true() -> bool {
@@ -132,6 +140,8 @@ struct AssetManagerSerializer {
     #[serde(default = "crate::config::default_max_concurrent_decodes")]
     max_concurrent_decodes: u16,
     use_repo_info_cache: bool,
+    #[serde(default)]
+    attribution: Attribution,
 }
 
 impl From<AssetManagerSerializer> for AssetManager {
@@ -150,6 +160,7 @@ impl From<AssetManagerSerializer> for AssetManager {
             value.max_concurrent_decodes,
             value.use_repo_info_cache,
         )
+        .with_attribution(value.attribution)
     }
 }
 
@@ -195,7 +206,23 @@ impl AssetManager {
             decode_semaphore: Arc::new(Semaphore::new(max_concurrent_decodes as usize)),
             repo_cache: RwLock::new(None),
             use_repo_info_cache,
+            attribution: Attribution::default(),
+            attribution_labels: AttributionLabels::default(),
         }
+    }
+
+    pub fn with_attribution(mut self, attribution: Attribution) -> Self {
+        self.attribution_labels = AttributionLabels::from(&attribution);
+        self.attribution = attribution;
+        self
+    }
+
+    pub fn attribution(&self) -> &Attribution {
+        &self.attribution
+    }
+
+    pub fn attribution_labels(&self) -> &AttributionLabels {
+        &self.attribution_labels
     }
 
     pub fn new_no_cache(
@@ -261,6 +288,7 @@ impl AssetManager {
             self.max_concurrent_decodes,
             true,
         )
+        .with_attribution(self.attribution.clone())
     }
 
     pub fn spec_version(&self) -> SpecVersionBin {
@@ -297,7 +325,7 @@ impl AssetManager {
     ) -> RepositoryResult<Option<(RepositoryConfig, VersionInfo)>> {
         match self
             .storage
-            .get_object(&self.storage_settings, CONFIG_FILE_PATH, None)
+            .get_object(&self.storage_context(), CONFIG_FILE_PATH, None)
             .await
         {
             Ok((mut result, version)) => {
@@ -324,7 +352,7 @@ impl AssetManager {
             match self
                 .storage
                 .copy_object(
-                    &self.storage_settings,
+                    &self.storage_context(),
                     CONFIG_FILE_PATH,
                     backup_path.as_str(),
                     content_type,
@@ -340,7 +368,7 @@ impl AssetManager {
         match self
             .storage
             .put_object(
-                &self.storage_settings,
+                &self.storage_context(),
                 CONFIG_FILE_PATH,
                 bytes,
                 content_type,
@@ -356,14 +384,18 @@ impl AssetManager {
     }
 
     #[instrument(skip(self, manifest))]
-    pub async fn write_manifest(&self, manifest: Arc<Manifest>) -> RepositoryResult<u64> {
+    pub async fn write_manifest(
+        &self,
+        array: &str,
+        manifest: Arc<Manifest>,
+    ) -> RepositoryResult<u64> {
         let manifest_c = Arc::clone(&manifest);
         let res = write_new_manifest(
             manifest_c,
             self.spec_version(),
             self.compression_level,
             self.storage.as_ref(),
-            &self.storage_settings,
+            &self.node_context(&self.storage_settings, array, None),
             &self.request_semaphore,
         )
         .await?;
@@ -374,6 +406,30 @@ impl AssetManager {
 
     pub async fn fetch_manifest(
         &self,
+        array: &str,
+        manifest_id: &ManifestId,
+        manifest_size: u64,
+    ) -> RepositoryResult<Arc<Manifest>> {
+        self.fetch_manifest_with_context(
+            &self.node_context(&self.storage_settings, array, None),
+            manifest_id,
+            manifest_size,
+        )
+        .await
+    }
+
+    /// For tooling that has a manifest id but no node: carries the labels but
+    /// no array.
+    pub async fn fetch_manifest_without_node(
+        &self,
+        manifest_id: &ManifestId,
+    ) -> RepositoryResult<Arc<Manifest>> {
+        self.fetch_manifest_with_context(&self.storage_context(), manifest_id, 0).await
+    }
+
+    async fn fetch_manifest_with_context(
+        &self,
+        ctx: &StorageContext<'_>,
         manifest_id: &ManifestId,
         manifest_size: u64,
     ) -> RepositoryResult<Arc<Manifest>> {
@@ -384,7 +440,7 @@ impl AssetManager {
                     manifest_id,
                     manifest_size,
                     self.storage.as_ref(),
-                    &self.storage_settings,
+                    ctx,
                     &self.request_semaphore,
                     &self.decode_semaphore,
                 )
@@ -426,9 +482,10 @@ impl AssetManager {
 
     pub async fn fetch_manifest_unknown_size(
         &self,
+        array: &str,
         manifest_id: &ManifestId,
     ) -> RepositoryResult<Arc<Manifest>> {
-        self.fetch_manifest(manifest_id, 0).await
+        self.fetch_manifest(array, manifest_id, 0).await
     }
 
     /// Compressed manifest bytes straight from storage: no cache, no
@@ -446,7 +503,7 @@ impl AssetManager {
         let range = if size_bytes > 0 { Some(&range) } else { None };
         let (read, _) = self
             .storage
-            .get_object(&self.storage_settings, path.as_str(), range)
+            .get_object(&self.storage_context(), path.as_str(), range)
             .await
             .inject()?;
         read_all(read, size_bytes).await
@@ -464,7 +521,7 @@ impl AssetManager {
             self.spec_version(),
             self.compression_level,
             self.storage.as_ref(),
-            &self.storage_settings,
+            &self.storage_context(),
             &self.request_semaphore,
         )
         .await?;
@@ -486,7 +543,7 @@ impl AssetManager {
                 let (snapshot, _header) = fetch_snapshot(
                     snapshot_id,
                     self.storage.as_ref(),
-                    &self.storage_settings,
+                    &self.storage_context(),
                     &self.request_semaphore,
                     &self.decode_semaphore,
                 )
@@ -511,7 +568,7 @@ impl AssetManager {
             self.spec_version(),
             self.compression_level,
             self.storage.as_ref(),
-            &self.storage_settings,
+            &self.storage_context(),
             &self.request_semaphore,
         )
         .await?;
@@ -529,7 +586,7 @@ impl AssetManager {
                 let (transaction, _header) = fetch_transaction_log(
                     transaction_id,
                     self.storage.as_ref(),
-                    &self.storage_settings,
+                    &self.storage_context(),
                     &self.request_semaphore,
                     &self.decode_semaphore,
                 )
@@ -564,7 +621,7 @@ impl AssetManager {
 
         match fetch_repo_info_from_path(
             self.storage.as_ref(),
-            &self.storage_settings,
+            &self.storage_context(),
             REPO_INFO_FILE_PATH,
             repo_cache.as_ref().map(|(_, info)| info),
             &self.decode_semaphore,
@@ -632,7 +689,7 @@ impl AssetManager {
     ) -> RepositoryResult<(Arc<RepoInfo>, VersionInfo)> {
         fetch_repo_info_backup(
             self.storage.as_ref(),
-            &self.storage_settings,
+            &self.storage_context(),
             file_name,
             &self.decode_semaphore,
         )
@@ -652,7 +709,7 @@ impl AssetManager {
         let _permit = self.request_semaphore.acquire().await.capture()?;
         let (read, _) = self
             .storage
-            .get_object(&self.storage_settings, path, Some(&range))
+            .get_object(&self.storage_context(), path, Some(&range))
             .await
             .inject()?;
         let bytes = async_reader_to_bytes(read, len).await.capture()?;
@@ -703,7 +760,7 @@ impl AssetManager {
         fetch_snapshot(
             snapshot_id,
             self.storage.as_ref(),
-            &self.storage_settings,
+            &self.storage_context(),
             &self.request_semaphore,
             &self.decode_semaphore,
         )
@@ -724,7 +781,7 @@ impl AssetManager {
             manifest_id,
             manifest_size,
             self.storage.as_ref(),
-            &self.storage_settings,
+            &self.storage_context(),
             &self.request_semaphore,
             &self.decode_semaphore,
         )
@@ -743,7 +800,7 @@ impl AssetManager {
         fetch_transaction_log(
             transaction_id,
             self.storage.as_ref(),
-            &self.storage_settings,
+            &self.storage_context(),
             &self.request_semaphore,
             &self.decode_semaphore,
         )
@@ -761,7 +818,7 @@ impl AssetManager {
         // TODO: widen the cache to store the FileHeader so we can serve from cache
         let fetched = fetch_repo_info_from_path(
             self.storage.as_ref(),
-            &self.storage_settings,
+            &self.storage_context(),
             REPO_INFO_FILE_PATH,
             None,
             &self.decode_semaphore,
@@ -783,7 +840,7 @@ impl AssetManager {
     ) -> RepositoryResult<(Arc<RepoInfo>, VersionInfo, FileHeader)> {
         let fetched = fetch_repo_info_from_path(
             self.storage.as_ref(),
-            &self.storage_settings,
+            &self.storage_context(),
             format!("{OVERWRITTEN_FILES_PATH}/{file_name}").as_str(),
             None,
             &self.decode_semaphore,
@@ -808,7 +865,7 @@ impl AssetManager {
             self.compression_level,
             backup_path,
             self.storage.as_ref(),
-            &self.storage_settings,
+            &self.storage_context(),
             None,
         )
         .await?;
@@ -914,7 +971,7 @@ impl AssetManager {
                 self.compression_level,
                 Some(backup_path.as_str()),
                 self.storage.as_ref(),
-                &self.storage_settings,
+                &self.storage_context(),
                 None,
             )
             .await
@@ -958,6 +1015,8 @@ impl AssetManager {
     #[instrument(skip(self, bytes))]
     pub async fn write_chunk(
         &self,
+        array: &str,
+        chunk: &[u32],
         chunk_id: ChunkId,
         bytes: Bytes,
     ) -> RepositoryResult<()> {
@@ -975,9 +1034,10 @@ impl AssetManager {
             storage_class: self.storage_settings.chunks_storage_class().cloned(),
             ..self.storage_settings.clone()
         };
+        let ctx = self.node_context(&settings, array, Some(chunk));
         // we don't pre-populate the chunk cache, there are too many of them for this to be useful
         self.storage
-            .put_object(&settings, path.as_str(), bytes, None, Default::default(), None)
+            .put_object(&ctx, path.as_str(), bytes, None, Default::default(), None)
             .await
             .inject()?
             .must_write()
@@ -988,6 +1048,8 @@ impl AssetManager {
     #[instrument(skip(self))]
     pub async fn fetch_chunk(
         &self,
+        array: &str,
+        chunk: &[u32],
         chunk_id: &ChunkId,
         range: &Range<ChunkOffset>,
     ) -> RepositoryResult<Bytes> {
@@ -999,9 +1061,11 @@ impl AssetManager {
                 let path = format!("{CHUNKS_FILE_PATH}/{chunk_id}");
                 let retry = (|| async {
                     let permit = self.request_semaphore.acquire().await.capture()?;
+                    let ctx =
+                        self.node_context(&self.storage_settings, array, Some(chunk));
                     let (read, _) = self
                         .storage
-                        .get_object(&self.storage_settings, &path, Some(range))
+                        .get_object(&ctx, &path, Some(range))
                         .await
                         .inject()?;
                     let bytes_result =
@@ -1049,7 +1113,7 @@ impl AssetManager {
         let path = format!("{SNAPSHOTS_FILE_PATH}/{snapshot_id}");
         let _permit = self.request_semaphore.acquire().await.capture()?;
         self.storage
-            .get_object_last_modified(path.as_str(), &self.storage_settings)
+            .get_object_last_modified(&self.storage_context(), path.as_str())
             .await
             .inject()
     }
@@ -1135,7 +1199,7 @@ impl AssetManager {
     {
         listing::list_object_ids(
             &self.storage,
-            &self.storage_settings,
+            &self.storage_context(),
             prefix,
             concurrency,
         )
@@ -1151,7 +1215,7 @@ impl AssetManager {
     ) -> RepositoryResult<BoxStream<'_, RepositoryResult<String>>> {
         let stream = self
             .storage
-            .list_objects(&self.storage_settings, OVERWRITTEN_FILES_PATH)
+            .list_objects(&self.storage_context(), OVERWRITTEN_FILES_PATH)
             .await
             .inject()?
             .map_ok(|li| li.id)
@@ -1176,6 +1240,27 @@ impl AssetManager {
         &self.storage_settings
     }
 
+    /// Context for a request about no particular node.
+    pub fn storage_context(&self) -> StorageContext<'_> {
+        StorageContext::without_node(&self.storage_settings, &self.attribution_labels)
+    }
+
+    fn node_context<'a>(
+        &'a self,
+        settings: &'a storage::Settings,
+        array: &'a str,
+        chunk: Option<&'a [u32]>,
+    ) -> StorageContext<'a> {
+        StorageContext::new(
+            settings,
+            RequestAttribution {
+                labels: &self.attribution_labels,
+                array: Some(array),
+                chunk,
+            },
+        )
+    }
+
     #[deprecated(
         since = "2.0.0",
         note = "Shouldn't be necessary after 2.0, only to support Icechunk 1 repos"
@@ -1197,6 +1282,11 @@ impl AssetManager {
         };
         Ok(stream)
     }
+}
+
+/// The `array` attribution of requests about the node at `path`.
+pub(crate) fn array_label(path: &Path) -> &str {
+    path.as_str().trim_start_matches('/')
 }
 
 fn binary_file_header(
@@ -1244,7 +1334,7 @@ async fn write_new_manifest(
     spec_version: SpecVersionBin,
     compression_level: u8,
     storage: &(dyn Storage + Send + Sync),
-    storage_settings: &storage::Settings,
+    ctx: &StorageContext<'_>,
     semaphore: &Semaphore,
 ) -> RepositoryResult<u64> {
     if !storage.can_write().await.inject()? {
@@ -1285,13 +1375,14 @@ async fn write_new_manifest(
     debug!(%id, size_bytes=len, "Writing manifest");
     let path = format!("{MANIFESTS_FILE_PATH}/{id}");
     let settings = storage::Settings {
-        storage_class: storage_settings.metadata_storage_class().cloned(),
-        ..storage_settings.clone()
+        storage_class: ctx.settings.metadata_storage_class().cloned(),
+        ..ctx.settings.clone()
     };
+    let ctx = StorageContext::new(&settings, ctx.attribution);
 
     let _permit = semaphore.acquire().await.capture()?;
     storage
-        .put_object(&settings, path.as_str(), buffer.into(), None, metadata, None)
+        .put_object(&ctx, path.as_str(), buffer.into(), None, metadata, None)
         .await
         .inject()?
         .must_write()
@@ -1299,12 +1390,12 @@ async fn write_new_manifest(
     Ok(len)
 }
 
-#[instrument(skip(storage, storage_settings, semaphore, decode_semaphore))]
+#[instrument(skip(storage, ctx, semaphore, decode_semaphore))]
 async fn fetch_manifest(
     manifest_id: &ManifestId,
     manifest_size: u64,
     storage: &(dyn Storage + Send),
-    storage_settings: &storage::Settings,
+    ctx: &StorageContext<'_>,
     semaphore: &Semaphore,
     decode_semaphore: &Arc<Semaphore>,
 ) -> RepositoryResult<(Arc<Manifest>, FileHeader)> {
@@ -1315,8 +1406,7 @@ async fn fetch_manifest(
     let range = if manifest_size > 0 { Some(&range) } else { None };
     let _permit = semaphore.acquire().await.capture()?;
 
-    let (read, _) =
-        storage.get_object(storage_settings, path.as_str(), range).await.inject()?;
+    let (read, _) = storage.get_object(ctx, path.as_str(), range).await.inject()?;
     fetch_and_decode(
         read,
         manifest_size,
@@ -1538,7 +1628,7 @@ async fn write_new_snapshot(
     spec_version: SpecVersionBin,
     compression_level: u8,
     storage: &(dyn Storage + Send + Sync),
-    storage_settings: &storage::Settings,
+    ctx: &StorageContext<'_>,
     semaphore: &Semaphore,
 ) -> RepositoryResult<SnapshotId> {
     if !storage.can_write().await.inject()? {
@@ -1575,12 +1665,13 @@ async fn write_new_snapshot(
     debug!(%id, size_bytes=buffer.len(), "Writing snapshot");
     let path = format!("{SNAPSHOTS_FILE_PATH}/{id}");
     let settings = storage::Settings {
-        storage_class: storage_settings.metadata_storage_class().cloned(),
-        ..storage_settings.clone()
+        storage_class: ctx.settings.metadata_storage_class().cloned(),
+        ..ctx.settings.clone()
     };
+    let ctx = StorageContext::new(&settings, ctx.attribution);
     let _permit = semaphore.acquire().await.capture()?;
     storage
-        .put_object(&settings, path.as_str(), buffer.into(), None, metadata, None)
+        .put_object(&ctx, path.as_str(), buffer.into(), None, metadata, None)
         .await
         .inject()?
         .must_write()
@@ -1589,11 +1680,11 @@ async fn write_new_snapshot(
     Ok(id)
 }
 
-#[instrument(skip(storage, storage_settings, semaphore, decode_semaphore))]
+#[instrument(skip(storage, ctx, semaphore, decode_semaphore))]
 async fn fetch_snapshot(
     snapshot_id: &SnapshotId,
     storage: &(dyn Storage + Send + Sync),
-    storage_settings: &storage::Settings,
+    ctx: &StorageContext<'_>,
     semaphore: &Semaphore,
     decode_semaphore: &Arc<Semaphore>,
 ) -> RepositoryResult<(Arc<Snapshot>, FileHeader)> {
@@ -1601,8 +1692,7 @@ async fn fetch_snapshot(
     let _permit = semaphore.acquire().await.capture()?;
 
     let path = format!("{SNAPSHOTS_FILE_PATH}/{snapshot_id}");
-    let (read, _) =
-        storage.get_object(storage_settings, path.as_str(), None).await.inject()?;
+    let (read, _) = storage.get_object(ctx, path.as_str(), None).await.inject()?;
     fetch_and_decode(
         read,
         DEFAULT_PREALLOC_HINT as u64,
@@ -1619,7 +1709,7 @@ async fn write_new_tx_log(
     spec_version: SpecVersionBin,
     compression_level: u8,
     storage: &(dyn Storage + Send + Sync),
-    storage_settings: &storage::Settings,
+    ctx: &StorageContext<'_>,
     semaphore: &Semaphore,
 ) -> RepositoryResult<()> {
     if !storage.can_write().await.inject()? {
@@ -1655,13 +1745,14 @@ async fn write_new_tx_log(
     debug!(%transaction_id, size_bytes=buffer.len(), "Writing transaction log");
     let path = format!("{TRANSACTION_LOGS_FILE_PATH}/{transaction_id}");
     let settings = storage::Settings {
-        storage_class: storage_settings.metadata_storage_class().cloned(),
-        ..storage_settings.clone()
+        storage_class: ctx.settings.metadata_storage_class().cloned(),
+        ..ctx.settings.clone()
     };
+    let ctx = StorageContext::new(&settings, ctx.attribution);
 
     let _permit = semaphore.acquire().await.capture()?;
     storage
-        .put_object(&settings, path.as_str(), buffer.into(), None, metadata, None)
+        .put_object(&ctx, path.as_str(), buffer.into(), None, metadata, None)
         .await
         .inject()?
         .must_write()
@@ -1670,19 +1761,18 @@ async fn write_new_tx_log(
     Ok(())
 }
 
-#[instrument(skip(storage, storage_settings, semaphore, decode_semaphore))]
+#[instrument(skip(storage, ctx, semaphore, decode_semaphore))]
 async fn fetch_transaction_log(
     transaction_id: &SnapshotId,
     storage: &(dyn Storage + Send + Sync),
-    storage_settings: &storage::Settings,
+    ctx: &StorageContext<'_>,
     semaphore: &Semaphore,
     decode_semaphore: &Arc<Semaphore>,
 ) -> RepositoryResult<(Arc<TransactionLog>, FileHeader)> {
     debug!(%transaction_id, "Downloading transaction log");
     let path = format!("{TRANSACTION_LOGS_FILE_PATH}/{transaction_id}");
     let _permit = semaphore.acquire().await.capture()?;
-    let (read, _) =
-        storage.get_object(storage_settings, path.as_str(), None).await.inject()?;
+    let (read, _) = storage.get_object(ctx, path.as_str(), None).await.inject()?;
     fetch_and_decode(
         read,
         DEFAULT_PREALLOC_HINT as u64,
@@ -1742,7 +1832,7 @@ pub async fn write_repo_info(
     compression_level: u8,
     backup_path: Option<&str>,
     storage: &(dyn Storage + Send + Sync),
-    storage_settings: &storage::Settings,
+    ctx: &StorageContext<'_>,
     path: Option<&str>,
 ) -> RepositoryResult<VersionInfo> {
     let (buffer, metadata) =
@@ -1754,13 +1844,7 @@ pub async fn write_repo_info(
     if let Some(backup_path) = backup_path {
         let backup_path = format!("{OVERWRITTEN_FILES_PATH}/{backup_path}");
         match storage
-            .copy_object(
-                storage_settings,
-                repo_file_path,
-                backup_path.as_str(),
-                None,
-                version,
-            )
+            .copy_object(ctx, repo_file_path, backup_path.as_str(), None, version)
             .await
             .inject()?
         {
@@ -1774,14 +1858,7 @@ pub async fn write_repo_info(
     }
 
     match storage
-        .put_object(
-            storage_settings,
-            repo_file_path,
-            buffer.into(),
-            None,
-            metadata,
-            Some(version),
-        )
+        .put_object(ctx, repo_file_path, buffer.into(), None, metadata, Some(version))
         .await
         .inject()?
     {
@@ -1804,7 +1881,7 @@ pub async unsafe fn force_write_repo_info(
     spec_version: SpecVersionBin,
     compression_level: u8,
     storage: &(dyn Storage + Send + Sync),
-    storage_settings: &storage::Settings,
+    ctx: &StorageContext<'_>,
     path: Option<&str>,
 ) -> RepositoryResult<VersionInfo> {
     let (buffer, metadata) =
@@ -1815,7 +1892,7 @@ pub async unsafe fn force_write_repo_info(
     let repo_file_path = path.unwrap_or(REPO_INFO_FILE_PATH);
 
     match storage
-        .put_object(storage_settings, repo_file_path, buffer.into(), None, metadata, None)
+        .put_object(ctx, repo_file_path, buffer.into(), None, metadata, None)
         .await
         .inject()?
     {
@@ -1829,36 +1906,30 @@ pub async unsafe fn force_write_repo_info(
 #[instrument(skip_all)]
 pub async fn fetch_repo_info(
     storage: &(dyn Storage + Send + Sync),
-    storage_settings: &storage::Settings,
+    ctx: &StorageContext<'_>,
     decode_semaphore: &Arc<Semaphore>,
 ) -> RepositoryResult<(Arc<RepoInfo>, VersionInfo)> {
-    fetch_repo_info_from_path(
-        storage,
-        storage_settings,
-        REPO_INFO_FILE_PATH,
-        None,
-        decode_semaphore,
-    )
-    .await
-    .map(|fetched| {
-        // Since we didn't give a previous version, there must be a result here
-        #[expect(clippy::expect_used)]
-        let (info, version, _header) =
-            fetched.expect("Logic bug, must have a repo_info here");
-        (info, version)
-    })
+    fetch_repo_info_from_path(storage, ctx, REPO_INFO_FILE_PATH, None, decode_semaphore)
+        .await
+        .map(|fetched| {
+            // Since we didn't give a previous version, there must be a result here
+            #[expect(clippy::expect_used)]
+            let (info, version, _header) =
+                fetched.expect("Logic bug, must have a repo_info here");
+            (info, version)
+        })
 }
 
 #[instrument(skip_all)]
 async fn fetch_repo_info_backup(
     storage: &(dyn Storage + Send + Sync),
-    storage_settings: &storage::Settings,
+    ctx: &StorageContext<'_>,
     file_name: &str,
     decode_semaphore: &Arc<Semaphore>,
 ) -> RepositoryResult<(Arc<RepoInfo>, VersionInfo)> {
     fetch_repo_info_from_path(
         storage,
-        storage_settings,
+        ctx,
         format!("{OVERWRITTEN_FILES_PATH}/{file_name}").as_str(),
         None,
         decode_semaphore,
@@ -1876,13 +1947,13 @@ async fn fetch_repo_info_backup(
 #[instrument(skip_all)]
 pub async fn fetch_repo_info_from_path(
     storage: &(dyn Storage + Send + Sync),
-    storage_settings: &storage::Settings,
+    ctx: &StorageContext<'_>,
     path: &str,
     previous_version: Option<&VersionInfo>,
     decode_semaphore: &Arc<Semaphore>,
 ) -> RepositoryResult<Option<(Arc<RepoInfo>, VersionInfo, FileHeader)>> {
     debug!("Downloading repo info");
-    match storage.get_object_conditional(storage_settings, path, previous_version).await {
+    match storage.get_object_conditional(ctx, path, previous_version).await {
         Ok(GetModifiedResult::Modified { data, new_version }) => {
             let (repo_info, header) = fetch_and_decode(
                 data,
@@ -2249,7 +2320,8 @@ mod test {
                 .unwrap();
         let pre_existing_manifest = Arc::new(pre_existing_manifest);
         let pre_existing_id = pre_existing_manifest.id();
-        let pre_size = manager.write_manifest(Arc::clone(&pre_existing_manifest)).await?;
+        let pre_size =
+            manager.write_manifest("a", Arc::clone(&pre_existing_manifest)).await?;
 
         let logging = Arc::new(LoggingStorage::new(Arc::clone(&backend)));
         let logging_c = Arc::clone(&logging);
@@ -2276,9 +2348,9 @@ mod test {
             .unwrap(),
         );
         let id = manifest.id();
-        let size = caching.write_manifest(Arc::clone(&manifest)).await?;
+        let size = caching.write_manifest("a", Arc::clone(&manifest)).await?;
 
-        let fetched = caching.fetch_manifest(&id, size).await?;
+        let fetched = caching.fetch_manifest("a", &id, size).await?;
         assert_eq!(fetched.len(), 1);
         assert_equal(
             fetched.iter(node2.clone()).unwrap().map(|x| x.unwrap()),
@@ -2286,7 +2358,7 @@ mod test {
         );
 
         // fetch again
-        caching.fetch_manifest(&id, size).await?;
+        caching.fetch_manifest("a", &id, size).await?;
         // when we insert we cache, so no fetches
         assert_eq!(
             logging.fetch_operations(),
@@ -2294,7 +2366,7 @@ mod test {
         );
 
         // first time it sees an ID it calls the backend
-        caching.fetch_manifest(&pre_existing_id, pre_size).await?;
+        caching.fetch_manifest("a", &pre_existing_id, pre_size).await?;
         assert_eq!(
             logging.fetch_operations(),
             vec![
@@ -2307,7 +2379,7 @@ mod test {
         );
 
         // only calls backend once
-        caching.fetch_manifest(&pre_existing_id, pre_size).await?;
+        caching.fetch_manifest("a", &pre_existing_id, pre_size).await?;
         assert_eq!(
             logging.fetch_operations(),
             vec![
@@ -2320,7 +2392,7 @@ mod test {
         );
 
         // other values still cached
-        caching.fetch_manifest(&id, size).await?;
+        caching.fetch_manifest("a", &id, size).await?;
         assert_eq!(
             logging.fetch_operations(),
             vec![
@@ -2366,7 +2438,7 @@ mod test {
                 .unwrap(),
         );
         let id1 = manifest1.id();
-        let size1 = manager.write_manifest(Arc::clone(&manifest1)).await?;
+        let size1 = manager.write_manifest("a", Arc::clone(&manifest1)).await?;
         let compression2: LocationCompressionConfig =
             (&ManifestVirtualChunkLocationCompressionConfig::default()).into();
         let manifest2 = Arc::new(
@@ -2379,14 +2451,14 @@ mod test {
             .unwrap(),
         );
         let id2 = manifest2.id();
-        let size2 = manager.write_manifest(Arc::clone(&manifest2)).await?;
+        let size2 = manager.write_manifest("a", Arc::clone(&manifest2)).await?;
         let manifest3 = Arc::new(
             Manifest::from_iter(&ManifestId::random(), vec![ci7, ci8, ci9], None)
                 .await?
                 .unwrap(),
         );
         let id3 = manifest3.id();
-        let size3 = manager.write_manifest(Arc::clone(&manifest3)).await?;
+        let size3 = manager.write_manifest("a", Arc::clone(&manifest3)).await?;
 
         let logging = Arc::new(LoggingStorage::new(Arc::clone(&backend)));
         let logging_c = Arc::clone(&logging);
@@ -2410,9 +2482,9 @@ mod test {
 
         // we keep asking for all 3 items, but the cache can only fit 2
         for _ in 0..20 {
-            caching.fetch_manifest(&id1, size1).await?;
-            caching.fetch_manifest(&id2, size2).await?;
-            caching.fetch_manifest(&id3, size3).await?;
+            caching.fetch_manifest("a", &id1, size1).await?;
+            caching.fetch_manifest("a", &id2, size2).await?;
+            caching.fetch_manifest("a", &id3, size3).await?;
         }
         // after the initial warming requests, we only request the file that doesn't fit in the cache
         assert_eq!(logging.fetch_operations()[10..].iter().unique().count(), 1);
@@ -2448,7 +2520,7 @@ mod test {
         .unwrap()
         .unwrap();
         let manifest_id = manifest.id().clone();
-        let size = manager.write_manifest(Arc::new(manifest)).await?;
+        let size = manager.write_manifest("a", Arc::new(manifest)).await?;
 
         let logging = Arc::new(LoggingStorage::new(Arc::clone(&storage)));
         let logging_c = Arc::clone(&logging);
@@ -2468,10 +2540,10 @@ mod test {
         let manifest_id_c = manifest_id.clone();
 
         let res1 = tokio::task::spawn(async move {
-            manager_c.fetch_manifest(&manifest_id_c, size).await
+            manager_c.fetch_manifest("a", &manifest_id_c, size).await
         });
         let res2 = tokio::task::spawn(async move {
-            manager_cc.fetch_manifest(&manifest_id, size).await
+            manager_cc.fetch_manifest("a", &manifest_id, size).await
         });
 
         assert!(res1.await?.is_ok());
@@ -2583,6 +2655,7 @@ mod test {
             HashMap::new(),
             Some(SpecVersionBin::current()),
             true,
+            None,
         )
         .await?;
 
@@ -2599,9 +2672,10 @@ mod test {
                 Bytes::from_static(br#"{"this":"array"}"#),
             )
             .await?;
-        let payload =
-            session.get_chunk_writer()?(Bytes::copy_from_slice(&42i8.to_be_bytes()))
-                .await?;
+        let payload = session.get_chunk_writer(&array_path, &ChunkIndices(vec![0]))?(
+            Bytes::copy_from_slice(&42i8.to_be_bytes()),
+        )
+        .await?;
         session
             .set_chunk_ref(array_path.clone(), ChunkIndices(vec![0]), Some(payload))
             .await?;
@@ -2683,6 +2757,7 @@ mod test {
             HashMap::new(),
             None,
             true,
+            None,
         )
         .await?;
         let mut session = repo.writable_session("main").await?;
@@ -2697,8 +2772,11 @@ mod test {
             )
             .await?;
         for i in 0..4u32 {
-            let payload =
-                session.get_chunk_writer()?(Bytes::from(vec![i as u8; 100])).await?;
+            let payload = session
+                .get_chunk_writer(&array_path, &ChunkIndices(vec![i]))?(
+                Bytes::from(vec![i as u8; 100]),
+            )
+            .await?;
             session
                 .set_chunk_ref(array_path.clone(), ChunkIndices(vec![i]), Some(payload))
                 .await?;
@@ -2718,7 +2796,7 @@ mod test {
         let bytes = am.fetch_manifest_bytes(&info.id, info.size_bytes).await?;
         assert_eq!(bytes.len() as u64, info.size_bytes);
         let decoded = decode_manifest(&bytes, None)?;
-        let cached = am.fetch_manifest(&info.id, info.size_bytes).await?;
+        let cached = am.fetch_manifest("a", &info.id, info.size_bytes).await?;
         assert_eq!(decoded.id(), cached.id());
         assert_eq!(decoded.len(), cached.len());
         assert_eq!(decoded.len(), 4);

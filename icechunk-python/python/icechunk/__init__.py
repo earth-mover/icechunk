@@ -31,6 +31,7 @@ from icechunk._icechunk_python import (
     user_agent,
 )
 from icechunk.config import (
+    Attribution,
     CachingConfig,
     CompressionAlgorithm,
     CompressionConfig,
@@ -138,6 +139,7 @@ __all__ = [
     "AnyGcsStaticCredential",
     "AnyObjectStoreConfig",
     "AnyS3Credential",
+    "Attribution",
     "AzureCredentials",
     "AzureRefreshableCredential",
     "AzureStaticCredentials",

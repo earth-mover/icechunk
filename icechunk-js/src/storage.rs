@@ -8,8 +8,8 @@ use bytes::Bytes;
 use futures::stream::BoxStream;
 use futures::{Stream, StreamExt};
 use icechunk::storage::{
-    DeleteObjectsResult, ETag, Generation, GetModifiedResult, ListInfo, Settings,
-    Storage, StorageError, StorageInfo, StorageResult, VersionInfo,
+    DeleteObjectsResult, ETag, Generation, GetModifiedResult, ListInfo, Storage,
+    StorageContext, StorageError, StorageInfo, StorageResult, VersionInfo,
     VersionedUpdateResult,
 };
 use napi::bindgen_prelude::{Buffer, Promise};
@@ -270,7 +270,7 @@ impl Storage for JsCallbackStorage {
 
     async fn get_object_range(
         &self,
-        _settings: &Settings,
+        _ctx: &StorageContext<'_>,
         path: &str,
         range: Option<&Range<u64>>,
     ) -> StorageResult<(
@@ -298,7 +298,7 @@ impl Storage for JsCallbackStorage {
 
     async fn put_object(
         &self,
-        _settings: &Settings,
+        _ctx: &StorageContext<'_>,
         path: &str,
         bytes: Bytes,
         content_type: Option<&str>,
@@ -327,7 +327,7 @@ impl Storage for JsCallbackStorage {
 
     async fn copy_object(
         &self,
-        _settings: &Settings,
+        _ctx: &StorageContext<'_>,
         from: &str,
         to: &str,
         content_type: Option<&str>,
@@ -351,7 +351,7 @@ impl Storage for JsCallbackStorage {
 
     async fn list_objects<'a>(
         &'a self,
-        _settings: &Settings,
+        _ctx: &StorageContext<'_>,
         prefix: &str,
     ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
         let items = self
@@ -378,7 +378,7 @@ impl Storage for JsCallbackStorage {
 
     async fn delete_batch(
         &self,
-        _settings: &Settings,
+        _ctx: &StorageContext<'_>,
         prefix: &str,
         batch: Vec<(String, u64)>,
     ) -> StorageResult<DeleteObjectsResult> {
@@ -405,8 +405,8 @@ impl Storage for JsCallbackStorage {
 
     async fn get_object_last_modified(
         &self,
+        _ctx: &StorageContext<'_>,
         path: &str,
-        _settings: &Settings,
     ) -> StorageResult<chrono::DateTime<chrono::Utc>> {
         self.get_object_last_modified_fn
             .call_async(Ok(path.to_string()))
@@ -418,7 +418,7 @@ impl Storage for JsCallbackStorage {
 
     async fn get_object_conditional(
         &self,
-        _settings: &Settings,
+        _ctx: &StorageContext<'_>,
         path: &str,
         previous_version: Option<&VersionInfo>,
     ) -> StorageResult<GetModifiedResult> {

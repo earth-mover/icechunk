@@ -13,7 +13,7 @@ from icechunk._icechunk_python import (
     RepoStatus,
     SpecVersion,
 )
-from icechunk.config import FeatureFlag, RepositoryConfig
+from icechunk.config import Attribution, FeatureFlag, RepositoryConfig
 from icechunk.conflicts import ConflictSolver
 from icechunk.credentials import AnyCredential
 from icechunk.ops import GCSummary, Update
@@ -106,6 +106,7 @@ class Repository:
         authorize_virtual_chunk_access: dict[str, AnyCredential | None] | None = None,
         spec_version: SpecVersion | int | None = None,
         check_clean_root: bool = True,
+        attribution: Attribution | None = None,
     ) -> Self:
         """
         Create a new Icechunk repository.
@@ -136,6 +137,12 @@ class Repository:
         spec_version : SpecVersion, optional
             Use this version of the spec for the new repository. If not passed, the latest version
             of the spec that was available before the library version release will be used.
+        attribution : Attribution, optional
+            Labels icechunk adds to the ``User-Agent`` of every request it makes for
+            this repository, so the bucket owner can attribute traffic in access logs.
+            The array path and chunk coordinates are always added; this adds which
+            software is talking to the bucket (``client``), what it is doing
+            (``workload``) and on whose behalf (``principal``).
 
         Returns
         -------
@@ -150,6 +157,7 @@ class Repository:
                 authorize_virtual_chunk_access=authorize_virtual_chunk_access,
                 spec_version=spec_version,
                 check_clean_root=check_clean_root,
+                attribution=attribution,
             )
         )
 
@@ -161,6 +169,7 @@ class Repository:
         authorize_virtual_chunk_access: dict[str, AnyCredential | None] | None = None,
         spec_version: SpecVersion | int | None = None,
         check_clean_root: bool = True,
+        attribution: Attribution | None = None,
     ) -> Self:
         """
         Create a new Icechunk repository asynchronously.
@@ -191,6 +200,12 @@ class Repository:
         spec_version : SpecVersion, optional
             Use this version of the spec for the new repository. If not passed, the latest version
             of the spec that was available before the library version release will be used.
+        attribution : Attribution, optional
+            Labels icechunk adds to the ``User-Agent`` of every request it makes for
+            this repository, so the bucket owner can attribute traffic in access logs.
+            The array path and chunk coordinates are always added; this adds which
+            software is talking to the bucket (``client``), what it is doing
+            (``workload``) and on whose behalf (``principal``).
 
         Returns
         -------
@@ -205,6 +220,7 @@ class Repository:
                 authorize_virtual_chunk_access=authorize_virtual_chunk_access,
                 spec_version=spec_version,
                 check_clean_root=check_clean_root,
+                attribution=attribution,
             )
         )
 
@@ -214,6 +230,7 @@ class Repository:
         storage: Storage,
         config: RepositoryConfig | None = None,
         authorize_virtual_chunk_access: dict[str, AnyCredential | None] | None = None,
+        attribution: Attribution | None = None,
     ) -> Self:
         """
         Open an existing Icechunk repository.
@@ -243,6 +260,12 @@ class Repository:
             environment (or uses anonymous access), which can expose private credentials.
             As a security measure, Icechunk will block access to virtual chunks if the
             container is not authorized using this argument.
+        attribution : Attribution, optional
+            Labels icechunk adds to the ``User-Agent`` of every request it makes for
+            this repository, so the bucket owner can attribute traffic in access logs.
+            The array path and chunk coordinates are always added; this adds which
+            software is talking to the bucket (``client``), what it is doing
+            (``workload``) and on whose behalf (``principal``).
 
         Returns
         -------
@@ -255,6 +278,7 @@ class Repository:
                 storage,
                 config=config,
                 authorize_virtual_chunk_access=authorize_virtual_chunk_access,
+                attribution=attribution,
             )
         )
 
@@ -264,6 +288,7 @@ class Repository:
         storage: Storage,
         config: RepositoryConfig | None = None,
         authorize_virtual_chunk_access: dict[str, AnyCredential | None] | None = None,
+        attribution: Attribution | None = None,
     ) -> Self:
         """
         Open an existing Icechunk repository asynchronously.
@@ -293,6 +318,12 @@ class Repository:
             environment (or uses anonymous access), which can expose private credentials.
             As a security measure, Icechunk will block access to virtual chunks if the
             container is not authorized using this argument.
+        attribution : Attribution, optional
+            Labels icechunk adds to the ``User-Agent`` of every request it makes for
+            this repository, so the bucket owner can attribute traffic in access logs.
+            The array path and chunk coordinates are always added; this adds which
+            software is talking to the bucket (``client``), what it is doing
+            (``workload``) and on whose behalf (``principal``).
 
         Returns
         -------
@@ -305,6 +336,7 @@ class Repository:
                 storage,
                 config=config,
                 authorize_virtual_chunk_access=authorize_virtual_chunk_access,
+                attribution=attribution,
             )
         )
 
@@ -316,6 +348,7 @@ class Repository:
         authorize_virtual_chunk_access: dict[str, AnyCredential | None] | None = None,
         create_version: SpecVersion | int | None = None,
         check_clean_root: bool = True,
+        attribution: Attribution | None = None,
     ) -> Self:
         """
         Open an existing Icechunk repository or create a new one if it does not exist.
@@ -350,6 +383,12 @@ class Repository:
             Use this version of the spec for the new repository, if it needs to be created.
             If not passed, the latest version of the spec that was available before the
             library version release will be used.
+        attribution : Attribution, optional
+            Labels icechunk adds to the ``User-Agent`` of every request it makes for
+            this repository, so the bucket owner can attribute traffic in access logs.
+            The array path and chunk coordinates are always added; this adds which
+            software is talking to the bucket (``client``), what it is doing
+            (``workload``) and on whose behalf (``principal``).
 
 
         Returns
@@ -365,6 +404,7 @@ class Repository:
                 authorize_virtual_chunk_access=authorize_virtual_chunk_access,
                 create_version=create_version,
                 check_clean_root=check_clean_root,
+                attribution=attribution,
             )
         )
 
@@ -376,6 +416,7 @@ class Repository:
         authorize_virtual_chunk_access: dict[str, AnyCredential | None] | None = None,
         create_version: SpecVersion | int | None = None,
         check_clean_root: bool = True,
+        attribution: Attribution | None = None,
     ) -> Self:
         """
         Open an existing Icechunk repository or create a new one if it does not exist (async version).
@@ -410,6 +451,12 @@ class Repository:
             Use this version of the spec for the new repository, if it needs to be created.
             If not passed, the latest version of the spec that was available before the
             library version release will be used.
+        attribution : Attribution, optional
+            Labels icechunk adds to the ``User-Agent`` of every request it makes for
+            this repository, so the bucket owner can attribute traffic in access logs.
+            The array path and chunk coordinates are always added; this adds which
+            software is talking to the bucket (``client``), what it is doing
+            (``workload``) and on whose behalf (``principal``).
 
         Returns
         -------
@@ -424,6 +471,7 @@ class Repository:
                 authorize_virtual_chunk_access=authorize_virtual_chunk_access,
                 create_version=create_version,
                 check_clean_root=check_clean_root,
+                attribution=attribution,
             )
         )
 
@@ -598,6 +646,18 @@ class Repository:
             The repository configuration.
         """
         return self._repository.config()
+
+    @property
+    def attribution(self) -> Attribution:
+        """
+        Get the labels this repository attaches to its requests.
+
+        Returns
+        -------
+        Attribution
+            The repository's request attribution.
+        """
+        return self._repository.attribution
 
     @property
     def storage(self) -> Storage:

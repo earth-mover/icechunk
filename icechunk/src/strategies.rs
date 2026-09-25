@@ -67,7 +67,7 @@ prop_compose! {
 
         runtime.block_on(async {
             let storage = new_in_memory_storage().await.expect("Cannot create in memory storage");
-            Repository::create(None, storage, HashMap::new(), Some(version), true)
+            Repository::create(None, storage, HashMap::new(), Some(version), true, None)
                 .await
                 .expect("Failed to initialize repository")
         })
@@ -85,7 +85,7 @@ prop_compose! {
 
     runtime.block_on(async {
         let storage = new_in_memory_storage().await.expect("Cannot create in memory storage");
-        let repository = Repository::create(None, storage, HashMap::new(), Some(version), true)
+        let repository = Repository::create(None, storage, HashMap::new(), Some(version), true, None)
             .await
             .expect("Failed to initialize repository");
         repository.writable_session("main").await.expect("Failed to create session")

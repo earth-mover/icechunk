@@ -32,7 +32,7 @@ use crate::{
     asset_manager::AssetManager,
     ops::{AbortOnDrop, walker::PROGRESS_INTERVAL},
     repository::{RepositoryError, RepositoryResult},
-    storage::{self, DeleteObjectsResult, ListInfo},
+    storage::{self, AttributionLabels, DeleteObjectsResult, ListInfo, StorageContext},
 };
 use icechunk_types::ICResultExt as _;
 
@@ -342,6 +342,7 @@ where
     let mut deleter = AbortOnDrop(tokio::spawn(run_deletes(
         Arc::clone(asset_manager.storage()),
         asset_manager.storage_settings().clone(),
+        asset_manager.attribution_labels().clone(),
         prefix,
         config,
         rx,
@@ -587,6 +588,7 @@ impl Deleter {
 async fn run_deletes(
     storage: Arc<dyn Storage + Send + Sync>,
     settings: storage::Settings,
+    labels: AttributionLabels,
     prefix: &'static str,
     config: DeleteConfig,
     mut rx: mpsc::Receiver<Vec<(String, u64)>>,
@@ -655,12 +657,14 @@ async fn run_deletes(
         let seq = deleter.congestion.take_seq();
         let storage = Arc::clone(&storage);
         let settings = settings.clone();
+        let labels = labels.clone();
         let batch_len = batch.len();
         in_flight.spawn(async move {
             // `delete_batch` consumes the keys, so a copy has to survive the
             // call to be re-queued if the store throttles it
             let retry = batch.clone();
-            match storage.delete_batch(&settings, prefix, batch).await {
+            let ctx = StorageContext::without_node(&settings, &labels);
+            match storage.delete_batch(&ctx, prefix, batch).await {
                 Ok(result) => {
                     BatchOutcome { seq, batch_len, batch: Vec::new(), result: Ok(result) }
                 }
@@ -843,7 +847,7 @@ pub(crate) mod testing {
 
         async fn put_object(
             &self,
-            settings: &Settings,
+            ctx: &StorageContext<'_>,
             path: &str,
             bytes: Bytes,
             content_type: Option<&str>,
@@ -851,34 +855,27 @@ pub(crate) mod testing {
             previous_version: Option<&VersionInfo>,
         ) -> StorageResult<VersionedUpdateResult> {
             self.backend
-                .put_object(
-                    settings,
-                    path,
-                    bytes,
-                    content_type,
-                    metadata,
-                    previous_version,
-                )
+                .put_object(ctx, path, bytes, content_type, metadata, previous_version)
                 .await
         }
 
         async fn copy_object(
             &self,
-            settings: &Settings,
+            ctx: &StorageContext<'_>,
             from: &str,
             to: &str,
             content_type: Option<&str>,
             version: &VersionInfo,
         ) -> StorageResult<VersionedUpdateResult> {
-            self.backend.copy_object(settings, from, to, content_type, version).await
+            self.backend.copy_object(ctx, from, to, content_type, version).await
         }
 
         async fn list_objects<'a>(
             &'a self,
-            settings: &Settings,
+            ctx: &StorageContext<'_>,
             prefix: &str,
         ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
-            let listing = self.backend.list_objects(settings, prefix).await?;
+            let listing = self.backend.list_objects(ctx, prefix).await?;
             if self.list_error_prefix.as_deref() != Some(prefix) {
                 return Ok(listing);
             }
@@ -887,13 +884,13 @@ pub(crate) mod testing {
 
         async fn list_objects_with_id_prefixes<'a>(
             &'a self,
-            settings: &Settings,
+            ctx: &StorageContext<'_>,
             prefix: &str,
             id_prefixes: &[String],
         ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
             let listing = self
                 .backend
-                .list_objects_with_id_prefixes(settings, prefix, id_prefixes)
+                .list_objects_with_id_prefixes(ctx, prefix, id_prefixes)
                 .await?;
             // Fail a worker's listing, never the probe: the probe asks for the
             // single two-character prefix `"00"`, workers for one-character ones.
@@ -913,7 +910,7 @@ pub(crate) mod testing {
 
         async fn delete_batch(
             &self,
-            settings: &Settings,
+            ctx: &StorageContext<'_>,
             prefix: &str,
             batch: Vec<(String, u64)>,
         ) -> StorageResult<DeleteObjectsResult> {
@@ -927,12 +924,10 @@ pub(crate) mod testing {
                         StorageError::capture(StorageErrorKind::Other(err.to_string()))
                     })?
                     .forget();
-                return self.backend.delete_batch(settings, prefix, batch).await;
+                return self.backend.delete_batch(ctx, prefix, batch).await;
             }
             match self.injected(prefix) {
-                Injected::Nothing => {
-                    self.backend.delete_batch(settings, prefix, batch).await
-                }
+                Injected::Nothing => self.backend.delete_batch(ctx, prefix, batch).await,
                 Injected::Fail => Err(StorageError::capture(StorageErrorKind::Other(
                     "injected delete failure".to_string(),
                 ))),
@@ -946,8 +941,7 @@ pub(crate) mod testing {
                 // which is what S3 does from the caller's point of view when
                 // one key in the batch errors
                 Injected::ReportOneFewer => {
-                    let result =
-                        self.backend.delete_batch(settings, prefix, batch).await?;
+                    let result = self.backend.delete_batch(ctx, prefix, batch).await?;
                     Ok(DeleteObjectsResult {
                         deleted_objects: result.deleted_objects.saturating_sub(1),
                         deleted_bytes: result.deleted_bytes,
@@ -958,31 +952,31 @@ pub(crate) mod testing {
 
         async fn get_object_last_modified(
             &self,
+            ctx: &StorageContext<'_>,
             path: &str,
-            settings: &Settings,
         ) -> StorageResult<DateTime<Utc>> {
-            self.backend.get_object_last_modified(path, settings).await
+            self.backend.get_object_last_modified(ctx, path).await
         }
 
         async fn get_object_conditional(
             &self,
-            settings: &Settings,
+            ctx: &StorageContext<'_>,
             path: &str,
             previous_version: Option<&VersionInfo>,
         ) -> StorageResult<GetModifiedResult> {
-            self.backend.get_object_conditional(settings, path, previous_version).await
+            self.backend.get_object_conditional(ctx, path, previous_version).await
         }
 
         async fn get_object_range(
             &self,
-            settings: &Settings,
+            ctx: &StorageContext<'_>,
             path: &str,
             range: Option<&Range<u64>>,
         ) -> StorageResult<(
             Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>,
             VersionInfo,
         )> {
-            self.backend.get_object_range(settings, path, range).await
+            self.backend.get_object_range(ctx, path, range).await
         }
     }
 
@@ -1173,9 +1167,12 @@ mod tests {
     ) -> Result<crate::Repository, Box<dyn std::error::Error>> {
         let repo = repo_with_converging_refs(backend).await?;
         let session = repo.writable_session("main").await?;
+        let path = crate::format::Path::new("/loose")?;
         for i in 0..n {
             // above the inline threshold, so each chunk is its own object
-            session.get_chunk_writer()?(Bytes::from(vec![i as u8; 1024])).await?;
+            let coords = crate::format::ChunkIndices(vec![i as u32]);
+            session.get_chunk_writer(&path, &coords)?(Bytes::from(vec![i as u8; 1024]))
+                .await?;
         }
         Ok(repo)
     }
@@ -1336,6 +1333,7 @@ mod tests {
         let run = tokio::spawn(run_deletes(
             Arc::clone(am.storage()),
             am.storage_settings().clone(),
+            AttributionLabels::default(),
             CHUNKS_FILE_PATH,
             delete_config(50, 4),
             rx,

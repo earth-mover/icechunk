@@ -46,10 +46,11 @@ async fn mk_repo(
             HashMap::new(),
             Some(spec_version),
             true,
+            None,
         )
         .await?)
     } else {
-        Ok(Repository::open(None, storage, HashMap::new()).await?)
+        Ok(Repository::open(None, storage, HashMap::new(), None).await?)
     }
 }
 
@@ -65,8 +66,11 @@ async fn write_chunks(
             let fy = y as f64;
             let bytes: Vec<u8> =
                 fx.to_le_bytes().into_iter().chain(fy.to_le_bytes()).collect();
-            let payload =
-                ds.get_chunk_writer()?(Bytes::copy_from_slice(bytes.as_slice())).await?;
+            let payload = ds.get_chunk_writer(
+                &"/array".try_into().unwrap(),
+                &ChunkIndices(vec![x, y]),
+            )?(Bytes::copy_from_slice(bytes.as_slice()))
+            .await?;
             ds.set_chunk_ref(
                 "/array".try_into().unwrap(),
                 ChunkIndices(vec![x, y]),

@@ -131,6 +131,7 @@ async fn create_repo_with_one_chunk(
         HashMap::new(),
         Some(spec_version),
         true,
+        None,
     )
     .await?;
     write_one_chunk(&repo, value).await?;
@@ -155,8 +156,10 @@ async fn write_one_chunk(
         let shape = ArrayShape::new(vec![(2, 1)]).unwrap();
         ds.add_array(array_path.clone(), shape, None, Bytes::new()).await?;
     }
-    let payload =
-        ds.get_chunk_writer()?(Bytes::copy_from_slice(&value.to_be_bytes())).await?;
+    let payload = ds.get_chunk_writer(&array_path, &ChunkIndices(vec![0]))?(
+        Bytes::copy_from_slice(&value.to_be_bytes()),
+    )
+    .await?;
     ds.set_chunk_ref(array_path.clone(), ChunkIndices(vec![0]), Some(payload)).await?;
     ds.commit(format!("write {value}")).execute().await?;
     Ok(())
@@ -220,9 +223,13 @@ async fn empty_prefix_roundtrips() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
 
         // Re-open with a fresh storage (forces the detection probe to run again).
-        let repo =
-            Repository::open(None, root_storage(&bucket, None, false), HashMap::new())
-                .await?;
+        let repo = Repository::open(
+            None,
+            root_storage(&bucket, None, false),
+            HashMap::new(),
+            None,
+        )
+        .await?;
         assert_eq!(read_chunk0(&repo).await?, 7);
     }
     Ok(())
@@ -244,8 +251,9 @@ async fn empty_prefix_roundtrips_on_normalizing_store()
     .await?;
 
     // A fresh storage forces the detection probe to run on reopen.
-    let repo = Repository::open(None, root_storage(&bucket, None, false), HashMap::new())
-        .await?;
+    let repo =
+        Repository::open(None, root_storage(&bucket, None, false), HashMap::new(), None)
+            .await?;
     assert_eq!(read_chunk0(&repo).await?, 13);
     Ok(())
 }
@@ -267,6 +275,7 @@ async fn empty_prefix_create_refuses_over_existing_repo()
             HashMap::new(),
             Some(new),
             true,
+            None,
         )
         .await
         .unwrap_err();
@@ -288,10 +297,14 @@ async fn empty_prefix_create_refuses_over_existing_repo()
 #[tokio_test]
 async fn empty_prefix_nonexistent_repo() -> Result<(), Box<dyn std::error::Error>> {
     let bucket = fresh_bucket().await;
-    let err =
-        Repository::open(None, root_storage(&bucket, Some(""), false), HashMap::new())
-            .await
-            .unwrap_err();
+    let err = Repository::open(
+        None,
+        root_storage(&bucket, Some(""), false),
+        HashMap::new(),
+        None,
+    )
+    .await
+    .unwrap_err();
     assert!(
         matches!(
             err,
@@ -393,20 +406,21 @@ async fn rooted_roundtrip_body(
         HashMap::new(),
         Some(SpecVersionBin::V2),
         false,
+        None,
     )
     .await?;
     write_one_chunk(&repo, 42).await?;
 
     // Reopen with auto-detection (a fresh storage forces the probe). On a
     // leading-slash-preserving store this resolves to LegacyRoot and reads back.
-    let repo =
-        Repository::open(None, store.rooted_storage(false)?, HashMap::new()).await?;
+    let repo = Repository::open(None, store.rooted_storage(false)?, HashMap::new(), None)
+        .await?;
     assert_eq!(read_chunk0(&repo).await?, 42);
 
     // Append through the reopened repo, then reopen + read again (write path).
     write_one_chunk(&repo, 7).await?;
-    let repo =
-        Repository::open(None, store.rooted_storage(false)?, HashMap::new()).await?;
+    let repo = Repository::open(None, store.rooted_storage(false)?, HashMap::new(), None)
+        .await?;
     assert_eq!(read_chunk0(&repo).await?, 7);
 
     // GC must run cleanly under the detected (rooted) layout.

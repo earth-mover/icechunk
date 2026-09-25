@@ -6,6 +6,7 @@
 )]
 
 mod common;
+mod test_attribution;
 mod test_concurrency;
 mod test_distributed_writes;
 mod test_flaky_connections;
