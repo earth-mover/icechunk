@@ -198,6 +198,35 @@ jobs:
           CARGO_TARGET_DIR: msrv-target
         run: pixi run -m icechunk-python/pyproject.toml -e msrv cargo check --locked
 
+  ubuntu-semver:
+    name: Rust semver (ubuntu-latest)
+    # needs a base revision, which only PRs and merge queues have
+    if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
+    timeout-minutes: 20
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          # cargo-semver-checks checks the baseline out from local history
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: prefix-dev/setup-pixi@d3f436a425481402e6a95a1d1fc10331c708cd9e # v0.10.2
+        with:
+          pixi-version: ${{ env.PIXI_VERSION }}
+          cache: false
+          activate-environment: true
+          manifest-path: icechunk-python/pyproject.toml
+
+      - name: Check the published crates for semver breaks against the base
+        env:
+          BASELINE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          # the breaking-change label declares a major release, so breaks pass
+          RELEASE_TYPE: ${{ contains(github.event.pull_request.labels.*.name, 'breaking-change') && 'major' || 'minor' }}
+        run: just check-semver --baseline-rev "$BASELINE" --release-type "$RELEASE_TYPE"
+
   ubuntu-test:
     name: Rust tests (ubuntu-latest, ${{ matrix.partition }}/${{ strategy.job-total }})
     timeout-minutes: 30
@@ -610,19 +639,20 @@ jobs:
   ubuntu-gate:
     name: Rust CI (ubuntu-latest)
     if: always()
-    needs: [ubuntu-msrv, ubuntu-test, ubuntu-doc-examples, ubuntu-python-debug, ubuntu-integration]
+    needs: [ubuntu-msrv, ubuntu-semver, ubuntu-test, ubuntu-doc-examples, ubuntu-python-debug, ubuntu-integration]
     timeout-minutes: 5
     runs-on: ubuntu-latest
     steps:
       - name: Verify all ubuntu-latest jobs passed
         env:
           MSRV_RESULT: ${{ needs.ubuntu-msrv.result }}
+          SEMVER_RESULT: ${{ needs.ubuntu-semver.result }}
           TEST_RESULT: ${{ needs.ubuntu-test.result }}
           DOC_EXAMPLES_RESULT: ${{ needs.ubuntu-doc-examples.result }}
           PYTHON_DEBUG_RESULT: ${{ needs.ubuntu-python-debug.result }}
           INTEGRATION_RESULT: ${{ needs.ubuntu-integration.result }}
         run: |
-          echo "msrv=$MSRV_RESULT test=$TEST_RESULT doc-examples=$DOC_EXAMPLES_RESULT python-debug=$PYTHON_DEBUG_RESULT integration=$INTEGRATION_RESULT"
+          echo "msrv=$MSRV_RESULT semver=$SEMVER_RESULT test=$TEST_RESULT doc-examples=$DOC_EXAMPLES_RESULT python-debug=$PYTHON_DEBUG_RESULT integration=$INTEGRATION_RESULT"
           if [ "$MSRV_RESULT" != "success" ] || [ "$TEST_RESULT" != "success" ] || [ "$DOC_EXAMPLES_RESULT" != "success" ] || [ "$PYTHON_DEBUG_RESULT" != "success" ]; then
             echo "::error::One or more ubuntu-latest Rust jobs failed"
             exit 1
@@ -630,6 +660,11 @@ jobs:
           # skipped when neither schedule, dispatch nor the label asked for it
           if [ "$INTEGRATION_RESULT" != "success" ] && [ "$INTEGRATION_RESULT" != "skipped" ]; then
             echo "::error::Integration tests failed"
+            exit 1
+          fi
+          # skipped on pushes, schedules and dispatches, which have no base revision
+          if [ "$SEMVER_RESULT" != "success" ] && [ "$SEMVER_RESULT" != "skipped" ]; then
+            echo "::error::Semver check failed"
             exit 1
           fi
 
