@@ -460,7 +460,7 @@ async fn inspect_manifest(
     asset_manager: &AssetManager,
     manifest_id: &ManifestId,
 ) -> RepositoryResult<ManifestInspect> {
-    let manifest = asset_manager.fetch_manifest_unknown_size(manifest_id).await?;
+    let manifest = asset_manager.fetch_manifest_without_node(manifest_id).await?;
     let header = asset_manager.fetch_manifest_header(manifest_id).await?;
     let node_ids: Vec<_> = manifest.arrays().collect();
     let mut arrays = Vec::with_capacity(node_ids.len());
@@ -705,7 +705,7 @@ mod tests {
             ))
             .await?,
         );
-        let repo = Repository::open(None, st, Default::default()).await?;
+        let repo = Repository::open(None, st, Default::default(), None).await?;
         let snap_id = repo
             .ancestry(&VersionInfo::BranchTipRef("main".to_string()))
             .await?
@@ -734,7 +734,7 @@ mod tests {
             ))
             .await?,
         );
-        let repo = Repository::open(None, st, Default::default()).await?;
+        let repo = Repository::open(None, st, Default::default(), None).await?;
 
         let json = repo_info_json(repo.asset_manager(), true).await?;
         let info: RepoInfoInspect = serde_json::from_str(json.as_str())?;

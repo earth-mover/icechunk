@@ -42,7 +42,8 @@ use tokio::sync::{Mutex, RwLock};
 
 use crate::{
     config::{
-        PyCredentials, PyRepositoryConfig, PyStorage, PyStorageSettings, datetime_repr,
+        PyAttribution, PyCredentials, PyRepositoryConfig, PyStorage, PyStorageSettings,
+        datetime_repr,
     },
     errors::PyIcechunkStoreError,
     impl_pickle,
@@ -1131,12 +1132,17 @@ impl PyRepository {
                 let repo = self.0.read().await;
                 let storage = Arc::clone(repo.storage());
                 let config = Some(repo.config().clone());
+                let attribution = repo.attribution().clone();
                 drop(repo);
 
-                let fresh =
-                    Repository::open(config, Arc::clone(&storage), Default::default())
-                        .await
-                        .map_err(PyIcechunkStoreError::RepositoryError)?;
+                let fresh = Repository::open(
+                    config,
+                    Arc::clone(&storage),
+                    Default::default(),
+                    Some(attribution.clone()),
+                )
+                .await
+                .map_err(PyIcechunkStoreError::RepositoryError)?;
                 migrations::migrate_1_to_2(
                     fresh,
                     dry_run,
@@ -1147,9 +1153,14 @@ impl PyRepository {
                 .map_err(PyIcechunkStoreError::MigrationError)?;
 
                 // Reopen to get a fresh repo with the correct spec version
-                let reopened = Repository::open(None, storage, Default::default())
-                    .await
-                    .map_err(PyIcechunkStoreError::RepositoryError)?;
+                let reopened = Repository::open(
+                    None,
+                    storage,
+                    Default::default(),
+                    Some(attribution),
+                )
+                .await
+                .map_err(PyIcechunkStoreError::RepositoryError)?;
                 Ok(Self(Arc::new(RwLock::new(reopened))))
             })
         })
@@ -1221,7 +1232,8 @@ impl PyRepository {
     }
 
     #[classmethod]
-    #[pyo3(signature = (storage, *, config = None, authorize_virtual_chunk_access = None, spec_version = None, check_clean_root = true))]
+    #[pyo3(signature = (storage, *, config = None, authorize_virtual_chunk_access = None, spec_version = None, check_clean_root = true, attribution = None))]
+    #[expect(clippy::too_many_arguments)]
     fn create(
         _cls: &Bound<'_, PyType>,
         py: Python<'_>,
@@ -1230,6 +1242,7 @@ impl PyRepository {
         authorize_virtual_chunk_access: Option<HashMap<String, Option<PyCredentials>>>,
         spec_version: Option<PySpecVersion>,
         check_clean_root: bool,
+        attribution: Option<PyAttribution>,
     ) -> PyResult<Self> {
         // This function calls block_on, so we need to allow other thread python to make progress
         py.detach(move || {
@@ -1245,6 +1258,7 @@ impl PyRepository {
                         map_credentials(authorize_virtual_chunk_access),
                         version,
                         check_clean_root,
+                        attribution.map(|a| a.0),
                     )
                     .await
                     .map_err(PyIcechunkStoreError::RepositoryError)
@@ -1255,7 +1269,8 @@ impl PyRepository {
     }
 
     #[classmethod]
-    #[pyo3(signature = (storage, *, config = None, authorize_virtual_chunk_access = None, spec_version = None, check_clean_root = true))]
+    #[pyo3(signature = (storage, *, config = None, authorize_virtual_chunk_access = None, spec_version = None, check_clean_root = true, attribution = None))]
+    #[expect(clippy::too_many_arguments)]
     fn create_async<'py>(
         _cls: &Bound<'py, PyType>,
         py: Python<'py>,
@@ -1264,6 +1279,7 @@ impl PyRepository {
         authorize_virtual_chunk_access: Option<HashMap<String, Option<PyCredentials>>>,
         spec_version: Option<PySpecVersion>,
         check_clean_root: bool,
+        attribution: Option<PyAttribution>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let config =
             config.map(|c| c.try_into().map_err(PyValueError::new_err)).transpose()?;
@@ -1277,6 +1293,7 @@ impl PyRepository {
                 authorize_virtual_chunk_access,
                 version,
                 check_clean_root,
+                attribution.map(|a| a.0),
             )
             .await
             .map_err(PyIcechunkStoreError::RepositoryError)?;
@@ -1286,13 +1303,14 @@ impl PyRepository {
     }
 
     #[classmethod]
-    #[pyo3(signature = (storage, *, config = None, authorize_virtual_chunk_access = None))]
+    #[pyo3(signature = (storage, *, config = None, authorize_virtual_chunk_access = None, attribution = None))]
     fn open(
         _cls: &Bound<'_, PyType>,
         py: Python<'_>,
         storage: PyStorage,
         config: Option<&PyRepositoryConfig>,
         authorize_virtual_chunk_access: Option<HashMap<String, Option<PyCredentials>>>,
+        attribution: Option<PyAttribution>,
     ) -> PyResult<Self> {
         // This function calls block_on, so we need to allow other thread python to make progress
         py.detach(move || {
@@ -1305,6 +1323,7 @@ impl PyRepository {
                         config,
                         storage.0,
                         map_credentials(authorize_virtual_chunk_access),
+                        attribution.map(|a| a.0),
                     )
                     .await
                     .map_err(PyIcechunkStoreError::RepositoryError)
@@ -1315,29 +1334,35 @@ impl PyRepository {
     }
 
     #[classmethod]
-    #[pyo3(signature = (storage, *, config = None, authorize_virtual_chunk_access = None))]
+    #[pyo3(signature = (storage, *, config = None, authorize_virtual_chunk_access = None, attribution = None))]
     fn open_async<'py>(
         _cls: &Bound<'py, PyType>,
         py: Python<'py>,
         storage: PyStorage,
         config: Option<&PyRepositoryConfig>,
         authorize_virtual_chunk_access: Option<HashMap<String, Option<PyCredentials>>>,
+        attribution: Option<PyAttribution>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let config =
             config.map(|c| c.try_into().map_err(PyValueError::new_err)).transpose()?;
         let authorize_virtual_chunk_access =
             map_credentials(authorize_virtual_chunk_access);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let repository =
-                Repository::open(config, storage.0, authorize_virtual_chunk_access)
-                    .await
-                    .map_err(PyIcechunkStoreError::RepositoryError)?;
+            let repository = Repository::open(
+                config,
+                storage.0,
+                authorize_virtual_chunk_access,
+                attribution.map(|a| a.0),
+            )
+            .await
+            .map_err(PyIcechunkStoreError::RepositoryError)?;
             Ok(Self(Arc::new(RwLock::new(repository))))
         })
     }
 
     #[classmethod]
-    #[pyo3(signature = (storage, *, config = None, authorize_virtual_chunk_access = None, create_version = None, check_clean_root = true))]
+    #[pyo3(signature = (storage, *, config = None, authorize_virtual_chunk_access = None, create_version = None, check_clean_root = true, attribution = None))]
+    #[expect(clippy::too_many_arguments)]
     fn open_or_create(
         _cls: &Bound<'_, PyType>,
         py: Python<'_>,
@@ -1346,6 +1371,7 @@ impl PyRepository {
         authorize_virtual_chunk_access: Option<HashMap<String, Option<PyCredentials>>>,
         create_version: Option<PySpecVersion>,
         check_clean_root: bool,
+        attribution: Option<PyAttribution>,
     ) -> PyResult<Self> {
         // This function calls block_on, so we need to allow other thread python to make progress
         py.detach(move || {
@@ -1362,6 +1388,7 @@ impl PyRepository {
                             map_credentials(authorize_virtual_chunk_access),
                             version,
                             check_clean_root,
+                            attribution.map(|a| a.0),
                         )
                         .await
                         .map_err(PyIcechunkStoreError::RepositoryError)?,
@@ -1373,7 +1400,8 @@ impl PyRepository {
     }
 
     #[classmethod]
-    #[pyo3(signature = (storage, *, config = None, authorize_virtual_chunk_access = None, create_version = None, check_clean_root = true))]
+    #[pyo3(signature = (storage, *, config = None, authorize_virtual_chunk_access = None, create_version = None, check_clean_root = true, attribution = None))]
+    #[expect(clippy::too_many_arguments)]
     fn open_or_create_async<'py>(
         _cls: &Bound<'py, PyType>,
         py: Python<'py>,
@@ -1382,6 +1410,7 @@ impl PyRepository {
         authorize_virtual_chunk_access: Option<HashMap<String, Option<PyCredentials>>>,
         create_version: Option<PySpecVersion>,
         check_clean_root: bool,
+        attribution: Option<PyAttribution>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let config =
             config.map(|c| c.try_into().map_err(PyValueError::new_err)).transpose()?;
@@ -1395,6 +1424,7 @@ impl PyRepository {
                 authorize_virtual_chunk_access,
                 version,
                 check_clean_root,
+                attribution.map(|a| a.0),
             )
             .await
             .map_err(PyIcechunkStoreError::RepositoryError)?;
@@ -1622,6 +1652,11 @@ impl PyRepository {
 
     pub(crate) fn config(&self) -> PyRepositoryConfig {
         self.0.blocking_read().config().clone().into()
+    }
+
+    #[getter]
+    pub(crate) fn attribution(&self) -> PyAttribution {
+        PyAttribution(self.0.blocking_read().attribution().clone())
     }
 
     pub(crate) fn storage_settings(&self) -> PyStorageSettings {

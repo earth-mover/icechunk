@@ -11,10 +11,11 @@ use crate::storage::redirect::RedirectStorage;
 
 // Re-export everything from icechunk-storage
 pub use icechunk_storage::{
-    ConcurrencySettings, DeleteObjectsResult, ETag, Generation, GetModifiedResult,
-    ICError, ListInfo, RepositoryCreation, RetriesSettings, Settings, Storage,
-    StorageError, StorageErrorKind, StorageInfo, StorageResult, TimeoutSettings,
-    VersionInfo, VersionedUpdateResult,
+    Attribution, AttributionError, AttributionLabels, ConcurrencySettings,
+    DeleteObjectsResult, ETag, Generation, GetModifiedResult, ICError, ListInfo,
+    RepositoryCreation, RequestAttribution, RetriesSettings, Settings, Storage,
+    StorageContext, StorageError, StorageErrorKind, StorageInfo, StorageResult,
+    TimeoutSettings, UNATTRIBUTED_LABELS, VersionInfo, VersionedUpdateResult,
     s3_config::{S3Credentials, S3CredentialsFetcher, S3Options, S3StaticCredentials},
     split_in_multiple_equal_requests, split_in_multiple_requests, strip_quotes,
 };
@@ -105,18 +106,20 @@ mod tests {
         use std::{fs::File, io::Write as _, path::PathBuf};
         use tempfile::TempDir;
 
+        let settings = Settings::default();
+        let ctx = StorageContext::unattributed(&settings);
         let repo_dir = TempDir::new().unwrap();
         let s = new_local_filesystem_storage(repo_dir.path()).await.unwrap();
-        assert!(s.root_is_clean(&Settings::default()).await.unwrap());
+        assert!(s.root_is_clean(&ctx).await.unwrap());
 
         let mut file = File::create(repo_dir.path().join("foo.txt")).unwrap();
         write!(file, "hello").unwrap();
-        assert!(!s.root_is_clean(&Settings::default()).await.unwrap());
+        assert!(!s.root_is_clean(&ctx).await.unwrap());
 
         let inside_existing =
             PathBuf::from_iter([repo_dir.path().as_os_str().to_str().unwrap(), "foo"]);
         let s = new_local_filesystem_storage(&inside_existing).await.unwrap();
-        assert!(s.root_is_clean(&Settings::default()).await.unwrap());
+        assert!(s.root_is_clean(&ctx).await.unwrap());
     }
 
     #[cfg(feature = "object-store-gcs")]

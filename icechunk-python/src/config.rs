@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Datelike as _, TimeDelta, Timelike as _, Utc};
 use futures::TryStreamExt as _;
-use icechunk::storage::RetriesSettings;
+use icechunk::storage::{Attribution, AttributionError, RetriesSettings};
 use itertools::Itertools as _;
 use pyo3::exceptions::PyValueError;
 use serde::{Deserialize, Serialize};
@@ -27,7 +27,7 @@ use icechunk::{
         S3ChecksumAlgorithm, S3Credentials, S3CredentialsFetcher, S3Options,
         S3StaticCredentials,
     },
-    storage::{self, ConcurrencySettings},
+    storage::{self, ConcurrencySettings, StorageContext},
     virtual_chunks::VirtualChunkContainer,
 };
 use pyo3::{
@@ -992,6 +992,74 @@ impl From<&PyCompressionConfig> for CompressionConfig {
             algorithm: value.algorithm.as_ref().map(|a| a.clone().into()),
             level: value.level,
         }
+    }
+}
+
+#[pyclass(from_py_object, name = "Attribution", eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PyAttribution(pub(crate) Attribution);
+
+impl PyRepr for PyAttribution {
+    const EXECUTABLE: bool = true;
+    fn cls_name() -> &'static str {
+        "icechunk.Attribution"
+    }
+    fn fields(&self, _mode: ReprMode) -> Vec<(&str, String)> {
+        let show = |v: Option<&str>| py_option_str(&v.map(str::to_string));
+        vec![
+            ("client", show(self.0.client())),
+            ("workload", show(self.0.workload())),
+            ("principal", show(self.0.principal())),
+        ]
+    }
+}
+
+#[pymethods]
+impl PyAttribution {
+    #[new]
+    #[pyo3(signature = (*, client=None, workload=None, principal=None))]
+    fn new(
+        client: Option<String>,
+        workload: Option<String>,
+        principal: Option<String>,
+    ) -> PyResult<Self> {
+        let invalid = |e: AttributionError| PyValueError::new_err(e.to_string());
+        let mut a = Attribution::new();
+        if let Some(c) = client {
+            a = a.with_client(c).map_err(invalid)?;
+        }
+        if let Some(w) = workload {
+            a = a.with_workload(w).map_err(invalid)?;
+        }
+        if let Some(p) = principal {
+            a = a.with_principal(p).map_err(invalid)?;
+        }
+        Ok(Self(a))
+    }
+
+    #[getter]
+    fn client(&self) -> Option<String> {
+        self.0.client().map(str::to_string)
+    }
+
+    #[getter]
+    fn workload(&self) -> Option<String> {
+        self.0.workload().map(str::to_string)
+    }
+
+    #[getter]
+    fn principal(&self) -> Option<String> {
+        self.0.principal().map(str::to_string)
+    }
+
+    fn __repr__(&self) -> String {
+        <Self as PyRepr>::__repr__(self)
+    }
+    fn __str__(&self) -> String {
+        <Self as PyRepr>::__str__(self)
+    }
+    fn _repr_html_(&self) -> String {
+        <Self as PyRepr>::_repr_html_(self)
     }
 }
 
@@ -3276,9 +3344,10 @@ impl PyStorage {
                 Some(s) => s.merge(defaults),
                 None => defaults,
             };
+            let ctx = StorageContext::unattributed(&settings);
             let stream = self
                 .0
-                .list_objects(&settings, &prefix)
+                .list_objects(&ctx, &prefix)
                 .await
                 .map_err(PyIcechunkStoreError::StorageError)?;
             let results: Vec<(String, u64)> = stream
@@ -3317,9 +3386,10 @@ impl PyStorage {
                 Some(s) => s.merge(defaults),
                 None => defaults,
             };
+            let ctx = StorageContext::unattributed(&settings);
             let stream = self
                 .0
-                .list_objects(&settings, &prefix)
+                .list_objects(&ctx, &prefix)
                 .await
                 .map_err(PyIcechunkStoreError::StorageError)?;
             let results: Vec<PyStorageObjectInfo> = stream

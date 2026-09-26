@@ -292,7 +292,7 @@ async fn open_repository(
     let storage = get_storage(repo).await?;
     let config = Some(repo.get_config().clone());
 
-    let repository = Repository::open(config, storage, HashMap::new())
+    let repository = Repository::open(config, storage, HashMap::new(), None)
         .await
         .context(format!("Failed to open repository {repo_alias:?}"))?;
 
@@ -319,7 +319,7 @@ async fn repo_create(init_cmd: &CreateCommand, config: &CliConfig) -> Result<()>
 
     let config = Some(repo.get_config().clone());
 
-    Repository::create(config, storage, HashMap::new(), None, true)
+    Repository::create(config, storage, HashMap::new(), None, true, None)
         .await
         .context(format!("Failed to create repository {:?}", init_cmd.repo))?;
 

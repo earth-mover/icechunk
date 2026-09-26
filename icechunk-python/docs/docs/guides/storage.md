@@ -445,6 +445,12 @@ Three keyword arguments are available on `s3_storage`, `s3_object_store_storage`
   `effective_read = {**headers, **read_headers}`,
   `effective_write = {**headers, **write_headers}`.
 
+The `User-Agent` header is managed by Icechunk: it names the array and chunk
+each request is for, plus optional labels set when opening the repository. See
+[Attributing requests in bucket logs][attribution].
+
+[attribution]: observability.md#attributing-requests-in-bucket-logs
+
 ### Empty prefix and legacy repositories
 
 Creating a repository at an empty `prefix` (`None` or `""`) — i.e. at the bucket root — is not supported on object stores since Icechunk v2.1.0 and raises an error; use a non-empty `prefix`. In-memory and local-filesystem storage are unaffected.
