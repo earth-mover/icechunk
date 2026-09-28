@@ -27,7 +27,7 @@ env:
   RUST_BACKTRACE: short
   RUSTFLAGS: "-D warnings"
   RUSTUP_MAX_RETRIES: 10
-  MSRV: '1.91.1'
+  MSRV: '1.95.0'
   PIXI_VERSION: "v0.72.0"
 
 jobs:
