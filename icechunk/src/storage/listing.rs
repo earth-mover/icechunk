@@ -243,16 +243,7 @@ mod tests {
         n: usize,
         two_char: bool,
     ) -> Arc<AssetManager> {
-        let repo = Repository::create(
-            None,
-            Arc::clone(backend),
-            Default::default(),
-            None,
-            true,
-            None,
-        )
-        .await
-        .unwrap();
+        let repo = Repository::create(Arc::clone(backend)).execute().await.unwrap();
         let am = Arc::clone(repo.asset_manager());
         for _ in 0..n {
             let mut id = ChunkId::random();

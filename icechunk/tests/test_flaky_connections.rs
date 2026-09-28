@@ -471,18 +471,15 @@ async fn conditional_put_repro(
         toxic_removal_delay_ms,
         |storage, settings, toxic_remover| async move {
             let storage_for_list = Arc::clone(&storage);
-            let result = icechunk::Repository::create(
-                Some(icechunk::RepositoryConfig {
+            let result = icechunk::Repository::create(storage)
+                .config(icechunk::RepositoryConfig {
                     storage: Some(settings),
                     ..Default::default()
-                }),
-                storage,
-                std::collections::HashMap::new(),
-                Some(SpecVersionBin::default()),
-                false,
-                None,
-            )
-            .await;
+                })
+                .spec_version(SpecVersionBin::default())
+                .check_clean_root(false)
+                .execute()
+                .await;
 
             toxic_remover.await??;
 

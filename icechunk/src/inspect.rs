@@ -705,7 +705,7 @@ mod tests {
             ))
             .await?,
         );
-        let repo = Repository::open(None, st, Default::default(), None).await?;
+        let repo = Repository::open(st).execute().await?;
         let snap_id = repo
             .ancestry(&VersionInfo::BranchTipRef("main".to_string()))
             .await?
@@ -734,7 +734,7 @@ mod tests {
             ))
             .await?,
         );
-        let repo = Repository::open(None, st, Default::default(), None).await?;
+        let repo = Repository::open(st).execute().await?;
 
         let json = repo_info_json(repo.asset_manager(), true).await?;
         let info: RepoInfoInspect = serde_json::from_str(json.as_str())?;

@@ -5,7 +5,7 @@ use icechunk_macros::tokio_test;
 use pretty_assertions::assert_eq;
 use rstest::rstest;
 use rstest_reuse::{self, *};
-use std::{collections::HashMap, ops::Range, sync::Arc};
+use std::{ops::Range, sync::Arc};
 
 use bytes::Bytes;
 use icechunk::{
@@ -40,17 +40,13 @@ async fn mk_repo(
             inline_chunk_threshold_bytes: Some(0),
             ..RepositoryConfig::default()
         };
-        Ok(Repository::create(
-            Some(config),
-            storage,
-            HashMap::new(),
-            Some(spec_version),
-            true,
-            None,
-        )
-        .await?)
+        Ok(Repository::create(storage)
+            .config(config)
+            .spec_version(spec_version)
+            .execute()
+            .await?)
     } else {
-        Ok(Repository::open(None, storage, HashMap::new(), None).await?)
+        Ok(Repository::open(storage).execute().await?)
     }
 }
 

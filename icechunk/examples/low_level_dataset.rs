@@ -1,5 +1,5 @@
 #![allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 
 use bytes::Bytes;
 use icechunk::{
@@ -21,15 +21,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 let storage: Arc<dyn Storage + Send + Sync> = Arc::new(InMemoryStorage::new());
 let storage: Arc<dyn Storage + Send + Sync> =
     Arc::new(MemCachingStorage::new(storage, 100_000_000));
-let mut ds = Repository::create(Arc::clone(&storage));
+let repo = Repository::create(Arc::clone(&storage)).execute().await?;
+let mut ds = repo.writable_session("main").await?;
 ```
 "#,
     );
 
     let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
-    let repo =
-        Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true, None)
-            .await?;
+    let repo = Repository::create(Arc::clone(&storage)).execute().await?;
     let mut ds = repo.writable_session("main").await?;
 
     println!();

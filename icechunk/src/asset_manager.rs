@@ -2037,7 +2037,6 @@ mod test {
         },
         storage::{Storage, logging::LoggingStorage, new_in_memory_storage},
     };
-    use std::collections::HashMap;
 
     /// A buffer no serializer of ours would ever produce.
     fn unreadable_buffer(size: usize) -> Vec<u8> {
@@ -2643,21 +2642,17 @@ mod test {
     #[tokio_test]
     async fn test_header_methods() -> Result<(), Box<dyn std::error::Error>> {
         let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
-        let repo = Repository::create(
-            Some(RepositoryConfig {
+        let repo = Repository::create(Arc::clone(&storage))
+            .config(RepositoryConfig {
                 // force a non-inline chunk so a manifest file is written
                 inline_chunk_threshold_bytes: Some(0),
                 // tiny batch size so a couple commits leave a repo-info backup chain
                 num_updates_per_repo_info_file: Some(1),
                 ..Default::default()
-            }),
-            Arc::clone(&storage),
-            HashMap::new(),
-            Some(SpecVersionBin::current()),
-            true,
-            None,
-        )
-        .await?;
+            })
+            .spec_version(SpecVersionBin::current())
+            .execute()
+            .await?;
 
         // First commit: group + array + a chunk, producing a manifest.
         let mut session = repo.writable_session("main").await?;
@@ -2747,19 +2742,14 @@ mod test {
     async fn repo_with_one_manifest()
     -> Result<(Repository, SnapshotId), Box<dyn std::error::Error>> {
         let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
-        let repo = Repository::create(
-            Some(RepositoryConfig {
+        let repo = Repository::create(storage)
+            .config(RepositoryConfig {
                 // force non-inline chunks so a manifest file is written
                 inline_chunk_threshold_bytes: Some(0),
                 ..Default::default()
-            }),
-            storage,
-            HashMap::new(),
-            None,
-            true,
-            None,
-        )
-        .await?;
+            })
+            .execute()
+            .await?;
         let mut session = repo.writable_session("main").await?;
         session.add_group(Path::root(), Bytes::new()).await?;
         let array_path: Path = "/a".to_string().try_into()?;

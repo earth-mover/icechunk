@@ -75,19 +75,16 @@ async fn create_repository(
         .map(|cont| (cont.url_prefix().to_string(), cont))
         .collect();
 
-    Repository::create(
-        Some(RepositoryConfig {
+    Repository::create(storage)
+        .config(RepositoryConfig {
             virtual_chunk_containers: Some(virtual_chunk_containers),
             ..Default::default()
-        }),
-        storage,
-        credentials,
-        Some(spec_version),
-        true,
-        None,
-    )
-    .await
-    .expect("Failed to initialize repository")
+        })
+        .authorize_virtual_chunk_access(credentials)
+        .spec_version(spec_version)
+        .execute()
+        .await
+        .expect("Failed to initialize repository")
 }
 
 async fn write_chunks_to_store(
@@ -1233,15 +1230,12 @@ async fn test_zarr_store_with_multiple_virtual_chunk_containers(
         config.set_virtual_chunk_container(container).unwrap();
     }
 
-    let repo = Repository::create(
-        Some(config),
-        storage,
-        virtual_creds,
-        Some(spec_version),
-        true,
-        None,
-    )
-    .await?;
+    let repo = Repository::create(storage)
+        .config(config)
+        .authorize_virtual_chunk_access(virtual_creds)
+        .spec_version(spec_version)
+        .execute()
+        .await?;
 
     let old_timestamp = SecondsSinceEpoch(chrono::Utc::now().timestamp() as u32 - 5);
 
@@ -1481,9 +1475,12 @@ async fn test_virtual_refs_with_vcc_relative_urls(
     let creds: HashMap<String, Option<Credentials>> =
         [(format!("file://{}", chunk_dir.path().to_str().unwrap()), None)].into();
 
-    let repo =
-        Repository::create(Some(config), storage, creds, Some(spec_version), true, None)
-            .await?;
+    let repo = Repository::create(storage)
+        .config(config)
+        .authorize_virtual_chunk_access(creds)
+        .spec_version(spec_version)
+        .execute()
+        .await?;
 
     let session = repo.writable_session("main").await?;
     let store = Store::from_session(Arc::new(RwLock::new(session))).await;
@@ -1609,15 +1606,12 @@ async fn test_vcc_relative_ref_rejects_file_traversal() -> Result<(), Box<dyn Er
     let mut config = RepositoryConfig::default();
     config.set_virtual_chunk_container(container)?;
     let creds: HashMap<String, Option<Credentials>> = [(prefix, None)].into();
-    let repo = Repository::create(
-        Some(config),
-        storage,
-        creds,
-        Some(SpecVersionBin::V2),
-        true,
-        None,
-    )
-    .await?;
+    let repo = Repository::create(storage)
+        .config(config)
+        .authorize_virtual_chunk_access(creds)
+        .spec_version(SpecVersionBin::V2)
+        .execute()
+        .await?;
 
     let mut ds = repo.writable_session("main").await?;
     let path: Path = "/a".try_into().unwrap();

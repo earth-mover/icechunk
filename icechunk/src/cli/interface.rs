@@ -290,9 +290,11 @@ async fn open_repository(
         .get(repo_alias)
         .context(format!("Repository {repo_alias:?} not found in config"))?;
     let storage = get_storage(repo).await?;
-    let config = Some(repo.get_config().clone());
+    let config = repo.get_config().clone();
 
-    let repository = Repository::open(config, storage, HashMap::new(), None)
+    let repository = Repository::open(storage)
+        .config(config)
+        .execute()
         .await
         .context(format!("Failed to open repository {repo_alias:?}"))?;
 
@@ -317,9 +319,11 @@ async fn repo_create(init_cmd: &CreateCommand, config: &CliConfig) -> Result<()>
         config.repos.get(&init_cmd.repo).context("Repository not found in config")?;
     let storage = get_storage(repo).await?;
 
-    let config = Some(repo.get_config().clone());
+    let config = repo.get_config().clone();
 
-    Repository::create(config, storage, HashMap::new(), None, true, None)
+    Repository::create(storage)
+        .config(config)
+        .execute()
         .await
         .context(format!("Failed to create repository {:?}", init_cmd.repo))?;
 

@@ -11,7 +11,6 @@
 #![allow(clippy::unwrap_used)]
 
 use std::{
-    collections::HashMap,
     env::{self},
     sync::Arc,
     time::Instant,
@@ -52,15 +51,7 @@ async fn mk_repo(
         }),
         ..RepositoryConfig::default()
     };
-    let repo = Repository::open_or_create(
-        Some(config),
-        storage,
-        HashMap::new(),
-        None,
-        true,
-        None,
-    )
-    .await?;
+    let repo = Repository::open_or_create(storage).config(config).execute().await?;
     Ok(repo)
 }
 
