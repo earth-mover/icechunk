@@ -19,7 +19,7 @@ chunk requests add `array=<path>; chunk=<coords>` and manifest requests add `arr
 
 ### Breaking changes
 
-- Rust only: `Repository::open`, `Repository::create` and `Repository::open_or_create` take only the storage and return a `RepositoryBuilder`. Optional settings are set by methods on the builder, followed by `.execute().await`. Python and JavaScript APIs are unchanged.
+- Rust only: `Repository::open`, `Repository::create` and `Repository::open_or_create` take only the storage and return a `RepositoryBuilder`. Optional settings are set by methods on the builder, followed by `.execute().await`. Python and JavaScript APIs are unchanged ([#2445](https://github.com/earth-mover/icechunk/pull/2445)).
 
 ## Python Icechunk Library 2.3.0a1
 
