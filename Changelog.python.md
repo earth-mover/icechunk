@@ -2,6 +2,10 @@
 
 ## Python Icechunk Library [unreleased]
 
+### Features
+
+- Add feature flags for `commit`, `amend`, `rebase`, `create_new_nodes`, `delete_nodes`, `update_chunks`, `update_array_metadata`, `update_group_metadata`, `create_branch`, `delete_branch`, `reset_branch`, `garbage_collection`, `expiration`, `update_config`, `set_default_commit_metadata`, `update_repository_metadata` and `rewrite_manifests`. `Repository.set_feature_flag(name, False)` makes the library refuse that operation on the repository. The session-content flags are checked when a session commits or flushes. All flags default to enabled.
+
 ### Fixes
 
 - `storage_class`, `metadata_storage_class` and `chunks_storage_class` now apply to the `object_store` backends — `gcs_storage`, `azure_storage` and `s3_object_store_storage`. The value is passed to the provider unchanged, so use its own names ([#904](https://github.com/earth-mover/icechunk/issues/904), [#2364](https://github.com/earth-mover/icechunk/issues/2364)).
