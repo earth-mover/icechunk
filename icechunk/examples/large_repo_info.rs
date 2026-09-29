@@ -10,7 +10,8 @@ use icechunk::{
         repo_info::{RepoAvailability, RepoInfo, RepoStatus, UpdateInfo, UpdateType},
         snapshot::SnapshotInfo,
     },
-    new_in_memory_storage, storage,
+    new_in_memory_storage,
+    storage::{self, StorageContext},
 };
 use rand::{Rng, RngExt as _};
 use std::{sync::Arc, time::Instant};
@@ -83,6 +84,7 @@ async fn measure_size(
 
     let stor: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
     let settings = storage::Settings::default();
+    let ctx = StorageContext::unattributed(&settings);
     let am = AssetManager::new_no_cache(
         Arc::clone(&stor),
         settings.clone(),
@@ -92,7 +94,7 @@ async fn measure_size(
     );
     am.create_repo_info(Arc::new(repo_info)).await?;
 
-    let (mut reader, _) = stor.get_object(&settings, REPO_INFO_FILE_PATH, None).await?;
+    let (mut reader, _) = stor.get_object(&ctx, REPO_INFO_FILE_PATH, None).await?;
     let mut buf = Vec::new();
     reader.read_to_end(&mut buf).await?;
     let compressed_size = buf.len();

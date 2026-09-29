@@ -129,7 +129,7 @@ fn benchmark_write_new_manifest(c: &mut Criterion) {
             || make_manifest(num_chunks, inline_size),
             |manifest| {
                 rt.block_on(async {
-                    asset_manager.write_manifest(manifest).await.unwrap();
+                    asset_manager.write_manifest("a", manifest).await.unwrap();
                 });
             },
             BatchSize::SmallInput,

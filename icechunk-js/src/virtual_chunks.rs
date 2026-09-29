@@ -67,6 +67,9 @@ impl HttpVirtualChunkFetcher for JsHttpVirtualChunkFetcher {
         range: &Range<ChunkOffset>,
         checksum: Option<&Checksum>,
         config: &HttpConfig,
+        // the JS callback owns the transport; browsers ignore a User-Agent set
+        // on fetch, and adding it would trigger CORS preflights
+        _user_agent: &str,
     ) -> Result<HttpVirtualChunkResponse, VirtualReferenceError> {
         const MAX_SAFE_INTEGER: u64 = (1 << 53) - 1;
         if range.start > MAX_SAFE_INTEGER || range.end > MAX_SAFE_INTEGER {

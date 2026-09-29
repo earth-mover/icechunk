@@ -158,10 +158,16 @@ mod tests {
         let storage: Arc<dyn Storage + Send + Sync> =
             new_in_memory_storage().await.unwrap();
 
-        let repo =
-            Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
-                .await
-                .unwrap();
+        let repo = Repository::create(
+            None,
+            Arc::clone(&storage),
+            HashMap::new(),
+            None,
+            true,
+            None,
+        )
+        .await
+        .unwrap();
 
         let all: Vec<_> = repo.feature_flags().await.unwrap().collect();
         assert_eq!(all.len(), FEATURE_FLAGS.len());
@@ -252,10 +258,16 @@ mod tests {
         let storage: Arc<dyn Storage + Send + Sync> =
             new_in_memory_storage().await.unwrap();
 
-        let repo =
-            Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
-                .await
-                .unwrap();
+        let repo = Repository::create(
+            None,
+            Arc::clone(&storage),
+            HashMap::new(),
+            None,
+            true,
+            None,
+        )
+        .await
+        .unwrap();
 
         let all = repo.feature_flags().await.unwrap().collect::<Vec<_>>();
         assert_eq!(
@@ -339,10 +351,16 @@ mod tests {
         let storage: Arc<dyn Storage + Send + Sync> =
             new_in_memory_storage().await.unwrap();
 
-        let repo =
-            Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
-                .await
-                .unwrap();
+        let repo = Repository::create(
+            None,
+            Arc::clone(&storage),
+            HashMap::new(),
+            None,
+            true,
+            None,
+        )
+        .await
+        .unwrap();
 
         repo.create_tag("exists", &Snapshot::INITIAL_SNAPSHOT_ID).await.unwrap();
 
@@ -379,10 +397,16 @@ mod tests {
         let storage: Arc<dyn Storage + Send + Sync> =
             new_in_memory_storage().await.unwrap();
 
-        let repo =
-            Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
-                .await
-                .unwrap();
+        let repo = Repository::create(
+            None,
+            Arc::clone(&storage),
+            HashMap::new(),
+            None,
+            true,
+            None,
+        )
+        .await
+        .unwrap();
 
         // rearrange session works by default
         let _session = repo.rearrange_session("main").await.unwrap();
@@ -413,10 +437,16 @@ mod tests {
         let storage: Arc<dyn Storage + Send + Sync> =
             new_in_memory_storage().await.unwrap();
 
-        let repo =
-            Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
-                .await
-                .unwrap();
+        let repo = Repository::create(
+            None,
+            Arc::clone(&storage),
+            HashMap::new(),
+            None,
+            true,
+            None,
+        )
+        .await
+        .unwrap();
 
         // create a group so we have something to move
         let mut session = repo.writable_session("main").await.unwrap();
@@ -459,10 +489,16 @@ mod tests {
         let storage: Arc<dyn Storage + Send + Sync> =
             new_in_memory_storage().await.unwrap();
 
-        let repo =
-            Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
-                .await
-                .unwrap();
+        let repo = Repository::create(
+            None,
+            Arc::clone(&storage),
+            HashMap::new(),
+            None,
+            true,
+            None,
+        )
+        .await
+        .unwrap();
 
         // create a group so we have something to move
         let mut session = repo.writable_session("main").await.unwrap();

@@ -17,7 +17,8 @@ use icechunk::{
     repository::VersionInfo,
     session::{SessionError, SessionErrorKind, get_chunk},
     storage::{
-        self, ConcurrencySettings, ETag, ObjectStorage, mk_client, new_s3_storage,
+        self, ConcurrencySettings, ETag, ObjectStorage, StorageContext, mk_client,
+        new_s3_storage,
     },
     store::{StoreError, StoreErrorKind},
     virtual_chunks::VirtualChunkContainer,
@@ -83,6 +84,7 @@ async fn create_repository(
         credentials,
         Some(spec_version),
         true,
+        None,
     )
     .await
     .expect("Failed to initialize repository")
@@ -317,10 +319,12 @@ async fn write_chunks_to_azure(
         .unwrap(),
     );
 
+    let settings = storage::Settings::default();
+    let ctx = StorageContext::unattributed(&settings);
     for (chunk_id, bytes) in chunks {
         storage
             .put_object(
-                &storage::Settings::default(),
+                &ctx,
                 format!("chunks/{chunk_id}").as_str(),
                 bytes,
                 None,
@@ -1235,6 +1239,7 @@ async fn test_zarr_store_with_multiple_virtual_chunk_containers(
         virtual_creds,
         Some(spec_version),
         true,
+        None,
     )
     .await?;
 
@@ -1476,8 +1481,9 @@ async fn test_virtual_refs_with_vcc_relative_urls(
     let creds: HashMap<String, Option<Credentials>> =
         [(format!("file://{}", chunk_dir.path().to_str().unwrap()), None)].into();
 
-    let repo = Repository::create(Some(config), storage, creds, Some(spec_version), true)
-        .await?;
+    let repo =
+        Repository::create(Some(config), storage, creds, Some(spec_version), true, None)
+            .await?;
 
     let session = repo.writable_session("main").await?;
     let store = Store::from_session(Arc::new(RwLock::new(session))).await;
@@ -1603,9 +1609,15 @@ async fn test_vcc_relative_ref_rejects_file_traversal() -> Result<(), Box<dyn Er
     let mut config = RepositoryConfig::default();
     config.set_virtual_chunk_container(container)?;
     let creds: HashMap<String, Option<Credentials>> = [(prefix, None)].into();
-    let repo =
-        Repository::create(Some(config), storage, creds, Some(SpecVersionBin::V2), true)
-            .await?;
+    let repo = Repository::create(
+        Some(config),
+        storage,
+        creds,
+        Some(SpecVersionBin::V2),
+        true,
+        None,
+    )
+    .await?;
 
     let mut ds = repo.writable_session("main").await?;
     let path: Path = "/a".try_into().unwrap();

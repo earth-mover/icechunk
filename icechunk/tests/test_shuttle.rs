@@ -87,7 +87,7 @@ async fn mk_commit(
 async fn mk_concurrent_commits_same_branch() -> Result<(), Box<dyn Error + Send + Sync>> {
     let storage = new_in_memory_storage().await?;
     let repo = Arc::new(
-        Repository::create(None, storage, Default::default(), None, false).await?,
+        Repository::create(None, storage, Default::default(), None, false, None).await?,
     );
 
     let mut session = repo.writable_session("main").await?;
@@ -353,7 +353,7 @@ async fn execute_concurrent_actions(
         (0..actions.len()).map(|i| format!("branch-{i}")).collect();
     let storage = new_in_memory_storage().await?;
     let repo = Arc::new(
-        Repository::create(None, storage, Default::default(), None, false).await?,
+        Repository::create(None, storage, Default::default(), None, false, None).await?,
     );
 
     let mut session = repo.writable_session("main").await?;

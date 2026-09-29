@@ -10,7 +10,7 @@ use std::{
 
 use async_trait::async_trait;
 use aws_config::{
-    AppName, BehaviorVersion, meta::region::RegionProviderChain, retry::RetryConfig,
+    BehaviorVersion, meta::region::RegionProviderChain, retry::RetryConfig,
     timeout::TimeoutConfig,
 };
 use aws_credential_types::provider::error::CredentialsError;
@@ -45,9 +45,9 @@ pub use icechunk_storage::s3_config::{
 };
 use icechunk_storage::{
     DeleteObjectsResult, GetModifiedResult, ListInfo, RepositoryCreation, Settings,
-    Storage, StorageError, StorageErrorKind, StorageInfo, StorageResult, VersionInfo,
-    VersionedUpdateResult, obj_not_found_res, obj_store_error, obj_store_error_res,
-    other_error,
+    Storage, StorageContext, StorageError, StorageErrorKind, StorageInfo, StorageResult,
+    VersionInfo, VersionedUpdateResult, obj_not_found_res, obj_store_error,
+    obj_store_error_res, other_error,
     readback::{
         ReadbackOutcome, WRITE_ID_METADATA_KEY, resolve_lost_response,
         resolve_precondition, write_id_for,
@@ -173,6 +173,44 @@ impl Intercept for ExtraHeadersInterceptor {
     }
 }
 
+/// Appends the icechunk attribution fragment to the `user-agent` the SDK
+/// built. It runs after the SDK's client-level `UserAgentInterceptor`,
+/// so the fragment lands after the SDK tokens.
+#[derive(Debug)]
+struct AttributionInterceptor {
+    fragment: String,
+}
+
+impl Intercept for AttributionInterceptor {
+    fn name(&self) -> &'static str {
+        "IcechunkAttribution"
+    }
+
+    fn modify_before_signing(
+        &self,
+        context: &mut BeforeTransmitInterceptorContextMut<'_>,
+        _runtime_components: &RuntimeComponents,
+        _cfg: &mut ConfigBag,
+    ) -> Result<(), BoxError> {
+        let headers = context.request_mut().headers_mut();
+        let ua = match headers.get("user-agent") {
+            Some(current) => format!("{current} {}", self.fragment),
+            None => self.fragment.clone(),
+        };
+        headers.try_insert("user-agent", ua)?;
+        Ok(())
+    }
+}
+
+/// Per-request config that appends `fragment` to the SDK's `user-agent`.
+pub fn attribution_override_for(fragment: String) -> Builder {
+    Builder::new().interceptor(AttributionInterceptor { fragment })
+}
+
+fn attribution_override(ctx: &StorageContext<'_>) -> Builder {
+    attribution_override_for(ctx.attribution.user_agent_fragment())
+}
+
 /// Strips `x-amz-checksum-*` headers from HTTP 304 (Not Modified) responses.
 ///
 /// R2 includes checksum headers (e.g. crc32, crc64nvme) on 304 responses, but
@@ -247,11 +285,8 @@ pub async fn mk_client(
         region
     };
 
-    #[expect(clippy::unwrap_used)]
-    let app_name = AppName::new(icechunk_types::user_agent()).unwrap();
-    let mut aws_config = aws_config::defaults(BehaviorVersion::v2026_01_12())
-        .region(region)
-        .app_name(app_name);
+    let mut aws_config =
+        aws_config::defaults(BehaviorVersion::v2026_01_12()).region(region);
 
     if let Some(endpoint) = endpoint {
         aws_config = aws_config.endpoint_url(endpoint);
@@ -582,12 +617,12 @@ impl S3Storage {
     /// Lists the keys that start with `key_prefix`. Ids are relative to `id_root`.
     async fn list_keys(
         &self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         key_prefix: String,
         id_root: String,
     ) -> BoxStream<'static, StorageResult<ListInfo<String>>> {
         let mut req = self
-            .get_client(settings)
+            .get_client(ctx.settings)
             .await
             .list_objects_v2()
             .bucket(self.bucket.clone())
@@ -597,6 +632,8 @@ impl S3Storage {
             req = req.request_payer(aws_sdk_s3::types::RequestPayer::Requester);
         }
 
+        // FIXME: The SDK paginator drops per-request config, so listings carry no
+        // attribution fragment.
         req.into_paginator()
             .send()
             .into_stream_03x()
@@ -611,8 +648,8 @@ impl S3Storage {
     }
 
     /// Resolve this repository's [`KeyLayout`], probing storage at most once.
-    async fn layout(&self, settings: &Settings) -> StorageResult<KeyLayout> {
-        self.key_layout.get_or_try_init(|| self.probe_layout(settings)).await.copied()
+    async fn layout(&self, ctx: &StorageContext<'_>) -> StorageResult<KeyLayout> {
+        self.key_layout.get_or_try_init(|| self.probe_layout(ctx)).await.copied()
     }
 
     /// Detect the key layout of the repository.
@@ -621,7 +658,7 @@ impl S3Storage {
     /// prefix can never produce a leading slash, so the layout is unambiguously
     /// [`KeyLayout::Standard`]. The probe HEADs a few fixed anchor files under
     /// both layouts.
-    async fn probe_layout(&self, settings: &Settings) -> StorageResult<KeyLayout> {
+    async fn probe_layout(&self, ctx: &StorageContext<'_>) -> StorageResult<KeyLayout> {
         if !self.prefix.is_empty() {
             // the legacy bug only triggered on empty prefixes
             return Ok(KeyLayout::Standard);
@@ -636,8 +673,8 @@ impl S3Storage {
             let rooted_key = self.key_for(KeyLayout::LegacyRoot, anchor);
             async move {
                 let (clean, rooted) = futures::future::try_join(
-                    self.head_etag(settings, &clean_key),
-                    self.head_etag(settings, &rooted_key),
+                    self.head_etag(ctx, &clean_key),
+                    self.head_etag(ctx, &rooted_key),
                 )
                 .await?;
                 Ok::<_, StorageError>(AnchorProbe { clean, rooted })
@@ -657,11 +694,11 @@ impl S3Storage {
     /// as `"x"`.
     async fn head_etag(
         &self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         key: &str,
     ) -> StorageResult<Option<String>> {
         let mut req = self
-            .get_client(settings)
+            .get_client(ctx.settings)
             .await
             .head_object()
             .bucket(self.bucket.clone())
@@ -669,7 +706,7 @@ impl S3Storage {
         if self.config.requester_pays {
             req = req.request_payer(aws_sdk_s3::types::RequestPayer::Requester);
         }
-        match req.send().await {
+        match req.customize().config_override(attribution_override(ctx)).send().await {
             Ok(out) => Ok(Some(out.e_tag().unwrap_or_default().to_string())),
             Err(sdk_err) => {
                 let absent = sdk_err.as_service_error().is_some_and(|e| e.is_not_found())
@@ -685,7 +722,7 @@ impl S3Storage {
         I: IntoIterator<Item = (impl Into<String>, impl Into<String>)>,
     >(
         &self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         key: &str,
         bytes: Bytes,
         content_type: Option<impl Into<String>>,
@@ -693,7 +730,7 @@ impl S3Storage {
         previous_version: Option<&VersionInfo>,
     ) -> StorageResult<VersionedUpdateResult> {
         let mut req = self
-            .get_client(settings)
+            .get_client(ctx.settings)
             .await
             .put_object()
             .bucket(self.bucket.clone())
@@ -704,7 +741,7 @@ impl S3Storage {
             req = req.checksum_algorithm(to_sdk_checksum(algo));
         }
 
-        if settings.unsafe_use_metadata() {
+        if ctx.settings.unsafe_use_metadata() {
             if let Some(ct) = content_type {
                 req = req.content_type(ct);
             };
@@ -714,12 +751,12 @@ impl S3Storage {
             }
         }
 
-        if let Some(klass) = settings.storage_class() {
+        if let Some(klass) = ctx.settings.storage_class() {
             let klass = klass.as_str().into();
             req = req.storage_class(klass);
         }
 
-        let conditional_applied = match conditional_for(previous_version, settings) {
+        let conditional_applied = match conditional_for(previous_version, ctx.settings) {
             Some(Conditional::IfNoneMatch) => {
                 req = req.if_none_match("*");
                 true
@@ -731,12 +768,12 @@ impl S3Storage {
             None => false,
         };
 
-        let write_id = write_id_for(settings, conditional_applied, next_write_id);
+        let write_id = write_id_for(ctx.settings, conditional_applied, next_write_id);
         if let Some(id) = write_id.as_deref() {
             req = req.metadata(WRITE_ID_METADATA_KEY, id);
         }
 
-        match req.send().await {
+        match req.customize().config_override(attribution_override(ctx)).send().await {
             Ok(out) => {
                 let new_etag = out
                     .e_tag()
@@ -749,7 +786,7 @@ impl S3Storage {
             Err(SdkError::ServiceError(err)) => {
                 let code = err.err().meta().code().unwrap_or_default();
                 if is_precondition_code(code) {
-                    self.recover_precondition(settings, key, write_id.as_deref()).await
+                    self.recover_precondition(ctx, key, write_id.as_deref()).await
                 } else {
                     obj_store_error_res(SdkError::<PutObjectError>::ServiceError(err))
                 }
@@ -759,7 +796,7 @@ impl S3Storage {
                 let status = err.raw().status().as_u16();
                 // see https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutObject.html#API_PutObject_RequestSyntax
                 if status == 409 || status == 412 {
-                    self.recover_precondition(settings, key, write_id.as_deref()).await
+                    self.recover_precondition(ctx, key, write_id.as_deref()).await
                 } else {
                     obj_store_error_res(SdkError::<PutObjectError>::ResponseError(err))
                 }
@@ -772,7 +809,7 @@ impl S3Storage {
         I: IntoIterator<Item = (impl Into<String>, impl Into<String>)>,
     >(
         &self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         key: &str,
         bytes: &Bytes,
         content_type: Option<impl Into<String>>,
@@ -780,7 +817,7 @@ impl S3Storage {
         previous_version: Option<&VersionInfo>,
     ) -> StorageResult<VersionedUpdateResult> {
         let mut multi = self
-            .get_client(settings)
+            .get_client(ctx.settings)
             .await
             .create_multipart_upload()
             // We would like this, but it fails in MinIO
@@ -791,10 +828,11 @@ impl S3Storage {
 
         // Write-id rides as metadata on `create_multipart_upload`, so decide
         // here whether the later `complete` will carry a condition.
-        let will_apply_condition = conditional_for(previous_version, settings).is_some();
-        let write_id = write_id_for(settings, will_apply_condition, next_write_id);
+        let will_apply_condition =
+            conditional_for(previous_version, ctx.settings).is_some();
+        let write_id = write_id_for(ctx.settings, will_apply_condition, next_write_id);
 
-        if settings.unsafe_use_metadata() {
+        if ctx.settings.unsafe_use_metadata() {
             if let Some(ct) = content_type {
                 multi = multi.content_type(ct);
             };
@@ -806,12 +844,17 @@ impl S3Storage {
             }
         }
 
-        if let Some(klass) = settings.storage_class() {
+        if let Some(klass) = ctx.settings.storage_class() {
             let klass = klass.as_str().into();
             multi = multi.storage_class(klass);
         }
 
-        let create_res = multi.send().await.capture_box()?;
+        let create_res = multi
+            .customize()
+            .config_override(attribution_override(ctx))
+            .send()
+            .await
+            .capture_box()?;
         let upload_id = create_res.upload_id().ok_or(other_error(
             "No upload_id in create multipart upload result".to_string(),
         ))?;
@@ -820,8 +863,8 @@ impl S3Storage {
         // smaller. This is a requirement for R2 compatibility
         let parts = split_in_multiple_equal_requests(
             &(0..bytes.len() as u64),
-            settings.concurrency().ideal_concurrent_request_size().get(),
-            settings.concurrency().max_concurrent_requests_for_object().get(),
+            ctx.settings.concurrency().ideal_concurrent_request_size().get(),
+            ctx.settings.concurrency().max_concurrent_requests_for_object().get(),
         )
         .collect::<Vec<_>>();
 
@@ -832,7 +875,7 @@ impl S3Storage {
                 let body = bytes.slice(range.start as usize..range.end as usize).into();
                 let idx = part_idx as i32 + 1;
                 let mut req = self
-                    .get_client(settings)
+                    .get_client(ctx.settings)
                     .await
                     .upload_part()
                     .upload_id(upload_id)
@@ -845,7 +888,11 @@ impl S3Storage {
                     req = req.checksum_algorithm(to_sdk_checksum(algo));
                 }
 
-                req.send().await.map(|res| (idx, res))
+                req.customize()
+                    .config_override(attribution_override(ctx))
+                    .send()
+                    .await
+                    .map(|res| (idx, res))
             })
             .collect::<FuturesOrdered<_>>();
 
@@ -865,7 +912,7 @@ impl S3Storage {
             CompletedMultipartUpload::builder().set_parts(Some(completed_parts)).build();
 
         let mut req = self
-            .get_client(settings)
+            .get_client(ctx.settings)
             .await
             .complete_multipart_upload()
             .bucket(self.bucket.clone())
@@ -874,13 +921,13 @@ impl S3Storage {
             //.checksum_type(aws_sdk_s3::types::ChecksumType::FullObject)
             .multipart_upload(completed_parts);
 
-        match conditional_for(previous_version, settings) {
+        match conditional_for(previous_version, ctx.settings) {
             Some(Conditional::IfNoneMatch) => req = req.if_none_match("*"),
             Some(Conditional::IfMatch(etag)) => req = req.if_match(strip_quotes(etag)),
             None => {}
         }
 
-        match req.send().await {
+        match req.customize().config_override(attribution_override(ctx)).send().await {
             Ok(out) => {
                 let new_etag = out
                     .e_tag()
@@ -894,10 +941,10 @@ impl S3Storage {
                 // `NoSuchUpload` = SDK-retried complete after a lost response,
                 // or a failed upload; readback tells them apart.
                 if is_precondition_code(code) {
-                    self.recover_precondition(settings, key, write_id.as_deref()).await
+                    self.recover_precondition(ctx, key, write_id.as_deref()).await
                 } else if code == "NoSuchUpload" {
                     self.recover_lost_response(
-                        settings,
+                        ctx,
                         key,
                         write_id.as_deref(),
                         obj_store_error(SdkError::ServiceError(err)),
@@ -910,11 +957,11 @@ impl S3Storage {
             Err(SdkError::ResponseError(err)) => {
                 let status = err.raw().status().as_u16();
                 if status == 409 || status == 412 {
-                    self.recover_precondition(settings, key, write_id.as_deref()).await
+                    self.recover_precondition(ctx, key, write_id.as_deref()).await
                 } else if status == 404 {
                     // NoSuchUpload surfaced as a raw HTTP status.
                     self.recover_lost_response(
-                        settings,
+                        ctx,
                         key,
                         write_id.as_deref(),
                         obj_store_error(SdkError::<PutObjectError>::ResponseError(err)),
@@ -932,25 +979,23 @@ impl S3Storage {
     /// 409/412 status).
     async fn recover_precondition(
         &self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         key: &str,
         write_id: Option<&str>,
     ) -> StorageResult<VersionedUpdateResult> {
-        let outcome =
-            self.read_back_after_conditional_failure(settings, key, write_id).await;
+        let outcome = self.read_back_after_conditional_failure(ctx, key, write_id).await;
         resolve_precondition(outcome, key)
     }
 
     /// Readback + resolve for a failure only our own landed write can rescue.
     async fn recover_lost_response(
         &self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         key: &str,
         write_id: Option<&str>,
         original: StorageError,
     ) -> StorageResult<VersionedUpdateResult> {
-        let outcome =
-            self.read_back_after_conditional_failure(settings, key, write_id).await;
+        let outcome = self.read_back_after_conditional_failure(ctx, key, write_id).await;
         resolve_lost_response(outcome, key, original)
     }
 
@@ -958,13 +1003,13 @@ impl S3Storage {
     /// failure.
     async fn read_back_after_conditional_failure(
         &self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         key: &str,
         write_id: Option<&str>,
     ) -> StorageResult<ReadbackOutcome> {
         let Some(write_id) = write_id else { return Ok(ReadbackOutcome::NotOurs) };
         let mut head = self
-            .get_client(settings)
+            .get_client(ctx.settings)
             .await
             .head_object()
             .bucket(self.bucket.clone())
@@ -972,7 +1017,12 @@ impl S3Storage {
         if self.config.requester_pays {
             head = head.request_payer(aws_sdk_s3::types::RequestPayer::Requester);
         }
-        let (stored_write_id, version) = match head.send().await {
+        let (stored_write_id, version) = match head
+            .customize()
+            .config_override(attribution_override(ctx))
+            .send()
+            .await
+        {
             Ok(out) => (
                 out.metadata().and_then(|m| m.get(WRITE_ID_METADATA_KEY)).cloned(),
                 // S3 has no generation; etag is the only version identity.
@@ -1030,18 +1080,18 @@ impl Storage for S3Storage {
 
     async fn put_object(
         &self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         path: &str,
         bytes: Bytes,
         content_type: Option<&str>,
         metadata: Vec<(String, String)>,
         previous_version: Option<&VersionInfo>,
     ) -> StorageResult<VersionedUpdateResult> {
-        let layout = self.layout(settings).await?;
+        let layout = self.layout(ctx).await?;
         let path = self.key_for(layout, path);
-        if bytes.len() >= settings.minimum_size_for_multipart_upload() as usize {
+        if bytes.len() >= ctx.settings.minimum_size_for_multipart_upload() as usize {
             self.put_object_multipart(
-                settings,
+                ctx,
                 path.as_str(),
                 &bytes,
                 content_type,
@@ -1051,7 +1101,7 @@ impl Storage for S3Storage {
             .await
         } else {
             self.put_object_single(
-                settings,
+                ctx,
                 path.as_str(),
                 bytes,
                 content_type,
@@ -1064,28 +1114,28 @@ impl Storage for S3Storage {
 
     async fn copy_object(
         &self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         from: &str,
         to: &str,
         content_type: Option<&str>,
         version: &VersionInfo,
     ) -> StorageResult<VersionedUpdateResult> {
-        let layout = self.layout(settings).await?;
+        let layout = self.layout(ctx).await?;
         let from = format!("{}/{}", self.bucket, self.key_for(layout, from));
         let to = self.key_for(layout, to);
         let mut req = self
-            .get_client(settings)
+            .get_client(ctx.settings)
             .await
             .copy_object()
             .bucket(self.bucket.clone())
             .key(to)
             .copy_source(from);
-        if settings.unsafe_use_conditional_update()
+        if ctx.settings.unsafe_use_conditional_update()
             && let Some(etag) = version.etag()
         {
             req = req.copy_source_if_match(strip_quotes(etag));
         }
-        if let Some(klass) = settings.storage_class() {
+        if let Some(klass) = ctx.settings.storage_class() {
             let klass = klass.as_str().into();
             req = req.storage_class(klass);
         }
@@ -1095,7 +1145,7 @@ impl Storage for S3Storage {
         if self.config.requester_pays {
             req = req.request_payer(aws_sdk_s3::types::RequestPayer::Requester);
         }
-        match req.send().await {
+        match req.customize().config_override(attribution_override(ctx)).send().await {
             Ok(_) => Ok(VersionedUpdateResult::Updated { new_version: version.clone() }),
             Err(SdkError::ServiceError(err)) => {
                 let code = err.err().meta().code().unwrap_or_default();
@@ -1136,25 +1186,25 @@ impl Storage for S3Storage {
         }
     }
 
-    #[instrument(skip(self, settings))]
+    #[instrument(skip(self, ctx))]
     async fn list_objects<'a>(
         &'a self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         prefix: &str,
     ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
-        let layout = self.layout(settings).await?;
+        let layout = self.layout(ctx).await?;
         let prefix = self.list_prefix(layout, prefix);
-        Ok(self.list_keys(settings, prefix.clone(), prefix).await)
+        Ok(self.list_keys(ctx, prefix.clone(), prefix).await)
     }
 
-    #[instrument(skip(self, settings, id_prefixes))]
+    #[instrument(skip(self, ctx, id_prefixes))]
     async fn list_objects_with_id_prefixes<'a>(
         &'a self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         prefix: &str,
         id_prefixes: &[String],
     ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
-        let layout = self.layout(settings).await?;
+        let layout = self.layout(ctx).await?;
         let prefix = self.list_prefix(layout, prefix);
         let mut listings = Vec::with_capacity(id_prefixes.len());
         for id_prefix in id_prefixes {
@@ -1163,7 +1213,7 @@ impl Storage for S3Storage {
             } else {
                 format!("{prefix}/{id_prefix}")
             };
-            listings.push(self.list_keys(settings, key_prefix, prefix.clone()).await);
+            listings.push(self.list_keys(ctx, key_prefix, prefix.clone()).await);
         }
         Ok(stream::select_all(listings).boxed())
     }
@@ -1172,10 +1222,10 @@ impl Storage for S3Storage {
         true
     }
 
-    #[instrument(skip(self, batch))]
+    #[instrument(skip(self, ctx, batch))]
     async fn delete_batch(
         &self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         prefix: &str,
         batch: Vec<(String, u64)>,
     ) -> StorageResult<DeleteObjectsResult> {
@@ -1187,7 +1237,7 @@ impl Storage for S3Storage {
             }
         }
 
-        let layout = self.layout(settings).await?;
+        let layout = self.layout(ctx).await?;
         let mut sizes = HashMap::new();
         let mut ids = Vec::new();
         for (id, size) in batch.into_iter() {
@@ -1205,7 +1255,7 @@ impl Storage for S3Storage {
             .map_err(|e| other_error(e.to_string()))?;
 
         let mut req = self
-            .get_client(settings)
+            .get_client(ctx.settings)
             .await
             .delete_objects()
             .bucket(self.bucket.clone())
@@ -1222,7 +1272,12 @@ impl Storage for S3Storage {
         // A throttle gets its own kind, so the caller can back off instead of
         // counting it as a failure. The SDK has already retried it `max_tries`
         // times with its own backoff by then.
-        let res = match req.send().await {
+        let res = match req
+            .customize()
+            .config_override(attribution_override(ctx))
+            .send()
+            .await
+        {
             Ok(res) => res,
             Err(SdkError::ServiceError(err)) => {
                 use aws_sdk_s3::operation::RequestId as _;
@@ -1280,16 +1335,16 @@ impl Storage for S3Storage {
         Ok(result)
     }
 
-    #[instrument(skip(self, settings))]
+    #[instrument(skip(self, ctx))]
     async fn get_object_last_modified(
         &self,
+        ctx: &StorageContext<'_>,
         path: &str,
-        settings: &Settings,
     ) -> StorageResult<DateTime<Utc>> {
-        let layout = self.layout(settings).await?;
+        let layout = self.layout(ctx).await?;
         let key = self.key_for(layout, path);
         let mut req = self
-            .get_client(settings)
+            .get_client(ctx.settings)
             .await
             .head_object()
             .bucket(self.bucket.clone())
@@ -1299,7 +1354,12 @@ impl Storage for S3Storage {
             req = req.request_payer(aws_sdk_s3::types::RequestPayer::Requester);
         }
 
-        let res = req.send().await.capture_box()?;
+        let res = req
+            .customize()
+            .config_override(attribution_override(ctx))
+            .send()
+            .await
+            .capture_box()?;
 
         let res = res
             .last_modified
@@ -1311,17 +1371,14 @@ impl Storage for S3Storage {
         Ok(res)
     }
 
-    #[instrument(skip(self, settings))]
+    #[instrument(skip(self, ctx))]
     async fn get_object_conditional(
         &self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         path: &str,
         previous_version: Option<&VersionInfo>,
     ) -> StorageResult<GetModifiedResult> {
-        match self
-            .get_object_range_conditional(settings, path, None, previous_version)
-            .await
-        {
+        match self.get_object_range_conditional(ctx, path, None, previous_version).await {
             Ok(Some((stream, new_version))) => {
                 let reader = StreamReader::new(stream.map_err(std::io::Error::other));
                 Ok(GetModifiedResult::Modified { data: Box::pin(reader), new_version })
@@ -1333,14 +1390,14 @@ impl Storage for S3Storage {
 
     async fn get_object_range(
         &self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         path: &str,
         range: Option<&Range<u64>>,
     ) -> StorageResult<(
         Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>,
         VersionInfo,
     )> {
-        self.get_object_range_conditional(settings, path, range, None).await.map(|v| {
+        self.get_object_range_conditional(ctx, path, range, None).await.map(|v| {
             // If we got a result, then we can unwrap safely here:
             // Errors would be in the other branch, and None is only expected
             // if previous_version was passed in function call, but we set it to None
@@ -1353,7 +1410,7 @@ impl Storage for S3Storage {
 impl S3Storage {
     async fn get_object_range_conditional(
         &self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         path: &str,
         range: Option<&Range<u64>>,
         previous_version: Option<&VersionInfo>,
@@ -1363,8 +1420,8 @@ impl S3Storage {
             VersionInfo,
         )>,
     > {
-        let layout = self.layout(settings).await?;
-        let client = self.get_client(settings).await;
+        let layout = self.layout(ctx).await?;
+        let client = self.get_client(ctx.settings).await;
         let bucket = self.bucket.clone();
         let key = self.key_for(layout, path);
 
@@ -1384,7 +1441,7 @@ impl S3Storage {
             req = req.if_none_match(strip_quotes(etag));
         };
 
-        match req.send().await {
+        match req.customize().config_override(attribution_override(ctx)).send().await {
             Ok(output) => match output.e_tag {
                 Some(etag) => {
                     let stream = stream2stream(output.body)

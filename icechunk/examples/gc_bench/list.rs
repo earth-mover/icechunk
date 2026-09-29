@@ -18,7 +18,9 @@ use icechunk::{
     asset_manager::AssetManager,
     format::format_constants::SpecVersionBin,
     repository::RepositoryResult,
-    storage::{ListInfo, Settings, StorageResult, metering::MeteringStorage},
+    storage::{
+        ListInfo, Settings, StorageContext, StorageResult, metering::MeteringStorage,
+    },
 };
 
 use crate::{
@@ -91,7 +93,8 @@ async fn run_single(
     let started = Instant::now();
     let outcome = tokio::time::timeout(Duration::from_secs(args.duration_secs), async {
         let prefix = format!("{}/", args.kind.prefix());
-        let stream = metering.list_objects(settings, &prefix).await?;
+        let ctx = StorageContext::unattributed(settings);
+        let stream = metering.list_objects(&ctx, &prefix).await?;
         drain(stream, &counters, args.max_keys).await?;
         Ok::<(), BoxError>(())
     })

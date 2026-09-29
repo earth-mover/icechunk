@@ -28,6 +28,7 @@ use bytes::Bytes;
 use thiserror::Error;
 
 use crate::ICError;
+use crate::attribution::{AttributionLabels, RequestAttribution, UNATTRIBUTED_LABELS};
 use crate::sealed;
 
 /// Storage operation error types.
@@ -412,6 +413,36 @@ impl Settings {
     }
 }
 
+/// Everything a [`Storage`] implementation needs to know about the calling
+/// context of a single operation.
+#[derive(Debug, Clone, Copy)]
+pub struct StorageContext<'a> {
+    pub settings: &'a Settings,
+    pub attribution: RequestAttribution<'a>,
+}
+
+impl<'a> StorageContext<'a> {
+    pub fn new(settings: &'a Settings, attribution: RequestAttribution<'a>) -> Self {
+        Self { settings, attribution }
+    }
+
+    /// A context for a request that is not about any node.
+    pub fn without_node(settings: &'a Settings, labels: &'a AttributionLabels) -> Self {
+        Self::new(settings, RequestAttribution::without_node(labels))
+    }
+
+    /// A context for code that drives a [`Storage`] directly, with no
+    /// repository behind it: tests, examples, and tools that list or inspect
+    /// a bucket. Requests carry only the icechunk product token.
+    ///
+    /// Anything that goes through a repository has labels and must use the
+    /// asset manager's `storage_context` or [`StorageContext::without_node`]
+    /// instead, so that no repository request goes out unattributed.
+    pub fn unattributed(settings: &'a Settings) -> Self {
+        Self::without_node(settings, &UNATTRIBUTED_LABELS)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VersionedUpdateResult {
     Updated { new_version: VersionInfo },
@@ -536,31 +567,31 @@ pub trait Storage: fmt::Debug + Display + sealed::Sealed + Sync + Send {
 
     async fn get_object(
         &self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         path: &str,
         range: Option<&Range<u64>>,
     ) -> StorageResult<(Pin<Box<dyn AsyncBufRead + Send>>, VersionInfo)> {
         if let Some(range) = range {
-            self.get_object_concurrently(settings, path, range).await
+            self.get_object_concurrently(ctx, path, range).await
         } else {
-            self.get_object_range_read(settings, path, range).await
+            self.get_object_range_read(ctx, path, range).await
         }
     }
 
     async fn get_object_range_read(
         &self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         path: &str,
         range: Option<&Range<u64>>,
     ) -> StorageResult<(Pin<Box<dyn AsyncBufRead + Send>>, VersionInfo)> {
-        let (stream, version) = self.get_object_range(settings, path, range).await?;
+        let (stream, version) = self.get_object_range(ctx, path, range).await?;
         let reader = StreamReader::new(stream.map_err(std::io::Error::other));
         Ok((Box::pin(reader), version))
     }
 
     async fn get_object_range(
         &self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         path: &str,
         range: Option<&Range<u64>>,
     ) -> StorageResult<(
@@ -570,7 +601,7 @@ pub trait Storage: fmt::Debug + Display + sealed::Sealed + Sync + Send {
 
     async fn put_object(
         &self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         path: &str,
         bytes: Bytes,
         content_type: Option<&str>,
@@ -580,7 +611,7 @@ pub trait Storage: fmt::Debug + Display + sealed::Sealed + Sync + Send {
 
     async fn copy_object(
         &self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         from: &str,
         to: &str,
         content_type: Option<&str>,
@@ -593,7 +624,7 @@ pub trait Storage: fmt::Debug + Display + sealed::Sealed + Sync + Send {
     /// Pass an empty prefix to list all objects in the repository's storage root.
     async fn list_objects<'a>(
         &'a self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         prefix: &str,
     ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>>;
 
@@ -601,14 +632,11 @@ pub trait Storage: fmt::Debug + Display + sealed::Sealed + Sync + Send {
     /// Unordered. Override to list each prefix concurrently; the default filters.
     async fn list_objects_with_id_prefixes<'a>(
         &'a self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         prefix: &str,
         id_prefixes: &[String],
     ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
-        Ok(filter_ids_by_id_prefix(
-            self.list_objects(settings, prefix).await?,
-            id_prefixes,
-        ))
+        Ok(filter_ids_by_id_prefix(self.list_objects(ctx, prefix).await?, id_prefixes))
     }
 
     /// Whether `list_objects_with_id_prefixes` lists each prefix on the server
@@ -619,20 +647,20 @@ pub trait Storage: fmt::Debug + Display + sealed::Sealed + Sync + Send {
 
     async fn delete_batch(
         &self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         prefix: &str,
         batch: Vec<(String, u64)>,
     ) -> StorageResult<DeleteObjectsResult>;
 
     async fn get_object_last_modified(
         &self,
+        ctx: &StorageContext<'_>,
         path: &str,
-        settings: &Settings,
     ) -> StorageResult<DateTime<Utc>>;
 
     async fn get_object_conditional(
         &self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         path: &str,
         previous_version: Option<&VersionInfo>,
     ) -> StorageResult<GetModifiedResult>;
@@ -643,10 +671,10 @@ pub trait Storage: fmt::Debug + Display + sealed::Sealed + Sync + Send {
     // swallowed (the result under-counts silently). Migrations and ref
     // deletion still use this method and should move to the new
     // style using listing.rs
-    #[instrument(skip(self, settings, ids))]
+    #[instrument(skip(self, ctx, ids))]
     async fn delete_objects(
         &self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         prefix: &str,
         ids: BoxStream<'_, (String, u64)>,
     ) -> StorageResult<DeleteObjectsResult> {
@@ -657,7 +685,7 @@ pub trait Storage: fmt::Debug + Display + sealed::Sealed + Sync + Send {
                 let res = Arc::clone(&res);
                 async move {
                     let new_deletes = self
-                        .delete_batch(settings, prefix, batch)
+                        .delete_batch(ctx, prefix, batch)
                         .await
                         .unwrap_or_else(|_| {
                             // FIXME: handle error instead of skipping
@@ -674,8 +702,8 @@ pub trait Storage: fmt::Debug + Display + sealed::Sealed + Sync + Send {
         Ok(res.clone())
     }
 
-    async fn root_is_clean(&self, settings: &Settings) -> StorageResult<bool> {
-        match self.list_objects(settings, "").await {
+    async fn root_is_clean(&self, ctx: &StorageContext<'_>) -> StorageResult<bool> {
+        match self.list_objects(ctx, "").await {
             Ok(mut stream) => match stream.next().await {
                 None => Ok(true),
                 Some(Ok(_)) => Ok(false),
@@ -688,24 +716,18 @@ pub trait Storage: fmt::Debug + Display + sealed::Sealed + Sync + Send {
 
     async fn get_object_concurrently_multiple(
         &self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         key: &str,
         parts: Vec<Range<u64>>,
     ) -> StorageResult<(Pin<Box<dyn AsyncBufRead + Send>>, VersionInfo)> {
-        let settings2 = settings.clone();
-        let key2 = key.to_string();
+        let ctx = *ctx;
         let results = parts
             .into_iter()
-            .map(move |range| {
-                let key = key2.clone();
-                let settings = settings2.clone();
-                async move {
-                    let (stream, version) = self
-                        .get_object_range(&settings, key.as_ref(), Some(&range))
-                        .await?;
-                    let all_bytes: Vec<_> = stream.try_collect().await?;
-                    Ok::<_, StorageError>((all_bytes, version))
-                }
+            .map(move |range| async move {
+                let (stream, version) =
+                    self.get_object_range(&ctx, key, Some(&range)).await?;
+                let all_bytes: Vec<_> = stream.try_collect().await?;
+                Ok::<_, StorageError>((all_bytes, version))
             })
             .collect::<FuturesOrdered<_>>();
 
@@ -727,21 +749,21 @@ pub trait Storage: fmt::Debug + Display + sealed::Sealed + Sync + Send {
 
     async fn get_object_concurrently(
         &self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         key: &str,
         range: &Range<u64>,
     ) -> StorageResult<(Pin<Box<dyn AsyncBufRead + Send>>, VersionInfo)> {
         let parts = split_in_multiple_requests(
             range,
-            settings.concurrency().ideal_concurrent_request_size().get(),
-            settings.concurrency().max_concurrent_requests_for_object().get(),
+            ctx.settings.concurrency().ideal_concurrent_request_size().get(),
+            ctx.settings.concurrency().max_concurrent_requests_for_object().get(),
         )
         .collect::<Vec<_>>();
 
         let res: (Pin<Box<dyn AsyncBufRead + Send>>, VersionInfo) = match parts.len() {
             0 => (Box::pin(tokio::io::empty()), VersionInfo::for_creation()),
-            1 => self.get_object_range_read(settings, key, Some(range)).await?,
-            _ => self.get_object_concurrently_multiple(settings, key, parts).await?,
+            1 => self.get_object_range_read(ctx, key, Some(range)).await?,
+            _ => self.get_object_concurrently_multiple(ctx, key, parts).await?,
         };
         Ok(res)
     }

@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     DeleteObjectsResult, GetModifiedResult, ListInfo, RepositoryCreation, Settings,
-    Storage, StorageError, StorageInfo, StorageResult, VersionInfo,
+    Storage, StorageContext, StorageError, StorageInfo, StorageResult, VersionInfo,
     VersionedUpdateResult,
 };
 use icechunk_storage::sealed;
@@ -81,7 +81,7 @@ impl Storage for LoggingStorage {
 
     async fn put_object(
         &self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         path: &str,
         bytes: Bytes,
         content_type: Option<&str>,
@@ -93,13 +93,13 @@ impl Storage for LoggingStorage {
             .expect("poison lock")
             .push(("put_object".to_string(), path.to_string()));
         self.backend
-            .put_object(settings, path, bytes, content_type, metadata, previous_version)
+            .put_object(ctx, path, bytes, content_type, metadata, previous_version)
             .await
     }
 
     async fn copy_object(
         &self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         from: &str,
         to: &str,
         content_type: Option<&str>,
@@ -109,24 +109,24 @@ impl Storage for LoggingStorage {
             .lock()
             .expect("poison lock")
             .push(("copy_object".to_string(), format!("{from} -> {to}")));
-        self.backend.copy_object(settings, from, to, content_type, version).await
+        self.backend.copy_object(ctx, from, to, content_type, version).await
     }
 
     async fn list_objects<'a>(
         &'a self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         prefix: &str,
     ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
         self.fetch_log
             .lock()
             .expect("poison lock")
             .push(("list_objects".to_string(), prefix.to_string()));
-        self.backend.list_objects(settings, prefix).await
+        self.backend.list_objects(ctx, prefix).await
     }
 
     async fn list_objects_with_id_prefixes<'a>(
         &'a self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         prefix: &str,
         id_prefixes: &[String],
     ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
@@ -134,7 +134,7 @@ impl Storage for LoggingStorage {
             .lock()
             .expect("poison lock")
             .push(("list_objects_with_id_prefixes".to_string(), prefix.to_string()));
-        self.backend.list_objects_with_id_prefixes(settings, prefix, id_prefixes).await
+        self.backend.list_objects_with_id_prefixes(ctx, prefix, id_prefixes).await
     }
 
     fn lists_id_prefixes_natively(&self) -> bool {
@@ -144,7 +144,7 @@ impl Storage for LoggingStorage {
 
     async fn delete_batch(
         &self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         prefix: &str,
         batch: Vec<(String, u64)>,
     ) -> StorageResult<DeleteObjectsResult> {
@@ -152,33 +152,33 @@ impl Storage for LoggingStorage {
             .lock()
             .expect("poison lock")
             .push(("delete_batch".to_string(), prefix.to_string()));
-        self.backend.delete_batch(settings, prefix, batch).await
+        self.backend.delete_batch(ctx, prefix, batch).await
     }
 
     async fn get_object_last_modified(
         &self,
+        ctx: &StorageContext<'_>,
         path: &str,
-        settings: &Settings,
     ) -> StorageResult<DateTime<Utc>> {
         self.fetch_log
             .lock()
             .expect("poison lock")
             .push(("get_object_last_modified".to_string(), path.to_string()));
-        self.backend.get_object_last_modified(path, settings).await
+        self.backend.get_object_last_modified(ctx, path).await
     }
 
     async fn get_object_conditional(
         &self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         path: &str,
         previous_version: Option<&VersionInfo>,
     ) -> StorageResult<GetModifiedResult> {
-        self.backend.get_object_conditional(settings, path, previous_version).await
+        self.backend.get_object_conditional(ctx, path, previous_version).await
     }
 
     async fn get_object_range(
         &self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         path: &str,
         range: Option<&Range<u64>>,
     ) -> StorageResult<(
@@ -189,6 +189,6 @@ impl Storage for LoggingStorage {
             .lock()
             .expect("poison lock")
             .push(("get_object_range".to_string(), path.to_string()));
-        self.backend.get_object_range(settings, path, range).await
+        self.backend.get_object_range(ctx, path, range).await
     }
 }

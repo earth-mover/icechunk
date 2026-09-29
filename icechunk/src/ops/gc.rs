@@ -961,8 +961,11 @@ mod tests {
             .await?;
         for i in 0..4u32 {
             // above the inline threshold, so each chunk is its own object
-            let payload =
-                session.get_chunk_writer()?(Bytes::from(vec![i as u8; 1024])).await?;
+            let payload = session
+                .get_chunk_writer(&array_path, &ChunkIndices(vec![i]))?(
+                Bytes::from(vec![i as u8; 1024]),
+            )
+            .await?;
             session
                 .set_chunk_ref(array_path.clone(), ChunkIndices(vec![i]), Some(payload))
                 .await?;

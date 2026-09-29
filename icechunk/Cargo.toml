@@ -107,6 +107,7 @@ tracing-chrome.workspace = true
 tracing-samply.workspace = true
 uuid.workspace = true
 warp.workspace = true
+wiremock.workspace = true
 shuttle.workspace = true
 
 [lints]

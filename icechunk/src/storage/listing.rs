@@ -27,7 +27,7 @@ use crate::{
     Storage,
     format::{OBJECT_ID_ONE_CHAR_PREFIXES, OBJECT_ID_TWO_CHAR_PREFIXES},
     repository::RepositoryResult,
-    storage::{self, ListInfo},
+    storage::{self, AttributionLabels, ListInfo, StorageContext},
 };
 
 /// About ten listing streams keep one core busy parsing responses, so the
@@ -57,7 +57,7 @@ static PROBE_ID_PREFIX: LazyLock<&'static [String]> =
 /// Dropping the result stream drops all tasks.
 pub(crate) async fn list_object_ids<'a, Id>(
     storage: &'a Arc<dyn Storage + Send + Sync>,
-    settings: &'a storage::Settings,
+    ctx: &StorageContext<'_>,
     prefix: &str,
     concurrency: NonZeroU16,
 ) -> RepositoryResult<BoxStream<'a, RepositoryResult<ListInfo<Id>>>>
@@ -66,12 +66,12 @@ where
 {
     if !storage.lists_id_prefixes_natively() {
         // one pass over the prefix; fanning out would repeat the full listing
-        let stream = storage.list_objects(settings, prefix).await.inject()?;
+        let stream = storage.list_objects(ctx, prefix).await.inject()?;
         return Ok(translate_list_infos(stream.map(|r| r.inject())));
     }
 
     let probe = storage
-        .list_objects_with_id_prefixes(settings, prefix, *PROBE_ID_PREFIX)
+        .list_objects_with_id_prefixes(ctx, prefix, *PROBE_ID_PREFIX)
         .await
         .inject()?;
     let probed = probe
@@ -93,7 +93,8 @@ where
     );
 
     let storage = Arc::clone(storage);
-    let settings = settings.clone();
+    let settings = ctx.settings.clone();
+    let labels = ctx.attribution.labels.clone();
     let prefix = prefix.to_string();
 
     let workers_n = (concurrency.get() as usize).min(prefixes.len());
@@ -105,6 +106,7 @@ where
         workers.spawn(list_prefixes_worker(
             Arc::clone(&storage),
             settings.clone(),
+            labels.clone(),
             prefix.clone(),
             prefixes,
             Arc::clone(&next),
@@ -178,6 +180,7 @@ enum ListEvent<T> {
 async fn list_prefixes_worker<Id>(
     storage: Arc<dyn Storage + Send + Sync>,
     settings: storage::Settings,
+    labels: AttributionLabels,
     prefix: String,
     prefixes: &'static [String],
     next: Arc<AtomicUsize>,
@@ -186,11 +189,12 @@ async fn list_prefixes_worker<Id>(
 where
     Id: for<'b> TryFrom<&'b str> + Send + std::fmt::Debug + 'static,
 {
+    let ctx = StorageContext::without_node(&settings, &labels);
     loop {
         let i = next.fetch_add(1, Ordering::Relaxed);
         let Some(id_prefix) = prefixes.get(i..=i) else { return Ok(()) };
         let stream = storage
-            .list_objects_with_id_prefixes(&settings, &prefix, id_prefix)
+            .list_objects_with_id_prefixes(&ctx, &prefix, id_prefix)
             .await
             .inject()?;
         // the backend yields a whole page at once, so `ready_chunks` groups by page
@@ -239,10 +243,16 @@ mod tests {
         n: usize,
         two_char: bool,
     ) -> Arc<AssetManager> {
-        let repo =
-            Repository::create(None, Arc::clone(backend), Default::default(), None, true)
-                .await
-                .unwrap();
+        let repo = Repository::create(
+            None,
+            Arc::clone(backend),
+            Default::default(),
+            None,
+            true,
+            None,
+        )
+        .await
+        .unwrap();
         let am = Arc::clone(repo.asset_manager());
         for _ in 0..n {
             let mut id = ChunkId::random();
@@ -254,7 +264,7 @@ mod tests {
             } else {
                 id.0[0] &= 0x07;
             }
-            am.write_chunk(id, Bytes::new()).await.unwrap();
+            am.write_chunk("a", &[0], id, Bytes::new()).await.unwrap();
         }
         am
     }

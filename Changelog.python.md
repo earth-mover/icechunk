@@ -2,6 +2,17 @@
 
 ## Python Icechunk Library [unreleased]
 
+### Features
+
+- Requests icechunk makes to the object store now identify themselves in the `User-Agent` header: the product token is `icechunk/<version>`,
+chunk requests add `array=<path>; chunk=<coords>` and manifest requests add `array=<path>`. `Repository.create`, `open` and
+`open_or_create` accept `attribution=Attribution(client=..., workload=..., principal=...)` to add caller labels to every request
+([#1799](https://github.com/earth-mover/icechunk/issues/1799), [#1153](https://github.com/earth-mover/icechunk/issues/1153)). With `Attribution(client="weatherlib/0.9", workload="nightly-ingest", principal="u_123")`, a chunk read on S3 sends:
+
+  ```
+  aws-sdk-rust/1.3.14 os/linux lang/rust/1.98.0 weatherlib/0.9 icechunk/2.3.0 (workload=nightly-ingest; principal=u_123; array=g/temperature; chunk=0/1/2)
+  ```
+
 ### Fixes
 
 - `storage_class`, `metadata_storage_class` and `chunks_storage_class` now apply to the `object_store` backends — `gcs_storage`, `azure_storage` and `s3_object_store_storage`. The value is passed to the provider unchanged, so use its own names ([#904](https://github.com/earth-mover/icechunk/issues/904), [#2364](https://github.com/earth-mover/icechunk/issues/2364)).

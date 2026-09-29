@@ -314,7 +314,8 @@ impl Store {
             Key::Chunk { node_path, coords } => {
                 match locked_session {
                     Some(session) => {
-                        let writer = session.get_chunk_writer().inject()?;
+                        let writer =
+                            session.get_chunk_writer(&node_path, &coords).inject()?;
                         let payload = writer(value).await.inject()?;
                         session
                             .set_chunk_ref(node_path, coords, Some(payload))
@@ -323,8 +324,12 @@ impl Store {
                     }
                     None => {
                         // we only lock the repository to get the writer
-                        let writer =
-                            self.session.read().await.get_chunk_writer().inject()?;
+                        let writer = self
+                            .session
+                            .read()
+                            .await
+                            .get_chunk_writer(&node_path, &coords)
+                            .inject()?;
                         // then we can write the bytes without holding the lock
                         let payload = writer(value).await.inject()?;
                         // and finally we lock for write and update the reference
@@ -1513,7 +1518,7 @@ mod tests {
     ) -> Repository {
         let storage =
             new_in_memory_storage().await.expect("failed to create in-memory store");
-        Repository::create(None, storage, HashMap::new(), spec_version, true)
+        Repository::create(None, storage, HashMap::new(), spec_version, true, None)
             .await
             .unwrap()
     }
@@ -2928,8 +2933,9 @@ mod tests {
                 .expect("could not create storage"),
         );
 
-        let repo =
-            Repository::create(None, storage, HashMap::new(), None, true).await.unwrap();
+        let repo = Repository::create(None, storage, HashMap::new(), None, true, None)
+            .await
+            .unwrap();
         let ds = Arc::new(RwLock::new(repo.writable_session("main").await.unwrap()));
         let store = Store::from_session(Arc::clone(&ds)).await;
         store

@@ -349,7 +349,8 @@ pub(crate) async fn setup_repo(
         auth.insert(url_prefix, cred);
     }
 
-    let repository = Repository::create(Some(config), storage, auth, None, false).await?;
+    let repository =
+        Repository::create(Some(config), storage, auth, None, false, None).await?;
 
     let mut session = repository.writable_session("main").await?;
 
@@ -381,7 +382,10 @@ pub(crate) async fn set_chunks(
         ChunkKind::Inline => {
             let bytes = Bytes::copy_from_slice(&42i8.to_be_bytes());
             for idx in chunks {
-                let payload = session.get_chunk_writer().unwrap()(bytes.clone()).await?;
+                let payload = session
+                    .get_chunk_writer(&path, &ChunkIndices(vec![idx]))
+                    .unwrap()(bytes.clone())
+                .await?;
                 session
                     .set_chunk_ref(path.clone(), ChunkIndices(vec![idx]), Some(payload))
                     .await?;
@@ -389,7 +393,9 @@ pub(crate) async fn set_chunks(
         }
         ChunkKind::Native => {
             let bytes = Bytes::from(vec![42u8; CHUNK_SIZE_BYTES as usize]);
-            let payload = session.get_chunk_writer().unwrap()(bytes).await?;
+            // one object shared by every chunk: attribute it to the first
+            let first = ChunkIndices(vec![chunks.start]);
+            let payload = session.get_chunk_writer(&path, &first).unwrap()(bytes).await?;
             for idx in chunks {
                 session
                     .set_chunk_ref(

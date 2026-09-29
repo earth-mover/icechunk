@@ -61,6 +61,7 @@ pub mod virtual_chunks;
 
 pub use config::{ObjectStoreConfig, RepositoryConfig};
 pub use repository::Repository;
+pub use storage::Attribution;
 #[cfg(feature = "object-store-fs")]
 pub use storage::new_local_filesystem_storage;
 #[cfg(feature = "object-store-s3")]
@@ -71,6 +72,7 @@ pub use storage::{ObjectStorage, Storage, StorageError, new_in_memory_storage};
 pub use store::Store;
 
 pub use icechunk_types::user_agent;
+pub use icechunk_types::user_agent_product;
 
 #[cfg(test)]
 pub(crate) mod test_utils {
@@ -107,6 +109,7 @@ pub(crate) mod test_utils {
             HashMap::new(),
             Some(SpecVersionBin::V2),
             true,
+            None,
         )
         .await?;
         for i in 0..5u32 {

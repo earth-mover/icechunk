@@ -82,7 +82,8 @@ async fn do_test_concurrency(
         ..Default::default()
     };
     let repo =
-        Repository::create(Some(config), storage, HashMap::new(), None, true).await?;
+        Repository::create(Some(config), storage, HashMap::new(), None, true, None)
+            .await?;
 
     let mut ds = repo.writable_session("main").await?;
 
@@ -138,7 +139,8 @@ async fn write_task(
 
     let payload = {
         let guard = ds.read().await;
-        let writer = guard.get_chunk_writer()?;
+        let writer = guard
+            .get_chunk_writer(&"/array".try_into().unwrap(), &ChunkIndices(vec![x, y]))?;
         writer(bytes).await.expect("Failed to write chunk")
     };
 

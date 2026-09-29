@@ -1,4 +1,5 @@
 from icechunk._icechunk_python import (
+    Attribution,
     CachingConfig,
     CompressionAlgorithm,
     CompressionConfig,
@@ -18,6 +19,7 @@ from icechunk._icechunk_python import (
 )
 
 __all__ = [
+    "Attribution",
     "CachingConfig",
     "CompressionAlgorithm",
     "CompressionConfig",

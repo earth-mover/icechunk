@@ -19,7 +19,7 @@ use icechunk::{
     asset_manager::AssetManager,
     config::{S3Credentials, S3Options, S3StaticCredentials},
     format::{ChunkId, format_constants::SpecVersionBin},
-    storage::{RetriesSettings, S3Storage, TimeoutSettings},
+    storage::{RetriesSettings, S3Storage, StorageContext, TimeoutSettings},
 };
 use noxious_client::{Client, StreamDirection, Toxic, ToxicKind};
 
@@ -123,11 +123,11 @@ async fn write_and_verify_chunk(
 ) -> Result<(ChunkId, Bytes), Box<dyn std::error::Error>> {
     let chunk_id = ChunkId::random();
     let test_data = Bytes::from(vec![42u8; 50 * 1024]); // 50KB
-    manager.write_chunk(chunk_id.clone(), test_data.clone()).await?;
+    manager.write_chunk("a", &[0], chunk_id.clone(), test_data.clone()).await?;
     println!("Wrote {} bytes", test_data.len());
 
     let range = 0..test_data.len() as u64;
-    let read_data = manager.fetch_chunk(&chunk_id, &range).await?;
+    let read_data = manager.fetch_chunk("a", &[0], &chunk_id, &range).await?;
     assert_eq!(test_data.len(), read_data.len());
     println!("Read without toxics completed successfully");
 
@@ -211,7 +211,7 @@ async fn test_stalled_stream() -> Result<(), Box<dyn std::error::Error>> {
     client.proxy(&name).await?.add_toxic(&toxic2).await?;
 
     println!("Reading with slowdown (expecting minimum throughput error)...");
-    let result = manager.fetch_chunk(&chunk_id, &range).await;
+    let result = manager.fetch_chunk("a", &[0], &chunk_id, &range).await;
 
     let err = result.expect_err("Should have failed with minimum throughput error");
     assert!(format!("{err:?}").contains("ThroughputBelowMinimum"));
@@ -220,7 +220,7 @@ async fn test_stalled_stream() -> Result<(), Box<dyn std::error::Error>> {
     // The retry logic should eventually succeed once the toxics are removed.
     let grab_data = {
         println!("Fetching chunk again");
-        manager.fetch_chunk(&chunk_id, &range)
+        manager.fetch_chunk("a", &[0], &chunk_id, &range)
     };
     let remove_toxics = async {
         // Wait for a couple of retries before removing toxics
@@ -256,7 +256,7 @@ async fn test_connection_reset() -> Result<(), Box<dyn std::error::Error>> {
 
     // With the toxic active persistently, fetch must fail
     println!("Reading with reset_peer toxic (expecting connection error)...");
-    let result = manager.fetch_chunk(&chunk_id, &range).await;
+    let result = manager.fetch_chunk("a", &[0], &chunk_id, &range).await;
 
     match &result {
         Ok(_) => println!("WARNING: Read succeeded despite reset_peer toxic!"),
@@ -272,7 +272,7 @@ async fn test_connection_reset() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     let pname = proxy_name.clone();
-    let grab_data = manager.fetch_chunk(&chunk_id, &range);
+    let grab_data = manager.fetch_chunk("a", &[0], &chunk_id, &range);
     let remove_toxic_task = async {
         tokio::time::sleep(Duration::from_secs(1)).await;
         println!("Removing reset_peer toxic");
@@ -436,8 +436,8 @@ where
     // arming the toxic, so the byte budget is spent on the trigger path
     // (PUT responses) and not on cold-start traffic.
     let warmup_settings = storage.default_settings().await?;
-    let _: Vec<_> =
-        storage.list_objects(&warmup_settings, "").await?.try_collect().await?;
+    let warmup_ctx = StorageContext::unattributed(&warmup_settings);
+    let _: Vec<_> = storage.list_objects(&warmup_ctx, "").await?.try_collect().await?;
     install_limit_data_toxic(proxy_label, LOST_RESPONSE_TOXIC_NAME, toxic_bytes).await?;
 
     let removal_proxy = proxy_name.clone();
@@ -480,14 +480,16 @@ async fn conditional_put_repro(
                 std::collections::HashMap::new(),
                 Some(SpecVersionBin::default()),
                 false,
+                None,
             )
             .await;
 
             toxic_remover.await??;
 
             let list_settings = storage_for_list.default_settings().await?;
+            let list_ctx = StorageContext::unattributed(&list_settings);
             let keys: Vec<String> = storage_for_list
-                .list_objects(&list_settings, "")
+                .list_objects(&list_ctx, "")
                 .await?
                 .map_ok(|li| li.id)
                 .try_collect()
@@ -565,9 +567,10 @@ async fn zero_byte_conditional_put_lost_response()
         80,
         50,
         |storage, settings, toxic_remover| async move {
+            let ctx = StorageContext::unattributed(&settings);
             let result = storage
                 .put_object(
-                    &settings,
+                    &ctx,
                     "zero-byte-test",
                     Bytes::new(),
                     None,

@@ -757,8 +757,11 @@ mod tests {
         for round in 0..rounds {
             let mut session = repo.writable_session("main").await?;
             for i in 0..8u32 {
-                let payload =
-                    session.get_chunk_writer()?(Bytes::from(vec![round; 64])).await?;
+                let payload = session
+                    .get_chunk_writer(&array_path, &ChunkIndices(vec![i]))?(
+                    Bytes::from(vec![round; 64]),
+                )
+                .await?;
                 session
                     .set_chunk_ref(
                         array_path.clone(),
@@ -1070,7 +1073,7 @@ mod tests {
             }
             backend
                 .put_object(
-                    repo.storage_settings(),
+                    &repo.storage_context(),
                     &format!("{MANIFESTS_FILE_PATH}/{}", info.id),
                     legacy.into(),
                     None,

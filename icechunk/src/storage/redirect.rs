@@ -29,7 +29,7 @@ use icechunk_types::ICResultExt as _;
 
 use super::{
     DeleteObjectsResult, GetModifiedResult, ListInfo, RepositoryCreation, Settings,
-    Storage, StorageError, StorageInfo, StorageResult, VersionInfo,
+    Storage, StorageContext, StorageError, StorageInfo, StorageResult, VersionInfo,
     VersionedUpdateResult,
 };
 
@@ -335,19 +335,19 @@ impl Storage for RedirectStorage {
 
     async fn get_object_range(
         &self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         path: &str,
         range: Option<&Range<u64>>,
     ) -> StorageResult<(
         Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>,
         VersionInfo,
     )> {
-        self.backend().await?.get_object_range(settings, path, range).await
+        self.backend().await?.get_object_range(ctx, path, range).await
     }
 
     async fn put_object(
         &self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         path: &str,
         bytes: Bytes,
         content_type: Option<&str>,
@@ -356,38 +356,38 @@ impl Storage for RedirectStorage {
     ) -> StorageResult<VersionedUpdateResult> {
         self.backend()
             .await?
-            .put_object(settings, path, bytes, content_type, metadata, previous_version)
+            .put_object(ctx, path, bytes, content_type, metadata, previous_version)
             .await
     }
 
     async fn copy_object(
         &self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         from: &str,
         to: &str,
         content_type: Option<&str>,
         version: &VersionInfo,
     ) -> StorageResult<VersionedUpdateResult> {
-        self.backend().await?.copy_object(settings, from, to, content_type, version).await
+        self.backend().await?.copy_object(ctx, from, to, content_type, version).await
     }
 
     async fn list_objects<'a>(
         &'a self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         prefix: &str,
     ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
-        self.backend().await?.list_objects(settings, prefix).await
+        self.backend().await?.list_objects(ctx, prefix).await
     }
 
     async fn list_objects_with_id_prefixes<'a>(
         &'a self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         prefix: &str,
         id_prefixes: &[String],
     ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
         self.backend()
             .await?
-            .list_objects_with_id_prefixes(settings, prefix, id_prefixes)
+            .list_objects_with_id_prefixes(ctx, prefix, id_prefixes)
             .await
     }
 
@@ -399,31 +399,28 @@ impl Storage for RedirectStorage {
 
     async fn delete_batch(
         &self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         prefix: &str,
         batch: Vec<(String, u64)>,
     ) -> StorageResult<DeleteObjectsResult> {
-        self.backend().await?.delete_batch(settings, prefix, batch).await
+        self.backend().await?.delete_batch(ctx, prefix, batch).await
     }
 
     async fn get_object_last_modified(
         &self,
+        ctx: &StorageContext<'_>,
         path: &str,
-        settings: &Settings,
     ) -> StorageResult<DateTime<Utc>> {
-        self.backend().await?.get_object_last_modified(path, settings).await
+        self.backend().await?.get_object_last_modified(ctx, path).await
     }
 
     async fn get_object_conditional(
         &self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         path: &str,
         previous_version: Option<&VersionInfo>,
     ) -> StorageResult<GetModifiedResult> {
-        self.backend()
-            .await?
-            .get_object_conditional(settings, path, previous_version)
-            .await
+        self.backend().await?.get_object_conditional(ctx, path, previous_version).await
     }
 }
 

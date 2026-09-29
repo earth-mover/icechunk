@@ -42,7 +42,7 @@ async fn open(name: &str, net: &NetArgs) -> Result<Opened, BoxError> {
     let metering = Arc::new(MeteringStorage::new(backend));
     let as_storage: Arc<dyn Storage + Send + Sync> =
         Arc::<MeteringStorage>::clone(&metering);
-    let repo = Repository::open(None, as_storage, HashMap::new()).await?;
+    let repo = Repository::open(None, as_storage, HashMap::new(), None).await?;
     Ok(Opened {
         am: Arc::clone(repo.asset_manager()),
         metering,

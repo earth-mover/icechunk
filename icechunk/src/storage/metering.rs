@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     DeleteObjectsResult, GetModifiedResult, ListInfo, RepositoryCreation, Settings,
-    Storage, StorageError, StorageInfo, StorageResult, VersionInfo,
+    Storage, StorageContext, StorageError, StorageInfo, StorageResult, VersionInfo,
     VersionedUpdateResult,
 };
 use icechunk_storage::sealed;
@@ -182,7 +182,7 @@ impl Storage for MeteringStorage {
 
     async fn put_object(
         &self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         path: &str,
         bytes: Bytes,
         content_type: Option<&str>,
@@ -193,7 +193,7 @@ impl Storage for MeteringStorage {
         let written = bytes.len() as u64;
         let result = self
             .backend
-            .put_object(settings, path, bytes, content_type, metadata, previous_version)
+            .put_object(ctx, path, bytes, content_type, metadata, previous_version)
             .await;
         if result.is_ok() {
             self.meter.written("put_object", written);
@@ -203,23 +203,23 @@ impl Storage for MeteringStorage {
 
     async fn copy_object(
         &self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         from: &str,
         to: &str,
         content_type: Option<&str>,
         version: &VersionInfo,
     ) -> StorageResult<VersionedUpdateResult> {
         self.meter.request("copy_object");
-        self.backend.copy_object(settings, from, to, content_type, version).await
+        self.backend.copy_object(ctx, from, to, content_type, version).await
     }
 
     async fn list_objects<'a>(
         &'a self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         prefix: &str,
     ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
         self.meter.request("list_objects");
-        let stream = self.backend.list_objects(settings, prefix).await?;
+        let stream = self.backend.list_objects(ctx, prefix).await?;
         let meter = Arc::clone(&self.meter);
         Ok(stream
             .inspect(move |item| {
@@ -232,15 +232,13 @@ impl Storage for MeteringStorage {
 
     async fn list_objects_with_id_prefixes<'a>(
         &'a self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         prefix: &str,
         id_prefixes: &[String],
     ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
         self.meter.request("list_objects_with_id_prefixes");
-        let stream = self
-            .backend
-            .list_objects_with_id_prefixes(settings, prefix, id_prefixes)
-            .await?;
+        let stream =
+            self.backend.list_objects_with_id_prefixes(ctx, prefix, id_prefixes).await?;
         let meter = Arc::clone(&self.meter);
         Ok(stream
             .inspect(move |item| {
@@ -257,40 +255,40 @@ impl Storage for MeteringStorage {
 
     async fn delete_batch(
         &self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         prefix: &str,
         batch: Vec<(String, u64)>,
     ) -> StorageResult<DeleteObjectsResult> {
         self.meter.request("delete_batch");
         // count what the backend reports deleted, not what we asked it to
         // delete: a batch can come back `Ok` with per-key failures inside
-        let result = self.backend.delete_batch(settings, prefix, batch).await?;
+        let result = self.backend.delete_batch(ctx, prefix, batch).await?;
         self.meter.deleted("delete_batch", result.deleted_objects);
         Ok(result)
     }
 
     async fn get_object_last_modified(
         &self,
+        ctx: &StorageContext<'_>,
         path: &str,
-        settings: &Settings,
     ) -> StorageResult<DateTime<Utc>> {
         self.meter.request("get_object_last_modified");
-        self.backend.get_object_last_modified(path, settings).await
+        self.backend.get_object_last_modified(ctx, path).await
     }
 
     async fn get_object_conditional(
         &self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         path: &str,
         previous_version: Option<&VersionInfo>,
     ) -> StorageResult<GetModifiedResult> {
         self.meter.request("get_object_conditional");
-        self.backend.get_object_conditional(settings, path, previous_version).await
+        self.backend.get_object_conditional(ctx, path, previous_version).await
     }
 
     async fn get_object_range(
         &self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         path: &str,
         range: Option<&Range<u64>>,
     ) -> StorageResult<(
@@ -298,8 +296,7 @@ impl Storage for MeteringStorage {
         VersionInfo,
     )> {
         self.meter.request("get_object_range");
-        let (stream, version) =
-            self.backend.get_object_range(settings, path, range).await?;
+        let (stream, version) = self.backend.get_object_range(ctx, path, range).await?;
         let meter = Arc::clone(&self.meter);
         let stream = stream.inspect(move |item| {
             if let Ok(bytes) = item {
@@ -323,30 +320,19 @@ mod tests {
         let backend = new_in_memory_storage().await.unwrap();
         let storage = MeteringStorage::new(backend);
         let settings = storage.default_settings().await.unwrap();
+        let ctx = StorageContext::unattributed(&settings);
 
         storage
-            .put_object(
-                &settings,
-                "a/b",
-                Bytes::from_static(b"hello"),
-                None,
-                vec![],
-                None,
-            )
+            .put_object(&ctx, "a/b", Bytes::from_static(b"hello"), None, vec![], None)
             .await
             .unwrap();
-        let (stream, _) = storage.get_object_range(&settings, "a/b", None).await.unwrap();
+        let (stream, _) = storage.get_object_range(&ctx, "a/b", None).await.unwrap();
         let chunks: Vec<Bytes> = stream.try_collect().await.unwrap();
         assert_eq!(chunks.concat(), b"hello");
-        let listed: Vec<_> = storage
-            .list_objects(&settings, "")
-            .await
-            .unwrap()
-            .try_collect()
-            .await
-            .unwrap();
+        let listed: Vec<_> =
+            storage.list_objects(&ctx, "").await.unwrap().try_collect().await.unwrap();
         assert_eq!(listed.len(), 1);
-        storage.delete_batch(&settings, "a", vec![("b".to_string(), 5)]).await.unwrap();
+        storage.delete_batch(&ctx, "a", vec![("b".to_string(), 5)]).await.unwrap();
 
         let report = storage.snapshot();
         let put = report.per_op["put_object"];

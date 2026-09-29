@@ -84,7 +84,10 @@ use crate::{
         },
     },
     private,
-    storage::{self, split_in_multiple_requests, strip_quotes},
+    storage::{
+        self, AttributionLabels, RequestAttribution, split_in_multiple_requests,
+        strip_quotes,
+    },
 };
 #[cfg(feature = "s3")]
 use icechunk_s3::{mk_client, range_to_header};
@@ -274,6 +277,7 @@ pub trait ChunkFetcher: std::fmt::Debug + private::Sealed + Send + Sync {
         key: &str,
         range: Range<ChunkOffset>,
         checksum: Option<&Checksum>,
+        attribution: RequestAttribution<'_>,
     ) -> Result<Box<dyn Buf + Unpin + Send>, VirtualReferenceError>;
 
     async fn fetch_chunk(
@@ -282,13 +286,14 @@ pub trait ChunkFetcher: std::fmt::Debug + private::Sealed + Send + Sync {
         key: &str,
         range: &Range<ChunkOffset>,
         checksum: Option<&Checksum>,
+        attribution: RequestAttribution<'_>,
     ) -> Result<Bytes, VirtualReferenceError> {
         let results = split_in_multiple_requests(
             range,
             self.ideal_concurrent_request_size().get(),
             self.max_concurrent_requests_for_object().get(),
         )
-        .map(|range| self.fetch_part(chunk_location, key, range, checksum))
+        .map(|range| self.fetch_part(chunk_location, key, range, checksum, attribution))
         .collect::<FuturesOrdered<_>>();
 
         let init: Box<dyn Buf + Unpin + Send> = Box::new(&[][..]);
@@ -347,6 +352,7 @@ pub trait HttpVirtualChunkFetcher: std::fmt::Debug + Send + Sync {
         range: &Range<ChunkOffset>,
         checksum: Option<&Checksum>,
         config: &crate::config::HttpConfig,
+        user_agent: &str,
     ) -> Result<HttpVirtualChunkResponse, VirtualReferenceError>;
 }
 
@@ -361,6 +367,8 @@ pub struct VirtualChunkResolver {
     fetchers: ChunkFetcherCache,
     #[serde(skip)]
     http_fetcher: Option<Arc<dyn HttpVirtualChunkFetcher>>,
+    #[serde(default)]
+    attribution_labels: AttributionLabels,
 }
 
 fn new_cache() -> ChunkFetcherCache {
@@ -409,7 +417,17 @@ impl VirtualChunkResolver {
             settings,
             fetchers: new_cache(),
             http_fetcher: None,
+            attribution_labels: AttributionLabels::default(),
         }
+    }
+
+    pub fn with_attribution(mut self, labels: AttributionLabels) -> Self {
+        self.attribution_labels = labels;
+        self
+    }
+
+    pub fn attribution_labels(&self) -> &AttributionLabels {
+        &self.attribution_labels
     }
 
     /// Attach a runtime HTTP transport while preserving container authorization.
@@ -421,6 +439,7 @@ impl VirtualChunkResolver {
             settings: self.settings.clone(),
             fetchers: new_cache(),
             http_fetcher: Some(fetcher),
+            attribution_labels: self.attribution_labels.clone(),
         }
     }
 
@@ -506,6 +525,7 @@ impl VirtualChunkResolver {
         chunk_location: &str,
         range: &Range<ChunkOffset>,
         checksum: Option<&Checksum>,
+        attribution: RequestAttribution<'_>,
     ) -> Result<Bytes, VirtualReferenceError> {
         let location = self.expand_location(chunk_location)?;
 
@@ -545,7 +565,15 @@ impl VirtualChunkResolver {
                     "invalid virtual chunk byte range".into(),
                 ))
             })?;
-            let response = fetcher.fetch(url.as_str(), range, checksum, config).await?;
+            let response = fetcher
+                .fetch(
+                    url.as_str(),
+                    range,
+                    checksum,
+                    config,
+                    &attribution.user_agent_fragment(),
+                )
+                .await?;
             let valid = match checksum {
                 Some(Checksum::ETag(etag)) => response
                     .etag
@@ -573,7 +601,7 @@ impl VirtualChunkResolver {
         }
         let key = resolved_object_key(&location)?;
         let fetcher = self.get_fetcher(&url).await?;
-        fetcher.fetch_chunk(&url, &key, range, checksum).await
+        fetcher.fetch_chunk(&url, &key, range, checksum, attribution).await
     }
 
     /// Validate that a virtual chunk location can be written: a container must
@@ -1044,6 +1072,7 @@ impl ChunkFetcher for S3Fetcher {
         key: &str,
         range: Range<ChunkOffset>,
         checksum: Option<&Checksum>,
+        attribution: RequestAttribution<'_>,
     ) -> Result<Box<dyn Buf + Unpin + Send>, VirtualReferenceError> {
         let bucket_name = if let Some(host) = chunk_location.host_str() {
             urlencoding::decode(host).capture()?.into_owned()
@@ -1080,6 +1109,10 @@ impl ChunkFetcher for S3Fetcher {
         };
 
         let res = b
+            .customize()
+            .config_override(icechunk_s3::attribution_override_for(
+                attribution.user_agent_fragment(),
+            ))
             .send()
             .await
             .map_err(|e| match e {
@@ -1299,10 +1332,16 @@ impl ChunkFetcher for ObjectStoreFetcher {
         key: &str,
         range: Range<ChunkOffset>,
         checksum: Option<&Checksum>,
+        attribution: RequestAttribution<'_>,
     ) -> Result<Box<dyn Buf + Unpin + Send>, VirtualReferenceError> {
         let usize_range = range.start..range.end;
-        let mut options =
-            GetOptions { range: Some(usize_range.into()), ..Default::default() };
+        let mut options = GetOptions {
+            range: Some(usize_range.into()),
+            extensions: icechunk_arrow_object_store::attribution::extensions_for(
+                attribution.user_agent_fragment(),
+            ),
+            ..Default::default()
+        };
 
         match checksum {
             Some(Checksum::LastModified(SecondsSinceEpoch(seconds))) => {
@@ -1367,6 +1406,7 @@ mod tests {
         format::manifest::{
             VirtualChunkLocation, VirtualReferenceError, VirtualReferenceErrorKind,
         },
+        storage::{RequestAttribution, UNATTRIBUTED_LABELS},
         virtual_chunks::{VirtualChunkContainer, VirtualChunkResolver},
     };
 
@@ -1592,7 +1632,14 @@ mod tests {
         );
 
         let path = "file:///example/foo.nc";
-        let res = resolver.fetch_chunk(path, &(0..100), None).await;
+        let res = resolver
+            .fetch_chunk(
+                path,
+                &(0..100),
+                None,
+                RequestAttribution::without_node(&UNATTRIBUTED_LABELS),
+            )
+            .await;
         assert!(matches!(
             res,
             Err(VirtualReferenceError {
@@ -1617,7 +1664,14 @@ mod tests {
         );
 
         let path = "file:///example/foo.nc";
-        let res = resolver.fetch_chunk(path, &(0..100), None).await;
+        let res = resolver
+            .fetch_chunk(
+                path,
+                &(0..100),
+                None,
+                RequestAttribution::without_node(&UNATTRIBUTED_LABELS),
+            )
+            .await;
         assert!(matches!(
             res,
             Err(VirtualReferenceError {
@@ -1644,7 +1698,14 @@ mod tests {
         );
 
         let path = "file:///example/foo.nc";
-        let res = resolver.fetch_chunk(path, &(0..100), None).await;
+        let res = resolver
+            .fetch_chunk(
+                path,
+                &(0..100),
+                None,
+                RequestAttribution::without_node(&UNATTRIBUTED_LABELS),
+            )
+            .await;
         assert!(matches!(
             res,
             Err(VirtualReferenceError {
@@ -1856,7 +1917,12 @@ mod http_callback_tests {
     use super::*;
     use crate::config::HttpConfig;
     use crate::storage::ETag;
+    use crate::storage::UNATTRIBUTED_LABELS;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    fn without_node() -> RequestAttribution<'static> {
+        RequestAttribution::without_node(&UNATTRIBUTED_LABELS)
+    }
 
     #[derive(Debug)]
     struct Fetcher {
@@ -1873,9 +1939,11 @@ mod http_callback_tests {
             range: &Range<ChunkOffset>,
             _checksum: Option<&Checksum>,
             _config: &HttpConfig,
+            user_agent: &str,
         ) -> Result<HttpVirtualChunkResponse, VirtualReferenceError> {
             assert_eq!(url, "https://example.com/tiles/a.tif");
             assert_eq!(range, &(4..8));
+            assert_eq!(user_agent, without_node().user_agent_fragment());
             self.calls.fetch_add(1, Ordering::SeqCst);
             Ok(HttpVirtualChunkResponse {
                 data: self.bytes.clone(),
@@ -1927,6 +1995,7 @@ mod http_callback_tests {
                 "vcc://tiles/a.tif",
                 &(4..8),
                 Some(&Checksum::ETag(ETag("v1".into()))),
+                without_node(),
             )
             .await
             .unwrap();
@@ -1937,9 +2006,14 @@ mod http_callback_tests {
     async fn rejects_unauthorized_and_outside_prefix_without_fetching() {
         let (r, calls) = resolver(false, b"abcd", None, None);
         assert!(
-            r.fetch_chunk("https://example.com/tiles/a.tif", &(4..8), None)
-                .await
-                .is_err()
+            r.fetch_chunk(
+                "https://example.com/tiles/a.tif",
+                &(4..8),
+                None,
+                without_node()
+            )
+            .await
+            .is_err()
         );
         assert_eq!(calls.load(Ordering::SeqCst), 0);
         let (r, calls) = resolver(true, b"abcd", None, None);
@@ -1947,7 +2021,7 @@ mod http_callback_tests {
             "https://example.com/tiles-other/a.tif",
             "https://example.com/tiles/../a.tif",
         ] {
-            assert!(r.fetch_chunk(url, &(4..8), None).await.is_err());
+            assert!(r.fetch_chunk(url, &(4..8), None, without_node()).await.is_err());
         }
         assert_eq!(calls.load(Ordering::SeqCst), 0);
     }
@@ -1957,17 +2031,25 @@ mod http_callback_tests {
         let etag = Checksum::ETag(ETag("v1".into()));
         for value in [None, Some("v2")] {
             let (r, _) = resolver(true, b"abcd", value, None);
-            assert!(r.fetch_chunk(url, &(4..8), Some(&etag)).await.is_err());
+            assert!(
+                r.fetch_chunk(url, &(4..8), Some(&etag), without_node()).await.is_err()
+            );
         }
         let (r, _) = resolver(true, b"abc", None, None);
-        assert!(r.fetch_chunk(url, &(4..8), None).await.is_err());
+        assert!(r.fetch_chunk(url, &(4..8), None, without_node()).await.is_err());
         let modified = Checksum::LastModified(SecondsSinceEpoch(100));
         for value in [None, Some(101)] {
             let (r, _) = resolver(true, b"abcd", None, value);
-            assert!(r.fetch_chunk(url, &(4..8), Some(&modified)).await.is_err());
+            assert!(
+                r.fetch_chunk(url, &(4..8), Some(&modified), without_node())
+                    .await
+                    .is_err()
+            );
         }
         let (r, _) = resolver(true, b"abcd", None, Some(99));
-        assert!(r.fetch_chunk(url, &(4..8), Some(&modified)).await.is_ok());
+        assert!(
+            r.fetch_chunk(url, &(4..8), Some(&modified), without_node()).await.is_ok()
+        );
     }
     #[test]
     fn http_config_deserializes_without_native_networking() {
