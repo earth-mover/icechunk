@@ -241,13 +241,11 @@ async fn do_migrate(
     info!(version=?new_version_info, "Written repository info file");
 
     info!("Opening migrated repo");
-    let Ok(migrated) = Repository::open(
-        Some(repo.config().clone()),
-        Arc::clone(repo.storage()),
-        Default::default(),
-        Some(repo.attribution().clone()),
-    )
-    .await
+    let Ok(migrated) = Repository::open(Arc::clone(repo.storage()))
+        .config(repo.config().clone())
+        .attribution(repo.attribution().clone())
+        .execute()
+        .await
     else {
         error!("Unknown error during migration. Repository doesn't open");
         delete_repo_info(repo).await?;
@@ -269,13 +267,11 @@ async fn do_migrate(
             return Err(err);
         }
         info!("Opening migrated repo");
-        let Ok(migrated) = Repository::open(
-            Some(repo.config().clone()),
-            Arc::clone(repo.storage()),
-            Default::default(),
-            Some(repo.attribution().clone()),
-        )
-        .await
+        let Ok(migrated) = Repository::open(Arc::clone(repo.storage()))
+            .config(repo.config().clone())
+            .attribution(repo.attribution().clone())
+            .execute()
+            .await
         else {
             error!("Unknown error during migration. Repository doesn't open");
             delete_repo_info(repo).await?;
@@ -678,8 +674,7 @@ mod tests {
         let storage =
             new_local_filesystem_storage(dir.path().join("test-repo-v1").as_path())
                 .await?;
-        let repo = Repository::open(None, Arc::clone(&storage), Default::default(), None)
-            .await?;
+        let repo = Repository::open(Arc::clone(&storage)).execute().await?;
         Ok((repo, dir))
     }
 
@@ -692,36 +687,30 @@ mod tests {
         let storage = Arc::clone(repo.storage());
 
         // Persist a custom caching config to the V1 repo's config.yaml
-        let repo = Repository::open(
-            Some(RepositoryConfig {
+        let repo = Repository::open(Arc::clone(&storage))
+            .config(RepositoryConfig {
                 caching: Some(CachingConfig {
                     num_chunk_refs: Some(10_000),
                     ..Default::default()
                 }),
                 ..Default::default()
-            }),
-            Arc::clone(&storage),
-            Default::default(),
-            None,
-        )
-        .await?;
+            })
+            .execute()
+            .await?;
         repo.save_config().await?;
 
         // Re-open with a *different* caching value to simulate a migration
         // client that tuned cache sizes for the migration workload.
-        let repo = Repository::open(
-            Some(RepositoryConfig {
+        let repo = Repository::open(Arc::clone(&storage))
+            .config(RepositoryConfig {
                 caching: Some(CachingConfig {
                     num_chunk_refs: Some(99),
                     ..Default::default()
                 }),
                 ..Default::default()
-            }),
-            Arc::clone(&storage),
-            Default::default(),
-            None,
-        )
-        .await?;
+            })
+            .execute()
+            .await?;
 
         let mut tag_ancestries_before = HashMap::new();
         for tag in repo.list_tags().await? {
@@ -744,7 +733,7 @@ mod tests {
         }
 
         migrate_1_to_2(repo, false, true, None).await.unwrap();
-        let repo = Repository::open(None, storage, Default::default(), None).await?;
+        let repo = Repository::open(storage).execute().await?;
 
         let mut tag_ancestries_after = HashMap::new();
         for tag in repo.list_tags().await? {
@@ -895,7 +884,7 @@ mod tests {
         migrate_1_to_2(repo, false, true, None).await.unwrap();
 
         // Reopen the now-V2 repo and try to migrate again
-        let repo = Repository::open(None, storage, Default::default(), None).await?;
+        let repo = Repository::open(storage).execute().await?;
         let result = migrate_1_to_2(repo, false, true, None).await;
         assert!(result.is_err(), "migrating an already-V2 repo should return an error");
 
@@ -909,7 +898,7 @@ mod tests {
         let storage = Arc::clone(repo.storage());
 
         migrate_1_to_2(repo, true, true, None).await.unwrap();
-        let repo = Repository::open(None, storage, Default::default(), None).await?;
+        let repo = Repository::open(storage).execute().await?;
 
         assert_eq!(repo.spec_version(), SpecVersionBin::V1);
         Ok(())
@@ -923,7 +912,7 @@ mod tests {
         let storage = Arc::clone(repo.storage());
 
         migrate_1_to_2(repo, false, false, None).await.unwrap();
-        let repo = Repository::open(None, storage, Default::default(), None).await?;
+        let repo = Repository::open(storage).execute().await?;
 
         assert_eq!(repo.spec_version(), SpecVersionBin::V2);
 
@@ -950,13 +939,8 @@ mod tests {
             num_updates_per_repo_info_file: Some(3),
             ..Default::default()
         };
-        let repo = Repository::open(
-            Some(config),
-            Arc::clone(&storage),
-            Default::default(),
-            None,
-        )
-        .await?;
+        let repo =
+            Repository::open(Arc::clone(&storage)).config(config).execute().await?;
 
         // Record initial ops log length after migration
         let (stream, _, _) = repo.ops_log().await?;

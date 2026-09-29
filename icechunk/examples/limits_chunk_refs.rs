@@ -73,20 +73,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ..ManifestConfig::default()
     };
 
-    let repo = Repository::create(
-        Some(RepositoryConfig {
+    let repo = Repository::create(storage)
+        .config(RepositoryConfig {
             inline_chunk_threshold_bytes: Some(0),
             manifest: Some(manifest_config),
             ..Default::default()
-        }),
-        storage,
-        creds,
-        None,
-        true,
-        None,
-    )
-    .await
-    .expect("Failed to initialize repository");
+        })
+        .authorize_virtual_chunk_access(creds)
+        .execute()
+        .await
+        .expect("Failed to initialize repository");
 
     let ds = Arc::new(RwLock::new(repo.writable_session("main").await?));
 

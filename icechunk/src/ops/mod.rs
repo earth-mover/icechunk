@@ -381,11 +381,7 @@ pub async fn pointed_snapshots<'a>(
 #[cfg(test)]
 mod tests {
     use futures::TryStreamExt as _;
-    use std::{
-        collections::{HashMap, HashSet},
-        num::NonZeroU16,
-        sync::Arc,
-    };
+    use std::{collections::HashSet, num::NonZeroU16, sync::Arc};
 
     use bytes::Bytes;
 
@@ -401,15 +397,7 @@ mod tests {
     async fn test_pointed_snapshots_duplicate() -> Result<(), Box<dyn std::error::Error>>
     {
         let storage = new_in_memory_storage().await?;
-        let repo = Repository::create(
-            None,
-            Arc::clone(&storage),
-            HashMap::new(),
-            None,
-            true,
-            None,
-        )
-        .await?;
+        let repo = Repository::create(Arc::clone(&storage)).execute().await?;
         let mut session = repo.writable_session("main").await?;
         session.add_group(Path::root(), Bytes::new()).await?;
         let snap = session.commit("commit").max_concurrent_nodes(8).execute().await?;

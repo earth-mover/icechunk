@@ -229,16 +229,13 @@ fn assert_attributed(requests: &[CapturedRequest]) {
 async fn attributed_repo(store: &FakeStore) -> Repository {
     let config =
         RepositoryConfig { inline_chunk_threshold_bytes: Some(0), ..Default::default() };
-    Repository::create(
-        Some(config),
-        native_s3(store),
-        HashMap::new(),
-        None,
-        false,
-        Some(attribution()),
-    )
-    .await
-    .unwrap()
+    Repository::create(native_s3(store))
+        .config(config)
+        .check_clean_root(false)
+        .attribution(attribution())
+        .execute()
+        .await
+        .unwrap()
 }
 
 #[tokio_test]
@@ -254,8 +251,7 @@ async fn repository_keeps_attribution_across_serialization() {
     );
 
     // opening without attribution gives the default
-    let reopened =
-        Repository::open(None, native_s3(&store), HashMap::new(), None).await.unwrap();
+    let reopened = Repository::open(native_s3(&store)).execute().await.unwrap();
     assert_eq!(reopened.attribution(), &Attribution::new());
 }
 
@@ -290,10 +286,11 @@ async fn repository_requests_carry_labels_array_and_chunk() {
     // a freshly opened repository has cold caches, so the read fetches the
     // manifest too; the open's own spec-version probe is asserted as well
     store.clear();
-    let repo =
-        Repository::open(None, native_s3(&store), HashMap::new(), Some(attribution()))
-            .await
-            .unwrap();
+    let repo = Repository::open(native_s3(&store))
+        .attribution(attribution())
+        .execute()
+        .await
+        .unwrap();
     let session = repo
         .readonly_session(&VersionInfo::BranchTipRef("main".to_string()))
         .await
@@ -327,16 +324,14 @@ async fn read_virtual_chunk(
     let mut config =
         RepositoryConfig { inline_chunk_threshold_bytes: Some(0), ..Default::default() };
     config.set_virtual_chunk_container(container).unwrap();
-    let repo = Repository::create(
-        Some(config),
-        native_s3(store),
-        HashMap::from([(prefix, credentials)]),
-        None,
-        false,
-        Some(attribution()),
-    )
-    .await
-    .unwrap();
+    let repo = Repository::create(native_s3(store))
+        .config(config)
+        .authorize_virtual_chunk_access(HashMap::from([(prefix, credentials)]))
+        .check_clean_root(false)
+        .attribution(attribution())
+        .execute()
+        .await
+        .unwrap();
 
     // put the external object in place through a plain storage handle
     let external = new_s3_storage(

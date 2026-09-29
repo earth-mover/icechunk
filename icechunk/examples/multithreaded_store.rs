@@ -1,4 +1,4 @@
-use std::{collections::HashMap, ops::Range, sync::Arc, time::Duration};
+use std::{ops::Range, sync::Arc, time::Duration};
 
 use bytes::Bytes;
 use futures::StreamExt as _;
@@ -15,9 +15,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         inline_chunk_threshold_bytes: Some(128),
         ..Default::default()
     };
-    let repo =
-        Repository::create(Some(config), storage, HashMap::new(), None, true, None)
-            .await?;
+    let repo = Repository::create(storage).config(config).execute().await?;
     let ds = Arc::new(RwLock::new(repo.writable_session("main").await?));
     let store = Store::from_session(Arc::clone(&ds)).await;
 

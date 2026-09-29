@@ -346,15 +346,8 @@ async fn test_tag_write_get(
     #[case] spec_version: SpecVersionBin,
 ) -> Result<(), Box<dyn std::error::Error>> {
     with_storage(Permission::Modify, |_, storage| async move {
-        let repo = Repository::create(
-            None,
-            storage,
-            Default::default(),
-            Some(spec_version),
-            true,
-            None,
-        )
-        .await?;
+        let repo =
+            Repository::create(storage).spec_version(spec_version).execute().await?;
         repo.create_tag("mytag", &Snapshot::INITIAL_SNAPSHOT_ID).await?;
         let back = repo.lookup_tag("mytag").await?;
         assert_eq!(Snapshot::INITIAL_SNAPSHOT_ID, back);
@@ -371,7 +364,7 @@ async fn test_fetch_non_existing_tag(
 ) -> Result<(), Box<dyn std::error::Error>> {
     with_storage(Permission::Modify, |_, storage| async move {
         let repo =
-            Repository::create(None, storage, Default::default(), Some(spec_version), true, None).await?;
+            Repository::create(storage).spec_version(spec_version).execute().await?;
         repo.create_tag("mytag", &Snapshot::INITIAL_SNAPSHOT_ID).await?;
         let back = repo.lookup_tag("non-existing-tag").await;
         assert!(
@@ -394,7 +387,7 @@ async fn test_create_existing_tag(
 ) -> Result<(), Box<dyn std::error::Error>> {
     with_storage(Permission::Modify, |_, storage| async move {
         let repo =
-            Repository::create(None, storage, Default::default(), Some(spec_version), true, None).await?;
+            Repository::create(storage).spec_version(spec_version).execute().await?;
         repo.create_tag("mytag", &Snapshot::INITIAL_SNAPSHOT_ID).await?;
         let res  = repo.create_tag("mytag", &Snapshot::INITIAL_SNAPSHOT_ID).await;
         assert!(
@@ -412,27 +405,11 @@ async fn test_create_existing_tag(
 #[tokio_test]
 async fn check_clean_repo() -> Result<(), Box<dyn std::error::Error>> {
     with_storage(Permission::Modify, |_, storage| async move {
-        let _repo = Repository::create(
-            None,
-            Arc::clone(&storage),
-            Default::default(),
-            None,
-            true,
-            None,
-        )
-        .await?;
+        let _repo = Repository::create(Arc::clone(&storage)).execute().await?;
 
         // creating repo with check_clean_repo = true
         // should fail because we wrote data above
-        let res = Repository::create(
-            None,
-            Arc::clone(&storage),
-            Default::default(),
-            None,
-            true,
-            None,
-        )
-        .await;
+        let res = Repository::create(Arc::clone(&storage)).execute().await;
         assert!(res.is_err());
         assert!(matches!(
             res,
@@ -441,9 +418,7 @@ async fn check_clean_repo() -> Result<(), Box<dyn std::error::Error>> {
 
         // creating repo with check_clean_repo = false
         // fails because it tries to overwrite a repo info that is not up to date
-        let res =
-            Repository::create(None, storage, Default::default(), None, false, None)
-                .await;
+        let res = Repository::create(storage).check_clean_root(false).execute().await;
         assert!(res.is_err());
         assert!(matches!(
             res,
@@ -511,8 +486,7 @@ async fn create_refuses_empty_prefix_on_object_store()
         );
         assert!(
             matches!(
-                Repository::create(None, storage, Default::default(), None, true, None)
-                    .await,
+                Repository::create(storage).execute().await,
                 Err(ICError { kind: RepositoryErrorKind::EmptyPrefixCreation, .. })
             ),
             "{name}: Repository::create should fail with EmptyPrefixCreation",
@@ -1156,7 +1130,7 @@ async fn test_fetch_non_existing_branch(
 ) -> Result<(), Box<dyn std::error::Error>> {
     with_storage(Permission::Modify, |_, storage| async move {
         let repo =
-            Repository::create(None, storage, Default::default(), Some(spec_version), true, None).await?;
+            Repository::create(storage).spec_version(spec_version).execute().await?;
         let back = repo.lookup_branch("non-existing-branch").await;
         assert!(
             matches!(
@@ -1794,7 +1768,7 @@ async fn test_redirect_storage() -> Result<(), Box<dyn std::error::Error>> {
     read.read_to_end(&mut data).await?;
     let _: RefData = serde_json::from_slice(&data)?;
 
-    let repo = Repository::open(None, storage, Default::default(), None).await?;
+    let repo = Repository::open(storage).execute().await?;
     let session = repo
         .readonly_session(&icechunk::repository::VersionInfo::BranchTipRef(
             "main".to_string(),
@@ -1811,15 +1785,10 @@ async fn test_basic_repo_ops(
     #[case] spec_version: SpecVersionBin,
 ) -> Result<(), Box<dyn std::error::Error>> {
     with_storage(Permission::Modify, |_, storage| async move {
-        let repo = Repository::create(
-            None,
-            Arc::clone(&storage),
-            Default::default(),
-            Some(spec_version),
-            true,
-            None,
-        )
-        .await?;
+        let repo = Repository::create(Arc::clone(&storage))
+            .spec_version(spec_version)
+            .execute()
+            .await?;
 
         let branches = repo.list_branches().await?;
         assert!(branches.contains("main"));
@@ -1832,7 +1801,7 @@ async fn test_basic_repo_ops(
         assert_eq!(session.list_nodes(&Path::root()).await?.count(), 0);
 
         // reopen from storage
-        let repo = Repository::open(None, storage, Default::default(), None).await?;
+        let repo = Repository::open(storage).execute().await?;
 
         let branches = repo.list_branches().await?;
         assert!(branches.contains("main"));

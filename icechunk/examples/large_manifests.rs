@@ -11,7 +11,7 @@ use icechunk::{
     session::Session,
     storage::new_in_memory_storage,
 };
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 use tokio::{
     sync::{RwLock, Semaphore},
     task::JoinSet,
@@ -35,15 +35,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }),
         ..Default::default()
     };
-    let repo = Repository::create(
-        Some(config),
-        storage,
-        HashMap::new(),
-        Some(SpecVersionBin::V2),
-        true,
-        None,
-    )
-    .await?;
+    let repo = Repository::create(storage)
+        .config(config)
+        .spec_version(SpecVersionBin::V2)
+        .execute()
+        .await?;
     let session = Arc::new(RwLock::new(repo.writable_session("main").await?));
     let store = Store::from_session(Arc::clone(&session)).await;
 

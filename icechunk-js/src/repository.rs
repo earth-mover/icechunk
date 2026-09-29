@@ -251,16 +251,18 @@ impl JsRepository {
             .transpose()
             .map_napi_err()?;
         let creds = convert_credentials(authorize_virtual_chunk_access)?;
-        let repo = Repository::create(
-            config,
-            Arc::clone(&storage.0),
-            creds,
-            version,
-            check_clean_root.unwrap_or(true),
-            None,
-        )
-        .await
-        .map_napi_err()?;
+        let builder = Repository::create(Arc::clone(&storage.0))
+            .authorize_virtual_chunk_access(creds)
+            .check_clean_root(check_clean_root.unwrap_or(true));
+        let builder = match config {
+            Some(c) => builder.config(c),
+            None => builder,
+        };
+        let builder = match version {
+            Some(v) => builder.spec_version(v),
+            None => builder,
+        };
+        let repo = builder.execute().await.map_napi_err()?;
         Ok(JsRepository(Arc::new(RwLock::new(repo))))
     }
 
@@ -272,9 +274,13 @@ impl JsRepository {
     ) -> napi::Result<JsRepository> {
         let config = convert_config(config)?;
         let creds = convert_credentials(authorize_virtual_chunk_access)?;
-        let repo = Repository::open(config, Arc::clone(&storage.0), creds, None)
-            .await
-            .map_napi_err()?;
+        let builder = Repository::open(Arc::clone(&storage.0))
+            .authorize_virtual_chunk_access(creds);
+        let builder = match config {
+            Some(c) => builder.config(c),
+            None => builder,
+        };
+        let repo = builder.execute().await.map_napi_err()?;
         Ok(JsRepository(Arc::new(RwLock::new(repo))))
     }
 
@@ -292,16 +298,18 @@ impl JsRepository {
             .transpose()
             .map_napi_err()?;
         let creds = convert_credentials(authorize_virtual_chunk_access)?;
-        let repo = Repository::open_or_create(
-            config,
-            Arc::clone(&storage.0),
-            creds,
-            version,
-            check_clean_root.unwrap_or(true),
-            None,
-        )
-        .await
-        .map_napi_err()?;
+        let builder = Repository::open_or_create(Arc::clone(&storage.0))
+            .authorize_virtual_chunk_access(creds)
+            .check_clean_root(check_clean_root.unwrap_or(true));
+        let builder = match config {
+            Some(c) => builder.config(c),
+            None => builder,
+        };
+        let builder = match version {
+            Some(v) => builder.spec_version(v),
+            None => builder,
+        };
+        let repo = builder.execute().await.map_napi_err()?;
         Ok(JsRepository(Arc::new(RwLock::new(repo))))
     }
 

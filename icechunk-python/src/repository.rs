@@ -13,7 +13,7 @@ use chrono::{DateTime, Utc};
 use futures::{StreamExt as _, TryStreamExt as _};
 use icechunk::{
     Repository,
-    config::Credentials,
+    config::{Credentials, RepositoryConfig},
     diff::Diff,
     feature_flags::FeatureFlag,
     format::{
@@ -29,7 +29,11 @@ use icechunk::{
         manifests::rewrite_manifests,
         stats::repo_chunks_storage,
     },
-    repository::{RepositoryError, RepositoryErrorKind, VersionInfo},
+    repository::{
+        CreateMode, Mode, RepositoryBuilder, RepositoryError, RepositoryErrorKind,
+        VersionInfo,
+    },
+    storage::Attribution,
 };
 use pyo3::{
     Borrowed, IntoPyObjectExt as _,
@@ -1131,18 +1135,16 @@ impl PyRepository {
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
                 let repo = self.0.read().await;
                 let storage = Arc::clone(repo.storage());
-                let config = Some(repo.config().clone());
+                let config = repo.config().clone();
                 let attribution = repo.attribution().clone();
                 drop(repo);
 
-                let fresh = Repository::open(
-                    config,
-                    Arc::clone(&storage),
-                    Default::default(),
-                    Some(attribution.clone()),
-                )
-                .await
-                .map_err(PyIcechunkStoreError::RepositoryError)?;
+                let fresh = Repository::open(Arc::clone(&storage))
+                    .config(config)
+                    .attribution(attribution.clone())
+                    .execute()
+                    .await
+                    .map_err(PyIcechunkStoreError::RepositoryError)?;
                 migrations::migrate_1_to_2(
                     fresh,
                     dry_run,
@@ -1153,14 +1155,11 @@ impl PyRepository {
                 .map_err(PyIcechunkStoreError::MigrationError)?;
 
                 // Reopen to get a fresh repo with the correct spec version
-                let reopened = Repository::open(
-                    None,
-                    storage,
-                    Default::default(),
-                    Some(attribution),
-                )
-                .await
-                .map_err(PyIcechunkStoreError::RepositoryError)?;
+                let reopened = Repository::open(storage)
+                    .attribution(attribution)
+                    .execute()
+                    .await
+                    .map_err(PyIcechunkStoreError::RepositoryError)?;
                 Ok(Self(Arc::new(RwLock::new(reopened))))
             })
         })
@@ -1252,16 +1251,16 @@ impl PyRepository {
                         .map(|c| c.try_into().map_err(PyValueError::new_err))
                         .transpose()?;
                     let version = spec_version.map(|v| v.into());
-                    Repository::create(
+                    let builder = apply_repo_options(
+                        Repository::create(storage.0),
                         config,
-                        storage.0,
                         map_credentials(authorize_virtual_chunk_access),
-                        version,
-                        check_clean_root,
                         attribution.map(|a| a.0),
-                    )
-                    .await
-                    .map_err(PyIcechunkStoreError::RepositoryError)
+                    );
+                    apply_create_options(builder, version, check_clean_root)
+                        .execute()
+                        .await
+                        .map_err(PyIcechunkStoreError::RepositoryError)
                 })?;
 
             Ok(Self(Arc::new(RwLock::new(repository))))
@@ -1287,16 +1286,16 @@ impl PyRepository {
             map_credentials(authorize_virtual_chunk_access);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let version = spec_version.map(|v| v.into());
-            let repository = Repository::create(
+            let builder = apply_repo_options(
+                Repository::create(storage.0),
                 config,
-                storage.0,
                 authorize_virtual_chunk_access,
-                version,
-                check_clean_root,
                 attribution.map(|a| a.0),
-            )
-            .await
-            .map_err(PyIcechunkStoreError::RepositoryError)?;
+            );
+            let repository = apply_create_options(builder, version, check_clean_root)
+                .execute()
+                .await
+                .map_err(PyIcechunkStoreError::RepositoryError)?;
 
             Ok(Self(Arc::new(RwLock::new(repository))))
         })
@@ -1319,12 +1318,13 @@ impl PyRepository {
                     let config = config
                         .map(|c| c.try_into().map_err(PyValueError::new_err))
                         .transpose()?;
-                    Repository::open(
+                    apply_repo_options(
+                        Repository::open(storage.0),
                         config,
-                        storage.0,
                         map_credentials(authorize_virtual_chunk_access),
                         attribution.map(|a| a.0),
                     )
+                    .execute()
                     .await
                     .map_err(PyIcechunkStoreError::RepositoryError)
                 })?;
@@ -1348,12 +1348,13 @@ impl PyRepository {
         let authorize_virtual_chunk_access =
             map_credentials(authorize_virtual_chunk_access);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let repository = Repository::open(
+            let repository = apply_repo_options(
+                Repository::open(storage.0),
                 config,
-                storage.0,
                 authorize_virtual_chunk_access,
                 attribution.map(|a| a.0),
             )
+            .execute()
             .await
             .map_err(PyIcechunkStoreError::RepositoryError)?;
             Ok(Self(Arc::new(RwLock::new(repository))))
@@ -1381,17 +1382,17 @@ impl PyRepository {
                         .map(|c| c.try_into().map_err(PyValueError::new_err))
                         .transpose()?;
                     let version = create_version.map(|v| v.into());
+                    let builder = apply_repo_options(
+                        Repository::open_or_create(storage.0),
+                        config,
+                        map_credentials(authorize_virtual_chunk_access),
+                        attribution.map(|a| a.0),
+                    );
                     Ok::<_, PyErr>(
-                        Repository::open_or_create(
-                            config,
-                            storage.0,
-                            map_credentials(authorize_virtual_chunk_access),
-                            version,
-                            check_clean_root,
-                            attribution.map(|a| a.0),
-                        )
-                        .await
-                        .map_err(PyIcechunkStoreError::RepositoryError)?,
+                        apply_create_options(builder, version, check_clean_root)
+                            .execute()
+                            .await
+                            .map_err(PyIcechunkStoreError::RepositoryError)?,
                     )
                 })?;
 
@@ -1418,16 +1419,16 @@ impl PyRepository {
             map_credentials(authorize_virtual_chunk_access);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let version = create_version.map(|v| v.into());
-            let repository = Repository::open_or_create(
+            let builder = apply_repo_options(
+                Repository::open_or_create(storage.0),
                 config,
-                storage.0,
                 authorize_virtual_chunk_access,
-                version,
-                check_clean_root,
                 attribution.map(|a| a.0),
-            )
-            .await
-            .map_err(PyIcechunkStoreError::RepositoryError)?;
+            );
+            let repository = apply_create_options(builder, version, check_clean_root)
+                .execute()
+                .await
+                .map_err(PyIcechunkStoreError::RepositoryError)?;
             Ok(Self(Arc::new(RwLock::new(repository))))
         })
     }
@@ -3211,6 +3212,35 @@ fn map_credentials(
         cred.into_iter().map(|(name, cred)| (name, cred.map(|c| c.into()))).collect()
     })
     .unwrap_or_default()
+}
+
+fn apply_repo_options<M: Mode>(
+    builder: RepositoryBuilder<M>,
+    config: Option<RepositoryConfig>,
+    authorize_virtual_chunk_access: HashMap<String, Option<Credentials>>,
+    attribution: Option<Attribution>,
+) -> RepositoryBuilder<M> {
+    let builder = match config {
+        Some(c) => builder.config(c),
+        None => builder,
+    };
+    let builder = builder.authorize_virtual_chunk_access(authorize_virtual_chunk_access);
+    match attribution {
+        Some(a) => builder.attribution(a),
+        None => builder,
+    }
+}
+
+fn apply_create_options<M: CreateMode>(
+    builder: RepositoryBuilder<M>,
+    spec_version: Option<SpecVersionBin>,
+    check_clean_root: bool,
+) -> RepositoryBuilder<M> {
+    let builder = match spec_version {
+        Some(v) => builder.spec_version(v),
+        None => builder,
+    };
+    builder.check_clean_root(check_clean_root)
 }
 
 /// Like `args_to_version_info`, but returns `None` when all args are `None`

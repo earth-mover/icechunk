@@ -12,11 +12,7 @@ use icechunk::{
 use icechunk_macros::tokio_test;
 use pretty_assertions::assert_eq;
 use rand::{RngExt as _, rng};
-use std::{
-    collections::{HashMap, HashSet},
-    sync::Arc,
-    time::Duration,
-};
+use std::{collections::HashSet, sync::Arc, time::Duration};
 use tokio::{
     sync::{Barrier, RwLock},
     task::{self, JoinSet},
@@ -81,9 +77,7 @@ async fn do_test_concurrency(
         }),
         ..Default::default()
     };
-    let repo =
-        Repository::create(Some(config), storage, HashMap::new(), None, true, None)
-            .await?;
+    let repo = Repository::create(storage).config(config).execute().await?;
 
     let mut ds = repo.writable_session("main").await?;
 

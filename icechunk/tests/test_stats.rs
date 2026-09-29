@@ -100,18 +100,14 @@ async fn do_test_repo_chunks_storage(
         DEFAULT_MAX_CONCURRENT_REQUESTS,
     ));
 
-    let repo = Repository::create(
-        Some(RepositoryConfig {
+    let repo = Repository::create(Arc::clone(&storage))
+        .config(RepositoryConfig {
             inline_chunk_threshold_bytes: Some(5),
             ..Default::default()
-        }),
-        Arc::clone(&storage),
-        Default::default(),
-        Some(spec_version),
-        true,
-        None,
-    )
-    .await?;
+        })
+        .spec_version(spec_version)
+        .execute()
+        .await?;
 
     let mut session = repo.writable_session("main").await?;
 
@@ -281,18 +277,14 @@ async fn test_virtual_chunk_deduplication(
         DEFAULT_MAX_CONCURRENT_REQUESTS,
     ));
 
-    let repo = Repository::create(
-        Some(RepositoryConfig {
+    let repo = Repository::create(storage)
+        .config(RepositoryConfig {
             inline_chunk_threshold_bytes: Some(5),
             ..Default::default()
-        }),
-        storage,
-        Default::default(),
-        Some(spec_version),
-        true,
-        None,
-    )
-    .await?;
+        })
+        .spec_version(spec_version)
+        .execute()
+        .await?;
 
     let mut session = repo.writable_session("main").await?;
     let user_data = Bytes::new();
