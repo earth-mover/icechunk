@@ -125,7 +125,10 @@ class Repository:
         authorize_virtual_chunk_access : dict[str, AnyCredential | None], optional
             Authorize Icechunk to access virtual chunks in these containers. A mapping
             from container url_prefix to the credentials to use to access chunks in
-            that container. Each value should be an explicit credential or no-auth
+            that container. Keys are matched exactly against the configured containers'
+            url_prefix, not by prefix: authorizing ``s3://bucket/`` does not authorize a
+            container defined at ``s3://bucket/sub/``, and keys that match no container
+            are ignored. Each value should be an explicit credential or no-auth
             sentinel: e.g. ``S3Credentials.FromEnv()`` / ``s3_anonymous_credentials()``
             for S3, or the ``icechunk.credentials.LocalFileSystemAccess`` /
             ``icechunk.credentials.HttpAccess`` sentinels for ``file://`` and
@@ -188,7 +191,10 @@ class Repository:
         authorize_virtual_chunk_access : dict[str, AnyCredential | None], optional
             Authorize Icechunk to access virtual chunks in these containers. A mapping
             from container url_prefix to the credentials to use to access chunks in
-            that container. Each value should be an explicit credential or no-auth
+            that container. Keys are matched exactly against the configured containers'
+            url_prefix, not by prefix: authorizing ``s3://bucket/`` does not authorize a
+            container defined at ``s3://bucket/sub/``, and keys that match no container
+            are ignored. Each value should be an explicit credential or no-auth
             sentinel: e.g. ``S3Credentials.FromEnv()`` / ``s3_anonymous_credentials()``
             for S3, or the ``icechunk.credentials.LocalFileSystemAccess`` /
             ``icechunk.credentials.HttpAccess`` sentinels for ``file://`` and
@@ -251,7 +257,10 @@ class Repository:
         authorize_virtual_chunk_access : dict[str, AnyCredential | None], optional
             Authorize Icechunk to access virtual chunks in these containers. A mapping
             from container url_prefix to the credentials to use to access chunks in
-            that container. Each value should be an explicit credential or no-auth
+            that container. Keys are matched exactly against the configured containers'
+            url_prefix, not by prefix: authorizing ``s3://bucket/`` does not authorize a
+            container defined at ``s3://bucket/sub/``, and keys that match no container
+            are ignored. Each value should be an explicit credential or no-auth
             sentinel: e.g. ``S3Credentials.FromEnv()`` / ``s3_anonymous_credentials()``
             for S3, or the ``icechunk.credentials.LocalFileSystemAccess`` /
             ``icechunk.credentials.HttpAccess`` sentinels for ``file://`` and
@@ -309,7 +318,10 @@ class Repository:
         authorize_virtual_chunk_access : dict[str, AnyCredential | None], optional
             Authorize Icechunk to access virtual chunks in these containers. A mapping
             from container url_prefix to the credentials to use to access chunks in
-            that container. Each value should be an explicit credential or no-auth
+            that container. Keys are matched exactly against the configured containers'
+            url_prefix, not by prefix: authorizing ``s3://bucket/`` does not authorize a
+            container defined at ``s3://bucket/sub/``, and keys that match no container
+            are ignored. Each value should be an explicit credential or no-auth
             sentinel: e.g. ``S3Credentials.FromEnv()`` / ``s3_anonymous_credentials()``
             for S3, or the ``icechunk.credentials.LocalFileSystemAccess`` /
             ``icechunk.credentials.HttpAccess`` sentinels for ``file://`` and
@@ -370,7 +382,10 @@ class Repository:
         authorize_virtual_chunk_access : dict[str, AnyCredential | None], optional
             Authorize Icechunk to access virtual chunks in these containers. A mapping
             from container url_prefix to the credentials to use to access chunks in
-            that container. Each value should be an explicit credential or no-auth
+            that container. Keys are matched exactly against the configured containers'
+            url_prefix, not by prefix: authorizing ``s3://bucket/`` does not authorize a
+            container defined at ``s3://bucket/sub/``, and keys that match no container
+            are ignored. Each value should be an explicit credential or no-auth
             sentinel: e.g. ``S3Credentials.FromEnv()`` / ``s3_anonymous_credentials()``
             for S3, or the ``icechunk.credentials.LocalFileSystemAccess`` /
             ``icechunk.credentials.HttpAccess`` sentinels for ``file://`` and
@@ -438,7 +453,10 @@ class Repository:
         authorize_virtual_chunk_access : dict[str, AnyCredential | None], optional
             Authorize Icechunk to access virtual chunks in these containers. A mapping
             from container url_prefix to the credentials to use to access chunks in
-            that container. Each value should be an explicit credential or no-auth
+            that container. Keys are matched exactly against the configured containers'
+            url_prefix, not by prefix: authorizing ``s3://bucket/`` does not authorize a
+            container defined at ``s3://bucket/sub/``, and keys that match no container
+            are ignored. Each value should be an explicit credential or no-auth
             sentinel: e.g. ``S3Credentials.FromEnv()`` / ``s3_anonymous_credentials()``
             for S3, or the ``icechunk.credentials.LocalFileSystemAccess`` /
             ``icechunk.credentials.HttpAccess`` sentinels for ``file://`` and

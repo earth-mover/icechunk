@@ -319,14 +319,23 @@ When using virtual chunk containers, the containers must be authorized by the re
 
     Passing `None` as a credential is deprecated and will be unsupported in a future release. For S3 it silently reads credentials from the process environment (or uses anonymous access if the container allows it), which can expose private credentials. Pass an explicit credential or no-auth sentinel instead.
 
+!!! important "Keys must match a container's `url_prefix` exactly"
+
+    Icechunk resolves a virtual chunk in two steps. First it picks the container whose `url_prefix` is the longest prefix of the chunk url. Then it looks up that container's `url_prefix`, as an exact string, in `authorize_virtual_chunk_access`.
+
+    Only the first step is prefix based. Authorizing a parent path does **not** authorize containers defined below it: if the repo defines a container at `s3://mybucket/data/2020/` and you authorize `s3://mybucket/data/`, chunks in that container fail with an "unauthorized virtual chunk container" error. Keys that match no container are ignored, so the mistake only surfaces when a chunk is fetched.
+
+    To authorize everything under a path, define the container at that path (see [Authorizing a whole prefix](#authorizing-a-whole-prefix) below).
+
 ### Example
 
-Expanding on the example from the [Virtual Chunk Containers](#virtual_chunk_containers) section, we can configure the repo to use the credentials for the `my-s3-bucket` and `my-other-s3-bucket` containers.
+Expanding on the example from the [Virtual Chunk Containers](#virtual_chunk_containers) section, we can configure the repo to use the credentials for the `my-s3-bucket` and `my-other-s3-bucket` containers. The keys are the same strings as the containers' `url_prefix`, trailing slash included.
 
 ```python
 credentials = ic.credentials.containers_credentials(
-    { "s3://my_s3_bucket": ic.credentials.s3_credentials(bucket="my-s3-bucket", region="us-east-1"),
-      "s3://my_other_s3_bucket": ic.credentials.s3_credentials(bucket="my-other-s3-bucket", region="us-west-2"),
+    {
+        "s3://my-s3-bucket/": ic.credentials.s3_credentials(from_env=True),
+        "s3://my-other-s3-bucket/": ic.credentials.s3_credentials(from_env=True),
     }
 )
 
@@ -336,6 +345,35 @@ repo = ic.Repository.open(
     authorize_virtual_chunk_access=credentials,
 )
 ```
+
+### Authorizing a whole prefix
+
+Container matching is already recursive: a container at `s3://mybucket/data/` serves every chunk url that starts with it. So if a repo's persisted config defines many narrow containers (for example one per year) and you want to authorize them all at once, replace them with one broader container when you open the repo. Containers passed in `config` replace the persisted ones for this process only; nothing is written back unless you call `save_config()`.
+
+```python
+PREFIX = "s3://mybucket/data/"
+
+config = ic.RepositoryConfig.default()
+config.set_virtual_chunk_container(
+    ic.VirtualChunkContainer(PREFIX, ic.s3_store(region="us-east-1", anonymous=True))
+)
+
+repo = ic.Repository.open(
+    storage=storage,
+    config=config,
+    authorize_virtual_chunk_access=ic.containers_credentials(
+        {PREFIX: ic.s3_anonymous_credentials()}
+    ),
+)
+
+# Optional, with write access: make the broader container the repo default
+# so other readers can authorize PREFIX without overriding the config.
+repo.save_config()
+```
+
+!!! note "What you are trusting"
+
+    The `url_prefix` is the only thing the reader binds credentials to. The store settings behind it (`endpoint_url`, `region`, `allow_http`, ...) come from the repo config, which is written by whoever has write access to the repo. Authorizing a prefix means trusting those settings for it. If you would rather not, build the container yourself as above instead of using `Repository.fetch_config`, so the endpoint your credentials are sent to is pinned on your side.
 
 ## Proxy configuration
 
