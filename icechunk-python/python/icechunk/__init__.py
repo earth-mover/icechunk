@@ -124,6 +124,7 @@ from icechunk.storage import (
 )
 from icechunk.store import IcechunkStore
 from icechunk.types import CommitMethod
+from icechunk.url_pipeline import UrlRef, parse_url_ref, storage_from_url
 from icechunk.virtual import (
     VirtualChunkContainer,
     VirtualChunkSpec,
@@ -205,6 +206,7 @@ __all__ = [
     "StorageTimeoutSettings",
     "Update",
     "UpdateType",
+    "UrlRef",
     "VersionSelection",
     "VirtualChunkContainer",
     "VirtualChunkSpec",
@@ -229,6 +231,7 @@ __all__ = [
     "initialize_logs",
     "local_filesystem_storage",
     "local_filesystem_store",
+    "parse_url_ref",
     "print_debug_info",
     "r2_storage",
     "redirect_storage",
@@ -242,6 +245,7 @@ __all__ = [
     "set_logs_filter",
     "shutdown_telemetry",
     "spec_version",
+    "storage_from_url",
     "tigris_storage",
     "user_agent",
 ]

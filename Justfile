@@ -632,6 +632,45 @@ python-upstream-pytest *args: python-upstream-setup
   source .venv/bin/activate
   pytest -n 4 --hypothesis-profile=nightly --report-log output-pytest-log.jsonl "$@"
 
+# zarr with URL pipeline support (zarr-developers/zarr-python#4192).
+# TODO: switch to zarr-developers/zarr-python@main once #4192 merges, and to a
+# release floor once one ships.
+zarr_url_pipeline := env("ZARR_URL_PIPELINE", "zarr @ git+https://github.com/jhamman/zarr-python@feature/url-pipeline-core")
+
+[group('upstream')]
+[doc("Run the icechunk: URL pipeline adapter checks against a zarr with URL pipeline support")]
+python-url-pipeline: build-wheels python-url-pipeline-setup python-url-pipeline-mypy python-url-pipeline-pytest
+  echo "python URL pipeline checks passed"
+
+[private]
+[script]
+[doc("Install the wheel, the test dependencies and a zarr with URL pipeline support")]
+python-url-pipeline-setup:
+  cd icechunk-python
+  python3 -m venv .venv
+  source .venv/bin/activate
+  WHEEL=$(ls dist/*-abi3-*.whl)
+  # The override drops the dev group's zarr cap in favor of the URL pipeline branch.
+  uv pip install "$WHEEL" --group dev --override <(echo "{{zarr_url_pipeline}}") 2>&1 | tee setup-output.log
+  python -c "import zarr.abc.url_pipeline"
+  uv pip list
+
+[private]
+[script]
+[doc("Type-check the URL pipeline adapter, which the default mypy run excludes")]
+python-url-pipeline-mypy:
+  cd icechunk-python
+  source .venv/bin/activate
+  mypy --python-version "$PYTHON_VERSION" python/icechunk/zarr_url_adapter.py tests/test_zarr_url_adapter.py
+
+[private]
+[script]
+[doc("Run the URL pipeline adapter tests (the S3 tests need `just rustfs-up`)")]
+python-url-pipeline-pytest *args:
+  cd icechunk-python
+  source .venv/bin/activate
+  pytest -n 4 tests/test_zarr_url_adapter.py "$@"
+
 [group('upstream')]
 [doc("Run full xarray-upstream checks")]
 xarray-upstream xarray_dir="xarray": xarray-upstream-clone build-wheels xarray-upstream-setup xarray-upstream-pytest
