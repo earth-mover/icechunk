@@ -12,6 +12,7 @@ mod session;
 mod stats;
 mod store;
 mod streams;
+mod url_pipeline;
 mod virtualrefs;
 
 use std::env;
@@ -261,6 +262,10 @@ fn _icechunk_python(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(user_agent, m)?)?;
     m.add_function(wrap_pyfunction!(cli_entrypoint, m)?)?;
     m.add_function(wrap_pyfunction!(_upgrade_icechunk_repository, m)?)?;
+    m.add_function(wrap_pyfunction!(url_pipeline::_parse_url_ref, m)?)?;
+    m.add_function(wrap_pyfunction!(url_pipeline::_url_root_schemes, m)?)?;
+    m.add_function(wrap_pyfunction!(url_pipeline::_storage_from_url, m)?)?;
+    m.add_function(wrap_pyfunction!(url_pipeline::_open_session_from_url_async, m)?)?;
     m.add("__version__", pep440_version())?;
 
     // Exceptions
