@@ -1,5 +1,15 @@
 # Changelog
 
+## Python Icechunk Library [unreleased]
+
+### Features
+
+- Experimental: zarr and Xarray can open Icechunk repositories by [URL pipeline](https://github.com/jbms/url-pipeline) (ZEP 8), e.g.
+`xr.open_zarr("s3://bucket/repo|icechunk://tag.v1/path/to/group")`. Requires a zarr with URL pipeline support
+([zarr-python#4192](https://github.com/zarr-developers/zarr-python/pull/4192)). URLs open read-only sessions; credentials and
+configuration come from `icechunk_*` `storage_options`. Adds `icechunk.storage_from_url`, `icechunk.parse_url_ref`, and the
+`icechunk.url_repository_openers` entry-point group for other root schemes ([#576](https://github.com/earth-mover/icechunk/issues/576)).
+
 ## Python Icechunk Library 2.3.0
 
 ### Features
