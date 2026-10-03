@@ -28,7 +28,7 @@ pytest.importorskip("zarr.abc.url_pipeline")
 import xarray as xr
 from icechunk import zarr_url_adapter
 from icechunk.credentials import LocalFileSystemAccess
-from icechunk.zarr_url_adapter import IcechunkURLAdapter
+from icechunk.zarr_url_adapter import IcechunkURLAdapter, register_url_repository_opener
 from zarr.abc.url_pipeline import (
     AdapterResolution,
     PipelineContext,
@@ -202,7 +202,6 @@ async def test_spec_examples(
 def test_parse_spec_snapshot_ids(body: str, canonical: str) -> None:
     ref = ic.parse_url_ref(body)
     assert ref == ic.UrlRef("snapshot", canonical, "path/to/node")
-    assert ref.session_kwargs() == {"snapshot_id": canonical}
 
 
 async def test_spec_example_chunk_key(local_repo: RepoInfo) -> None:
@@ -272,7 +271,9 @@ def test_xarray_open_zarr(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("mode", ["w", "w-", "r+"])
-async def test_write_modes_rejected(local_repo: RepoInfo, mode: AccessModeLiteral) -> None:
+async def test_write_modes_rejected(
+    local_repo: RepoInfo, mode: AccessModeLiteral
+) -> None:
     with pytest.raises(URLPipelineError, match="writable_session"):
         await _resolve(local_repo.root + "|icechunk:", mode=mode)
     with pytest.raises(URLPipelineError, match="writable_session"):
@@ -680,6 +681,180 @@ async def test_adapter_does_not_block_event_loop(local_repo: RepoInfo) -> None:
 
 
 # ---------------------------------------------------------------------------
+# repository openers
+
+
+@pytest.fixture
+def clean_openers(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(zarr_url_adapter, "_openers", {})
+    monkeypatch.setattr(zarr_url_adapter, "_entry_points_by_scheme", None)
+
+
+@pytest.mark.usefixtures("clean_openers")
+async def test_opener_dispatch(local_repo: RepoInfo) -> None:
+    calls: list[tuple[PipelineSegment, bool, dict[str, Any]]] = []
+
+    async def opener(
+        root: PipelineSegment, *, read_only: bool, storage_options: dict[str, Any]
+    ) -> ic.Repository:
+        calls.append((root, read_only, storage_options))
+        assert root.body == "//org/repo"
+        return local_repo.repo
+
+    register_url_repository_opener("test.vendor", opener)
+    options = {"test_token": "abc", "icechunk_config": ic.RepositoryConfig.default()}
+    resolution = await _resolve(
+        "test.vendor://org/repo|icechunk://tag.v5/path/to/node|zarr3:",
+        mode="r",
+        storage_options=options,
+    )
+    assert resolution.path == "path/to/node"
+    assert resolution.zarr_format == 3
+    assert _session_of(resolution).snapshot_id == local_repo.first
+
+    root, read_only, passed = calls[0]
+    assert root.scheme == "test.vendor"
+    assert read_only is True
+    # icechunk_* keys are consumed; the rest is a fresh dict for the opener
+    assert passed == {"test_token": "abc"}
+    assert options == {"test_token": "abc", "icechunk_config": options["icechunk_config"]}
+
+    # default mode "a" through zarr's sync API
+    group = zarr.open_group("test.vendor://org/repo|icechunk:path/to/node")
+    assert group.attrs["level"] == "node"
+    assert calls[-1][1] is True
+    arr = zarr.open_array(
+        f"test.vendor://org/repo|icechunk://{local_repo.first}/path/to/array"
+    )
+    np.testing.assert_array_equal(arr[:], np.arange(4))
+
+
+@pytest.mark.usefixtures("clean_openers")
+async def test_opener_errors(local_repo: RepoInfo) -> None:
+    def not_async(
+        root: PipelineSegment, *, read_only: bool, storage_options: dict[str, Any]
+    ) -> Any:
+        return local_repo.repo
+
+    async def wrong_type(
+        root: PipelineSegment, *, read_only: bool, storage_options: dict[str, Any]
+    ) -> Any:
+        return local_repo.repo.readonly_session(branch="main")
+
+    async def raises(
+        root: PipelineSegment, *, read_only: bool, storage_options: dict[str, Any]
+    ) -> Any:
+        raise URLPipelineError("bad root from opener")
+
+    register_url_repository_opener("x.sync", not_async)
+    register_url_repository_opener("x.wrong", wrong_type)
+    register_url_repository_opener("x.raises", raises)
+    register_url_repository_opener("x.ok", lambda *a, **k: _async_value(local_repo.repo))
+
+    with pytest.raises(URLPipelineError, match="must be an async"):
+        await _resolve("x.sync://a|icechunk:", mode="r")
+    with pytest.raises(URLPipelineError, match=r"not an icechunk\.Repository"):
+        await _resolve("x.wrong://a|icechunk:", mode="r")
+    with pytest.raises(URLPipelineError, match="bad root from opener"):
+        await _resolve("x.raises://a|icechunk:", mode="r")
+    with pytest.raises(URLPipelineError, match="writable_session"):
+        await _resolve("x.ok://a|icechunk:", mode="w")
+    with pytest.raises(URLPipelineError, match="owns its own credentials"):
+        await _resolve(
+            "x.ok://a|icechunk:", mode="r", storage_options={"icechunk_anonymous": True}
+        )
+    with pytest.raises(URLPipelineError, match="snapshot id"):
+        await _resolve("x.ok://a|icechunk://nope", mode="r")
+    with pytest.raises(URLPipelineError, match="unsupported root scheme"):
+        await _resolve("x.missing://a|icechunk:", mode="r")
+
+
+async def _async_value(value: Any) -> Any:
+    return value
+
+
+@pytest.mark.usefixtures("clean_openers")
+def test_register_opener_rules() -> None:
+    async def opener(
+        root: PipelineSegment, *, read_only: bool, storage_options: dict[str, Any]
+    ) -> ic.Repository:
+        raise AssertionError
+
+    with pytest.raises(ValueError, match="built-in root scheme"):
+        register_url_repository_opener("s3", opener)
+    with pytest.raises(ValueError, match="built-in root scheme"):
+        register_url_repository_opener("FILE", opener)
+    register_url_repository_opener("Vendor.X", opener)
+    assert zarr_url_adapter._get_opener("vendor.x") is opener
+    with pytest.warns(RuntimeWarning, match="replacing"):
+        register_url_repository_opener("vendor.x", opener)
+    register_url_repository_opener("vendor.x", opener, override=True)
+
+
+class _FakeEntryPoint:
+    def __init__(self, name: str, value: str, obj: Any) -> None:
+        self.name = name
+        self.value = value
+        self.group = zarr_url_adapter.OPENER_ENTRY_POINT_GROUP
+        self._obj = obj
+        self.loaded = False
+
+    def load(self) -> Any:
+        self.loaded = True
+        if isinstance(self._obj, Exception):
+            raise self._obj
+        return self._obj
+
+
+@pytest.mark.usefixtures("clean_openers")
+async def test_opener_entry_points(
+    local_repo: RepoInfo, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def first(
+        root: PipelineSegment, *, read_only: bool, storage_options: dict[str, Any]
+    ) -> ic.Repository:
+        return local_repo.repo
+
+    async def second(
+        root: PipelineSegment, *, read_only: bool, storage_options: dict[str, Any]
+    ) -> ic.Repository:
+        raise AssertionError("duplicate entry point must be ignored")
+
+    eps = [
+        _FakeEntryPoint("ep.vendor", "pkg:first", first),
+        _FakeEntryPoint("ep.vendor", "pkg:second", second),
+        _FakeEntryPoint("s3", "pkg:hijack", second),
+        _FakeEntryPoint("ep.broken", "pkg:broken", ImportError("boom")),
+        _FakeEntryPoint("ep.notcallable", "pkg:value", 42),
+        _FakeEntryPoint("ep.unused", "pkg:unused", first),
+    ]
+    monkeypatch.setattr(
+        zarr_url_adapter,
+        "entry_points",
+        lambda group: [e for e in eps if e.group == group],
+    )
+
+    with pytest.warns(RuntimeWarning) as record:
+        resolution = await _resolve("ep.vendor://x|icechunk://tag.v5/", mode="r")
+    messages = [str(w.message) for w in record]
+    assert any("built-in root scheme" in m for m in messages)
+    assert any("using 'pkg:first' and ignoring 'pkg:second'" in m for m in messages)
+    assert _session_of(resolution).snapshot_id == local_repo.first
+
+    # built-in schemes never reach an opener
+    resolution = await _resolve(local_repo.root + "|icechunk:", mode="r")
+    assert not eps[2].loaded
+
+    with pytest.raises(URLPipelineError, match="failed to load") as excinfo:
+        await _resolve("ep.broken://x|icechunk:", mode="r")
+    assert isinstance(excinfo.value.__cause__, ImportError)
+    with pytest.raises(URLPipelineError, match="not callable"):
+        await _resolve("ep.notcallable://x|icechunk:", mode="r")
+    # lazy: only the entry points for the schemes used were loaded
+    assert not eps[5].loaded
+
+
+# ---------------------------------------------------------------------------
 # helpers
 
 
@@ -699,9 +874,9 @@ def test_storage_from_url() -> None:
 def test_parse_url_ref() -> None:
     assert ic.parse_url_ref("") == ic.UrlRef("branch", "main", "")
     assert ic.parse_url_ref("//tag.v1/a/b/") == ic.UrlRef("tag", "v1", "a/b")
-    assert ic.parse_url_ref("//branch.my%20branch").session_kwargs() == {
-        "branch": "my branch"
-    }
+    assert ic.parse_url_ref("//branch.my%20branch") == ic.UrlRef(
+        "branch", "my branch", ""
+    )
     for bad in ("//branch.a%2Fb", "//FWWFQGAW742XMX0F5MF", "//"):
         with pytest.raises(ValueError):
             ic.parse_url_ref(bad)

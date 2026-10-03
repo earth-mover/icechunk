@@ -35,11 +35,6 @@ class UrlRef(NamedTuple):
     """The path inside the repository, without leading or trailing `/`.
     Empty for the repository root."""
 
-    def session_kwargs(self) -> dict[str, str]:
-        """Keyword arguments for `Repository.readonly_session` selecting this ref."""
-        key = "snapshot_id" if self.kind == "snapshot" else self.kind
-        return {key: self.name}
-
 
 def parse_url_ref(body: str) -> UrlRef:
     """
