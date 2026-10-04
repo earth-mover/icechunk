@@ -709,8 +709,8 @@ mod tests {
     #[rstest]
     #[case("zip://x", "zip")]
     #[case("az://container/path", "az")]
-    #[case("al://org/repo", "al")]
-    #[case("earthmover.arraylake://org/repo", "earthmover.arraylake")]
+    #[case("arraylake://org/repo", "arraylake")]
+    #[case("vendor.scheme://org/repo", "vendor.scheme")]
     #[case("Unknown:x", "unknown")]
     fn test_parse_root_unsupported_scheme(#[case] url: &str, #[case] scheme: &str) {
         let err = parse_root_url(url).unwrap_err();

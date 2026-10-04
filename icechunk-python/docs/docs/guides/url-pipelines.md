@@ -113,6 +113,6 @@ session.commit("my changes")
 
 ## Other root schemes
 
-Packages can add root schemes, such as `al:` for Arraylake, by registering a
+Packages can add root schemes, such as `arraylake:` for Arraylake, by registering a
 repository opener in the `icechunk.url_repository_openers` entry-point group.
 See `icechunk.zarr_url_adapter.URLRepositoryOpener` for the contract.

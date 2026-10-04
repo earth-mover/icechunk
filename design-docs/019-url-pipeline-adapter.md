@@ -168,7 +168,7 @@ Alternatives, both out of scope:
 
 ## Repository openers
 
-Arraylake (and similar services) want `al://org/repo|icechunk://tag.v1/path`
+Arraylake (and similar services) want `arraylake://org/repo|icechunk://tag.v1/path`
 to work without Icechunk depending on them. Openers are async callables
 registered under the `icechunk.url_repository_openers` entry-point group,
 named by root scheme (or via `register_url_repository_opener`):

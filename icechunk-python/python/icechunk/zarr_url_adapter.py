@@ -10,7 +10,7 @@ to an `IcechunkStore` on a read-only session. This module requires a zarr
 release with URL pipeline support (zarr-developers/zarr-python#4192);
 `import icechunk` does not import it.
 
-Other packages can teach the adapter new root schemes (for example `al:`
+Other packages can teach the adapter new root schemes (for example `arraylake:`
 for Arraylake) through the `icechunk.url_repository_openers` entry-point
 group; see [`register_url_repository_opener`][icechunk.zarr_url_adapter.register_url_repository_opener].
 """
@@ -75,12 +75,12 @@ class URLRepositoryOpener(Protocol):
 
     ```toml
     [project.entry-points."icechunk.url_repository_openers"]
-    al = "arraylake.url_pipeline:open_repository"
+    arraylake = "arraylake.url_pipeline:open_repository"
     ```
 
     The `icechunk:` adapter calls it with the pipeline's root segment and
     then applies the `icechunk:` ref and path itself, so
-    `al://org/repo|icechunk://tag.v1/path|zarr3:` works as the spec intends.
+    `arraylake://org/repo|icechunk://tag.v1/path|zarr3:` works as the spec intends.
 
     Contract:
 
@@ -124,7 +124,7 @@ def register_url_repository_opener(
     Parameters
     ----------
     scheme : str
-        The root URL scheme, e.g. `"al"`. Case-insensitive.
+        The root URL scheme, e.g. `"arraylake"`. Case-insensitive.
     opener : URLRepositoryOpener
         An async callable `(root, *, read_only, storage_options) -> Repository`.
     override : bool
