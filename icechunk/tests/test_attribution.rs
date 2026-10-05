@@ -13,12 +13,12 @@ use icechunk::{
         manifest::{ChunkPayload, VirtualChunkLocation, VirtualChunkRef},
         snapshot::ArrayShape,
     },
-    new_s3_object_store_storage, new_s3_storage,
+    new_s3_object_store_storage,
     repository::VersionInfo,
     session::get_chunk,
     storage::{
         Attribution, AttributionLabels, RequestAttribution, S3ObjectStoreOptions,
-        S3StorageOptions, StorageContext,
+        S3Storage, StorageContext,
     },
     user_agent_product,
     virtual_chunks::VirtualChunkContainer,
@@ -43,15 +43,14 @@ fn static_creds() -> S3Credentials {
 }
 
 fn native_s3(store: &FakeStore) -> Arc<dyn Storage + Send + Sync> {
-    new_s3_storage(
-        s3_options(store),
-        "bucket".to_string(),
-        Some("prefix".to_string()),
-        S3StorageOptions::default()
-            .with_credentials(static_creds())
-            .with_legacy_rooted_keys(false),
+    Arc::new(
+        S3Storage::s3(s3_options(store), "bucket".to_string())
+            .prefix("prefix".to_string())
+            .credentials(static_creds())
+            .legacy_rooted_keys(false)
+            .execute()
+            .unwrap(),
     )
-    .unwrap()
 }
 
 async fn object_store_s3(store: &FakeStore) -> Arc<dyn Storage + Send + Sync> {
@@ -335,15 +334,11 @@ async fn read_virtual_chunk(
         .unwrap();
 
     // put the external object in place through a plain storage handle
-    let external = new_s3_storage(
-        s3_options(store),
-        "virtual-bucket".to_string(),
-        None,
-        S3StorageOptions::default()
-            .with_credentials(static_creds())
-            .with_legacy_rooted_keys(false),
-    )
-    .unwrap();
+    let external = S3Storage::s3(s3_options(store), "virtual-bucket".to_string())
+        .credentials(static_creds())
+        .legacy_rooted_keys(false)
+        .execute()
+        .unwrap();
     let settings = external.default_settings().await.unwrap();
     external
         .put_object(

@@ -5,8 +5,7 @@ use std::sync::Arc;
 use icechunk::{
     Storage,
     config::{S3Credentials, S3Options, S3StaticCredentials},
-    new_s3_storage,
-    storage::S3StorageOptions,
+    storage::S3Storage,
 };
 
 use crate::BoxError;
@@ -35,12 +34,11 @@ pub(crate) fn rustfs_storage(
         session_token: None,
         expires_after: None,
     });
-    Ok(new_s3_storage(
-        options,
-        BUCKET.to_string(),
-        Some(dataset_prefix(name)),
-        S3StorageOptions::default().with_credentials(credentials),
-    )?)
+    let storage = S3Storage::s3(options, BUCKET.to_string())
+        .prefix(dataset_prefix(name))
+        .credentials(credentials)
+        .execute()?;
+    Ok(Arc::new(storage))
 }
 
 /// Where the credentials for a real S3 target came from. Only the source is
@@ -95,11 +93,9 @@ pub(crate) fn s3_storage(
 ) -> Result<(Arc<dyn Storage + Send + Sync>, CredentialSource), BoxError> {
     let options = S3Options::default().with_region(region);
     let (credentials, source) = s3_credentials();
-    let storage = new_s3_storage(
-        options,
-        bucket.to_string(),
-        Some(prefix.to_string()),
-        S3StorageOptions::default().with_credentials(credentials),
-    )?;
-    Ok((storage, source))
+    let storage = S3Storage::s3(options, bucket.to_string())
+        .prefix(prefix.to_string())
+        .credentials(credentials)
+        .execute()?;
+    Ok((Arc::new(storage), source))
 }

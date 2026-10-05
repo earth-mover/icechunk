@@ -1,7 +1,7 @@
 //! Object store abstraction layer.
 //!
 //! The [`Storage`] trait defines generic object store operations (get, put, delete,
-//! list) for persisting Icechunk data. Constructor functions like [`new_s3_storage`],
+//! list) for persisting Icechunk data. Constructors like [`S3Storage::s3`],
 //! [`new_gcs_storage`], [`new_in_memory_storage`] create configured storage instances.
 
 use std::sync::Arc;
@@ -23,9 +23,7 @@ pub use icechunk_storage::{
 // Re-export from icechunk-s3
 #[cfg(feature = "s3")]
 pub use icechunk_s3::{
-    S3Storage, S3StorageOptions, mk_client, new_hf_storage, new_r2_storage,
-    new_s3_storage, new_tigris_storage, r2_storage, range_to_header, s3_storage,
-    tigris_storage,
+    Flavor, Hf, R2, S3, S3Storage, S3StorageBuilder, Tigris, mk_client, range_to_header,
 };
 
 // Re-export from icechunk-arrow-object-store

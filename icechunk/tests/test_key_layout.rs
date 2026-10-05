@@ -20,7 +20,7 @@ use icechunk::{
     ops::gc::garbage_collect,
     repository::{RepositoryError, RepositoryErrorKind, VersionInfo},
     session::get_chunk,
-    storage::{S3StorageOptions, Settings, mk_client, s3_storage},
+    storage::{S3Storage, Settings, mk_client},
 };
 use icechunk_macros::tokio_test;
 
@@ -55,20 +55,17 @@ fn root_storage(
     prefix: Option<&str>,
     legacy_rooted_keys: bool,
 ) -> Arc<dyn Storage + Send + Sync> {
-    let mut options = S3StorageOptions::default().with_credentials(root_credentials());
-    options.legacy_rooted_keys = legacy_rooted_keys.then_some(true);
+    let mut builder = S3Storage::s3(rustfs_options(), bucket.to_string())
+        .credentials(root_credentials());
+    if let Some(prefix) = prefix {
+        builder = builder.prefix(prefix.to_string());
+    }
+    if legacy_rooted_keys {
+        builder = builder.legacy_rooted_keys(true);
+    }
     // These tests deliberately create empty-prefix (bucket-root) repos, which is
     // normally refused, so apply the escape hatch before erasing the type.
-    Arc::new(
-        s3_storage(
-            rustfs_options(),
-            bucket.to_string(),
-            prefix.map(str::to_string),
-            options,
-        )
-        .unwrap()
-        .unsafe_allow_empty_prefix_creation(),
-    )
+    Arc::new(builder.execute().unwrap().unsafe_allow_empty_prefix_creation())
 }
 
 /// Create a fresh, uniquely named bucket and return its name.

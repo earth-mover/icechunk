@@ -26,10 +26,9 @@ use icechunk::{
     storage::{
         self, Attribution, AttributionLabels, AzureStorageOptions, ConcurrencySettings,
         ETag, GcsStorageOptions, Generation, RepositoryCreation, RequestAttribution,
-        S3ObjectStoreOptions, S3Storage, S3StorageOptions, StorageContext,
-        StorageErrorKind, StorageResult, VersionInfo, VersionedUpdateResult, mk_client,
-        new_gcs_storage, new_http_storage, new_in_memory_storage, new_redirect_storage,
-        new_s3_object_store_storage, new_s3_storage, s3_storage,
+        S3ObjectStoreOptions, S3Storage, StorageContext, StorageErrorKind, StorageResult,
+        VersionInfo, VersionedUpdateResult, mk_client, new_gcs_storage, new_http_storage,
+        new_in_memory_storage, new_redirect_storage, new_s3_object_store_storage,
     },
 };
 use icechunk_arrow_object_store::object_store::azure::AzureConfigKey;
@@ -85,24 +84,25 @@ async fn mk_s3_storage(
 ) -> StorageResult<Arc<dyn Storage + Send + Sync>> {
     let (access_key_id, secret_access_key) = permission.keys();
 
-    let storage: Arc<dyn Storage + Send + Sync> = new_s3_storage(
-        S3Options::default()
-            .with_region("us-east-1")
-            .with_endpoint_url("http://localhost:4200")
-            .with_allow_http(true)
-            .with_force_path_style(true),
-        "testbucket".to_string(),
-        Some(prefix.to_string()),
-        S3StorageOptions::default().with_credentials(S3Credentials::Static(
-            S3StaticCredentials {
-                access_key_id: access_key_id.into(),
-                secret_access_key: secret_access_key.into(),
-                session_token: None,
-                expires_after: None,
-            },
-        )),
-    )
-    .expect("Creating S3 storage failed");
+    let storage: Arc<dyn Storage + Send + Sync> = Arc::new(
+        S3Storage::s3(
+            S3Options::default()
+                .with_region("us-east-1")
+                .with_endpoint_url("http://localhost:4200")
+                .with_allow_http(true)
+                .with_force_path_style(true),
+            "testbucket".to_string(),
+        )
+        .prefix(prefix.to_string())
+        .credentials(S3Credentials::Static(S3StaticCredentials {
+            access_key_id: access_key_id.into(),
+            secret_access_key: secret_access_key.into(),
+            session_token: None,
+            expires_after: None,
+        }))
+        .execute()
+        .expect("Creating S3 storage failed"),
+    );
 
     Ok(storage)
 }
@@ -444,12 +444,13 @@ async fn create_refuses_empty_prefix_on_object_store()
         })
     }
     fn native_s3(prefix: &str) -> StorageResult<S3Storage> {
-        s3_storage(
+        S3Storage::s3(
             S3Options::default().with_region("us-east-1"),
             "testbucket".to_string(),
-            Some(prefix.to_string()),
-            S3StorageOptions::default().with_credentials(s3_creds()),
         )
+        .prefix(prefix.to_string())
+        .credentials(s3_creds())
+        .execute()
     }
 
     // Every create-capable cloud object-store backend, addressed at the bucket /
@@ -917,24 +918,25 @@ async fn assert_lost_response_recovers_with_fresh_etag(
     // rustfs ignores the requester-pays header; setting it only exercises the
     // requester-pays branch of the readback HEAD.
     let (access_key_id, secret_access_key) = Permission::Modify.keys();
-    let storage = new_s3_storage(
-        S3Options::default()
-            .with_region("us-east-1")
-            .with_endpoint_url("http://localhost:4200")
-            .with_allow_http(true)
-            .with_force_path_style(true)
-            .with_requester_pays(requester_pays),
-        "testbucket".to_string(),
-        Some(common::get_random_prefix(label)),
-        S3StorageOptions::default().with_credentials(S3Credentials::Static(
-            S3StaticCredentials {
-                access_key_id: access_key_id.into(),
-                secret_access_key: secret_access_key.into(),
-                session_token: None,
-                expires_after: None,
-            },
-        )),
-    )?;
+    let storage: Arc<dyn Storage + Send + Sync> = Arc::new(
+        S3Storage::s3(
+            S3Options::default()
+                .with_region("us-east-1")
+                .with_endpoint_url("http://localhost:4200")
+                .with_allow_http(true)
+                .with_force_path_style(true)
+                .with_requester_pays(requester_pays),
+            "testbucket".to_string(),
+        )
+        .prefix(common::get_random_prefix(label))
+        .credentials(S3Credentials::Static(S3StaticCredentials {
+            access_key_id: access_key_id.into(),
+            secret_access_key: secret_access_key.into(),
+            session_token: None,
+            expires_after: None,
+        }))
+        .execute()?,
+    );
     let mut settings = storage.default_settings().await?;
     if multipart {
         // Tiny threshold so small writes exercise the multipart path.
@@ -1881,14 +1883,13 @@ async fn test_write_headers_reach_s3_compatible_storage()
 
         // native S3
         let prefix = common::get_random_prefix("write_headers_native");
-        let native = new_s3_storage(
-            options.clone(),
-            "testbucket".to_string(),
-            Some(prefix.clone()),
-            S3StorageOptions::default()
-                .with_credentials(credentials.clone())
-                .with_extra_write_headers(write_header()),
-        )?;
+        let native: Arc<dyn Storage + Send + Sync> = Arc::new(
+            S3Storage::s3(options.clone(), "testbucket".to_string())
+                .prefix(prefix.clone())
+                .credentials(credentials.clone())
+                .write_headers(write_header())
+                .execute()?,
+        );
         let key = put_probe_object(&native).await?;
         assert_write_header_round_trips(
             &format!("{name}/native"),
@@ -2010,17 +2011,13 @@ async fn test_invalid_native_s3_header_errors_not_panics()
         session_token: None,
         expires_after: None,
     });
-    let storage = new_s3_storage(
-        options,
-        "testbucket".to_string(),
-        Some(common::get_random_prefix("invalid_header")),
-        S3StorageOptions::default()
-            .with_credentials(credentials)
-            .with_extra_write_headers(vec![(
-                "bad header name".to_string(),
-                "v".to_string(),
-            )]),
-    )?;
+    let storage: Arc<dyn Storage + Send + Sync> = Arc::new(
+        S3Storage::s3(options, "testbucket".to_string())
+            .prefix(common::get_random_prefix("invalid_header"))
+            .credentials(credentials)
+            .write_headers(vec![("bad header name".to_string(), "v".to_string())])
+            .execute()?,
+    );
     let settings = storage.default_settings().await?;
     let ctx = attributed(&settings);
     let result = storage

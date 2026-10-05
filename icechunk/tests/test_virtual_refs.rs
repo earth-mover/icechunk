@@ -17,8 +17,8 @@ use icechunk::{
     repository::VersionInfo,
     session::{SessionError, SessionErrorKind, get_chunk},
     storage::{
-        self, AzureStorageOptions, ConcurrencySettings, ETag, ObjectStorage,
-        S3StorageOptions, StorageContext, mk_client, new_s3_storage,
+        self, AzureStorageOptions, ConcurrencySettings, ETag, ObjectStorage, S3Storage,
+        StorageContext, mk_client,
     },
     store::{StoreError, StoreErrorKind},
     virtual_chunks::VirtualChunkContainer,
@@ -202,13 +202,13 @@ async fn create_local_repository(
 async fn create_minio_repository(spec_version: SpecVersionBin) -> Repository {
     let prefix = format!("{:?}", ChunkId::random());
     let (config, credentials) = minio_s3_config();
-    let storage: Arc<dyn Storage + Send + Sync> = new_s3_storage(
-        config,
-        "testbucket".to_string(),
-        Some(prefix),
-        S3StorageOptions::default().with_credentials(credentials),
-    )
-    .expect("Creating minio storage failed");
+    let storage: Arc<dyn Storage + Send + Sync> = Arc::new(
+        S3Storage::s3(config, "testbucket".to_string())
+            .prefix(prefix)
+            .credentials(credentials)
+            .execute()
+            .expect("Creating minio storage failed"),
+    );
 
     let containers = vec![
         VirtualChunkContainer::new(
@@ -1165,13 +1165,13 @@ async fn test_zarr_store_with_multiple_virtual_chunk_containers(
 
     let prefix = format!("{:?}", ChunkId::random());
     let (config, credentials) = minio_s3_config();
-    let storage: Arc<dyn Storage + Send + Sync> = new_s3_storage(
-        config,
-        "testbucket".to_string(),
-        Some(prefix),
-        S3StorageOptions::default().with_credentials(credentials),
-    )
-    .expect("Creating minio storage failed");
+    let storage: Arc<dyn Storage + Send + Sync> = Arc::new(
+        S3Storage::s3(config, "testbucket".to_string())
+            .prefix(prefix)
+            .credentials(credentials)
+            .execute()
+            .expect("Creating minio storage failed"),
+    );
 
     let chunk_dir = TempDir::new()?;
 

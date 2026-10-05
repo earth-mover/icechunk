@@ -4,8 +4,8 @@
 pub use aws_sdk_s3;
 
 use std::{
-    borrow::Cow, collections::HashMap, fmt, future::ready, ops::Range, pin::Pin,
-    sync::Arc, time::Duration,
+    borrow::Cow, collections::HashMap, fmt, future::ready, marker::PhantomData,
+    ops::Range, pin::Pin, sync::Arc, time::Duration,
 };
 
 use async_trait::async_trait;
@@ -511,84 +511,154 @@ fn transient_per_key_code(errors: &[aws_sdk_s3::types::Error]) -> Option<&str> {
         .then_some(first)
 }
 
-/// Per-storage settings for an S3-compatible bucket: credentials, headers, write access,
-/// key layout.
-#[derive(Debug, Clone)]
-#[non_exhaustive]
-pub struct S3StorageOptions {
-    /// `None` reads credentials from the environment.
-    pub credentials: Option<S3Credentials>,
-    /// False makes a read-only store. Tigris weak consistency also forces false.
-    pub can_write: bool,
-    /// Extra HTTP headers on `GET`/`HEAD`/`OPTIONS`/`TRACE` requests.
-    pub extra_read_headers: Vec<(String, String)>,
-    /// Extra HTTP headers on every other request.
-    pub extra_write_headers: Vec<(String, String)>,
-    /// Key layout of the bucket. See [`S3Storage::new`].
-    pub legacy_rooted_keys: Option<bool>,
+mod private {
+    pub trait Sealed {}
 }
 
-impl Default for S3StorageOptions {
-    fn default() -> Self {
-        Self {
-            credentials: None,
-            can_write: true,
-            extra_read_headers: Vec::new(),
-            extra_write_headers: Vec::new(),
-            legacy_rooted_keys: None,
-        }
+/// Marker for an S3 or S3-compatible bucket, see [`S3Storage::s3`].
+#[derive(Debug, Clone, Copy)]
+pub struct S3;
+/// Marker for Cloudflare R2, see [`S3Storage::r2`].
+#[derive(Debug, Clone, Copy)]
+pub struct R2;
+/// Marker for a Hugging Face Storage Bucket, see [`S3Storage::hf`].
+#[derive(Debug, Clone, Copy)]
+pub struct Hf;
+/// Marker for Tigris, see [`S3Storage::tigris`].
+#[derive(Debug, Clone, Copy)]
+pub struct Tigris;
+
+/// The service an [`S3StorageBuilder`] targets.
+///
+/// Flavor-only methods do not compile on another flavor:
+///
+/// ```compile_fail
+/// # use icechunk_s3::{S3Storage, S3Options};
+/// S3Storage::s3(S3Options::default(), "b".to_string()).weak_consistency(true);
+/// ```
+pub trait Flavor: private::Sealed + Send + Sync + 'static {}
+
+impl private::Sealed for S3 {}
+impl private::Sealed for R2 {}
+impl private::Sealed for Hf {}
+impl private::Sealed for Tigris {}
+impl Flavor for S3 {}
+impl Flavor for R2 {}
+impl Flavor for Hf {}
+impl Flavor for Tigris {}
+
+/// Builds an [`S3Storage`]. Start with [`S3Storage::s3`], [`r2`](S3Storage::r2),
+/// [`hf`](S3Storage::hf) or [`tigris`](S3Storage::tigris).
+///
+/// ```no_run
+/// # use icechunk_s3::{S3Storage, S3Options};
+/// # fn f() -> Result<(), Box<dyn std::error::Error>> {
+/// let storage =
+///     S3Storage::s3(S3Options::default().with_region("us-east-1"), "bucket".to_string())
+///         .prefix("repo".to_string())
+///         .execute()?;
+/// # Ok(()) }
+/// ```
+pub struct S3StorageBuilder<F: Flavor> {
+    config: S3Options,
+    bucket: Option<String>,
+    prefix: Option<String>,
+    credentials: Option<S3Credentials>,
+    can_write: bool,
+    read_headers: Vec<(String, String)>,
+    write_headers: Vec<(String, String)>,
+    legacy_rooted_keys: Option<bool>,
+    namespace: Option<String>,
+    account_id: Option<String>,
+    weak_consistency: bool,
+    _flavor: PhantomData<F>,
+}
+
+impl<F: Flavor> fmt::Debug for S3StorageBuilder<F> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("S3StorageBuilder")
+            .field("flavor", &std::any::type_name::<F>())
+            .field("config", &self.config)
+            .field("bucket", &self.bucket)
+            .field("prefix", &self.prefix)
+            .field("can_write", &self.can_write)
+            .field("read_headers", &self.read_headers)
+            .field("write_headers", &self.write_headers)
+            .field("legacy_rooted_keys", &self.legacy_rooted_keys)
+            .field("namespace", &self.namespace)
+            .field("account_id", &self.account_id)
+            .field("weak_consistency", &self.weak_consistency)
+            .finish_non_exhaustive()
     }
 }
 
-impl S3StorageOptions {
-    pub fn with_credentials(mut self, value: S3Credentials) -> Self {
+impl<F: Flavor> S3StorageBuilder<F> {
+    fn new(config: S3Options, bucket: Option<String>) -> Self {
+        Self {
+            config,
+            bucket,
+            prefix: None,
+            credentials: None,
+            can_write: true,
+            read_headers: Vec::new(),
+            write_headers: Vec::new(),
+            legacy_rooted_keys: None,
+            namespace: None,
+            account_id: None,
+            weak_consistency: false,
+            _flavor: PhantomData,
+        }
+    }
+
+    /// Key prefix inside the bucket. Default: none, the bucket root.
+    pub fn prefix(mut self, value: String) -> Self {
+        self.prefix = Some(value);
+        self
+    }
+
+    /// Default: credentials from the environment.
+    pub fn credentials(mut self, value: S3Credentials) -> Self {
         self.credentials = Some(value);
         self
     }
 
-    pub fn with_can_write(mut self, value: bool) -> Self {
+    /// Extra HTTP headers on `GET`/`HEAD`/`OPTIONS`/`TRACE` requests. Default: none.
+    pub fn read_headers(mut self, value: Vec<(String, String)>) -> Self {
+        self.read_headers = value;
+        self
+    }
+
+    /// Extra HTTP headers on every other request. Default: none.
+    pub fn write_headers(mut self, value: Vec<(String, String)>) -> Self {
+        self.write_headers = value;
+        self
+    }
+
+    /// Key layout of the bucket. Default: auto-detect by a probe of storage on first use.
+    ///
+    /// - `true` forces the legacy leading-slash layout used before the fix for
+    ///   <https://github.com/earth-mover/icechunk/issues/2239>. Only valid with an
+    ///   empty prefix; `execute` fails otherwise.
+    /// - `false` forces the standard layout and skips the probe.
+    pub fn legacy_rooted_keys(mut self, value: bool) -> Self {
+        self.legacy_rooted_keys = Some(value);
+        self
+    }
+
+    /// False makes a read-only store. Default: true. Tigris weak consistency also forces false.
+    pub fn can_write(mut self, value: bool) -> Self {
         self.can_write = value;
         self
     }
 
-    pub fn with_extra_read_headers(mut self, value: Vec<(String, String)>) -> Self {
-        self.extra_read_headers = value;
-        self
-    }
-
-    pub fn with_extra_write_headers(mut self, value: Vec<(String, String)>) -> Self {
-        self.extra_write_headers = value;
-        self
-    }
-
-    pub fn with_legacy_rooted_keys(mut self, value: bool) -> Self {
-        self.legacy_rooted_keys = Some(value);
-        self
-    }
-}
-
-impl S3Storage {
-    /// Build an [`S3Storage`].
-    ///
-    /// `options.legacy_rooted_keys` declares the bucket's key layout:
-    /// - `None` — unknown: the layout is auto-detected by probing storage on first
-    ///   use. The right choice when opening a repository whose layout you don't know.
-    /// - `Some(true)` — force the legacy leading-slash layout used before the fix
-    ///   for <https://github.com/earth-mover/icechunk/issues/2239>. Only valid with
-    ///   an empty prefix; errors otherwise.
-    /// - `Some(false)` — force the standard layout, skipping the probe.
-    pub fn new(
-        config: S3Options,
-        bucket: String,
-        prefix: Option<String>,
-        options: S3StorageOptions,
-    ) -> Result<S3Storage, StorageError> {
+    fn finish(self) -> StorageResult<S3Storage> {
+        let bucket = self.bucket.ok_or_else(|| other_error("bucket is required"))?;
         let client = OnceCell::new();
-        let prefix = prefix.unwrap_or_default();
+        let prefix = self.prefix.unwrap_or_default();
         let prefix = prefix.strip_suffix("/").unwrap_or(prefix.as_str()).to_string();
         // A known layout pre-seeds the cell so `probe_layout` is never reached;
         // `None` leaves it empty to be detected lazily on first use.
-        let key_layout = match options.legacy_rooted_keys {
+        let key_layout = match self.legacy_rooted_keys {
             Some(true) => {
                 if !prefix.is_empty() {
                     return Err(other_error(
@@ -602,16 +672,75 @@ impl S3Storage {
         };
         Ok(S3Storage {
             client,
-            config,
+            config: self.config,
             bucket,
             prefix,
-            credentials: options.credentials.unwrap_or(S3Credentials::FromEnv),
-            can_write: options.can_write,
-            extra_read_headers: options.extra_read_headers,
-            extra_write_headers: options.extra_write_headers,
+            credentials: self.credentials.unwrap_or(S3Credentials::FromEnv),
+            can_write: self.can_write,
+            extra_read_headers: self.read_headers,
+            extra_write_headers: self.write_headers,
             key_layout,
             allow_empty_prefix_creation: false,
         })
+    }
+}
+
+impl S3StorageBuilder<R2> {
+    /// R2 bucket. Either this or a `prefix` of the form `bucket/prefix` is required.
+    pub fn bucket(mut self, value: String) -> Self {
+        self.bucket = Some(value);
+        self
+    }
+
+    /// Cloudflare account id. Required unless the config has an `endpoint_url`.
+    pub fn account_id(mut self, value: String) -> Self {
+        self.account_id = Some(value);
+        self
+    }
+}
+
+impl S3StorageBuilder<Tigris> {
+    /// Eventually consistent reads. True forces a read-only store, whatever
+    /// [`can_write`](Self::can_write) says. Default: false.
+    pub fn weak_consistency(mut self, value: bool) -> Self {
+        self.weak_consistency = value;
+        self
+    }
+}
+
+impl S3Storage {
+    /// Storage for an S3 (or S3-compatible, non-Tigris) bucket.
+    pub fn s3(config: S3Options, bucket: String) -> S3StorageBuilder<S3> {
+        S3StorageBuilder::new(config, Some(bucket))
+    }
+
+    /// Storage for a Cloudflare R2 bucket. Set the bucket with
+    /// [`bucket`](S3StorageBuilder::bucket) or a `bucket/prefix` prefix.
+    pub fn r2(config: S3Options) -> S3StorageBuilder<R2> {
+        S3StorageBuilder::new(config, None)
+    }
+
+    /// Storage for a Hugging Face Storage Bucket.
+    ///
+    /// `namespace` owns the bucket: a Hugging Face user or organization. The gateway
+    /// scopes every operation to it through the endpoint path. Hugging Face runs one
+    /// gateway, so this overwrites any `endpoint_url` in `config`.
+    pub fn hf(
+        config: S3Options,
+        bucket: String,
+        namespace: &str,
+    ) -> S3StorageBuilder<Hf> {
+        let mut builder = S3StorageBuilder::new(config, Some(bucket));
+        builder.namespace = Some(namespace.to_string());
+        builder
+    }
+
+    /// Storage for a Tigris bucket.
+    ///
+    /// The required `X-Tigris-*` consistency headers take precedence over user
+    /// headers on a name conflict.
+    pub fn tigris(config: S3Options, bucket: String) -> S3StorageBuilder<Tigris> {
+        S3StorageBuilder::new(config, Some(bucket))
     }
 
     /// Test/internal escape hatch: permit creating a new repository at an empty
@@ -1639,161 +1768,79 @@ impl ProvideRefreshableCredentials {
     }
 }
 
-// Factory functions
-
-/// Build storage for an S3 (or S3-compatible, non-Tigris) bucket.
-///
-/// Credentials, headers, write access, and key layout come from `options`, see
-/// [`S3StorageOptions`].
-pub fn new_s3_storage(
-    config: S3Options,
-    bucket: String,
-    prefix: Option<String>,
-    options: S3StorageOptions,
-) -> StorageResult<Arc<dyn Storage + Send + Sync>> {
-    Ok(Arc::new(s3_storage(config, bucket, prefix, options)?))
-}
-
-/// Build storage for an S3 (or S3-compatible, non-Tigris) bucket.
-///
-/// Credentials, headers, write access, and key layout come from `options`, see
-/// [`S3StorageOptions`].
-pub fn s3_storage(
-    config: S3Options,
-    bucket: String,
-    prefix: Option<String>,
-    options: S3StorageOptions,
-) -> StorageResult<S3Storage> {
-    if let Some(endpoint) = &config.endpoint_url
-        && (endpoint.contains("fly.storage.tigris.dev")
-            || endpoint.contains("t3.storage.dev"))
-    {
-        return Err(other_error(
-            "Tigris Storage is not S3 compatible, use the Tigris specific constructor instead"
-                .to_string(),
-        ));
+impl S3StorageBuilder<S3> {
+    /// Fails on a Tigris endpoint; use [`S3Storage::tigris`] there.
+    pub fn execute(self) -> StorageResult<S3Storage> {
+        if let Some(endpoint) = &self.config.endpoint_url
+            && (endpoint.contains("fly.storage.tigris.dev")
+                || endpoint.contains("t3.storage.dev"))
+        {
+            return Err(other_error(
+                "Tigris Storage is not S3 compatible, use the Tigris specific constructor instead"
+                    .to_string(),
+            ));
+        }
+        self.finish()
     }
-
-    S3Storage::new(config, bucket, prefix, options)
 }
 
-/// Build storage for a Cloudflare R2 bucket.
-///
-/// Credentials, headers, write access, and key layout come from `options`, see
-/// [`S3StorageOptions`].
-pub fn new_r2_storage(
-    config: S3Options,
-    bucket: Option<String>,
-    prefix: Option<String>,
-    account_id: Option<String>,
-    options: S3StorageOptions,
-) -> StorageResult<Arc<dyn Storage + Send + Sync>> {
-    Ok(Arc::new(r2_storage(config, bucket, prefix, account_id, options)?))
-}
+impl S3StorageBuilder<R2> {
+    /// Fails without a bucket or prefix, or without an endpoint or account id.
+    pub fn execute(mut self) -> StorageResult<S3Storage> {
+        let (bucket, prefix) = match (self.bucket.take(), self.prefix.take()) {
+            (Some(bucket), Some(prefix)) => (bucket, Some(prefix)),
+            (None, Some(prefix)) => match prefix.split_once("/") {
+                Some((bucket, prefix)) => (bucket.to_string(), Some(prefix.to_string())),
+                None => (prefix, None),
+            },
+            (Some(bucket), None) => (bucket, None),
+            (None, None) => {
+                return Err(StorageErrorKind::R2ConfigurationError(
+                    "Either bucket or prefix must be provided.".to_string(),
+                ))
+                .capture();
+            }
+        };
 
-/// Build storage for a Cloudflare R2 bucket.
-///
-/// Credentials, headers, write access, and key layout come from `options`, see
-/// [`S3StorageOptions`].
-pub fn r2_storage(
-    config: S3Options,
-    bucket: Option<String>,
-    prefix: Option<String>,
-    account_id: Option<String>,
-    options: S3StorageOptions,
-) -> StorageResult<S3Storage> {
-    let (bucket, prefix) = match (bucket, prefix) {
-        (Some(bucket), Some(prefix)) => (bucket, Some(prefix)),
-        (None, Some(prefix)) => match prefix.split_once("/") {
-            Some((bucket, prefix)) => (bucket.to_string(), Some(prefix.to_string())),
-            None => (prefix, None),
-        },
-        (Some(bucket), None) => (bucket, None),
-        (None, None) => {
+        if self.config.endpoint_url.is_none() && self.account_id.is_none() {
             return Err(StorageErrorKind::R2ConfigurationError(
-                "Either bucket or prefix must be provided.".to_string(),
+                "Either endpoint_url or account_id must be provided.".to_string(),
             ))
             .capture();
         }
-    };
 
-    if config.endpoint_url.is_none() && account_id.is_none() {
-        return Err(StorageErrorKind::R2ConfigurationError(
-            "Either endpoint_url or account_id must be provided.".to_string(),
-        ))
-        .capture();
+        if self.config.region.is_none() {
+            self.config.region = Some("auto".to_string());
+        }
+        if self.config.endpoint_url.is_none() {
+            self.config.endpoint_url = self
+                .account_id
+                .take()
+                .map(|x| format!("https://{x}.r2.cloudflarestorage.com"));
+        }
+        self.config.force_path_style = true;
+        self.bucket = Some(bucket);
+        self.prefix = prefix;
+        self.finish()
     }
-
-    let mut config = config;
-    if config.region.is_none() {
-        config.region = Some("auto".to_string());
-    }
-    if config.endpoint_url.is_none() {
-        config.endpoint_url =
-            account_id.map(|x| format!("https://{x}.r2.cloudflarestorage.com"));
-    }
-    config.force_path_style = true;
-    S3Storage::new(config, bucket, prefix, options)
 }
 
 /// The Hugging Face S3-compatible gateway.
 const HF_GATEWAY_ENDPOINT: &str = "https://s3.hf.co";
 
-/// Build storage for a Hugging Face Storage Bucket.
-///
-/// `namespace` owns the bucket: a Hugging Face user or organization. The gateway
-/// scopes every operation to it through the endpoint path.
-///
-/// Hugging Face runs one gateway, so this overwrites any `endpoint_url` in
-/// `config`.
-///
-/// Credentials, headers, write access, and key layout come from `options`, see
-/// [`S3StorageOptions`].
-pub fn new_hf_storage(
-    config: S3Options,
-    bucket: String,
-    prefix: Option<String>,
-    namespace: &str,
-    options: S3StorageOptions,
-) -> StorageResult<Arc<dyn Storage + Send + Sync>> {
-    Ok(Arc::new(hf_storage(config, bucket, prefix, namespace, options)?))
-}
-
-/// The concrete storage behind [`new_hf_storage`], so tests can read its config.
-fn hf_storage(
-    config: S3Options,
-    bucket: String,
-    prefix: Option<String>,
-    namespace: &str,
-    options: S3StorageOptions,
-) -> StorageResult<S3Storage> {
-    let mut config = config;
-    config.endpoint_url = Some(format!("{HF_GATEWAY_ENDPOINT}/{namespace}"));
-    if config.region.is_none() {
-        // the gateway serves one region and still requires the field
-        config.region = Some("us-east-1".to_string());
+impl S3StorageBuilder<Hf> {
+    /// Uses the gateway endpoint and path-style URLs. Region default: `us-east-1`.
+    pub fn execute(mut self) -> StorageResult<S3Storage> {
+        let namespace = self.namespace.take().unwrap_or_default();
+        self.config.endpoint_url = Some(format!("{HF_GATEWAY_ENDPOINT}/{namespace}"));
+        if self.config.region.is_none() {
+            // the gateway serves one region and still requires the field
+            self.config.region = Some("us-east-1".to_string());
+        }
+        // the gateway does not serve virtual-hosted style URLs
+        self.config.force_path_style = true;
+        self.finish()
     }
-    // the gateway does not serve virtual-hosted style URLs
-    config.force_path_style = true;
-
-    S3Storage::new(config, bucket, prefix, options)
-}
-
-/// Build storage for a Tigris bucket.
-///
-/// Credentials, headers, write access, and key layout come from `options`, see
-/// [`S3StorageOptions`].
-/// `use_weak_consistency = true` forces a read-only store, whatever `options.can_write` says.
-/// The required `X-Tigris-*` consistency headers take precedence on a name
-/// conflict.
-pub fn new_tigris_storage(
-    config: S3Options,
-    bucket: String,
-    prefix: Option<String>,
-    use_weak_consistency: bool,
-    options: S3StorageOptions,
-) -> StorageResult<Arc<dyn Storage + Send + Sync>> {
-    Ok(Arc::new(tigris_storage(config, bucket, prefix, use_weak_consistency, options)?))
 }
 
 /// Merge user-supplied headers with headers Icechunk must set itself. On a
@@ -1812,58 +1859,46 @@ fn merge_required_headers(
     merged
 }
 
-/// Build storage for a Tigris bucket.
-///
-/// Credentials, headers, write access, and key layout come from `options`, see
-/// [`S3StorageOptions`].
-/// `use_weak_consistency = true` forces a read-only store, whatever `options.can_write` says.
-/// The required `X-Tigris-*` consistency headers take precedence on a name
-/// conflict.
-pub fn tigris_storage(
-    config: S3Options,
-    bucket: String,
-    prefix: Option<String>,
-    use_weak_consistency: bool,
-    options: S3StorageOptions,
-) -> StorageResult<S3Storage> {
-    let mut config = config;
-    if config.endpoint_url.is_none() {
-        config.endpoint_url = Some("https://t3.storage.dev".to_string());
-    }
-    let mut tigris_write_headers = Vec::with_capacity(2);
-    let mut tigris_read_headers = Vec::with_capacity(3);
-
-    if !use_weak_consistency {
-        // TODO: Tigris will need more than this to offer good eventually consistent behavior
-        // For example: we should use no-cache for branches and config file
-        if let Some(region) = config.region.as_ref() {
-            tigris_write_headers.push(("X-Tigris-Regions".to_string(), region.clone()));
-            tigris_write_headers
-                .push(("X-Tigris-Consistent".to_string(), "true".to_string()));
-
-            tigris_read_headers.push(("X-Tigris-Regions".to_string(), region.clone()));
-            tigris_read_headers
-                .push(("Cache-Control".to_string(), "no-cache".to_string()));
-            tigris_read_headers
-                .push(("X-Tigris-Consistent".to_string(), "true".to_string()));
-        } else {
-            return Err(other_error("Tigris storage requires a region to provide full consistency. Either set the region for the bucket or use the read-only, eventually consistent storage by passing `use_weak_consistency=True` (experts only)".to_string()));
+impl S3StorageBuilder<Tigris> {
+    /// Fails without a region unless weak consistency is on.
+    pub fn execute(mut self) -> StorageResult<S3Storage> {
+        if self.config.endpoint_url.is_none() {
+            self.config.endpoint_url = Some("https://t3.storage.dev".to_string());
         }
-    }
-    let options = S3StorageOptions {
+        let mut tigris_write_headers = Vec::with_capacity(2);
+        let mut tigris_read_headers = Vec::with_capacity(3);
+
+        if !self.weak_consistency {
+            // TODO: Tigris will need more than this to offer good eventually consistent behavior
+            // For example: we should use no-cache for branches and config file
+            if let Some(region) = self.config.region.as_ref() {
+                tigris_write_headers
+                    .push(("X-Tigris-Regions".to_string(), region.clone()));
+                tigris_write_headers
+                    .push(("X-Tigris-Consistent".to_string(), "true".to_string()));
+
+                tigris_read_headers
+                    .push(("X-Tigris-Regions".to_string(), region.clone()));
+                tigris_read_headers
+                    .push(("Cache-Control".to_string(), "no-cache".to_string()));
+                tigris_read_headers
+                    .push(("X-Tigris-Consistent".to_string(), "true".to_string()));
+            } else {
+                return Err(other_error("Tigris storage requires a region to provide full consistency. Either set the region for the bucket or use the read-only, eventually consistent storage by passing `use_weak_consistency=True` (experts only)".to_string()));
+            }
+        }
         // eventually consistent storage cannot do writes
-        can_write: options.can_write && !use_weak_consistency,
-        extra_read_headers: merge_required_headers(
-            options.extra_read_headers,
+        self.can_write = self.can_write && !self.weak_consistency;
+        self.read_headers = merge_required_headers(
+            std::mem::take(&mut self.read_headers),
             tigris_read_headers,
-        ),
-        extra_write_headers: merge_required_headers(
-            options.extra_write_headers,
+        );
+        self.write_headers = merge_required_headers(
+            std::mem::take(&mut self.write_headers),
             tigris_write_headers,
-        ),
-        ..options
-    };
-    S3Storage::new(config, bucket, prefix, options)
+        );
+        self.finish()
+    }
 }
 
 #[cfg(test)]
@@ -1951,26 +1986,20 @@ mod tests {
     /// into a single stream.
     #[test]
     fn s3_lists_id_prefixes_natively() {
-        let storage = new_s3_storage(
-            S3Options::default(),
-            "my-bucket".to_string(),
-            Some("some/prefix".to_string()),
-            S3StorageOptions::default(),
-        )
-        .unwrap();
+        let storage = S3Storage::s3(S3Options::default(), "my-bucket".to_string())
+            .prefix("some/prefix".to_string())
+            .execute()
+            .unwrap();
         assert!(storage.lists_id_prefixes_natively());
     }
 
     #[test]
     fn hf_storage_sets_gateway_config() {
-        let storage = hf_storage(
-            S3Options::default(),
-            "my-bucket".to_string(),
-            Some("some/prefix".to_string()),
-            "my-namespace",
-            S3StorageOptions::default(),
-        )
-        .unwrap();
+        let storage =
+            S3Storage::hf(S3Options::default(), "my-bucket".to_string(), "my-namespace")
+                .prefix("some/prefix".to_string())
+                .execute()
+                .unwrap();
 
         assert_eq!(
             storage.config.endpoint_url.as_deref(),
@@ -1982,66 +2011,84 @@ mod tests {
     }
 
     #[test]
-    fn s3_storage_options_default_matches_the_free_function_defaults() {
-        let o = S3StorageOptions::default();
-        assert!(o.credentials.is_none());
-        assert!(o.can_write);
-        assert!(o.extra_read_headers.is_empty());
-        assert!(o.extra_write_headers.is_empty());
-        assert_eq!(o.legacy_rooted_keys, None);
+    fn s3_builder_defaults() {
+        let b = S3Storage::s3(S3Options::default(), "b".to_string());
+        assert!(b.prefix.is_none());
+        assert!(b.credentials.is_none());
+        assert!(b.can_write);
+        assert!(b.read_headers.is_empty() && b.write_headers.is_empty());
+        assert_eq!(b.legacy_rooted_keys, None);
     }
 
     #[test]
-    fn s3_storage_options_setters_set_fields() {
-        let o = S3StorageOptions::default()
-            .with_credentials(S3Credentials::Anonymous)
-            .with_can_write(false)
-            .with_extra_read_headers(vec![("a".to_string(), "b".to_string())])
-            .with_extra_write_headers(vec![("c".to_string(), "d".to_string())])
-            .with_legacy_rooted_keys(false);
-        assert!(matches!(o.credentials, Some(S3Credentials::Anonymous)));
-        assert!(!o.can_write);
-        assert_eq!(o.extra_read_headers, vec![("a".to_string(), "b".to_string())]);
-        assert_eq!(o.extra_write_headers, vec![("c".to_string(), "d".to_string())]);
-        assert_eq!(o.legacy_rooted_keys, Some(false));
+    fn s3_builder_methods_set_fields() {
+        let b = S3Storage::s3(S3Options::default(), "b".to_string())
+            .prefix("p".to_string())
+            .credentials(S3Credentials::Anonymous)
+            .read_headers(vec![("a".to_string(), "b".to_string())])
+            .write_headers(vec![("c".to_string(), "d".to_string())])
+            .legacy_rooted_keys(false)
+            .can_write(false);
+        assert_eq!(b.prefix.as_deref(), Some("p"));
+        assert!(matches!(b.credentials, Some(S3Credentials::Anonymous)));
+        assert_eq!(b.read_headers, vec![("a".to_string(), "b".to_string())]);
+        assert_eq!(b.write_headers, vec![("c".to_string(), "d".to_string())]);
+        assert_eq!(b.legacy_rooted_keys, Some(false));
+        assert!(!b.can_write);
     }
 
     #[test]
-    fn default_options_read_credentials_from_env() {
-        let storage = S3Storage::new(
-            S3Options::default(),
-            "bucket".to_string(),
-            None,
-            S3StorageOptions::default(),
-        )
-        .unwrap();
+    fn default_credentials_come_from_env() {
+        let storage =
+            S3Storage::s3(S3Options::default(), "bucket".to_string()).execute().unwrap();
         let json = serde_json::to_string(&storage).unwrap();
         assert!(json.contains(r#""s3_credential_type":"from_env""#), "{json}");
     }
 
     #[tokio_test]
     async fn weak_consistency_tigris_is_read_only_even_when_can_write_is_true() {
-        let storage = tigris_storage(
+        let storage = S3Storage::tigris(
             S3Options::default().with_region("iad"),
             "bucket".to_string(),
-            None,
-            true,
-            S3StorageOptions::default().with_can_write(true),
         )
+        .weak_consistency(true)
+        .can_write(true)
+        .execute()
         .unwrap();
         assert!(!storage.can_write().await.unwrap());
     }
 
     #[tokio_test]
-    async fn with_can_write_false_makes_a_read_only_store() {
-        let storage = S3Storage::new(
-            S3Options::default(),
-            "bucket".to_string(),
-            None,
-            S3StorageOptions::default().with_can_write(false),
-        )
-        .unwrap();
+    async fn can_write_false_makes_a_read_only_store() {
+        let storage = S3Storage::s3(S3Options::default(), "bucket".to_string())
+            .can_write(false)
+            .execute()
+            .unwrap();
         assert!(!storage.can_write().await.unwrap());
+    }
+
+    #[test]
+    fn r2_without_bucket_or_prefix_is_an_error() {
+        let err = S3Storage::r2(S3Options::default())
+            .account_id("acct".to_string())
+            .execute()
+            .unwrap_err();
+        assert!(matches!(err.kind, StorageErrorKind::R2ConfigurationError(_)), "{err:?}");
+    }
+
+    #[test]
+    fn r2_prefix_with_slash_splits_bucket_and_prefix() {
+        let storage = S3Storage::r2(S3Options::default())
+            .prefix("mybucket/some/path".to_string())
+            .account_id("acct".to_string())
+            .execute()
+            .unwrap();
+        let json = serde_json::to_string(&storage).unwrap();
+        assert!(
+            json.contains(r#""bucket":"mybucket""#)
+                && json.contains(r#""prefix":"some/path""#),
+            "{json}"
+        );
     }
 
     #[tokio_test]
@@ -2056,13 +2103,11 @@ mod tests {
             session_token: Some("session_token".to_string()),
             expires_after: None,
         });
-        let storage = S3Storage::new(
-            config,
-            "bucket".to_string(),
-            Some("prefix".to_string()),
-            S3StorageOptions::default().with_credentials(credentials),
-        )
-        .unwrap();
+        let storage = S3Storage::s3(config, "bucket".to_string())
+            .prefix("prefix".to_string())
+            .credentials(credentials)
+            .execute()
+            .unwrap();
 
         let serialized = serde_json::to_string(&storage).unwrap();
 
@@ -2084,15 +2129,12 @@ mod tests {
             ("x-amz-acl".to_string(), "bucket-owner-full-control".to_string()),
             ("x-amz-meta-writer".to_string(), "w".to_string()),
         ];
-        let storage = S3Storage::new(
-            S3Options::default(),
-            "bucket".to_string(),
-            Some("prefix".to_string()),
-            S3StorageOptions::default()
-                .with_extra_read_headers(read_headers.clone())
-                .with_extra_write_headers(write_headers.clone()),
-        )
-        .unwrap();
+        let storage = S3Storage::s3(S3Options::default(), "bucket".to_string())
+            .prefix("prefix".to_string())
+            .read_headers(read_headers.clone())
+            .write_headers(write_headers.clone())
+            .execute()
+            .unwrap();
 
         let serialized = serde_json::to_string(&storage).unwrap();
         assert!(serialized.contains("x-amz-acl"), "got: {serialized}");
@@ -2106,23 +2148,20 @@ mod tests {
     /// case-insensitive name conflict; non-conflicting user headers survive.
     #[test]
     fn test_tigris_user_headers_merge() {
-        let storage = tigris_storage(
+        let storage = S3Storage::tigris(
             S3Options::default().with_region("iad"),
             "bucket".to_string(),
-            Some("prefix".to_string()),
-            false,
-            S3StorageOptions::default()
-                .with_credentials(S3Credentials::FromEnv)
-                .with_extra_read_headers(vec![(
-                    "x-amz-meta-reader".to_string(),
-                    "r".to_string(),
-                )])
-                .with_extra_write_headers(vec![
-                    ("x-amz-acl".to_string(), "bucket-owner-full-control".to_string()),
-                    // collides (case-insensitively) with the required Tigris header
-                    ("x-tigris-regions".to_string(), "hijacked".to_string()),
-                ]),
         )
+        .prefix("prefix".to_string())
+        .weak_consistency(false)
+        .credentials(S3Credentials::FromEnv)
+        .read_headers(vec![("x-amz-meta-reader".to_string(), "r".to_string())])
+        .write_headers(vec![
+            ("x-amz-acl".to_string(), "bucket-owner-full-control".to_string()),
+            // collides (case-insensitively) with the required Tigris header
+            ("x-tigris-regions".to_string(), "hijacked".to_string()),
+        ])
+        .execute()
         .unwrap();
 
         // user read header preserved alongside the injected Tigris read headers
@@ -2153,18 +2192,15 @@ mod tests {
     }
 
     fn storage_with_prefix(prefix: Option<&str>, legacy_rooted_keys: bool) -> S3Storage {
-        let options = S3StorageOptions {
-            // map the helper's bool: force legacy when set, else auto-detect
-            legacy_rooted_keys: legacy_rooted_keys.then_some(true),
-            ..S3StorageOptions::default()
-        };
-        S3Storage::new(
-            S3Options::default(),
-            "bucket".to_string(),
-            prefix.map(str::to_string),
-            options,
-        )
-        .unwrap()
+        let mut b = S3Storage::s3(S3Options::default(), "bucket".to_string());
+        if let Some(p) = prefix {
+            b = b.prefix(p.to_string());
+        }
+        // map the helper's bool: force legacy when set, else auto-detect
+        if legacy_rooted_keys {
+            b = b.legacy_rooted_keys(true);
+        }
+        b.execute().unwrap()
     }
 
     /// empty prefix + Standard layout never produces a
@@ -2191,7 +2227,7 @@ mod tests {
     }
 
     /// `None` and `""` are the two ways #2239 was triggered; they must produce an
-    /// identical empty prefix (they converge at `unwrap_or_default` in `new`).
+    /// identical empty prefix (they converge at `unwrap_or_default` in `finish`).
     #[test]
     fn test_none_and_empty_prefix_are_equivalent() {
         let from_none = storage_with_prefix(None, false);
@@ -2236,13 +2272,11 @@ mod tests {
 
     #[test]
     fn test_legacy_rooted_keys_rejected_with_nonempty_prefix() {
-        let err = S3Storage::new(
-            S3Options::default(),
-            "bucket".to_string(),
-            Some("foo".to_string()),
-            S3StorageOptions::default().with_legacy_rooted_keys(true),
-        )
-        .unwrap_err();
+        let err = S3Storage::s3(S3Options::default(), "bucket".to_string())
+            .prefix("foo".to_string())
+            .legacy_rooted_keys(true)
+            .execute()
+            .unwrap_err();
         assert!(err.to_string().contains("empty prefix"), "got: {err}");
     }
 

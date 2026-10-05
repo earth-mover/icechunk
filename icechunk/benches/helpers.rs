@@ -94,10 +94,9 @@ use icechunk::config::{
 use icechunk::format::manifest::{ChunkPayload, VirtualChunkLocation, VirtualChunkRef};
 use icechunk::format::snapshot::{ArrayShape, DimensionName};
 use icechunk::format::{ChunkIndices, Path};
-use icechunk::new_s3_storage;
 use icechunk::repository::Repository;
 use icechunk::session::Session;
-use icechunk::storage::{S3StorageOptions, new_in_memory_storage};
+use icechunk::storage::{S3Storage, new_in_memory_storage};
 use icechunk::virtual_chunks::VirtualChunkContainer;
 use icechunk::{RepositoryConfig, Storage};
 use icechunk_arrow_object_store::object_store::ObjectStoreExt as _;
@@ -229,13 +228,11 @@ pub(crate) fn make_s3_storage(
     latency_ms: Option<u64>,
 ) -> Result<Arc<dyn Storage + Send + Sync>, Box<dyn Error>> {
     let port = if latency_ms.is_some() { TOXIPROXY_PORT } else { RUSTFS_PORT };
-    let storage = new_s3_storage(
-        rustfs_s3_options(port),
-        "testbucket".to_string(),
-        Some(format!("bench-{}", uuid::Uuid::new_v4())),
-        S3StorageOptions::default().with_credentials(rustfs_credentials()),
-    )?;
-    Ok(storage)
+    let storage = S3Storage::s3(rustfs_s3_options(port), "testbucket".to_string())
+        .prefix(format!("bench-{}", uuid::Uuid::new_v4()))
+        .credentials(rustfs_credentials())
+        .execute()?;
+    Ok(Arc::new(storage))
 }
 
 type Credentials = icechunk::config::Credentials;

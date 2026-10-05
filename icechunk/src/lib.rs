@@ -66,8 +66,6 @@ pub use storage::Attribution;
 pub use storage::new_local_filesystem_storage;
 #[cfg(feature = "object-store-s3")]
 pub use storage::new_s3_object_store_storage;
-#[cfg(feature = "s3")]
-pub use storage::new_s3_storage;
 pub use storage::{ObjectStorage, Storage, StorageError, new_in_memory_storage};
 pub use store::Store;
 

@@ -14,6 +14,8 @@ use tracing::{debug, trace};
 use url::Url;
 
 use crate::config::{S3Credentials, S3Options};
+#[cfg(feature = "s3")]
+use crate::storage::S3Storage;
 use crate::storage::StorageErrorKind;
 #[cfg(feature = "object-store-http")]
 use crate::storage::new_http_storage;
@@ -21,11 +23,6 @@ use crate::storage::new_http_storage;
 use crate::{
     config::GcsCredentials,
     storage::{GcsStorageOptions, new_gcs_storage},
-};
-#[cfg(feature = "s3")]
-use crate::{
-    new_s3_storage,
-    storage::{S3StorageOptions, new_r2_storage, new_tigris_storage},
 };
 use icechunk_storage::sealed;
 use icechunk_types::ICResultExt as _;
@@ -138,14 +135,16 @@ impl RedirectStorage {
                 debug!(bucket, prefix, region, "Creating S3 Storage from redirect");
 
                 // TODO: make more parameters configurable using the query
-                new_s3_storage(
-                    S3Options::default().with_region(region).with_anonymous(true),
-                    bucket,
-                    Some(prefix),
-                    // key layout is auto-detected
-                    S3StorageOptions::default()
-                        .with_credentials(S3Credentials::Anonymous),
-                )
+                // key layout is auto-detected
+                Ok(Arc::new(
+                    S3Storage::s3(
+                        S3Options::default().with_region(region).with_anonymous(true),
+                        bucket,
+                    )
+                    .prefix(prefix)
+                    .credentials(S3Credentials::Anonymous)
+                    .execute()?,
+                ))
             }
             #[cfg(not(feature = "s3"))]
             "s3" => Err(StorageErrorKind::BadRedirect(
@@ -164,15 +163,15 @@ impl RedirectStorage {
                 if let Some(region) = region {
                     opts = opts.with_region(region);
                 }
-                new_r2_storage(
-                    opts,
-                    Some(bucket),
-                    Some(prefix),
-                    Some(account_id),
-                    // key layout is auto-detected
-                    S3StorageOptions::default()
-                        .with_credentials(S3Credentials::Anonymous),
-                )
+                // key layout is auto-detected
+                Ok(Arc::new(
+                    S3Storage::r2(opts)
+                        .bucket(bucket)
+                        .prefix(prefix)
+                        .account_id(account_id)
+                        .credentials(S3Credentials::Anonymous)
+                        .execute()?,
+                ))
             }
             #[cfg(not(feature = "s3"))]
             "r2" => Err(StorageErrorKind::BadRedirect(
@@ -190,15 +189,14 @@ impl RedirectStorage {
                 if let Some(region) = region {
                     opts = opts.with_region(region);
                 }
-                new_tigris_storage(
-                    opts,
-                    bucket,
-                    Some(prefix),
-                    true,
-                    // key layout is auto-detected
-                    S3StorageOptions::default()
-                        .with_credentials(S3Credentials::Anonymous),
-                )
+                // key layout is auto-detected
+                Ok(Arc::new(
+                    S3Storage::tigris(opts, bucket)
+                        .prefix(prefix)
+                        .weak_consistency(true)
+                        .credentials(S3Credentials::Anonymous)
+                        .execute()?,
+                ))
             }
             #[cfg(not(feature = "s3"))]
             "tigris" => Err(StorageErrorKind::BadRedirect(

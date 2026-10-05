@@ -16,10 +16,10 @@ use std::sync::Arc;
 use anyhow::{Context as _, Result};
 
 use crate::storage::{
-    AzureStorageOptions, GcsStorageOptions, S3StorageOptions, new_azure_blob_storage,
-    new_gcs_storage, new_local_filesystem_storage, new_tigris_storage,
+    AzureStorageOptions, GcsStorageOptions, S3Storage, new_azure_blob_storage,
+    new_gcs_storage, new_local_filesystem_storage,
 };
-use crate::{Repository, RepositoryConfig, Storage, new_s3_storage};
+use crate::{Repository, RepositoryConfig, Storage};
 
 use crate::cli::config::{CliConfig, RepositoryAlias, RepositoryDefinition};
 use crate::config::{AzureCredentials, GcsCredentials, S3Credentials, S3Options};
@@ -216,15 +216,15 @@ async fn get_storage(
         RepositoryDefinition::S3 {
             location, object_store_config, credentials, ..
         } => {
-            let storage = new_s3_storage(
-                object_store_config.clone(),
-                location.bucket.clone(),
-                location.prefix.clone(),
-                // key layout is auto-detected
-                S3StorageOptions::default().with_credentials(credentials.clone()),
-            )
-            .context("Failed to create S3 storage")?;
-            Ok(storage)
+            // key layout is auto-detected
+            let mut builder =
+                S3Storage::s3(object_store_config.clone(), location.bucket.clone())
+                    .credentials(credentials.clone());
+            if let Some(prefix) = location.prefix.clone() {
+                builder = builder.prefix(prefix);
+            }
+            let storage = builder.execute().context("Failed to create S3 storage")?;
+            Ok(Arc::new(storage))
         }
         RepositoryDefinition::Tigris {
             location,
@@ -232,16 +232,16 @@ async fn get_storage(
             credentials,
             ..
         } => {
-            let storage = new_tigris_storage(
-                object_store_config.clone(),
-                location.bucket.clone(),
-                location.prefix.clone(),
-                false,
-                // key layout is auto-detected
-                S3StorageOptions::default().with_credentials(credentials.clone()),
-            )
-            .context("Failed to create Tigris storage")?;
-            Ok(storage)
+            // key layout is auto-detected
+            let mut builder =
+                S3Storage::tigris(object_store_config.clone(), location.bucket.clone())
+                    .weak_consistency(false)
+                    .credentials(credentials.clone());
+            if let Some(prefix) = location.prefix.clone() {
+                builder = builder.prefix(prefix);
+            }
+            let storage = builder.execute().context("Failed to create Tigris storage")?;
+            Ok(Arc::new(storage))
         }
         RepositoryDefinition::GCS {
             location, object_store_config, credentials, ..

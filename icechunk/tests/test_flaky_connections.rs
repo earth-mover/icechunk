@@ -20,8 +20,7 @@ use icechunk::{
     config::{S3Credentials, S3Options, S3StaticCredentials},
     format::{ChunkId, format_constants::SpecVersionBin},
     storage::{
-        RetriesSettings, S3ObjectStoreOptions, S3Storage, S3StorageOptions,
-        StorageContext, TimeoutSettings,
+        RetriesSettings, S3ObjectStoreOptions, S3Storage, StorageContext, TimeoutSettings,
     },
 };
 use noxious_client::{Client, StreamDirection, Toxic, ToxicKind};
@@ -35,7 +34,7 @@ fn create_proxied_storage(
     prefix: &str,
 ) -> Result<Arc<S3Storage>, Box<dyn std::error::Error>> {
     let (access_key_id, secret_access_key) = Permission::Modify.keys();
-    let storage = S3Storage::new(
+    let storage = S3Storage::s3(
         S3Options::default()
             .with_region("us-east-1")
             .with_endpoint_url(format!("http://localhost:{proxy_port}"))
@@ -43,16 +42,15 @@ fn create_proxied_storage(
             .with_force_path_style(true)
             .with_network_stream_timeout_seconds(timeout_seconds),
         "testbucket".to_string(),
-        Some(format!("{}-{}", prefix, uuid::Uuid::new_v4())),
-        S3StorageOptions::default().with_credentials(S3Credentials::Static(
-            S3StaticCredentials {
-                access_key_id: access_key_id.into(),
-                secret_access_key: secret_access_key.into(),
-                session_token: None,
-                expires_after: None,
-            },
-        )),
-    )?;
+    )
+    .prefix(format!("{}-{}", prefix, uuid::Uuid::new_v4()))
+    .credentials(S3Credentials::Static(S3StaticCredentials {
+        access_key_id: access_key_id.into(),
+        secret_access_key: secret_access_key.into(),
+        session_token: None,
+        expires_after: None,
+    }))
+    .execute()?;
 
     Ok(Arc::new(storage))
 }
@@ -338,12 +336,12 @@ async fn build_proxied_storage(
         .with_network_stream_timeout_seconds(3);
     let prefix = format!("{proxy_label}-{}", uuid::Uuid::new_v4());
     Ok(match backend {
-        ConditionalPutBackend::IcechunkS3 => Arc::new(S3Storage::new(
-            s3_options,
-            "testbucket".to_string(),
-            Some(prefix),
-            S3StorageOptions::default().with_credentials(credentials),
-        )?),
+        ConditionalPutBackend::IcechunkS3 => Arc::new(
+            S3Storage::s3(s3_options, "testbucket".to_string())
+                .prefix(prefix)
+                .credentials(credentials)
+                .execute()?,
+        ),
         ConditionalPutBackend::ArrowObjectStore => Arc::new(
             icechunk::ObjectStorage::new_s3(
                 "testbucket".to_string(),
