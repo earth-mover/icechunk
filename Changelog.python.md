@@ -16,6 +16,7 @@ chunk requests add `array=<path>; chunk=<coords>` and manifest requests add `arr
 ### Fixes
 
 - `storage_class`, `metadata_storage_class` and `chunks_storage_class` now apply to the `object_store` backends — `gcs_storage`, `azure_storage` and `s3_object_store_storage`. The value is passed to the provider unchanged, so use its own names ([#904](https://github.com/earth-mover/icechunk/issues/904), [#2364](https://github.com/earth-mover/icechunk/issues/2364)).
+- Rectilinear chunk grids accept a bare integer for an axis in `chunk_shapes`, such as `[2, [1, 2]]`, as written by zarr-python for `chunks=(2, [1, 2])` ([#2451](https://github.com/earth-mover/icechunk/issues/2451)).
 
 ### Breaking changes
 
