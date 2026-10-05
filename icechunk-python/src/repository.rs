@@ -26,13 +26,14 @@ use icechunk::{
     migrations::{self, MigrateOptions},
     ops::{
         gc::{ExpiredRefAction, GCSummary, expire, garbage_collect},
-        manifests::{RewriteManifestsOptions, rewrite_manifests},
+        manifests::rewrite_manifests,
         stats::repo_chunks_storage,
     },
     repository::{
         CreateMode, Mode, RepositoryBuilder, RepositoryError, RepositoryErrorKind,
         VersionInfo,
     },
+    session::CommitMethod,
     storage::Attribution,
 };
 use pyo3::{
@@ -56,10 +57,10 @@ use crate::{
     streams::PyAsyncCloseableIterator,
 };
 
-fn parse_commit_method(method: &str) -> PyResult<icechunk::session::CommitMethod> {
+fn parse_commit_method(method: &str) -> PyResult<CommitMethod> {
     match method {
-        "new_commit" => Ok(icechunk::session::CommitMethod::NewCommit),
-        "amend" => Ok(icechunk::session::CommitMethod::Amend),
+        "new_commit" => Ok(CommitMethod::NewCommit),
+        "amend" => Ok(CommitMethod::Amend),
         other => Err(PyValueError::new_err(format!(
             "Invalid commit method: '{other}'. Expected 'new_commit' or 'amend'."
         ))),
@@ -2770,10 +2771,15 @@ impl PyRepository {
             let result =
                 pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
                     let lock = self.0.read().await;
-                    let mut options = RewriteManifestsOptions::default()
-                        .with_commit_method(commit_method);
-                    options.properties = metadata;
-                    rewrite_manifests(&lock, branch, message, options)
+                    let mut builder = rewrite_manifests(&lock, branch, message);
+                    if let Some(m) = metadata {
+                        builder = builder.properties(m);
+                    }
+                    if commit_method == CommitMethod::Amend {
+                        builder = builder.amend();
+                    }
+                    builder
+                        .execute()
                         .await
                         .map_err(PyIcechunkStoreError::ManifestOpsError)
                 })?;
@@ -2798,10 +2804,15 @@ impl PyRepository {
 
         pyo3_async_runtimes::tokio::future_into_py::<_, String>(py, async move {
             let repository = repository.read().await;
-            let mut options =
-                RewriteManifestsOptions::default().with_commit_method(commit_method);
-            options.properties = metadata;
-            let result = rewrite_manifests(&repository, &branch, &message, options)
+            let mut builder = rewrite_manifests(&repository, &branch, &message);
+            if let Some(m) = metadata {
+                builder = builder.properties(m);
+            }
+            if commit_method == CommitMethod::Amend {
+                builder = builder.amend();
+            }
+            let result = builder
+                .execute()
                 .await
                 .map_err(PyIcechunkStoreError::ManifestOpsError)?;
             Ok(result.to_string())

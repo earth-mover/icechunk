@@ -20,97 +20,126 @@ pub enum ManifestOpsError {
 
 pub type ManifestOpsResult<A> = Result<A, ManifestOpsError>;
 
-/// How a manifest rewrite commits: concurrency, snapshot properties, and commit method.
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[non_exhaustive]
-pub struct RewriteManifestsOptions {
-    /// `None` uses the session default.
-    pub max_concurrent_manifests: Option<usize>,
-    pub properties: Option<SnapshotProperties>,
-    pub commit_method: CommitMethod,
+/// Rewrites every manifest of a branch in one commit. Build with [`rewrite_manifests`].
+///
+/// ```no_run
+/// # use icechunk::{Repository, ops::manifests::rewrite_manifests};
+/// # async fn f(repo: Repository) -> Result<(), Box<dyn std::error::Error>> {
+/// let snapshot_id = rewrite_manifests(&repo, "main", "rewrite manifests")
+///     .max_concurrent_manifests(8)
+///     .execute()
+///     .await?;
+/// # Ok(()) }
+/// ```
+pub struct RewriteManifestsBuilder<'a> {
+    repository: &'a Repository,
+    branch: &'a str,
+    message: &'a str,
+    max_concurrent_manifests: Option<usize>,
+    properties: Option<SnapshotProperties>,
+    commit_method: CommitMethod,
 }
 
-impl Default for RewriteManifestsOptions {
-    fn default() -> Self {
-        Self {
-            max_concurrent_manifests: None,
-            properties: None,
-            commit_method: CommitMethod::NewCommit,
-        }
+impl std::fmt::Debug for RewriteManifestsBuilder<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RewriteManifestsBuilder")
+            .field("branch", &self.branch)
+            .field("message", &self.message)
+            .field("max_concurrent_manifests", &self.max_concurrent_manifests)
+            .field("properties", &self.properties)
+            .field("commit_method", &self.commit_method)
+            .finish_non_exhaustive()
     }
 }
 
-impl RewriteManifestsOptions {
-    pub fn with_max_concurrent_manifests(mut self, value: usize) -> Self {
+/// Rewrite every manifest of `branch` in a commit with `message`.
+pub fn rewrite_manifests<'a>(
+    repository: &'a Repository,
+    branch: &'a str,
+    message: &'a str,
+) -> RewriteManifestsBuilder<'a> {
+    RewriteManifestsBuilder {
+        repository,
+        branch,
+        message,
+        max_concurrent_manifests: None,
+        properties: None,
+        commit_method: CommitMethod::NewCommit,
+    }
+}
+
+impl RewriteManifestsBuilder<'_> {
+    /// Default: the session default.
+    pub fn max_concurrent_manifests(mut self, value: usize) -> Self {
         self.max_concurrent_manifests = Some(value);
         self
     }
 
-    pub fn with_properties(mut self, value: SnapshotProperties) -> Self {
+    /// Default: none.
+    pub fn properties(mut self, value: SnapshotProperties) -> Self {
         self.properties = Some(value);
         self
     }
 
-    pub fn with_commit_method(mut self, value: CommitMethod) -> Self {
-        self.commit_method = value;
+    /// Amend the branch tip, not a new commit. Fails on V1 repositories.
+    /// Default: a new commit.
+    pub fn amend(mut self) -> Self {
+        self.commit_method = CommitMethod::Amend;
         self
     }
-}
 
-pub async fn rewrite_manifests(
-    repository: &Repository,
-    branch: &str,
-    message: &str,
-    options: RewriteManifestsOptions,
-) -> ManifestOpsResult<SnapshotId> {
-    if options.commit_method == CommitMethod::Amend
-        && repository.spec_version() < SpecVersionBin::V2
-    {
-        return Err(ManifestOpsError::AmendNotSupportedForV1);
-    }
+    pub async fn execute(self) -> ManifestOpsResult<SnapshotId> {
+        if self.commit_method == CommitMethod::Amend
+            && self.repository.spec_version() < SpecVersionBin::V2
+        {
+            return Err(ManifestOpsError::AmendNotSupportedForV1);
+        }
 
-    let mut session = repository
-        .writable_session(branch)
-        .await
-        .map_err(|e| ManifestOpsError::ManifestRewriteError(Box::new(e.inject())))?;
+        let mut session =
+            self.repository.writable_session(self.branch).await.map_err(|e| {
+                ManifestOpsError::ManifestRewriteError(Box::new(e.inject()))
+            })?;
 
-    let mut builder = session.commit(message).rewrite_manifests();
-    if let Some(n) = options.max_concurrent_manifests {
-        builder = builder.max_concurrent_nodes(n);
+        let mut builder = session.commit(self.message).rewrite_manifests();
+        if let Some(n) = self.max_concurrent_manifests {
+            builder = builder.max_concurrent_nodes(n);
+        }
+        if self.commit_method == CommitMethod::Amend {
+            builder = builder.amend();
+        }
+        if let Some(props) = self.properties {
+            builder = builder.properties(props);
+        }
+        builder
+            .execute()
+            .await
+            .map_err(|e| ManifestOpsError::ManifestRewriteError(Box::new(e)))
     }
-    if options.commit_method == CommitMethod::Amend {
-        builder = builder.amend();
-    }
-    if let Some(props) = options.properties {
-        builder = builder.properties(props);
-    }
-    builder
-        .execute()
-        .await
-        .map_err(|e| ManifestOpsError::ManifestRewriteError(Box::new(e)))
 }
 
 #[cfg(test)]
-mod options_tests {
+mod tests {
+    use icechunk_macros::tokio_test;
+
+    // `tokio_test` expands to nothing under shuttle, so only the async tests use these.
+    #[cfg(not(feature = "shuttle"))]
     use super::*;
+    #[cfg(not(feature = "shuttle"))]
+    use crate::storage::new_in_memory_storage;
 
-    #[test]
-    fn rewrite_manifests_options_default_makes_a_new_commit() {
-        let o = RewriteManifestsOptions::default();
-        assert_eq!(o.max_concurrent_manifests, None);
-        assert_eq!(o.properties, None);
-        assert_eq!(o.commit_method, CommitMethod::NewCommit);
-    }
-
-    #[test]
-    fn rewrite_manifests_options_setters_set_fields() {
+    #[tokio_test]
+    async fn rewrite_manifests_builder_defaults_and_methods()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let repo = Repository::create(new_in_memory_storage().await?).execute().await?;
+        let b = rewrite_manifests(&repo, "main", "msg");
+        assert_eq!(b.max_concurrent_manifests, None);
+        assert_eq!(b.properties, None);
+        assert_eq!(b.commit_method, CommitMethod::NewCommit);
         let props = SnapshotProperties::from([("k".to_string(), "v".into())]);
-        let o = RewriteManifestsOptions::default()
-            .with_max_concurrent_manifests(8)
-            .with_properties(props.clone())
-            .with_commit_method(CommitMethod::Amend);
-        assert_eq!(o.max_concurrent_manifests, Some(8));
-        assert_eq!(o.properties, Some(props));
-        assert_eq!(o.commit_method, CommitMethod::Amend);
+        let b = b.max_concurrent_manifests(8).properties(props.clone()).amend();
+        assert_eq!(b.max_concurrent_manifests, Some(8));
+        assert_eq!(b.properties, Some(props));
+        assert_eq!(b.commit_method, CommitMethod::Amend);
+        Ok(())
     }
 }

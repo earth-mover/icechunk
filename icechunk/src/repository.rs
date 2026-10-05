@@ -2047,7 +2047,7 @@ mod tests {
             snapshot::{ArrayShape, DimensionName},
         },
         migrations::{MigrateOptions, migrate_1_to_2},
-        ops::manifests::{RewriteManifestsOptions, rewrite_manifests},
+        ops::manifests::rewrite_manifests,
         session::{CommitMethod, SessionError, get_chunk},
         storage::new_in_memory_storage,
         test_utils::spec_version_cases,
@@ -2633,15 +2633,13 @@ mod tests {
         let new_repo =
             reopen_repo_with_new_splitting_config(&repository, Some(split_sizes)).await;
 
-        let snap = rewrite_manifests(
-            &new_repo,
-            "main",
-            "rewrite_manifests with split-size=12",
-            RewriteManifestsOptions::default()
-                .with_max_concurrent_manifests(8)
-                .with_commit_method(commit_method),
-        )
-        .await?;
+        let mut builder =
+            rewrite_manifests(&new_repo, "main", "rewrite_manifests with split-size=12")
+                .max_concurrent_manifests(8);
+        if commit_method == CommitMethod::Amend {
+            builder = builder.amend();
+        }
+        let snap = builder.execute().await?;
         total_manifests += 1;
         assert_manifest_count(new_repo.asset_manager(), total_manifests).await;
         validate_data().await;
@@ -2667,15 +2665,13 @@ mod tests {
         let new_repo =
             reopen_repo_with_new_splitting_config(&repository, Some(split_sizes)).await;
 
-        let snap = rewrite_manifests(
-            &new_repo,
-            "main",
-            "rewrite_manifests with split-size=4",
-            RewriteManifestsOptions::default()
-                .with_max_concurrent_manifests(8)
-                .with_commit_method(commit_method),
-        )
-        .await?;
+        let mut builder =
+            rewrite_manifests(&new_repo, "main", "rewrite_manifests with split-size=4")
+                .max_concurrent_manifests(8);
+        if commit_method == CommitMethod::Amend {
+            builder = builder.amend();
+        }
+        let snap = builder.execute().await?;
         total_manifests += 3;
         assert_manifest_count(new_repo.asset_manager(), total_manifests).await;
         validate_data().await;
@@ -3988,14 +3984,11 @@ mod tests {
         assert_eq!(repo.spec_version(), SpecVersionBin::V2);
 
         // Rewrite manifests (now with IC2 compression enabled)
-        rewrite_manifests(
-            &repo,
-            "main",
-            "rewrite manifests",
-            RewriteManifestsOptions::default().with_max_concurrent_manifests(8),
-        )
-        .await
-        .unwrap();
+        rewrite_manifests(&repo, "main", "rewrite manifests")
+            .max_concurrent_manifests(8)
+            .execute()
+            .await
+            .unwrap();
 
         // Verify manifests ARE now compressed
         let snap_id =
@@ -4047,25 +4040,18 @@ mod tests {
         let repo2 = Repository::open(Arc::clone(&storage)).execute().await?;
 
         // Amend should fail because the previous commit was a rearrange
-        let result = rewrite_manifests(
-            &repo2,
-            "main",
-            "rewriting manifests",
-            RewriteManifestsOptions::default()
-                .with_max_concurrent_manifests(8)
-                .with_commit_method(CommitMethod::Amend),
-        )
-        .await;
+        let result = rewrite_manifests(&repo2, "main", "rewriting manifests")
+            .max_concurrent_manifests(8)
+            .amend()
+            .execute()
+            .await;
         assert!(result.is_err());
 
         // NewCommit (the new default) should succeed
-        let result = rewrite_manifests(
-            &repo2,
-            "main",
-            "rewriting manifests",
-            RewriteManifestsOptions::default().with_max_concurrent_manifests(8),
-        )
-        .await;
+        let result = rewrite_manifests(&repo2, "main", "rewriting manifests")
+            .max_concurrent_manifests(8)
+            .execute()
+            .await;
         assert!(result.is_ok());
 
         Ok(())
