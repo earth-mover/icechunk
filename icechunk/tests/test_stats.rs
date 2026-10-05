@@ -5,7 +5,6 @@ use std::{
 
 use bytes::Bytes;
 use chrono::Utc;
-use icechunk::ops::walker::ManifestWalkOptions;
 use icechunk::{
     Repository, RepositoryConfig, Storage,
     asset_manager::{AssetManager, AssetManagerOptions},
@@ -154,30 +153,26 @@ async fn do_test_repo_chunks_storage(
             .await?;
     }
 
-    let stats = repo_chunks_storage(
-        Arc::clone(&asset_manager),
-        &ManifestWalkOptions::default()
-            .with_max_snapshots_in_memory(NonZeroU16::new(5).unwrap())
-            .with_max_compressed_manifest_mem_bytes(NonZeroUsize::MIN)
-            .with_max_concurrent_manifest_fetches(NonZeroU16::try_from(10).unwrap()),
-    )
-    .await
-    .unwrap();
+    let stats = repo_chunks_storage(Arc::clone(&asset_manager))
+        .max_snapshots_in_memory(NonZeroU16::new(5).unwrap())
+        .max_compressed_manifest_mem_bytes(NonZeroUsize::MIN)
+        .max_concurrent_manifest_fetches(NonZeroU16::try_from(10).unwrap())
+        .execute()
+        .await
+        .unwrap();
     // no commits
     assert_eq!(stats.native_bytes, 0);
     assert_eq!(stats.virtual_bytes, 0);
     assert_eq!(stats.inlined_bytes, 0);
 
     let _ = session.commit("first").max_concurrent_nodes(8).execute().await?;
-    let stats = repo_chunks_storage(
-        Arc::clone(&asset_manager),
-        &ManifestWalkOptions::default()
-            .with_max_snapshots_in_memory(NonZeroU16::new(5).unwrap())
-            .with_max_compressed_manifest_mem_bytes(NonZeroUsize::MAX)
-            .with_max_concurrent_manifest_fetches(NonZeroU16::try_from(10).unwrap()),
-    )
-    .await
-    .unwrap();
+    let stats = repo_chunks_storage(Arc::clone(&asset_manager))
+        .max_snapshots_in_memory(NonZeroU16::new(5).unwrap())
+        .max_compressed_manifest_mem_bytes(NonZeroUsize::MAX)
+        .max_concurrent_manifest_fetches(NonZeroU16::try_from(10).unwrap())
+        .execute()
+        .await
+        .unwrap();
 
     // 50 native chunks 6 bytes each, 10 inline chunks 1 byte each, 10 virtual chunks 100 bytes each
     assert_eq!(stats.native_bytes, 50 * 6);
@@ -200,15 +195,13 @@ async fn do_test_repo_chunks_storage(
 
     let second_commit =
         session.commit("second").max_concurrent_nodes(8).execute().await?;
-    let stats = repo_chunks_storage(
-        Arc::clone(&asset_manager),
-        &ManifestWalkOptions::default()
-            .with_max_snapshots_in_memory(NonZeroU16::new(5).unwrap())
-            .with_max_compressed_manifest_mem_bytes(NonZeroUsize::MIN)
-            .with_max_concurrent_manifest_fetches(NonZeroU16::try_from(10).unwrap()),
-    )
-    .await
-    .unwrap();
+    let stats = repo_chunks_storage(Arc::clone(&asset_manager))
+        .max_snapshots_in_memory(NonZeroU16::new(5).unwrap())
+        .max_compressed_manifest_mem_bytes(NonZeroUsize::MIN)
+        .max_concurrent_manifest_fetches(NonZeroU16::try_from(10).unwrap())
+        .execute()
+        .await
+        .unwrap();
     // 50 native chunks from first commit, 10 from second
     assert_eq!(stats.native_bytes, (50 + 10) * 6);
     // Inline chunks are NOT deduplicated - they're stored in each manifest
@@ -242,15 +235,13 @@ async fn do_test_repo_chunks_storage(
             .await?;
     }
     let _ = session.commit("third").max_concurrent_nodes(8).execute().await?;
-    let stats = repo_chunks_storage(
-        Arc::clone(&asset_manager),
-        &ManifestWalkOptions::default()
-            .with_max_snapshots_in_memory(NonZeroU16::new(5).unwrap())
-            .with_max_compressed_manifest_mem_bytes(NonZeroUsize::MAX)
-            .with_max_concurrent_manifest_fetches(NonZeroU16::try_from(10).unwrap()),
-    )
-    .await
-    .unwrap();
+    let stats = repo_chunks_storage(Arc::clone(&asset_manager))
+        .max_snapshots_in_memory(NonZeroU16::new(5).unwrap())
+        .max_compressed_manifest_mem_bytes(NonZeroUsize::MAX)
+        .max_concurrent_manifest_fetches(NonZeroU16::try_from(10).unwrap())
+        .execute()
+        .await
+        .unwrap();
     // 50 native chunks from first commit, 10 from second, 5 from third
     assert_eq!(stats.native_bytes, 50 * 6 + 10 * 6 + 5 * 6);
     // Inline chunks are stored in each manifest, so NOT deduplicated:
@@ -317,15 +308,13 @@ async fn test_virtual_chunk_deduplication(
 
     session.commit("first").max_concurrent_nodes(8).execute().await?;
 
-    let stats = repo_chunks_storage(
-        Arc::clone(&asset_manager),
-        &ManifestWalkOptions::default()
-            .with_max_snapshots_in_memory(NonZeroU16::new(5).unwrap())
-            .with_max_compressed_manifest_mem_bytes(NonZeroUsize::MAX)
-            .with_max_concurrent_manifest_fetches(NonZeroU16::try_from(10).unwrap()),
-    )
-    .await
-    .unwrap();
+    let stats = repo_chunks_storage(Arc::clone(&asset_manager))
+        .max_snapshots_in_memory(NonZeroU16::new(5).unwrap())
+        .max_compressed_manifest_mem_bytes(NonZeroUsize::MAX)
+        .max_concurrent_manifest_fetches(NonZeroU16::try_from(10).unwrap())
+        .execute()
+        .await
+        .unwrap();
 
     // Should have 10 unique virtual chunks (indices 0-9 with different offsets)
     // Indices 10-14 are duplicates of index 0, so they shouldn't add to the count

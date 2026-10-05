@@ -184,7 +184,7 @@ pub(crate) struct NetArgs {
     pub(crate) bandwidth_kbps: Option<u64>,
 }
 
-/// Walk budget limits that the bench passes into `ManifestWalkOptions`.
+/// Walk budget limits that the bench passes to the GC and stats builders.
 #[derive(Args, Debug, Clone)]
 pub(crate) struct WalkArgs {
     #[arg(long, default_value_t = 50)]

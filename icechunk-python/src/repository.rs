@@ -25,12 +25,9 @@ use icechunk::{
     inspect::{manifest_json, repo_info_json, snapshot_json, transaction_log_json},
     migrations::{self, MigrateOptions},
     ops::{
-        gc::{
-            ExpireOptions, ExpiredRefAction, GCConfig, GCSummary, expire, garbage_collect,
-        },
+        gc::{ExpireOptions, ExpiredRefAction, GCSummary, expire, garbage_collect},
         manifests::{RewriteManifestsOptions, rewrite_manifests},
         stats::repo_chunks_storage,
-        walker::ManifestWalkOptions,
     },
     repository::{
         CreateMode, Mode, RepositoryBuilder, RepositoryError, RepositoryErrorKind,
@@ -2915,31 +2912,23 @@ impl PyRepository {
                         let num_updates = lock.config().num_updates_per_repo_info_file();
                         (Arc::clone(lock.asset_manager()), num_updates)
                     };
-                    let mut gc_config = GCConfig::clean_all(
-                        delete_object_older_than,
-                        delete_object_older_than,
-                    )
-                    .with_walk(
-                        ManifestWalkOptions::default()
-                            .with_max_snapshots_in_memory(max_snapshots_in_memory)
-                            .with_max_compressed_manifest_mem_bytes(
-                                max_compressed_manifest_mem_bytes,
-                            )
-                            .with_max_decoded_manifest_mem_bytes(
-                                max_decoded_manifest_mem_bytes,
-                            )
-                            .with_max_concurrent_manifest_fetches(
-                                max_concurrent_manifest_fetches,
-                            ),
-                    )
-                    .with_max_concurrent_deletes(max_concurrent_deletes)
-                    .with_max_consecutive_delete_failures(max_consecutive_delete_failures)
-                    .with_num_updates_per_repo_info_file(num_updates)
-                    .with_dry_run(dry_run);
-                    gc_config.max_concurrent_listings = max_concurrent_listings;
-                    let result = garbage_collect(asset_manager, &gc_config)
-                        .await
-                        .map_err(PyIcechunkStoreError::GCError)?;
+                    let mut gc = garbage_collect(asset_manager)
+                        .clean_all(delete_object_older_than, delete_object_older_than)
+                        .max_snapshots_in_memory(max_snapshots_in_memory)
+                        .max_compressed_manifest_mem_bytes(
+                            max_compressed_manifest_mem_bytes,
+                        )
+                        .max_decoded_manifest_mem_bytes(max_decoded_manifest_mem_bytes)
+                        .max_concurrent_manifest_fetches(max_concurrent_manifest_fetches)
+                        .max_concurrent_deletes(max_concurrent_deletes)
+                        .max_consecutive_delete_failures(max_consecutive_delete_failures)
+                        .num_updates_per_repo_info_file(num_updates)
+                        .dry_run(dry_run);
+                    if let Some(n) = max_concurrent_listings {
+                        gc = gc.max_concurrent_listings(n);
+                    }
+                    let result =
+                        gc.execute().await.map_err(PyIcechunkStoreError::GCError)?;
                     Ok::<_, PyIcechunkStoreError>(result.into())
                 })?;
 
@@ -2968,29 +2957,20 @@ impl PyRepository {
                 let num_updates = lock.config().num_updates_per_repo_info_file();
                 (Arc::clone(lock.asset_manager()), num_updates)
             };
-            let mut gc_config =
-                GCConfig::clean_all(delete_object_older_than, delete_object_older_than)
-                    .with_walk(
-                        ManifestWalkOptions::default()
-                            .with_max_snapshots_in_memory(max_snapshots_in_memory)
-                            .with_max_compressed_manifest_mem_bytes(
-                                max_compressed_manifest_mem_bytes,
-                            )
-                            .with_max_decoded_manifest_mem_bytes(
-                                max_decoded_manifest_mem_bytes,
-                            )
-                            .with_max_concurrent_manifest_fetches(
-                                max_concurrent_manifest_fetches,
-                            ),
-                    )
-                    .with_max_concurrent_deletes(max_concurrent_deletes)
-                    .with_max_consecutive_delete_failures(max_consecutive_delete_failures)
-                    .with_num_updates_per_repo_info_file(num_updates)
-                    .with_dry_run(dry_run);
-            gc_config.max_concurrent_listings = max_concurrent_listings;
-            let result = garbage_collect(asset_manager, &gc_config)
-                .await
-                .map_err(PyIcechunkStoreError::GCError)?;
+            let mut gc = garbage_collect(asset_manager)
+                .clean_all(delete_object_older_than, delete_object_older_than)
+                .max_snapshots_in_memory(max_snapshots_in_memory)
+                .max_compressed_manifest_mem_bytes(max_compressed_manifest_mem_bytes)
+                .max_decoded_manifest_mem_bytes(max_decoded_manifest_mem_bytes)
+                .max_concurrent_manifest_fetches(max_concurrent_manifest_fetches)
+                .max_concurrent_deletes(max_concurrent_deletes)
+                .max_consecutive_delete_failures(max_consecutive_delete_failures)
+                .num_updates_per_repo_info_file(num_updates)
+                .dry_run(dry_run);
+            if let Some(n) = max_concurrent_listings {
+                gc = gc.max_concurrent_listings(n);
+            }
+            let result = gc.execute().await.map_err(PyIcechunkStoreError::GCError)?;
             Ok(result.into())
         })
     }
@@ -3011,18 +2991,14 @@ impl PyRepository {
                         let lock = self.0.read().await;
                         Arc::clone(lock.asset_manager())
                     };
-                    let walk = ManifestWalkOptions::default()
-                        .with_max_snapshots_in_memory(max_snapshots_in_memory)
-                        .with_max_compressed_manifest_mem_bytes(
+                    let stats = repo_chunks_storage(asset_manager)
+                        .max_snapshots_in_memory(max_snapshots_in_memory)
+                        .max_compressed_manifest_mem_bytes(
                             max_compressed_manifest_mem_bytes,
                         )
-                        .with_max_decoded_manifest_mem_bytes(
-                            max_decoded_manifest_mem_bytes,
-                        )
-                        .with_max_concurrent_manifest_fetches(
-                            max_concurrent_manifest_fetches,
-                        );
-                    let stats = repo_chunks_storage(asset_manager, &walk)
+                        .max_decoded_manifest_mem_bytes(max_decoded_manifest_mem_bytes)
+                        .max_concurrent_manifest_fetches(max_concurrent_manifest_fetches)
+                        .execute()
                         .await
                         .map_err(PyIcechunkStoreError::RepositoryError)?;
                     Ok::<_, PyIcechunkStoreError>(stats)
@@ -3048,16 +3024,12 @@ impl PyRepository {
                     let lock = repository.read().await;
                     Arc::clone(lock.asset_manager())
                 };
-                let walk = ManifestWalkOptions::default()
-                    .with_max_snapshots_in_memory(max_snapshots_in_memory)
-                    .with_max_compressed_manifest_mem_bytes(
-                        max_compressed_manifest_mem_bytes,
-                    )
-                    .with_max_decoded_manifest_mem_bytes(max_decoded_manifest_mem_bytes)
-                    .with_max_concurrent_manifest_fetches(
-                        max_concurrent_manifest_fetches,
-                    );
-                let stats = repo_chunks_storage(asset_manager, &walk)
+                let stats = repo_chunks_storage(asset_manager)
+                    .max_snapshots_in_memory(max_snapshots_in_memory)
+                    .max_compressed_manifest_mem_bytes(max_compressed_manifest_mem_bytes)
+                    .max_decoded_manifest_mem_bytes(max_decoded_manifest_mem_bytes)
+                    .max_concurrent_manifest_fetches(max_concurrent_manifest_fetches)
+                    .execute()
                     .await
                     .map_err(PyIcechunkStoreError::RepositoryError)?;
                 Ok(stats.into())

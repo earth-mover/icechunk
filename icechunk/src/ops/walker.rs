@@ -208,18 +208,17 @@ pub struct WalkLimits {
 }
 
 /// Memory and concurrency budget for a walk over the manifests of a set of snapshots.
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[non_exhaustive]
-pub struct ManifestWalkOptions {
-    pub max_snapshots_in_memory: NonZeroU16,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ManifestWalkBudget {
+    pub(crate) max_snapshots_in_memory: NonZeroU16,
     /// Budget for compressed manifest bytes in flight.
-    pub max_compressed_manifest_mem_bytes: NonZeroUsize,
+    pub(crate) max_compressed_manifest_mem_bytes: NonZeroUsize,
     /// Budget for decoded manifest bytes.
-    pub max_decoded_manifest_mem_bytes: NonZeroUsize,
-    pub max_concurrent_manifest_fetches: NonZeroU16,
+    pub(crate) max_decoded_manifest_mem_bytes: NonZeroUsize,
+    pub(crate) max_concurrent_manifest_fetches: NonZeroU16,
 }
 
-impl Default for ManifestWalkOptions {
+impl Default for ManifestWalkBudget {
     fn default() -> Self {
         // 4 GiB does not fit a 32-bit usize; saturate instead of a compile-time overflow.
         let decoded = usize::try_from(4u64 * 1024 * 1024 * 1024).unwrap_or(usize::MAX);
@@ -235,27 +234,7 @@ impl Default for ManifestWalkOptions {
     }
 }
 
-impl ManifestWalkOptions {
-    pub fn with_max_snapshots_in_memory(mut self, value: NonZeroU16) -> Self {
-        self.max_snapshots_in_memory = value;
-        self
-    }
-
-    pub fn with_max_compressed_manifest_mem_bytes(mut self, value: NonZeroUsize) -> Self {
-        self.max_compressed_manifest_mem_bytes = value;
-        self
-    }
-
-    pub fn with_max_decoded_manifest_mem_bytes(mut self, value: NonZeroUsize) -> Self {
-        self.max_decoded_manifest_mem_bytes = value;
-        self
-    }
-
-    pub fn with_max_concurrent_manifest_fetches(mut self, value: NonZeroU16) -> Self {
-        self.max_concurrent_manifest_fetches = value;
-        self
-    }
-
+impl ManifestWalkBudget {
     /// Walker limits for this budget. `decode_workers` comes from the asset manager.
     pub(crate) fn limits(&self, decode_workers: NonZeroU16) -> WalkLimits {
         WalkLimits {
@@ -1574,12 +1553,12 @@ mod tests {
 }
 
 #[cfg(test)]
-mod options_tests {
+mod budget_tests {
     use super::*;
 
     #[test]
-    fn manifest_walk_options_defaults_match_python() {
-        let o = ManifestWalkOptions::default();
+    fn manifest_walk_budget_defaults_match_python() {
+        let o = ManifestWalkBudget::default();
         assert_eq!(o.max_snapshots_in_memory.get(), 50);
         assert_eq!(o.max_compressed_manifest_mem_bytes.get(), 512 * 1024 * 1024);
         assert_eq!(o.max_decoded_manifest_mem_bytes.get() as u64, 4 * 1024 * 1024 * 1024);
@@ -1587,21 +1566,8 @@ mod options_tests {
     }
 
     #[test]
-    fn manifest_walk_options_setters_set_fields() {
-        let o = ManifestWalkOptions::default()
-            .with_max_snapshots_in_memory(NonZeroU16::new(7).unwrap())
-            .with_max_compressed_manifest_mem_bytes(NonZeroUsize::new(8).unwrap())
-            .with_max_decoded_manifest_mem_bytes(NonZeroUsize::new(9).unwrap())
-            .with_max_concurrent_manifest_fetches(NonZeroU16::new(10).unwrap());
-        assert_eq!(o.max_snapshots_in_memory.get(), 7);
-        assert_eq!(o.max_compressed_manifest_mem_bytes.get(), 8);
-        assert_eq!(o.max_decoded_manifest_mem_bytes.get(), 9);
-        assert_eq!(o.max_concurrent_manifest_fetches.get(), 10);
-    }
-
-    #[test]
-    fn manifest_walk_options_limits_copy_fields() {
-        let o = ManifestWalkOptions::default();
+    fn manifest_walk_budget_limits_copy_fields() {
+        let o = ManifestWalkBudget::default();
         let limits = o.limits(NonZeroU16::new(3).unwrap());
         assert_eq!(
             limits.max_concurrent_manifest_fetches,

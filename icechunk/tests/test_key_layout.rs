@@ -17,7 +17,7 @@ use icechunk::{
         ByteRange, ChunkIndices, Path, format_constants::SpecVersionBin,
         snapshot::ArrayShape,
     },
-    ops::gc::{GCConfig, garbage_collect},
+    ops::gc::garbage_collect,
     repository::{RepositoryError, RepositoryErrorKind, VersionInfo},
     session::get_chunk,
     storage::{S3StorageOptions, Settings, mk_client, s3_storage},
@@ -310,9 +310,11 @@ async fn empty_prefix_gc_actually_deletes_chunks()
     repo.reset_branch("main", &first, None).await?;
 
     let now = common::cutoff_after_all_listed(&repo).await?;
-    let gc_config =
-        GCConfig::clean_all(now, now).with_num_updates_per_repo_info_file(100);
-    let summary = garbage_collect(Arc::clone(repo.asset_manager()), &gc_config).await?;
+    let summary = garbage_collect(Arc::clone(repo.asset_manager()))
+        .clean_all(now, now)
+        .num_updates_per_repo_info_file(100)
+        .execute()
+        .await?;
     assert_eq!(summary.chunks_deleted, 1, "GC should report one deleted chunk");
 
     let chunks_after =
@@ -379,9 +381,11 @@ async fn rooted_roundtrip_body(
 
     // GC must run cleanly under the detected (rooted) layout.
     let now = Utc::now();
-    let gc_config =
-        GCConfig::clean_all(now, now).with_num_updates_per_repo_info_file(100);
-    garbage_collect(Arc::clone(repo.asset_manager()), &gc_config).await?;
+    garbage_collect(Arc::clone(repo.asset_manager()))
+        .clean_all(now, now)
+        .num_updates_per_repo_info_file(100)
+        .execute()
+        .await?;
     Ok(())
 }
 

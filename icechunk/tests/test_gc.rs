@@ -19,8 +19,8 @@ use icechunk::{
     },
     new_in_memory_storage,
     ops::gc::{
-        ExpireOptions, ExpiredRefAction, GCConfig, GCSummary, ManifestWalkOptions,
-        expire, garbage_collect,
+        ExpireOptions, ExpiredRefAction, GCSummary, GarbageCollectBuilder, expire,
+        garbage_collect,
     },
     refs::Ref,
     repository::VersionInfo,
@@ -143,9 +143,8 @@ async fn do_test_gc(
     // verify doing gc without dangling objects doesn't change the repo
 
     let now = cutoff_after_all_listed(&repo).await?;
-    let gc_config =
-        GCConfig::clean_all(now, now).with_num_updates_per_repo_info_file(100);
-    let summary = garbage_collect(Arc::clone(repo.asset_manager()), &gc_config).await?;
+    let summary =
+        clean_all_before(Arc::clone(repo.asset_manager()), now).execute().await?;
     assert_eq!(summary, GCSummary::default());
     assert_eq!(repo.asset_manager().list_chunks().await?.count().await, 1110);
     for idx in 0..10 {
@@ -165,7 +164,8 @@ async fn do_test_gc(
     assert_eq!(repo.asset_manager().list_chunks().await?.count().await, 1110);
     assert_eq!(repo.asset_manager().list_manifests().await?.count().await, 111);
 
-    let summary = garbage_collect(Arc::clone(repo.asset_manager()), &gc_config).await?;
+    let summary =
+        clean_all_before(Arc::clone(repo.asset_manager()), now).execute().await?;
     assert_eq!(summary.chunks_deleted, 10);
     // only one manifest was re-created, so there is only one garbage manifest
     assert_eq!(summary.manifests_deleted, 1);
@@ -215,9 +215,8 @@ async fn do_test_gc(
     let listed = listed_snapshots(&repo).await?;
     let anon1 = listed.iter().find(|s| s.id == anon_snaps[1]).expect("anon[1] is listed");
     let cutoff = anon1.created_at + TimeDelta::seconds(1);
-    let gc_config =
-        GCConfig::clean_all(cutoff, cutoff).with_num_updates_per_repo_info_file(100);
-    let summary = garbage_collect(Arc::clone(repo.asset_manager()), &gc_config).await?;
+    let summary =
+        clean_all_before(Arc::clone(repo.asset_manager()), cutoff).execute().await?;
     assert_eq!(summary.snapshots_deleted, 2);
 
     // The last 3 should still be accessible
@@ -253,9 +252,8 @@ async fn test_gc_cutoff_inside_listed_second_in_tigris()
     // The cutoff falls inside the listed second, after the write instant.
     let cutoff = created_at + TimeDelta::milliseconds(500);
 
-    let gc_config =
-        GCConfig::clean_all(cutoff, cutoff).with_num_updates_per_repo_info_file(100);
-    let summary = garbage_collect(Arc::clone(repo.asset_manager()), &gc_config).await?;
+    let summary =
+        clean_all_before(Arc::clone(repo.asset_manager()), cutoff).execute().await?;
     assert_eq!(summary.snapshots_deleted, 0);
     repo.readonly_session(&VersionInfo::SnapshotId(dangling)).await?;
 
@@ -472,8 +470,6 @@ async fn do_test_expire_and_garbage_collect(
     );
 
     let now = cutoff_after_all_listed(&repo).await?;
-    let gc_config =
-        GCConfig::clean_all(now, now).with_num_updates_per_repo_info_file(100);
     let asset_manager = Arc::new(AssetManager::new(
         Arc::clone(&storage),
         storage_settings.clone(),
@@ -481,7 +477,7 @@ async fn do_test_expire_and_garbage_collect(
         &AssetManagerOptions::no_cache().with_compression_level(1),
     ));
 
-    let summary = garbage_collect(Arc::clone(&asset_manager), &gc_config).await?;
+    let summary = clean_all_before(Arc::clone(&asset_manager), now).execute().await?;
     // other expired snapshots are pointed by tags
     assert_eq!(summary.snapshots_deleted, 5);
 
@@ -490,7 +486,7 @@ async fn do_test_expire_and_garbage_collect(
 
     repo.delete_tag("tag1").await?;
 
-    let summary = garbage_collect(Arc::clone(&asset_manager), &gc_config).await?;
+    let summary = clean_all_before(Arc::clone(&asset_manager), now).execute().await?;
     // other expired snapshots are pointed by tag2
     assert_eq!(summary.snapshots_deleted, 1);
 
@@ -499,7 +495,7 @@ async fn do_test_expire_and_garbage_collect(
 
     repo.delete_tag("tag2").await?;
 
-    let summary = garbage_collect(Arc::clone(&asset_manager), &gc_config).await?;
+    let summary = clean_all_before(Arc::clone(&asset_manager), now).execute().await?;
     // tag2 snapshosts are not released yet because it's in the path to root from main
     // this behavior changed in IC 2.0
     assert_eq!(summary.snapshots_deleted, 0);
@@ -545,9 +541,7 @@ async fn test_expire_and_garbage_collect_deleting_expired_refs()
     assert_eq!(result.deleted_refs.len(), 2);
 
     let now = Utc::now();
-    let gc_config =
-        GCConfig::clean_all(now, now).with_num_updates_per_repo_info_file(100);
-    let summary = garbage_collect(Arc::clone(&asset_manager), &gc_config).await?;
+    let summary = clean_all_before(Arc::clone(&asset_manager), now).execute().await?;
 
     assert_eq!(summary.snapshots_deleted, 7);
     // The 7 released snapshots' files are deleted, but their transaction logs
@@ -613,9 +607,7 @@ async fn test_diff_complete_after_expire_and_gc() -> Result<(), Box<dyn std::err
     assert_eq!(result.edited_snapshots.len(), 1); // /c re-parented to root
 
     let now = Utc::now();
-    let gc_config =
-        GCConfig::clean_all(now, now).with_num_updates_per_repo_info_file(100);
-    let summary = garbage_collect(Arc::clone(&asset_manager), &gc_config).await?;
+    let summary = clean_all_before(Arc::clone(&asset_manager), now).execute().await?;
     // the 3 expired snapshot files are deleted, but their transaction logs are
     // all retained: /c's pruned_ancestor_tx_logs references them.
     assert_eq!(summary.snapshots_deleted, 3);
@@ -692,9 +684,7 @@ async fn test_gc_deletes_only_unreferenced_expired_tx_logs()
     assert!(result.deleted_refs.iter().any(|r| r.name() == "doomed"));
 
     let now = Utc::now();
-    let gc_config =
-        GCConfig::clean_all(now, now).with_num_updates_per_repo_info_file(100);
-    let summary = garbage_collect(Arc::clone(&asset_manager), &gc_config).await?;
+    let summary = clean_all_before(Arc::clone(&asset_manager), now).execute().await?;
 
     // All 5 released snapshot files are deleted...
     assert_eq!(summary.snapshots_deleted, 5);
@@ -761,9 +751,7 @@ async fn test_gc_retains_snapshot_between_flushed_and_created_at()
     let (repo_info, _) = am.fetch_repo_info().await?;
     assert!(repo_info.find_snapshot(&c)?.flushed_at < c_created_at);
 
-    let gc_config = GCConfig::clean_all(c_created_at, c_created_at)
-        .with_num_updates_per_repo_info_file(100);
-    let summary = garbage_collect(Arc::clone(&am), &gc_config).await?;
+    let summary = clean_all_before(Arc::clone(&am), c_created_at).execute().await?;
 
     // Only /b's snapshot file is deleted; /c's file is too new.
     assert_eq!(summary.snapshots_deleted, 1);
@@ -820,9 +808,7 @@ async fn test_gc_deletes_pruned_tx_logs_of_expire_released_snapshot()
     // of /a and /b, so GC deletes no tx log. The released snapshot file of
     // /b is unprotected garbage, and GC removes it.
     let now = Utc::now();
-    let gc_config =
-        GCConfig::clean_all(now, now).with_num_updates_per_repo_info_file(100);
-    let summary = garbage_collect(Arc::clone(&am), &gc_config).await?;
+    let summary = clean_all_before(Arc::clone(&am), now).execute().await?;
     assert_eq!(summary.snapshots_deleted, 1);
     assert_eq!(summary.transaction_logs_deleted, 0);
     am.fetch_transaction_log(&a).await?;
@@ -861,9 +847,7 @@ async fn test_gc_deletes_pruned_tx_logs_of_expire_released_snapshot()
         .expect("tx log /c not listed")
         .created_at;
     let cutoff = c_snapshot_created_at.min(c_tx_created_at);
-    let gc_config =
-        GCConfig::clean_all(cutoff, cutoff).with_num_updates_per_repo_info_file(100);
-    let summary = garbage_collect(Arc::clone(&am), &gc_config).await?;
+    let summary = clean_all_before(Arc::clone(&am), cutoff).execute().await?;
 
     // GC deletes only /b's tx log: no repo-info snapshot references it
     // anymore. /a's log survives as the tip of main. /c's files are too
@@ -883,9 +867,7 @@ async fn test_gc_deletes_pruned_tx_logs_of_expire_released_snapshot()
     // A follow-up GC whose cutoff passes /c's files removes the stranded
     // snapshot file and its tx log.
     let now = Utc::now();
-    let gc_config =
-        GCConfig::clean_all(now, now).with_num_updates_per_repo_info_file(100);
-    let summary = garbage_collect(Arc::clone(&am), &gc_config).await?;
+    let summary = clean_all_before(Arc::clone(&am), now).execute().await?;
     assert_eq!(summary.snapshots_deleted, 1);
     assert_eq!(summary.transaction_logs_deleted, 1);
     let on_disk: Vec<_> = am.list_snapshots().await?.try_collect().await?;
@@ -920,9 +902,15 @@ async fn threshold_between_commits() -> DateTime<Utc> {
     t
 }
 
-fn clean_all_now() -> GCConfig {
-    let now = Utc::now();
-    GCConfig::clean_all(now, now).with_num_updates_per_repo_info_file(100)
+fn clean_all_before(
+    am: Arc<AssetManager>,
+    cutoff: DateTime<Utc>,
+) -> GarbageCollectBuilder {
+    garbage_collect(am).clean_all(cutoff, cutoff).num_updates_per_repo_info_file(100)
+}
+
+fn clean_all_now(am: Arc<AssetManager>) -> GarbageCollectBuilder {
+    clean_all_before(am, Utc::now())
 }
 
 /// Expiring the same branch repeatedly must grow `pruned_ancestor_tx_logs`
@@ -986,7 +974,7 @@ async fn test_repeated_expiration_accumulates_pruned_logs()
         vec![g0.clone(), a.clone(), b.clone(), c.clone()]
     );
 
-    garbage_collect(Arc::clone(&am), &clean_all_now()).await?;
+    clean_all_now(Arc::clone(&am)).execute().await?;
 
     // Diff still reports every group despite two rounds of collapse + GC.
     let diff = repo
@@ -1028,9 +1016,7 @@ async fn test_reparent_accumulates_existing_pruned_logs()
     // Reset to /a, then GC between /b and /c: /b is dropped, /c is kept (too new)
     // and re-parented onto /a, seeding pruned_ancestor_tx_logs = [b].
     repo.reset_branch("main", &a, None).await?;
-    let gc_config = GCConfig::clean_all(gc_threshold, gc_threshold)
-        .with_num_updates_per_repo_info_file(100);
-    garbage_collect(Arc::clone(&am), &gc_config).await?;
+    clean_all_before(Arc::clone(&am), gc_threshold).execute().await?;
 
     let (written, _) = am.fetch_repo_info().await?;
     let edited = written.find_snapshot(&c)?;
@@ -1057,7 +1043,7 @@ async fn test_reparent_accumulates_existing_pruned_logs()
     assert_eq!(c_ancestry[0].pruned_ancestor_tx_logs, vec![a.clone(), b.clone()]);
 
     // Diff from the initial commit still sees every group after GC.
-    garbage_collect(Arc::clone(&am), &clean_all_now()).await?;
+    clean_all_now(Arc::clone(&am)).execute().await?;
     let diff = repo
         .diff(
             &VersionInfo::SnapshotId(initial_id),
@@ -1115,7 +1101,7 @@ async fn test_amend_preserves_pruned_logs() -> Result<(), Box<dyn std::error::Er
         vec![g0.clone(), a.clone(), b.clone()]
     );
 
-    garbage_collect(Arc::clone(&am), &clean_all_now()).await?;
+    clean_all_now(Arc::clone(&am)).execute().await?;
 
     let diff = repo
         .diff(
@@ -1179,7 +1165,7 @@ async fn test_rebase_detects_conflict_in_pruned_ancestor()
     .await?;
     assert!(r.released_snapshots.contains(&x));
 
-    garbage_collect(Arc::clone(&am), &clean_all_now()).await?;
+    clean_all_now(Arc::clone(&am)).execute().await?;
 
     // The conflict exists only in pruned ancestor X's log; the tip's own log
     // (/other) does not conflict. Rebase must still surface it.
@@ -1237,7 +1223,7 @@ async fn test_rebase_errors_on_missing_pruned_ancestor_log()
         &ExpireOptions::default().with_num_updates_per_repo_info_file(100),
     )
     .await?;
-    garbage_collect(Arc::clone(&am), &clean_all_now()).await?;
+    clean_all_now(Arc::clone(&am)).execute().await?;
 
     // Simulate an older GC having deleted the pruned ancestor's tx log.
     am.storage()
@@ -1287,7 +1273,7 @@ async fn test_diff_skips_missing_pruned_log() -> Result<(), Box<dyn std::error::
         &ExpireOptions::default().with_num_updates_per_repo_info_file(100),
     )
     .await?;
-    garbage_collect(Arc::clone(&am), &clean_all_now()).await?;
+    clean_all_now(Arc::clone(&am)).execute().await?;
 
     // Delete /a's pruned-ancestor tx log, then diff: it should still succeed.
     am.storage()
@@ -1368,7 +1354,7 @@ async fn test_inspect_shows_synthetic_composite() -> Result<(), Box<dyn std::err
 
     // GC retains the pruned-ancestor logs (c references them), so the composite
     // stays complete. Now simulate an older GC having deleted one of them.
-    garbage_collect(Arc::clone(&am), &clean_all_now()).await?;
+    clean_all_now(Arc::clone(&am)).execute().await?;
     am.storage()
         .delete_batch(
             &StorageContext::unattributed(am.storage_settings()),
@@ -1446,9 +1432,7 @@ async fn test_gc_reset_branch() -> Result<(), Box<dyn std::error::Error>> {
     repo.reset_branch("main", &snaps[1], None).await?;
 
     let before = repo.lookup_snapshot(&snaps[3]).await?.flushed_at;
-    let gc_config =
-        GCConfig::clean_all(before, before).with_num_updates_per_repo_info_file(100);
-    let summary = garbage_collect(Arc::clone(&asset_manager), &gc_config).await?;
+    let summary = clean_all_before(Arc::clone(&asset_manager), before).execute().await?;
     assert_eq!(summary.snapshots_deleted, 1);
 
     // snaps[2] is the dropped ancestor sitting between the retained
@@ -1480,7 +1464,7 @@ async fn test_gc_reset_branch() -> Result<(), Box<dyn std::error::Error>> {
         .try_collect::<Vec<_>>();
 
     // garbage_collect also traces ancestry
-    let summary = garbage_collect(asset_manager, &gc_config).await?;
+    let summary = clean_all_before(asset_manager, before).execute().await?;
     assert_eq!(summary.snapshots_deleted, 0);
 
     repo.readonly_session(&VersionInfo::SnapshotId(snaps[3].clone())).await?;
@@ -1586,22 +1570,15 @@ async fn test_gc_completes_with_one_decode_slot() -> Result<(), Box<dyn std::err
     open_config.max_concurrent_decodes = Some(1);
     let repo =
         Repository::open(Arc::clone(&storage)).config(open_config).execute().await?;
-    let config = GCConfig::clean_all(Utc::now(), Utc::now())
-        .with_walk(
-            ManifestWalkOptions::default()
-                .with_max_snapshots_in_memory(NonZeroU16::new(25).unwrap())
-                .with_max_compressed_manifest_mem_bytes(
-                    NonZeroUsize::new(64 * 1024 * 1024).unwrap(),
-                )
-                .with_max_concurrent_manifest_fetches(NonZeroU16::new(8).unwrap()),
-        )
-        .with_num_updates_per_repo_info_file(100)
-        .with_dry_run(true);
-    let summary = tokio::time::timeout(
-        std::time::Duration::from_secs(120),
-        garbage_collect(Arc::clone(repo.asset_manager()), &config),
-    )
-    .await??;
+    let gc = garbage_collect(Arc::clone(repo.asset_manager()))
+        .clean_all(Utc::now(), Utc::now())
+        .max_snapshots_in_memory(NonZeroU16::new(25).unwrap())
+        .max_compressed_manifest_mem_bytes(NonZeroUsize::new(64 * 1024 * 1024).unwrap())
+        .max_concurrent_manifest_fetches(NonZeroU16::new(8).unwrap())
+        .num_updates_per_repo_info_file(100)
+        .dry_run(true);
+    let summary =
+        tokio::time::timeout(std::time::Duration::from_secs(120), gc.execute()).await??;
     assert_eq!(summary.snapshots_deleted, 0);
     Ok(())
 }
@@ -1676,9 +1653,7 @@ async fn test_fork_snapshots_are_unregistered() -> Result<(), Box<dyn std::error
 
     // GC finds the fork snapshot by listing and deletes it, the repo is untouched
     let cutoff = cutoff_after_all_listed(&repo).await?;
-    let gc_config =
-        GCConfig::clean_all(cutoff, cutoff).with_num_updates_per_repo_info_file(100);
-    let summary = garbage_collect(Arc::clone(&asset_manager), &gc_config).await?;
+    let summary = clean_all_before(Arc::clone(&asset_manager), cutoff).execute().await?;
     assert_eq!(summary.snapshots_deleted, 1);
     assert!(listed_snapshots(&repo).await?.iter().all(|s| s.id != fork_snap));
 

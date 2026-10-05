@@ -10,11 +10,7 @@ use chrono::{TimeDelta, Utc};
 use icechunk::{
     Repository, Storage,
     asset_manager::AssetManager,
-    ops::{
-        gc::{GCConfig, garbage_collect},
-        stats::repo_chunks_storage,
-        walker::ManifestWalkOptions,
-    },
+    ops::{gc::garbage_collect, stats::repo_chunks_storage},
     storage::metering::MeteringStorage,
 };
 
@@ -92,22 +88,22 @@ pub(crate) async fn gc(args: GcArgs) -> Result<(), BoxError> {
         args.max_consecutive_delete_failures,
         "--max-consecutive-delete-failures",
     )?;
-    let mut config = GCConfig::clean_all(cutoff, cutoff)
-        .with_walk(
-            ManifestWalkOptions::default()
-                .with_max_snapshots_in_memory(snaps)
-                .with_max_compressed_manifest_mem_bytes(mem)
-                .with_max_decoded_manifest_mem_bytes(decoded_mem)
-                .with_max_concurrent_manifest_fetches(fetches),
-        )
-        .with_max_concurrent_deletes(deletes)
-        .with_max_consecutive_delete_failures(delete_failures)
-        .with_num_updates_per_repo_info_file(opened.num_updates_per_file)
-        .with_dry_run(!args.delete);
-    config.max_concurrent_listings = args
-        .max_concurrent_listings
-        .map(|n| non_zero_u16(n, "--max-concurrent-listings"))
-        .transpose()?;
+    let gc = garbage_collect(Arc::clone(&opened.am))
+        .clean_all(cutoff, cutoff)
+        .max_snapshots_in_memory(snaps)
+        .max_compressed_manifest_mem_bytes(mem)
+        .max_decoded_manifest_mem_bytes(decoded_mem)
+        .max_concurrent_manifest_fetches(fetches)
+        .max_concurrent_deletes(deletes)
+        .max_consecutive_delete_failures(delete_failures)
+        .num_updates_per_repo_info_file(opened.num_updates_per_file)
+        .dry_run(!args.delete);
+    let gc = match args.max_concurrent_listings {
+        Some(n) => {
+            gc.max_concurrent_listings(non_zero_u16(n, "--max-concurrent-listings")?)
+        }
+        None => gc,
+    };
     println!(
         "gc on {} (dry_run={}, cutoff={})",
         args.name,
@@ -119,7 +115,7 @@ pub(crate) async fn gc(args: GcArgs) -> Result<(), BoxError> {
     // operation alone
     opened.metering.reset();
     let started = Instant::now();
-    let result = garbage_collect(Arc::clone(&opened.am), &config).await;
+    let result = gc.execute().await;
     match &result {
         Ok(summary) => println!("{summary:#?}"),
         Err(err) => eprintln!("GC failed: {err}"),
@@ -136,12 +132,13 @@ pub(crate) async fn stats(args: StatsArgs) -> Result<(), BoxError> {
 
     opened.metering.reset();
     let started = Instant::now();
-    let walk_options = ManifestWalkOptions::default()
-        .with_max_snapshots_in_memory(snaps)
-        .with_max_compressed_manifest_mem_bytes(mem)
-        .with_max_decoded_manifest_mem_bytes(decoded_mem)
-        .with_max_concurrent_manifest_fetches(fetches);
-    let result = repo_chunks_storage(Arc::clone(&opened.am), &walk_options).await;
+    let result = repo_chunks_storage(Arc::clone(&opened.am))
+        .max_snapshots_in_memory(snaps)
+        .max_compressed_manifest_mem_bytes(mem)
+        .max_decoded_manifest_mem_bytes(decoded_mem)
+        .max_concurrent_manifest_fetches(fetches)
+        .execute()
+        .await;
     match &result {
         Ok(stats) => println!("{stats:#?}"),
         Err(err) => eprintln!("stats failed: {err}"),

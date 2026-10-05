@@ -2014,11 +2014,9 @@ impl Session {
     /// policy, configured to their needs:
     ///
     /// ```ignore
-    /// let solver = BasicConflictSolver {
-    ///    on_chunk_conflict: VersionSelection::UseOurs,
-    ///    ..Default::default()
-    /// };
-    /// repo2.rebase(&solver, "main").await?
+    /// let mut solver = BasicConflictSolver::default();
+    /// solver.on_chunk_conflict = VersionSelection::UseTheirs;
+    /// session.commit("wrote a chunk").rebase(&solver, 5).execute().await?;
     /// ```
     ///
     /// When there are more than one commit between the parent snapshot and the tip of

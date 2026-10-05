@@ -2,7 +2,7 @@
 
 use std::{
     collections::HashSet,
-    num::NonZeroU16,
+    num::{NonZeroU16, NonZeroUsize},
     ops::Add,
     sync::{
         Arc,
@@ -22,7 +22,7 @@ use crate::{
         pointed_snapshots,
         sharded_set::{ChunkIdSet, ShardedSet},
         walk_peak_requests,
-        walker::{ManifestConsumer, ManifestWalkOptions, walk_manifests},
+        walker::{ManifestConsumer, ManifestWalkBudget, walk_manifests},
         warn_on_low_fd_limit,
     },
     repository::{RepositoryError, RepositoryErrorKind, RepositoryResult},
@@ -131,38 +131,121 @@ impl ManifestConsumer for ChunkStorage {
     }
 }
 
-/// Compute the total size in bytes of all committed repo chunks.
-/// The total for each type of chunk is computed separately.
-#[instrument(skip_all)]
-pub async fn repo_chunks_storage(
+/// Chunk storage statistics over every reachable snapshot. Build with [`repo_chunks_storage`].
+///
+/// ```no_run
+/// # use std::sync::Arc;
+/// # use icechunk::{asset_manager::AssetManager, ops::stats::repo_chunks_storage};
+/// # async fn f(am: Arc<AssetManager>) -> Result<(), Box<dyn std::error::Error>> {
+/// let stats = repo_chunks_storage(am).execute().await?;
+/// # Ok(()) }
+/// ```
+pub struct ChunkStorageStatsBuilder {
     asset_manager: Arc<AssetManager>,
-    walk: &ManifestWalkOptions,
-) -> RepositoryResult<ChunkStorageStats> {
-    warn_on_low_fd_limit(
-        walk_peak_requests(
-            walk.max_concurrent_manifest_fetches,
+    walk: ManifestWalkBudget,
+}
+
+impl std::fmt::Debug for ChunkStorageStatsBuilder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ChunkStorageStatsBuilder")
+            .field("walk", &self.walk)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Start a chunk storage computation. Each type of chunk gets its own total.
+pub fn repo_chunks_storage(asset_manager: Arc<AssetManager>) -> ChunkStorageStatsBuilder {
+    ChunkStorageStatsBuilder { asset_manager, walk: ManifestWalkBudget::default() }
+}
+
+impl ChunkStorageStatsBuilder {
+    /// Default: 50.
+    pub fn max_snapshots_in_memory(mut self, value: NonZeroU16) -> Self {
+        self.walk.max_snapshots_in_memory = value;
+        self
+    }
+
+    /// Default: 512 MiB.
+    pub fn max_compressed_manifest_mem_bytes(mut self, value: NonZeroUsize) -> Self {
+        self.walk.max_compressed_manifest_mem_bytes = value;
+        self
+    }
+
+    /// Default: 4 GiB.
+    pub fn max_decoded_manifest_mem_bytes(mut self, value: NonZeroUsize) -> Self {
+        self.walk.max_decoded_manifest_mem_bytes = value;
+        self
+    }
+
+    /// Default: 500.
+    pub fn max_concurrent_manifest_fetches(mut self, value: NonZeroU16) -> Self {
+        self.walk.max_concurrent_manifest_fetches = value;
+        self
+    }
+
+    /// Compute the total size in bytes of all committed repo chunks.
+    #[instrument(skip_all)]
+    pub async fn execute(self) -> RepositoryResult<ChunkStorageStats> {
+        let Self { asset_manager, walk } = self;
+        warn_on_low_fd_limit(
+            walk_peak_requests(
+                walk.max_concurrent_manifest_fetches,
+                walk.max_snapshots_in_memory,
+            ),
+            "Chunk storage stats",
+        );
+        let extra_roots = HashSet::new();
+        let snaps = pointed_snapshots(
+            Arc::clone(&asset_manager),
+            None,
+            &extra_roots,
             walk.max_snapshots_in_memory,
-        ),
-        "Chunk storage stats",
-    );
-    let extra_roots = HashSet::new();
-    let snaps = pointed_snapshots(
-        Arc::clone(&asset_manager),
-        None,
-        &extra_roots,
-        walk.max_snapshots_in_memory,
-    )
-    .await?;
-    let limits = walk.limits(
-        NonZeroU16::new(asset_manager.max_concurrent_decodes())
-            .unwrap_or(NonZeroU16::MIN),
-    );
-    let consumer = Arc::new(ChunkStorage::default());
-    walk_manifests(asset_manager, limits, Arc::clone(&consumer), snaps).await?;
-    let consumer = Arc::try_unwrap(consumer).map_err(|_| {
-        RepositoryError::capture(RepositoryErrorKind::Other(
-            "manifest walker still holds the consumer".to_string(),
-        ))
-    })?;
-    Ok(consumer.into_stats())
+        )
+        .await?;
+        let limits = walk.limits(
+            NonZeroU16::new(asset_manager.max_concurrent_decodes())
+                .unwrap_or(NonZeroU16::MIN),
+        );
+        let consumer = Arc::new(ChunkStorage::default());
+        walk_manifests(asset_manager, limits, Arc::clone(&consumer), snaps).await?;
+        let consumer = Arc::try_unwrap(consumer).map_err(|_| {
+            RepositoryError::capture(RepositoryErrorKind::Other(
+                "manifest walker still holds the consumer".to_string(),
+            ))
+        })?;
+        Ok(consumer.into_stats())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        asset_manager::AssetManagerOptions, format::format_constants::SpecVersionBin,
+    };
+
+    // defaults and method wiring; the asset manager is never touched
+    #[tokio::test]
+    async fn chunk_storage_stats_builder_methods_set_fields()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let storage = crate::storage::new_in_memory_storage().await?;
+        let am = Arc::new(AssetManager::new(
+            storage,
+            crate::storage::Settings::default(),
+            SpecVersionBin::current(),
+            &AssetManagerOptions::no_cache(),
+        ));
+        let b = repo_chunks_storage(Arc::clone(&am));
+        assert_eq!(b.walk, ManifestWalkBudget::default());
+        let b = b
+            .max_snapshots_in_memory(NonZeroU16::new(7).unwrap())
+            .max_compressed_manifest_mem_bytes(NonZeroUsize::new(8).unwrap())
+            .max_decoded_manifest_mem_bytes(NonZeroUsize::new(9).unwrap())
+            .max_concurrent_manifest_fetches(NonZeroU16::new(10).unwrap());
+        assert_eq!(b.walk.max_snapshots_in_memory.get(), 7);
+        assert_eq!(b.walk.max_compressed_manifest_mem_bytes.get(), 8);
+        assert_eq!(b.walk.max_decoded_manifest_mem_bytes.get(), 9);
+        assert_eq!(b.walk.max_concurrent_manifest_fetches.get(), 10);
+        Ok(())
+    }
 }
