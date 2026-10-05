@@ -54,6 +54,10 @@ impl Path {
         Path(Utf8UnixPathBuf::from("/".to_string()))
     }
 
+    pub fn as_str(&self) -> &str {
+        self.0.as_str()
+    }
+
     // Fast-path unvalidated constructor for use when reading from Snapshots
     pub fn from_trusted(path: &str) -> Path {
         Path(Utf8UnixPathBuf::from(path))
@@ -121,4 +125,11 @@ impl TryFrom<String> for Path {
 /// Format: `icechunk-rust-<version>` (e.g., `icechunk-rust-2.0.0-alpha.4`).
 pub fn user_agent() -> &'static str {
     concat!("icechunk-rust-", env!("CARGO_PKG_VERSION"))
+}
+
+/// The product token used in `User-Agent` header.
+///
+/// Format: `icechunk/<version>` (e.g., `icechunk/2.3.0-alpha.1`).
+pub const fn user_agent_product() -> &'static str {
+    concat!("icechunk/", env!("CARGO_PKG_VERSION"))
 }

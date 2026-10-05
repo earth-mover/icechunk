@@ -266,7 +266,7 @@ clang = ">=19.1.7"
 llvm-tools = ">=19.1.7"
 
 [tool.pixi.feature.msrv.dependencies]
-rust = "~=1.91.1"
+rust = "~=1.95.0"
 
 [tool.pixi.feature.nextest.dependencies]
 cargo-nextest = ">=0.9.143,<0.10"

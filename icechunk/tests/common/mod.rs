@@ -1,3 +1,5 @@
+pub(crate) mod capture;
+
 use std::{env, sync::Arc};
 
 use chrono::{DateTime, TimeDelta, Utc};

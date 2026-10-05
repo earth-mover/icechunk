@@ -4,6 +4,9 @@
 
 pub use object_store;
 
+#[cfg(any(feature = "s3", feature = "gcs", feature = "azure", feature = "http"))]
+pub mod attribution;
+
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::{DateTime, TimeDelta, Utc};
@@ -16,10 +19,10 @@ use http::header::{HeaderName, HeaderValue};
 use icechunk_storage::s3_config::{S3Credentials, S3Options};
 use icechunk_storage::{
     ConcurrencySettings, DeleteObjectsResult, ETag, Generation, GetModifiedResult,
-    ListInfo, RepositoryCreation, RetriesSettings, Settings, Storage, StorageError,
-    StorageErrorKind, StorageInfo, StorageResult, VersionInfo, VersionedUpdateResult,
-    filter_ids_by_id_prefix, obj_not_found_res, obj_store_error, obj_store_error_res,
-    other_error,
+    ListInfo, RepositoryCreation, RetriesSettings, Settings, Storage, StorageContext,
+    StorageError, StorageErrorKind, StorageInfo, StorageResult, VersionInfo,
+    VersionedUpdateResult, filter_ids_by_id_prefix, obj_not_found_res, obj_store_error,
+    obj_store_error_res, other_error,
     readback::{
         ReadbackOutcome, WRITE_ID_METADATA_KEY, resolve_lost_response,
         resolve_precondition, write_id_for,
@@ -42,8 +45,8 @@ use object_store::http::HttpBuilder;
 #[cfg(feature = "fs")]
 use object_store::local::LocalFileSystem;
 use object_store::{
-    Attribute, AttributeValue, Attributes, GetOptions, ObjectMeta, ObjectStore,
-    ObjectStoreExt as _, PutMode, PutOptions, UpdateVersion, memory::InMemory,
+    Attribute, AttributeValue, Attributes, CopyOptions, GetOptions, ObjectMeta,
+    ObjectStore, PutMode, PutOptions, UpdateVersion, memory::InMemory,
     path::Path as ObjectPath,
 };
 #[cfg(any(feature = "s3", feature = "gcs", feature = "azure", feature = "http"))]
@@ -69,6 +72,16 @@ use tokio_util::io::StreamReader;
 use tracing::{instrument, warn};
 use url::Url;
 use uuid::Uuid;
+
+/// Request extensions carrying `ctx`'s attribution to the `user-agent` header.
+#[cfg(any(feature = "s3", feature = "gcs", feature = "azure", feature = "http"))]
+fn request_extensions(ctx: &StorageContext<'_>) -> http::Extensions {
+    attribution::extensions_for(ctx.attribution.user_agent_fragment())
+}
+#[cfg(not(any(feature = "s3", feature = "gcs", feature = "azure", feature = "http")))]
+fn request_extensions(_ctx: &StorageContext<'_>) -> http::Extensions {
+    http::Extensions::new()
+}
 
 /// Whether a storage operation reads from or writes to the object store.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -542,7 +555,7 @@ impl Storage for ObjectStorage {
 
     async fn put_object(
         &self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         path: &str,
         bytes: Bytes,
         content_type: Option<&str>,
@@ -551,23 +564,24 @@ impl Storage for ObjectStorage {
     ) -> StorageResult<VersionedUpdateResult> {
         let path = self.prefixed_path(path);
         let mut attributes = Attributes::new();
-        if settings.unsafe_use_metadata() {
+        if ctx.settings.unsafe_use_metadata() {
             if let Some(content_type) = content_type {
                 attributes.insert(
                     Attribute::ContentType,
                     AttributeValue::from(content_type.to_string()),
                 );
             }
-            for (att, value) in self.metadata_to_attributes(settings, metadata).iter() {
+            for (att, value) in self.metadata_to_attributes(ctx.settings, metadata).iter()
+            {
                 attributes.insert(att.clone(), value.clone());
             }
         };
-        self.add_storage_class(settings, &mut attributes);
+        self.add_storage_class(ctx.settings, &mut attributes);
 
-        let mode = self.get_put_mode(settings, previous_version);
+        let mode = self.get_put_mode(ctx.settings, previous_version);
         let is_conditional = !matches!(mode, PutMode::Overwrite);
         let write_id =
-            write_id_for(settings, is_conditional, || Uuid::new_v4().to_string());
+            write_id_for(ctx.settings, is_conditional, || Uuid::new_v4().to_string());
         if let Some(id) = &write_id {
             attributes.insert(
                 Attribute::Metadata(std::borrow::Cow::Borrowed(WRITE_ID_METADATA_KEY)),
@@ -575,10 +589,15 @@ impl Storage for ObjectStorage {
             );
         }
 
-        let options = PutOptions { mode, attributes, ..PutOptions::default() };
+        let options = PutOptions {
+            mode,
+            attributes,
+            extensions: request_extensions(ctx),
+            ..PutOptions::default()
+        };
         // FIXME: use multipart
         let res = self
-            .get_client(settings, Role::Write)
+            .get_client(ctx.settings, Role::Write)
             .await?
             .put_opts(&path, bytes.into(), options)
             .await;
@@ -593,11 +612,7 @@ impl Storage for ObjectStorage {
             Err(object_store::Error::Precondition { .. })
             | Err(object_store::Error::AlreadyExists { .. }) => {
                 let outcome = self
-                    .read_back_after_conditional_failure(
-                        settings,
-                        &path,
-                        write_id.as_deref(),
-                    )
+                    .read_back_after_conditional_failure(ctx, &path, write_id.as_deref())
                     .await;
                 resolve_precondition(outcome, path.as_ref())
             }
@@ -606,11 +621,7 @@ impl Storage for ObjectStorage {
             // Then only `OurWrite` flips to success; the rest propagate.
             Err(err) if matches!(err, object_store::Error::Generic { .. }) => {
                 let outcome = self
-                    .read_back_after_conditional_failure(
-                        settings,
-                        &path,
-                        write_id.as_deref(),
-                    )
+                    .read_back_after_conditional_failure(ctx, &path, write_id.as_deref())
                     .await;
                 resolve_lost_response(outcome, path.as_ref(), obj_store_error(err))
             }
@@ -620,7 +631,7 @@ impl Storage for ObjectStorage {
 
     async fn copy_object(
         &self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         from: &str,
         to: &str,
         _content_type: Option<&str>,
@@ -629,15 +640,19 @@ impl Storage for ObjectStorage {
         let from = self.prefixed_path(from);
         let to = self.prefixed_path(to);
 
-        if settings.unsafe_use_conditional_update() && version.etag().is_some() {
+        if ctx.settings.unsafe_use_conditional_update() && version.etag().is_some() {
             // object_store has no conditional copy, so we do a conditional GET
             // (verifying the source etag) followed by a PUT.
             let opts = GetOptions {
                 if_match: version.etag().map(|e| e.into()),
+                extensions: request_extensions(ctx),
                 ..Default::default()
             };
-            let result =
-                self.get_client(settings, Role::Write).await?.get_opts(&from, opts).await;
+            let result = self
+                .get_client(ctx.settings, Role::Write)
+                .await?
+                .get_opts(&from, opts)
+                .await;
             match result {
                 Ok(result) => {
                     let bytes = result
@@ -646,9 +661,13 @@ impl Storage for ObjectStorage {
                         .map_err(|e| StorageErrorKind::ObjectStore(Box::new(e)))
                         .capture()?;
                     let mut attributes = Attributes::new();
-                    self.add_storage_class(settings, &mut attributes);
-                    let options = PutOptions { attributes, ..PutOptions::default() };
-                    self.get_client(settings, Role::Write)
+                    self.add_storage_class(ctx.settings, &mut attributes);
+                    let options = PutOptions {
+                        attributes,
+                        extensions: request_extensions(ctx),
+                        ..PutOptions::default()
+                    };
+                    self.get_client(ctx.settings, Role::Write)
                         .await?
                         .put_opts(&to, bytes.into(), options)
                         .await
@@ -665,7 +684,14 @@ impl Storage for ObjectStorage {
         } else {
             // FIXME: `settings.storage_class()` is dropped, the copy lands in the
             // default class. object_store's `CopyOptions` has no attributes to carry it.
-            match self.get_client(settings, Role::Write).await?.copy(&from, &to).await {
+            let options =
+                CopyOptions { extensions: request_extensions(ctx), ..Default::default() };
+            match self
+                .get_client(ctx.settings, Role::Write)
+                .await?
+                .copy_opts(&from, &to, options)
+                .await
+            {
                 Ok(_) => {
                     Ok(VersionedUpdateResult::Updated { new_version: version.clone() })
                 }
@@ -675,15 +701,15 @@ impl Storage for ObjectStorage {
         }
     }
 
-    #[instrument(skip(self, settings))]
+    #[instrument(skip(self, ctx))]
     async fn list_objects<'a>(
         &'a self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         prefix: &str,
     ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
         let prefix = ObjectPath::from(format!("{}/{}", self.backend.prefix(), prefix));
         let stream =
-            self.get_client(settings, Role::Read).await?.list(Some(&prefix)).map(
+            self.get_client(ctx.settings, Role::Read).await?.list(Some(&prefix)).map(
                 move |object| {
                     let prefix = prefix.clone();
                     object
@@ -694,19 +720,19 @@ impl Storage for ObjectStorage {
         Ok(stream.boxed())
     }
 
-    #[instrument(skip(self, settings, id_prefixes))]
+    #[instrument(skip(self, ctx, id_prefixes))]
     async fn list_objects_with_id_prefixes<'a>(
         &'a self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         prefix: &str,
         id_prefixes: &[String],
     ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
         if !self.backend.ordered_offset_listing() {
-            let listing = self.list_objects(settings, prefix).await?;
+            let listing = self.list_objects(ctx, prefix).await?;
             return Ok(filter_ids_by_id_prefix(listing, id_prefixes));
         }
         let root = ObjectPath::from(format!("{}/{}", self.backend.prefix(), prefix));
-        let client = self.get_client(settings, Role::Read).await?;
+        let client = self.get_client(ctx.settings, Role::Read).await?;
         let listings: Vec<_> = id_prefixes
             .iter()
             .map(|id_prefix| {
@@ -732,10 +758,10 @@ impl Storage for ObjectStorage {
         self.backend.ordered_offset_listing()
     }
 
-    #[instrument(skip(self, batch))]
+    #[instrument(skip(self, ctx, batch))]
     async fn delete_batch(
         &self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         prefix: &str,
         batch: Vec<(String, u64)>,
     ) -> StorageResult<DeleteObjectsResult> {
@@ -747,7 +773,7 @@ impl Storage for ObjectStorage {
             sizes.insert(path, size);
         }
         let results = self
-            .get_client(settings, Role::Write)
+            .get_client(ctx.settings, Role::Write)
             .await?
             .delete_stream(stream::iter(ids).boxed());
         // FIXME: no throttle detection here. A key the store refused with a
@@ -776,34 +802,36 @@ impl Storage for ObjectStorage {
         Ok(res)
     }
 
-    #[instrument(skip(self, settings))]
+    #[instrument(skip(self, ctx))]
     async fn get_object_last_modified(
         &self,
+        ctx: &StorageContext<'_>,
         path: &str,
-        settings: &Settings,
     ) -> StorageResult<DateTime<Utc>> {
         let path = self.prefixed_path(path);
+        let opts = GetOptions {
+            head: true,
+            extensions: request_extensions(ctx),
+            ..Default::default()
+        };
         let res = self
-            .get_client(settings, Role::Read)
+            .get_client(ctx.settings, Role::Read)
             .await?
-            .head(&path)
+            .get_opts(&path, opts)
             .await
             .map_err(Box::new)
             .capture_box()?;
-        Ok(res.last_modified)
+        Ok(res.meta.last_modified)
     }
 
-    #[instrument(skip(self, settings))]
+    #[instrument(skip(self, ctx))]
     async fn get_object_conditional(
         &self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         path: &str,
         previous_version: Option<&VersionInfo>,
     ) -> StorageResult<GetModifiedResult> {
-        match self
-            .get_object_range_conditional(settings, path, None, previous_version)
-            .await
-        {
+        match self.get_object_range_conditional(ctx, path, None, previous_version).await {
             Ok(Some((stream, new_version))) => {
                 let reader = StreamReader::new(stream.map_err(std::io::Error::other));
                 Ok(GetModifiedResult::Modified { data: Box::pin(reader), new_version })
@@ -813,17 +841,17 @@ impl Storage for ObjectStorage {
         }
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip(self, ctx))]
     async fn get_object_range(
         &self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         path: &str,
         range: Option<&Range<u64>>,
     ) -> StorageResult<(
         Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>,
         VersionInfo,
     )> {
-        self.get_object_range_conditional(settings, path, range, None).await.map(|v| {
+        self.get_object_range_conditional(ctx, path, range, None).await.map(|v| {
             // If we got a result, then we can unwrap safely here:
             // Errors would be in the other branch, and None is only expected
             // if previous_version was passed in function call, but we set it to None
@@ -839,13 +867,17 @@ impl ObjectStorage {
     /// user metadata.
     async fn read_back_after_conditional_failure(
         &self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         path: &ObjectPath,
         write_id: Option<&str>,
     ) -> StorageResult<ReadbackOutcome> {
         let Some(write_id) = write_id else { return Ok(ReadbackOutcome::NotOurs) };
-        let client = self.get_client(settings, Role::Write).await?;
-        let opts = GetOptions { head: true, ..Default::default() };
+        let client = self.get_client(ctx.settings, Role::Write).await?;
+        let opts = GetOptions {
+            head: true,
+            extensions: request_extensions(ctx),
+            ..Default::default()
+        };
         let (stored_write_id, version) = match client.get_opts(path, opts).await {
             Ok(result) => (
                 result
@@ -877,7 +909,7 @@ impl ObjectStorage {
 
     async fn get_object_range_conditional(
         &self,
-        settings: &Settings,
+        ctx: &StorageContext<'_>,
         path: &str,
         range: Option<&Range<u64>>,
         previous_version: Option<&VersionInfo>,
@@ -897,10 +929,14 @@ impl ObjectStorage {
             if_none_match: previous_version
                 .as_ref()
                 .and_then(|v| v.etag().map(|e| e.into())),
+            extensions: request_extensions(ctx),
             ..Default::default()
         };
-        let res =
-            self.get_client(settings, Role::Read).await?.get_opts(&full_key, opts).await;
+        let res = self
+            .get_client(ctx.settings, Role::Read)
+            .await?
+            .get_opts(&full_key, opts)
+            .await;
 
         match res {
             Ok(result) => {
@@ -1164,13 +1200,12 @@ impl ObjectStoreBackend for HttpObjectStoreBackend {
 
         // Build a single ClientOptions accumulating all settings so that
         // with_client_options (which replaces, not merges) is called exactly once.
-        // Start with the icechunk UserAgent default; user-supplied opts applied
-        // after so they can override it if needed.
-        let mut client_opts = ClientOptions::new()
-            .with_config(ClientConfigKey::UserAgent, icechunk_types::user_agent());
-        client_opts = config
-            .iter()
-            .fold(client_opts, |opts, (key, value)| opts.with_config(*key, value));
+        // A user-supplied user_agent is kept by the attribution connector as a
+        // prefix of the icechunk header.
+        let mut client_opts =
+            config.iter().fold(ClientOptions::new(), |opts, (key, value)| {
+                opts.with_config(*key, value)
+            });
 
         // Auto-enable AllowHttp for plain http:// URLs unless the user already set it.
         if !config.contains_key(&ClientConfigKey::AllowHttp)
@@ -1212,6 +1247,8 @@ impl ObjectStoreBackend for HttpObjectStoreBackend {
                 retry_timeout: core::time::Duration::from_secs(5 * 60),
             });
 
+        let builder =
+            builder.with_http_connector(attribution::AttributedHttpConnector::default());
         let store = builder.build().capture_box()?;
 
         Ok(Arc::new(store))
@@ -1375,11 +1412,7 @@ impl ObjectStoreBackend for S3ObjectStoreBackend {
         // Defaults
         let builder = builder
             .with_bucket_name(&self.bucket)
-            .with_conditional_put(object_store::aws::S3ConditionalPut::ETagMatch)
-            .with_config(
-                object_store::aws::AmazonS3ConfigKey::Client(ClientConfigKey::UserAgent),
-                icechunk_types::user_agent(),
-            );
+            .with_conditional_put(object_store::aws::S3ConditionalPut::ETagMatch);
 
         let builder = builder.with_retry(RetryConfig {
             backoff: BackoffConfig {
@@ -1413,6 +1446,8 @@ impl ObjectStoreBackend for S3ObjectStoreBackend {
             builder.with_client_options(opts)
         };
 
+        let builder =
+            builder.with_http_connector(attribution::AttributedHttpConnector::default());
         let store = builder.build().capture_box()?;
         Ok(Arc::new(store))
     }
@@ -1550,13 +1585,8 @@ impl ObjectStoreBackend for AzureObjectStoreBackend {
         };
 
         // Either the account name should be provided or user_emulator should be set to true to use the default account
-        let builder = builder
-            .with_account(&self.account)
-            .with_container_name(&self.container)
-            .with_config(
-                AzureConfigKey::Client(ClientConfigKey::UserAgent),
-                icechunk_types::user_agent(),
-            );
+        let builder =
+            builder.with_account(&self.account).with_container_name(&self.container);
 
         // Add options (user config takes precedence over defaults)
         let builder = self
@@ -1580,6 +1610,8 @@ impl ObjectStoreBackend for AzureObjectStoreBackend {
             retry_timeout: core::time::Duration::from_secs(5 * 60),
         });
 
+        let builder =
+            builder.with_http_connector(attribution::AttributedHttpConnector::default());
         let store = builder.build().capture_box()?;
         Ok(Arc::new(store))
     }
@@ -1734,10 +1766,7 @@ impl ObjectStoreBackend for GcsObjectStoreBackend {
             None | Some(GcsCredentials::FromEnv) => GoogleCloudStorageBuilder::from_env(),
         };
 
-        let builder = builder.with_bucket_name(&self.bucket).with_config(
-            GoogleConfigKey::Client(ClientConfigKey::UserAgent),
-            icechunk_types::user_agent(),
-        );
+        let builder = builder.with_bucket_name(&self.bucket);
 
         // Add options (user config takes precedence over defaults)
         let builder = self
@@ -1777,6 +1806,8 @@ impl ObjectStoreBackend for GcsObjectStoreBackend {
             builder.with_client_options(opts)
         };
 
+        let builder =
+            builder.with_http_connector(attribution::AttributedHttpConnector::default());
         let store = builder.build().capture_box()?;
         Ok(Arc::new(store))
     }
@@ -1947,7 +1978,8 @@ mod tests {
 
     use super::{
         Attribute, Attributes, Bytes, GetOptions, ObjectPath, ObjectStorage,
-        ReadbackOutcome, Role, Settings, Storage as _, VersionedUpdateResult,
+        ReadbackOutcome, Role, Settings, Storage as _, StorageContext,
+        VersionedUpdateResult,
     };
     #[cfg(feature = "http")]
     use super::{NonZeroU16, RetriesSettings, Url};
@@ -2031,7 +2063,7 @@ mod tests {
         let store = ObjectStorage::new_in_memory().await.unwrap();
         let outcome = store
             .read_back_after_conditional_failure(
-                &Settings::default(),
+                &StorageContext::unattributed(&Settings::default()),
                 &ObjectPath::from("missing"),
                 Some("some-write-id"),
             )
@@ -2047,10 +2079,11 @@ mod tests {
         // quotes turns every conditional copy into a spurious conflict.
         let store = ObjectStorage::new_in_memory().await.unwrap();
         let settings = store.default_settings().await.unwrap();
+        let ctx = StorageContext::unattributed(&settings);
         let path = "conditional-roundtrip";
         let version = match store
             .put_object(
-                &settings,
+                &ctx,
                 path,
                 Bytes::from_static(b"payload"),
                 None,
@@ -2067,13 +2100,13 @@ mod tests {
         };
 
         let copied = store
-            .copy_object(&settings, path, "conditional-roundtrip-copy", None, &version)
+            .copy_object(&ctx, path, "conditional-roundtrip-copy", None, &version)
             .await
             .unwrap();
         assert!(matches!(copied, VersionedUpdateResult::Updated { .. }));
 
         let not_modified = store
-            .get_object_range_conditional(&settings, path, None, Some(&version))
+            .get_object_range_conditional(&ctx, path, None, Some(&version))
             .await
             .unwrap();
         assert!(not_modified.is_none());
@@ -2101,10 +2134,11 @@ mod tests {
         let mut settings = Settings::default();
         settings.storage_class = Some("STANDARD_IA".to_string());
         settings.unsafe_use_metadata = Some(false);
+        let ctx = StorageContext::unattributed(&settings);
         let path = "chunks/with-class";
         store
             .put_object(
-                &settings,
+                &ctx,
                 path,
                 Bytes::from_static(b"payload"),
                 Some("application/octet-stream"),
@@ -2129,16 +2163,10 @@ mod tests {
     async fn no_storage_class_attribute_when_unset() {
         let store = ObjectStorage::new_in_memory().await.unwrap();
         let settings = store.default_settings().await.unwrap();
+        let ctx = StorageContext::unattributed(&settings);
         let path = "chunks/without-class";
         store
-            .put_object(
-                &settings,
-                path,
-                Bytes::from_static(b"payload"),
-                None,
-                vec![],
-                None,
-            )
+            .put_object(&ctx, path, Bytes::from_static(b"payload"), None, vec![], None)
             .await
             .unwrap()
             .must_write()
@@ -2157,16 +2185,10 @@ mod tests {
         let store = ObjectStorage::new_local_filesystem(tmp_dir.path()).await.unwrap();
         let mut settings = store.default_settings().await.unwrap();
         settings.storage_class = Some("STANDARD_IA".to_string());
+        let ctx = StorageContext::unattributed(&settings);
         let path = "chunks/on-disk";
         store
-            .put_object(
-                &settings,
-                path,
-                Bytes::from_static(b"payload"),
-                None,
-                vec![],
-                None,
-            )
+            .put_object(&ctx, path, Bytes::from_static(b"payload"), None, vec![], None)
             .await
             .unwrap()
             .must_write()
@@ -2182,9 +2204,10 @@ mod tests {
         let store = ObjectStorage::new_in_memory().await.unwrap();
         let mut settings = store.default_settings().await.unwrap();
         settings.storage_class = Some("STANDARD_IA".to_string());
+        let ctx = StorageContext::unattributed(&settings);
         let version = store
             .put_object(
-                &settings,
+                &ctx,
                 "config",
                 Bytes::from_static(b"payload"),
                 None,
@@ -2198,7 +2221,7 @@ mod tests {
         assert!(version.etag().is_some());
 
         store
-            .copy_object(&settings, "config", "config-backup", None, &version)
+            .copy_object(&ctx, "config", "config-backup", None, &version)
             .await
             .unwrap()
             .must_write()
@@ -2228,9 +2251,10 @@ mod tests {
         retries.max_backoff_ms = Some(1);
         let mut settings = Settings::default();
         settings.retries = Some(retries);
+        let ctx = StorageContext::unattributed(&settings);
         store
             .read_back_after_conditional_failure(
-                &settings,
+                &ctx,
                 &ObjectPath::from("missing"),
                 Some("some-write-id"),
             )

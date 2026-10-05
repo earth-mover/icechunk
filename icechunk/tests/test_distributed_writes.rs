@@ -5,7 +5,7 @@ use icechunk_macros::tokio_test;
 use pretty_assertions::assert_eq;
 use rstest::rstest;
 use rstest_reuse::{self, *};
-use std::{collections::HashMap, ops::Range, sync::Arc};
+use std::{ops::Range, sync::Arc};
 
 use bytes::Bytes;
 use icechunk::{
@@ -38,16 +38,13 @@ async fn mk_repo(
     if init {
         let mut config = RepositoryConfig::default();
         config.inline_chunk_threshold_bytes = Some(0);
-        Ok(Repository::create(
-            Some(config),
-            storage,
-            HashMap::new(),
-            Some(spec_version),
-            true,
-        )
-        .await?)
+        Ok(Repository::create(storage)
+            .config(config)
+            .spec_version(spec_version)
+            .execute()
+            .await?)
     } else {
-        Ok(Repository::open(None, storage, HashMap::new()).await?)
+        Ok(Repository::open(storage).execute().await?)
     }
 }
 
@@ -63,8 +60,11 @@ async fn write_chunks(
             let fy = y as f64;
             let bytes: Vec<u8> =
                 fx.to_le_bytes().into_iter().chain(fy.to_le_bytes()).collect();
-            let payload =
-                ds.get_chunk_writer()?(Bytes::copy_from_slice(bytes.as_slice())).await?;
+            let payload = ds.get_chunk_writer(
+                &"/array".try_into().unwrap(),
+                &ChunkIndices(vec![x, y]),
+            )?(Bytes::copy_from_slice(bytes.as_slice()))
+            .await?;
             ds.set_chunk_ref(
                 "/array".try_into().unwrap(),
                 ChunkIndices(vec![x, y]),

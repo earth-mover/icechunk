@@ -11,7 +11,6 @@
 #![allow(clippy::unwrap_used)]
 
 use std::{
-    collections::HashMap,
     env::{self},
     sync::Arc,
     time::Instant,
@@ -49,9 +48,7 @@ async fn mk_repo(
     compression.level = Some(3);
     let mut config = RepositoryConfig::default();
     config.compression = Some(compression);
-    let repo =
-        Repository::open_or_create(Some(config), storage, HashMap::new(), None, true)
-            .await?;
+    let repo = Repository::open_or_create(storage).config(config).execute().await?;
     Ok(repo)
 }
 

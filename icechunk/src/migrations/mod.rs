@@ -94,7 +94,7 @@ async fn fetch_deleted_tag_snapshot_id(
     tag_name: &str,
 ) -> Option<SnapshotId> {
     let ref_path = format!("{V1_REFS_FILE_PATH}/tag.{tag_name}/ref.json");
-    match repo.storage().get_object(repo.storage_settings(), &ref_path, None).await {
+    match repo.storage().get_object(&repo.storage_context(), &ref_path, None).await {
         Ok((mut reader, ..)) => {
             let mut data = Vec::with_capacity(40);
             if reader.read_to_end(&mut data).await.is_err() {
@@ -241,12 +241,11 @@ async fn do_migrate(
     info!(version=?new_version_info, "Written repository info file");
 
     info!("Opening migrated repo");
-    let Ok(migrated) = Repository::open(
-        Some(repo.config().clone()),
-        Arc::clone(repo.storage()),
-        Default::default(),
-    )
-    .await
+    let Ok(migrated) = Repository::open(Arc::clone(repo.storage()))
+        .config(repo.config().clone())
+        .attribution(repo.attribution().clone())
+        .execute()
+        .await
     else {
         error!("Unknown error during migration. Repository doesn't open");
         delete_repo_info(repo).await?;
@@ -268,12 +267,11 @@ async fn do_migrate(
             return Err(err);
         }
         info!("Opening migrated repo");
-        let Ok(migrated) = Repository::open(
-            Some(repo.config().clone()),
-            Arc::clone(repo.storage()),
-            Default::default(),
-        )
-        .await
+        let Ok(migrated) = Repository::open(Arc::clone(repo.storage()))
+            .config(repo.config().clone())
+            .attribution(repo.attribution().clone())
+            .execute()
+            .await
         else {
             error!("Unknown error during migration. Repository doesn't open");
             delete_repo_info(repo).await?;
@@ -356,7 +354,7 @@ pub async fn migrate_1_to_2(
     }));
 
     let deleted_tags =
-        list_deleted_tags(repo.storage().as_ref(), repo.storage_settings())
+        list_deleted_tags(repo.storage().as_ref(), &repo.storage_context())
             .await
             .inject()?;
 
@@ -560,7 +558,7 @@ async fn delete_repo_info(repo: &Repository) -> MigrationResult<()> {
     warn!("Deleting generated repo info file");
     repo.storage()
         .delete_objects(
-            repo.storage_settings(),
+            &repo.storage_context(),
             "",
             stream::iter([(REPO_INFO_FILE_PATH.to_string(), 0)]).boxed(),
         )
@@ -579,11 +577,12 @@ const V1_DEFAULT_BRANCH_KEY: &str = "branch.main/ref.json";
 /// This minimizes the window where the repo appears as both valid V1 and V2.
 async fn delete_v1_refs(repo: &Repository) -> MigrationResult<()> {
     info!("Deleting V1 references");
+    let ctx = repo.storage_context();
 
     // Delete the main branch first to break IC1 clients immediately
     repo.storage()
         .delete_objects(
-            repo.storage_settings(),
+            &ctx,
             V1_REFS_FILE_PATH,
             stream::iter([(V1_DEFAULT_BRANCH_KEY.to_string(), 0)]).boxed(),
         )
@@ -592,21 +591,13 @@ async fn delete_v1_refs(repo: &Repository) -> MigrationResult<()> {
     info!("V1 main branch reference deleted");
 
     // Then delete remaining V1 refs, as long as main is gone the repo is broken for v1 usage
-    let all = repo
-        .storage()
-        .list_objects(repo.storage_settings(), V1_REFS_FILE_PATH)
-        .await
-        .inject()?;
+    let all = repo.storage().list_objects(&ctx, V1_REFS_FILE_PATH).await.inject()?;
     let delete_keys =
         all.map_ok(|li| (li.id, 0)).boxed().try_collect::<Vec<_>>().await.inject()?;
 
     if !delete_keys.is_empty() {
         repo.storage()
-            .delete_objects(
-                repo.storage_settings(),
-                V1_REFS_FILE_PATH,
-                stream::iter(delete_keys).boxed(),
-            )
+            .delete_objects(&ctx, V1_REFS_FILE_PATH, stream::iter(delete_keys).boxed())
             .await
             .inject()?;
     }
@@ -614,7 +605,7 @@ async fn delete_v1_refs(repo: &Repository) -> MigrationResult<()> {
     info!("All V1 references deleted, verifying");
     let remaining = repo
         .storage()
-        .list_objects(repo.storage_settings(), V1_REFS_FILE_PATH)
+        .list_objects(&ctx, V1_REFS_FILE_PATH)
         .await
         .inject()?
         .try_collect::<Vec<_>>()
@@ -636,7 +627,7 @@ async fn delete_config_yaml(repo: &Repository) -> MigrationResult<()> {
     info!("Deleting V1 config.yaml");
     repo.storage()
         .delete_objects(
-            repo.storage_settings(),
+            &repo.storage_context(),
             "",
             stream::iter([(CONFIG_FILE_PATH.to_string(), 0)]).boxed(),
         )
@@ -650,9 +641,9 @@ async fn delete_config_yaml(repo: &Repository) -> MigrationResult<()> {
 async fn all_roots<'a>(
     repo: &'a Repository,
 ) -> RefResult<impl Stream<Item = RefResult<(Ref, SnapshotId)>> + 'a> {
-    let all_refs = list_refs(repo.storage().as_ref(), repo.storage_settings()).await?;
+    let all_refs = list_refs(repo.storage().as_ref(), &repo.storage_context()).await?;
     let roots = stream::iter(all_refs).then(move |r| async move {
-        r.fetch(repo.storage().as_ref(), repo.storage_settings())
+        r.fetch(repo.storage().as_ref(), &repo.storage_context())
             .await
             .map(|ref_data| (r, ref_data.snapshot))
     });
@@ -715,8 +706,7 @@ mod tests {
         let storage =
             new_local_filesystem_storage(dir.path().join("test-repo-v1").as_path())
                 .await?;
-        let repo =
-            Repository::open(None, Arc::clone(&storage), Default::default()).await?;
+        let repo = Repository::open(Arc::clone(&storage)).execute().await?;
         Ok((repo, dir))
     }
 
@@ -729,34 +719,30 @@ mod tests {
         let storage = Arc::clone(repo.storage());
 
         // Persist a custom caching config to the V1 repo's config.yaml
-        let repo = Repository::open(
-            Some(RepositoryConfig {
+        let repo = Repository::open(Arc::clone(&storage))
+            .config(RepositoryConfig {
                 caching: Some(CachingConfig {
                     num_chunk_refs: Some(10_000),
                     ..Default::default()
                 }),
                 ..Default::default()
-            }),
-            Arc::clone(&storage),
-            Default::default(),
-        )
-        .await?;
+            })
+            .execute()
+            .await?;
         repo.save_config().await?;
 
         // Re-open with a *different* caching value to simulate a migration
         // client that tuned cache sizes for the migration workload.
-        let repo = Repository::open(
-            Some(RepositoryConfig {
+        let repo = Repository::open(Arc::clone(&storage))
+            .config(RepositoryConfig {
                 caching: Some(CachingConfig {
                     num_chunk_refs: Some(99),
                     ..Default::default()
                 }),
                 ..Default::default()
-            }),
-            Arc::clone(&storage),
-            Default::default(),
-        )
-        .await?;
+            })
+            .execute()
+            .await?;
 
         let mut tag_ancestries_before = HashMap::new();
         for tag in repo.list_tags().await? {
@@ -781,7 +767,7 @@ mod tests {
         migrate_1_to_2(repo, &MigrateOptions::default().with_dry_run(false))
             .await
             .unwrap();
-        let repo = Repository::open(None, storage, Default::default()).await?;
+        let repo = Repository::open(storage).execute().await?;
 
         let mut tag_ancestries_after = HashMap::new();
         for tag in repo.list_tags().await? {
@@ -934,7 +920,7 @@ mod tests {
             .unwrap();
 
         // Reopen the now-V2 repo and try to migrate again
-        let repo = Repository::open(None, storage, Default::default()).await?;
+        let repo = Repository::open(storage).execute().await?;
         let result =
             migrate_1_to_2(repo, &MigrateOptions::default().with_dry_run(false)).await;
         assert!(result.is_err(), "migrating an already-V2 repo should return an error");
@@ -951,7 +937,7 @@ mod tests {
         migrate_1_to_2(repo, &MigrateOptions::default().with_dry_run(true))
             .await
             .unwrap();
-        let repo = Repository::open(None, storage, Default::default()).await?;
+        let repo = Repository::open(storage).execute().await?;
 
         assert_eq!(repo.spec_version(), SpecVersionBin::V1);
         Ok(())
@@ -972,12 +958,12 @@ mod tests {
         )
         .await
         .unwrap();
-        let repo = Repository::open(None, storage, Default::default()).await?;
+        let repo = Repository::open(storage).execute().await?;
 
         assert_eq!(repo.spec_version(), SpecVersionBin::V2);
 
         assert_eq!(
-            refs::list_branches(repo.storage().as_ref(), repo.storage_settings()).await?,
+            refs::list_branches(repo.storage().as_ref(), &repo.storage_context()).await?,
             ["main".to_string(), "my-branch".to_string()].into()
         );
         Ok(())
@@ -1002,8 +988,7 @@ mod tests {
             ..Default::default()
         };
         let repo =
-            Repository::open(Some(config), Arc::clone(&storage), Default::default())
-                .await?;
+            Repository::open(Arc::clone(&storage)).config(config).execute().await?;
 
         // Record initial ops log length after migration
         let (stream, _, _) = repo.ops_log().await?;

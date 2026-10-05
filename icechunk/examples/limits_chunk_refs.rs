@@ -76,7 +76,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut config = RepositoryConfig::default();
     config.inline_chunk_threshold_bytes = Some(0);
     config.manifest = Some(manifest_config);
-    let repo = Repository::create(Some(config), storage, creds, None, true)
+    let repo = Repository::create(storage)
+        .config(config)
+        .authorize_virtual_chunk_access(creds)
+        .execute()
         .await
         .expect("Failed to initialize repository");
 

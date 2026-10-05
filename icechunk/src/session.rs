@@ -28,7 +28,7 @@ use tracing::{Instrument as _, Span, debug, info, instrument, trace, warn};
 
 use crate::{
     RepositoryConfig, Storage,
-    asset_manager::AssetManager,
+    asset_manager::{AssetManager, array_label},
     change_set::{
         ArrayData, ChangeSet, ChunkTable, MovedFrom, transaction_log_from_change_set,
     },
@@ -60,7 +60,7 @@ use crate::{
     },
     refs::{RefError, RefErrorKind, fetch_branch_tip_v1, update_branch},
     repository::{RepositoryError, RepositoryErrorKind, RepositoryResult},
-    storage::{self, StorageErrorKind},
+    storage::{self, RequestAttribution, StorageContext, StorageErrorKind},
     virtual_chunks::{VirtualChunkContainer, VirtualChunkResolver},
 };
 use icechunk_types::{ICResultExt as _, error::ICResultCtxExt as _};
@@ -1295,7 +1295,13 @@ impl Session {
                 match session_chunk {
                     Some(res) => Ok(res),
                     None => {
-                        self.get_old_chunk(node.id, manifests.as_slice(), coords).await
+                        self.get_old_chunk(
+                            array_label(path),
+                            node.id,
+                            manifests.as_slice(),
+                            coords,
+                        )
+                        .await
                     }
                 }
             }
@@ -1339,9 +1345,14 @@ impl Session {
                 let byte_range = byte_range.clone();
                 let asset_manager = Arc::clone(&self.asset_manager);
                 let byte_range = construct_valid_byte_range(&byte_range, offset, length)?;
+                let array = array_label(path).to_string();
+                let chunk = coords.0.clone();
                 Ok(Some(crate::compat::ic_boxed!(async move {
                     // TODO: we don't have a way to distinguish if we want to pass a range or not
-                    asset_manager.fetch_chunk(&id, &byte_range).await.inject()
+                    asset_manager
+                        .fetch_chunk(&array, &chunk, &id, &byte_range)
+                        .await
+                        .inject()
                 })))
             }
             Some(ChunkPayload::Inline(bytes)) => {
@@ -1360,9 +1371,20 @@ impl Session {
             })) => {
                 let byte_range = construct_valid_byte_range(byte_range, offset, length)?;
                 let resolver = Arc::clone(&self.virtual_resolver);
+                let array = array_label(path).to_string();
+                let chunk = coords.0.clone();
                 Ok(Some(crate::compat::ic_boxed!(async move {
                     resolver
-                        .fetch_chunk(location.url(), &byte_range, checksum.as_ref())
+                        .fetch_chunk(
+                            location.url(),
+                            &byte_range,
+                            checksum.as_ref(),
+                            RequestAttribution {
+                                labels: resolver.attribution_labels(),
+                                array: Some(&array),
+                                chunk: Some(&chunk),
+                            },
+                        )
                         .await
                         .inject()
                 })))
@@ -1381,13 +1403,15 @@ impl Session {
     ///
     /// Example usage:
     /// ```ignore
-    /// repository.get_chunk_writer()(Bytes::copy_from_slice(b"hello")).await?
+    /// session.get_chunk_writer(&path, &coords)?(Bytes::copy_from_slice(b"hello")).await?
     /// ```
     ///
     /// As shown, the result of the returned function must be awaited to finish the upload.
     #[instrument(skip(self))]
     pub fn get_chunk_writer(
         &self,
+        path: &Path,
+        coords: &ChunkIndices,
     ) -> SessionResult<
         impl FnOnce(
             Bytes,
@@ -1397,10 +1421,13 @@ impl Session {
     > {
         let threshold = self.config().inline_chunk_threshold_bytes() as usize;
         let asset_manager = Arc::clone(&self.asset_manager);
+        let array = array_label(path).to_string();
+        let chunk = coords.0.clone();
         let fut = move |data: Bytes| {
             crate::compat::ic_boxed!(async move {
                 let payload = if data.len() > threshold {
-                    new_materialized_chunk(asset_manager.as_ref(), data).await?
+                    new_materialized_chunk(asset_manager.as_ref(), &array, &chunk, data)
+                        .await?
                 } else {
                     new_inline_chunk(data)
                 };
@@ -1430,6 +1457,7 @@ impl Session {
 
     async fn get_old_chunk(
         &self,
+        array: &str,
         node: NodeId,
         manifests: &[ManifestRef],
         coords: &ChunkIndices,
@@ -1449,7 +1477,7 @@ impl Session {
             return Ok(None);
         };
 
-        let manifest = self.fetch_manifest(&manifests[index].object_id).await?;
+        let manifest = self.fetch_manifest(array, &manifests[index].object_id).await?;
         match manifest.get_chunk_payload(&node, coords) {
             Ok(payload) => {
                 return Ok(Some(payload.clone()));
@@ -1463,8 +1491,12 @@ impl Session {
         Ok(None)
     }
 
-    async fn fetch_manifest(&self, id: &ManifestId) -> SessionResult<Arc<Manifest>> {
-        fetch_manifest(id, self.snapshot_id(), self.asset_manager.as_ref()).await
+    async fn fetch_manifest(
+        &self,
+        array: &str,
+        id: &ManifestId,
+    ) -> SessionResult<Arc<Manifest>> {
+        fetch_manifest(array, id, self.snapshot_id(), self.asset_manager.as_ref()).await
     }
 
     #[instrument(skip(self))]
@@ -2094,7 +2126,10 @@ impl Session {
     ) -> SessionResult<Vec<SnapshotId>> {
         let ref_data = match fetch_branch_tip_v1(
             self.storage.as_ref(),
-            self.storage_settings.as_ref(),
+            &StorageContext::without_node(
+                self.storage_settings.as_ref(),
+                self.asset_manager.attribution_labels(),
+            ),
             branch_name,
         )
         .await
@@ -2264,6 +2299,7 @@ async fn verified_node_chunk_iterator<'a>(
             );
 
             let node_id_c = node.id.clone();
+            let array = array_label(&node.path).to_string();
             let new_chunks = change_set
                 .array_chunks_iterator(&node.id, &node.path)
                 .filter_map(move |(idx, payload)| {
@@ -2284,8 +2320,10 @@ async fn verified_node_chunk_iterator<'a>(
                             let node_id_c = node.id.clone();
                             let node_id_c2 = node.id.clone();
                             let node_id_c3 = node.id.clone();
+                            let array = array.clone();
                             async move {
                                 let manifest = fetch_manifest(
+                                    &array,
                                     &manifest_ref.object_id,
                                     snapshot_id,
                                     asset_manager,
@@ -2352,10 +2390,15 @@ pub fn is_prefix_match(key: &str, prefix: &str) -> bool {
 
 async fn new_materialized_chunk(
     asset_manager: &AssetManager,
+    array: &str,
+    chunk: &[u32],
     data: Bytes,
 ) -> SessionResult<ChunkPayload> {
     let new_id = ObjectId::random();
-    asset_manager.write_chunk(new_id.clone(), data.clone()).await.inject()?;
+    asset_manager
+        .write_chunk(array, chunk, new_id.clone(), data.clone())
+        .await
+        .inject()?;
     Ok(ChunkPayload::Ref(ChunkRef { id: new_id, offset: 0, length: data.len() as u64 }))
 }
 
@@ -2620,6 +2663,7 @@ struct NodeFlushResult {
 
 async fn write_manifest_from_stream(
     asset_manager: &AssetManager,
+    array: &str,
     manifest_config: &ManifestConfig,
     chunks: impl Stream<Item = SessionResult<ChunkInfo>>,
 ) -> SessionResult<Option<(ManifestRef, ManifestFileInfo)>> {
@@ -2640,8 +2684,10 @@ async fn write_manifest_from_stream(
             .inject()?
     {
         let new_manifest = Arc::new(new_manifest);
-        let new_manifest_size =
-            asset_manager.write_manifest(Arc::clone(&new_manifest)).await.inject()?;
+        let new_manifest_size = asset_manager
+            .write_manifest(array, Arc::clone(&new_manifest))
+            .await
+            .inject()?;
 
         let file_info = ManifestFileInfo::new(new_manifest.as_ref(), new_manifest_size);
         let new_ref = ManifestRef {
@@ -2657,8 +2703,10 @@ async fn write_manifest_from_stream(
 /// Creates a new manifest for the node, by obtaining all previous chunks coming from
 /// `previous_manifests`, filtering those that are in the `extent`, and overriding them
 /// with any changes in `modified_chunks`
+#[expect(clippy::too_many_arguments)]
 async fn write_manifest_with_changes(
     asset_manager: &AssetManager,
+    array: &str,
     manifest_config: &ManifestConfig,
     previous_manifests: impl Iterator<Item = &ManifestRef>,
     modified_chunks: ChunkTable,
@@ -2668,7 +2716,9 @@ async fn write_manifest_with_changes(
 ) -> SessionResult<Option<(ManifestRef, ManifestFileInfo)>> {
     // First add chunks from previous manifests that are not modified
     let futs = previous_manifests
-        .map(|mref| fetch_manifest(&mref.object_id, old_snapshot_id, asset_manager))
+        .map(|mref| {
+            fetch_manifest(array, &mref.object_id, old_snapshot_id, asset_manager)
+        })
         .collect::<Vec<_>>();
 
     // Hardcoded to 1: this fetches manifests for a single extent within a single node.
@@ -2701,6 +2751,7 @@ async fn write_manifest_with_changes(
 
     write_manifest_from_stream(
         asset_manager,
+        array,
         manifest_config,
         stream::iter(all_chunks_vec).map_err(|e| e.inject()),
     )
@@ -2786,6 +2837,7 @@ async fn flush_existing_node(
                 if !modified_chunks.is_empty() || rewrite_manifests {
                     if let Some((new_ref, file_info)) = write_manifest_with_changes(
                         asset_manager,
+                        array_label(&node.path),
                         manifest_config,
                         intersecting_manifests.iter().map(|(mr, _)| *mr),
                         modified_chunks,
@@ -2809,6 +2861,7 @@ async fn flush_existing_node(
                         } else if let Some((new_ref, file_info)) =
                             write_manifest_with_changes(
                                 asset_manager,
+                                array_label(&node.path),
                                 manifest_config,
                                 std::iter::once(mref),
                                 Default::default(),
@@ -2890,8 +2943,13 @@ async fn flush_new_node(
                     })
                     .map(Ok),
             );
-            if let Some((new_ref, file_info)) =
-                write_manifest_from_stream(asset_manager, manifest_config, chunks).await?
+            if let Some((new_ref, file_info)) = write_manifest_from_stream(
+                asset_manager,
+                array_label(node_path),
+                manifest_config,
+                chunks,
+            )
+            .await?
             {
                 result.manifest_refs.push(new_ref);
                 result.manifest_files.push(file_info);
@@ -3314,7 +3372,7 @@ async fn do_commit(
         SpecVersionBin::V1 => {
             do_commit_v1(
                 asset_manager.storage().as_ref(),
-                asset_manager.storage_settings(),
+                &asset_manager.storage_context(),
                 branch_name,
                 snapshot_id,
                 new_snapshot_id.clone(),
@@ -3363,7 +3421,7 @@ async fn do_commit(
 
 async fn do_commit_v1(
     storage: &dyn Storage,
-    storage_settings: &storage::Settings,
+    ctx: &StorageContext<'_>,
     branch_name: &str,
     parent_snapshot_id: &SnapshotId,
     new_snapshot_id: SnapshotId,
@@ -3371,7 +3429,7 @@ async fn do_commit_v1(
     debug!(branch_name, new_snapshot_id=%new_snapshot_id, "Updating branch");
     match update_branch(
         storage,
-        storage_settings,
+        ctx,
         branch_name,
         new_snapshot_id,
         Some(parent_snapshot_id),
@@ -3475,6 +3533,7 @@ async fn do_commit_v2(
 }
 
 async fn fetch_manifest(
+    array: &str,
     manifest_id: &ManifestId,
     snapshot_id: &SnapshotId,
     asset_manager: &AssetManager,
@@ -3488,7 +3547,10 @@ async fn fetch_manifest(
         })
         .capture::<IcechunkFormatErrorKind>()
         .inject()?;
-    asset_manager.fetch_manifest(manifest_id, manifest_info.size_bytes).await.inject()
+    asset_manager
+        .fetch_manifest(array, manifest_id, manifest_info.size_bytes)
+        .await
+        .inject()
 }
 
 /// Map the iterator to accumulate the extents of the chunks traversed
@@ -3551,7 +3613,6 @@ fn aggregate_extents<'a, T: std::fmt::Debug, E>(
 #[cfg(test)]
 mod tests {
     use std::{
-        collections::HashMap,
         error::Error,
         sync::atomic::{AtomicU16, Ordering},
     };
@@ -3606,9 +3667,7 @@ mod tests {
     async fn create_memory_store_repository(spec_version: SpecVersionBin) -> Repository {
         let storage =
             new_in_memory_storage().await.expect("failed to create in-memory store");
-        Repository::create(None, storage, HashMap::new(), Some(spec_version), true)
-            .await
-            .unwrap()
+        Repository::create(storage).spec_version(spec_version).execute().await.unwrap()
     }
 
     #[proptest(async = "tokio")]
@@ -3843,7 +3902,9 @@ mod tests {
             .await?;
 
         let bytes = Bytes::copy_from_slice(&42i8.to_be_bytes());
-        let payload = session.get_chunk_writer()?(bytes.clone()).await?;
+        let payload =
+            session.get_chunk_writer(&array_path, &ChunkIndices(vec![0]))?(bytes.clone())
+                .await?;
         session
             .set_chunk_ref(array_path.clone(), ChunkIndices(vec![0]), Some(payload))
             .await?;
@@ -3897,14 +3958,11 @@ mod tests {
             }),
             ..Default::default()
         };
-        let repo = Repository::create(
-            Some(config),
-            backend,
-            HashMap::new(),
-            Some(SpecVersionBin::V2),
-            true,
-        )
-        .await?;
+        let repo = Repository::create(backend)
+            .config(config)
+            .spec_version(SpecVersionBin::V2)
+            .execute()
+            .await?;
         let (array_path, bytes, snapshot) = write_array_and_commit(&repo, None).await?;
         assert_chunk_readable(&repo, &array_path, bytes, snapshot).await
     }
@@ -3985,18 +4043,15 @@ mod tests {
             ..ManifestConfig::default()
         };
 
-        let repo = Repository::create(
-            Some(RepositoryConfig {
+        let repo = Repository::create(storage)
+            .config(RepositoryConfig {
                 inline_chunk_threshold_bytes: Some(0),
                 manifest: Some(man_config),
                 ..Default::default()
-            }),
-            storage,
-            HashMap::new(),
-            Some(spec_version),
-            true,
-        )
-        .await?;
+            })
+            .spec_version(spec_version)
+            .execute()
+            .await?;
         let mut session = repo.writable_session("main").await?;
         session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
 
@@ -4016,7 +4071,11 @@ mod tests {
 
         let bytes = Bytes::copy_from_slice(&42i8.to_be_bytes());
         for idx in [0, 2] {
-            let payload = session.get_chunk_writer()?(bytes.clone()).await?;
+            let payload = session
+                .get_chunk_writer(&array_path, &ChunkIndices(vec![idx]))?(
+                bytes.clone()
+            )
+            .await?;
             session
                 .set_chunk_ref(array_path.clone(), ChunkIndices(vec![idx]), Some(payload))
                 .await?;
@@ -4064,7 +4123,9 @@ mod tests {
         );
 
         // set another chunk in this split
-        let payload = session.get_chunk_writer()?(bytes.clone()).await?;
+        let payload =
+            session.get_chunk_writer(&array_path, &ChunkIndices(vec![3]))?(bytes.clone())
+                .await?;
         session
             .set_chunk_ref(array_path.clone(), ChunkIndices(vec![3]), Some(payload))
             .await?;
@@ -4144,7 +4205,8 @@ mod tests {
         .unwrap();
         let manifest = Arc::new(manifest);
         let manifest_id = manifest.id();
-        let manifest_size = asset_manager.write_manifest(Arc::clone(&manifest)).await?;
+        let manifest_size =
+            asset_manager.write_manifest("array1", Arc::clone(&manifest)).await?;
 
         let shape = ArrayShape::new(vec![(2, 2), (2, 2), (2, 2)]).unwrap();
         let dimension_names = Some(vec!["x".into(), "y".into(), "t".into()]);
@@ -4204,6 +4266,7 @@ mod tests {
             Arc::clone(&storage),
             &RepositoryConfig::default(),
             &storage::VersionInfo::for_creation(),
+            storage::Attribution::default(),
         )
         .await?;
         let repo_info = RepoInfo::initial(
@@ -4227,7 +4290,7 @@ mod tests {
         )?;
         asset_manager.create_repo_info(Arc::new(repo_info)).await?;
 
-        let repo = Repository::open(None, storage, HashMap::new()).await?;
+        let repo = Repository::open(storage).execute().await?;
         let mut ds = repo.writable_session("main").await?;
 
         // retrieve the old array node
@@ -4306,7 +4369,10 @@ mod tests {
                     node_data == NodeData::Array { shape:shape3, dimension_names: dimension_names3, manifests: vec![] }
         ));
 
-        let payload = ds.get_chunk_writer()?(Bytes::copy_from_slice(b"foo")).await?;
+        let payload = ds.get_chunk_writer(&new_array_path, &ChunkIndices(vec![0]))?(
+            Bytes::copy_from_slice(b"foo"),
+        )
+        .await?;
         ds.set_chunk_ref(new_array_path.clone(), ChunkIndices(vec![0]), Some(payload))
             .await?;
 
@@ -4338,7 +4404,9 @@ mod tests {
 
         // set old array chunk and check them
         let data = Bytes::copy_from_slice(b"foo".repeat(512).as_slice());
-        let payload = ds.get_chunk_writer()?(data.clone()).await?;
+        let payload =
+            ds.get_chunk_writer(&new_array_path, &ChunkIndices(vec![0]))?(data.clone())
+                .await?;
         ds.set_chunk_ref(new_array_path.clone(), ChunkIndices(vec![0]), Some(payload))
             .await?;
 
@@ -4370,11 +4438,15 @@ mod tests {
 
         // set old array chunk and check them
         let data = Bytes::copy_from_slice(b"old".repeat(512).as_slice());
-        let payload = ds.get_chunk_writer()?(data.clone()).await?;
+        let payload =
+            ds.get_chunk_writer(&new_array_path, &ChunkIndices(vec![0]))?(data.clone())
+                .await?;
         ds.set_chunk_ref(new_array_path.clone(), ChunkIndices(vec![0]), Some(payload))
             .await?;
         let data = Bytes::copy_from_slice(b"new".repeat(512).as_slice());
-        let payload = ds.get_chunk_writer()?(data.clone()).await?;
+        let payload =
+            ds.get_chunk_writer(&new_array_path, &ChunkIndices(vec![1]))?(data.clone())
+                .await?;
         ds.set_chunk_ref(new_array_path.clone(), ChunkIndices(vec![1]), Some(payload))
             .await?;
 
@@ -4418,14 +4490,11 @@ mod tests {
             inline_chunk_threshold_bytes: Some(0),
             ..Default::default()
         };
-        let repository = Repository::create(
-            Some(config),
-            storage,
-            HashMap::new(),
-            Some(spec_version),
-            true,
-        )
-        .await?;
+        let repository = Repository::create(storage)
+            .config(config)
+            .spec_version(spec_version)
+            .execute()
+            .await?;
 
         let mut ds = repository.writable_session("main").await?;
 
@@ -4890,8 +4959,7 @@ mod tests {
     ) -> Result<(), Box<dyn Error>> {
         let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
         let repo =
-            Repository::create(None, storage, HashMap::new(), Some(spec_version), true)
-                .await?;
+            Repository::create(storage).spec_version(spec_version).execute().await?;
         let mut ds = repo.writable_session("main").await?;
         let def = Bytes::copy_from_slice(b"");
 
@@ -4965,14 +5033,10 @@ mod tests {
         let in_mem_storage = Arc::new(ObjectStorage::new_in_memory().await?);
         let storage = Arc::clone(&in_mem_storage);
         let storage: Arc<dyn Storage + Send + Sync> = storage;
-        let repo = Repository::create(
-            None,
-            Arc::clone(&storage),
-            HashMap::new(),
-            Some(spec_version),
-            true,
-        )
-        .await?;
+        let repo = Repository::create(Arc::clone(&storage))
+            .spec_version(spec_version)
+            .execute()
+            .await?;
 
         // there should be no manifests yet
         assert!(
@@ -5070,8 +5134,10 @@ mod tests {
             }
             NodeData::Group => panic!("must be an array"),
         };
-        let manifest =
-            repo.asset_manager().fetch_manifest_unknown_size(&manifest_id).await?;
+        let manifest = repo
+            .asset_manager()
+            .fetch_manifest_unknown_size(array_label(&a1path), &manifest_id)
+            .await?;
         let initial_size = manifest.len();
 
         // we wrote two chunks to array 1
@@ -5099,8 +5165,10 @@ mod tests {
             }
             NodeData::Group => panic!("must be an array"),
         };
-        let manifest =
-            repo.asset_manager().fetch_manifest_unknown_size(&manifest_id).await?;
+        let manifest = repo
+            .asset_manager()
+            .fetch_manifest_unknown_size(array_label(&a1path), &manifest_id)
+            .await?;
         let size_after_delete = manifest.len();
 
         // it's the same manifest
@@ -5139,8 +5207,10 @@ mod tests {
             }
             NodeData::Group => panic!("must be an array"),
         };
-        let manifest =
-            repo.asset_manager().fetch_manifest_unknown_size(&manifest_id).await?;
+        let manifest = repo
+            .asset_manager()
+            .fetch_manifest_unknown_size(array_label(&a1path), &manifest_id)
+            .await?;
         let size_after_chunk_delete = manifest.len();
         assert!(size_after_chunk_delete < size_after_delete);
 
@@ -5792,14 +5862,10 @@ mod tests {
         let in_mem_storage = new_in_memory_storage().await?;
         let storage = Arc::clone(&in_mem_storage);
         let storage: Arc<dyn Storage + Send + Sync> = storage;
-        let repo = Repository::create(
-            None,
-            Arc::clone(&storage),
-            HashMap::new(),
-            Some(SpecVersionBin::current()),
-            true,
-        )
-        .await?;
+        let repo = Repository::create(Arc::clone(&storage))
+            .spec_version(SpecVersionBin::current())
+            .execute()
+            .await?;
         let mut session = repo.writable_session("main").await?;
 
         let shape = ArrayShape::new(vec![(5, 3), (5, 3)]).unwrap();
@@ -5916,14 +5982,10 @@ mod tests {
         let in_mem_storage = new_in_memory_storage().await?;
         let storage = Arc::clone(&in_mem_storage);
         let storage: Arc<dyn Storage + Send + Sync> = storage;
-        let repo = Repository::create(
-            None,
-            Arc::clone(&storage),
-            HashMap::new(),
-            Some(SpecVersionBin::current()),
-            true,
-        )
-        .await?;
+        let repo = Repository::create(Arc::clone(&storage))
+            .spec_version(SpecVersionBin::current())
+            .execute()
+            .await?;
         let mut session = repo.writable_session("main").await?;
 
         let shape = ArrayShape::new(vec![(5, 3), (5, 3)]).unwrap();
@@ -5958,14 +6020,10 @@ mod tests {
         let in_mem_storage = new_in_memory_storage().await?;
         let storage = Arc::clone(&in_mem_storage);
         let storage: Arc<dyn Storage + Send + Sync> = storage;
-        let repo = Repository::create(
-            None,
-            Arc::clone(&storage),
-            HashMap::new(),
-            Some(spec_version),
-            true,
-        )
-        .await?;
+        let repo = Repository::create(Arc::clone(&storage))
+            .spec_version(spec_version)
+            .execute()
+            .await?;
         let mut ds = repo.writable_session("main").await?;
 
         let shape = ArrayShape::new(vec![(5, 3), (5, 3)]).unwrap();
@@ -6028,14 +6086,10 @@ mod tests {
         #[case] spec_version: SpecVersionBin,
     ) -> Result<(), Box<dyn Error>> {
         let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
-        let repo = Repository::create(
-            None,
-            Arc::clone(&storage),
-            HashMap::new(),
-            Some(spec_version),
-            true,
-        )
-        .await?;
+        let repo = Repository::create(Arc::clone(&storage))
+            .spec_version(spec_version)
+            .execute()
+            .await?;
         let mut ds = repo.writable_session("main").await?;
 
         let shape = ArrayShape::new(vec![(5, 3), (5, 3)]).unwrap();
@@ -6096,14 +6150,10 @@ mod tests {
         let in_mem_storage = new_in_memory_storage().await?;
         let storage = Arc::clone(&in_mem_storage);
         let storage: Arc<dyn Storage + Send + Sync> = storage;
-        let repo = Repository::create(
-            None,
-            Arc::clone(&storage),
-            HashMap::new(),
-            Some(spec_version),
-            true,
-        )
-        .await?;
+        let repo = Repository::create(Arc::clone(&storage))
+            .spec_version(spec_version)
+            .execute()
+            .await?;
         let mut session = repo.writable_session("main").await?;
         let shape = ArrayShape::new(vec![(20, 10)]).unwrap();
         session.add_group(Path::root(), Bytes::new()).await?;
@@ -6151,14 +6201,10 @@ mod tests {
         #[case] spec_version: SpecVersionBin,
     ) -> Result<(), Box<dyn Error>> {
         let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
-        let repo = Repository::create(
-            None,
-            Arc::clone(&storage),
-            HashMap::new(),
-            Some(spec_version),
-            true,
-        )
-        .await?;
+        let repo = Repository::create(Arc::clone(&storage))
+            .spec_version(spec_version)
+            .execute()
+            .await?;
         let mut session = repo.writable_session("main").await?;
         session.add_group(Path::root(), Bytes::new()).await?;
 

@@ -411,6 +411,55 @@ class CompressionAlgorithm(Enum):
             The default compression algorithm.
         """
 
+@final
+class Attribution:
+    """
+    Labels icechunk adds to the User-Agent header of every request of a repository.
+
+    They let the bucket owner break traffic down in access logs by which
+    software made it (`client`), what it was doing (`workload`) and on whose
+    behalf (`principal`). The array path and chunk coordinates are added per
+    request by icechunk itself and need no configuration.
+    """
+
+    def __new__(
+        cls,
+        *,
+        client: str | None = None,
+        workload: str | None = None,
+        principal: str | None = None,
+    ) -> Self:
+        """
+        Create a new `Attribution` object
+
+        Parameters
+        ----------
+        client: str | None
+            Which software is talking to the bucket: the product token of the
+            application or library that embeds icechunk, `name` or
+            `name/version` in HTTP token characters, at most 128 bytes. For
+            example `weatherlib/0.9`.
+        workload: str | None
+            What the requests are for: the job, pipeline or deployment running
+            them, for example `nightly-ingest` or `dashboard-v2`. Printable
+            ASCII, at most 128 bytes, none of `(`, `)`, `\\`, `;`, `=`, `"`.
+        principal: str | None
+            On whose behalf the requests are made: a user id, service account
+            or tenant, for services that act for many users. Same rules as
+            `workload`.
+
+        Raises
+        ------
+        ValueError
+            If any value is invalid.
+        """
+    @property
+    def client(self) -> str | None: ...
+    @property
+    def workload(self) -> str | None: ...
+    @property
+    def principal(self) -> str | None: ...
+
 class CompressionConfig:
     """Configuration for how Icechunk compresses its metadata files"""
 
@@ -2247,6 +2296,7 @@ class PyRepository:
         authorize_virtual_chunk_access: dict[str, _AnyCredential | None] | None = None,
         spec_version: SpecVersion | int | None = None,
         check_clean_root: bool = True,
+        attribution: Attribution | None = None,
     ) -> PyRepository: ...
     @classmethod
     async def create_async(
@@ -2257,6 +2307,7 @@ class PyRepository:
         authorize_virtual_chunk_access: dict[str, _AnyCredential | None] | None = None,
         spec_version: SpecVersion | int | None = None,
         check_clean_root: bool = True,
+        attribution: Attribution | None = None,
     ) -> PyRepository: ...
     @classmethod
     def open(
@@ -2265,6 +2316,7 @@ class PyRepository:
         *,
         config: RepositoryConfig | None = None,
         authorize_virtual_chunk_access: dict[str, _AnyCredential | None] | None = None,
+        attribution: Attribution | None = None,
     ) -> PyRepository: ...
     @classmethod
     async def open_async(
@@ -2273,6 +2325,7 @@ class PyRepository:
         *,
         config: RepositoryConfig | None = None,
         authorize_virtual_chunk_access: dict[str, _AnyCredential | None] | None = None,
+        attribution: Attribution | None = None,
     ) -> PyRepository: ...
     @classmethod
     def open_or_create(
@@ -2283,6 +2336,7 @@ class PyRepository:
         authorize_virtual_chunk_access: dict[str, _AnyCredential | None] | None = None,
         create_version: SpecVersion | int | None = None,
         check_clean_root: bool = True,
+        attribution: Attribution | None = None,
     ) -> PyRepository: ...
     @classmethod
     async def open_or_create_async(
@@ -2293,6 +2347,7 @@ class PyRepository:
         authorize_virtual_chunk_access: dict[str, _AnyCredential | None] | None = None,
         create_version: SpecVersion | int | None = None,
         check_clean_root: bool = True,
+        attribution: Attribution | None = None,
     ) -> PyRepository: ...
     @staticmethod
     def exists(
@@ -2320,6 +2375,8 @@ class PyRepository:
     def save_config(self) -> None: ...
     async def save_config_async(self) -> None: ...
     def config(self) -> RepositoryConfig: ...
+    @property
+    def attribution(self) -> Attribution: ...
     def storage_settings(self) -> StorageSettings: ...
     def storage(self) -> Storage: ...
     @property

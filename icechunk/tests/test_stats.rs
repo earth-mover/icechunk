@@ -101,14 +101,11 @@ async fn do_test_repo_chunks_storage(
 
     let mut config = RepositoryConfig::default();
     config.inline_chunk_threshold_bytes = Some(5);
-    let repo = Repository::create(
-        Some(config),
-        Arc::clone(&storage),
-        Default::default(),
-        Some(spec_version),
-        true,
-    )
-    .await?;
+    let repo = Repository::create(Arc::clone(&storage))
+        .config(config)
+        .spec_version(spec_version)
+        .execute()
+        .await?;
 
     let mut session = repo.writable_session("main").await?;
 
@@ -123,7 +120,10 @@ async fn do_test_repo_chunks_storage(
     // we write 50 native chunks, 6 bytes each
     for idx in 0..50 {
         let bytes = Bytes::copy_from_slice(&[0, 1, 2, 3, 4, 5]);
-        let payload = session.get_chunk_writer()?(bytes.clone()).await?;
+        let payload = session.get_chunk_writer(&array_path, &ChunkIndices(vec![idx]))?(
+            bytes.clone(),
+        )
+        .await?;
         session
             .set_chunk_ref(array_path.clone(), ChunkIndices(vec![idx]), Some(payload))
             .await?;
@@ -132,7 +132,10 @@ async fn do_test_repo_chunks_storage(
     // we write 10 inline chunks, 1 byte each
     for idx in 50..60 {
         let bytes = Bytes::copy_from_slice(&[0]);
-        let payload = session.get_chunk_writer()?(bytes.clone()).await?;
+        let payload = session.get_chunk_writer(&array_path, &ChunkIndices(vec![idx]))?(
+            bytes.clone(),
+        )
+        .await?;
         session
             .set_chunk_ref(array_path.clone(), ChunkIndices(vec![idx]), Some(payload))
             .await?;
@@ -186,7 +189,10 @@ async fn do_test_repo_chunks_storage(
     // we write 10 more native chunks, 6 bytes each
     for idx in 0..10 {
         let bytes = Bytes::copy_from_slice(&[0, 1, 2, 3, 4, 5]);
-        let payload = session.get_chunk_writer()?(bytes.clone()).await?;
+        let payload = session.get_chunk_writer(&array_path, &ChunkIndices(vec![idx]))?(
+            bytes.clone(),
+        )
+        .await?;
         session
             .set_chunk_ref(array_path.clone(), ChunkIndices(vec![idx]), Some(payload))
             .await?;
@@ -216,7 +222,10 @@ async fn do_test_repo_chunks_storage(
     // we write 5 native chunks 6 bytes each
     for idx in 0..5 {
         let bytes = Bytes::copy_from_slice(&[0, 1, 2, 3, 4, 5]);
-        let payload = session.get_chunk_writer()?(bytes.clone()).await?;
+        let payload = session.get_chunk_writer(&array_path, &ChunkIndices(vec![idx]))?(
+            bytes.clone(),
+        )
+        .await?;
         session
             .set_chunk_ref(array_path.clone(), ChunkIndices(vec![idx]), Some(payload))
             .await?;
@@ -224,7 +233,10 @@ async fn do_test_repo_chunks_storage(
     // we write a few inline chunks
     for idx in 50..60 {
         let bytes = Bytes::copy_from_slice(&[0]);
-        let payload = session.get_chunk_writer()?(bytes.clone()).await?;
+        let payload = session.get_chunk_writer(&array_path, &ChunkIndices(vec![idx]))?(
+            bytes.clone(),
+        )
+        .await?;
         session
             .set_chunk_ref(array_path.clone(), ChunkIndices(vec![idx]), Some(payload))
             .await?;
@@ -264,14 +276,11 @@ async fn test_virtual_chunk_deduplication(
 
     let mut config = RepositoryConfig::default();
     config.inline_chunk_threshold_bytes = Some(5);
-    let repo = Repository::create(
-        Some(config),
-        storage,
-        Default::default(),
-        Some(spec_version),
-        true,
-    )
-    .await?;
+    let repo = Repository::create(storage)
+        .config(config)
+        .spec_version(spec_version)
+        .execute()
+        .await?;
 
     let mut session = repo.writable_session("main").await?;
     let user_data = Bytes::new();

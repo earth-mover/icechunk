@@ -314,7 +314,8 @@ impl Store {
             Key::Chunk { node_path, coords } => {
                 match locked_session {
                     Some(session) => {
-                        let writer = session.get_chunk_writer().inject()?;
+                        let writer =
+                            session.get_chunk_writer(&node_path, &coords).inject()?;
                         let payload = writer(value).await.inject()?;
                         session
                             .set_chunk_ref(node_path, coords, Some(payload))
@@ -323,8 +324,12 @@ impl Store {
                     }
                     None => {
                         // we only lock the repository to get the writer
-                        let writer =
-                            self.session.read().await.get_chunk_writer().inject()?;
+                        let writer = self
+                            .session
+                            .read()
+                            .await
+                            .get_chunk_writer(&node_path, &coords)
+                            .inject()?;
                         // then we can write the bytes without holding the lock
                         let payload = writer(value).await.inject()?;
                         // and finally we lock for write and update the reference
@@ -1448,8 +1453,6 @@ impl From<Vec<u64>> for ChunkGridSerializer {
 #[cfg(test)]
 mod tests {
 
-    use std::collections::HashMap;
-
     use crate::{
         ObjectStorage, Repository, repository::VersionInfo,
         storage::new_in_memory_storage,
@@ -1513,9 +1516,12 @@ mod tests {
     ) -> Repository {
         let storage =
             new_in_memory_storage().await.expect("failed to create in-memory store");
-        Repository::create(None, storage, HashMap::new(), spec_version, true)
-            .await
-            .unwrap()
+        let builder = Repository::create(storage);
+        let builder = match spec_version {
+            Some(v) => builder.spec_version(v),
+            None => builder,
+        };
+        builder.execute().await.unwrap()
     }
 
     async fn all_keys(store: &Store) -> Result<Vec<String>, Box<dyn std::error::Error>> {
@@ -2928,8 +2934,7 @@ mod tests {
                 .expect("could not create storage"),
         );
 
-        let repo =
-            Repository::create(None, storage, HashMap::new(), None, true).await.unwrap();
+        let repo = Repository::create(storage).execute().await.unwrap();
         let ds = Arc::new(RwLock::new(repo.writable_session("main").await.unwrap()));
         let store = Store::from_session(Arc::clone(&ds)).await;
         store

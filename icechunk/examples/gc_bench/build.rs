@@ -1,6 +1,6 @@
 //! The `build` subcommand: writes a synthetic repository directly through the `AssetManager`.
 
-use std::{collections::HashMap, num::NonZeroU16, sync::Arc, time::Instant};
+use std::{num::NonZeroU16, sync::Arc, time::Instant};
 
 use bytes::Bytes;
 use chrono::Utc;
@@ -23,7 +23,7 @@ use icechunk::{
         },
         transaction_log::TransactionLog,
     },
-    storage::RetriesSettings,
+    storage::{RetriesSettings, StorageContext},
 };
 use icechunk_types::error::ICResultCtxExt as _;
 use tokio::{sync::Semaphore, task::JoinSet};
@@ -143,7 +143,7 @@ async fn write_manifest(
     ids: Vec<ChunkId>,
 ) -> Result<ManifestFileInfo, BoxError> {
     let manifest = make_manifest(node, ids).await?;
-    let size = am.write_manifest(Arc::clone(&manifest)).await?;
+    let size = am.write_manifest("a", Arc::clone(&manifest)).await?;
     Ok(ManifestFileInfo::new(&manifest, size))
 }
 
@@ -235,15 +235,16 @@ async fn delete_everything(
     storage: &Arc<dyn Storage + Send + Sync>,
 ) -> Result<(), BoxError> {
     let settings = storage.default_settings().await?;
+    let ctx = StorageContext::unattributed(&settings);
     let keys: Vec<(String, u64)> = storage
-        .list_objects(&settings, "")
+        .list_objects(&ctx, "")
         .await?
         .map_ok(|info| (info.id, info.size_bytes))
         .try_collect()
         .await?;
     println!("Deleting {} existing objects", keys.len());
     for batch in keys.chunks(1_000) {
-        storage.delete_batch(&settings, "", batch.to_vec()).await?;
+        storage.delete_batch(&ctx, "", batch.to_vec()).await?;
     }
     Ok(())
 }
@@ -252,7 +253,8 @@ async fn prefix_is_empty(
     storage: &Arc<dyn Storage + Send + Sync>,
 ) -> Result<bool, BoxError> {
     let settings = storage.default_settings().await?;
-    let mut stream = storage.list_objects(&settings, "").await?;
+    let ctx = StorageContext::unattributed(&settings);
+    let mut stream = storage.list_objects(&ctx, "").await?;
     Ok(stream.next().await.is_none())
 }
 
@@ -303,14 +305,10 @@ pub(crate) async fn build(args: BuildArgs) -> Result<(), BoxError> {
         }
     }
 
-    let repo = Repository::create(
-        None,
-        Arc::clone(&storage),
-        HashMap::new(),
-        Some(SpecVersionBin::V2),
-        true,
-    )
-    .await?;
+    let repo = Repository::create(Arc::clone(&storage))
+        .spec_version(SpecVersionBin::V2)
+        .execute()
+        .await?;
     let num_updates_per_file = repo.config().num_updates_per_repo_info_file();
     let am = Arc::clone(repo.asset_manager());
     let mut writer = Writer::new(Arc::clone(&am), params.write_concurrency);
@@ -354,7 +352,7 @@ pub(crate) async fn build(args: BuildArgs) -> Result<(), BoxError> {
     for _ in 0..garbage_chunks {
         writer
             .spawn(|am| async move {
-                Ok(am.write_chunk(ChunkId::random(), Bytes::new()).await?)
+                Ok(am.write_chunk("a", &[0], ChunkId::random(), Bytes::new()).await?)
             })
             .await?;
     }
@@ -471,7 +469,9 @@ pub(crate) async fn build(args: BuildArgs) -> Result<(), BoxError> {
     for idx in picks.iter() {
         let id = all_referenced[idx].clone();
         writer
-            .spawn(move |am| async move { Ok(am.write_chunk(id, Bytes::new()).await?) })
+            .spawn(move |am| async move {
+                Ok(am.write_chunk("a", &[0], id, Bytes::new()).await?)
+            })
             .await?;
     }
     writer.drain().await?;
