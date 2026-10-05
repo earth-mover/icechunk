@@ -184,7 +184,7 @@ impl ChunkStorageStatsBuilder {
     }
 
     /// Compute the total size in bytes of all committed repo chunks.
-    #[instrument(skip_all)]
+    #[instrument(name = "repo_chunks_storage", skip_all)]
     pub async fn execute(self) -> RepositoryResult<ChunkStorageStats> {
         let Self { asset_manager, walk } = self;
         warn_on_low_fd_limit(
