@@ -1067,16 +1067,16 @@ impl JsStorage {
         credentials: Option<JsS3Credentials>,
         options: Option<JsS3Options>,
     ) -> napi::Result<JsStorage> {
-        let creds = credentials.map(|c| c.into());
         let opts = options.map(|o| o.into()).unwrap_or_default();
-        let mut options =
-            icechunk::storage::S3ObjectStoreOptions::default().with_config(opts);
-        options.credentials = creds;
-        let storage =
-            icechunk::storage::new_s3_object_store_storage(bucket, prefix, options)
-                .await
-                .map_napi_err()?;
-        Ok(JsStorage(storage))
+        let mut builder = icechunk::storage::ObjectStorage::s3(bucket).config(opts);
+        if let Some(prefix) = prefix {
+            builder = builder.prefix(prefix);
+        }
+        if let Some(c) = credentials {
+            builder = builder.credentials(c.into());
+        }
+        let storage = builder.execute().map_napi_err()?;
+        Ok(JsStorage(Arc::new(storage)))
     }
 
     #[napi(factory)]
@@ -1086,13 +1086,16 @@ impl JsStorage {
         credentials: Option<JsGcsCredentials>,
         config: Option<HashMap<String, String>>,
     ) -> napi::Result<JsStorage> {
-        let creds = credentials.map(|c| c.into());
-        let mut options = icechunk::storage::GcsStorageOptions::default()
-            .with_config(config.unwrap_or_default());
-        options.credentials = creds;
-        let storage =
-            icechunk::storage::new_gcs_storage(bucket, prefix, options).map_napi_err()?;
-        Ok(JsStorage(storage))
+        let mut builder = icechunk::storage::ObjectStorage::gcs(bucket)
+            .config(config.unwrap_or_default());
+        if let Some(prefix) = prefix {
+            builder = builder.prefix(prefix);
+        }
+        if let Some(c) = credentials {
+            builder = builder.credentials(c.into());
+        }
+        let storage = builder.execute().map_napi_err()?;
+        Ok(JsStorage(Arc::new(storage)))
     }
 
     #[napi(factory)]
@@ -1103,16 +1106,16 @@ impl JsStorage {
         credentials: Option<JsAzureCredentials>,
         config: Option<HashMap<String, String>>,
     ) -> napi::Result<JsStorage> {
-        let creds = credentials.map(|c| c.into());
-        let mut options = icechunk::storage::AzureStorageOptions::default()
-            .with_config(config.unwrap_or_default());
-        options.credentials = creds;
-        let storage = icechunk::storage::new_azure_blob_storage(
-            account, container, prefix, options,
-        )
-        .await
-        .map_napi_err()?;
-        Ok(JsStorage(storage))
+        let mut builder = icechunk::storage::ObjectStorage::azure(account, container)
+            .config(config.unwrap_or_default());
+        if let Some(prefix) = prefix {
+            builder = builder.prefix(prefix);
+        }
+        if let Some(c) = credentials {
+            builder = builder.credentials(c.into());
+        }
+        let storage = builder.execute().map_napi_err()?;
+        Ok(JsStorage(Arc::new(storage)))
     }
 
     #[napi(factory)]
@@ -1121,9 +1124,23 @@ impl JsStorage {
         config: Option<HashMap<String, String>>,
         headers: Option<HashMap<String, String>>,
     ) -> napi::Result<JsStorage> {
-        let storage = icechunk::storage::new_http_storage(&base_url, config, headers)
+        let url = base_url
+            .parse()
+            .map_err(|cause| {
+                StorageError::capture(
+                    icechunk::storage::StorageErrorKind::CannotParseUrl {
+                        cause,
+                        url: base_url.clone(),
+                    },
+                )
+            })
             .map_napi_err()?;
-        Ok(JsStorage(storage))
+        let storage = icechunk::storage::ObjectStorage::http(url)
+            .config(config.unwrap_or_default())
+            .headers(headers.unwrap_or_default())
+            .execute()
+            .map_napi_err()?;
+        Ok(JsStorage(Arc::new(storage)))
     }
 
     // --- Refreshable credential factory methods ---
@@ -1243,14 +1260,13 @@ impl JsStorage {
         let creds =
             icechunk::config::S3Credentials::Refreshable(std::sync::Arc::new(fetcher));
         let opts = options.map(|o| o.into()).unwrap_or(default_s3_options());
-        let options = icechunk::storage::S3ObjectStoreOptions::default()
-            .with_config(opts)
-            .with_credentials(creds);
-        let storage =
-            icechunk::storage::new_s3_object_store_storage(bucket, prefix, options)
-                .await
-                .map_napi_err()?;
-        Ok(JsStorage(storage))
+        let mut builder =
+            icechunk::storage::ObjectStorage::s3(bucket).config(opts).credentials(creds);
+        if let Some(prefix) = prefix {
+            builder = builder.prefix(prefix);
+        }
+        let storage = builder.execute().map_napi_err()?;
+        Ok(JsStorage(Arc::new(storage)))
     }
 
     #[napi(factory)]
@@ -1273,11 +1289,13 @@ impl JsStorage {
         };
         let creds =
             icechunk::config::GcsCredentials::Refreshable(std::sync::Arc::new(fetcher));
-        let options = icechunk::storage::GcsStorageOptions::default()
-            .with_config(config.unwrap_or_default())
-            .with_credentials(creds);
-        let storage =
-            icechunk::storage::new_gcs_storage(bucket, prefix, options).map_napi_err()?;
-        Ok(JsStorage(storage))
+        let mut builder = icechunk::storage::ObjectStorage::gcs(bucket)
+            .config(config.unwrap_or_default())
+            .credentials(creds);
+        if let Some(prefix) = prefix {
+            builder = builder.prefix(prefix);
+        }
+        let storage = builder.execute().map_napi_err()?;
+        Ok(JsStorage(Arc::new(storage)))
     }
 }

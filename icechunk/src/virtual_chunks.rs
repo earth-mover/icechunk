@@ -15,13 +15,6 @@ use std::{
 use async_trait::async_trait;
 use bytes::{Buf, Bytes};
 use futures::{TryStreamExt as _, stream::FuturesOrdered};
-#[cfg(any(
-    feature = "object-store-s3",
-    feature = "object-store-gcs",
-    feature = "object-store-azure",
-    feature = "object-store-http"
-))]
-use icechunk_arrow_object_store::object_store::ClientConfigKey;
 #[cfg(feature = "object-store-fs")]
 use icechunk_arrow_object_store::object_store::local::LocalFileSystem;
 #[cfg(any(
@@ -39,8 +32,6 @@ use icechunk_s3::aws_sdk_s3::{
 use icechunk_types::ICResultExt as _;
 use quick_cache::sync::Cache;
 use serde::{Deserialize, Serialize};
-#[cfg(feature = "object-store-http")]
-use std::str::FromStr as _;
 use url::Url;
 
 #[cfg(feature = "object-store-azure")]
@@ -48,15 +39,13 @@ use crate::config::AzureCredentials;
 #[cfg(feature = "object-store-gcs")]
 use crate::config::GcsCredentials;
 use crate::config::{S3Credentials, S3Options};
-#[cfg(feature = "object-store-http")]
-use crate::storage::HttpObjectStoreBackend;
 #[cfg(any(
     all(not(feature = "s3"), feature = "object-store-s3"),
     feature = "object-store-gcs",
     feature = "object-store-azure",
     feature = "object-store-http"
 ))]
-use crate::storage::ObjectStoreBackend as _;
+use crate::storage::ObjectStorage;
 #[cfg(any(
     all(not(feature = "s3"), feature = "object-store-s3"),
     feature = "object-store-gcs",
@@ -64,12 +53,6 @@ use crate::storage::ObjectStoreBackend as _;
     feature = "object-store-http"
 ))]
 use crate::storage::Role;
-#[cfg(feature = "object-store-azure")]
-use crate::storage::{AzureObjectStoreBackend, AzureStorageOptions};
-#[cfg(feature = "object-store-gcs")]
-use crate::storage::{GcsObjectStoreBackend, GcsStorageOptions};
-#[cfg(all(not(feature = "s3"), feature = "object-store-s3"))]
-use crate::storage::{S3ObjectStoreBackend, S3ObjectStoreOptions};
 use crate::{
     ObjectStoreConfig,
     config::Credentials,
@@ -1200,11 +1183,22 @@ impl ObjectStoreFetcher {
         config: Option<S3Options>,
         settings: storage::Settings,
     ) -> Result<Self, VirtualReferenceError> {
-        let mut options = S3ObjectStoreOptions::default();
-        options.credentials = credentials;
-        options.config = config;
-        let backend = S3ObjectStoreBackend::new(bucket, prefix, options);
-        let client = backend
+        let mut builder = ObjectStorage::s3(bucket);
+        if let Some(prefix) = prefix {
+            builder = builder.prefix(prefix);
+        }
+        if let Some(credentials) = credentials {
+            builder = builder.credentials(credentials);
+        }
+        if let Some(config) = config {
+            builder = builder.config(config);
+        }
+        let storage = builder
+            .execute()
+            .map_err(|e| VirtualReferenceErrorKind::OtherError(Box::new(e)))
+            .capture()?;
+        let client = storage
+            .backend()
             .mk_object_store(&settings, Role::Read)
             .map_err(|e| VirtualReferenceErrorKind::OtherError(Box::new(e)))
             .capture()?;
@@ -1218,18 +1212,20 @@ impl ObjectStoreFetcher {
         headers: &HashMap<String, String>,
         settings: storage::Settings,
     ) -> Result<Self, VirtualReferenceError> {
-        let config = opts
-            .iter()
-            .filter_map(|(k, v)| {
-                ClientConfigKey::from_str(k).ok().map(|key| (key, v.clone()))
+        let parsed = Url::parse(url)
+            .map_err(|e| VirtualReferenceErrorKind::CannotParseUrl {
+                cause: e,
+                url: url.to_string(),
             })
-            .collect();
-        let backend = HttpObjectStoreBackend::new(
-            url.to_string(),
-            Some(config),
-            if headers.is_empty() { None } else { Some(headers.clone()) },
-        );
-        let client = backend
+            .capture()?;
+        let storage = ObjectStorage::http(parsed)
+            .config(opts.clone())
+            .headers(headers.clone())
+            .execute()
+            .map_err(|e| VirtualReferenceErrorKind::OtherError(Box::new(e)))
+            .capture()?;
+        let client = storage
+            .backend()
             .mk_object_store(&settings, Role::Read)
             .map_err(|e| VirtualReferenceErrorKind::OtherError(Box::new(e)))
             .capture()?;
@@ -1244,10 +1240,19 @@ impl ObjectStoreFetcher {
         config: HashMap<String, String>,
         settings: storage::Settings,
     ) -> Result<Self, VirtualReferenceError> {
-        let mut options = GcsStorageOptions::default().with_config(config);
-        options.credentials = credentials;
-        let backend = GcsObjectStoreBackend::new(bucket, prefix, options);
-        let client = backend
+        let mut builder = ObjectStorage::gcs(bucket).config(config);
+        if let Some(prefix) = prefix {
+            builder = builder.prefix(prefix);
+        }
+        if let Some(credentials) = credentials {
+            builder = builder.credentials(credentials);
+        }
+        let storage = builder
+            .execute()
+            .map_err(|e| VirtualReferenceErrorKind::OtherError(Box::new(e)))
+            .capture()?;
+        let client = storage
+            .backend()
             .mk_object_store(&settings, Role::Read)
             .map_err(|e| VirtualReferenceErrorKind::OtherError(Box::new(e)))
             .capture()?;
@@ -1264,11 +1269,20 @@ impl ObjectStoreFetcher {
         config: HashMap<String, String>,
         settings: storage::Settings,
     ) -> Result<Self, VirtualReferenceError> {
-        let mut options = AzureStorageOptions::default().with_config(config);
-        options.credentials = credentials;
-        let backend = AzureObjectStoreBackend::new(account, container, prefix, options);
+        let mut builder = ObjectStorage::azure(account, container).config(config);
+        if let Some(prefix) = prefix {
+            builder = builder.prefix(prefix);
+        }
+        if let Some(credentials) = credentials {
+            builder = builder.credentials(credentials);
+        }
+        let storage = builder
+            .execute()
+            .map_err(|e| VirtualReferenceErrorKind::OtherError(Box::new(e)))
+            .capture()?;
 
-        let client = backend
+        let client = storage
+            .backend()
             .mk_object_store(&settings, Role::Read)
             .map_err(|e| VirtualReferenceErrorKind::OtherError(Box::new(e)))
             .capture()?;

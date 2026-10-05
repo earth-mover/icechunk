@@ -13,17 +13,14 @@ use tokio::sync::OnceCell;
 use tracing::{debug, trace};
 use url::Url;
 
+#[cfg(feature = "object-store-gcs")]
+use crate::config::GcsCredentials;
 use crate::config::{S3Credentials, S3Options};
+#[cfg(any(feature = "object-store-gcs", feature = "object-store-http"))]
+use crate::storage::ObjectStorage;
 #[cfg(feature = "s3")]
 use crate::storage::S3Storage;
 use crate::storage::StorageErrorKind;
-#[cfg(feature = "object-store-http")]
-use crate::storage::new_http_storage;
-#[cfg(feature = "object-store-gcs")]
-use crate::{
-    config::GcsCredentials,
-    storage::{GcsStorageOptions, new_gcs_storage},
-};
 use icechunk_storage::sealed;
 use icechunk_types::ICResultExt as _;
 
@@ -215,7 +212,13 @@ impl RedirectStorage {
                 let base_scheme =
                     scheme.split_once('+').map_or(scheme, |(base, _)| base);
                 let http_url = [base_scheme, &url.as_str()[scheme.len()..]].concat();
-                new_http_storage(http_url.as_str(), None, None)
+                let http_url = Url::parse(&http_url)
+                    .map_err(|e| StorageErrorKind::CannotParseUrl {
+                        cause: e,
+                        url: http_url.clone(),
+                    })
+                    .capture()?;
+                Ok(Arc::new(ObjectStorage::http(http_url).execute()?))
             }
             #[cfg(not(feature = "object-store-http"))]
             "http+icechunk" | "http+ic" | "https+icechunk" | "https+ic" => Err(
@@ -227,12 +230,12 @@ impl RedirectStorage {
             #[cfg(feature = "object-store-gcs")]
             "gs" | "gcs" => {
                 let (bucket, prefix) = repo_location(&url)?;
-                new_gcs_storage(
-                    bucket,
-                    Some(prefix),
-                    GcsStorageOptions::default()
-                        .with_credentials(GcsCredentials::Anonymous),
-                )
+                Ok(Arc::new(
+                    ObjectStorage::gcs(bucket)
+                        .prefix(prefix)
+                        .credentials(GcsCredentials::Anonymous)
+                        .execute()?,
+                ))
             }
             #[cfg(not(feature = "object-store-gcs"))]
             "gs" | "gcs" => Err(StorageErrorKind::BadRedirect(

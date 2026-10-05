@@ -3089,17 +3089,20 @@ impl PyStorage {
             resolve_request_headers(headers, read_headers, write_headers)?;
         py.detach(move || {
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
-                let mut options = storage::S3ObjectStoreOptions::default()
-                    .with_config(config.into())
-                    .with_extra_read_headers(read_headers)
-                    .with_extra_write_headers(write_headers);
-                options.credentials = credentials.map(|cred| cred.into());
+                let mut builder = storage::ObjectStorage::s3(bucket)
+                    .config(config.into())
+                    .read_headers(read_headers)
+                    .write_headers(write_headers);
+                if let Some(prefix) = prefix {
+                    builder = builder.prefix(prefix);
+                }
+                if let Some(cred) = credentials {
+                    builder = builder.credentials(cred.into());
+                }
                 let storage =
-                    storage::new_s3_object_store_storage(bucket, prefix, options)
-                        .await
-                        .map_err(PyIcechunkStoreError::StorageError)?;
+                    builder.execute().map_err(PyIcechunkStoreError::StorageError)?;
 
-                Ok(PyStorage(storage))
+                Ok(PyStorage(Arc::new(storage)))
             })
         })
     }
@@ -3255,15 +3258,20 @@ impl PyStorage {
         let (read_headers, write_headers) =
             resolve_request_headers(headers, read_headers, write_headers)?;
         py.detach(move || {
-            let mut options = storage::GcsStorageOptions::default()
-                .with_config(config.unwrap_or_default())
-                .with_extra_read_headers(read_headers)
-                .with_extra_write_headers(write_headers);
-            options.credentials = credentials.map(|cred| cred.into());
-            let storage = storage::new_gcs_storage(bucket, prefix, options)
-                .map_err(PyIcechunkStoreError::StorageError)?;
+            let mut builder = storage::ObjectStorage::gcs(bucket)
+                .config(config.unwrap_or_default())
+                .read_headers(read_headers)
+                .write_headers(write_headers);
+            if let Some(prefix) = prefix {
+                builder = builder.prefix(prefix);
+            }
+            if let Some(cred) = credentials {
+                builder = builder.credentials(cred.into());
+            }
+            let storage =
+                builder.execute().map_err(PyIcechunkStoreError::StorageError)?;
 
-            Ok(PyStorage(storage))
+            Ok(PyStorage(Arc::new(storage)))
         })
     }
 
@@ -3280,19 +3288,16 @@ impl PyStorage {
     ) -> PyResult<Self> {
         py.detach(move || {
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
-                let mut options = storage::AzureStorageOptions::default()
-                    .with_config(config.unwrap_or_default());
-                options.credentials = credentials.map(|cred| cred.into());
-                let storage = storage::new_azure_blob_storage(
-                    account,
-                    container,
-                    Some(prefix),
-                    options,
-                )
-                .await
-                .map_err(PyIcechunkStoreError::StorageError)?;
+                let mut builder = storage::ObjectStorage::azure(account, container)
+                    .prefix(prefix)
+                    .config(config.unwrap_or_default());
+                if let Some(cred) = credentials {
+                    builder = builder.credentials(cred.into());
+                }
+                let storage =
+                    builder.execute().map_err(PyIcechunkStoreError::StorageError)?;
 
-                Ok(PyStorage(storage))
+                Ok(PyStorage(Arc::new(storage)))
             })
         })
     }
@@ -3308,10 +3313,24 @@ impl PyStorage {
     ) -> PyResult<Self> {
         py.detach(move || {
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
-                let storage = storage::new_http_storage(base_url, config, headers)
+                let url = base_url
+                    .parse()
+                    .map_err(|cause| {
+                        storage::StorageError::capture(
+                            storage::StorageErrorKind::CannotParseUrl {
+                                cause,
+                                url: base_url.to_string(),
+                            },
+                        )
+                    })
+                    .map_err(PyIcechunkStoreError::StorageError)?;
+                let storage = storage::ObjectStorage::http(url)
+                    .config(config.unwrap_or_default())
+                    .headers(headers.unwrap_or_default())
+                    .execute()
                     .map_err(PyIcechunkStoreError::StorageError)?;
 
-                Ok(PyStorage(storage))
+                Ok(PyStorage(Arc::new(storage)))
             })
         })
     }

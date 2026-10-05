@@ -19,9 +19,7 @@ use icechunk::{
     asset_manager::AssetManager,
     config::{S3Credentials, S3Options, S3StaticCredentials},
     format::{ChunkId, format_constants::SpecVersionBin},
-    storage::{
-        RetriesSettings, S3ObjectStoreOptions, S3Storage, StorageContext, TimeoutSettings,
-    },
+    storage::{RetriesSettings, S3Storage, StorageContext, TimeoutSettings},
 };
 use noxious_client::{Client, StreamDirection, Toxic, ToxicKind};
 
@@ -343,14 +341,11 @@ async fn build_proxied_storage(
                 .execute()?,
         ),
         ConditionalPutBackend::ArrowObjectStore => Arc::new(
-            icechunk::ObjectStorage::new_s3(
-                "testbucket".to_string(),
-                Some(prefix),
-                S3ObjectStoreOptions::default()
-                    .with_credentials(credentials)
-                    .with_config(s3_options),
-            )
-            .await?,
+            icechunk::ObjectStorage::s3("testbucket".to_string())
+                .prefix(prefix)
+                .credentials(credentials)
+                .config(s3_options)
+                .execute()?,
         ),
     })
 }

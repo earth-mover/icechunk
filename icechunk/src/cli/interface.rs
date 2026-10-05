@@ -15,10 +15,7 @@ use std::sync::Arc;
 
 use anyhow::{Context as _, Result};
 
-use crate::storage::{
-    AzureStorageOptions, GcsStorageOptions, S3Storage, new_azure_blob_storage,
-    new_gcs_storage, new_local_filesystem_storage,
-};
+use crate::storage::{ObjectStorage, S3Storage, new_local_filesystem_storage};
 use crate::{Repository, RepositoryConfig, Storage};
 
 use crate::cli::config::{CliConfig, RepositoryAlias, RepositoryDefinition};
@@ -246,15 +243,14 @@ async fn get_storage(
         RepositoryDefinition::GCS {
             location, object_store_config, credentials, ..
         } => {
-            let storage = new_gcs_storage(
-                location.bucket.clone(),
-                location.prefix.clone(),
-                GcsStorageOptions::default()
-                    .with_credentials(credentials.clone())
-                    .with_config(object_store_config.clone()),
-            )
-            .context("Failed to create GCS storage")?;
-            Ok(storage)
+            let mut builder = ObjectStorage::gcs(location.bucket.clone())
+                .credentials(credentials.clone())
+                .config(object_store_config.clone());
+            if let Some(prefix) = location.prefix.clone() {
+                builder = builder.prefix(prefix);
+            }
+            let storage = builder.execute().context("Failed to create GCS storage")?;
+            Ok(Arc::new(storage))
         }
         RepositoryDefinition::Azure {
             location,
@@ -262,17 +258,17 @@ async fn get_storage(
             credentials,
             ..
         } => {
-            let storage = new_azure_blob_storage(
+            let mut builder = ObjectStorage::azure(
                 location.account.clone(),
                 location.container.clone(),
-                location.prefix.clone(),
-                AzureStorageOptions::default()
-                    .with_credentials(credentials.clone())
-                    .with_config(object_store_config.clone()),
             )
-            .await
-            .context("Failed to create Azure storage")?;
-            Ok(storage)
+            .credentials(credentials.clone())
+            .config(object_store_config.clone());
+            if let Some(prefix) = location.prefix.clone() {
+                builder = builder.prefix(prefix);
+            }
+            let storage = builder.execute().context("Failed to create Azure storage")?;
+            Ok(Arc::new(storage))
         }
     }
 }

@@ -17,8 +17,8 @@ use icechunk::{
     repository::VersionInfo,
     session::{SessionError, SessionErrorKind, get_chunk},
     storage::{
-        self, AzureStorageOptions, ConcurrencySettings, ETag, ObjectStorage, S3Storage,
-        StorageContext, mk_client,
+        self, ConcurrencySettings, ETag, ObjectStorage, S3Storage, StorageContext,
+        mk_client,
     },
     store::{StoreError, StoreErrorKind},
     virtual_chunks::VirtualChunkContainer,
@@ -302,17 +302,14 @@ async fn write_chunks_to_azure(
     chunks: impl Iterator<Item = (ChunkId, Bytes)>,
 ) {
     let storage = Arc::new(
-        ObjectStorage::new_azure(
-            "devstoreaccount1".to_string(),
-            "testcontainer".to_string(),
-            Some(prefix),
-            AzureStorageOptions::default().with_config(HashMap::from([(
+        ObjectStorage::azure("devstoreaccount1".to_string(), "testcontainer".to_string())
+            .prefix(prefix)
+            .config(HashMap::from([(
                 AzureConfigKey::UseEmulator.as_ref().to_string(),
                 "true".to_string(),
-            )])),
-        )
-        .await
-        .unwrap(),
+            )]))
+            .execute()
+            .unwrap(),
     );
 
     let settings = storage::Settings::default();

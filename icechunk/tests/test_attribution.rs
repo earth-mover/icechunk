@@ -13,12 +13,11 @@ use icechunk::{
         manifest::{ChunkPayload, VirtualChunkLocation, VirtualChunkRef},
         snapshot::ArrayShape,
     },
-    new_s3_object_store_storage,
     repository::VersionInfo,
     session::get_chunk,
     storage::{
-        Attribution, AttributionLabels, RequestAttribution, S3ObjectStoreOptions,
-        S3Storage, StorageContext,
+        Attribution, AttributionLabels, ObjectStorage, RequestAttribution, S3Storage,
+        StorageContext,
     },
     user_agent_product,
     virtual_chunks::VirtualChunkContainer,
@@ -54,15 +53,14 @@ fn native_s3(store: &FakeStore) -> Arc<dyn Storage + Send + Sync> {
 }
 
 async fn object_store_s3(store: &FakeStore) -> Arc<dyn Storage + Send + Sync> {
-    new_s3_object_store_storage(
-        "bucket".to_string(),
-        Some("prefix".to_string()),
-        S3ObjectStoreOptions::default()
-            .with_config(s3_options(store))
-            .with_credentials(static_creds()),
+    Arc::new(
+        ObjectStorage::s3("bucket".to_string())
+            .prefix("prefix".to_string())
+            .config(s3_options(store))
+            .credentials(static_creds())
+            .execute()
+            .unwrap(),
     )
-    .await
-    .unwrap()
 }
 
 fn attribution() -> Attribution {

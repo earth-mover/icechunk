@@ -60,6 +60,7 @@ use std::{
     collections::HashMap,
     fmt::{self, Debug, Display},
     future::ready,
+    marker::PhantomData,
     num::{NonZeroU16, NonZeroU64},
     ops::Range,
     path::{Path as StdPath, PathBuf},
@@ -349,54 +350,36 @@ impl ObjectStorage {
         Ok(storage)
     }
 
+    /// Storage for an S3 bucket, through `object_store`.
     #[cfg(feature = "s3")]
-    pub async fn new_s3(
-        bucket: String,
-        prefix: Option<String>,
-        options: S3ObjectStoreOptions,
-    ) -> Result<ObjectStorage, StorageError> {
-        let backend = Arc::new(S3ObjectStoreBackend::new(bucket, prefix, options));
-        let storage = ObjectStorage::from_backend(backend);
-
-        Ok(storage)
+    pub fn s3(bucket: String) -> ObjectStorageBuilder<S3Backend> {
+        ObjectStorageBuilder { bucket, ..ObjectStorageBuilder::empty() }
     }
 
+    /// Storage for a Google Cloud Storage bucket.
+    #[cfg(feature = "gcs")]
+    pub fn gcs(bucket: String) -> ObjectStorageBuilder<GcsBackend> {
+        ObjectStorageBuilder { bucket, ..ObjectStorageBuilder::empty() }
+    }
+
+    /// Storage for an Azure Blob Storage container.
     #[cfg(feature = "azure")]
-    pub async fn new_azure(
+    pub fn azure(
         account: String,
         container: String,
-        prefix: Option<String>,
-        options: AzureStorageOptions,
-    ) -> Result<ObjectStorage, StorageError> {
-        let backend =
-            Arc::new(AzureObjectStoreBackend::new(account, container, prefix, options));
-        let storage = ObjectStorage::from_backend(backend);
-
-        Ok(storage)
+    ) -> ObjectStorageBuilder<AzureBackend> {
+        ObjectStorageBuilder { account, container, ..ObjectStorageBuilder::empty() }
     }
 
-    #[cfg(feature = "gcs")]
-    pub fn new_gcs(
-        bucket: String,
-        prefix: Option<String>,
-        options: GcsStorageOptions,
-    ) -> Result<ObjectStorage, StorageError> {
-        let backend = Arc::new(GcsObjectStoreBackend::new(bucket, prefix, options));
-        let storage = ObjectStorage::from_backend(backend);
-
-        Ok(storage)
-    }
-
+    /// Read-only storage over HTTP, rooted at `url`.
     #[cfg(feature = "http")]
-    pub fn new_http(
-        url: &Url,
-        config: Option<HashMap<ClientConfigKey, String>>,
-        headers: Option<HashMap<String, String>>,
-    ) -> Result<ObjectStorage, StorageError> {
-        let backend =
-            Arc::new(HttpObjectStoreBackend::new(url.to_string(), config, headers));
-        let storage = ObjectStorage::from_backend(backend);
-        Ok(storage)
+    pub fn http(url: Url) -> ObjectStorageBuilder<HttpBackend> {
+        ObjectStorageBuilder { url: Some(url), ..ObjectStorageBuilder::empty() }
+    }
+
+    /// The backend this storage talks to.
+    pub fn backend(&self) -> &Arc<dyn ObjectStoreBackend> {
+        &self.backend
     }
 
     /// Get the client, initializing it if it hasn't been initialized yet. This is necessary because the
@@ -1147,17 +1130,6 @@ pub struct HttpObjectStoreBackend {
 }
 
 #[cfg(feature = "http")]
-impl HttpObjectStoreBackend {
-    pub fn new(
-        url: String,
-        config: Option<HashMap<ClientConfigKey, String>>,
-        headers: Option<HashMap<String, String>>,
-    ) -> Self {
-        Self { url, config, headers }
-    }
-}
-
-#[cfg(feature = "http")]
 impl Display for HttpObjectStoreBackend {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let config_str = self
@@ -1283,61 +1255,6 @@ pub struct S3ObjectStoreBackend {
     pub extra_write_headers: Vec<(String, String)>,
 }
 
-/// Client options for an S3 object-store backend, without the location.
-#[cfg(feature = "s3")]
-#[derive(Debug, Clone, Default)]
-#[non_exhaustive]
-pub struct S3ObjectStoreOptions {
-    /// `None` applies no client options; `Some(S3Options::default())` applies the default
-    /// options, which differ.
-    pub config: Option<S3Options>,
-    /// `None` reads credentials from the environment.
-    pub credentials: Option<S3Credentials>,
-    pub extra_read_headers: Vec<(String, String)>,
-    pub extra_write_headers: Vec<(String, String)>,
-}
-
-#[cfg(feature = "s3")]
-impl S3ObjectStoreOptions {
-    pub fn with_config(mut self, value: S3Options) -> Self {
-        self.config = Some(value);
-        self
-    }
-
-    pub fn with_credentials(mut self, value: S3Credentials) -> Self {
-        self.credentials = Some(value);
-        self
-    }
-
-    pub fn with_extra_read_headers(mut self, value: Vec<(String, String)>) -> Self {
-        self.extra_read_headers = value;
-        self
-    }
-
-    pub fn with_extra_write_headers(mut self, value: Vec<(String, String)>) -> Self {
-        self.extra_write_headers = value;
-        self
-    }
-}
-
-#[cfg(feature = "s3")]
-impl S3ObjectStoreBackend {
-    pub fn new(
-        bucket: String,
-        prefix: Option<String>,
-        options: S3ObjectStoreOptions,
-    ) -> Self {
-        Self {
-            bucket,
-            prefix,
-            credentials: options.credentials,
-            config: options.config,
-            extra_read_headers: sorted_headers(options.extra_read_headers),
-            extra_write_headers: sorted_headers(options.extra_write_headers),
-        }
-    }
-}
-
 #[cfg(feature = "s3")]
 impl Display for S3ObjectStoreBackend {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -1452,7 +1369,7 @@ impl ObjectStoreBackend for S3ObjectStoreBackend {
         Ok(Arc::new(store))
     }
 
-    // Headers are stored sorted (see `new_s3`/`new_gcs`), so this is order-insensitive.
+    // Headers are stored sorted (see `sorted_headers`), so this is order-insensitive.
     fn read_write_headers_differ(&self) -> bool {
         self.extra_read_headers != self.extra_write_headers
     }
@@ -1483,51 +1400,6 @@ pub struct AzureObjectStoreBackend {
     pub prefix: Option<String>,
     pub credentials: Option<AzureCredentials>,
     pub config: Option<HashMap<AzureConfigKey, String>>,
-}
-
-#[cfg(feature = "azure")]
-#[derive(Debug, Clone, Default)]
-#[non_exhaustive]
-pub struct AzureStorageOptions {
-    pub credentials: Option<AzureCredentials>,
-    /// `object_store` Azure client keys by name. Unknown names are dropped.
-    pub config: HashMap<String, String>,
-}
-
-#[cfg(feature = "azure")]
-impl AzureStorageOptions {
-    pub fn with_credentials(mut self, value: AzureCredentials) -> Self {
-        self.credentials = Some(value);
-        self
-    }
-
-    pub fn with_config(mut self, value: HashMap<String, String>) -> Self {
-        self.config = value;
-        self
-    }
-}
-
-#[cfg(feature = "azure")]
-impl AzureObjectStoreBackend {
-    pub fn new(
-        account: String,
-        container: String,
-        prefix: Option<String>,
-        options: AzureStorageOptions,
-    ) -> Self {
-        let config = options
-            .config
-            .into_iter()
-            .filter_map(|(k, v)| k.parse::<AzureConfigKey>().ok().map(|key| (key, v)))
-            .collect();
-        Self {
-            account,
-            container,
-            prefix,
-            credentials: options.credentials,
-            config: Some(config),
-        }
-    }
 }
 
 #[cfg(feature = "azure")]
@@ -1649,63 +1521,6 @@ pub struct GcsObjectStoreBackend {
 }
 
 #[cfg(feature = "gcs")]
-#[derive(Debug, Clone, Default)]
-#[non_exhaustive]
-pub struct GcsStorageOptions {
-    pub credentials: Option<GcsCredentials>,
-    /// `object_store` GCS client keys by name. Unknown names are dropped.
-    pub config: HashMap<String, String>,
-    pub extra_read_headers: Vec<(String, String)>,
-    pub extra_write_headers: Vec<(String, String)>,
-}
-
-#[cfg(feature = "gcs")]
-impl GcsStorageOptions {
-    pub fn with_credentials(mut self, value: GcsCredentials) -> Self {
-        self.credentials = Some(value);
-        self
-    }
-
-    pub fn with_config(mut self, value: HashMap<String, String>) -> Self {
-        self.config = value;
-        self
-    }
-
-    pub fn with_extra_read_headers(mut self, value: Vec<(String, String)>) -> Self {
-        self.extra_read_headers = value;
-        self
-    }
-
-    pub fn with_extra_write_headers(mut self, value: Vec<(String, String)>) -> Self {
-        self.extra_write_headers = value;
-        self
-    }
-}
-
-#[cfg(feature = "gcs")]
-impl GcsObjectStoreBackend {
-    pub fn new(
-        bucket: String,
-        prefix: Option<String>,
-        options: GcsStorageOptions,
-    ) -> Self {
-        let config = options
-            .config
-            .into_iter()
-            .filter_map(|(k, v)| k.parse::<GoogleConfigKey>().ok().map(|key| (key, v)))
-            .collect();
-        Self {
-            bucket,
-            prefix,
-            credentials: options.credentials,
-            config: Some(config),
-            extra_read_headers: sorted_headers(options.extra_read_headers),
-            extra_write_headers: sorted_headers(options.extra_write_headers),
-        }
-    }
-}
-
-#[cfg(feature = "gcs")]
 impl Display for GcsObjectStoreBackend {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
@@ -1812,7 +1627,7 @@ impl ObjectStoreBackend for GcsObjectStoreBackend {
         Ok(Arc::new(store))
     }
 
-    // Headers are stored sorted (see `new_s3`/`new_gcs`), so this is order-insensitive.
+    // Headers are stored sorted (see `sorted_headers`), so this is order-insensitive.
     fn read_write_headers_differ(&self) -> bool {
         self.extra_read_headers != self.extra_write_headers
     }
@@ -1998,13 +1813,10 @@ mod tests {
         #[cfg(feature = "gcs")]
         {
             // building the client makes no requests
-            let gcs = super::new_gcs_storage(
-                "bucket".to_string(),
-                None,
-                super::GcsStorageOptions::default()
-                    .with_credentials(super::GcsCredentials::Anonymous),
-            )
-            .unwrap();
+            let gcs = ObjectStorage::gcs("bucket".to_string())
+                .credentials(super::GcsCredentials::Anonymous)
+                .execute()
+                .unwrap();
             assert!(gcs.lists_id_prefixes_natively());
         }
     }
@@ -2239,12 +2051,9 @@ mod tests {
     async fn readback_head_failure_propagates() {
         // Unreachable endpoint: the readback HEAD fails with a non-NotFound
         // error, which must propagate instead of faking a conflict.
-        let store = ObjectStorage::new_http(
-            &Url::parse("http://127.0.0.1:9").unwrap(),
-            None,
-            None,
-        )
-        .unwrap();
+        let store = ObjectStorage::http(Url::parse("http://127.0.0.1:9").unwrap())
+            .execute()
+            .unwrap();
         let mut retries = RetriesSettings::default();
         retries.max_tries = Some(NonZeroU16::new(1).unwrap());
         retries.initial_backoff_ms = Some(1);
@@ -2263,6 +2072,296 @@ mod tests {
     }
 }
 
+mod private {
+    pub trait Sealed {}
+}
+
+/// Marker for an S3 bucket, see [`ObjectStorage::s3`].
+#[cfg(feature = "s3")]
+#[derive(Debug, Clone, Copy)]
+pub struct S3Backend;
+/// Marker for a Google Cloud Storage bucket, see [`ObjectStorage::gcs`].
+#[cfg(feature = "gcs")]
+#[derive(Debug, Clone, Copy)]
+pub struct GcsBackend;
+/// Marker for an Azure Blob Storage container, see [`ObjectStorage::azure`].
+#[cfg(feature = "azure")]
+#[derive(Debug, Clone, Copy)]
+pub struct AzureBackend;
+/// Marker for an HTTP server, see [`ObjectStorage::http`].
+#[cfg(feature = "http")]
+#[derive(Debug, Clone, Copy)]
+pub struct HttpBackend;
+
+/// The service an [`ObjectStorageBuilder`] targets.
+///
+/// Backend-only methods do not compile on another backend:
+///
+/// ```compile_fail
+/// # use icechunk_arrow_object_store::ObjectStorage;
+/// ObjectStorage::azure("a".into(), "c".into()).read_headers(Vec::new());
+/// ```
+pub trait Backend: private::Sealed + Send + Sync + 'static {}
+
+#[cfg(feature = "s3")]
+impl private::Sealed for S3Backend {}
+#[cfg(feature = "s3")]
+impl Backend for S3Backend {}
+#[cfg(feature = "gcs")]
+impl private::Sealed for GcsBackend {}
+#[cfg(feature = "gcs")]
+impl Backend for GcsBackend {}
+#[cfg(feature = "azure")]
+impl private::Sealed for AzureBackend {}
+#[cfg(feature = "azure")]
+impl Backend for AzureBackend {}
+#[cfg(feature = "http")]
+impl private::Sealed for HttpBackend {}
+#[cfg(feature = "http")]
+impl Backend for HttpBackend {}
+
+/// Builds an [`ObjectStorage`]. Start with [`ObjectStorage::s3`],
+/// [`gcs`](ObjectStorage::gcs), [`azure`](ObjectStorage::azure) or
+/// [`http`](ObjectStorage::http).
+///
+/// ```no_run
+/// # use icechunk_arrow_object_store::ObjectStorage;
+/// # fn f() -> Result<(), Box<dyn std::error::Error>> {
+/// let storage = ObjectStorage::gcs("bucket".to_string())
+///     .prefix("repo".to_string())
+///     .execute()?;
+/// # Ok(()) }
+/// ```
+pub struct ObjectStorageBuilder<B: Backend> {
+    // Each entry point fills the location fields its backend needs.
+    bucket: String,
+    account: String,
+    container: String,
+    url: Option<Url>,
+    prefix: Option<String>,
+    #[cfg(feature = "s3")]
+    s3_credentials: Option<S3Credentials>,
+    #[cfg(feature = "s3")]
+    s3_config: Option<S3Options>,
+    #[cfg(feature = "gcs")]
+    gcs_credentials: Option<GcsCredentials>,
+    #[cfg(feature = "azure")]
+    azure_credentials: Option<AzureCredentials>,
+    config_keys: HashMap<String, String>,
+    headers: HashMap<String, String>,
+    read_headers: Vec<(String, String)>,
+    write_headers: Vec<(String, String)>,
+    _backend: PhantomData<B>,
+}
+
+impl<B: Backend> Debug for ObjectStorageBuilder<B> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Only key names: config values and headers can hold secrets.
+        let mut config_keys: Vec<&String> = self.config_keys.keys().collect();
+        config_keys.sort_unstable();
+        f.debug_struct("ObjectStorageBuilder")
+            .field("backend", &std::any::type_name::<B>())
+            .field("bucket", &self.bucket)
+            .field("account", &self.account)
+            .field("container", &self.container)
+            .field("url", &self.url)
+            .field("prefix", &self.prefix)
+            .field("config_keys", &config_keys)
+            .field("headers", &self.headers.len())
+            .field("read_headers", &self.read_headers.len())
+            .field("write_headers", &self.write_headers.len())
+            .finish_non_exhaustive()
+    }
+}
+
+impl<B: Backend> ObjectStorageBuilder<B> {
+    #[cfg(any(feature = "s3", feature = "gcs", feature = "azure", feature = "http"))]
+    fn empty() -> Self {
+        Self {
+            bucket: String::new(),
+            account: String::new(),
+            container: String::new(),
+            url: None,
+            prefix: None,
+            #[cfg(feature = "s3")]
+            s3_credentials: None,
+            #[cfg(feature = "s3")]
+            s3_config: None,
+            #[cfg(feature = "gcs")]
+            gcs_credentials: None,
+            #[cfg(feature = "azure")]
+            azure_credentials: None,
+            config_keys: HashMap::new(),
+            headers: HashMap::new(),
+            read_headers: Vec::new(),
+            write_headers: Vec::new(),
+            _backend: PhantomData,
+        }
+    }
+
+    /// Key prefix inside the bucket or container. Default: none, the root.
+    pub fn prefix(mut self, value: String) -> Self {
+        self.prefix = Some(value);
+        self
+    }
+}
+
+#[cfg(feature = "s3")]
+impl ObjectStorageBuilder<S3Backend> {
+    /// Default: credentials from the environment.
+    pub fn credentials(mut self, value: S3Credentials) -> Self {
+        self.s3_credentials = Some(value);
+        self
+    }
+
+    /// Default: none, no client options. `S3Options::default()` applies the
+    /// default options, which differ.
+    pub fn config(mut self, value: S3Options) -> Self {
+        self.s3_config = Some(value);
+        self
+    }
+
+    /// Extra HTTP headers on read requests. Default: none.
+    pub fn read_headers(mut self, value: Vec<(String, String)>) -> Self {
+        self.read_headers = value;
+        self
+    }
+
+    /// Extra HTTP headers on write requests. Default: none.
+    pub fn write_headers(mut self, value: Vec<(String, String)>) -> Self {
+        self.write_headers = value;
+        self
+    }
+
+    /// Fails for a Tigris endpoint: Tigris is not S3 compatible.
+    pub fn execute(self) -> StorageResult<ObjectStorage> {
+        if let Some(endpoint) =
+            self.s3_config.as_ref().and_then(|c| c.endpoint_url.as_ref())
+            && (endpoint.contains("fly.storage.tigris.dev")
+                || endpoint.contains("t3.storage.dev"))
+        {
+            return Err(other_error(
+                "Tigris Storage is not S3 compatible, use the Tigris specific constructor instead",
+            ));
+        }
+        let backend = Arc::new(S3ObjectStoreBackend {
+            bucket: self.bucket,
+            prefix: self.prefix,
+            credentials: self.s3_credentials,
+            config: self.s3_config,
+            extra_read_headers: sorted_headers(self.read_headers),
+            extra_write_headers: sorted_headers(self.write_headers),
+        });
+        Ok(ObjectStorage::from_backend(backend))
+    }
+}
+
+#[cfg(feature = "gcs")]
+impl ObjectStorageBuilder<GcsBackend> {
+    /// Default: credentials from the environment.
+    pub fn credentials(mut self, value: GcsCredentials) -> Self {
+        self.gcs_credentials = Some(value);
+        self
+    }
+
+    /// `object_store` GCS client keys by name. Unknown names are dropped. Default: empty.
+    pub fn config(mut self, value: HashMap<String, String>) -> Self {
+        self.config_keys = value;
+        self
+    }
+
+    /// Extra HTTP headers on read requests. Default: none.
+    pub fn read_headers(mut self, value: Vec<(String, String)>) -> Self {
+        self.read_headers = value;
+        self
+    }
+
+    /// Extra HTTP headers on write requests. Default: none.
+    pub fn write_headers(mut self, value: Vec<(String, String)>) -> Self {
+        self.write_headers = value;
+        self
+    }
+
+    pub fn execute(self) -> StorageResult<ObjectStorage> {
+        let config = self
+            .config_keys
+            .into_iter()
+            .filter_map(|(k, v)| k.parse::<GoogleConfigKey>().ok().map(|key| (key, v)))
+            .collect();
+        let backend = Arc::new(GcsObjectStoreBackend {
+            bucket: self.bucket,
+            prefix: self.prefix,
+            credentials: self.gcs_credentials,
+            config: Some(config),
+            extra_read_headers: sorted_headers(self.read_headers),
+            extra_write_headers: sorted_headers(self.write_headers),
+        });
+        Ok(ObjectStorage::from_backend(backend))
+    }
+}
+
+#[cfg(feature = "azure")]
+impl ObjectStorageBuilder<AzureBackend> {
+    /// Default: credentials from the environment.
+    pub fn credentials(mut self, value: AzureCredentials) -> Self {
+        self.azure_credentials = Some(value);
+        self
+    }
+
+    /// `object_store` Azure client keys by name. Unknown names are dropped. Default: empty.
+    pub fn config(mut self, value: HashMap<String, String>) -> Self {
+        self.config_keys = value;
+        self
+    }
+
+    pub fn execute(self) -> StorageResult<ObjectStorage> {
+        let config = self
+            .config_keys
+            .into_iter()
+            .filter_map(|(k, v)| k.parse::<AzureConfigKey>().ok().map(|key| (key, v)))
+            .collect();
+        let backend = Arc::new(AzureObjectStoreBackend {
+            account: self.account,
+            container: self.container,
+            prefix: self.prefix,
+            credentials: self.azure_credentials,
+            config: Some(config),
+        });
+        Ok(ObjectStorage::from_backend(backend))
+    }
+}
+
+#[cfg(feature = "http")]
+impl ObjectStorageBuilder<HttpBackend> {
+    /// `object_store` HTTP client keys by name. Unknown names are dropped. Default: empty.
+    pub fn config(mut self, value: HashMap<String, String>) -> Self {
+        self.config_keys = value;
+        self
+    }
+
+    /// HTTP headers on every request. Default: none.
+    pub fn headers(mut self, value: HashMap<String, String>) -> Self {
+        self.headers = value;
+        self
+    }
+
+    pub fn execute(self) -> StorageResult<ObjectStorage> {
+        let url = self.url.ok_or_else(|| other_error("url is required"))?;
+        let config = self
+            .config_keys
+            .into_iter()
+            .filter_map(|(k, v)| k.parse::<ClientConfigKey>().ok().map(|key| (key, v)))
+            .collect();
+        let headers = if self.headers.is_empty() { None } else { Some(self.headers) };
+        let backend = Arc::new(HttpObjectStoreBackend {
+            url: url.to_string(),
+            config: Some(config),
+            headers,
+        });
+        Ok(ObjectStorage::from_backend(backend))
+    }
+}
+
 // Factory functions
 
 pub async fn new_in_memory_storage() -> StorageResult<Arc<dyn Storage + Send + Sync>> {
@@ -2278,70 +2377,6 @@ pub async fn new_local_filesystem_storage(
     Ok(Arc::new(st))
 }
 
-#[cfg(feature = "http")]
-pub fn new_http_storage(
-    base_url: &str,
-    config: Option<HashMap<String, String>>,
-    headers: Option<HashMap<String, String>>,
-) -> StorageResult<Arc<dyn Storage + Send + Sync>> {
-    use std::str::FromStr as _;
-    let base_url = Url::parse(base_url)
-        .map_err(|e| StorageErrorKind::CannotParseUrl {
-            cause: e,
-            url: base_url.to_string(),
-        })
-        .capture()?;
-    let config = config
-        .unwrap_or_default()
-        .iter()
-        .filter_map(|(k, v)| {
-            ClientConfigKey::from_str(k).ok().map(|key| (key, v.clone()))
-        })
-        .collect();
-    let st = ObjectStorage::new_http(&base_url, Some(config), headers)?;
-    Ok(Arc::new(st))
-}
-
-#[cfg(feature = "s3")]
-pub async fn new_s3_object_store_storage(
-    bucket: String,
-    prefix: Option<String>,
-    options: S3ObjectStoreOptions,
-) -> StorageResult<Arc<dyn Storage + Send + Sync>> {
-    if let Some(endpoint) = options.config.as_ref().and_then(|c| c.endpoint_url.as_ref())
-        && (endpoint.contains("fly.storage.tigris.dev")
-            || endpoint.contains("t3.storage.dev"))
-    {
-        return Err(StorageError::from(other_error(
-            "Tigris Storage is not S3 compatible, use the Tigris specific constructor instead"
-                .to_string(),
-        )));
-    }
-    let storage = ObjectStorage::new_s3(bucket, prefix, options).await?;
-    Ok(Arc::new(storage))
-}
-
-#[cfg(feature = "azure")]
-pub async fn new_azure_blob_storage(
-    account: String,
-    container: String,
-    prefix: Option<String>,
-    options: AzureStorageOptions,
-) -> StorageResult<Arc<dyn Storage + Send + Sync>> {
-    let storage = ObjectStorage::new_azure(account, container, prefix, options).await?;
-    Ok(Arc::new(storage))
-}
-
-#[cfg(feature = "gcs")]
-pub fn new_gcs_storage(
-    bucket: String,
-    prefix: Option<String>,
-    options: GcsStorageOptions,
-) -> StorageResult<Arc<dyn Storage + Send + Sync>> {
-    let storage = ObjectStorage::new_gcs(bucket, prefix, options)?;
-    Ok(Arc::new(storage))
-}
-
 #[cfg(all(test, feature = "s3"))]
 mod s3_header_tests {
     use std::sync::Arc;
@@ -2349,10 +2384,7 @@ mod s3_header_tests {
     use icechunk_macros::tokio_test;
     use icechunk_storage::{Settings, s3_config::S3Options};
 
-    use super::{
-        ObjectStorage, ObjectStoreBackend as _, Role, S3ObjectStoreBackend,
-        S3ObjectStoreOptions,
-    };
+    use super::{ObjectStorage, ObjectStoreBackend as _, Role, S3ObjectStoreBackend};
 
     fn backend(read: &[(&str, &str)], write: &[(&str, &str)]) -> S3ObjectStoreBackend {
         let to_vec = |hs: &[(&str, &str)]| {
@@ -2369,7 +2401,7 @@ mod s3_header_tests {
     }
 
     /// Whether the read-role and write-role clients are the *same* `Arc`. Goes
-    /// through `new_s3` so the construction-time header sort is exercised.
+    /// through the builder so the construction-time header sort is exercised.
     #[expect(clippy::unwrap_used)]
     async fn read_and_write_share_client(
         read: &[(&str, &str)],
@@ -2378,16 +2410,13 @@ mod s3_header_tests {
         let to_vec = |hs: &[(&str, &str)]| {
             hs.iter().map(|(k, v)| ((*k).to_string(), (*v).to_string())).collect()
         };
-        let storage = ObjectStorage::new_s3(
-            "testbucket".to_string(),
-            Some("p".to_string()),
-            S3ObjectStoreOptions::default()
-                .with_config(S3Options::default().with_region("us-east-1"))
-                .with_extra_read_headers(to_vec(read))
-                .with_extra_write_headers(to_vec(write)),
-        )
-        .await
-        .unwrap();
+        let storage = ObjectStorage::s3("testbucket".to_string())
+            .prefix("p".to_string())
+            .config(S3Options::default().with_region("us-east-1"))
+            .read_headers(to_vec(read))
+            .write_headers(to_vec(write))
+            .execute()
+            .unwrap();
         let settings = Settings::default();
         let read_client = storage.get_client(&settings, Role::Read).await.unwrap();
         let write_client = storage.get_client(&settings, Role::Write).await.unwrap();
@@ -2534,72 +2563,78 @@ mod http_tests {
 }
 
 #[cfg(test)]
-#[cfg(any(feature = "s3", feature = "gcs", feature = "azure"))]
-mod options_tests {
-    #[cfg(any(feature = "gcs", feature = "azure"))]
-    use std::collections::HashMap;
-
-    #[cfg(feature = "azure")]
-    use super::{AzureConfigKey, AzureObjectStoreBackend, AzureStorageOptions};
-    #[cfg(feature = "gcs")]
-    use super::{
-        GcsCredentials, GcsObjectStoreBackend, GcsStorageOptions, GoogleConfigKey,
-    };
-    #[cfg(feature = "s3")]
-    use super::{S3Credentials, S3ObjectStoreOptions, S3Options};
+#[cfg(any(feature = "s3", feature = "gcs", feature = "azure", feature = "http"))]
+mod builder_tests {
+    use super::*;
 
     #[cfg(feature = "s3")]
     #[test]
-    fn s3_object_store_options_setters_set_fields() {
-        let o = S3ObjectStoreOptions::default()
-            .with_config(S3Options::default().with_region("us-east-1"))
-            .with_credentials(S3Credentials::Anonymous)
-            .with_extra_read_headers(vec![("a".to_string(), "b".to_string())])
-            .with_extra_write_headers(vec![("c".to_string(), "d".to_string())]);
-        assert_eq!(
-            o.config.as_ref().and_then(|c| c.region.clone()),
-            Some("us-east-1".to_string())
+    fn s3_builder_methods_reach_the_backend() {
+        let st = ObjectStorage::s3("bucket".to_string())
+            .prefix("p".to_string())
+            .credentials(S3Credentials::Anonymous)
+            .config(S3Options::default().with_region("us-east-1"))
+            .read_headers(vec![
+                ("b".to_string(), "1".to_string()),
+                ("a".to_string(), "2".to_string()),
+            ])
+            .execute()
+            .unwrap();
+        let json = serde_json::to_string(st.backend()).unwrap();
+        assert!(
+            json.contains(r#""bucket":"bucket""#) && json.contains(r#""prefix":"p""#),
+            "{json}"
         );
-        assert!(matches!(o.credentials, Some(S3Credentials::Anonymous)));
-        assert_eq!(o.extra_read_headers, vec![("a".to_string(), "b".to_string())]);
-        assert_eq!(o.extra_write_headers, vec![("c".to_string(), "d".to_string())]);
-        let d = S3ObjectStoreOptions::default();
-        assert!(d.config.is_none() && d.credentials.is_none());
-        assert!(d.extra_read_headers.is_empty() && d.extra_write_headers.is_empty());
+        assert!(json.contains(r#""region":"us-east-1""#), "{json}");
+        // headers are sorted by name
+        assert!(json.contains(r#"[["a","2"],["b","1"]]"#), "{json}");
+    }
+
+    #[cfg(feature = "s3")]
+    #[test]
+    fn s3_builder_refuses_a_tigris_endpoint() {
+        let err = ObjectStorage::s3("bucket".to_string())
+            .config(S3Options::default().with_endpoint_url("https://t3.storage.dev"))
+            .execute()
+            .unwrap_err();
+        assert!(err.to_string().contains("Tigris"), "{err}");
     }
 
     #[cfg(feature = "gcs")]
     #[test]
-    fn gcs_storage_options_config_keys_reach_the_backend() {
-        let o = GcsStorageOptions::default()
-            .with_credentials(GcsCredentials::Anonymous)
-            .with_config(HashMap::from([
+    fn gcs_builder_parses_config_keys_and_drops_unknown_ones() {
+        let st = ObjectStorage::gcs("bucket".to_string())
+            .credentials(GcsCredentials::Anonymous)
+            .config(HashMap::from([
                 ("google_service_account".to_string(), "sa.json".to_string()),
                 ("not_a_key".to_string(), "dropped".to_string()),
             ]))
-            .with_extra_read_headers(vec![("a".to_string(), "b".to_string())]);
-        let backend = GcsObjectStoreBackend::new("bucket".to_string(), None, o);
-        let config = backend.config.as_ref().unwrap();
-        assert_eq!(config.len(), 1);
-        assert_eq!(
-            config.get(&GoogleConfigKey::ServiceAccount),
-            Some(&"sa.json".to_string())
-        );
-        assert!(matches!(backend.credentials, Some(GcsCredentials::Anonymous)));
-        assert_eq!(backend.extra_read_headers, vec![("a".to_string(), "b".to_string())]);
+            .execute()
+            .unwrap();
+        let json = serde_json::to_string(st.backend()).unwrap();
+        assert!(json.contains("sa.json") && !json.contains("dropped"), "{json}");
     }
 
     #[cfg(feature = "azure")]
     #[test]
-    fn azure_storage_options_config_keys_reach_the_backend() {
-        let o = AzureStorageOptions::default().with_config(HashMap::from([(
-            "use_emulator".to_string(),
-            "true".to_string(),
-        )]));
-        let backend =
-            AzureObjectStoreBackend::new("acct".to_string(), "cont".to_string(), None, o);
-        let config = backend.config.as_ref().unwrap();
-        assert_eq!(config.get(&AzureConfigKey::UseEmulator), Some(&"true".to_string()));
-        assert!(backend.credentials.is_none());
+    fn azure_builder_parses_config_keys() {
+        let st = ObjectStorage::azure("acct".to_string(), "cont".to_string())
+            .config(HashMap::from([("use_emulator".to_string(), "true".to_string())]))
+            .execute()
+            .unwrap();
+        let json = serde_json::to_string(st.backend()).unwrap();
+        assert!(json.contains(r#""UseEmulator":"true""#), "{json}");
+    }
+
+    #[cfg(feature = "http")]
+    #[test]
+    fn http_builder_keeps_url_config_and_headers() {
+        let st = ObjectStorage::http(Url::parse("https://example.org/data/").unwrap())
+            .config(HashMap::from([("allow_http".to_string(), "true".to_string())]))
+            .headers(HashMap::from([("x-a".to_string(), "1".to_string())]))
+            .execute()
+            .unwrap();
+        let json = serde_json::to_string(st.backend()).unwrap();
+        assert!(json.contains("example.org") && json.contains("x-a"), "{json}");
     }
 }

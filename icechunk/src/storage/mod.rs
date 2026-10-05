@@ -2,7 +2,7 @@
 //!
 //! The [`Storage`] trait defines generic object store operations (get, put, delete,
 //! list) for persisting Icechunk data. Constructors like [`S3Storage::s3`],
-//! [`new_gcs_storage`], [`new_in_memory_storage`] create configured storage instances.
+//! [`ObjectStorage::gcs`], [`new_in_memory_storage`] create configured storage instances.
 
 use std::sync::Arc;
 
@@ -28,35 +28,30 @@ pub use icechunk_s3::{
 
 // Re-export from icechunk-arrow-object-store
 pub use icechunk_arrow_object_store::{
-    ObjectStorage, new_in_memory_storage, validate_extra_headers,
+    Backend, ObjectStorage, ObjectStorageBuilder, new_in_memory_storage,
+    validate_extra_headers,
 };
 
 #[cfg(feature = "object-store-fs")]
 pub use icechunk_arrow_object_store::new_local_filesystem_storage;
 
-#[cfg(feature = "object-store-http")]
-pub use icechunk_arrow_object_store::new_http_storage;
-
 #[cfg(feature = "object-store-s3")]
-pub use icechunk_arrow_object_store::{
-    S3ObjectStoreBackend, S3ObjectStoreOptions, new_s3_object_store_storage,
-};
+pub use icechunk_arrow_object_store::{S3Backend, S3ObjectStoreBackend};
 
 #[cfg(feature = "object-store-azure")]
 pub use icechunk_arrow_object_store::{
-    AzureCredentials, AzureCredentialsFetcher, AzureObjectStoreBackend,
-    AzureRefreshableCredential, AzureStaticCredentials, AzureStorageOptions,
-    new_azure_blob_storage,
+    AzureBackend, AzureCredentials, AzureCredentialsFetcher, AzureObjectStoreBackend,
+    AzureRefreshableCredential, AzureStaticCredentials,
 };
 
 #[cfg(feature = "object-store-gcs")]
 pub use icechunk_arrow_object_store::{
-    GcsBearerCredential, GcsCredentials, GcsCredentialsFetcher, GcsObjectStoreBackend,
-    GcsStaticCredentials, GcsStorageOptions, new_gcs_storage,
+    GcsBackend, GcsBearerCredential, GcsCredentials, GcsCredentialsFetcher,
+    GcsObjectStoreBackend, GcsStaticCredentials,
 };
 
 #[cfg(feature = "object-store-http")]
-pub use icechunk_arrow_object_store::HttpObjectStoreBackend;
+pub use icechunk_arrow_object_store::{HttpBackend, HttpObjectStoreBackend};
 
 pub use icechunk_arrow_object_store::{ObjectStoreBackend, Role};
 
@@ -128,17 +123,18 @@ mod tests {
     async fn test_gcs_session_serialization() {
         use crate::config::{GcsBearerCredential, GcsStaticCredentials};
 
-        let storage = new_gcs_storage(
-            "bucket".to_string(),
-            Some("prefix".to_string()),
-            GcsStorageOptions::default().with_credentials(GcsCredentials::Static(
-                GcsStaticCredentials::BearerToken(GcsBearerCredential {
-                    bearer: "the token".to_string(),
-                    expires_after: None,
-                }),
-            )),
-        )
-        .unwrap();
+        let storage: Arc<dyn Storage> = Arc::new(
+            ObjectStorage::gcs("bucket".to_string())
+                .prefix("prefix".to_string())
+                .credentials(GcsCredentials::Static(GcsStaticCredentials::BearerToken(
+                    GcsBearerCredential {
+                        bearer: "the token".to_string(),
+                        expires_after: None,
+                    },
+                )))
+                .execute()
+                .unwrap(),
+        );
         let bytes = rmp_serde::to_vec(&storage).unwrap();
         let dese: Result<Arc<dyn Storage>, _> = rmp_serde::from_slice(&bytes);
         assert!(dese.is_ok());

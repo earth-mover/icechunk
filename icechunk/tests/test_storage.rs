@@ -24,11 +24,10 @@ use icechunk::{
     refs::{RefData, RefErrorKind},
     repository::{RepositoryError, RepositoryErrorKind},
     storage::{
-        self, Attribution, AttributionLabels, AzureStorageOptions, ConcurrencySettings,
-        ETag, GcsStorageOptions, Generation, RepositoryCreation, RequestAttribution,
-        S3ObjectStoreOptions, S3Storage, StorageContext, StorageErrorKind, StorageResult,
-        VersionInfo, VersionedUpdateResult, mk_client, new_gcs_storage, new_http_storage,
-        new_in_memory_storage, new_redirect_storage, new_s3_object_store_storage,
+        self, Attribution, AttributionLabels, ConcurrencySettings, ETag, Generation,
+        RepositoryCreation, RequestAttribution, S3Storage, StorageContext,
+        StorageErrorKind, StorageResult, VersionInfo, VersionedUpdateResult, mk_client,
+        new_in_memory_storage, new_redirect_storage,
     },
 };
 use icechunk_arrow_object_store::object_store::azure::AzureConfigKey;
@@ -114,25 +113,22 @@ async fn mk_s3_object_store_storage(
     let (access_key_id, secret_access_key) = permission.keys();
 
     let storage = Arc::new(
-        ObjectStorage::new_s3(
-            "testbucket".to_string(),
-            Some(prefix.to_string()),
-            S3ObjectStoreOptions::default()
-                .with_credentials(S3Credentials::Static(S3StaticCredentials {
-                    access_key_id: access_key_id.into(),
-                    secret_access_key: secret_access_key.into(),
-                    session_token: None,
-                    expires_after: None,
-                }))
-                .with_config(
-                    S3Options::default()
-                        .with_region("us-east-1")
-                        .with_endpoint_url("http://localhost:4200")
-                        .with_allow_http(true)
-                        .with_force_path_style(true),
-                ),
-        )
-        .await?,
+        ObjectStorage::s3("testbucket".to_string())
+            .prefix(prefix.to_string())
+            .credentials(S3Credentials::Static(S3StaticCredentials {
+                access_key_id: access_key_id.into(),
+                secret_access_key: secret_access_key.into(),
+                session_token: None,
+                expires_after: None,
+            }))
+            .config(
+                S3Options::default()
+                    .with_region("us-east-1")
+                    .with_endpoint_url("http://localhost:4200")
+                    .with_allow_http(true)
+                    .with_force_path_style(true),
+            )
+            .execute()?,
     );
 
     Ok(storage)
@@ -142,16 +138,13 @@ async fn mk_azure_blob_storage(
     prefix: &str,
 ) -> StorageResult<Arc<dyn Storage + Send + Sync>> {
     let storage = Arc::new(
-        ObjectStorage::new_azure(
-            "devstoreaccount1".to_string(),
-            "testcontainer".to_string(),
-            Some(prefix.to_string()),
-            AzureStorageOptions::default().with_config(HashMap::from([(
+        ObjectStorage::azure("devstoreaccount1".to_string(), "testcontainer".to_string())
+            .prefix(prefix.to_string())
+            .config(HashMap::from([(
                 AzureConfigKey::UseEmulator.as_ref().to_string(),
                 "true".to_string(),
-            )])),
-        )
-        .await?,
+            )]))
+            .execute()?,
     );
 
     Ok(storage)
@@ -462,11 +455,11 @@ async fn create_refuses_empty_prefix_on_object_store()
         ("object_store_azure", mk_azure_blob_storage("").await?),
         (
             "object_store_gcs",
-            Arc::new(ObjectStorage::new_gcs(
-                "testbucket".to_string(),
-                Some(String::new()),
-                GcsStorageOptions::default(),
-            )?),
+            Arc::new(
+                ObjectStorage::gcs("testbucket".to_string())
+                    .prefix(String::new())
+                    .execute()?,
+            ),
         ),
     ];
     for (name, storage) in refused {
@@ -496,15 +489,12 @@ async fn create_refuses_empty_prefix_on_object_store()
         (
             "object_store_s3_empty_with_hatch",
             Arc::new(
-                ObjectStorage::new_s3(
-                    "testbucket".to_string(),
-                    Some(String::new()),
-                    S3ObjectStoreOptions::default()
-                        .with_credentials(s3_creds())
-                        .with_config(S3Options::default().with_region("us-east-1")),
-                )
-                .await?
-                .unsafe_allow_empty_prefix_creation(),
+                ObjectStorage::s3("testbucket".to_string())
+                    .prefix(String::new())
+                    .credentials(s3_creds())
+                    .config(S3Options::default().with_region("us-east-1"))
+                    .execute()?
+                    .unsafe_allow_empty_prefix_creation(),
             ),
         ),
         ("in_memory", new_in_memory_storage().await?),
@@ -741,25 +731,21 @@ async fn test_list_objects_with_all_two_char_id_prefixes()
 async fn test_list_objects_with_id_prefixes_at_bucket_root()
 -> Result<(), Box<dyn std::error::Error>> {
     let (access_key_id, secret_access_key) = Permission::Modify.keys();
-    let storage = ObjectStorage::new_s3(
-        "testbucket".to_string(),
-        None,
-        S3ObjectStoreOptions::default()
-            .with_credentials(S3Credentials::Static(S3StaticCredentials {
-                access_key_id: access_key_id.into(),
-                secret_access_key: secret_access_key.into(),
-                session_token: None,
-                expires_after: None,
-            }))
-            .with_config(
-                S3Options::default()
-                    .with_region("us-east-1")
-                    .with_endpoint_url("http://localhost:4200")
-                    .with_allow_http(true)
-                    .with_force_path_style(true),
-            ),
-    )
-    .await?;
+    let storage = ObjectStorage::s3("testbucket".to_string())
+        .credentials(S3Credentials::Static(S3StaticCredentials {
+            access_key_id: access_key_id.into(),
+            secret_access_key: secret_access_key.into(),
+            session_token: None,
+            expires_after: None,
+        }))
+        .config(
+            S3Options::default()
+                .with_region("us-east-1")
+                .with_endpoint_url("http://localhost:4200")
+                .with_allow_http(true)
+                .with_force_path_style(true),
+        )
+        .execute()?;
     let settings = storage.default_settings().await?;
     let ctx = attributed(&settings);
     let dir = common::get_random_prefix("root_first_chars");
@@ -791,11 +777,10 @@ async fn test_list_objects_with_id_prefixes_at_bucket_root()
 #[tokio_test]
 async fn test_gcs_list_objects_with_id_prefixes() -> Result<(), Box<dyn std::error::Error>>
 {
-    let storage = new_gcs_storage(
-        "al-public-test-bucket".to_string(),
-        Some("verification-copy".to_string()),
-        GcsStorageOptions::default().with_credentials(GcsCredentials::Anonymous),
-    )?;
+    let storage = ObjectStorage::gcs("al-public-test-bucket".to_string())
+        .prefix("verification-copy".to_string())
+        .credentials(GcsCredentials::Anonymous)
+        .execute()?;
     // GC fans listings out per id prefix only on backends that list a prefix
     // natively; GCS must be one of them or GC repeats the full listing per prefix
     assert!(storage.lists_id_prefixes_natively());
@@ -1352,15 +1337,12 @@ async fn test_storage_classes_object_store() -> Result<(), Box<dyn std::error::E
         return Ok(());
     };
     let prefix = common::get_random_prefix("test_storage_classes_object_store");
-    let st = new_s3_object_store_storage(
-        store.bucket().to_string(),
-        Some(prefix.clone()),
-        S3ObjectStoreOptions::default()
-            .with_config(store.options().clone())
-            .with_credentials(store.credentials().clone()),
-    )
-    .await?;
-    check_storage_classes(st, &store, &prefix).await
+    let st = ObjectStorage::s3(store.bucket().to_string())
+        .prefix(prefix.clone())
+        .config(store.options().clone())
+        .credentials(store.credentials().clone())
+        .execute()?;
+    check_storage_classes(Arc::new(st), &store, &prefix).await
 }
 
 /// Write two objects as `STANDARD_IA` and one with the default class, then
@@ -1599,8 +1581,8 @@ async fn test_http_storage() -> Result<(), Box<dyn std::error::Error>> {
     let join = tokio::task::spawn(server.run());
 
     let url = format!("http://127.0.0.1:{port}");
-    let storage1 = new_http_storage(url.as_str(), None, None)?;
-    let storage2 = new_http_storage(url.as_str(), None, None)?;
+    let storage1 = ObjectStorage::http(url::Url::parse(&url)?).execute()?;
+    let storage2 = ObjectStorage::http(url::Url::parse(&url)?).execute()?;
     for storage in [storage1, storage2] {
         assert!(!storage.can_write().await?);
 
@@ -1671,7 +1653,8 @@ async fn test_http_storage_with_auth_header() -> Result<(), Box<dyn std::error::
     // With the correct Authorization header – reads should succeed
     let headers =
         HashMap::from([("authorization".to_string(), EXPECTED_TOKEN.to_string())]);
-    let storage_with_auth = new_http_storage(url.as_str(), None, Some(headers))?;
+    let storage_with_auth =
+        ObjectStorage::http(url::Url::parse(&url)?).headers(headers).execute()?;
     assert!(!storage_with_auth.can_write().await?);
     let settings = storage_with_auth.default_settings().await?;
     let ctx = attributed(&settings);
@@ -1686,7 +1669,7 @@ async fn test_http_storage_with_auth_header() -> Result<(), Box<dyn std::error::
     assert_eq!(expected_len, data.len() as u64);
 
     // Without the Authorization header – the server should reject the request
-    let storage_no_auth = new_http_storage(url.as_str(), None, None)?;
+    let storage_no_auth = ObjectStorage::http(url::Url::parse(&url)?).execute()?;
     let Err(err) = storage_no_auth.get_object(&ctx, "repo", None).await else {
         panic!("expected an error when no Authorization header is provided");
     };
@@ -1904,15 +1887,12 @@ async fn test_write_headers_reach_s3_compatible_storage()
         // object_store S3
         let prefix = common::get_random_prefix("write_headers_object_store");
         let object_store: Arc<dyn Storage + Send + Sync> = Arc::new(
-            ObjectStorage::new_s3(
-                "testbucket".to_string(),
-                Some(prefix.clone()),
-                S3ObjectStoreOptions::default()
-                    .with_credentials(credentials.clone())
-                    .with_config(options.clone())
-                    .with_extra_write_headers(write_header()),
-            )
-            .await?,
+            ObjectStorage::s3("testbucket".to_string())
+                .prefix(prefix.clone())
+                .credentials(credentials.clone())
+                .config(options.clone())
+                .write_headers(write_header())
+                .execute()?,
         );
         let key = put_probe_object(&object_store).await?;
         assert_write_header_round_trips(
@@ -1958,15 +1938,12 @@ async fn test_write_headers_reach_aws() -> Result<(), Box<dyn std::error::Error>
     // object_store constructor exposed)
     let prefix = common::get_random_prefix("write_headers_real_object_store");
     let object_store: Arc<dyn Storage + Send + Sync> = Arc::new(
-        ObjectStorage::new_s3(
-            store.bucket().to_string(),
-            Some(prefix.clone()),
-            S3ObjectStoreOptions::default()
-                .with_credentials(store.credentials().clone())
-                .with_config(store.options().clone())
-                .with_extra_write_headers(write_header()),
-        )
-        .await?,
+        ObjectStorage::s3(store.bucket().to_string())
+            .prefix(prefix.clone())
+            .credentials(store.credentials().clone())
+            .config(store.options().clone())
+            .write_headers(write_header())
+            .execute()?,
     );
     let key = put_probe_object(&object_store).await?;
     assert_write_header_round_trips(
