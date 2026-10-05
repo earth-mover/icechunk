@@ -280,10 +280,12 @@ format-nix *args:
 check-deps *args:
   cargo deny --all-features check "$@"
 
+# cargo-semver-checks resolves its own lockfile. Its cc reads CFLAGS before aws-lc-sys
+# removes -O2 for jitterentropy, so the recipe clears the conda CFLAGS.
 [group('lint')]
 [doc("Check the published crates for semver breaks against their latest crates.io release via cargo-semver-checks (to compare with a git revision pass `--baseline-rev <rev> --release-type minor`; with the same version on both sides the tool skips every check unless a release type is given)")]
 check-semver *args:
-  cargo semver-checks check-release --workspace "$@"
+  CFLAGS="" CXXFLAGS="" cargo semver-checks check-release --workspace "$@"
 
 [group('test')]
 [script]
