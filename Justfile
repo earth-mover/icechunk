@@ -440,7 +440,10 @@ zarrs-upstream-patch zarrs_dir="zarrs_icechunk":
 [script]
 [doc("Build zarrs_icechunk against local icechunk")]
 zarrs-upstream-build zarrs_dir="zarrs_icechunk": zarrs-upstream-patch
-  cd {{zarrs_dir}} && cargo build 2>&1 | tee build-output.log
+  # aws-lc-sys fails to build with cc >= 1.6 when CFLAGS contains -O2 (as in
+  # the pixi env); drop once https://github.com/aws/aws-lc-rs/issues/1252 is fixed
+  cd {{zarrs_dir}} && cargo update -p cc --precise 1.5.1
+  cargo build 2>&1 | tee build-output.log
 
 [private]
 [script]
