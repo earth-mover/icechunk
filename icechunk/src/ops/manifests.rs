@@ -88,6 +88,7 @@ impl RewriteManifestsBuilder<'_> {
         self
     }
 
+    /// Rewrite the manifests and commit the result.
     pub async fn execute(self) -> ManifestOpsResult<SnapshotId> {
         if self.commit_method == CommitMethod::Amend
             && self.repository.spec_version() < SpecVersionBin::V2

@@ -125,7 +125,7 @@ impl ExpireBuilder {
         self
     }
 
-    /// Default: no retries.
+    /// Default: `RepoUpdateRetryConfig::default()`, 100 tries with 50 ms to 30 s backoff.
     pub fn repo_update_retries(mut self, value: RepoUpdateRetryConfig) -> Self {
         self.repo_update_retries = Some(value);
         self
@@ -137,6 +137,7 @@ impl ExpireBuilder {
         self
     }
 
+    /// Run the expiration.
     #[instrument(name = "expire", skip(self), fields(older_than = ?self.older_than))]
     pub async fn execute(self) -> GCResult<ExpireResult> {
         ensure_repo_writable(self.asset_manager.as_ref(), "expire").await?;

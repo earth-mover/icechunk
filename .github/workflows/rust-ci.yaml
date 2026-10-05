@@ -200,8 +200,8 @@ jobs:
 
   ubuntu-semver:
     name: Rust semver (ubuntu-latest)
-    # needs a base revision, which only PRs and merge queues have
-    if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
+    # needs a base revision, which only PRs have
+    if: github.event_name == 'pull_request'
     timeout-minutes: 20
     runs-on: ubuntu-latest
     steps:
@@ -222,7 +222,7 @@ jobs:
 
       - name: Check the published crates for semver breaks against the base
         env:
-          BASELINE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          BASELINE: ${{ github.event.pull_request.base.sha }}
           # the breaking-change label declares a major release, so breaks pass
           RELEASE_TYPE: ${{ contains(github.event.pull_request.labels.*.name, 'breaking-change') && 'major' || 'minor' }}
         run: just check-semver --baseline-rev "$BASELINE" --release-type "$RELEASE_TYPE"
@@ -662,7 +662,7 @@ jobs:
             echo "::error::Integration tests failed"
             exit 1
           fi
-          # skipped on pushes, schedules and dispatches, which have no base revision
+          # skipped on pushes, merge queues, schedules and dispatches, which have no PR labels
           if [ "$SEMVER_RESULT" != "success" ] && [ "$SEMVER_RESULT" != "skipped" ]; then
             echo "::error::Semver check failed"
             exit 1

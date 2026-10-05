@@ -2282,6 +2282,7 @@ impl ObjectStorageBuilder<GcsBackend> {
         self
     }
 
+    /// Build the GCS storage.
     pub fn execute(self) -> StorageResult<ObjectStorage> {
         let config = self
             .config_keys
@@ -2314,6 +2315,7 @@ impl ObjectStorageBuilder<AzureBackend> {
         self
     }
 
+    /// Build the Azure storage.
     pub fn execute(self) -> StorageResult<ObjectStorage> {
         let config = self
             .config_keys
@@ -2345,6 +2347,7 @@ impl ObjectStorageBuilder<HttpBackend> {
         self
     }
 
+    /// Build the HTTP storage.
     pub fn execute(self) -> StorageResult<ObjectStorage> {
         let url = self.url.ok_or_else(|| other_error("url is required"))?;
         let config = self
@@ -2566,6 +2569,57 @@ mod http_tests {
 #[cfg(any(feature = "s3", feature = "gcs", feature = "azure", feature = "http"))]
 mod builder_tests {
     use super::*;
+
+    fn assert_no_headers<B: Backend>(b: &ObjectStorageBuilder<B>) {
+        assert!(b.headers.is_empty());
+        assert!(b.read_headers.is_empty());
+        assert!(b.write_headers.is_empty());
+    }
+
+    #[cfg(feature = "s3")]
+    #[test]
+    fn s3_builder_defaults() {
+        let b = ObjectStorage::s3("bucket".to_string());
+        assert_eq!(b.bucket, "bucket");
+        assert_eq!(b.prefix, None);
+        assert!(b.s3_credentials.is_none());
+        assert!(b.s3_config.is_none());
+        assert!(b.config_keys.is_empty());
+        assert_no_headers(&b);
+    }
+
+    #[cfg(feature = "gcs")]
+    #[test]
+    fn gcs_builder_defaults() {
+        let b = ObjectStorage::gcs("bucket".to_string());
+        assert_eq!(b.bucket, "bucket");
+        assert_eq!(b.prefix, None);
+        assert!(b.gcs_credentials.is_none());
+        assert!(b.config_keys.is_empty());
+        assert_no_headers(&b);
+    }
+
+    #[cfg(feature = "azure")]
+    #[test]
+    fn azure_builder_defaults() {
+        let b = ObjectStorage::azure("acct".to_string(), "cont".to_string());
+        assert_eq!((b.account.as_str(), b.container.as_str()), ("acct", "cont"));
+        assert_eq!(b.prefix, None);
+        assert!(b.azure_credentials.is_none());
+        assert!(b.config_keys.is_empty());
+        assert_no_headers(&b);
+    }
+
+    #[cfg(feature = "http")]
+    #[test]
+    fn http_builder_defaults() {
+        let url = Url::parse("https://example.org/data/").unwrap();
+        let b = ObjectStorage::http(url.clone());
+        assert_eq!(b.url, Some(url));
+        assert_eq!(b.prefix, None);
+        assert!(b.config_keys.is_empty());
+        assert_no_headers(&b);
+    }
 
     #[cfg(feature = "s3")]
     #[test]

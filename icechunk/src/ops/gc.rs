@@ -229,7 +229,7 @@ impl GarbageCollectBuilder {
         self
     }
 
-    /// Default: no retries.
+    /// Default: `RepoUpdateRetryConfig::default()`, 100 tries with 50 ms to 30 s backoff.
     pub fn repo_update_retries(mut self, value: RepoUpdateRetryConfig) -> Self {
         self.repo_update_retries = Some(value);
         self
@@ -274,7 +274,7 @@ impl GarbageCollectBuilder {
 
     /// How many id prefixes GC lists concurrently, defaulting to a value
     /// derived from the machine's cores.
-    pub fn list_concurrency(&self) -> NonZeroU16 {
+    pub(crate) fn list_concurrency(&self) -> NonZeroU16 {
         self.max_concurrent_listings
             .unwrap_or_else(storage::listing::default_list_concurrency)
     }
@@ -293,7 +293,7 @@ impl GarbageCollectBuilder {
         list.max(walk).max(delete)
     }
 
-    pub fn action_needed(&self) -> bool {
+    pub(crate) fn action_needed(&self) -> bool {
         [
             &self.dangling_chunks,
             &self.dangling_manifests,
@@ -305,11 +305,11 @@ impl GarbageCollectBuilder {
         .any(|action| action != &Action::Keep)
     }
 
-    pub fn deletes_chunks(&self) -> bool {
+    pub(crate) fn deletes_chunks(&self) -> bool {
         self.dangling_chunks != Action::Keep
     }
 
-    pub fn deletes_manifests(&self) -> bool {
+    pub(crate) fn deletes_manifests(&self) -> bool {
         self.dangling_manifests != Action::Keep
     }
 
@@ -317,11 +317,11 @@ impl GarbageCollectBuilder {
         self.dangling_attributes != Action::Keep
     }
 
-    pub fn deletes_transaction_logs(&self) -> bool {
+    pub(crate) fn deletes_transaction_logs(&self) -> bool {
         self.dangling_transaction_logs != Action::Keep
     }
 
-    pub fn deletes_snapshots(&self) -> bool {
+    pub(crate) fn deletes_snapshots(&self) -> bool {
         self.dangling_snapshots != Action::Keep
     }
 
@@ -445,7 +445,7 @@ impl ManifestConsumer for RetainedChunks {
 }
 
 #[instrument(skip_all)]
-pub async fn find_retained(
+pub(crate) async fn find_retained(
     asset_manager: Arc<AssetManager>,
     config: &GarbageCollectBuilder,
     snaps: impl Stream<Item = RepositoryResult<Arc<Snapshot>>>,
@@ -831,7 +831,7 @@ async fn delete_snapshots_from_repo_info(
 }
 
 #[instrument(skip(asset_manager, config, keep_ids), fields(keep_ids.len = keep_ids.len()))]
-pub async fn gc_chunks(
+pub(crate) async fn gc_chunks(
     asset_manager: &AssetManager,
     config: &GarbageCollectBuilder,
     keep_ids: &ChunkIdSet,
@@ -851,7 +851,7 @@ pub async fn gc_chunks(
 }
 
 #[instrument(skip(asset_manager, config, keep_ids), fields(keep_ids.len = keep_ids.len()))]
-pub async fn gc_manifests(
+pub(crate) async fn gc_manifests(
     asset_manager: &AssetManager,
     config: &GarbageCollectBuilder,
     keep_ids: &HashSet<ManifestId>,
@@ -879,7 +879,7 @@ pub async fn gc_manifests(
 
 /// `snapshots` are the delete candidates
 #[instrument(skip(asset_manager, config, keep_ids, snapshots), fields(keep_ids.len = keep_ids.len()))]
-pub async fn gc_snapshots(
+pub(crate) async fn gc_snapshots(
     asset_manager: &AssetManager,
     config: &GarbageCollectBuilder,
     keep_ids: &HashSet<SnapshotId>,
@@ -905,7 +905,7 @@ pub async fn gc_snapshots(
 }
 
 #[instrument(skip(asset_manager, config, keep_ids), fields(keep_ids.len = keep_ids.len()))]
-pub async fn gc_transaction_logs(
+pub(crate) async fn gc_transaction_logs(
     asset_manager: &AssetManager,
     config: &GarbageCollectBuilder,
     keep_ids: &HashSet<SnapshotId>,

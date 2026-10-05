@@ -582,8 +582,8 @@ impl<F: Flavor> fmt::Debug for S3StorageBuilder<F> {
             .field("bucket", &self.bucket)
             .field("prefix", &self.prefix)
             .field("can_write", &self.can_write)
-            .field("read_headers", &self.read_headers)
-            .field("write_headers", &self.write_headers)
+            .field("read_headers", &self.read_headers.len())
+            .field("write_headers", &self.write_headers.len())
             .field("legacy_rooted_keys", &self.legacy_rooted_keys)
             .field("namespace", &self.namespace)
             .field("account_id", &self.account_id)
@@ -2018,6 +2018,8 @@ mod tests {
         assert!(b.can_write);
         assert!(b.read_headers.is_empty() && b.write_headers.is_empty());
         assert_eq!(b.legacy_rooted_keys, None);
+        let b = S3Storage::tigris(S3Options::default(), "b".to_string());
+        assert!(!b.weak_consistency);
     }
 
     #[test]

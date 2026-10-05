@@ -355,6 +355,7 @@ impl MigrateBuilder {
         self
     }
 
+    /// Run the migration.
     pub async fn execute(self) -> MigrationResult<()> {
         let MigrateBuilder {
             repo,
