@@ -30,7 +30,7 @@ use tracing::{Instrument as _, debug, error, instrument, trace, warn};
 
 use crate::{
     Storage,
-    asset_manager::{AssetManager, AssetManagerOptions, array_label},
+    asset_manager::{AssetManager, array_label},
     config::{Credentials, ManifestPreloadCondition, RepositoryConfig},
     diff::{Diff, DiffBuilder},
     display::AncestryGraph,
@@ -307,13 +307,15 @@ impl Repository {
 
         let after_v1 = async move {
             let temp_asset_manager = Arc::new(
-                AssetManager::new(
+                AssetManager::builder(
                     Arc::clone(&storage),
                     settings,
                     SpecVersionBin::current(),
-                    // compression level does not matter for a reader
-                    &AssetManagerOptions::no_cache().with_compression_level(1),
                 )
+                // compression level does not matter for a reader
+                .no_cache()
+                .compression_level(1)
+                .execute()
                 .with_attribution(attribution),
             );
 
@@ -411,13 +413,15 @@ impl Repository {
                 .inject()?
                 .map(|config| (config, storage::VersionInfo::for_creation()))),
             Some(DetectedSpecVersion::V1) => {
-                let am = AssetManager::new(
+                let am = AssetManager::builder(
                     Arc::clone(&storage),
                     settings,
                     SpecVersionBin::V1,
-                    // compression level does not matter for a reader
-                    &AssetManagerOptions::no_cache().with_compression_level(1),
-                );
+                )
+                // compression level does not matter for a reader
+                .no_cache()
+                .compression_level(1)
+                .execute();
                 am.fetch_config().await
             }
             None => {
@@ -656,14 +660,12 @@ impl Repository {
     ) -> RepositoryResult<storage::VersionInfo> {
         raise_if_cant_write(storage.as_ref(), "Cannot save configuration").await?;
         let settings = storage.default_settings().await.inject()?;
-        let am = AssetManager::new(
-            storage,
-            settings,
-            SpecVersionBin::current(),
+        let am = AssetManager::builder(storage, settings, SpecVersionBin::current())
             // compression level does not matter for a reader
-            &AssetManagerOptions::no_cache().with_compression_level(1),
-        )
-        .with_attribution(attribution);
+            .no_cache()
+            .compression_level(1)
+            .execute()
+            .with_attribution(attribution);
         let backup_path = if previous_version.is_create() {
             None
         } else {

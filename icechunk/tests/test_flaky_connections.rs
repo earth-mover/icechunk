@@ -16,7 +16,7 @@ use bytes::Bytes;
 use futures::TryStreamExt as _;
 use icechunk::{
     Storage,
-    asset_manager::{AssetManager, AssetManagerOptions},
+    asset_manager::AssetManager,
     config::{S3Credentials, S3Options, S3StaticCredentials},
     format::{ChunkId, format_constants::SpecVersionBin},
     storage::{
@@ -108,14 +108,15 @@ fn create_test_manager(storage: Arc<S3Storage>) -> AssetManager {
     let mut settings = icechunk::storage::Settings::default();
     settings.retries = Some(retries);
 
-    AssetManager::new(
+    AssetManager::builder(
         storage as Arc<dyn Storage + Send + Sync>,
         settings,
         SpecVersionBin::default(),
-        &AssetManagerOptions::no_cache()
-            .with_compression_level(1)
-            .with_max_concurrent_requests(100),
     )
+    .no_cache()
+    .compression_level(1)
+    .max_concurrent_requests(100)
+    .execute()
 }
 
 /// Write a test chunk and verify a clean read works

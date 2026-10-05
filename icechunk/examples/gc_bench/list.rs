@@ -15,7 +15,7 @@ use std::{
 use futures::{StreamExt as _, stream::BoxStream};
 use icechunk::{
     Storage,
-    asset_manager::{AssetManager, AssetManagerOptions},
+    asset_manager::AssetManager,
     format::format_constants::SpecVersionBin,
     repository::RepositoryResult,
     storage::{
@@ -203,14 +203,12 @@ async fn run_asset_manager(
     let concurrency =
         NonZeroU16::new(u16::try_from(args.streams.max(1)).unwrap_or(u16::MAX))
             .unwrap_or(NonZeroU16::MIN);
-    let am = AssetManager::new(
-        Arc::clone(backend),
-        settings.clone(),
-        SpecVersionBin::V2,
-        &AssetManagerOptions::no_cache()
-            .with_compression_level(1)
-            .with_max_concurrent_requests(100),
-    );
+    let am =
+        AssetManager::builder(Arc::clone(backend), settings.clone(), SpecVersionBin::V2)
+            .no_cache()
+            .compression_level(1)
+            .max_concurrent_requests(100)
+            .execute();
     let run = Arc::new(TaskRun::default());
     let timeline = Arc::new(Mutex::new(Vec::new()));
 

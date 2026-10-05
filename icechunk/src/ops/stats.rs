@@ -220,21 +220,22 @@ impl ChunkStorageStatsBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        asset_manager::AssetManagerOptions, format::format_constants::SpecVersionBin,
-    };
+    use crate::format::format_constants::SpecVersionBin;
 
     // defaults and method wiring; the asset manager is never touched
     #[tokio::test]
     async fn chunk_storage_stats_builder_methods_set_fields()
     -> Result<(), Box<dyn std::error::Error>> {
         let storage = crate::storage::new_in_memory_storage().await?;
-        let am = Arc::new(AssetManager::new(
-            storage,
-            crate::storage::Settings::default(),
-            SpecVersionBin::current(),
-            &AssetManagerOptions::no_cache(),
-        ));
+        let am = Arc::new(
+            AssetManager::builder(
+                storage,
+                crate::storage::Settings::default(),
+                SpecVersionBin::current(),
+            )
+            .no_cache()
+            .execute(),
+        );
         let b = repo_chunks_storage(Arc::clone(&am));
         assert_eq!(b.walk, ManifestWalkBudget::default());
         let b = b

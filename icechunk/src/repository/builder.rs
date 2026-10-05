@@ -14,7 +14,7 @@ use tracing::{Instrument as _, debug, instrument, trace};
 
 use crate::{
     Storage,
-    asset_manager::{AssetManager, AssetManagerOptions},
+    asset_manager::AssetManager,
     change_set::{ChangeSet, transaction_log_from_change_set},
     config::{Credentials, RepositoryConfig},
     format::{
@@ -321,16 +321,16 @@ async fn create(
     let spec_version = spec_version.unwrap_or_default();
 
     let asset_manager = Arc::new(
-        AssetManager::new(
+        AssetManager::builder(
             Arc::clone(&storage),
             storage_settings.clone(),
             spec_version,
-            &AssetManagerOptions::default()
-                .with_caching(*config.caching())
-                .with_compression_level(config.compression().level())
-                .with_max_concurrent_requests(config.max_concurrent_requests())
-                .with_max_concurrent_decodes(config.max_concurrent_decodes()),
         )
+        .caching(*config.caching())
+        .compression_level(config.compression().level())
+        .max_concurrent_requests(config.max_concurrent_requests())
+        .max_concurrent_decodes(config.max_concurrent_decodes())
+        .execute()
         .with_attribution(attribution.clone()),
     );
 
@@ -478,13 +478,15 @@ async fn open(
     // result is ignored (config lives in the repo info object instead).
     // Note: for V2+ repos, fetch_spec_version already fetches the RepoInfo
     // internally, so we reuse it to avoid a redundant round-trip.
-    let temp_am = AssetManager::new(
+    let temp_am = AssetManager::builder(
         Arc::clone(&storage),
         settings.clone(),
         SpecVersionBin::current(),
-        // compression level does not matter for a reader
-        &AssetManagerOptions::no_cache().with_compression_level(1),
     )
+    // compression level does not matter for a reader
+    .no_cache()
+    .compression_level(1)
+    .execute()
     .with_attribution(attribution.clone());
 
     let storage_c = Arc::clone(&storage);
@@ -545,16 +547,16 @@ async fn open(
         RepositoryConfig { storage: Some(storage_settings.clone()), ..merged_config };
 
     let asset_manager = Arc::new(
-        AssetManager::new(
+        AssetManager::builder(
             Arc::clone(&storage),
             storage_settings.clone(),
             spec_version,
-            &AssetManagerOptions::default()
-                .with_caching(*final_config.caching())
-                .with_compression_level(final_config.compression().level())
-                .with_max_concurrent_requests(final_config.max_concurrent_requests())
-                .with_max_concurrent_decodes(final_config.max_concurrent_decodes()),
         )
+        .caching(*final_config.caching())
+        .compression_level(final_config.compression().level())
+        .max_concurrent_requests(final_config.max_concurrent_requests())
+        .max_concurrent_decodes(final_config.max_concurrent_decodes())
+        .execute()
         .with_attribution(attribution),
     );
 

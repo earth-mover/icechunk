@@ -944,7 +944,6 @@ mod tests {
     #[cfg(not(feature = "shuttle"))]
     use crate::{
         Storage,
-        asset_manager::AssetManagerOptions,
         format::{CHUNKS_FILE_PATH, SNAPSHOTS_FILE_PATH},
         ops::deleter::testing::{
             FailMode, wrapped_asset_manager, wrapped_asset_manager_listing,
@@ -1129,12 +1128,13 @@ mod tests {
     async fn test_builder() -> GarbageCollectBuilder {
         // the asset manager is never touched by these tests
         let storage = new_in_memory_storage().await.expect("in-memory storage");
-        let am = AssetManager::new(
+        let am = AssetManager::builder(
             storage,
             storage::Settings::default(),
             SpecVersionBin::current(),
-            &AssetManagerOptions::no_cache(),
-        );
+        )
+        .no_cache()
+        .execute();
         garbage_collect(Arc::new(am))
     }
 

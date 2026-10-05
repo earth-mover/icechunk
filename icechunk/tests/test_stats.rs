@@ -7,7 +7,7 @@ use bytes::Bytes;
 use chrono::Utc;
 use icechunk::{
     Repository, RepositoryConfig, Storage,
-    asset_manager::{AssetManager, AssetManagerOptions},
+    asset_manager::AssetManager,
     format::{
         ChunkIndices, Path,
         format_constants::SpecVersionBin,
@@ -91,12 +91,16 @@ async fn do_test_repo_chunks_storage(
     spec_version: SpecVersionBin,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let storage_settings = storage.default_settings().await?;
-    let asset_manager = Arc::new(AssetManager::new(
-        Arc::clone(&storage),
-        storage_settings.clone(),
-        spec_version,
-        &AssetManagerOptions::no_cache().with_compression_level(1),
-    ));
+    let asset_manager = Arc::new(
+        AssetManager::builder(
+            Arc::clone(&storage),
+            storage_settings.clone(),
+            spec_version,
+        )
+        .no_cache()
+        .compression_level(1)
+        .execute(),
+    );
 
     let mut config = RepositoryConfig::default();
     config.inline_chunk_threshold_bytes = Some(5);
@@ -258,12 +262,16 @@ async fn test_virtual_chunk_deduplication(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let storage = new_in_memory_storage().await?;
     let storage_settings = storage.default_settings().await?;
-    let asset_manager = Arc::new(AssetManager::new(
-        Arc::clone(&storage),
-        storage_settings.clone(),
-        spec_version,
-        &AssetManagerOptions::no_cache().with_compression_level(1),
-    ));
+    let asset_manager = Arc::new(
+        AssetManager::builder(
+            Arc::clone(&storage),
+            storage_settings.clone(),
+            spec_version,
+        )
+        .no_cache()
+        .compression_level(1)
+        .execute(),
+    );
 
     let mut config = RepositoryConfig::default();
     config.inline_chunk_threshold_bytes = Some(5);

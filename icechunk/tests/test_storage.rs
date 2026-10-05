@@ -12,7 +12,7 @@ use chrono::Utc;
 use futures::{StreamExt as _, TryStreamExt as _, stream};
 use icechunk::{
     ObjectStorage, Repository, RepositoryConfig, Storage,
-    asset_manager::{AssetManager, AssetManagerOptions},
+    asset_manager::AssetManager,
     config::{GcsCredentials, S3Credentials, S3Options, S3StaticCredentials},
     error::ICError,
     format::{
@@ -1136,13 +1136,13 @@ async fn test_write_config_on_empty(
     with_storage(Permission::Modify, |_, storage| async move {
         let storage_settings = with_storage_settings(&storage).await?;
 
-        let am = Arc::new(AssetManager::new(
-            storage,
-            storage_settings,
-            spec_version,
-            // compression level does not matter for a reader
-            &AssetManagerOptions::no_cache().with_compression_level(1),
-        ));
+        let am = Arc::new(
+            AssetManager::builder(storage, storage_settings, spec_version)
+                // compression level does not matter for a reader
+                .no_cache()
+                .compression_level(1)
+                .execute(),
+        );
         let config = RepositoryConfig::default();
         let Some(version) =
             am.try_update_config(&config, &VersionInfo::for_creation(), None).await?
@@ -1170,13 +1170,17 @@ async fn test_write_config_on_existing(
     #[case] spec_version: SpecVersionBin,
 ) -> Result<(), Box<dyn std::error::Error>> {
     with_storage(Permission::Modify, |_, storage| async move {
-        let am = Arc::new(AssetManager::new(
-            Arc::clone(&storage),
-            with_storage_settings(&storage).await?,
-            spec_version,
+        let am = Arc::new(
+            AssetManager::builder(
+                Arc::clone(&storage),
+                with_storage_settings(&storage).await?,
+                spec_version,
+            )
             // compression level does not matter for a reader
-            &AssetManagerOptions::no_cache().with_compression_level(1),
-        ));
+            .no_cache()
+            .compression_level(1)
+            .execute(),
+        );
         let config1 = RepositoryConfig::default();
         let Some(first_version) =
             am.try_update_config(&config1, &VersionInfo::for_creation(), None).await?
@@ -1208,13 +1212,13 @@ async fn test_write_config_fails_on_bad_version_when_non_existing(
     // FIXME: this test fails in MinIO but seems to work on S3
     let storage = new_in_memory_storage().await.unwrap();
     let storage_settings = storage.default_settings().await?;
-    let am = Arc::new(AssetManager::new(
-        storage,
-        storage_settings,
-        spec_version,
-        // compression level does not matter for a reader
-        &AssetManagerOptions::no_cache().with_compression_level(1),
-    ));
+    let am = Arc::new(
+        AssetManager::builder(storage, storage_settings, spec_version)
+            // compression level does not matter for a reader
+            .no_cache()
+            .compression_level(1)
+            .execute(),
+    );
     let config = RepositoryConfig::default();
     let err = am
         .try_update_config(
@@ -1240,13 +1244,13 @@ async fn test_write_config_fails_on_bad_version_when_existing(
 ) -> Result<(), Box<dyn std::error::Error>> {
     with_storage(Permission::Modify, |storage_type, storage| async move {
         let storage_settings = with_storage_settings(&storage).await?;
-        let am = Arc::new(AssetManager::new(
-            storage,
-            storage_settings,
-            spec_version,
-            // compression level does not matter for a reader
-            &AssetManagerOptions::no_cache().with_compression_level(1),
-        ));
+        let am = Arc::new(
+            AssetManager::builder(storage, storage_settings, spec_version)
+                // compression level does not matter for a reader
+                .no_cache()
+                .compression_level(1)
+                .execute(),
+        );
 
         let config1 = RepositoryConfig::default();
         let Some(version) =
@@ -1296,13 +1300,13 @@ async fn test_write_config_can_overwrite_with_unsafe_config(
         let mut storage_settings = with_storage_settings(&storage).await?;
         storage_settings.unsafe_use_conditional_update = Some(false);
         storage_settings.unsafe_use_conditional_create = Some(false);
-        let am = Arc::new(AssetManager::new(
-            storage,
-            storage_settings,
-            spec_version,
-            // compression level does not matter for a reader
-            &AssetManagerOptions::no_cache().with_compression_level(1),
-        ));
+        let am = Arc::new(
+            AssetManager::builder(storage, storage_settings, spec_version)
+                // compression level does not matter for a reader
+                .no_cache()
+                .compression_level(1)
+                .execute(),
+        );
 
         let config1 = RepositoryConfig::default();
         match am.try_update_config(&config1, &VersionInfo::for_creation(), None).await? {

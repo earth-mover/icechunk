@@ -432,18 +432,21 @@ mod tests {
 
     // `tokio_test` expands to nothing under shuttle, so only the async tests use these.
     #[cfg(not(feature = "shuttle"))]
-    use crate::{asset_manager::AssetManagerOptions, storage::new_in_memory_storage};
+    use crate::storage::new_in_memory_storage;
 
     #[cfg(not(feature = "shuttle"))]
     async fn test_asset_manager() -> Arc<AssetManager> {
         // the asset manager is never touched by these tests
         let storage = new_in_memory_storage().await.expect("in-memory storage");
-        Arc::new(AssetManager::new(
-            storage,
-            storage::Settings::default(),
-            SpecVersionBin::current(),
-            &AssetManagerOptions::no_cache(),
-        ))
+        Arc::new(
+            AssetManager::builder(
+                storage,
+                storage::Settings::default(),
+                SpecVersionBin::current(),
+            )
+            .no_cache()
+            .execute(),
+        )
     }
 
     #[tokio_test]

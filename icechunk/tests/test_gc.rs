@@ -8,7 +8,7 @@ use chrono::{DateTime, TimeDelta, Utc};
 use futures::{StreamExt as _, TryStreamExt as _};
 use icechunk::{
     Repository, RepositoryConfig, Storage,
-    asset_manager::{AssetManager, AssetManagerOptions},
+    asset_manager::AssetManager,
     config::{
         ManifestConfig, ManifestSplitCondition, ManifestSplitDim,
         ManifestSplitDimCondition, ManifestSplittingConfig,
@@ -421,12 +421,16 @@ async fn do_test_expire_and_garbage_collect(
 
     let expire_older_than = make_design_doc_repo(&mut repo).await?;
 
-    let asset_manager = Arc::new(AssetManager::new(
-        Arc::clone(&storage),
-        storage_settings.clone(),
-        SpecVersionBin::current(),
-        &AssetManagerOptions::no_cache().with_compression_level(1),
-    ));
+    let asset_manager = Arc::new(
+        AssetManager::builder(
+            Arc::clone(&storage),
+            storage_settings.clone(),
+            SpecVersionBin::current(),
+        )
+        .no_cache()
+        .compression_level(1)
+        .execute(),
+    );
 
     let result = expire(Arc::clone(&asset_manager), expire_older_than)
         .num_updates_per_repo_info_file(100)
@@ -467,12 +471,16 @@ async fn do_test_expire_and_garbage_collect(
     );
 
     let now = cutoff_after_all_listed(&repo).await?;
-    let asset_manager = Arc::new(AssetManager::new(
-        Arc::clone(&storage),
-        storage_settings.clone(),
-        SpecVersionBin::current(),
-        &AssetManagerOptions::no_cache().with_compression_level(1),
-    ));
+    let asset_manager = Arc::new(
+        AssetManager::builder(
+            Arc::clone(&storage),
+            storage_settings.clone(),
+            SpecVersionBin::current(),
+        )
+        .no_cache()
+        .compression_level(1)
+        .execute(),
+    );
 
     let summary = clean_all_before(Arc::clone(&asset_manager), now).execute().await?;
     // other expired snapshots are pointed by tags
@@ -516,12 +524,16 @@ async fn test_expire_and_garbage_collect_deleting_expired_refs()
 
     let expire_older_than = make_design_doc_repo(&mut repo).await?;
 
-    let asset_manager = Arc::new(AssetManager::new(
-        Arc::clone(&storage),
-        storage_settings.clone(),
-        SpecVersionBin::current(),
-        &AssetManagerOptions::no_cache().with_compression_level(1),
-    ));
+    let asset_manager = Arc::new(
+        AssetManager::builder(
+            Arc::clone(&storage),
+            storage_settings.clone(),
+            SpecVersionBin::current(),
+        )
+        .no_cache()
+        .compression_level(1)
+        .execute(),
+    );
 
     let result = expire(Arc::clone(&asset_manager), expire_older_than)
         // This is different compared to the previous test
@@ -585,12 +597,16 @@ async fn test_diff_complete_after_expire_and_gc() -> Result<(), Box<dyn std::err
     session.add_group(Path::try_from("/c").unwrap(), user_data.clone()).await?;
     session.commit("/c").execute().await?;
 
-    let asset_manager = Arc::new(AssetManager::new(
-        Arc::clone(&storage),
-        storage_settings.clone(),
-        SpecVersionBin::current(),
-        &AssetManagerOptions::no_cache().with_compression_level(1),
-    ));
+    let asset_manager = Arc::new(
+        AssetManager::builder(
+            Arc::clone(&storage),
+            storage_settings.clone(),
+            SpecVersionBin::current(),
+        )
+        .no_cache()
+        .compression_level(1)
+        .execute(),
+    );
     let result = expire(Arc::clone(&asset_manager), expire_older_than)
         .num_updates_per_repo_info_file(100)
         .execute()
@@ -656,12 +672,16 @@ async fn test_gc_deletes_only_unreferenced_expired_tx_logs()
     // main tip survives, becoming the boundary re-parented to root.
     commit_group(&repo, "main", "/c").await?;
 
-    let asset_manager = Arc::new(AssetManager::new(
-        Arc::clone(&storage),
-        storage_settings.clone(),
-        SpecVersionBin::current(),
-        &AssetManagerOptions::no_cache().with_compression_level(1),
-    ));
+    let asset_manager = Arc::new(
+        AssetManager::builder(
+            Arc::clone(&storage),
+            storage_settings.clone(),
+            SpecVersionBin::current(),
+        )
+        .no_cache()
+        .compression_level(1)
+        .execute(),
+    );
     let result = expire(Arc::clone(&asset_manager), expire_older_than)
         .expired_branches(ExpiredRefAction::Delete)
         .num_updates_per_repo_info_file(100)
@@ -1355,12 +1375,16 @@ async fn test_gc_reset_branch() -> Result<(), Box<dyn std::error::Error>> {
 
     let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
     let storage_settings = storage.default_settings().await?;
-    let asset_manager = Arc::new(AssetManager::new(
-        Arc::clone(&storage),
-        storage_settings,
-        SpecVersionBin::current(),
-        &AssetManagerOptions::no_cache().with_compression_level(1),
-    ));
+    let asset_manager = Arc::new(
+        AssetManager::builder(
+            Arc::clone(&storage),
+            storage_settings,
+            SpecVersionBin::current(),
+        )
+        .no_cache()
+        .compression_level(1)
+        .execute(),
+    );
     let repo = Repository::create(Arc::clone(&storage)).execute().await?;
 
     let mut session = repo.writable_session("main").await?;
@@ -1465,12 +1489,16 @@ async fn test_expire_deletes_branch_sharing_tip_with_main()
 
     let expire_older_than = Utc::now();
 
-    let asset_manager = Arc::new(AssetManager::new(
-        Arc::clone(&storage),
-        storage_settings.clone(),
-        SpecVersionBin::current(),
-        &AssetManagerOptions::no_cache().with_compression_level(1),
-    ));
+    let asset_manager = Arc::new(
+        AssetManager::builder(
+            Arc::clone(&storage),
+            storage_settings.clone(),
+            SpecVersionBin::current(),
+        )
+        .no_cache()
+        .compression_level(1)
+        .execute(),
+    );
 
     let result = expire(Arc::clone(&asset_manager), expire_older_than)
         .expired_branches(ExpiredRefAction::Delete)
