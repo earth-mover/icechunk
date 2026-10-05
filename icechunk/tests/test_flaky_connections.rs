@@ -15,7 +15,7 @@ use std::{num::NonZeroU16, sync::Arc, time::Duration};
 use bytes::Bytes;
 use futures::TryStreamExt as _;
 use icechunk::{
-    CreateOptions, Storage,
+    Storage,
     asset_manager::{AssetManager, AssetManagerOptions},
     config::{S3Credentials, S3Options, S3StaticCredentials},
     format::{ChunkId, format_constants::SpecVersionBin},
@@ -469,11 +469,11 @@ async fn conditional_put_repro(
             let mut config = icechunk::RepositoryConfig::default();
             config.storage = Some(settings);
             let result = icechunk::Repository::create(
+                Some(config),
                 storage,
-                CreateOptions::default()
-                    .with_config(config)
-                    .with_spec_version(SpecVersionBin::default())
-                    .with_check_clean_root(false),
+                std::collections::HashMap::new(),
+                Some(SpecVersionBin::default()),
+                false,
             )
             .await;
 

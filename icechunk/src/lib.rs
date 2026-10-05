@@ -60,7 +60,7 @@ pub mod strategies;
 pub mod virtual_chunks;
 
 pub use config::{ObjectStoreConfig, RepositoryConfig};
-pub use repository::{CreateOptions, OpenOptions, Repository};
+pub use repository::Repository;
 #[cfg(feature = "object-store-fs")]
 pub use storage::new_local_filesystem_storage;
 #[cfg(feature = "object-store-s3")]
@@ -78,12 +78,12 @@ pub(crate) mod test_utils {
     use rstest::rstest;
     use rstest_reuse::{self, *};
 
-    use std::sync::Arc;
+    use std::{collections::HashMap, sync::Arc};
 
     use bytes::Bytes;
 
     use crate::{
-        CreateOptions, Repository, Storage,
+        Repository, Storage,
         asset_manager::{AssetManager, AssetManagerOptions},
         format::Path,
         storage,
@@ -105,8 +105,11 @@ pub(crate) mod test_utils {
         backend: &Arc<dyn Storage + Send + Sync>,
     ) -> Result<Repository, Box<dyn std::error::Error>> {
         let repo = Repository::create(
+            None,
             Arc::clone(backend),
-            CreateOptions::default().with_spec_version(SpecVersionBin::V2),
+            HashMap::new(),
+            Some(SpecVersionBin::V2),
+            true,
         )
         .await?;
         for i in 0..5u32 {

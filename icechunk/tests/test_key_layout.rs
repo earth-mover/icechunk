@@ -5,13 +5,13 @@
 //! silently orphaned objects (delete used a different join than write). These
 //! tests verify the fix against local rustfs.
 
-use std::{panic::AssertUnwindSafe, sync::Arc};
+use std::{collections::HashMap, panic::AssertUnwindSafe, sync::Arc};
 
 use bytes::Bytes;
 use chrono::Utc;
 use futures::FutureExt as _;
 use icechunk::{
-    CreateOptions, OpenOptions, Repository, RepositoryConfig, Storage,
+    Repository, RepositoryConfig, Storage,
     config::{S3Credentials, S3Options, S3StaticCredentials},
     format::{
         ByteRange, ChunkIndices, Path, format_constants::SpecVersionBin,
@@ -119,8 +119,11 @@ async fn create_repo_with_one_chunk(
     // force chunks to be written as separate objects (not inlined)
     config.inline_chunk_threshold_bytes = Some(0);
     let repo = Repository::create(
+        Some(config),
         storage,
-        CreateOptions::default().with_config(config).with_spec_version(spec_version),
+        HashMap::new(),
+        Some(spec_version),
+        true,
     )
     .await?;
     write_one_chunk(&repo, value).await?;
@@ -211,7 +214,7 @@ async fn empty_prefix_roundtrips() -> Result<(), Box<dyn std::error::Error>> {
 
         // Re-open with a fresh storage (forces the detection probe to run again).
         let repo =
-            Repository::open(root_storage(&bucket, None, false), OpenOptions::default())
+            Repository::open(None, root_storage(&bucket, None, false), HashMap::new())
                 .await?;
         assert_eq!(read_chunk0(&repo).await?, 7);
     }
@@ -234,9 +237,8 @@ async fn empty_prefix_roundtrips_on_normalizing_store()
     .await?;
 
     // A fresh storage forces the detection probe to run on reopen.
-    let repo =
-        Repository::open(root_storage(&bucket, None, false), OpenOptions::default())
-            .await?;
+    let repo = Repository::open(None, root_storage(&bucket, None, false), HashMap::new())
+        .await?;
     assert_eq!(read_chunk0(&repo).await?, 13);
     Ok(())
 }
@@ -253,8 +255,11 @@ async fn empty_prefix_create_refuses_over_existing_repo()
             .await?;
 
         let err = Repository::create(
+            None,
             root_storage(&bucket, Some(""), false),
-            CreateOptions::default().with_spec_version(new),
+            HashMap::new(),
+            Some(new),
+            true,
         )
         .await
         .unwrap_err();
@@ -277,7 +282,7 @@ async fn empty_prefix_create_refuses_over_existing_repo()
 async fn empty_prefix_nonexistent_repo() -> Result<(), Box<dyn std::error::Error>> {
     let bucket = fresh_bucket().await;
     let err =
-        Repository::open(root_storage(&bucket, Some(""), false), OpenOptions::default())
+        Repository::open(None, root_storage(&bucket, Some(""), false), HashMap::new())
             .await
             .unwrap_err();
     assert!(
@@ -363,11 +368,11 @@ async fn rooted_roundtrip_body(
     let mut config = RepositoryConfig::default();
     config.inline_chunk_threshold_bytes = Some(0);
     let repo = Repository::create(
+        Some(config),
         store.rooted_storage(true)?,
-        CreateOptions::default()
-            .with_config(config)
-            .with_spec_version(SpecVersionBin::V2)
-            .with_check_clean_root(false),
+        HashMap::new(),
+        Some(SpecVersionBin::V2),
+        false,
     )
     .await?;
     write_one_chunk(&repo, 42).await?;
@@ -375,13 +380,13 @@ async fn rooted_roundtrip_body(
     // Reopen with auto-detection (a fresh storage forces the probe). On a
     // leading-slash-preserving store this resolves to LegacyRoot and reads back.
     let repo =
-        Repository::open(store.rooted_storage(false)?, OpenOptions::default()).await?;
+        Repository::open(None, store.rooted_storage(false)?, HashMap::new()).await?;
     assert_eq!(read_chunk0(&repo).await?, 42);
 
     // Append through the reopened repo, then reopen + read again (write path).
     write_one_chunk(&repo, 7).await?;
     let repo =
-        Repository::open(store.rooted_storage(false)?, OpenOptions::default()).await?;
+        Repository::open(None, store.rooted_storage(false)?, HashMap::new()).await?;
     assert_eq!(read_chunk0(&repo).await?, 7);
 
     // GC must run cleanly under the detected (rooted) layout.

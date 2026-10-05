@@ -11,6 +11,7 @@
 #![allow(clippy::unwrap_used)]
 
 use std::{
+    collections::HashMap,
     env::{self},
     sync::Arc,
     time::Instant,
@@ -19,7 +20,7 @@ use std::{
 use bytes::Bytes;
 use futures::{StreamExt as _, stream::FuturesUnordered};
 use icechunk::{
-    CreateOptions, Repository, RepositoryConfig,
+    Repository, RepositoryConfig,
     config::CompressionConfig,
     format::{
         ChunkId, ChunkIndices, Path,
@@ -49,7 +50,7 @@ async fn mk_repo(
     let mut config = RepositoryConfig::default();
     config.compression = Some(compression);
     let repo =
-        Repository::open_or_create(storage, CreateOptions::default().with_config(config))
+        Repository::open_or_create(Some(config), storage, HashMap::new(), None, true)
             .await?;
     Ok(repo)
 }

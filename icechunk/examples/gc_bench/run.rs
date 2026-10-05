@@ -1,6 +1,7 @@
 //! The `gc` and `stats` subcommands.
 
 use std::{
+    collections::HashMap,
     num::{NonZeroU16, NonZeroUsize},
     sync::Arc,
     time::Instant,
@@ -8,7 +9,7 @@ use std::{
 
 use chrono::{TimeDelta, Utc};
 use icechunk::{
-    OpenOptions, Repository, Storage,
+    Repository, Storage,
     asset_manager::AssetManager,
     ops::{
         gc::{GCConfig, garbage_collect},
@@ -42,7 +43,7 @@ async fn open(name: &str, net: &NetArgs) -> Result<Opened, BoxError> {
     let metering = Arc::new(MeteringStorage::new(backend));
     let as_storage: Arc<dyn Storage + Send + Sync> =
         Arc::<MeteringStorage>::clone(&metering);
-    let repo = Repository::open(as_storage, OpenOptions::default()).await?;
+    let repo = Repository::open(None, as_storage, HashMap::new()).await?;
     Ok(Opened {
         am: Arc::clone(repo.asset_manager()),
         metering,

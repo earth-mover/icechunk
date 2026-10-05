@@ -1982,9 +1982,11 @@ impl Session {
     /// policy, configured to their needs:
     ///
     /// ```ignore
-    /// let mut solver = BasicConflictSolver::default();
-    /// solver.on_chunk_conflict = VersionSelection::UseTheirs;
-    /// session.commit("wrote a chunk").rebase(&solver, 5).execute().await?;
+    /// let solver = BasicConflictSolver {
+    ///    on_chunk_conflict: VersionSelection::UseOurs,
+    ///    ..Default::default()
+    /// };
+    /// repo2.rebase(&solver, "main").await?
     /// ```
     ///
     /// When there are more than one commit between the parent snapshot and the tip of
@@ -3549,12 +3551,13 @@ fn aggregate_extents<'a, T: std::fmt::Debug, E>(
 #[cfg(test)]
 mod tests {
     use std::{
+        collections::HashMap,
         error::Error,
         sync::atomic::{AtomicU16, Ordering},
     };
 
     use crate::{
-        CreateOptions, ObjectStorage, OpenOptions, Repository,
+        ObjectStorage, Repository,
         asset_manager::AssetManagerOptions,
         config::{ManifestConfig, ManifestSplitCondition},
         conflicts::{
@@ -3603,12 +3606,9 @@ mod tests {
     async fn create_memory_store_repository(spec_version: SpecVersionBin) -> Repository {
         let storage =
             new_in_memory_storage().await.expect("failed to create in-memory store");
-        Repository::create(
-            storage,
-            CreateOptions::default().with_spec_version(spec_version),
-        )
-        .await
-        .unwrap()
+        Repository::create(None, storage, HashMap::new(), Some(spec_version), true)
+            .await
+            .unwrap()
     }
 
     #[proptest(async = "tokio")]
@@ -3898,10 +3898,11 @@ mod tests {
             ..Default::default()
         };
         let repo = Repository::create(
+            Some(config),
             backend,
-            CreateOptions::default()
-                .with_config(config)
-                .with_spec_version(SpecVersionBin::V2),
+            HashMap::new(),
+            Some(SpecVersionBin::V2),
+            true,
         )
         .await?;
         let (array_path, bytes, snapshot) = write_array_and_commit(&repo, None).await?;
@@ -3985,14 +3986,15 @@ mod tests {
         };
 
         let repo = Repository::create(
+            Some(RepositoryConfig {
+                inline_chunk_threshold_bytes: Some(0),
+                manifest: Some(man_config),
+                ..Default::default()
+            }),
             storage,
-            CreateOptions::default()
-                .with_config(RepositoryConfig {
-                    inline_chunk_threshold_bytes: Some(0),
-                    manifest: Some(man_config),
-                    ..Default::default()
-                })
-                .with_spec_version(spec_version),
+            HashMap::new(),
+            Some(spec_version),
+            true,
         )
         .await?;
         let mut session = repo.writable_session("main").await?;
@@ -4225,7 +4227,7 @@ mod tests {
         )?;
         asset_manager.create_repo_info(Arc::new(repo_info)).await?;
 
-        let repo = Repository::open(storage, OpenOptions::default()).await?;
+        let repo = Repository::open(None, storage, HashMap::new()).await?;
         let mut ds = repo.writable_session("main").await?;
 
         // retrieve the old array node
@@ -4417,8 +4419,11 @@ mod tests {
             ..Default::default()
         };
         let repository = Repository::create(
+            Some(config),
             storage,
-            CreateOptions::default().with_config(config).with_spec_version(spec_version),
+            HashMap::new(),
+            Some(spec_version),
+            true,
         )
         .await?;
 
@@ -4884,11 +4889,9 @@ mod tests {
         #[case] spec_version: SpecVersionBin,
     ) -> Result<(), Box<dyn Error>> {
         let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
-        let repo = Repository::create(
-            storage,
-            CreateOptions::default().with_spec_version(spec_version),
-        )
-        .await?;
+        let repo =
+            Repository::create(None, storage, HashMap::new(), Some(spec_version), true)
+                .await?;
         let mut ds = repo.writable_session("main").await?;
         let def = Bytes::copy_from_slice(b"");
 
@@ -4963,8 +4966,11 @@ mod tests {
         let storage = Arc::clone(&in_mem_storage);
         let storage: Arc<dyn Storage + Send + Sync> = storage;
         let repo = Repository::create(
+            None,
             Arc::clone(&storage),
-            CreateOptions::default().with_spec_version(spec_version),
+            HashMap::new(),
+            Some(spec_version),
+            true,
         )
         .await?;
 
@@ -5787,8 +5793,11 @@ mod tests {
         let storage = Arc::clone(&in_mem_storage);
         let storage: Arc<dyn Storage + Send + Sync> = storage;
         let repo = Repository::create(
+            None,
             Arc::clone(&storage),
-            CreateOptions::default().with_spec_version(SpecVersionBin::current()),
+            HashMap::new(),
+            Some(SpecVersionBin::current()),
+            true,
         )
         .await?;
         let mut session = repo.writable_session("main").await?;
@@ -5908,8 +5917,11 @@ mod tests {
         let storage = Arc::clone(&in_mem_storage);
         let storage: Arc<dyn Storage + Send + Sync> = storage;
         let repo = Repository::create(
+            None,
             Arc::clone(&storage),
-            CreateOptions::default().with_spec_version(SpecVersionBin::current()),
+            HashMap::new(),
+            Some(SpecVersionBin::current()),
+            true,
         )
         .await?;
         let mut session = repo.writable_session("main").await?;
@@ -5947,8 +5959,11 @@ mod tests {
         let storage = Arc::clone(&in_mem_storage);
         let storage: Arc<dyn Storage + Send + Sync> = storage;
         let repo = Repository::create(
+            None,
             Arc::clone(&storage),
-            CreateOptions::default().with_spec_version(spec_version),
+            HashMap::new(),
+            Some(spec_version),
+            true,
         )
         .await?;
         let mut ds = repo.writable_session("main").await?;
@@ -6014,8 +6029,11 @@ mod tests {
     ) -> Result<(), Box<dyn Error>> {
         let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
         let repo = Repository::create(
+            None,
             Arc::clone(&storage),
-            CreateOptions::default().with_spec_version(spec_version),
+            HashMap::new(),
+            Some(spec_version),
+            true,
         )
         .await?;
         let mut ds = repo.writable_session("main").await?;
@@ -6079,8 +6097,11 @@ mod tests {
         let storage = Arc::clone(&in_mem_storage);
         let storage: Arc<dyn Storage + Send + Sync> = storage;
         let repo = Repository::create(
+            None,
             Arc::clone(&storage),
-            CreateOptions::default().with_spec_version(spec_version),
+            HashMap::new(),
+            Some(spec_version),
+            true,
         )
         .await?;
         let mut session = repo.writable_session("main").await?;
@@ -6131,8 +6152,11 @@ mod tests {
     ) -> Result<(), Box<dyn Error>> {
         let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
         let repo = Repository::create(
+            None,
             Arc::clone(&storage),
-            CreateOptions::default().with_spec_version(spec_version),
+            HashMap::new(),
+            Some(spec_version),
+            true,
         )
         .await?;
         let mut session = repo.writable_session("main").await?;

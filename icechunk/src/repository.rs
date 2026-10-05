@@ -200,93 +200,15 @@ pub struct Repository {
     default_commit_metadata: SnapshotProperties,
 }
 
-/// Inputs for opening a repository that exists.
-#[derive(Debug, Clone, Default)]
-#[non_exhaustive]
-pub struct OpenOptions {
-    /// Values that replace the persisted config's values. `None` uses the persisted config.
-    pub config: Option<RepositoryConfig>,
-    /// Virtual chunk containers this repository may read, with their credentials.
-    pub authorize_virtual_chunk_access: HashMap<String, Option<Credentials>>,
-}
-
-impl OpenOptions {
-    pub fn with_config(mut self, value: RepositoryConfig) -> Self {
-        self.config = Some(value);
-        self
-    }
-
-    pub fn with_authorize_virtual_chunk_access(
-        mut self,
-        value: HashMap<String, Option<Credentials>>,
-    ) -> Self {
-        self.authorize_virtual_chunk_access = value;
-        self
-    }
-}
-
-/// Inputs for creating a repository.
-#[derive(Debug, Clone)]
-#[non_exhaustive]
-pub struct CreateOptions {
-    pub config: Option<RepositoryConfig>,
-    pub authorize_virtual_chunk_access: HashMap<String, Option<Credentials>>,
-    /// Spec version of the created repository. `None` is the default version.
-    /// `open_or_create` ignores it when the repository exists.
-    pub spec_version: Option<SpecVersionBin>,
-    /// Refuse to create when the parent prefix holds other objects.
-    pub check_clean_root: bool,
-}
-
-impl Default for CreateOptions {
-    fn default() -> Self {
-        Self {
-            config: None,
-            authorize_virtual_chunk_access: HashMap::new(),
-            spec_version: None,
-            check_clean_root: true,
-        }
-    }
-}
-
-impl CreateOptions {
-    pub fn with_config(mut self, value: RepositoryConfig) -> Self {
-        self.config = Some(value);
-        self
-    }
-
-    pub fn with_authorize_virtual_chunk_access(
-        mut self,
-        value: HashMap<String, Option<Credentials>>,
-    ) -> Self {
-        self.authorize_virtual_chunk_access = value;
-        self
-    }
-
-    pub fn with_spec_version(mut self, value: SpecVersionBin) -> Self {
-        self.spec_version = Some(value);
-        self
-    }
-
-    pub fn with_check_clean_root(mut self, value: bool) -> Self {
-        self.check_clean_root = value;
-        self
-    }
-}
-
 impl Repository {
     #[instrument(skip_all)]
     pub async fn create(
+        config: Option<RepositoryConfig>,
         storage: Arc<dyn Storage + Send + Sync>,
-        options: CreateOptions,
+        authorize_virtual_chunk_access: HashMap<String, Option<Credentials>>,
+        spec_version: Option<SpecVersionBin>,
+        check_clean_root: bool,
     ) -> RepositoryResult<Self> {
-        let CreateOptions {
-            config,
-            authorize_virtual_chunk_access,
-            spec_version,
-            check_clean_root,
-            ..
-        } = options;
         debug!("Creating Repository");
         raise_if_cant_write(storage.as_ref(), "Cannot create repository").await?;
         if storage.can_create_repository().await.inject()?
@@ -432,10 +354,10 @@ impl Repository {
 
     #[instrument(skip_all)]
     pub async fn open(
+        config: Option<RepositoryConfig>,
         storage: Arc<dyn Storage + Send + Sync>,
-        options: OpenOptions,
+        authorize_virtual_chunk_access: HashMap<String, Option<Credentials>>,
     ) -> RepositoryResult<Self> {
-        let OpenOptions { config, authorize_virtual_chunk_access, .. } = options;
         debug!("Opening Repository");
 
         // Merge user-provided storage settings with backend defaults upfront so
@@ -540,23 +462,29 @@ impl Repository {
     }
 
     pub async fn open_or_create(
+        config: Option<RepositoryConfig>,
         storage: Arc<dyn Storage + Send + Sync>,
-        options: CreateOptions,
+        authorize_virtual_chunk_access: HashMap<String, Option<Credentials>>,
+        create_version: Option<SpecVersionBin>,
+        check_clean_root: bool,
     ) -> RepositoryResult<Self> {
         let storage_defaults = storage.default_settings().await.inject()?;
-        let settings = match options.config.as_ref().and_then(|c| c.storage().cloned()) {
+        let settings = match config.as_ref().and_then(|c| c.storage().cloned()) {
             Some(user_storage) => storage_defaults.merge(user_storage),
             None => storage_defaults,
         };
         if Self::fetch_spec_version(Arc::clone(&storage), Some(settings)).await?.is_some()
         {
-            let open = OpenOptions {
-                config: options.config,
-                authorize_virtual_chunk_access: options.authorize_virtual_chunk_access,
-            };
-            Self::open(storage, open).await
+            Self::open(config, storage, authorize_virtual_chunk_access).await
         } else {
-            Self::create(storage, options).await
+            Self::create(
+                config,
+                storage,
+                authorize_virtual_chunk_access,
+                create_version,
+                check_clean_root,
+            )
+            .await
         }
     }
 
@@ -2399,8 +2327,11 @@ mod tests {
         let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
 
         let repo = Repository::create(
+            None,
             Arc::clone(&storage),
-            CreateOptions::default().with_spec_version(spec_version),
+            HashMap::new(),
+            Some(spec_version),
+            true,
         )
         .await?;
 
@@ -2413,16 +2344,17 @@ mod tests {
         assert!(Repository::fetch_config(Arc::clone(&storage)).await?.is_none());
 
         // reopening with default config still works
-        let repo = Repository::open(Arc::clone(&storage), OpenOptions::default()).await?;
+        let repo = Repository::open(None, Arc::clone(&storage), HashMap::new()).await?;
         assert_eq!(repo.config(), &expected_default);
 
         // reload the repo changing config via client override
         let repo = Repository::open(
-            Arc::clone(&storage),
-            OpenOptions::default().with_config(RepositoryConfig {
+            Some(RepositoryConfig {
                 inline_chunk_threshold_bytes: Some(42),
                 ..Default::default()
             }),
+            Arc::clone(&storage),
+            HashMap::new(),
         )
         .await?;
 
@@ -2443,7 +2375,7 @@ mod tests {
         );
 
         // verify loading again gets the value from persistent config in repo info
-        let repo = Repository::open(Arc::clone(&storage), OpenOptions::default()).await?;
+        let repo = Repository::open(None, Arc::clone(&storage), HashMap::new()).await?;
         assert_eq!(repo.config().inline_chunk_threshold_bytes(), 42);
 
         // creating a repo we can override certain config atts:
@@ -2457,8 +2389,11 @@ mod tests {
             ..RepositoryConfig::default()
         };
         let repo = Repository::create(
+            Some(config),
             Arc::clone(&storage),
-            CreateOptions::default().with_config(config).with_spec_version(spec_version),
+            HashMap::new(),
+            Some(spec_version),
+            true,
         )
         .await?;
         assert_eq!(repo.config().inline_chunk_threshold_bytes(), 20);
@@ -2492,8 +2427,11 @@ mod tests {
         let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
 
         let repo = Repository::create(
+            None,
             Arc::clone(&storage),
-            CreateOptions::default().with_spec_version(spec_version),
+            HashMap::new(),
+            Some(spec_version),
+            true,
         )
         .await?;
 
@@ -2558,8 +2496,11 @@ mod tests {
     -> Result<(), Box<dyn Error>> {
         let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
         let repo = Repository::create(
+            None,
             Arc::clone(&storage),
-            CreateOptions::default().with_spec_version(SpecVersionBin::V2),
+            HashMap::new(),
+            Some(SpecVersionBin::V2),
+            true,
         )
         .await?;
 
@@ -2662,8 +2603,11 @@ mod tests {
             ..RepositoryConfig::default()
         };
         let repository = Repository::create(
+            Some(config),
             storage,
-            CreateOptions::default().with_config(config).with_spec_version(spec_version),
+            HashMap::new(),
+            Some(spec_version),
+            true,
         )
         .await?;
 
@@ -2686,13 +2630,14 @@ mod tests {
     ) -> Result<(), Box<dyn Error>> {
         let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
         let repo = Repository::create(
+            Some(RepositoryConfig {
+                inline_chunk_threshold_bytes: Some(0),
+                ..Default::default()
+            }),
             Arc::clone(&storage),
-            CreateOptions::default()
-                .with_config(RepositoryConfig {
-                    inline_chunk_threshold_bytes: Some(0),
-                    ..Default::default()
-                })
-                .with_spec_version(spec_version),
+            HashMap::new(),
+            Some(spec_version),
+            true,
         )
         .await?;
         let mut session = repo.writable_session("main").await?;
@@ -3085,9 +3030,7 @@ mod tests {
             storage: Some(storage_settings),
             ..RepositoryConfig::default()
         };
-        let read_repo =
-            Repository::open(storage2, OpenOptions::default().with_config(config))
-                .await?;
+        let read_repo = Repository::open(Some(config), storage2, HashMap::new()).await?;
         let session = read_repo
             .readonly_session(&VersionInfo::BranchTipRef("main".to_string()))
             .await?;
@@ -3846,11 +3789,9 @@ mod tests {
         let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
         let storage = Arc::clone(&backend);
 
-        let repository = Repository::create(
-            storage,
-            CreateOptions::default().with_spec_version(spec_version),
-        )
-        .await?;
+        let repository =
+            Repository::create(None, storage, HashMap::new(), Some(spec_version), true)
+                .await?;
 
         let mut session = repository.writable_session("main").await?;
 
@@ -3967,8 +3908,7 @@ mod tests {
             storage: Some(storage_settings),
             ..RepositoryConfig::default()
         };
-        let repository =
-            Repository::open(storage, OpenOptions::default().with_config(config)).await?;
+        let repository = Repository::open(Some(config), storage, HashMap::new()).await?;
 
         let ops =
             Vec::from_iter(logging.fetch_operations().into_iter().filter(|(_, key)| {
@@ -4036,9 +3976,10 @@ mod tests {
                 .await
                 .expect("Creating local storage failed");
 
-        Repository::create(Arc::clone(&storage), CreateOptions::default()).await?;
+        Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
+            .await?;
         assert!(
-            Repository::create(Arc::clone(&storage), CreateOptions::default())
+            Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
                 .await
                 .is_err()
         );
@@ -4053,7 +3994,7 @@ mod tests {
                 .expect("Creating local storage failed");
 
         assert!(
-            Repository::create(Arc::clone(&storage), CreateOptions::default())
+            Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
                 .await
                 .is_err()
         );
@@ -4065,11 +4006,14 @@ mod tests {
     async fn create_repo_with_spec_version_2() -> Result<(), Box<dyn Error>> {
         let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
         Repository::create(
+            None,
             Arc::clone(&storage),
-            CreateOptions::default().with_spec_version(SpecVersionBin::V2),
+            HashMap::new(),
+            Some(SpecVersionBin::V2),
+            true,
         )
         .await?;
-        let repo = Repository::open(storage, OpenOptions::default()).await?;
+        let repo = Repository::open(None, storage, Default::default()).await?;
         assert_eq!(repo.spec_version(), SpecVersionBin::V2);
         Ok(())
     }
@@ -4078,11 +4022,14 @@ mod tests {
     async fn create_repo_with_spec_version_1() -> Result<(), Box<dyn Error>> {
         let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
         Repository::create(
+            None,
             Arc::clone(&storage),
-            CreateOptions::default().with_spec_version(SpecVersionBin::V1),
+            HashMap::new(),
+            Some(SpecVersionBin::V1),
+            true,
         )
         .await?;
-        let repo = Repository::open(storage, OpenOptions::default()).await?;
+        let repo = Repository::open(None, storage, Default::default()).await?;
         assert_eq!(repo.spec_version(), SpecVersionBin::V1);
         Ok(())
     }
@@ -4101,8 +4048,7 @@ mod tests {
                 .await
                 .expect("Creating local storage failed");
 
-        let open_err =
-            Repository::open(Arc::clone(&storage), OpenOptions::default()).await;
+        let open_err = Repository::open(None, Arc::clone(&storage), HashMap::new()).await;
         assert!(matches!(
             open_err,
             Err(RepositoryError { kind: RepositoryErrorKind::RepositoryDoesntExist, .. })
@@ -4113,7 +4059,8 @@ mod tests {
             new_local_filesystem_storage(&present)
                 .await
                 .expect("Creating local storage failed");
-        Repository::create(Arc::clone(&storage), CreateOptions::default()).await?;
+        Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
+            .await?;
         assert!(present.exists());
 
         Ok(())
@@ -4123,7 +4070,8 @@ mod tests {
     async fn set_metadata() -> Result<(), Box<dyn Error>> {
         let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
         let repo =
-            Repository::create(Arc::clone(&storage), CreateOptions::default()).await?;
+            Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
+                .await?;
         assert_eq!(repo.get_metadata().await?, Default::default());
 
         let meta =
@@ -4137,7 +4085,8 @@ mod tests {
     async fn update_metadata() -> Result<(), Box<dyn Error>> {
         let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
         let repo =
-            Repository::create(Arc::clone(&storage), CreateOptions::default()).await?;
+            Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
+                .await?;
 
         let meta =
             [("foo".to_string(), "bar".into()), ("number".to_string(), 42.into())].into();
@@ -4176,8 +4125,11 @@ mod tests {
         };
 
         let repo = Repository::create(
+            Some(config.clone()),
             Arc::clone(&storage),
-            CreateOptions::default().with_config(config.clone()),
+            HashMap::new(),
+            None,
+            true,
         )
         .await?;
 
@@ -4205,11 +4157,8 @@ mod tests {
             num_updates_per_repo_info_file: Some(10),
             ..Default::default()
         };
-        let repo = Repository::open(
-            Arc::clone(&storage),
-            OpenOptions::default().with_config(config2),
-        )
-        .await?;
+        let repo =
+            Repository::open(Some(config2), Arc::clone(&storage), HashMap::new()).await?;
 
         repo.create_tag("test-tag-1", &snap_id).await?;
         let (stream, _, _) = repo.ops_log().await?;
@@ -4222,11 +4171,8 @@ mod tests {
             num_updates_per_repo_info_file: Some(1),
             ..Default::default()
         };
-        let repo = Repository::open(
-            Arc::clone(&storage),
-            OpenOptions::default().with_config(config2),
-        )
-        .await?;
+        let repo =
+            Repository::open(Some(config2), Arc::clone(&storage), HashMap::new()).await?;
 
         repo.create_tag("test-tag-2", &snap_id).await?;
         let (stream, _, _) = repo.ops_log().await?;
@@ -4263,10 +4209,11 @@ mod tests {
             ..Default::default()
         };
         let repo = Repository::create(
+            Some(config.clone()),
             Arc::clone(&storage),
-            CreateOptions::default()
-                .with_config(config.clone())
-                .with_spec_version(SpecVersionBin::V1),
+            HashMap::new(),
+            Some(SpecVersionBin::V1),
+            true,
         )
         .await?;
 
@@ -4327,11 +4274,8 @@ mod tests {
         migrate_1_to_2(repo, &MigrateOptions::default().with_dry_run(false))
             .await
             .unwrap();
-        let repo = Repository::open(
-            Arc::clone(&storage),
-            OpenOptions::default().with_config(config),
-        )
-        .await?;
+        let repo =
+            Repository::open(Some(config), Arc::clone(&storage), HashMap::new()).await?;
         assert_eq!(repo.spec_version(), SpecVersionBin::V2);
 
         // Rewrite manifests (now with IC2 compression enabled)
@@ -4371,8 +4315,11 @@ mod tests {
     async fn test_rewrite_manifests_after_rearrange() -> Result<(), Box<dyn Error>> {
         let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
         let repo = Repository::create(
+            None,
             Arc::clone(&storage),
-            CreateOptions::default().with_spec_version(SpecVersionBin::current()),
+            HashMap::new(),
+            Some(SpecVersionBin::current()),
+            true,
         )
         .await?;
 
@@ -4392,8 +4339,7 @@ mod tests {
         session.commit("moved source to dest").max_concurrent_nodes(8).execute().await?;
 
         // Open a fresh repo from the same storage (as the issue reproducer does)
-        let repo2 =
-            Repository::open(Arc::clone(&storage), OpenOptions::default()).await?;
+        let repo2 = Repository::open(None, Arc::clone(&storage), HashMap::new()).await?;
 
         // Amend should fail because the previous commit was a rearrange
         let result = rewrite_manifests(
@@ -4430,8 +4376,11 @@ mod tests {
         let storage: Arc<dyn Storage + Send + Sync> =
             new_local_filesystem_storage(repo_dir.path()).await?;
         let repo = Repository::create(
+            None,
             Arc::clone(&storage),
-            CreateOptions::default().with_spec_version(SpecVersionBin::current()),
+            HashMap::new(),
+            Some(SpecVersionBin::current()),
+            true,
         )
         .await?;
 
@@ -4566,8 +4515,11 @@ mod tests {
     async fn rearrange_session_amend_on_top_of_amend() -> Result<(), Box<dyn Error>> {
         let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
         let repo = Repository::create(
+            None,
             Arc::clone(&storage),
-            CreateOptions::default().with_spec_version(SpecVersionBin::current()),
+            HashMap::new(),
+            Some(SpecVersionBin::current()),
+            true,
         )
         .await?;
 
@@ -4695,8 +4647,11 @@ mod tests {
     async fn rearrange_session_amend_identity_moves() -> Result<(), Box<dyn Error>> {
         let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
         let repo = Repository::create(
+            None,
             Arc::clone(&storage),
-            CreateOptions::default().with_spec_version(SpecVersionBin::current()),
+            HashMap::new(),
+            Some(SpecVersionBin::current()),
+            true,
         )
         .await?;
 
@@ -4779,8 +4734,11 @@ mod tests {
     async fn rearrange_session_amend_reuse_path() -> Result<(), Box<dyn Error>> {
         let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
         let repo = Repository::create(
+            None,
             Arc::clone(&storage),
-            CreateOptions::default().with_spec_version(SpecVersionBin::current()),
+            HashMap::new(),
+            Some(SpecVersionBin::current()),
+            true,
         )
         .await?;
 
@@ -4878,8 +4836,11 @@ mod tests {
     async fn rearrange_session_amend_children() -> Result<(), Box<dyn Error>> {
         let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
         let repo = Repository::create(
+            None,
             Arc::clone(&storage),
-            CreateOptions::default().with_spec_version(SpecVersionBin::current()),
+            HashMap::new(),
+            Some(SpecVersionBin::current()),
+            true,
         )
         .await?;
 
@@ -4983,59 +4944,6 @@ mod tests {
 
         assert_eq!(diff.moved_nodes.len(), 2);
 
-        Ok(())
-    }
-
-    #[test]
-    fn create_options_default_checks_the_root_and_uses_the_default_version() {
-        let o = CreateOptions::default();
-        assert!(o.config.is_none());
-        assert!(o.authorize_virtual_chunk_access.is_empty());
-        assert!(o.spec_version.is_none());
-        assert!(o.check_clean_root);
-    }
-
-    #[test]
-    fn create_and_open_options_setters_set_fields() {
-        let config = RepositoryConfig {
-            inline_chunk_threshold_bytes: Some(7),
-            ..Default::default()
-        };
-        let creds = HashMap::from([("c".to_string(), None)]);
-        let o = CreateOptions::default()
-            .with_config(config.clone())
-            .with_authorize_virtual_chunk_access(creds.clone())
-            .with_spec_version(SpecVersionBin::V1)
-            .with_check_clean_root(false);
-        assert_eq!(o.config, Some(config.clone()));
-        assert_eq!(o.authorize_virtual_chunk_access.len(), 1);
-        assert_eq!(o.spec_version, Some(SpecVersionBin::V1));
-        assert!(!o.check_clean_root);
-
-        let o = OpenOptions::default()
-            .with_config(config.clone())
-            .with_authorize_virtual_chunk_access(creds);
-        assert_eq!(o.config, Some(config));
-        assert_eq!(o.authorize_virtual_chunk_access.len(), 1);
-    }
-
-    #[tokio::test]
-    async fn open_or_create_uses_spec_version_only_for_a_missing_repo()
-    -> Result<(), Box<dyn Error>> {
-        let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
-        let repo = Repository::open_or_create(
-            Arc::clone(&storage),
-            CreateOptions::default().with_spec_version(SpecVersionBin::V1),
-        )
-        .await?;
-        assert_eq!(repo.spec_version(), SpecVersionBin::V1);
-
-        let repo = Repository::open_or_create(
-            storage,
-            CreateOptions::default().with_spec_version(SpecVersionBin::V2),
-        )
-        .await?;
-        assert_eq!(repo.spec_version(), SpecVersionBin::V1);
         Ok(())
     }
 }

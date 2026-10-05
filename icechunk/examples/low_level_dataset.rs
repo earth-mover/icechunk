@@ -1,9 +1,9 @@
 #![allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use bytes::Bytes;
 use icechunk::{
-    CreateOptions, Repository, Storage,
+    Repository, Storage,
     format::{ChunkIndices, Path, manifest::ChunkPayload, snapshot::ArrayShape},
     repository::VersionInfo,
     session::{Session, SessionError},
@@ -27,7 +27,8 @@ let mut ds = Repository::create(Arc::clone(&storage));
     );
 
     let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
-    let repo = Repository::create(Arc::clone(&storage), CreateOptions::default()).await?;
+    let repo = Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
+        .await?;
     let mut ds = repo.writable_session("main").await?;
 
     println!();

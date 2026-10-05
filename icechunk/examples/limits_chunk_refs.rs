@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::vec;
 
 use icechunk::{
-    CreateOptions, Repository, RepositoryConfig, Storage,
+    Repository, RepositoryConfig, Storage,
     config::{
         ManifestConfig, ManifestSplitCondition, ManifestSplitDim,
         ManifestSplitDimCondition, ManifestSplittingConfig,
@@ -76,14 +76,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut config = RepositoryConfig::default();
     config.inline_chunk_threshold_bytes = Some(0);
     config.manifest = Some(manifest_config);
-    let repo = Repository::create(
-        storage,
-        CreateOptions::default()
-            .with_config(config)
-            .with_authorize_virtual_chunk_access(creds),
-    )
-    .await
-    .expect("Failed to initialize repository");
+    let repo = Repository::create(Some(config), storage, creds, None, true)
+        .await
+        .expect("Failed to initialize repository");
 
     let ds = Arc::new(RwLock::new(repo.writable_session("main").await?));
 

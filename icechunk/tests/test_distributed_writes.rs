@@ -5,11 +5,11 @@ use icechunk_macros::tokio_test;
 use pretty_assertions::assert_eq;
 use rstest::rstest;
 use rstest_reuse::{self, *};
-use std::{ops::Range, sync::Arc};
+use std::{collections::HashMap, ops::Range, sync::Arc};
 
 use bytes::Bytes;
 use icechunk::{
-    CreateOptions, OpenOptions, Repository, RepositoryConfig, Storage,
+    Repository, RepositoryConfig, Storage,
     format::{
         ByteRange, ChunkIndices, Path, format_constants::SpecVersionBin,
         snapshot::ArrayShape,
@@ -39,12 +39,15 @@ async fn mk_repo(
         let mut config = RepositoryConfig::default();
         config.inline_chunk_threshold_bytes = Some(0);
         Ok(Repository::create(
+            Some(config),
             storage,
-            CreateOptions::default().with_config(config).with_spec_version(spec_version),
+            HashMap::new(),
+            Some(spec_version),
+            true,
         )
         .await?)
     } else {
-        Ok(Repository::open(storage, OpenOptions::default()).await?)
+        Ok(Repository::open(None, storage, HashMap::new()).await?)
     }
 }
 

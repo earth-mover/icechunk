@@ -19,9 +19,7 @@ use crate::storage::{
     AzureStorageOptions, GcsStorageOptions, S3StorageOptions, new_azure_blob_storage,
     new_gcs_storage, new_local_filesystem_storage, new_tigris_storage,
 };
-use crate::{
-    CreateOptions, OpenOptions, Repository, RepositoryConfig, Storage, new_s3_storage,
-};
+use crate::{Repository, RepositoryConfig, Storage, new_s3_storage};
 
 use crate::cli::config::{CliConfig, RepositoryAlias, RepositoryDefinition};
 use crate::config::{AzureCredentials, GcsCredentials, S3Credentials, S3Options};
@@ -288,9 +286,9 @@ async fn open_repository(
         .get(repo_alias)
         .context(format!("Repository {repo_alias:?} not found in config"))?;
     let storage = get_storage(repo).await?;
-    let options = OpenOptions::default().with_config(repo.get_config().clone());
+    let config = Some(repo.get_config().clone());
 
-    let repository = Repository::open(storage, options)
+    let repository = Repository::open(config, storage, HashMap::new())
         .await
         .context(format!("Failed to open repository {repo_alias:?}"))?;
 
@@ -315,9 +313,9 @@ async fn repo_create(init_cmd: &CreateCommand, config: &CliConfig) -> Result<()>
         config.repos.get(&init_cmd.repo).context("Repository not found in config")?;
     let storage = get_storage(repo).await?;
 
-    let options = CreateOptions::default().with_config(repo.get_config().clone());
+    let config = Some(repo.get_config().clone());
 
-    Repository::create(storage, options)
+    Repository::create(config, storage, HashMap::new(), None, true)
         .await
         .context(format!("Failed to create repository {:?}", init_cmd.repo))?;
 
