@@ -23,7 +23,7 @@ use icechunk::{
         snapshot::{ManifestFileInfo, SnapshotInfo, SnapshotProperties},
     },
     inspect::{manifest_json, repo_info_json, snapshot_json, transaction_log_json},
-    migrations::{self, MigrateOptions},
+    migrations,
     ops::{
         gc::{ExpiredRefAction, GCSummary, expire, garbage_collect},
         manifests::rewrite_manifests,
@@ -1146,15 +1146,13 @@ impl PyRepository {
                     .execute()
                     .await
                     .map_err(PyIcechunkStoreError::RepositoryError)?;
-                let mut options = MigrateOptions::default()
-                    .with_dry_run(dry_run)
-                    .with_delete_unused_v1_files(delete_unused_v1_files);
+                let mut builder = migrations::migrate_1_to_2(fresh)
+                    .dry_run(dry_run)
+                    .delete_unused_v1_files(delete_unused_v1_files);
                 if let Some(n) = prefetch_concurrency {
-                    options = options.with_prefetch_concurrency(n);
+                    builder = builder.prefetch_concurrency(n);
                 }
-                migrations::migrate_1_to_2(fresh, &options)
-                    .await
-                    .map_err(PyIcechunkStoreError::MigrationError)?;
+                builder.execute().await.map_err(PyIcechunkStoreError::MigrationError)?;
 
                 // Reopen to get a fresh repo with the correct spec version
                 let reopened = Repository::open(storage)

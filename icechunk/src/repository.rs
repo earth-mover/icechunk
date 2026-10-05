@@ -2046,7 +2046,7 @@ mod tests {
             },
             snapshot::{ArrayShape, DimensionName},
         },
-        migrations::{MigrateOptions, migrate_1_to_2},
+        migrations::migrate_1_to_2,
         ops::manifests::rewrite_manifests,
         session::{CommitMethod, SessionError, get_chunk},
         storage::new_in_memory_storage,
@@ -3976,9 +3976,7 @@ mod tests {
         }
 
         // Migrate to IC2
-        migrate_1_to_2(repo, &MigrateOptions::default().with_dry_run(false))
-            .await
-            .unwrap();
+        migrate_1_to_2(repo).dry_run(false).execute().await.unwrap();
         let repo =
             Repository::open(Arc::clone(&storage)).config(config).execute().await?;
         assert_eq!(repo.spec_version(), SpecVersionBin::V2);

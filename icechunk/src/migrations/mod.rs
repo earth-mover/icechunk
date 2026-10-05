@@ -301,256 +301,284 @@ async fn do_migrate(
     Ok(())
 }
 
-/// Controls for the V1 to V2 migration. The default is a dry run.
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[non_exhaustive]
-pub struct MigrateOptions {
-    pub dry_run: bool,
-    /// Delete the V1 objects the V2 layout no longer reads.
-    pub delete_unused_v1_files: bool,
-    pub prefetch_concurrency: usize,
+/// Migrates a V1 repository to V2. Build with [`migrate_1_to_2`].
+///
+/// ```no_run
+/// # use icechunk::{Repository, migrations::migrate_1_to_2};
+/// # async fn f(repo: Repository) -> Result<(), Box<dyn std::error::Error>> {
+/// migrate_1_to_2(repo).dry_run(false).execute().await?;
+/// # Ok(()) }
+/// ```
+pub struct MigrateBuilder {
+    repo: Repository,
+    dry_run: bool,
+    delete_unused_v1_files: bool,
+    prefetch_concurrency: usize,
 }
 
-impl Default for MigrateOptions {
-    fn default() -> Self {
-        Self { dry_run: true, delete_unused_v1_files: true, prefetch_concurrency: 64 }
+impl std::fmt::Debug for MigrateBuilder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MigrateBuilder")
+            .field("dry_run", &self.dry_run)
+            .field("delete_unused_v1_files", &self.delete_unused_v1_files)
+            .field("prefetch_concurrency", &self.prefetch_concurrency)
+            .finish_non_exhaustive()
     }
 }
 
-impl MigrateOptions {
-    pub fn with_dry_run(mut self, value: bool) -> Self {
+/// Migrate `repo` from V1 to V2. The default run is a dry run.
+pub fn migrate_1_to_2(repo: Repository) -> MigrateBuilder {
+    MigrateBuilder {
+        repo,
+        dry_run: true,
+        delete_unused_v1_files: true,
+        prefetch_concurrency: 64,
+    }
+}
+
+impl MigrateBuilder {
+    /// Default: true.
+    pub fn dry_run(mut self, value: bool) -> Self {
         self.dry_run = value;
         self
     }
 
-    pub fn with_delete_unused_v1_files(mut self, value: bool) -> Self {
+    /// Delete the V1 objects the V2 layout no longer reads. Default: true.
+    pub fn delete_unused_v1_files(mut self, value: bool) -> Self {
         self.delete_unused_v1_files = value;
         self
     }
 
-    pub fn with_prefetch_concurrency(mut self, value: usize) -> Self {
+    /// Default: 64.
+    pub fn prefetch_concurrency(mut self, value: usize) -> Self {
         self.prefetch_concurrency = value;
         self
     }
-}
 
-pub async fn migrate_1_to_2(
-    repo: Repository,
-    options: &MigrateOptions,
-) -> MigrationResult<()> {
-    let MigrateOptions { dry_run, delete_unused_v1_files, prefetch_concurrency, .. } =
-        options;
-    let start_time = Instant::now();
-    validate_start(&repo).await?;
+    pub async fn execute(self) -> MigrationResult<()> {
+        let MigrateBuilder {
+            repo,
+            dry_run,
+            delete_unused_v1_files,
+            prefetch_concurrency,
+        } = self;
+        let start_time = Instant::now();
+        validate_start(&repo).await?;
 
-    info!("Starting migration");
-    info!("Collecting refs");
-    let refs = all_roots(&repo).await.inject()?.try_collect::<Vec<_>>().await.inject()?;
-    let tags = Vec::from_iter(refs.iter().filter_map(|(r, id)| {
-        if r.is_tag() { Some((r.name(), id.clone())) } else { None }
-    }));
-    let branches = Vec::from_iter(refs.iter().filter_map(|(r, id)| {
-        if r.is_branch() { Some((r.name(), id.clone())) } else { None }
-    }));
+        info!("Starting migration");
+        info!("Collecting refs");
+        let refs =
+            all_roots(&repo).await.inject()?.try_collect::<Vec<_>>().await.inject()?;
+        let tags = Vec::from_iter(refs.iter().filter_map(|(r, id)| {
+            if r.is_tag() { Some((r.name(), id.clone())) } else { None }
+        }));
+        let branches = Vec::from_iter(refs.iter().filter_map(|(r, id)| {
+            if r.is_branch() { Some((r.name(), id.clone())) } else { None }
+        }));
 
-    let deleted_tags =
-        list_deleted_tags(repo.storage().as_ref(), &repo.storage_context())
-            .await
-            .inject()?;
+        let deleted_tags =
+            list_deleted_tags(repo.storage().as_ref(), &repo.storage_context())
+                .await
+                .inject()?;
 
-    info!(
-        "Found {} refs: {} tags, {} branches, {} deleted tags",
-        refs.len(),
-        tags.len(),
-        branches.len(),
-        deleted_tags.len()
-    );
-    let deleted_tag_names: Vec<&str> = deleted_tags
-        .iter()
-        .filter_map(|s| {
-            s.as_str()
-                .strip_prefix("tag.")
-                .and_then(|s| s.strip_suffix("/ref.json.deleted"))
-        })
-        .collect();
+        info!(
+            "Found {} refs: {} tags, {} branches, {} deleted tags",
+            refs.len(),
+            tags.len(),
+            branches.len(),
+            deleted_tags.len()
+        );
+        let deleted_tag_names: Vec<&str> = deleted_tags
+            .iter()
+            .filter_map(|s| {
+                s.as_str()
+                    .strip_prefix("tag.")
+                    .and_then(|s| s.strip_suffix("/ref.json.deleted"))
+            })
+            .collect();
 
-    info!("Collecting non-dangling snapshots, this may take a few minutes");
+        info!("Collecting non-dangling snapshots, this may take a few minutes");
 
-    // Keep each SnapshotInfo so the serial ancestry walk runs in memory. Warming the LRU
-    // cache instead fails: the concurrent prefetch outruns the walk and evicts every entry.
-    let asset_manager = Arc::clone(repo.asset_manager());
-    let snapshot_infos: HashMap<SnapshotId, SnapshotInfo> = {
-        let am = Arc::clone(&asset_manager);
-        let ids: Vec<SnapshotId> = match am.list_snapshots().await {
-            Ok(snapshot_list) => match snapshot_list.try_collect::<Vec<_>>().await {
-                Ok(v) => v.into_iter().map(|info| info.id).collect(),
+        // Keep each SnapshotInfo so the serial ancestry walk runs in memory. Warming the LRU
+        // cache instead fails: the concurrent prefetch outruns the walk and evicts every entry.
+        let asset_manager = Arc::clone(repo.asset_manager());
+        let snapshot_infos: HashMap<SnapshotId, SnapshotInfo> = {
+            let am = Arc::clone(&asset_manager);
+            let ids: Vec<SnapshotId> = match am.list_snapshots().await {
+                Ok(snapshot_list) => match snapshot_list.try_collect::<Vec<_>>().await {
+                    Ok(v) => v.into_iter().map(|info| info.id).collect(),
+                    Err(e) => {
+                        warn!("Snapshot prefetch: failed to collect snapshot list: {e}");
+                        Vec::new()
+                    }
+                },
                 Err(e) => {
-                    warn!("Snapshot prefetch: failed to collect snapshot list: {e}");
+                    warn!("Snapshot prefetch: failed to list snapshots: {e}");
                     Vec::new()
                 }
-            },
-            Err(e) => {
-                warn!("Snapshot prefetch: failed to list snapshots: {e}");
-                Vec::new()
-            }
-        };
-        info!(
-            "Snapshot prefetch: loading {} snapshots with concurrency {}",
-            ids.len(),
-            *prefetch_concurrency,
-        );
-        let infos: HashMap<SnapshotId, SnapshotInfo> =
-            stream::iter(ids.into_iter().map(|id| {
-                let am = Arc::clone(&am);
-                async move {
-                    match am.fetch_snapshot(&id).await {
-                        Ok(snap) => SnapshotInfo::from_snapshot_file(snap.as_ref())
-                            .ok()
-                            .map(|info| (id, info)),
-                        Err(e) => {
-                            debug!("Snapshot prefetch: failed to fetch {id}: {e}");
-                            None
+            };
+            info!(
+                "Snapshot prefetch: loading {} snapshots with concurrency {}",
+                ids.len(),
+                prefetch_concurrency,
+            );
+            let infos: HashMap<SnapshotId, SnapshotInfo> =
+                stream::iter(ids.into_iter().map(|id| {
+                    let am = Arc::clone(&am);
+                    async move {
+                        match am.fetch_snapshot(&id).await {
+                            Ok(snap) => SnapshotInfo::from_snapshot_file(snap.as_ref())
+                                .ok()
+                                .map(|info| (id, info)),
+                            Err(e) => {
+                                debug!("Snapshot prefetch: failed to fetch {id}: {e}");
+                                None
+                            }
                         }
                     }
-                }
-            }))
-            .buffer_unordered(*prefetch_concurrency)
-            .filter_map(|entry| async move { entry })
-            .collect()
-            .await;
-        info!("Snapshot prefetch: loaded {} snapshots", infos.len());
-        infos
-    };
+                }))
+                .buffer_unordered(prefetch_concurrency)
+                .filter_map(|entry| async move { entry })
+                .collect()
+                .await;
+            info!("Snapshot prefetch: loaded {} snapshots", infos.len());
+            infos
+        };
 
-    let snap_ids = refs.iter().map(|(_, id)| id);
-    let all_snapshots = pointed_snapshots_from_map(&repo, snap_ids, &snapshot_infos)
-        .await?
-        .try_collect::<Vec<_>>()
-        .await?;
+        let snap_ids = refs.iter().map(|(_, id)| id);
+        let all_snapshots = pointed_snapshots_from_map(&repo, snap_ids, &snapshot_infos)
+            .await?
+            .try_collect::<Vec<_>>()
+            .await?;
 
-    // The reachable set is now in all_snapshots, so release the second copy before the
-    // ops log builds. Repos with long commit messages keep a lot of memory here.
-    drop(snapshot_infos);
+        // The reachable set is now in all_snapshots, so release the second copy before the
+        // ops log builds. Repos with long commit messages keep a lot of memory here.
+        drop(snapshot_infos);
 
-    info!("Found {} non-dangling snapshots", all_snapshots.len());
+        info!("Found {} non-dangling snapshots", all_snapshots.len());
 
-    info!("Generating migration ops log");
-    // Build a lookup so we can reconstruct per-branch ancestry in memory
-    // instead of re-fetching from storage.
-    let snap_by_id: HashMap<&SnapshotId, &SnapshotInfo> =
-        all_snapshots.iter().map(|s| (&s.id, s)).collect();
+        info!("Generating migration ops log");
+        // Build a lookup so we can reconstruct per-branch ancestry in memory
+        // instead of re-fetching from storage.
+        let snap_by_id: HashMap<&SnapshotId, &SnapshotInfo> =
+            all_snapshots.iter().map(|s| (&s.id, s)).collect();
 
-    // Walk parent pointers from `tip` to root, returning tip-to-root order.
-    let ancestry_from = |tip: &SnapshotId| -> Vec<SnapshotInfo> {
-        let mut result = Vec::new();
-        let mut current = snap_by_id.get(tip);
-        while let Some(snap) = current {
-            result.push((*snap).clone());
-            current = snap.parent_id.as_ref().and_then(|pid| snap_by_id.get(pid));
+        // Walk parent pointers from `tip` to root, returning tip-to-root order.
+        let ancestry_from = |tip: &SnapshotId| -> Vec<SnapshotInfo> {
+            let mut result = Vec::new();
+            let mut current = snap_by_id.get(tip);
+            while let Some(snap) = current {
+                result.push((*snap).clone());
+                current = snap.parent_id.as_ref().and_then(|pid| snap_by_id.get(pid));
+            }
+            result
+        };
+
+        // Collect main branch ancestry (tip-to-root)
+        let main_snap_id = branches
+            .iter()
+            .find(|(name, _)| *name == Ref::DEFAULT_BRANCH)
+            .map(|(_, id)| id);
+        let main_ancestry = main_snap_id.map(&ancestry_from).unwrap_or_default();
+
+        // Collect non-main branch ancestries
+        let branch_ancestries: Vec<(&str, Vec<SnapshotInfo>)> = branches
+            .iter()
+            .filter(|(name, _)| *name != Ref::DEFAULT_BRANCH)
+            .map(|(name, snap_id)| (*name, ancestry_from(snap_id)))
+            .collect();
+        // Fetch snapshot IDs for deleted tags
+        let mut deleted_tags_with_snap: Vec<(&str, SnapshotId)> = Vec::new();
+        for name in &deleted_tag_names {
+            if let Some(snap_id) = fetch_deleted_tag_snapshot_id(&repo, name).await {
+                deleted_tags_with_snap.push((name, snap_id));
+            } else {
+                warn!(
+                    "Could not fetch snapshot ID for deleted tag '{name}', skipping ops log entry"
+                );
+            }
         }
-        result
-    };
-
-    // Collect main branch ancestry (tip-to-root)
-    let main_snap_id =
-        branches.iter().find(|(name, _)| *name == Ref::DEFAULT_BRANCH).map(|(_, id)| id);
-    let main_ancestry = main_snap_id.map(&ancestry_from).unwrap_or_default();
-
-    // Collect non-main branch ancestries
-    let branch_ancestries: Vec<(&str, Vec<SnapshotInfo>)> = branches
-        .iter()
-        .filter(|(name, _)| *name != Ref::DEFAULT_BRANCH)
-        .map(|(name, snap_id)| (*name, ancestry_from(snap_id)))
-        .collect();
-    // Fetch snapshot IDs for deleted tags
-    let mut deleted_tags_with_snap: Vec<(&str, SnapshotId)> = Vec::new();
-    for name in &deleted_tag_names {
-        if let Some(snap_id) = fetch_deleted_tag_snapshot_id(&repo, name).await {
-            deleted_tags_with_snap.push((name, snap_id));
-        } else {
-            warn!(
-                "Could not fetch snapshot ID for deleted tag '{name}', skipping ops log entry"
-            );
-        }
-    }
-    let ops_log = generate_migration_ops_log(
-        &main_ancestry,
-        &branch_ancestries,
-        &tags,
-        &deleted_tags_with_snap,
-        &all_snapshots,
-    );
-    info!("Generated {} ops log entries", ops_log.len());
-
-    let previous_updates: Vec<crate::format::IcechunkResult<_>> =
-        ops_log.into_iter().map(|(ut, dt)| Ok((ut, dt, None))).collect();
-
-    // Use a page size large enough to hold all synthetic entries (+1 for RepoMigratedUpdate)
-    // so nothing is truncated. There are no backup files to chain to, so overflow would
-    // silently drop entries. Subsequent operations will use the configured page size.
-    let migration_page_size = (previous_updates.len() as u16 + 1)
-        .max(repo.config().num_updates_per_repo_info_file());
-
-    info!("Creating repository info file");
-    // Read the original V1 config.yaml instead of using repo.config(), which
-    // is the fully-merged runtime config. Persisting the runtime config would
-    // bake instance-local settings (caching, storage) from the migration
-    // caller into the V2 repo, overriding every future client's defaults.
-    let persisted_config = repo.asset_manager().fetch_config().await.inject()?;
-    let config_bytes: Option<Vec<u8>> = match persisted_config {
-        Some((config, _)) => Some(
-            flexbuffers::to_vec(&config)
-                .map_err(|e| {
-                    IcechunkFormatErrorKind::SerializationErrorFlexBuffers(Box::new(e))
-                })
-                .capture()?,
-        ),
-        None => None,
-    };
-
-    // main_ancestry is tip-to-root, so last element is the root
-    let root = &main_ancestry[main_ancestry.len() - 1];
-    let root_time = root.flushed_at;
-
-    let repo_info = Arc::new(
-        RepoInfo::new(
-            SpecVersionBin::V2,
-            tags,
-            branches,
-            deleted_tag_names.iter().copied(),
-            all_snapshots,
-            &Default::default(),
-            UpdateInfo {
-                update_type: UpdateType::RepoMigratedUpdate {
-                    from_version: SpecVersionBin::V1,
-                    to_version: SpecVersionBin::V2,
-                },
-                update_time: Utc::now(),
-                previous_updates,
-            },
-            None,
-            migration_page_size,
-            None,
-            config_bytes.as_deref(),
-            None::<std::iter::Empty<u16>>,
-            None::<std::iter::Empty<u16>>,
-            &RepoStatus {
-                availability: RepoAvailability::Online,
-                set_at: root_time,
-                limited_availability_reason: None,
-            },
-        )
-        .inject()?,
-    );
-
-    if *dry_run {
-        info!(
-            "Migration dry-run completed in {} seconds, your repository wasn't modified, run with `dry_run=False` to actually migrate",
-            start_time.elapsed().as_secs()
+        let ops_log = generate_migration_ops_log(
+            &main_ancestry,
+            &branch_ancestries,
+            &tags,
+            &deleted_tags_with_snap,
+            &all_snapshots,
         );
-        Ok(())
-    } else {
-        do_migrate(&repo, repo_info, start_time, *delete_unused_v1_files).await
+        info!("Generated {} ops log entries", ops_log.len());
+
+        let previous_updates: Vec<crate::format::IcechunkResult<_>> =
+            ops_log.into_iter().map(|(ut, dt)| Ok((ut, dt, None))).collect();
+
+        // Use a page size large enough to hold all synthetic entries (+1 for RepoMigratedUpdate)
+        // so nothing is truncated. There are no backup files to chain to, so overflow would
+        // silently drop entries. Subsequent operations will use the configured page size.
+        let migration_page_size = (previous_updates.len() as u16 + 1)
+            .max(repo.config().num_updates_per_repo_info_file());
+
+        info!("Creating repository info file");
+        // Read the original V1 config.yaml instead of using repo.config(), which
+        // is the fully-merged runtime config. Persisting the runtime config would
+        // bake instance-local settings (caching, storage) from the migration
+        // caller into the V2 repo, overriding every future client's defaults.
+        let persisted_config = repo.asset_manager().fetch_config().await.inject()?;
+        let config_bytes: Option<Vec<u8>> = match persisted_config {
+            Some((config, _)) => Some(
+                flexbuffers::to_vec(&config)
+                    .map_err(|e| {
+                        IcechunkFormatErrorKind::SerializationErrorFlexBuffers(Box::new(
+                            e,
+                        ))
+                    })
+                    .capture()?,
+            ),
+            None => None,
+        };
+
+        // main_ancestry is tip-to-root, so last element is the root
+        let root = &main_ancestry[main_ancestry.len() - 1];
+        let root_time = root.flushed_at;
+
+        let repo_info = Arc::new(
+            RepoInfo::new(
+                SpecVersionBin::V2,
+                tags,
+                branches,
+                deleted_tag_names.iter().copied(),
+                all_snapshots,
+                &Default::default(),
+                UpdateInfo {
+                    update_type: UpdateType::RepoMigratedUpdate {
+                        from_version: SpecVersionBin::V1,
+                        to_version: SpecVersionBin::V2,
+                    },
+                    update_time: Utc::now(),
+                    previous_updates,
+                },
+                None,
+                migration_page_size,
+                None,
+                config_bytes.as_deref(),
+                None::<std::iter::Empty<u16>>,
+                None::<std::iter::Empty<u16>>,
+                &RepoStatus {
+                    availability: RepoAvailability::Online,
+                    set_at: root_time,
+                    limited_availability_reason: None,
+                },
+            )
+            .inject()?,
+        );
+
+        if dry_run {
+            info!(
+                "Migration dry-run completed in {} seconds, your repository wasn't modified, run with `dry_run=False` to actually migrate",
+                start_time.elapsed().as_secs()
+            );
+            Ok(())
+        } else {
+            do_migrate(&repo, repo_info, start_time, delete_unused_v1_files).await
+        }
     }
 }
 
@@ -764,9 +792,7 @@ mod tests {
             branch_ancestries_before.insert(branch, anc);
         }
 
-        migrate_1_to_2(repo, &MigrateOptions::default().with_dry_run(false))
-            .await
-            .unwrap();
+        migrate_1_to_2(repo).dry_run(false).execute().await.unwrap();
         let repo = Repository::open(storage).execute().await?;
 
         let mut tag_ancestries_after = HashMap::new();
@@ -915,14 +941,11 @@ mod tests {
         let (repo, _tmp) = prepare_v1_repo().await?;
         let storage = Arc::clone(repo.storage());
 
-        migrate_1_to_2(repo, &MigrateOptions::default().with_dry_run(false))
-            .await
-            .unwrap();
+        migrate_1_to_2(repo).dry_run(false).execute().await.unwrap();
 
         // Reopen the now-V2 repo and try to migrate again
         let repo = Repository::open(storage).execute().await?;
-        let result =
-            migrate_1_to_2(repo, &MigrateOptions::default().with_dry_run(false)).await;
+        let result = migrate_1_to_2(repo).dry_run(false).execute().await;
         assert!(result.is_err(), "migrating an already-V2 repo should return an error");
 
         Ok(())
@@ -934,9 +957,7 @@ mod tests {
         let (repo, _tmp) = prepare_v1_repo().await?;
         let storage = Arc::clone(repo.storage());
 
-        migrate_1_to_2(repo, &MigrateOptions::default().with_dry_run(true))
-            .await
-            .unwrap();
+        migrate_1_to_2(repo).dry_run(true).execute().await.unwrap();
         let repo = Repository::open(storage).execute().await?;
 
         assert_eq!(repo.spec_version(), SpecVersionBin::V1);
@@ -950,14 +971,12 @@ mod tests {
         let (repo, _tmp) = prepare_v1_repo().await?;
         let storage = Arc::clone(repo.storage());
 
-        migrate_1_to_2(
-            repo,
-            &MigrateOptions::default()
-                .with_dry_run(false)
-                .with_delete_unused_v1_files(false),
-        )
-        .await
-        .unwrap();
+        migrate_1_to_2(repo)
+            .dry_run(false)
+            .delete_unused_v1_files(false)
+            .execute()
+            .await
+            .unwrap();
         let repo = Repository::open(storage).execute().await?;
 
         assert_eq!(repo.spec_version(), SpecVersionBin::V2);
@@ -977,9 +996,7 @@ mod tests {
         let (repo, _tmp) = prepare_v1_repo().await?;
         let storage = Arc::clone(repo.storage());
 
-        migrate_1_to_2(repo, &MigrateOptions::default().with_dry_run(false))
-            .await
-            .unwrap();
+        migrate_1_to_2(repo).dry_run(false).execute().await.unwrap();
 
         // Reopen with a very small num_updates_per_file to force overflow
         // of synthetic migration entries immediately.
@@ -1035,22 +1052,32 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn migrate_options_default_is_a_dry_run() {
-        let o = MigrateOptions::default();
-        assert!(o.dry_run);
-        assert!(o.delete_unused_v1_files);
-        assert_eq!(o.prefetch_concurrency, 64);
+    #[tokio_test]
+    async fn migrate_builder_default_is_a_dry_run()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let repo = Repository::create(crate::storage::new_in_memory_storage().await?)
+            .execute()
+            .await?;
+        let b = migrate_1_to_2(repo);
+        assert!(b.dry_run);
+        assert!(b.delete_unused_v1_files);
+        assert_eq!(b.prefetch_concurrency, 64);
+        Ok(())
     }
 
-    #[test]
-    fn migrate_options_setters_set_fields() {
-        let o = MigrateOptions::default()
-            .with_dry_run(false)
-            .with_delete_unused_v1_files(false)
-            .with_prefetch_concurrency(3);
-        assert!(!o.dry_run);
-        assert!(!o.delete_unused_v1_files);
-        assert_eq!(o.prefetch_concurrency, 3);
+    #[tokio_test]
+    async fn migrate_builder_methods_set_fields() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let repo = Repository::create(crate::storage::new_in_memory_storage().await?)
+            .execute()
+            .await?;
+        let b = migrate_1_to_2(repo)
+            .dry_run(false)
+            .delete_unused_v1_files(false)
+            .prefetch_concurrency(3);
+        assert!(!b.dry_run);
+        assert!(!b.delete_unused_v1_files);
+        assert_eq!(b.prefetch_concurrency, 3);
+        Ok(())
     }
 }
