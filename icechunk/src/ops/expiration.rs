@@ -137,7 +137,7 @@ impl ExpireBuilder {
         self
     }
 
-    #[instrument(name = "expire", skip(self))]
+    #[instrument(name = "expire", skip(self), fields(older_than = ?self.older_than))]
     pub async fn execute(self) -> GCResult<ExpireResult> {
         ensure_repo_writable(self.asset_manager.as_ref(), "expire").await?;
 
