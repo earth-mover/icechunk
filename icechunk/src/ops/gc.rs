@@ -42,7 +42,7 @@ use icechunk_types::error::ICResultCtxExt as _;
 pub use crate::ops::{
     GCError, GCResult,
     deleter::DeleteReport,
-    expiration::{ExpireOptions, ExpireResult, ExpiredRefAction, expire},
+    expiration::{ExpireBuilder, ExpireResult, ExpiredRefAction, expire},
 };
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]

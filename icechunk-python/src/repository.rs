@@ -25,7 +25,7 @@ use icechunk::{
     inspect::{manifest_json, repo_info_json, snapshot_json, transaction_log_json},
     migrations::{self, MigrateOptions},
     ops::{
-        gc::{ExpireOptions, ExpiredRefAction, GCSummary, expire, garbage_collect},
+        gc::{ExpiredRefAction, GCSummary, expire, garbage_collect},
         manifests::{RewriteManifestsOptions, rewrite_manifests},
         stats::repo_chunks_storage,
     },
@@ -2826,19 +2826,19 @@ impl PyRepository {
                         (Arc::clone(lock.asset_manager()), num_updates)
                     };
 
-                    let options = ExpireOptions::default()
-                        .with_expired_branches(if delete_expired_branches {
+                    let result = expire(asset_manager, older_than)
+                        .expired_branches(if delete_expired_branches {
                             ExpiredRefAction::Delete
                         } else {
                             ExpiredRefAction::Ignore
                         })
-                        .with_expired_tags(if delete_expired_tags {
+                        .expired_tags(if delete_expired_tags {
                             ExpiredRefAction::Delete
                         } else {
                             ExpiredRefAction::Ignore
                         })
-                        .with_num_updates_per_repo_info_file(num_updates);
-                    let result = expire(asset_manager, older_than, &options)
+                        .num_updates_per_repo_info_file(num_updates)
+                        .execute()
                         .await
                         .map_err(PyIcechunkStoreError::GCError)?;
                     Ok::<_, PyIcechunkStoreError>(
@@ -2870,19 +2870,19 @@ impl PyRepository {
                 (Arc::clone(lock.asset_manager()), num_updates)
             };
 
-            let options = ExpireOptions::default()
-                .with_expired_branches(if delete_expired_branches {
+            let result = expire(asset_manager, older_than)
+                .expired_branches(if delete_expired_branches {
                     ExpiredRefAction::Delete
                 } else {
                     ExpiredRefAction::Ignore
                 })
-                .with_expired_tags(if delete_expired_tags {
+                .expired_tags(if delete_expired_tags {
                     ExpiredRefAction::Delete
                 } else {
                     ExpiredRefAction::Ignore
                 })
-                .with_num_updates_per_repo_info_file(num_updates);
-            let result = expire(asset_manager, older_than, &options)
+                .num_updates_per_repo_info_file(num_updates)
+                .execute()
                 .await
                 .map_err(PyIcechunkStoreError::GCError)?;
             Ok(result.released_snapshots.iter().map(|id| id.to_string()).collect())

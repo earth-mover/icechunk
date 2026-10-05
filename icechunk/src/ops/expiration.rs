@@ -37,55 +37,45 @@ pub enum ExpiredRefAction {
     Ignore,
 }
 
-/// Which expired refs to delete, and how the repo info update retries and rolls over.
-/// `num_updates_per_repo_info_file` defaults to 1000, not to the repository setting.
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[non_exhaustive]
-pub struct ExpireOptions {
-    pub expired_branches: ExpiredRefAction,
-    pub expired_tags: ExpiredRefAction,
-    pub repo_update_retries: Option<RepoUpdateRetryConfig>,
-    pub num_updates_per_repo_info_file: u16,
-}
-
-impl Default for ExpireOptions {
-    fn default() -> Self {
-        Self {
-            expired_branches: ExpiredRefAction::Ignore,
-            expired_tags: ExpiredRefAction::Ignore,
-            repo_update_retries: None,
-            num_updates_per_repo_info_file: DEFAULT_NUM_UPDATES_PER_REPO_INFO_FILE,
-        }
-    }
-}
-
-impl ExpireOptions {
-    pub fn with_expired_branches(mut self, value: ExpiredRefAction) -> Self {
-        self.expired_branches = value;
-        self
-    }
-
-    pub fn with_expired_tags(mut self, value: ExpiredRefAction) -> Self {
-        self.expired_tags = value;
-        self
-    }
-
-    pub fn with_repo_update_retries(mut self, value: RepoUpdateRetryConfig) -> Self {
-        self.repo_update_retries = Some(value);
-        self
-    }
-
-    pub fn with_num_updates_per_repo_info_file(mut self, value: u16) -> Self {
-        self.num_updates_per_repo_info_file = value;
-        self
-    }
-}
-
 #[derive(Debug, PartialEq, Eq, Clone, Default)]
 pub struct ExpireResult {
     pub released_snapshots: HashSet<SnapshotId>,
     pub edited_snapshots: HashSet<SnapshotId>,
     pub deleted_refs: HashSet<Ref>,
+}
+
+/// Expiration of old snapshots. Build with [`expire`], run with [`execute`](Self::execute).
+///
+/// ```no_run
+/// # use std::sync::Arc;
+/// # use chrono::{Duration, Utc};
+/// # use icechunk::{asset_manager::AssetManager, ops::gc::{ExpiredRefAction, expire}};
+/// # async fn f(am: Arc<AssetManager>) -> Result<(), Box<dyn std::error::Error>> {
+/// let result = expire(am, Utc::now() - Duration::days(30))
+///     .expired_branches(ExpiredRefAction::Delete)
+///     .execute()
+///     .await?;
+/// # Ok(()) }
+/// ```
+pub struct ExpireBuilder {
+    asset_manager: Arc<AssetManager>,
+    older_than: DateTime<Utc>,
+    expired_branches: ExpiredRefAction,
+    expired_tags: ExpiredRefAction,
+    repo_update_retries: Option<RepoUpdateRetryConfig>,
+    num_updates_per_repo_info_file: u16,
+}
+
+impl std::fmt::Debug for ExpireBuilder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ExpireBuilder")
+            .field("older_than", &self.older_than)
+            .field("expired_branches", &self.expired_branches)
+            .field("expired_tags", &self.expired_tags)
+            .field("repo_update_retries", &self.repo_update_retries)
+            .field("num_updates_per_repo_info_file", &self.num_updates_per_repo_info_file)
+            .finish_non_exhaustive()
+    }
 }
 
 /// Expire all snapshots older than a threshold.
@@ -105,47 +95,81 @@ pub struct ExpireResult {
 /// available for garbage collection, they could still be pointed by
 /// ether refs.
 ///
+/// Expired refs are kept unless a builder method says otherwise.
+///
 /// See: <https://github.com/earth-mover/icechunk/blob/main/design-docs/007-basic-expiration.md>
-#[instrument(skip(asset_manager))]
-pub async fn expire(
+pub fn expire(
     asset_manager: Arc<AssetManager>,
     older_than: DateTime<Utc>,
-    options: &ExpireOptions,
-) -> GCResult<ExpireResult> {
-    ensure_repo_writable(asset_manager.as_ref(), "expire").await?;
+) -> ExpireBuilder {
+    ExpireBuilder {
+        asset_manager,
+        older_than,
+        expired_branches: ExpiredRefAction::Ignore,
+        expired_tags: ExpiredRefAction::Ignore,
+        repo_update_retries: None,
+        num_updates_per_repo_info_file: DEFAULT_NUM_UPDATES_PER_REPO_INFO_FILE,
+    }
+}
 
-    match asset_manager.spec_version() {
-        SpecVersionBin::V1 => {
-            v1::expire(
-                asset_manager,
-                older_than,
-                options.expired_branches,
-                options.expired_tags,
-            )
-            .await
+impl ExpireBuilder {
+    /// Default: `ExpiredRefAction::Ignore`.
+    pub fn expired_branches(mut self, value: ExpiredRefAction) -> Self {
+        self.expired_branches = value;
+        self
+    }
+
+    /// Default: `ExpiredRefAction::Ignore`.
+    pub fn expired_tags(mut self, value: ExpiredRefAction) -> Self {
+        self.expired_tags = value;
+        self
+    }
+
+    /// Default: no retries.
+    pub fn repo_update_retries(mut self, value: RepoUpdateRetryConfig) -> Self {
+        self.repo_update_retries = Some(value);
+        self
+    }
+
+    /// Default: 1000, not the repository setting.
+    pub fn num_updates_per_repo_info_file(mut self, value: u16) -> Self {
+        self.num_updates_per_repo_info_file = value;
+        self
+    }
+
+    #[instrument(name = "expire", skip(self))]
+    pub async fn execute(self) -> GCResult<ExpireResult> {
+        ensure_repo_writable(self.asset_manager.as_ref(), "expire").await?;
+
+        match self.asset_manager.spec_version() {
+            SpecVersionBin::V1 => {
+                v1::expire(
+                    Arc::clone(&self.asset_manager),
+                    self.older_than,
+                    self.expired_branches,
+                    self.expired_tags,
+                )
+                .await
+            }
+            SpecVersionBin::V2 => expire_v2(&self).await,
         }
-        SpecVersionBin::V2 => expire_v2(asset_manager, older_than, options).await,
     }
 }
 
 /// Since `expire_v2` is a relatively fast operation (repo object only) we retry it if the repo info
 /// object was modified since it started
-#[instrument(skip(asset_manager))]
-pub(crate) async fn expire_v2(
-    asset_manager: Arc<AssetManager>,
-    older_than: DateTime<Utc>,
-    options: &ExpireOptions,
-) -> GCResult<ExpireResult> {
+#[instrument(name = "expire_v2", skip_all)]
+pub(crate) async fn expire_v2(builder: &ExpireBuilder) -> GCResult<ExpireResult> {
     retry_on_repo_info_update(
-        options.repo_update_retries.as_ref(),
+        builder.repo_update_retries.as_ref(),
         "expire",
         async || {
             expire_v2_one_attempt(
-                Arc::clone(&asset_manager),
-                older_than,
-                options.expired_branches,
-                options.expired_tags,
-                options.num_updates_per_repo_info_file,
+                Arc::clone(&builder.asset_manager),
+                builder.older_than,
+                builder.expired_branches,
+                builder.expired_tags,
+                builder.num_updates_per_repo_info_file,
             )
             .await
         },
@@ -402,31 +426,49 @@ async fn expire_v2_one_attempt(
 
 #[cfg(test)]
 mod tests {
+    use icechunk_macros::tokio_test;
+
     use super::*;
 
-    #[test]
-    fn expire_options_default_keeps_refs() {
-        let o = ExpireOptions::default();
-        assert_eq!(o.expired_branches, ExpiredRefAction::Ignore);
-        assert_eq!(o.expired_tags, ExpiredRefAction::Ignore);
-        assert_eq!(o.repo_update_retries, None);
+    // `tokio_test` expands to nothing under shuttle, so only the async tests use these.
+    #[cfg(not(feature = "shuttle"))]
+    use crate::{asset_manager::AssetManagerOptions, storage::new_in_memory_storage};
+
+    #[cfg(not(feature = "shuttle"))]
+    async fn test_asset_manager() -> Arc<AssetManager> {
+        // the asset manager is never touched by these tests
+        let storage = new_in_memory_storage().await.expect("in-memory storage");
+        Arc::new(AssetManager::new(
+            storage,
+            storage::Settings::default(),
+            SpecVersionBin::current(),
+            &AssetManagerOptions::no_cache(),
+        ))
+    }
+
+    #[tokio_test]
+    async fn expire_builder_default_keeps_refs() {
+        let b = expire(test_asset_manager().await, Utc::now());
+        assert_eq!(b.expired_branches, ExpiredRefAction::Ignore);
+        assert_eq!(b.expired_tags, ExpiredRefAction::Ignore);
+        assert_eq!(b.repo_update_retries, None);
         assert_eq!(
-            o.num_updates_per_repo_info_file,
+            b.num_updates_per_repo_info_file,
             DEFAULT_NUM_UPDATES_PER_REPO_INFO_FILE
         );
     }
 
-    #[test]
-    fn expire_options_setters_set_fields() {
+    #[tokio_test]
+    async fn expire_builder_methods_set_fields() {
         let retries = RepoUpdateRetryConfig::default();
-        let o = ExpireOptions::default()
-            .with_expired_branches(ExpiredRefAction::Delete)
-            .with_expired_tags(ExpiredRefAction::Delete)
-            .with_repo_update_retries(retries)
-            .with_num_updates_per_repo_info_file(7);
-        assert_eq!(o.expired_branches, ExpiredRefAction::Delete);
-        assert_eq!(o.expired_tags, ExpiredRefAction::Delete);
-        assert_eq!(o.repo_update_retries, Some(retries));
-        assert_eq!(o.num_updates_per_repo_info_file, 7);
+        let b = expire(test_asset_manager().await, Utc::now())
+            .expired_branches(ExpiredRefAction::Delete)
+            .expired_tags(ExpiredRefAction::Delete)
+            .repo_update_retries(retries)
+            .num_updates_per_repo_info_file(7);
+        assert_eq!(b.expired_branches, ExpiredRefAction::Delete);
+        assert_eq!(b.expired_tags, ExpiredRefAction::Delete);
+        assert_eq!(b.repo_update_retries, Some(retries));
+        assert_eq!(b.num_updates_per_repo_info_file, 7);
     }
 }

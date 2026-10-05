@@ -19,8 +19,7 @@ use icechunk::{
     },
     new_in_memory_storage,
     ops::gc::{
-        ExpireOptions, ExpiredRefAction, GCSummary, GarbageCollectBuilder, expire,
-        garbage_collect,
+        ExpiredRefAction, GCSummary, GarbageCollectBuilder, expire, garbage_collect,
     },
     refs::Ref,
     repository::VersionInfo,
@@ -429,12 +428,10 @@ async fn do_test_expire_and_garbage_collect(
         &AssetManagerOptions::no_cache().with_compression_level(1),
     ));
 
-    let result = expire(
-        Arc::clone(&asset_manager),
-        expire_older_than,
-        &ExpireOptions::default().with_num_updates_per_repo_info_file(100),
-    )
-    .await?;
+    let result = expire(Arc::clone(&asset_manager), expire_older_than)
+        .num_updates_per_repo_info_file(100)
+        .execute()
+        .await?;
 
     assert_eq!(result.released_snapshots.len(), 5);
     assert_eq!(result.deleted_refs.len(), 0);
@@ -526,16 +523,13 @@ async fn test_expire_and_garbage_collect_deleting_expired_refs()
         &AssetManagerOptions::no_cache().with_compression_level(1),
     ));
 
-    let result = expire(
-        Arc::clone(&asset_manager),
-        expire_older_than,
+    let result = expire(Arc::clone(&asset_manager), expire_older_than)
         // This is different compared to the previous test
-        &ExpireOptions::default()
-            .with_expired_branches(ExpiredRefAction::Delete)
-            .with_expired_tags(ExpiredRefAction::Delete)
-            .with_num_updates_per_repo_info_file(100),
-    )
-    .await?;
+        .expired_branches(ExpiredRefAction::Delete)
+        .expired_tags(ExpiredRefAction::Delete)
+        .num_updates_per_repo_info_file(100)
+        .execute()
+        .await?;
 
     assert_eq!(result.released_snapshots.len(), 7);
     assert_eq!(result.deleted_refs.len(), 2);
@@ -597,12 +591,10 @@ async fn test_diff_complete_after_expire_and_gc() -> Result<(), Box<dyn std::err
         SpecVersionBin::current(),
         &AssetManagerOptions::no_cache().with_compression_level(1),
     ));
-    let result = expire(
-        Arc::clone(&asset_manager),
-        expire_older_than,
-        &ExpireOptions::default().with_num_updates_per_repo_info_file(100),
-    )
-    .await?;
+    let result = expire(Arc::clone(&asset_manager), expire_older_than)
+        .num_updates_per_repo_info_file(100)
+        .execute()
+        .await?;
     assert_eq!(result.released_snapshots.len(), 3); // root group, /a, /b
     assert_eq!(result.edited_snapshots.len(), 1); // /c re-parented to root
 
@@ -670,14 +662,11 @@ async fn test_gc_deletes_only_unreferenced_expired_tx_logs()
         SpecVersionBin::current(),
         &AssetManagerOptions::no_cache().with_compression_level(1),
     ));
-    let result = expire(
-        Arc::clone(&asset_manager),
-        expire_older_than,
-        &ExpireOptions::default()
-            .with_expired_branches(ExpiredRefAction::Delete)
-            .with_num_updates_per_repo_info_file(100),
-    )
-    .await?;
+    let result = expire(Arc::clone(&asset_manager), expire_older_than)
+        .expired_branches(ExpiredRefAction::Delete)
+        .num_updates_per_repo_info_file(100)
+        .execute()
+        .await?;
     // root group, /a, /b on main + /d, /e on doomed
     assert_eq!(result.released_snapshots.len(), 5);
     assert_eq!(result.edited_snapshots.len(), 1); // /c re-parented to root
@@ -725,12 +714,10 @@ async fn test_gc_retains_snapshot_between_flushed_and_created_at()
 
     // Expire /b. Expiration keeps both branch tips. It re-parents /c to
     // the root, so /c gets pruned_ancestor_tx_logs = [a, b].
-    let result = expire(
-        Arc::clone(&am),
-        Utc::now() + chrono::Duration::days(1),
-        &ExpireOptions::default().with_num_updates_per_repo_info_file(100),
-    )
-    .await?;
+    let result = expire(Arc::clone(&am), Utc::now() + chrono::Duration::days(1))
+        .num_updates_per_repo_info_file(100)
+        .execute()
+        .await?;
     assert_eq!(result.released_snapshots.len(), 1);
     assert!(result.edited_snapshots.contains(&c));
 
@@ -790,12 +777,10 @@ async fn test_gc_deletes_pruned_tx_logs_of_expire_released_snapshot()
 
     // Expire /b. Expiration keeps both branch tips. It re-parents /c to
     // the root, so /c gets pruned_ancestor_tx_logs = [a, b].
-    let result = expire(
-        Arc::clone(&am),
-        Utc::now() + chrono::Duration::days(1),
-        &ExpireOptions::default().with_num_updates_per_repo_info_file(100),
-    )
-    .await?;
+    let result = expire(Arc::clone(&am), Utc::now() + chrono::Duration::days(1))
+        .num_updates_per_repo_info_file(100)
+        .execute()
+        .await?;
     assert_eq!(result.released_snapshots.len(), 1);
     assert!(result.edited_snapshots.contains(&c));
     let (repo_info, _) = am.fetch_repo_info().await?;
@@ -818,12 +803,10 @@ async fn test_gc_deletes_pruned_tx_logs_of_expire_released_snapshot()
     // the repo info and destroys its pruned refs. The file of /c stays on
     // disk.
     repo.delete_branch("feat").await?;
-    let result = expire(
-        Arc::clone(&am),
-        Utc::now() + chrono::Duration::days(1),
-        &ExpireOptions::default().with_num_updates_per_repo_info_file(100),
-    )
-    .await?;
+    let result = expire(Arc::clone(&am), Utc::now() + chrono::Duration::days(1))
+        .num_updates_per_repo_info_file(100)
+        .execute()
+        .await?;
     assert!(result.released_snapshots.contains(&c));
 
     // Set the cutoff just below the `created_at` of /c's files. The delete
@@ -939,12 +922,10 @@ async fn test_repeated_expiration_accumulates_pruned_logs()
     let threshold1 = threshold_between_commits().await;
     let c = commit_group(&repo, "main", "/c").await?;
 
-    let r1 = expire(
-        Arc::clone(&am),
-        threshold1,
-        &ExpireOptions::default().with_num_updates_per_repo_info_file(100),
-    )
-    .await?;
+    let r1 = expire(Arc::clone(&am), threshold1)
+        .num_updates_per_repo_info_file(100)
+        .execute()
+        .await?;
     assert_eq!(r1.released_snapshots.len(), 3); // g0, a, b
     assert!(r1.edited_snapshots.contains(&c));
 
@@ -953,12 +934,10 @@ async fn test_repeated_expiration_accumulates_pruned_logs()
     let d = commit_group(&repo, "main", "/d").await?;
     let _e = commit_group(&repo, "main", "/e").await?;
 
-    let r2 = expire(
-        Arc::clone(&am),
-        threshold2,
-        &ExpireOptions::default().with_num_updates_per_repo_info_file(100),
-    )
-    .await?;
+    let r2 = expire(Arc::clone(&am), threshold2)
+        .num_updates_per_repo_info_file(100)
+        .execute()
+        .await?;
     assert_eq!(r2.released_snapshots.len(), 1); // c
     assert!(r2.edited_snapshots.contains(&d));
 
@@ -1027,12 +1006,10 @@ async fn test_reparent_accumulates_existing_pruned_logs()
     // existing [b], not overwrite it.
     repo.reset_branch("main", &c, None).await?;
     let expire_threshold = threshold_between_commits().await;
-    expire(
-        Arc::clone(&am),
-        expire_threshold,
-        &ExpireOptions::default().with_num_updates_per_repo_info_file(100),
-    )
-    .await?;
+    expire(Arc::clone(&am), expire_threshold)
+        .num_updates_per_repo_info_file(100)
+        .execute()
+        .await?;
 
     let c_ancestry = repo
         .ancestry(&VersionInfo::SnapshotId(c.clone()))
@@ -1076,12 +1053,10 @@ async fn test_amend_preserves_pruned_logs() -> Result<(), Box<dyn std::error::Er
     let threshold = threshold_between_commits().await;
     let c = commit_group(&repo, "main", "/c").await?;
 
-    let r = expire(
-        Arc::clone(&am),
-        threshold,
-        &ExpireOptions::default().with_num_updates_per_repo_info_file(100),
-    )
-    .await?;
+    let r = expire(Arc::clone(&am), threshold)
+        .num_updates_per_repo_info_file(100)
+        .execute()
+        .await?;
     assert!(r.edited_snapshots.contains(&c));
 
     // Amend the boundary /c, adding /c_extra.
@@ -1157,12 +1132,10 @@ async fn test_rebase_detects_conflict_in_pruned_ancestor()
     session.add_group(Path::try_from("/other").unwrap(), Bytes::new()).await?;
     session.commit("add /other").execute().await?;
 
-    let r = expire(
-        Arc::clone(&am),
-        threshold,
-        &ExpireOptions::default().with_num_updates_per_repo_info_file(100),
-    )
-    .await?;
+    let r = expire(Arc::clone(&am), threshold)
+        .num_updates_per_repo_info_file(100)
+        .execute()
+        .await?;
     assert!(r.released_snapshots.contains(&x));
 
     clean_all_now(Arc::clone(&am)).execute().await?;
@@ -1217,12 +1190,10 @@ async fn test_rebase_errors_on_missing_pruned_ancestor_log()
     session.add_group(Path::try_from("/other").unwrap(), Bytes::new()).await?;
     session.commit("add /other").execute().await?;
 
-    expire(
-        Arc::clone(&am),
-        threshold,
-        &ExpireOptions::default().with_num_updates_per_repo_info_file(100),
-    )
-    .await?;
+    expire(Arc::clone(&am), threshold)
+        .num_updates_per_repo_info_file(100)
+        .execute()
+        .await?;
     clean_all_now(Arc::clone(&am)).execute().await?;
 
     // Simulate an older GC having deleted the pruned ancestor's tx log.
@@ -1267,12 +1238,10 @@ async fn test_diff_skips_missing_pruned_log() -> Result<(), Box<dyn std::error::
     let threshold = threshold_between_commits().await;
     commit_group(&repo, "main", "/c").await?;
 
-    expire(
-        Arc::clone(&am),
-        threshold,
-        &ExpireOptions::default().with_num_updates_per_repo_info_file(100),
-    )
-    .await?;
+    expire(Arc::clone(&am), threshold)
+        .num_updates_per_repo_info_file(100)
+        .execute()
+        .await?;
     clean_all_now(Arc::clone(&am)).execute().await?;
 
     // Delete /a's pruned-ancestor tx log, then diff: it should still succeed.
@@ -1327,12 +1296,10 @@ async fn test_inspect_shows_synthetic_composite() -> Result<(), Box<dyn std::err
     let b_node = tip.get_node(&Path::try_from("/b").unwrap()).await?.id.to_string();
     let c_node = tip.get_node(&Path::try_from("/c").unwrap()).await?.id.to_string();
 
-    let r = expire(
-        Arc::clone(&am),
-        threshold,
-        &ExpireOptions::default().with_num_updates_per_repo_info_file(100),
-    )
-    .await?;
+    let r = expire(Arc::clone(&am), threshold)
+        .num_updates_per_repo_info_file(100)
+        .execute()
+        .await?;
     assert!(r.edited_snapshots.contains(&c));
 
     // Inspecting the edited boundary returns the synthetic composite, naming
@@ -1505,14 +1472,11 @@ async fn test_expire_deletes_branch_sharing_tip_with_main()
         &AssetManagerOptions::no_cache().with_compression_level(1),
     ));
 
-    let result = expire(
-        Arc::clone(&asset_manager),
-        expire_older_than,
-        &ExpireOptions::default()
-            .with_expired_branches(ExpiredRefAction::Delete)
-            .with_num_updates_per_repo_info_file(100),
-    )
-    .await?;
+    let result = expire(Arc::clone(&asset_manager), expire_older_than)
+        .expired_branches(ExpiredRefAction::Delete)
+        .num_updates_per_repo_info_file(100)
+        .execute()
+        .await?;
 
     assert!(result.deleted_refs.contains(&Ref::Branch("feature".to_string())));
 
