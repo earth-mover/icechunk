@@ -440,7 +440,10 @@ zarrs-upstream-patch zarrs_dir="zarrs_icechunk":
 [script]
 [doc("Build zarrs_icechunk against local icechunk")]
 zarrs-upstream-build zarrs_dir="zarrs_icechunk": zarrs-upstream-patch
-  cd {{zarrs_dir}} && cargo build 2>&1 | tee build-output.log
+  # aws-lc-sys fails to build with cc >= 1.6 when CFLAGS contains -O2 (as in
+  # the pixi env); drop once https://github.com/aws/aws-lc-rs/issues/1252 is fixed
+  cd {{zarrs_dir}} && cargo update -p cc --precise 1.5.1
+  cargo build 2>&1 | tee build-output.log
 
 [private]
 [script]
@@ -665,7 +668,12 @@ xarray-upstream-pytest xarray_dir="xarray": xarray-upstream-clone xarray-upstrea
   cd icechunk-python
   source .venv/bin/activate
   export ICECHUNK_XARRAY_BACKENDS_TESTS=1
-  pytest -c="$xarray_abs/pyproject.toml" -W ignore tests/run_xarray_backends_tests.py --report-log output-pytest-log.jsonl
+  # pytest only loads conftest.py files on the tested paths, so load xarray's root
+  # conftest (it applies the skip_if_param marks) as a plugin; copy it out because
+  # putting the clone on PYTHONPATH would shadow the installed xarray
+  conftest_dir=$(mktemp -d)
+  cp "$xarray_abs/conftest.py" "$conftest_dir/xarray_root_conftest.py"
+  PYTHONPATH="$conftest_dir" pytest -p xarray_root_conftest -p xarray.tests.conftest -c="$xarray_abs/pyproject.toml" -W ignore tests/run_xarray_backends_tests.py --report-log output-pytest-log.jsonl
 
 [group('docs')]
 [script]
@@ -696,8 +704,13 @@ xarray-backends-pytest xarray_dir="xarray":
   cd icechunk-python
   source .venv/bin/activate
   export ICECHUNK_XARRAY_BACKENDS_TESTS=1
+  # pytest only loads conftest.py files on the tested paths, so load xarray's root
+  # conftest (it applies the skip_if_param marks) as a plugin; copy it out because
+  # putting the clone on PYTHONPATH would shadow the installed xarray
+  conftest_dir=$(mktemp -d)
+  cp "$xarray_abs/conftest.py" "$conftest_dir/xarray_root_conftest.py"
   # xarray's pyproject.toml so pytest finds the `flaky` fixture
-  python -m pytest -c="$xarray_abs/pyproject.toml" -W ignore --override-ini="strict_markers=false" tests/run_xarray_backends_tests.py
+  PYTHONPATH="$conftest_dir" python -m pytest -p xarray_root_conftest -p xarray.tests.conftest -c="$xarray_abs/pyproject.toml" -W ignore --override-ini="strict_markers=false" tests/run_xarray_backends_tests.py
 
 [group('coverage')]
 [script]
