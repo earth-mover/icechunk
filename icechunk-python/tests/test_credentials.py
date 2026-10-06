@@ -6,11 +6,15 @@ from pathlib import Path
 import pytest
 
 from icechunk import (
+    AzureCredentials,
+    AzureRefreshableCredential,
     IcechunkError,
     Repository,
     S3Options,
     S3StaticCredentials,
     Storage,
+    azure_credentials,
+    azure_refreshable_credentials,
     s3_refreshable_credentials,
     s3_storage,
 )
@@ -221,3 +225,30 @@ def test_s3_refreshable_credentials_pickle_with_optimization(
 
     called_only_once = path.read_text() == "."
     assert called_only_once == scatter_initial_credentials
+
+
+def get_azure_bearer() -> AzureRefreshableCredential.BearerToken:
+    return AzureRefreshableCredential.BearerToken("token", expires_after=None)
+
+
+@pytest.mark.parametrize(
+    "scatter_initial_credentials",
+    [False, True],
+)
+def test_azure_refreshable_credentials_accept_variant_factory(
+    scatter_initial_credentials: bool,
+) -> None:
+    """Regression for #2137: mypy rejected a factory returning a concrete variant."""
+    creds = azure_refreshable_credentials(
+        get_azure_bearer, scatter_initial_credentials=scatter_initial_credentials
+    )
+    assert isinstance(creds, AzureCredentials.Refreshable)
+    any_creds = azure_credentials(
+        get_credentials=get_azure_bearer,
+        scatter_initial_credentials=scatter_initial_credentials,
+    )
+    assert isinstance(any_creds, AzureCredentials.Refreshable)
+    assert isinstance(
+        AzureCredentials.Refreshable(pickle.dumps(get_azure_bearer), get_azure_bearer()),
+        AzureCredentials.Refreshable,
+    )
