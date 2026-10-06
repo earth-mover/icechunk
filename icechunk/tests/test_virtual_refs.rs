@@ -864,30 +864,10 @@ async fn test_zarr_store_virtual_refs_minio_set_and_get(
     Ok(())
 }
 
-/// A virtual chunk served by an HTTP store on a non-default port must be read
-/// from that port. Serve a chunk from a local HTTP server bound to a random
-/// (non-80) port and verify the read path honors the port stored in the ref.
-/// Regression test for <https://github.com/earth-mover/icechunk/issues/2223>
+/// Creates a store with an `array` that can hold virtual chunks from `http://127.0.0.1:{port}/`.
 #[cfg(feature = "object-store-http")]
-#[tokio::test]
-async fn test_zarr_store_virtual_refs_http_non_default_port() -> Result<(), Box<dyn Error>>
-{
+async fn create_http_virtual_chunk_store(port: u16) -> Result<Store, Box<dyn Error>> {
     use icechunk::config::HttpConfig;
-    use tokio::sync::oneshot;
-
-    let bytes = Bytes::copy_from_slice(b"first");
-
-    // Serve a single chunk file over HTTP from a temp dir.
-    let dir = TempDir::new()?;
-    tokio::fs::write(dir.path().join("chunk-1"), &bytes).await?;
-
-    let route = warp::fs::dir(dir.path().to_path_buf());
-    let (stop, wait) = oneshot::channel();
-    let port = port_check::free_local_ipv4_port_in_range(8000..65000).unwrap();
-    let server = warp::serve(route).bind(([127, 0, 0, 1], port)).await.graceful(async {
-        let _ = wait.await;
-    });
-    let join = tokio::task::spawn(server.run());
 
     let url_prefix = format!("http://127.0.0.1:{port}/");
     let container = VirtualChunkContainer::new(
@@ -913,7 +893,35 @@ async fn test_zarr_store_virtual_refs_http_non_default_port() -> Result<(), Box<
         )
         .await?;
     let zarr_meta = Bytes::copy_from_slice(br#"{"zarr_format":3,"node_type":"array","attributes":{"foo":42},"shape":[2,2,2],"data_type":"int32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":0,"codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#);
-    store.set("array/zarr.json", zarr_meta.clone()).await?;
+    store.set("array/zarr.json", zarr_meta).await?;
+    Ok(store)
+}
+
+/// A virtual chunk served by an HTTP store on a non-default port must be read
+/// from that port. Serve a chunk from a local HTTP server bound to a random
+/// (non-80) port and verify the read path honors the port stored in the ref.
+/// Regression test for <https://github.com/earth-mover/icechunk/issues/2223>
+#[cfg(feature = "object-store-http")]
+#[tokio::test]
+async fn test_zarr_store_virtual_refs_http_non_default_port() -> Result<(), Box<dyn Error>>
+{
+    use tokio::sync::oneshot;
+
+    let bytes = Bytes::copy_from_slice(b"first");
+
+    // Serve a single chunk file over HTTP from a temp dir.
+    let dir = TempDir::new()?;
+    tokio::fs::write(dir.path().join("chunk-1"), &bytes).await?;
+
+    let route = warp::fs::dir(dir.path().to_path_buf());
+    let (stop, wait) = oneshot::channel();
+    let port = port_check::free_local_ipv4_port_in_range(8000..65000).unwrap();
+    let server = warp::serve(route).bind(([127, 0, 0, 1], port)).await.graceful(async {
+        let _ = wait.await;
+    });
+    let join = tokio::task::spawn(server.run());
+
+    let store = create_http_virtual_chunk_store(port).await?;
 
     let reference = VirtualChunkRef {
         location: VirtualChunkLocation::from_url(&format!(
@@ -926,6 +934,106 @@ async fn test_zarr_store_virtual_refs_http_non_default_port() -> Result<(), Box<
     store.set_virtual_ref("array/c/0/0/0", reference, false).await?;
 
     assert_eq!(store.get("array/c/0/0/0", &ByteRange::ALL).await?, bytes);
+
+    // stop the server
+    stop.send(()).unwrap();
+    join.await?;
+    Ok(())
+}
+
+/// Reads HTTP virtual chunks with `ETag` checksums from a server that applies RFC 9110.
+/// RFC 9110 requires a quoted entity-tag in `If-Match`.
+#[cfg(feature = "object-store-http")]
+#[tokio::test]
+async fn test_zarr_store_virtual_refs_http_etag_checksum() -> Result<(), Box<dyn Error>> {
+    use tokio::sync::oneshot;
+    use warp::{Filter as _, Reply as _, http::StatusCode};
+
+    const ETAG: &str = "\"v1\"";
+    let bytes = Bytes::copy_from_slice(b"first");
+
+    // The server returns 400 for a malformed `If-Match` tag and 412 for no match.
+    // Otherwise it sends the requested range of `bytes` with ETAG.
+    fn is_entity_tag(tag: &str) -> bool {
+        let opaque = tag.strip_prefix("W/").unwrap_or(tag);
+        opaque.len() >= 2
+            && opaque.starts_with('"')
+            && opaque.ends_with('"')
+            && !opaque[1..opaque.len() - 1].contains('"')
+    }
+    let served = bytes.clone();
+    let route = warp::path!("chunk-1")
+        .and(warp::header::optional::<String>("if-match"))
+        .and(warp::header::optional::<String>("range"))
+        .map(move |if_match: Option<String>, range: Option<String>| {
+            if let Some(tags) = &if_match {
+                let mut tags = tags.split(',').map(str::trim);
+                if !tags.clone().all(|tag| tag == "*" || is_entity_tag(tag)) {
+                    return StatusCode::BAD_REQUEST.into_response();
+                }
+                if !tags.any(|tag| tag == "*" || tag == ETAG) {
+                    return StatusCode::PRECONDITION_FAILED.into_response();
+                }
+            }
+            let (start, end) = range
+                .as_deref()
+                .and_then(|r| r.strip_prefix("bytes="))
+                .and_then(|r| r.split_once('-'))
+                .map(|(s, e)| (s.parse::<usize>().unwrap(), e.parse::<usize>().unwrap()))
+                .unwrap_or((0, served.len() - 1));
+            let reply = warp::reply::with_status(
+                served[start..=end].to_vec(),
+                StatusCode::PARTIAL_CONTENT,
+            );
+            let reply = warp::reply::with_header(reply, "etag", ETAG);
+            warp::reply::with_header(
+                reply,
+                "content-range",
+                format!("bytes {start}-{end}/{}", served.len()),
+            )
+            .into_response()
+        });
+    let (stop, wait) = oneshot::channel();
+    let port = port_check::free_local_ipv4_port_in_range(8000..65000).unwrap();
+    let server = warp::serve(route).bind(([127, 0, 0, 1], port)).await.graceful(async {
+        let _ = wait.await;
+    });
+    let join = tokio::task::spawn(server.run());
+
+    let store = create_http_virtual_chunk_store(port).await?;
+
+    let location = format!("http://127.0.0.1:{port}/chunk-1");
+    // The refs store the tag quoted, unquoted, with a wrong value, and as a weak tag.
+    for (key, etag) in [
+        ("array/c/0/0/0", ETAG),
+        ("array/c/0/0/1", "v1"),
+        ("array/c/0/1/0", "v2"),
+        ("array/c/0/1/1", r#"W/"v1""#),
+    ] {
+        let reference = VirtualChunkRef {
+            location: VirtualChunkLocation::from_url(&location)?,
+            offset: 0,
+            length: 5,
+            checksum: Some(Checksum::ETag(ETag(etag.to_string()))),
+        };
+        store.set_virtual_ref(key, reference, false).await?;
+    }
+
+    assert_eq!(store.get("array/c/0/0/0", &ByteRange::ALL).await?, bytes);
+    assert_eq!(store.get("array/c/0/0/1", &ByteRange::ALL).await?, bytes);
+    // `If-Match` uses strong comparison. A weak tag never matches.
+    for key in ["array/c/0/1/0", "array/c/0/1/1"] {
+        let result = store.get(key, &ByteRange::ALL).await;
+        assert!(
+            matches!(
+                &result,
+                Err(StoreError{kind: StoreErrorKind::SessionError(SessionErrorKind::VirtualReferenceError(
+                    VirtualReferenceErrorKind::ObjectModified(chunk_location)
+                )),..}) if *chunk_location == location
+            ),
+            "{key}: {result:?}"
+        );
+    }
 
     // stop the server
     stop.send(()).unwrap();

@@ -1,5 +1,11 @@
 # Changelog
 
+## Python Icechunk Library [unreleased]
+
+### Fixes
+
+- Icechunk sends `If-Match` as a quoted entity-tag when it reads an HTTP virtual chunk with an ETag checksum. RFC 9110 requires the quotes. Servers such as GitHub returned 412 for an unquoted tag. The read then failed with "the checksum of the object owning the virtual chunk has changed".
+
 ## Python Icechunk Library 2.3.0
 
 ### Features

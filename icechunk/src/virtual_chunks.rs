@@ -1169,6 +1169,9 @@ impl ChunkFetcher for S3Fetcher {
 pub struct ObjectStoreFetcher {
     client: Arc<dyn ObjectStore>,
     settings: storage::Settings,
+    /// If true, the fetcher sends `If-Match` as a quoted entity-tag.
+    /// RFC 9110 requires the quotes for HTTP servers.
+    quote_etags: bool,
 }
 
 #[cfg(any(
@@ -1197,6 +1200,7 @@ impl ObjectStoreFetcher {
                 unsafe_use_metadata: Some(false),
                 ..settings
             },
+            quote_etags: false,
         }
     }
 
@@ -1220,7 +1224,7 @@ impl ObjectStoreFetcher {
             .mk_object_store(&settings, Role::Read)
             .map_err(|e| VirtualReferenceErrorKind::OtherError(Box::new(e)))
             .capture()?;
-        Ok(ObjectStoreFetcher { client, settings })
+        Ok(ObjectStoreFetcher { client, settings, quote_etags: false })
     }
 
     #[cfg(feature = "object-store-http")]
@@ -1245,7 +1249,7 @@ impl ObjectStoreFetcher {
             .mk_object_store(&settings, Role::Read)
             .map_err(|e| VirtualReferenceErrorKind::OtherError(Box::new(e)))
             .capture()?;
-        Ok(ObjectStoreFetcher { client, settings })
+        Ok(ObjectStoreFetcher { client, settings, quote_etags: true })
     }
 
     #[cfg(feature = "object-store-gcs")]
@@ -1275,7 +1279,7 @@ impl ObjectStoreFetcher {
             .map_err(|e| VirtualReferenceErrorKind::OtherError(Box::new(e)))
             .capture()?;
 
-        Ok(ObjectStoreFetcher { client, settings })
+        Ok(ObjectStoreFetcher { client, settings, quote_etags: false })
     }
 
     #[cfg(feature = "object-store-azure")]
@@ -1306,7 +1310,7 @@ impl ObjectStoreFetcher {
             .map_err(|e| VirtualReferenceErrorKind::OtherError(Box::new(e)))
             .capture()?;
 
-        Ok(ObjectStoreFetcher { client, settings })
+        Ok(ObjectStoreFetcher { client, settings, quote_etags: false })
     }
 }
 
@@ -1352,7 +1356,13 @@ impl ChunkFetcher for ObjectStoreFetcher {
                 options.if_unmodified_since = Some(d);
             }
             Some(Checksum::ETag(etag)) => {
-                options.if_match = Some(strip_quotes(&etag.0).to_string());
+                let etag = &etag.0;
+                let is_entity_tag = etag.starts_with('"') || etag.starts_with("W/\"");
+                options.if_match = Some(match (self.quote_etags, is_entity_tag) {
+                    (true, true) => etag.clone(),
+                    (true, false) => format!("\"{etag}\""),
+                    (false, _) => strip_quotes(etag).to_string(),
+                });
             }
             None => {}
         }
