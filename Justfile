@@ -668,7 +668,12 @@ xarray-upstream-pytest xarray_dir="xarray": xarray-upstream-clone xarray-upstrea
   cd icechunk-python
   source .venv/bin/activate
   export ICECHUNK_XARRAY_BACKENDS_TESTS=1
-  pytest -c="$xarray_abs/pyproject.toml" -W ignore tests/run_xarray_backends_tests.py --report-log output-pytest-log.jsonl
+  # pytest only loads conftest.py files on the tested paths, so load xarray's root
+  # conftest (it applies the skip_if_param marks) as a plugin; copy it out because
+  # putting the clone on PYTHONPATH would shadow the installed xarray
+  conftest_dir=$(mktemp -d)
+  cp "$xarray_abs/conftest.py" "$conftest_dir/xarray_root_conftest.py"
+  PYTHONPATH="$conftest_dir" pytest -p xarray_root_conftest -p xarray.tests.conftest -c="$xarray_abs/pyproject.toml" -W ignore tests/run_xarray_backends_tests.py --report-log output-pytest-log.jsonl
 
 [group('docs')]
 [script]
@@ -699,8 +704,13 @@ xarray-backends-pytest xarray_dir="xarray":
   cd icechunk-python
   source .venv/bin/activate
   export ICECHUNK_XARRAY_BACKENDS_TESTS=1
+  # pytest only loads conftest.py files on the tested paths, so load xarray's root
+  # conftest (it applies the skip_if_param marks) as a plugin; copy it out because
+  # putting the clone on PYTHONPATH would shadow the installed xarray
+  conftest_dir=$(mktemp -d)
+  cp "$xarray_abs/conftest.py" "$conftest_dir/xarray_root_conftest.py"
   # xarray's pyproject.toml so pytest finds the `flaky` fixture
-  python -m pytest -c="$xarray_abs/pyproject.toml" -W ignore --override-ini="strict_markers=false" tests/run_xarray_backends_tests.py
+  PYTHONPATH="$conftest_dir" python -m pytest -p xarray_root_conftest -p xarray.tests.conftest -c="$xarray_abs/pyproject.toml" -W ignore --override-ini="strict_markers=false" tests/run_xarray_backends_tests.py
 
 [group('coverage')]
 [script]
