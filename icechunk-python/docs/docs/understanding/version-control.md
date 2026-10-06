@@ -222,6 +222,7 @@ This can be useful for:
 
 - **Exploratory work** — saving intermediate results without cluttering a branch's history.
 - **Deferred decisions** — creating several candidate snapshots and deciding later which one to keep.
+- **Distributed writes** — workers flush their changes and return snapshot IDs. A coordinator merges the IDs into one commit with [`merge_snapshots`](../reference/index.md#icechunk.Repository.merge_snapshots). See [distributed writes with flushed snapshots](./parallel.md#distributed-writes-with-flushed-snapshots).
 
 ```python exec="on" session="version" source="material-block" result="code"
 session = repo.writable_session("main")

@@ -91,6 +91,26 @@ There are fundamentally two different modes for distributed writes in Icechunk:
 - "Uncooperative" writes, in which multiple workers are attempting to write to the same store in an uncoordinated way.
   This path relies on the optimistic concurrency mechanism to detect and resolve conflicts.
 
+Cooperative writes come in two flows. In the fork-and-merge flow, workers return `ForkSession`
+objects and the coordinator merges them in memory. In the flush-and-merge flow, workers save
+their changes to the store with `Session.flush` and return snapshot IDs. Both flows produce one
+commit. Pick the flow by where the workers run and what they can return:
+
+| | Fork and merge | Flush and merge |
+|---|---|---|
+| Workers return | A pickled `ForkSession` | A snapshot ID string |
+| Writes to the store before the commit | None | One snapshot per worker, with its manifests |
+| Coordinator memory | Every chunk reference from every worker | The chunk coordinates from every worker |
+| Driver crash before the commit | All worker output is lost | Flushed snapshots survive until garbage collection |
+| Two workers write the same chunk | The later fork wins, with no error | The merge fails and lists the chunks |
+| Branch tip moved during the job | `commit` needs `rebase_with` | The merge applies the snapshots on the new tip |
+
+Use fork and merge when the workers run in one process pool or one Dask cluster. It writes
+nothing until the commit and needs no cleanup. Use flush and merge when the job scheduler can
+only return strings from a worker. Also use it when a worker's output must survive a crash of
+the coordinator. Each flush registers a snapshot in the repository. A job with thousands of
+workers grows the repository metadata until garbage collection runs.
+
 !!! info
 
     This code will not execute with a `ProcessPoolExecutor` without [some changes](https://docs.python.org/3/library/multiprocessing.html#programming-guidelines).
@@ -111,6 +131,11 @@ There are three key points to keep in mind:
 2. Icechunk requires that users obtain a distributable *writable* `Session` using `Session.fork()`.
    This creates a new `ForkSession` object that can be pickled.
 3. The user *must* manually merge the `ForkSession` objects into the `Session` to create a meaningful commit.
+
+!!! warning
+
+    `Session.merge` does not detect two forks that write the same chunk. The fork merged last
+    wins. Partition the work so that no two tasks write the same chunk.
 
 First we modify `write_task` to return the `Session`:
 

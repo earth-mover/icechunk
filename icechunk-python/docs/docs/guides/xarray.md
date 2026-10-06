@@ -20,6 +20,11 @@ and `icechunk.xarray.to_icechunk` methods.
     In a distributed context, e.g.
     writes orchestrated with `multiprocesssing` or a `dask.distributed.Client` and `dask.array`, you *must* use `to_icechunk`.
     This will ensure that you can execute a commit that successfully records all remote writes.
+    When the input holds dask arrays, `to_icechunk` forks the session and writes through the fork.
+    It merges the fork back before it returns. Pass the `Session` itself. Do not fork it first.
+    In-memory variables are written before the fork. If the input holds any, the fork starts from a
+    session with changes and writes a snapshot that no branch points to. Garbage collection removes it later.
+    Drop in-memory variables that every worker would write, such as coordinates, before the call.
     See [these docs on orchestrating parallel writes](../understanding/parallel.md) and [these docs on dask.array with distributed](./dask.md#icechunk-dask-xarray)
     for more.
 
