@@ -1,6 +1,7 @@
 //! CLI command definitions and handlers.
 
 use crate::format::{SnapshotId, snapshot::SnapshotInfo};
+use crate::inspect::snapshot_json;
 use crate::repository::VersionInfo;
 use chrono::Local;
 use clap::{Args, Parser, Subcommand};
@@ -42,6 +43,25 @@ enum Command {
     Repo(RepoCommand),
     #[command(name = "ancestry", about = "Show ancestry of a branch, tag or snapshot")]
     Ancestry(AncestryArgs),
+    #[command(name = "inspect", about = "Show details of a snapshot as JSON")]
+    Inspect(InspectArgs),
+    #[command(
+        name = "diff",
+        about = "Show changes from a branch, tag or snapshot to one of its descendants",
+        long_about = concat!(
+            "Show changes from a branch, tag or snapshot to one of its descendants.\n",
+            "`from` must be an ancestor of `to`.\n\n",
+            "Each line starts with a status letter:\n",
+            "  A  added group or array\n",
+            "  D  deleted group or array\n",
+            "  M  group or array with changed metadata\n",
+            "  U  array with updated chunks\n",
+            "  R  moved group or array\n\n",
+            "A path can have more than one line, e.g. a new array with chunks\n",
+            "shows both `A` and `U`."
+        )
+    )]
+    Diff(DiffArgs),
     #[command(subcommand, about = "Manage branches")]
     Branch(BranchCommand),
     #[command(subcommand, about = "Manage tags")]
@@ -66,6 +86,31 @@ struct AncestryArgs {
     reference: String,
     #[arg(short = 'n', default_value_t = 10, help = "Number of snapshots to list")]
     n: usize,
+}
+
+#[derive(Debug, Args)]
+struct InspectArgs {
+    #[arg(name = "alias", help = "Alias of the repository in the config")]
+    repo: RepositoryAlias,
+    #[arg(
+        name = "reference",
+        default_value = "main",
+        help = "Branch, tag, or snapshot id to inspect"
+    )]
+    reference: String,
+}
+
+#[derive(Debug, Args)]
+struct DiffArgs {
+    #[arg(name = "alias", help = "Alias of the repository in the config")]
+    repo: RepositoryAlias,
+    #[arg(
+        name = "from",
+        help = "Branch, tag, or snapshot id to diff from; must be an ancestor of `to`"
+    )]
+    from: String,
+    #[arg(name = "to", help = "Branch, tag, or snapshot id to diff to")]
+    to: String,
 }
 
 #[derive(Debug, Subcommand)]
@@ -459,6 +504,52 @@ async fn ancestry(
     Ok(())
 }
 
+async fn inspect(
+    args: &InspectArgs,
+    config: &CliConfig,
+    mut writer: impl std::io::Write,
+) -> Result<()> {
+    let repository = open_repository(&args.repo, config).await?;
+    let snapshot = parse_reference(&repository, &args.reference).await?;
+    let json = snapshot_json(repository.asset_manager(), &snapshot, true)
+        .await
+        .context(format!("Failed to inspect snapshot {snapshot}"))?;
+    writeln!(writer, "{json}")?;
+    Ok(())
+}
+
+async fn diff(
+    args: &DiffArgs,
+    config: &CliConfig,
+    mut writer: impl std::io::Write,
+) -> Result<()> {
+    let repository = open_repository(&args.repo, config).await?;
+    let from = parse_reference(&repository, &args.from).await?;
+    let to = parse_reference(&repository, &args.to).await?;
+    let diff = repository
+        .diff(&VersionInfo::SnapshotId(from), &VersionInfo::SnapshotId(to))
+        .await
+        .context(format!("Failed to diff {:?} and {:?}", args.from, args.to))?;
+
+    for path in diff.new_groups.iter().chain(&diff.new_arrays) {
+        writeln!(writer, "A  {path}")?;
+    }
+    for path in diff.deleted_groups.iter().chain(&diff.deleted_arrays) {
+        writeln!(writer, "D  {path}")?;
+    }
+    for path in diff.updated_groups.iter().chain(&diff.updated_arrays) {
+        writeln!(writer, "M  {path}")?;
+    }
+    for (path, chunks) in &diff.updated_chunks {
+        let noun = if chunks.len() == 1 { "chunk" } else { "chunks" };
+        writeln!(writer, "U  {path}  ({} {noun})", chunks.len())?;
+    }
+    for moved in &diff.moved_nodes {
+        writeln!(writer, "R  {} -> {}", moved.from, moved.to)?;
+    }
+    Ok(())
+}
+
 async fn config_add(add_cmd: &AddCommand, config: &CliConfig) -> Result<CliConfig> {
     if config.repos.contains_key(&add_cmd.repo) {
         return Err(anyhow::anyhow!("Repository {:?} already exists", add_cmd.repo));
@@ -624,6 +715,14 @@ pub async fn run_cli(args: IcechunkCLI) -> Result<()> {
             ancestry(&ancestry_args, &config, stdout()).await?;
             Ok(())
         }
+        Command::Inspect(inspect_args) => {
+            inspect(&inspect_args, &config, stdout()).await?;
+            Ok(())
+        }
+        Command::Diff(diff_args) => {
+            diff(&diff_args, &config, stdout()).await?;
+            Ok(())
+        }
         Command::Branch(BranchCommand::List(list_args)) => {
             list_branches(&list_args, &config, stdout()).await?;
             Ok(())
@@ -667,9 +766,11 @@ pub async fn run_cli(args: IcechunkCLI) -> Result<()> {
 mod tests {
     use std::fs::read_dir;
 
+    use bytes::Bytes;
     use icechunk_macros::tokio_test;
 
     use super::*;
+    use crate::format::{ChunkIndices, Path, snapshot::ArrayShape};
 
     use regex::Regex;
 
@@ -902,5 +1003,82 @@ Date: \w+ \d{2} \d+  \d{2}:\d{2}:\d{2}
         // errors clearly on something that is none of the above
         let err = parse_reference(&repository, "does-not-exist").await.unwrap_err();
         assert!(err.to_string().contains("does-not-exist"));
+    }
+
+    #[tokio_test]
+    async fn test_inspect() {
+        // Arrange
+        let temp = assert_fs::TempDir::new().unwrap();
+        let (repo_alias, config, root) = setup_test_repo(&temp).await;
+        let args = InspectArgs { repo: repo_alias, reference: "main".to_string() };
+        let mut writer = Vec::new();
+
+        // Act
+        inspect(&args, &config, &mut writer).await.unwrap();
+
+        // Assert
+        let info: crate::inspect::SnapshotInfoInspect =
+            serde_json::from_slice(&writer).unwrap();
+        assert_eq!(info.id, root.to_string());
+        assert_eq!(info.commit_message, "Repository initialized");
+    }
+
+    #[tokio_test]
+    async fn test_diff() {
+        // Arrange
+        let temp = assert_fs::TempDir::new().unwrap();
+        let (repo_alias, config, root) = setup_test_repo(&temp).await;
+        let repository = open_repository(&repo_alias, &config).await.unwrap();
+        let mut session = repository.writable_session("main").await.unwrap();
+        session.add_group(Path::root(), Bytes::new()).await.unwrap();
+        session.add_group("/a".try_into().unwrap(), Bytes::new()).await.unwrap();
+        session.commit("add groups").execute().await.unwrap();
+        let args =
+            DiffArgs { repo: repo_alias, from: root.to_string(), to: "main".to_string() };
+        let mut writer = Vec::new();
+
+        // Act
+        diff(&args, &config, &mut writer).await.unwrap();
+
+        // Assert
+        assert_eq!(String::from_utf8(writer).unwrap(), "A  /\nA  /a\n");
+    }
+
+    #[tokio_test]
+    async fn test_diff_updated_array() {
+        // Arrange
+        let temp = assert_fs::TempDir::new().unwrap();
+        let (repo_alias, config, _) = setup_test_repo(&temp).await;
+        let repository = open_repository(&repo_alias, &config).await.unwrap();
+        let path: Path = "/array".try_into().unwrap();
+        let shape = ArrayShape::new(vec![(4, 4)]).unwrap();
+        let mut session = repository.writable_session("main").await.unwrap();
+        session.add_group(Path::root(), Bytes::new()).await.unwrap();
+        session.add_array(path.clone(), shape.clone(), None, Bytes::new()).await.unwrap();
+        let from = session.commit("add array").execute().await.unwrap();
+        let mut session = repository.writable_session("main").await.unwrap();
+        session
+            .update_array(&path, shape, None, Bytes::from_static(b"new"))
+            .await
+            .unwrap();
+        let coords = ChunkIndices(vec![0]);
+        let payload =
+            session.get_chunk_writer(&path, &coords).unwrap()(Bytes::from_static(b"x"))
+                .await
+                .unwrap();
+        session.set_chunk_ref(path, coords, Some(payload)).await.unwrap();
+        session.commit("update array").execute().await.unwrap();
+        let args =
+            DiffArgs { repo: repo_alias, from: from.to_string(), to: "main".to_string() };
+        let mut writer = Vec::new();
+
+        // Act
+        diff(&args, &config, &mut writer).await.unwrap();
+
+        // Assert
+        assert_eq!(
+            String::from_utf8(writer).unwrap(),
+            "M  /array\nU  /array  (1 chunk)\n"
+        );
     }
 }
