@@ -54,7 +54,7 @@ enum Command {
             "Each line starts with a status letter:\n",
             "  A  added group or array\n",
             "  D  deleted group or array\n",
-            "  M  group or array with changed metadata\n",
+            "  M  group or array with updated metadata\n",
             "  U  array with updated chunks\n",
             "  R  moved group or array\n\n",
             "A path can have more than one line, e.g. a new array with chunks\n",
