@@ -1,5 +1,5 @@
 import pickle
-import time
+import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -202,8 +202,7 @@ def test_s3_refreshable_credentials_pickle_with_optimization(
         allow_http=True,
         force_path_style=True,
         bucket="testbucket",
-        prefix="test_refreshable_credentials_pickle_optimization-"
-        + str(int(time.time() * 1000)),
+        prefix=f"test_refreshable_credentials_pickle_optimization-{uuid.uuid4()}",
         get_credentials=creds_obj,
         scatter_initial_credentials=scatter_initial_credentials,
     )
