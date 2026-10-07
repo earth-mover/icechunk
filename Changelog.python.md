@@ -1,6 +1,6 @@
 # Changelog
 
-## Python Icechunk Library [unreleased]
+## Python Icechunk Library 2.3.0
 
 ### Features
 
@@ -17,8 +17,13 @@ chunk requests add `array=<path>; chunk=<coords>` and manifest requests add `arr
 
 - `storage_class`, `metadata_storage_class` and `chunks_storage_class` now apply to the `object_store` backends — `gcs_storage`, `azure_storage` and `s3_object_store_storage`. The value is passed to the provider unchanged, so use its own names ([#904](https://github.com/earth-mover/icechunk/issues/904), [#2364](https://github.com/earth-mover/icechunk/issues/2364)).
 
+### Performance
+
+- Decoded virtual chunk locations no longer keep a 1 KiB decompression buffer each, which cuts memory when garbage collection and chunk statistics walk manifests with many virtual chunks ([#2436](https://github.com/earth-mover/icechunk/pull/2436)).
+
 ### Breaking changes
 
+- Rust only: the minimum supported Rust version is 1.95.0 ([#2443](https://github.com/earth-mover/icechunk/pull/2443)).
 - Rust only: `Repository::open`, `Repository::create` and `Repository::open_or_create` take only the storage and return a `RepositoryBuilder`. Optional settings are set by methods on the builder, followed by `.execute().await`. Python and JavaScript APIs are unchanged ([#2445](https://github.com/earth-mover/icechunk/pull/2445)).
 
 ## Python Icechunk Library 2.3.0a1
