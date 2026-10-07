@@ -17,6 +17,7 @@ from icechunk._icechunk_python import (
 
 __all__ = [
     "AnyAzureCredential",
+    "AnyAzureRefreshableCredential",
     "AnyAzureStaticCredential",
     "AnyCredential",
     "AnyGcsCredential",
@@ -76,6 +77,12 @@ AnyAzureStaticCredential = (
     AzureStaticCredentials.AccessKey
     | AzureStaticCredentials.SasToken
     | AzureStaticCredentials.BearerToken
+)
+
+AnyAzureRefreshableCredential = (
+    AzureRefreshableCredential.AccessKey
+    | AzureRefreshableCredential.SasToken
+    | AzureRefreshableCredential.BearerToken
 )
 
 AnyAzureCredential = (
@@ -377,14 +384,14 @@ def azure_static_credentials(
 
 
 def azure_refreshable_credentials(
-    get_credentials: Callable[[], AzureRefreshableCredential],
+    get_credentials: Callable[[], AnyAzureRefreshableCredential],
     scatter_initial_credentials: bool = False,
 ) -> AzureCredentials.Refreshable:
     """Create refreshable credentials for Azure Blob Storage object store.
 
     Parameters
     ----------
-    get_credentials: Callable[[], AzureRefreshableCredential]
+    get_credentials: Callable[[], AnyAzureRefreshableCredential]
         Use this function to get and refresh the credentials. The function must be picklable.
     scatter_initial_credentials: bool, optional
         Immediately call and store the value returned by get_credentials. This is useful if the
@@ -415,7 +422,7 @@ def azure_credentials(
     bearer_token: str | None = None,
     from_env: bool | None = None,
     anonymous: bool | None = None,
-    get_credentials: Callable[[], AzureRefreshableCredential] | None = None,
+    get_credentials: Callable[[], AnyAzureRefreshableCredential] | None = None,
     scatter_initial_credentials: bool = False,
 ) -> AnyAzureCredential:
     """Create credentials Azure Blob Storage object store.
