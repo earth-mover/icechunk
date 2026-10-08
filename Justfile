@@ -123,11 +123,16 @@ test-integration rooted="true" *args:
   set +e
   rc=0
   # exclude icechunk-python: no Rust tests, but its PyO3 lib-test binary aborts loading libpython
-  cargo test --profile {{profile}} --workspace --exclude icechunk-python --tests "$@" -- --ignored --skip rooted_roundtrip || rc=1
+  cargo test --profile {{profile}} --workspace --exclude icechunk-python --tests "$@" -- --ignored --skip rooted_roundtrip --skip three_writers_everything || rc=1
   if [ "{{rooted}}" = "true" ]; then
     cargo test --profile {{profile}} -p icechunk --test main rooted_roundtrip -- --ignored || rc=1
   fi
   exit $rc
+
+[group('test')]
+[doc("Run the 3-writer model check of the filesystem storage protocol (not run in CI; over 10 min and about 19 GB of RAM)")]
+fs-model-check:
+  cargo test --release -p icechunk-fs --test protocol_model -- --ignored --nocapture three_writers_everything
 
 [group('test')]
 [script]

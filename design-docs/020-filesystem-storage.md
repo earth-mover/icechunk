@@ -340,11 +340,26 @@ by reading content, never by `stat`:
 ## Sweeping
 
 - **Step 6** handles the normal case.
-- **GC** also sweeps, and never touches anything younger than N hours:
+- **GC** also sweeps protocol files whose mtime is older than a cutoff. The
+  cutoff is the metadata age cutoff the user gives GC
+  (`delete_object_older_than` in Python), but never later than 60 minutes ago:
+  `cutoff = min(user_cutoff, now - 60 min)`. When GC is told to keep
+  metadata, it sweeps no protocol files.
   - `repo.new_bytes.*`, `repo.lockinfo.*` and `repo.probe.*`: deleted
-    unconditionally.
-  - `repo.lock.<h>.*`: deleted only if `h` differs from the hash of a fresh
-    read of `repo`.
+    whatever their content.
+  - `repo.lock.<h>.*`: GC lists the lock files first, then does a fresh read
+    of `repo`. It deletes only listed locks whose `h` differs from the hash of
+    that read. A lock listed before the read was created on top of a version
+    that was current at or before the listing. If the read shows a different
+    hash, that version is gone for good (content uniqueness), so its lock
+    family can never be used again. A lock that appears after the listing is
+    left for the next run.
+- The cutoff affects only liveness. Deleting a live attempt's ticket or
+  lockinfo makes that attempt fail with a conflict, and a lock of a dead family
+  is never used again. The 60-minute floor keeps GC from failing slow attempts
+  that are still alive. It also absorbs skew between the clock of the GC
+  client, which computes the cutoff, and the file server's clock, which sets
+  the mtimes.
 - **Never** delete a lock file whose hash is current.
 
 ## Fresh read
@@ -570,7 +585,7 @@ Mitigations:
   - **No lost update.** Every successful commit replaces exactly the version
     it was based on.
   - **Acknowledged commits are never undone.**
-  - **Progress.** Without crashes, some writer eventually commits.
+  - **Progress.** Without crashes or GC sweeping, some writer eventually commits.
 - **Storage tests.** The existing `Storage` tests run against
   `FilesystemStorage`, covering the reworked read and `put_object` APIs on
   every backend.

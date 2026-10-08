@@ -5,6 +5,7 @@ members = [
   "icechunk-format",
   "icechunk-storage",
   "icechunk-s3",
+  "icechunk-fs",
   "icechunk-arrow-object-store",
   "icechunk-python",
   "icechunk-macros",
