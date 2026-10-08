@@ -44,11 +44,17 @@ pub(crate) fn staging_path(target: &Path) -> PathBuf {
 }
 
 pub(crate) fn is_staging_name(file_name: &OsStr) -> bool {
-    file_name.to_str().and_then(|name| name.rsplit_once(STAGING_INFIX)).is_some_and(
-        |(_, id)| {
-            Uuid::try_parse(id).is_ok_and(|uuid| uuid.hyphenated().to_string() == id)
-        },
-    )
+    file_name
+        .to_str()
+        .and_then(|name| name.rsplit_once(STAGING_INFIX))
+        .and_then(|(_, id)| parse_hyphenated_uuid(id))
+        .is_some()
+}
+
+/// Parses `s` only if it is exactly a lowercase hyphenated UUID, the form
+/// `Uuid`'s `Display` writes.
+pub(crate) fn parse_hyphenated_uuid(s: &str) -> Option<Uuid> {
+    Uuid::try_parse(s).ok().filter(|uuid| uuid.hyphenated().to_string() == s)
 }
 
 #[cfg(test)]

@@ -42,6 +42,11 @@ Some new paths, all in the repo root next to `repo`:
 | `repo.lockinfo.<attempt_id>` | Contains `attempt_id`; linked as the lock |
 | `repo.lock.<h>.<gen>` | Lock for replacing hash `h`, generation `gen` |
 
+The conditional-update protocol works for any object: for an object `<name>`
+the files are `<name>.new_bytes.<attempt_id>`, `<name>.lockinfo.<attempt_id>`
+and `<name>.lock.<h>.<gen>` next to it (V2 only updates `repo`
+conditionally).
+
 ## Algorithm overview
 
 `repo` is only ever replaced by `rename`. A writer that wants to replace the
@@ -107,9 +112,15 @@ fn conditional_update(base_hash: Hash, new_bytes: &[u8]) -> Result<Updated | Not
     let attempt_id    = Uuid::new_v4();
     let ticket_path   = format!("repo.new_bytes.{attempt_id}");
     let lockinfo_path = format!("repo.lockinfo.{attempt_id}");
+    // Before the commit point, any I/O error not matched below runs
+    // cleanup() and is returned.
 
     // ── Step 1: stage the lock content and the new content ──────────────────
-    write_fsync_close(&lockinfo_path, attempt_id.to_string());
+    match write_fsync_close(&lockinfo_path, attempt_id.to_string()) {
+        Ok(()) => {}
+        // The directory doesn't exist, so neither does `repo`.
+        Err(ENOENT) => return NotOnLatestVersion,
+    }
 
     // Early exit: if the gen-0 lock for our base exists and is not stale,
     // someone is committing on top of our base and we will lose anyway.
@@ -143,7 +154,9 @@ fn conditional_update(base_hash: Hash, new_bytes: &[u8]) -> Result<Updated | Not
                 // Lock files are fsynced before being linked, so this is
                 // corruption. Without the holder's attempt_id we cannot delete
                 // its ticket, so we cannot steal. Needs manual recovery.
-                Err(Unparseable) => return Err(FormatError),
+                Err(Unparseable) => { cleanup(); return Err(CorruptLock); }
+
+                Err(e) => { cleanup(); return Err(e); }  // couldn't read the lock
 
                 // Probably alive and about to change `repo`, which would outdate
                 // our base anyway. Report a conflict; the caller's retry loop
@@ -162,16 +175,23 @@ fn conditional_update(base_hash: Hash, new_bytes: &[u8]) -> Result<Updated | Not
     // makes its future `rename(ticket, repo)` fail.
     for j in 0..my_gen {
         match read_lock_owner(&lock_path(&base_hash, j)) {
-            Ok(owner) => { let _ = unlink(&format!("repo.new_bytes.{owner}")); } // ENOENT: already committed or deleted
+            Ok(owner) => match unlink(&format!("repo.new_bytes.{owner}")) {
+                Ok(()) | Err(ENOENT) => {}  // ENOENT: already committed or deleted
+                // The holder's ticket may still exist, and it could commit
+                // alongside us.
+                Err(e) => { cleanup(); return Err(e); }
+            },
             Err(ENOENT) => {}        // deleted => base_hash no longer current => step 4 fails
-            Err(Unparseable) => return Err(FormatError),
+            Err(Unparseable) => { cleanup(); return Err(CorruptLock); }  // needs manual recovery
+            Err(e) => { cleanup(); return Err(e); }
         }
     }
 
     // ── Step 4: compare ─────────────────────────────────────────────────────
-    if sha256(&read_file_fresh("repo")) != base_hash {
-        cleanup();
-        return NotOnLatestVersion;
+    match repo_hashes_to(&base_hash) {
+        Ok(true) => {}
+        Ok(false) => { cleanup(); return NotOnLatestVersion; }
+        Err(e) => { cleanup(); return Err(e); }
     }
 
     // ── Step 5: commit point ────────────────────────────────────────────────
@@ -180,8 +200,11 @@ fn conditional_update(base_hash: Hash, new_bytes: &[u8]) -> Result<Updated | Not
         // Either our ticket was deleted before the rename reached the server, or the
         // rename succeeded and a retry after a lost reply saw ENOENT. Content
         // is unique, so reading `repo` tells us which.
-        Err(ENOENT) if sha256(&read_file_fresh("repo")) == sha256(new_bytes) => {}
-        Err(ENOENT) => { cleanup(); return NotOnLatestVersion; }
+        Err(ENOENT) => match repo_hashes_to(&sha256(new_bytes)) {
+            Ok(true) => {}
+            Ok(false) => { cleanup(); return NotOnLatestVersion; }
+            Err(e) => { cleanup(); return Err(e); }
+        },
     }
     // The rename is a change to the directory, not to any file, and fsyncing
     // the ticket doesn't make it durable. Without this, a power loss after we
@@ -202,6 +225,15 @@ fn conditional_update(base_hash: Hash, new_bytes: &[u8]) -> Result<Updated | Not
 // generation. It only deletes the tickets of *lower* generations, so it would
 // miss a stealer above us, and both could commit.
 fn cleanup() { unlink(&ticket_path); unlink(&lockinfo_path); }
+
+// A missing `repo` doesn't hash to anything.
+fn repo_hashes_to(hash: &Hash) -> Result<bool> {
+    match read_file_fresh("repo") {
+        Ok(bytes) => Ok(sha256(&bytes) == hash),
+        Err(ENOENT) => Ok(false),
+        Err(e) => Err(e),
+    }
+}
 ```
 
 #### Lock staleness
@@ -214,6 +246,12 @@ matter:
   server's current time.
 
 The lock is stale if the difference exceeds `STALE_AFTER`.
+
+A lock shares its inode with its holder's lockinfo, and unlinking any name
+of an inode updates its ctime. So the lock's ctime is also refreshed when
+the holder's lockinfo is deleted (by its cleanup, its tidy-up or a GC
+sweep), which can delay a steal by up to another `STALE_AFTER`. This only
+affects liveness.
 
 **Choosing `STALE_AFTER`.** it must be longer than a healthy
 holder ever needs between taking the lock (step 2) and its commit `rename`
@@ -234,11 +272,16 @@ Consequences:
 - **Too short.** Live holders get stolen from and fail with spurious
   conflicts. Under sustained stalls longer than `STALE_AFTER`, every holder
   can be stolen from before it finishes, and nobody makes progress.
-- **Too long.** After a writer crashes while holding a lock, commits on top of
-  that base are blocked for up to `STALE_AFTER`.
+- **Too long.** After a writer crashes while holding a lock, writers on top
+  of that base get conflicts until the lock is stale. Commits and ref
+  updates keep retrying with backoff (`repo_update_retries`), then steal the
+  lock and commit about `STALE_AFTER` later, or up to twice that when a
+  lockinfo unlink refreshed the lock's ctime. GC, expiration, and callers
+  configured with few retries fail instead, with "too many attempts"
+  (`RepoUpdateAttemptsLimit`).
 
-Crashes are rare, and a block of up to a minute after one is acceptable, so
-the value should err long. **Default: 60 s.** That is three or more orders of
+Crashes are rare, and conflicts for up to a minute after one are acceptable,
+so the value should err long. **Default: 60 s.** That is three or more orders of
 magnitude above normal hold times, and above typical metadata stalls. It is
 configurable for sites whose filesystems stall longer, and for tests.
 
@@ -269,9 +312,14 @@ the repo-info cache holds a version, it is passed as `previous_version`.
 - Version: `etag = sha256(bytes)`, and
   `generation = (dev, ino, size, mtime_ns, ctime_ns)` from the `fstat`.
 - If the caller's previous version has the same `generation` tuple, return
-  `NotModified` without reading the data. A false hit needs inode reuse plus
-  identical size and nanosecond timestamps. It only delays freshness, and the
-  compare in step 4 still protects writers.
+  `NotModified` without reading the data. This can be a false hit: file
+  timestamps advance in kernel ticks or coarser (milliseconds on ext4, up to
+  seconds on some filesystems and NFS exports), and inode numbers are reused,
+  so two replacements of `repo` within one tick that restore its size on a
+  reused inode look unchanged. A false hit never affects safety, because
+  writers compare the hash of a fresh read in step 4. A reader may keep
+  seeing its cached version until `repo` changes again. A writer that gets a
+  conflict drops its cached version, so its next attempt reads in full.
 - Otherwise read, hash, and return `Modified`.
 
 ## Algorithm correctness
@@ -326,6 +374,7 @@ by reading content, never by `stat`:
 | Operation | Spurious result | Resolution |
 | --- | --- | --- |
 | `link(lockinfo, lock)` | `EEXIST` | The lock's `attempt_id` is ours: we hold the lock. |
+| `link(staging, name)` (conditional create) | `EEXIST` | A fresh read of the target hashes to `sha256(new_bytes)`: the create succeeded. |
 | `rename(ticket, repo)` | `ENOENT` | A fresh read of `repo` hashes to `sha256(new_bytes)`: we committed. |
 | `unlink(other's ticket)` | `ENOENT` | Irrelevant: the ticket is gone either way. |
 
@@ -497,18 +546,25 @@ client, Lustre, GPFS, CephFS, JuiceFS.
 
     The hint is a parameter of `put_object`, ignored by the other backends,
     whose PUTs are all-or-nothing anyway.
-  - **`put_object_conditional(Create)`**: staging file plus `link`
-    (`EEXIST` → `NotOnLatestVersion`). The `link` needs complete content
-    behind it.
+  - **`put_object_conditional(Create)`**: staging file plus `link`. The
+    `link` needs complete content behind it. `EEXIST` → fresh read of the
+    target: the same hash is a success (see Lost replies), anything else
+    `NotOnLatestVersion`.
   - **`put_object_conditional(IfVersion(hash))`**: the conditional update,
     staged in the ticket.
   - **`copy_object`**: the backup is staged and renamed into place.
 
   The parent directory is fsynced after commit-critical renames and links.
-  When directory entries of data files are fsynced is open question 6.
+  When directory entries of data files are fsynced is open question 6. A
+  directory fsync failing with `EINVAL` or `ENOTSUP` is treated as
+  unsupported by the filesystem and warned about once. Any other error after
+  a successful rename or link is reported as an I/O error, and the write may
+  have landed.
 - **`fsync` on by default.** A storage setting disables it, for users who
   accept that a power loss can leave `repo` pointing at empty files. On NFS,
-  `close()` already flushes and COMMITs, so the cost there is small.
+  `close()` already flushes and COMMITs, so the cost there is small. The
+  lockinfo is always fsynced, even with fsync disabled: an empty lock file
+  would block its lock family until manual recovery.
 - **IC1 repos are refused.** Opening or creating an IC1 repo with this
   backend fails with an error that points to migrating the repo to V2.
   The backend declares that it requires V2
@@ -519,7 +575,9 @@ client, Lustre, GPFS, CephFS, JuiceFS.
   | Call | `etag` | `generation` |
   | --- | --- | --- |
   | `get_object_conditional` | `sha256(content)` | `fstat` tuple `(dev, ino, size, mtime_ns, ctime_ns)` |
-  | `put_object_conditional` | `sha256(new_bytes)` | `fstat` of the ticket |
+  | `put_object_conditional` | `sha256(new_bytes)` | `fstat` of the written file after its final rename or link (for a create: of the target, kept only if a fresh read hashes to `sha256(new_bytes)`) |
+
+  If that `fstat` fails, the version carries only the etag.
 
   - **`etag` is the only identity used for compare-and-swap.** Conditional
     writes compare it against a fresh read of `repo`.
@@ -672,7 +730,9 @@ Tracked as a separate issue.
    measured on heavily loaded HPC filesystems.
 6. **Durability of data files' directory entries.** A chunk, manifest,
    snapshot or transaction log is only durable once its *directory entry* is,
-   and that entry must be durable before `repo` points at the file.
+   and that entry must be durable before `repo` points at the file. Backups
+   in `overwritten/` are data files in the same sense: their directory entry
+   isn't fsynced either.
    - Fsyncing the parent directory after every write is simple and correct,
      but costs one journal commit per chunk on local disks. That caps write
      throughput at a few thousand chunks per second.

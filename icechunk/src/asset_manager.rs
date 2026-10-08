@@ -1009,6 +1009,15 @@ impl AssetManager {
                     kind: RepositoryErrorKind::RepoInfoUpdated,
                     ..
                 }) => {
+                    // A conflict means our cached version is stale; with backends
+                    // whose fast path can falsely match, keeping it could loop.
+                    if self.use_repo_info_cache {
+                        *self
+                            .repo_cache
+                            .write()
+                            .map_err(|_| RepositoryErrorKind::PoisonLock)
+                            .capture()? = None;
+                    }
                     let delay = backoff
                         .next()
                         .ok_or(RepositoryErrorKind::RepoUpdateAttemptsLimit(
@@ -2822,6 +2831,194 @@ mod test {
         assert_eq!(decoded.len(), cached.len());
         assert_eq!(decoded.len(), 4);
         assert!(am.max_concurrent_decodes() >= 1);
+        Ok(())
+    }
+
+    /// Claims every conditional read is on the latest version, like a
+    /// backend whose fast path falsely matches.
+    #[derive(Debug, Serialize, Deserialize)]
+    struct FalseHitStorage {
+        backend: Arc<dyn Storage + Send + Sync>,
+    }
+
+    impl std::fmt::Display for FalseHitStorage {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "FalseHitStorage({})", self.backend)
+        }
+    }
+
+    impl icechunk_storage::sealed::Sealed for FalseHitStorage {}
+
+    #[async_trait::async_trait]
+    #[typetag::serde]
+    impl Storage for FalseHitStorage {
+        fn storage_info(&self) -> storage::StorageInfo {
+            self.backend.storage_info()
+        }
+
+        async fn default_settings(&self) -> storage::StorageResult<storage::Settings> {
+            self.backend.default_settings().await
+        }
+
+        async fn can_write(&self) -> storage::StorageResult<bool> {
+            self.backend.can_write().await
+        }
+
+        async fn get_object_range(
+            &self,
+            ctx: &StorageContext<'_>,
+            path: &str,
+            range: Option<&Range<u64>>,
+        ) -> storage::StorageResult<
+            Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>,
+        > {
+            self.backend.get_object_range(ctx, path, range).await
+        }
+
+        async fn put_object(
+            &self,
+            ctx: &StorageContext<'_>,
+            path: &str,
+            bytes: Bytes,
+            content_type: Option<&str>,
+            metadata: Vec<(String, String)>,
+            hint: WriteHint,
+        ) -> storage::StorageResult<()> {
+            self.backend.put_object(ctx, path, bytes, content_type, metadata, hint).await
+        }
+
+        async fn put_object_conditional(
+            &self,
+            ctx: &StorageContext<'_>,
+            path: &str,
+            bytes: Bytes,
+            content_type: Option<&str>,
+            metadata: Vec<(String, String)>,
+            condition: PutCondition<'_>,
+        ) -> storage::StorageResult<VersionedUpdateResult> {
+            self.backend
+                .put_object_conditional(
+                    ctx,
+                    path,
+                    bytes,
+                    content_type,
+                    metadata,
+                    condition,
+                )
+                .await
+        }
+
+        async fn copy_object(
+            &self,
+            ctx: &StorageContext<'_>,
+            from: &str,
+            to: &str,
+            content_type: Option<&str>,
+            version: &VersionInfo,
+        ) -> storage::StorageResult<VersionedUpdateResult> {
+            self.backend.copy_object(ctx, from, to, content_type, version).await
+        }
+
+        async fn list_objects<'a>(
+            &'a self,
+            ctx: &StorageContext<'_>,
+            prefix: &str,
+        ) -> storage::StorageResult<BoxStream<'a, storage::StorageResult<ListInfo<String>>>>
+        {
+            self.backend.list_objects(ctx, prefix).await
+        }
+
+        async fn delete_batch(
+            &self,
+            ctx: &StorageContext<'_>,
+            prefix: &str,
+            batch: Vec<(String, u64)>,
+        ) -> storage::StorageResult<storage::DeleteObjectsResult> {
+            self.backend.delete_batch(ctx, prefix, batch).await
+        }
+
+        async fn get_object_last_modified(
+            &self,
+            ctx: &StorageContext<'_>,
+            path: &str,
+        ) -> storage::StorageResult<DateTime<Utc>> {
+            self.backend.get_object_last_modified(ctx, path).await
+        }
+
+        async fn get_object_conditional(
+            &self,
+            ctx: &StorageContext<'_>,
+            path: &str,
+            previous_version: Option<&VersionInfo>,
+        ) -> storage::StorageResult<GetModifiedResult> {
+            match previous_version {
+                Some(_) => Ok(GetModifiedResult::OnLatestVersion),
+                None => self.backend.get_object_conditional(ctx, path, None).await,
+            }
+        }
+    }
+
+    #[tokio_test]
+    async fn conflict_drops_the_cached_repo_info()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+        let false_hits: Arc<dyn Storage + Send + Sync> =
+            Arc::new(FalseHitStorage { backend: Arc::clone(&backend) });
+        let settings = storage::Settings::default();
+        let cached = AssetManager::new_with_config(
+            false_hits,
+            settings.clone(),
+            SpecVersionBin::default(),
+            &CachingConfig::default(),
+            1,
+            100,
+            8,
+        );
+        let other = AssetManager::new_no_cache(
+            backend,
+            settings,
+            SpecVersionBin::default(),
+            1,
+            100,
+        );
+        let initial = Snapshot::initial(SpecVersionBin::current())?;
+        let snap = initial.id().clone();
+        cached
+            .create_repo_info(Arc::new(RepoInfo::initial(
+                SpecVersionBin::current(),
+                SnapshotInfo::from_snapshot_file(&initial)?,
+                100,
+                None::<&()>,
+                None,
+            )))
+            .await?;
+
+        let add_tag = |name: &'static str| {
+            let snap = snap.clone();
+            move |info: Arc<RepoInfo>, backup_path: &str, _| {
+                Ok(Arc::new(
+                    info.add_tag(
+                        SpecVersionBin::current(),
+                        name,
+                        &snap,
+                        backup_path,
+                        100,
+                    )
+                    .inject()?,
+                ))
+            }
+        };
+        let retries = storage::RetriesSettings {
+            max_tries: NonZeroU16::new(3),
+            initial_backoff_ms: Some(1),
+            max_backoff_ms: Some(1),
+        };
+        // Outdates the version `cached` holds.
+        other.update_repo_info(&retries, add_tag("other")).await?;
+        cached.update_repo_info(&retries, add_tag("cached")).await?;
+
+        let (info, _) = other.fetch_repo_info().await?;
+        assert_eq!(info.tag_names()?.sorted().collect::<Vec<_>>(), ["cached", "other"]);
         Ok(())
     }
 }

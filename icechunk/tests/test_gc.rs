@@ -44,6 +44,14 @@ async fn test_gc_in_minio_spec_v2() -> Result<(), Box<dyn std::error::Error>> {
     do_test_gc(storage, Some(SpecVersionBin::V2)).await
 }
 
+#[cfg(all(feature = "fs", unix))]
+#[tokio_test]
+async fn test_gc_in_filesystem() -> Result<(), Box<dyn std::error::Error>> {
+    let dir = tempfile::tempdir()?;
+    let storage = icechunk::storage::new_filesystem_storage(dir.path()).await?;
+    do_test_gc(storage, Some(SpecVersionBin::V2)).await
+}
+
 #[tokio_test]
 #[ignore = "needs credentials from env"]
 async fn test_gc_in_aws() -> Result<(), Box<dyn std::error::Error>> {
@@ -411,6 +419,15 @@ async fn test_expire_and_garbage_collect_in_minio()
         format!("test_expire_and_garbage_collect_{}", Utc::now().timestamp_millis());
     let storage: Arc<dyn Storage + Send + Sync> =
         common::make_minio_integration_storage(prefix, &Permission::Modify)?;
+    do_test_expire_and_garbage_collect(storage).await
+}
+
+#[cfg(all(feature = "fs", unix))]
+#[tokio_test]
+async fn test_expire_and_garbage_collect_in_filesystem()
+-> Result<(), Box<dyn std::error::Error>> {
+    let dir = tempfile::tempdir()?;
+    let storage = icechunk::storage::new_filesystem_storage(dir.path()).await?;
     do_test_expire_and_garbage_collect(storage).await
 }
 

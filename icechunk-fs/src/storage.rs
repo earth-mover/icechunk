@@ -20,8 +20,8 @@ use futures::{
     stream::{self, BoxStream},
 };
 use icechunk_storage::{
-    DeleteObjectsResult, GetModifiedResult, ListInfo, PutCondition, Settings, Storage,
-    StorageContext, StorageError, StorageErrorKind, StorageInfo, StorageResult,
+    DeleteObjectsResult, ETag, GetModifiedResult, ListInfo, PutCondition, Settings,
+    Storage, StorageContext, StorageError, StorageErrorKind, StorageInfo, StorageResult,
     VersionInfo, VersionedUpdateResult, WriteHint, other_error, sealed,
 };
 use icechunk_types::ICResultExt as _;
@@ -29,20 +29,29 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::OnceCell;
 
 use crate::{
+    cas::{CasError, CasOptions, CasOutcome, NoHooks, conditional_update},
     list::{delete_files, list_recursive},
+    lock::is_valid_hash,
     path::{key_path, prefix_path},
     probe::probe_hard_links,
-    read::{last_modified, read_all, read_range},
-    version::content_version,
+    read::{FreshRead, last_modified, read_all, read_fresh, read_range},
+    version::{sha256_hex, version_of},
     write::{CreateOutcome, create_exclusive, write_new, write_staged},
 };
 
 /// A [`Storage`] on a local or shared POSIX filesystem, safe for concurrent
 /// writers, including writers on different hosts of a network filesystem.
 ///
-/// - Conditional updates of the `repo` object use the lock-free protocol of
-///   design document 020 (`design-docs/020-filesystem-storage.md`). The
-///   version of an object is the sha256 of its content.
+/// - Conditional updates use the lock-free protocol of design document 020
+///   (`design-docs/020-filesystem-storage.md`). The version of an object is
+///   the sha256 of its content; a conditional update of a missing object is
+///   `NotOnLatestVersion`.
+/// - Conditional updates require that an object never holds the same bytes
+///   twice, not just in consecutive versions. Only an update to the bytes it
+///   already holds is detected, as an error. The Icechunk 2 format
+///   guarantees this for `repo`.
+/// - A corrupt lock file makes conditional updates of its object fail until
+///   it is recovered manually: once no writer is active, delete it.
 /// - Repositories in the Icechunk 1 format are refused.
 /// - `unsafe_use_conditional_create` and `unsafe_use_conditional_update` are
 ///   ignored, with a warning.
@@ -155,8 +164,26 @@ fn write_error(err: io::Error) -> StorageError {
     StorageError::capture(StorageErrorKind::IOError(err))
 }
 
-fn not_implemented<T>(method: &str) -> StorageResult<T> {
-    Err(other_error(format!("FilesystemStorage::{method} is not implemented yet")))
+/// The hash a conditional call compares against, `None` if `version` can't
+/// be the version of any content. Only a valid hash is ever put into a path.
+fn base_hash(version: &VersionInfo, method: &str) -> StorageResult<Option<String>> {
+    let etag = version.etag().ok_or_else(|| {
+        other_error(format!("FilesystemStorage: {method} needs a version with an etag"))
+    })?;
+    Ok(is_valid_hash(etag).then(|| etag.clone()))
+}
+
+fn cas_error(err: CasError) -> StorageError {
+    match err {
+        CasError::RepeatedContent => other_error(
+            "FilesystemStorage: new content equals the base version's content; repo content must never repeat",
+        ),
+        CasError::CorruptLock { path } => other_error(format!(
+            "FilesystemStorage: corrupt lock file {} needs manual recovery: once no writer is active, delete it",
+            path.display()
+        )),
+        CasError::Io(err) => write_error(err),
+    }
 }
 
 impl sealed::Sealed for FilesystemStorage {}
@@ -219,9 +246,17 @@ impl Storage for FilesystemStorage {
     }
 
     /// `Create` stages the content and hard-links it into place, so the object
-    /// appears complete or not at all. The conditions always hold: settings
-    /// that disable them are ignored, with a warning. `content_type` and
-    /// `metadata` are ignored.
+    /// appears complete or not at all. If the object already holds exactly
+    /// these bytes, `Create` returns `Updated`: a retried create whose first
+    /// reply was lost looks the same. `IfVersion` runs the conditional update
+    /// of design document 020: the new content replaces the object only if a
+    /// fresh read of it hashes to the version's etag, and is
+    /// `NotOnLatestVersion` if the object is missing. A version without an
+    /// etag is an error. The object must never hold the same bytes twice;
+    /// only new content equal to the version's is detected, as an error. A
+    /// corrupt lock file is an error that needs manual recovery. The
+    /// conditions always hold: settings that disable them are ignored, with a
+    /// warning. `content_type` and `metadata` are ignored.
     async fn put_object_conditional(
         &self,
         ctx: &StorageContext<'_>,
@@ -237,35 +272,86 @@ impl Storage for FilesystemStorage {
             PutCondition::Create => {
                 let path = key_path(&self.root, path)?;
                 let fsync = self.fsync;
-                let new_version = content_version(&bytes);
-                let outcome = blocking(move || {
-                    create_exclusive(&path, &bytes, fsync).map_err(write_error)
+                blocking(move || {
+                    let etag = Some(ETag(sha256_hex(&bytes)));
+                    let outcome =
+                        create_exclusive(&path, &bytes, fsync).map_err(write_error)?;
+                    Ok(match outcome {
+                        CreateOutcome::Created { generation } => {
+                            VersionedUpdateResult::Updated {
+                                new_version: VersionInfo { etag, generation },
+                            }
+                        }
+                        CreateOutcome::Exists => {
+                            VersionedUpdateResult::NotOnLatestVersion
+                        }
+                    })
                 })
-                .await?;
-                Ok(match outcome {
-                    CreateOutcome::Created => {
-                        VersionedUpdateResult::Updated { new_version }
-                    }
-                    CreateOutcome::Exists => VersionedUpdateResult::NotOnLatestVersion,
-                })
+                .await
             }
-            PutCondition::IfVersion(_) => {
-                not_implemented("put_object_conditional(IfVersion)")
+            PutCondition::IfVersion(version) => {
+                let Some(base_hash) = base_hash(version, "IfVersion")? else {
+                    return Ok(VersionedUpdateResult::NotOnLatestVersion);
+                };
+                let path = key_path(&self.root, path)?;
+                let opts =
+                    CasOptions { fsync: self.fsync, stale_after: self.stale_after };
+                blocking(move || {
+                    let outcome =
+                        conditional_update(&path, &bytes, &base_hash, &opts, &NoHooks)
+                            .map_err(cas_error)?;
+                    Ok(match outcome {
+                        CasOutcome::Updated { generation } => {
+                            VersionedUpdateResult::Updated {
+                                new_version: VersionInfo {
+                                    etag: Some(ETag(sha256_hex(&bytes))),
+                                    generation,
+                                },
+                            }
+                        }
+                        CasOutcome::NotOnLatestVersion => {
+                            VersionedUpdateResult::NotOnLatestVersion
+                        }
+                    })
+                })
+                .await
             }
         }
     }
 
+    /// Reads `from` through a new file descriptor and, if its content hashes
+    /// to `version`'s etag, writes those same bytes to `to`, staged and
+    /// renamed into place. The copy is `version`'s content whatever happens
+    /// concurrently; it takes no lock. Returns `version` unchanged. A version
+    /// without an etag is an error; a missing `from` is `ObjectNotFound`. The
+    /// check always runs: a setting that disables it is ignored, with a
+    /// warning. `content_type` is ignored.
     async fn copy_object(
         &self,
         ctx: &StorageContext<'_>,
-        _from: &str,
-        _to: &str,
+        from: &str,
+        to: &str,
         _content_type: Option<&str>,
-        _version: &VersionInfo,
+        version: &VersionInfo,
     ) -> StorageResult<VersionedUpdateResult> {
         self.warn_if_unsafe_settings(ctx.settings);
         self.ensure_links_supported().await?;
-        not_implemented("copy_object")
+        let Some(hash) = base_hash(version, "copy_object")? else {
+            return Ok(VersionedUpdateResult::NotOnLatestVersion);
+        };
+        let from = key_path(&self.root, from)?;
+        let to = key_path(&self.root, to)?;
+        let fsync = self.fsync;
+        let version = version.clone();
+        blocking(move || {
+            let bytes = read_all(&from).map_err(io_error)?;
+            if sha256_hex(&bytes) != hash {
+                return Ok(VersionedUpdateResult::NotOnLatestVersion);
+            }
+            write_staged(&to, &bytes, fsync).map_err(write_error)?;
+            Ok(VersionedUpdateResult::Updated { new_version: version })
+        })
+        .await
     }
 
     /// The order is unspecified: it is the directory walk order. In-flight
@@ -317,8 +403,11 @@ impl Storage for FilesystemStorage {
         blocking(move || last_modified(&path).map_err(io_error)).await
     }
 
-    /// Reads `path` through a new file descriptor. The returned version's
-    /// etag, the sha256 of the content, is the object's identity.
+    /// Reads `path` through a new file descriptor. The version's etag, the
+    /// sha256 of the content, is the object's identity: `OnLatestVersion`
+    /// means the content is `previous_version`'s. Its generation, from an
+    /// `fstat` of the descriptor, is a fast path: when it matches
+    /// `previous_version`'s, the file isn't read.
     async fn get_object_conditional(
         &self,
         _ctx: &StorageContext<'_>,
@@ -326,8 +415,23 @@ impl Storage for FilesystemStorage {
         previous_version: Option<&VersionInfo>,
     ) -> StorageResult<GetModifiedResult> {
         let path = key_path(&self.root, path)?;
-        let bytes = blocking(move || read_all(&path).map_err(io_error)).await?;
-        let new_version = content_version(&bytes);
+        let known_generation =
+            previous_version.and_then(VersionInfo::generation).cloned();
+        let read = blocking(move || {
+            let read =
+                read_fresh(&path, known_generation.as_deref()).map_err(io_error)?;
+            Ok(match read {
+                FreshRead::Unchanged => None,
+                FreshRead::Content { bytes, generation } => {
+                    let version = version_of(&bytes, Some(generation));
+                    Some((bytes, version))
+                }
+            })
+        })
+        .await?;
+        let Some((bytes, new_version)) = read else {
+            return Ok(GetModifiedResult::OnLatestVersion);
+        };
         if previous_version.and_then(VersionInfo::etag) == new_version.etag() {
             Ok(GetModifiedResult::OnLatestVersion)
         } else {

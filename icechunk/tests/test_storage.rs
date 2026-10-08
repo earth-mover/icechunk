@@ -353,10 +353,6 @@ async fn test_tag_write_get(
         if name == "filesystem" && spec_version == SpecVersionBin::V1 {
             return Ok(());
         }
-        // FilesystemStorage: IfVersion/copy_object not implemented yet
-        if name == "filesystem" {
-            return Ok(());
-        }
         let repo =
             Repository::create(storage).spec_version(spec_version).execute().await?;
         repo.create_tag("mytag", &Snapshot::INITIAL_SNAPSHOT_ID).await?;
@@ -376,10 +372,6 @@ async fn test_fetch_non_existing_tag(
     with_storage(Permission::Modify, |name, storage| async move {
         // FilesystemStorage refuses IC1 repos
         if name == "filesystem" && spec_version == SpecVersionBin::V1 {
-            return Ok(());
-        }
-        // FilesystemStorage: IfVersion/copy_object not implemented yet
-        if name == "filesystem" {
             return Ok(());
         }
         let repo =
@@ -407,10 +399,6 @@ async fn test_create_existing_tag(
     with_storage(Permission::Modify, |name, storage| async move {
         // FilesystemStorage refuses IC1 repos
         if name == "filesystem" && spec_version == SpecVersionBin::V1 {
-            return Ok(());
-        }
-        // FilesystemStorage: IfVersion/copy_object not implemented yet
-        if name == "filesystem" {
             return Ok(());
         }
         let repo =
@@ -1289,11 +1277,7 @@ async fn test_write_config_on_empty(
 async fn test_write_config_on_existing(
     #[case] spec_version: SpecVersionBin,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    with_storage(Permission::Modify, |name, storage| async move {
-        // FilesystemStorage: IfVersion/copy_object not implemented yet
-        if name == "filesystem" {
-            return Ok(());
-        }
+    with_storage(Permission::Modify, |_, storage| async move {
         let am = Arc::new(AssetManager::new_no_cache(
             Arc::clone(&storage),
             with_storage_settings(&storage).await?,
@@ -1363,10 +1347,6 @@ async fn test_write_config_fails_on_bad_version_when_existing(
     #[case] spec_version: SpecVersionBin,
 ) -> Result<(), Box<dyn std::error::Error>> {
     with_storage(Permission::Modify, |storage_type, storage| async move {
-        // FilesystemStorage: IfVersion/copy_object not implemented yet
-        if storage_type == "filesystem" {
-            return Ok(());
-        }
         let storage_settings = with_storage_settings(&storage).await?;
         let am = Arc::new(AssetManager::new_no_cache(
             storage,
@@ -1439,20 +1419,24 @@ async fn test_write_config_can_overwrite_with_unsafe_config(
             Some(new_version) => new_version,
             None => panic!(),
         };
-        // FilesystemStorage ignores the unsafe settings: creation stays conditional
-        if name == "filesystem" {
+        // FilesystemStorage ignores the unsafe settings: updates stay conditional
+        let ignores_unsafe_settings = name == "filesystem";
+        let config2 = RepositoryConfig {
+            inline_chunk_threshold_bytes: Some(0),
+            ..Default::default()
+        };
+        if ignores_unsafe_settings {
             let res = am
-                .try_update_config(&config1, &VersionInfo::for_creation(), None)
+                .try_update_config(&config2, &VersionInfo::for_creation(), None)
                 .await?;
             assert!(res.is_none(), "{res:?}");
-            // FilesystemStorage: IfVersion/copy_object not implemented yet
-            return Ok(());
+            assert_eq!(am.fetch_config().await?.unwrap().0, config1);
         }
 
-        // attempt a bad change that should succeed in this config
+        // a stale version: the write lands only if the condition is skipped
         let update_res = am
             .try_update_config(
-                &config1,
+                &config2,
                 &VersionInfo {
                     etag: Some(ETag("other-bad-etag".to_string())),
                     generation: Some(Generation("55".to_string())),
@@ -1460,8 +1444,14 @@ async fn test_write_config_can_overwrite_with_unsafe_config(
                 Some("foo/bar"),
             )
             .await?;
-        assert!(update_res.is_some());
-        assert_eq!(am.fetch_config().await?.unwrap().0, config1);
+        let expected = if ignores_unsafe_settings {
+            assert!(update_res.is_none(), "{name}: {update_res:?}");
+            config1
+        } else {
+            assert!(update_res.is_some(), "{name}: {update_res:?}");
+            config2
+        };
+        assert_eq!(am.fetch_config().await?.unwrap().0, expected, "{name}");
         Ok(())
     })
     .await?;
@@ -1781,14 +1771,31 @@ async fn test_conditional_write_contract() -> Result<(), Box<dyn std::error::Err
         };
         assert_eq!(async_read_to_bytes(data).await?, b"first", "{name}");
 
-        // FilesystemStorage: IfVersion/copy_object not implemented yet
-        if name == "filesystem" {
-            return Ok(());
-        }
         // local_filesystem defaults to unsafe_use_conditional_update: Some(false)
         if name == "local_filesystem" {
             return Ok(());
         }
+
+        let missing = "conditional-write-contract-missing";
+        let res = storage
+            .put_object_conditional(
+                &ctx,
+                missing,
+                Bytes::from_static(b"never"),
+                None,
+                Default::default(),
+                PutCondition::IfVersion(&g1),
+            )
+            .await?;
+        assert!(
+            matches!(res, VersionedUpdateResult::NotOnLatestVersion),
+            "{name}: update on a missing key: {res:?}"
+        );
+        let res = storage.get_object_conditional(&ctx, missing, None).await;
+        assert!(
+            matches!(res, Err(ICError { kind: StorageErrorKind::ObjectNotFound, .. })),
+            "{name}: update on a missing key created it"
+        );
 
         let VersionedUpdateResult::Updated { new_version: v2 } =
             put(b"third", PutCondition::IfVersion(&g1)).await?

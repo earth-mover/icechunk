@@ -15,14 +15,17 @@ use futures::{StreamExt as _, TryStreamExt as _};
 use icechunk_fs::{FilesystemStorage, new_filesystem_storage};
 use icechunk_macros::tokio_test;
 use icechunk_storage::{
-    GetModifiedResult, ListInfo, PutCondition, Settings, Storage, StorageContext,
-    StorageErrorKind, StorageResult, VersionInfo, VersionedUpdateResult, WriteHint,
+    ETag, Generation, GetModifiedResult, ListInfo, PutCondition, Settings, Storage,
+    StorageContext, StorageErrorKind, StorageResult, VersionInfo, VersionedUpdateResult,
+    WriteHint,
 };
 use tokio::io::AsyncReadExt as _;
 
 const CONTENT: &[u8] = b"hello world";
 const CONTENT_SHA256: &str =
     "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9";
+const OTHER_SHA256: &str =
+    "f41f3fa625ff120ddca7ef456bf66371ecea23c129f4e4c32367101edb516cf8";
 
 fn storage(dir: &Path) -> FilesystemStorage {
     FilesystemStorage::new(dir).unwrap()
@@ -165,7 +168,7 @@ async fn conditional_get_versions_by_content() {
     let (data, version) = get_conditional(&st, "repo", None).await.unwrap();
     assert_eq!(data, CONTENT);
     assert_eq!(version.etag().unwrap(), CONTENT_SHA256);
-    assert_eq!(version.generation, None);
+    assert!(version.generation.is_some());
 
     assert!(get_conditional(&st, "repo", Some(&version)).await.is_none());
 
@@ -173,6 +176,45 @@ async fn conditional_get_versions_by_content() {
     let (data, new_version) = get_conditional(&st, "repo", Some(&version)).await.unwrap();
     assert_eq!(data, b"something else");
     assert_ne!(new_version, version);
+}
+
+fn with_etag(version: &VersionInfo, etag: &str) -> VersionInfo {
+    VersionInfo { etag: Some(ETag(etag.to_string())), ..version.clone() }
+}
+
+fn with_generation(version: &VersionInfo, generation: &str) -> VersionInfo {
+    VersionInfo {
+        generation: Some(Generation(generation.to_string())),
+        ..version.clone()
+    }
+}
+
+#[tokio_test]
+async fn conditional_get_uses_the_generation_fast_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let st = storage(dir.path());
+    write(dir.path(), "repo", CONTENT);
+    let (_, version) = get_conditional(&st, "repo", None).await.unwrap();
+
+    // A content check would report this version as modified.
+    let bogus_etag = with_etag(&version, &"0".repeat(64));
+    assert!(get_conditional(&st, "repo", Some(&bogus_etag)).await.is_none());
+
+    // Without a matching generation, the content decides.
+    let bogus_generation = with_generation(&version, "0:0:0:0:0");
+    assert!(get_conditional(&st, "repo", Some(&bogus_generation)).await.is_none());
+    let only_etag = VersionInfo { generation: None, ..version.clone() };
+    assert!(get_conditional(&st, "repo", Some(&only_etag)).await.is_none());
+
+    put(&st, "repo", b"something else", WriteHint::Atomic).await;
+    for previous in [&version, &bogus_etag, &bogus_generation] {
+        let (data, new_version) =
+            get_conditional(&st, "repo", Some(previous)).await.unwrap();
+        assert_eq!(data, b"something else");
+        assert_eq!(new_version.etag().unwrap(), OTHER_SHA256);
+        assert!(new_version.generation.is_some());
+        assert_ne!(new_version.generation, version.generation);
+    }
 }
 
 #[tokio_test]
@@ -371,6 +413,11 @@ async fn conditional_create() {
         panic!("first create must succeed")
     };
     assert_eq!(new_version.etag().unwrap(), CONTENT_SHA256);
+    assert!(new_version.generation.is_some());
+    assert_eq!(
+        get_conditional(&st, "repo", None).await.unwrap(),
+        (CONTENT.to_vec(), new_version.clone())
+    );
     assert_eq!(get(&st, "repo", None).await, CONTENT);
     assert_eq!(staging_leftovers(dir.path()), Vec::<std::path::PathBuf>::new());
     assert_eq!(probe_leftovers(dir.path()), Vec::<std::path::PathBuf>::new());
@@ -383,6 +430,27 @@ async fn conditional_create() {
     assert_eq!(staging_leftovers(dir.path()), Vec::<std::path::PathBuf>::new());
 
     assert!(get_conditional(&st, "repo", Some(&new_version)).await.is_none());
+}
+
+#[tokio_test]
+async fn conditional_create_of_identical_content_succeeds() {
+    let dir = tempfile::tempdir().unwrap();
+    let st = storage(dir.path());
+    let settings = Settings::default();
+    write(dir.path(), "repo", CONTENT);
+
+    let VersionedUpdateResult::Updated { new_version } =
+        put_conditional(&st, &settings, "repo", CONTENT, PutCondition::Create)
+            .await
+            .unwrap()
+    else {
+        panic!("the object already holds this version")
+    };
+    assert_eq!(
+        get_conditional(&st, "repo", None).await.unwrap(),
+        (CONTENT.to_vec(), new_version)
+    );
+    assert_eq!(staging_leftovers(dir.path()), Vec::<std::path::PathBuf>::new());
 }
 
 #[tokio_test]
@@ -454,38 +522,20 @@ async fn concurrent_creates_have_one_winner() {
 
     let winners: Vec<_> = results
         .iter()
-        .filter(|(_, result)| matches!(result, VersionedUpdateResult::Updated { .. }))
-        .map(|(content, _)| content)
+        .filter_map(|(content, result)| match result {
+            VersionedUpdateResult::Updated { new_version } => {
+                Some((content, new_version))
+            }
+            VersionedUpdateResult::NotOnLatestVersion => None,
+        })
         .collect();
     assert_eq!(winners.len(), 1, "{results:?}");
-    assert!(results.iter().all(|(_, result)| matches!(
-        result,
-        VersionedUpdateResult::Updated { .. } | VersionedUpdateResult::NotOnLatestVersion
-    )));
-    assert_eq!(get(&st, "repo", None).await, winners[0]);
+    let (content, version) = winners[0];
+    assert_eq!(
+        get_conditional(&st, "repo", None).await.unwrap(),
+        (content.to_vec(), version.clone())
+    );
     assert_eq!(staging_leftovers(dir.path()), Vec::<std::path::PathBuf>::new());
-}
-
-#[tokio_test]
-async fn conditional_update_is_not_implemented() {
-    let dir = tempfile::tempdir().unwrap();
-    let st = storage(dir.path());
-    let settings = Settings::default();
-    let version = VersionInfo::from_etag_only(CONTENT_SHA256.to_string());
-    write(dir.path(), "repo", CONTENT);
-
-    let result = put_conditional(
-        &st,
-        &settings,
-        "repo",
-        b"new",
-        PutCondition::IfVersion(&version),
-    )
-    .await;
-    let err = result.err().unwrap();
-    assert!(matches!(err.kind, StorageErrorKind::Other(_)), "{err}");
-    assert!(err.to_string().contains("is not implemented yet"), "{err}");
-    assert_eq!(get(&st, "repo", None).await, CONTENT);
 }
 
 #[tokio_test]

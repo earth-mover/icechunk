@@ -4,15 +4,13 @@
 
 use std::{
     error::Error,
-    fmt,
-    fs::{self, OpenOptions},
-    io,
+    fmt, fs, io,
     path::{Path, PathBuf},
 };
 
 use uuid::Uuid;
 
-use crate::write::close_checked;
+use crate::write::write_exclusive;
 
 #[derive(Debug)]
 struct ProbeFailed {
@@ -51,8 +49,8 @@ fn probe(root: &Path) -> io::Result<()> {
     link_name.push(".link");
     let link = PathBuf::from(link_name);
 
-    let file = OpenOptions::new().write(true).create_new(true).open(&probe)?;
-    let linked = close_checked(file).and_then(|()| link_exclusively(&probe, &link));
+    write_exclusive(&probe, &[], false)?;
+    let linked = link_exclusively(&probe, &link);
     let removed_link = match fs::remove_file(&link) {
         Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
         removed => removed,

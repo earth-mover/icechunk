@@ -31,6 +31,14 @@ async fn test_concurrency_in_memory() -> Result<(), Box<dyn std::error::Error>> 
     do_test_concurrency(storage).await
 }
 
+#[cfg(all(feature = "fs", unix))]
+#[tokio_test]
+async fn test_concurrency_in_filesystem() -> Result<(), Box<dyn std::error::Error>> {
+    let dir = tempfile::tempdir()?;
+    let storage = icechunk::storage::new_filesystem_storage(dir.path()).await?;
+    do_test_concurrency(storage).await
+}
+
 #[tokio_test]
 #[ignore = "needs credentials from env"]
 async fn test_concurrency_in_r2() -> Result<(), Box<dyn std::error::Error>> {

@@ -639,8 +639,12 @@ pub trait Storage: fmt::Debug + Display + sealed::Sealed + Sync + Send {
     /// success, or [`VersionedUpdateResult::NotOnLatestVersion`] without
     /// writing when the condition fails: for [`PutCondition::Create`] the
     /// object exists, for [`PutCondition::IfVersion`] its current version is a
-    /// different one. The version in [`PutCondition::IfVersion`] must come
-    /// from [`Storage::get_object_conditional`] or an earlier
+    /// different one or the object doesn't exist (on every backend; a missing
+    /// object is never an error). For `Create`, a backend may return
+    /// `Updated` when the object already holds exactly these bytes: a retried
+    /// create whose first reply was lost is indistinguishable from that.
+    /// The version in [`PutCondition::IfVersion`]
+    /// must come from [`Storage::get_object_conditional`] or an earlier
     /// `put_object_conditional`. Backends honouring
     /// [`Settings::unsafe_use_conditional_create()`] and
     /// [`Settings::unsafe_use_conditional_update()`] skip the condition, and
@@ -720,6 +724,10 @@ pub trait Storage: fmt::Debug + Display + sealed::Sealed + Sync + Send {
     /// `previous_version`, in which case it returns
     /// [`GetModifiedResult::OnLatestVersion`] without the data. With `None`
     /// it always reads.
+    ///
+    /// The etag is the version's identity: `OnLatestVersion` means the
+    /// object's content is `previous_version`'s. Backends may use the other
+    /// fields of `previous_version` as a fast path to answer that.
     async fn get_object_conditional(
         &self,
         ctx: &StorageContext<'_>,

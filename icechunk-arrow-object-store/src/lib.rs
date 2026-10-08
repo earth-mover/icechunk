@@ -577,7 +577,7 @@ impl ObjectStorage {
         }
 
         let options = PutOptions {
-            mode,
+            mode: mode.clone(),
             attributes,
             extensions: request_extensions(ctx),
             ..PutOptions::default()
@@ -603,6 +603,9 @@ impl ObjectStorage {
                     .await;
                 resolve_precondition(outcome, path.as_ref())
             }
+            Err(err) if is_update_of_missing_object(&mode, &err) => {
+                Ok(VersionedUpdateResult::NotOnLatestVersion)
+            }
             // Only `Generic` can hide a landed-but-ack-lost write as a transport
             // failure; `Precondition`/`AlreadyExists` have their own arm above.
             // Then only `OurWrite` flips to success; the rest propagate.
@@ -615,6 +618,13 @@ impl ObjectStorage {
             Err(err) => Err(obj_store_error(err)),
         }
     }
+}
+
+/// An `IfVersion` put on a missing object, which the `Storage` contract
+/// reports as `NotOnLatestVersion`.
+fn is_update_of_missing_object(mode: &PutMode, err: &object_store::Error) -> bool {
+    matches!(mode, PutMode::Update(_))
+        && matches!(err, object_store::Error::NotFound { .. })
 }
 
 impl Display for ObjectStorage {
@@ -1867,7 +1877,8 @@ mod tests {
     use super::{
         Attribute, Attributes, Bytes, GetOptions, ObjectPath, ObjectStorage,
         PutCondition, PutMode, ReadbackOutcome, Role, Settings, Storage as _,
-        StorageContext, VersionInfo, VersionedUpdateResult, WriteHint,
+        StorageContext, UpdateVersion, VersionInfo, VersionedUpdateResult, WriteHint,
+        is_update_of_missing_object,
     };
     #[cfg(feature = "http")]
     use super::{NonZeroU16, RetriesSettings, Url};
@@ -1887,6 +1898,26 @@ mod tests {
             storage.get_put_mode(&disabled, condition).unwrap(),
             PutMode::Overwrite
         );
+    }
+
+    #[test]
+    fn only_an_update_of_a_missing_object_is_not_on_latest() {
+        let not_found = || object_store::Error::NotFound {
+            path: "repo".to_string(),
+            source: "missing".into(),
+        };
+        let update = PutMode::Update(UpdateVersion {
+            e_tag: Some("etag".to_string()),
+            version: None,
+        });
+        assert!(is_update_of_missing_object(&update, &not_found()));
+        assert!(!is_update_of_missing_object(&PutMode::Create, &not_found()));
+        assert!(!is_update_of_missing_object(&PutMode::Overwrite, &not_found()));
+        let precondition = object_store::Error::Precondition {
+            path: "repo".to_string(),
+            source: "changed".into(),
+        };
+        assert!(!is_update_of_missing_object(&update, &precondition));
     }
 
     /// GC fans listings out per id prefix only where the store lists a prefix

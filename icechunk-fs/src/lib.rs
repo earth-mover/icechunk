@@ -1,7 +1,11 @@
 //! Filesystem storage backend for icechunk. See design-docs/020-filesystem-storage.md.
 
 #[cfg(unix)]
+mod cas;
+#[cfg(unix)]
 mod list;
+#[cfg(unix)]
+mod lock;
 #[cfg(unix)]
 mod path;
 #[cfg(unix)]

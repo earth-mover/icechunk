@@ -489,6 +489,19 @@ fn is_precondition_code(code: &str) -> bool {
     )
 }
 
+/// An `If-Match` PUT on a missing key: S3 answers 404 `NoSuchKey`, which the
+/// `Storage` contract reports as `NotOnLatestVersion`. A 404 without a code
+/// counts too; pass no `status` where it can mean something else
+/// (`NoSuchUpload` on a multipart complete).
+fn is_if_match_on_missing_key(
+    conditional: Option<Conditional<'_>>,
+    status: Option<u16>,
+    code: &str,
+) -> bool {
+    matches!(conditional, Some(Conditional::IfMatch(_)))
+        && (code == "NoSuchKey" || (code.is_empty() && status == Some(404)))
+}
+
 /// Identify a retryable error: any 5xx, HTTP 429, or an S3 code that means "try again"
 fn is_transient_s3_error(status: Option<u16>, code: &str) -> bool {
     matches!(status, Some(s) if s >= 500 || s == 429)
@@ -789,6 +802,12 @@ impl S3Storage {
                 let code = err.err().meta().code().unwrap_or_default();
                 if is_precondition_code(code) {
                     self.recover_precondition(ctx, key, write_id.as_deref()).await
+                } else if is_if_match_on_missing_key(
+                    conditional,
+                    Some(err.raw().status().as_u16()),
+                    code,
+                ) {
+                    Ok(VersionedUpdateResult::NotOnLatestVersion)
                 } else {
                     obj_store_error_res(SdkError::<PutObjectError>::ServiceError(err))
                 }
@@ -799,6 +818,8 @@ impl S3Storage {
                 // see https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutObject.html#API_PutObject_RequestSyntax
                 if status == 409 || status == 412 {
                     self.recover_precondition(ctx, key, write_id.as_deref()).await
+                } else if is_if_match_on_missing_key(conditional, Some(status), "") {
+                    Ok(VersionedUpdateResult::NotOnLatestVersion)
                 } else {
                     obj_store_error_res(SdkError::<PutObjectError>::ResponseError(err))
                 }
@@ -984,6 +1005,8 @@ impl S3Storage {
                         obj_store_error(SdkError::ServiceError(err)),
                     )
                     .await
+                } else if is_if_match_on_missing_key(conditional, None, code) {
+                    Ok(VersionedUpdateResult::NotOnLatestVersion)
                 } else {
                     obj_store_error_res(SdkError::ServiceError(err))
                 }
@@ -2031,6 +2054,21 @@ mod tests {
         }
         assert!(!is_precondition_code("NoSuchUpload"));
         assert!(!is_precondition_code(""));
+    }
+
+    #[test]
+    fn if_match_on_missing_key() {
+        let if_match = Some(Conditional::IfMatch("etag"));
+        assert!(is_if_match_on_missing_key(if_match, Some(404), "NoSuchKey"));
+        assert!(is_if_match_on_missing_key(if_match, Some(404), ""));
+        assert!(is_if_match_on_missing_key(if_match, None, "NoSuchKey"));
+        assert!(!is_if_match_on_missing_key(if_match, None, ""));
+        assert!(!is_if_match_on_missing_key(if_match, None, "NoSuchUpload"));
+        assert!(!is_if_match_on_missing_key(if_match, Some(404), "NoSuchBucket"));
+        assert!(!is_if_match_on_missing_key(if_match, Some(403), "AccessDenied"));
+        for conditional in [None, Some(Conditional::IfNoneMatch)] {
+            assert!(!is_if_match_on_missing_key(conditional, Some(404), "NoSuchKey"));
+        }
     }
 
     #[test]
