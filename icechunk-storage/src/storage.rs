@@ -674,6 +674,7 @@ pub trait Storage: fmt::Debug + Display + sealed::Sealed + Sync + Send {
     ///
     /// Returns a stream of [`ListInfo`] entries, each containing the object's key and size in bytes.
     /// Pass an empty prefix to list all objects in the repository's storage root.
+    /// The order is unspecified; no backend guarantees one.
     async fn list_objects<'a>(
         &'a self,
         ctx: &StorageContext<'_>,
@@ -695,6 +696,11 @@ pub trait Storage: fmt::Debug + Display + sealed::Sealed + Sync + Send {
     /// rather than filtering a full listing. Callers fan out only when true.
     fn lists_id_prefixes_natively(&self) -> bool {
         false
+    }
+
+    /// Whether this backend can hold IC1 (spec version 1) repositories.
+    fn supports_ic1_repos(&self) -> bool {
+        true
     }
 
     async fn delete_batch(

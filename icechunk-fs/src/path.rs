@@ -1,0 +1,120 @@
+use std::{
+    ffi::OsStr,
+    path::{Path, PathBuf},
+};
+
+use icechunk_storage::{StorageResult, other_error};
+use uuid::Uuid;
+
+const STAGING_INFIX: &str = ".staging.";
+
+fn valid_component(component: &str) -> bool {
+    !component.is_empty()
+        && component != "."
+        && component != ".."
+        && !component.contains('\0')
+}
+
+/// Maps a `/`-separated object key to a path under `root`. Rejects any key
+/// that could escape `root` or that doesn't name a file.
+pub(crate) fn key_path(root: &Path, key: &str) -> StorageResult<PathBuf> {
+    key.split('/')
+        .try_fold(root.to_path_buf(), |mut path, component| {
+            valid_component(component).then(|| {
+                path.push(component);
+                path
+            })
+        })
+        .ok_or_else(|| {
+            other_error(format!("invalid object key for FilesystemStorage: {key:?}"))
+        })
+}
+
+/// Like [`key_path`], but `""` is the root and one trailing `/` is ignored.
+pub(crate) fn prefix_path(root: &Path, prefix: &str) -> StorageResult<PathBuf> {
+    let prefix = prefix.strip_suffix('/').unwrap_or(prefix);
+    if prefix.is_empty() { Ok(root.to_path_buf()) } else { key_path(root, prefix) }
+}
+
+/// A unique sibling of `target` to write before renaming or linking it into place.
+pub(crate) fn staging_path(target: &Path) -> PathBuf {
+    let mut name = target.file_name().map(OsStr::to_os_string).unwrap_or_default();
+    name.push(format!("{STAGING_INFIX}{}", Uuid::new_v4()));
+    target.with_file_name(name)
+}
+
+pub(crate) fn is_staging_name(file_name: &OsStr) -> bool {
+    file_name.to_str().and_then(|name| name.rsplit_once(STAGING_INFIX)).is_some_and(
+        |(_, id)| {
+            Uuid::try_parse(id).is_ok_and(|uuid| uuid.hyphenated().to_string() == id)
+        },
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn valid_key_maps_under_root() {
+        let root = Path::new("/data/repo");
+        assert_eq!(
+            key_path(root, "chunks/ABC").unwrap(),
+            PathBuf::from("/data/repo/chunks/ABC")
+        );
+        assert_eq!(key_path(root, "repo").unwrap(), PathBuf::from("/data/repo/repo"));
+    }
+
+    #[test]
+    fn invalid_keys_are_rejected() {
+        let root = Path::new("/data/repo");
+        for key in [
+            "..",
+            "../x",
+            "a/../b",
+            ".",
+            "a/./b",
+            "a//b",
+            "/etc/passwd",
+            "a/",
+            "",
+            "a\0b",
+        ] {
+            assert!(key_path(root, key).is_err(), "{key:?}");
+        }
+    }
+
+    #[test]
+    fn prefix_paths() {
+        let root = Path::new("/data/repo");
+        assert_eq!(prefix_path(root, "").unwrap(), root);
+        assert_eq!(
+            prefix_path(root, "chunks/").unwrap(),
+            prefix_path(root, "chunks").unwrap()
+        );
+        assert_eq!(
+            prefix_path(root, "chunks").unwrap(),
+            PathBuf::from("/data/repo/chunks")
+        );
+        assert!(prefix_path(root, "../x").is_err());
+        assert!(prefix_path(root, "a//").is_err());
+    }
+
+    #[test]
+    fn staging_names() {
+        let target = Path::new("/data/repo/repo");
+        let staging = staging_path(target);
+        assert_eq!(staging.parent(), target.parent());
+        assert_ne!(staging, staging_path(target));
+        assert!(is_staging_name(staging.file_name().unwrap()));
+        assert!(!is_staging_name(OsStr::new("repo")));
+        assert!(!is_staging_name(OsStr::new("x.staging.notauuid")));
+        let uuid = Uuid::new_v4();
+        assert!(is_staging_name(OsStr::new(&format!("x.staging.{}", uuid.hyphenated()))));
+        for id in
+            [uuid.simple().to_string(), uuid.braced().to_string(), uuid.urn().to_string()]
+        {
+            assert!(!is_staging_name(OsStr::new(&format!("x.staging.{id}"))), "{id}");
+        }
+    }
+}

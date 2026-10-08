@@ -347,6 +347,9 @@ by reading content, never by `stat`:
   metadata, it sweeps no protocol files.
   - `repo.new_bytes.*`, `repo.lockinfo.*` and `repo.probe.*`: deleted
     whatever their content.
+  - Staging files `<name>.staging.<uuid>`, written next to their target by
+    unconditional writes, conditional creates and backups: deleted whatever
+    their content. `list_objects` never returns them.
   - `repo.lock.<h>.*`: GC lists the lock files first, then does a fresh read
     of `repo`. It deletes only listed locks whose `h` differs from the hash of
     that read. A lock listed before the read was created on top of a version
@@ -426,8 +429,9 @@ documented.
 
 - At repo creation and on first write, the backend creates
   `repo.probe.<uuid>` in the repo directory, hard-links it to
-  `repo.probe.<uuid>.link`, then deletes both. Failure means no hard links and
-  the backend refuses to write. A crash mid-probe leaves files behind; GC
+  `repo.probe.<uuid>.link`, links it again onto that existing name, which must
+  fail with `EEXIST`, then deletes both. Failure means no exclusive hard links
+  and the backend refuses to write. A crash mid-probe leaves files behind; GC
   sweeps them.
 - On Linux, the backend refuses NFS mounts with `nocto`, which breaks the
   fresh read on NFSv3. It checks at create and open:

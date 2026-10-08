@@ -211,6 +211,12 @@ where
         ("azure_blob_slash", s4slash),
     ];
 
+    #[cfg(all(feature = "fs", unix))]
+    let fs_dir = tempdir().expect("cannot create temp dir");
+    #[cfg(all(feature = "fs", unix))]
+    storages
+        .insert(2, ("filesystem", storage::new_filesystem_storage(fs_dir.path()).await?));
+
     if let Ok(e) = env::var("AWS_BUCKET")
         && !e.is_empty()
     {
@@ -342,7 +348,15 @@ async fn test_object_write_read() -> Result<(), Box<dyn std::error::Error>> {
 async fn test_tag_write_get(
     #[case] spec_version: SpecVersionBin,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    with_storage(Permission::Modify, |_, storage| async move {
+    with_storage(Permission::Modify, |name, storage| async move {
+        // FilesystemStorage refuses IC1 repos
+        if name == "filesystem" && spec_version == SpecVersionBin::V1 {
+            return Ok(());
+        }
+        // FilesystemStorage: IfVersion/copy_object not implemented yet
+        if name == "filesystem" {
+            return Ok(());
+        }
         let repo =
             Repository::create(storage).spec_version(spec_version).execute().await?;
         repo.create_tag("mytag", &Snapshot::INITIAL_SNAPSHOT_ID).await?;
@@ -359,7 +373,15 @@ async fn test_tag_write_get(
 async fn test_fetch_non_existing_tag(
     #[case] spec_version: SpecVersionBin,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    with_storage(Permission::Modify, |_, storage| async move {
+    with_storage(Permission::Modify, |name, storage| async move {
+        // FilesystemStorage refuses IC1 repos
+        if name == "filesystem" && spec_version == SpecVersionBin::V1 {
+            return Ok(());
+        }
+        // FilesystemStorage: IfVersion/copy_object not implemented yet
+        if name == "filesystem" {
+            return Ok(());
+        }
         let repo =
             Repository::create(storage).spec_version(spec_version).execute().await?;
         repo.create_tag("mytag", &Snapshot::INITIAL_SNAPSHOT_ID).await?;
@@ -382,7 +404,15 @@ async fn test_fetch_non_existing_tag(
 async fn test_create_existing_tag(
     #[case] spec_version: SpecVersionBin,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    with_storage(Permission::Modify, |_, storage| async move {
+    with_storage(Permission::Modify, |name, storage| async move {
+        // FilesystemStorage refuses IC1 repos
+        if name == "filesystem" && spec_version == SpecVersionBin::V1 {
+            return Ok(());
+        }
+        // FilesystemStorage: IfVersion/copy_object not implemented yet
+        if name == "filesystem" {
+            return Ok(());
+        }
         let repo =
             Repository::create(storage).spec_version(spec_version).execute().await?;
         repo.create_tag("mytag", &Snapshot::INITIAL_SNAPSHOT_ID).await?;
@@ -1198,7 +1228,11 @@ async fn test_delete_objects() -> Result<(), Box<dyn std::error::Error>> {
 async fn test_fetch_non_existing_branch(
     #[case] spec_version: SpecVersionBin,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    with_storage(Permission::Modify, |_, storage| async move {
+    with_storage(Permission::Modify, |name, storage| async move {
+        // FilesystemStorage refuses IC1 repos
+        if name == "filesystem" && spec_version == SpecVersionBin::V1 {
+            return Ok(());
+        }
         let repo =
             Repository::create(storage).spec_version(spec_version).execute().await?;
         let back = repo.lookup_branch("non-existing-branch").await;
@@ -1255,7 +1289,11 @@ async fn test_write_config_on_empty(
 async fn test_write_config_on_existing(
     #[case] spec_version: SpecVersionBin,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    with_storage(Permission::Modify, |_, storage| async move {
+    with_storage(Permission::Modify, |name, storage| async move {
+        // FilesystemStorage: IfVersion/copy_object not implemented yet
+        if name == "filesystem" {
+            return Ok(());
+        }
         let am = Arc::new(AssetManager::new_no_cache(
             Arc::clone(&storage),
             with_storage_settings(&storage).await?,
@@ -1325,6 +1363,10 @@ async fn test_write_config_fails_on_bad_version_when_existing(
     #[case] spec_version: SpecVersionBin,
 ) -> Result<(), Box<dyn std::error::Error>> {
     with_storage(Permission::Modify, |storage_type, storage| async move {
+        // FilesystemStorage: IfVersion/copy_object not implemented yet
+        if storage_type == "filesystem" {
+            return Ok(());
+        }
         let storage_settings = with_storage_settings(&storage).await?;
         let am = Arc::new(AssetManager::new_no_cache(
             storage,
@@ -1378,7 +1420,7 @@ async fn test_write_config_fails_on_bad_version_when_existing(
 async fn test_write_config_can_overwrite_with_unsafe_config(
     #[case] spec_version: SpecVersionBin,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    with_storage(Permission::Modify, |_, storage| async move {
+    with_storage(Permission::Modify, |name, storage| async move {
         let storage_settings = storage::Settings {
             unsafe_use_conditional_update: Some(false),
             unsafe_use_conditional_create: Some(false),
@@ -1397,6 +1439,15 @@ async fn test_write_config_can_overwrite_with_unsafe_config(
             Some(new_version) => new_version,
             None => panic!(),
         };
+        // FilesystemStorage ignores the unsafe settings: creation stays conditional
+        if name == "filesystem" {
+            let res = am
+                .try_update_config(&config1, &VersionInfo::for_creation(), None)
+                .await?;
+            assert!(res.is_none(), "{res:?}");
+            // FilesystemStorage: IfVersion/copy_object not implemented yet
+            return Ok(());
+        }
 
         // attempt a bad change that should succeed in this config
         let update_res = am
@@ -1526,7 +1577,7 @@ async fn check_storage_classes(
 async fn test_storage_class_reaches_backend() -> Result<(), Box<dyn std::error::Error>> {
     with_storage(Permission::Modify, |name, storage| async move {
         let valid_class = match name {
-            "in_memory" | "local_filesystem" => None,
+            "in_memory" | "local_filesystem" | "filesystem" => None,
             // rustfs only accepts REDUCED_REDUNDANCY
             n if n.starts_with("s3_") => Some("REDUCED_REDUNDANCY"),
             n if n.starts_with("azure_blob") => Some("Cool"),
@@ -1674,6 +1725,97 @@ async fn test_get_object_conditional() -> Result<(), Box<dyn std::error::Error>>
     })
     .await?;
     Ok(())
+}
+
+/// Versions returned by conditional puts and conditional gets identify the same
+/// content, and conditional puts honour them.
+#[tokio_test]
+async fn test_conditional_write_contract() -> Result<(), Box<dyn std::error::Error>> {
+    with_storage(Permission::Modify, |name, storage| async move {
+        let settings = with_storage_settings(&storage).await?;
+        let ctx = attributed(&settings);
+        let key = "conditional-write-contract";
+        let put = |bytes: &'static [u8], condition| {
+            storage.put_object_conditional(
+                &ctx,
+                key,
+                Bytes::from_static(bytes),
+                None,
+                Default::default(),
+                condition,
+            )
+        };
+        let get = |version| storage.get_object_conditional(&ctx, key, version);
+        // the Hugging Face gateway ignores If-None-Match on GetObject
+        let honours_if_none_match = !name.starts_with("HF");
+
+        let VersionedUpdateResult::Updated { new_version: v1 } =
+            put(b"first", PutCondition::Create).await?
+        else {
+            panic!("{name}: create on a new key failed");
+        };
+
+        let storage::GetModifiedResult::Modified { data, new_version: g1 } =
+            get(None).await?
+        else {
+            panic!("{name}: unconditional get returned no data");
+        };
+        assert_eq!(async_read_to_bytes(data).await?, b"first", "{name}");
+        if honours_if_none_match {
+            for version in [&g1, &v1] {
+                let res = get(Some(version)).await?;
+                assert!(
+                    matches!(res, storage::GetModifiedResult::OnLatestVersion),
+                    "{name}: {version:?} is not the latest version: {res:?}"
+                );
+            }
+        }
+
+        let res = put(b"second", PutCondition::Create).await?;
+        assert!(
+            matches!(res, VersionedUpdateResult::NotOnLatestVersion),
+            "{name}: create on an existing key: {res:?}"
+        );
+        let storage::GetModifiedResult::Modified { data, .. } = get(None).await? else {
+            panic!("{name}: unconditional get returned no data");
+        };
+        assert_eq!(async_read_to_bytes(data).await?, b"first", "{name}");
+
+        // FilesystemStorage: IfVersion/copy_object not implemented yet
+        if name == "filesystem" {
+            return Ok(());
+        }
+        // local_filesystem defaults to unsafe_use_conditional_update: Some(false)
+        if name == "local_filesystem" {
+            return Ok(());
+        }
+
+        let VersionedUpdateResult::Updated { new_version: v2 } =
+            put(b"third", PutCondition::IfVersion(&g1)).await?
+        else {
+            panic!("{name}: update on the latest version failed");
+        };
+        let res = put(b"fourth", PutCondition::IfVersion(&g1)).await?;
+        assert!(
+            matches!(res, VersionedUpdateResult::NotOnLatestVersion),
+            "{name}: update on a stale version: {res:?}"
+        );
+        let storage::GetModifiedResult::Modified { data, .. } = get(Some(&g1)).await?
+        else {
+            panic!("{name}: get on a stale version returned no data");
+        };
+        assert_eq!(async_read_to_bytes(data).await?, b"third", "{name}");
+        if honours_if_none_match {
+            let res = get(Some(&v2)).await?;
+            assert!(
+                matches!(res, storage::GetModifiedResult::OnLatestVersion),
+                "{name}: {v2:?} is not the latest version: {res:?}"
+            );
+        }
+
+        Ok(())
+    })
+    .await
 }
 
 #[tokio::test]
@@ -1857,7 +1999,27 @@ async fn test_redirect_storage() -> Result<(), Box<dyn std::error::Error>> {
 async fn test_basic_repo_ops(
     #[case] spec_version: SpecVersionBin,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    with_storage(Permission::Modify, |_, storage| async move {
+    with_storage(Permission::Modify, |name, storage| async move {
+        if name == "filesystem" && spec_version == SpecVersionBin::V1 {
+            let res = Repository::create(Arc::clone(&storage))
+                .spec_version(spec_version)
+                .execute()
+                .await;
+            assert!(
+                matches!(
+                    res,
+                    Err(ICError {
+                        kind: RepositoryErrorKind::BadRepoVersion {
+                            minimum_spec_version: SpecVersionBin::V2
+                        },
+                        ..
+                    })
+                ),
+                "{:?}",
+                res.err()
+            );
+            return Ok(());
+        }
         let repo = Repository::create(Arc::clone(&storage))
             .spec_version(spec_version)
             .execute()
@@ -1889,6 +2051,137 @@ async fn test_basic_repo_ops(
         Ok(())
     })
     .await?;
+    Ok(())
+}
+
+#[cfg(all(feature = "fs", unix))]
+#[tokio_test]
+async fn filesystem_storage_refuses_ic1_open() -> Result<(), Box<dyn std::error::Error>> {
+    let dir = tempdir()?;
+    let options = fs_extra::dir::CopyOptions::new().content_only(true);
+    fs_extra::dir::copy(
+        env::current_dir()?.join("../icechunk-python/tests/data/test-repo-v1"),
+        dir.path(),
+        &options,
+    )?;
+
+    let res = Repository::open(storage::new_filesystem_storage(dir.path()).await?)
+        .execute()
+        .await;
+    assert!(
+        matches!(
+            res,
+            Err(ICError {
+                kind: RepositoryErrorKind::BadRepoVersion {
+                    minimum_spec_version: SpecVersionBin::V2
+                },
+                ..
+            })
+        ),
+        "{:?}",
+        res.err()
+    );
+
+    let repo = Repository::open(new_local_filesystem_storage(dir.path()).await?)
+        .execute()
+        .await?;
+    assert_eq!(repo.spec_version(), SpecVersionBin::V1);
+    Ok(())
+}
+
+#[cfg(all(feature = "fs", unix))]
+#[tokio_test]
+async fn filesystem_storage_refuses_ic1_create() -> Result<(), Box<dyn std::error::Error>>
+{
+    let dir = tempdir()?;
+    let root = dir.path().join("repo");
+    let res = Repository::create(storage::new_filesystem_storage(&root).await?)
+        .spec_version(SpecVersionBin::V1)
+        .execute()
+        .await;
+    assert!(
+        matches!(
+            res,
+            Err(ICError {
+                kind: RepositoryErrorKind::BadRepoVersion {
+                    minimum_spec_version: SpecVersionBin::V2
+                },
+                ..
+            })
+        ),
+        "{:?}",
+        res.err()
+    );
+    assert!(!root.try_exists()?);
+    Ok(())
+}
+
+#[cfg(all(feature = "fs", unix))]
+#[tokio_test]
+async fn filesystem_storage_creates_and_reopens_v2()
+-> Result<(), Box<dyn std::error::Error>> {
+    let dir = tempdir()?;
+    let created = Repository::create(storage::new_filesystem_storage(dir.path()).await?)
+        .spec_version(SpecVersionBin::V2)
+        .execute()
+        .await?;
+    assert_eq!(created.spec_version(), SpecVersionBin::V2);
+
+    let opened = Repository::open(storage::new_filesystem_storage(dir.path()).await?)
+        .execute()
+        .await?;
+    assert_eq!(opened.spec_version(), SpecVersionBin::V2);
+    assert!(opened.list_branches().await?.contains("main"));
+    Ok(())
+}
+
+#[cfg(all(feature = "fs", unix))]
+#[tokio_test]
+async fn filesystem_storage_ignores_unsafe_settings_of_local_filesystem_repos()
+-> Result<(), Box<dyn std::error::Error>> {
+    let dir = tempdir()?;
+    let config =
+        RepositoryConfig { inline_chunk_threshold_bytes: Some(42), ..Default::default() };
+    Repository::create(new_local_filesystem_storage(dir.path()).await?)
+        .spec_version(SpecVersionBin::V2)
+        .config(config)
+        .execute()
+        .await?;
+
+    let repo = Repository::open(storage::new_filesystem_storage(dir.path()).await?)
+        .execute()
+        .await?;
+    let settings = repo.storage_settings();
+    assert_eq!(settings.unsafe_use_conditional_update, Some(false));
+
+    let ctx = attributed(settings);
+    let put = |bytes: &'static [u8]| {
+        repo.storage().put_object_conditional(
+            &ctx,
+            "unsafe-settings-check",
+            Bytes::from_static(bytes),
+            None,
+            Vec::new(),
+            PutCondition::Create,
+        )
+    };
+    let res = put(b"first").await?;
+    assert!(matches!(res, VersionedUpdateResult::Updated { .. }), "{res:?}");
+    let res = put(b"second").await?;
+    assert!(matches!(res, VersionedUpdateResult::NotOnLatestVersion), "{res:?}");
+    Ok(())
+}
+
+#[cfg(all(feature = "fs", unix))]
+#[tokio_test]
+async fn filesystem_storage_wrapper_forwards_ic1_refusal()
+-> Result<(), Box<dyn std::error::Error>> {
+    let dir = tempdir()?;
+    let fs = storage::new_filesystem_storage(dir.path()).await?;
+    assert!(!fs.supports_ic1_repos());
+    let metered = storage::metering::MeteringStorage::new(fs);
+    assert!(!metered.supports_ic1_repos());
+    assert!(new_in_memory_storage().await?.supports_ic1_repos());
     Ok(())
 }
 

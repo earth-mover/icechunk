@@ -235,7 +235,7 @@ import-hook-remove:
 
 # Use --all-features for the workspace but skip icechunk's `shuttle` feature,
 # which swaps tokio for shuttle-tokio and is incompatible with other crates.
-icechunk_features := "s3,object-store-s3,object-store-gcs,object-store-azure,object-store-http,object-store-fs,redirect,logs,otel,cli,napi-send-contract"
+icechunk_features := "s3,fs,object-store-s3,object-store-gcs,object-store-azure,object-store-http,object-store-fs,redirect,logs,otel,cli,napi-send-contract"
 
 [group('lint')]
 [doc("Run clippy lints on all features and targets")]

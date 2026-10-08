@@ -294,6 +294,8 @@ async fn create(
 ) -> RepositoryResult<Repository> {
     debug!("Creating Repository");
     raise_if_cant_write(storage.as_ref(), "Cannot create repository").await?;
+    let spec_version = spec_version.unwrap_or_default();
+    raise_if_ic1_unsupported(storage.as_ref(), spec_version)?;
     if storage.can_create_repository().await.inject()?
         == storage::RepositoryCreation::RefusedEmptyPrefix
     {
@@ -317,8 +319,6 @@ async fn create(
     let config = RepositoryConfig { storage: Some(storage_settings.clone()), ..config };
     let attribution = attribution.unwrap_or_default();
     let labels = AttributionLabels::from(&attribution);
-
-    let spec_version = spec_version.unwrap_or_default();
 
     let asset_manager = Arc::new(
         AssetManager::new_with_config(
@@ -509,6 +509,7 @@ async fn open(
     }?;
     let spec_version = detected.spec_version();
     trace!(%spec_version, "Repository version found");
+    raise_if_ic1_unsupported(storage.as_ref(), spec_version)?;
 
     let (persisted_config, config_version) = match detected {
         DetectedSpecVersion::V2Plus { repo_info, .. } => {
@@ -568,6 +569,18 @@ async fn open(
         asset_manager,
         authorize_virtual_chunk_access,
     )
+}
+
+fn raise_if_ic1_unsupported(
+    storage: &(dyn Storage + Send + Sync),
+    spec_version: SpecVersionBin,
+) -> RepositoryResult<()> {
+    if spec_version < SpecVersionBin::V2 && !storage.supports_ic1_repos() {
+        return Err(RepositoryError::capture(RepositoryErrorKind::BadRepoVersion {
+            minimum_spec_version: SpecVersionBin::V2,
+        }));
+    }
+    Ok(())
 }
 
 #[cfg(test)]

@@ -14,9 +14,29 @@ publish = true
 rust-version.workspace = true
 
 [dependencies]
+icechunk-storage.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+icechunk-types.workspace = true
+async-trait.workspace = true
+bytes.workspace = true
+chrono.workspace = true
+futures.workspace = true
+libc.workspace = true
+serde.workspace = true
+sha2.workspace = true
+tokio = { workspace = true, features = ["rt", "sync"] }
+tracing.workspace = true
+typetag.workspace = true
+uuid.workspace = true
 
 [dev-dependencies]
+icechunk-macros.workspace = true
+serde_json.workspace = true
 stateright = "0.31"
+tempfile.workspace = true
+test-log.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "io-util"] }
 
 [lints]
 workspace = true
