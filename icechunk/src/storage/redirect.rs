@@ -28,9 +28,9 @@ use icechunk_storage::sealed;
 use icechunk_types::ICResultExt as _;
 
 use super::{
-    DeleteObjectsResult, GetModifiedResult, ListInfo, RepositoryCreation, Settings,
-    Storage, StorageContext, StorageError, StorageInfo, StorageResult, VersionInfo,
-    VersionedUpdateResult,
+    DeleteObjectsResult, GetModifiedResult, ListInfo, PutCondition, RepositoryCreation,
+    Settings, Storage, StorageContext, StorageError, StorageInfo, StorageResult,
+    VersionInfo, VersionedUpdateResult, WriteHint,
 };
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -338,10 +338,8 @@ impl Storage for RedirectStorage {
         ctx: &StorageContext<'_>,
         path: &str,
         range: Option<&Range<u64>>,
-    ) -> StorageResult<(
-        Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>,
-        VersionInfo,
-    )> {
+    ) -> StorageResult<Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>>
+    {
         self.backend().await?.get_object_range(ctx, path, range).await
     }
 
@@ -352,11 +350,26 @@ impl Storage for RedirectStorage {
         bytes: Bytes,
         content_type: Option<&str>,
         metadata: Vec<(String, String)>,
-        previous_version: Option<&VersionInfo>,
+        hint: WriteHint,
+    ) -> StorageResult<()> {
+        self.backend()
+            .await?
+            .put_object(ctx, path, bytes, content_type, metadata, hint)
+            .await
+    }
+
+    async fn put_object_conditional(
+        &self,
+        ctx: &StorageContext<'_>,
+        path: &str,
+        bytes: Bytes,
+        content_type: Option<&str>,
+        metadata: Vec<(String, String)>,
+        condition: PutCondition<'_>,
     ) -> StorageResult<VersionedUpdateResult> {
         self.backend()
             .await?
-            .put_object(ctx, path, bytes, content_type, metadata, previous_version)
+            .put_object_conditional(ctx, path, bytes, content_type, metadata, condition)
             .await
     }
 

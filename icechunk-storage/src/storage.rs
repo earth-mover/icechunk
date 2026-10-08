@@ -443,6 +443,29 @@ impl<'a> StorageContext<'a> {
     }
 }
 
+/// The condition for [`Storage::put_object_conditional`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PutCondition<'a> {
+    /// Write only if the object doesn't exist.
+    Create,
+    /// Write only if the object's current version is this one.
+    IfVersion(&'a VersionInfo),
+}
+
+/// What the caller guarantees about an unconditional write.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum WriteHint {
+    /// No guarantee: the name may exist and be read concurrently, so the
+    /// write must be all-or-nothing.
+    #[default]
+    Atomic,
+    /// The caller's promise: the name is new and written by nobody else, and
+    /// nothing reads the object before `put_object` returns. Backends may then
+    /// write in place, without staging. Backends whose PUTs are all-or-nothing
+    /// ignore it.
+    NewObject,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VersionedUpdateResult {
     Updated { new_version: VersionInfo },
@@ -570,7 +593,7 @@ pub trait Storage: fmt::Debug + Display + sealed::Sealed + Sync + Send {
         ctx: &StorageContext<'_>,
         path: &str,
         range: Option<&Range<u64>>,
-    ) -> StorageResult<(Pin<Box<dyn AsyncBufRead + Send>>, VersionInfo)> {
+    ) -> StorageResult<Pin<Box<dyn AsyncBufRead + Send>>> {
         if let Some(range) = range {
             self.get_object_concurrently(ctx, path, range).await
         } else {
@@ -583,10 +606,10 @@ pub trait Storage: fmt::Debug + Display + sealed::Sealed + Sync + Send {
         ctx: &StorageContext<'_>,
         path: &str,
         range: Option<&Range<u64>>,
-    ) -> StorageResult<(Pin<Box<dyn AsyncBufRead + Send>>, VersionInfo)> {
-        let (stream, version) = self.get_object_range(ctx, path, range).await?;
+    ) -> StorageResult<Pin<Box<dyn AsyncBufRead + Send>>> {
+        let stream = self.get_object_range(ctx, path, range).await?;
         let reader = StreamReader::new(stream.map_err(std::io::Error::other));
-        Ok((Box::pin(reader), version))
+        Ok(Box::pin(reader))
     }
 
     async fn get_object_range(
@@ -594,11 +617,12 @@ pub trait Storage: fmt::Debug + Display + sealed::Sealed + Sync + Send {
         ctx: &StorageContext<'_>,
         path: &str,
         range: Option<&Range<u64>>,
-    ) -> StorageResult<(
-        Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>,
-        VersionInfo,
-    )>;
+    ) -> StorageResult<Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>>;
 
+    /// Write `path` unconditionally, replacing any existing object.
+    ///
+    /// Never reports a version conflict and returns no version. `hint` is
+    /// advisory; see [`WriteHint`].
     async fn put_object(
         &self,
         ctx: &StorageContext<'_>,
@@ -606,9 +630,37 @@ pub trait Storage: fmt::Debug + Display + sealed::Sealed + Sync + Send {
         bytes: Bytes,
         content_type: Option<&str>,
         metadata: Vec<(String, String)>,
-        previous_version: Option<&VersionInfo>,
+        hint: WriteHint,
+    ) -> StorageResult<()>;
+
+    /// Write `path` only if `condition` holds.
+    ///
+    /// Returns [`VersionedUpdateResult::Updated`] with the new version on
+    /// success, or [`VersionedUpdateResult::NotOnLatestVersion`] without
+    /// writing when the condition fails: for [`PutCondition::Create`] the
+    /// object exists, for [`PutCondition::IfVersion`] its current version is a
+    /// different one. The version in [`PutCondition::IfVersion`] must come
+    /// from [`Storage::get_object_conditional`] or an earlier
+    /// `put_object_conditional`. Backends honouring
+    /// [`Settings::unsafe_use_conditional_create()`] and
+    /// [`Settings::unsafe_use_conditional_update()`] skip the condition, and
+    /// write unconditionally, when the corresponding setting disables it.
+    async fn put_object_conditional(
+        &self,
+        ctx: &StorageContext<'_>,
+        path: &str,
+        bytes: Bytes,
+        content_type: Option<&str>,
+        metadata: Vec<(String, String)>,
+        condition: PutCondition<'_>,
     ) -> StorageResult<VersionedUpdateResult>;
 
+    /// Copy `from` to `to` only if `from`'s current version is `version`,
+    /// which must come from [`Storage::get_object_conditional`] or
+    /// [`Storage::put_object_conditional`]. On success it returns `version`
+    /// unchanged, not a version of `to`. Backends honouring
+    /// [`Settings::unsafe_use_conditional_update()`] skip the check, and copy
+    /// unconditionally, when that setting disables it.
     async fn copy_object(
         &self,
         ctx: &StorageContext<'_>,
@@ -658,6 +710,10 @@ pub trait Storage: fmt::Debug + Display + sealed::Sealed + Sync + Send {
         path: &str,
     ) -> StorageResult<DateTime<Utc>>;
 
+    /// Read `path` with its current version, unless that version is
+    /// `previous_version`, in which case it returns
+    /// [`GetModifiedResult::OnLatestVersion`] without the data. With `None`
+    /// it always reads.
     async fn get_object_conditional(
         &self,
         ctx: &StorageContext<'_>,
@@ -719,32 +775,23 @@ pub trait Storage: fmt::Debug + Display + sealed::Sealed + Sync + Send {
         ctx: &StorageContext<'_>,
         key: &str,
         parts: Vec<Range<u64>>,
-    ) -> StorageResult<(Pin<Box<dyn AsyncBufRead + Send>>, VersionInfo)> {
+    ) -> StorageResult<Pin<Box<dyn AsyncBufRead + Send>>> {
         let ctx = *ctx;
-        let results = parts
+        let all_bytes = parts
             .into_iter()
             .map(move |range| async move {
-                let (stream, version) =
-                    self.get_object_range(&ctx, key, Some(&range)).await?;
+                let stream = self.get_object_range(&ctx, key, Some(&range)).await?;
                 let all_bytes: Vec<_> = stream.try_collect().await?;
-                Ok::<_, StorageError>((all_bytes, version))
+                Ok::<_, StorageError>(all_bytes)
             })
-            .collect::<FuturesOrdered<_>>();
-
-        let results = results.peekable();
-        tokio::pin!(results);
-        let version = match results.as_mut().peek().await {
-            Some(Ok((_, version))) => version.clone(),
-            _ => VersionInfo::for_creation(),
-        };
-        let all_bytes = results
-            .map_ok(|(all_bytes, _)| stream::iter(all_bytes).map(Ok::<_, StorageError>))
+            .collect::<FuturesOrdered<_>>()
+            .map_ok(|all_bytes| stream::iter(all_bytes).map(Ok::<_, StorageError>))
             .try_flatten()
             .try_collect::<Vec<_>>()
             .await?;
 
         let res = StreamReader::new(stream::iter(all_bytes).map(Ok::<_, std::io::Error>));
-        Ok((Box::pin(res), version))
+        Ok(Box::pin(res))
     }
 
     async fn get_object_concurrently(
@@ -752,7 +799,7 @@ pub trait Storage: fmt::Debug + Display + sealed::Sealed + Sync + Send {
         ctx: &StorageContext<'_>,
         key: &str,
         range: &Range<u64>,
-    ) -> StorageResult<(Pin<Box<dyn AsyncBufRead + Send>>, VersionInfo)> {
+    ) -> StorageResult<Pin<Box<dyn AsyncBufRead + Send>>> {
         let parts = split_in_multiple_requests(
             range,
             ctx.settings.concurrency().ideal_concurrent_request_size().get(),
@@ -760,8 +807,8 @@ pub trait Storage: fmt::Debug + Display + sealed::Sealed + Sync + Send {
         )
         .collect::<Vec<_>>();
 
-        let res: (Pin<Box<dyn AsyncBufRead + Send>>, VersionInfo) = match parts.len() {
-            0 => (Box::pin(tokio::io::empty()), VersionInfo::for_creation()),
+        let res: Pin<Box<dyn AsyncBufRead + Send>> = match parts.len() {
+            0 => Box::pin(tokio::io::empty()),
             1 => self.get_object_range_read(ctx, key, Some(range)).await?,
             _ => self.get_object_concurrently_multiple(ctx, key, parts).await?,
         };

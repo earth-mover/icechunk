@@ -65,8 +65,9 @@ use crate::{
     private,
     repository::{RepositoryError, RepositoryErrorKind, RepositoryResult},
     storage::{
-        self, Attribution, AttributionLabels, ListInfo, RequestAttribution,
-        StorageContext, StorageErrorKind, VersionInfo, VersionedUpdateResult, listing,
+        self, Attribution, AttributionLabels, ListInfo, PutCondition, RequestAttribution,
+        StorageContext, StorageErrorKind, VersionInfo, VersionedUpdateResult, WriteHint,
+        listing,
     },
 };
 
@@ -325,15 +326,19 @@ impl AssetManager {
     ) -> RepositoryResult<Option<(RepositoryConfig, VersionInfo)>> {
         match self
             .storage
-            .get_object(&self.storage_context(), CONFIG_FILE_PATH, None)
+            .get_object_conditional(&self.storage_context(), CONFIG_FILE_PATH, None)
             .await
         {
-            Ok((mut result, version)) => {
-                let mut data = Vec::with_capacity(1_024);
-                result.read_to_end(&mut data).await.capture()?;
-                let config = serde_yaml_ng::from_slice(data.as_slice()).capture()?;
-                Ok(Some((config, version)))
+            Ok(GetModifiedResult::Modified { mut data, new_version }) => {
+                let mut bytes = Vec::with_capacity(1_024);
+                data.read_to_end(&mut bytes).await.capture()?;
+                let config = serde_yaml_ng::from_slice(bytes.as_slice()).capture()?;
+                Ok(Some((config, new_version)))
             }
+            Ok(GetModifiedResult::OnLatestVersion) => Err(icechunk_storage::other_error(
+                "backend returned \"on latest version\" for a conditional get without a previous version",
+            )
+            .inject()),
             Err(StorageError { kind: StorageErrorKind::ObjectNotFound, .. }) => Ok(None),
             Err(e) => Err(e.inject()),
         }
@@ -365,15 +370,21 @@ impl AssetManager {
                 VersionedUpdateResult::NotOnLatestVersion => return Ok(None),
             }
         }
+        // IC1 config versions use `for_creation()` as "doesn't exist yet".
+        let condition = if previous_version.is_create() {
+            PutCondition::Create
+        } else {
+            PutCondition::IfVersion(previous_version)
+        };
         match self
             .storage
-            .put_object(
+            .put_object_conditional(
                 &self.storage_context(),
                 CONFIG_FILE_PATH,
                 bytes,
                 content_type,
                 Vec::new(),
-                Some(previous_version),
+                condition,
             )
             .await
             .inject()?
@@ -501,7 +512,7 @@ impl AssetManager {
         let path = format!("{MANIFESTS_FILE_PATH}/{manifest_id}");
         let range = 0..size_bytes;
         let range = if size_bytes > 0 { Some(&range) } else { None };
-        let (read, _) = self
+        let read = self
             .storage
             .get_object(&self.storage_context(), path.as_str(), range)
             .await
@@ -514,7 +525,11 @@ impl AssetManager {
     }
 
     #[instrument(skip(self, snapshot))]
-    pub async fn write_snapshot(&self, snapshot: Arc<Snapshot>) -> RepositoryResult<()> {
+    pub async fn write_snapshot(
+        &self,
+        snapshot: Arc<Snapshot>,
+        hint: WriteHint,
+    ) -> RepositoryResult<()> {
         let snapshot_c = Arc::clone(&snapshot);
         write_new_snapshot(
             snapshot_c,
@@ -523,6 +538,7 @@ impl AssetManager {
             self.storage.as_ref(),
             &self.storage_context(),
             &self.request_semaphore,
+            hint,
         )
         .await?;
         let snapshot_id = snapshot.id().clone();
@@ -560,6 +576,7 @@ impl AssetManager {
         &self,
         transaction_id: SnapshotId,
         log: Arc<TransactionLog>,
+        hint: WriteHint,
     ) -> RepositoryResult<()> {
         let log_c = Arc::clone(&log);
         write_new_tx_log(
@@ -570,6 +587,7 @@ impl AssetManager {
             self.storage.as_ref(),
             &self.storage_context(),
             &self.request_semaphore,
+            hint,
         )
         .await?;
         self.transactions_cache.insert(transaction_id, log);
@@ -707,7 +725,7 @@ impl AssetManager {
         let len = format_constants::ICECHUNK_FILE_HEADER_LEN;
         let range = 0u64..(len as u64);
         let _permit = self.request_semaphore.acquire().await.capture()?;
-        let (read, _) = self
+        let read = self
             .storage
             .get_object(&self.storage_context(), path, Some(&range))
             .await
@@ -855,13 +873,13 @@ impl AssetManager {
     pub async fn write_repo_info(
         &self,
         info: Arc<RepoInfo>,
-        version: &VersionInfo,
+        condition: PutCondition<'_>,
         backup_path: Option<&str>,
     ) -> RepositoryResult<VersionInfo> {
         let new_version = write_repo_info(
             Arc::clone(&info),
             self.spec_version(),
-            version,
+            condition,
             self.compression_level,
             backup_path,
             self.storage.as_ref(),
@@ -888,7 +906,7 @@ impl AssetManager {
         &self,
         info: Arc<RepoInfo>,
     ) -> RepositoryResult<VersionInfo> {
-        self.write_repo_info(info, &VersionInfo::for_creation(), None).await
+        self.write_repo_info(info, PutCondition::Create, None).await
     }
 
     #[instrument(skip(self, retry_settings, update))]
@@ -967,7 +985,7 @@ impl AssetManager {
             match write_repo_info(
                 Arc::clone(&new_repo),
                 self.spec_version(),
-                &repo_version,
+                PutCondition::IfVersion(&repo_version),
                 self.compression_level,
                 Some(backup_path.as_str()),
                 self.storage.as_ref(),
@@ -1037,10 +1055,15 @@ impl AssetManager {
         let ctx = self.node_context(&settings, array, Some(chunk));
         // we don't pre-populate the chunk cache, there are too many of them for this to be useful
         self.storage
-            .put_object(&ctx, path.as_str(), bytes, None, Default::default(), None)
+            .put_object(
+                &ctx,
+                path.as_str(),
+                bytes,
+                None,
+                Default::default(),
+                WriteHint::NewObject,
+            )
             .await
-            .inject()?
-            .must_write()
             .inject()?;
         Ok(())
     }
@@ -1063,7 +1086,7 @@ impl AssetManager {
                     let permit = self.request_semaphore.acquire().await.capture()?;
                     let ctx =
                         self.node_context(&self.storage_settings, array, Some(chunk));
-                    let (read, _) = self
+                    let read = self
                         .storage
                         .get_object(&ctx, &path, Some(range))
                         .await
@@ -1382,10 +1405,15 @@ async fn write_new_manifest(
 
     let _permit = semaphore.acquire().await.capture()?;
     storage
-        .put_object(&ctx, path.as_str(), buffer.into(), None, metadata, None)
+        .put_object(
+            &ctx,
+            path.as_str(),
+            buffer.into(),
+            None,
+            metadata,
+            WriteHint::NewObject,
+        )
         .await
-        .inject()?
-        .must_write()
         .inject()?;
     Ok(len)
 }
@@ -1406,7 +1434,7 @@ async fn fetch_manifest(
     let range = if manifest_size > 0 { Some(&range) } else { None };
     let _permit = semaphore.acquire().await.capture()?;
 
-    let (read, _) = storage.get_object(ctx, path.as_str(), range).await.inject()?;
+    let read = storage.get_object(ctx, path.as_str(), range).await.inject()?;
     fetch_and_decode(
         read,
         manifest_size,
@@ -1630,6 +1658,7 @@ async fn write_new_snapshot(
     storage: &(dyn Storage + Send + Sync),
     ctx: &StorageContext<'_>,
     semaphore: &Semaphore,
+    hint: WriteHint,
 ) -> RepositoryResult<SnapshotId> {
     if !storage.can_write().await.inject()? {
         return Err(RepositoryErrorKind::ReadonlyStorage(
@@ -1671,10 +1700,8 @@ async fn write_new_snapshot(
     let ctx = StorageContext::new(&settings, ctx.attribution);
     let _permit = semaphore.acquire().await.capture()?;
     storage
-        .put_object(&ctx, path.as_str(), buffer.into(), None, metadata, None)
+        .put_object(&ctx, path.as_str(), buffer.into(), None, metadata, hint)
         .await
-        .inject()?
-        .must_write()
         .inject()?;
 
     Ok(id)
@@ -1692,7 +1719,7 @@ async fn fetch_snapshot(
     let _permit = semaphore.acquire().await.capture()?;
 
     let path = format!("{SNAPSHOTS_FILE_PATH}/{snapshot_id}");
-    let (read, _) = storage.get_object(ctx, path.as_str(), None).await.inject()?;
+    let read = storage.get_object(ctx, path.as_str(), None).await.inject()?;
     fetch_and_decode(
         read,
         DEFAULT_PREALLOC_HINT as u64,
@@ -1703,6 +1730,7 @@ async fn fetch_snapshot(
     .await
 }
 
+#[expect(clippy::too_many_arguments)]
 async fn write_new_tx_log(
     transaction_id: SnapshotId,
     new_log: Arc<TransactionLog>,
@@ -1711,6 +1739,7 @@ async fn write_new_tx_log(
     storage: &(dyn Storage + Send + Sync),
     ctx: &StorageContext<'_>,
     semaphore: &Semaphore,
+    hint: WriteHint,
 ) -> RepositoryResult<()> {
     if !storage.can_write().await.inject()? {
         return Err(RepositoryErrorKind::ReadonlyStorage(
@@ -1752,10 +1781,8 @@ async fn write_new_tx_log(
 
     let _permit = semaphore.acquire().await.capture()?;
     storage
-        .put_object(&ctx, path.as_str(), buffer.into(), None, metadata, None)
+        .put_object(&ctx, path.as_str(), buffer.into(), None, metadata, hint)
         .await
-        .inject()?
-        .must_write()
         .inject()?;
 
     Ok(())
@@ -1772,7 +1799,7 @@ async fn fetch_transaction_log(
     debug!(%transaction_id, "Downloading transaction log");
     let path = format!("{TRANSACTION_LOGS_FILE_PATH}/{transaction_id}");
     let _permit = semaphore.acquire().await.capture()?;
-    let (read, _) = storage.get_object(ctx, path.as_str(), None).await.inject()?;
+    let read = storage.get_object(ctx, path.as_str(), None).await.inject()?;
     fetch_and_decode(
         read,
         DEFAULT_PREALLOC_HINT as u64,
@@ -1828,7 +1855,7 @@ async fn prepare_repo_info(
 pub async fn write_repo_info(
     info: Arc<RepoInfo>,
     spec_version: SpecVersionBin,
-    version: &VersionInfo,
+    condition: PutCondition<'_>,
     compression_level: u8,
     backup_path: Option<&str>,
     storage: &(dyn Storage + Send + Sync),
@@ -1841,7 +1868,10 @@ pub async fn write_repo_info(
     debug!(size_bytes = buffer.len(), "Writing repo info");
 
     let repo_file_path = path.unwrap_or(REPO_INFO_FILE_PATH);
-    if let Some(backup_path) = backup_path {
+    // A create has no previous object to back up.
+    if let (Some(backup_path), PutCondition::IfVersion(version)) =
+        (backup_path, condition)
+    {
         let backup_path = format!("{OVERWRITTEN_FILES_PATH}/{backup_path}");
         match storage
             .copy_object(ctx, repo_file_path, backup_path.as_str(), None, version)
@@ -1858,7 +1888,14 @@ pub async fn write_repo_info(
     }
 
     match storage
-        .put_object(ctx, repo_file_path, buffer.into(), None, metadata, Some(version))
+        .put_object_conditional(
+            ctx,
+            repo_file_path,
+            buffer.into(),
+            None,
+            metadata,
+            condition,
+        )
         .await
         .inject()?
     {
@@ -1883,7 +1920,7 @@ pub async unsafe fn force_write_repo_info(
     storage: &(dyn Storage + Send + Sync),
     ctx: &StorageContext<'_>,
     path: Option<&str>,
-) -> RepositoryResult<VersionInfo> {
+) -> RepositoryResult<()> {
     let (buffer, metadata) =
         prepare_repo_info(info, spec_version, compression_level, storage).await?;
 
@@ -1891,16 +1928,10 @@ pub async unsafe fn force_write_repo_info(
 
     let repo_file_path = path.unwrap_or(REPO_INFO_FILE_PATH);
 
-    match storage
-        .put_object(ctx, repo_file_path, buffer.into(), None, metadata, None)
+    storage
+        .put_object(ctx, repo_file_path, buffer.into(), None, metadata, WriteHint::Atomic)
         .await
-        .inject()?
-    {
-        VersionedUpdateResult::Updated { new_version } => Ok(new_version),
-        VersionedUpdateResult::NotOnLatestVersion => {
-            Err(RepositoryError::capture(RepositoryErrorKind::RepoInfoUpdated))
-        }
-    }
+        .inject()
 }
 
 #[instrument(skip_all)]

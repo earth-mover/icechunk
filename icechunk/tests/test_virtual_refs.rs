@@ -17,8 +17,8 @@ use icechunk::{
     repository::VersionInfo,
     session::{SessionError, SessionErrorKind, get_chunk},
     storage::{
-        self, ConcurrencySettings, ETag, ObjectStorage, StorageContext, mk_client,
-        new_s3_storage,
+        self, ConcurrencySettings, ETag, ObjectStorage, StorageContext, WriteHint,
+        mk_client, new_s3_storage,
     },
     store::{StoreError, StoreErrorKind},
     virtual_chunks::VirtualChunkContainer,
@@ -326,7 +326,7 @@ async fn write_chunks_to_azure(
                 bytes,
                 None,
                 Default::default(),
-                None,
+                WriteHint::Atomic,
             )
             .await
             .unwrap();

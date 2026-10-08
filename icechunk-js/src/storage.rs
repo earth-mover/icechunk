@@ -8,9 +8,9 @@ use bytes::Bytes;
 use futures::stream::BoxStream;
 use futures::{Stream, StreamExt};
 use icechunk::storage::{
-    DeleteObjectsResult, ETag, Generation, GetModifiedResult, ListInfo, Storage,
-    StorageContext, StorageError, StorageInfo, StorageResult, VersionInfo,
-    VersionedUpdateResult,
+    DeleteObjectsResult, ETag, Generation, GetModifiedResult, ListInfo, PutCondition,
+    Storage, StorageContext, StorageError, StorageInfo, StorageResult, VersionInfo,
+    VersionedUpdateResult, WriteHint,
 };
 use napi::bindgen_prelude::{Buffer, Promise};
 use napi::threadsafe_function::ThreadsafeFunction;
@@ -250,6 +250,36 @@ impl<'de> Deserialize<'de> for JsCallbackStorage {
     }
 }
 
+impl JsCallbackStorage {
+    async fn call_put_object(
+        &self,
+        path: &str,
+        bytes: Bytes,
+        content_type: Option<&str>,
+        metadata: Vec<(String, String)>,
+        previous_version: Option<JsStorageVersionInfo>,
+    ) -> StorageResult<VersionedUpdateResult> {
+        let args = JsStoragePutObjectArgs {
+            path: path.to_string(),
+            data: bytes.to_vec().into(),
+            content_type: content_type.map(|s| s.to_string()),
+            metadata: metadata
+                .into_iter()
+                .map(|(k, v)| JsStorageKeyValue { key: k, value: v })
+                .collect(),
+            previous_version,
+        };
+        let result = self
+            .put_object_fn
+            .call_async(Ok(args))
+            .await
+            .map_err(|e| js_storage_error("JS putObject call failed", e))?
+            .await
+            .map_err(|e| js_storage_error("JS putObject failed", e))?;
+        result.into_rust()
+    }
+}
+
 impl icechunk_storage::sealed::Sealed for JsCallbackStorage {}
 
 #[async_trait]
@@ -273,10 +303,8 @@ impl Storage for JsCallbackStorage {
         _ctx: &StorageContext<'_>,
         path: &str,
         range: Option<&Range<u64>>,
-    ) -> StorageResult<(
-        Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>,
-        VersionInfo,
-    )> {
+    ) -> StorageResult<Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>>
+    {
         let args = JsStorageGetObjectRangeArgs {
             path: path.to_string(),
             range_start: range.map(|r| r.start as f64),
@@ -291,9 +319,8 @@ impl Storage for JsCallbackStorage {
             .map_err(|e| js_storage_error("JS getObjectRange failed", e))?;
 
         let bytes = Bytes::from(response.data.to_vec());
-        let version = response.version.into();
         let stream = futures::stream::once(async move { Ok(bytes) });
-        Ok((Box::pin(stream), version))
+        Ok(Box::pin(stream))
     }
 
     async fn put_object(
@@ -303,26 +330,29 @@ impl Storage for JsCallbackStorage {
         bytes: Bytes,
         content_type: Option<&str>,
         metadata: Vec<(String, String)>,
-        previous_version: Option<&VersionInfo>,
+        _hint: WriteHint,
+    ) -> StorageResult<()> {
+        self.call_put_object(path, bytes, content_type, metadata, None)
+            .await?
+            .must_write()
+            .map(|_| ())
+    }
+
+    async fn put_object_conditional(
+        &self,
+        _ctx: &StorageContext<'_>,
+        path: &str,
+        bytes: Bytes,
+        content_type: Option<&str>,
+        metadata: Vec<(String, String)>,
+        condition: PutCondition<'_>,
     ) -> StorageResult<VersionedUpdateResult> {
-        let args = JsStoragePutObjectArgs {
-            path: path.to_string(),
-            data: bytes.to_vec().into(),
-            content_type: content_type.map(|s| s.to_string()),
-            metadata: metadata
-                .into_iter()
-                .map(|(k, v)| JsStorageKeyValue { key: k, value: v })
-                .collect(),
-            previous_version: previous_version.map(|v| v.into()),
+        let previous_version = match condition {
+            PutCondition::Create => (&VersionInfo::for_creation()).into(),
+            PutCondition::IfVersion(v) => v.into(),
         };
-        let result = self
-            .put_object_fn
-            .call_async(Ok(args))
+        self.call_put_object(path, bytes, content_type, metadata, Some(previous_version))
             .await
-            .map_err(|e| js_storage_error("JS putObject call failed", e))?
-            .await
-            .map_err(|e| js_storage_error("JS putObject failed", e))?;
-        result.into_rust()
     }
 
     async fn copy_object(

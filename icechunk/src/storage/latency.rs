@@ -18,9 +18,9 @@ use futures::{Stream, stream::BoxStream};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    DeleteObjectsResult, GetModifiedResult, ListInfo, RepositoryCreation, Settings,
-    Storage, StorageContext, StorageError, StorageInfo, StorageResult, VersionInfo,
-    VersionedUpdateResult,
+    DeleteObjectsResult, GetModifiedResult, ListInfo, PutCondition, RepositoryCreation,
+    Settings, Storage, StorageContext, StorageError, StorageInfo, StorageResult,
+    VersionInfo, VersionedUpdateResult, WriteHint,
 };
 use icechunk_storage::sealed;
 
@@ -103,11 +103,24 @@ impl Storage for LatencyStorage {
         bytes: Bytes,
         content_type: Option<&str>,
         metadata: Vec<(String, String)>,
-        previous_version: Option<&VersionInfo>,
+        hint: WriteHint,
+    ) -> StorageResult<()> {
+        self.sleep_for_write().await;
+        self.backend.put_object(ctx, path, bytes, content_type, metadata, hint).await
+    }
+
+    async fn put_object_conditional(
+        &self,
+        ctx: &StorageContext<'_>,
+        path: &str,
+        bytes: Bytes,
+        content_type: Option<&str>,
+        metadata: Vec<(String, String)>,
+        condition: PutCondition<'_>,
     ) -> StorageResult<VersionedUpdateResult> {
         self.sleep_for_write().await;
         self.backend
-            .put_object(ctx, path, bytes, content_type, metadata, previous_version)
+            .put_object_conditional(ctx, path, bytes, content_type, metadata, condition)
             .await
     }
 
@@ -182,10 +195,8 @@ impl Storage for LatencyStorage {
         ctx: &StorageContext<'_>,
         path: &str,
         range: Option<&Range<u64>>,
-    ) -> StorageResult<(
-        Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>,
-        VersionInfo,
-    )> {
+    ) -> StorageResult<Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>>
+    {
         self.sleep_for_read().await;
         self.backend.get_object_range(ctx, path, range).await
     }
@@ -209,7 +220,7 @@ mod tests {
 
         let start = std::time::Instant::now();
         storage
-            .put_object(&ctx, "test/key", "hello".into(), None, vec![], None)
+            .put_object(&ctx, "test/key", "hello".into(), None, vec![], WriteHint::Atomic)
             .await
             .unwrap();
         let write_with_latency = start.elapsed();

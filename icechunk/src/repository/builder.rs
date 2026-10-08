@@ -24,7 +24,7 @@ use crate::{
     },
     private,
     refs::{self, Ref},
-    storage::{self, Attribution, AttributionLabels, StorageContext},
+    storage::{self, Attribution, AttributionLabels, StorageContext, WriteHint},
 };
 use icechunk_types::{ICResultExt as _, error::ICResultCtxExt as _};
 
@@ -353,7 +353,9 @@ async fn create(
     let create_repo_info = async move {
         // On create we need to create the default branch
         let new_snapshot = Arc::new(Snapshot::initial(spec_version).inject()?);
-        let write_snap = asset_manager_c.write_snapshot(Arc::clone(&new_snapshot));
+        // Concurrent creators all write these fixed names.
+        let write_snap =
+            asset_manager_c.write_snapshot(Arc::clone(&new_snapshot), WriteHint::Atomic);
 
         if spec_version >= SpecVersionBin::V2 {
             let empty_tx_log = transaction_log_from_change_set(
@@ -376,6 +378,7 @@ async fn create(
             let write_tx = asset_manager_c.write_transaction_log(
                 Snapshot::INITIAL_SNAPSHOT_ID,
                 Arc::new(empty_tx_log),
+                WriteHint::Atomic,
             );
             try_join!(write_snap, write_tx)?;
 

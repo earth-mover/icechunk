@@ -19,10 +19,10 @@ use http::header::{HeaderName, HeaderValue};
 use icechunk_storage::s3_config::{S3Credentials, S3Options};
 use icechunk_storage::{
     ConcurrencySettings, DeleteObjectsResult, ETag, Generation, GetModifiedResult,
-    ListInfo, RepositoryCreation, RetriesSettings, Settings, Storage, StorageContext,
-    StorageError, StorageErrorKind, StorageInfo, StorageResult, VersionInfo,
-    VersionedUpdateResult, filter_ids_by_id_prefix, obj_not_found_res, obj_store_error,
-    obj_store_error_res, other_error,
+    ListInfo, PutCondition, RepositoryCreation, RetriesSettings, Settings, Storage,
+    StorageContext, StorageError, StorageErrorKind, StorageInfo, StorageResult,
+    VersionInfo, VersionedUpdateResult, WriteHint, filter_ids_by_id_prefix,
+    obj_not_found_res, obj_store_error, obj_store_error_res, other_error,
     readback::{
         ReadbackOutcome, WRITE_ID_METADATA_KEY, resolve_lost_response,
         resolve_precondition, write_id_for,
@@ -517,25 +517,102 @@ impl ObjectStorage {
     fn get_put_mode(
         &self,
         settings: &Settings,
-        previous_version: Option<&VersionInfo>,
-    ) -> PutMode {
-        if let Some(previous_version) = previous_version {
-            match (
-                previous_version.is_create(),
-                settings.unsafe_use_conditional_create(),
-                settings.unsafe_use_conditional_update(),
-            ) {
-                (true, true, _) => PutMode::Create,
-                (true, false, _) => PutMode::Overwrite,
-
-                (false, _, true) => PutMode::Update(UpdateVersion {
-                    e_tag: previous_version.etag().cloned(),
-                    version: previous_version.generation().cloned(),
-                }),
-                (false, _, false) => PutMode::Overwrite,
+        condition: Option<PutCondition<'_>>,
+    ) -> StorageResult<PutMode> {
+        match condition {
+            Some(PutCondition::Create) if settings.unsafe_use_conditional_create() => {
+                Ok(PutMode::Create)
             }
-        } else {
-            PutMode::Overwrite
+            Some(PutCondition::IfVersion(v))
+                if settings.unsafe_use_conditional_update() =>
+            {
+                if v.is_create() {
+                    return Err(other_error(
+                        "conditional update requires a version with an etag or generation",
+                    ));
+                }
+                Ok(PutMode::Update(UpdateVersion {
+                    e_tag: v.etag().cloned(),
+                    version: v.generation().cloned(),
+                }))
+            }
+            _ => Ok(PutMode::Overwrite),
+        }
+    }
+
+    async fn put_object_with(
+        &self,
+        ctx: &StorageContext<'_>,
+        path: &str,
+        bytes: Bytes,
+        content_type: Option<&str>,
+        metadata: Vec<(String, String)>,
+        condition: Option<PutCondition<'_>>,
+    ) -> StorageResult<VersionedUpdateResult> {
+        let path = self.prefixed_path(path);
+        let mut attributes = Attributes::new();
+        if ctx.settings.unsafe_use_metadata() {
+            if let Some(content_type) = content_type {
+                attributes.insert(
+                    Attribute::ContentType,
+                    AttributeValue::from(content_type.to_string()),
+                );
+            }
+            for (att, value) in self.metadata_to_attributes(ctx.settings, metadata).iter()
+            {
+                attributes.insert(att.clone(), value.clone());
+            }
+        };
+        self.add_storage_class(ctx.settings, &mut attributes);
+
+        let mode = self.get_put_mode(ctx.settings, condition)?;
+        let is_conditional = !matches!(mode, PutMode::Overwrite);
+        let write_id =
+            write_id_for(ctx.settings, is_conditional, || Uuid::new_v4().to_string());
+        if let Some(id) = &write_id {
+            attributes.insert(
+                Attribute::Metadata(std::borrow::Cow::Borrowed(WRITE_ID_METADATA_KEY)),
+                AttributeValue::from(id.clone()),
+            );
+        }
+
+        let options = PutOptions {
+            mode,
+            attributes,
+            extensions: request_extensions(ctx),
+            ..PutOptions::default()
+        };
+        // FIXME: use multipart
+        let res = self
+            .get_client(ctx.settings, Role::Write)
+            .await?
+            .put_opts(&path, bytes.into(), options)
+            .await;
+        match res {
+            Ok(res) => {
+                let new_version = VersionInfo {
+                    etag: res.e_tag.map(ETag),
+                    generation: res.version.map(Generation),
+                };
+                Ok(VersionedUpdateResult::Updated { new_version })
+            }
+            Err(object_store::Error::Precondition { .. })
+            | Err(object_store::Error::AlreadyExists { .. }) => {
+                let outcome = self
+                    .read_back_after_conditional_failure(ctx, &path, write_id.as_deref())
+                    .await;
+                resolve_precondition(outcome, path.as_ref())
+            }
+            // Only `Generic` can hide a landed-but-ack-lost write as a transport
+            // failure; `Precondition`/`AlreadyExists` have their own arm above.
+            // Then only `OurWrite` flips to success; the rest propagate.
+            Err(err) if matches!(err, object_store::Error::Generic { .. }) => {
+                let outcome = self
+                    .read_back_after_conditional_failure(ctx, &path, write_id.as_deref())
+                    .await;
+                resolve_lost_response(outcome, path.as_ref(), obj_store_error(err))
+            }
+            Err(err) => Err(obj_store_error(err)),
         }
     }
 }
@@ -586,73 +663,25 @@ impl Storage for ObjectStorage {
         bytes: Bytes,
         content_type: Option<&str>,
         metadata: Vec<(String, String)>,
-        previous_version: Option<&VersionInfo>,
-    ) -> StorageResult<VersionedUpdateResult> {
-        let path = self.prefixed_path(path);
-        let mut attributes = Attributes::new();
-        if ctx.settings.unsafe_use_metadata() {
-            if let Some(content_type) = content_type {
-                attributes.insert(
-                    Attribute::ContentType,
-                    AttributeValue::from(content_type.to_string()),
-                );
-            }
-            for (att, value) in self.metadata_to_attributes(ctx.settings, metadata).iter()
-            {
-                attributes.insert(att.clone(), value.clone());
-            }
-        };
-        self.add_storage_class(ctx.settings, &mut attributes);
-
-        let mode = self.get_put_mode(ctx.settings, previous_version);
-        let is_conditional = !matches!(mode, PutMode::Overwrite);
-        let write_id =
-            write_id_for(ctx.settings, is_conditional, || Uuid::new_v4().to_string());
-        if let Some(id) = &write_id {
-            attributes.insert(
-                Attribute::Metadata(std::borrow::Cow::Borrowed(WRITE_ID_METADATA_KEY)),
-                AttributeValue::from(id.clone()),
-            );
-        }
-
-        let options = PutOptions {
-            mode,
-            attributes,
-            extensions: request_extensions(ctx),
-            ..PutOptions::default()
-        };
-        // FIXME: use multipart
-        let res = self
-            .get_client(ctx.settings, Role::Write)
+        _hint: WriteHint,
+    ) -> StorageResult<()> {
+        self.put_object_with(ctx, path, bytes, content_type, metadata, None)
             .await?
-            .put_opts(&path, bytes.into(), options)
-            .await;
-        match res {
-            Ok(res) => {
-                let new_version = VersionInfo {
-                    etag: res.e_tag.map(ETag),
-                    generation: res.version.map(Generation),
-                };
-                Ok(VersionedUpdateResult::Updated { new_version })
-            }
-            Err(object_store::Error::Precondition { .. })
-            | Err(object_store::Error::AlreadyExists { .. }) => {
-                let outcome = self
-                    .read_back_after_conditional_failure(ctx, &path, write_id.as_deref())
-                    .await;
-                resolve_precondition(outcome, path.as_ref())
-            }
-            // Only `Generic` can hide a landed-but-ack-lost write as a transport
-            // failure; `Precondition`/`AlreadyExists` have their own arm above.
-            // Then only `OurWrite` flips to success; the rest propagate.
-            Err(err) if matches!(err, object_store::Error::Generic { .. }) => {
-                let outcome = self
-                    .read_back_after_conditional_failure(ctx, &path, write_id.as_deref())
-                    .await;
-                resolve_lost_response(outcome, path.as_ref(), obj_store_error(err))
-            }
-            Err(err) => Err(obj_store_error(err)),
-        }
+            .must_write()
+            .map(|_| ())
+    }
+
+    async fn put_object_conditional(
+        &self,
+        ctx: &StorageContext<'_>,
+        path: &str,
+        bytes: Bytes,
+        content_type: Option<&str>,
+        metadata: Vec<(String, String)>,
+        condition: PutCondition<'_>,
+    ) -> StorageResult<VersionedUpdateResult> {
+        self.put_object_with(ctx, path, bytes, content_type, metadata, Some(condition))
+            .await
     }
 
     async fn copy_object(
@@ -873,16 +902,14 @@ impl Storage for ObjectStorage {
         ctx: &StorageContext<'_>,
         path: &str,
         range: Option<&Range<u64>>,
-    ) -> StorageResult<(
-        Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>,
-        VersionInfo,
-    )> {
+    ) -> StorageResult<Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>>
+    {
         self.get_object_range_conditional(ctx, path, range, None).await.map(|v| {
             // If we got a result, then we can unwrap safely here:
             // Errors would be in the other branch, and None is only expected
             // if previous_version was passed in function call, but we set it to None
             #[expect(clippy::expect_used)]
-            v.expect("Logic bug in get_object_range_conditional, should not get None")
+            v.expect("Logic bug in get_object_range_conditional, should not get None").0
         })
     }
 }
@@ -1839,11 +1866,28 @@ mod tests {
 
     use super::{
         Attribute, Attributes, Bytes, GetOptions, ObjectPath, ObjectStorage,
-        ReadbackOutcome, Role, Settings, Storage as _, StorageContext,
-        VersionedUpdateResult,
+        PutCondition, PutMode, ReadbackOutcome, Role, Settings, Storage as _,
+        StorageContext, VersionInfo, VersionedUpdateResult, WriteHint,
     };
     #[cfg(feature = "http")]
     use super::{NonZeroU16, RetriesSettings, Url};
+
+    #[tokio_test]
+    async fn if_version_without_identity_fails_only_when_conditional_update_is_on() {
+        let storage = ObjectStorage::new_in_memory().await.unwrap();
+        let no_identity = VersionInfo::for_creation();
+        let condition = Some(PutCondition::IfVersion(&no_identity));
+        assert!(storage.get_put_mode(&Settings::default(), condition).is_err());
+
+        let disabled = Settings {
+            unsafe_use_conditional_update: Some(false),
+            ..Settings::default()
+        };
+        assert_eq!(
+            storage.get_put_mode(&disabled, condition).unwrap(),
+            PutMode::Overwrite
+        );
+    }
 
     /// GC fans listings out per id prefix only where the store lists a prefix
     /// natively. Backends that filter a full listing client-side must report
@@ -1945,20 +1989,20 @@ mod tests {
         let ctx = StorageContext::unattributed(&settings);
         let path = "conditional-roundtrip";
         let version = match store
-            .put_object(
+            .put_object_conditional(
                 &ctx,
                 path,
                 Bytes::from_static(b"payload"),
                 None,
                 Default::default(),
-                None,
+                PutCondition::Create,
             )
             .await
             .unwrap()
         {
             VersionedUpdateResult::Updated { new_version } => new_version,
             VersionedUpdateResult::NotOnLatestVersion => {
-                panic!("unconditional put must succeed")
+                panic!("create of a new object must succeed")
             }
         };
 
@@ -2008,11 +2052,9 @@ mod tests {
                 Bytes::from_static(b"payload"),
                 Some("application/octet-stream"),
                 vec![("k".to_string(), "v".to_string())],
-                None,
+                WriteHint::Atomic,
             )
             .await
-            .unwrap()
-            .must_write()
             .unwrap();
 
         let attributes = stored_attributes(&store, &settings, path).await;
@@ -2031,10 +2073,15 @@ mod tests {
         let ctx = StorageContext::unattributed(&settings);
         let path = "chunks/without-class";
         store
-            .put_object(&ctx, path, Bytes::from_static(b"payload"), None, vec![], None)
+            .put_object(
+                &ctx,
+                path,
+                Bytes::from_static(b"payload"),
+                None,
+                vec![],
+                WriteHint::Atomic,
+            )
             .await
-            .unwrap()
-            .must_write()
             .unwrap();
 
         let attributes = stored_attributes(&store, &settings, path).await;
@@ -2055,10 +2102,15 @@ mod tests {
         let ctx = StorageContext::unattributed(&settings);
         let path = "chunks/on-disk";
         store
-            .put_object(&ctx, path, Bytes::from_static(b"payload"), None, vec![], None)
+            .put_object(
+                &ctx,
+                path,
+                Bytes::from_static(b"payload"),
+                None,
+                vec![],
+                WriteHint::Atomic,
+            )
             .await
-            .unwrap()
-            .must_write()
             .unwrap();
 
         let on_disk =
@@ -2075,13 +2127,13 @@ mod tests {
         };
         let ctx = StorageContext::unattributed(&settings);
         let version = store
-            .put_object(
+            .put_object_conditional(
                 &ctx,
                 "config",
                 Bytes::from_static(b"payload"),
                 None,
                 vec![],
-                None,
+                PutCondition::Create,
             )
             .await
             .unwrap()

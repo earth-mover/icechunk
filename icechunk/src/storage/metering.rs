@@ -16,9 +16,9 @@ use futures::{Stream, StreamExt as _, stream::BoxStream};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    DeleteObjectsResult, GetModifiedResult, ListInfo, RepositoryCreation, Settings,
-    Storage, StorageContext, StorageError, StorageInfo, StorageResult, VersionInfo,
-    VersionedUpdateResult,
+    DeleteObjectsResult, GetModifiedResult, ListInfo, PutCondition, RepositoryCreation,
+    Settings, Storage, StorageContext, StorageError, StorageInfo, StorageResult,
+    VersionInfo, VersionedUpdateResult, WriteHint,
 };
 use icechunk_storage::sealed;
 
@@ -28,7 +28,8 @@ pub struct OpStats {
     pub requests: u64,
     /// Only `get_object_range` counts bytes read, as they are yielded by the stream.
     pub bytes_read: u64,
-    /// Only `put_object` counts bytes written.
+    /// Only the `put_object` label counts bytes written, for both
+    /// `put_object` and `put_object_conditional`.
     pub bytes_written: u64,
     /// Only `delete_batch` counts deleted objects.
     pub objects_deleted: u64,
@@ -187,13 +188,32 @@ impl Storage for MeteringStorage {
         bytes: Bytes,
         content_type: Option<&str>,
         metadata: Vec<(String, String)>,
-        previous_version: Option<&VersionInfo>,
+        hint: WriteHint,
+    ) -> StorageResult<()> {
+        self.meter.request("put_object");
+        let written = bytes.len() as u64;
+        let result =
+            self.backend.put_object(ctx, path, bytes, content_type, metadata, hint).await;
+        if result.is_ok() {
+            self.meter.written("put_object", written);
+        }
+        result
+    }
+
+    async fn put_object_conditional(
+        &self,
+        ctx: &StorageContext<'_>,
+        path: &str,
+        bytes: Bytes,
+        content_type: Option<&str>,
+        metadata: Vec<(String, String)>,
+        condition: PutCondition<'_>,
     ) -> StorageResult<VersionedUpdateResult> {
         self.meter.request("put_object");
         let written = bytes.len() as u64;
         let result = self
             .backend
-            .put_object(ctx, path, bytes, content_type, metadata, previous_version)
+            .put_object_conditional(ctx, path, bytes, content_type, metadata, condition)
             .await;
         if result.is_ok() {
             self.meter.written("put_object", written);
@@ -291,19 +311,17 @@ impl Storage for MeteringStorage {
         ctx: &StorageContext<'_>,
         path: &str,
         range: Option<&Range<u64>>,
-    ) -> StorageResult<(
-        Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>,
-        VersionInfo,
-    )> {
+    ) -> StorageResult<Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>>
+    {
         self.meter.request("get_object_range");
-        let (stream, version) = self.backend.get_object_range(ctx, path, range).await?;
+        let stream = self.backend.get_object_range(ctx, path, range).await?;
         let meter = Arc::clone(&self.meter);
         let stream = stream.inspect(move |item| {
             if let Ok(bytes) = item {
                 meter.read("get_object_range", bytes.len() as u64);
             }
         });
-        Ok((Box::pin(stream), version))
+        Ok(Box::pin(stream))
     }
 }
 
@@ -323,10 +341,17 @@ mod tests {
         let ctx = StorageContext::unattributed(&settings);
 
         storage
-            .put_object(&ctx, "a/b", Bytes::from_static(b"hello"), None, vec![], None)
+            .put_object(
+                &ctx,
+                "a/b",
+                Bytes::from_static(b"hello"),
+                None,
+                vec![],
+                WriteHint::Atomic,
+            )
             .await
             .unwrap();
-        let (stream, _) = storage.get_object_range(&ctx, "a/b", None).await.unwrap();
+        let stream = storage.get_object_range(&ctx, "a/b", None).await.unwrap();
         let chunks: Vec<Bytes> = stream.try_collect().await.unwrap();
         assert_eq!(chunks.concat(), b"hello");
         let listed: Vec<_> =
