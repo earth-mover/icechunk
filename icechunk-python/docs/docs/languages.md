@@ -6,7 +6,7 @@ title: Languages
 
 Icechunk is a format with a Rust core.
 Most libraries bind to that core, so every one of them reads and writes the same repositories.
-A few independent readers implement the [spec](reference/spec-v2-1.md) directly.
+Independent readers implement the [spec](reference/spec-v2-1.md) directly.
 
 ## Official
 
