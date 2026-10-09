@@ -414,10 +414,6 @@ a.pane:hover .pane-more {
   text-anchor: start;
 }
 
-.fig .end {
-  text-anchor: end;
-}
-
 .fig .box {
   fill: var(--md-default-bg-color);
   stroke: var(--md-accent-fg-color);
@@ -461,12 +457,6 @@ a.pane:hover .pane-more {
   font-weight: 700;
 }
 
-.fig .panel {
-  fill: var(--md-default-bg-color);
-  stroke: var(--md-default-fg-color--lighter);
-  stroke-width: 2;
-}
-
 /* Versioning: branch and tag labels */
 .fig .branch {
   fill: var(--md-primary-fg-color--dark);
@@ -495,38 +485,6 @@ a.pane:hover .pane-more {
   fill: var(--md-default-fg-color--light);
   font-size: 14px;
   font-style: italic;
-}
-
-/* Scale: archive and repository drawn to scale by area */
-.fig .files {
-  fill: var(--md-default-fg-color--lightest);
-}
-
-.fig .ring {
-  fill: none;
-  stroke: var(--md-accent-fg-color);
-  stroke-width: 2;
-}
-
-.fig .callout {
-  fill: none;
-  stroke: var(--md-accent-fg-color);
-  stroke-width: 1.5;
-}
-
-.fig .big {
-  font-size: 34px;
-  font-weight: 700;
-  text-anchor: start;
-}
-
-.fig text.big.accent {
-  fill: var(--md-accent-fg-color);
-}
-
-.fig .link {
-  fill: var(--md-typeset-a-color);
-  font-size: 14px;
 }
 
 /* Mixed chunks: colors match the zero-copy diagram (archive orange, Icechunk

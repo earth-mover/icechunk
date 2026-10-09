@@ -8,33 +8,19 @@ title: Icechunk - Open-source, high-performance array format and library for sci
 
 ## Scale {#scale}
 
-The same repository works on a laptop and in the cloud, and scales to national archives.
+Work with a repository far larger than your disk, straight from your laptop.
 
+- A read fetches only the chunks it touches, and opening a repository never lists the bucket.
+- Each commit stores only the chunks that changed, so keeping history doesn't multiply storage.
 - **NASA**'s virtual stores feasibility report recommends adopting Icechunk ([report](https://nasa-impact.github.io/virtual-stores-feasibility-report/recommendations.html)).
 - **NOAA** forecast and radar archives (HRRR, GFS, MRMS) are published as Icechunk on the AWS Open Data Registry ([dynamical.org](https://registry.opendata.aws/dynamical-noaa-mrms/)).
-- Many machines can write in parallel and commit once.
 
 [:octicons-arrow-right-24: Tuning performance](guides/performance.md) ·
 [:octicons-arrow-right-24: Parallel writes](understanding/parallel.md)
 
 </div>
 <div class="benefit-figure">
-<svg class="fig" viewBox="0 0 760 330" role="img" aria-label="Drawn to scale by area: the 115 TB GOES-16 archive as a large square and its 80 GB Icechunk repository as a dot inside it.">
-<defs><pattern id="fig-files" width="12" height="12" patternUnits="userSpaceOnUse"><rect class="files" x="1" y="1" width="10" height="10" rx="1.5"/></pattern></defs>
-<rect class="panel" x="40" y="40" width="240" height="240" rx="6"/>
-<rect fill="url(#fig-files)" x="40" y="40" width="240" height="240" rx="6"/>
-<rect class="accent" x="259.7" y="259.7" width="6.3" height="6.3"/>
-<circle class="ring" cx="262.8" cy="262.8" r="13"/>
-<path class="callout" d="M275.8 262.8 L 360 262.8"/>
-<text class="big" x="360" y="92">115 TB</text>
-<text class="sub start" x="360" y="118">GOES-16 archive: 380,000 NetCDF files.</text>
-<text class="sub start" x="360" y="140">Stays where it is.</text>
-<text class="big accent" x="360" y="250.8">80 GB</text>
-<text class="sub start" x="360" y="276.8">Icechunk repository: references</text>
-<text class="sub start" x="360" y="298.8">to all 7.1 billion chunks.</text>
-<text class="sub start" x="40" y="310">Drawn to scale by area.</text>
-<a href="https://www.earthmover.io/blog/virtual-zarr"><text class="link end" x="720" y="310">How it was built →</text></a>
-</svg>
+<iframe data-illustrated="commits" title="Commits store only the chunks that changed" loading="lazy"></iframe>
 </div>
 </div>
 
@@ -49,6 +35,8 @@ A reader has to fetch headers and offset tables before it finds the bytes it wan
 With Icechunk, that cost is paid once, by whoever writes the repository.
 Every reader after that gets each chunk in one range request to the original file.
 The files are not copied or changed.
+
+The GOES-16 satellite archive, 115 TB in 380,000 NetCDF files, became an 80 GB Icechunk repository this way ([blog post](https://www.earthmover.io/blog/virtual-zarr)).
 
 [:octicons-arrow-right-24: Virtual datasets](guides/virtual.md)
 
@@ -83,8 +71,6 @@ A bad write or an accidental delete is undone by moving the branch back to an ea
 Old commits stay readable until you choose to expire them.
 
 Tag a commit to cite it in a paper, or branch to try a change without affecting anyone else.
-
-Commits share unchanged chunks, so history costs only the chunks that changed.
 
 [:octicons-arrow-right-24: Version control](understanding/version-control.md)
 

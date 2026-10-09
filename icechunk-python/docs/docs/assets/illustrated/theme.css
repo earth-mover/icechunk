@@ -7,6 +7,7 @@
   --il-1b2530ff: #e4f1f8;
   --il-1c2230ff: #e4f1f8;
   --il-4dabf7ff: #1d467f;
+  --il-4ec48cff: #1f9d63;
   --il-5ea0d1ff: #2f6fa8;
   --il-6b7785ff: #9aa5b1;
   --il-8b97a6ff: #5c6773;
@@ -24,6 +25,7 @@
   --il-ffffff2e: #1d467f2e;
   --il-ffffff33: #1d467f33;
   --il-ffffff40: #1d467f40;
+  --il-ffffff66: #1d467f66;
 }
 :root[data-theme="dark"] {
   --il-0d1117ff: #272a35;
@@ -37,5 +39,12 @@
 @media (max-width: 760px) {
   :root:root {
     --cell: clamp(96px, 40vw, 132px);
+  }
+}
+/* The commits snapshot panel collapses beside a wide storage panel;
+   give it a floor so its label isn't clipped. */
+@media (min-width: 761px) {
+  .ck-stage.ck-stage {
+    grid-template-columns: minmax(200px, 1fr) minmax(0, 2.4fr);
   }
 }

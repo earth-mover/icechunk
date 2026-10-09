@@ -26,7 +26,7 @@ from pathlib import Path
 
 from PIL import Image
 
-PAGES = ["virtual/netcdf", "consistency"]
+PAGES = ["virtual/netcdf", "commits", "consistency"]
 OUT = Path(__file__).resolve().parent.parent / "docs" / "assets" / "illustrated"
 
 # Light values keyed by the dark color as 8-digit lowercase hex. White at any
@@ -210,6 +210,12 @@ def main(dist: Path) -> None:
         "   depends on the frame's height would grow without end. */\n"
         "@media (max-width: 760px) {\n"
         "  :root:root {\n    --cell: clamp(96px, 40vw, 132px);\n  }\n}\n"
+        "/* The commits snapshot panel collapses beside a wide storage panel;\n"
+        "   give it a floor so its label isn't clipped. */\n"
+        "@media (min-width: 761px) {\n"
+        "  .ck-stage.ck-stage {\n"
+        "    grid-template-columns: minmax(200px, 1fr) minmax(0, 2.4fr);\n"
+        "  }\n}\n"
     )
     print(f"vendored {len(PAGES)} pages, {len(needed)} assets, {len(keys)} colors")
 
