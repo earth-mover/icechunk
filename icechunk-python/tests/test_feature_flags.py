@@ -1,6 +1,7 @@
 import pytest
 
 import icechunk as ic
+import zarr
 
 
 def test_set_and_unset_flags_on_repo() -> None:
@@ -139,3 +140,81 @@ async def test_tag_ops_blocked_by_feature_flags_async() -> None:
 
     with pytest.raises(ic.IcechunkError):
         await repo.delete_tag_async("exists")
+
+
+def test_commit_blocked_by_feature_flag() -> None:
+    repo = ic.Repository.create(
+        storage=ic.in_memory_storage(),
+        spec_version=2,
+    )
+
+    session = repo.writable_session("main")
+    zarr.group(store=session.store, overwrite=True)
+
+    repo.set_feature_flag("commit", False)
+
+    with pytest.raises(ic.IcechunkError):
+        session.commit("blocked")
+
+    with pytest.raises(ic.IcechunkError):
+        repo.writable_session("main")
+
+    repo.set_feature_flag("commit", None)
+    session.commit("allowed")
+
+
+async def test_commit_blocked_by_feature_flag_async() -> None:
+    repo = await ic.Repository.create_async(
+        storage=ic.in_memory_storage(),
+        spec_version=2,
+    )
+
+    session = await repo.writable_session_async("main")
+    zarr.group(store=session.store, overwrite=True)
+
+    await repo.set_feature_flag_async("commit", False)
+
+    with pytest.raises(ic.IcechunkError):
+        await session.commit_async("blocked")
+
+    with pytest.raises(ic.IcechunkError):
+        await repo.writable_session_async("main")
+
+    await repo.set_feature_flag_async("commit", None)
+    await session.commit_async("allowed")
+
+
+def test_branch_ops_blocked_by_feature_flags() -> None:
+    repo = ic.Repository.create(
+        storage=ic.in_memory_storage(),
+        spec_version=2,
+    )
+
+    snap_id = repo.lookup_branch("main")
+    repo.create_branch("exists", snap_id)
+
+    repo.set_feature_flag("create_branch", False)
+
+    with pytest.raises(ic.IcechunkError):
+        repo.create_branch("should_fail", snap_id)
+
+    repo.set_feature_flag("create_branch", None)
+    repo.create_branch("allowed", snap_id)
+
+
+async def test_branch_ops_blocked_by_feature_flags_async() -> None:
+    repo = await ic.Repository.create_async(
+        storage=ic.in_memory_storage(),
+        spec_version=2,
+    )
+
+    snap_id = await repo.lookup_branch_async("main")
+    await repo.create_branch_async("exists", snap_id)
+
+    await repo.set_feature_flag_async("create_branch", False)
+
+    with pytest.raises(ic.IcechunkError):
+        await repo.create_branch_async("should_fail", snap_id)
+
+    await repo.set_feature_flag_async("create_branch", None)
+    await repo.create_branch_async("allowed", snap_id)
