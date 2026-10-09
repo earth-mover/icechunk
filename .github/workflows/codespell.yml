@@ -25,6 +25,6 @@ jobs:
       - name: Codespell
         uses: codespell-project/actions-codespell@8f01853be192eb0f849a5c7d721450e7a467c579 # v2.2
         with:
-          skip: .git*,*.svg,*.lock,*lock.json,*.css,.codespellrc,*.cjs
+          skip: .git*,*.svg,*.lock,*lock.json,*.css,.codespellrc,*.cjs,*/assets/illustrated/*
           ignore_words_list: crate,firs,anc,asend
           check_hidden: true
