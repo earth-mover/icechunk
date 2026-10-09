@@ -1027,8 +1027,7 @@ impl S3Fetcher {
         credentials: &S3Credentials,
         settings: storage::Settings,
     ) -> Self {
-        let client =
-            mk_client(opts, credentials.clone(), Vec::new(), Vec::new(), &settings).await;
+        let client = mk_client(opts, credentials.clone(), &settings).await;
         Self { settings, client: Arc::new(client) }
     }
 }

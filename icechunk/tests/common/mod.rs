@@ -261,14 +261,9 @@ impl RealStore {
     pub(crate) async fn cleanup_rooted_keys(
         &self,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let client = mk_client(
-            &self.options,
-            self.credentials.clone(),
-            vec![],
-            vec![],
-            &Settings::default(),
-        )
-        .await;
+        let client =
+            mk_client(&self.options, self.credentials.clone(), &Settings::default())
+                .await;
         let resp =
             client.list_objects_v2().bucket(&self.bucket).prefix("/").send().await?;
         for obj in resp.contents() {

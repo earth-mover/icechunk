@@ -260,8 +260,18 @@ fn endpoint_with_bucket_separator(endpoint_url: &str) -> Cow<'_, str> {
     }
 }
 
-#[instrument(skip(credentials))]
+/// Builds an S3 client from the options, credentials, and settings.
+/// `S3Storage` adds request headers through the builder.
 pub async fn mk_client(
+    config: &S3Options,
+    credentials: S3Credentials,
+    settings: &Settings,
+) -> Client {
+    mk_client_with_headers(config, credentials, Vec::new(), Vec::new(), settings).await
+}
+
+#[instrument(name = "mk_client", skip(credentials))]
+pub(crate) async fn mk_client_with_headers(
     config: &S3Options,
     credentials: S3Credentials,
     extra_read_headers: Vec<(String, String)>,
@@ -759,7 +769,7 @@ impl S3Storage {
         self.client
             .get_or_init(|| async {
                 Arc::new(
-                    mk_client(
+                    mk_client_with_headers(
                         &self.config,
                         self.credentials.clone(),
                         self.extra_read_headers.clone(),

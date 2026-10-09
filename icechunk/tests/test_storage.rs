@@ -1355,8 +1355,6 @@ async fn check_storage_classes(
     let client = mk_client(
         store.options(),
         store.credentials().clone(),
-        Vec::new(),
-        Vec::new(),
         &storage::Settings::default(),
     )
     .await;
@@ -1829,9 +1827,7 @@ async fn assert_write_header_round_trips(
     prefix: &str,
     rel_key: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let client =
-        mk_client(options, credentials, vec![], vec![], &storage::Settings::default())
-            .await;
+    let client = mk_client(options, credentials, &storage::Settings::default()).await;
     let full_key = format!("{prefix}/{rel_key}");
     let head = client.head_object().bucket(bucket).key(&full_key).send().await?;
     let got =

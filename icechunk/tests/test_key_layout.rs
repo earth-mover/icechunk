@@ -83,8 +83,7 @@ async fn create_fresh_bucket(options: &S3Options, credentials: S3Credentials) ->
         Utc::now().timestamp_micros(),
         rand::random::<u64>(),
     );
-    let client =
-        mk_client(options, credentials, vec![], vec![], &Settings::default()).await;
+    let client = mk_client(options, credentials, &Settings::default()).await;
     client.create_bucket().bucket(&bucket).send().await.expect("create_bucket");
     bucket
 }
@@ -92,14 +91,8 @@ async fn create_fresh_bucket(options: &S3Options, credentials: S3Credentials) ->
 /// List every object key in a bucket (raw, with the leading slash, if any, that
 /// the object was actually stored under).
 async fn raw_keys(bucket: &str) -> Vec<String> {
-    let client = mk_client(
-        &rustfs_options(),
-        root_credentials(),
-        vec![],
-        vec![],
-        &Settings::default(),
-    )
-    .await;
+    let client =
+        mk_client(&rustfs_options(), root_credentials(), &Settings::default()).await;
     // we have only a few objects, first page of results is enough
     let resp =
         client.list_objects_v2().bucket(bucket).send().await.expect("list_objects_v2");
