@@ -21,7 +21,7 @@ Maintained in the [icechunk repository](https://github.com/earth-mover/icechunk)
 ## Experimental
 
 Earthmover projects under the [earth-mover](https://github.com/earth-mover) GitHub organization.
-They bind to the Rust core but are not supported: APIs change without notice.
+They bind to the Rust core but are not officially supported yet, and their APIs change without notice.
 
 | Language | Package | Access | Notes |
 |---|---|---|---|
@@ -34,13 +34,12 @@ Built and maintained outside Earthmover.
 
 | Language | Project | Access | Notes |
 |---|---|---|---|
-| C++ | [GDAL Icechunk driver](https://github.com/OSGeo/gdal/pull/14755) | Read only | Independent implementation of the spec. Merged in June 2026; expected in GDAL 3.14. |
+| C++ | [GDAL Icechunk driver](https://gdal.org/en/latest/drivers/raster/icechunk.html) | Read only | Independent implementation of the spec. |
 | TypeScript | [EarthyScience/icechunk-js](https://github.com/EarthyScience/icechunk-js) | Read only | Independent implementation, designed for zarrita. |
 | JavaScript | [Neuroglancer](https://neuroglancer-docs.web.app/datasource/icechunk/index.html) | Read only | Independent implementation in Google's volumetric viewer. |
 | Rust | [zarrs_icechunk](https://github.com/zarrs/zarrs_icechunk) | Read and write | Icechunk store for the zarrs crate, built on the `icechunk` crate. |
 
-Independent readers can lag behind new spec versions.
-Check each project for the spec versions it reads.
+Independent readers can lag behind new spec versions, so check which versions each one reads.
 
 ## R
 
