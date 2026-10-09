@@ -494,6 +494,11 @@ a.pane:hover .pane-more {
   stroke-dasharray: 6 4;
 }
 
+.fig .virtual.fine {
+  stroke-width: 1.2;
+  stroke-dasharray: 3 2;
+}
+
 .fig .tiff {
   fill: color-mix(in srgb, #2a9d8f 18%, transparent);
   stroke: #2a9d8f;
@@ -528,29 +533,4 @@ a.pane:hover .pane-more {
   fill: var(--md-default-fg-color--light);
   font-family: var(--md-code-font-family);
   font-size: 12px;
-}
-
-/* Scale: gigabytes to petabytes, with a selection wandering over the largest */
-.fig .cell {
-  fill: var(--md-default-fg-color--lightest);
-}
-
-.fig .slice {
-  fill: color-mix(in srgb, var(--md-accent-fg-color) 35%, transparent);
-  stroke: var(--md-accent-fg-color);
-  stroke-width: 2.5;
-  animation: slice-wander 9s ease-in-out infinite;
-}
-
-@keyframes slice-wander {
-  0%, 22% { transform: translate(0, 0); }
-  33%, 55% { transform: translate(63px, 49px); }
-  66%, 88% { transform: translate(35px, -21px); }
-  100% { transform: translate(0, 0); }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .fig .slice {
-    animation: none;
-  }
 }
