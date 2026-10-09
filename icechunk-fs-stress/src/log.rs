@@ -1,0 +1,468 @@
+//! JSON-lines logs written by workers and supervisors under `logs/`.
+//!
+//! Each record is one line, written by a single `write_all` to a file opened
+//! with `O_APPEND` and never fsynced. A process killed mid-write leaves a torn
+//! last line, which readers skip.
+
+use std::{
+    collections::BTreeMap,
+    fs::{self, File, OpenOptions},
+    io::{self, Read as _, Seek as _, SeekFrom, Write as _},
+    path::Path,
+    sync::{Mutex, PoisonError},
+};
+
+use anyhow::Context as _;
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
+
+use crate::{
+    config::{PointName, WorkerId},
+    layout::{RunRoot, SUPERVISOR_SLOT, is_valid_slot, is_valid_tag},
+};
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Record {
+    Start {
+        t_ms: i64,
+        host: String,
+        slot: String,
+        incarnation: u32,
+        pid: u32,
+    },
+    Intent {
+        t_ms: i64,
+        id: Uuid,
+        op: Op,
+    },
+    Outcome {
+        t_ms: i64,
+        id: Uuid,
+        result: OpResult,
+    },
+    /// A `Kill` is written before the kill.
+    Fault {
+        t_ms: i64,
+        action: FaultAction,
+        point: PointName,
+    },
+    /// Supervisor log only.
+    Spawn {
+        t_ms: i64,
+        slot: String,
+        incarnation: u32,
+        pid: u32,
+    },
+    /// Supervisor log only.
+    ExternalKill {
+        t_ms: i64,
+        slot: String,
+        incarnation: u32,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Op {
+    /// Storage mode; `base` and `new` are etags.
+    Cas {
+        base: String,
+        new: String,
+    },
+    BranchCommit {
+        branch: String,
+    },
+    MainCommit,
+    Tag {
+        name: String,
+        snapshot: String,
+    },
+    CreateBranch {
+        branch: String,
+    },
+    Gc,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum OpResult {
+    Ack { snapshot: Option<String> },
+    Conflict,
+    Error { message: String },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FaultAction {
+    Kill,
+    Pause,
+    Sabotage,
+}
+
+/// Wall-clock Unix milliseconds.
+pub fn now_ms() -> i64 {
+    chrono::Utc::now().timestamp_millis()
+}
+
+#[derive(Debug)]
+pub struct LogWriter {
+    file: Mutex<File>,
+}
+
+impl LogWriter {
+    /// Creates the log, which must not exist.
+    pub fn create(path: &Path) -> io::Result<Self> {
+        let file = OpenOptions::new().append(true).create_new(true).open(path)?;
+        Ok(Self { file: Mutex::new(file) })
+    }
+
+    pub fn append(&self, record: &Record) -> io::Result<()> {
+        let mut line = serde_json::to_vec(record)?;
+        line.push(b'\n');
+        // A panic while holding the lock cannot leave a partial line from
+        // `write_all` behind for us to extend, so a poisoned lock is usable.
+        self.file.lock().unwrap_or_else(PoisonError::into_inner).write_all(&line)
+    }
+}
+
+/// Creates a worker's log and writes its `Start` record.
+pub fn start_worker_log(root: &RunRoot, who: &WorkerId) -> anyhow::Result<LogWriter> {
+    let path = root.worker_log(&who.tag, &who.slot, who.incarnation);
+    let log = LogWriter::create(&path)
+        .with_context(|| format!("creating {}", path.display()))?;
+    log.append(&Record::Start {
+        t_ms: now_ms(),
+        host: who.tag.clone(),
+        slot: who.slot.clone(),
+        incarnation: who.incarnation,
+        pid: std::process::id(),
+    })
+    .with_context(|| format!("writing {}", path.display()))?;
+    Ok(log)
+}
+
+/// Reads a log, skipping a torn last line. Any other unparsable line is an
+/// error.
+pub fn read_log(path: &Path) -> anyhow::Result<Vec<Record>> {
+    let bytes = fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+    let mut lines: Vec<&[u8]> = bytes.split(|&b| b == b'\n').collect();
+    // The segment after the last newline: empty, or a torn write.
+    lines.pop();
+    lines
+        .into_iter()
+        .enumerate()
+        .map(|(i, line)| {
+            serde_json::from_slice(line)
+                .with_context(|| format!("{} line {}", path.display(), i + 1))
+        })
+        .collect()
+}
+
+/// The complete lines appended to a log since some offset.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Appended {
+    pub records: Vec<Record>,
+    pub malformed_lines: u64,
+    /// Where the next read starts: after the last complete line.
+    pub offset: u64,
+}
+
+/// Reads the records appended to `path` from byte `offset` on, without
+/// rereading earlier ones. A torn last line is left for the next call; a
+/// missing log has nothing appended yet.
+pub fn read_appended(path: &Path, offset: u64) -> io::Result<Appended> {
+    let mut file = match File::open(path) {
+        Ok(file) => file,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {
+            return Ok(Appended { offset, ..Appended::default() });
+        }
+        Err(err) => return Err(err),
+    };
+    file.seek(SeekFrom::Start(offset))?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)?;
+    let complete = bytes.iter().rposition(|&b| b == b'\n').map_or(0, |last| last + 1);
+    let mut appended = Appended {
+        offset: offset + u64::try_from(complete).unwrap_or(0),
+        ..Appended::default()
+    };
+    for line in bytes[..complete].split(|&b| b == b'\n').filter(|line| !line.is_empty()) {
+        match serde_json::from_slice(line) {
+            Ok(record) => appended.records.push(record),
+            Err(_) => appended.malformed_lines += 1,
+        }
+    }
+    Ok(appended)
+}
+
+/// Identifies a log file: `<tag>.<slot>.<incarnation>.log` for a worker,
+/// `<tag>.supervisor.log` (with `incarnation: None`) for a supervisor.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct LogName {
+    pub tag: String,
+    pub slot: String,
+    pub incarnation: Option<u32>,
+}
+
+impl LogName {
+    pub fn parse(file_name: &str) -> Option<Self> {
+        let (rest, last) = file_name.strip_suffix(".log")?.rsplit_once('.')?;
+        let (tag, slot, incarnation) = if last == SUPERVISOR_SLOT {
+            (rest, last, None)
+        } else {
+            let (tag, slot) = rest.rsplit_once('.')?;
+            if !is_valid_slot(slot) {
+                return None;
+            }
+            (tag, slot, Some(parse_canonical_u32(last)?))
+        };
+        is_valid_tag(tag).then(|| Self {
+            tag: tag.to_owned(),
+            slot: slot.to_owned(),
+            incarnation,
+        })
+    }
+}
+
+/// Only the form [`RunRoot::worker_log`] writes: no sign, no leading zeros.
+fn parse_canonical_u32(s: &str) -> Option<u32> {
+    s.parse().ok().filter(|n: &u32| n.to_string() == s)
+}
+
+/// Reads every log under `logs/`, which must contain nothing else.
+pub fn read_all_logs(root: &RunRoot) -> anyhow::Result<BTreeMap<LogName, Vec<Record>>> {
+    let dir = root.logs_dir();
+    let context = || format!("listing {}", dir.display());
+    fs::read_dir(&dir)
+        .with_context(context)?
+        .map(|entry| {
+            let path = entry.with_context(context)?.path();
+            let name = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .and_then(LogName::parse)
+                .with_context(|| format!("unexpected file {}", path.display()))?;
+            Ok((name, read_log(&path)?))
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn every_variant() -> Vec<Record> {
+        let id = Uuid::new_v4();
+        let host = "h-1".to_owned();
+        let slot = "3".to_owned();
+        let op = |op| Record::Intent { t_ms: 2, id, op };
+        let outcome = |result| Record::Outcome { t_ms: 3, id, result };
+        vec![
+            Record::Start { t_ms: 1, host, slot: slot.clone(), incarnation: 4, pid: 77 },
+            op(Op::Cas { base: "aa".to_owned(), new: "bb".to_owned() }),
+            op(Op::BranchCommit { branch: "w.h-1.3".to_owned() }),
+            op(Op::MainCommit),
+            op(Op::Tag { name: format!("t-{id}"), snapshot: "SNAP".to_owned() }),
+            op(Op::CreateBranch { branch: "w.h-1.3".to_owned() }),
+            op(Op::Gc),
+            outcome(OpResult::Ack { snapshot: Some("SNAP".to_owned()) }),
+            outcome(OpResult::Ack { snapshot: None }),
+            outcome(OpResult::Conflict),
+            outcome(OpResult::Error { message: "boom\nline".to_owned() }),
+            Record::Fault {
+                t_ms: 4,
+                action: FaultAction::Kill,
+                point: PointName::LockTaken,
+            },
+            Record::Fault {
+                t_ms: 4,
+                action: FaultAction::Pause,
+                point: PointName::Fenced,
+            },
+            Record::Fault {
+                t_ms: 4,
+                action: FaultAction::Sabotage,
+                point: PointName::Compared,
+            },
+            Record::Spawn { t_ms: 5, slot: slot.clone(), incarnation: 5, pid: 78 },
+            Record::ExternalKill { t_ms: 6, slot, incarnation: 5 },
+        ]
+    }
+
+    #[test]
+    fn append_then_read_round_trips_every_variant() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("h.0.0.log");
+        let writer = LogWriter::create(&path).unwrap();
+        let records = every_variant();
+        for record in &records {
+            writer.append(record).unwrap();
+        }
+        assert_eq!(read_log(&path).unwrap(), records);
+        assert!(LogWriter::create(&path).is_err());
+    }
+
+    #[test]
+    fn torn_last_line_is_skipped() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("h.0.0.log");
+        let writer = LogWriter::create(&path).unwrap();
+        let record = Record::Start {
+            t_ms: 1,
+            host: "h".to_owned(),
+            slot: "0".to_owned(),
+            incarnation: 0,
+            pid: 1,
+        };
+        writer.append(&record).unwrap();
+        let mut file = OpenOptions::new().append(true).open(&path).unwrap();
+        file.write_all(b"{\"kind\":\"fau").unwrap();
+        assert_eq!(read_log(&path).unwrap(), std::slice::from_ref(&record));
+
+        // Even a parseable last line is torn without its newline.
+        fs::write(&path, serde_json::to_vec(&record).unwrap()).unwrap();
+        assert_eq!(read_log(&path).unwrap(), []);
+
+        fs::write(&path, b"").unwrap();
+        assert_eq!(read_log(&path).unwrap(), []);
+    }
+
+    #[test]
+    fn corrupt_middle_line_names_file_and_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("h.0.0.log");
+        let good = serde_json::to_string(&Record::ExternalKill {
+            t_ms: 1,
+            slot: "0".to_owned(),
+            incarnation: 0,
+        })
+        .unwrap();
+        fs::write(&path, format!("{good}\n{{\"kind\":\"nope\"}}\n{good}\n")).unwrap();
+        let err = format!("{:#}", read_log(&path).unwrap_err());
+        assert!(err.contains(&path.display().to_string()), "{err}");
+        assert!(err.contains("line 2"), "{err}");
+
+        fs::write(&path, format!("{good}\n\n{good}\n")).unwrap();
+        let err = format!("{:#}", read_log(&path).unwrap_err());
+        assert!(err.contains("line 2"), "{err}");
+    }
+
+    #[test]
+    fn read_appended_reads_each_complete_line_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("h.0.0.log");
+        assert_eq!(read_appended(&path, 0).unwrap(), Appended::default());
+
+        let writer = LogWriter::create(&path).unwrap();
+        let records = every_variant();
+        writer.append(&records[0]).unwrap();
+        writer.append(&records[1]).unwrap();
+        let first = read_appended(&path, 0).unwrap();
+        assert_eq!(first.records, records[..2]);
+        assert_eq!(first.malformed_lines, 0);
+        assert_eq!(first.offset, fs::metadata(&path).unwrap().len());
+
+        let again = read_appended(&path, first.offset).unwrap();
+        assert_eq!(again, Appended { offset: first.offset, ..Appended::default() });
+
+        let line = serde_json::to_vec(&records[2]).unwrap();
+        let (head, tail) = line.split_at(line.len() / 2);
+        let mut file = OpenOptions::new().append(true).open(&path).unwrap();
+        file.write_all(head).unwrap();
+        let torn = read_appended(&path, first.offset).unwrap();
+        assert_eq!(torn, Appended { offset: first.offset, ..Appended::default() });
+
+        file.write_all(tail).unwrap();
+        file.write_all(b"\nnot json\n").unwrap();
+        writer.append(&records[3]).unwrap();
+        let rest = read_appended(&path, torn.offset).unwrap();
+        assert_eq!(rest.records, [records[2].clone(), records[3].clone()]);
+        assert_eq!(rest.malformed_lines, 1);
+        assert_eq!(rest.offset, fs::metadata(&path).unwrap().len());
+    }
+
+    #[test]
+    fn log_names_parse() {
+        let worker = |tag: &str, slot: &str, n| LogName {
+            tag: tag.to_owned(),
+            slot: slot.to_owned(),
+            incarnation: Some(n),
+        };
+        let supervisor = |tag: &str| LogName {
+            tag: tag.to_owned(),
+            slot: SUPERVISOR_SLOT.to_owned(),
+            incarnation: None,
+        };
+        assert_eq!(LogName::parse("h-1.3.0.log"), Some(worker("h-1", "3", 0)));
+        assert_eq!(
+            LogName::parse("a.b_c-9.gc.12.log"),
+            Some(worker("a.b_c-9", "gc", 12))
+        );
+        assert_eq!(LogName::parse("h-1.supervisor.log"), Some(supervisor("h-1")));
+        assert_eq!(LogName::parse("a.5.supervisor.log"), Some(supervisor("a.5")));
+        for bad in [
+            "h.3.0",
+            "h.3.log",
+            ".3.0.log",
+            "h..0.log",
+            "h.3.x.log",
+            "h.3.-1.log",
+            "h.3.01.log",
+            "h.3.+1.log",
+            "h.supervisor.0.log",
+            "h space.3.0.log",
+            "supervisor.log",
+            "h.3.0.log.tmp",
+            "notes.txt",
+        ] {
+            assert_eq!(LogName::parse(bad), None, "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn read_all_logs_parses_names_and_rejects_others() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = RunRoot::new(dir.path().to_path_buf());
+        fs::create_dir_all(root.logs_dir()).unwrap();
+        let start = Record::Start {
+            t_ms: 1,
+            host: "h.x".to_owned(),
+            slot: "gc".to_owned(),
+            incarnation: 2,
+            pid: 9,
+        };
+        let spawn =
+            Record::Spawn { t_ms: 1, slot: "gc".to_owned(), incarnation: 2, pid: 9 };
+        LogWriter::create(&root.worker_log("h.x", "gc", 2))
+            .unwrap()
+            .append(&start)
+            .unwrap();
+        LogWriter::create(&root.supervisor_log("h.x")).unwrap().append(&spawn).unwrap();
+
+        let logs = read_all_logs(&root).unwrap();
+        let expected = BTreeMap::from([
+            (
+                LogName {
+                    tag: "h.x".to_owned(),
+                    slot: "gc".to_owned(),
+                    incarnation: Some(2),
+                },
+                vec![start],
+            ),
+            (
+                LogName {
+                    tag: "h.x".to_owned(),
+                    slot: SUPERVISOR_SLOT.to_owned(),
+                    incarnation: None,
+                },
+                vec![spawn],
+            ),
+        ]);
+        assert_eq!(logs, expected);
+
+        fs::write(root.logs_dir().join("stray.txt"), b"").unwrap();
+        let err = format!("{:#}", read_all_logs(&root).unwrap_err());
+        assert!(err.contains("stray.txt"), "{err}");
+    }
+}

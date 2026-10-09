@@ -2514,6 +2514,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "icechunk-fs-stress"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bytes",
+ "chrono",
+ "clap",
+ "futures",
+ "icechunk",
+ "icechunk-fs",
+ "libc",
+ "rand 0.10.3",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
 name = "icechunk-js"
 version = "0.1.0"
 dependencies = [
@@ -6038,6 +6061,7 @@ checksum = "2ef6dac1e96601b4fb3acccccff2139741fcb757cb9a36089bf5be91cfb285ce"
 dependencies = [
  "getrandom 0.4.2",
  "js-sys",
+ "serde_core",
  "wasm-bindgen",
 ]
 

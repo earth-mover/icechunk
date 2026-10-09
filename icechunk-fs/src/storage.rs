@@ -30,7 +30,7 @@ use tokio::sync::OnceCell;
 
 use crate::{
     FilesystemSettings,
-    cas::{CasError, CasOptions, CasOutcome, NoHooks, conditional_update},
+    cas::{CasError, CasHooks, CasOptions, CasOutcome, NoHooks, conditional_update},
     list::{delete_files, list_recursive},
     lock::is_valid_hash,
     path::{key_path, prefix_path},
@@ -74,6 +74,12 @@ pub struct FilesystemStorage {
     links_checked: OnceCell<()>,
     #[serde(skip)]
     warned_unsafe_settings: AtomicBool,
+    #[serde(skip, default = "no_hooks")]
+    hooks: Arc<dyn CasHooks>,
+}
+
+fn no_hooks() -> Arc<dyn CasHooks> {
+    Arc::new(NoHooks)
 }
 
 impl FilesystemStorage {
@@ -98,6 +104,7 @@ impl FilesystemStorage {
             stale_after: settings.stale_after,
             links_checked: OnceCell::new(),
             warned_unsafe_settings: AtomicBool::new(false),
+            hooks: no_hooks(),
         })
     }
 
@@ -110,6 +117,13 @@ impl FilesystemStorage {
     /// Sets the lock staleness threshold, [`Self::DEFAULT_STALE_AFTER`] by default.
     pub fn with_stale_after(self, stale_after: Duration) -> Self {
         Self { stale_after, ..self }
+    }
+
+    #[cfg(feature = "fault-injection")]
+    #[doc(hidden)]
+    /// Testing only: installs protocol hooks for conditional updates. Not serialized.
+    pub fn with_cas_hooks(self, hooks: Arc<dyn CasHooks>) -> Self {
+        Self { hooks, ..self }
     }
 
     /// The absolute directory holding the repository.
@@ -338,9 +352,10 @@ impl Storage for FilesystemStorage {
                 let path = key_path(&self.root, path)?;
                 let opts =
                     CasOptions { fsync: self.fsync, stale_after: self.stale_after };
+                let hooks = Arc::clone(&self.hooks);
                 blocking(move || {
                     let outcome =
-                        conditional_update(&path, &bytes, &base_hash, &opts, &NoHooks)
+                        conditional_update(&path, &bytes, &base_hash, &opts, &*hooks)
                             .map_err(cas_error)?;
                     Ok(match outcome {
                         CasOutcome::Updated { generation } => {

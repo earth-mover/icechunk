@@ -123,7 +123,8 @@ test-integration rooted="true" *args:
   set +e
   rc=0
   # exclude icechunk-python: no Rust tests, but its PyO3 lib-test binary aborts loading libpython
-  cargo test --profile {{profile}} --workspace --exclude icechunk-python --tests "$@" -- --ignored --skip rooted_roundtrip --skip three_writers_everything || rc=1
+  # exclude icechunk-fs-stress: its ignored tests spawn stress processes, see fs-stress-process-tests
+  cargo test --profile {{profile}} --workspace --exclude icechunk-python --exclude icechunk-fs-stress --tests "$@" -- --ignored --skip rooted_roundtrip --skip three_writers_everything || rc=1
   if [ "{{rooted}}" = "true" ]; then
     cargo test --profile {{profile}} -p icechunk --test main rooted_roundtrip -- --ignored || rc=1
   fi
@@ -133,6 +134,33 @@ test-integration rooted="true" *args:
 [doc("Run the 3-writer model check of the filesystem storage protocol (not run in CI; over 10 min and about 19 GB of RAM)")]
 fs-model-check:
   cargo test --release -p icechunk-fs --test protocol_model -- --ignored --nocapture three_writers_everything
+
+[group('test')]
+[script]
+[doc("Run a single-host filesystem storage stress test (mode: storage|repository) in a new run root under parent, deleted if the run passes; not in CI")]
+fs-stress mode="storage" parent=env("TMPDIR", "/tmp") *args:
+  shift 2
+  root="{{parent}}/fs-stress-$(date +%Y%m%d-%H%M%S)-$$"
+  echo "run root: $root" >&2
+  if cargo run --profile {{profile}} -p icechunk-fs-stress -- run --root "$root" --mode {{mode}} --stale-after 1s "$@"; then
+    rm -rf "$root"
+  else
+    rc=$?
+    echo "run root kept: $root" >&2
+    exit $rc
+  fi
+
+[group('test')]
+[script]
+[doc("Check that the filesystem storage stress test detects sabotaged protocols and the unsafe legacy backend; not in CI")]
+fs-stress-selftest parent=env("TMPDIR", "/tmp") *args:
+  shift
+  cargo run --profile {{profile}} -p icechunk-fs-stress -- selftest --root-parent "{{parent}}" "$@"
+
+[group('test')]
+[doc("Run the ignored icechunk-fs-stress tests, which spawn stress processes; not in CI")]
+fs-stress-process-tests:
+  cargo nextest run --cargo-profile {{profile}} -p icechunk-fs-stress --run-ignored ignored-only
 
 [group('test')]
 [script]

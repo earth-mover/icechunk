@@ -13,6 +13,11 @@ edition.workspace = true
 publish = true
 rust-version.workspace = true
 
+[features]
+# Testing only, no stability guarantees: exposes protocol hooks for fault injection
+# (used by icechunk-fs-stress). Adds API, changes no behaviour.
+fault-injection = []
+
 [dependencies]
 icechunk-storage.workspace = true
 

@@ -2,9 +2,12 @@
 //!
 //! The protocol takes [`CasHooks`] so tests can interleave concurrent writers
 //! deterministically and inject filesystem failures that real filesystems
-//! don't produce on demand. Production uses [`NoHooks`].
+//! don't produce on demand. The default methods do the real operation; only
+//! sabotage hooks change control flow ([`CasHooks::compared`]). Production
+//! uses [`NoHooks`].
 
 use std::{
+    fmt,
     fs::{self, File},
     io,
     path::{Path, PathBuf},
@@ -50,8 +53,12 @@ pub(crate) enum CasError {
 }
 
 /// The protocol steps after which [`CasHooks::at`] is called.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Point {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(
+    not(feature = "fault-injection"),
+    expect(unreachable_pub, reason = "exported only with the fault-injection feature")
+)]
+pub enum Point {
     /// Our lockinfo exists; no lock or ticket yet.
     LockInfoWritten,
     /// Our ticket exists, before our lock is visible.
@@ -66,12 +73,16 @@ pub(crate) enum Point {
     Renamed,
 }
 
-/// Test seams in the protocol. The default methods do the real filesystem
-/// operation, and the hooks never change the protocol's control flow.
+/// Test seams in the protocol. The default methods do the real operation;
+/// only sabotage hooks change control flow ([`Self::compared`]).
 ///
 /// Its correctness depends on how concurrent writers interleave and on how
 /// name operations fail, and neither can be produced reliably from outside.
-pub(crate) trait CasHooks: Sync {
+#[cfg_attr(
+    not(feature = "fault-injection"),
+    expect(unreachable_pub, reason = "exported only with the fault-injection feature")
+)]
+pub trait CasHooks: Send + Sync + fmt::Debug {
     /// Called after each step. A test can block a writer here, run other
     /// writers (for example a stealer that fences and commits), then resume
     /// it, which checks interleavings deterministically, without sleeps.
@@ -93,6 +104,11 @@ pub(crate) trait CasHooks: Sync {
     /// (`EIO`, `EACCES`) to check that the writer then doesn't commit.
     fn unlink(&self, path: &Path) -> io::Result<()> {
         fs::remove_file(path)
+    }
+
+    /// Step 4's verdict. Only a sabotage hook overrides it.
+    fn compared(&self, matches: bool) -> bool {
+        matches
     }
 }
 
@@ -295,7 +311,7 @@ impl Attempt<'_> {
         self.hooks.at(Point::Fenced);
 
         // ── Step 4: compare ─────────────────────────────────────────────────
-        if !self.target_hashes_to(self.base_hash)? {
+        if !self.hooks.compared(self.target_hashes_to(self.base_hash)?) {
             return Ok(None);
         }
         self.hooks.at(Point::Compared);
@@ -383,7 +399,7 @@ impl Attempt<'_> {
 mod tests {
     use std::{
         collections::BTreeSet,
-        sync::{Mutex, mpsc},
+        sync::{Arc, Mutex, mpsc},
         thread,
         time::SystemTime,
     };
@@ -399,6 +415,7 @@ mod tests {
     type AtFn = Box<dyn Fn(Point) + Send + Sync>;
     type PathFn = Box<dyn Fn(&Path, &Path) -> io::Result<()> + Send + Sync>;
     type UnlinkFn = Box<dyn Fn(&Path) -> io::Result<()> + Send + Sync>;
+    type ComparedFn = Box<dyn Fn(bool) -> bool + Send + Sync>;
 
     /// Records every point reached; each behaviour defaults to the real one.
     #[derive(Default)]
@@ -408,6 +425,13 @@ mod tests {
         link: Option<PathFn>,
         rename: Option<PathFn>,
         unlink: Option<UnlinkFn>,
+        compared: Option<ComparedFn>,
+    }
+
+    impl fmt::Debug for TestHooks {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.debug_struct("TestHooks").finish_non_exhaustive()
+        }
     }
 
     impl CasHooks for TestHooks {
@@ -436,6 +460,13 @@ mod tests {
             match &self.unlink {
                 Some(unlink) => unlink(path),
                 None => fs::remove_file(path),
+            }
+        }
+
+        fn compared(&self, matches: bool) -> bool {
+            match &self.compared {
+                Some(compared) => compared(matches),
+                None => matches,
             }
         }
     }
@@ -824,6 +855,39 @@ mod tests {
             other => panic!("expected Io, got {other:?}"),
         }
         assert_stopped_before_fenced(dir.path(), &repo, &hooks, holder);
+    }
+
+    #[test]
+    fn forced_compare_lets_a_stale_base_commit() {
+        let (_dir, repo) = setup();
+        fs::write(&repo, b"v1").unwrap();
+        let hooks =
+            TestHooks { compared: Some(Box::new(|_| true)), ..TestHooks::default() };
+        assert_updated(update(&repo, b"v2", &hooks));
+        assert_eq!(fs::read(&repo).unwrap(), b"v2");
+    }
+
+    #[test]
+    fn compared_hook_sees_the_real_verdict() {
+        let verdicts = |stale: bool| {
+            let (_dir, repo) = setup();
+            if stale {
+                fs::write(&repo, b"v1").unwrap();
+            }
+            let seen = Arc::new(Mutex::new(Vec::new()));
+            let recorder = Arc::clone(&seen);
+            let hooks = TestHooks {
+                compared: Some(Box::new(move |matches| {
+                    recorder.lock().unwrap().push(matches);
+                    matches
+                })),
+                ..TestHooks::default()
+            };
+            let _ = update(&repo, b"v2", &hooks);
+            seen.lock().unwrap().clone()
+        };
+        assert_eq!(verdicts(false), [true]);
+        assert_eq!(verdicts(true), [false]);
     }
 
     #[test]

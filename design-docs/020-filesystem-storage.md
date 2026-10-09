@@ -649,13 +649,44 @@ Open question 9 describes a possible warning.
   distributed-writes tests run with `FilesystemStorage`. The Python suites
   that run on the `object_store` filesystem backend also run with
   `FilesystemStorage`, except for spec version 1 cases.
-- **Concurrency stress test.** Many processes commit concurrently to one repo.
-  Afterwards every acknowledged commit must be in the repo's history. Run on a
-  local filesystem, and with the processes randomly killed (`SIGKILL`) to
-  exercise crash recovery and lock stealing.
-- **NFS test.** The same stress test across two Linux clients on separate
-  machines, over NFSv3 and NFSv4.x. This checks the fresh-read behaviour the
-  design relies on in the environment it targets.
+- **Stress test.** `fs-stress` (crate `icechunk-fs-stress`, not published)
+  runs many worker processes against one repo on a real filesystem, then
+  checks what they did against what they logged. Its README is the operator
+  runbook.
+  - **Modes.** In storage mode every worker updates `repo` with
+    `put_object_conditional`, backing up the base to
+    `overwritten/<attempt id>` first. In repository mode workers commit to
+    their own branch, commit to `main` with rebase, and create tags, each
+    commit overwriting one chunk; optionally a GC worker runs throughout.
+  - **Faults.** Through test-only protocol hooks of the backend
+    (`fault-injection` feature), workers `SIGKILL` themselves or pause, past
+    `STALE_AFTER`, at chosen protocol steps. Each host's supervisor also
+    `SIGKILL`s a random worker every few seconds and respawns it. A run fails
+    unless enough faults of each kind fired.
+  - **Oracle.** Workers log each intent before the attempt and its outcome
+    after. Storage mode rebuilds the chain of versions from the backups;
+    repository mode walks every branch's ancestry and checks the tags and
+    each worker's last chunk. Every acknowledged update must be on the chain
+    after its base, and nothing may appear that no intent explains. A
+    conflict that landed fails a run on local filesystems; on network
+    filesystems it is a warning, the lost-reply limitation below. An error
+    that landed is always a warning.
+  - **Liveness and recovery.** No gap between acknowledged updates may exceed
+    a threshold derived from `STALE_AFTER` and the pause length (a warning on
+    network filesystems). After the run, a fresh writer must succeed within
+    `2 × STALE_AFTER + 5 s`. Then the storage root's files are aged past the
+    sweep's 24-hour floor and swept (by the storage's sweep or by GC), after
+    which only `repo` may remain in the storage root. Staging files in
+    subdirectories are reported as a warning (open question 7).
+  - **Multi-host runs.** Operators run it on any filesystem mounted on several
+    hosts. The hosts coordinate only through the shared run directory:
+    `control` is replaced by rename, and the participant list is decided once,
+    by the first host to hard-link its list to `go`.
+  - **Self-test.** `fs-stress selftest` runs each mode once per sabotaged
+    protocol step (skip the fence, skip the compare, trust `ENOENT` from the
+    commit rename) and once on the `object_store` filesystem backend, which
+    overwrites `repo` unconditionally. Every case must be detected as a lost
+    update, or, for a sabotaged step, a repo the oracle can't read.
 
 ## Known limitation: spurious conflict after a lost commit reply
 

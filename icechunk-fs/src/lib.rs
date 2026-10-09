@@ -30,6 +30,12 @@ pub use storage::{
     FilesystemStorage, new_filesystem_storage, new_filesystem_storage_with,
 };
 
+#[cfg(all(unix, feature = "fault-injection"))]
+#[doc(hidden)]
+pub mod fault_injection {
+    pub use crate::cas::{CasHooks, Point};
+}
+
 const DEFAULT_STALE_AFTER: Duration = Duration::from_secs(60);
 
 /// Settings of a filesystem storage, see [`new_filesystem_storage_with`].
