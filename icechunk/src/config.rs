@@ -60,6 +60,18 @@ pub struct HttpConfig {
     pub headers: HashMap<String, String>,
 }
 
+impl HttpConfig {
+    pub fn with_opts(mut self, value: HashMap<String, String>) -> Self {
+        self.opts = value;
+        self
+    }
+
+    pub fn with_headers(mut self, value: HashMap<String, String>) -> Self {
+        self.headers = value;
+        self
+    }
+}
+
 /// Storage backend configuration.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -102,6 +114,16 @@ impl CompressionConfig {
 
     pub fn level(&self) -> u8 {
         self.level.unwrap_or(3)
+    }
+
+    pub fn with_algorithm(mut self, value: CompressionAlgorithm) -> Self {
+        self.algorithm = Some(value);
+        self
+    }
+
+    pub fn with_level(mut self, value: u8) -> Self {
+        self.level = Some(value);
+        self
     }
 
     pub fn merge(&self, other: Self) -> Self {
@@ -147,6 +169,31 @@ impl CachingConfig {
     }
     pub fn num_bytes_chunks(&self) -> u64 {
         self.num_bytes_chunks.unwrap_or(0)
+    }
+
+    pub fn with_num_snapshot_nodes(mut self, value: u64) -> Self {
+        self.num_snapshot_nodes = Some(value);
+        self
+    }
+
+    pub fn with_num_chunk_refs(mut self, value: u64) -> Self {
+        self.num_chunk_refs = Some(value);
+        self
+    }
+
+    pub fn with_num_transaction_changes(mut self, value: u64) -> Self {
+        self.num_transaction_changes = Some(value);
+        self
+    }
+
+    pub fn with_num_bytes_attributes(mut self, value: u64) -> Self {
+        self.num_bytes_attributes = Some(value);
+        self
+    }
+
+    pub fn with_num_bytes_chunks(mut self, value: u64) -> Self {
+        self.num_bytes_chunks = Some(value);
+        self
     }
 
     pub fn merge(&self, other: Self) -> Self {
@@ -263,6 +310,14 @@ impl ManifestSplittingConfig {
         )];
         ManifestSplittingConfig { split_sizes: Some(split_sizes) }
     }
+
+    pub fn with_split_sizes(
+        mut self,
+        value: Vec<(ManifestSplitCondition, Vec<ManifestSplitDim>)>,
+    ) -> Self {
+        self.split_sizes = Some(value);
+        self
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone)]
@@ -292,6 +347,21 @@ impl ManifestPreloadConfig {
             preload_if: other.preload_if.or(self.preload_if.clone()),
             max_arrays_to_scan: other.max_arrays_to_scan.or(self.max_arrays_to_scan),
         }
+    }
+
+    pub fn with_max_total_refs(mut self, value: u32) -> Self {
+        self.max_total_refs = Some(value);
+        self
+    }
+
+    pub fn with_preload_if(mut self, value: ManifestPreloadCondition) -> Self {
+        self.preload_if = Some(value);
+        self
+    }
+
+    pub fn with_max_arrays_to_scan(mut self, value: u32) -> Self {
+        self.max_arrays_to_scan = Some(value);
+        self
     }
 
     pub fn max_total_refs(&self) -> u32 {
@@ -375,6 +445,26 @@ impl ManifestVirtualChunkLocationCompressionConfig {
 
     pub fn compression_level(&self) -> i32 {
         self.compression_level.unwrap_or(3)
+    }
+
+    pub fn with_min_num_chunks(mut self, value: u16) -> Self {
+        self.min_num_chunks = Some(value);
+        self
+    }
+
+    pub fn with_dictionary_max_training_samples(mut self, value: u16) -> Self {
+        self.dictionary_max_training_samples = Some(value);
+        self
+    }
+
+    pub fn with_dictionary_max_size_bytes(mut self, value: u32) -> Self {
+        self.dictionary_max_size_bytes = Some(value);
+        self
+    }
+
+    pub fn with_compression_level(mut self, value: i32) -> Self {
+        self.compression_level = Some(value);
+        self
     }
 
     pub fn merge(&self, other: Self) -> Self {
@@ -472,6 +562,32 @@ impl ManifestConfig {
         self.max_concurrent_manifest_fetches_during_commit.unwrap_or(1).max(1)
     }
 
+    pub fn with_preload(mut self, value: ManifestPreloadConfig) -> Self {
+        self.preload = Some(value);
+        self
+    }
+
+    pub fn with_splitting(mut self, value: ManifestSplittingConfig) -> Self {
+        self.splitting = Some(value);
+        self
+    }
+
+    pub fn with_virtual_chunk_location_compression(
+        mut self,
+        value: ManifestVirtualChunkLocationCompressionConfig,
+    ) -> Self {
+        self.virtual_chunk_location_compression = Some(value);
+        self
+    }
+
+    pub fn with_max_concurrent_manifest_fetches_during_commit(
+        mut self,
+        value: u16,
+    ) -> Self {
+        self.max_concurrent_manifest_fetches_during_commit = Some(value);
+        self
+    }
+
     // for testing only, create a config with no preloading, no splitting, and no max_arrays to scan
     pub fn empty() -> Self {
         ManifestConfig {
@@ -511,6 +627,12 @@ impl RepoUpdateRetryConfig {
 
     pub fn retries(&self) -> &RetriesSettings {
         self.default.as_ref().unwrap_or(Self::default_retries())
+    }
+
+    /// Sets the `default` field.
+    pub fn with_default_retries(mut self, value: RetriesSettings) -> Self {
+        self.default = Some(value);
+        self
     }
 
     pub fn merge(&self, other: Self) -> Self {
@@ -632,6 +754,69 @@ impl RepositoryConfig {
     pub fn num_updates_per_repo_info_file(&self) -> u16 {
         self.num_updates_per_repo_info_file
             .unwrap_or(DEFAULT_NUM_UPDATES_PER_REPO_INFO_FILE)
+    }
+
+    pub fn with_inline_chunk_threshold_bytes(mut self, value: u16) -> Self {
+        self.inline_chunk_threshold_bytes = Some(value);
+        self
+    }
+
+    pub fn with_get_partial_values_concurrency(mut self, value: u16) -> Self {
+        self.get_partial_values_concurrency = Some(value);
+        self
+    }
+
+    pub fn with_compression(mut self, value: CompressionConfig) -> Self {
+        self.compression = Some(value);
+        self
+    }
+
+    pub fn with_max_concurrent_requests(mut self, value: u16) -> Self {
+        self.max_concurrent_requests = Some(value);
+        self
+    }
+
+    pub fn with_max_concurrent_decodes(mut self, value: u16) -> Self {
+        self.max_concurrent_decodes = Some(value);
+        self
+    }
+
+    pub fn with_caching(mut self, value: CachingConfig) -> Self {
+        self.caching = Some(value);
+        self
+    }
+
+    pub fn with_storage(mut self, value: storage::Settings) -> Self {
+        self.storage = Some(value);
+        self
+    }
+
+    pub fn with_virtual_chunk_containers(
+        mut self,
+        value: HashMap<String, VirtualChunkContainer>,
+    ) -> Self {
+        self.virtual_chunk_containers = Some(value);
+        self
+    }
+
+    pub fn with_manifest(mut self, value: ManifestConfig) -> Self {
+        self.manifest = Some(value);
+        self
+    }
+
+    pub fn with_previous_file(mut self, value: String) -> Self {
+        self.previous_file = Some(value);
+        self
+    }
+
+    pub fn with_repo_update_retries(mut self, value: RepoUpdateRetryConfig) -> Self {
+        self.repo_update_retries = Some(value);
+        self
+    }
+
+    pub fn with_num_updates_per_repo_info_file(mut self, value: u16) -> Self {
+        self.num_updates_per_repo_info_file = Some(value);
+        self
     }
 
     pub fn merge(&self, other: Self) -> Self {
@@ -781,11 +966,17 @@ pub enum Credentials {
 
 #[cfg(test)]
 mod tests {
-    #[cfg(feature = "object-store-http")]
-    use crate::config::HttpConfig;
+    use std::{collections::HashMap, num::NonZeroU16};
+
     use crate::{
         ObjectStoreConfig, RepositoryConfig,
-        config::S3Options,
+        config::{
+            CachingConfig, CompressionAlgorithm, CompressionConfig, HttpConfig,
+            ManifestConfig, ManifestPreloadCondition, ManifestPreloadConfig,
+            ManifestSplittingConfig, ManifestVirtualChunkLocationCompressionConfig,
+            RepoUpdateRetryConfig, S3Options,
+        },
+        storage::{RetriesSettings, Settings},
         strategies::{repository_config, s3_static_credentials},
         virtual_chunks::VirtualChunkContainer,
     };
@@ -875,7 +1066,7 @@ mod tests {
         // VCCs should be empty after merge
         assert_eq!(
             merged.virtual_chunk_containers,
-            Some(std::collections::HashMap::new()),
+            Some(HashMap::new()),
             "Merging with cleared VCCs should result in empty VCCs"
         );
     }
@@ -1180,5 +1371,137 @@ manifest: null
             }
             other => panic!("Expected Http, got {other:?}"),
         }
+    }
+
+    #[icechunk_macros::test]
+    fn compression_config_setters_set_fields() {
+        let c = CompressionConfig::default()
+            .with_algorithm(CompressionAlgorithm::Zstd)
+            .with_level(7);
+        assert_eq!(c.algorithm, Some(CompressionAlgorithm::Zstd));
+        assert_eq!(c.level, Some(7));
+    }
+
+    #[icechunk_macros::test]
+    fn caching_config_setters_set_fields() {
+        let c = CachingConfig::default()
+            .with_num_snapshot_nodes(1)
+            .with_num_chunk_refs(2)
+            .with_num_transaction_changes(3)
+            .with_num_bytes_attributes(4)
+            .with_num_bytes_chunks(5);
+        assert_eq!(c.num_snapshot_nodes, Some(1));
+        assert_eq!(c.num_chunk_refs, Some(2));
+        assert_eq!(c.num_transaction_changes, Some(3));
+        assert_eq!(c.num_bytes_attributes, Some(4));
+        assert_eq!(c.num_bytes_chunks, Some(5));
+    }
+
+    #[icechunk_macros::test]
+    fn http_config_setters_set_fields() {
+        let opts = HashMap::from([("allow_http".to_string(), "true".to_string())]);
+        let headers = HashMap::from([("X-A".to_string(), "b".to_string())]);
+        let c =
+            HttpConfig::default().with_opts(opts.clone()).with_headers(headers.clone());
+        assert_eq!(c.opts, opts);
+        assert_eq!(c.headers, headers);
+    }
+
+    #[icechunk_macros::test]
+    fn manifest_splitting_config_setters_set_fields() {
+        let split_sizes = ManifestSplittingConfig::with_size(42).split_sizes.unwrap();
+        let c = ManifestSplittingConfig::default().with_split_sizes(split_sizes.clone());
+        assert_eq!(c.split_sizes, Some(split_sizes));
+    }
+
+    #[icechunk_macros::test]
+    fn manifest_preload_config_setters_set_fields() {
+        let c = ManifestPreloadConfig::default()
+            .with_max_total_refs(1)
+            .with_preload_if(ManifestPreloadCondition::True)
+            .with_max_arrays_to_scan(2);
+        assert_eq!(c.max_total_refs, Some(1));
+        assert_eq!(c.preload_if, Some(ManifestPreloadCondition::True));
+        assert_eq!(c.max_arrays_to_scan, Some(2));
+    }
+
+    #[icechunk_macros::test]
+    fn manifest_virtual_chunk_location_compression_config_setters_set_fields() {
+        let c = ManifestVirtualChunkLocationCompressionConfig::default()
+            .with_min_num_chunks(1)
+            .with_dictionary_max_training_samples(2)
+            .with_dictionary_max_size_bytes(3)
+            .with_compression_level(4);
+        assert_eq!(c.min_num_chunks, Some(1));
+        assert_eq!(c.dictionary_max_training_samples, Some(2));
+        assert_eq!(c.dictionary_max_size_bytes, Some(3));
+        assert_eq!(c.compression_level, Some(4));
+    }
+
+    #[icechunk_macros::test]
+    fn manifest_config_setters_set_fields() {
+        let preload = ManifestPreloadConfig::default().with_max_total_refs(1);
+        let splitting = ManifestSplittingConfig::with_size(2);
+        let compression = ManifestVirtualChunkLocationCompressionConfig::default()
+            .with_min_num_chunks(3);
+        let c = ManifestConfig::default()
+            .with_preload(preload.clone())
+            .with_splitting(splitting.clone())
+            .with_virtual_chunk_location_compression(compression)
+            .with_max_concurrent_manifest_fetches_during_commit(4);
+        assert_eq!(c.preload, Some(preload));
+        assert_eq!(c.splitting, Some(splitting));
+        assert_eq!(c.virtual_chunk_location_compression, Some(compression));
+        assert_eq!(c.max_concurrent_manifest_fetches_during_commit, Some(4));
+    }
+
+    #[icechunk_macros::test]
+    fn repo_update_retry_config_setters_set_fields() {
+        let retries = RetriesSettings::default().with_max_backoff_ms(9);
+        let c = RepoUpdateRetryConfig::default().with_default_retries(retries);
+        assert_eq!(c.default, Some(retries));
+    }
+
+    #[icechunk_macros::test]
+    fn repository_config_setters_set_fields() {
+        let compression = CompressionConfig::default().with_level(5);
+        let caching = CachingConfig::default().with_num_chunk_refs(7);
+        let storage = Settings::default().with_storage_class("GLACIER".to_string());
+        let vcc = VirtualChunkContainer::new(
+            "s3://bucket1/".to_string(),
+            ObjectStoreConfig::S3(S3Options::default()),
+        )
+        .unwrap();
+        let vccs = HashMap::from([(vcc.url_prefix().to_string(), vcc)]);
+        let manifest = ManifestConfig::default()
+            .with_max_concurrent_manifest_fetches_during_commit(8);
+        let retries = RepoUpdateRetryConfig::default().with_default_retries(
+            RetriesSettings::default().with_max_tries(NonZeroU16::MIN),
+        );
+        let c = RepositoryConfig::default()
+            .with_inline_chunk_threshold_bytes(1)
+            .with_get_partial_values_concurrency(2)
+            .with_compression(compression)
+            .with_max_concurrent_requests(3)
+            .with_max_concurrent_decodes(4)
+            .with_caching(caching)
+            .with_storage(storage.clone())
+            .with_virtual_chunk_containers(vccs.clone())
+            .with_manifest(manifest.clone())
+            .with_previous_file("prev".to_string())
+            .with_repo_update_retries(retries)
+            .with_num_updates_per_repo_info_file(6);
+        assert_eq!(c.inline_chunk_threshold_bytes, Some(1));
+        assert_eq!(c.get_partial_values_concurrency, Some(2));
+        assert_eq!(c.compression, Some(compression));
+        assert_eq!(c.max_concurrent_requests, Some(3));
+        assert_eq!(c.max_concurrent_decodes, Some(4));
+        assert_eq!(c.caching, Some(caching));
+        assert_eq!(c.storage, Some(storage));
+        assert_eq!(c.virtual_chunk_containers, Some(vccs));
+        assert_eq!(c.manifest, Some(manifest));
+        assert_eq!(c.previous_file, Some("prev".to_string()));
+        assert_eq!(c.repo_update_retries, Some(retries));
+        assert_eq!(c.num_updates_per_repo_info_file, Some(6));
     }
 }

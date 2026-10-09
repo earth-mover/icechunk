@@ -173,6 +173,21 @@ impl RetriesSettings {
         self.max_backoff_ms.unwrap_or(3 * 60 * 1000)
     }
 
+    pub fn with_max_tries(mut self, value: NonZeroU16) -> Self {
+        self.max_tries = Some(value);
+        self
+    }
+
+    pub fn with_initial_backoff_ms(mut self, value: u32) -> Self {
+        self.initial_backoff_ms = Some(value);
+        self
+    }
+
+    pub fn with_max_backoff_ms(mut self, value: u32) -> Self {
+        self.max_backoff_ms = Some(value);
+        self
+    }
+
     pub fn merge(&self, other: Self) -> Self {
         Self {
             max_tries: other.max_tries.or(self.max_tries),
@@ -192,6 +207,26 @@ pub struct TimeoutSettings {
 }
 
 impl TimeoutSettings {
+    pub fn with_connect_timeout_ms(mut self, value: u32) -> Self {
+        self.connect_timeout_ms = Some(value);
+        self
+    }
+
+    pub fn with_read_timeout_ms(mut self, value: u32) -> Self {
+        self.read_timeout_ms = Some(value);
+        self
+    }
+
+    pub fn with_operation_timeout_ms(mut self, value: u32) -> Self {
+        self.operation_timeout_ms = Some(value);
+        self
+    }
+
+    pub fn with_operation_attempt_timeout_ms(mut self, value: u32) -> Self {
+        self.operation_attempt_timeout_ms = Some(value);
+        self
+    }
+
     pub fn merge(&self, other: Self) -> Self {
         Self {
             connect_timeout_ms: other.connect_timeout_ms.or(self.connect_timeout_ms),
@@ -227,6 +262,16 @@ impl ConcurrencySettings {
         self.ideal_concurrent_request_size.unwrap_or_else(|| {
             NonZeroU64::new(12 * 1024 * 1024).unwrap_or(NonZeroU64::MIN)
         })
+    }
+
+    pub fn with_max_concurrent_requests_for_object(mut self, value: NonZeroU16) -> Self {
+        self.max_concurrent_requests_for_object = Some(value);
+        self
+    }
+
+    pub fn with_ideal_concurrent_request_size(mut self, value: NonZeroU64) -> Self {
+        self.ideal_concurrent_request_size = Some(value);
+        self
     }
 
     pub fn merge(&self, other: Self) -> Self {
@@ -331,6 +376,56 @@ impl Settings {
     pub fn minimum_size_for_multipart_upload(&self) -> u64 {
         // per AWS  recommendation: 100 MB
         self.minimum_size_for_multipart_upload.unwrap_or(100 * 1024 * 1024)
+    }
+
+    pub fn with_concurrency(mut self, value: ConcurrencySettings) -> Self {
+        self.concurrency = Some(value);
+        self
+    }
+
+    pub fn with_retries(mut self, value: RetriesSettings) -> Self {
+        self.retries = Some(value);
+        self
+    }
+
+    pub fn with_timeouts(mut self, value: TimeoutSettings) -> Self {
+        self.timeouts = Some(value);
+        self
+    }
+
+    pub fn with_unsafe_use_conditional_update(mut self, value: bool) -> Self {
+        self.unsafe_use_conditional_update = Some(value);
+        self
+    }
+
+    pub fn with_unsafe_use_conditional_create(mut self, value: bool) -> Self {
+        self.unsafe_use_conditional_create = Some(value);
+        self
+    }
+
+    pub fn with_unsafe_use_metadata(mut self, value: bool) -> Self {
+        self.unsafe_use_metadata = Some(value);
+        self
+    }
+
+    pub fn with_storage_class(mut self, value: String) -> Self {
+        self.storage_class = Some(value);
+        self
+    }
+
+    pub fn with_metadata_storage_class(mut self, value: String) -> Self {
+        self.metadata_storage_class = Some(value);
+        self
+    }
+
+    pub fn with_chunks_storage_class(mut self, value: String) -> Self {
+        self.chunks_storage_class = Some(value);
+        self
+    }
+
+    pub fn with_minimum_size_for_multipart_upload(mut self, value: u64) -> Self {
+        self.minimum_size_for_multipart_upload = Some(value);
+        self
     }
 
     pub fn merge(&self, other: Self) -> Self {
@@ -896,5 +991,67 @@ mod tests {
         assert_eq!(filtered(&ids, &["0B"]), vec!["0B"]);
         assert!(filtered(&ids, &[]).is_empty());
         assert!(filtered(&ids, &["1"]).is_empty());
+    }
+
+    #[test]
+    fn retries_settings_setters_set_fields() {
+        let r = RetriesSettings::default()
+            .with_max_tries(NonZeroU16::MIN)
+            .with_initial_backoff_ms(2)
+            .with_max_backoff_ms(3);
+        assert_eq!(r.max_tries, Some(NonZeroU16::MIN));
+        assert_eq!(r.initial_backoff_ms, Some(2));
+        assert_eq!(r.max_backoff_ms, Some(3));
+    }
+
+    #[test]
+    fn timeout_settings_setters_set_fields() {
+        let t = TimeoutSettings::default()
+            .with_connect_timeout_ms(1)
+            .with_read_timeout_ms(2)
+            .with_operation_timeout_ms(3)
+            .with_operation_attempt_timeout_ms(4);
+        assert_eq!(t.connect_timeout_ms, Some(1));
+        assert_eq!(t.read_timeout_ms, Some(2));
+        assert_eq!(t.operation_timeout_ms, Some(3));
+        assert_eq!(t.operation_attempt_timeout_ms, Some(4));
+    }
+
+    #[test]
+    fn concurrency_settings_setters_set_fields() {
+        let c = ConcurrencySettings::default()
+            .with_max_concurrent_requests_for_object(NonZeroU16::MIN)
+            .with_ideal_concurrent_request_size(NonZeroU64::MAX);
+        assert_eq!(c.max_concurrent_requests_for_object, Some(NonZeroU16::MIN));
+        assert_eq!(c.ideal_concurrent_request_size, Some(NonZeroU64::MAX));
+    }
+
+    #[test]
+    fn settings_setters_set_fields() {
+        let concurrency = ConcurrencySettings::default()
+            .with_ideal_concurrent_request_size(NonZeroU64::MIN);
+        let retries = RetriesSettings::default().with_max_backoff_ms(5);
+        let timeouts = TimeoutSettings::default().with_read_timeout_ms(6);
+        let s = Settings::default()
+            .with_concurrency(concurrency)
+            .with_retries(retries)
+            .with_timeouts(timeouts)
+            .with_unsafe_use_conditional_update(false)
+            .with_unsafe_use_conditional_create(true)
+            .with_unsafe_use_metadata(false)
+            .with_storage_class("A".to_string())
+            .with_metadata_storage_class("B".to_string())
+            .with_chunks_storage_class("C".to_string())
+            .with_minimum_size_for_multipart_upload(7);
+        assert_eq!(s.concurrency, Some(concurrency));
+        assert_eq!(s.retries, Some(retries));
+        assert_eq!(s.timeouts, Some(timeouts));
+        assert_eq!(s.unsafe_use_conditional_update, Some(false));
+        assert_eq!(s.unsafe_use_conditional_create, Some(true));
+        assert_eq!(s.unsafe_use_metadata, Some(false));
+        assert_eq!(s.storage_class, Some("A".to_string()));
+        assert_eq!(s.metadata_storage_class, Some("B".to_string()));
+        assert_eq!(s.chunks_storage_class, Some("C".to_string()));
+        assert_eq!(s.minimum_size_for_multipart_upload, Some(7));
     }
 }

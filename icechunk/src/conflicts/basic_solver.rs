@@ -64,6 +64,23 @@ impl ConflictSolver for BasicConflictSolver {
 }
 
 impl BasicConflictSolver {
+    pub fn with_on_chunk_conflict(mut self, value: VersionSelection) -> Self {
+        self.on_chunk_conflict = value;
+        self
+    }
+
+    pub fn with_fail_on_delete_of_updated_array(mut self, value: bool) -> Self {
+        self.fail_on_delete_of_updated_array = value;
+        self
+    }
+
+    pub fn with_fail_on_delete_of_updated_group(mut self, value: bool) -> Self {
+        self.fail_on_delete_of_updated_group = value;
+        self
+    }
+}
+
+impl BasicConflictSolver {
     async fn solve_conflicts(
         &self,
         _previous_change: &TransactionLog,
@@ -136,5 +153,21 @@ impl BasicConflictSolver {
         }
 
         Ok(ConflictResolution::Patched(current_changes))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{BasicConflictSolver, VersionSelection};
+
+    #[icechunk_macros::test]
+    fn basic_conflict_solver_setters_set_fields() {
+        let s = BasicConflictSolver::default()
+            .with_on_chunk_conflict(VersionSelection::UseTheirs)
+            .with_fail_on_delete_of_updated_array(true)
+            .with_fail_on_delete_of_updated_group(false);
+        assert_eq!(s.on_chunk_conflict, VersionSelection::UseTheirs);
+        assert!(s.fail_on_delete_of_updated_array);
+        assert!(!s.fail_on_delete_of_updated_group);
     }
 }
