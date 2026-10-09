@@ -29,6 +29,7 @@ repos:
     rev: v2.3.0
     hooks:
       - id: codespell
+        exclude: icechunk-python/docs/docs/assets/illustrated/
 
   - repo: https://github.com/zizmorcore/zizmor-pre-commit
     rev: v1.24.1
