@@ -1,5 +1,8 @@
 import test from 'ava'
 import assert from 'node:assert/strict'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import * as zarr from 'zarrita'
 
 import { Storage, Repository, RepositoryConfig } from '../index'
@@ -388,6 +391,47 @@ test('zarrita read and write', async (t) => {
   // Read a slice
   const slice = await zarr.get(arr, [zarr.slice(1, 3)])
   assert.deepEqual(Array.from(slice.data as Float32Array), [2.5, 3.5])
+
+  t.pass()
+})
+
+// js-test-wasi always sets NAPI_RS_FORCE_WASI; filesystem constructors are native-only
+const nativeUnixOnly =
+  process.platform === 'win32' || process.env.NAPI_RS_FORCE_WASI ? test.skip : test
+
+nativeUnixOnly('filesystem storage lifecycle', async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), 'icechunk-js-fs-'))
+  try {
+    const repo = await Repository.create(await Storage.newFilesystem(dir))
+    const session = await repo.writableSession('main')
+    const store = session.store
+    const enc = new TextEncoder()
+
+    await store.set('zarr.json', enc.encode(JSON.stringify({
+      zarr_format: 3,
+      node_type: 'group',
+    })))
+    await store.set('temperature/zarr.json', enc.encode(JSON.stringify({
+      zarr_format: 3,
+      node_type: 'array',
+      shape: [4],
+      data_type: 'float32',
+      chunk_grid: { name: 'regular', configuration: { chunk_shape: [4] } },
+      chunk_key_encoding: { name: 'default', configuration: { separator: '/' } },
+      fill_value: 0,
+      codecs: [{ name: 'bytes', configuration: { endian: 'little' } }],
+    })))
+    await store.set('temperature/c/0', new Uint8Array(new Float32Array([1.5, 2.5, 3.5, 4.5]).buffer))
+    await session.commit('add temperature array')
+
+    const reopened = await Repository.open(await Storage.newFilesystem(dir))
+    const readSession = await reopened.readonlySession({ branch: 'main' })
+    const arr = await zarr.open(zarr.root(readSession.store).resolve('/temperature'), { kind: 'array' })
+    const data = await zarr.get(arr)
+    assert.deepEqual(Array.from(data.data as Float32Array), [1.5, 2.5, 3.5, 4.5])
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
 
   t.pass()
 })

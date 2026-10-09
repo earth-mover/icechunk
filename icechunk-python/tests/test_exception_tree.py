@@ -13,6 +13,7 @@ import pytest
 import icechunk as ic
 import zarr
 from icechunk._icechunk_python import _all_error_kinds
+from tests.conftest import fs_storage
 
 
 def test_tree_shape() -> None:
@@ -175,9 +176,9 @@ def test_readonly_session_ref_not_found(spec_version: ic.SpecVersion | int) -> N
     assert err.kind in (ic.ErrorKind.REF_NOT_FOUND, ic.ErrorKind.TAG_NOT_FOUND)
 
 
-def test_repository_not_found(tmpdir: Any) -> None:
+def test_repository_not_found(tmpdir: Any, fs_backend: str) -> None:
     with pytest.raises(ic.RepositoryNotFoundError) as excinfo:
-        ic.Repository.open(storage=ic.local_filesystem_storage(str(tmpdir / "nope")))
+        ic.Repository.open(storage=fs_storage(fs_backend, str(tmpdir / "nope")))
     err = excinfo.value
     assert err.kind == ic.ErrorKind.REPOSITORY_NOT_FOUND
     assert isinstance(err, KeyError)

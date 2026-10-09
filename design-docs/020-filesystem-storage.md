@@ -154,7 +154,7 @@ fn conditional_update(base_hash: Hash, new_bytes: &[u8]) -> Result<Updated | Not
                 // Lock files are fsynced before being linked, so this is
                 // corruption. Without the holder's attempt_id we cannot delete
                 // its ticket, so we cannot steal. Needs manual recovery.
-                Err(Unparseable) => { cleanup(); return Err(CorruptLock); }
+                Err(Unparsable) => { cleanup(); return Err(CorruptLock); }
 
                 Err(e) => { cleanup(); return Err(e); }  // couldn't read the lock
 
@@ -182,7 +182,7 @@ fn conditional_update(base_hash: Hash, new_bytes: &[u8]) -> Result<Updated | Not
                 Err(e) => { cleanup(); return Err(e); }
             },
             Err(ENOENT) => {}        // deleted => base_hash no longer current => step 4 fails
-            Err(Unparseable) => { cleanup(); return Err(CorruptLock); }  // needs manual recovery
+            Err(Unparsable) => { cleanup(); return Err(CorruptLock); }  // needs manual recovery
             Err(e) => { cleanup(); return Err(e); }
         }
     }
@@ -483,7 +483,7 @@ What the algorithm needs from the filesystem, and where:
 | 6 | Server timestamps | `is_stale` | Liveness only |
 | 7 | Durable `fsync` | Steps 1 and 5, every write | Power-loss damage |
 
-**Enforcement.** Requirements that can be checked are checked; the rest are
+**Enforcement.** Exclusive hard links are checked; the other requirements are
 documented.
 
 - At repo creation and on first write, the backend creates
@@ -492,25 +492,10 @@ documented.
   fail with `EEXIST`, then deletes both. Failure means no exclusive hard links
   and the backend refuses to write. A crash mid-probe leaves files behind; GC
   sweeps them.
-- On Linux, the backend refuses NFS mounts with `nocto`, which breaks the
-  fresh read on NFSv3. It checks at create and open:
-  1. If `statfs` on the repo directory doesn't report NFS
-     (`f_type == NFS_SUPER_MAGIC`), there is nothing to check.
-  2. Find the mount by device number: the line in `/proc/self/mountinfo`
-     whose `major:minor` field matches `st_dev` from `stat` on the repo
-     directory. Matching paths instead would break with symlinks, bind mounts
-     and filesystems mounted over other mounts.
-  3. Look for `nocto` in that line's superblock options (the last field), not
-     in the per-mount options.
-  4. Fail closed: if the repo is on NFS and its options can't be read, refuse.
-     A storage setting overrides the check.
+- NFS mounts with `nocto` are unsupported: the option breaks the fresh read
+  on NFSv3. Open question 3 describes a possible check.
 
-  Reading `/proc/self/mountinfo` needs no privileges and shows mounts as our
-  process sees them, which is right inside containers. The check is Linux-only,
-  doesn't notice a remount after it ran, and only rejects the one option known
-  to be dangerous. It doesn't certify a mount as safe.
-
-**Expected to qualify:** local POSIX filesystems, NTFS, NFSv3/v4 with a Linux
+**Expected to qualify:** local POSIX filesystems, NFSv3/v4 with a Linux
 client, Lustre, GPFS, CephFS, JuiceFS.
 
 ## Backend
@@ -518,6 +503,8 @@ client, Lustre, GPFS, CephFS, JuiceFS.
 - **Crate and type.** A new crate `icechunk-fs` with `FilesystemStorage`,
   implemented directly on `std::fs` with `spawn_blocking`. It does not use
   `object_store`.
+- **Platforms.** Unix only. On other platforms the constructors return an
+  error. Windows is open question 8.
 - **Rollout.** The new backend starts as an explicit opt-in. After real-world
   use, the existing names switch to it.
 
@@ -623,9 +610,6 @@ client, Lustre, GPFS, CephFS, JuiceFS.
     It has no callers in the crate and changes to return `()`.
   - Conditional writers (repo info, repo creation, IC1 refs and config) move
     to `put_object_conditional`.
-- **Windows.** NTFS has hard links. Replacing a file another process opened
-  without `FILE_SHARE_DELETE` fails, which surfaces as a failed rename and a
-  retry, never as corruption. Windows NFS clients are unsupported.
 
 ## Old writers
 
@@ -636,13 +620,10 @@ unconditionally:
 - the `object_store` filesystem backend in the same version;
 - `force_write_repo_info`.
 
-Mixing them with the new backend on one repo is unsafe.
+Running any of them on a repo at the same time as the new backend is unsafe.
+Switching a repo to the new backend once every old writer has stopped is safe.
 
-Mitigations:
-
-- Document that every writer of a filesystem repo must use the new backend.
-- The new backend warns when `repo`'s `FileHeader.impl_name` shows it was last
-  written by an Icechunk version older than the protocol.
+Open question 9 describes a possible warning.
 
 ## Verification
 
@@ -664,8 +645,10 @@ Mitigations:
 - **Storage tests.** The existing `Storage` tests run against
   `FilesystemStorage`, covering the reworked read and `put_object` APIs on
   every backend.
-- **Repository tests.** The existing Rust and Python suites run with
-  `FilesystemStorage`, including the stateful repository-operations tests.
+- **Repository tests.** The Rust garbage collection, stats, concurrency and
+  distributed-writes tests run with `FilesystemStorage`. The Python suites
+  that run on the `object_store` filesystem backend also run with
+  `FilesystemStorage`, except for spec version 1 cases.
 - **Concurrency stress test.** Many processes commit concurrently to one repo.
   Afterwards every acknowledged commit must be in the repo's history. Run on a
   local filesystem, and with the processes randomly killed (`SIGKILL`) to
@@ -735,8 +718,24 @@ Tracked as a separate issue.
    2010 FreeBSD patch shows that client returned `ESTALE` from `open()`
    instead of retrying the lookup. That's safe (an error) but needs a retry in
    `read_file_fresh`.
-3. **Relaxing the `nocto` refusal.** Whether `nocto` mounts can still give
-   fresh reads has not been investigated.
+3. **`nocto` mounts.** Whether they can still give fresh reads has not been
+   investigated. If they can't, the backend could refuse them on Linux, at
+   create and open:
+   1. If `statfs` on the repo directory doesn't report NFS
+      (`f_type == NFS_SUPER_MAGIC`), there is nothing to check.
+   2. Find the mount by device number: the line in `/proc/self/mountinfo`
+      whose `major:minor` field matches `st_dev` from `stat` on the repo
+      directory. Matching paths instead would break with symlinks, bind
+      mounts and filesystems mounted over other mounts.
+   3. Look for `nocto` in that line's superblock options (the last field),
+      not in the per-mount options.
+   4. Fail closed: if the repo is on NFS and its options can't be read,
+      refuse. A storage setting overrides the check.
+
+   Reading `/proc/self/mountinfo` needs no privileges and shows mounts as our
+   process sees them, which is right inside containers. The check would be
+   Linux-only, wouldn't notice a remount after it ran, and would only reject
+   the one option known to be dangerous. It wouldn't certify a mount as safe.
 4. **Manual recovery for a corrupt lock file** in the current lock family: a
    CLI command, or documented steps.
 5. **Validating the `STALE_AFTER` default** against metadata stall times
@@ -763,3 +762,10 @@ Tracked as a separate issue.
    subdirectories, which V2 never updates conditionally. How to sweep them
    without a second full listing of large directories such as `chunks/` is
    open.
+8. **Windows.** NTFS has hard links. Replacing a file another process opened
+   without `FILE_SHARE_DELETE` fails, which would surface as a failed rename
+   and a retry, never as corruption. Windows NFS clients would be unsupported.
+   The backend is not implemented on Windows.
+9. **Warning about old writers.** The backend could warn when `repo`'s
+   `FileHeader.impl_name` shows it was last written by an Icechunk version
+   older than the protocol.

@@ -4,6 +4,7 @@ import pytest
 
 import icechunk as ic
 import zarr
+from tests.conftest import fs_storage
 
 
 @pytest.mark.filterwarnings("ignore:datetime.datetime.utcnow")
@@ -63,11 +64,14 @@ async def test_total_chunks_storage_async(any_spec_version: int | None) -> None:
 
 
 @pytest.mark.parametrize(
-    "dir", ["./tests/data/test-repo-v2", "./tests/data/test-repo-v1"]
+    "dir, spec_version",
+    [("./tests/data/test-repo-v2", 2), ("./tests/data/test-repo-v1", 1)],
 )
-def test_chunk_storage_on_filesystem(dir: str) -> None:
+def test_chunk_storage_on_filesystem(
+    dir: str, spec_version: int, fs_backend: str
+) -> None:
     repo = ic.Repository.open(
-        storage=ic.local_filesystem_storage(dir),
+        storage=fs_storage(fs_backend, dir, spec_version),
     )
     with pytest.warns(DeprecationWarning, match="total_chunks_storage"):
         actual = repo.total_chunks_storage()

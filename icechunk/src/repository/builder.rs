@@ -576,9 +576,7 @@ fn raise_if_ic1_unsupported(
     spec_version: SpecVersionBin,
 ) -> RepositoryResult<()> {
     if spec_version < SpecVersionBin::V2 && !storage.supports_ic1_repos() {
-        return Err(RepositoryError::capture(RepositoryErrorKind::BadRepoVersion {
-            minimum_spec_version: SpecVersionBin::V2,
-        }));
+        return Err(RepositoryError::capture(RepositoryErrorKind::StorageRefusesIc1));
     }
     Ok(())
 }

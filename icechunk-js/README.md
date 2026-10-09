@@ -45,6 +45,7 @@ In-memory storage works on all platforms. The following backends are available o
 - **Tigris** — `Storage.newTigris(bucket, prefix?, credentials?, options?)`
 - **HTTP** — `Storage.newHttp(baseUrl, config?)`
 - **Local Filesystem** — `Storage.newLocalFilesystem(path)`
+- **Filesystem** (safe for concurrent writers, experimental, Unix only) — `Storage.newFilesystem(path)`
 
 #### Fetch Storage (read-only, works everywhere)
 

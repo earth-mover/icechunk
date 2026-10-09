@@ -72,7 +72,20 @@ export declare class Storage {
    * especially useful for WASM builds where native Rust networking is unavailable.
    */
   static newCustom(backend: { canWrite: () => Promise<boolean>; getObjectRange: (args: StorageGetObjectRangeArgs) => Promise<StorageGetObjectResponse>; putObject: (args: StoragePutObjectArgs) => Promise<StorageVersionedUpdateResult>; copyObject: (args: StorageCopyObjectArgs) => Promise<StorageVersionedUpdateResult>; listObjects: (prefix: string) => Promise<Array<StorageListInfo>>; deleteBatch: (args: StorageDeleteBatchArgs) => Promise<StorageDeleteObjectsResult>; getObjectLastModified: (path: string) => Promise<Date>; getObjectConditional: (args: StorageGetObjectConditionalArgs) => Promise<StorageGetModifiedResult> }): Storage
+  /**
+   * Storage on the local filesystem. Not safe for concurrent commits: a commit
+   * can be lost. Use `newFilesystem` when several writers may commit.
+   */
   static newLocalFilesystem(path: string): Promise<Storage>
+  /**
+   * Storage on a filesystem, safe for concurrent writers on filesystems that
+   * meet the requirements in the Icechunk storage guide (exclusive hard links,
+   * atomic rename, fresh opens).
+   * Safe only if every writer of the repository uses this backend: never let
+   * `newLocalFilesystem` writers, or older Icechunk versions, run on the same
+   * repository at the same time. Experimental. Unix only.
+   */
+  static newFilesystem(path: string): Promise<Storage>
   static newS3(bucket: string, prefix?: string | undefined | null, credentials?: S3Credentials | undefined | null, options?: S3Options | undefined | null): Storage
   static newR2(bucket?: string | undefined | null, prefix?: string | undefined | null, accountId?: string | undefined | null, credentials?: S3Credentials | undefined | null, options?: S3Options | undefined | null): Storage
   static newTigris(bucket: string, prefix?: string | undefined | null, credentials?: S3Credentials | undefined | null, options?: S3Options | undefined | null, useWeakConsistency?: boolean | undefined | null): Storage

@@ -25,9 +25,9 @@ import zarr
 # This file can be run as a script to regenerate test data (see module docstring).
 # When run as a script, `tests` is not a package, so we fall back to a direct import.
 try:
-    from tests.conftest import Permission
+    from tests.conftest import Permission, fs_storage
 except ImportError:
-    from conftest import Permission  # type: ignore[import-not-found,no-redef]
+    from conftest import Permission, fs_storage  # type: ignore[import-not-found,no-redef]
 
 UPDATED_SPLITTING_CONFIG = ic.ManifestSplittingConfig.from_dict(
     {
@@ -41,7 +41,11 @@ UPDATED_SPLITTING_CONFIG = ic.ManifestSplittingConfig.from_dict(
 
 
 def mk_repo(
-    *, create: bool, store_path: str, config: ic.RepositoryConfig | None = None
+    *,
+    create: bool,
+    store_path: str,
+    config: ic.RepositoryConfig | None = None,
+    backend: str = "local_filesystem",
 ) -> ic.Repository:
     """Create a store that can access virtual chunks in localhost MinIO"""
     if create and config is None:
@@ -69,7 +73,7 @@ def mk_repo(
 
     operation = ic.Repository.create if create else ic.Repository.open
     repo = operation(
-        storage=ic.local_filesystem_storage(store_path),
+        storage=fs_storage(backend, store_path),
         config=config,
         authorize_virtual_chunk_access=credentials,
     )
@@ -155,8 +159,10 @@ async def write_a_split_repo(path: str) -> None:
     session.commit("write data again with more splits")
 
 
-async def do_icechunk_can_read_old_repo_with_manifest_splitting(path: str) -> None:
-    repo = mk_repo(create=False, store_path=path)
+async def do_icechunk_can_read_old_repo_with_manifest_splitting(
+    path: str, backend: str = "local_filesystem"
+) -> None:
+    repo = mk_repo(create=False, store_path=path, backend=backend)
     ancestry = list(repo.ancestry(branch="main"))[::-1]
 
     init_snapshot = ancestry[1]
@@ -292,13 +298,15 @@ async def write_a_test_repo(path: str) -> None:
     store.close()
 
 
-async def do_icechunk_can_read_old_repo(path: str) -> None:
+async def do_icechunk_can_read_old_repo(
+    path: str, backend: str = "local_filesystem"
+) -> None:
     try:
         from tests.conftest import write_chunks_to_minio
     except ImportError:
         from conftest import write_chunks_to_minio  # type: ignore[no-redef]
 
-    repo = mk_repo(create=False, store_path=path)
+    repo = mk_repo(create=False, store_path=path, backend=backend)
     main_snapshot = repo.lookup_branch("main")
 
     expected_main_history = [
@@ -418,13 +426,13 @@ async def test_icechunk_can_read_old_repo_v1() -> None:
 
 
 @pytest.mark.filterwarnings("ignore:datetime.datetime.utcnow")
-async def test_icechunk_can_read_old_repo_v2() -> None:
-    await do_icechunk_can_read_old_repo("./tests/data/test-repo-v2")
+async def test_icechunk_can_read_old_repo_v2(fs_backend: str) -> None:
+    await do_icechunk_can_read_old_repo("./tests/data/test-repo-v2", fs_backend)
 
 
 @pytest.mark.filterwarnings("ignore:datetime.datetime.utcnow")
-async def test_icechunk_can_read_old_repo_v2_migrated() -> None:
-    await do_icechunk_can_read_old_repo("./tests/data/test-repo-v2-migrated")
+async def test_icechunk_can_read_old_repo_v2_migrated(fs_backend: str) -> None:
+    await do_icechunk_can_read_old_repo("./tests/data/test-repo-v2-migrated", fs_backend)
 
 
 async def test_icechunk_can_read_old_repo_with_manifest_splitting_v1() -> None:
@@ -433,15 +441,19 @@ async def test_icechunk_can_read_old_repo_with_manifest_splitting_v1() -> None:
     )
 
 
-async def test_icechunk_can_read_old_repo_with_manifest_splitting_v2() -> None:
+async def test_icechunk_can_read_old_repo_with_manifest_splitting_v2(
+    fs_backend: str,
+) -> None:
     await do_icechunk_can_read_old_repo_with_manifest_splitting(
-        "./tests/data/split-repo-v2"
+        "./tests/data/split-repo-v2", fs_backend
     )
 
 
-async def test_icechunk_can_read_old_repo_with_manifest_splitting_v2_migrated() -> None:
+async def test_icechunk_can_read_old_repo_with_manifest_splitting_v2_migrated(
+    fs_backend: str,
+) -> None:
     await do_icechunk_can_read_old_repo_with_manifest_splitting(
-        "./tests/data/split-repo-v2-migrated"
+        "./tests/data/split-repo-v2-migrated", fs_backend
     )
 
 
@@ -463,7 +475,9 @@ EXPIRED_FEATURE_HISTORY = ["feature post-t2", "Repository initialized"]
 EXPIRED_PROTECT_B_HISTORY = ["write b", "Repository initialized"]
 
 
-async def do_read_expired_repo(path: str, *, tracks_tx_logs: bool) -> None:
+async def do_read_expired_repo(
+    path: str, *, tracks_tx_logs: bool, backend: str = "local_filesystem"
+) -> None:
     """Read a repo that went through two rounds of expiration + GC.
 
     ``tracks_tx_logs`` selects the expectation: the v2 fixture written by a
@@ -472,7 +486,7 @@ async def do_read_expired_repo(path: str, *, tracks_tx_logs: bool) -> None:
     synthetic composite and a root-to-tip diff is complete); every other fixture
     lost those logs to GC (degraded but non-crashing).
     """
-    repo = ic.Repository.open(storage=ic.local_filesystem_storage(path))
+    repo = ic.Repository.open(storage=fs_storage(backend, path))
 
     # ----- common: surviving structure is identical across all fixtures -----
     branches = repo.list_branches()
@@ -554,9 +568,9 @@ async def test_read_expired_repo_v1_by_2_0_5() -> None:
 
 
 @pytest.mark.filterwarnings("ignore:datetime.datetime.utcnow")
-async def test_read_expired_repo_v2_by_2_0_5() -> None:
+async def test_read_expired_repo_v2_by_2_0_5(fs_backend: str) -> None:
     await do_read_expired_repo(
-        "./tests/data/expire-repo-v2-by-2.0.5", tracks_tx_logs=False
+        "./tests/data/expire-repo-v2-by-2.0.5", tracks_tx_logs=False, backend=fs_backend
     )
 
 
@@ -569,10 +583,11 @@ async def test_read_expired_repo_v1_by_working_copy() -> None:
 
 
 @pytest.mark.filterwarnings("ignore:datetime.datetime.utcnow")
-async def test_read_expired_repo_v2_by_working_copy() -> None:
+async def test_read_expired_repo_v2_by_working_copy(fs_backend: str) -> None:
     await do_read_expired_repo(
         "./tests/data/expire-repo-v2-by-working-copy",
         tracks_tx_logs=True,
+        backend=fs_backend,
     )
 
 

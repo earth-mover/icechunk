@@ -3,6 +3,7 @@
 import contextlib
 import os
 import pickle
+import sys
 import tempfile
 import time
 from collections.abc import Generator
@@ -17,11 +18,11 @@ import zarr
 from icechunk import (
     IcechunkStore,
     Repository,
-    local_filesystem_storage,
+    Storage,
     s3_storage,
 )
 from icechunk.xarray import to_icechunk
-from tests.conftest import Permission
+from tests.conftest import Permission, fs_storage
 from xarray.testing import assert_identical
 
 # tmp_store is imported because pytest only uses fixtures defined in or
@@ -48,6 +49,8 @@ except ImportError:
 
 
 class SpecVersionMixin:
+    fs_backend = "local_filesystem"
+
     @pytest.fixture(
         autouse=True,
         params=[1, 2, None],
@@ -55,6 +58,9 @@ class SpecVersionMixin:
     )
     def _spec_version(self, request: pytest.FixtureRequest) -> None:
         self._spec_version_value = request.param
+
+    def make_storage(self, path: str) -> Storage:
+        return fs_storage(self.fs_backend, path, self._spec_version_value)
 
 
 @pytest.mark.skipif(
@@ -137,8 +143,13 @@ class TestIcechunkStoreFilesystem(IcechunkStoreBase):
     def create_repo(self) -> Generator[Repository]:
         with tempfile.TemporaryDirectory() as tmpdir:
             yield Repository.create(
-                local_filesystem_storage(tmpdir), spec_version=self._spec_version_value
+                self.make_storage(tmpdir), spec_version=self._spec_version_value
             )
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="FilesystemStorage is Unix-only")
+class TestIcechunkStoreFilesystemStorage(TestIcechunkStoreFilesystem):
+    fs_backend = "filesystem"
 
 
 class TestIcechunkStoreMemory(IcechunkStoreBase):
@@ -146,7 +157,7 @@ class TestIcechunkStoreMemory(IcechunkStoreBase):
     def create_repo(self) -> Generator[Repository]:
         with tempfile.TemporaryDirectory() as tmpdir:
             yield Repository.create(
-                local_filesystem_storage(tmpdir), spec_version=self._spec_version_value
+                self.make_storage(tmpdir), spec_version=self._spec_version_value
             )
 
     def test_pickle(self) -> None:
@@ -184,7 +195,7 @@ class TestIcechunkRegionAuto(SpecVersionMixin, ZarrRegionAutoTests):
 
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = Repository.create(
-                local_filesystem_storage(tmpdir), spec_version=self._spec_version_value
+                self.make_storage(tmpdir), spec_version=self._spec_version_value
             )
             session = repo.writable_session("main")
             yield session.store
@@ -199,7 +210,7 @@ class TestIcechunkRegionAuto(SpecVersionMixin, ZarrRegionAutoTests):
         )
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = Repository.create(
-                local_filesystem_storage(tmpdir), spec_version=self._spec_version_value
+                self.make_storage(tmpdir), spec_version=self._spec_version_value
             )
             session = repo.writable_session("main")
             self.save(session.store, ds)
@@ -235,3 +246,8 @@ class TestIcechunkRegionAuto(SpecVersionMixin, ZarrRegionAutoTests):
         pytest.skip(
             "this test requires multiple saves, and is meant to exercise Xarray logic."
         )
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="FilesystemStorage is Unix-only")
+class TestIcechunkRegionAutoFilesystemStorage(TestIcechunkRegionAuto):
+    fs_backend = "filesystem"

@@ -23,6 +23,7 @@ import zstandard
 
 import icechunk as ic
 import zarr
+from tests.conftest import FS_BACKENDS, fs_storage
 
 # grab the source .fbs files
 FLATBUFFERS_DIR = Path(__file__).resolve().parents[2] / "icechunk-format" / "flatbuffers"
@@ -149,8 +150,13 @@ def flatbuf_mod() -> Generator[ModuleType]:
             sys.path.remove(tmpdir)
 
 
+@pytest.fixture(scope="session", params=FS_BACKENDS)
+def repo_backend(request: pytest.FixtureRequest) -> str:
+    return str(request.param)
+
+
 @pytest.fixture(scope="session")
-def repo_path() -> Generator[str]:
+def repo_path(repo_backend: str) -> Generator[str]:
     """Create a fresh icechunk repo in a temp directory.
 
     The repo has materialized, inline, and virtual chunks across multiple commits,
@@ -177,7 +183,7 @@ def repo_path() -> Generator[str]:
         )
 
         repo = ic.Repository.create(
-            storage=ic.local_filesystem_storage(tmpdir),
+            storage=fs_storage(repo_backend, tmpdir),
             config=config,
         )
 
@@ -923,7 +929,7 @@ def _rebuild_repo(payload: bytes, mod: Any) -> bytes:
 
 
 def test_extra_fields_forward_compatibility(
-    repo_path: str, flatbuf_mod: ModuleType
+    repo_path: str, repo_backend: str, flatbuf_mod: ModuleType
 ) -> None:
     """Inject non-empty ``extra`` bytes into every flatbuffer file in a copy of
     the repo, then compare reads from the patched repo against the original."""
@@ -933,7 +939,7 @@ def test_extra_fields_forward_compatibility(
 
     # -- Read reference values from the original, unpatched repo --
     orig_repo = ic.Repository.open(
-        storage=ic.local_filesystem_storage(repo_path),
+        storage=fs_storage(repo_backend, repo_path),
     )
     orig_branches = sorted(orig_repo.list_branches())
     orig_tags = sorted(orig_repo.list_tags())
@@ -986,7 +992,7 @@ def test_extra_fields_forward_compatibility(
 
         # -- Open the patched repo and compare against the original --
         new_repo = ic.Repository.open(
-            storage=ic.local_filesystem_storage(str(patched)),
+            storage=fs_storage(repo_backend, str(patched)),
         )
 
         assert sorted(new_repo.list_branches()) == orig_branches
@@ -1009,8 +1015,10 @@ def test_extra_fields_forward_compatibility(
         np.testing.assert_array_equal(new_tag_big, orig_tag_big)
 
 
-def test_snapshot_nodes_sorted_by_bytes(tmp_path: Path, flatbuf_mod: ModuleType) -> None:
-    repo = ic.Repository.create(ic.local_filesystem_storage(str(tmp_path)))
+def test_snapshot_nodes_sorted_by_bytes(
+    tmp_path: Path, flatbuf_mod: ModuleType, fs_backend: str
+) -> None:
+    repo = ic.Repository.create(fs_storage(fs_backend, str(tmp_path)))
     with repo.transaction("main", message="create nodes") as store:
         root = zarr.group(store)
         root.create_group("a").create_group("b")
@@ -1028,8 +1036,10 @@ def test_snapshot_nodes_sorted_by_bytes(tmp_path: Path, flatbuf_mod: ModuleType)
     assert [snap.Nodes(i).Path().decode() for i in range(snap.NodesLength())] == expected
 
 
-def test_moved_nodes_sorted_segment_wise(tmp_path: Path, flatbuf_mod: ModuleType) -> None:
-    repo = ic.Repository.create(ic.local_filesystem_storage(str(tmp_path)))
+def test_moved_nodes_sorted_segment_wise(
+    tmp_path: Path, flatbuf_mod: ModuleType, fs_backend: str
+) -> None:
+    repo = ic.Repository.create(fs_storage(fs_backend, str(tmp_path)))
     with repo.transaction("main", message="create sources") as store:
         root = zarr.group(store)
         for name in ("src0", "src1", "src2", "src3", "src4", "src5"):

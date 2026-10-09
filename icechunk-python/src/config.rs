@@ -27,7 +27,7 @@ use icechunk::{
         S3ChecksumAlgorithm, S3Credentials, S3CredentialsFetcher, S3Options,
         S3StaticCredentials,
     },
-    storage::{self, ConcurrencySettings, StorageContext},
+    storage::{self, ConcurrencySettings, FilesystemSettings, StorageContext},
     virtual_chunks::VirtualChunkContainer,
 };
 use pyo3::{
@@ -3196,6 +3196,31 @@ impl PyStorage {
                 let storage = storage::new_local_filesystem_storage(&path)
                     .await
                     .map_err(PyIcechunkStoreError::StorageError)?;
+
+                Ok(PyStorage(storage))
+            })
+        })
+    }
+
+    #[classmethod]
+    #[pyo3(signature = (path, *, fsync = true, stale_after = FilesystemSettings::default().stale_after))]
+    pub(crate) fn new_filesystem(
+        _cls: &Bound<'_, PyType>,
+        py: Python<'_>,
+        path: PathBuf,
+        fsync: bool,
+        stale_after: std::time::Duration,
+    ) -> PyResult<Self> {
+        py.detach(move || {
+            pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+                let storage = storage::new_filesystem_storage_with(
+                    &path,
+                    FilesystemSettings::default()
+                        .with_fsync(fsync)
+                        .with_stale_after(stale_after),
+                )
+                .await
+                .map_err(PyIcechunkStoreError::StorageError)?;
 
                 Ok(PyStorage(storage))
             })

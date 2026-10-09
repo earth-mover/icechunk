@@ -2015,15 +2015,16 @@ async fn test_basic_repo_ops(
             assert!(
                 matches!(
                     res,
-                    Err(ICError {
-                        kind: RepositoryErrorKind::BadRepoVersion {
-                            minimum_spec_version: SpecVersionBin::V2
-                        },
-                        ..
-                    })
+                    Err(ICError { kind: RepositoryErrorKind::StorageRefusesIc1, .. })
                 ),
                 "{:?}",
                 res.err()
+            );
+            assert!(
+                res.is_err_and(|e| e
+                    .kind
+                    .to_string()
+                    .contains("local_filesystem_storage"))
             );
             return Ok(());
         }
@@ -2076,18 +2077,11 @@ async fn filesystem_storage_refuses_ic1_open() -> Result<(), Box<dyn std::error:
         .execute()
         .await;
     assert!(
-        matches!(
-            res,
-            Err(ICError {
-                kind: RepositoryErrorKind::BadRepoVersion {
-                    minimum_spec_version: SpecVersionBin::V2
-                },
-                ..
-            })
-        ),
+        matches!(res, Err(ICError { kind: RepositoryErrorKind::StorageRefusesIc1, .. })),
         "{:?}",
         res.err()
     );
+    assert!(res.is_err_and(|e| e.kind.to_string().contains("local_filesystem_storage")));
 
     let repo = Repository::open(new_local_filesystem_storage(dir.path()).await?)
         .execute()
@@ -2107,18 +2101,11 @@ async fn filesystem_storage_refuses_ic1_create() -> Result<(), Box<dyn std::erro
         .execute()
         .await;
     assert!(
-        matches!(
-            res,
-            Err(ICError {
-                kind: RepositoryErrorKind::BadRepoVersion {
-                    minimum_spec_version: SpecVersionBin::V2
-                },
-                ..
-            })
-        ),
+        matches!(res, Err(ICError { kind: RepositoryErrorKind::StorageRefusesIc1, .. })),
         "{:?}",
         res.err()
     );
+    assert!(res.is_err_and(|e| e.kind.to_string().contains("local_filesystem_storage")));
     assert!(!root.try_exists()?);
     Ok(())
 }

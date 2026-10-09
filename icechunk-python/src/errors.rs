@@ -384,7 +384,9 @@ fn classify_repository(kind: &RepositoryErrorKind) -> Classified {
             actual_parent: None,
             code: codes::UPDATE_ATTEMPTS_EXHAUSTED,
         },
-        K::BadRepoVersion { .. } => class("FormatError", codes::UNSUPPORTED_SPEC_VERSION),
+        K::BadRepoVersion { .. } | K::StorageRefusesIc1 => {
+            class("FormatError", codes::UNSUPPORTED_SPEC_VERSION)
+        }
         K::PoisonLock => class("InternalError", codes::POISON_LOCK),
         _ => general(codes::UNKNOWN),
     }

@@ -341,7 +341,7 @@ impl ObjectStorage {
         prefix: &StdPath,
     ) -> Result<ObjectStorage, StorageError> {
         tracing::warn!(
-            "The LocalFileSystem storage is not safe for concurrent commits. If more than one thread/process will attempt to commit at the same time, prefer using object stores."
+            "The local filesystem storage is not safe for concurrent commits. If more than one thread or process may commit at the same time, use the filesystem storage (`filesystem_storage` in Python, experimental) or an object store."
         );
         let backend =
             Arc::new(LocalFileSystemObjectStoreBackend { path: prefix.to_path_buf() });
@@ -2224,6 +2224,14 @@ pub async fn new_in_memory_storage() -> StorageResult<Arc<dyn Storage + Send + S
     Ok(Arc::new(st))
 }
 
+/// Creates an [`ObjectStorage`] on a local filesystem directory at `path`.
+///
+/// Not safe for concurrent writers: when several writers commit at once, a
+/// commit can be lost. Use `new_filesystem_storage` (`icechunk-fs`) when
+/// several writers may commit at the same time. `new_filesystem_storage` is
+/// safe only if every writer of the repository uses it; never let writers of
+/// both backends run on one repository at the same time, since this one
+/// overwrites `repo` unconditionally.
 #[cfg(feature = "fs")]
 pub async fn new_local_filesystem_storage(
     path: &StdPath,

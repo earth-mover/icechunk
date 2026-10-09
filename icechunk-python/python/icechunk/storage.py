@@ -1,5 +1,5 @@
 from collections.abc import Callable
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from icechunk._icechunk_python import (
     ChecksumAlgorithm,
@@ -33,6 +33,7 @@ __all__ = [
     "StorageTimeoutSettings",
     "azure_storage",
     "azure_store",
+    "filesystem_storage",
     "gcs_storage",
     "gcs_store",
     "hf_storage",
@@ -70,9 +71,53 @@ def in_memory_storage() -> Storage:
 def local_filesystem_storage(path: str) -> Storage:
     """Create a Storage instance that saves data in the local file system.
 
-    This Storage instance is not recommended for production data
+    This Storage instance is not recommended for production data.
+
+    It is not safe for concurrent commits: two sessions committing at once can
+    both succeed, losing one of the commits. Use `filesystem_storage` when
+    several writers may commit to the repository.
     """
     return Storage.new_local_filesystem(path)
+
+
+def filesystem_storage(
+    path: str,
+    *,
+    fsync: bool = True,
+    stale_after: timedelta = timedelta(seconds=60),
+) -> Storage:
+    """Create a Storage instance that saves data in a filesystem, safe for concurrent writers.
+
+    This storage is experimental. Unlike `local_filesystem_storage`, it is safe
+    for concurrent writers on filesystems that meet the requirements in the
+    storage guide: exclusive hard links, atomic rename and fresh opens.
+
+    Concurrent-writer safety holds only if every writer of the repository uses
+    this storage. Writers using `local_filesystem_storage`, or an older Icechunk
+    version, must never run on the same repository at the same time.
+
+    It is only available on Unix platforms; elsewhere it raises an error.
+    Icechunk 1 repositories are refused: migrate them to Icechunk 2 with
+    `local_filesystem_storage` first.
+
+    Parameters
+    ----------
+    path: str
+        The path to the root of the repository.
+    fsync: bool
+        Whether to fsync files and directories after writes. Turning it off
+        risks losing writes after an OS crash or power loss; it never affects
+        safety between concurrent writers.
+    stale_after: timedelta
+        How old a repository lock must be before another writer may steal it.
+        Any non-negative duration is accepted. It must exceed how long a writer
+        holds the lock: from taking it to its commit rename, only a few metadata
+        operations, slower on network filesystems. Shorter values make writers
+        steal live locks and cause spurious conflicts; longer values delay
+        recovery after a writer crashes while holding the lock. Safety never
+        depends on it.
+    """
+    return Storage.new_filesystem(path, fsync=fsync, stale_after=stale_after)
 
 
 def http_storage(

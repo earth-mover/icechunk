@@ -497,6 +497,8 @@ pub(crate) struct PyGCSummary {
     pub delete_errors: Vec<String>,
     #[pyo3(get)]
     pub skipped_phases: Vec<String>,
+    #[pyo3(get)]
+    pub storage_leftovers_deleted: u64,
 }
 
 impl From<GCSummary> for PyGCSummary {
@@ -512,6 +514,7 @@ impl From<GCSummary> for PyGCSummary {
             throttled_batches: value.throttled_batches,
             delete_errors: value.delete_errors,
             skipped_phases: value.skipped_phases,
+            storage_leftovers_deleted: value.storage_leftovers_deleted,
         }
     }
 }
@@ -533,6 +536,7 @@ impl PyRepr for PyGCSummary {
             ("throttled_batches", self.throttled_batches.to_string()),
             ("delete_errors", format!("{:?}", self.delete_errors)),
             ("skipped_phases", format!("{:?}", self.skipped_phases)),
+            ("storage_leftovers_deleted", self.storage_leftovers_deleted.to_string()),
         ]
     }
 }

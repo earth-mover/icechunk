@@ -312,7 +312,10 @@ Icechunk can be used with [Azure Blob Storage](https://azure.microsoft.com/en-us
 
 ### Filesystem Storage
 
-Icechunk can also be used on a [local filesystem](../reference/storage.md#icechunk.storage.local_filesystem_storage) by providing a path to the location of the store
+Icechunk can also store a repository in a filesystem, given the path to the location of the store. There are two filesystem backends:
+
+- [`local_filesystem_storage`](../reference/storage.md#icechunk.storage.local_filesystem_storage). It is not safe for concurrent commits.
+- [`filesystem_storage`](../reference/storage.md#icechunk.storage.filesystem_storage), experimental. It is safe for concurrent writers on filesystems that meet [its requirements](#requirements-and-limits-of-filesystem_storage), including network filesystems such as NFS.
 
 === "Local filesystem"
 
@@ -320,12 +323,58 @@ Icechunk can also be used on a [local filesystem](../reference/storage.md#icechu
     icechunk.local_filesystem_storage("/path/to/my/dataset")
     ```
 
+=== "Filesystem (safe for concurrent writers)"
+
+    ```python
+    icechunk.filesystem_storage("/path/to/my/dataset")
+    ```
+
+!!! warning "Experimental"
+
+    `filesystem_storage` is experimental. Feedback on how it behaves on different filesystems is welcome on the [issue tracker](https://github.com/earth-mover/icechunk/issues).
+
 #### Limitations
 
 !!! warning
-    File system Storage is not safe in the presence of concurrent commits. If two sessions are trying to commit at the same time, both operations may return successfully but one of the commits can be lost. Don't use file system storage in production if there is the possibility of concurrent commits.
+    `local_filesystem_storage` is not safe in the presence of concurrent commits. If two sessions are trying to commit at the same time, both operations may return successfully but one of the commits can be lost. Don't use `local_filesystem_storage` in production if there is the possibility of concurrent commits; use [`filesystem_storage`](#requirements-and-limits-of-filesystem_storage) instead.
 
 - Icechunk currently does not work with a local filesystem storage backend on Windows. See [this issue](https://github.com/earth-mover/icechunk/issues/665) for more discussion. To work around, try using [WSL](https://learn.microsoft.com/en-us/windows/wsl/about) or a cloud storage backend.
+
+#### Requirements and limits of `filesystem_storage`
+
+- **Hard links.** The filesystem must support hard links; Icechunk checks this before the first write and refuses to write otherwise. Local POSIX filesystems, NFSv3 and NFSv4 with a Linux client, Lustre, GPFS and CephFS are expected to work; SMB and non-Linux NFS clients are untested.
+- **NFS `nocto`.** NFS mounts with the `nocto` option are unsupported. Icechunk doesn't detect them, so check your mount options.
+- **Unix only.** `filesystem_storage` is available on Unix platforms only; elsewhere it raises an error when constructed.
+- **Every writer.** Concurrent-writer safety holds only if every writer of the repository uses `filesystem_storage`. Writing to the same repository with `local_filesystem_storage`, or with an older Icechunk version, at the same time is unsafe.
+- **Icechunk 1 repositories** are refused. See [Switching an existing repo](#switching-an-existing-repo).
+- **Spurious conflicts.** On NFSv3 or NFSv4.0, if the reply to a commit's final write is lost, the server's duplicate-request cache misses the retry, and another writer commits within milliseconds, the commit may report a conflict (or a tag or branch creation may report "already exists") although it succeeded. The repository stays consistent and no data is lost. After a conflict error the commit may already have landed: look for it in the branch history ([`Repository.ancestry`](../reference/index.md#icechunk.Repository.ancestry), for example by its message) before retrying it.
+- **Symlinks.** Reads follow symlinks inside the repository, but listings don't. Garbage collection never deletes objects reached through a symlink.
+- **Listing order** is unspecified.
+- **Conditional writes.** Repositories whose config disables `unsafe_use_conditional_create` or `unsafe_use_conditional_update` log a warning; the setting is ignored and the backend always uses its own conditional writes.
+- **Garbage collection** also deletes leftovers of crashed or abandoned writes in the repository's top-level directory, older than the `delete_object_older_than` cutoff and never younger than 24 hours. `GCSummary.storage_leftovers_deleted` counts them.
+
+`filesystem_storage` takes two optional settings:
+
+- `fsync` (default `True`): whether to fsync files and directories after writes. Turning it off risks losing writes after an OS crash or power loss; it never affects safety between concurrent writers.
+- `stale_after` (default 60 seconds): how old a repository lock must be before another writer may take it over. Any non-negative `timedelta` is accepted. It must exceed how long a writer holds the lock: from taking it to its commit rename, only a few metadata operations, slower on network filesystems. Shorter values cause spurious conflicts; longer values delay recovery after a writer crashes while holding the lock. Safety never depends on it.
+
+```python
+from datetime import timedelta
+
+icechunk.filesystem_storage(
+    "/path/to/my/dataset",
+    stale_after=timedelta(minutes=2),
+)
+```
+
+#### Switching an existing repo
+
+An Icechunk 2 repository created with `local_filesystem_storage` can be opened with `filesystem_storage`:
+
+- Stop every writer that uses `local_filesystem_storage`, or an older Icechunk version, before the first write with `filesystem_storage`.
+- Icechunk 1 repositories must first be migrated to Icechunk 2 with `local_filesystem_storage`. See [Migrate to 2.0](../reference/migration-2.md).
+- A repository config that disables conditional writes only logs a harmless warning; see **Conditional writes** in [Requirements and limits](#requirements-and-limits-of-filesystem_storage).
+- Pickled storage carries the absolute root path. With Dask or distributed, every worker must see the filesystem at the same path.
 
 ### HTTP Storage
 

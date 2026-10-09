@@ -85,7 +85,7 @@ pub(crate) enum LockReadError {
     NotFound,
     /// Not exactly a hyphenated UUID. Lock files are fsynced before being
     /// linked, so this is corruption.
-    Unparseable,
+    Unparsable,
     Io(io::Error),
 }
 
@@ -98,7 +98,7 @@ pub(crate) fn read_lock_owner(lock: &Path) -> Result<Uuid, LockReadError> {
     std::str::from_utf8(&bytes)
         .ok()
         .and_then(parse_hyphenated_uuid)
-        .ok_or(LockReadError::Unparseable)
+        .ok_or(LockReadError::Unparsable)
 }
 
 /// A lock is stale once our lockinfo, just written, is more than
@@ -219,7 +219,7 @@ mod tests {
         ] {
             fs::write(&lock, &content).unwrap();
             assert!(
-                matches!(read_lock_owner(&lock), Err(LockReadError::Unparseable)),
+                matches!(read_lock_owner(&lock), Err(LockReadError::Unparsable)),
                 "{content:?}"
             );
         }

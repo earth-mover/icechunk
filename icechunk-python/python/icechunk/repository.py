@@ -1987,7 +1987,10 @@ class Repository:
         delete_object_older_than: datetime.datetime
             Delete objects older than this time. The bound is exclusive. An
             object is deleted only if it is also not referenced by any surviving
-            (non-expired) snapshot.
+            (non-expired) snapshot. With `filesystem_storage`, leftovers of
+            crashed or abandoned writes in the repository's top-level directory
+            older than this are also deleted, but never ones younger than 24
+            hours.
         dry_run: bool : bool
             Report results but don't delete any objects
         max_snapshots_in_memory : int
@@ -2072,7 +2075,10 @@ class Repository:
         delete_object_older_than: datetime.datetime
             Delete objects older than this time. The bound is exclusive. An
             object is deleted only if it is also not referenced by any surviving
-            (non-expired) snapshot.
+            (non-expired) snapshot. With `filesystem_storage`, leftovers of
+            crashed or abandoned writes in the repository's top-level directory
+            older than this are also deleted, but never ones younger than 24
+            hours.
         dry_run: bool : bool
             Report results but don't delete any objects
         max_snapshots_in_memory : int

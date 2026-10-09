@@ -252,7 +252,7 @@ impl Attempt<'_> {
                         Err(LockReadError::NotFound) => return Ok(None),
                         // Without the holder's attempt_id we cannot delete its
                         // ticket, so we cannot steal.
-                        Err(LockReadError::Unparseable) => {
+                        Err(LockReadError::Unparsable) => {
                             return Err(CasError::CorruptLock { path: lock });
                         }
                         Err(LockReadError::Io(err)) => return Err(CasError::Io(err)),
@@ -286,7 +286,7 @@ impl Attempt<'_> {
                 },
                 // Deleted, so `base_hash` is no longer current and step 4 fails.
                 Err(LockReadError::NotFound) => {}
-                Err(LockReadError::Unparseable) => {
+                Err(LockReadError::Unparsable) => {
                     return Err(CasError::CorruptLock { path: lock });
                 }
                 Err(LockReadError::Io(err)) => return Err(CasError::Io(err)),

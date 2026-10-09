@@ -4,6 +4,7 @@ from packaging.version import Version
 
 import icechunk as ic
 import zarr
+from tests.conftest import fs_storage
 
 
 def check_header(header: dict[str, Any], file_type: str) -> None:
@@ -14,9 +15,9 @@ def check_header(header: dict[str, Any], file_type: str) -> None:
     assert header["compression"] in ("none", "zstd")
 
 
-async def test_inspect_snapshot() -> None:
+async def test_inspect_snapshot(fs_backend: str) -> None:
     repo = await ic.Repository.open_async(
-        storage=ic.local_filesystem_storage("./tests/data/split-repo-v2")
+        storage=fs_storage(fs_backend, "./tests/data/split-repo-v2")
     )
     snap = next(repo.ancestry(branch="main")).id
     sync_result = repo.inspect_snapshot(snap)
@@ -27,9 +28,9 @@ async def test_inspect_snapshot() -> None:
     check_header(sync_result["header"], "snapshot")
 
 
-async def test_inspect_repo_info() -> None:
+async def test_inspect_repo_info(fs_backend: str) -> None:
     repo = await ic.Repository.open_async(
-        storage=ic.local_filesystem_storage("./tests/data/split-repo-v2")
+        storage=fs_storage(fs_backend, "./tests/data/split-repo-v2")
     )
     sync_result = repo.inspect_repo_info()
     async_result = await repo.inspect_repo_info_async()
@@ -40,9 +41,9 @@ async def test_inspect_repo_info() -> None:
     check_header(sync_result["header"], "repo-info")
 
 
-async def test_inspect_manifest() -> None:
+async def test_inspect_manifest(fs_backend: str) -> None:
     repo = await ic.Repository.open_async(
-        storage=ic.local_filesystem_storage("./tests/data/split-repo-v2")
+        storage=fs_storage(fs_backend, "./tests/data/split-repo-v2")
     )
     snap = next(repo.ancestry(branch="main")).id
     manifests = repo.list_manifest_files(snap)
@@ -71,9 +72,9 @@ async def test_inspect_manifest() -> None:
     check_header(sync_result["header"], "manifest")
 
 
-async def test_inspect_transaction_log() -> None:
+async def test_inspect_transaction_log(fs_backend: str) -> None:
     repo = await ic.Repository.open_async(
-        storage=ic.local_filesystem_storage("./tests/data/split-repo-v2")
+        storage=fs_storage(fs_backend, "./tests/data/split-repo-v2")
     )
     snap = next(repo.ancestry(branch="main")).id
     sync_result = repo.inspect_transaction_log(snap)

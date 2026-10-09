@@ -129,6 +129,9 @@ import { Storage } from '@earthmover/icechunk'
 // Local filesystem
 const local = await Storage.newLocalFilesystem('/path/to/repo')
 
+// Filesystem, safe for concurrent writers (experimental, Unix only)
+const fs = await Storage.newFilesystem('/path/to/repo')
+
 // Amazon S3
 const s3 = Storage.newS3('my-bucket', 'my-prefix', credentials, options)
 

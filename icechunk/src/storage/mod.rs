@@ -30,7 +30,9 @@ pub use icechunk_s3::{
 #[cfg(all(feature = "fs", unix))]
 pub use icechunk_fs::FilesystemStorage;
 #[cfg(feature = "fs")]
-pub use icechunk_fs::new_filesystem_storage;
+pub use icechunk_fs::{
+    FilesystemSettings, new_filesystem_storage, new_filesystem_storage_with,
+};
 
 // Re-export from icechunk-arrow-object-store
 pub use icechunk_arrow_object_store::{

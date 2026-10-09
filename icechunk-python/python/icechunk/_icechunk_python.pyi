@@ -2070,6 +2070,13 @@ class GCSummary:
         Delete phases skipped because an earlier phase had failures, in order.
         Possible values: "transaction_logs", "manifests", "chunks".
         """
+    @property
+    def storage_leftovers_deleted(self) -> int:
+        """
+        Leftovers of crashed or abandoned writes in the repository's top-level
+        directory that the storage backend deleted; their bytes are included in
+        `bytes_deleted`. Only `filesystem_storage` has such leftovers.
+        """
     def _repr_html_(self) -> str: ...
 
 @final
@@ -3355,6 +3362,14 @@ class Storage:
     def new_in_memory(cls) -> Storage: ...
     @classmethod
     def new_local_filesystem(cls, path: str) -> Storage: ...
+    @classmethod
+    def new_filesystem(
+        cls,
+        path: str,
+        *,
+        fsync: bool = True,
+        stale_after: datetime.timedelta = ...,
+    ) -> Storage: ...
     @classmethod
     def new_gcs(
         cls,

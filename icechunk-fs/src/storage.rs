@@ -29,6 +29,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::OnceCell;
 
 use crate::{
+    FilesystemSettings,
     cas::{CasError, CasOptions, CasOutcome, NoHooks, conditional_update},
     list::{delete_files, list_recursive},
     lock::is_valid_hash,
@@ -41,8 +42,15 @@ use crate::{
 };
 
 /// A [`Storage`] on a local or shared POSIX filesystem, safe for concurrent
-/// writers, including writers on different hosts of a network filesystem.
+/// writers, including writers on different hosts of a network filesystem, under
+/// the conditions below.
 ///
+/// - Safe only if every writer of the repository uses this backend: older
+///   Icechunk versions and `new_local_filesystem_storage` overwrite `repo`
+///   unconditionally, so they must never run on the same repository at the
+///   same time as this backend.
+/// - The filesystem must meet the requirements
+///   (exclusive hard links, atomic rename, fresh opens).
 /// - Conditional updates use the lock-free protocol of design document 020
 ///   (`design-docs/020-filesystem-storage.md`). The version of an object is
 ///   the sha256 of its content; a conditional update of a missing object is
@@ -70,7 +78,7 @@ pub struct FilesystemStorage {
 
 impl FilesystemStorage {
     /// How old a `repo` lock must be before another writer may steal it.
-    pub const DEFAULT_STALE_AFTER: Duration = Duration::from_secs(60);
+    pub const DEFAULT_STALE_AFTER: Duration = crate::DEFAULT_STALE_AFTER;
 
     /// Leftovers younger than this are never swept, whatever cutoff the
     /// caller gives: a write that stalled for a long time, such as one on a
@@ -80,10 +88,14 @@ impl FilesystemStorage {
     /// A storage rooted at `root`, made absolute against the current
     /// directory. Does no other I/O.
     pub fn new(root: &Path) -> StorageResult<Self> {
+        Self::from_settings(root, FilesystemSettings::default())
+    }
+
+    fn from_settings(root: &Path, settings: FilesystemSettings) -> StorageResult<Self> {
         Ok(Self {
             root: std::path::absolute(root).capture()?,
-            fsync: true,
-            stale_after: Self::DEFAULT_STALE_AFTER,
+            fsync: settings.fsync,
+            stale_after: settings.stale_after,
             links_checked: OnceCell::new(),
             warned_unsafe_settings: AtomicBool::new(false),
         })
@@ -135,18 +147,42 @@ impl fmt::Display for FilesystemStorage {
     }
 }
 
-/// Creates a [`FilesystemStorage`] at `path`. Unlike
-/// `new_local_filesystem_storage`, it is safe for concurrent writers.
+/// Creates a [`FilesystemStorage`] at `path` with the default
+/// [`FilesystemSettings`].
+///
+/// Unlike `new_local_filesystem_storage`, it is safe for concurrent writers,
+/// as long as every writer of the repository uses it: older Icechunk versions
+/// and `new_local_filesystem_storage` overwrite `repo` unconditionally, so
+/// they must never run on one repository at the same time as this backend.
+/// Requires a filesystem that meets the requirements of design document 020
+/// (exclusive hard links, atomic rename, fresh opens.
 pub async fn new_filesystem_storage(
     path: &Path,
 ) -> StorageResult<Arc<dyn Storage + Send + Sync>> {
-    Ok(Arc::new(FilesystemStorage::new(path)?))
+    new_filesystem_storage_with(path, FilesystemSettings::default()).await
+}
+
+/// Creates a [`FilesystemStorage`] at `path` with the given settings.
+///
+/// Unlike `new_local_filesystem_storage`, it is safe for concurrent writers,
+/// as long as every writer of the repository uses it: older Icechunk versions
+/// and `new_local_filesystem_storage` overwrite `repo` unconditionally, so
+/// they must never run on one repository at the same time as this backend.
+/// Requires a filesystem that meets the requirements of design document 020
+/// (exclusive hard links, atomic rename, fresh opens.
+pub async fn new_filesystem_storage_with(
+    path: &Path,
+    settings: FilesystemSettings,
+) -> StorageResult<Arc<dyn Storage + Send + Sync>> {
+    Ok(Arc::new(FilesystemStorage::from_settings(path, settings)?))
 }
 
 async fn blocking<T: Send + 'static>(
     f: impl FnOnce() -> StorageResult<T> + Send + 'static,
 ) -> StorageResult<T> {
-    tokio::task::spawn_blocking(f).await.map_err(|e| {
+    // errors capture their SpanTrace here, and spans don't follow spawn_blocking
+    let span = tracing::Span::current();
+    tokio::task::spawn_blocking(move || span.in_scope(f)).await.map_err(|e| {
         other_error(format!("FilesystemStorage blocking task failed: {e}"))
     })?
 }
@@ -466,5 +502,39 @@ impl Storage for FilesystemStorage {
                 new_version,
             })
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_settings() {
+        assert_eq!(
+            FilesystemSettings::default(),
+            FilesystemSettings { fsync: true, stale_after: Duration::from_secs(60) }
+        );
+        assert_eq!(
+            FilesystemSettings::default().stale_after,
+            FilesystemStorage::DEFAULT_STALE_AFTER
+        );
+    }
+
+    #[test]
+    fn from_settings_applies_settings() -> StorageResult<()> {
+        let dir = tempfile::tempdir().capture()?;
+        let stale_after = Duration::from_secs(7);
+        let st = FilesystemStorage::from_settings(
+            dir.path(),
+            FilesystemSettings { fsync: false, stale_after },
+        )?;
+        assert!(!st.fsync);
+        assert_eq!(st.stale_after, stale_after);
+
+        let st = FilesystemStorage::new(dir.path())?;
+        assert!(st.fsync);
+        assert_eq!(st.stale_after, Duration::from_secs(60));
+        Ok(())
     }
 }

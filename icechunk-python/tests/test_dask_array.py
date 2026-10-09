@@ -19,8 +19,10 @@ def test_chunkmanager_is_replaced() -> None:
     assert type(manager).__module__.startswith("dask_array")
 
 
-def test_to_icechunk_roundtrip(any_spec_version: int | None) -> None:
+def test_to_icechunk_roundtrip(any_spec_version: int | None, fs_backend: str) -> None:
     ds = create_test_data().chunk(dim1=3, dim2=4)
     assert isinstance(ds["var1"].data, dask_array.Array)
-    with roundtrip(ds, commit=True, spec_version=any_spec_version) as actual:
+    with roundtrip(
+        ds, commit=True, spec_version=any_spec_version, backend=fs_backend
+    ) as actual:
         assert_identical(actual, ds)

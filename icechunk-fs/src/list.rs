@@ -25,7 +25,10 @@ pub(crate) fn list_recursive(
     dir: PathBuf,
 ) -> impl Stream<Item = io::Result<ListInfo<String>>> + Send + 'static {
     let (tx, rx) = mpsc::channel(CHANNEL_CAPACITY);
+    // spans don't follow spawn_blocking; keep the caller's for the walk's logs
+    let span = tracing::Span::current();
     let walker = tokio::task::spawn_blocking(move || {
+        let _entered = span.enter();
         if let Err(err) = walk(&dir, &tx) {
             // the receiver may be gone; then nobody needs the error
             drop(tx.blocking_send(Err(err)));

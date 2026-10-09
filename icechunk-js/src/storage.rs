@@ -988,10 +988,27 @@ fn default_s3_options() -> icechunk::config::S3Options {
 #[cfg(not(target_family = "wasm"))]
 #[napi]
 impl JsStorage {
+    /// Storage on the local filesystem. Not safe for concurrent commits: a commit
+    /// can be lost. Use `newFilesystem` when several writers may commit.
     #[napi(factory)]
     pub async fn new_local_filesystem(path: String) -> napi::Result<JsStorage> {
         let storage =
             icechunk::storage::new_local_filesystem_storage(std::path::Path::new(&path))
+                .await
+                .map_napi_err()?;
+        Ok(JsStorage(storage))
+    }
+
+    /// Storage on a filesystem, safe for concurrent writers on filesystems that
+    /// meet the requirements in the Icechunk storage guide (exclusive hard links,
+    /// atomic rename, fresh opens).
+    /// Safe only if every writer of the repository uses this backend: never let
+    /// `newLocalFilesystem` writers, or older Icechunk versions, run on the same
+    /// repository at the same time. Experimental. Unix only.
+    #[napi(factory)]
+    pub async fn new_filesystem(path: String) -> napi::Result<JsStorage> {
+        let storage =
+            icechunk::storage::new_filesystem_storage(std::path::Path::new(&path))
                 .await
                 .map_napi_err()?;
         Ok(JsStorage(storage))
