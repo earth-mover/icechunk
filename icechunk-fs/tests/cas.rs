@@ -4,6 +4,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
+    time::Duration,
 };
 
 use icechunk_fs::FilesystemStorage;
@@ -251,6 +252,27 @@ async fn repeated_content_is_an_error() {
     assert_other_error(update(&st, "repo", V0, &base).await);
     assert_eq!(get(&st, "repo").await, (V0.to_vec(), base));
     assert_eq!(protocol_files(dir.path()), BTreeSet::new());
+}
+
+#[tokio_test]
+async fn corrupt_lock_is_an_error_naming_the_lock() {
+    let dir = tempfile::tempdir().unwrap();
+    // Any existing lock is stale, so the writer reads the corrupt one instead
+    // of backing off from it.
+    let st = storage(dir.path()).with_stale_after(Duration::ZERO);
+    let version = create(&st, "repo", V0).await;
+    let lock = dir.path().join(format!("repo.lock.{}.0", etag(&version)));
+    std::fs::write(&lock, "garbage").unwrap();
+    // Staleness needs our lockinfo's mtime strictly after the lock's ctime,
+    // and filesystem timestamps are as coarse as the kernel tick.
+    std::thread::sleep(Duration::from_millis(50));
+
+    let err = update(&st, "repo", b"v1", &version).await.err().unwrap();
+    assert!(matches!(err.kind, StorageErrorKind::Other(_)), "{err}");
+    let message = err.to_string();
+    assert!(message.contains(lock.to_str().unwrap()), "{message}");
+    assert!(message.contains("corrupt"), "{message}");
+    assert_eq!(get(&st, "repo").await.0, V0);
 }
 
 #[tokio_test]

@@ -31,7 +31,7 @@ pub struct OpStats {
     /// Only the `put_object` label counts bytes written, for both
     /// `put_object` and `put_object_conditional`.
     pub bytes_written: u64,
-    /// Only `delete_batch` counts deleted objects.
+    /// Only `delete_batch` and `sweep_leftovers` count deleted objects.
     pub objects_deleted: u64,
     /// Only the `list_*` methods count keys, as they are yielded by the stream.
     pub keys_listed: u64,
@@ -291,6 +291,18 @@ impl Storage for MeteringStorage {
         Ok(result)
     }
 
+    async fn sweep_leftovers(
+        &self,
+        ctx: &StorageContext<'_>,
+        older_than: DateTime<Utc>,
+        dry_run: bool,
+    ) -> StorageResult<DeleteObjectsResult> {
+        self.meter.request("sweep_leftovers");
+        let result = self.backend.sweep_leftovers(ctx, older_than, dry_run).await?;
+        self.meter.deleted("sweep_leftovers", result.deleted_objects);
+        Ok(result)
+    }
+
     async fn get_object_last_modified(
         &self,
         ctx: &StorageContext<'_>,
@@ -384,5 +396,43 @@ mod tests {
         assert_eq!(started, 4);
         let keys: u64 = report.read_timeline.iter().map(|s| s.keys_listed).sum();
         assert_eq!(keys, 1);
+    }
+
+    #[cfg(all(feature = "fs", unix))]
+    #[tokio::test]
+    async fn forwards_sweep_leftovers() {
+        use std::{
+            fs::File,
+            time::{Duration, SystemTime},
+        };
+
+        use crate::storage::{logging::LoggingStorage, new_filesystem_storage};
+
+        let dir = tempfile::tempdir().unwrap();
+        let leftover = dir.path().join(format!("repo.lockinfo.{}", uuid::Uuid::new_v4()));
+        std::fs::write(&leftover, b"hello").unwrap();
+        File::options()
+            .write(true)
+            .open(&leftover)
+            .unwrap()
+            .set_modified(SystemTime::now() - Duration::from_secs(2 * 24 * 60 * 60))
+            .unwrap();
+        let logging = Arc::new(LoggingStorage::new(
+            new_filesystem_storage(dir.path()).await.unwrap(),
+        ));
+        let storage = MeteringStorage::new(Arc::clone(&logging) as Arc<_>);
+        let settings = storage.default_settings().await.unwrap();
+        let ctx = StorageContext::unattributed(&settings);
+
+        let result = storage.sweep_leftovers(&ctx, Utc::now(), false).await.unwrap();
+        assert_eq!(result, DeleteObjectsResult { deleted_objects: 1, deleted_bytes: 5 });
+        assert!(!leftover.exists());
+        assert_eq!(
+            logging.fetch_operations(),
+            vec![("sweep_leftovers".to_string(), String::new())]
+        );
+        let sweep = storage.snapshot().per_op["sweep_leftovers"];
+        assert_eq!(sweep.requests, 1);
+        assert_eq!(sweep.objects_deleted, 1);
     }
 }

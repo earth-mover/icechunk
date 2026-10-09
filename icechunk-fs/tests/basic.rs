@@ -2,22 +2,23 @@
 #![expect(clippy::unwrap_used)]
 
 use std::{
+    fs::File,
     os::unix::fs::MetadataExt as _,
     path::Path,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
-    time::Duration,
+    time::{Duration, SystemTime},
 };
 
 use futures::{StreamExt as _, TryStreamExt as _};
 use icechunk_fs::{FilesystemStorage, new_filesystem_storage};
 use icechunk_macros::tokio_test;
 use icechunk_storage::{
-    ETag, Generation, GetModifiedResult, ListInfo, PutCondition, Settings, Storage,
-    StorageContext, StorageErrorKind, StorageResult, VersionInfo, VersionedUpdateResult,
-    WriteHint,
+    DeleteObjectsResult, ETag, Generation, GetModifiedResult, ListInfo, PutCondition,
+    Settings, Storage, StorageContext, StorageErrorKind, StorageResult, VersionInfo,
+    VersionedUpdateResult, WriteHint,
 };
 use tokio::io::AsyncReadExt as _;
 
@@ -685,6 +686,62 @@ async fn listing_skips_staging_files() {
 }
 
 #[tokio_test]
+async fn list_objects_hides_protocol_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let st = storage(dir.path());
+    let id = uuid::Uuid::new_v4();
+    for key in [
+        "repo".to_string(),
+        "chunks/ABC".to_string(),
+        format!("repo.new_bytes.{id}"),
+        format!("repo.lockinfo.{id}"),
+        format!("repo.lock.{CONTENT_SHA256}.0"),
+        format!("repo.probe.{id}"),
+        format!("repo.probe.{id}.link"),
+        format!("chunks/ABC.staging.{id}"),
+        format!("chunks/DEF.lockinfo.{id}"),
+    ] {
+        write(dir.path(), &key, CONTENT);
+    }
+
+    let listed: Vec<String> = list(&st, "").await.into_iter().map(|(id, _)| id).collect();
+    assert_eq!(listed, vec!["chunks/ABC".to_string(), "repo".to_string()]);
+}
+
+#[tokio_test]
+async fn root_with_only_leftovers_is_clean() {
+    let dir = tempfile::tempdir().unwrap();
+    let st = storage(dir.path());
+    let settings = Settings::default();
+    let ctx = StorageContext::unattributed(&settings);
+    write(dir.path(), &format!("repo.probe.{}", uuid::Uuid::new_v4()), b"");
+    write(dir.path(), &format!("repo.lock.{CONTENT_SHA256}.0"), b"");
+
+    assert!(st.root_is_clean(&ctx).await.unwrap());
+}
+
+// APFS rejects non-UTF-8 names
+#[cfg(target_os = "linux")]
+#[tokio_test]
+async fn non_utf8_names_are_skipped() {
+    use std::{ffi::OsStr, os::unix::ffi::OsStrExt as _};
+
+    let dir = tempfile::tempdir().unwrap();
+    let st = storage(dir.path());
+    let chunks = dir.path().join("chunks");
+    write(dir.path(), "chunks/ABC", CONTENT);
+    std::fs::write(chunks.join(OsStr::from_bytes(b"\xff")), CONTENT).unwrap();
+    let bad_dir = chunks.join(OsStr::from_bytes(b"\xfe"));
+    std::fs::create_dir_all(&bad_dir).unwrap();
+    std::fs::write(bad_dir.join("XYZ"), CONTENT).unwrap();
+
+    assert_eq!(
+        list(&st, "chunks").await,
+        vec![("ABC".to_string(), CONTENT.len() as u64)]
+    );
+}
+
+#[tokio_test]
 async fn delete_batch_counts_missing_objects() {
     let dir = tempfile::tempdir().unwrap();
     let st = storage(dir.path());
@@ -814,4 +871,80 @@ async fn delete_batch_failures_are_not_counted() {
     assert_eq!(result.deleted_objects, 1);
     assert_eq!(result.deleted_bytes, 3);
     assert!(dir.path().join("p/dir").is_dir());
+}
+
+fn set_age(path: &Path, age: Duration) {
+    File::options()
+        .write(true)
+        .open(path)
+        .unwrap()
+        .set_modified(SystemTime::now() - age)
+        .unwrap();
+}
+
+/// `repo` with a 2-day-old lockinfo and a 30-minute-old ticket next to it.
+fn sweep_fixture(dir: &Path) -> (std::path::PathBuf, std::path::PathBuf) {
+    write(dir, "repo", b"v1");
+    let id = uuid::Uuid::new_v4();
+    let lockinfo = dir.join(format!("repo.lockinfo.{id}"));
+    let ticket = dir.join(format!("repo.new_bytes.{id}"));
+    std::fs::write(&lockinfo, CONTENT).unwrap();
+    std::fs::write(&ticket, CONTENT).unwrap();
+    set_age(&lockinfo, Duration::from_secs(2 * 24 * 60 * 60));
+    set_age(&ticket, Duration::from_secs(30 * 60));
+    (lockinfo, ticket)
+}
+
+async fn sweep(
+    st: &FilesystemStorage,
+    older_than: chrono::DateTime<chrono::Utc>,
+    dry_run: bool,
+) -> DeleteObjectsResult {
+    let settings = Settings::default();
+    let ctx = StorageContext::unattributed(&settings);
+    st.sweep_leftovers(&ctx, older_than, dry_run).await.unwrap()
+}
+
+#[tokio_test]
+async fn sweep_leftovers_respects_the_floor() {
+    let dir = tempfile::tempdir().unwrap();
+    let st = storage(dir.path());
+    let (lockinfo, ticket) = sweep_fixture(dir.path());
+
+    let result =
+        sweep(&st, chrono::Utc::now() + chrono::TimeDelta::hours(1), false).await;
+    assert_eq!(
+        result,
+        DeleteObjectsResult { deleted_objects: 1, deleted_bytes: CONTENT.len() as u64 }
+    );
+    assert!(!lockinfo.exists());
+    assert!(ticket.exists());
+    assert_eq!(std::fs::read(dir.path().join("repo")).unwrap(), b"v1");
+}
+
+#[tokio_test]
+async fn sweep_leftovers_respects_older_than() {
+    let dir = tempfile::tempdir().unwrap();
+    let st = storage(dir.path());
+    let (lockinfo, ticket) = sweep_fixture(dir.path());
+
+    let result = sweep(&st, chrono::Utc::now() - chrono::TimeDelta::days(3), false).await;
+    assert_eq!(result, DeleteObjectsResult::default());
+    assert!(lockinfo.exists());
+    assert!(ticket.exists());
+}
+
+#[tokio_test]
+async fn sweep_leftovers_dry_run() {
+    let dir = tempfile::tempdir().unwrap();
+    let st = storage(dir.path());
+    let (lockinfo, ticket) = sweep_fixture(dir.path());
+
+    let result = sweep(&st, chrono::Utc::now(), true).await;
+    assert_eq!(
+        result,
+        DeleteObjectsResult { deleted_objects: 1, deleted_bytes: CONTENT.len() as u64 }
+    );
+    assert!(lockinfo.exists());
+    assert!(ticket.exists());
 }

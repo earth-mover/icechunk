@@ -249,9 +249,9 @@ The lock is stale if the difference exceeds `STALE_AFTER`.
 
 A lock shares its inode with its holder's lockinfo, and unlinking any name
 of an inode updates its ctime. So the lock's ctime is also refreshed when
-the holder's lockinfo is deleted (by its cleanup, its tidy-up or a GC
-sweep), which can delay a steal by up to another `STALE_AFTER`. This only
-affects liveness.
+the holder's lockinfo is deleted by its cleanup or its tidy-up, which can
+delay a steal by up to another `STALE_AFTER`. This only affects liveness. A
+GC sweep never unlinks a lockinfo still linked as a lock it keeps.
 
 **Choosing `STALE_AFTER`.** it must be longer than a healthy
 holder ever needs between taking the lock (step 2) and its commit `rename`
@@ -389,27 +389,37 @@ by reading content, never by `stat`:
 ## Sweeping
 
 - **Step 6** handles the normal case.
-- **GC** also sweeps protocol files whose mtime is older than a cutoff. The
-  cutoff is the metadata age cutoff the user gives GC
-  (`delete_object_older_than` in Python), but never later than 60 minutes ago:
-  `cutoff = min(user_cutoff, now - 60 min)`. When GC is told to keep
-  metadata, it sweeps no protocol files.
-  - `repo.new_bytes.*`, `repo.lockinfo.*` and `repo.probe.*`: deleted
-    whatever their content.
+- **GC** asks the storage backend to sweep its leftovers, through a `Storage`
+  hook that the other backends don't implement. GC passes the metadata age
+  cutoff the user gives it (`delete_object_older_than` in Python). The backend
+  never uses a cutoff later than 24 hours ago, and sweeps only files whose
+  mtime is older than it.
+- The sweep reads only the repo root, in one listing. For any key `<name>`
+  in the root:
+  - `<name>.new_bytes.*` and `repo.probe.*`: deleted whatever their content.
+  - `<name>.lockinfo.*`: deleted whatever their content, except a lockinfo
+    still linked as a lock the sweep keeps (same device and inode). Unlinking
+    it would refresh that lock's ctime and delay stealing it. A lockinfo
+    linked to a lock the sweep deletes is deleted with it.
   - Staging files `<name>.staging.<uuid>`, written next to their target by
-    unconditional writes, conditional creates and backups: deleted whatever
-    their content. `list_objects` never returns them.
-  - `repo.lock.<h>.*`: GC lists the lock files first, then does a fresh read
-    of `repo`. It deletes only listed locks whose `h` differs from the hash of
-    that read. A lock listed before the read was created on top of a version
+    unconditional writes and conditional creates: deleted whatever their
+    content.
+  - `<name>.lock.<h>.*`: the lock files are listed first, then `<name>` is
+    read fresh. Only listed locks whose `h` differs from the hash of that read
+    are deleted. A lock listed before the read was created on top of a version
     that was current at or before the listing. If the read shows a different
-    hash, that version is gone for good (content uniqueness), so its lock
-    family can never be used again. A lock that appears after the listing is
-    left for the next run.
+    hash, that version is gone for good, so its lock family can never be used
+    again. A lock that appears after the listing is left for the next run.
+  - A missing `<name>` has all its listed locks past the
+    cutoff deleted.
+  - A `<name>` that can't be read keeps its locks.
+
+- `list_objects` returns neither protocol files nor staging files.
 - The cutoff affects only liveness. Deleting a live attempt's ticket or
   lockinfo makes that attempt fail with a conflict, and a lock of a dead family
-  is never used again. The 60-minute floor keeps GC from failing slow attempts
-  that are still alive. It also absorbs skew between the clock of the GC
+  is never used again. The 24-hour floor keeps GC from failing attempts that
+  stalled for a long time but are still alive, such as a write on a suspended
+  machine. It also absorbs any plausible skew between the clock of the GC
   client, which computes the cutoff, and the file server's clock, which sets
   the mtimes.
 - **Never** delete a lock file whose hash is current.
@@ -639,7 +649,10 @@ Mitigations:
 - **Model checker.** A `stateright` model of the algorithm as specified, as a
   dev-dependency in the repo. It covers:
   - steps 1–6, including the early exit, stealing, and `cleanup()`;
-  - `copy_object` and the GC sweeping rules;
+  - `copy_object` and GC sweeping of `repo`'s protocol files: tickets and
+    lockinfos deleted at any age, and locks listed before a read of `repo`
+    that shows another hash. It doesn't model the age cutoff, a missing
+    target, other keys, or staging and probe files;
   - every interleaving of several writers, a crash at any point, and lost
     replies on `link` and `rename`.
 
@@ -743,3 +756,10 @@ Tracked as a separate issue.
 
    On NFS this is free either way, because the server makes metadata
    operations durable before replying.
+7. **Leftovers outside the repo root.** GC doesn't sweep staging files and
+   protocol files outside the repo root: staging files of backups in
+   `overwritten/`, of the initial snapshot and transaction log, and of an
+   `EEXIST` fallback in any directory; protocol files of keys in
+   subdirectories, which V2 never updates conditionally. How to sweep them
+   without a second full listing of large directories such as `chunks/` is
+   open.

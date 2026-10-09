@@ -714,6 +714,20 @@ pub trait Storage: fmt::Debug + Display + sealed::Sealed + Sync + Send {
         batch: Vec<(String, u64)>,
     ) -> StorageResult<DeleteObjectsResult>;
 
+    /// Deletes files the backend's own write protocols leave behind after a
+    /// crash or an abandoned write. Only files last modified
+    /// before `older_than` are candidates; a backend may use an earlier cutoff
+    /// to protect writes still in progress. With `dry_run`, deletes nothing and
+    /// reports what it would delete.
+    async fn sweep_leftovers(
+        &self,
+        _ctx: &StorageContext<'_>,
+        _older_than: DateTime<Utc>,
+        _dry_run: bool,
+    ) -> StorageResult<DeleteObjectsResult> {
+        Ok(DeleteObjectsResult::default())
+    }
+
     async fn get_object_last_modified(
         &self,
         ctx: &StorageContext<'_>,

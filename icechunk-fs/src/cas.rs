@@ -445,6 +445,20 @@ mod tests {
             Self { at: Some(Box::new(at)), ..Self::default() }
         }
 
+        /// Runs `at` after the hooks' current `at`.
+        fn and_at(self, at: impl Fn(Point) + Send + Sync + 'static) -> Self {
+            let first = self.at;
+            Self {
+                at: Some(Box::new(move |point| {
+                    if let Some(first) = &first {
+                        first(point);
+                    }
+                    at(point);
+                })),
+                ..self
+            }
+        }
+
         fn reached(&self) -> Vec<Point> {
             self.reached.lock().unwrap().clone()
         }
@@ -708,17 +722,7 @@ mod tests {
         for errno in [libc::EIO, libc::EACCES] {
             let (dir, repo) = setup();
             let base = sha256_hex(V0);
-            let holder = Uuid::new_v4();
-            let holder_ticket = format!("repo.new_bytes.{holder}");
-            let holder_lockinfo = format!("repo.lockinfo.{holder}");
-            fs::write(dir.path().join(&holder_ticket), b"a").unwrap();
-            fs::write(dir.path().join(&holder_lockinfo), holder.hyphenated().to_string())
-                .unwrap();
-            fs::hard_link(
-                dir.path().join(&holder_lockinfo),
-                dir.path().join(lock_name(&base, 0)),
-            )
-            .unwrap();
+            let (holder_ticket, holder_lockinfo) = plant_holder(dir.path());
 
             let hooks = TestHooks {
                 unlink: Some(Box::new(move |_| Err(io::Error::from_raw_os_error(errno)))),
@@ -740,6 +744,86 @@ mod tests {
                 BTreeSet::from([lock_name(&base, 0), lock_name(&base, 1)])
             );
         }
+    }
+
+    /// Plants a holder of generation 0 on `V0`: its ticket, its lockinfo and
+    /// the lock hard-linked to it. Returns the ticket and lockinfo names.
+    fn plant_holder(dir: &Path) -> (String, String) {
+        let holder = Uuid::new_v4();
+        let ticket = format!("repo.new_bytes.{holder}");
+        let lockinfo = format!("repo.lockinfo.{holder}");
+        fs::write(dir.join(&ticket), b"a").unwrap();
+        fs::write(dir.join(&lockinfo), holder.hyphenated().to_string()).unwrap();
+        fs::hard_link(dir.join(&lockinfo), dir.join(lock_name(&sha256_hex(V0), 0)))
+            .unwrap();
+        (ticket, lockinfo)
+    }
+
+    /// Hooks that steal generation 1 from a planted holder and, once the lock
+    /// is taken, replace the holder's lock using `replace`.
+    fn steals_then_replaces_lock0(
+        dir: &Path,
+        replace: impl Fn(&Path) + Send + Sync + 'static,
+    ) -> TestHooks {
+        let lock0 = dir.join(lock_name(&sha256_hex(V0), 0));
+        sees_locks_as_stale(dir).and_at(move |point| {
+            if point == (Point::LockTaken { generation: 1 }) {
+                fs::remove_file(&lock0).unwrap();
+                replace(&lock0);
+            }
+        })
+    }
+
+    fn assert_stopped_before_fenced(
+        dir: &Path,
+        repo: &Path,
+        hooks: &TestHooks,
+        holder: (String, String),
+    ) {
+        let reached = hooks.reached();
+        assert!(reached.contains(&Point::LockTaken { generation: 1 }), "{reached:?}");
+        assert!(!reached.contains(&Point::Fenced), "{reached:?}");
+        assert_eq!(fs::read(repo).unwrap(), V0);
+        let (holder_ticket, holder_lockinfo) = holder;
+        assert_eq!(tickets(dir), BTreeSet::from([holder_ticket]));
+        assert_eq!(lockinfos(dir), BTreeSet::from([holder_lockinfo]));
+        let base = sha256_hex(V0);
+        assert_eq!(
+            locks(dir),
+            BTreeSet::from([lock_name(&base, 0), lock_name(&base, 1)])
+        );
+    }
+
+    #[test]
+    fn corrupt_lock_found_while_fencing_is_an_error() {
+        let (dir, repo) = setup();
+        let holder = plant_holder(dir.path());
+        let hooks = steals_then_replaces_lock0(dir.path(), |lock0| {
+            fs::write(lock0, "garbage").unwrap();
+        });
+
+        match update(&repo, b"b", &hooks) {
+            Err(CasError::CorruptLock { path }) => {
+                assert_eq!(path, dir.path().join(lock_name(&sha256_hex(V0), 0)));
+            }
+            other => panic!("expected CorruptLock, got {other:?}"),
+        }
+        assert_stopped_before_fenced(dir.path(), &repo, &hooks, holder);
+    }
+
+    #[test]
+    fn fence_lock_read_error_is_an_error() {
+        let (dir, repo) = setup();
+        let holder = plant_holder(dir.path());
+        let hooks = steals_then_replaces_lock0(dir.path(), |lock0| {
+            fs::create_dir_all(lock0).unwrap();
+        });
+
+        match update(&repo, b"b", &hooks) {
+            Err(CasError::Io(err)) => assert_eq!(err.kind(), io::ErrorKind::IsADirectory),
+            other => panic!("expected Io, got {other:?}"),
+        }
+        assert_stopped_before_fenced(dir.path(), &repo, &hooks, holder);
     }
 
     #[test]

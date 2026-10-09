@@ -12,6 +12,19 @@ use uuid::Uuid;
 
 use crate::write::write_exclusive;
 
+pub(crate) const PROBE_PREFIX: &str = "repo.probe.";
+pub(crate) const PROBE_LINK_SUFFIX: &str = ".link";
+
+/// The probe file of attempt `id`, in the repo root.
+pub(crate) fn probe_name(id: Uuid) -> String {
+    format!("{PROBE_PREFIX}{}", id.hyphenated())
+}
+
+/// The name the probe file of attempt `id` is linked to.
+pub(crate) fn probe_link_name(id: Uuid) -> String {
+    format!("{}{PROBE_LINK_SUFFIX}", probe_name(id))
+}
+
 #[derive(Debug)]
 struct ProbeFailed {
     root: PathBuf,
@@ -44,10 +57,9 @@ pub(crate) fn probe_hard_links(root: &Path) -> io::Result<()> {
 }
 
 fn probe(root: &Path) -> io::Result<()> {
-    let probe = root.join(format!("repo.probe.{}", Uuid::new_v4()));
-    let mut link_name = probe.clone().into_os_string();
-    link_name.push(".link");
-    let link = PathBuf::from(link_name);
+    let id = Uuid::new_v4();
+    let probe = root.join(probe_name(id));
+    let link = root.join(probe_link_name(id));
 
     write_exclusive(&probe, &[], false)?;
     let linked = link_exclusively(&probe, &link);

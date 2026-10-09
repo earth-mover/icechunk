@@ -7,17 +7,20 @@ use futures::{Stream, StreamExt as _, future::ready, stream};
 use icechunk_storage::{DeleteObjectsResult, ListInfo};
 use tokio::sync::mpsc;
 
-use crate::{path::is_staging_name, storage::is_missing};
+use crate::{leftover::is_leftover_name, storage::is_missing};
 
 const BATCH_SIZE: usize = 1000;
 const CHANNEL_CAPACITY: usize = 2;
 
 type Batch = io::Result<Vec<ListInfo<String>>>;
 
-/// Streams the regular files under `dir`, except in-flight staging files, with
-/// ids relative to `dir`. A missing `dir` lists nothing, and entries deleted
-/// while the walk runs are skipped. The walk runs on a blocking thread and
-/// stops soon after the stream is dropped; an error ends the stream.
+/// Streams the regular files under `dir`, except staging and protocol files.
+/// Each item's `id` is the file's path relative to `dir`, `/`-separated (`a/b`
+/// for `dir/a/b`). A missing `dir` lists nothing, and entries deleted while
+/// the walk runs are skipped, as are non-UTF-8 names (a file, or a directory
+/// and everything under it) with a warning. The walk runs on a blocking
+/// thread and stops soon after the stream is dropped; an error ends the
+/// stream.
 pub(crate) fn list_recursive(
     dir: PathBuf,
 ) -> impl Stream<Item = io::Result<ListInfo<String>>> + Send + 'static {
@@ -60,12 +63,13 @@ fn walk(dir: &Path, tx: &mpsc::Sender<Batch>) -> io::Result<()> {
             }
             let entry = entry?;
             let file_name = entry.file_name();
-            let name = file_name.to_str().ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!("non-UTF-8 file name: {}", entry.path().display()),
-                )
-            })?;
+            let Some(name) = file_name.to_str() else {
+                tracing::warn!(
+                    path = %entry.path().display(),
+                    "Skipping a file name that is not UTF-8"
+                );
+                continue;
+            };
             let id = format!("{id_prefix}{name}");
             let file_type = match entry.file_type() {
                 Ok(file_type) => file_type,
@@ -74,7 +78,7 @@ fn walk(dir: &Path, tx: &mpsc::Sender<Batch>) -> io::Result<()> {
             };
             if file_type.is_dir() {
                 pending.push((entry.path(), format!("{id}/")));
-            } else if file_type.is_file() && !is_staging_name(&file_name) {
+            } else if file_type.is_file() && !is_leftover_name(&file_name) {
                 let metadata = match entry.metadata() {
                     Ok(metadata) => metadata,
                     Err(err) if is_missing(&err) => continue,

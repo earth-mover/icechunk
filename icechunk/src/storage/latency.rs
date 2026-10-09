@@ -175,6 +175,16 @@ impl Storage for LatencyStorage {
         self.backend.delete_batch(ctx, prefix, batch).await
     }
 
+    async fn sweep_leftovers(
+        &self,
+        ctx: &StorageContext<'_>,
+        older_than: DateTime<Utc>,
+        dry_run: bool,
+    ) -> StorageResult<DeleteObjectsResult> {
+        self.sleep_for_write().await;
+        self.backend.sweep_leftovers(ctx, older_than, dry_run).await
+    }
+
     async fn get_object_last_modified(
         &self,
         ctx: &StorageContext<'_>,

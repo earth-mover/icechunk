@@ -3,6 +3,8 @@
 #[cfg(unix)]
 mod cas;
 #[cfg(unix)]
+mod leftover;
+#[cfg(unix)]
 mod list;
 #[cfg(unix)]
 mod lock;
@@ -14,6 +16,8 @@ mod probe;
 mod read;
 #[cfg(unix)]
 mod storage;
+#[cfg(unix)]
+mod sweep;
 #[cfg(unix)]
 mod version;
 #[cfg(unix)]

@@ -175,6 +175,19 @@ impl Storage for LoggingStorage {
         self.backend.delete_batch(ctx, prefix, batch).await
     }
 
+    async fn sweep_leftovers(
+        &self,
+        ctx: &StorageContext<'_>,
+        older_than: DateTime<Utc>,
+        dry_run: bool,
+    ) -> StorageResult<DeleteObjectsResult> {
+        self.fetch_log
+            .lock()
+            .expect("poison lock")
+            .push(("sweep_leftovers".to_string(), String::new()));
+        self.backend.sweep_leftovers(ctx, older_than, dry_run).await
+    }
+
     async fn get_object_last_modified(
         &self,
         ctx: &StorageContext<'_>,

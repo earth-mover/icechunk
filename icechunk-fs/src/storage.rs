@@ -8,7 +8,7 @@ use std::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
-    time::Duration,
+    time::{Duration, SystemTime},
 };
 
 use async_trait::async_trait;
@@ -35,6 +35,7 @@ use crate::{
     path::{key_path, prefix_path},
     probe::probe_hard_links,
     read::{FreshRead, last_modified, read_all, read_fresh, read_range},
+    sweep::sweep_root,
     version::{sha256_hex, version_of},
     write::{CreateOutcome, create_exclusive, write_new, write_staged},
 };
@@ -70,6 +71,11 @@ pub struct FilesystemStorage {
 impl FilesystemStorage {
     /// How old a `repo` lock must be before another writer may steal it.
     pub const DEFAULT_STALE_AFTER: Duration = Duration::from_secs(60);
+
+    /// Leftovers younger than this are never swept, whatever cutoff the
+    /// caller gives: a write that stalled for a long time, such as one on a
+    /// suspended machine, may still be using them.
+    pub const SWEEP_MIN_AGE: Duration = Duration::from_secs(24 * 60 * 60);
 
     /// A storage rooted at `root`, made absolute against the current
     /// directory. Does no other I/O.
@@ -354,8 +360,9 @@ impl Storage for FilesystemStorage {
         .await
     }
 
-    /// The order is unspecified: it is the directory walk order. In-flight
-    /// staging files are not listed; `created_at` is the file's mtime.
+    /// The order is unspecified: it is the directory walk order. Staging and
+    /// protocol files are not listed, and non-UTF-8 names are skipped with a
+    /// warning; `created_at` is the file's mtime.
     async fn list_objects<'a>(
         &'a self,
         _ctx: &StorageContext<'_>,
@@ -392,6 +399,25 @@ impl Storage for FilesystemStorage {
             })
             .collect::<StorageResult<Vec<_>>>()?;
         blocking(move || Ok(delete_files(paths))).await
+    }
+
+    /// Sweeps only the repository root: tickets, probe files and staging
+    /// files, lock files whose hash isn't the current content of their
+    /// object, and lockinfos not linked as a lock it keeps. The cutoff is never later than
+    /// [`FilesystemStorage::SWEEP_MIN_AGE`] ago. Per-file failures are logged
+    /// and left out of the result. See design document 020, "Sweeping".
+    async fn sweep_leftovers(
+        &self,
+        _ctx: &StorageContext<'_>,
+        older_than: DateTime<Utc>,
+        dry_run: bool,
+    ) -> StorageResult<DeleteObjectsResult> {
+        let floor = SystemTime::now()
+            .checked_sub(Self::SWEEP_MIN_AGE)
+            .unwrap_or(SystemTime::UNIX_EPOCH);
+        let cutoff = SystemTime::from(older_than).min(floor);
+        let root = self.root.clone();
+        blocking(move || sweep_root(&root, cutoff, dry_run).map_err(write_error)).await
     }
 
     async fn get_object_last_modified(

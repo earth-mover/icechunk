@@ -419,6 +419,15 @@ impl Storage for RedirectStorage {
         self.backend().await?.delete_batch(ctx, prefix, batch).await
     }
 
+    async fn sweep_leftovers(
+        &self,
+        ctx: &StorageContext<'_>,
+        older_than: DateTime<Utc>,
+        dry_run: bool,
+    ) -> StorageResult<DeleteObjectsResult> {
+        self.backend().await?.sweep_leftovers(ctx, older_than, dry_run).await
+    }
+
     async fn get_object_last_modified(
         &self,
         ctx: &StorageContext<'_>,
