@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <script>document.documentElement.dataset.theme=new URLSearchParams(location.search).get("theme")||"dark"</script>
+    <link rel="stylesheet" href="../theme.css">
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Icechunk commits: only write the chunks that changed</title>
+    <script type="module" crossorigin src="../assets/commits-DJSkZti8.js"></script>
+    <link rel="modulepreload" crossorigin href="../assets/chrome-BI9ASo4_.js">
+    <link rel="stylesheet" crossorigin href="../assets/chrome-DYx6i_tk.css">
+    <link rel="stylesheet" crossorigin href="../assets/commits-D64eELEl.css">
+  </head>
+  <body class="page-commits">
+    <main id="app">
+      <header class="intro">
+        <p class="crumb"><a href="../">&larr; Icechunk, illustrated</a></p>
+        <h1>A commit only writes the chunks that changed</h1>
+        <p>
+          On plain cloud storage a new "version" means a fresh copy of every
+          chunk. Icechunk only writes the chunks that actually changed; every
+          other chunk in the new snapshot keeps pointing at the object that was
+          already in storage.
+        </p>
+      </header>
+
+      <section class="ck-scoreboard" aria-live="polite">
+        <div class="ck-score ck-score-stored">
+          <span class="ck-score-label">Storage used</span>
+          <span class="ck-score-value" data-c="stored-bytes">0 MB</span>
+        </div>
+        <div class="ck-score ck-score-naive">
+          <span class="ck-score-label">Full-copy alternative</span>
+          <span class="ck-score-value" data-c="fullcopy-bytes">0 MB</span>
+        </div>
+        <div class="ck-score ck-score-saved">
+          <span class="ck-score-label">Saved</span>
+          <span class="ck-score-value" data-c="savings">&mdash;</span>
+        </div>
+      </section>
+
+      <section class="ck-stage">
+        <div class="ck-panel ck-snapshot-panel">
+          <span class="ck-panel-label">Latest snapshot</span>
+          <div class="ck-snapshot-grid" data-c="snapshot"></div>
+        </div>
+
+        <div class="ck-panel ck-storage-panel">
+          <span class="ck-panel-label">Object storage</span>
+          <div class="ck-storage-list" data-c="commit-list"></div>
+        </div>
+      </section>
+
+      <section class="controls">
+        <label>
+          Array size
+          <!-- Slider is half the side length (so chunks = (2v)*(2v)). Even-
+               only sides keep the desktop grid a clean square AND let the
+               mobile layout flatten it into a 2*side × side/2 strip without
+               a partial row. -->
+          <input
+            id="ckChunks"
+            type="range"
+            min="2"
+            max="6"
+            step="1"
+            value="4"
+          />
+          <span id="ckChunksLabel">64 (8×8)</span>
+        </label>
+        <label>
+          Change per commit
+          <input
+            id="ckChange"
+            type="range"
+            min="1"
+            max="60"
+            step="1"
+            value="12"
+          />
+          <span id="ckChangeLabel">12%</span>
+        </label>
+        <label>
+          Commit speed
+          <input id="ckRate" type="range" min="1" max="10" step="1" value="5" />
+        </label>
+      </section>
+    </main>
+
+  </body>
+</html>

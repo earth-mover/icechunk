@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <script>document.documentElement.dataset.theme=new URLSearchParams(location.search).get("theme")||"dark"</script>
+    <link rel="stylesheet" href="../theme.css">
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Icechunk consistency: quantum cat demo</title>
+    <script type="module" crossorigin src="../assets/consistency-BQKJhgKw.js"></script>
+    <link rel="modulepreload" crossorigin href="../assets/chrome-BI9ASo4_.js">
+    <link rel="modulepreload" crossorigin href="../assets/images-DXyXHgBX.js">
+    <link rel="stylesheet" crossorigin href="../assets/chrome-DYx6i_tk.css">
+  </head>
+  <body>
+    <main id="app">
+      <p class="crumb"><a href="../">&larr; Icechunk, illustrated</a></p>
+      <details class="intro" open>
+        <summary>
+          <h1>Schr&ouml;dinger&rsquo;s chunks</h1>
+          <span class="intro-hint" aria-hidden="true"></span>
+        </summary>
+        <div class="intro-body">
+          <div class="intro-left">
+            <p>
+              A <strong class="ink-writer">writer</strong> overwrites the cat
+              chunk by chunk in random order. Two
+              <strong class="ink-reader">readers</strong> read all the data they
+              can see at any moment. Reads and writes are not instant, so a read
+              can overlap a write. Zarr and Icechunk differ in what the reader
+              sees during a write, because Icechunk offers "<strong class="hl"
+                >ACID transactions</strong
+              >" where native Zarr does not.
+            </p>
+            <ul class="contrast">
+              <li>
+                <strong>Zarr:</strong> A read that starts mid-write returns a
+                mix of old and new chunks. The state of the data is
+                inconsistent, the cat is neither alive nor dead!
+              </li>
+              <li>
+                <strong>Icechunk:</strong> Data is not visible to readers until
+                it is committed, so readers never observe partially-written
+                data. The cat is either alive or dead!
+              </li>
+            </ul>
+          </div>
+          <div class="intro-right">
+            <p>
+              <strong class="hl">ACID transactions:</strong> In Icechunk the
+              data is always in a <strong class="hl">consistent</strong> state
+              (the C in ACID). This works because writers write intermediate
+              data to a <strong class="hl">session</strong>, before
+              <strong class="hl">atomically</strong> (the A in ACID) flipping
+              the latest available snapshot at the moment of the commit. If a
+              new commit lands mid-read it keeps that snapshot and finishes
+              reading the version it started on (<strong class="hl"
+                >isolation</strong
+              >, the I in ACID). Older commits stay available as part of the
+              repo history, i.e. the commit is
+              <strong class="hl">durable</strong> (the D in ACID).
+            </p>
+          </div>
+        </div>
+      </details>
+
+      <section class="stage">
+        <svg class="wires" aria-hidden="true"></svg>
+
+        <!-- Writer (left, outside the cloud) -->
+        <div class="actor writer" data-node="writer">
+          <h2 class="ink-writer">Writer</h2>
+          <canvas class="view" data-canvas="writer"></canvas>
+        </div>
+
+        <!-- Cloud container wraps all storage -->
+        <div class="cloud">
+          <span class="cloud-label">&#9729;&#65039; Cloud storage</span>
+
+          <div class="cloud-row">
+            <div class="store" data-store="zarr">
+              <span class="store-name" data-wire-in="zarr-cloud">
+                Zarr <span class="tag tag-zarr">no transactions</span>
+              </span>
+              <div class="store-body" data-node="zarr-cloud">
+                <canvas class="view" data-canvas="zarr-cloud"></canvas>
+              </div>
+            </div>
+          </div>
+
+          <div class="cloud-row">
+            <div class="store" data-store="icechunk">
+              <span class="store-name" data-wire-in="ice-session">
+                Icechunk <span class="tag tag-icechunk">ACID</span>
+              </span>
+              <div class="commits">
+                <!-- Brief flash fired the instant the session is committed to
+                     `main`. Absolute, so it never reflows the layout. -->
+                <span class="commit-flash" aria-hidden="true">commit!</span>
+                <div class="commit commit-session" data-node="ice-session">
+                  <span class="commit-label">session</span>
+                  <canvas class="view" data-canvas="ice-session"></canvas>
+                  <!-- frozen snapshot that slides onto `main` on commit -->
+                  <canvas
+                    class="promote-ghost"
+                    data-canvas="ice-ghost"
+                    aria-hidden="true"
+                  ></canvas>
+                </div>
+                <div
+                  class="commit commit-main commit-stack"
+                  data-node="ice-main"
+                >
+                  <span class="commit-label"
+                    >main <em data-ref="main">#0</em></span
+                  >
+                  <!-- previous committed versions, peeking out behind main -->
+                  <canvas
+                    class="stack-layer l2"
+                    data-canvas="ice-hist2"
+                    aria-hidden="true"
+                  ></canvas>
+                  <canvas
+                    class="stack-layer l1"
+                    data-canvas="ice-hist1"
+                    aria-hidden="true"
+                  ></canvas>
+                  <canvas class="view" data-canvas="ice-main"></canvas>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Readers (right, outside the cloud) -->
+        <div class="readers">
+          <div class="actor reader" data-node="zarr-reader">
+            <h2 class="ink-reader" data-wire-in="zarr-reader">Zarr Reader</h2>
+            <div class="reader-row">
+              <div class="reader-frame">
+                <canvas class="view" data-canvas="zarr-reader"></canvas>
+                <canvas
+                  class="read-ghost"
+                  data-canvas="zarr-read-ghost"
+                  aria-hidden="true"
+                ></canvas>
+              </div>
+              <div class="analysis">
+                <div class="q">Is the cat alive?</div>
+                <div class="a unknown" data-answer="zarr">???</div>
+              </div>
+            </div>
+          </div>
+          <div class="actor reader" data-node="ice-reader">
+            <h2 class="ink-reader" data-wire-in="ice-reader">
+              Icechunk Reader
+            </h2>
+            <div class="reader-row">
+              <div class="reader-frame">
+                <canvas class="view" data-canvas="ice-reader"></canvas>
+                <canvas
+                  class="read-ghost"
+                  data-canvas="ice-read-ghost"
+                  aria-hidden="true"
+                ></canvas>
+              </div>
+              <div class="analysis">
+                <div class="q">Is the cat alive?</div>
+                <div class="a" data-answer="ice">Yes</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="controls">
+        <button id="playPause" type="button">Pause</button>
+        <button id="reset" type="button">Reset</button>
+        <label>
+          Chunks
+          <input id="chunks" type="range" min="3" max="24" value="3" />
+          <span id="chunksLabel">3&times;3</span>
+        </label>
+        <label>
+          Write speed
+          <input id="speed" type="range" min="1" max="100" value="40" />
+        </label>
+        <div class="controls-right">
+          <label class="read-speed">
+            Read speed
+            <input id="readSpeed" type="range" min="1" max="100" value="40" />
+          </label>
+          <label class="read-mode">
+            Read mode
+            <select id="readMode">
+              <option value="parallel" selected>Parallel</option>
+              <option value="serial">Serial</option>
+            </select>
+          </label>
+        </div>
+      </section>
+    </main>
+
+  </body>
+</html>
