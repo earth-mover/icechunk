@@ -36,8 +36,7 @@ async fn mk_repo(
     spec_version: SpecVersionBin,
 ) -> Result<Repository, Box<dyn std::error::Error>> {
     if init {
-        let mut config = RepositoryConfig::default();
-        config.inline_chunk_threshold_bytes = Some(0);
+        let config = RepositoryConfig::default().with_inline_chunk_threshold_bytes(0);
         Ok(Repository::create(storage)
             .config(config)
             .spec_version(spec_version)

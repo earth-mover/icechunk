@@ -114,10 +114,8 @@ async fn setup_get_chunks_repo(
 
     // Re-open with the splitting config and rewrite manifests.
     // Using reopen() preserves VCC auth.
-    let mut man_config = ManifestConfig::default();
-    man_config.splitting = Some(split_config);
-    let mut config = RepositoryConfig::default();
-    config.manifest = Some(man_config);
+    let config = RepositoryConfig::default()
+        .with_manifest(ManifestConfig::default().with_splitting(split_config));
     let repo = repo.reopen(Some(config), None).await.unwrap();
     if num_manifests > 1 {
         let mut session = repo.writable_session("main").await.unwrap();

@@ -2756,10 +2756,10 @@ mod tests {
         let logging2 = Arc::new(LoggingStorage::new(Arc::clone(&backend)));
         let storage2 = Arc::clone(&logging2);
         let storage2: Arc<dyn Storage + Send + Sync> = storage2;
-        let mut concurrency = storage::ConcurrencySettings::default();
-        concurrency.max_concurrent_requests_for_object = NonZeroU16::new(1);
-        let mut storage_settings = storage::Settings::default();
-        storage_settings.concurrency = Some(concurrency);
+        let storage_settings = storage::Settings::default().with_concurrency(
+            storage::ConcurrencySettings::default()
+                .with_max_concurrent_requests_for_object(NonZeroU16::MIN),
+        );
         let config = RepositoryConfig {
             manifest: Some(ManifestConfig::empty()),
             storage: Some(storage_settings),
@@ -3633,10 +3633,10 @@ mod tests {
             }),
             ..ManifestConfig::default()
         };
-        let mut concurrency = storage::ConcurrencySettings::default();
-        concurrency.max_concurrent_requests_for_object = NonZeroU16::new(1);
-        let mut storage_settings = storage::Settings::default();
-        storage_settings.concurrency = Some(concurrency);
+        let storage_settings = storage::Settings::default().with_concurrency(
+            storage::ConcurrencySettings::default()
+                .with_max_concurrent_requests_for_object(NonZeroU16::MIN),
+        );
         let config = RepositoryConfig {
             manifest: Some(man_config),
             storage: Some(storage_settings),

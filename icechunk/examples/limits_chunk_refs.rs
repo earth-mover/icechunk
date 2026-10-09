@@ -64,18 +64,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     let creds = Default::default();
 
-    let split_sizes = Some(vec![(
+    let split_sizes = vec![(
         ManifestSplitCondition::PathMatches { regex: r".*".to_string() },
         vec![ManifestSplitDim { condition: ManifestSplitDimCondition::Any, num_chunks }],
-    )]);
-    let mut splitting = ManifestSplittingConfig::default();
-    splitting.split_sizes = split_sizes;
-    let mut manifest_config = ManifestConfig::default();
-    manifest_config.splitting = Some(splitting);
+    )];
+    let splitting = ManifestSplittingConfig::default().with_split_sizes(split_sizes);
 
-    let mut config = RepositoryConfig::default();
-    config.inline_chunk_threshold_bytes = Some(0);
-    config.manifest = Some(manifest_config);
+    let config = RepositoryConfig::default()
+        .with_inline_chunk_threshold_bytes(0)
+        .with_manifest(ManifestConfig::default().with_splitting(splitting));
     let repo = Repository::create(storage)
         .config(config)
         .authorize_virtual_chunk_access(creds)

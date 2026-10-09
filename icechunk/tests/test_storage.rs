@@ -259,12 +259,12 @@ where
 async fn with_storage_settings(
     storage: &Arc<dyn Storage + Send + Sync>,
 ) -> StorageResult<storage::Settings> {
-    let mut retry_settings = storage::RetriesSettings::default();
-    retry_settings.max_tries = NonZeroU16::new(16);
-    retry_settings.initial_backoff_ms = Some(500);
-    retry_settings.max_backoff_ms = Some(30_000);
-    let mut retries = storage::Settings::default();
-    retries.retries = Some(retry_settings);
+    let retries = storage::Settings::default().with_retries(
+        storage::RetriesSettings::default()
+            .with_max_tries(NonZeroU16::new(16).unwrap())
+            .with_initial_backoff_ms(500)
+            .with_max_backoff_ms(30_000),
+    );
     Ok(storage.default_settings().await?.merge(retries))
 }
 
@@ -1361,8 +1361,8 @@ async fn check_storage_classes(
     )
     .await;
 
-    let mut ia_settings = storage::Settings::default();
-    ia_settings.storage_class = Some("STANDARD_IA".to_string());
+    let ia_settings =
+        storage::Settings::default().with_storage_class("STANDARD_IA".to_string());
     let ia_ctx = attributed(&ia_settings);
     let default_settings = storage::Settings::default();
     let default_ctx = attributed(&default_settings);
@@ -1596,9 +1596,9 @@ async fn test_http_storage() -> Result<(), Box<dyn std::error::Error>> {
         assert_eq!(expected, data.len() as u64);
 
         let mut data = Vec::with_capacity(1_024);
-        let mut concurrency = ConcurrencySettings::default();
-        concurrency.max_concurrent_requests_for_object = Some(100.try_into()?);
-        concurrency.ideal_concurrent_request_size = Some(10.try_into()?);
+        let concurrency = ConcurrencySettings::default()
+            .with_max_concurrent_requests_for_object(100.try_into()?)
+            .with_ideal_concurrent_request_size(10.try_into()?);
         let mut conc_settings = settings.clone();
         conc_settings.concurrency = Some(concurrency);
         let conc_ctx = attributed(&conc_settings);

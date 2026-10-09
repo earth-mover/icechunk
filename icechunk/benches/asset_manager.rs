@@ -62,8 +62,7 @@ fn benchmark_write_new_snapshot(c: &mut Criterion) {
 
     let tmp_dir = TempDir::new().unwrap();
     let storage = rt.block_on(new_local_filesystem_storage(tmp_dir.path())).unwrap();
-    let mut settings = storage::Settings::default();
-    settings.unsafe_use_metadata = Some(false);
+    let settings = storage::Settings::default().with_unsafe_use_metadata(false);
     let asset_manager =
         AssetManager::builder(storage, settings, SpecVersionBin::current())
             .no_cache()
@@ -118,8 +117,7 @@ fn benchmark_write_new_manifest(c: &mut Criterion) {
 
     let tmp_dir = TempDir::new().unwrap();
     let storage = rt.block_on(new_local_filesystem_storage(tmp_dir.path())).unwrap();
-    let mut settings = storage::Settings::default();
-    settings.unsafe_use_metadata = Some(false);
+    let settings = storage::Settings::default().with_unsafe_use_metadata(false);
     let asset_manager =
         AssetManager::builder(storage, settings, SpecVersionBin::current())
             .no_cache()

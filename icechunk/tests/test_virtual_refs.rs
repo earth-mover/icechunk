@@ -75,8 +75,8 @@ async fn create_repository(
         .map(|cont| (cont.url_prefix().to_string(), cont))
         .collect();
 
-    let mut config = RepositoryConfig::default();
-    config.virtual_chunk_containers = Some(virtual_chunk_containers);
+    let config = RepositoryConfig::default()
+        .with_virtual_chunk_containers(virtual_chunk_containers);
 
     Repository::create(storage)
         .config(config)
@@ -747,9 +747,9 @@ async fn test_repository_with_minio_virtual_refs(
     ds.commit("done").max_concurrent_nodes(8).execute().await?;
 
     let mut config = repo.config().clone();
-    let mut concurrency = ConcurrencySettings::default();
-    concurrency.max_concurrent_requests_for_object = Some(100.try_into()?);
-    concurrency.ideal_concurrent_request_size = Some(1.try_into()?);
+    let concurrency = ConcurrencySettings::default()
+        .with_max_concurrent_requests_for_object(100.try_into()?)
+        .with_ideal_concurrent_request_size(1.try_into()?);
     let mut storage_settings = repo.storage().default_settings().await?;
     storage_settings.concurrency = Some(concurrency);
     config.storage = Some(storage_settings);
@@ -885,9 +885,9 @@ async fn test_zarr_store_virtual_refs_http_non_default_port() -> Result<(), Box<
     let join = tokio::task::spawn(server.run());
 
     let url_prefix = format!("http://127.0.0.1:{port}/");
-    let mut http = HttpConfig::default();
-    http.opts = HashMap::from([("allow_http".to_string(), "true".to_string())]);
-    http.headers = HashMap::new();
+    let http = HttpConfig::default()
+        .with_opts(HashMap::from([("allow_http".to_string(), "true".to_string())]))
+        .with_headers(HashMap::new());
     let container =
         VirtualChunkContainer::new(url_prefix.clone(), ObjectStoreConfig::Http(http))?;
     let credentials = HashMap::from([(url_prefix.clone(), None)]);

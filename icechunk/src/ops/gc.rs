@@ -823,8 +823,8 @@ async fn delete_snapshots_from_repo_info(
         Ok(new_repo_info)
     };
 
-    let mut retry_settings = storage::RetriesSettings::default();
-    retry_settings.max_tries = Some(NonZeroU16::MIN);
+    let retry_settings =
+        storage::RetriesSettings::default().with_max_tries(NonZeroU16::MIN);
     let _ = asset_manager.update_repo_info(&retry_settings, do_update).await?;
 
     Ok(written_repo_info)

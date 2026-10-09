@@ -299,10 +299,10 @@ impl PyBasicConflictSolver {
         fail_on_delete_of_updated_array: bool,
         fail_on_delete_of_updated_group: bool,
     ) -> PyClassInitializer<Self> {
-        let mut solver = BasicConflictSolver::default();
-        solver.on_chunk_conflict = on_chunk_conflict.into();
-        solver.fail_on_delete_of_updated_array = fail_on_delete_of_updated_array;
-        solver.fail_on_delete_of_updated_group = fail_on_delete_of_updated_group;
+        let solver = BasicConflictSolver::default()
+            .with_on_chunk_conflict(on_chunk_conflict.into())
+            .with_fail_on_delete_of_updated_array(fail_on_delete_of_updated_array)
+            .with_fail_on_delete_of_updated_group(fail_on_delete_of_updated_group);
         PyClassInitializer::from(PyConflictSolver(Arc::new(solver))).add_subclass(Self)
     }
 }

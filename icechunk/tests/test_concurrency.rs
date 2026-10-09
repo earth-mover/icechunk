@@ -70,10 +70,9 @@ async fn do_test_concurrency(
     let shape =
         ArrayShape::new(vec![(N as u64, N as u32), (N as u64, N as u32)]).unwrap();
 
-    let mut man_config = ManifestConfig::default();
-    man_config.splitting = Some(ManifestSplittingConfig::with_size(2));
-    let mut config = RepositoryConfig::default();
-    config.manifest = Some(man_config);
+    let config = RepositoryConfig::default().with_manifest(
+        ManifestConfig::default().with_splitting(ManifestSplittingConfig::with_size(2)),
+    );
     let repo = Repository::create(storage).config(config).execute().await?;
 
     let mut ds = repo.writable_session("main").await?;

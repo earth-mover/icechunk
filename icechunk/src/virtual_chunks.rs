@@ -1840,12 +1840,11 @@ mod tests {
         use std::num::{NonZeroU16, NonZeroU64};
         use url::Url;
 
-        let mut concurrency = crate::storage::ConcurrencySettings::default();
-        concurrency.max_concurrent_requests_for_object =
-            Some(NonZeroU16::new(42).unwrap());
-        concurrency.ideal_concurrent_request_size = Some(NonZeroU64::new(8192).unwrap());
-        let mut custom_settings = crate::storage::Settings::default();
-        custom_settings.concurrency = Some(concurrency);
+        let custom_settings = crate::storage::Settings::default().with_concurrency(
+            crate::storage::ConcurrencySettings::default()
+                .with_max_concurrent_requests_for_object(NonZeroU16::new(42).unwrap())
+                .with_ideal_concurrent_request_size(NonZeroU64::new(8192).unwrap()),
+        );
 
         let container = VirtualChunkContainer::new(
             "file:///example/".to_string(),

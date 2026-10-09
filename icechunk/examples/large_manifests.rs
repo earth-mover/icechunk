@@ -27,11 +27,11 @@ const MAX_CONCURRENT_TASKS: usize = 100;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let storage = new_in_memory_storage().await?;
-    let mut man_config = ManifestConfig::default();
-    man_config.splitting = Some(ManifestSplittingConfig::with_size(MANIFEST_SPLIT_SIZE));
-    let mut config = RepositoryConfig::default();
-    config.inline_chunk_threshold_bytes = Some(128);
-    config.manifest = Some(man_config);
+    let config =
+        RepositoryConfig::default().with_inline_chunk_threshold_bytes(128).with_manifest(
+            ManifestConfig::default()
+                .with_splitting(ManifestSplittingConfig::with_size(MANIFEST_SPLIT_SIZE)),
+        );
     let repo = Repository::create(storage)
         .config(config)
         .spec_version(SpecVersionBin::V2)

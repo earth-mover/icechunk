@@ -95,14 +95,14 @@ async fn setup_toxiproxy(
 
 /// Create an `AssetManager` with fast retry settings for testing
 fn create_test_manager(storage: Arc<S3Storage>) -> AssetManager {
-    let mut retries = RetriesSettings::default();
     #[expect(clippy::unwrap_used)]
     let max_tries = NonZeroU16::new(3).unwrap();
-    retries.max_tries = Some(max_tries);
-    retries.initial_backoff_ms = Some(100);
-    retries.max_backoff_ms = Some(1000);
-    let mut settings = icechunk::storage::Settings::default();
-    settings.retries = Some(retries);
+    let settings = icechunk::storage::Settings::default().with_retries(
+        RetriesSettings::default()
+            .with_max_tries(max_tries)
+            .with_initial_backoff_ms(100)
+            .with_max_backoff_ms(1000),
+    );
 
     AssetManager::builder(
         storage as Arc<dyn Storage + Send + Sync>,
@@ -354,19 +354,16 @@ async fn build_proxied_storage(
 /// healthy machine, generous enough for the readback's retry budget to
 /// outlast the modelled blip.
 fn default_lost_response_settings() -> icechunk::storage::Settings {
-    let mut retries = RetriesSettings::default();
     #[expect(clippy::unwrap_used)]
     let max_tries = NonZeroU16::new(5).unwrap();
-    retries.max_tries = Some(max_tries);
-    retries.initial_backoff_ms = Some(50);
-    retries.max_backoff_ms = Some(500);
-    let mut timeouts = TimeoutSettings::default();
-    timeouts.read_timeout_ms = Some(2000);
-    timeouts.operation_attempt_timeout_ms = Some(3000);
-    let mut settings = icechunk::storage::Settings::default();
-    settings.retries = Some(retries);
-    settings.timeouts = Some(timeouts);
-    settings
+    let retries = RetriesSettings::default()
+        .with_max_tries(max_tries)
+        .with_initial_backoff_ms(50)
+        .with_max_backoff_ms(500);
+    let timeouts = TimeoutSettings::default()
+        .with_read_timeout_ms(2000)
+        .with_operation_attempt_timeout_ms(3000);
+    icechunk::storage::Settings::default().with_retries(retries).with_timeouts(timeouts)
 }
 
 async fn install_limit_data_toxic(
@@ -460,8 +457,7 @@ async fn conditional_put_repro(
         toxic_removal_delay_ms,
         |storage, settings, toxic_remover| async move {
             let storage_for_list = Arc::clone(&storage);
-            let mut config = icechunk::RepositoryConfig::default();
-            config.storage = Some(settings);
+            let config = icechunk::RepositoryConfig::default().with_storage(settings);
             let result = icechunk::Repository::create(storage)
                 .config(config)
                 .spec_version(SpecVersionBin::default())

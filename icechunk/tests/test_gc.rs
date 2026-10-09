@@ -80,20 +80,17 @@ async fn do_test_gc(
     let shape = ArrayShape::new(vec![(1100, 1100)]).unwrap();
     // intentionally small to create garbage
     let manifest_split_size = 10;
-    let split_sizes = Some(vec![(
+    let split_sizes = vec![(
         ManifestSplitCondition::PathMatches { regex: r".*".to_string() },
         vec![ManifestSplitDim {
             condition: ManifestSplitDimCondition::Any,
             num_chunks: manifest_split_size,
         }],
-    )]);
-    let mut splitting = ManifestSplittingConfig::default();
-    splitting.split_sizes = split_sizes;
-    let mut man_config = ManifestConfig::default();
-    man_config.splitting = Some(splitting);
-    let mut config = RepositoryConfig::default();
-    config.inline_chunk_threshold_bytes = Some(0);
-    config.manifest = Some(man_config);
+    )];
+    let splitting = ManifestSplittingConfig::default().with_split_sizes(split_sizes);
+    let config = RepositoryConfig::default()
+        .with_inline_chunk_threshold_bytes(0)
+        .with_manifest(ManifestConfig::default().with_splitting(splitting));
 
     let builder = Repository::create(Arc::clone(&storage)).config(config);
     let builder = match spec_version {
@@ -1524,8 +1521,7 @@ async fn test_gc_completes_with_one_decode_slot() -> Result<(), Box<dyn std::err
     // Without read latency every fetch completes at once and the deadlock never forms.
     let storage: Arc<dyn Storage + Send + Sync> =
         Arc::new(LatencyStorage::new(inner, 0, 5));
-    let mut create_config = RepositoryConfig::default();
-    create_config.inline_chunk_threshold_bytes = Some(0);
+    let create_config = RepositoryConfig::default().with_inline_chunk_threshold_bytes(0);
     let repo =
         Repository::create(Arc::clone(&storage)).config(create_config).execute().await?;
     let arrays: Vec<Path> =
@@ -1558,8 +1554,7 @@ async fn test_gc_completes_with_one_decode_slot() -> Result<(), Box<dyn std::err
     }
 
     // The writing repository has everything cached; GC must fetch and decode.
-    let mut open_config = RepositoryConfig::default();
-    open_config.max_concurrent_decodes = Some(1);
+    let open_config = RepositoryConfig::default().with_max_concurrent_decodes(1);
     let repo =
         Repository::open(Arc::clone(&storage)).config(open_config).execute().await?;
     let gc = garbage_collect(Arc::clone(repo.asset_manager()))

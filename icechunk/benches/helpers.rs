@@ -258,21 +258,19 @@ pub(crate) async fn setup_repo(
         StorageKind::InMemory => new_in_memory_storage().await?,
     };
 
-    let mut preload = ManifestPreloadConfig::default();
-    // turn off preloading so the profiles show us where things are loaded.
-    preload.preload_if = Some(ManifestPreloadCondition::False);
-    let mut man_config = ManifestConfig::default();
-    man_config.preload = Some(preload);
+    let mut man_config = ManifestConfig::default().with_preload(
+        // turn off preloading so the profiles show us where things are loaded.
+        ManifestPreloadConfig::default().with_preload_if(ManifestPreloadCondition::False),
+    );
     man_config.splitting = split_config;
 
-    let mut caching = CachingConfig::default();
-    // we only write 1 native chunk
-    // & point a million chunk refs at it.
-    // so turn off chunk caching.
-    caching.num_bytes_chunks = Some(0);
-    let mut config = RepositoryConfig::default();
-    config.manifest = Some(man_config);
-    config.caching = Some(caching);
+    let caching = CachingConfig::default()
+        // we only write 1 native chunk
+        // & point a million chunk refs at it.
+        // so turn off chunk caching.
+        .with_num_bytes_chunks(0);
+    let mut config =
+        RepositoryConfig::default().with_manifest(man_config).with_caching(caching);
 
     // Create 20 VCCs, each with a chunk file.
     // When using toxiproxy/S3, files live in MinIO and reads go through the proxy.

@@ -102,8 +102,7 @@ async fn do_test_repo_chunks_storage(
         .execute(),
     );
 
-    let mut config = RepositoryConfig::default();
-    config.inline_chunk_threshold_bytes = Some(5);
+    let config = RepositoryConfig::default().with_inline_chunk_threshold_bytes(5);
     let repo = Repository::create(Arc::clone(&storage))
         .config(config)
         .spec_version(spec_version)
@@ -273,8 +272,7 @@ async fn test_virtual_chunk_deduplication(
         .execute(),
     );
 
-    let mut config = RepositoryConfig::default();
-    config.inline_chunk_threshold_bytes = Some(5);
+    let config = RepositoryConfig::default().with_inline_chunk_threshold_bytes(5);
     let repo = Repository::create(storage)
         .config(config)
         .spec_version(spec_version)

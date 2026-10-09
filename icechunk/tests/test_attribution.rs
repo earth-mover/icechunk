@@ -225,8 +225,7 @@ fn assert_attributed(requests: &[CapturedRequest]) {
 }
 
 async fn attributed_repo(store: &FakeStore) -> Repository {
-    let mut config = RepositoryConfig::default();
-    config.inline_chunk_threshold_bytes = Some(0);
+    let config = RepositoryConfig::default().with_inline_chunk_threshold_bytes(0);
     Repository::create(native_s3(store))
         .config(config)
         .check_clean_root(false)
@@ -319,8 +318,7 @@ async fn read_virtual_chunk(
     location: &str,
 ) -> String {
     let prefix = container.url_prefix().to_string();
-    let mut config = RepositoryConfig::default();
-    config.inline_chunk_threshold_bytes = Some(0);
+    let mut config = RepositoryConfig::default().with_inline_chunk_threshold_bytes(0);
     config.set_virtual_chunk_container(container).unwrap();
     let repo = Repository::create(native_s3(store))
         .config(config)
@@ -412,8 +410,7 @@ async fn read_http_virtual_chunk(store: &FakeStore, opts: &[(&str, &str)]) -> St
         .chain(opts)
         .map(|(k, v)| (k.to_string(), v.to_string()))
         .collect();
-    let mut http = HttpConfig::default();
-    http.opts = opts;
+    let http = HttpConfig::default().with_opts(opts);
     let container =
         VirtualChunkContainer::new(prefix.clone(), ObjectStoreConfig::Http(http))
             .unwrap();
