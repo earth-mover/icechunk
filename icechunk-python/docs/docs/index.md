@@ -109,7 +109,7 @@ When two writers commit at once, the second is rejected or rebased, never silent
 
 </div>
 <div class="benefit-figure">
-<iframe data-illustrated="consistency" title="Torn reads versus consistent reads" loading="lazy"></iframe>
+<iframe data-illustrated="consistency" data-params="chunks=6&write=15" title="Torn reads versus consistent reads" loading="lazy"></iframe>
 </div>
 </div>
 
