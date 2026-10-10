@@ -1,13 +1,14 @@
 from collections.abc import AsyncIterator, Callable, Iterable, Sequence
 from typing import Any
 
-from icechunk._icechunk_python import ChunkType, PySession, SessionMode
+from icechunk._icechunk_python import ChunkReference, ChunkType, PySession, SessionMode
 from icechunk.config import RepositoryConfig
 from icechunk.conflicts import ConflictSolver
 from icechunk.snapshots import Diff
 from icechunk.store import IcechunkStore
 
 __all__ = [
+    "ChunkReference",
     "ForkSession",
     "Session",
     "SessionMode",
@@ -339,6 +340,166 @@ class Session:
         async for batch in self._session.chunk_coordinates(array_path, batch_size):
             for coord in batch:
                 yield tuple(coord)
+
+    def get_chunk_refs(
+        self, array_path: str, coordinates: Sequence[Sequence[int]]
+    ) -> list[ChunkReference | None]:
+        """
+        Read a bounded batch of existing chunk references in input order.
+
+        Parameters
+        ----------
+        array_path : str
+            The path to the array inside the Zarr store. Example: "/group/data".
+        coordinates : Sequence[Sequence[int]]
+            The chunk coordinates to look up, as sequences of non-negative integers.
+
+        Returns
+        -------
+        list[ChunkReference | None]
+            The chunk references in input order. Missing or out-of-bounds
+            coordinates return ``None``.
+
+        Notes
+        -----
+        Only the requested coordinates are looked up; initialized chunks are not
+        enumerated. Native and virtual chunk data are not fetched or decoded.
+        Inline bytes remain part of the returned reference.
+
+        References are opaque, immutable and not pickleable. They can only be
+        written through sessions sharing the same repository storage handle.
+        Pin a read-only source session by snapshot ID when moving overlapping
+        ranges across commits, rather than reading from the evolving destination.
+
+        The caller controls batch size. Manifest loading and cache memory are
+        separate from the batch's working memory.
+        """
+        return self._session.get_chunk_refs(array_path, coordinates)
+
+    async def get_chunk_refs_async(
+        self, array_path: str, coordinates: Sequence[Sequence[int]]
+    ) -> list[ChunkReference | None]:
+        """
+        Read a bounded batch of existing chunk references in input order.
+
+        Parameters
+        ----------
+        array_path : str
+            The path to the array inside the Zarr store. Example: "/group/data".
+        coordinates : Sequence[Sequence[int]]
+            The chunk coordinates to look up, as sequences of non-negative integers.
+
+        Returns
+        -------
+        list[ChunkReference | None]
+            The chunk references in input order. Missing or out-of-bounds
+            coordinates return ``None``.
+
+        Notes
+        -----
+        Only the requested coordinates are looked up; initialized chunks are not
+        enumerated. Native and virtual chunk data are not fetched or decoded.
+        Inline bytes remain part of the returned reference.
+
+        References are opaque, immutable and not pickleable. They can only be
+        written through sessions sharing the same repository storage handle.
+        Pin a read-only source session by snapshot ID when moving overlapping
+        ranges across commits, rather than reading from the evolving destination.
+
+        The caller controls batch size. Manifest loading and cache memory are
+        separate from the batch's working memory.
+        """
+        return await self._session.get_chunk_refs_async(array_path, coordinates)
+
+    def set_chunk_refs(
+        self,
+        array_path: str,
+        updates: Sequence[tuple[Sequence[int], ChunkReference | None]],
+    ) -> None:
+        """
+        Apply a bounded batch of chunk references without reading chunk data.
+
+        Parameters
+        ----------
+        array_path : str
+            The path to the array inside the Zarr store. Example: "/group/data".
+        updates : Sequence[tuple[Sequence[int], ChunkReference | None]]
+            Pairs of destination chunk coordinates and references. ``None``
+            explicitly deletes the destination reference; it never means
+            "leave unchanged". Repeated coordinates use the last update.
+
+        Raises
+        ------
+        IcechunkError
+            If the path does not identify an array, destination coordinates are
+            invalid, the session is read-only or rearrange, or virtual-container
+            validation fails.
+        ValueError
+            If a reference comes from a different repository storage handle.
+
+        Notes
+        -----
+        All updates are validated before any are applied. Reference kind,
+        offsets, lengths, checksums and inline bytes are preserved exactly.
+        Array metadata is not changed: callers must ensure compatible chunk
+        encoding, data type and chunk shape at the destination.
+
+        References must come from sessions sharing the same storage handle
+        (for example, sessions created by one Repository or Repository.reopen).
+        Cross-repository copying and independently opened storage handles are
+        not supported. References do not keep snapshots alive for garbage
+        collection; retain the source snapshot while references are in use.
+
+        Changes accumulate in the writable session. Commit and reopen sessions
+        between batches to release that state; fixed-size calls alone do not
+        bound total session memory.
+        """
+        self._session.set_chunk_refs(array_path, updates)
+
+    async def set_chunk_refs_async(
+        self,
+        array_path: str,
+        updates: Sequence[tuple[Sequence[int], ChunkReference | None]],
+    ) -> None:
+        """
+        Apply a bounded batch of chunk references without reading chunk data.
+
+        Parameters
+        ----------
+        array_path : str
+            The path to the array inside the Zarr store. Example: "/group/data".
+        updates : Sequence[tuple[Sequence[int], ChunkReference | None]]
+            Pairs of destination chunk coordinates and references. ``None``
+            explicitly deletes the destination reference; it never means
+            "leave unchanged". Repeated coordinates use the last update.
+
+        Raises
+        ------
+        IcechunkError
+            If the path does not identify an array, destination coordinates are
+            invalid, the session is read-only or rearrange, or virtual-container
+            validation fails.
+        ValueError
+            If a reference comes from a different repository storage handle.
+
+        Notes
+        -----
+        All updates are validated before any are applied. Reference kind,
+        offsets, lengths, checksums and inline bytes are preserved exactly.
+        Array metadata is not changed: callers must ensure compatible chunk
+        encoding, data type and chunk shape at the destination.
+
+        References must come from sessions sharing the same storage handle
+        (for example, sessions created by one Repository or Repository.reopen).
+        Cross-repository copying and independently opened storage handles are
+        not supported. References do not keep snapshots alive for garbage
+        collection; retain the source snapshot while references are in use.
+
+        Changes accumulate in the writable session. Commit and reopen sessions
+        between batches to release that state; fixed-size calls alone do not
+        bound total session memory.
+        """
+        await self._session.set_chunk_refs_async(array_path, updates)
 
     def chunk_type(
         self,

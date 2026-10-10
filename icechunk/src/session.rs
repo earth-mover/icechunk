@@ -664,6 +664,10 @@ impl Session {
         &self.config
     }
 
+    pub fn storage(&self) -> &Arc<dyn Storage + Send + Sync> {
+        &self.storage
+    }
+
     pub fn matching_container(
         &self,
         chunk_location: &VirtualChunkLocation,
@@ -1142,6 +1146,35 @@ impl Session {
         self.set_node_chunk_ref(&node_snapshot, coord, data).await
     }
 
+    /// Set a caller-bounded batch of references without reading chunk data.
+    ///
+    /// All updates are validated before modifying the session. `None` deletes a
+    /// reference, and repeated coordinates use the last update. Virtual locations
+    /// must pass this session's container validation.
+    #[instrument(skip(self, updates))]
+    pub async fn set_chunk_refs(
+        &mut self,
+        path: &Path,
+        updates: Vec<(ChunkIndices, Option<ChunkPayload>)>,
+    ) -> SessionResult<()> {
+        self.change_set_mut()?;
+        if self.mode() == SessionMode::Rearrange {
+            return Err(SessionError::capture(SessionErrorKind::RearrangeSessionOnly));
+        }
+        let node = self.get_array(path).await?;
+        for (coord, data) in &updates {
+            Self::validate_node_chunk_ref(&node, coord, data.as_ref())?;
+            if let Some(ChunkPayload::Virtual(reference)) = data {
+                self.validate_virtual_chunk_location(&reference.location).inject()?;
+            }
+        }
+        let changes = self.change_set_mut()?;
+        for (coord, data) in updates {
+            changes.set_chunk_ref(node.id.clone(), coord, data)?;
+        }
+        Ok(())
+    }
+
     fn change_set(&self) -> &ChangeSet {
         &self.change_set
     }
@@ -1171,23 +1204,31 @@ impl Session {
         coord: ChunkIndices,
         data: Option<ChunkPayload>,
     ) -> SessionResult<()> {
+        Self::validate_node_chunk_ref(node, &coord, data.as_ref())?;
+        self.change_set_mut()?.set_chunk_ref(node.id.clone(), coord, data)
+    }
+
+    fn validate_node_chunk_ref(
+        node: &NodeSnapshot,
+        coord: &ChunkIndices,
+        data: Option<&ChunkPayload>,
+    ) -> SessionResult<()> {
         // No valid chunk is ever zero bytes long, however it is stored: a chunk has to
         // decode to the full chunk shape, and nothing decodes from nothing. `data: None`
         // is untouched - deleting is how a chunk that isn't stored is recorded, and it
         // reads back as the array's fill value.
-        if data.as_ref().is_some_and(|payload| payload.length() == 0) {
+        if data.is_some_and(|payload| payload.length() == 0) {
             return Err(SessionError::capture(SessionErrorKind::ZeroLengthChunk {
-                coords: coord,
+                coords: coord.clone(),
                 path: node.path.clone(),
             }));
         }
         if let NodeData::Array { ref shape, .. } = node.node_data {
-            if shape.valid_chunk_coord(&coord) {
-                self.change_set_mut()?.set_chunk_ref(node.id.clone(), coord, data)?;
+            if shape.valid_chunk_coord(coord) {
                 Ok(())
             } else {
                 Err(SessionError::capture(SessionErrorKind::InvalidIndex {
-                    coords: coord,
+                    coords: coord.clone(),
                     path: node.path.clone(),
                 }))
             }
@@ -1270,11 +1311,36 @@ impl Session {
         coords: &ChunkIndices,
     ) -> SessionResult<Option<ChunkPayload>> {
         let node = self.get_node(path).await?;
+        self.get_node_chunk_ref(&node, coords).await
+    }
+
+    /// Look up only the requested coordinates, in input order, without reading
+    /// chunk data or enumerating initialized chunks. Missing references are `None`.
+    /// Resolves the array once; manifest loading and caching costs still apply.
+    #[instrument(skip(self, coordinates))]
+    pub async fn get_chunk_refs(
+        &self,
+        path: &Path,
+        coordinates: &[ChunkIndices],
+    ) -> SessionResult<Vec<Option<ChunkPayload>>> {
+        let node = self.get_array(path).await?;
+        let mut references = Vec::with_capacity(coordinates.len());
+        for coords in coordinates {
+            references.push(self.get_node_chunk_ref(&node, coords).await?);
+        }
+        Ok(references)
+    }
+
+    async fn get_node_chunk_ref(
+        &self,
+        node: &NodeSnapshot,
+        coords: &ChunkIndices,
+    ) -> SessionResult<Option<ChunkPayload>> {
         // TODO: it's ugly to have to do this destructuring even if we could be calling `get_array`
         // get_array should return the array data, not a node
-        match node.node_data {
+        match &node.node_data {
             NodeData::Group => Err(SessionError::capture(SessionErrorKind::NotAnArray {
-                node: Box::new(node),
+                node: Box::new(node.clone()),
                 message: "getting chunk reference".to_string(),
             })),
             NodeData::Array { shape, manifests, .. } => {
@@ -1296,8 +1362,8 @@ impl Session {
                     Some(res) => Ok(res),
                     None => {
                         self.get_old_chunk(
-                            array_label(path),
-                            node.id,
+                            array_label(&node.path),
+                            node.id.clone(),
                             manifests.as_slice(),
                             coords,
                         )
@@ -3667,6 +3733,157 @@ mod tests {
         let storage =
             new_in_memory_storage().await.expect("failed to create in-memory store");
         Repository::create(storage).spec_version(spec_version).execute().await.unwrap()
+    }
+
+    #[tokio_test]
+    #[apply(spec_version_cases)]
+    async fn test_chunk_refs_indexed_metadata_only(
+        #[case] spec_version: SpecVersionBin,
+    ) -> Result<(), Box<dyn Error>> {
+        use crate::config::{
+            ManifestPreloadCondition, ManifestPreloadConfig, ObjectStoreConfig, S3Options,
+        };
+        use crate::format::{ChunkId, manifest::Checksum};
+        use icechunk_types::ETag;
+
+        for num_chunks in [16u32, 1024] {
+            let logging = Arc::new(LoggingStorage::new(new_in_memory_storage().await?));
+            let storage: Arc<dyn Storage + Send + Sync> = logging.clone();
+            let mut config = RepositoryConfig {
+                // Count manifest loads, not the in-memory backend's range splitting.
+                storage: Some(storage::Settings {
+                    concurrency: Some(storage::ConcurrencySettings {
+                        max_concurrent_requests_for_object: std::num::NonZeroU16::new(1),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }),
+                manifest: Some(ManifestConfig {
+                    preload: Some(ManifestPreloadConfig {
+                        preload_if: Some(ManifestPreloadCondition::False),
+                        ..Default::default()
+                    }),
+                    splitting: Some(ManifestSplittingConfig {
+                        split_sizes: Some(vec![(
+                            ManifestSplitCondition::PathMatches {
+                                regex: ".*".to_string(),
+                            },
+                            vec![ManifestSplitDim {
+                                condition: ManifestSplitDimCondition::Any,
+                                num_chunks: 4,
+                            }],
+                        )]),
+                    }),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+            config
+                .set_virtual_chunk_container(
+                    VirtualChunkContainer::new(
+                        "s3://unavailable/".to_string(),
+                        ObjectStoreConfig::S3(S3Options::default().with_anonymous(true)),
+                    )
+                    .unwrap(),
+                )
+                .unwrap();
+            let repo = Repository::create(storage)
+                .config(config)
+                .spec_version(spec_version)
+                .execute()
+                .await?;
+            let path = Path::root();
+            let mut session = repo.writable_session("main").await?;
+            session
+                .add_array(
+                    path.clone(),
+                    ArrayShape::new(vec![(u64::from(num_chunks), num_chunks)]).unwrap(),
+                    None,
+                    Bytes::new(),
+                )
+                .await?;
+            // Neither referenced object exists: reads of chunk data must fail.
+            let native = ChunkPayload::Ref(ChunkRef {
+                id: ChunkId::random(),
+                offset: 17,
+                length: 23,
+            });
+            let inline = ChunkPayload::Inline(Bytes::from_static(b"inline bytes"));
+            let virtual_ref = ChunkPayload::Virtual(VirtualChunkRef {
+                location: VirtualChunkLocation::from_url("s3://unavailable/chunk")?,
+                offset: 37,
+                length: 41,
+                checksum: Some(Checksum::ETag(ETag("exact-etag".to_string()))),
+            });
+            let updates = (0..num_chunks)
+                .filter(|&i| i != 3)
+                .map(|i| {
+                    let payload = match i {
+                        0 => inline.clone(),
+                        2 => virtual_ref.clone(),
+                        _ => native.clone(),
+                    };
+                    (ChunkIndices(vec![i]), Some(payload))
+                })
+                .collect();
+            session.set_chunk_refs(&path, updates).await?;
+            let snapshot = session.commit("source").execute().await?;
+
+            // Fresh caches make a whole-array traversal visible in storage reads.
+            let repo = Repository::open(Arc::clone(repo.storage())).execute().await?;
+            let source =
+                repo.readonly_session(&VersionInfo::SnapshotId(snapshot)).await?;
+            let mut destination = repo.writable_session("main").await?;
+            source.get_array(&path).await?;
+            destination.get_array(&path).await?;
+            logging.clear();
+            let coords = [2, 0, 1, 3, 0].map(|i| ChunkIndices(vec![i]));
+            let refs = source.get_chunk_refs(&path, &coords).await?;
+            assert_eq!(
+                refs,
+                vec![
+                    Some(virtual_ref),
+                    Some(inline.clone()),
+                    Some(native.clone()),
+                    None,
+                    Some(inline),
+                ]
+            );
+            let reads = logging.fetch_operations();
+            assert_eq!(reads.len(), 1, "{reads:?}");
+            assert_eq!(reads[0].0, "get_object_range");
+            assert!(reads[0].1.starts_with("manifests/"));
+
+            for (coord, payload) in [
+                (ChunkIndices(vec![num_chunks]), Some(native)),
+                (ChunkIndices(vec![0]), Some(ChunkPayload::Inline(Bytes::new()))),
+            ] {
+                assert!(
+                    destination
+                        .set_chunk_refs(
+                            &path,
+                            vec![(ChunkIndices(vec![0]), None), (coord, payload)],
+                        )
+                        .await
+                        .is_err()
+                );
+                assert!(!destination.has_uncommitted_changes());
+            }
+            let targets = [8, 9, 10, 11, 12].map(|i| ChunkIndices(vec![i]));
+            destination
+                .set_chunk_refs(
+                    &path,
+                    targets.iter().cloned().zip(refs.iter().cloned()).collect(),
+                )
+                .await?;
+            assert_eq!(logging.fetch_operations(), reads);
+            assert_eq!(destination.get_chunk_refs(&path, &targets).await?, refs);
+            let copied = destination.commit("copy references").execute().await?;
+            let result = repo.readonly_session(&VersionInfo::SnapshotId(copied)).await?;
+            assert_eq!(result.get_chunk_refs(&path, &targets).await?, refs);
+            assert_eq!(source.get_chunk_refs(&path, &coords).await?, refs);
+        }
+        Ok(())
     }
 
     #[proptest(async = "tokio")]
