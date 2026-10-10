@@ -186,24 +186,24 @@ jobs:
       - uses: prefix-dev/setup-pixi@d3f436a425481402e6a95a1d1fc10331c708cd9e # v0.10.2
         with:
           pixi-version: ${{ env.PIXI_VERSION }}
-          # py314t builds some PyPI deps from source, so a restore beats a fresh install
+          # py315t builds some PyPI deps from source, so a restore beats a fresh install
           cache: true
           cache-write: ${{ github.ref == 'refs/heads/main' }}
           activate-environment: true
           manifest-path: icechunk-python/pyproject.toml
-          environments: py314t
+          environments: py315t
 
       - name: Cache Dependencies
         uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
         with:
-          prefix-key: "rust-py314t"
+          prefix-key: "rust-py315t"
           shared-key: "wheels"
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Build wheels
         run: just profile=ci-wheel build-wheels
         env:
-          PYTHON_VERSION: "3.14t"
+          PYTHON_VERSION: "3.15t"
 
       - name: Upload wheels
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -233,18 +233,18 @@ jobs:
           cache: false
           activate-environment: true
           manifest-path: icechunk-python/pyproject.toml
-          environments: wheel-test-py314t
+          environments: wheel-test-py315t
 
       - name: Stand up RustFS
         run: just services-start rustfs_init
 
-      # zstandard has no 3.14t wheel and takes ~45s to build. Build it into uv's cache
+      # zstandard has no 3.15t wheel and takes ~45s to build. Build it into uv's cache
       # while the wheel compiles; the install step below still does the full install.
       - name: Prefetch test dependencies
         continue-on-error: true
         working-directory: icechunk-python
         run: |
-          uv venv "$RUNNER_TEMP/prefetch" --python 3.14t
+          uv venv "$RUNNER_TEMP/prefetch" --python 3.15t
           uv pip install --python "$RUNNER_TEMP/prefetch" --group test
 
       # Only this lane polls instead of using `needs`: its setup above takes ~90s,
@@ -262,7 +262,7 @@ jobs:
 
       - name: Install dependencies
         env:
-          PYTHON_VERSION: "3.14t"
+          PYTHON_VERSION: "3.15t"
         run: just install-test-wheel test
 
       - name: Wait for RustFS to be ready

@@ -55,7 +55,8 @@ http = "1.4.0"
 itertools = "0.15.0"
 miette = { version = "7.6.0", features = ["fancy"] }
 noxious-client = "1.0"
-numpy = "0.29.0"
+# abi3t support (PyO3/rust-numpy#556) is not in a crates.io release yet
+numpy = { git = "https://github.com/PyO3/rust-numpy", rev = "9df402373716a60f0e7825b6043568abe4e63b46" }
 object_store = { version = "0.14.0", default-features = false }
 opentelemetry = { version = "0.33", default-features = false, features = ["trace"] }
 opentelemetry-otlp = { version = "0.33", default-features = false, features = ["grpc-tonic", "trace"] }

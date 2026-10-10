@@ -126,6 +126,4 @@ def test_version_int_or_specversion() -> None:
 
 
 def test_version_supported_listing() -> None:
-    assert (
-        str(ic.supported_spec_versions()) == "[SpecVersion.v2 (current), SpecVersion.v1]"
-    )
+    assert str(ic.supported_spec_versions()) == "[SpecVersion.v2, SpecVersion.v1]"
