@@ -3,7 +3,7 @@ use std::{borrow::Cow, ops::Deref as _, sync::Arc};
 use async_stream::try_stream;
 use futures::{StreamExt as _, TryStreamExt as _};
 use icechunk::{
-    Store,
+    Storage, Store,
     format::{ChunkIndices, Path, manifest::ChunkPayload},
     session::{
         ReindexMapping, ReindexOperationResult, Session, SessionError, SessionErrorKind,
@@ -30,6 +30,21 @@ use crate::{
 #[pyclass(skip_from_py_object)]
 #[derive(Clone, Debug)]
 pub struct PySession(pub Arc<RwLock<Session>>);
+
+/// An immutable, process-local reference to an existing chunk in a storage handle.
+#[pyclass(from_py_object, frozen, name = "ChunkReference", module = "icechunk")]
+#[derive(Clone, Debug)]
+pub struct PyChunkReference {
+    payload: ChunkPayload,
+    storage: Arc<dyn Storage + Send + Sync>,
+}
+
+#[pymethods]
+impl PyChunkReference {
+    fn __eq__(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.storage, &other.storage) && self.payload == other.payload
+    }
+}
 
 #[pyclass(eq, eq_int, rename_all = "snake_case")]
 #[derive(Debug, PartialEq)]
@@ -419,6 +434,56 @@ impl PySession {
         })
     }
 
+    pub fn get_chunk_refs(
+        &self,
+        py: Python<'_>,
+        array_path: String,
+        coordinates: Vec<Vec<u32>>,
+    ) -> PyResult<Vec<Option<PyChunkReference>>> {
+        py.detach(move || {
+            pyo3_async_runtimes::tokio::get_runtime().block_on(
+                Self::get_chunk_refs_inner(Arc::clone(&self.0), array_path, coordinates),
+            )
+        })
+    }
+
+    pub fn get_chunk_refs_async<'py>(
+        &self,
+        py: Python<'py>,
+        array_path: String,
+        coordinates: Vec<Vec<u32>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        pyo3_async_runtimes::tokio::future_into_py(
+            py,
+            Self::get_chunk_refs_inner(Arc::clone(&self.0), array_path, coordinates),
+        )
+    }
+
+    pub fn set_chunk_refs(
+        &self,
+        py: Python<'_>,
+        array_path: String,
+        updates: Vec<(Vec<u32>, Option<PyChunkReference>)>,
+    ) -> PyResult<()> {
+        py.detach(move || {
+            pyo3_async_runtimes::tokio::get_runtime().block_on(
+                Self::set_chunk_refs_inner(Arc::clone(&self.0), array_path, updates),
+            )
+        })
+    }
+
+    pub fn set_chunk_refs_async<'py>(
+        &self,
+        py: Python<'py>,
+        array_path: String,
+        updates: Vec<(Vec<u32>, Option<PyChunkReference>)>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        pyo3_async_runtimes::tokio::future_into_py(
+            py,
+            Self::set_chunk_refs_inner(Arc::clone(&self.0), array_path, updates),
+        )
+    }
+
     pub fn all_virtual_chunk_locations_async<'py>(
         &'py self,
         py: Python<'py>,
@@ -748,6 +813,65 @@ impl PySession {
 }
 
 impl PySession {
+    async fn get_chunk_refs_inner(
+        session: Arc<RwLock<Session>>,
+        array_path: String,
+        coordinates: Vec<Vec<u32>>,
+    ) -> PyResult<Vec<Option<PyChunkReference>>> {
+        let array_path = Path::new(&array_path)
+            .map_err(|e| StoreError::capture(StoreErrorKind::PathError(e)))
+            .map_err(PyIcechunkStoreError::StoreError)?;
+        let coordinates = coordinates.into_iter().map(ChunkIndices).collect::<Vec<_>>();
+        let session = session.read().await;
+        let references = session
+            .get_chunk_refs(&array_path, &coordinates)
+            .await
+            .map_err(PyIcechunkStoreError::SessionError)?;
+        Ok(references
+            .into_iter()
+            .map(|reference| {
+                reference.map(|payload| PyChunkReference {
+                    payload,
+                    storage: Arc::clone(session.storage()),
+                })
+            })
+            .collect())
+    }
+
+    async fn set_chunk_refs_inner(
+        session: Arc<RwLock<Session>>,
+        array_path: String,
+        updates: Vec<(Vec<u32>, Option<PyChunkReference>)>,
+    ) -> PyResult<()> {
+        let array_path = Path::new(&array_path)
+            .map_err(|e| StoreError::capture(StoreErrorKind::PathError(e)))
+            .map_err(PyIcechunkStoreError::StoreError)?;
+        let mut session = session.write().await;
+        for (_, reference) in &updates {
+            if let Some(reference) = reference
+                && !Arc::ptr_eq(&reference.storage, session.storage())
+            {
+                return Err(PyIcechunkStoreError::PyValueError(
+                    "Chunk references must use the same repository storage handle; \
+                     cross-repository and independently opened storage handles are not supported"
+                        .to_string(),
+                )
+                .into());
+            }
+        }
+        let updates = updates
+            .into_iter()
+            .map(|(coords, reference)| {
+                (ChunkIndices(coords), reference.map(|reference| reference.payload))
+            })
+            .collect();
+        session
+            .set_chunk_refs(&array_path, updates)
+            .await
+            .map_err(PyIcechunkStoreError::SessionError)?;
+        Ok(())
+    }
+
     async fn chunk_type_inner(
         session: Arc<RwLock<Session>>,
         array_path: String,
