@@ -150,8 +150,8 @@ jobs:
           - runner: ubuntu-latest
             target: aarch64
             manylinux: 2_28
-        # free-threaded CPython has no stable ABI, so 3.14t needs its own wheel
-        python: ['3.12', '3.14t']
+        # 3.14t has no stable ABI and needs its own wheel; 3.15t builds abi3t
+        python: ['3.12', '3.14t', '3.15t']
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -209,8 +209,8 @@ jobs:
             target: x86_64
           - runner: ubuntu-latest
             target: aarch64
-        # free-threaded CPython has no stable ABI, so 3.14t needs its own wheel
-        python: ['3.12', '3.14t']
+        # 3.14t has no stable ABI and needs its own wheel; 3.15t builds abi3t
+        python: ['3.12', '3.14t', '3.15t']
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -262,8 +262,8 @@ jobs:
         platform:
           - runner: windows-latest
             target: x64
-        # free-threaded CPython has no stable ABI, so 3.14t needs its own wheel
-        python: ['3.12', '3.14t']
+        # 3.14t has no stable ABI and needs its own wheel; 3.15t builds abi3t
+        python: ['3.12', '3.14t', '3.15t']
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -311,8 +311,8 @@ jobs:
             target: x86_64
           - runner: macos-14
             target: aarch64
-        # free-threaded CPython has no stable ABI, so 3.14t needs its own wheel
-        python: ['3.12', '3.14t']
+        # 3.14t has no stable ABI and needs its own wheel; 3.15t builds abi3t
+        python: ['3.12', '3.14t', '3.15t']
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

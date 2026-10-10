@@ -556,7 +556,9 @@ install-test-wheel group="test" *args:
   cd icechunk-python
   uv venv --clear --python=${PYTHON_VERSION}
   source .venv/bin/activate
-  PY_TAG="cp${PYTHON_VERSION//./}"
+  # wheel python tags omit the free-threaded "t" (cp314-cp314t, cp315-abi3.abi3t)
+  PY_VERSION="${PYTHON_VERSION%t}"
+  PY_TAG="cp${PY_VERSION//./}"
   WHEEL=$(ls dist/*-"${PY_TAG}"-*.whl)
   uv pip install "$WHEEL" --group "{{group}}" "$@"
 
