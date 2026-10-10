@@ -1107,13 +1107,6 @@ impl From<SpecVersionBin> for PySpecVersion {
 
 #[pymethods]
 impl PySpecVersion {
-    pub(crate) fn __repr__(&self) -> String {
-        match self {
-            Self::V2 => "SpecVersion.v2 (current)".into(),
-            Self::V1 => "SpecVersion.v1".into(),
-        }
-    }
-
     #[staticmethod]
     pub(crate) fn current() -> Self {
         Default::default()

@@ -13,6 +13,7 @@ classifiers = [
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
   "Programming Language :: Python :: 3.14",
+  "Programming Language :: Python :: 3.15",
   "Programming Language :: Python :: Free Threading :: 2 - Beta",
 ]
 readme = "README.md"
@@ -94,7 +95,7 @@ docs = [
 ]
 
 [tool.maturin]
-features = ["pyo3/abi3-py312"]
+features = ["pyo3/abi3-py312", "pyo3/abi3t-py315"]
 module-name = "icechunk._icechunk_python"
 python-source = "python"
 editable-profile = "dev"
@@ -221,18 +222,21 @@ platforms = [
 [tool.pixi.feature.dev.pypi-dependencies]
 zarr = "<3.2"
 
+[tool.pixi.feature.netcdf.dependencies]
+netcdf4 = ">=1.7.4,<2"
+
 [tool.pixi.feature.docs.dependencies]
 cairo = ">=1.18.4,<2"
 
 [tool.pixi.feature.py312.dependencies]
 python = "~=3.12.0"
 
-[tool.pixi.feature.py314t.dependencies]
-python-freethreading = "~=3.14.0"
+[tool.pixi.feature.py315t.dependencies]
+python-freethreading = "~=3.15.0"
 
 # numcodecs declared free-threaded support in 0.17.0. Older releases re-enable
 # the GIL when zarr imports them, which serializes every thread.
-[tool.pixi.feature.py314t.pypi-dependencies]
+[tool.pixi.feature.py315t.pypi-dependencies]
 numcodecs = ">=0.17.0"
 
 [tool.pixi.feature.rustc.dependencies]
@@ -250,7 +254,6 @@ openssl = ">=3.6.3,<4"
 pkgconfig = ">=1.5.5,<2"
 cargo-deny = ">=0.20.2,<0.21"
 prek = ">=0.4.14,<0.5"
-netcdf4 = ">=1.7.4,<2"
 cargo-nextest = ">=0.9.143,<0.10"
 samply = ">=0.13.1,<0.14"
 cargo-release = ">=1.1.3,<2"
@@ -283,6 +286,7 @@ sysroot_linux-aarch64 = ">=2.34"
 [tool.pixi.environments]
 default = { features = [
   "py312",
+  "netcdf",
   "runner",
   "build",
   "dev",
@@ -291,14 +295,14 @@ default = { features = [
   "rustc"
 ], solve-group = "default" }
 benchmark = { features = ["benchmark"], solve-group = "default" }
-py314t = { features = [
-  "py314t",
+py315t = { features = [
+  "py315t",
   "runner",
   "build",
   "dev",
   "test",
   "rustc"
-], solve-group = "py314t" }
+], solve-group = "py315t" }
 # The MSRV check only runs cargo. The default feature's PyPI deps get built
 # from source for the free-threaded python this env resolves to.
 msrv = { features = [
@@ -319,11 +323,11 @@ wheel-test = { features = [
   "py312",
   "runner"
 ], no-default-feature = true, solve-group = "default" }
-# Same solve group as py314t, so the wheel is tested on the interpreter that built it
-wheel-test-py314t = { features = [
-  "py314t",
+# Same solve group as py315t, so the wheel is tested on the interpreter that built it
+wheel-test-py315t = { features = [
+  "py315t",
   "runner"
-], no-default-feature = true, solve-group = "py314t" }
+], no-default-feature = true, solve-group = "py315t" }
 # The Windows and macOS unit-test legs need cargo, nextest and the MSRV text
 # check. A small env installs faster than the default one.
 rust-test = { features = [
