@@ -6,7 +6,7 @@ title: Icechunk - Open-source, high-performance array format and library for sci
 <div class="benefit-row" markdown>
 <div class="benefit-text" markdown>
 
-## Scale {#scale}
+## Scale and speed {#scale}
 
 Store gigabytes on your laptop or terabytes in a bucket, or reference petabytes of existing files with a repository of gigabytes. The same format and library cover all three.
 
