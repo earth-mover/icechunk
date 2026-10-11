@@ -98,7 +98,7 @@ Every other chunk in the new snapshot points at data already in storage, so a lo
 <div class="benefit-row" markdown>
 <div class="benefit-text" markdown>
 
-## Consistency {#consistency}
+## ACID transactions {#consistency}
 
 Icechunk gives you ACID transactions on arrays.
 Without them, a reader can catch a write halfway and get arrays that don't match.
