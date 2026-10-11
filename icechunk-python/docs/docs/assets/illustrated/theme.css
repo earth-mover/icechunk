@@ -34,6 +34,13 @@
 .crumb {
   display: none;
 }
+/* Embedded frames are sized to their content. A frame that can scroll,
+   even for a moment while it resizes, takes the reader's scroll gesture
+   away from the page. */
+:root:root,
+:root:root body {
+  overflow: hidden;
+}
 /* Embedded frames are sized to their content, so a cell size that
    depends on the frame's height would grow without end. */
 @media (max-width: 760px) {

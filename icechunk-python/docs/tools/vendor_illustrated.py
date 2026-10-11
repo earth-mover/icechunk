@@ -206,6 +206,10 @@ def main(dist: Path) -> None:
         f':root[data-theme="dark"] {{\n  --il-0d1117ff: {DARK_BACKGROUND};\n}}\n'
         "/* The back link to the illustrated index has no place in the docs. */\n"
         ".crumb {\n  display: none;\n}\n"
+        "/* Embedded frames are sized to their content. A frame that can scroll,\n"
+        "   even for a moment while it resizes, takes the reader's scroll gesture\n"
+        "   away from the page. */\n"
+        ":root:root,\n:root:root body {\n  overflow: hidden;\n}\n"
         "/* Embedded frames are sized to their content, so a cell size that\n"
         "   depends on the frame's height would grow without end. */\n"
         "@media (max-width: 760px) {\n"
