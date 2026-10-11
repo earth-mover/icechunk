@@ -1,6 +1,6 @@
 site_name: Icechunk
 site_description: >-
-  Open-source, cloud-native transactional tensor storage engine
+  Open-source, high-performance array format and library for scientific data
 site_author: Earthmover PBC
 site_url: !ENV [READTHEDOCS_CANONICAL_URL, 'https://icechunk.io']
 repo_url: https://github.com/earth-mover/icechunk
@@ -17,6 +17,7 @@ extra_css:
 
 extra_javascript:
   - scripts/readthedocs.js
+  - scripts/illustrated.js
 
 theme:
   name: material
@@ -232,6 +233,7 @@ markdown_extensions:
 nav:
   - Home: index.md
   - Overview: overview.md
+  - Languages: languages.md
   - Getting Started:
     - Quickstart: getting-started/quickstart.md
     - How To: getting-started/howto.md

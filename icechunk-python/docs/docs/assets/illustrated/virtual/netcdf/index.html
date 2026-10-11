@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <script>document.documentElement.dataset.theme=new URLSearchParams(location.search).get("theme")||"dark"</script>
+    <link rel="stylesheet" href="../../theme.css">
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Virtual chunks: subset queries without re-uploading data</title>
+    <script type="module" crossorigin src="../../assets/virtualNetcdf-C83R-JEd.js"></script>
+    <link rel="modulepreload" crossorigin href="../../assets/chrome-BI9ASo4_.js">
+    <link rel="modulepreload" crossorigin href="../../assets/format-EFX9Z0f-.js">
+    <link rel="modulepreload" crossorigin href="../../assets/urlParams-amDJmafp.js">
+    <link rel="modulepreload" crossorigin href="../../assets/pricing--oGC33CI.js">
+    <link rel="stylesheet" crossorigin href="../../assets/chrome-DYx6i_tk.css">
+    <link rel="stylesheet" crossorigin href="../../assets/virtualNetcdf-BL0EXOaw.css">
+  <script>
+(() => {
+  const formats = [
+    { stem: "file", ext: ".nc", label: "NetCDF / GRIB" },
+    { stem: "ds", ext: ".h5ad", label: "AnnData h5ad" },
+  ];
+  let round = -1;
+  window.__ilFileName = (i) => {
+    if (i === 0) {
+      round += 1;
+      const label = formats[round % formats.length].label;
+      for (const el of document.querySelectorAll("[data-il-format]")) el.textContent = label;
+    }
+    const f = formats[round % formats.length];
+    return `${f.stem}_${String(i).padStart(2, "0")}${f.ext}`;
+  };
+})();
+</script>
+  </head>
+  <body class="page-virtual">
+    <main id="app">
+      <header class="intro">
+        <p class="crumb"><a href="../">&larr; Virtual chunks</a></p>
+        <h1>Virtual chunks: query the archive in place</h1>
+        <p>
+          Big archival datasets are usually a pile of NetCDF or GRIB files in
+          object storage. To read a small slice with the native reader you have
+          to download whole files and throw 99% of the bytes away. With
+          <a
+            href="https://virtualizarr.readthedocs.io/"
+            target="_blank"
+            rel="noreferrer"
+            >VirtualiZarr</a
+          >
+          and Icechunk, a tiny manifest maps every logical chunk to a
+          <em>(file, offset, length)</em> in the archive. The reader pulls the
+          manifest first, then range-GETs only the bytes it needs.
+        </p>
+      </header>
+
+      <section class="vc-scoreboard" aria-live="polite">
+        <div class="vc-score vc-score-trad">
+          <span class="vc-score-label ink-trad">Native reader bill</span>
+          <span class="vc-score-value" data-vc="trad-cost">$0</span>
+          <span class="vc-score-sub" data-vc="trad-time">&lt; 1 s</span>
+          <span class="vc-score-foot">
+            <span data-vc="trad-bytes">0 B</span> downloaded
+          </span>
+        </div>
+        <div class="vc-score vc-score-ice">
+          <span class="vc-score-label ink-icechunk">Virtual chunks bill</span>
+          <span class="vc-score-value" data-vc="virt-cost">$0</span>
+          <span class="vc-score-sub" data-vc="virt-time">&lt; 1 s</span>
+          <span class="vc-score-foot">
+            <span data-vc="virt-bytes">0 B</span> downloaded
+          </span>
+        </div>
+      </section>
+
+      <!--
+        Stage layout (CSS grid, see style.css):
+          row 1: shared archival source spanning both columns
+          row 2: plain-Zarr column (just a laptop)  | Icechunk column
+                                                       (manifest box + laptop)
+        The packets overlay covers the whole stage so a chunk can fly
+        diagonally from the shared archive down to either laptop.
+      -->
+      <section class="vc-stage">
+        <div class="vc-archive" data-vc="archive">
+          <span class="vc-cloud-label"
+            >&#9729;&#65039; Archival (<span data-il-format>NetCDF / GRIB</span>)</span
+          >
+          <!-- Opaque files. From the outside a NetCDF / GRIB blob is just
+               bytes; you don't know what's inside until you've downloaded
+               and parsed it (traditional) or you have a manifest pointing
+               into it (Icechunk). -->
+          <div class="vc-files" data-vc="files"></div>
+        </div>
+
+        <div class="vc-side vc-side-trad">
+          <span class="vc-side-label ink-trad"
+            >Native <span data-il-format>NetCDF / GRIB</span> reader</span
+          >
+          <div class="vc-computer" data-vc="trad-computer">
+            <span class="vc-computer-label">Your laptop</span>
+            <!-- Decode zone: downloads land here and are transformed into
+                 chunks. For the plain client this is where the whole
+                 opaque file gets parsed; the selected chunks then snap
+                 into the result array below. -->
+            <div class="vc-decode-zone" data-vc="trad-decode">
+              <span class="vc-decode-zone-label">decode</span>
+            </div>
+            <div class="vc-result" data-vc="trad-result">
+              <span class="vc-result-label">result array</span>
+              <div class="vc-result-cells" data-vc="trad-result-cells"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="vc-side vc-side-ice">
+          <span class="vc-side-label ink-icechunk"
+            >Icechunk virtual dataset</span
+          >
+
+          <!-- Icechunk repo: a small container holding a "ghost" grid of the
+               archive (the manifest knows about every chunk in every file).
+               The selected slots in the ghost grid light up to show what the
+               query is asking for; once the manifest packet lands at the
+               laptop, the matching chunks in the real archive above start
+               flying down. -->
+          <div class="vc-icechunk" data-vc="ice-repo">
+            <span class="vc-icechunk-label">Icechunk repo</span>
+            <div class="vc-manifest" data-vc="manifest-box">
+              <span class="vc-manifest-label">manifest</span>
+              <div class="vc-ghost-files" data-vc="ghost-files"></div>
+              <span class="vc-manifest-sub">(path, offset, length)</span>
+            </div>
+          </div>
+          <div class="vc-computer" data-vc="virt-computer">
+            <span class="vc-computer-label">Your laptop</span>
+            <div class="vc-result" data-vc="virt-result">
+              <span class="vc-result-label">result array</span>
+              <div class="vc-result-cells" data-vc="virt-result-cells"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="vc-packets" data-vc="packets"></div>
+      </section>
+
+      <section class="controls">
+        <label>
+          Files
+          <input id="vcFiles" type="range" min="2" max="8" value="4" />
+          <span id="vcFilesLabel">4</span>
+        </label>
+        <label>
+          Chunks / file
+          <input id="vcPer" type="range" min="4" max="36" value="16" />
+          <span id="vcPerLabel">16</span>
+        </label>
+        <label>
+          Chunk size
+          <input id="vcSize" type="range" min="0" max="10" value="4" />
+          <span id="vcSizeLabel">16 MiB</span>
+        </label>
+        <label>
+          Bandwidth
+          <input id="vcBw" type="range" min="0" max="13" value="7" />
+          <span id="vcBwLabel">128 MB/s</span>
+        </label>
+        <label>
+          Pick / file
+          <input id="vcPick" type="range" min="1" max="6" value="2" />
+          <span id="vcPickLabel">2</span>
+        </label>
+      </section>
+    </main>
+
+  </body>
+</html>
