@@ -117,7 +117,7 @@ When two writers commit at once, the second is rejected or rebased, never silent
 <div class="benefit-row" markdown>
 <div class="benefit-text" markdown>
 
-## Format and client only {#format-and-client-only}
+## Client and format only {#format-and-client-only}
 
 The Icechunk library runs inside your program and reads and writes files directly.
 There is no server, database or service to run.
