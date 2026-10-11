@@ -55,6 +55,8 @@ pub enum StorageErrorKind {
     /// The store asked us to slow down (S3 `SlowDown` / HTTP 503 / 429). Retry with backoff.
     #[error("storage throttled the request: {code}: {message}")]
     Throttled { code: String, message: String },
+    #[error("the repository is frozen: unfreeze it before writing")]
+    RepositoryFrozen,
     #[error("storage error: {0}")]
     Other(String),
 }
@@ -740,8 +742,8 @@ pub trait Storage: fmt::Debug + Display + sealed::Sealed + Sync + Send {
     /// it always reads.
     ///
     /// The etag is the version's identity: `OnLatestVersion` means the
-    /// object's content is `previous_version`'s. Backends may use the other
-    /// fields of `previous_version` as a fast path to answer that.
+    /// backend has nothing newer than `previous_version` to show. A backend
+    /// whose listing lags may answer it for an older version too.
     async fn get_object_conditional(
         &self,
         ctx: &StorageContext<'_>,

@@ -1,9 +1,10 @@
 from collections.abc import Callable
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from icechunk._icechunk_python import (
     ChecksumAlgorithm,
     ChunkType,
+    FilesystemStorage,
     GcsBearerCredential,
     ObjectStoreConfig,
     S3Options,
@@ -24,6 +25,7 @@ __all__ = [
     "AnyObjectStoreConfig",
     "ChecksumAlgorithm",
     "ChunkType",
+    "FilesystemStorage",
     "ObjectStoreConfig",
     "S3Options",
     "Storage",
@@ -80,21 +82,24 @@ def local_filesystem_storage(path: str) -> Storage:
     return Storage.new_local_filesystem(path)
 
 
-def filesystem_storage(
-    path: str,
-    *,
-    fsync: bool = True,
-    stale_after: timedelta = timedelta(seconds=60),
-) -> Storage:
+def filesystem_storage(path: str, *, fsync: bool = True) -> FilesystemStorage:
     """Create a Storage instance that saves data in a filesystem, safe for concurrent writers.
 
     This storage is experimental. Unlike `local_filesystem_storage`, it is safe
     for concurrent writers on filesystems that meet the requirements in the
-    storage guide: exclusive hard links, atomic rename and fresh opens.
+    storage guide: hard links, atomic rename by name and exclusive directory
+    rename.
+
+    It keeps the repository's `repo` file in its own format, a stub `repo` file
+    and a `repo.d/` directory, so other tools and other storage backends can't
+    open its repositories. Everything else is the same as in
+    `local_filesystem_storage`.
 
     Concurrent-writer safety holds only if every writer of the repository uses
     this storage. Writers using `local_filesystem_storage`, or an older Icechunk
-    version, must never run on the same repository at the same time.
+    version, must never write to its repositories. Repositories written by them
+    must first be converted, once, with no writer running, with
+    `FilesystemStorage.migrate_legacy_repo`.
 
     It is only available on Unix platforms; elsewhere it raises an error.
     Icechunk 1 repositories are refused: migrate them to Icechunk 2 with
@@ -105,19 +110,12 @@ def filesystem_storage(
     path: str
         The path to the root of the repository.
     fsync: bool
-        Whether to fsync files and directories after writes. Turning it off
-        risks losing writes after an OS crash or power loss; it never affects
-        safety between concurrent writers.
-    stale_after: timedelta
-        How old a repository lock must be before another writer may steal it.
-        Any non-negative duration is accepted. It must exceed how long a writer
-        holds the lock: from taking it to its commit rename, only a few metadata
-        operations, slower on network filesystems. Shorter values make writers
-        steal live locks and cause spurious conflicts; longer values delay
-        recovery after a writer crashes while holding the lock. Safety never
-        depends on it.
+        Whether to fsync data files and their directories after writes. Turning
+        it off risks losing writes after an OS crash or power loss; it never
+        affects safety between concurrent writers. The fsyncs of commits always
+        run.
     """
-    return Storage.new_filesystem(path, fsync=fsync, stale_after=stale_after)
+    return Storage.new_filesystem(path, fsync=fsync)
 
 
 def http_storage(

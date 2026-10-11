@@ -15,12 +15,17 @@ use icechunk::{
     Repository,
     conflicts::basic_solver::BasicConflictSolver,
     format::{
-        ChunkIndices, Path, SnapshotId, manifest::ChunkPayload, snapshot::ArrayShape,
+        ChunkIndices, IcechunkFormatErrorKind, Path, SnapshotId, manifest::ChunkPayload,
+        snapshot::ArrayShape,
     },
+    new_local_filesystem_storage,
     ops::gc::{GCConfig, garbage_collect},
-    repository::VersionInfo,
+    repository::{RepositoryErrorKind, VersionInfo},
+    session::{SessionError, SessionErrorKind},
     storage::{
-        FilesystemStorage, GetModifiedResult, PutCondition, new_filesystem_storage,
+        FilesystemStorage, FreezeOutcome, GetModifiedResult, MigrateOutcome,
+        StorageErrorKind, UnfreezeOutcome, metering::MeteringStorage,
+        new_filesystem_storage,
     },
 };
 use icechunk_macros::tokio_test;
@@ -82,13 +87,13 @@ async fn test_concurrent_commits_from_independent_repositories()
         }
     }
 
-    let names = std::fs::read_dir(&root)?
-        .map(|entry| entry.map(|e| e.file_name().to_string_lossy().into_owned()))
-        .collect::<Result<Vec<_>, _>>()?;
-    let leftovers: Vec<String> = names
+    assert_eq!(root_names(&root.join("repo.d"))?, settled(&repo).await?);
+    let leftovers: Vec<String> = root_names(&root)?
         .into_iter()
         .filter(|name| {
-            name.starts_with("repo.new_bytes.") || name.starts_with("repo.lockinfo.")
+            ["repo.stub.", "repo.d.tmp.", "repo.legacy."]
+                .iter()
+                .any(|prefix| name.starts_with(prefix))
         })
         .collect();
     assert_eq!(leftovers, Vec::<String>::new());
@@ -140,18 +145,17 @@ async fn make_commits(
     Ok(snapshots)
 }
 
-/// Plants protocol leftovers in the repo root, then runs GC twice.
-/// - Swept: five leftovers modified two days ago (a ticket, a lockinfo, a
-///   probe file, a lock for a hash `repo` doesn't hold, a staging file).
-/// - Kept: a lock for the hash its object currently holds, and a lockinfo
-///   modified just now (younger than `FilesystemStorage::SWEEP_MIN_AGE`).
+/// Plants protocol leftovers, then runs GC twice.
+/// - Swept: a staging file in `repo.d`, a creation directory, a stub staging
+///   file and a root staging file, all modified two days ago, and a version
+///   file the marker proves dead, modified just now: dead versions go
+///   whatever their age.
+/// - Kept: a staging file modified just now (younger than
+///   `FilesystemStorage::SWEEP_MIN_AGE`), a version file above the marker
+///   (an attempt in flight) and an NFS silly-rename file.
 ///
 /// The dry run reports the five without deleting anything; the real run
 /// deletes exactly them, and the repo still opens with the same history.
-///
-/// The current-hash lock is on the object `target`, not on `repo`: a fresh
-/// lock on `repo`'s current hash looks like a live writer's, so GC's own
-/// update of `repo` would fail with a conflict.
 #[tokio_test]
 async fn gc_sweeps_root_leftovers() -> Result<(), Box<dyn Error>> {
     let dir = tempfile::tempdir()?;
@@ -174,57 +178,41 @@ async fn gc_sweeps_root_leftovers() -> Result<(), Box<dyn Error>> {
         session.commit(format!("commit {commit}")).execute().await?;
     }
     let ancestry = main_ancestry(&repo).await?;
+    let (n, _) = repo_version(&repo).await?;
+
+    let tmp_dir = format!("repo.d.tmp.{}", Uuid::new_v4());
+    std::fs::create_dir_all(root.join(&tmp_dir))?;
+    std::fs::write(root.join(&tmp_dir).join(format!("0.{}", "a".repeat(64))), b"tmp")?;
+    let old = [
+        format!("repo.d/stage.{}", Uuid::new_v4()),
+        format!("repo.stub.{}", Uuid::new_v4()),
+        format!("config.yaml.staging.{}", Uuid::new_v4()),
+    ];
+    let dead = format!("repo.d/{}.{}", n - 1, "b".repeat(64));
+    let kept = [
+        format!("repo.d/stage.{}", Uuid::new_v4()),
+        format!("repo.d/{}.{}", n + 5, "c".repeat(64)),
+        "repo.d/.nfs0001".to_string(),
+    ];
+    for name in old.iter().chain([&dead]).chain(&kept) {
+        std::fs::write(root.join(name), b"leftover")?;
+    }
+    for name in old.iter().chain([&tmp_dir]) {
+        File::open(root.join(name))?.set_modified(two_days_ago())?;
+    }
+    let planted: BTreeSet<String> =
+        old.iter().chain([&tmp_dir, &dead]).chain(&kept).cloned().collect();
 
     let am = repo.asset_manager();
-    let ctx = am.storage_context();
-    let GetModifiedResult::Modified { new_version, .. } =
-        am.storage().get_object_conditional(&ctx, "repo", None).await?
-    else {
-        panic!("a read without a previous version returns the data");
-    };
-    let repo_hash = new_version.etag().ok_or("no etag")?.clone();
-    let other = if repo_hash == "0".repeat(64) { "1" } else { "0" }.repeat(64);
-    let target = am
-        .storage()
-        .put_object_conditional(
-            &ctx,
-            "target",
-            Bytes::from_static(b"target"),
-            None,
-            vec![],
-            PutCondition::Create,
-        )
-        .await?
-        .must_write()?;
-    let current = target.etag().ok_or("no etag")?;
-
-    let swept = [
-        format!("repo.new_bytes.{}", Uuid::new_v4()),
-        format!("repo.lockinfo.{}", Uuid::new_v4()),
-        format!("repo.probe.{}", Uuid::new_v4()),
-        format!("repo.lock.{other}.0"),
-        format!("repo.staging.{}", Uuid::new_v4()),
-    ];
-    let current_lock = format!("target.lock.{current}.0");
-    let fresh = format!("repo.lockinfo.{}", Uuid::new_v4());
-    let two_days_ago = SystemTime::now() - Duration::from_secs(2 * 24 * 60 * 60);
-    for name in swept.iter().chain([&current_lock]) {
-        std::fs::write(root.join(name), b"leftover")?;
-        File::options().write(true).open(root.join(name))?.set_modified(two_days_ago)?;
-    }
-    std::fs::write(root.join(&fresh), b"leftover")?;
-    let planted: BTreeSet<String> =
-        swept.iter().chain([&current_lock, &fresh]).cloned().collect();
-
     let summary = garbage_collect(Arc::clone(am), &clean_all(true), None, 100).await?;
     assert_eq!(summary.storage_leftovers_deleted, 5);
-    assert_eq!(root_names(&root)?.intersection(&planted).count(), planted.len());
+    assert_eq!(repo_names(&root)?.intersection(&planted).count(), planted.len());
 
     let summary = garbage_collect(Arc::clone(am), &clean_all(false), None, 100).await?;
     assert_eq!(summary.storage_leftovers_deleted, 5);
     let left: BTreeSet<String> =
-        root_names(&root)?.intersection(&planted).cloned().collect();
-    assert_eq!(left, BTreeSet::from([current_lock, fresh]));
+        repo_names(&root)?.intersection(&planted).cloned().collect();
+    assert_eq!(left, BTreeSet::from(kept));
 
     let reopened =
         Repository::open(new_filesystem_storage(&root).await?).execute().await?;
@@ -232,57 +220,179 @@ async fn gc_sweeps_root_leftovers() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-/// Simulates a writer that crashed while holding the lock on `repo`'s current
-/// hash: a lockinfo modified two days ago, hard-linked as that lock, and left
-/// alone until the lock is stale. Then runs GC twice.
-/// - First run: the sweep keeps the lockinfo, GC steals the stale lock to
-///   update `repo`, and only the lockinfo is left.
-/// - Second run: the lockinfo no longer backs a lock, so it is swept.
-///
-/// The lockinfo and the lock share an inode, and lock staleness is judged by
-/// the inode's ctime. Unlinking the lockinfo would bump that ctime, the lock
-/// would look fresh, and GC's own update of `repo` would fail with a conflict.
+/// A writer that crashed mid-commit leaves its staging file and its version
+/// file `N+1` behind. Neither is a lock: the next commit through `Repository`
+/// succeeds at its first attempt, and its tidy-up deletes the crashed
+/// version, which its own `N+1` proves dead.
 #[tokio_test]
-async fn gc_steals_the_lock_of_a_crashed_writer() -> Result<(), Box<dyn Error>> {
-    let stale_after = Duration::from_millis(500);
+async fn a_crashed_attempt_blocks_nobody() -> Result<(), Box<dyn Error>> {
     let dir = tempfile::tempdir()?;
     let root = dir.path().to_path_buf();
-    let storage = Arc::new(FilesystemStorage::new(&root)?.with_stale_after(stale_after));
-    let repo = Repository::create(storage).execute().await?;
-    let mut session = repo.writable_session("main").await?;
-    session.add_group(Path::root(), Bytes::new()).await?;
-    session.commit("commit").execute().await?;
+    let metered = Arc::new(MeteringStorage::new(new_filesystem_storage(&root).await?));
+    let repo = Repository::create(Arc::clone(&metered) as _).execute().await?;
+    commit_group(&repo, "/before").await?;
+    let (n, _) = repo_version(&repo).await?;
 
+    let stage = format!("stage.{}", Uuid::new_v4());
+    let crashed = format!("{}.{}", n + 1, "c".repeat(64));
+    for name in [&stage, &crashed] {
+        std::fs::write(root.join("repo.d").join(name), b"a crashed attempt")?;
+    }
+
+    metered.reset();
+    commit_group(&repo, "/after").await?;
+    // Each attempt to update `repo` first backs it up.
+    assert_eq!(metered.snapshot().per_op["copy_object"].requests, 1);
+    let (after, _) = repo_version(&repo).await?;
+    assert_eq!(after, n + 1);
+    let mut expected = settled(&repo).await?;
+    expected.insert(stage);
+    assert_eq!(root_names(&root.join("repo.d"))?, expected);
+    Ok(())
+}
+
+/// A commit on a frozen repository fails with `RepositoryFrozen` at its first
+/// attempt: it makes exactly the requests of a commit that succeeds at once,
+/// one backup and one conditional update of `repo` among them, and no retry.
+#[tokio_test]
+async fn frozen_repository_refuses_commits_without_retrying() -> Result<(), Box<dyn Error>>
+{
+    let dir = tempfile::tempdir()?;
+    let root = dir.path().to_path_buf();
+    let metered = Arc::new(MeteringStorage::new(new_filesystem_storage(&root).await?));
+    let repo = Repository::create(Arc::clone(&metered) as _).execute().await?;
+    let fs = FilesystemStorage::new(&root)?;
+
+    metered.reset();
+    commit_group(&repo, "/committed").await?;
+    let committed = metered.snapshot().per_op;
+    assert_eq!(committed["copy_object"].requests, 1);
+
+    let (n, h) = repo_version(&repo).await?;
+    let FreezeOutcome::Frozen(frozen) = fs.freeze_repo().await? else {
+        panic!("the repo was not frozen");
+    };
+    assert_eq!((frozen.generation(), frozen.etag()), (Some(&n.to_string()), Some(&h)));
+
+    metered.reset();
+    let err = commit_group(&repo, "/refused").await.err().ok_or("committed")?;
+    let err = err.downcast_ref::<SessionError>().ok_or("not a session error")?;
+    assert!(
+        matches!(
+            err.kind,
+            SessionErrorKind::RepositoryError(RepositoryErrorKind::StorageError(
+                StorageErrorKind::RepositoryFrozen
+            ))
+        ),
+        "{err:?}"
+    );
+    let refused = metered.snapshot().per_op;
+    for op in ["copy_object", "put_object"] {
+        assert_eq!(refused[op].requests, committed[op].requests, "{op}");
+    }
+
+    assert!(matches!(fs.unfreeze_repo().await?, UnfreezeOutcome::Unfrozen(_)));
+    commit_group(&repo, "/unfrozen").await?;
+    assert_eq!(repo_version(&repo).await?.0, n + 2);
+    Ok(())
+}
+
+/// A repository in this backend's format, opened with a backend that reads
+/// `repo` as a `RepoInfo` file, names the format and how to open it.
+#[tokio_test]
+async fn stub_read_by_another_backend_names_the_filesystem_format()
+-> Result<(), Box<dyn Error>> {
+    let dir = tempfile::tempdir()?;
+    Repository::create(new_filesystem_storage(dir.path()).await?).execute().await?;
+
+    let res =
+        Repository::open(new_local_filesystem_storage(dir.path()).await?).execute().await;
+    let err = res.err().ok_or("opened")?;
+    assert!(
+        matches!(
+            err.kind,
+            RepositoryErrorKind::FormatError(
+                IcechunkFormatErrorKind::FilesystemFormatRepository
+            )
+        ),
+        "{err:?}"
+    );
+    assert!(err.to_string().contains("filesystem_storage"), "{err}");
+    Ok(())
+}
+
+/// A checked-in single-file repository is refused with a pointer to
+/// `migrate_legacy_repo`; once migrated it opens with the same history and
+/// commits.
+#[tokio_test]
+async fn legacy_repo_open_names_migrate() -> Result<(), Box<dyn Error>> {
+    let source =
+        std::env::current_dir()?.join("../icechunk-python/tests/data/test-repo-v2");
+    let options = fs_extra::dir::CopyOptions::new().content_only(true);
+    let legacy = tempfile::tempdir()?;
+    fs_extra::dir::copy(&source, legacy.path(), &options)?;
+    let dir = tempfile::tempdir()?;
+    fs_extra::dir::copy(&source, dir.path(), &options)?;
+
+    let res = Repository::open(new_filesystem_storage(dir.path()).await?).execute().await;
+    let err = res.err().ok_or("opened")?;
+    assert!(
+        matches!(
+            &err.kind,
+            RepositoryErrorKind::StorageError(StorageErrorKind::Other(_))
+        ),
+        "{err:?}"
+    );
+    assert!(err.to_string().contains("migrate_legacy_repo"), "{err}");
+
+    let outcome = FilesystemStorage::new(dir.path())?.migrate_legacy_repo().await?;
+    assert_eq!(outcome, MigrateOutcome::Migrated);
+    let migrated =
+        Repository::open(new_filesystem_storage(dir.path()).await?).execute().await?;
+    let legacy = Repository::open(new_local_filesystem_storage(legacy.path()).await?)
+        .execute()
+        .await?;
+    assert_eq!(migrated.list_branches().await?, legacy.list_branches().await?);
+    assert_eq!(migrated.list_tags().await?, legacy.list_tags().await?);
+    assert_eq!(main_ancestry(&migrated).await?, main_ancestry(&legacy).await?);
+
+    commit_group(&migrated, "/after_migration").await?;
+    Ok(())
+}
+
+fn two_days_ago() -> SystemTime {
+    SystemTime::now() - Duration::from_secs(2 * 24 * 60 * 60)
+}
+
+async fn commit_group(
+    repo: &Repository,
+    path: &str,
+) -> Result<SnapshotId, Box<dyn Error>> {
+    let mut session = repo.writable_session("main").await?;
+    session.add_group(Path::from_trusted(path), Bytes::new()).await?;
+    Ok(session.commit("commit").execute().await?)
+}
+
+/// `N` and `h` of `repo`'s current version.
+async fn repo_version(repo: &Repository) -> Result<(u64, String), Box<dyn Error>> {
     let am = repo.asset_manager();
     let GetModifiedResult::Modified { new_version, .. } =
         am.storage().get_object_conditional(&am.storage_context(), "repo", None).await?
     else {
         panic!("a read without a previous version returns the data");
     };
-    let repo_hash = new_version.etag().ok_or("no etag")?.clone();
-    let id = Uuid::new_v4();
-    let lockinfo = root.join(format!("repo.lockinfo.{id}"));
-    std::fs::write(&lockinfo, id.to_string())?;
-    File::options()
-        .write(true)
-        .open(&lockinfo)?
-        .set_modified(SystemTime::now() - Duration::from_secs(2 * 24 * 60 * 60))?;
-    std::fs::hard_link(&lockinfo, root.join(format!("repo.lock.{repo_hash}.0")))?;
-    tokio::time::sleep(stale_after + Duration::from_millis(100)).await;
+    let n = new_version.generation().ok_or("no generation")?.parse()?;
+    Ok((n, new_version.etag().ok_or("no etag")?.clone()))
+}
 
-    let protocol_files = || -> Result<BTreeSet<String>, Box<dyn Error>> {
-        Ok(root_names(&root)?
-            .into_iter()
-            .filter(|name| name.starts_with("repo.lock"))
-            .collect())
-    };
-    garbage_collect(Arc::clone(am), &clean_all(false), None, 100).await?;
-    // Stealing deleted the lock; the lockinfo is now swept like any other.
-    assert_eq!(protocol_files()?, BTreeSet::from([format!("repo.lockinfo.{id}")]));
-    let summary = garbage_collect(Arc::clone(am), &clean_all(false), None, 100).await?;
-    assert_eq!(summary.storage_leftovers_deleted, 1);
-    assert_eq!(protocol_files()?, BTreeSet::new());
-    Ok(())
+/// The names `repo.d` holds when nothing is in flight: the current version
+/// and its marker.
+async fn settled(repo: &Repository) -> Result<BTreeSet<String>, Box<dyn Error>> {
+    let (n, h) = repo_version(repo).await?;
+    Ok(BTreeSet::from([
+        format!("{n}.{h}"),
+        format!("latest.{:015}.{n}.{h}", 999_999_999_999_999 - n),
+    ]))
 }
 
 fn clean_all(dry_run: bool) -> GCConfig {
@@ -315,4 +425,15 @@ fn root_names(root: &std::path::Path) -> Result<BTreeSet<String>, Box<dyn Error>
     Ok(std::fs::read_dir(root)?
         .map(|entry| entry.map(|e| e.file_name().to_string_lossy().into_owned()))
         .collect::<Result<_, _>>()?)
+}
+
+/// The names in `root` and, as `repo.d/<name>`, in `repo.d`.
+fn repo_names(root: &std::path::Path) -> Result<BTreeSet<String>, Box<dyn Error>> {
+    let mut names = root_names(root)?;
+    names.extend(
+        root_names(&root.join("repo.d"))?
+            .into_iter()
+            .map(|name| format!("repo.d/{name}")),
+    );
+    Ok(names)
 }

@@ -131,6 +131,8 @@ const local = await Storage.newLocalFilesystem('/path/to/repo')
 
 // Filesystem, safe for concurrent writers (experimental, Unix only)
 const fs = await Storage.newFilesystem('/path/to/repo')
+// fs.migrateLegacyRepo() converts a repository written by newLocalFilesystem (needed before opening it);
+// fs.freezeRepo() and fs.unfreezeRepo() stop and resume commits
 
 // Amazon S3
 const s3 = Storage.newS3('my-bucket', 'my-prefix', credentials, options)

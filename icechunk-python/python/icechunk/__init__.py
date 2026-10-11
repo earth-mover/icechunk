@@ -101,6 +101,7 @@ from icechunk.snapshots import (
 from icechunk.storage import (
     AnyObjectStoreConfig,
     ChecksumAlgorithm,
+    FilesystemStorage,
     S3Options,
     Storage,
     StorageConcurrencySettings,
@@ -160,6 +161,7 @@ __all__ = [
     "Diff",
     "ErrorKind",
     "FeatureFlag",
+    "FilesystemStorage",
     "ForkSession",
     "FormatError",
     "GCSummary",

@@ -7,29 +7,31 @@ use futures::{Stream, StreamExt as _, future::ready, stream};
 use icechunk_storage::{DeleteObjectsResult, ListInfo};
 use tokio::sync::mpsc;
 
-use crate::{leftover::is_leftover_name, storage::is_missing};
+use crate::{names::parse_root_name, path::is_staging_name, storage::is_missing};
 
 const BATCH_SIZE: usize = 1000;
 const CHANNEL_CAPACITY: usize = 2;
 
 type Batch = io::Result<Vec<ListInfo<String>>>;
 
-/// Streams the regular files under `dir`, except staging and protocol files.
-/// Each item's `id` is the file's path relative to `dir`, `/`-separated (`a/b`
-/// for `dir/a/b`). A missing `dir` lists nothing, and entries deleted while
-/// the walk runs are skipped, as are non-UTF-8 names (a file, or a directory
-/// and everything under it) with a warning. The walk runs on a blocking
-/// thread and stops soon after the stream is dropped; an error ends the
-/// stream.
+/// Streams the regular files under `dir`, except staging files and, if `dir`
+/// is the storage root, the root's protocol names other than `repo` and
+/// everything under them. Each item's `id` is the file's path relative to
+/// `dir`, `/`-separated (`a/b` for `dir/a/b`). A missing `dir` lists nothing,
+/// and entries deleted while the walk runs are skipped, as are non-UTF-8
+/// names (a file, or a directory and everything under it) with a warning.
+/// The walk runs on a blocking thread and stops soon after the stream is
+/// dropped; an error ends the stream.
 pub(crate) fn list_recursive(
     dir: PathBuf,
+    is_root: bool,
 ) -> impl Stream<Item = io::Result<ListInfo<String>>> + Send + 'static {
     let (tx, rx) = mpsc::channel(CHANNEL_CAPACITY);
     // spans don't follow spawn_blocking; keep the caller's for the walk's logs
     let span = tracing::Span::current();
     let walker = tokio::task::spawn_blocking(move || {
         let _entered = span.enter();
-        if let Err(err) = walk(&dir, &tx) {
+        if let Err(err) = walk(&dir, is_root, &tx) {
             // the receiver may be gone; then nobody needs the error
             drop(tx.blocking_send(Err(err)));
         }
@@ -51,7 +53,7 @@ pub(crate) fn list_recursive(
 }
 
 /// Returns early, without error, once the receiver is dropped.
-fn walk(dir: &Path, tx: &mpsc::Sender<Batch>) -> io::Result<()> {
+fn walk(dir: &Path, is_root: bool, tx: &mpsc::Sender<Batch>) -> io::Result<()> {
     let mut batch = Vec::new();
     let mut pending = vec![(dir.to_path_buf(), String::new())];
     while let Some((dir, id_prefix)) = pending.pop() {
@@ -73,6 +75,9 @@ fn walk(dir: &Path, tx: &mpsc::Sender<Batch>) -> io::Result<()> {
                 );
                 continue;
             };
+            if is_root && id_prefix.is_empty() && parse_root_name(name).is_some() {
+                continue;
+            }
             let id = format!("{id_prefix}{name}");
             let file_type = match entry.file_type() {
                 Ok(file_type) => file_type,
@@ -81,7 +86,7 @@ fn walk(dir: &Path, tx: &mpsc::Sender<Batch>) -> io::Result<()> {
             };
             if file_type.is_dir() {
                 pending.push((entry.path(), format!("{id}/")));
-            } else if file_type.is_file() && !is_leftover_name(&file_name) {
+            } else if file_type.is_file() && !is_staging_name(&file_name) {
                 let metadata = match entry.metadata() {
                     Ok(metadata) => metadata,
                     Err(err) if is_missing(&err) => continue,

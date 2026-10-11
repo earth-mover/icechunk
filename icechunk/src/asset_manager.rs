@@ -1010,7 +1010,8 @@ impl AssetManager {
                     ..
                 }) => {
                     // A conflict means our cached version is stale; with backends
-                    // whose fast path can falsely match, keeping it could loop.
+                    // whose listing lags (FilesystemStorage answers
+                    // `OnLatestVersion` for an older version), keeping it could loop.
                     if self.use_repo_info_cache {
                         *self
                             .repo_cache
@@ -1032,6 +1033,8 @@ impl AssetManager {
                     tokio::time::sleep(delay).await;
                     attempts += 1;
                 }
+                // `StorageErrorKind::RepositoryFrozen` must stay final: retries cannot
+                // unfreeze.
                 err @ Err(_) => {
                     return err;
                 }
@@ -1349,6 +1352,14 @@ const DEFAULT_PREALLOC_HINT: usize = 8192;
 
 /// Validates that `header.file_type` matches the expected `file_type`.
 fn check_file_type(header: &FileHeader, file_type: FileTypeBin) -> RepositoryResult<()> {
+    if file_type == FileTypeBin::RepoInfo
+        && header.file_type == FileTypeBin::FilesystemStub
+    {
+        return Err(RepositoryErrorKind::FormatError(
+            IcechunkFormatErrorKind::FilesystemFormatRepository,
+        ))
+        .capture();
+    }
     if header.file_type != file_type {
         return Err(RepositoryErrorKind::FormatError(
             IcechunkFormatErrorKind::InvalidFileType {
@@ -2088,6 +2099,51 @@ mod test {
         let data = unreadable_buffer(1024);
         verify_before_write(data.as_slice(), FileTypeBin::Manifest, data.len() + 1)
             .expect("small buffers must not be verified");
+    }
+
+    fn filesystem_stub_header() -> FileHeader {
+        FileHeader {
+            impl_name: "ic-2.0.0".to_string(),
+            app_name: "ic".to_string(),
+            app_version: Some("2.0.0".to_string()),
+            spec_version: SpecVersionBin::V2,
+            file_type: FileTypeBin::FilesystemStub,
+            compression: CompressionAlgorithmBin::None,
+        }
+    }
+
+    #[icechunk_macros::test]
+    fn check_file_type_reports_filesystem_format_for_repo_info() {
+        let err = check_file_type(&filesystem_stub_header(), FileTypeBin::RepoInfo)
+            .expect_err("a stub is not a repo info file");
+        assert!(
+            matches!(
+                err.kind,
+                RepositoryErrorKind::FormatError(
+                    IcechunkFormatErrorKind::FilesystemFormatRepository
+                )
+            ),
+            "{err}"
+        );
+        assert!(err.to_string().contains("filesystem_storage"), "{err}");
+    }
+
+    #[icechunk_macros::test]
+    fn check_file_type_rejects_filesystem_stub_for_other_types() {
+        let err = check_file_type(&filesystem_stub_header(), FileTypeBin::Snapshot)
+            .expect_err("a stub is not a snapshot file");
+        assert!(
+            matches!(
+                err.kind,
+                RepositoryErrorKind::FormatError(
+                    IcechunkFormatErrorKind::InvalidFileType {
+                        expected: FileTypeBin::Snapshot,
+                        got: 7
+                    }
+                )
+            ),
+            "{err}"
+        );
     }
 
     #[tokio_test]
@@ -2835,7 +2891,7 @@ mod test {
     }
 
     /// Claims every conditional read is on the latest version, like a
-    /// backend whose fast path falsely matches.
+    /// backend whose listing lags behind the caller's version.
     #[derive(Debug, Serialize, Deserialize)]
     struct FalseHitStorage {
         backend: Arc<dyn Storage + Send + Sync>,

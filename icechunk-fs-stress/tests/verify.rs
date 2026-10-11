@@ -74,9 +74,9 @@ async fn missing_done_entries_are_harness_errors_and_leave_the_repository_alone(
     write_control(&root, &Control::Go { participants }).unwrap();
     let now = SystemTime::now();
     write_done(&root, "a", now, now);
-    // A live writer's ticket, as far as verify can tell.
-    let ticket = root.storage().join(format!("repo.new_bytes.{}", uuid::Uuid::new_v4()));
-    fs::write(&ticket, b"t").unwrap();
+    // A live writer's staging file, as far as verify can tell.
+    let stage = root.storage().join(format!("repo.d/stage.{}", uuid::Uuid::new_v4()));
+    fs::write(&stage, b"t").unwrap();
 
     let started = Instant::now();
     let report = verify(&root, Duration::from_secs(1)).await.unwrap();
@@ -100,7 +100,7 @@ async fn missing_done_entries_are_harness_errors_and_leave_the_repository_alone(
     assert_eq!(Report::load(&root).unwrap(), report);
     let who = recovery_worker();
     assert!(!root.worker_log(&who.tag, &who.slot, who.incarnation).exists());
-    let age = fs::metadata(&ticket).unwrap().modified().unwrap().elapsed().unwrap();
+    let age = fs::metadata(&stage).unwrap().modified().unwrap().elapsed().unwrap();
     assert!(age < Duration::from_secs(3600), "{age:?}");
 
     // Once the late host finished, the run verifies in full.
@@ -108,7 +108,7 @@ async fn missing_done_entries_are_harness_errors_and_leave_the_repository_alone(
     let report = verify(&root, Duration::from_secs(1)).await.unwrap();
     assert!(report.passed, "{}", report.summary());
     assert!(report.recovery_ms.is_some());
-    assert!(!ticket.exists());
+    assert!(!stage.exists());
 }
 
 #[tokio::test]
@@ -175,7 +175,7 @@ async fn a_missing_repo_is_broken_history_in_a_written_report() {
     // `b` stays missing, so verify skips the recovery write, which would wait
     // out its whole deadline without a `repo`.
     write_done(&root, "a", now, now);
-    fs::remove_file(root.storage().join(storage_mode::REPO_KEY)).unwrap();
+    fs::remove_dir_all(root.storage().join("repo.d")).unwrap();
 
     let report = verify(&root, Duration::from_millis(100)).await.unwrap();
     assert!(

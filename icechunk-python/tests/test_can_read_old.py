@@ -25,9 +25,14 @@ import zarr
 # This file can be run as a script to regenerate test data (see module docstring).
 # When run as a script, `tests` is not a package, so we fall back to a direct import.
 try:
-    from tests.conftest import Permission, fs_storage
+    from tests.conftest import Permission, fs_storage, readable_path
 except ImportError:
-    from conftest import Permission, fs_storage  # type: ignore[import-not-found,no-redef]
+    from conftest import (  # type: ignore[import-not-found,no-redef]
+        Permission,
+        fs_storage,
+        readable_path,
+    )
+
 
 UPDATED_SPLITTING_CONFIG = ic.ManifestSplittingConfig.from_dict(
     {
@@ -426,13 +431,17 @@ async def test_icechunk_can_read_old_repo_v1() -> None:
 
 
 @pytest.mark.filterwarnings("ignore:datetime.datetime.utcnow")
-async def test_icechunk_can_read_old_repo_v2(fs_backend: str) -> None:
-    await do_icechunk_can_read_old_repo("./tests/data/test-repo-v2", fs_backend)
+async def test_icechunk_can_read_old_repo_v2(fs_backend: str, tmp_path: Path) -> None:
+    path = readable_path("./tests/data/test-repo-v2", fs_backend, tmp_path)
+    await do_icechunk_can_read_old_repo(path, fs_backend)
 
 
 @pytest.mark.filterwarnings("ignore:datetime.datetime.utcnow")
-async def test_icechunk_can_read_old_repo_v2_migrated(fs_backend: str) -> None:
-    await do_icechunk_can_read_old_repo("./tests/data/test-repo-v2-migrated", fs_backend)
+async def test_icechunk_can_read_old_repo_v2_migrated(
+    fs_backend: str, tmp_path: Path
+) -> None:
+    path = readable_path("./tests/data/test-repo-v2-migrated", fs_backend, tmp_path)
+    await do_icechunk_can_read_old_repo(path, fs_backend)
 
 
 async def test_icechunk_can_read_old_repo_with_manifest_splitting_v1() -> None:
@@ -442,19 +451,17 @@ async def test_icechunk_can_read_old_repo_with_manifest_splitting_v1() -> None:
 
 
 async def test_icechunk_can_read_old_repo_with_manifest_splitting_v2(
-    fs_backend: str,
+    fs_backend: str, tmp_path: Path
 ) -> None:
-    await do_icechunk_can_read_old_repo_with_manifest_splitting(
-        "./tests/data/split-repo-v2", fs_backend
-    )
+    path = readable_path("./tests/data/split-repo-v2", fs_backend, tmp_path)
+    await do_icechunk_can_read_old_repo_with_manifest_splitting(path, fs_backend)
 
 
 async def test_icechunk_can_read_old_repo_with_manifest_splitting_v2_migrated(
-    fs_backend: str,
+    fs_backend: str, tmp_path: Path
 ) -> None:
-    await do_icechunk_can_read_old_repo_with_manifest_splitting(
-        "./tests/data/split-repo-v2-migrated", fs_backend
-    )
+    path = readable_path("./tests/data/split-repo-v2-migrated", fs_backend, tmp_path)
+    await do_icechunk_can_read_old_repo_with_manifest_splitting(path, fs_backend)
 
 
 # ---------------------------------------------------------------------------
@@ -568,10 +575,9 @@ async def test_read_expired_repo_v1_by_2_0_5() -> None:
 
 
 @pytest.mark.filterwarnings("ignore:datetime.datetime.utcnow")
-async def test_read_expired_repo_v2_by_2_0_5(fs_backend: str) -> None:
-    await do_read_expired_repo(
-        "./tests/data/expire-repo-v2-by-2.0.5", tracks_tx_logs=False, backend=fs_backend
-    )
+async def test_read_expired_repo_v2_by_2_0_5(fs_backend: str, tmp_path: Path) -> None:
+    path = readable_path("./tests/data/expire-repo-v2-by-2.0.5", fs_backend, tmp_path)
+    await do_read_expired_repo(path, tracks_tx_logs=False, backend=fs_backend)
 
 
 @pytest.mark.filterwarnings("ignore:datetime.datetime.utcnow")
@@ -583,12 +589,13 @@ async def test_read_expired_repo_v1_by_working_copy() -> None:
 
 
 @pytest.mark.filterwarnings("ignore:datetime.datetime.utcnow")
-async def test_read_expired_repo_v2_by_working_copy(fs_backend: str) -> None:
-    await do_read_expired_repo(
-        "./tests/data/expire-repo-v2-by-working-copy",
-        tracks_tx_logs=True,
-        backend=fs_backend,
+async def test_read_expired_repo_v2_by_working_copy(
+    fs_backend: str, tmp_path: Path
+) -> None:
+    path = readable_path(
+        "./tests/data/expire-repo-v2-by-working-copy", fs_backend, tmp_path
     )
+    await do_read_expired_repo(path, tracks_tx_logs=True, backend=fs_backend)
 
 
 if __name__ == "__main__":

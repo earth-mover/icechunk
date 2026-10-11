@@ -145,7 +145,8 @@ pub fn start_worker_log(root: &RunRoot, who: &WorkerId) -> anyhow::Result<LogWri
 /// Reads a log, skipping a torn last line. Any other unparsable line is an
 /// error.
 pub fn read_log(path: &Path) -> anyhow::Result<Vec<Record>> {
-    let bytes = fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+    let bytes =
+        read_log_from(path, 0).with_context(|| format!("reading {}", path.display()))?;
     let mut lines: Vec<&[u8]> = bytes.split(|&b| b == b'\n').collect();
     // The segment after the last newline: empty, or a torn write.
     lines.pop();
@@ -172,16 +173,13 @@ pub struct Appended {
 /// rereading earlier ones. A torn last line is left for the next call; a
 /// missing log has nothing appended yet.
 pub fn read_appended(path: &Path, offset: u64) -> io::Result<Appended> {
-    let mut file = match File::open(path) {
-        Ok(file) => file,
+    let bytes = match read_log_from(path, offset) {
+        Ok(bytes) => bytes,
         Err(err) if err.kind() == io::ErrorKind::NotFound => {
             return Ok(Appended { offset, ..Appended::default() });
         }
         Err(err) => return Err(err),
     };
-    file.seek(SeekFrom::Start(offset))?;
-    let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes)?;
     let complete = bytes.iter().rposition(|&b| b == b'\n').map_or(0, |last| last + 1);
     let mut appended = Appended {
         offset: offset + u64::try_from(complete).unwrap_or(0),
@@ -194,6 +192,19 @@ pub fn read_appended(path: &Path, offset: u64) -> io::Result<Appended> {
         }
     }
     Ok(appended)
+}
+
+/// A log's bytes from `offset` on. An empty log isn't opened: an `NFSv3`
+/// exclusive create ([`LogWriter::create`]) killed before its follow-up
+/// `SETATTR` leaves an empty log with mode 000, which can't be opened.
+fn read_log_from(path: &Path, offset: u64) -> io::Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    if fs::metadata(path)?.len() > 0 {
+        let mut file = File::open(path)?;
+        file.seek(SeekFrom::Start(offset))?;
+        file.read_to_end(&mut bytes)?;
+    }
+    Ok(bytes)
 }
 
 /// Identifies a log file: `<tag>.<slot>.<incarnation>.log` for a worker,
@@ -273,17 +284,17 @@ mod tests {
             Record::Fault {
                 t_ms: 4,
                 action: FaultAction::Kill,
-                point: PointName::LockTaken,
+                point: PointName::Linked,
             },
             Record::Fault {
                 t_ms: 4,
                 action: FaultAction::Pause,
-                point: PointName::Fenced,
+                point: PointName::BeforeRename,
             },
             Record::Fault {
                 t_ms: 4,
                 action: FaultAction::Sabotage,
-                point: PointName::Compared,
+                point: PointName::BeforeTidyUp,
             },
             Record::Spawn { t_ms: 5, slot: slot.clone(), incarnation: 5, pid: 78 },
             Record::ExternalKill { t_ms: 6, slot, incarnation: 5 },
@@ -326,6 +337,30 @@ mod tests {
 
         fs::write(&path, b"").unwrap();
         assert_eq!(read_log(&path).unwrap(), []);
+    }
+
+    /// What an `NFSv3` exclusive create killed before its `SETATTR` leaves.
+    #[test]
+    fn unreadable_log_is_empty_only_if_it_has_no_bytes() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("h.0.0.log");
+        fs::write(&path, b"").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).unwrap();
+        if File::open(&path).is_ok() {
+            // Privileged (root): permissions don't stop the open.
+            return;
+        }
+        assert_eq!(read_log(&path).unwrap(), []);
+        assert_eq!(read_appended(&path, 0).unwrap(), Appended::default());
+
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        fs::write(&path, b"{}\n").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).unwrap();
+        let err = format!("{:#}", read_log(&path).unwrap_err());
+        assert!(err.contains("Permission denied"), "{err}");
+        let err = read_appended(&path, 0).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
     }
 
     #[test]

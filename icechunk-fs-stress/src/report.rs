@@ -311,7 +311,7 @@ mod tests {
             Violation::Stall { from_ms: 1, to_ms: 40_000 },
             Violation::FaultFloor { kind: "pause".to_owned(), fired: 1, required: 3 },
             Violation::Recovery { detail: detail() },
-            Violation::Leftovers { names: vec!["repo.new_bytes.x".to_owned()] },
+            Violation::Leftovers { names: vec!["repo.d/stage.x".to_owned()] },
             Violation::DataMismatch { detail: detail() },
             Violation::Harness { detail: detail() },
         ]
@@ -440,7 +440,7 @@ mod tests {
         };
         let external = floor("external_kill");
         assert!(external.contains("lower --external-kill-every"), "{external}");
-        for kind in ["in_window_kill", "pause", "per_point.fenced"] {
+        for kind in ["in_window_kill", "pause", "per_point.before_rename"] {
             let summary = floor(kind);
             assert!(summary.contains("the kill/pause probability"), "{summary}");
         }

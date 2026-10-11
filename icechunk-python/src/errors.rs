@@ -175,6 +175,7 @@ pub(crate) mod codes {
         BAD_REDIRECT => "bad-redirect",
         SEMAPHORE_ACQUIRE => "semaphore-acquire",
         THROTTLED => "throttled",
+        REPOSITORY_FROZEN => "repository-frozen",
         STORAGE_OTHER => "storage-other",
         VIRTUAL_CHUNK_FETCH => "virtual-chunk-fetch",
         VIRTUAL_CHUNK_MODIFIED => "virtual-chunk-modified",
@@ -404,6 +405,7 @@ fn classify_storage(kind: &StorageErrorKind) -> Classified {
         K::CannotParseUrl { .. } => class("StorageError", codes::CANNOT_PARSE_URL),
         K::BadRedirect(_) => class("StorageError", codes::BAD_REDIRECT),
         K::Throttled { .. } => class("StorageError", codes::THROTTLED),
+        K::RepositoryFrozen => class("StorageError", codes::REPOSITORY_FROZEN),
         K::Other(_) => class("StorageError", codes::STORAGE_OTHER),
     }
 }
@@ -464,7 +466,10 @@ fn classify_format(kind: &IcechunkFormatErrorKind) -> Classified {
         | K::InvalidFlatBuffer(_)
         | K::InvalidTimestamp
         | K::MissingLocationCompressionDictionary
-        | K::MissingRequiredField(_) => class("FormatError", codes::INVALID_FILE_FORMAT),
+        | K::MissingRequiredField(_)
+        | K::FilesystemFormatRepository => {
+            class("FormatError", codes::INVALID_FILE_FORMAT)
+        }
         K::InvalidSpecVersion { .. } => {
             class("FormatError", codes::UNSUPPORTED_SPEC_VERSION)
         }

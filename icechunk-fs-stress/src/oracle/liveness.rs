@@ -164,12 +164,11 @@ fn gaps(acks: impl Iterator<Item = i64>, start: i64, end: i64) -> Vec<(i64, i64)
 
 fn point_name(point: PointName) -> &'static str {
     match point {
-        PointName::LockInfoWritten => "lock_info_written",
-        PointName::TicketWritten => "ticket_written",
-        PointName::LockTaken => "lock_taken",
-        PointName::Fenced => "fenced",
-        PointName::Compared => "compared",
+        PointName::Staged => "staged",
+        PointName::Linked => "linked",
+        PointName::BeforeRename => "before_rename",
         PointName::Renamed => "renamed",
+        PointName::BeforeTidyUp => "before_tidy_up",
     }
 }
 
@@ -329,13 +328,13 @@ mod tests {
     #[test]
     fn fault_floor_shortfall_per_kind() {
         use FaultAction::{Kill, Pause, Sabotage};
-        use PointName::{Compared, Fenced, LockTaken};
+        use PointName::{BeforeRename, BeforeTidyUp, Linked};
         let enough = || {
             vec![
-                (worker("h", "0"), faults(Kill, &[LockTaken, Fenced, Compared])),
-                (worker("h", "1"), faults(Pause, &[LockTaken, Fenced, Compared])),
+                (worker("h", "0"), faults(Kill, &[Linked, BeforeRename, BeforeTidyUp])),
+                (worker("h", "1"), faults(Pause, &[Linked, BeforeRename, BeforeTidyUp])),
                 (supervisor("h"), external_kills(10)),
-                (worker("h", "2"), faults(Sabotage, &[Fenced, Fenced])),
+                (worker("h", "2"), faults(Sabotage, &[BeforeRename, BeforeRename])),
             ]
         };
         let verdict = check(&busy(enough()), &faulty_config(), false);
@@ -346,8 +345,8 @@ mod tests {
         assert_eq!(verdict.stats.faults["sabotage"], 2);
 
         let short = [
-            ("in_window_kill", worker("h", "0"), faults(Kill, &[LockTaken, Fenced])),
-            ("pause", worker("h", "1"), faults(Pause, &[LockTaken, Compared])),
+            ("in_window_kill", worker("h", "0"), faults(Kill, &[Linked, BeforeRename])),
+            ("pause", worker("h", "1"), faults(Pause, &[Linked, BeforeTidyUp])),
             ("external_kill", supervisor("h"), external_kills(9)),
         ];
         for (kind, name, records) in short {
@@ -371,17 +370,17 @@ mod tests {
     #[test]
     fn fault_floor_shortfall_per_point() {
         use FaultAction::{Kill, Pause};
-        use PointName::{Fenced, LockTaken};
+        use PointName::{BeforeRename, Linked};
         let logs = vec![
-            (worker("h", "0"), faults(Kill, &[LockTaken, LockTaken, Fenced])),
-            (worker("h", "1"), faults(Pause, &[LockTaken, LockTaken, Fenced])),
+            (worker("h", "0"), faults(Kill, &[Linked, Linked, BeforeRename])),
+            (worker("h", "1"), faults(Pause, &[Linked, Linked, BeforeRename])),
             (supervisor("h"), external_kills(10)),
         ];
         let verdict = check(&busy(logs), &faulty_config(), false);
         assert_eq!(
             verdict.violations,
             [Violation::FaultFloor {
-                kind: "per_point.compared".to_owned(),
+                kind: "per_point.before_tidy_up".to_owned(),
                 fired: 0,
                 required: 1
             }]
@@ -391,23 +390,28 @@ mod tests {
     #[test]
     fn fault_floor_ignores_disabled_kinds() {
         use FaultAction::Pause;
-        use PointName::{Compared, Fenced, LockTaken};
+        use PointName::{BeforeRename, BeforeTidyUp, Linked};
         let verdict = check(&busy(vec![]), &quiet_config(), false);
         assert_eq!(verdict.violations, []);
 
         // Pauses alone still need every point.
         let mut config = quiet_config();
         config.faults.pause_probability = 0.01;
-        let logs =
-            vec![(worker("h", "0"), faults(Pause, &[LockTaken, Fenced, Compared]))];
+        let logs = vec![(
+            worker("h", "0"),
+            faults(Pause, &[Linked, BeforeRename, BeforeTidyUp]),
+        )];
         let verdict = check(&busy(logs), &config, false);
         assert_eq!(verdict.violations, []);
-        let logs = vec![(worker("h", "0"), faults(Pause, &[LockTaken, Fenced, Fenced]))];
+        let logs = vec![(
+            worker("h", "0"),
+            faults(Pause, &[Linked, BeforeRename, BeforeRename]),
+        )];
         let verdict = check(&busy(logs), &config, false);
         assert_eq!(
             verdict.violations,
             [Violation::FaultFloor {
-                kind: "per_point.compared".to_owned(),
+                kind: "per_point.before_tidy_up".to_owned(),
                 fired: 0,
                 required: 1
             }]

@@ -20,7 +20,7 @@ use crate::{
     log::read_all_logs,
     oracle::{History, Verdict, Violation, check_mode, liveness::check_liveness},
     recovery::{
-        RecoveryOutcome, age_storage_root, check_clean_root, recovery_deadline,
+        RECOVERY_DEADLINE, RecoveryOutcome, age_storage_root, check_clean_root,
         recovery_worker, recovery_write, sweep,
     },
     report::{Participants, Report},
@@ -120,24 +120,23 @@ async fn recover_and_clean(
     verdict: &mut Verdict,
 ) -> anyhow::Result<Option<u64>> {
     eprintln!("recovery write");
-    let recovery_ms =
-        match recovery_write(root, config, recovery_deadline(config)).await? {
-            RecoveryOutcome::Succeeded { elapsed } => {
-                let ms = millis(elapsed);
-                eprintln!("recovery write took {ms} ms");
-                Some(ms)
-            }
-            RecoveryOutcome::Failed { elapsed, last_error } => {
-                let ms = millis(elapsed);
-                eprintln!("recovery write failed after {ms} ms");
-                verdict.violations.push(Violation::Recovery {
-                    detail: format!(
-                        "no write succeeded within {ms} ms; last error: {last_error}"
-                    ),
-                });
-                None
-            }
-        };
+    let recovery_ms = match recovery_write(root, config, RECOVERY_DEADLINE).await? {
+        RecoveryOutcome::Succeeded { elapsed } => {
+            let ms = millis(elapsed);
+            eprintln!("recovery write took {ms} ms");
+            Some(ms)
+        }
+        RecoveryOutcome::Failed { elapsed, last_error } => {
+            let ms = millis(elapsed);
+            eprintln!("recovery write failed after {ms} ms");
+            verdict.violations.push(Violation::Recovery {
+                detail: format!(
+                    "no write succeeded within {ms} ms; last error: {last_error}"
+                ),
+            });
+            None
+        }
+    };
 
     // From here on a failure is recorded, so the report is still written.
     eprintln!("aging and sweeping the storage root");
@@ -151,7 +150,7 @@ async fn recover_and_clean(
             detail: format!("sweeping after the run: {err:#}"),
         });
     }
-    if let Err(err) = check_clean_root(root, verdict) {
+    if let Err(err) = check_clean_root(root, config, verdict) {
         verdict.violations.push(Violation::Harness {
             detail: format!("checking the storage root: {err:#}"),
         });

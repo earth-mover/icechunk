@@ -2497,6 +2497,7 @@ dependencies = [
  "bytes",
  "chrono",
  "futures",
+ "icechunk-format",
  "icechunk-macros",
  "icechunk-storage",
  "icechunk-types",

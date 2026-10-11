@@ -4,12 +4,12 @@
 use std::{fs, num::NonZeroU16, path::Path, time::Duration};
 
 use anyhow::{Context as _, bail, ensure};
-use icechunk_fs::fault_injection::Point;
+use icechunk_fs::fault_injection::{Point, Sabotage as ProtocolSabotage};
 use serde::{Deserialize, Serialize};
 
 use crate::layout::RunRoot;
 
-pub const RUN_CONFIG_VERSION: u32 = 1;
+pub const RUN_CONFIG_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -21,8 +21,6 @@ pub struct RunConfig {
     pub hosts: u32,
     #[serde(with = "millis")]
     pub duration: Duration,
-    #[serde(with = "millis")]
-    pub stale_after: Duration,
     pub fsync: bool,
     pub workers_per_host_default: u32,
     pub faults: FaultConfig,
@@ -83,19 +81,17 @@ pub struct FaultConfig {
     pub pause: Duration,
 }
 
-/// A [`Point`] without its data, as named in the configuration and in fault
-/// records.
+/// A [`Point`], as named in the configuration and in fault records.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize,
 )]
 #[serde(rename_all = "snake_case")]
 pub enum PointName {
-    LockInfoWritten,
-    TicketWritten,
-    LockTaken,
-    Fenced,
-    Compared,
+    Staged,
+    Linked,
+    BeforeRename,
     Renamed,
+    BeforeTidyUp,
 }
 
 /// Minimum fired-fault counts for a run to count as exercised. Counts are per
@@ -135,16 +131,26 @@ pub struct WorkerId {
     pub incarnation: u32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// A [`ProtocolSabotage`], as named in the configuration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Sabotage {
-    SkipFence,
-    SkipCompare,
+    SkipLink,
+    RenameFromListedMarker,
     TrustRenameEnoent,
+    AckUnproven,
+    TidyUpDeletesCurrent,
+    DeleteAboveMarker,
+    UnlinkBaseBeforeRename,
+    LinkAfterRename,
+    DeleteWinnerFile,
 }
 
 const DEFAULT_DURATION: Duration = Duration::from_secs(60);
-const DEFAULT_STALE_AFTER: Duration = Duration::from_secs(5);
+const DEFAULT_PAUSE: Duration = Duration::from_secs(2);
+/// No writer holds anything across steps, so a pause stalls only the paused
+/// writer: the threshold doesn't depend on it.
+const DEFAULT_STALL_THRESHOLD: Duration = Duration::from_secs(30);
 const DEFAULT_WORKERS_PER_HOST: u32 = 8;
 const DEFAULT_EXTERNAL_KILL_EVERY: Duration = Duration::from_secs(3);
 const DEFAULT_PAYLOAD_BYTES: usize = 1024;
@@ -154,19 +160,16 @@ const GC_MARGIN_SLACK: Duration = Duration::from_secs(30);
 
 impl RunConfig {
     pub fn defaults(mode: Mode, hosts: u32) -> Self {
-        let stale_after = DEFAULT_STALE_AFTER;
-        let faults = FaultConfig::defaults(stale_after);
         Self {
             version: RUN_CONFIG_VERSION,
             mode,
             backend: Backend::default(),
             hosts,
             duration: DEFAULT_DURATION,
-            stale_after,
             fsync: true,
             workers_per_host_default: DEFAULT_WORKERS_PER_HOST,
-            stall_threshold: default_stall_threshold(stale_after, faults.pause),
-            faults,
+            stall_threshold: DEFAULT_STALL_THRESHOLD,
+            faults: FaultConfig::default(),
             external_kill_every: Some(DEFAULT_EXTERNAL_KILL_EVERY),
             fault_floor: FaultFloor::default(),
             payload_bytes: DEFAULT_PAYLOAD_BYTES,
@@ -223,7 +226,6 @@ impl RunConfig {
         ensure!(self.hosts >= 1, "hosts must be at least 1");
         for (name, duration) in [
             ("duration", self.duration),
-            ("stale_after", self.stale_after),
             ("faults.pause", self.faults.pause),
             ("stall_threshold", self.stall_threshold),
         ] {
@@ -288,17 +290,17 @@ pub(crate) fn write_synced(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     file.sync_all()
 }
 
-pub fn default_stall_threshold(stale_after: Duration, pause: Duration) -> Duration {
-    4 * stale_after + pause
-}
-
-impl FaultConfig {
-    pub fn defaults(stale_after: Duration) -> Self {
+impl Default for FaultConfig {
+    fn default() -> Self {
         Self {
-            points: vec![PointName::LockTaken, PointName::Fenced, PointName::Compared],
+            points: vec![
+                PointName::Linked,
+                PointName::BeforeRename,
+                PointName::BeforeTidyUp,
+            ],
             kill_probability: 0.005,
             pause_probability: 0.005,
-            pause: 2 * stale_after,
+            pause: DEFAULT_PAUSE,
         }
     }
 }
@@ -353,19 +355,48 @@ impl Default for RetryConfig {
 impl From<Point> for PointName {
     fn from(point: Point) -> Self {
         match point {
-            Point::LockInfoWritten => Self::LockInfoWritten,
-            Point::TicketWritten => Self::TicketWritten,
-            Point::LockTaken { .. } => Self::LockTaken,
-            Point::Fenced => Self::Fenced,
-            Point::Compared => Self::Compared,
+            Point::Staged => Self::Staged,
+            Point::Linked => Self::Linked,
+            Point::BeforeRename => Self::BeforeRename,
             Point::Renamed => Self::Renamed,
+            Point::BeforeTidyUp => Self::BeforeTidyUp,
         }
     }
 }
 
-impl PointName {
-    pub fn matches(self, point: Point) -> bool {
-        self == Self::from(point)
+impl From<ProtocolSabotage> for Sabotage {
+    fn from(sabotage: ProtocolSabotage) -> Self {
+        match sabotage {
+            ProtocolSabotage::SkipLink => Self::SkipLink,
+            ProtocolSabotage::RenameFromListedMarker => Self::RenameFromListedMarker,
+            ProtocolSabotage::TrustRenameEnoent => Self::TrustRenameEnoent,
+            ProtocolSabotage::AckUnproven => Self::AckUnproven,
+            ProtocolSabotage::TidyUpDeletesCurrent => Self::TidyUpDeletesCurrent,
+            ProtocolSabotage::DeleteAboveMarker => Self::DeleteAboveMarker,
+            ProtocolSabotage::UnlinkBaseBeforeRename => Self::UnlinkBaseBeforeRename,
+            ProtocolSabotage::LinkAfterRename => Self::LinkAfterRename,
+            ProtocolSabotage::DeleteWinnerFile => Self::DeleteWinnerFile,
+        }
+    }
+}
+
+impl Sabotage {
+    /// The protocol point nearest to where the sabotage changes behaviour,
+    /// named in its fault records.
+    pub fn point(self) -> PointName {
+        match self {
+            Self::SkipLink => PointName::Linked,
+            Self::RenameFromListedMarker | Self::UnlinkBaseBeforeRename => {
+                PointName::BeforeRename
+            }
+            Self::TrustRenameEnoent
+            | Self::AckUnproven
+            | Self::LinkAfterRename
+            | Self::DeleteWinnerFile => PointName::Renamed,
+            Self::TidyUpDeletesCurrent | Self::DeleteAboveMarker => {
+                PointName::BeforeTidyUp
+            }
+        }
     }
 }
 
@@ -447,7 +478,7 @@ mod tests {
         let (_dir, root) = run_root();
         let mut repo = RunConfig::defaults(Mode::Repository, 3);
         repo.gc = Some(GcConfig::defaults(repo.faults.pause));
-        repo.sabotage = Some(Sabotage::TrustRenameEnoent);
+        repo.sabotage = Some(Sabotage::DeleteAboveMarker);
         repo.external_kill_every = None;
         repo.write_new(&root).unwrap();
         assert_eq!(RunConfig::load(&root).unwrap(), repo);
@@ -475,8 +506,9 @@ mod tests {
     fn durations_are_milliseconds_and_every_field_is_required() {
         let config = RunConfig::defaults(Mode::Storage, 2);
         let json = serde_json::to_value(&config).unwrap();
-        assert_eq!(json["stale_after"], 5000);
-        assert_eq!(json["faults"]["pause"], 10_000);
+        assert_eq!(json["version"], 2);
+        assert_eq!(json["faults"]["pause"], 2000);
+        assert_eq!(json["stall_threshold"], 30_000);
         assert_eq!(json["external_kill_every"], 3000);
         assert_eq!(json["gc"], serde_json::Value::Null);
 
@@ -497,6 +529,18 @@ mod tests {
     }
 
     #[test]
+    fn a_run_json_of_the_lock_protocol_is_rejected() {
+        let mut json =
+            serde_json::to_value(RunConfig::defaults(Mode::Storage, 1)).unwrap();
+        json["stale_after"] = 5000.into();
+        assert!(serde_json::from_value::<RunConfig>(json.clone()).is_err());
+        json.as_object_mut().unwrap().remove("stale_after");
+        json["version"] = 1.into();
+        let config: RunConfig = serde_json::from_value(json).unwrap();
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
     fn load_rejects_malformed_run_json() {
         let (_dir, root) = run_root();
         fs::write(root.run_json(), b"{\"version\": 1").unwrap();
@@ -505,7 +549,7 @@ mod tests {
 
         let mut config =
             serde_json::to_value(RunConfig::defaults(Mode::Storage, 1)).unwrap();
-        config["version"] = 2.into();
+        config["version"] = 3.into();
         fs::write(root.run_json(), serde_json::to_vec(&config).unwrap()).unwrap();
         assert!(RunConfig::load(&root).is_err());
     }
@@ -516,7 +560,7 @@ mod tests {
             let mut config = RunConfig::defaults(mode, 1);
             config.validate().unwrap();
             config.gc = Some(GcConfig::defaults(config.faults.pause));
-            config.sabotage = Some(Sabotage::SkipFence);
+            config.sabotage = Some(Sabotage::SkipLink);
             config.validate().unwrap();
         }
     }
@@ -527,11 +571,9 @@ mod tests {
         type Mutate = fn(&mut RunConfig);
         let cases: &[(&str, Mutate)] = &[
             ("hosts 0", |c| c.hosts = 0),
-            ("version", |c| c.version = 2),
+            ("version", |c| c.version = 1),
             ("zero duration", |c| c.duration = Duration::ZERO),
             ("huge duration", |c| c.duration = 31 * DAY),
-            ("zero stale_after", |c| c.stale_after = Duration::ZERO),
-            ("huge stale_after", |c| c.stale_after = Duration::MAX),
             ("zero pause", |c| c.faults.pause = Duration::ZERO),
             ("huge pause", |c| c.faults.pause = 31 * DAY),
             ("zero stall", |c| c.stall_threshold = Duration::ZERO),
@@ -555,7 +597,7 @@ mod tests {
                 c.faults.pause_probability = 0.5;
             }),
             ("duplicate point", |c| {
-                c.faults.points = vec![PointName::Fenced, PointName::Fenced];
+                c.faults.points = vec![PointName::Linked, PointName::Linked];
             }),
             ("huge payload", |c| c.payload_bytes = MAX_BYTES + 1),
             ("huge chunk", |c| c.chunk_bytes = MAX_BYTES + 1),
@@ -604,7 +646,7 @@ mod tests {
         let cases: &[(&str, Mutate)] = &[
             ("kill", |c| c.faults.kill_probability = 0.1),
             ("pause", |c| c.faults.pause_probability = 0.1),
-            ("sabotage", |c| c.sabotage = Some(Sabotage::SkipCompare)),
+            ("sabotage", |c| c.sabotage = Some(Sabotage::AckUnproven)),
         ];
         for (name, mutate) in cases {
             for mode in [Mode::Storage, Mode::Repository] {
@@ -628,11 +670,14 @@ mod tests {
     }
 
     #[test]
-    fn stall_threshold_defaults_to_four_stale_after_plus_pause() {
+    fn fault_and_stall_defaults() {
         let config = RunConfig::defaults(Mode::Storage, 1);
-        assert_eq!(config.faults.pause, 2 * config.stale_after);
-        assert_eq!(config.stall_threshold, 4 * config.stale_after + config.faults.pause);
+        assert_eq!(config.faults.pause, Duration::from_secs(2));
         assert_eq!(config.stall_threshold, Duration::from_secs(30));
+        assert_eq!(
+            config.faults.points,
+            [PointName::Linked, PointName::BeforeRename, PointName::BeforeTidyUp]
+        );
     }
 
     #[test]
@@ -663,13 +708,73 @@ mod tests {
     }
 
     #[test]
-    fn point_names_ignore_generation() {
-        assert_eq!(
-            PointName::from(Point::LockTaken { generation: 7 }),
-            PointName::LockTaken
-        );
-        assert!(PointName::LockTaken.matches(Point::LockTaken { generation: 0 }));
-        assert!(!PointName::Fenced.matches(Point::Compared));
-        assert!(PointName::Renamed.matches(Point::Renamed));
+    fn point_names_mirror_the_protocol_points() {
+        let points = [
+            (Point::Staged, PointName::Staged, "staged"),
+            (Point::Linked, PointName::Linked, "linked"),
+            (Point::BeforeRename, PointName::BeforeRename, "before_rename"),
+            (Point::Renamed, PointName::Renamed, "renamed"),
+            (Point::BeforeTidyUp, PointName::BeforeTidyUp, "before_tidy_up"),
+        ];
+        for (point, name, json) in points {
+            assert_eq!(PointName::from(point), name);
+            assert_eq!(serde_json::to_value(name).unwrap(), json);
+        }
+    }
+
+    #[test]
+    fn sabotages_mirror_the_protocol_sabotages() {
+        use ProtocolSabotage as P;
+        let sabotages = [
+            (P::SkipLink, Sabotage::SkipLink, "skip_link", PointName::Linked),
+            (
+                P::RenameFromListedMarker,
+                Sabotage::RenameFromListedMarker,
+                "rename_from_listed_marker",
+                PointName::BeforeRename,
+            ),
+            (
+                P::TrustRenameEnoent,
+                Sabotage::TrustRenameEnoent,
+                "trust_rename_enoent",
+                PointName::Renamed,
+            ),
+            (P::AckUnproven, Sabotage::AckUnproven, "ack_unproven", PointName::Renamed),
+            (
+                P::TidyUpDeletesCurrent,
+                Sabotage::TidyUpDeletesCurrent,
+                "tidy_up_deletes_current",
+                PointName::BeforeTidyUp,
+            ),
+            (
+                P::DeleteAboveMarker,
+                Sabotage::DeleteAboveMarker,
+                "delete_above_marker",
+                PointName::BeforeTidyUp,
+            ),
+            (
+                P::UnlinkBaseBeforeRename,
+                Sabotage::UnlinkBaseBeforeRename,
+                "unlink_base_before_rename",
+                PointName::BeforeRename,
+            ),
+            (
+                P::LinkAfterRename,
+                Sabotage::LinkAfterRename,
+                "link_after_rename",
+                PointName::Renamed,
+            ),
+            (
+                P::DeleteWinnerFile,
+                Sabotage::DeleteWinnerFile,
+                "delete_winner_file",
+                PointName::Renamed,
+            ),
+        ];
+        for (protocol, sabotage, json, point) in sabotages {
+            assert_eq!(Sabotage::from(protocol), sabotage);
+            assert_eq!(serde_json::to_value(sabotage).unwrap(), json);
+            assert_eq!(sabotage.point(), point, "{sabotage:?}");
+        }
     }
 }

@@ -1277,7 +1277,12 @@ async fn test_write_config_on_empty(
 async fn test_write_config_on_existing(
     #[case] spec_version: SpecVersionBin,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    with_storage(Permission::Modify, |_, storage| async move {
+    with_storage(Permission::Modify, |name, storage| async move {
+        // `try_update_config` is the IC1 config path, which FilesystemStorage
+        // refuses: it updates only `repo` conditionally.
+        if name == "filesystem" {
+            return Ok(());
+        }
         let am = Arc::new(AssetManager::new_no_cache(
             Arc::clone(&storage),
             with_storage_settings(&storage).await?,
@@ -1724,7 +1729,9 @@ async fn test_conditional_write_contract() -> Result<(), Box<dyn std::error::Err
     with_storage(Permission::Modify, |name, storage| async move {
         let settings = with_storage_settings(&storage).await?;
         let ctx = attributed(&settings);
-        let key = "conditional-write-contract";
+        let empty_root = tempdir()?;
+        let (key, missing, missing_storage) =
+            conditional_write_contract_keys(name, &storage, empty_root.path()).await?;
         let put = |bytes: &'static [u8], condition| {
             storage.put_object_conditional(
                 &ctx,
@@ -1776,8 +1783,7 @@ async fn test_conditional_write_contract() -> Result<(), Box<dyn std::error::Err
             return Ok(());
         }
 
-        let missing = "conditional-write-contract-missing";
-        let res = storage
+        let res = missing_storage
             .put_object_conditional(
                 &ctx,
                 missing,
@@ -1791,7 +1797,7 @@ async fn test_conditional_write_contract() -> Result<(), Box<dyn std::error::Err
             matches!(res, VersionedUpdateResult::NotOnLatestVersion),
             "{name}: update on a missing key: {res:?}"
         );
-        let res = storage.get_object_conditional(&ctx, missing, None).await;
+        let res = missing_storage.get_object_conditional(&ctx, missing, None).await;
         assert!(
             matches!(res, Err(ICError { kind: StorageErrorKind::ObjectNotFound, .. })),
             "{name}: update on a missing key created it"
@@ -1823,6 +1829,27 @@ async fn test_conditional_write_contract() -> Result<(), Box<dyn std::error::Err
         Ok(())
     })
     .await
+}
+
+/// The key `test_conditional_write_contract` updates, and its missing key with
+/// the storage that lacks it. `FilesystemStorage` updates only `repo`
+/// conditionally, and `repo` is missing only from another, empty root.
+async fn conditional_write_contract_keys(
+    name: &str,
+    storage: &Arc<dyn Storage + Send + Sync>,
+    empty_root: &std::path::Path,
+) -> StorageResult<(&'static str, &'static str, Arc<dyn Storage + Send + Sync>)> {
+    #[cfg(all(feature = "fs", unix))]
+    if name == "filesystem" {
+        return Ok(("repo", "repo", storage::new_filesystem_storage(empty_root).await?));
+    }
+    #[cfg(not(all(feature = "fs", unix)))]
+    let _ = (name, empty_root);
+    Ok((
+        "conditional-write-contract",
+        "conditional-write-contract-missing",
+        Arc::clone(storage),
+    ))
 }
 
 #[tokio::test]
@@ -2129,6 +2156,8 @@ async fn filesystem_storage_creates_and_reopens_v2()
     Ok(())
 }
 
+/// A repository created by `new_local_filesystem_storage` must be migrated
+/// first; then its unsafe settings are ignored: writes stay conditional.
 #[cfg(all(feature = "fs", unix))]
 #[tokio_test]
 async fn filesystem_storage_ignores_unsafe_settings_of_local_filesystem_repos()
@@ -2141,6 +2170,16 @@ async fn filesystem_storage_ignores_unsafe_settings_of_local_filesystem_repos()
         .config(config)
         .execute()
         .await?;
+
+    let res = Repository::open(storage::new_filesystem_storage(dir.path()).await?)
+        .execute()
+        .await;
+    assert!(
+        res.as_ref().is_err_and(|err| err.to_string().contains("migrate_legacy_repo")),
+        "{:?}",
+        res.err()
+    );
+    storage::FilesystemStorage::new(dir.path())?.migrate_legacy_repo().await?;
 
     let repo = Repository::open(storage::new_filesystem_storage(dir.path()).await?)
         .execute()
@@ -2163,6 +2202,10 @@ async fn filesystem_storage_ignores_unsafe_settings_of_local_filesystem_repos()
     assert!(matches!(res, VersionedUpdateResult::Updated { .. }), "{res:?}");
     let res = put(b"second").await?;
     assert!(matches!(res, VersionedUpdateResult::NotOnLatestVersion), "{res:?}");
+
+    let mut session = repo.writable_session("main").await?;
+    session.add_group(Path::root(), Bytes::new()).await?;
+    session.commit("after migration").execute().await?;
     Ok(())
 }
 

@@ -2073,9 +2073,10 @@ class GCSummary:
     @property
     def storage_leftovers_deleted(self) -> int:
         """
-        Leftovers of crashed or abandoned writes in the repository's top-level
-        directory that the storage backend deleted; their bytes are included in
-        `bytes_deleted`. Only `filesystem_storage` has such leftovers.
+        Leftovers of the storage backend's commit protocol that it deleted:
+        superseded versions of the `repo` file, and files of crashed or
+        abandoned writes. Their bytes are included in `bytes_deleted`. Only
+        `filesystem_storage` has such leftovers.
         """
     def _repr_html_(self) -> str: ...
 
@@ -3283,6 +3284,42 @@ class LatencyStorage(Storage):
     def read_latency_ms(self, ms: int) -> None: ...
 
 @final
+class FilesystemStorage(Storage):
+    """The `Storage` returned by `filesystem_storage`.
+
+    It adds the operations specific to the repository format of
+    `filesystem_storage`.
+    """
+
+    def migrate_legacy_repo(self) -> bool:
+        """Convert a repository written by `local_filesystem_storage` or an older
+        Icechunk to the format of `filesystem_storage`.
+
+        `filesystem_storage` refuses to open such a repository until it is
+        converted. Stop every writer of the repository first: no other process
+        may write to it from when this starts until every writer uses
+        `filesystem_storage`. Rerunning it completes an interrupted conversion.
+
+        Returns
+        -------
+        bool
+            True if this call converted the repository, False if there was
+            nothing to convert.
+        """
+    async def migrate_legacy_repo_async(self) -> bool:
+        """Convert a repository written by `local_filesystem_storage` or an older
+        Icechunk to the format of `filesystem_storage` (async version).
+
+        See `migrate_legacy_repo`.
+
+        Returns
+        -------
+        bool
+            True if this call converted the repository, False if there was
+            nothing to convert.
+        """
+
+@final
 class StorageObjectInfo:
     """Metadata for an object in storage.
 
@@ -3368,8 +3405,7 @@ class Storage:
         path: str,
         *,
         fsync: bool = True,
-        stale_after: datetime.timedelta = ...,
-    ) -> Storage: ...
+    ) -> FilesystemStorage: ...
     @classmethod
     def new_gcs(
         cls,

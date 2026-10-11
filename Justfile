@@ -124,16 +124,16 @@ test-integration rooted="true" *args:
   rc=0
   # exclude icechunk-python: no Rust tests, but its PyO3 lib-test binary aborts loading libpython
   # exclude icechunk-fs-stress: its ignored tests spawn stress processes, see fs-stress-process-tests
-  cargo test --profile {{profile}} --workspace --exclude icechunk-python --exclude icechunk-fs-stress --tests "$@" -- --ignored --skip rooted_roundtrip --skip three_writers_everything || rc=1
+  cargo test --profile {{profile}} --workspace --exclude icechunk-python --exclude icechunk-fs-stress --tests "$@" -- --ignored --skip rooted_roundtrip --skip three_writers_everything --skip three_writers_no_freeze || rc=1
   if [ "{{rooted}}" = "true" ]; then
     cargo test --profile {{profile}} -p icechunk --test main rooted_roundtrip -- --ignored || rc=1
   fi
   exit $rc
 
 [group('test')]
-[doc("Run the 3-writer model check of the filesystem storage protocol (not run in CI; over 10 min and about 19 GB of RAM)")]
+[doc("Run the large model checks of the filesystem storage protocol (not run in CI; about 5 min and 2.4 GB of RAM)")]
 fs-model-check:
-  cargo test --release -p icechunk-fs --test protocol_model -- --ignored --nocapture three_writers_everything
+  cargo test --release -p icechunk-fs --test protocol_model -- --ignored --nocapture --test-threads=1 --skip three_writers_everything
 
 [group('test')]
 [script]
@@ -142,7 +142,7 @@ fs-stress mode="storage" parent=env("TMPDIR", "/tmp") *args:
   shift 2
   root="{{parent}}/fs-stress-$(date +%Y%m%d-%H%M%S)-$$"
   echo "run root: $root" >&2
-  if cargo run --profile {{profile}} -p icechunk-fs-stress -- run --root "$root" --mode {{mode}} --stale-after 1s "$@"; then
+  if cargo run --profile {{profile}} -p icechunk-fs-stress -- run --root "$root" --mode {{mode}} "$@"; then
     rm -rf "$root"
   else
     rc=$?

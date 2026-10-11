@@ -396,8 +396,8 @@ test('zarrita read and write', async (t) => {
 })
 
 // js-test-wasi always sets NAPI_RS_FORCE_WASI; filesystem constructors are native-only
-const nativeUnixOnly =
-  process.platform === 'win32' || process.env.NAPI_RS_FORCE_WASI ? test.skip : test
+const nativeOnly = process.env.NAPI_RS_FORCE_WASI ? test.skip : test
+const nativeUnixOnly = process.platform === 'win32' ? test.skip : nativeOnly
 
 nativeUnixOnly('filesystem storage lifecycle', async (t) => {
   const dir = await mkdtemp(join(tmpdir(), 'icechunk-js-fs-'))
@@ -434,6 +434,81 @@ nativeUnixOnly('filesystem storage lifecycle', async (t) => {
   }
 
   t.pass()
+})
+
+nativeUnixOnly('filesystem storage freeze, unfreeze and migrate', async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), 'icechunk-js-fs-'))
+  try {
+    const storage = await Storage.newFilesystem(dir)
+    assert.equal(await storage.migrateLegacyRepo(), false)
+    const repo = await Repository.create(storage)
+    assert.equal(await storage.migrateLegacyRepo(), false)
+
+    assert.equal(await storage.freezeRepo(), true)
+    assert.equal(await storage.freezeRepo(), false)
+    await t.throwsAsync(
+      async () => { await repo.createBranch('frozen-branch', await repo.lookupBranch('main')) },
+      { message: /the repository is frozen/ },
+    )
+    const session = await repo.writableSession('main')
+    await session.store.set('zarr.json', new TextEncoder().encode(JSON.stringify({
+      zarr_format: 3,
+      node_type: 'group',
+    })))
+    await t.throwsAsync(
+      async () => { await session.commit('while frozen') },
+      { message: /the repository is frozen/ },
+    )
+
+    assert.equal(await storage.unfreezeRepo(), true)
+    assert.equal(await storage.unfreezeRepo(), false)
+    const retry = await repo.writableSession('main')
+    await retry.store.set('zarr.json', new TextEncoder().encode(JSON.stringify({
+      zarr_format: 3,
+      node_type: 'group',
+    })))
+    await retry.commit('after unfreeze')
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+
+  t.pass()
+})
+
+nativeUnixOnly('filesystem storage migrates a local filesystem repository', async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), 'icechunk-js-fs-'))
+  try {
+    const legacy = await Repository.create(await Storage.newLocalFilesystem(dir))
+    const main = await legacy.lookupBranch('main')
+
+    const storage = await Storage.newFilesystem(dir)
+    await t.throwsAsync(
+      async () => { await Repository.open(storage) },
+      { message: /migrate_legacy_repo/ },
+    )
+    assert.equal(await storage.migrateLegacyRepo(), true)
+    assert.equal(await storage.migrateLegacyRepo(), false)
+    const repo = await Repository.open(storage)
+    assert.equal(await repo.lookupBranch('main'), main)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+nativeOnly('repository operations of filesystem storage fail on other storage', async (t) => {
+  const storage = await Storage.newInMemory()
+  await t.throwsAsync(
+    async () => { await storage.freezeRepo() },
+    { message: 'freezeRepo is only available on storage created with Storage.newFilesystem' },
+  )
+  await t.throwsAsync(
+    async () => { await storage.unfreezeRepo() },
+    { message: 'unfreezeRepo is only available on storage created with Storage.newFilesystem' },
+  )
+  await t.throwsAsync(
+    async () => { await storage.migrateLegacyRepo() },
+    { message: 'migrateLegacyRepo is only available on storage created with Storage.newFilesystem' },
+  )
 })
 
 test('invalid manifest config gives error', async (t) => {

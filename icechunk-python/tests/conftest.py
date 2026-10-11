@@ -1,7 +1,9 @@
 import math
 import os
+import shutil
 import sys
 from enum import Enum
+from pathlib import Path
 from typing import Literal, cast
 
 import boto3
@@ -118,6 +120,18 @@ def fs_storage(
             pytest.skip("FilesystemStorage refuses IC1 repos")
         return filesystem_storage(path)
     return local_filesystem_storage(path)
+
+
+def readable_path(path: str, backend: str, tmp_path: Path) -> str:
+    """The filesystem backend refuses single-file repos: open a migrated copy."""
+    if backend != "filesystem":
+        return path
+    copy = tmp_path / "repo"
+    shutil.copytree(path, copy)
+    storage = filesystem_storage(str(copy))
+    migrated = storage.migrate_legacy_repo()
+    assert migrated
+    return str(copy)
 
 
 def parse_repo(

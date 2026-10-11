@@ -4,7 +4,7 @@
 
 ### Features
 
-- New experimental `icechunk.filesystem_storage`: filesystem storage that is safe for concurrent writers on filesystems that meet the requirements (exclusive hard links, atomic rename, fresh opens). It is opt-in; `local_filesystem_storage` is unchanged and still not safe for concurrent commits.
+- New experimental `icechunk.filesystem_storage`: filesystem storage that is safe for concurrent writers on filesystems that meet the requirements (hard links and atomic rename). It is opt-in; `local_filesystem_storage` is unchanged and still not safe for concurrent commits; repositories created with `local_filesystem_storage` must first be converted with `FilesystemStorage.migrate_legacy_repo()`.
 
 ## Python Icechunk Library 2.3.0
 

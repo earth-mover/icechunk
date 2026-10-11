@@ -4,7 +4,7 @@ import pytest
 
 import icechunk as ic
 import zarr
-from tests.conftest import fs_storage
+from tests.conftest import fs_storage, readable_path
 
 
 @pytest.mark.filterwarnings("ignore:datetime.datetime.utcnow")
@@ -68,11 +68,11 @@ async def test_total_chunks_storage_async(any_spec_version: int | None) -> None:
     [("./tests/data/test-repo-v2", 2), ("./tests/data/test-repo-v1", 1)],
 )
 def test_chunk_storage_on_filesystem(
-    dir: str, spec_version: int, fs_backend: str
+    dir: str, spec_version: int, fs_backend: str, tmp_path: Path
 ) -> None:
-    repo = ic.Repository.open(
-        storage=fs_storage(fs_backend, dir, spec_version),
-    )
+    # fs_storage skips IC1 on the filesystem backend, which can't migrate it
+    path = readable_path(dir, fs_backend, tmp_path) if spec_version == 2 else dir
+    repo = ic.Repository.open(storage=fs_storage(fs_backend, path, spec_version))
     with pytest.warns(DeprecationWarning, match="total_chunks_storage"):
         actual = repo.total_chunks_storage()
     expected = sum(

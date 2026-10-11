@@ -59,7 +59,7 @@ async fn kill_fault_kills_the_worker_process_after_logging_it() {
     let dir = tempfile::tempdir().unwrap();
     let root = RunRoot::new(dir.path().to_path_buf());
     let mut config = RunConfig::defaults(Mode::Storage, 1);
-    config.faults.points = vec![PointName::LockTaken];
+    config.faults.points = vec![PointName::Linked];
     config.faults.kill_probability = 1.0;
     config.faults.pause_probability = 0.0;
     config.write_new(&root).unwrap();
@@ -85,7 +85,7 @@ async fn kill_fault_kills_the_worker_process_after_logging_it() {
             records.last(),
             Some(Record::Fault {
                 action: FaultAction::Kill,
-                point: PointName::LockTaken,
+                point: PointName::Linked,
                 ..
             })
         ),
@@ -102,7 +102,7 @@ fn two_hosts_run_and_a_late_host_is_refused() {
         .args(["init", "--root"])
         .arg(root.root())
         .args(["--mode", "storage", "--hosts", "2", "--duration", "3s"])
-        .args(["--stale-after", "1s", "--kill-p", "0", "--pause-p", "0"])
+        .args(["--kill-p", "0", "--pause-p", "0"])
         .args(["--external-kill-every", "1s", "--workers", "2"])
         .spawn()
         .unwrap();
@@ -249,14 +249,9 @@ fn storage_run_with_default_faults_passes() {
             root.to_str().unwrap(),
             "--mode",
             "storage",
-            // Each pause and kill holds up every writer for about a second, so
-            // shorter runs miss the fault floor at some point too often.
+            // Long enough for the fault floor at every point.
             "--duration",
             "30s",
-            "--stale-after",
-            "1s",
-            "--pause",
-            "2s",
             "--external-kill-every",
             "1s",
             "--progress-every",
@@ -302,7 +297,18 @@ fn selftest_detects_every_case_in_both_modes() {
     );
     assert_eq!(status.code(), Some(0), "{stdout}\n{stderr}");
     let lines: Vec<_> = stdout.lines().collect();
-    let cases = ["skip-fence", "skip-compare", "trust-rename-enoent", "legacy-local"];
+    let cases = [
+        "skip-link",
+        "rename-from-listed-marker",
+        "trust-rename-enoent",
+        "ack-unproven",
+        "tidy-up-deletes-current",
+        "delete-above-marker",
+        "unlink-base-before-rename",
+        "link-after-rename",
+        "delete-winner-file",
+        "legacy-local",
+    ];
     let expected: Vec<_> = ["storage", "repository"]
         .iter()
         .flat_map(|mode| cases.iter().map(move |case| format!("{mode} {case}: detected")))

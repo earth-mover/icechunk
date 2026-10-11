@@ -19,13 +19,15 @@ your own filesystem, run it there and [send us the report](#what-to-send-us).
   history may contain nothing that no worker attempted.
 - **Crash and pause recovery.** Workers are killed with `SIGKILL` and paused
   at points inside the protocol, and each host also kills one of its workers
-  from outside every few seconds. The remaining writers must keep making
-  progress, taking over the locks the dead and paused ones leave behind. After
-  the run, a fresh writer must succeed within `2 × stale_after + 5 s`.
-- **Sweeping.** After the run, `verify` sets the modification time of every
-  other file in the repository's top-level directory 25 hours into the past and
-  sweeps it: with the storage's own sweep in storage mode, with garbage
-  collection in repository mode. Only `repo` may be left.
+  from outside every few seconds. No writer holds anything across protocol
+  steps, so the remaining writers must keep making progress whatever the dead
+  and paused ones left behind. After the run, a fresh writer must succeed
+  within 10 s.
+- **Sweeping.** After the run, `verify` sets the modification time of the
+  protocol's leftovers 25 hours into the past and sweeps them: with the
+  storage's own sweep in storage mode, with garbage collection in repository
+  mode. Only `repo`, and `repo.d/` holding the marker and the one version it
+  names, may be left.
 
 What it doesn't test:
 
@@ -42,8 +44,8 @@ A passing run is evidence, not a guarantee: the backend is experimental.
   results are informative only (see below).
 - **One filesystem, mounted on every host.** The mount path may differ from
   host to host: every command takes the run root's path as this host sees it
-  (`--root`). The filesystem needs exclusive hard links; the backend checks
-  that before its first write.
+  (`--root`). The filesystem needs hard links, atomic rename by name and
+  exclusive directory rename; the backend doesn't check for them.
 - **Synchronised clocks** (NTP) for runs on several hosts: the stall and
   start-skew checks compare timestamps from different hosts.
 - **The Rust toolchain** ([rustup](https://rustup.rs)), on every host or on a
@@ -51,10 +53,9 @@ A passing run is evidence, not a guarantee: the backend is experimental.
 - **Disk and memory.** See [Safety notes](#safety-notes).
 
 Expected to qualify: local POSIX filesystems, NFSv3 and NFSv4 with a Linux
-client, Lustre, GPFS, CephFS, JuiceFS. NFS mounts with `nocto` are
-unsupported. SMB and non-Linux NFS clients (macOS, FreeBSD) have not been
-analysed: you can run the tool there, but its results are informative only,
-and a pass doesn't make them supported. The
+client, Lustre, GPFS, CephFS, JuiceFS. SMB and non-Linux NFS clients (macOS,
+FreeBSD) have not been analysed: you can run the tool there, but its results
+are informative only, and a pass doesn't make them supported. The
 [storage guide](../icechunk-python/docs/docs/guides/storage.md#requirements-and-limits-of-filesystem_storage)
 lists the backend's requirements and limits.
 
@@ -166,13 +167,12 @@ or `1h`.
 | `--mode` | required | `storage` or `repository`, see [Modes](#modes) |
 | `--hosts` | required (`init` only) | how many hosts run `workers` |
 | `--duration` | `1m` | how long each host runs its workers |
-| `--stale-after` | `5s` | how old a lock must be before another writer may take it over |
 | `--no-fsync` | fsync on | don't fsync storage writes |
 | `--workers` | `8` | worker processes per host |
 | `--kill-p` | `0.005` | probability of a kill at each fault point an attempt passes |
 | `--pause-p` | `0.005` | probability of a pause at each fault point |
-| `--pause` | `2 × stale-after` | length of a pause |
-| `--fault-points` | `LockTaken,Fenced,Compared` | where kills and pauses happen; also `LockInfoWritten`, `TicketWritten`, `Renamed` |
+| `--pause` | `2s` | length of a pause |
+| `--fault-points` | `Linked,BeforeRename,BeforeTidyUp` | where kills and pauses happen; also `Staged`, `Renamed` |
 | `--external-kill-every` | `3s` | how often each host kills one of its workers, or `off` |
 | `--payload-bytes` | `1024` | storage mode: padding per update |
 | `--chunk-bytes` | `1024` | repository mode: chunk size |
@@ -182,18 +182,19 @@ or `1h`.
 | `--initial-backoff` | `10ms` | repository mode: first wait before retrying a conflicting update |
 | `--max-backoff` | `100ms` | repository mode: longest wait before retrying a conflicting update |
 
-The fault points are steps of the commit protocol, described in
-[design doc 020](../design-docs/020-filesystem-storage.md#algorithm-detail).
+The fault points are steps of a commit of `repo`, described in
+[design doc 020](../design-docs/020-filesystem-storage.md#algorithm). A
+commit writes the new version to a staging file in `repo.d/` (`Staged`),
+links it as the next version (`Linked`), renames the marker that names the
+current version to name the new one (`BeforeRename`, then `Renamed` once it
+succeeded), and deletes the versions it made obsolete (`BeforeTidyUp`).
+Only the rename decides whether the commit lands.
 
-**`--stale-after`** is the backend's `stale_after` setting for this run
-(the library's default is 60 s). A lock older than this counts as abandoned,
-and the next writer takes it over; until then, writers on top of the locked
-version get conflicts. It must exceed how long a healthy writer holds the
-lock, which is a few metadata operations. Too short a value causes spurious
-conflicts, never lost updates. Pauses (`2 × stale_after`) are long enough for
-other writers to take over the paused writer's lock. The stall threshold is
-`4 × stale_after + pause`: 30 s with the defaults. Raise `--stale-after` if
-metadata operations on your filesystem can take seconds.
+**`--pause`.** A paused writer holds nothing, so the others keep committing
+and the paused one comes back on a stale base: that is the race the pauses
+are for. A worker killed at `Linked` or `BeforeRename` leaves its next
+version in `repo.d/` until a later commit or the sweep deletes it. The stall
+threshold is 30 s.
 
 **`--duration`.** Each kind of fault must fire a minimum number of times,
 otherwise the run fails with `FaultFloor`: 3 in-window kills, 3 pauses, 10
@@ -208,12 +209,11 @@ rarer races; check the data volume first.
 **`--initial-backoff` and `--max-backoff`** (repository mode) are the retry
 back-off of the repository's own conflicting updates (`repo_update_retries`):
 each retry waits longer, from the initial value up to the maximum. Short
-waits keep many writers racing inside each other's lock windows, which is
-what the test is after, but every retry costs metadata operations. On a
-shared production filesystem you may raise `--max-backoff`, for example to
-`1s`, to reduce the load on the file server, at the cost of fewer races in
-the lock window. In storage mode a worker that lost a race waits a random 1
-to 10 ms before its next attempt.
+waits keep many writers racing for the same version, which is what the test
+is after, but every retry costs metadata operations. On a shared production
+filesystem you may raise `--max-backoff`, for example to `1s`, to reduce the
+load on the file server, at the cost of fewer races. In storage mode a worker
+that lost a race waits a random 1 to 10 ms before its next attempt.
 
 ## Modes
 
@@ -261,7 +261,8 @@ any host is on a network filesystem, the whole run is judged as one.
   conflict landed anyway, or a commit to `main` landed twice because its
   rebase ran into its own first landing.
 - **`BrokenHistory`**: the history can't be rebuilt: a missing backup, a
-  cycle, an unparsable payload or commit message.
+  cycle, an unparsable payload or commit message, a `repo` that can't be
+  read, or a `repo.d/` without exactly one marker and its version.
 - **`Stall`**: on a local filesystem, no worker got an update acknowledged for
   longer than the stall threshold.
 - **`FaultFloor`**: a kind of fault fired fewer times than required, so the
@@ -269,7 +270,9 @@ any host is on a network filesystem, the whole run is judged as one.
 - **`Recovery`**: after the run, a fresh writer couldn't update within its
   deadline, or aging or sweeping the repository failed.
 - **`Leftovers`**: after aging and sweeping, the repository's top-level
-  directory holds files other than `repo`.
+  directory holds files other than `repo` or a `repo.d.tmp.*` directory, or
+  `repo.d/` holds anything but the marker and its version. `.nfs*` files,
+  which an NFS client keeps for a while after a deletion, are ignored.
 - **`DataMismatch`**: repository mode: the chunk of an acknowledged commit,
   on a worker branch or on `main`, reads back with the wrong content or can't
   be read.
@@ -316,16 +319,35 @@ old `local_filesystem_storage` backend, which overwrites `repo`
 unconditionally, in each mode (`--mode storage|repository|both`, default
 both). The broken steps:
 
-- `skip-fence`: don't delete the other writer's ticket before committing;
-- `skip-compare`: commit even if the current version isn't the base;
-- `trust-rename-enoent`: treat a failed final rename as a success.
+- `skip-link`: commit without linking the new version's bytes;
+- `rename-from-listed-marker`: rename the marker from wherever a listing
+  shows it, not from the base, so there is no compare;
+- `trust-rename-enoent`: treat a failed rename as a success without listing
+  again;
+- `ack-unproven`: treat a failed rename as a success whenever the listing
+  after it doesn't prove the outcome;
+- `tidy-up-deletes-current`: the tidy-up also deletes the version just
+  committed;
+- `delete-above-marker`: the tidy-up and the sweep also delete versions
+  newer than the marker, which other writers are about to commit;
+- `unlink-base-before-rename`: delete the base's version before the rename,
+  with kills in between;
+- `link-after-rename`: rename first and link the bytes after, with kills in
+  between;
+- `delete-winner-file`: a writer that lost a race deletes the winner's
+  version instead of its own.
 
-Every case must be *detected*: its run must fail with a `LostUpdate`, or a
-broken-protocol case must leave the repository too damaged to read. Cases run
-for `--duration` (default `20s`); the legacy-backend cases run at most 10 s,
-with 64-byte payloads. The run roots of detected cases are deleted; the others
-are kept and printed. The exit code is 0 if every case was detected, 1 if one
-was missed, 3 if a case couldn't be run.
+Writers pause before the rename, so that others commit in between, and the
+supervisor restarts killed workers. Every case must be *detected*: a
+broken-protocol case after the sabotage fired, with a `LostUpdate`, a
+`BrokenHistory` or a repository too damaged to read; a legacy-backend case
+with a `LostUpdate`. The self-test exercises only the tidy-up half of
+`delete-above-marker`, since no sweep runs while writers are live; a unit
+test in icechunk-fs `repo_d/sweep.rs` covers the sweep half. Cases run for
+`--duration` (default `20s`); the legacy-backend cases run at most 10 s, with
+64-byte payloads. The run roots of detected cases are deleted; the others are
+kept and printed. The exit code is 0 if every case was detected, 1 if one was
+missed, 3 if a case couldn't be run.
 
 ## What to send us
 
@@ -384,9 +406,9 @@ apart from the mount line in `hosts/*.json`, which is informational.
 From the repository root, with the dev profile:
 
 - `just fs-stress [mode] [parent] [args…]`: a single-host `run` in a new run
-  root under `parent` (default `$TMPDIR`), with `--stale-after 1s`; later
-  arguments override it. The run root is deleted if the run passes and kept,
-  with its path printed, if it fails.
+  root under `parent` (default `$TMPDIR`), with `args` passed on to `run`.
+  The run root is deleted if the run passes and kept, with its path printed,
+  if it fails.
 - `just fs-stress-selftest [parent] [args…]`: `selftest` under `parent`.
 - `just fs-stress-process-tests`: the ignored tests that spawn stress
   processes. `just test` runs the others.

@@ -342,37 +342,43 @@ Icechunk can also store a repository in a filesystem, given the path to the loca
 
 #### Requirements and limits of `filesystem_storage`
 
-- **Hard links.** The filesystem must support hard links; Icechunk checks this before the first write and refuses to write otherwise. Local POSIX filesystems, NFSv3 and NFSv4 with a Linux client, Lustre, GPFS and CephFS are expected to work; SMB and non-Linux NFS clients are untested.
-- **NFS `nocto`.** NFS mounts with the `nocto` option are unsupported. Icechunk doesn't detect them, so check your mount options.
+- **Filesystem.** The filesystem must provide hard links, atomic rename by name and exclusive directory rename. Icechunk doesn't check for them. Local POSIX filesystems, NFSv3 and NFSv4 with a Linux client, Lustre, GPFS, CephFS and JuiceFS are expected to work. SMB is untested. Non-Linux NFS clients (macOS, FreeBSD) are untested and may see new commits late.
+- **Repository format.** `filesystem_storage` stores the repository's `repo` file in its own format: a stub file named `repo` and a `repo.d/` directory holding its versions. Everything else is stored as with any other backend. Other tools and other storage backends can't open these repositories: `local_filesystem_storage` and the object-store backends fail with a [`FormatError`](../reference/index.md#icechunk.FormatError) saying the repository uses the filesystem format, and older Icechunk versions fail on an unknown file type.
 - **Unix only.** `filesystem_storage` is available on Unix platforms only; elsewhere it raises an error when constructed.
-- **Every writer.** Concurrent-writer safety holds only if every writer of the repository uses `filesystem_storage`. Writing to the same repository with `local_filesystem_storage`, or with an older Icechunk version, at the same time is unsafe.
+- **Every writer.** Concurrent-writer safety holds only if every writer of the repository uses `filesystem_storage`. `local_filesystem_storage` and older Icechunk versions overwrite `repo` without the protocol `filesystem_storage` relies on: they must never write to its repositories. After such a write, `filesystem_storage` refuses to open the repository, which then needs manual recovery. The refusal happens at the first use of `repo` by each storage instance (opening a repository creates one), so an overwrite while an instance is already in use goes unnoticed until the next instance.
 - **Icechunk 1 repositories** are refused. See [Switching an existing repo](#switching-an-existing-repo).
-- **Spurious conflicts.** On NFSv3 or NFSv4.0, if the reply to a commit's final write is lost, the server's duplicate-request cache misses the retry, and another writer commits within milliseconds, the commit may report a conflict (or a tag or branch creation may report "already exists") although it succeeded. The repository stays consistent and no data is lost. After a conflict error the commit may already have landed: look for it in the branch history ([`Repository.ancestry`](../reference/index.md#icechunk.Repository.ancestry), for example by its message) before retrying it.
+- **Spurious conflicts.** On NFSv3 or NFSv4.0, a commit can be reported as a conflict (or a tag or branch creation as "already exists") although it succeeded. This needs the reply to the commit's final rename to be lost, the server's duplicate-request cache to miss the retry, and either another writer to commit within milliseconds or the directory listing to lag. The repository stays consistent and no data is lost. After a conflict error the commit may already have landed: look for it in the branch history ([`Repository.ancestry`](../reference/index.md#icechunk.Repository.ancestry), for example by its message) before retrying it.
+- **Frozen repositories.** A repository can be frozen, for example to copy it consistently, from Rust or JavaScript. While it is frozen, it stays readable and every write that updates the repository fails with a [`StorageError`](../reference/index.md#icechunk.StorageError) of kind `repository-frozen` ([`ErrorKind.REPOSITORY_FROZEN`](../reference/index.md#icechunk.ErrorKind)), until it is unfrozen. Python has no API to freeze or unfreeze a repository yet.
 - **Symlinks.** Reads follow symlinks inside the repository, but listings don't. Garbage collection never deletes objects reached through a symlink.
 - **Listing order** is unspecified.
 - **Conditional writes.** Repositories whose config disables `unsafe_use_conditional_create` or `unsafe_use_conditional_update` log a warning; the setting is ignored and the backend always uses its own conditional writes.
-- **Garbage collection** also deletes leftovers of crashed or abandoned writes in the repository's top-level directory, older than the `delete_object_older_than` cutoff and never younger than 24 hours. `GCSummary.storage_leftovers_deleted` counts them.
+- **Garbage collection** also deletes the leftovers of `filesystem_storage`'s commit protocol: versions of `repo` that are no longer current, whatever their age, and files of crashed or abandoned writes and creations (`repo.d/stage.*`, `repo.d.tmp.*`, `repo.stub.*` and staging files in the top-level directory) older than the `delete_object_older_than` cutoff, but never younger than 24 hours. `GCSummary.storage_leftovers_deleted` counts them.
 
-`filesystem_storage` takes two optional settings:
-
-- `fsync` (default `True`): whether to fsync files and directories after writes. Turning it off risks losing writes after an OS crash or power loss; it never affects safety between concurrent writers.
-- `stale_after` (default 60 seconds): how old a repository lock must be before another writer may take it over. Any non-negative `timedelta` is accepted. It must exceed how long a writer holds the lock: from taking it to its commit rename, only a few metadata operations, slower on network filesystems. Shorter values cause spurious conflicts; longer values delay recovery after a writer crashes while holding the lock. Safety never depends on it.
+`filesystem_storage` takes one optional setting, `fsync` (default `True`): whether to fsync data files and their directories after writes. Turning it off risks losing writes after an OS crash or power loss; it never affects safety between concurrent writers. The fsyncs of commits always run.
 
 ```python
-from datetime import timedelta
-
-icechunk.filesystem_storage(
-    "/path/to/my/dataset",
-    stale_after=timedelta(minutes=2),
-)
+icechunk.filesystem_storage("/path/to/my/dataset", fsync=False)
 ```
 
 #### Switching an existing repo
 
-An Icechunk 2 repository created with `local_filesystem_storage` can be opened with `filesystem_storage`:
+Repositories created with `local_filesystem_storage`, or with an older Icechunk version, keep `repo` as a single file. `filesystem_storage` refuses to open them, with an error that names `migrate_legacy_repo`, until they are converted once:
 
-- Stop every writer that uses `local_filesystem_storage`, or an older Icechunk version, before the first write with `filesystem_storage`.
+1. Stop every writer of the repository. No other process may write to it from when the conversion starts until every writer uses `filesystem_storage`.
+2. Convert it with [`FilesystemStorage.migrate_legacy_repo`](../reference/storage.md#icechunk.storage.FilesystemStorage.migrate_legacy_repo). It returns `True` if it converted the repository and `False` if there was nothing to convert. If it is interrupted, run it again.
+
+    ```python
+    storage = icechunk.filesystem_storage("/path/to/my/dataset")
+    storage.migrate_legacy_repo()
+    repo = icechunk.Repository.open(storage)
+    ```
+
+3. From then on, open the repository only with `filesystem_storage`.
+
+Also note:
+
 - Icechunk 1 repositories must first be migrated to Icechunk 2 with `local_filesystem_storage`. See [Migrate to 2.0](../reference/migration-2.md).
+- Converting a repository back to the single-file format, or copying it to an object store, isn't supported yet.
 - A repository config that disables conditional writes only logs a harmless warning; see **Conditional writes** in [Requirements and limits](#requirements-and-limits-of-filesystem_storage).
 - Pickled storage carries the absolute root path. With Dask or distributed, every worker must see the filesystem at the same path.
 

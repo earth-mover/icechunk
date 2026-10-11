@@ -2,34 +2,36 @@
 #![expect(clippy::unwrap_used, clippy::panic)]
 
 use std::{
+    collections::HashSet,
     path::Path,
     sync::{Arc, Mutex},
 };
 
 use icechunk_fs::{
     FilesystemStorage,
-    fault_injection::{CasHooks, Point},
+    fault_injection::{Point, ProtocolHooks, Sabotage},
 };
 use icechunk_macros::tokio_test;
 use icechunk_storage::{
     GetModifiedResult, PutCondition, Settings, Storage as _, StorageContext,
     StorageResult, VersionInfo, VersionedUpdateResult,
 };
+use tokio::io::AsyncReadExt as _;
 
-/// Records every point reached; `force_compare` overrides step 4's verdict.
+/// Records every point reached and turns on `sabotages`.
 #[derive(Debug, Default)]
 struct Recorder {
     reached: Mutex<Vec<Point>>,
-    force_compare: bool,
+    sabotages: HashSet<Sabotage>,
 }
 
-impl CasHooks for Recorder {
+impl ProtocolHooks for Recorder {
     fn at(&self, point: Point) {
         self.reached.lock().unwrap().push(point);
     }
 
-    fn compared(&self, matches: bool) -> bool {
-        matches || self.force_compare
+    fn sabotaged(&self, sabotage: Sabotage) -> bool {
+        self.sabotages.contains(&sabotage)
     }
 }
 
@@ -40,8 +42,8 @@ impl Recorder {
 }
 
 fn with_hooks(dir: &Path, hooks: &Arc<Recorder>) -> FilesystemStorage {
-    let hooks: Arc<dyn CasHooks> = Arc::clone(hooks) as _;
-    FilesystemStorage::new(dir).unwrap().with_cas_hooks(hooks)
+    let hooks: Arc<dyn ProtocolHooks> = Arc::clone(hooks) as _;
+    FilesystemStorage::new(dir).unwrap().with_protocol_hooks(hooks)
 }
 
 async fn put(
@@ -71,6 +73,14 @@ async fn latest(st: &FilesystemStorage) -> VersionInfo {
     }
 }
 
+async fn read(st: &FilesystemStorage) -> Vec<u8> {
+    let settings = Settings::default();
+    let ctx = StorageContext::unattributed(&settings);
+    let mut buf = Vec::new();
+    st.get_object(&ctx, "repo", None).await.unwrap().read_to_end(&mut buf).await.unwrap();
+    buf
+}
+
 fn assert_updated(result: &StorageResult<VersionedUpdateResult>) {
     assert!(matches!(result, Ok(VersionedUpdateResult::Updated { .. })), "{result:?}");
 }
@@ -97,15 +107,14 @@ async fn hooks_see_every_point_of_an_update() {
     assert_eq!(
         hooks.take(),
         [
-            Point::LockInfoWritten,
-            Point::TicketWritten,
-            Point::LockTaken { generation: 0 },
-            Point::Fenced,
-            Point::Compared,
+            Point::Staged,
+            Point::Linked,
+            Point::BeforeRename,
             Point::Renamed,
+            Point::BeforeTidyUp,
         ]
     );
-    assert_eq!(std::fs::read(dir.path().join("repo")).unwrap(), b"v2");
+    assert_eq!(read(&st).await, b"v2");
 }
 
 #[tokio_test]
@@ -115,13 +124,11 @@ async fn storage_without_hooks_is_unchanged() {
     assert_updated(&put(&st, b"v1", PutCondition::Create).await);
     let v1 = latest(&st).await;
     assert_updated(&put(&st, b"v2", PutCondition::IfVersion(&v1)).await);
-    assert_eq!(std::fs::read(dir.path().join("repo")).unwrap(), b"v2");
+    assert_eq!(read(&st).await, b"v2");
 }
 
 #[tokio_test]
-async fn forced_compare_through_the_public_api() {
-    // Separate directories: a refused update leaves its lock behind, which
-    // would stop the next writer on that base before the compare.
+async fn renaming_from_the_listed_marker_commits_a_stale_base() {
     let plain_dir = tempfile::tempdir().unwrap();
     let v1 = stale_v1(plain_dir.path()).await;
     let plain = FilesystemStorage::new(plain_dir.path()).unwrap();
@@ -130,12 +137,15 @@ async fn forced_compare_through_the_public_api() {
         matches!(refused, Ok(VersionedUpdateResult::NotOnLatestVersion)),
         "{refused:?}"
     );
-    assert_eq!(std::fs::read(plain_dir.path().join("repo")).unwrap(), b"v2");
+    assert_eq!(read(&plain).await, b"v2");
 
     let dir = tempfile::tempdir().unwrap();
     let v1 = stale_v1(dir.path()).await;
-    let hooks = Arc::new(Recorder { force_compare: true, ..Recorder::default() });
+    let hooks = Arc::new(Recorder {
+        sabotages: HashSet::from([Sabotage::RenameFromListedMarker]),
+        ..Recorder::default()
+    });
     let sabotaged = with_hooks(dir.path(), &hooks);
     assert_updated(&put(&sabotaged, b"v3", PutCondition::IfVersion(&v1)).await);
-    assert_eq!(std::fs::read(dir.path().join("repo")).unwrap(), b"v3");
+    assert_eq!(read(&sabotaged).await, b"v3");
 }

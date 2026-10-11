@@ -182,8 +182,8 @@ pub async fn workers(
         let why = if stopped { "stop received" } else { "deadline reached" };
         eprintln!("{why}, waiting for {} workers to exit…", pool.children.len());
     }
-    let deadline =
-        stopped_at + 5 * config.stale_after + config.faults.pause + WIND_DOWN_SLACK;
+    // A worker finishes its attempt first, which may include a pause.
+    let deadline = stopped_at + config.faults.pause + WIND_DOWN_SLACK;
     let stragglers = loop {
         pool.reap_exited()?;
         if pool.children.is_empty() {
@@ -506,7 +506,7 @@ mod tests {
         let fault = |action| Record::Fault {
             t_ms: 3,
             action,
-            point: crate::config::PointName::Fenced,
+            point: crate::config::PointName::BeforeRename,
         };
         log.append(&fault(FaultAction::Pause)).unwrap();
         let expected = ProgressCounts {

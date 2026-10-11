@@ -28,7 +28,7 @@ use icechunk::{
     session::{Session, SessionError, SessionErrorKind},
     storage::RetriesSettings,
 };
-use icechunk_fs::fault_injection::CasHooks;
+use icechunk_fs::fault_injection::ProtocolHooks;
 use rand::{RngExt as _, rngs::StdRng};
 use uuid::Uuid;
 
@@ -112,7 +112,7 @@ fn repository_config(config: &RunConfig) -> RepositoryConfig {
 pub async fn open_repo(
     root: &RunRoot,
     config: &RunConfig,
-    hooks: Option<Arc<dyn CasHooks>>,
+    hooks: Option<Arc<dyn ProtocolHooks>>,
 ) -> anyhow::Result<Repository> {
     let storage = storage_mode::storage(root, config, hooks).await?;
     Repository::open(storage)
@@ -363,7 +363,7 @@ impl RepoWorker {
 async fn open_until_stopped(
     root: &RunRoot,
     config: &RunConfig,
-    hooks: &Arc<dyn CasHooks>,
+    hooks: &Arc<dyn ProtocolHooks>,
     stop: &mut StopCheck<'_>,
 ) -> Option<Repository> {
     while !stop.stopped() {
@@ -388,7 +388,7 @@ pub async fn worker(
     until: SystemTime,
 ) -> anyhow::Result<()> {
     let log = Arc::new(start_worker_log(root, who)?);
-    let hooks: Arc<dyn CasHooks> =
+    let hooks: Arc<dyn ProtocolHooks> =
         Arc::new(FaultHooks::new(&config.faults, config.sabotage, Arc::clone(&log)));
     let mut stop = StopCheck::new(root, until);
     let Some(repo) = open_until_stopped(root, config, &hooks, &mut stop).await else {
@@ -434,7 +434,7 @@ pub async fn gc_worker(
     let gc = config.gc.context("the run has no gc configuration")?;
     let margin = TimeDelta::from_std(gc.margin).context("gc.margin is too long")?;
     let log = Arc::new(start_worker_log(root, who)?);
-    let hooks: Arc<dyn CasHooks> =
+    let hooks: Arc<dyn ProtocolHooks> =
         Arc::new(FaultHooks::new(&config.faults, config.sabotage, Arc::clone(&log)));
     let mut stop = StopCheck::new(root, until);
     let Some(repo) = open_until_stopped(root, config, &hooks, &mut stop).await else {
@@ -717,7 +717,7 @@ pub(crate) mod tests {
     async fn fault_hooks_fire_in_repository_mode() {
         let (_dir, root, mut config) = repo_root().await;
         config.faults = FaultConfig {
-            points: vec![PointName::Compared],
+            points: vec![PointName::BeforeRename],
             kill_probability: 0.0,
             pause_probability: 1.0,
             pause: Duration::from_millis(1),
@@ -732,7 +732,7 @@ pub(crate) mod tests {
                 record,
                 Record::Fault {
                     action: FaultAction::Pause,
-                    point: PointName::Compared,
+                    point: PointName::BeforeRename,
                     ..
                 }
             )),

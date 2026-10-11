@@ -1,13 +1,9 @@
-//! Faults injected at the conditional-update protocol's points: kills, pauses
-//! and, for the self-test, sabotaged steps.
+//! Faults injected at the commit protocol's points: kills, pauses and, for
+//! the self-test, sabotaged steps.
 
-use std::{
-    fs, io,
-    path::Path,
-    sync::{Arc, Mutex, PoisonError},
-};
+use std::sync::{Arc, Mutex, PoisonError};
 
-use icechunk_fs::fault_injection::{CasHooks, Point};
+use icechunk_fs::fault_injection::{Point, ProtocolHooks, Sabotage as ProtocolSabotage};
 use rand::{RngExt as _, rngs::StdRng};
 
 use crate::{
@@ -41,7 +37,7 @@ impl FaultHooks {
     }
 }
 
-impl CasHooks for FaultHooks {
+impl ProtocolHooks for FaultHooks {
     fn at(&self, point: Point) {
         let point = PointName::from(point);
         if !self.config.points.contains(&point) {
@@ -58,37 +54,15 @@ impl CasHooks for FaultHooks {
         }
     }
 
-    fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
-        match fs::rename(from, to) {
-            Err(err)
-                if err.kind() == io::ErrorKind::NotFound
-                    && self.sabotage == Some(Sabotage::TrustRenameEnoent) =>
-            {
-                self.record(FaultAction::Sabotage, PointName::Renamed);
-                Ok(())
-            }
-            result => result,
+    /// Records every `true`: each one takes the sabotaged branch, though it
+    /// may find nothing to break, as a tidy-up with no file above the marker.
+    fn sabotaged(&self, sabotage: ProtocolSabotage) -> bool {
+        let sabotage = Sabotage::from(sabotage);
+        let on = self.sabotage == Some(sabotage);
+        if on {
+            self.record(FaultAction::Sabotage, sabotage.point());
         }
-    }
-
-    fn unlink(&self, path: &Path) -> io::Result<()> {
-        if self.sabotage == Some(Sabotage::SkipFence) {
-            self.record(FaultAction::Sabotage, PointName::Fenced);
-            Ok(())
-        } else {
-            fs::remove_file(path)
-        }
-    }
-
-    fn compared(&self, matches: bool) -> bool {
-        if self.sabotage == Some(Sabotage::SkipCompare) {
-            if !matches {
-                self.record(FaultAction::Sabotage, PointName::Compared);
-            }
-            true
-        } else {
-            matches
-        }
+        on
     }
 }
 
@@ -107,7 +81,7 @@ pub fn kill_self() -> ! {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use std::{path::Path, time::Duration};
 
     use super::*;
     use crate::log::read_log;
@@ -146,77 +120,42 @@ mod tests {
     fn pauses_only_at_configured_points() {
         let dir = tempfile::tempdir().unwrap();
         let config = FaultConfig {
-            points: vec![PointName::Compared],
+            points: vec![PointName::BeforeRename],
             pause_probability: 1.0,
             ..no_faults()
         };
         let (hooks, path) = hooks(dir.path(), &config, None);
-        for point in [
-            Point::LockInfoWritten,
-            Point::TicketWritten,
-            Point::LockTaken { generation: 3 },
-            Point::Fenced,
-            Point::Renamed,
-        ] {
+        for point in [Point::Staged, Point::Linked, Point::Renamed, Point::BeforeTidyUp] {
             hooks.at(point);
         }
         assert_eq!(faults(&path), []);
 
         let started = std::time::Instant::now();
-        hooks.at(Point::Compared);
-        hooks.at(Point::Compared);
+        hooks.at(Point::BeforeRename);
+        hooks.at(Point::BeforeRename);
         assert!(started.elapsed() >= 2 * config.pause);
-        assert_eq!(faults(&path), [(FaultAction::Pause, PointName::Compared); 2]);
+        assert_eq!(faults(&path), [(FaultAction::Pause, PointName::BeforeRename); 2]);
     }
 
     #[test]
-    fn skip_fence_keeps_the_ticket() {
+    fn only_the_configured_sabotage_is_on_and_each_use_is_recorded() {
         let dir = tempfile::tempdir().unwrap();
-        let ticket = dir.path().join("ticket");
-        fs::write(&ticket, b"").unwrap();
-        let (hooks, path) = hooks(dir.path(), &no_faults(), Some(Sabotage::SkipFence));
-        hooks.unlink(&ticket).unwrap();
-        assert!(ticket.exists());
-        assert_eq!(faults(&path), [(FaultAction::Sabotage, PointName::Fenced)]);
-    }
-
-    #[test]
-    fn trust_rename_enoent_reports_success() {
-        let dir = tempfile::tempdir().unwrap();
-        let missing = dir.path().join("missing");
         let (hooks, path) =
-            hooks(dir.path(), &no_faults(), Some(Sabotage::TrustRenameEnoent));
-        hooks.rename(&missing, &dir.path().join("target")).unwrap();
-        assert_eq!(faults(&path), [(FaultAction::Sabotage, PointName::Renamed)]);
-
-        let from = dir.path().join("from");
-        fs::write(&from, b"x").unwrap();
-        hooks.rename(&from, &dir.path().join("target")).unwrap();
-        assert_eq!(fs::read(dir.path().join("target")).unwrap(), b"x");
-        assert_eq!(faults(&path).len(), 1);
-    }
-
-    #[test]
-    fn skip_compare_records_only_overridden_verdicts() {
-        let dir = tempfile::tempdir().unwrap();
-        let (hooks, path) = hooks(dir.path(), &no_faults(), Some(Sabotage::SkipCompare));
-        assert!(hooks.compared(true));
+            hooks(dir.path(), &no_faults(), Some(Sabotage::DeleteWinnerFile));
+        assert!(!hooks.sabotaged(ProtocolSabotage::SkipLink));
+        assert!(!hooks.sabotaged(ProtocolSabotage::TidyUpDeletesCurrent));
         assert_eq!(faults(&path), []);
-        assert!(hooks.compared(false));
-        assert_eq!(faults(&path), [(FaultAction::Sabotage, PointName::Compared)]);
+        assert!(hooks.sabotaged(ProtocolSabotage::DeleteWinnerFile));
+        assert!(hooks.sabotaged(ProtocolSabotage::DeleteWinnerFile));
+        assert_eq!(faults(&path), [(FaultAction::Sabotage, PointName::Renamed); 2]);
     }
 
     #[test]
-    fn without_sabotage_the_real_operations_run() {
+    fn without_sabotage_nothing_is_sabotaged() {
         let dir = tempfile::tempdir().unwrap();
         let (hooks, path) = hooks(dir.path(), &no_faults(), None);
-        let ticket = dir.path().join("ticket");
-        fs::write(&ticket, b"").unwrap();
-        hooks.unlink(&ticket).unwrap();
-        assert!(!ticket.exists());
-        let err = hooks.rename(&ticket, &dir.path().join("target")).unwrap_err();
-        assert_eq!(err.kind(), io::ErrorKind::NotFound);
-        assert!(!hooks.compared(false));
+        assert!(!hooks.sabotaged(ProtocolSabotage::SkipLink));
+        assert!(!hooks.sabotaged(ProtocolSabotage::AckUnproven));
         assert_eq!(faults(&path), []);
     }
 }

@@ -27,11 +27,13 @@ pub use icechunk_s3::{
     new_tigris_storage, r2_storage, range_to_header, s3_storage, tigris_storage,
 };
 
-#[cfg(all(feature = "fs", unix))]
-pub use icechunk_fs::FilesystemStorage;
 #[cfg(feature = "fs")]
 pub use icechunk_fs::{
     FilesystemSettings, new_filesystem_storage, new_filesystem_storage_with,
+};
+#[cfg(all(feature = "fs", unix))]
+pub use icechunk_fs::{
+    FilesystemStorage, FreezeOutcome, MigrateOutcome, UnfreezeOutcome,
 };
 
 // Re-export from icechunk-arrow-object-store

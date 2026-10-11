@@ -2,31 +2,28 @@
 #![expect(clippy::unwrap_used)]
 
 use std::{
-    fs::File,
+    collections::BTreeSet,
     os::unix::fs::MetadataExt as _,
     path::Path,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
-    time::{Duration, SystemTime},
+    time::Duration,
 };
 
 use futures::{StreamExt as _, TryStreamExt as _};
 use icechunk_fs::{FilesystemStorage, new_filesystem_storage};
 use icechunk_macros::tokio_test;
 use icechunk_storage::{
-    DeleteObjectsResult, ETag, Generation, GetModifiedResult, ListInfo, PutCondition,
-    Settings, Storage, StorageContext, StorageErrorKind, StorageResult, VersionInfo,
-    VersionedUpdateResult, WriteHint,
+    GetModifiedResult, ListInfo, PutCondition, Settings, Storage, StorageContext,
+    StorageErrorKind, StorageResult, VersionInfo, VersionedUpdateResult, WriteHint,
 };
 use tokio::io::AsyncReadExt as _;
 
 const CONTENT: &[u8] = b"hello world";
 const CONTENT_SHA256: &str =
     "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9";
-const OTHER_SHA256: &str =
-    "f41f3fa625ff120ddca7ef456bf66371ecea23c129f4e4c32367101edb516cf8";
 
 fn storage(dir: &Path) -> FilesystemStorage {
     FilesystemStorage::new(dir).unwrap()
@@ -94,12 +91,17 @@ async fn get_conditional(
 #[test]
 fn serde_round_trip() {
     let dir = tempfile::tempdir().unwrap();
-    let st: Arc<dyn Storage> = Arc::new(
-        storage(dir.path()).with_fsync(false).with_stale_after(Duration::from_secs(5)),
-    );
+    let st: Arc<dyn Storage> = Arc::new(storage(dir.path()).with_fsync(false));
     let json = serde_json::to_string(&st).unwrap();
     let value: serde_json::Value = serde_json::from_str(&json).unwrap();
-    assert_eq!(value["type"], "FilesystemStorage");
+    assert_eq!(
+        value,
+        serde_json::json!({
+            "type": "FilesystemStorage",
+            "root": dir.path(),
+            "fsync": false,
+        })
+    );
 
     let back: Arc<dyn Storage> = serde_json::from_str(&json).unwrap();
     assert_eq!(serde_json::to_string(&back).unwrap(), json);
@@ -164,58 +166,19 @@ async fn path_traversal_is_rejected() {
 async fn conditional_get_versions_by_content() {
     let dir = tempfile::tempdir().unwrap();
     let st = storage(dir.path());
-    write(dir.path(), "repo", CONTENT);
+    write(dir.path(), "a/b", CONTENT);
 
-    let (data, version) = get_conditional(&st, "repo", None).await.unwrap();
+    let (data, version) = get_conditional(&st, "a/b", None).await.unwrap();
     assert_eq!(data, CONTENT);
     assert_eq!(version.etag().unwrap(), CONTENT_SHA256);
-    assert!(version.generation.is_some());
+    assert_eq!(version.generation, None);
 
-    assert!(get_conditional(&st, "repo", Some(&version)).await.is_none());
+    assert!(get_conditional(&st, "a/b", Some(&version)).await.is_none());
 
-    write(dir.path(), "repo", b"something else");
-    let (data, new_version) = get_conditional(&st, "repo", Some(&version)).await.unwrap();
+    write(dir.path(), "a/b", b"something else");
+    let (data, new_version) = get_conditional(&st, "a/b", Some(&version)).await.unwrap();
     assert_eq!(data, b"something else");
     assert_ne!(new_version, version);
-}
-
-fn with_etag(version: &VersionInfo, etag: &str) -> VersionInfo {
-    VersionInfo { etag: Some(ETag(etag.to_string())), ..version.clone() }
-}
-
-fn with_generation(version: &VersionInfo, generation: &str) -> VersionInfo {
-    VersionInfo {
-        generation: Some(Generation(generation.to_string())),
-        ..version.clone()
-    }
-}
-
-#[tokio_test]
-async fn conditional_get_uses_the_generation_fast_path() {
-    let dir = tempfile::tempdir().unwrap();
-    let st = storage(dir.path());
-    write(dir.path(), "repo", CONTENT);
-    let (_, version) = get_conditional(&st, "repo", None).await.unwrap();
-
-    // A content check would report this version as modified.
-    let bogus_etag = with_etag(&version, &"0".repeat(64));
-    assert!(get_conditional(&st, "repo", Some(&bogus_etag)).await.is_none());
-
-    // Without a matching generation, the content decides.
-    let bogus_generation = with_generation(&version, "0:0:0:0:0");
-    assert!(get_conditional(&st, "repo", Some(&bogus_generation)).await.is_none());
-    let only_etag = VersionInfo { generation: None, ..version.clone() };
-    assert!(get_conditional(&st, "repo", Some(&only_etag)).await.is_none());
-
-    put(&st, "repo", b"something else", WriteHint::Atomic).await;
-    for previous in [&version, &bogus_etag, &bogus_generation] {
-        let (data, new_version) =
-            get_conditional(&st, "repo", Some(previous)).await.unwrap();
-        assert_eq!(data, b"something else");
-        assert_eq!(new_version.etag().unwrap(), OTHER_SHA256);
-        assert!(new_version.generation.is_some());
-        assert_ne!(new_version.generation, version.generation);
-    }
 }
 
 #[tokio_test]
@@ -358,16 +321,6 @@ async fn put_without_fsync() {
     assert_eq!(get(&st, "a/c", None).await, b"other");
 }
 
-fn probe_leftovers(dir: &Path) -> Vec<std::path::PathBuf> {
-    std::fs::read_dir(dir)
-        .unwrap()
-        .map(|entry| entry.unwrap().path())
-        .filter(|path| {
-            path.file_name().unwrap().to_string_lossy().starts_with("repo.probe.")
-        })
-        .collect()
-}
-
 async fn put_conditional(
     st: &FilesystemStorage,
     settings: &Settings,
@@ -388,14 +341,13 @@ async fn put_conditional(
 }
 
 #[tokio_test]
-async fn create_location_probes_without_leftovers() {
+async fn create_location_creates_an_empty_root() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("a/repo");
     let st = storage(&root);
 
     st.create_location_if_needed().await.unwrap();
     assert!(root.is_dir());
-    assert_eq!(probe_leftovers(&root), Vec::<std::path::PathBuf>::new());
     st.create_location_if_needed().await.unwrap();
     assert_eq!(std::fs::read_dir(&root).unwrap().count(), 0);
 }
@@ -407,30 +359,30 @@ async fn conditional_create() {
     let settings = Settings::default();
 
     let VersionedUpdateResult::Updated { new_version } =
-        put_conditional(&st, &settings, "repo", CONTENT, PutCondition::Create)
+        put_conditional(&st, &settings, "config.yaml", CONTENT, PutCondition::Create)
             .await
             .unwrap()
     else {
         panic!("first create must succeed")
     };
     assert_eq!(new_version.etag().unwrap(), CONTENT_SHA256);
-    assert!(new_version.generation.is_some());
+    assert_eq!(new_version.generation, None);
     assert_eq!(
-        get_conditional(&st, "repo", None).await.unwrap(),
+        get_conditional(&st, "config.yaml", None).await.unwrap(),
         (CONTENT.to_vec(), new_version.clone())
     );
-    assert_eq!(get(&st, "repo", None).await, CONTENT);
+    assert_eq!(get(&st, "config.yaml", None).await, CONTENT);
     assert_eq!(staging_leftovers(dir.path()), Vec::<std::path::PathBuf>::new());
-    assert_eq!(probe_leftovers(dir.path()), Vec::<std::path::PathBuf>::new());
 
-    let second = put_conditional(&st, &settings, "repo", b"other", PutCondition::Create)
-        .await
-        .unwrap();
+    let second =
+        put_conditional(&st, &settings, "config.yaml", b"other", PutCondition::Create)
+            .await
+            .unwrap();
     assert!(matches!(second, VersionedUpdateResult::NotOnLatestVersion));
-    assert_eq!(get(&st, "repo", None).await, CONTENT);
+    assert_eq!(get(&st, "config.yaml", None).await, CONTENT);
     assert_eq!(staging_leftovers(dir.path()), Vec::<std::path::PathBuf>::new());
 
-    assert!(get_conditional(&st, "repo", Some(&new_version)).await.is_none());
+    assert!(get_conditional(&st, "config.yaml", Some(&new_version)).await.is_none());
 }
 
 #[tokio_test]
@@ -438,17 +390,17 @@ async fn conditional_create_of_identical_content_succeeds() {
     let dir = tempfile::tempdir().unwrap();
     let st = storage(dir.path());
     let settings = Settings::default();
-    write(dir.path(), "repo", CONTENT);
+    write(dir.path(), "config.yaml", CONTENT);
 
     let VersionedUpdateResult::Updated { new_version } =
-        put_conditional(&st, &settings, "repo", CONTENT, PutCondition::Create)
+        put_conditional(&st, &settings, "config.yaml", CONTENT, PutCondition::Create)
             .await
             .unwrap()
     else {
         panic!("the object already holds this version")
     };
     assert_eq!(
-        get_conditional(&st, "repo", None).await.unwrap(),
+        get_conditional(&st, "config.yaml", None).await.unwrap(),
         (CONTENT.to_vec(), new_version)
     );
     assert_eq!(staging_leftovers(dir.path()), Vec::<std::path::PathBuf>::new());
@@ -537,30 +489,11 @@ async fn concurrent_creates_have_one_winner() {
         (content.to_vec(), version.clone())
     );
     assert_eq!(staging_leftovers(dir.path()), Vec::<std::path::PathBuf>::new());
-}
-
-#[tokio_test]
-async fn failed_probe_is_retried() {
-    let dir = tempfile::tempdir().unwrap();
-    let root = dir.path().join("repo");
-    let st = storage(&root);
-    let settings = Settings::default();
-    let ctx = StorageContext::unattributed(&settings);
-
-    let err = st
-        .put_object(&ctx, "a", CONTENT.into(), None, Vec::new(), WriteHint::Atomic)
-        .await
-        .err()
-        .unwrap();
-    assert!(matches!(err.kind, StorageErrorKind::IOError(_)), "{err}");
-    let message = err.to_string();
-    assert!(message.contains("hard-link probe failed in"), "{message}");
-    assert!(message.contains(&root.display().to_string()), "{message}");
-    assert!(!root.exists());
-
-    std::fs::create_dir_all(&root).unwrap();
-    put(&st, "a", CONTENT, WriteHint::Atomic).await;
-    assert_eq!(get(&st, "a", None).await, CONTENT);
+    let root: BTreeSet<_> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .collect();
+    assert_eq!(root, BTreeSet::from(["repo".to_string(), "repo.d".to_string()]));
 }
 
 async fn list_infos(st: &FilesystemStorage, prefix: &str) -> Vec<ListInfo<String>> {
@@ -693,19 +626,36 @@ async fn list_objects_hides_protocol_files() {
     for key in [
         "repo".to_string(),
         "chunks/ABC".to_string(),
-        format!("repo.new_bytes.{id}"),
-        format!("repo.lockinfo.{id}"),
-        format!("repo.lock.{CONTENT_SHA256}.0"),
-        format!("repo.probe.{id}"),
-        format!("repo.probe.{id}.link"),
+        format!("repo.d/0.{CONTENT_SHA256}"),
+        format!("repo.d/stage.{id}"),
+        format!("repo.d.tmp.{id}/0.{CONTENT_SHA256}"),
+        format!("repo.legacy.{id}"),
+        format!("repo.stub.{id}"),
+        format!("repo.staging.{id}"),
         format!("chunks/ABC.staging.{id}"),
-        format!("chunks/DEF.lockinfo.{id}"),
+        // Root protocol names are only hidden at the root.
+        "chunks/repo.d/x".to_string(),
+        format!("chunks/repo.legacy.{id}"),
     ] {
         write(dir.path(), &key, CONTENT);
     }
 
     let listed: Vec<String> = list(&st, "").await.into_iter().map(|(id, _)| id).collect();
-    assert_eq!(listed, vec!["chunks/ABC".to_string(), "repo".to_string()]);
+    assert_eq!(
+        listed,
+        vec![
+            "chunks/ABC".to_string(),
+            "chunks/repo.d/x".to_string(),
+            format!("chunks/repo.legacy.{id}"),
+            "repo".to_string()
+        ]
+    );
+    let listed: Vec<String> =
+        list(&st, "chunks").await.into_iter().map(|(id, _)| id).collect();
+    assert_eq!(
+        listed,
+        vec!["ABC".to_string(), "repo.d/x".to_string(), format!("repo.legacy.{id}")]
+    );
 }
 
 #[tokio_test]
@@ -714,8 +664,12 @@ async fn root_with_only_leftovers_is_clean() {
     let st = storage(dir.path());
     let settings = Settings::default();
     let ctx = StorageContext::unattributed(&settings);
-    write(dir.path(), &format!("repo.probe.{}", uuid::Uuid::new_v4()), b"");
-    write(dir.path(), &format!("repo.lock.{CONTENT_SHA256}.0"), b"");
+    let id = uuid::Uuid::new_v4();
+    write(dir.path(), &format!("repo.d/stage.{id}"), b"");
+    write(dir.path(), &format!("repo.d.tmp.{id}/0.{CONTENT_SHA256}"), b"");
+    write(dir.path(), &format!("repo.legacy.{id}"), b"");
+    write(dir.path(), &format!("repo.stub.{id}"), b"");
+    write(dir.path(), &format!("repo.staging.{id}"), b"");
 
     assert!(st.root_is_clean(&ctx).await.unwrap());
 }
@@ -871,80 +825,4 @@ async fn delete_batch_failures_are_not_counted() {
     assert_eq!(result.deleted_objects, 1);
     assert_eq!(result.deleted_bytes, 3);
     assert!(dir.path().join("p/dir").is_dir());
-}
-
-fn set_age(path: &Path, age: Duration) {
-    File::options()
-        .write(true)
-        .open(path)
-        .unwrap()
-        .set_modified(SystemTime::now() - age)
-        .unwrap();
-}
-
-/// `repo` with a 2-day-old lockinfo and a 30-minute-old ticket next to it.
-fn sweep_fixture(dir: &Path) -> (std::path::PathBuf, std::path::PathBuf) {
-    write(dir, "repo", b"v1");
-    let id = uuid::Uuid::new_v4();
-    let lockinfo = dir.join(format!("repo.lockinfo.{id}"));
-    let ticket = dir.join(format!("repo.new_bytes.{id}"));
-    std::fs::write(&lockinfo, CONTENT).unwrap();
-    std::fs::write(&ticket, CONTENT).unwrap();
-    set_age(&lockinfo, Duration::from_secs(2 * 24 * 60 * 60));
-    set_age(&ticket, Duration::from_secs(30 * 60));
-    (lockinfo, ticket)
-}
-
-async fn sweep(
-    st: &FilesystemStorage,
-    older_than: chrono::DateTime<chrono::Utc>,
-    dry_run: bool,
-) -> DeleteObjectsResult {
-    let settings = Settings::default();
-    let ctx = StorageContext::unattributed(&settings);
-    st.sweep_leftovers(&ctx, older_than, dry_run).await.unwrap()
-}
-
-#[tokio_test]
-async fn sweep_leftovers_respects_the_floor() {
-    let dir = tempfile::tempdir().unwrap();
-    let st = storage(dir.path());
-    let (lockinfo, ticket) = sweep_fixture(dir.path());
-
-    let result =
-        sweep(&st, chrono::Utc::now() + chrono::TimeDelta::hours(1), false).await;
-    assert_eq!(
-        result,
-        DeleteObjectsResult { deleted_objects: 1, deleted_bytes: CONTENT.len() as u64 }
-    );
-    assert!(!lockinfo.exists());
-    assert!(ticket.exists());
-    assert_eq!(std::fs::read(dir.path().join("repo")).unwrap(), b"v1");
-}
-
-#[tokio_test]
-async fn sweep_leftovers_respects_older_than() {
-    let dir = tempfile::tempdir().unwrap();
-    let st = storage(dir.path());
-    let (lockinfo, ticket) = sweep_fixture(dir.path());
-
-    let result = sweep(&st, chrono::Utc::now() - chrono::TimeDelta::days(3), false).await;
-    assert_eq!(result, DeleteObjectsResult::default());
-    assert!(lockinfo.exists());
-    assert!(ticket.exists());
-}
-
-#[tokio_test]
-async fn sweep_leftovers_dry_run() {
-    let dir = tempfile::tempdir().unwrap();
-    let st = storage(dir.path());
-    let (lockinfo, ticket) = sweep_fixture(dir.path());
-
-    let result = sweep(&st, chrono::Utc::now(), true).await;
-    assert_eq!(
-        result,
-        DeleteObjectsResult { deleted_objects: 1, deleted_bytes: CONTENT.len() as u64 }
-    );
-    assert!(lockinfo.exists());
-    assert!(ticket.exists());
 }

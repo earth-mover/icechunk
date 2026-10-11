@@ -4,10 +4,7 @@ pub mod liveness;
 pub mod repo;
 pub mod storage;
 
-use std::{
-    collections::{BTreeMap, HashSet, btree_map::Entry},
-    fs,
-};
+use std::collections::{BTreeMap, HashSet, btree_map::Entry};
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -17,8 +14,7 @@ use crate::{
     env_info::{HostDone, HostInfo},
     layout::RunRoot,
     log::{LogName, Op, OpResult, Record},
-    repo_mode,
-    storage_mode::REPO_KEY,
+    repo_mode, storage_mode,
 };
 
 /// A failed run.
@@ -124,8 +120,9 @@ impl History {
 
 /// Checks the run's repository against `history` with the oracle of its
 /// mode. In storage mode an unreadable `repo` is `BrokenHistory`, and `Err`
-/// only if the backups can't be read; in repository mode `Err` if the
-/// repository can't be read, with the context [`RepositoryUnreadable`].
+/// only if the storage can't be opened or the backups can't be read; in
+/// repository mode `Err` if the repository can't be read, with the context
+/// [`RepositoryUnreadable`]. Both read `repo` through the run's storage.
 pub async fn check_mode(
     root: &RunRoot,
     config: &RunConfig,
@@ -135,11 +132,12 @@ pub async fn check_mode(
 ) -> anyhow::Result<()> {
     match config.mode {
         Mode::Storage => {
-            let path = root.storage().join(REPO_KEY);
-            let final_repo = fs::read(&path)
+            let storage = storage_mode::storage(root, config, None).await?;
+            let final_repo = storage_mode::read_repo(&*storage)
+                .await
                 .map_err(|err| {
                     verdict.violations.push(Violation::BrokenHistory {
-                        detail: format!("reading {}: {err}", path.display()),
+                        detail: format!("reading {}: {err:#}", storage_mode::REPO_KEY),
                     });
                 })
                 .ok();

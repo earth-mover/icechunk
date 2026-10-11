@@ -18,7 +18,7 @@ use icechunk::{
         new_local_filesystem_storage,
     },
 };
-use icechunk_fs::{FilesystemStorage, fault_injection::CasHooks};
+use icechunk_fs::{FilesystemStorage, fault_injection::ProtocolHooks};
 use rand::{Rng, RngExt as _, rngs::StdRng};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
@@ -56,7 +56,7 @@ pub struct Payload {
 }
 
 /// The etag of a payload: the lowercase sha256 hex of its bytes, which is
-/// also the etag `FilesystemStorage` gives them.
+/// also the etag `FilesystemStorage` gives them: the `h` of `repo.d/<N>.<h>`.
 pub fn payload_etag(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
@@ -71,20 +71,28 @@ pub fn parse_payload(bytes: &[u8]) -> anyhow::Result<Payload> {
 pub async fn storage(
     root: &RunRoot,
     config: &RunConfig,
-    hooks: Option<Arc<dyn CasHooks>>,
+    hooks: Option<Arc<dyn ProtocolHooks>>,
 ) -> anyhow::Result<Arc<dyn Storage + Send + Sync>> {
     match config.backend {
         Backend::Filesystem => {
-            let storage = FilesystemStorage::new(&root.storage())?
-                .with_fsync(config.fsync)
-                .with_stale_after(config.stale_after);
+            let storage =
+                FilesystemStorage::new(&root.storage())?.with_fsync(config.fsync);
             Ok(Arc::new(match hooks {
-                Some(hooks) => storage.with_cas_hooks(hooks),
+                Some(hooks) => storage.with_protocol_hooks(hooks),
                 None => storage,
             }))
         }
         Backend::LegacyLocal => Ok(new_local_filesystem_storage(&root.storage()).await?),
     }
+}
+
+/// The current content of `repo`, read through `storage`: with
+/// `FilesystemStorage` the file `repo` is only a stub.
+pub async fn read_repo(storage: &(dyn Storage + Send + Sync)) -> anyhow::Result<Bytes> {
+    let settings = storage.default_settings().await?;
+    let ctx = StorageContext::unattributed(&settings);
+    let reader = storage.get_object(&ctx, REPO_KEY, None).await?;
+    Ok(async_reader_to_bytes(reader, 0).await?)
 }
 
 /// Creates `repo` with the initial payload, the root of every chain.
@@ -116,7 +124,7 @@ pub async fn init(root: &RunRoot, config: &RunConfig) -> anyhow::Result<()> {
     {
         VersionedUpdateResult::Updated { .. } => Ok(()),
         VersionedUpdateResult::NotOnLatestVersion => {
-            bail!("{} already exists", root.storage().join(REPO_KEY).display())
+            bail!("a repository already exists in {}", root.storage().display())
         }
     }
 }
@@ -292,7 +300,8 @@ async fn latest(
             let bytes = async_reader_to_bytes(data, 0).await?;
             let etag = payload_etag(&bytes);
             // The version we update must be the content we read. Only
-            // `FilesystemStorage` derives its etags from the content.
+            // `FilesystemStorage` derives its etags from the content, and it
+            // checks them on every read, so this holds by construction.
             if backend == Backend::Filesystem && new_version.etag() != Some(&etag) {
                 bail!(
                     "read {REPO_KEY} with content hashing to {etag} as {new_version:?}"
@@ -396,9 +405,13 @@ mod tests {
             .collect()
     }
 
+    async fn repo_bytes(root: &RunRoot, config: &RunConfig) -> Bytes {
+        read_repo(&*storage(root, config, None).await.unwrap()).await.unwrap()
+    }
+
     /// Follows `repo`'s parents through the backups down to the initial
     /// payload and returns the etags of the whole chain.
-    fn chain(root: &RunRoot) -> HashSet<String> {
+    async fn chain(root: &RunRoot, config: &RunConfig) -> HashSet<String> {
         let storage = root.storage();
         let backups: HashMap<String, Payload> = fs::read_dir(storage.join("overwritten"))
             .unwrap()
@@ -407,7 +420,7 @@ mod tests {
                 (payload_etag(&bytes), parse_payload(&bytes).unwrap())
             })
             .collect();
-        let bytes = fs::read(storage.join(REPO_KEY)).unwrap();
+        let bytes = repo_bytes(root, config).await;
         let mut etags = HashSet::from([payload_etag(&bytes)]);
         let mut payload = parse_payload(&bytes).unwrap();
         while let Some(parent) = &payload.parent {
@@ -433,7 +446,7 @@ mod tests {
     }
 
     /// Runs one worker per slot until every one has an acknowledged update,
-    /// then stops them through `control`. The protocol has no lock fairness,
+    /// then stops them through `control`. The protocol has no fairness,
     /// so a fixed time budget could leave a slot without a single win.
     async fn run_until_each_acks(root: &RunRoot, config: &RunConfig, slots: &[&str]) {
         init(root, config).await.unwrap();
@@ -464,7 +477,7 @@ mod tests {
         run_until_each_acks(&root, &config, &["0"]).await;
         let acked = acked(&root, &who("0"));
         assert!(!acked.is_empty());
-        let chain = chain(&root);
+        let chain = chain(&root, &config).await;
         assert!(acked.iter().all(|etag| chain.contains(etag)));
     }
 
@@ -478,7 +491,7 @@ mod tests {
         run_until_each_acks(&root, &config, &["0"]).await;
         assert!(!acked(&root, &who("0")).is_empty());
 
-        let final_repo = fs::read(root.storage().join(REPO_KEY)).unwrap();
+        let final_repo = repo_bytes(&root, &config).await;
         let backups = read_backups(&root.storage()).unwrap();
         let history =
             History { logs: read_all_logs(&root).unwrap(), ..History::default() };
@@ -492,7 +505,7 @@ mod tests {
     async fn two_workers_both_commit() {
         let (_dir, root, config) = run_root();
         run_until_each_acks(&root, &config, &["0", "1"]).await;
-        let chain = chain(&root);
+        let chain = chain(&root, &config).await;
         for slot in ["0", "1"] {
             let acked = acked(&root, &who(slot));
             assert!(!acked.is_empty(), "slot {slot}");
@@ -507,8 +520,7 @@ mod tests {
         let other =
             RunConfig { payload_bytes: config.payload_bytes + 1, ..config.clone() };
         assert!(init(&root, &other).await.is_err());
-        let payload =
-            parse_payload(&fs::read(root.storage().join(REPO_KEY)).unwrap()).unwrap();
+        let payload = parse_payload(&repo_bytes(&root, &config).await).unwrap();
         assert_eq!(payload.id, Uuid::nil());
         assert_eq!(payload.parent, None);
         assert_eq!(payload.padding, "x".repeat(config.payload_bytes));

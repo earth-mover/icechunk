@@ -1,6 +1,7 @@
-//! `selftest`: runs that `verify` must fail with a lost update. Each mode
-//! runs once per sabotaged protocol step, and once on the legacy-local
-//! backend, which overwrites `repo` unconditionally.
+//! `selftest`: runs that `verify` must fail. Each mode runs once per
+//! sabotaged protocol step, which must show as a lost update, a broken
+//! history or an unreadable repository, and once on the legacy-local backend,
+//! which overwrites `repo` unconditionally and must lose updates.
 
 use std::{
     fmt::Write as _,
@@ -13,10 +14,7 @@ use anyhow::Context as _;
 use uuid::Uuid;
 
 use crate::{
-    config::{
-        Backend, FaultConfig, FaultFloor, Mode, PointName, RunConfig, Sabotage,
-        default_stall_threshold,
-    },
+    config::{Backend, FaultConfig, FaultFloor, Mode, PointName, RunConfig, Sabotage},
     env_info::default_tag,
     layout::RunRoot,
     log::{FaultAction, Record, read_all_logs},
@@ -26,10 +24,20 @@ use crate::{
     verify::{DEFAULT_DONE_TIMEOUT, verify},
 };
 
-pub const SABOTAGES: [Sabotage; 3] =
-    [Sabotage::SkipFence, Sabotage::SkipCompare, Sabotage::TrustRenameEnoent];
+pub const SABOTAGES: [Sabotage; 9] = [
+    Sabotage::SkipLink,
+    Sabotage::RenameFromListedMarker,
+    Sabotage::TrustRenameEnoent,
+    Sabotage::AckUnproven,
+    Sabotage::TidyUpDeletesCurrent,
+    Sabotage::DeleteAboveMarker,
+    Sabotage::UnlinkBaseBeforeRename,
+    Sabotage::LinkAfterRename,
+    Sabotage::DeleteWinnerFile,
+];
 
-/// What makes a case lose updates.
+/// What a case breaks: it must be detected by lost updates, a broken
+/// history or a repository too damaged to read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CaseKind {
     Sabotage(Sabotage),
@@ -60,8 +68,8 @@ pub struct SelftestOptions {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CaseOutcome {
     Detected(String),
-    /// The run passed, or failed without a lost update, or the sabotage
-    /// never fired.
+    /// The run passed, or failed without a detecting violation, or the
+    /// sabotage never fired.
     Missed(String),
     /// The case couldn't be run or checked.
     Error(String),
@@ -141,9 +149,15 @@ pub fn mode_name(mode: Mode) -> &'static str {
 
 pub fn sabotage_name(sabotage: Sabotage) -> &'static str {
     match sabotage {
-        Sabotage::SkipFence => "skip-fence",
-        Sabotage::SkipCompare => "skip-compare",
+        Sabotage::SkipLink => "skip-link",
+        Sabotage::RenameFromListedMarker => "rename-from-listed-marker",
         Sabotage::TrustRenameEnoent => "trust-rename-enoent",
+        Sabotage::AckUnproven => "ack-unproven",
+        Sabotage::TidyUpDeletesCurrent => "tidy-up-deletes-current",
+        Sabotage::DeleteAboveMarker => "delete-above-marker",
+        Sabotage::UnlinkBaseBeforeRename => "unlink-base-before-rename",
+        Sabotage::LinkAfterRename => "link-after-rename",
+        Sabotage::DeleteWinnerFile => "delete-winner-file",
     }
 }
 
@@ -154,21 +168,34 @@ pub fn case_name(kind: CaseKind) -> &'static str {
     }
 }
 
-/// A one-host run with `sabotage`, pauses at the compare step long enough
-/// for other writers to steal the lock, and no fault floor.
+/// A one-host run with `sabotage` and no fault floor. Writers pause before
+/// the rename, so that others commit in between and they race on stale
+/// bases. A sabotage that breaks the repository only if the writer dies in
+/// its window also gets kills there, and the supervisor respawns the killed
+/// workers.
 pub fn selftest_config(mode: Mode, sabotage: Sabotage, duration: Duration) -> RunConfig {
-    let stale_after = Duration::from_secs(1);
-    let pause = Duration::from_secs(2);
+    let (points, kill_probability) = match sabotage {
+        // Unlinked the base, not yet renamed.
+        Sabotage::UnlinkBaseBeforeRename => (vec![PointName::BeforeRename], 0.05),
+        // Renamed, not yet linked.
+        Sabotage::LinkAfterRename => {
+            (vec![PointName::BeforeRename, PointName::Renamed], 0.05)
+        }
+        // Commits land while the paused committer has yet to tidy up, so its
+        // tidy-up finds the new current version above its own.
+        Sabotage::DeleteAboveMarker => {
+            (vec![PointName::BeforeRename, PointName::BeforeTidyUp], 0.0)
+        }
+        _ => (vec![PointName::BeforeRename], 0.0),
+    };
     let mut config = RunConfig::defaults(mode, 1);
     config.duration = duration;
-    config.stale_after = stale_after;
     config.faults = FaultConfig {
-        points: vec![PointName::Compared],
-        kill_probability: 0.0,
+        points,
+        kill_probability,
         pause_probability: 0.05,
-        pause,
+        pause: Duration::from_secs(2),
     };
-    config.stall_threshold = default_stall_threshold(stale_after, pause);
     config.external_kill_every = None;
     config.fault_floor = FaultFloor::ZERO;
     config.sabotage = Some(sabotage);
@@ -277,22 +304,32 @@ fn lost_updates(report: &Report) -> usize {
     violations.iter().filter(|v| matches!(v, Violation::LostUpdate { .. })).count()
 }
 
-/// Detected only as a failed run with a lost update, after the sabotage fired.
+fn broken_histories(report: &Report) -> usize {
+    let violations = &report.verdict.violations;
+    violations.iter().filter(|v| matches!(v, Violation::BrokenHistory { .. })).count()
+}
+
+/// Detected only as a failed run, after the sabotage fired, with a lost
+/// update (an acknowledged update missing from the history or after the
+/// wrong base) or a broken history (which includes a `repo` that can't be
+/// read).
 pub fn judge(report: &Report) -> CaseOutcome {
     let fired = report.verdict.stats.faults.get("sabotage").copied().unwrap_or(0);
     let lost = lost_updates(report);
+    let broken = broken_histories(report);
     if report.passed {
         CaseOutcome::Missed(format!("the run passed; the sabotage fired {fired} times"))
     } else if fired == 0 {
         CaseOutcome::Missed("the sabotage never fired".to_owned())
-    } else if lost == 0 {
+    } else if lost == 0 && broken == 0 {
         CaseOutcome::Missed(format!(
-            "no LostUpdate among {} violations; the sabotage fired {fired} times",
+            "no LostUpdate or BrokenHistory among {} violations; the sabotage fired \
+             {fired} times",
             report.verdict.violations.len()
         ))
     } else {
         CaseOutcome::Detected(format!(
-            "{lost} LostUpdate; the sabotage fired {fired} times"
+            "{lost} LostUpdate, {broken} BrokenHistory; the sabotage fired {fired} times"
         ))
     }
 }
@@ -354,7 +391,7 @@ mod tests {
         verdict.stats.faults.insert("sabotage".to_owned(), fired);
         Report::new(
             verdict,
-            selftest_config(Mode::Storage, Sabotage::SkipFence, Duration::from_secs(1)),
+            selftest_config(Mode::Storage, Sabotage::SkipLink, Duration::from_secs(1)),
             Participants::default(),
             vec![],
             vec![],
@@ -374,15 +411,28 @@ mod tests {
         Violation::Stall { from_ms: 0, to_ms: 10_000 }
     }
 
+    fn broken() -> Violation {
+        Violation::BrokenHistory { detail: "reading repo: no consistent view".to_owned() }
+    }
+
     #[test]
-    fn only_a_lost_update_after_the_sabotage_fired_is_detected() {
+    fn a_lost_update_or_broken_history_after_the_sabotage_fired_is_detected() {
+        assert_eq!(
+            judge(&report(vec![lost(), stall(), broken()], 2)),
+            CaseOutcome::Detected(
+                "1 LostUpdate, 1 BrokenHistory; the sabotage fired 2 times".to_owned()
+            )
+        );
         assert!(matches!(
-            judge(&report(vec![lost(), stall()], 2)),
+            judge(&report(vec![broken(), stall()], 2)),
             CaseOutcome::Detected(_)
         ));
         assert!(matches!(judge(&report(vec![], 2)), CaseOutcome::Missed(_)));
         assert!(matches!(judge(&report(vec![stall()], 2)), CaseOutcome::Missed(_)));
+        let recovery = Violation::Recovery { detail: "no write succeeded".to_owned() };
+        assert!(matches!(judge(&report(vec![recovery], 2)), CaseOutcome::Missed(_)));
         assert!(matches!(judge(&report(vec![lost()], 0)), CaseOutcome::Missed(_)));
+        assert!(matches!(judge(&report(vec![broken()], 0)), CaseOutcome::Missed(_)));
     }
 
     #[test]
@@ -390,6 +440,10 @@ mod tests {
         assert!(matches!(
             judge_legacy(&report(vec![lost(), stall()], 0)),
             CaseOutcome::Detected(_)
+        ));
+        assert!(matches!(
+            judge_legacy(&report(vec![broken()], 0)),
+            CaseOutcome::Missed(_)
         ));
         assert_eq!(
             judge_legacy(&report(vec![], 0)),
@@ -426,6 +480,27 @@ mod tests {
                 assert_eq!(config.sabotage, Some(sabotage));
                 assert_eq!(config.backend, Backend::Filesystem);
                 assert_eq!(config.gc, None);
+                assert_eq!(config.external_kill_every, None);
+                assert_eq!(config.fault_floor, FaultFloor::ZERO);
+                assert!(config.faults.points.contains(&PointName::BeforeRename));
+                assert!(config.faults.pause_probability > 0.0);
+                let kill_point = match sabotage {
+                    Sabotage::UnlinkBaseBeforeRename => Some(PointName::BeforeRename),
+                    Sabotage::LinkAfterRename => Some(PointName::Renamed),
+                    _ => None,
+                };
+                match kill_point {
+                    Some(point) => {
+                        assert!(config.faults.points.contains(&point), "{sabotage:?}");
+                        assert!(config.faults.kill_probability >= 0.05, "{sabotage:?}");
+                    }
+                    None => assert_eq!(config.faults.kill_probability, 0.0),
+                }
+                assert_eq!(
+                    config.faults.points.contains(&PointName::BeforeTidyUp),
+                    sabotage == Sabotage::DeleteAboveMarker,
+                    "{sabotage:?}"
+                );
             }
             let config = legacy_config(mode, Duration::from_secs(15));
             config.validate().unwrap();
@@ -451,7 +526,7 @@ mod tests {
                 assert_eq!(config.duration, Duration::from_secs(expected));
                 assert_eq!(config.payload_bytes, 64);
                 let sabotaged =
-                    case_config(mode, CaseKind::Sabotage(Sabotage::SkipFence), duration);
+                    case_config(mode, CaseKind::Sabotage(Sabotage::SkipLink), duration);
                 assert_eq!(sabotaged.duration, duration);
                 assert_eq!(sabotaged.payload_bytes, 1024);
             }
@@ -460,6 +535,8 @@ mod tests {
 
     #[test]
     fn cases_cover_every_sabotage_then_the_legacy_backend() {
+        let distinct: std::collections::HashSet<_> = SABOTAGES.into_iter().collect();
+        assert_eq!(distinct.len(), SABOTAGES.len());
         let mut expected: Vec<_> = SABOTAGES.map(CaseKind::Sabotage).to_vec();
         expected.push(CaseKind::LegacyBackend);
         assert_eq!(cases().collect::<Vec<_>>(), expected);
@@ -485,7 +562,7 @@ mod tests {
         let all = SelftestReport { cases: cases().map(detected).collect() };
         assert_eq!(all.exit_code(), 0);
         let summary = all.summary();
-        assert_eq!(summary.lines().count(), 5, "{summary}");
+        assert_eq!(summary.lines().count(), 11, "{summary}");
         assert!(summary.ends_with("PASS"), "{summary}");
         assert!(summary.contains("storage trust-rename-enoent: detected"), "{summary}");
         assert!(summary.contains("storage legacy-local: detected"), "{summary}");
@@ -493,7 +570,7 @@ mod tests {
 
         let mut missed = all.clone();
         missed.cases[1] = case(
-            CaseKind::Sabotage(Sabotage::SkipCompare),
+            CaseKind::Sabotage(Sabotage::RenameFromListedMarker),
             CaseOutcome::Missed("the run passed".to_owned()),
         );
         missed.cases[2].outcome = CaseOutcome::Error("boom".to_owned());
@@ -501,7 +578,9 @@ mod tests {
         let summary = missed.summary();
         assert!(summary.ends_with("FAIL"), "{summary}");
         assert!(
-            summary.contains("storage skip-compare: MISSED: the run passed (kept-root)"),
+            summary.contains(
+                "storage rename-from-listed-marker: MISSED: the run passed (kept-root)"
+            ),
             "{summary}"
         );
 

@@ -206,7 +206,7 @@ The header contains the following fields, in order:
 | Magic bytes | 12 bytes | The UTF-8 encoding of `ICE🧊CHUNK` (`49 43 45 F0 9F A7 8A 43 48 55 4E 4B`). |
 | Implementation name | 24 bytes | A left-aligned, right-space-padded UTF-8 string identifying the writing client. |
 | Spec version | 1 byte | `1` for spec version 1, `2` for spec version 2. |
-| File type | 1 byte | `1` = Snapshot, `2` = Manifest, `4` = TransactionLog, `6` = RepoInfo. |
+| File type | 1 byte | `1` = Snapshot, `2` = Manifest, `4` = TransactionLog, `6` = RepoInfo, `7` = filesystem stub, used only by FilesystemStorage; see design doc 020. |
 | Compression algorithm | 1 byte | `0` = none, `1` = zstd. |
 
 The remainder of the file is the flatbuffers payload, compressed with the algorithm specified in the header.

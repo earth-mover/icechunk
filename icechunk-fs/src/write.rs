@@ -6,9 +6,7 @@ use std::{
     sync::atomic::{AtomicBool, Ordering},
 };
 
-use icechunk_storage::Generation;
-
-use crate::{path::staging_path, read::read_with_metadata, version::generation_of};
+use crate::{path::staging_path, read::read_all};
 
 /// Closes `file` and returns the error from `close(2)`, which dropping a
 /// `File` ignores. On NFS, write errors such as running out of space or quota
@@ -35,8 +33,19 @@ pub(crate) fn ensure_parent(target: &Path) -> io::Result<()> {
 /// Creates `path`, which must not exist, and writes `bytes` to it. On a
 /// write error the file is removed. `AlreadyExists` can only come from the
 /// create, before anything was written.
-pub(crate) fn write_exclusive(path: &Path, bytes: &[u8], fsync: bool) -> io::Result<()> {
+fn write_exclusive(path: &Path, bytes: &[u8], fsync: bool) -> io::Result<()> {
     let file = OpenOptions::new().write(true).create_new(true).open(path)?;
+    fill_or_remove(path, file, bytes, fsync, write_file)
+}
+
+/// Creates `path`, which nothing else uses because its name or its
+/// directory's holds a new random id, and writes `bytes` to it. On a write
+/// error the file is removed.
+pub(crate) fn write_fresh(path: &Path, bytes: &[u8], fsync: bool) -> io::Result<()> {
+    // No `O_EXCL`: on NFSv3 an exclusive create killed before the client's
+    // follow-up SETATTR leaves a mode-000 file whose mtime is the client's
+    // verifier, possibly years ahead, which the sweep's cutoff never reaches.
+    let file = OpenOptions::new().write(true).create(true).truncate(true).open(path)?;
     fill_or_remove(path, file, bytes, fsync, write_file)
 }
 
@@ -70,7 +79,7 @@ fn fill_or_remove(
 /// Writes `bytes` to a new staging sibling of `target` and returns its path.
 fn stage(target: &Path, bytes: &[u8], fsync: bool) -> io::Result<PathBuf> {
     let staging = staging_path(target);
-    write_exclusive(&staging, bytes, fsync)?;
+    write_fresh(&staging, bytes, fsync)?;
     Ok(staging)
 }
 
@@ -83,13 +92,10 @@ pub(crate) fn write_staged(target: &Path, bytes: &[u8], fsync: bool) -> io::Resu
     })
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CreateOutcome {
-    /// `target` holds the new content. `generation` is that of the file a
-    /// fresh read sees afterwards, if it could be observed.
-    Created {
-        generation: Option<Generation>,
-    },
+    /// `target` holds the new content.
+    Created,
     Exists,
 }
 
@@ -104,26 +110,22 @@ pub(crate) fn create_exclusive(
     let staging = stage(target, bytes, fsync)?;
     let linked = fs::hard_link(&staging, target);
     // The link alone decides the outcome; GC sweeps a staging file left behind.
-    // No fd stays open on it: on NFS, unlinking an open file renames it
-    // instead, changing the target's ctime after we observed it.
     let _ = fs::remove_file(&staging);
     match linked {
         Ok(()) => {
             sync_parent(target, fsync)?;
-            // The create landed: failing to observe it must not fail it.
-            let generation = generation_if_holding(target, bytes).ok().flatten();
-            Ok(CreateOutcome::Created { generation })
+            Ok(CreateOutcome::Created)
         }
         // An NFS retry of a `link` whose reply was lost reports `EEXIST`
         // although it succeeded. Identical content means the object is this
         // version either way.
         Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {
-            match generation_if_holding(target, bytes) {
-                Ok(Some(generation)) => {
+            match read_all(target) {
+                Ok(current) if current == bytes => {
                     sync_parent(target, fsync)?;
-                    Ok(CreateOutcome::Created { generation: Some(generation) })
+                    Ok(CreateOutcome::Created)
                 }
-                Ok(None) => Ok(CreateOutcome::Exists),
+                Ok(_) => Ok(CreateOutcome::Exists),
                 Err(err) if err.kind() == io::ErrorKind::NotFound => {
                     Ok(CreateOutcome::Exists)
                 }
@@ -139,13 +141,6 @@ fn sync_parent(target: &Path, fsync: bool) -> io::Result<()> {
         Some(parent) if fsync => fsync_dir(parent),
         _ => Ok(()),
     }
-}
-
-/// Reads `target` through a new file descriptor: the generation of the file
-/// if it holds `bytes`, `None` if it holds other content.
-fn generation_if_holding(target: &Path, bytes: &[u8]) -> io::Result<Option<Generation>> {
-    let (current, meta) = read_with_metadata(target)?;
-    Ok((current == bytes).then(|| generation_of(&meta)))
 }
 
 /// Writes `bytes` directly to `target`, which must not exist. If it does,
@@ -240,6 +235,15 @@ mod tests {
     }
 
     #[test]
+    fn write_fresh_writes_exactly_the_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("x");
+        write_fresh(&path, b"first, longer", false).unwrap();
+        write_fresh(&path, b"second", true).unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"second");
+    }
+
+    #[test]
     fn write_new_falls_back_to_staged_write() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("a/x");
@@ -262,21 +266,15 @@ mod tests {
         tolerate_unsupported_dir_sync(Ok(())).unwrap();
     }
 
-    fn created_generation(outcome: CreateOutcome) -> Option<Generation> {
-        match outcome {
-            CreateOutcome::Created { generation } => generation,
-            CreateOutcome::Exists => panic!("expected Created"),
-        }
-    }
-
     #[test]
     fn create_exclusive_creates_once() {
         let dir = tempfile::tempdir().unwrap();
         let target = dir.path().join("a/repo");
 
-        let generation =
-            created_generation(create_exclusive(&target, b"first", true).unwrap());
-        assert_eq!(generation, Some(generation_of(&fs::metadata(&target).unwrap())));
+        assert_eq!(
+            create_exclusive(&target, b"first", true).unwrap(),
+            CreateOutcome::Created
+        );
         assert_eq!(
             create_exclusive(&target, b"second", false).unwrap(),
             CreateOutcome::Exists
@@ -292,9 +290,12 @@ mod tests {
             let target = dir.path().join("repo");
             fs::write(&target, b"same").unwrap();
 
-            let generation =
-                created_generation(create_exclusive(&target, b"same", fsync).unwrap());
-            assert_eq!(generation, Some(generation_of(&fs::metadata(&target).unwrap())));
+            let before = fs::metadata(&target).unwrap().ino();
+            assert_eq!(
+                create_exclusive(&target, b"same", fsync).unwrap(),
+                CreateOutcome::Created
+            );
+            assert_eq!(fs::metadata(&target).unwrap().ino(), before);
             assert_eq!(fs::read(&target).unwrap(), b"same");
             assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
         }
@@ -305,14 +306,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let target = dir.path().join("repo");
         fs::write(&target, b"theirs").unwrap();
-        let before = generation_of(&fs::metadata(&target).unwrap());
+        let before = fs::metadata(&target).unwrap().ino();
 
         assert_eq!(
             create_exclusive(&target, b"ours", true).unwrap(),
             CreateOutcome::Exists
         );
         assert_eq!(fs::read(&target).unwrap(), b"theirs");
-        assert_eq!(generation_of(&fs::metadata(&target).unwrap()), before);
+        assert_eq!(fs::metadata(&target).unwrap().ino(), before);
         assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
     }
 

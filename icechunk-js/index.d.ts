@@ -79,13 +79,40 @@ export declare class Storage {
   static newLocalFilesystem(path: string): Promise<Storage>
   /**
    * Storage on a filesystem, safe for concurrent writers on filesystems that
-   * meet the requirements in the Icechunk storage guide (exclusive hard links,
-   * atomic rename, fresh opens).
+   * meet the requirements in the Icechunk storage guide (hard links, atomic
+   * rename by name, exclusive directory rename).
    * Safe only if every writer of the repository uses this backend: never let
-   * `newLocalFilesystem` writers, or older Icechunk versions, run on the same
-   * repository at the same time. Experimental. Unix only.
+   * `newLocalFilesystem` writers, or older Icechunk versions, write to its
+   * repositories. Their repositories must first be converted, once, with
+   * `migrateLegacyRepo`. Experimental. Unix only.
    */
   static newFilesystem(path: string): Promise<Storage>
+  /**
+   * Stops every commit to a repository of `newFilesystem` storage, leaving it
+   * readable, for example to copy it consistently. Commits fail with a
+   * "repository is frozen" error until `unfreezeRepo`. Resolves to true if
+   * this call froze it, false if it already was frozen. Only true proves
+   * that this call changed the repository: false comes from a directory
+   * listing that can lag, so an export must not rely on it.
+   */
+  freezeRepo(): Promise<boolean>
+  /**
+   * Accepts commits again after `freezeRepo`. Writers based on the frozen
+   * version get one conflict. Resolves to true if this call unfroze the
+   * repository, false if it wasn't frozen. Only true proves that this call
+   * changed the repository: false comes from a directory listing that can
+   * lag.
+   */
+  unfreezeRepo(): Promise<boolean>
+  /**
+   * Converts a repository written by `newLocalFilesystem` or an older Icechunk
+   * to the format of `newFilesystem`, which refuses to open it until then.
+   * Stop every writer first: no other process may write to the repository
+   * from when this starts until every writer uses `newFilesystem`. A rerun
+   * completes an interrupted conversion. Resolves to true if this call
+   * converted the repository, false if there was nothing to convert.
+   */
+  migrateLegacyRepo(): Promise<boolean>
   static newS3(bucket: string, prefix?: string | undefined | null, credentials?: S3Credentials | undefined | null, options?: S3Options | undefined | null): Storage
   static newR2(bucket?: string | undefined | null, prefix?: string | undefined | null, accountId?: string | undefined | null, credentials?: S3Credentials | undefined | null, options?: S3Options | undefined | null): Storage
   static newTigris(bucket: string, prefix?: string | undefined | null, credentials?: S3Credentials | undefined | null, options?: S3Options | undefined | null, useWeakConsistency?: boolean | undefined | null): Storage

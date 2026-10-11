@@ -183,7 +183,9 @@ pub fn verify_buffer(
         FileTypeBin::Manifest => Manifest::verify_buffer(buffer),
         FileTypeBin::TransactionLog => TransactionLog::verify_buffer(buffer),
         FileTypeBin::RepoInfo => RepoInfo::verify_buffer(buffer),
-        FileTypeBin::Attributes | FileTypeBin::Chunk => Ok(()),
+        FileTypeBin::Attributes | FileTypeBin::Chunk | FileTypeBin::FilesystemStub => {
+            Ok(())
+        }
     }
 }
 

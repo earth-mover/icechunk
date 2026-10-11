@@ -409,7 +409,8 @@ mod tests {
         use crate::storage::{logging::LoggingStorage, new_filesystem_storage};
 
         let dir = tempfile::tempdir().unwrap();
-        let leftover = dir.path().join(format!("repo.lockinfo.{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(dir.path().join("repo.d")).unwrap();
+        let leftover = dir.path().join(format!("repo.d/stage.{}", uuid::Uuid::new_v4()));
         std::fs::write(&leftover, b"hello").unwrap();
         File::options()
             .write(true)

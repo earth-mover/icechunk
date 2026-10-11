@@ -3,7 +3,7 @@ import pickle
 import sys
 import time
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 
 import numpy as np
@@ -12,11 +12,14 @@ import pytest
 import zarr
 from icechunk import (
     ErrorKind,
+    FilesystemStorage,
     FormatError,
     Repository,
     Storage,
+    StorageError,
     filesystem_storage,
     in_memory_storage,
+    local_filesystem_storage,
 )
 
 pytestmark = pytest.mark.skipif(
@@ -49,17 +52,17 @@ def test_create_commit_reopen(tmp_path: Path) -> None:
 
 
 def test_settings(tmp_path: Path) -> None:
-    storage = Storage.new_filesystem(
-        str(tmp_path), fsync=False, stale_after=timedelta(seconds=5)
-    )
+    storage = Storage.new_filesystem(str(tmp_path), fsync=False)
+    assert isinstance(storage, FilesystemStorage)
     repo = Repository.create(storage)
     write_array(repo)
     np.testing.assert_array_equal(read_array(repo), np.arange(4))
 
 
-def test_negative_stale_after(tmp_path: Path) -> None:
-    with pytest.raises(ValueError):
-        filesystem_storage(str(tmp_path), stale_after=timedelta(seconds=-1))
+def test_returns_filesystem_storage(tmp_path: Path) -> None:
+    storage = filesystem_storage(str(tmp_path))
+    assert isinstance(storage, FilesystemStorage)
+    assert isinstance(storage, Storage)
 
 
 def test_repr(tmp_path: Path) -> None:
@@ -78,7 +81,7 @@ def test_gc_deletes_leftovers(tmp_path: Path) -> None:
     repo = Repository.create(filesystem_storage(str(tmp_path)))
     write_array(repo)
 
-    leftover = tmp_path / f"repo.new_bytes.{uuid.uuid4()}"
+    leftover = tmp_path / "repo.d" / f"stage.{uuid.uuid4()}"
     leftover.write_bytes(b"abandoned")
     two_days_ago = time.time() - 2 * 24 * 3600
     os.utime(leftover, (two_days_ago, two_days_ago))
@@ -86,6 +89,47 @@ def test_gc_deletes_leftovers(tmp_path: Path) -> None:
     summary = repo.garbage_collect(datetime.now(UTC))
     assert summary.storage_leftovers_deleted == 1
     assert not leftover.exists()
+
+
+def test_migrate_legacy_repo(tmp_path: Path) -> None:
+    write_array(Repository.create(local_filesystem_storage(str(tmp_path))))
+
+    storage = filesystem_storage(str(tmp_path))
+    with pytest.raises(StorageError, match="migrate_legacy_repo"):
+        Repository.open(storage)
+
+    assert storage.migrate_legacy_repo()
+    np.testing.assert_array_equal(read_array(Repository.open(storage)), np.arange(4))
+    assert not storage.migrate_legacy_repo()
+
+
+async def test_migrate_legacy_repo_async(tmp_path: Path) -> None:
+    write_array(Repository.create(local_filesystem_storage(str(tmp_path))))
+
+    storage = filesystem_storage(str(tmp_path))
+    with pytest.raises(StorageError, match="migrate_legacy_repo"):
+        await Repository.open_async(storage)
+
+    assert await storage.migrate_legacy_repo_async()
+    repo = await Repository.open_async(storage)
+    np.testing.assert_array_equal(read_array(repo), np.arange(4))
+    assert not await storage.migrate_legacy_repo_async()
+
+
+def test_migrate_filesystem_repo_changes_nothing(tmp_path: Path) -> None:
+    storage = filesystem_storage(str(tmp_path))
+    assert not storage.migrate_legacy_repo()
+    write_array(Repository.create(storage))
+    assert not storage.migrate_legacy_repo()
+    np.testing.assert_array_equal(read_array(Repository.open(storage)), np.arange(4))
+
+
+def test_local_filesystem_storage_refuses_filesystem_format(tmp_path: Path) -> None:
+    write_array(Repository.create(filesystem_storage(str(tmp_path))))
+
+    with pytest.raises(FormatError, match="filesystem_storage") as exc_info:
+        Repository.open(local_filesystem_storage(str(tmp_path)))
+    assert exc_info.value.kind == ErrorKind.INVALID_FILE_FORMAT
 
 
 def test_gc_in_memory_has_no_leftovers() -> None:

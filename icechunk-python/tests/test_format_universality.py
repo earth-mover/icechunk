@@ -256,11 +256,23 @@ def repo_path(repo_backend: str) -> Generator[str]:
 # ---------------------------------------------------------------------------
 
 
-def test_repo_info_file(repo_path: str, flatbuf_mod: ModuleType) -> None:
+def repo_info_bytes(repo_path: str, backend: str) -> bytes:
+    """The bytes the storage serves as `repo`: in the filesystem format, the
+    version file the marker names."""
+    if backend != "filesystem":
+        return Path(repo_path, "repo").read_bytes()
+    (marker,) = Path(repo_path, "repo.d").glob("latest.*")
+    _, _, version, sha = marker.name.split(".")
+    return Path(repo_path, "repo.d", f"{version}.{sha}").read_bytes()
+
+
+def test_repo_info_file(
+    repo_path: str, repo_backend: str, flatbuf_mod: ModuleType
+) -> None:
     """Read the repo info file, verify header + flatbuffer content."""
     Repo = flatbuf_mod.Repo
 
-    data = Path(repo_path, "repo").read_bytes()
+    data = repo_info_bytes(repo_path, repo_backend)
     payload = assert_valid_header(data, FileType.RepoInfo, filename="repo")
 
     repo = Repo.GetRootAs(payload)
@@ -934,6 +946,9 @@ def test_extra_fields_forward_compatibility(
     """Inject non-empty ``extra`` bytes into every flatbuffer file in a copy of
     the repo, then compare reads from the patched repo against the original."""
     import shutil
+
+    if repo_backend == "filesystem":
+        pytest.skip("patches the single-file `repo` of local_filesystem_storage")
 
     import numpy as np
 

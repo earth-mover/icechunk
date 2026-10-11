@@ -22,6 +22,7 @@ fault-injection = []
 icechunk-storage.workspace = true
 
 [target.'cfg(unix)'.dependencies]
+icechunk-format.workspace = true
 icechunk-types.workspace = true
 async-trait.workspace = true
 bytes.workspace = true

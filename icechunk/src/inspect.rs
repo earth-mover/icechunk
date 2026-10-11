@@ -62,6 +62,7 @@ impl From<FileHeader> for FileHeaderInspect {
                 FileTypeBin::RepoInfo => ICECHUNK_FILE_TYPE_REPO_INFO,
                 FileTypeBin::Attributes => "attributes",
                 FileTypeBin::Chunk => "chunk",
+                FileTypeBin::FilesystemStub => "filesystem_stub",
             }
             .to_string(),
             compression: match value.compression {

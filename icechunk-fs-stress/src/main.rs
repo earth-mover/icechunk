@@ -24,7 +24,7 @@ mod cli {
     use icechunk_fs_stress::{
         config::{
             Backend, FaultConfig, GcConfig, Mode, PointName, RunConfig, WorkerId,
-            default_stall_threshold, parse_duration,
+            parse_duration,
         },
         control,
         env_info::default_tag,
@@ -100,9 +100,6 @@ mod cli {
         /// [default: 1m]
         #[arg(long, value_parser = parse_duration)]
         duration: Option<Duration>,
-        /// [default: 5s]
-        #[arg(long, value_parser = parse_duration)]
-        stale_after: Option<Duration>,
         /// Don't fsync storage writes.
         #[arg(long)]
         no_fsync: bool,
@@ -116,10 +113,11 @@ mod cli {
         /// Probability of a pause at each fault point [default: 0.005]
         #[arg(long)]
         pause_p: Option<f64>,
-        /// Length of a pause [default: 2 × stale-after]
+        /// Length of a pause [default: 2s]
         #[arg(long, value_parser = parse_duration)]
         pause: Option<Duration>,
-        /// [default: LockTaken,Fenced,Compared]
+        /// Where kills and pauses happen [default: Linked,BeforeRename,BeforeTidyUp]
+        /// [possible values: Staged,Linked,BeforeRename,Renamed,BeforeTidyUp]
         #[arg(long, value_delimiter = ',', value_parser = parse_point)]
         fault_points: Option<Vec<PointName>>,
         /// How often each host SIGKILLs one of its workers, or "off" [default: 3s]
@@ -390,8 +388,7 @@ mod cli {
         };
         ensure!(!args.gc || mode == Mode::Repository, "--gc needs repository mode");
         let mut config = RunConfig::defaults(mode, hosts);
-        let stale_after = args.stale_after.unwrap_or(config.stale_after);
-        let defaults = FaultConfig::defaults(stale_after);
+        let defaults = FaultConfig::default();
         let faults = FaultConfig {
             points: args.fault_points.clone().unwrap_or(defaults.points),
             kill_probability: args.kill_p.unwrap_or(defaults.kill_probability),
@@ -405,9 +402,7 @@ mod cli {
                 margin: args.gc_margin.unwrap_or(defaults.margin),
             }
         });
-        config.stall_threshold = default_stall_threshold(stale_after, faults.pause);
         config.faults = faults;
-        config.stale_after = stale_after;
         config.duration = args.duration.unwrap_or(config.duration);
         config.fsync = !args.no_fsync;
         config.workers_per_host_default =
@@ -426,12 +421,11 @@ mod cli {
 
     fn parse_point(s: &str) -> anyhow::Result<PointName> {
         let points = [
-            ("LockInfoWritten", PointName::LockInfoWritten),
-            ("TicketWritten", PointName::TicketWritten),
-            ("LockTaken", PointName::LockTaken),
-            ("Fenced", PointName::Fenced),
-            ("Compared", PointName::Compared),
+            ("Staged", PointName::Staged),
+            ("Linked", PointName::Linked),
+            ("BeforeRename", PointName::BeforeRename),
             ("Renamed", PointName::Renamed),
+            ("BeforeTidyUp", PointName::BeforeTidyUp),
         ];
         let key = |name: &str| name.replace('_', "").to_ascii_lowercase();
         points
@@ -558,8 +552,6 @@ mod cli {
                 "2",
                 "--duration",
                 "90s",
-                "--stale-after",
-                "1s",
                 "--no-fsync",
                 "--workers",
                 "4",
@@ -567,8 +559,10 @@ mod cli {
                 "0.5",
                 "--pause-p",
                 "0",
+                "--pause",
+                "3s",
                 "--fault-points",
-                "Renamed,lock_info_written",
+                "Renamed,before_tidy_up,STAGED",
                 "--external-kill-every",
                 "off",
                 "--payload-bytes",
@@ -584,20 +578,21 @@ mod cli {
                 "1s",
             ]);
             let config = config(&args).unwrap();
-            let pause = Duration::from_secs(2);
+            let pause = Duration::from_secs(3);
             let mut expected = RunConfig::defaults(Mode::Repository, 2);
             expected.duration = Duration::from_secs(90);
-            expected.stale_after = Duration::from_secs(1);
             expected.fsync = false;
             expected.workers_per_host_default = 4;
             expected.faults = FaultConfig {
-                points: vec![PointName::Renamed, PointName::LockInfoWritten],
+                points: vec![
+                    PointName::Renamed,
+                    PointName::BeforeTidyUp,
+                    PointName::Staged,
+                ],
                 kill_probability: 0.5,
                 pause_probability: 0.0,
                 pause,
             };
-            expected.stall_threshold =
-                default_stall_threshold(expected.stale_after, pause);
             expected.external_kill_every = None;
             expected.payload_bytes = 10;
             expected.chunk_bytes = 2048;
@@ -614,13 +609,13 @@ mod cli {
         #[test]
         fn later_flags_override_earlier_ones() {
             let args = init_args(&[
-                "--stale-after",
+                "--pause",
                 "1s",
                 "--mode",
                 "storage",
                 "--hosts",
                 "1",
-                "--stale-after",
+                "--pause",
                 "7s",
                 "--external-kill-every",
                 "off",
@@ -628,8 +623,8 @@ mod cli {
                 "2s",
             ]);
             let config = config(&args).unwrap();
-            assert_eq!(config.stale_after, Duration::from_secs(7));
-            assert_eq!(config.faults.pause, Duration::from_secs(14));
+            assert_eq!(config.faults.pause, Duration::from_secs(7));
+            assert_eq!(config.stall_threshold, Duration::from_secs(30));
             assert_eq!(config.external_kill_every, Some(Duration::from_secs(2)));
         }
 
@@ -639,6 +634,8 @@ mod cli {
             for bad in [
                 &["--mode", "nfs"][..],
                 &["--mode", "storage", "--fault-points", "Nope"],
+                &["--mode", "storage", "--fault-points", "Compared"],
+                &["--mode", "storage", "--stale-after", "1s"],
                 &["--mode", "storage", "--external-kill-every", "never"],
                 &["--mode", "storage", "--duration", "5"],
                 &["--mode", "repository", "--gc-every", "5s"],

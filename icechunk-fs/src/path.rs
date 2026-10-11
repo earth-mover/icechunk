@@ -6,6 +6,8 @@ use std::{
 use icechunk_storage::{StorageResult, other_error};
 use uuid::Uuid;
 
+use crate::names::parse_root_name;
+
 const STAGING_INFIX: &str = ".staging.";
 
 fn valid_component(component: &str) -> bool {
@@ -16,8 +18,10 @@ fn valid_component(component: &str) -> bool {
 }
 
 /// Maps a `/`-separated object key to a path under `root`. Rejects any key
-/// that could escape `root` or that doesn't name a file.
+/// that could escape `root`, that doesn't name a file, or that is under a
+/// protocol name of the root other than `repo`.
 pub(crate) fn key_path(root: &Path, key: &str) -> StorageResult<PathBuf> {
+    let protocol = key.split('/').next().and_then(parse_root_name).is_some();
     key.split('/')
         .try_fold(root.to_path_buf(), |mut path, component| {
             valid_component(component).then(|| {
@@ -25,6 +29,7 @@ pub(crate) fn key_path(root: &Path, key: &str) -> StorageResult<PathBuf> {
                 path
             })
         })
+        .filter(|_| !protocol)
         .ok_or_else(|| {
             other_error(format!("invalid object key for FilesystemStorage: {key:?}"))
         })
@@ -87,6 +92,26 @@ mod tests {
             "a\0b",
         ] {
             assert!(key_path(root, key).is_err(), "{key:?}");
+        }
+    }
+
+    #[test]
+    fn root_protocol_names_are_rejected_only_at_the_root() {
+        let root = Path::new("/data/repo");
+        let id = Uuid::new_v4();
+        for name in [
+            "repo.d".to_string(),
+            format!("repo.d.tmp.{id}"),
+            format!("repo.legacy.{id}"),
+            format!("repo.stub.{id}"),
+        ] {
+            assert!(key_path(root, &name).is_err(), "{name}");
+            assert!(key_path(root, &format!("{name}/x")).is_err(), "{name}");
+            assert!(prefix_path(root, &name).is_err(), "{name}");
+            assert!(key_path(root, &format!("a/{name}")).is_ok(), "{name}");
+        }
+        for key in ["repo", "repo.dx", "repo.legacy.x", &format!("repo.staging.{id}")] {
+            assert!(key_path(root, key).is_ok(), "{key}");
         }
     }
 
