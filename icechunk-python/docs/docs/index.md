@@ -6,7 +6,7 @@ title: Icechunk - Open-source, high-performance array format and library for sci
 <div class="benefit-row" markdown>
 <div class="benefit-text" markdown>
 
-## Scale and speed {#scale}
+## Scale and Speed {#scale}
 
 Store gigabytes on your laptop or terabytes in a bucket, or reference petabytes of existing files with a repository of gigabytes. The same format and library cover all three.
 
@@ -26,7 +26,7 @@ NASA's virtual stores feasibility report recommends adopting Icechunk ([report](
 <div class="benefit-row" markdown>
 <div class="benefit-text" markdown>
 
-## Zero-copy ingest {#zero-copy-ingest}
+## Zero-Copy Ingest {#zero-copy-ingest}
 
 Reading a TIFF, HDF5, NetCDF or GRIB file from the cloud is slow.
 A reader has to fetch headers and offset tables before it finds the bytes it wants.
@@ -48,7 +48,7 @@ The GOES-16 satellite archive, 115 TB in 380,000 NetCDF files, became an 80 GB I
 <div class="benefit-row" markdown>
 <div class="benefit-text" markdown>
 
-### Mix virtual and native chunks {#mix-virtual-and-native}
+### Mix Virtual and Native Chunks {#mix-virtual-and-native}
 
 One array can hold both.
 Reference the archive where it sits, then append new data, fix a bad chunk, or add a downsampled level as native chunks.
@@ -82,7 +82,7 @@ Tag a commit to cite it in a paper, or branch to try a change without affecting 
 <div class="benefit-row" markdown>
 <div class="benefit-text" markdown>
 
-### History without ballooning storage {#history-storage}
+### History Without Ballooning Storage {#history-storage}
 
 A commit writes only the chunks that changed.
 Every other chunk in the new snapshot points at data already in storage, so a long history costs a fraction of keeping full copies.
@@ -98,7 +98,7 @@ Every other chunk in the new snapshot points at data already in storage, so a lo
 <div class="benefit-row" markdown>
 <div class="benefit-text" markdown>
 
-## ACID transactions {#consistency}
+## ACID Transactions {#consistency}
 
 Icechunk gives you ACID transactions on arrays.
 Without them, a reader can catch a write halfway and get arrays that don't match.
@@ -117,7 +117,7 @@ When two writers commit at once, the second is rejected or rebased, never silent
 <div class="benefit-row" markdown>
 <div class="benefit-text" markdown>
 
-## No server {#format-and-client-only}
+## No Server {#format-and-client-only}
 
 The Icechunk library runs inside your program and reads and writes files directly.
 There is no server, database or service to run.
