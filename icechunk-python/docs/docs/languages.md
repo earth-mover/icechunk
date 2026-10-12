@@ -37,13 +37,13 @@ Built and maintained by the community.
 | C++ | [GDAL Icechunk driver](https://gdal.org/en/latest/drivers/raster/icechunk.html) | Read only | Independent implementation of the spec. |
 | TypeScript | [EarthyScience/icechunk-js](https://github.com/EarthyScience/icechunk-js) | Read only | Independent implementation, designed for zarrita. |
 | JavaScript | [Neuroglancer](https://neuroglancer-docs.web.app/datasource/icechunk/index.html) | Read only | Independent implementation in Google's volumetric viewer. |
-| Rust (zarrs) | [zarrs_icechunk](https://github.com/zarrs/zarrs_icechunk) | Read and write | Connects the zarrs crate to Icechunk repositories through the `icechunk` crate. Reads virtual datasets built with VirtualiZarr. |
+| Rust (zarrs) | [zarrs_icechunk](https://github.com/zarrs/zarrs_icechunk) | Read and write | Connects the [zarrs](https://zarrs.dev/) crate to Icechunk repositories through the `icechunk` crate. Reads virtual datasets built with VirtualiZarr. |
 
 Independent readers can lag behind new spec versions, so check which versions each one reads.
 
 ## R
 
-Native R bindings are in progress.
+Native R bindings are planned.
 Today, R can use the Python library through [reticulate](https://rstudio.github.io/reticulate/):
 
 ```r
