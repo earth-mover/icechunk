@@ -31,8 +31,9 @@ NASA's virtual stores feasibility report recommends adopting Icechunk ([report](
 Reading a TIFF, HDF5, NetCDF or GRIB file from the cloud is slow.
 A reader has to fetch headers and offset tables before it finds the bytes it wants.
 
-The writer pays that cost once, when creating the repository.
-After that, reading a virtual chunk is one range request to the original file.
+With Icechunk, you parse each file once and record where every chunk's bytes are.
+Every reader after that skips the parsing.
+Reading a virtual chunk (a pointer to bytes in the original file) is one range request.
 The files are not copied or changed.
 
 The GOES-16 satellite archive, 115 TB in 380,000 NetCDF files, became an 80 GB Icechunk repository this way ([blog post](https://www.earthmover.io/blog/virtual-zarr)).
