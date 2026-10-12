@@ -73,6 +73,15 @@ cargo build --release -p icechunk-fs-stress
 The binary is `target/release/fs-stress`. Build every host from the same
 commit: the tool doesn't check that all hosts run the same build.
 
+Alternatively, build one fully static binary and copy it to every x86_64
+Linux host, whatever its C library. In the repository's Nix dev shell:
+
+```sh
+just fs-stress-static
+```
+
+It prints the binary's path and its sha256.
+
 ## Single host
 
 ```sh
@@ -156,6 +165,138 @@ Details:
   writing can make the others look wrong. The summary then says
   "provisional: hosts still missing (…)" and `verify` exits with 3; verify
   again once they finished.
+
+## Driving several hosts from one machine
+
+`scripts/remote.sh` runs the procedure above over ssh from a control machine
+that doesn't need the filesystem: it copies the binary, checks the hosts,
+creates the run root, starts `workers` on every host, verifies, and copies
+the results back. It can also inject network faults on one host during the
+run.
+
+### What it needs
+
+- Bash on the control machine, and non-interactive ssh (keys, no password
+  prompt) to every host.
+- The filesystem mounted at **the same path on every host**.
+- One binary that runs on every host: build it with `just fs-stress-static`.
+- `chronyc` on the hosts, for the clock check (without it you only get a
+  warning).
+- For network faults, on the fault host only: passwordless `sudo`, `nft`
+  (nftables), `tc` (iproute-tc) and `ss`.
+
+### Setup
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `FS_STRESS_HOSTS` | required | ssh destinations, space-separated: `user@host1 user@host2` |
+| `FS_STRESS_RESULTS` | required | local directory for the fetched results |
+| `FS_STRESS_SSH_OPTS` | `-o BatchMode=yes -o ConnectTimeout=10` | options for every `ssh` and `scp` |
+| `FS_STRESS_MODES` | `storage repository` | the modes `matrix` runs |
+
+The first host in `FS_STRESS_HOSTS` runs `init`, `verify` and `selftest`.
+
+```sh
+export FS_STRESS_HOSTS="rocky@10.77.0.21 rocky@10.77.0.22"
+export FS_STRESS_RESULTS=~/fs-stress-results
+just fs-stress-static
+scripts/remote.sh deploy target/x86_64-unknown-linux-musl/fs-stress-dist/fs-stress
+scripts/remote.sh preflight /mnt/nfs
+scripts/remote.sh run /mnt/nfs storage --duration 2m
+scripts/remote.sh matrix /mnt/nfs /mnt/lustre -- --duration 2m
+```
+
+### Commands
+
+- **`deploy BINARY`** copies `BINARY` to `~/fs-stress` on every host and
+  checks its sha256 there.
+- **`preflight MOUNT`** checks, on every host: the binary is there and the
+  same as on the first host; `MOUNT` is a mount point of the same filesystem
+  type as on the first host; `MOUNT/fs-stress/` is writable; the clock is
+  within 100 ms of NTP. It prints each host's filesystem type, clock offset
+  and free space. Each check gives up after 30 s, so a mount whose server is
+  down fails the preflight instead of hanging it. With network faults on, it
+  also checks the fault host's tools and removes leftover faults.
+- **`run MOUNT MODE [ARGS…]`** runs `preflight`, then `init` on the first host
+  with `--hosts` set to the number of hosts and `ARGS`, then `workers` on
+  every host in parallel, then `verify` on the first host. It fetches the
+  results, then deletes the run root if both the workers and `verify`
+  succeeded, and keeps it otherwise. The run root is
+  `MOUNT/fs-stress/<mount name>-<mode>-<timestamp>`. Progress goes to stderr,
+  each line prefixed with its host; the summary goes to stdout. The exit code
+  is `verify`'s, or 1 if a host's `workers` failed.
+- **`matrix MOUNT… [-- ARGS…]`** runs `run` for each mount and each mode in
+  `FS_STRESS_MODES`, one at a time, and goes on after a failure. At the end
+  it prints a table of `PASS`, `FAIL` or `ERROR (exit N)` per run, and saves
+  it as `matrix-<timestamp>.txt` in `FS_STRESS_RESULTS`. It exits with 1 if
+  any run didn't pass.
+- **`selftest MOUNT [ARGS…]`** runs `selftest` on the first host with its root
+  parent under `MOUNT/fs-stress/`, and saves its output.
+- **`net-clean`** stops a leftover fault loop on the fault host and removes its
+  rules and its netem queue.
+
+`^C` during a `run` tells the hosts to stop (`fs-stress stop`), and `verify`
+then checks the stopped run. Nothing bounds a run itself: if a server goes
+down mid-run, the workers block with it. Run one `run` or `matrix` at a time:
+runs on the same hosts slow each other down and make the stall and starvation
+checks meaningless.
+
+### Results
+
+Each run writes `FS_STRESS_RESULTS/<mount name>-<mode>-<timestamp>/`:
+
+| File | Content |
+| --- | --- |
+| `meta.txt` | mount, mode, arguments, hosts, run root, binary sha256, network faults, exit codes |
+| `summary.txt` | the summary `verify` printed |
+| `report.json`, `run.json`, `control`, `go`, `hosts/`, `done/` | copied from the run root |
+| `logs.tar.gz` | the run root's `logs/`, for every run |
+| `init.log`, `workers-<i>.log`, `verify.log` | output of each step; `workers-<i>.log` is host `i` (0-based) |
+| `net-faults.log`, `net-before.txt`, `net-after.txt` | with network faults: the loop's output and the fault host's TCP and NFS client counters before and after |
+
+### Network faults
+
+They test the protocol's handling of lost replies: a client whose connection
+breaks resends its outstanding requests, and a resent `link` or `rename` that
+already happened on the server can come back as `EEXIST` or `ENOENT`. The
+faults run on one host, from just after `init` until its workers finish, so
+`verify` runs on a healthy network.
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `FS_STRESS_NET_RESET_EVERY` | off | seconds between connection resets, jittered between 0.5× and 1.5× |
+| `FS_STRESS_NET_OUTAGE` | `0` | seconds after each reset in which new connections are refused |
+| `FS_STRESS_NETEM` | off | `tc netem` arguments for outgoing traffic, e.g. `delay 5ms 2ms loss 1%` |
+| `FS_STRESS_NET_HOST` | the last host | which host gets the faults, 1-based |
+
+Network faults are on when `FS_STRESS_NET_RESET_EVERY` or `FS_STRESS_NETEM`
+is set.
+
+- **What they hit.** All TCP from the fault host to the control machine's
+  /24, as the fault host sees the control machine's address, except the
+  control machine itself, so the ssh sessions survive. The file servers must
+  be in that /24.
+- **A reset** kills the fault host's live connections to them with `ss -K`;
+  the kernel clients reconnect on their next request. With
+  `FS_STRESS_NET_OUTAGE`, an `nft` rule also refuses new connections with a
+  TCP reset for that long.
+- **Netem** delays, drops or reorders outgoing packets. Over TCP, loss only
+  slows the client down: TCP retransmits the packets, and no RPC reply is
+  lost.
+- **Cleanup.** The loop runs as root under a trap that removes its `nft`
+  table and netem queue, stops when the run's workers are done, and in any
+  case after 2 hours. `preflight` and `net-clean` remove what a killed loop
+  left.
+
+Start with resets every 15 s and nothing else. Kernel clients back off for
+seconds after a refused reconnect, so frequent resets, an outage or packet
+loss can keep the fault host from committing at all; the report then shows it
+as `Starved`. Check the `observed:` line of the summary (see
+[Reading the report](#reading-the-report)): `link_existed` or
+`rename_enoent.landed` means a lost reply reached the protocol. The file
+servers often hide lost replies: an NFS server's duplicate-request cache
+answers a resent request with the reply it already sent, and Lustre and
+CephFS reconstruct replies on resend.
 
 ## Knobs
 
@@ -243,7 +384,27 @@ took; and notes.
 
 Conflicts are normal: all workers race for the same key or branch, and most
 attempts lose. The counts are in the stats. An attempt without an outcome
-("unresolved") belongs to a killed worker.
+("unresolved") belongs to a killed worker. "Failed before intent" counts
+storage-mode attempts that couldn't read or back up `repo`, so they never
+tried to update it; see `AttemptFailures` below.
+
+The `observed:` line counts how commits of `repo` resolved a step whose
+outcome was in doubt:
+
+- `rename_enoent.lost_race`, `rename_enoent.superseded`: the commit rename
+  failed because another writer committed first. Most conflicts end here.
+- `rename_enoent.unproven`: the listing after a failed rename didn't yet show
+  the winner, so the attempt reported a conflict. A few per minute on network
+  filesystems are listing lag.
+- `rename_enoent.landed`: the rename failed, but our own marker is there, so
+  our rename landed and its reply was lost. The commit is acknowledged.
+- `link_existed`: linking our new version found the name taken. The name is
+  the hash of the content, so it holds our bytes: our own link, resent after a
+  lost reply.
+- `rename_enoent.frozen`: the repository was frozen under the commit.
+
+`landed` and `link_existed` only happen after lost replies. They show that a
+run exercised that path; they aren't failures.
 
 A filesystem counts as a network filesystem unless its type is a known local
 one: ext2/3/4, XFS, Btrfs, ZFS, tmpfs, F2FS, bcachefs, overlay, vfat, exFAT,
@@ -304,6 +465,11 @@ any host is on a network filesystem, the whole run is judged as one.
   subdirectories yet, so they are expected after a run with kills.
 - **`Stragglers`**: workers still running at their host's wind-down deadline,
   which were then killed.
+- **`AttemptFailures`**: storage mode: attempts that failed reading or
+  backing up `repo`, before logging their intent, with the first few messages.
+  They change nothing, so no other check sees them. A version whose bytes
+  don't hash to its name means a reader saw other bytes than the writer
+  wrote; send us the report.
 
 ## Selftest
 
@@ -412,5 +578,8 @@ From the repository root, with the dev profile:
 - `just fs-stress-selftest [parent] [args…]`: `selftest` under `parent`.
 - `just fs-stress-process-tests`: the ignored tests that spawn stress
   processes. `just test` runs the others.
+- `just fs-stress-static`: the static binary for other hosts.
+- `scripts/remote.sh`: see
+  [Driving several hosts from one machine](#driving-several-hosts-from-one-machine).
 
 None of these run in CI.

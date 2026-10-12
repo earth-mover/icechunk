@@ -104,12 +104,15 @@ impl RepoD<'_> {
 fn read_version_file(dir: &Path, version: &Version) -> Result<Bytes, ProtocolError> {
     let name = version.file_name();
     let bytes = read_all(&dir.join(&name))?;
-    if Hash::of(&bytes) == *version.hash() {
+    let read = Hash::of(&bytes);
+    if read == *version.hash() {
         Ok(bytes)
     } else {
         Err(ProtocolError::Corrupt(format!(
-            "{name} in {} doesn't hash to its name",
-            dir.display()
+            "{name} in {} doesn't hash to its name: read {} bytes hashing to {}",
+            dir.display(),
+            bytes.len(),
+            read.as_str()
         )))
     }
 }

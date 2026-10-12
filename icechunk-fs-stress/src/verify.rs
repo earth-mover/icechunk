@@ -18,7 +18,10 @@ use crate::{
     env_info::{HostDone, HostInfo, default_tag},
     layout::RunRoot,
     log::read_all_logs,
-    oracle::{History, Verdict, Violation, check_mode, liveness::check_liveness},
+    oracle::{
+        History, Verdict, Violation, check_failures, check_mode, count_observed,
+        liveness::check_liveness,
+    },
     recovery::{
         RECOVERY_DEADLINE, RecoveryOutcome, age_storage_root, check_clean_root,
         recovery_worker, recovery_write, sweep,
@@ -83,6 +86,8 @@ pub async fn verify(root: &RunRoot, done_timeout: Duration) -> anyhow::Result<Re
             let history = History { logs, hosts: hosts.clone(), done: done.clone() };
             check_mode(root, &config, &history, network_fs, &mut verdict).await?;
             check_liveness(&history, &config, network_fs, &mut verdict);
+            check_failures(&history, &mut verdict);
+            count_observed(&history, &mut verdict);
         }
         Err(err) => verdict
             .violations

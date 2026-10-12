@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 use super::{Listed, ProtocolError, RepoD, is_dead, list_names, remove_stage};
 use crate::{
-    hooks::{Point, Sabotage},
+    hooks::{Observed, Point, Sabotage},
     names::{Hash, Marker, MarkerKind, RepoDName, Version, stage_name},
     nudge::nudge,
     storage::is_missing,
@@ -45,7 +45,9 @@ impl RepoD<'_> {
                 // The name is the hash of our bytes, so whatever holds it has
                 // our bytes: typically our own link, retried after a lost reply.
                 Ok(()) => {}
-                Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {}
+                Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {
+                    self.hooks.observed(Observed::LinkExisted);
+                }
                 // The staging file was swept, or `repo.d` is gone.
                 Err(err) if err.kind() == io::ErrorKind::NotFound => {
                     return Ok(UpdateOutcome::NotOnLatestVersion);
@@ -111,12 +113,14 @@ impl RepoD<'_> {
         let ack_unproven = || self.hooks.sabotaged(Sabotage::AckUnproven);
         match Self::highest(&markers) {
             Some(marker) if marker.version == new => {
+                self.hooks.observed(Observed::RenameLanded);
                 fsync_dir(&dir)?;
                 self.tidy_up(&new, base);
                 Ok(UpdateOutcome::Updated(new))
             }
             // Lost the race for `N+1`.
             Some(marker) if marker.version.n() == new.n() => {
+                self.hooks.observed(Observed::RenameLostRace);
                 let dead = if self.hooks.sabotaged(Sabotage::DeleteWinnerFile) {
                     &marker.version
                 } else {
@@ -127,6 +131,7 @@ impl RepoD<'_> {
             }
             // Superseded, whether or not our rename landed.
             Some(marker) if marker.version.n() > new.n() => {
+                self.hooks.observed(Observed::RenameSuperseded);
                 if ack_unproven() {
                     return Ok(UpdateOutcome::Updated(new));
                 }
@@ -138,12 +143,19 @@ impl RepoD<'_> {
             Some(marker)
                 if marker.kind == MarkerKind::Frozen && marker.version == *base =>
             {
+                self.hooks.observed(Observed::RenameFrozen);
                 Err(ProtocolError::Frozen)
             }
             // Ambiguous: leave the content to the sweep. Spurious only after a
             // lost reply on NFSv3/4.0.
-            _ if ack_unproven() => Ok(UpdateOutcome::Updated(new)),
-            _ => Ok(UpdateOutcome::NotOnLatestVersion),
+            _ => {
+                self.hooks.observed(Observed::RenameUnproven);
+                if ack_unproven() {
+                    Ok(UpdateOutcome::Updated(new))
+                } else {
+                    Ok(UpdateOutcome::NotOnLatestVersion)
+                }
+            }
         }
     }
 
@@ -350,6 +362,21 @@ mod tests {
         let v1 = version(1, V1);
         assert_eq!(update(root.path(), &hooks, V1, &v0).unwrap(), Updated(v1.clone()));
         assert_eq!(names(&repo_d(root.path())), current(&v1));
+        assert_eq!(hooks.observed(), [Observed::LinkExisted]);
+    }
+
+    #[test]
+    fn rename_after_another_commit_observes_the_lost_race() {
+        let root = tempfile::tempdir().unwrap();
+        let v0 = seed(root.path());
+        let other_root = root.path().to_path_buf();
+        let other_base = v0.clone();
+        let hooks = TestHooks::default().rename(move |from, to| {
+            update_plain(&other_root, OTHER, &other_base);
+            fs::rename(from, to)
+        });
+        assert_eq!(update(root.path(), &hooks, V1, &v0).unwrap(), NotOnLatestVersion);
+        assert_eq!(hooks.observed(), [Observed::RenameLostRace]);
     }
 
     #[test]
@@ -364,6 +391,7 @@ mod tests {
         assert_eq!(update(root.path(), &hooks, V1, &v0).unwrap(), Updated(v1.clone()));
         // Tidied up.
         assert_eq!(names(&dir), current(&v1));
+        assert_eq!(hooks.observed(), [Observed::RenameLanded]);
     }
 
     #[test]
@@ -427,6 +455,7 @@ mod tests {
         assert_eq!(update(root.path(), &hooks, V1, &v0).unwrap(), NotOnLatestVersion);
         let dir = repo_d(root.path());
         assert_eq!(names(&dir), set([v0.file_name(), latest(&v0), v1.file_name()]));
+        assert_eq!(hooks.observed(), [Observed::RenameUnproven]);
     }
 
     #[test]

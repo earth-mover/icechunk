@@ -70,13 +70,36 @@ pub enum Violation {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "warning")]
 pub enum Warning {
-    LostReplyConflict { id: Uuid },
-    AmbiguousErrorLanded { id: Uuid },
-    Stall { from_ms: i64, to_ms: i64 },
-    StartSkew { ms: i64 },
-    Starved { tag: String, longest_gap_ms: i64 },
-    SubdirStaging { count: u64 },
-    Stragglers { tag: String, count: u32 },
+    LostReplyConflict {
+        id: Uuid,
+    },
+    AmbiguousErrorLanded {
+        id: Uuid,
+    },
+    Stall {
+        from_ms: i64,
+        to_ms: i64,
+    },
+    StartSkew {
+        ms: i64,
+    },
+    Starved {
+        tag: String,
+        longest_gap_ms: i64,
+    },
+    SubdirStaging {
+        count: u64,
+    },
+    Stragglers {
+        tag: String,
+        count: u32,
+    },
+    /// Storage mode: attempts that failed reading or backing up `repo`, with
+    /// the first few messages.
+    AttemptFailures {
+        count: u64,
+        samples: Vec<String>,
+    },
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -92,6 +115,11 @@ pub struct Stats {
     pub acks: u64,
     pub conflicts: u64,
     pub errors: u64,
+    /// Storage mode: attempts that failed before their intent.
+    pub failures: u64,
+    /// Doubtful outcomes the commits resolved, by
+    /// [`observed_name`](crate::faults::observed_name).
+    pub observed: BTreeMap<String, u64>,
     /// Intents without an outcome.
     pub unresolved: u64,
     /// Storage mode: payloads on the rebuilt chain, the initial one included.
@@ -222,6 +250,39 @@ pub fn intents(history: &History, verdict: &mut Verdict) -> Intents {
     intents
 }
 
+/// How many [`AttemptFailures`](Warning::AttemptFailures) samples a report
+/// keeps.
+const FAILURE_SAMPLES: usize = 3;
+
+/// Counts the attempts that failed before their intent and warns about them.
+/// No intent was logged for them, so the other checks don't see them.
+pub fn check_failures(history: &History, verdict: &mut Verdict) {
+    let messages: Vec<&String> = history
+        .worker_records()
+        .filter_map(|(_, record)| match record {
+            Record::Failure { message, .. } => Some(message),
+            _ => None,
+        })
+        .collect();
+    let count = messages.len() as u64;
+    verdict.stats.failures = count;
+    if count > 0 {
+        let samples =
+            messages.into_iter().take(FAILURE_SAMPLES).map(String::clone).collect();
+        verdict.warnings.push(Warning::AttemptFailures { count, samples });
+    }
+}
+
+/// Counts the doubtful outcomes the workers' commits resolved: they show
+/// whether lost replies and races reached the protocol's ambiguous branches.
+pub fn count_observed(history: &History, verdict: &mut Verdict) {
+    for (_, record) in history.worker_records() {
+        if let Record::Observed { what, .. } = record {
+            *verdict.stats.observed.entry(what.clone()).or_default() += 1;
+        }
+    }
+}
+
 fn label(name: &LogName) -> String {
     match name.incarnation {
         Some(incarnation) => format!("{}.{}.{incarnation}", name.tag, name.slot),
@@ -320,6 +381,58 @@ mod tests {
             (worker("1"), vec![intent(2, a)]),
         ]);
         assert_one_harness(&verdict, a, "h.1.0");
+    }
+
+    #[test]
+    fn failures_are_counted_and_sampled_from_worker_logs_only() {
+        let failure =
+            |message: &str| Record::Failure { t_ms: 0, message: message.to_owned() };
+        let history = History {
+            logs: [
+                (
+                    worker("0"),
+                    vec![failure("a"), intent(1, Uuid::new_v4()), failure("b")],
+                ),
+                (worker("1"), vec![failure("c"), failure("d")]),
+                (name("supervisor", None), vec![failure("e")]),
+            ]
+            .into(),
+            ..History::default()
+        };
+        let mut verdict = Verdict::default();
+        check_failures(&history, &mut verdict);
+        assert_eq!(verdict.stats.failures, 4);
+        assert_eq!(
+            verdict.warnings,
+            [Warning::AttemptFailures {
+                count: 4,
+                samples: vec!["a".to_owned(), "b".to_owned(), "c".to_owned()],
+            }]
+        );
+
+        let mut verdict = Verdict::default();
+        check_failures(&History::default(), &mut verdict);
+        assert_eq!(verdict, Verdict::default());
+    }
+
+    #[test]
+    fn observed_outcomes_are_counted_from_worker_logs_only() {
+        let observed = |what: &str| Record::Observed { t_ms: 0, what: what.to_owned() };
+        let history = History {
+            logs: [
+                (worker("0"), vec![observed("a"), observed("b"), observed("a")]),
+                (name("supervisor", None), vec![observed("a")]),
+            ]
+            .into(),
+            ..History::default()
+        };
+        let mut verdict = Verdict::default();
+        count_observed(&history, &mut verdict);
+        assert_eq!(
+            verdict.stats.observed,
+            BTreeMap::from([("a".to_owned(), 2), ("b".to_owned(), 1)])
+        );
+        assert_eq!(verdict.warnings, []);
     }
 
     #[test]

@@ -237,7 +237,7 @@ pub(super) mod testing {
     };
 
     use crate::{
-        hooks::{Point, ProtocolHooks, Sabotage},
+        hooks::{Observed, Point, ProtocolHooks, Sabotage},
         names::{Hash, Marker, MarkerKind, Version},
     };
 
@@ -283,6 +283,7 @@ pub(super) mod testing {
     #[derive(Default)]
     pub(crate) struct TestHooks {
         reached: Mutex<Vec<Point>>,
+        observed: Mutex<Vec<Observed>>,
         at: Option<AtFn>,
         link: Option<PathFn>,
         rename: Option<PathFn>,
@@ -319,6 +320,10 @@ pub(super) mod testing {
 
         fn sabotaged(&self, sabotage: Sabotage) -> bool {
             self.sabotages.contains(&sabotage)
+        }
+
+        fn observed(&self, what: Observed) {
+            self.observed.lock().unwrap().push(what);
         }
     }
 
@@ -358,6 +363,10 @@ pub(super) mod testing {
 
         pub(crate) fn reached(&self) -> Vec<Point> {
             self.reached.lock().unwrap().clone()
+        }
+
+        pub(crate) fn observed(&self) -> Vec<Observed> {
+            self.observed.lock().unwrap().clone()
         }
     }
 

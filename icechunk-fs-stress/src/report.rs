@@ -149,13 +149,14 @@ impl Report {
         let stats = &self.verdict.stats;
         writeln!(
             out,
-            "stats: {} intents, {} acks, {} conflicts, {} errors, {} unresolved; \
-             chain length {}; {} external kills",
+            "stats: {} intents, {} acks, {} conflicts, {} errors, {} unresolved, \
+             {} failed before intent; chain length {}; {} external kills",
             stats.intents,
             stats.acks,
             stats.conflicts,
             stats.errors,
             stats.unresolved,
+            stats.failures,
             stats.chain_len,
             stats.external_kills
         )?;
@@ -163,6 +164,11 @@ impl Report {
             let faults: Vec<_> =
                 stats.faults.iter().map(|(kind, n)| format!("{kind} {n}")).collect();
             writeln!(out, "faults: {}", faults.join(", "))?;
+        }
+        if !stats.observed.is_empty() {
+            let observed: Vec<_> =
+                stats.observed.iter().map(|(what, n)| format!("{what} {n}")).collect();
+            writeln!(out, "observed: {}", observed.join(", "))?;
         }
         let violations: Vec<_> = self.verdict.violations.iter().map(violation).collect();
         list(out, "violations", &violations)?;
@@ -286,6 +292,11 @@ fn warning(w: &Warning) -> String {
                 "Stragglers: {tag} killed {count} workers still running at its deadline"
             )
         }
+        Warning::AttemptFailures { count, samples } => format!(
+            "AttemptFailures: {count} attempts failed reading or backing up repo, \
+             before their intent; first: {}",
+            samples.join("; ")
+        ),
     }
 }
 
@@ -327,6 +338,7 @@ mod tests {
             Warning::Starved { tag: "h".to_owned(), longest_gap_ms: 9 },
             Warning::SubdirStaging { count: 4 },
             Warning::Stragglers { tag: "h".to_owned(), count: 1 },
+            Warning::AttemptFailures { count: 2, samples: vec!["boom".to_owned()] },
         ]
     }
 
@@ -339,6 +351,7 @@ mod tests {
                 intents: 10,
                 acks: 7,
                 faults: [("pause".to_owned(), 2)].into(),
+                observed: [("rename_enoent.landed".to_owned(), 3)].into(),
                 ..Stats::default()
             },
         };
@@ -398,10 +411,19 @@ mod tests {
             "Starved",
             "SubdirStaging",
             "Stragglers",
+            "AttemptFailures",
         ] {
             assert!(failed.contains(kind), "{kind} missing from {failed}");
         }
-        for expected in ["storage", "1234 ms", "60s", "10 intents", "pause 2", "a note"] {
+        for expected in [
+            "storage",
+            "1234 ms",
+            "60s",
+            "10 intents",
+            "pause 2",
+            "rename_enoent.landed 3",
+            "a note",
+        ] {
             assert!(failed.contains(expected), "{expected} missing from {failed}");
         }
 

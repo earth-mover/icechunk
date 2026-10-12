@@ -3,7 +3,9 @@
 
 use std::sync::{Arc, Mutex, PoisonError};
 
-use icechunk_fs::fault_injection::{Point, ProtocolHooks, Sabotage as ProtocolSabotage};
+use icechunk_fs::fault_injection::{
+    Observed, Point, ProtocolHooks, Sabotage as ProtocolSabotage,
+};
 use rand::{RngExt as _, rngs::StdRng};
 
 use crate::{
@@ -30,10 +32,25 @@ impl FaultHooks {
 
     /// A failed append only lowers the fault count, so it never stops the fault.
     fn record(&self, action: FaultAction, point: PointName) {
-        let record = Record::Fault { t_ms: now_ms(), action, point };
-        if let Err(err) = self.log.append(&record) {
+        self.append(&Record::Fault { t_ms: now_ms(), action, point });
+    }
+
+    fn append(&self, record: &Record) {
+        if let Err(err) = self.log.append(record) {
             tracing::warn!("failed to log {record:?}: {err}");
         }
+    }
+}
+
+/// The name of an [`Observed`] in logs and reports.
+pub fn observed_name(what: Observed) -> &'static str {
+    match what {
+        Observed::LinkExisted => "link_existed",
+        Observed::RenameLanded => "rename_enoent.landed",
+        Observed::RenameLostRace => "rename_enoent.lost_race",
+        Observed::RenameSuperseded => "rename_enoent.superseded",
+        Observed::RenameFrozen => "rename_enoent.frozen",
+        Observed::RenameUnproven => "rename_enoent.unproven",
     }
 }
 
@@ -63,6 +80,13 @@ impl ProtocolHooks for FaultHooks {
             self.record(FaultAction::Sabotage, sabotage.point());
         }
         on
+    }
+
+    fn observed(&self, what: Observed) {
+        self.append(&Record::Observed {
+            t_ms: now_ms(),
+            what: observed_name(what).to_owned(),
+        });
     }
 }
 

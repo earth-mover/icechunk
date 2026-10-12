@@ -158,6 +158,20 @@ fs-stress-selftest parent=env("TMPDIR", "/tmp") *args:
   cargo run --profile {{profile}} -p icechunk-fs-stress -- selftest --root-parent "{{parent}}" "$@"
 
 [group('test')]
+[script]
+[doc("Build a fully static (musl) fs-stress binary to copy to other Linux hosts; prints its path and sha256")]
+fs-stress-static:
+  target=x86_64-unknown-linux-musl
+  cargo build --profile fs-stress-dist --target "$target" -p icechunk-fs-stress
+  bin="${CARGO_TARGET_DIR:-target}/$target/fs-stress-dist/fs-stress"
+  if ! file "$bin" | grep -q 'static.*linked'; then
+    echo "not a static binary: $(file "$bin")" >&2
+    exit 1
+  fi
+  echo "$bin"
+  sha256sum "$bin"
+
+[group('test')]
 [doc("Run the ignored icechunk-fs-stress tests, which spawn stress processes; not in CI")]
 fs-stress-process-tests:
   cargo nextest run --cargo-profile {{profile}} -p icechunk-fs-stress --run-ignored ignored-only

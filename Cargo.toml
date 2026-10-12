@@ -249,3 +249,9 @@ opt-level = 0
 # For convenience with cargo-samply
 [profile.samply]
 inherits = "bench"
+
+# The fs-stress binary shipped to other hosts (`just fs-stress-static`):
+# release speed, with file:line backtraces for panics on those hosts.
+[profile.fs-stress-dist]
+inherits = "release"
+debug = "line-tables-only"

@@ -41,6 +41,18 @@ pub enum Record {
         id: Uuid,
         result: OpResult,
     },
+    /// Storage mode: an attempt that failed reading or backing up `repo`,
+    /// before its intent.
+    Failure {
+        t_ms: i64,
+        message: String,
+    },
+    /// A doubtful outcome a commit resolved, named as in
+    /// [`observed_name`](crate::faults::observed_name).
+    Observed {
+        t_ms: i64,
+        what: String,
+    },
     /// A `Kill` is written before the kill.
     Fault {
         t_ms: i64,

@@ -165,6 +165,7 @@ pub async fn worker(
             }
             Attempt::Failed(err) => {
                 tracing::warn!("{err}");
+                log.append(&Record::Failure { t_ms: now_ms(), message: err })?;
                 ERROR_BACKOFF
             }
             Attempt::Logged(OpResult::Error { .. }) => ERROR_BACKOFF,
@@ -180,7 +181,7 @@ pub async fn worker(
 pub enum Attempt {
     /// `repo` changed while it was backed up; nothing was logged.
     Raced,
-    /// Reading or backing up `repo` failed; nothing was logged.
+    /// Reading or backing up `repo` failed; no intent was logged.
     Failed(String),
     /// The update's intent and this outcome were logged.
     Logged(OpResult),
@@ -374,8 +375,8 @@ mod tests {
         WorkerId { tag: "h".to_owned(), slot: slot.to_owned(), incarnation: 0 }
     }
 
-    /// Checks the log is `Start`, then intents each followed by its outcome,
-    /// and returns the `new` etag of every acknowledged update.
+    /// Checks the log is `Start`, then intents each followed by its outcome
+    /// (ignoring `Observed` records), and returns the `new` etag of every acknowledged update.
     fn acked(root: &RunRoot, who: &WorkerId) -> Vec<String> {
         let records =
             read_log(&root.worker_log(&who.tag, &who.slot, who.incarnation)).unwrap();
@@ -385,6 +386,11 @@ mod tests {
                 if *host == who.tag && *slot == who.slot && *pid == std::process::id()),
             "{start:?}"
         );
+        let ops: Vec<_> = ops
+            .iter()
+            .filter(|record| !matches!(record, Record::Observed { .. }))
+            .cloned()
+            .collect();
         assert_eq!(ops.len() % 2, 0, "{ops:?}");
         ops.chunks(2)
             .filter_map(|pair| match pair {

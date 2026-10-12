@@ -55,6 +55,34 @@ pub enum Sabotage {
     DeleteWinnerFile,
 }
 
+/// How a commit resolved a name operation whose outcome was in doubt, for
+/// [`ProtocolHooks::observed`]. Only lost replies and concurrent writers
+/// produce them, so a stress run can tell whether it reached these branches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(
+    not(feature = "fault-injection"),
+    expect(unreachable_pub, reason = "exported with the fault-injection feature")
+)]
+pub enum Observed {
+    /// The content `link` reported `EEXIST`: the name holds our bytes,
+    /// typically our own link retried after a lost reply.
+    LinkExisted,
+    /// The marker rename reported `ENOENT` and the listing shows our marker:
+    /// the rename landed and its reply was lost. Acknowledged.
+    RenameLanded,
+    /// The marker rename reported `ENOENT` and the listing shows another
+    /// writer's `N+1`. A conflict.
+    RenameLostRace,
+    /// The marker rename reported `ENOENT` and the listing shows a marker past
+    /// `N+1`: a conflict, whether or not our rename landed.
+    RenameSuperseded,
+    /// The marker rename reported `ENOENT` and the base is frozen.
+    RenameFrozen,
+    /// The marker rename reported `ENOENT` and the listing doesn't settle the
+    /// outcome. A conflict.
+    RenameUnproven,
+}
+
 /// The operation hooks are used only for the protocol's name operations: the
 /// content link, the marker rename and deletions of version files.
 #[cfg_attr(
@@ -86,6 +114,9 @@ pub trait ProtocolHooks: Send + Sync + fmt::Debug {
     fn sabotaged(&self, _sabotage: Sabotage) -> bool {
         false
     }
+
+    /// Called once for each doubtful outcome a commit resolves.
+    fn observed(&self, _what: Observed) {}
 }
 
 /// The hooks used in production: every method does the real operation.

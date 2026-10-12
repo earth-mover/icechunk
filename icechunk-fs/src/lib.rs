@@ -34,7 +34,7 @@ pub use storage::{
 #[cfg(all(unix, feature = "fault-injection"))]
 #[doc(hidden)]
 pub mod fault_injection {
-    pub use crate::hooks::{Point, ProtocolHooks, Sabotage};
+    pub use crate::hooks::{Observed, Point, ProtocolHooks, Sabotage};
 }
 
 /// Settings of a filesystem storage, see [`new_filesystem_storage_with`].

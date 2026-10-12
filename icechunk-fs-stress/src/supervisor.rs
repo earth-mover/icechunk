@@ -293,7 +293,8 @@ impl Pool<'_> {
         let elapsed = go_seen_at.elapsed().unwrap_or_default();
         Some(format!(
             "[{}] {}s/{}s  workers {} live, {} incarnations, {} external kills | \
-             {} intents, {} acks, {} conflicts, {} errors | faults: {} kills, {} pauses",
+             {} intents, {} acks, {} conflicts, {} errors, {} failed before intent | \
+             faults: {} kills, {} pauses",
             self.tag,
             elapsed.as_secs(),
             duration.as_secs(),
@@ -304,6 +305,7 @@ impl Pool<'_> {
             counts.acks,
             counts.conflicts,
             counts.errors,
+            counts.failures,
             counts.kills,
             counts.pauses,
         ))
@@ -388,6 +390,7 @@ pub struct ProgressCounts {
     pub acks: u64,
     pub conflicts: u64,
     pub errors: u64,
+    pub failures: u64,
     pub kills: u64,
     pub pauses: u64,
 }
@@ -399,6 +402,7 @@ impl ProgressCounts {
             Record::Outcome { result: OpResult::Ack { .. }, .. } => self.acks += 1,
             Record::Outcome { result: OpResult::Conflict, .. } => self.conflicts += 1,
             Record::Outcome { result: OpResult::Error { .. }, .. } => self.errors += 1,
+            Record::Failure { .. } => self.failures += 1,
             Record::Fault { action: FaultAction::Kill, .. } => self.kills += 1,
             Record::Fault { action: FaultAction::Pause, .. } => self.pauses += 1,
             _ => {}
@@ -525,7 +529,9 @@ mod tests {
         file.write_all(b"\n").unwrap();
         log.append(&fault(FaultAction::Kill)).unwrap();
         log.append(&outcome(OpResult::Error { message: "e".to_owned() })).unwrap();
-        let expected = ProgressCounts { conflicts: 1, kills: 1, errors: 1, ..expected };
+        log.append(&Record::Failure { t_ms: 4, message: "f".to_owned() }).unwrap();
+        let expected =
+            ProgressCounts { conflicts: 1, kills: 1, errors: 1, failures: 1, ..expected };
         assert_eq!(*progress.poll(), expected);
 
         progress.exited(&path);
