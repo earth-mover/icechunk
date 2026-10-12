@@ -34,7 +34,7 @@ A reader has to fetch headers and offset tables before it finds the bytes it wan
 With Icechunk, you parse each file once and record where every chunk's bytes are.
 Every reader after that skips the parsing.
 Reading a virtual chunk (a pointer to bytes in the original file) is one range request instead of many round trips.
-The files are not copied or changed.
+This makes the files cloud-optimized without duplicating or changing the originals.
 
 The GOES-16 satellite archive, 115 TB in 380,000 NetCDF files, became an 80 GB Icechunk repository this way ([blog post](https://www.earthmover.io/blog/virtual-zarr)).
 
