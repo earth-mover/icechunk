@@ -4,8 +4,8 @@ title: Languages
 
 # Languages
 
-Icechunk is a format with a Rust core.
-Most libraries bind to that core, so every one of them reads and writes the same repositories.
+Icechunk is an open format with a reference implementation in Rust.
+Most libraries bind to that implementation, so every one of them reads and writes the same repositories.
 Independent readers implement the [spec](reference/spec-v2-1.md) directly.
 
 ## Official
@@ -14,14 +14,14 @@ Maintained in the [icechunk repository](https://github.com/earth-mover/icechunk)
 
 | Language | Package | Access | Notes |
 |---|---|---|---|
-| Rust | [`icechunk`](https://crates.io/crates/icechunk) | Read and write | The core library. [Rust docs](reference/icechunk-rust.md) |
+| Rust | [`icechunk`](https://crates.io/crates/icechunk) | Read and write | The reference implementation. [Rust docs](reference/icechunk-rust.md) |
 | Python | [`icechunk`](https://pypi.org/project/icechunk) | Read and write | Works with Zarr Python, Xarray and Dask. [API reference](reference/index.md) |
 | JavaScript / TypeScript | [`@earthmover/icechunk`](https://www.npmjs.com/package/@earthmover/icechunk) | Read and write | Node.js through native bindings, the browser through WebAssembly. Use with zarrita. [JS docs](reference/icechunk-js.md) |
 
 ## Experimental
 
 Earthmover projects under the [earth-mover](https://github.com/earth-mover) GitHub organization.
-They bind to the Rust core but are not officially supported yet, and their APIs change without notice.
+They bind to the Rust implementation but are not officially supported yet, and their APIs change without notice.
 
 | Language | Package | Access | Notes |
 |---|---|---|---|
