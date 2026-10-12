@@ -45,7 +45,7 @@ use crate::{
         sweep::sweep,
     },
     version::sha256_hex,
-    write::{CreateOutcome, create_exclusive, write_new, write_staged},
+    write::{CreateOutcome, create_exclusive, sync_data_dirs, write_new, write_staged},
 };
 
 /// A [`Storage`] on a local or shared POSIX filesystem, safe for concurrent
@@ -132,9 +132,9 @@ impl FilesystemStorage {
         })
     }
 
-    /// Whether writes of data files `fsync` the file and its directory. On by
-    /// default; without it, a power loss can leave `repo` pointing at empty
-    /// files. The fsyncs of `repo` always run.
+    /// Whether data files are fsynced, and their directories before every
+    /// commit. On by default; without it, a power loss can leave `repo`
+    /// pointing at empty or missing files. The fsyncs of `repo` always run.
     pub fn with_fsync(self, fsync: bool) -> Self {
         Self { fsync, ..self }
     }
@@ -197,6 +197,7 @@ impl FilesystemStorage {
     /// repository from when this starts until every writer uses this backend.
     /// A rerun completes an interrupted migration.
     pub async fn migrate_legacy_repo(&self) -> StorageResult<MigrateOutcome> {
+        self.sync_data_dirs().await?;
         self.on_repo(|repo| repo.migrate()).await
     }
 
@@ -212,6 +213,16 @@ impl FilesystemStorage {
             let _ = self.repo_checked.set(());
         }
         Ok(())
+    }
+
+    /// The barrier before `repo` can name a new version: data files are
+    /// fsynced, but the names of data files only here. Skipped without fsync.
+    async fn sync_data_dirs(&self) -> StorageResult<()> {
+        if !self.fsync {
+            return Ok(());
+        }
+        let root = self.root.clone();
+        blocking(move || sync_data_dirs(&root).map_err(write_error)).await
     }
 
     /// Runs `f` on the `repo` protocol, on a blocking thread.
@@ -498,6 +509,7 @@ impl Storage for FilesystemStorage {
         self.warn_if_unsafe_settings(ctx.settings);
         match condition {
             PutCondition::Create if path == REPO => {
+                self.sync_data_dirs().await?;
                 self.on_repo(move |repo| {
                     Ok(match repo.create(&bytes)? {
                         RepoCreateOutcome::Created(version) => {
@@ -516,6 +528,7 @@ impl Storage for FilesystemStorage {
                 let base = parse_version(version)
                     .map_err(|err| protocol_error(&self.root, err))?;
                 self.check_repo_once().await?;
+                self.sync_data_dirs().await?;
                 self.on_repo(move |repo| {
                     Ok(match repo.conditional_update(&bytes, &base)? {
                         UpdateOutcome::Updated(version) => {

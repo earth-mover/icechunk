@@ -582,6 +582,90 @@ async fn an_interrupted_migration_must_be_rerun() {
     assert_eq!(get(&st).await.0, LEGACY);
 }
 
+const DATA_DIRS: [&str; 5] =
+    ["chunks", "manifests", "snapshots", "transactions", "overwritten"];
+
+/// Makes `root/name` a directory that can't be opened, so fsyncing it fails.
+/// `false` if this process opens it anyway (root): nothing to test.
+fn unopenable_dir(root: &Path, name: &str) -> bool {
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = root.join(name);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o000)).unwrap();
+    File::open(&dir).is_err()
+}
+
+fn assert_permission_denied<T: std::fmt::Debug>(result: StorageResult<T>) {
+    let err = result.err().unwrap();
+    assert!(
+        matches!(&err.kind, StorageErrorKind::IOError(err) if err.kind() == io::ErrorKind::PermissionDenied),
+        "{err}"
+    );
+}
+
+#[tokio_test]
+async fn a_commit_syncs_every_data_dir_before_the_protocol() {
+    for name in DATA_DIRS {
+        let dir = tempfile::tempdir().unwrap();
+        let st = storage(dir.path());
+        let v0 = create(&st, V0).await;
+        if !unopenable_dir(dir.path(), name) {
+            return;
+        }
+        assert_permission_denied(update(&st, b"v1", &v0).await);
+        assert_eq!(names(&dir.path().join("repo.d")), settled(&v0), "{name}");
+    }
+}
+
+#[tokio_test]
+async fn creation_syncs_the_data_dirs_before_the_protocol() {
+    let dir = tempfile::tempdir().unwrap();
+    let st = storage(dir.path());
+    if !unopenable_dir(dir.path(), "snapshots") {
+        return;
+    }
+    assert_permission_denied(
+        put_conditional(&st, "repo", V0, PutCondition::Create).await,
+    );
+    assert_eq!(names(dir.path()), BTreeSet::from(["snapshots".to_string()]));
+}
+
+#[tokio_test]
+async fn migration_syncs_the_data_dirs_before_the_protocol() {
+    let dir = tempfile::tempdir().unwrap();
+    let st = storage(dir.path());
+    std::fs::write(dir.path().join("repo"), LEGACY).unwrap();
+    if !unopenable_dir(dir.path(), "chunks") {
+        return;
+    }
+    assert_permission_denied(st.migrate_legacy_repo().await);
+    assert_eq!(
+        names(dir.path()),
+        BTreeSet::from(["chunks".to_string(), "repo".to_string()])
+    );
+    assert_eq!(std::fs::read(dir.path().join("repo")).unwrap(), LEGACY);
+}
+
+#[tokio_test]
+async fn without_fsync_there_is_no_data_dir_barrier() {
+    let dir = tempfile::tempdir().unwrap();
+    let st = storage(dir.path()).with_fsync(false);
+    std::fs::write(dir.path().join("repo"), LEGACY).unwrap();
+    if !unopenable_dir(dir.path(), "chunks") {
+        return;
+    }
+    assert_eq!(st.migrate_legacy_repo().await.unwrap(), MigrateOutcome::Migrated);
+    let (_, v0) = get(&st).await;
+    assert_updated(update(&st, b"v1", &v0).await);
+
+    let dir = tempfile::tempdir().unwrap();
+    let st = storage(dir.path()).with_fsync(false);
+    if !unopenable_dir(dir.path(), "snapshots") {
+        return;
+    }
+    create(&st, V0).await;
+}
+
 #[tokio_test]
 async fn a_frozen_repo_refuses_commits_until_unfrozen() {
     let dir = tempfile::tempdir().unwrap();

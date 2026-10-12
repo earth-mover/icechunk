@@ -459,6 +459,9 @@ fsyncs, always run, whatever the fsync setting. So do those in
   nothing: a listing can show `frozen.<N>.<h>` from before a commit from
   `latest.<N>.<h>` only if that name was used again, which invariant 1
   forbids.
+- **A committed version survives a crash whole** (with `fsync` on): its
+  data files are fsynced before the commit, and the data directory barrier
+  makes their names durable before the marker moves.
 - **Deleting a version never corrupts a read.** Version files are
   immutable, so a reader gets either the right bytes or an error. A read in
   progress may complete or fail with `ESTALE`, on any NFS version, and
@@ -554,6 +557,7 @@ What the algorithm needs from the filesystem, and where:
 | 4 | `unlink` by name | tidy-up, sweep | Garbage |
 | 5 | Listings that show only names that existed | reads, sweep | Lost update |
 | 6 | Durable `fsync` | the commit path, every write | Power-loss damage |
+| 7 | A directory fsync on one client persists entries other clients created | the data directory barrier | A marker naming missing data after a crash |
 
 No requirement involves a fresh read, a server timestamp, or a lock. All
 are documented, none is probed. Hard links are also used by the existing
@@ -618,15 +622,20 @@ client (verified on 3, 4.0 and 4.2), Lustre, GPFS, CephFS, JuiceFS.
   - **`copy_object`**: the backup is staged and renamed into place.
 
   The parent directory is fsynced after commit-critical renames and links.
-  When directory entries of data files are fsynced is open question 2. A
-  directory fsync failing with `EINVAL` or `ENOTSUP` is treated as
+  A directory fsync failing with `EINVAL` or `ENOTSUP` is treated as
   unsupported by the filesystem and warned about once. Any other error after
   a successful rename or link is reported as an I/O error, and the write may
   have landed.
-- **`fsync` on by default.** A storage setting disables it for data files,
-  for users who accept that a power loss can leave chunks and metadata
-  files empty. On NFS, `close()` already flushes and COMMITs, so the cost
-  there is small. The fsyncs of the commit path, of creation (the stub
+- **Data directory barrier.** Data files' directory entries are not fsynced
+  per write. Instead, before every `put_object_conditional` on `repo` and
+  before `migrate_legacy_repo`, the backend fsyncs the root and its
+  `chunks`, `manifests`, `snapshots`, `transactions` and `overwritten`
+  directories, skipping missing ones. This covers files written by any
+  process. An error fails the call before the protocol starts.
+- **`fsync` on by default.** A storage setting disables it, and the
+  barrier, for data files, for users who accept that a power loss can
+  leave chunks and metadata files empty or missing. On NFS, `close()`
+  already flushes and COMMITs, so the cost there is small. The fsyncs of the commit path, of creation (the stub
   included), of freeze and of unfreeze always run: a marker naming
   truncated bytes is the one state nothing recovers from.
 - **IC1 repos are refused.** Opening or creating an IC1 repo with this
@@ -772,9 +781,10 @@ What an implementation of this section needs beyond the algorithm.
   root's `<name>.staging.<id>` files of other objects; dead version files go
   whatever their age.
 - **Settings.** `stale_after` is removed. `fsync` keeps its meaning for
-  data files; the fsyncs in the commit path, in `build_repo_d`, in
-  `write_stub`, in `freeze` and in `unfreeze` always run. No compatibility
-  obligation: no release has shipped `FilesystemStorage`.
+  data files and the barrier; the fsyncs in the commit path, in
+  `build_repo_d`, in `write_stub`, in `freeze` and in `unfreeze` always
+  run. No compatibility obligation: no release has shipped
+  `FilesystemStorage`.
 - **Removed from the crate:** the lock, ticket, lockinfo and probe code,
   lock sweeping, `STALE_AFTER`, the fresh-read generation fast path and
   the fault-injection points tied to the lock steps. Kept: staged and
@@ -1087,21 +1097,7 @@ permission on the repo root.
 
 1. **SMB.** Not analysed: Linux cifs hard-link support, lease breaks on
    rename, Samba vs Windows servers.
-2. **Durability of data files' directory entries.** A chunk, manifest,
-   snapshot or transaction log is only durable once its *directory entry* is,
-   and that entry must be durable before `repo` points at the file. Backups
-   in `overwritten/` are data files in the same sense: their directory entry
-   isn't fsynced either.
-   - Fsyncing the parent directory after every write is simple and correct,
-     but costs one journal commit per chunk on local disks. That caps write
-     throughput at a few thousand chunks per second.
-   - Fsyncing each data directory once before the commit is much cheaper, but
-     chunks are often written by other processes (e.g. dask workers) than the
-     one that commits. Each writer process would have to sync before handing
-     its changes over, and the API has no hook for that today.
-
-   On NFS this is free either way, because the server makes metadata
-   operations durable before replying.
+2. **Requirement 7** is not verified on network filesystems.
 3. **Leftovers outside the repo root.** GC doesn't sweep staging files
    outside the repo root: of backups in `overwritten/`, of the initial
    snapshot and transaction log, and of an `EEXIST` fallback in any

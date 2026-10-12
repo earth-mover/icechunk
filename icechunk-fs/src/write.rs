@@ -6,7 +6,12 @@ use std::{
     sync::atomic::{AtomicBool, Ordering},
 };
 
-use crate::{path::staging_path, read::read_all};
+use icechunk_format::{
+    CHUNKS_FILE_PATH, MANIFESTS_FILE_PATH, OVERWRITTEN_FILES_PATH, SNAPSHOTS_FILE_PATH,
+    TRANSACTION_LOGS_FILE_PATH,
+};
+
+use crate::{path::staging_path, read::read_all, storage::is_missing};
 
 /// Closes `file` and returns the error from `close(2)`, which dropping a
 /// `File` ignores. On NFS, write errors such as running out of space or quota
@@ -153,6 +158,26 @@ pub(crate) fn write_new(target: &Path, bytes: &[u8], fsync: bool) -> io::Result<
         }
         result => result,
     }
+}
+
+const DATA_DIRS: [&str; 5] = [
+    CHUNKS_FILE_PATH,
+    MANIFESTS_FILE_PATH,
+    SNAPSHOTS_FILE_PATH,
+    TRANSACTION_LOGS_FILE_PATH,
+    OVERWRITTEN_FILES_PATH,
+];
+
+/// Fsyncs `root` and its data directories, making the names of data files
+/// durable, whichever process wrote them, before `repo` can point at them.
+/// Missing directories are skipped.
+pub(crate) fn sync_data_dirs(root: &Path) -> io::Result<()> {
+    std::iter::once(root.to_path_buf())
+        .chain(DATA_DIRS.iter().map(|dir| root.join(dir)))
+        .try_for_each(|dir| match fsync_dir(&dir) {
+            Err(err) if is_missing(&err) => Ok(()),
+            result => result,
+        })
 }
 
 /// Fsyncs `dir`, making renames and links in it durable. Filesystems that

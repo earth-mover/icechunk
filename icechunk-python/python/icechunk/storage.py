@@ -110,10 +110,10 @@ def filesystem_storage(path: str, *, fsync: bool = True) -> FilesystemStorage:
     path: str
         The path to the root of the repository.
     fsync: bool
-        Whether to fsync data files and their directories after writes. Turning
-        it off risks losing writes after an OS crash or power loss; it never
-        affects safety between concurrent writers. The fsyncs of commits always
-        run.
+        Whether to fsync data files after writes, and their directories before
+        each commit. Turning it off risks losing writes after an OS crash or
+        power loss; it never affects safety between concurrent writers. The
+        fsyncs of the commit itself always run.
     """
     return Storage.new_filesystem(path, fsync=fsync)
 

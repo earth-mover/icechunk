@@ -354,7 +354,7 @@ Icechunk can also store a repository in a filesystem, given the path to the loca
 - **Conditional writes.** Repositories whose config disables `unsafe_use_conditional_create` or `unsafe_use_conditional_update` log a warning; the setting is ignored and the backend always uses its own conditional writes.
 - **Garbage collection** also deletes the leftovers of `filesystem_storage`'s commit protocol: versions of `repo` that are no longer current, whatever their age, and files of crashed or abandoned writes and creations (`repo.d/stage.*`, `repo.d.tmp.*`, `repo.stub.*` and staging files in the top-level directory) older than the `delete_object_older_than` cutoff, but never younger than 24 hours. `GCSummary.storage_leftovers_deleted` counts them.
 
-`filesystem_storage` takes one optional setting, `fsync` (default `True`): whether to fsync data files and their directories after writes. Turning it off risks losing writes after an OS crash or power loss; it never affects safety between concurrent writers. The fsyncs of commits always run.
+`filesystem_storage` takes one optional setting, `fsync` (default `True`): whether to fsync data files after writes, and their directories before each commit. Turning it off risks losing writes after an OS crash or power loss; it never affects safety between concurrent writers. The fsyncs of the commit itself always run. On NFS, crash safety also needs exports with the `sync` option (the default).
 
 ```python
 icechunk.filesystem_storage("/path/to/my/dataset", fsync=False)
