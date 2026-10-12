@@ -51,9 +51,10 @@ With this technique, Earthmover turned the 115 TB GOES-16 satellite archive (380
 
 ### Mix Virtual and Native Chunks {#mix-virtual-and-native}
 
-One array can hold both.
-Reference the archive where it sits, then append new data, fix a bad chunk, or add a downsampled level as native chunks.
-Readers see one array and never need to know which is which.
+You don't have to choose between virtual and native chunks.
+One repository, and even one array, can mix both.
+Reference an archive where it sits, then append new data, fix a bad chunk, or add downsampled levels as native chunks.
+Anyone reading the repository sees ordinary Zarr and never needs to know which kind of chunk they are reading.
 
 </div>
 <div class="benefit-figure">
