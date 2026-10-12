@@ -10,7 +10,7 @@ Independent readers implement the [spec](reference/spec-v2-1.md) directly.
 
 ## Official
 
-Maintained in the [icechunk repository](https://github.com/earth-mover/icechunk) and supported by Earthmover.
+Maintained and released from the main [icechunk repository](https://github.com/earth-mover/icechunk).
 
 | Language | Package | Access | Notes |
 |---|---|---|---|
@@ -20,7 +20,7 @@ Maintained in the [icechunk repository](https://github.com/earth-mover/icechunk)
 
 ## Experimental
 
-Earthmover projects under the [earth-mover](https://github.com/earth-mover) GitHub organization.
+Bindings that live in their own repositories, linked below.
 They bind to the Rust implementation but are not officially supported yet, and their APIs change without notice.
 
 | Language | Package | Access | Notes |
@@ -30,7 +30,7 @@ They bind to the Rust implementation but are not officially supported yet, and t
 
 ## Community
 
-Built and maintained outside Earthmover.
+Built and maintained by the community.
 
 | Language | Project | Access | Notes |
 |---|---|---|---|
