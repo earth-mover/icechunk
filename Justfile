@@ -444,6 +444,13 @@ gen-expired-fixtures *args:
   uv run --with third-wheel third-wheel sync --rename "icechunk==1.1.21=icechunk_v1" --rename "icechunk==2.0.5=icechunk_v2"
   uv run python tests/data_generation/generate_expired_repos.py "$@"
 
+[group('python')]
+[script]
+[doc("Write can_read_old fixtures with the working copy, e.g. `just gen-can-read-old-fixtures v2-fs`; refuses to overwrite")]
+gen-can-read-old-fixtures +sets:
+  cd icechunk-python
+  uv run python tests/test_can_read_old.py {{sets}}
+
 [group('docs')]
 [script]
 [doc("Start MkDocs dev server with live reload")]

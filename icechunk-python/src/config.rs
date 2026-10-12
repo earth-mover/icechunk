@@ -3027,6 +3027,50 @@ impl PyFilesystemStorage {
         let filesystem = Arc::clone(&self.filesystem);
         pyo3_async_runtimes::tokio::future_into_py(py, migrate_legacy_repo(filesystem))
     }
+
+    fn freeze_repo(&self, py: Python<'_>) -> PyResult<bool> {
+        let filesystem = Arc::clone(&self.filesystem);
+        py.detach(move || {
+            pyo3_async_runtimes::tokio::get_runtime().block_on(freeze_repo(filesystem))
+        })
+    }
+
+    fn freeze_repo_async<'py>(
+        &self,
+        py: Python<'py>,
+    ) -> PyResult<Bound<'py, pyo3::PyAny>> {
+        let filesystem = Arc::clone(&self.filesystem);
+        pyo3_async_runtimes::tokio::future_into_py(py, freeze_repo(filesystem))
+    }
+
+    fn unfreeze_repo(&self, py: Python<'_>) -> PyResult<bool> {
+        let filesystem = Arc::clone(&self.filesystem);
+        py.detach(move || {
+            pyo3_async_runtimes::tokio::get_runtime().block_on(unfreeze_repo(filesystem))
+        })
+    }
+
+    fn unfreeze_repo_async<'py>(
+        &self,
+        py: Python<'py>,
+    ) -> PyResult<Bound<'py, pyo3::PyAny>> {
+        let filesystem = Arc::clone(&self.filesystem);
+        pyo3_async_runtimes::tokio::future_into_py(py, unfreeze_repo(filesystem))
+    }
+}
+
+#[cfg(unix)]
+async fn freeze_repo(filesystem: Arc<storage::FilesystemStorage>) -> PyResult<bool> {
+    let outcome =
+        filesystem.freeze_repo().await.map_err(PyIcechunkStoreError::StorageError)?;
+    Ok(matches!(outcome, storage::FreezeOutcome::Frozen(_)))
+}
+
+#[cfg(unix)]
+async fn unfreeze_repo(filesystem: Arc<storage::FilesystemStorage>) -> PyResult<bool> {
+    let outcome =
+        filesystem.unfreeze_repo().await.map_err(PyIcechunkStoreError::StorageError)?;
+    Ok(matches!(outcome, storage::UnfreezeOutcome::Unfrozen(_)))
 }
 
 #[cfg(unix)]

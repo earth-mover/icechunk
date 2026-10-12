@@ -3318,6 +3318,51 @@ class FilesystemStorage(Storage):
             True if this call converted the repository, False if there was
             nothing to convert.
         """
+    def freeze_repo(self) -> bool:
+        """Refuse changes to the repository until `unfreeze_repo`.
+
+        The repository stays readable, so a frozen repository can be copied or
+        exported consistently. Every change to it fails with an error.
+
+        Returns
+        -------
+        bool
+            True if this call froze the repository, False if it already was
+            frozen. Only True proves that the repository is frozen: False comes
+            from a directory listing that can lag, so an export must not rely
+            on it.
+        """
+    async def freeze_repo_async(self) -> bool:
+        """Refuse changes to the repository until `unfreeze_repo` (async version).
+
+        See `freeze_repo`.
+
+        Returns
+        -------
+        bool
+            True if this call froze the repository, False if it already was
+            frozen.
+        """
+    def unfreeze_repo(self) -> bool:
+        """Accept changes to a frozen repository again.
+
+        Returns
+        -------
+        bool
+            True if this call unfroze the repository, False if it wasn't
+            frozen. False comes from a directory listing that can lag.
+        """
+    async def unfreeze_repo_async(self) -> bool:
+        """Accept changes to a frozen repository again (async version).
+
+        See `unfreeze_repo`.
+
+        Returns
+        -------
+        bool
+            True if this call unfroze the repository, False if it wasn't
+            frozen.
+        """
 
 @final
 class StorageObjectInfo:

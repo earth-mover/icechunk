@@ -1061,8 +1061,8 @@ impl JsStorage {
         }
     }
 
-    /// Stops every commit to a repository of `newFilesystem` storage, leaving it
-    /// readable, for example to copy it consistently. Commits fail with a
+    /// Stops every change to a repository of `newFilesystem` storage, leaving it
+    /// readable, for example to copy it consistently. Changes fail with a
     /// "repository is frozen" error until `unfreezeRepo`. Resolves to true if
     /// this call froze it, false if it already was frozen. Only true proves
     /// that this call changed the repository: false comes from a directory
@@ -1079,11 +1079,10 @@ impl JsStorage {
         Err(only_filesystem("freezeRepo"))
     }
 
-    /// Accepts commits again after `freezeRepo`. Writers based on the frozen
-    /// version get one conflict. Resolves to true if this call unfroze the
-    /// repository, false if it wasn't frozen. Only true proves that this call
-    /// changed the repository: false comes from a directory listing that can
-    /// lag.
+    /// Accepts changes again after `freezeRepo`. Resolves to true if this call
+    /// unfroze the repository, false if it wasn't frozen. Only true proves that
+    /// this call changed the repository: false comes from a directory listing
+    /// that can lag.
     #[napi]
     pub async fn unfreeze_repo(&self) -> napi::Result<bool> {
         #[cfg(unix)]

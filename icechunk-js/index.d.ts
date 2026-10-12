@@ -88,8 +88,8 @@ export declare class Storage {
    */
   static newFilesystem(path: string): Promise<Storage>
   /**
-   * Stops every commit to a repository of `newFilesystem` storage, leaving it
-   * readable, for example to copy it consistently. Commits fail with a
+   * Stops every change to a repository of `newFilesystem` storage, leaving it
+   * readable, for example to copy it consistently. Changes fail with a
    * "repository is frozen" error until `unfreezeRepo`. Resolves to true if
    * this call froze it, false if it already was frozen. Only true proves
    * that this call changed the repository: false comes from a directory
@@ -97,11 +97,10 @@ export declare class Storage {
    */
   freezeRepo(): Promise<boolean>
   /**
-   * Accepts commits again after `freezeRepo`. Writers based on the frozen
-   * version get one conflict. Resolves to true if this call unfroze the
-   * repository, false if it wasn't frozen. Only true proves that this call
-   * changed the repository: false comes from a directory listing that can
-   * lag.
+   * Accepts changes again after `freezeRepo`. Resolves to true if this call
+   * unfroze the repository, false if it wasn't frozen. Only true proves that
+   * this call changed the repository: false comes from a directory listing
+   * that can lag.
    */
   unfreezeRepo(): Promise<boolean>
   /**

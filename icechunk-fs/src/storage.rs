@@ -63,7 +63,7 @@ use crate::{
 /// - Repositories in the single-file format of `new_local_filesystem_storage`
 ///   and older Icechunk versions are refused until converted, once, with
 ///   [`FilesystemStorage::migrate_legacy_repo`].
-/// - A frozen repository ([`FilesystemStorage::freeze_repo`]) refuses commits
+/// - A frozen repository ([`FilesystemStorage::freeze_repo`]) refuses changes
 ///   until it is unfrozen.
 /// - The filesystem must provide hard links, atomic rename by name and
 ///   exclusive directory rename.
@@ -103,7 +103,7 @@ pub enum FreezeOutcome {
 /// What [`FilesystemStorage::unfreeze_repo`] did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UnfreezeOutcome {
-    /// The repository accepts commits again, on top of this new version
+    /// The repository accepts changes again, on top of this new version
     /// holding the frozen version's bytes.
     Unfrozen(VersionInfo),
     /// It wasn't frozen.
@@ -151,7 +151,7 @@ impl FilesystemStorage {
         &self.root
     }
 
-    /// Stops every commit: renames the marker of the current version to a
+    /// Stops every change: renames the marker of the current version to a
     /// name no commit renames from. The current version stays readable, so a
     /// frozen repository can be copied or exported consistently. Writers get
     /// a [`StorageErrorKind::RepositoryFrozen`] error.
@@ -172,7 +172,7 @@ impl FilesystemStorage {
         .await
     }
 
-    /// Accepts commits again, on top of a new version holding the frozen
+    /// Accepts changes again, on top of a new version holding the frozen
     /// version's bytes: writers based on the frozen version get one conflict.
     ///
     /// Only [`UnfreezeOutcome::Unfrozen`] proves that this call unfroze the

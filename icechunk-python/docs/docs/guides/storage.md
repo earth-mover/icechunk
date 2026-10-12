@@ -348,7 +348,7 @@ Icechunk can also store a repository in a filesystem, given the path to the loca
 - **Every writer.** Concurrent-writer safety holds only if every writer of the repository uses `filesystem_storage`. `local_filesystem_storage` and older Icechunk versions overwrite `repo` without the protocol `filesystem_storage` relies on: they must never write to its repositories. After such a write, `filesystem_storage` refuses to open the repository, which then needs manual recovery. The refusal happens at the first use of `repo` by each storage instance (opening a repository creates one), so an overwrite while an instance is already in use goes unnoticed until the next instance.
 - **Icechunk 1 repositories** are refused. See [Switching an existing repo](#switching-an-existing-repo).
 - **Spurious conflicts.** On NFSv3 or NFSv4.0, a commit can be reported as a conflict (or a tag or branch creation as "already exists") although it succeeded. This needs the reply to the commit's final rename to be lost, the server's duplicate-request cache to miss the retry, and either another writer to commit within milliseconds or the directory listing to lag. The repository stays consistent and no data is lost. After a conflict error the commit may already have landed: look for it in the branch history ([`Repository.ancestry`](../reference/index.md#icechunk.Repository.ancestry), for example by its message) before retrying it.
-- **Frozen repositories.** A repository can be frozen, for example to copy it consistently, from Rust or JavaScript. While it is frozen, it stays readable and every write that updates the repository fails with a [`StorageError`](../reference/index.md#icechunk.StorageError) of kind `repository-frozen` ([`ErrorKind.REPOSITORY_FROZEN`](../reference/index.md#icechunk.ErrorKind)), until it is unfrozen. Python has no API to freeze or unfreeze a repository yet.
+- **Frozen repositories.** A repository can be [frozen](#freezing-a-repo), for example to copy it consistently. While it is frozen, it stays readable and every change to the repository fails with a [`StorageError`](../reference/index.md#icechunk.StorageError) of kind `repository-frozen` ([`ErrorKind.REPOSITORY_FROZEN`](../reference/index.md#icechunk.ErrorKind)), until it is unfrozen.
 - **Symlinks.** Reads follow symlinks inside the repository, but listings don't. Garbage collection never deletes objects reached through a symlink.
 - **Listing order** is unspecified.
 - **Conditional writes.** Repositories whose config disables `unsafe_use_conditional_create` or `unsafe_use_conditional_update` log a warning; the setting is ignored and the backend always uses its own conditional writes.
@@ -381,6 +381,19 @@ Also note:
 - Converting a repository back to the single-file format, or copying it to an object store, isn't supported yet.
 - A repository config that disables conditional writes only logs a harmless warning; see **Conditional writes** in [Requirements and limits](#requirements-and-limits-of-filesystem_storage).
 - Pickled storage carries the absolute root path. With Dask or distributed, every worker must see the filesystem at the same path.
+
+#### Freezing a repo
+
+[`FilesystemStorage.freeze_repo`](../reference/storage.md#icechunk.storage.FilesystemStorage.freeze_repo) stops all changes to a `filesystem_storage` repository while keeping it readable, for example to copy the directory consistently. While it is frozen, every update of the repository (commits, creating or deleting branches and tags, saving the config) fails with an error saying the repository is frozen. [`FilesystemStorage.unfreeze_repo`](../reference/storage.md#icechunk.storage.FilesystemStorage.unfreeze_repo) accepts changes again.
+
+```python
+storage = icechunk.filesystem_storage("/path/to/my/dataset")
+assert storage.freeze_repo()
+# copy /path/to/my/dataset
+storage.unfreeze_repo()
+```
+
+Both return `True` if the call changed the repository.
 
 ### HTTP Storage
 

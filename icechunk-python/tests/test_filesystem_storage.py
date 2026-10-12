@@ -124,6 +124,38 @@ def test_migrate_filesystem_repo_changes_nothing(tmp_path: Path) -> None:
     np.testing.assert_array_equal(read_array(Repository.open(storage)), np.arange(4))
 
 
+def test_freeze_repo(tmp_path: Path) -> None:
+    storage = filesystem_storage(str(tmp_path))
+    repo = Repository.create(storage)
+
+    assert storage.freeze_repo()
+    assert not storage.freeze_repo()
+    with pytest.raises(StorageError, match="frozen"):
+        write_array(repo)
+
+    assert storage.unfreeze_repo()
+    assert not storage.unfreeze_repo()
+    repo = Repository.open(storage)
+    write_array(repo)
+    np.testing.assert_array_equal(read_array(repo), np.arange(4))
+
+
+async def test_freeze_repo_async(tmp_path: Path) -> None:
+    storage = filesystem_storage(str(tmp_path))
+    repo = await Repository.create_async(storage)
+
+    assert await storage.freeze_repo_async()
+    assert not await storage.freeze_repo_async()
+    with pytest.raises(StorageError, match="frozen"):
+        write_array(repo)
+
+    assert await storage.unfreeze_repo_async()
+    assert not await storage.unfreeze_repo_async()
+    repo = await Repository.open_async(storage)
+    write_array(repo)
+    np.testing.assert_array_equal(read_array(repo), np.arange(4))
+
+
 def test_local_filesystem_storage_refuses_filesystem_format(tmp_path: Path) -> None:
     write_array(Repository.create(filesystem_storage(str(tmp_path))))
 

@@ -46,7 +46,7 @@ In-memory storage works on all platforms. The following backends are available o
 - **HTTP** — `Storage.newHttp(baseUrl, config?)`
 - **Local Filesystem** — `Storage.newLocalFilesystem(path)`
 - **Filesystem** (safe for concurrent writers, experimental, Unix only) — `Storage.newFilesystem(path)`
-  - Its `migrateLegacyRepo()` converts a repository written by `newLocalFilesystem` (needed before opening it), and `freezeRepo()`/`unfreezeRepo()` stop and resume commits. Each resolves to whether it changed the repository.
+  - Its `migrateLegacyRepo()` converts a repository written by `newLocalFilesystem` (needed before opening it), and `freezeRepo()`/`unfreezeRepo()` stop and resume changes to the repository. Each resolves to whether it changed the repository.
 
 #### Fetch Storage (read-only, works everywhere)
 
