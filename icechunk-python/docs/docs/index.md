@@ -10,7 +10,7 @@ title: Icechunk - Open-source, high-performance array format and library for sci
 
 Icechunk works the same whether you store gigabytes on a laptop, terabytes in a bucket, or reference petabytes of existing files from a repository of a few gigabytes.
 
-Reads stay fast at every size: Icechunk downloads only the chunks you need, many of them in parallel.
+Reads stay fast at every size: Icechunk fetches only the chunks you need and downloads them in parallel.
 
 NASA's virtual stores feasibility report recommends adopting Icechunk ([report](https://nasa-impact.github.io/virtual-stores-feasibility-report/recommendations.html)), and NOAA's National Weather Service has adopted it for its CIRRUS cloud data platform ([blog post](https://www.earthmover.io/blog/icechunk-at-nws-cirrus)).
 
