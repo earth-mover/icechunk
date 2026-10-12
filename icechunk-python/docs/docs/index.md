@@ -36,7 +36,7 @@ Every reader after that skips the parsing.
 Reading a virtual chunk (a pointer to bytes in the original file) is one range request instead of many round trips.
 This makes the files cloud-optimized without duplicating or changing the originals.
 
-The GOES-16 satellite archive, 115 TB in 380,000 NetCDF files, became an 80 GB Icechunk repository this way ([blog post](https://www.earthmover.io/blog/virtual-zarr)).
+Earthmover virtualized the 115 TB GOES-16 satellite archive (380,000 NetCDF files) into an Icechunk repository of about 80 GB ([blog post](https://www.earthmover.io/blog/virtual-zarr)).
 
 [:octicons-arrow-right-24: Virtual datasets](guides/virtual.md)
 
