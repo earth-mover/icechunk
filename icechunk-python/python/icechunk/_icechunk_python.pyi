@@ -3117,9 +3117,7 @@ class AzureRefreshableCredential:
             cls, bearer: str, *, expires_after: datetime.datetime | None = None
         ) -> AzureRefreshableCredential.BearerToken: ...
 
-# The annotation of azure_refreshable_credentials needs this union: see
-# https://github.com/earth-mover/icechunk/issues/2137.
-type _AnyAzureRefreshableCredential = (  # noqa: PYI047
+type _AnyAzureRefreshableCredential = (
     AzureRefreshableCredential.AccessKey
     | AzureRefreshableCredential.SasToken
     | AzureRefreshableCredential.BearerToken
@@ -3193,7 +3191,7 @@ class AzureCredentials:
         def __new__(
             cls,
             pickled_function: bytes,
-            current: AzureRefreshableCredential | None = None,
+            current: _AnyAzureRefreshableCredential | None = None,
         ) -> AzureCredentials.Refreshable: ...
 
 type _AnyAzureCredential = (
