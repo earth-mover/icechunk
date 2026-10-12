@@ -908,6 +908,181 @@ What an implementation of this section needs beyond the algorithm.
       why protocol and staging files are created without `O_EXCL` (open
       question 8).
 
+## Follow-up: a read-only mirror at `repo`
+
+Not part of the first implementation. Clients on other backends read
+`repo`: HTTP storage serving the directory, an S3 gateway in front of the
+filesystem, the `object_store` filesystem backend. With the stub they get
+an error. With the mirror, `repo` holds a copy of the current version that
+they can read but not write.
+
+### Contents
+
+The RepoInfo of version `(N, h)`, rendered by core with:
+
+- availability at least `ReadOnly`: `Online` and `ReadOnly` become
+  `ReadOnly`, `Offline` stays `Offline`;
+- a reason saying that the repository uses the filesystem format and is
+  written with `filesystem_storage`, followed by the repo's own reason, if
+  any;
+- the repo metadata key `icechunk.filesystem_mirror`, with value
+  `{"version": N, "hash": "<h>"}`;
+- no ops-log entry. Everything else is as in `<N>.<h>`.
+
+Icechunk checks the status before updating a RepoInfo (since 2.0), except
+in the calls listed under [Not defended against](#not-defended-against), so
+other backends refuse to write through the mirror.
+
+### Setting
+
+`filesystem_mirror` in the repo config, ignored by every other backend:
+
+| Value | `repo` |
+| --- | --- |
+| `Disabled` (default) | The stub |
+| `Sync` | The mirror, published before the update returns |
+| `Async` | The mirror, published by a background task after the update returns |
+
+Async is best effort: a process that exits before the task runs leaves the
+mirror behind. When the mirror is disabled, `repo` is the stub, never a
+copy that nobody updates: an old version that opens without complaint is
+worse than an error.
+
+### Not atomic
+
+No name operation changes two names at once, and the commit's compare lives
+in the source name of the marker, which a fixed name like `repo` can't
+carry. The mirror is replaced after the commit and is eventually consistent
+with `repo.d`.
+
+### Publishing
+
+Core renders the mirror and runs the loop; the backend only puts bytes in
+place:
+
+```rust
+// Core. After an update, errors are logged, never returned: the update has
+// already landed. `Repository::publish_mirror` returns them.
+fn publish_mirror() {
+    for _ in 0..4 {
+        let (info, version) = fetch_repo_info();       // from repo.d, bypassing the cache
+        let bytes = match info.config().filesystem_mirror {
+            Disabled => None,                          // the stub
+            Sync | Async => Some(render_mirror(info, version)),
+        };
+        match storage.publish_repo(version, bytes) {
+            Superseded => continue,
+            Current | Unsupported => return,
+        }
+    }
+}
+
+// FilesystemStorage. Replaces `repo` with the stub (None) or a mirror of
+// version `of`. Never reads `repo`: whatever is there is replaced. Never a
+// safety input. Superseded tells core to render the newer version and call again.
+fn publish_repo(of: (N, h), bytes: Option<Bytes>) -> Current | Superseded | Io {
+    let stage = "repo.mirror.<uuid>";
+    write_fsync_close(stage, bytes.unwrap_or(stub))?;
+    match rename(stage, "repo") {                      // may silly-rename `repo`, see below
+        Ok => fsync_dir(root),
+        Err(e) => { unlink(stage); return Io(e) }
+    }
+    nudge("repo.d");
+    match highest(list_markers()?) {
+        Some((_, n, x)) if (n, x) == of => Current,    // latest or frozen: the bytes are the same
+        _ => Superseded,                               // moved on, or a torn listing
+    }
+}
+```
+
+`publish_mirror` runs:
+
+- after a successful repo-info update whose new or base config enables the
+  mirror, so disabling it restores the stub;
+- after creating a repo whose config enables it;
+- in `Repository::publish_mirror`, the explicit repair.
+
+Freeze and unfreeze don't publish: the bytes don't change. GC doesn't
+either; its repo-info updates publish like any other. Opening a repo
+doesn't, because readers may not have write permission.
+`migrate_legacy_repo` ends with the stub; if the repo's config enables the
+mirror, the next update or `publish_mirror` publishes it.
+
+### Convergence
+
+Take the last rename over `repo` to land. Its publisher listed afterwards
+and saw the version it published, or it would have published again. A
+listing never shows the future, so if that listing was fresh, `repo` copies
+the current version, and any later update publishes again. The mirror stays
+behind only when a writer dies between its update and that listing, when
+that listing lags, or in async mode when the process exits first. The next
+update or `publish_mirror` fixes all three.
+
+### What readers of `repo` see
+
+- Never a torn file: the copy is staged and renamed into place.
+- Briefly, an older version than one they saw before, when a slow publisher
+  lands after a newer one, until its listing sends it round again.
+- Briefly, no `repo`: if a process on the publishing NFS client has `repo`
+  open, the client splits the rename into a silly rename and a rename, and
+  a kill between the two leaves no `repo` until the next publish.
+- References to objects GC has deleted, like any reader holding an old
+  RepoInfo.
+
+### Not defended against
+
+Calls that skip the status check (`Repository::set_status`,
+`update_repo_info_unchecked`, `force_write_repo_info`) through another
+backend write `repo`. This backend never reads it, and the next publish
+replaces it: their updates are lost. The same holds for a repo created
+through another backend while `repo` is missing.
+
+### Cost
+
+Per repo-info update: one RepoInfo render, one small write and fsync, a
+rename, a fsync of the root and a listing. Every writer needs write
+permission on the repo root.
+
+### Changes to this design
+
+- **Names.** `repo` is the stub or the mirror; new staging name
+  `repo.mirror.<id>`, swept by age like `repo.stub.*`, hidden by
+  `list_objects`, which shows `repo` with its own size and time.
+- **Invariants.** Invariant 4 covers protocol names only: the rename of a
+  staged copy over `repo` is outside the protocol. Invariant 5 adds
+  `repo.mirror.*`. The fsyncs of `publish_repo` always run.
+- **`open` and `migrate`.** Once `repo.d` exists, `repo` is never read: it
+  may be the stub, the mirror or missing. `open` returns `Ok`, and `migrate`
+  deletes any `repo.legacy.*` and returns `AlreadyMigrated`. Its final
+  `write_stub` accepts `LegacyRepo`, since a writer of this format may
+  already have published the mirror. `MixedFormats` goes away. `create`
+  still reads `repo` before `repo.d` exists, and a mirror never exists
+  without `repo.d`, so it is unaffected.
+- **Old writers.** Older versions and the `object_store` backend read
+  `repo` before every update, so they fail on the stub or refuse the
+  mirror's status. What gets through is under
+  [Not defended against](#not-defended-against).
+- **Conversion.** With the mirror on, copying `repo` first and then every
+  other object, with any tool, gives a consistent read-only repo unless GC
+  deletes objects during the copy. Setting its status to `Online` and
+  removing the metadata key makes it an ordinary repo.
+- **API.** `Storage::publish_repo(settings, of: &VersionInfo, bytes:
+  Option<Bytes>) -> StorageResult<Published>`, with `Published` one of
+  `Current`, `Superseded` and `Unsupported`, the default implementation
+  returning `Unsupported`. `RepositoryConfig.filesystem_mirror:
+  FilesystemMirror` (`Disabled`, `Sync`, `Async`) and
+  `Repository::publish_mirror`, in Rust, Python and JS.
+- **Recovery.** A crash between an update and its publish, or a lost reply
+  on the rename over `repo`, leaves the mirror of an older version; a crash
+  after staging leaves `repo.mirror.<id>`, swept by age; the first half of a
+  silly rename leaves no `repo` and a `.nfs*` file. The next publish fixes
+  the first and the last.
+- **Verification.** The mirror is not in the model, since no protocol step
+  reads it. With the mirror on, the stress tool reads `repo` through the
+  `object_store` backend during the run, which must always parse it or find
+  it missing, never torn, and after a final `publish_mirror` the metadata of
+  `repo` must name the current marker.
+
 ## Open questions
 
 1. **SMB.** Not analysed: Linux cifs hard-link support, lease breaks on
