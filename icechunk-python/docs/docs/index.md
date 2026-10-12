@@ -8,9 +8,9 @@ title: Icechunk - Open-source, high-performance array format and library for sci
 
 ## Scale and Speed {#scale}
 
-Store gigabytes on your laptop or terabytes in a bucket, or reference petabytes of existing files with a repository of gigabytes. The same format and library cover all three.
+Icechunk works the same whether you store gigabytes on a laptop, terabytes in a bucket, or reference petabytes of existing files from a repository of a few gigabytes.
 
-A read fetches only the chunks it touches, and opening a repository never lists the bucket.
+Reads stay fast at every size: Icechunk downloads only the chunks you need, many of them in parallel.
 
 NASA's virtual stores feasibility report recommends adopting Icechunk ([report](https://nasa-impact.github.io/virtual-stores-feasibility-report/recommendations.html)), and NOAA's National Weather Service has adopted it for its CIRRUS cloud data platform ([blog post](https://www.earthmover.io/blog/icechunk-at-nws-cirrus)).
 
@@ -67,11 +67,11 @@ Anyone reading the repository sees ordinary Zarr and never needs to know which k
 
 ## Versioning {#versioning}
 
-Every change is a commit, deletes included.
-Undo a bad write or an accidental delete by moving the branch back to an earlier commit.
+In a plain Zarr store, a bad write or an accidental delete is permanent.
+Icechunk records every change as a commit, so you can undo a mistake by moving the branch back to an earlier commit.
 Old commits stay readable until you choose to expire them.
 
-Tag a commit to cite it in a paper, or branch to try a change without affecting anyone else.
+Tag a commit to cite the exact data in a paper, or create a branch to try a change without affecting anyone else.
 
 [:octicons-arrow-right-24: Version control](understanding/version-control.md)
 
@@ -86,8 +86,8 @@ Tag a commit to cite it in a paper, or branch to try a change without affecting 
 
 ### History Without Ballooning Storage {#history-storage}
 
-A commit writes only the chunks that changed.
-Every other chunk in the new snapshot points at data already in storage, so a long history costs a fraction of keeping full copies.
+Keeping history doesn't mean keeping full copies.
+A commit writes only the chunks that changed, and every other chunk points at data already in storage.
 
 [:octicons-arrow-right-24: Expiring old data](understanding/expiration.md)
 
@@ -102,8 +102,7 @@ Every other chunk in the new snapshot points at data already in storage, so a lo
 
 ## ACID Transactions {#consistency}
 
-Icechunk gives you ACID transactions on arrays.
-Without them, a reader can catch a write halfway and get arrays that don't match.
+Without transactions, a reader can catch a write halfway and get arrays that don't match.
 
 With Icechunk, a reader always sees one complete commit, even while another process is writing.
 When two writers commit at once, the second is rejected or rebased, never silently overwritten.
@@ -121,7 +120,7 @@ When two writers commit at once, the second is rejected or rebased, never silent
 
 ## No Server Required {#format-and-client-only}
 
-The Icechunk library runs inside your program and reads and writes files directly.
+The Icechunk library runs inside your code and reads and writes files directly.
 There is no server, database or service to run.
 
 - [The format spec](reference/spec-v2-1.md)
