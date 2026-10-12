@@ -244,6 +244,12 @@ a.pane:hover .pane-more {
   }
 }
 
+/* mkdocs-breadcrumbs-plugin prepends a "Home" breadcrumb to every page, the
+   home page included, and its exclude_paths does not stop that. */
+#home-content > .by-line-wrapper + p {
+  display: none;
+}
+
 /* By-line */
 .by-line-wrapper {
   margin: 16px auto 0;
