@@ -597,4 +597,5 @@ From the repository root, with the dev profile:
 - `vms/lab.sh`: a lab of libvirt VMs serving Lustre, BeeGFS, CephFS, NFS
   and GPFS to client VMs; see [its README](vms/README.md).
 
-None of these run in CI.
+The scheduled CI runs `just fs-stress-process-tests` and short storage and
+repository mode `just fs-stress` runs; none of the others run in CI.

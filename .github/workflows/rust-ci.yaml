@@ -415,6 +415,75 @@ jobs:
         # run them on a single runner.
         run: just profile=ci test-integration true
 
+  # The filesystem storage tests too slow for every PR: the fs-stress process tests,
+  # the large protocol model checks and a short stress run.
+  ubuntu-fs-slow:
+    name: Filesystem storage slow tests (ubuntu-latest)
+    if: >-
+      github.event_name == 'schedule'
+      || github.event_name == 'workflow_dispatch'
+      || contains(github.event.pull_request.labels.*.name, 'run-integration-tests')
+    timeout-minutes: 60
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - uses: prefix-dev/setup-pixi@d3f436a425481402e6a95a1d1fc10331c708cd9e # v0.10.2
+        with:
+          pixi-version: ${{ env.PIXI_VERSION }}
+          cache: false
+          activate-environment: true
+          manifest-path: icechunk-python/pyproject.toml
+
+      - name: Cache Dependencies
+        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        with:
+          # Currently: Python 3.12, see the rust job's cache step
+          prefix-key: "rust-py312"
+          shared-key: "rust-fs-slow"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      # All release: fs-model-check always builds release, so the steps share one build
+      - name: Run fs-stress process tests
+        run: just profile=release fs-stress-process-tests
+
+      # !cancelled(): a failure in one step shouldn't hide the others
+      - name: Run protocol model checks
+        if: ${{ !cancelled() }}
+        run: just fs-model-check
+
+      - name: Run a 4 minute storage stress test
+        if: ${{ !cancelled() }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/fs-stress-storage"
+          just profile=release fs-stress storage "$RUNNER_TEMP/fs-stress-storage" --duration 4m
+
+      # Short: every commit backs up the whole repo object, which grows with each
+      # snapshot, so the disk use is quadratic (5 minutes write about 19 GB)
+      - name: Run a 1 minute repository stress test
+        if: ${{ !cancelled() }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/fs-stress-repository"
+          just profile=release fs-stress repository "$RUNNER_TEMP/fs-stress-repository" --duration 1m
+
+      # Only failed runs keep their run root. The repository oracle doesn't read the
+      # repo backups, which are most of its volume.
+      - name: Upload the failed stress tests' run roots
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: fs-stress-run-roots
+          path: |
+            ${{ runner.temp }}/fs-stress-storage/
+            ${{ runner.temp }}/fs-stress-repository/
+            !${{ runner.temp }}/fs-stress-repository/*/storage/overwritten/
+          if-no-files-found: ignore
+          retention-days: 14
+
   # Not a required check: these jobs re-run the tests instrumented for the codecov report.
   # The Rust tests, doctests and examples, split in two like ubuntu-test.
   ubuntu-coverage-rust:
@@ -610,7 +679,7 @@ jobs:
   ubuntu-gate:
     name: Rust CI (ubuntu-latest)
     if: always()
-    needs: [ubuntu-msrv, ubuntu-test, ubuntu-doc-examples, ubuntu-python-debug, ubuntu-integration]
+    needs: [ubuntu-msrv, ubuntu-test, ubuntu-doc-examples, ubuntu-python-debug, ubuntu-integration, ubuntu-fs-slow]
     timeout-minutes: 5
     runs-on: ubuntu-latest
     steps:
@@ -621,8 +690,9 @@ jobs:
           DOC_EXAMPLES_RESULT: ${{ needs.ubuntu-doc-examples.result }}
           PYTHON_DEBUG_RESULT: ${{ needs.ubuntu-python-debug.result }}
           INTEGRATION_RESULT: ${{ needs.ubuntu-integration.result }}
+          FS_SLOW_RESULT: ${{ needs.ubuntu-fs-slow.result }}
         run: |
-          echo "msrv=$MSRV_RESULT test=$TEST_RESULT doc-examples=$DOC_EXAMPLES_RESULT python-debug=$PYTHON_DEBUG_RESULT integration=$INTEGRATION_RESULT"
+          echo "msrv=$MSRV_RESULT test=$TEST_RESULT doc-examples=$DOC_EXAMPLES_RESULT python-debug=$PYTHON_DEBUG_RESULT integration=$INTEGRATION_RESULT fs-slow=$FS_SLOW_RESULT"
           if [ "$MSRV_RESULT" != "success" ] || [ "$TEST_RESULT" != "success" ] || [ "$DOC_EXAMPLES_RESULT" != "success" ] || [ "$PYTHON_DEBUG_RESULT" != "success" ]; then
             echo "::error::One or more ubuntu-latest Rust jobs failed"
             exit 1
@@ -630,6 +700,10 @@ jobs:
           # skipped when neither schedule, dispatch nor the label asked for it
           if [ "$INTEGRATION_RESULT" != "success" ] && [ "$INTEGRATION_RESULT" != "skipped" ]; then
             echo "::error::Integration tests failed"
+            exit 1
+          fi
+          if [ "$FS_SLOW_RESULT" != "success" ] && [ "$FS_SLOW_RESULT" != "skipped" ]; then
+            echo "::error::Filesystem storage slow tests failed"
             exit 1
           fi
 
