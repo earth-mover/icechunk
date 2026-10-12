@@ -103,7 +103,8 @@ A commit writes only the chunks that changed, and every other chunk points at da
 
 ## ACID Transactions {#consistency}
 
-Without transactions, a reader can catch a write halfway and get arrays that don't match.
+Without transactions, a reader can catch a write halfway and get a mix of old and new chunks.
+The result is a Schrödinger's array, like the cat in the animation: you can't tell what state it is in until you have read all of it.
 
 With Icechunk, a reader always sees one complete commit, even while another process is writing.
 When two writers commit at once, the second is rejected or rebased, never silently overwritten.
