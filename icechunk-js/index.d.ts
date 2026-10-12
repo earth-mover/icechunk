@@ -81,6 +81,9 @@ export declare class Storage {
    * Storage on a filesystem, safe for concurrent writers on filesystems that
    * meet the requirements in the Icechunk storage guide (hard links, atomic
    * rename by name, exclusive directory rename).
+   * It uses a different on-disk format: `repo` is a stub file next to a
+   * `repo.d/` directory, which other backends and older Icechunk versions
+   * can't open.
    * Safe only if every writer of the repository uses this backend: never let
    * `newLocalFilesystem` writers, or older Icechunk versions, write to its
    * repositories. Their repositories must first be converted, once, with

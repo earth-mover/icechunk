@@ -736,14 +736,18 @@ pub trait Storage: fmt::Debug + Display + sealed::Sealed + Sync + Send {
         path: &str,
     ) -> StorageResult<DateTime<Utc>>;
 
-    /// Read `path` with its current version, unless that version is
-    /// `previous_version`, in which case it returns
-    /// [`GetModifiedResult::OnLatestVersion`] without the data. With `None`
-    /// it always reads.
+    /// Read the object at `path`, skipping the download if the caller already
+    /// has its current version.
     ///
-    /// The etag is the version's identity: `OnLatestVersion` means the
-    /// backend has nothing newer than `previous_version` to show. A backend
-    /// whose listing lags may answer it for an older version too.
+    /// Returns [`GetModifiedResult::OnLatestVersion`], without data, if the
+    /// object is still at `previous_version`. Otherwise returns
+    /// [`GetModifiedResult::Modified`] with the data and the new version.
+    /// With `previous_version = None` it always returns `Modified`.
+    ///
+    /// Object stores compare the object's `ETag` with `previous_version.etag`.
+    /// Other backends may define versions differently; a backend whose
+    /// listings can lag may also return `OnLatestVersion` when the version it
+    /// sees is older than `previous_version`.
     async fn get_object_conditional(
         &self,
         ctx: &StorageContext<'_>,

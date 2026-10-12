@@ -5,7 +5,7 @@ CephFS, NFS and, optionally, IBM Storage Scale (GPFS) to any number of client
 VMs, for running [fs-stress](../README.md) across hosts on real distributed
 filesystems.
 
-Everything goes through `lab.sh`; `./lab.sh --help` lists its commands and
+`lab.sh` is the entry point; `./lab.sh --help` lists its commands and
 options. Commands below run from this directory.
 
 ```sh
@@ -44,17 +44,12 @@ clients to a provisioned lab takes 5 to 7. `stop` takes 15 seconds, `start`
 - **Disk:** sparse qcow2 files in `/var/lib/libvirt/<lab>`; each OS disk is a
   copy-on-write overlay of one base image.
 
-**macOS is not supported.** libvirt on macOS has no virtual networks, and
-Apple Silicon can't run the x86_64 guests at a usable speed. Run the lab on a
-Linux machine (a workstation, or a cloud instance with KVM such as an EC2
-`.metal` type) and run `lab.sh fs-stress` there too: the network faults treat
-the machine that runs `remote.sh` as the one to spare, so it must be the lab's
-host.
+**macOS is not supported yet.**
 
 ## Layout
 
 | VM | IP | vCPU / RAM | Disks | Serves |
-|---|---|---|---|---|
+| --- | --- | --- | --- | --- |
 | ceph-srv | .10 | 4 / 6G | os 25G, data1 30G (OSD) | Ceph 20.2.4 via cephadm (podman): mon, mgr, mds, one OSD; CephFS `cephfs` |
 | lustre-srv | .11 | 2 / 4G | os 20G, data1 8G (MGS+MDT), data2 25G (OST) | Lustre 2.17.0, fsname `lfs`, on Whamcloud's patched kernel |
 | beegfs-srv | .12 | 2 / 3G | os 20G, data1 8G (meta, ext4), data2 25G (storage, xfs) | BeeGFS 8.4.1 mgmtd, meta and storage |
@@ -70,7 +65,7 @@ reaches them by IP.
 ### Client mounts
 
 | Mount | Filesystem | Notes |
-|---|---|---|
+| --- | --- | --- |
 | `/mnt/lustre` | Lustre | |
 | `/mnt/beegfs` | BeeGFS | clients 1 to 5 only |
 | `/mnt/cephfs` | CephFS, kernel client | `stress@.cephfs=/` |
@@ -84,11 +79,7 @@ reaches them by IP.
 Every filesystem root is mode `1777`, so the `rocky` user writes without sudo.
 
 Only clients 1 to 5 mount BeeGFS because of its license: without one, mgmtd
-registers at most 5 clients, and every mount is a client ("Number of licensed
-clients (5) exhausted" in its log; the 6th mount fails with "Mount sanity
-check failed"). Unmounting frees a slot. `down` unmounts BeeGFS before
-destroying a running client; a client that dies without unmounting keeps its
-slot until mgmtd drops it after 30 minutes.
+registers at most 5 clients, and every mount is a client.
 
 ## GPFS (optional)
 
@@ -192,36 +183,13 @@ only `down` destroys anything.
 - `sudo reboot` inside a VM is fine. The exception is a VM's very first boot
   after `up`, which powers off on reboot; `provision` handles that.
 
-Clients often boot before their servers are ready, especially Ceph (its
-daemons run in containers) and BeeGFS's mgmtd. Those mounts fail once, and
-neither fstab mounts nor `beegfs-client` retry. A client-side oneshot,
-`fs-stress-mount-retry.service`, retries every missing mount every 5 s for up
-to 10 minutes, through `systemctl start <mount unit>` so it never stacks a
-second mount on one that's still in progress. If a server stays down longer,
-start it and run `./lab.sh start` again, or
-`sudo systemctl restart fs-stress-mount-retry` on the clients.
-
-**A server going down blocks its clients.** I/O on its mounts, `ls` and `df`
-included, hangs until it comes back: NFS mounts are `hard`, and Lustre and
-BeeGFS retry too. Before stopping or rebuilding one server, unmount its
-filesystem on the clients, or stop the clients too. If already stuck:
-`sudo umount -f -l /mnt/<m>`. Rebuilding nfs-srv also invalidates existing
-NFS file handles (`ESTALE`): unmount on the clients, then provision them again.
-
 ## Rebuilding
 
 ```sh
 ./lab.sh down client2 && ./lab.sh up client2 && ./lab.sh provision client2
 ```
 
-Rebuilding a server invalidates what the clients hold (the Ceph keyring and
-fsid, the BeeGFS secret, GPFS cluster membership), so provision the clients
-again afterwards. Mounts that are already mounted are skipped, so unmount
-stale ones first. A rebuilt GPFS client is still listed in the cluster;
-`provision` notices that it lost its configuration, removes it and adds it
-again. After rebuilding gpfs-srv, the clients still belong to the old
-cluster: run `sudo /usr/lpp/mmfs/bin/mmshutdown && sudo /usr/lpp/mmfs/bin/mmdelnode -f`
-on each of them before provisioning.
+Rebuilding a server invalidates what the clients hold.
 
 ## Access
 
@@ -235,7 +203,7 @@ on each of them before provisioning.
   host at `.1`, and nothing outside the host reaches the VMs.
 
 | Credential | Where | Notes |
-|---|---|---|
+| --- | --- | --- |
 | Ceph client key `client.stress` | clients: `/etc/ceph/ceph.client.stress.keyring`, `/etc/ceph/ceph.conf` | the caps of `ceph fs authorize cephfs client.stress / rw` |
 | Ceph admin | ceph-srv: `/etc/ceph/ceph.client.admin.keyring` | `sudo /usr/local/sbin/cephadm shell -- ceph ...` |
 | BeeGFS shared secret | `/etc/beegfs/conn.auth` on all BeeGFS nodes | generated on beegfs-srv |

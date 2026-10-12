@@ -23,20 +23,17 @@ your own filesystem, run it there and [send us the report](#what-to-send-us).
   steps, so the remaining writers must keep making progress whatever the dead
   and paused ones left behind. After the run, a fresh writer must succeed
   within 10 s.
+- **Modes**. Support storage and repository mode. The former uses the filesystem
+  storage directly to do high concurrency validation; the later uses the full
+  Icechunk API and it provides a higher level check, at the price of reduced
+  concurrency.
 - **Sweeping.** After the run, `verify` sets the modification time of the
   protocol's leftovers 25 hours into the past and sweeps them: with the
   storage's own sweep in storage mode, with garbage collection in repository
   mode. Only `repo`, and `repo.d/` holding the marker and the one version it
   names, may be left.
 
-What it doesn't test:
-
-- **Power loss and durability.** Killing a process leaves the kernel's and
-  the file server's state intact; nothing here crashes a machine or a server.
-  Whether `fsync` really makes data durable is out of scope.
-- **Performance.** The numbers it prints are not benchmarks.
-
-A passing run is evidence, not a guarantee: the backend is experimental.
+Even with a passing run, remember the backend is experimental.
 
 ## Requirements
 
@@ -53,20 +50,16 @@ A passing run is evidence, not a guarantee: the backend is experimental.
 - **Disk and memory.** See [Safety notes](#safety-notes).
 
 Expected to qualify: local POSIX filesystems, NFSv3 and NFSv4 with a Linux
-client, Lustre, GPFS, CephFS, JuiceFS. SMB and non-Linux NFS clients (macOS,
-FreeBSD) have not been analysed: you can run the tool there, but its results
-are informative only, and a pass doesn't make them supported. The
-[storage guide](../icechunk-python/docs/docs/guides/storage.md#requirements-and-limits-of-filesystem_storage)
+client, Lustre, GPFS, CephFS. The [storage guide](../icechunk-python/docs/docs/guides/storage.md#requirements-and-limits-of-filesystem_storage)
 lists the backend's requirements and limits.
 
 ## Building
 
-On every host, at the tag or commit we gave you:
+On every host:
 
 ```sh
 git clone https://github.com/earth-mover/icechunk
 cd icechunk
-git checkout <tag or commit>
 cargo build --release -p icechunk-fs-stress
 ```
 
@@ -127,8 +120,8 @@ gets only the final summary. The exit code is 0 for a pass, 1 for a failure,
    srun -N 3 --ntasks-per-node=1 /path/fs-stress workers --root /path/on/fs/stress-1
    ```
 
-   Each host registers and waits. Once `--hosts` hosts have registered, one of
-   them writes the participant list to `go` and the run starts. Every host
+   Each host registers and waits. Once `--hosts` hosts have registered, the all
+   start working at once. Every host
    runs for `--duration` from the moment it sees the go, then waits for its
    workers and writes its `done/` entry. `workers` and `verify` print progress
    to stderr, like `run`.

@@ -416,7 +416,7 @@ jobs:
         run: just profile=ci test-integration true
 
   # The filesystem storage tests too slow for every PR: the fs-stress process tests,
-  # the large protocol model checks and a short stress run.
+  # the two-writer protocol model check and a short stress run.
   ubuntu-fs-slow:
     name: Filesystem storage slow tests (ubuntu-latest)
     if: >-
@@ -451,10 +451,11 @@ jobs:
       - name: Run fs-stress process tests
         run: just profile=release fs-stress-process-tests
 
-      # !cancelled(): a failure in one step shouldn't hide the others
-      - name: Run protocol model checks
+      # !cancelled(): a failure in one step shouldn't hide the others.
+      # three_writers_no_freeze runs in ubuntu-fs-model-check
+      - name: Run the two-writer protocol model check
         if: ${{ !cancelled() }}
-        run: just fs-model-check
+        run: just fs-model-check two_writers_everything
 
       - name: Run a 4 minute storage stress test
         if: ${{ !cancelled() }}
@@ -483,6 +484,37 @@ jobs:
             !${{ runner.temp }}/fs-stress-repository/*/storage/overwritten/
           if-no-files-found: ignore
           retention-days: 14
+
+  # The three-writer protocol model check takes over an hour on a 4-core runner, too
+  # long for labeled PRs.
+  ubuntu-fs-model-check:
+    name: Filesystem storage protocol model check (ubuntu-latest)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    timeout-minutes: 120
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: prefix-dev/setup-pixi@d3f436a425481402e6a95a1d1fc10331c708cd9e # v0.10.2
+        with:
+          pixi-version: ${{ env.PIXI_VERSION }}
+          cache: false
+          activate-environment: true
+          manifest-path: icechunk-python/pyproject.toml
+
+      - name: Cache Dependencies
+        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        with:
+          # Currently: Python 3.12, see the rust job's cache step
+          prefix-key: "rust-py312"
+          shared-key: "rust-fs-slow"
+          save-if: false
+
+      - name: Run the three-writer protocol model check
+        run: just fs-model-check three_writers_no_freeze
 
   # Not a required check: these jobs re-run the tests instrumented for the codecov report.
   # The Rust tests, doctests and examples, split in two like ubuntu-test.
@@ -679,7 +711,7 @@ jobs:
   ubuntu-gate:
     name: Rust CI (ubuntu-latest)
     if: always()
-    needs: [ubuntu-msrv, ubuntu-test, ubuntu-doc-examples, ubuntu-python-debug, ubuntu-integration, ubuntu-fs-slow]
+    needs: [ubuntu-msrv, ubuntu-test, ubuntu-doc-examples, ubuntu-python-debug, ubuntu-integration, ubuntu-fs-slow, ubuntu-fs-model-check]
     timeout-minutes: 5
     runs-on: ubuntu-latest
     steps:
@@ -691,8 +723,9 @@ jobs:
           PYTHON_DEBUG_RESULT: ${{ needs.ubuntu-python-debug.result }}
           INTEGRATION_RESULT: ${{ needs.ubuntu-integration.result }}
           FS_SLOW_RESULT: ${{ needs.ubuntu-fs-slow.result }}
+          FS_MODEL_CHECK_RESULT: ${{ needs.ubuntu-fs-model-check.result }}
         run: |
-          echo "msrv=$MSRV_RESULT test=$TEST_RESULT doc-examples=$DOC_EXAMPLES_RESULT python-debug=$PYTHON_DEBUG_RESULT integration=$INTEGRATION_RESULT fs-slow=$FS_SLOW_RESULT"
+          echo "msrv=$MSRV_RESULT test=$TEST_RESULT doc-examples=$DOC_EXAMPLES_RESULT python-debug=$PYTHON_DEBUG_RESULT integration=$INTEGRATION_RESULT fs-slow=$FS_SLOW_RESULT fs-model-check=$FS_MODEL_CHECK_RESULT"
           if [ "$MSRV_RESULT" != "success" ] || [ "$TEST_RESULT" != "success" ] || [ "$DOC_EXAMPLES_RESULT" != "success" ] || [ "$PYTHON_DEBUG_RESULT" != "success" ]; then
             echo "::error::One or more ubuntu-latest Rust jobs failed"
             exit 1
@@ -704,6 +737,10 @@ jobs:
           fi
           if [ "$FS_SLOW_RESULT" != "success" ] && [ "$FS_SLOW_RESULT" != "skipped" ]; then
             echo "::error::Filesystem storage slow tests failed"
+            exit 1
+          fi
+          if [ "$FS_MODEL_CHECK_RESULT" != "success" ] && [ "$FS_MODEL_CHECK_RESULT" != "skipped" ]; then
+            echo "::error::Filesystem storage protocol model check failed"
             exit 1
           fi
 

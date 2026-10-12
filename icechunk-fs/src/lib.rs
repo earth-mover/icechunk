@@ -19,8 +19,6 @@ mod storage;
 #[cfg(unix)]
 mod stub;
 #[cfg(unix)]
-mod version;
-#[cfg(unix)]
 mod write;
 
 #[cfg(unix)]

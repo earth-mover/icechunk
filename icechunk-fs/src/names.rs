@@ -5,9 +5,10 @@
 use std::io;
 
 use icechunk_storage::{ETag, Generation, VersionInfo};
+use sha2::{Digest as _, Sha256};
 use uuid::Uuid;
 
-use crate::{path::parse_hyphenated_uuid, version::sha256_hex};
+use crate::path::parse_hyphenated_uuid;
 
 /// The largest version number: `N < 10^15`.
 pub(crate) const MAX_N: u64 = 999_999_999_999_999;
@@ -22,6 +23,11 @@ const STUB_STAGING_PREFIX: &str = "repo.stub.";
 const STAGE_PREFIX: &str = "stage.";
 const LATEST_PREFIX: &str = "latest.";
 const FROZEN_PREFIX: &str = "frozen.";
+
+/// Lowercase hex sha256 of `bytes`.
+pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(bytes))
+}
 
 /// A sha256 as 64 lowercase hex characters.
 #[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]

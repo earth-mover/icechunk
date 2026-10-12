@@ -10,7 +10,7 @@ filesystem backend overwrites unconditionally and concurrent commits can
 silently lose updates.
 
 Users want Icechunk on HPC and network filesystems: NFS, SMB, Lustre, GPFS,
-CephFS, and others. This design adds a new filesystem storage backend with a
+CephFS, and others. This design adds a new experimental filesystem storage backend with a
 safe conditional update.
 
 Research done with Claude in October 2026, from published site data and the
@@ -27,9 +27,8 @@ life-science sites using each shared filesystem at:
 | Ceph | 10% |
 | WEKA | 5% |
 
-Sites run several, so the shares overlap. NFS is the common case, and the
-one with the weakest client-side consistency, which is why the design
-relies only on what every NFS client must execute on the server.
+NFS is common, and has weak consistency, which is why the design
+relies mostly on what every NFS client must execute on the server.
 
 The first design kept `repo` as a single file and replaced it with a
 lock-free compare-and-swap built on hard links and `rename`. It was
@@ -37,28 +36,30 @@ implemented and stress-tested, and it lost updates on NFS: the read it
 relied on to compare versions is not guaranteed to be fresh on any NFS
 client. It is kept at the end, under
 [Previous attempt](#previous-attempt-compare-and-swap-on-a-single-repo-file).
-This document describes its replacement.
+This document describes its replacement that seems to work.
 
 ## Goals and constraints
 
-- No lost updates, on local disks and on every distributed filesystem,
-  relying only on operations that a client must execute on the server.
+- No lost updates.
 - Timeouts may affect liveness, not safety.
-- The filesystem format may differ from the object-store format in the one
-  object that is updated conditionally, `repo`. Everything else is
-  byte-identical to V2, and a repo converts between the two formats in both
-  directions.
-- Keep it minimal and simple.
+- Commit visibility across clients may lag: not the read-after-write
+  of object stores. If users want read after commit consistency they
+  need to use the snapshot id. See [Freshness and the nudge](#freshness-and-the-nudge).
+- Ideally no changes to the on-disk format
+  (not possible because of NFS non-atomic renames). Next best thing,
+  minimize format differences for the filesystem,  and a way to convert
+  between the two formats in both directions.
+- Keep it as minimal and simple as possible.
 - We only need to support Icechunk V2.
 
 ## Format
 
 The filesystem format replaces the `repo` object with a stub file and a
-directory of immutable versions, and the commit becomes a single
+directory of immutable versions. The commit becomes a single
 server-decided `rename`. Everything else, chunks, manifests, snapshots,
 transaction logs, `overwritten/` backups, GC and expiration, is unchanged.
-Old clients that open a repo in this format get a clear error instead of a
-stale or missing file.
+Old clients that open a repo in this format get a clear error when they
+try to parse the `repo` stub.
 
 ## Names
 
@@ -76,15 +77,12 @@ stale or missing file.
 `N` is a decimal integer below `10^15` without leading zeros, `K` is its
 nines' complement in exactly 15 digits (`999999999999999 - N`, so version
 1000 has `K = 999999999998999`), `h` is 64 lowercase hex characters, and
-`id` a random UUID, new for every attempt, creation or migration, so that
-no two of them ever share a name. A marker name parses only if `K` and `N`
+`id` a random UUID. A marker name parses only if `K` and `N`
 agree. `VersionInfo` is `etag = h`, `generation = N`; `IfVersion` needs
 both. Version files and the stub are immutable.
 
 `K` exists so that a lexicographic listing of `latest.*` puts the newest
-marker first. No filesystem returns sorted listings, so nothing here
-depends on it; it keeps the names usable by a future object-store variant,
-whose listings are sorted and strongly consistent. `N` is in the name for
+marker first. `N` is in the name for
 people and tools. The sections below write `latest.<N>.<h>` and
 `frozen.<N>.<h>` for brevity.
 
@@ -93,18 +91,16 @@ people and tools. The sections below write `latest.<N>.<h>` and
 The marker is an empty file whose name says which version is current:
 `latest.<N>.<h>` means the RepoInfo is version `N`, with its bytes in
 `repo.d/<N>.<h>`. It is one inode, never opened or written, only renamed,
-so exactly one such name exists at any instant. `rename` is atomic and
-decided by the server, so moving the marker is both the compare and the
-swap of a commit. Nothing else is ever renamed over, and no file but
-`<N>.<h>` is ever read.
+so exactly one such name exists at any instant. `rename` is atomic for a new file,
+so moving the marker is both the compare and the
+swap of a commit. No files are read except for `<N>.<h>`, which are immutable.
 
 **Read.** List `repo.d` and take its marker. A listing is served in several
 `readdir` calls and a rename can land between them, so it can show the
 marker under two names, the old and the new, or under none. *The marker of
 a listing* is its `latest.*` or `frozen.*` entry with the highest `N`, and
-at equal `N` the `frozen.*` one, the later state: the newest state the
-listing witnessed, and never ahead of the server. No marker means a torn
-listing, read again. Then read `<N>.<h>` and check its
+at equal `N` the `frozen.*` one.
+No marker means a torn listing, read again. Then read `<N>.<h>` and check its
 hash. If the caller already holds `(N, h)`, or a newer `N`, report
 `NotModified`.
 
@@ -114,8 +110,7 @@ hash. If the caller already holds `(N, h)`, or a newer `N`, report
 2. **Publish the bytes.** `link` the staging file as `<N+1>.<h'>` and fsync
    the directory. The name is new, so nothing is overwritten. It is also the
    hash of the bytes, so whatever holds it has our bytes: on `EEXIST` it is
-   our own link retried after a lost reply, or another writer's identical
-   bytes, and either is fine.
+   our own link retried after a lost reply.
 3. **Commit.** `rename(latest.<N>.<h>, latest.<N+1>.<h'>)`. Success means
    the marker was at our base on the server at that instant, and we moved
    it: the base was current and nobody else can have replaced it. `ENOENT`
@@ -125,25 +120,13 @@ hash. If the caller already holds `(N, h)`, or a newer `N`, report
    listing, every other version file at or below `N` and every `<N+1>.<x>`
    with `x != h'`. The successful rename proved the marker is at
    `(N+1, h')`, so all of them are dead for good. The directory therefore
-   holds two files plus the attempts in flight, however many commits a day
-   there are, and a listing stays one small `readdir`. A reader that
-   already has the base's bytes keeps them. One that opened it from another
-   client may get `ESTALE` on its next read, even on NFSv4.2 (observed:
-   a holder that had not read yet got `ESTALE`, one mid-stream completed);
-   one on the committing client is protected by the client's silly rename.
+   holds only two files plus the attempts in flight.
    Readers treat any failure as "deleted under me" and list again.
 
-A conflict leaves at most `<N+1>.<h'>` behind, deleted by the loser when
-the listing proves it lost, otherwise by the sweep.
-
-**Freeze** renames the marker to `frozen.<N>.<h>`, a name no commit uses as
-its source. Version `N` stays readable, no commit can succeed, and exactly
-one operator can take the rename. It serves exports and consistent copies
+**Freeze** renames the marker to `frozen.<N>.<h>`, so no commit can
+succeed. Version `N` stays readable. It serves exports and consistent copies
 of the directory. **Unfreeze** links `<N>.<h>` as `<N+1>.<h>` and renames
-the marker to `latest.<N+1>.<h>`, never back to `latest.<N>.<h>`, so no
-marker name is ever reused. Writers based on `(N, h)` get one conflict.
-Only the rename proves that a freeze or an unfreeze acted: "already
-frozen" and "not frozen" come from a listing, which can lag.
+the marker to `latest.<N+1>.<h>`. Writers based on `(N, h)` get one conflict.
 
 **Create** builds `repo.d.tmp.<id>/` with `0.<h>` and `latest.0.<h>`, then
 renames the directory to `repo.d`. A directory rename fails if the target
@@ -151,8 +134,8 @@ exists and is not empty, so creation is exclusive too. The stub is linked
 as `repo` first.
 
 **Sweep**, run by GC from one listing with marker `(N, h)`: delete every
-`<i>.<x>` with `i < N`, and `<N>.<x>` with `x != h`. Both are dead for
-good, however old the listing. Files above `N` belong to attempts in
+`<i>.<x>` with `i < N`, and `<N>.<x>` with `x != h`.
+Files above `N` belong to attempts in
 flight. Staging files, including the root's staging files of other
 objects, and abandoned creation directories go by age.
 
@@ -164,23 +147,6 @@ The stub is a V2 file header with the new file type `FilesystemStub`. Old
 versions fail on the unknown type; current non-filesystem backends report
 that the repository uses the filesystem format.
 
-## Rules
-
-What the filesystem is trusted for, and nothing else:
-
-1. A successful `link`, `rename`, `unlink`, `mkdir` or `rmdir` was executed
-   by the server against the true directory state at that instant.
-2. Any error may come from a client cache. An error never enables a commit.
-   The one error stepped past is `EEXIST` on the content link; the
-   server-decided rename still stands behind it.
-3. A name created once and never rewritten returns the right bytes when it
-   returns bytes.
-4. A listing may lag, but shows only names that existed at some point. So
-   its highest `N` is at most the true `N`, and version `N` has one hash
-   forever.
-5. Never read through a name obtained by renaming a name this client may
-   have cached: the client moves its cached dentry onto the new name.
-
 ## Invariants
 
 1. Exactly one marker exists at any instant, and no marker name is ever
@@ -189,14 +155,12 @@ What the filesystem is trusted for, and nothing else:
    `rename(latest.<N>.<h>, frozen.<N>.<h>)` (a freeze), or
    `rename(frozen.<N>.<h>, latest.<N+1>.<h>)` (an unfreeze).
 2. `<N+1>.<h'>` is fully written, fsynced and durably linked before the
-   marker names it.
+   marker refers to it.
 3. `<i>.<x>` is deleted only if a listing showed a marker `(N, h)` with
    `i < N`, or with `i == N` and `x != h`.
 4. No rename targets an existing name, and no protocol file other than
-   `<N>.<h>` is opened. So no silly rename ever happens, and no name is ever
-   transiently missing.
-5. No clock decides anything except the deletion of `stage.*`,
-   `repo.stub.*` and `repo.d.tmp.*`.
+   `<N>.<h>` is opened. This avoids NFS silly-rename and cache issues.
+5. Clocks only decide the deletion of `stage.*`, `repo.stub.*` and `repo.d.tmp.*`.
 
 ## Algorithm
 
@@ -212,8 +176,8 @@ fn list_markers() -> Result<Vec<Marker>, NotFound> {
     }
 }
 
-// The marker of a listing: the highest N, and at equal N `frozen` over
-// `latest`, which a freeze renamed it from. None for a torn listing.
+// The marker of a listing: the highest N, on ties `frozen` over
+// `latest`. None for a torn listing.
 fn highest(markers) -> Option<Marker> {}
 
 fn read_latest(previous: Option<(N, h)>) -> NotModified | Modified | NotFound | Error {
@@ -247,7 +211,7 @@ fn conditional_update(new_bytes, base: (N, h)) -> Updated | NotOnLatestVersion |
         Err(ENOENT) => return NotOnLatestVersion,      // stage swept, or repo.d gone
         Err(e) => { unlink(stage); return Io(e) }
     }
-    fsync_dir("repo.d");                               // the link is durable before the marker can name it
+    fsync_dir("repo.d");                               // the link is durable before the marker can reference it
     unlink(stage);
     match rename("repo.d/latest.<N>.<h>", "repo.d/latest.<N+1>.<h2>") {
         Ok => { fsync_dir("repo.d"); tidy_up(N+1, h2); Updated((N+1, h2)) }
@@ -296,7 +260,7 @@ fn write_stub() -> Ok | LegacyRepo | Io {
 }
 
 // Never delete through `tmp`: a cached name may lead into the repo.d that
-// it became (rule 5). The rename to a fresh name is decided by the server.
+// it became. The rename to a fresh name is decided by the server.
 fn discard(tmp) { let aside = "repo.d.tmp.<uuid>"; rename(tmp, aside)?; rm_rf(aside) }
 
 fn build_repo_d(bytes) -> Created | Exists((N, h)) | Io {
@@ -436,44 +400,6 @@ The three fsyncs in the commit path, the content file and the two directory
 fsyncs, always run, whatever the fsync setting. So do those in
 `build_repo_d`, `write_stub`, `freeze` and `unfreeze`.
 
-## Correctness
-
-- **No lost update.** A commit is one successful `rename` whose source is
-  `latest.<N>.<h>`, the writer's base. By rule 1 the marker was at the base
-  at that instant, so the base was current. Two writers on one base race on
-  the same source name and the server lets exactly one win. A writer on a
-  stale base has a source that no longer exists; a cached `ENOENT` and a
-  server `ENOENT` take the same conflict path.
-- **The current version always has bytes.** Content is linked and made
-  durable before the marker names it (invariant 2), and deleted only under
-  invariant 3, which no lagging listing can violate (rule 4).
-- **Acknowledged commits are never undone.** `N` only grows, and no marker
-  name recurs, so no later rename can restore an earlier state.
-- **Identical bytes are harmless.** Two writers committing identical bytes
-  on one base can both be acknowledged, and a commit whose bytes equal its
-  base's can coincide with an unfreeze's `latest.<N+1>.<h>`. Content
-  addressing makes the end states identical either way.
-- **`after_failed_rename` is safe.** Its two deletions are justified by the
-  listed marker: `<N+1>.<h2>` is dead once version `N+1` has another hash,
-  or once the marker is at `N+2` or beyond. The `Frozen` branch deletes
-  nothing: a listing can show `frozen.<N>.<h>` from before a commit from
-  `latest.<N>.<h>` only if that name was used again, which invariant 1
-  forbids.
-- **A committed version survives a crash whole** (with `fsync` on): its
-  data files are fsynced before the commit, and the data directory barrier
-  makes their names durable before the marker moves.
-- **Deleting a version never corrupts a read.** Version files are
-  immutable, so a reader gets either the right bytes or an error. A read in
-  progress may complete or fail with `ESTALE`, on any NFS version, and
-  `read_latest` lists again. The hash check catches anything else.
-- **Tidy-up deletes only dead files.** The committer's own successful
-  rename is proof that the marker is at `(N+1, h')`, at least as strong as
-  a listing showing it, so invariant 3 covers every file it deletes.
-- **Timeouts affect liveness only.** The cutoff deletes staging files and
-  abandoned creation directories; a live attempt that loses its staging
-  file gets a conflict.
-- **Nothing is held across steps.** A crash anywhere blocks nobody.
-
 ## Lost replies
 
 | Operation | Spurious result | Resolution |
@@ -496,22 +422,31 @@ fsyncs, always run, whatever the fsync setting. So do those in
 | Unfreeze link | `<N+1>.<h>` next to `<N>.<h>` | The next unfreeze gets `EEXIST` and continues |
 | Migration | `repo.legacy.<id>`, maybe `repo.d` | Rerunning `migrate` |
 
-A crashed attempt in a repo that never commits again leaves one content
-file above the marker. That is deliberate: deleting it on age would let a
-long-paused attempt commit a marker without bytes.
-
 ## Freshness and the nudge
 
-Readers see another client's commit once their directory listing refreshes.
-A writer on a stale base gets a conflict and the asset manager's retry lists
-again. The committer deletes its base right after committing, so a lagging
-reader can fail on the content and list again; the retry loop covers it.
+Commits are linearizable: each one is a single rename decided by the
+server. Reads are not. A reader sees another client's commit once its
+directory listing refreshes, so this backend gives bounded staleness, not
+the cross-client read-after-write of the object-store backends.
+
+Staleness never loses an update. A writer on a stale base gets a conflict
+and the asset manager's retry lists again. The committer deletes its base
+right after committing, so a lagging reader can fail on the content and list
+again; the retry loop covers it. Within one process reads never go back: a
+listing with a lower `N` returns `NotModified`.
+
+Staleness can make a reader miss commits silently. A pipeline step started on
+another host after a commit can open the branch and read the previous tip,
+without an error. A handoff between hosts should pass the snapshot id, and
+the reader should open that snapshot. Opening a snapshot id checks it
+against the repo info, so a lagging reader gets a snapshot-not-found error
+instead of old data, and can retry.
 
 `nudge(dir)` asks the client to refresh what it has cached about one
 directory, so that the next listing or lookup under it reflects the server.
 It runs before every listing of `repo.d`, and on the root before `create`,
-`migrate` and `open`. It is never a safety input: every argument in this
-section holds without it. It only shortens how long a client can lag.
+`migrate` and `open`. It is never a safety input: every safety argument in
+this section holds without it. It only shortens how long a client can lag.
 
 - **Linux:** `statx(dir, AT_STATX_FORCE_SYNC)`, defined by statx(2) as "do
   whatever is necessary to synchronize the attributes (e.g., for a network
@@ -530,21 +465,6 @@ section holds without it. It only shortens how long a client can lag.
   permission, leaves garbage after a crash, and rests on undocumented
   behaviour.
 
-## Conversion
-
-- **Legacy single file on a filesystem to this format:** `migrate`, run
-  offline. Its fresh read rests on the force-sync before the rename, Linux
-  client behaviour, and the precondition that no legacy writer runs after
-  it starts. The legacy format has no server-side version to check against.
-- **This format to object store:** `freeze`, read `<N>.<h>`, copy every
-  object listed by `list_objects` (which hides the protocol names), then
-  put `repo` with a conditional create. The stub never travels. Unfreezing
-  the source is the operator's explicit choice.
-- **Object store to this format:** read `repo` and its etag, copy every
-  object, read `repo` again with that etag and stop unless it is
-  `NotModified`, then `create`. The re-read catches most violations of the
-  no-writers precondition.
-
 ## Filesystem requirements
 
 What the algorithm needs from the filesystem, and where:
@@ -559,9 +479,7 @@ What the algorithm needs from the filesystem, and where:
 | 6 | Durable `fsync` | the commit path, every write | Power-loss damage |
 | 7 | A directory fsync on one client persists entries other clients created | the data directory barrier | A marker naming missing data after a crash |
 
-No requirement involves a fresh read, a server timestamp, or a lock. All
-are documented, none is probed. Hard links are also used by the existing
-unconditional and conditional writes, as before.
+No requirement involves a fresh read, a server timestamp, or a lock.
 
 **Expected to qualify:** local POSIX filesystems, NFSv3 and v4 with a Linux
 client (verified on 3, 4.0 and 4.2), Lustre, GPFS, CephFS, JuiceFS.
@@ -572,23 +490,7 @@ client (verified on 3, 4.0 and 4.2), Lustre, GPFS, CephFS, JuiceFS.
   implemented directly on `std::fs` with `spawn_blocking`. It does not use
   `object_store`.
 - **Platforms.** Unix only. On other platforms the constructors return an
-  error. Windows is open question 4.
-- **Rollout.** The new backend starts as an explicit opt-in. After real-world
-  use, the existing names switch to it.
-
-  | | Opt-in phase | After the switch |
-  | --- | --- | --- |
-  | Python function | `icechunk.filesystem_storage(path)` (new) | `local_filesystem_storage` becomes a deprecated alias of `filesystem_storage` |
-  | Python class method | `Storage.new_filesystem(path)` (new) | `Storage.new_local_filesystem` becomes a deprecated alias |
-  | Rust | `icechunk_fs::new_filesystem_storage(path)` (new) | `new_local_filesystem_storage` returns `FilesystemStorage` |
-  | Old `object_store` backend | default for the existing names | `legacy_local_filesystem_storage` for one or two releases, then removed |
-
-  - **Serde tags** follow the existing convention (plain `#[typetag::serde]`).
-    The new backend serializes as `FilesystemStorage`. Payloads from the old
-    backend keep `ObjectStorage` with the `local_file_system_object_store_provider`
-    backend and keep deserializing to the old backend.
-  - **Docstrings** for both constructors must state which one is safe for
-    concurrent writers while both exist.
+  error. Windows is future work.
 - **The `repo` key** is the only one that goes through the protocol; V2
   updates nothing else conditionally. `get_object` and
   `get_object_conditional` on it are `read_latest`; `put_object_conditional`
@@ -603,41 +505,12 @@ client (verified on 3, 4.0 and 4.2), Lustre, GPFS, CephFS, JuiceFS.
     object.
   - **`put_object` with the new-object hint**: written directly under its
     final name, opened with `O_CREAT|O_EXCL`. No staging file and no `rename`.
-    - **The caller's promise.** With the hint, the caller declares two things:
-      the name is new and written by nobody else, and nothing reads the object
-      before `put_object`. The asset manager sets the hint for chunks,
-      manifests, snapshots and transaction logs.
-    - **Failure handling.** A crash mid-write leaves a truncated file that
-      nothing references, and GC deletes it like any orphan. On a write error
-      the partial file is deleted.
-    - **Safety net.** If the exclusive open fails with `EEXIST`, the promise
-      didn't hold (for example, a retry of the same write). The write falls
-      back to the default staged path, before any data was written. This
-      protects from retries.
-
     The hint is a parameter of `put_object`, ignored by the other backends,
     whose PUTs are all-or-nothing anyway.
   - **`put_object_conditional(Create)`** on any key but `repo`: staging file
     plus `link`. `EEXIST` means the object exists: `NotOnLatestVersion`.
   - **`copy_object`**: the backup is staged and renamed into place.
-
-  The parent directory is fsynced after commit-critical renames and links.
-  A directory fsync failing with `EINVAL` or `ENOTSUP` is treated as
-  unsupported by the filesystem and warned about once. Any other error after
-  a successful rename or link is reported as an I/O error, and the write may
-  have landed.
-- **Data directory barrier.** Data files' directory entries are not fsynced
-  per write. Instead, before every `put_object_conditional` on `repo` and
-  before `migrate_legacy_repo`, the backend fsyncs the root and its
-  `chunks`, `manifests`, `snapshots`, `transactions` and `overwritten`
-  directories, skipping missing ones. This covers files written by any
-  process. An error fails the call before the protocol starts.
-- **`fsync` on by default.** A storage setting disables it, and the
-  barrier, for data files, for users who accept that a power loss can
-  leave chunks and metadata files empty or missing. On NFS, `close()`
-  already flushes and COMMITs, so the cost there is small. The fsyncs of the commit path, of creation (the stub
-  included), of freeze and of unfreeze always run: a marker naming
-  truncated bytes is the one state nothing recovers from.
+- **`fsync` on by default.** A storage setting disables it.
 - **IC1 repos are refused.** Opening or creating an IC1 repo with this
   backend fails with an error that points to migrating the repo to V2.
   The backend declares that it requires V2 through a `Storage` capability
@@ -652,9 +525,6 @@ client (verified on 3, 4.0 and 4.2), Lustre, GPFS, CephFS, JuiceFS.
   Both are the identity: `IfVersion` needs both, and `get_object_conditional`
   answers `NotModified` from the marker alone when the previous version
   matches.
-- **`overwritten/` backups stay as they are:** no change to the asset
-  manager, and byte parity with object-store repos. The version files make
-  them redundant; dropping them is a later change.
 - **A legacy single-file repo is refused** with a pointer to
   `migrate_legacy_repo` rather than migrated on first write, because the
   migration must run with no other writers.
@@ -677,18 +547,6 @@ client (verified on 3, 4.0 and 4.2), Lustre, GPFS, CephFS, JuiceFS.
     supports, used to refuse IC1 repos (see above). It defaults to all
     versions.
 
-  Callers:
-  - Every V2 caller of the read methods, and every unconditional
-    `put_object` caller, already discards the version.
-  - Two IC1 callers keep a `get_object` version for a later conditional write:
-    `refs::fetch_branch` (used by `refs::update_branch`) and
-    `AssetManager::fetch_config`. Both switch to
-    `get_object_conditional(previous_version = None)`.
-  - `force_write_repo_info` returns the version from its unconditional put.
-    It has no callers in the crate and changes to return `()`.
-  - Conditional writers (repo info, repo creation, IC1 refs and config) move
-    to `put_object_conditional`.
-
 ## Old writers
 
 None of these use the protocol; they all overwrite `repo` unconditionally:
@@ -706,117 +564,6 @@ next instance. Running any of them on a repo
 at the same time as this backend is unsafe. Converting a repo once every
 old writer has stopped is safe.
 
-## Known limitation: spurious conflict after a lost commit reply
-
-On NFSv3 and v4.0 a client retries a request whose reply was lost, and the
-server may run it twice. If the commit `rename` lands but its reply is
-lost, the retry returns `ENOENT`, and `after_failed_rename` lists the
-directory. If the listing has caught up it shows our marker and we report
-success. If another writer already committed on top of us, or the listing
-lags, we report a conflict for a commit that landed.
-
-**What the caller sees.** `update_repo_info_internal` treats the failure as
-a conflict and reapplies the update on top of the newer version, so the
-user gets a spurious error: a commit finds its branch tip is its own
-snapshot and reports a conflict; a tag or branch creation reports "already
-exists".
-
-**How likely.** A lost reply, no session (NFSv4.1 and later have
-exactly-once semantics), and either a lagging listing or another commit
-within milliseconds. Local and coherent filesystems have no lost replies.
-
-**Accepted.** This is the same as the "Overwrite race" caveat of design
-doc 017 for object stores. It must be documented in the user-facing docs.
-
-**Follow-up, for all backends.** Every RepoInfo update records a unique,
-random backup path in its `Update` entry. When a conditional write fails
-in a way that may hide a landed write, the repo-info layer could re-read
-`repo` and look for its own backup path in the update history, which turns
-the spurious conflict into a success. It requires backends to report an
-*ambiguous* failure separately from a *definite* conflict, and enough
-update history kept in `repo`. Tracked as a separate issue.
-
-## Implementation notes
-
-What an implementation of this section needs beyond the algorithm.
-
-- **The stub.** The V2 file header (magic, implementation name, spec
-  version, file type byte, compression) with a new
-  `FileTypeBin::FilesystemStub = 7` and no body. Every shipped version
-  fails on it with `UnknownFileType { got: 7 }`. The core RepoInfo reader,
-  which already checks the file type after parsing, maps it to an error
-  saying the repository uses the filesystem format and must be opened with
-  `filesystem_storage`.
-- **Name parsing.** `<N>.<h>`, `latest.<K>.<N>.<h>`, `frozen.<K>.<N>.<h>`,
-  `stage.<id>`, with the exact widths and alphabets above; `K` must equal
-  the complement of `N`. Anything else, `.nfs*` included, is ignored by
-  reads and kept by the sweep.
-- **Retries.** `read_latest` tries 8 times with backoff doubling from
-  10 ms and capped at 500 ms. `list_markers` retries once after a nudge
-  of the root on `ENOENT` or `ENOTDIR`. `freeze` and `unfreeze` use the
-  same count.
-- **Versions.** `IfVersion` without both `etag` and `generation` is an
-  invalid-input error. `get_object_conditional` returns `NotModified` when
-  the listed marker equals the previous version or has a lower `N`.
-- **`open` classification** runs on every NotFound from `read_latest`, at
-  the start of `create`, and at the first use of `repo` by each storage
-  instance, where only success is cached; the `Storage` trait has no open
-  call.
-- **Errors.** `RepositoryFrozen` is a new `StorageErrorKind` variant. The
-  repo-info update loop excludes it from the conflicts it retries and
-  surfaces it unchanged, so Python and JS see an `IcechunkError` with that
-  message. `LegacyFormat`, `MigrationInterrupted` and `MixedFormats` are
-  errors whose messages name the remedy.
-- **API.** `FilesystemStorage` gets `freeze_repo`, `unfreeze_repo` and
-  `migrate_legacy_repo`. JS exposes all three on the `Storage` object that
-  `Storage.newFilesystem` returns; Python exposes only
-  `migrate_legacy_repo`, on the `FilesystemStorage` that
-  `filesystem_storage` returns. Export and import are out of scope; the
-  freeze is the backend's part of them.
-- **Listings.** `list_objects` on the root shows the stub as `repo` with
-  the stub's own size and time, and hides `repo.d`, `repo.d.tmp.*`,
-  `repo.legacy.*` and `repo.stub.*`.
-- **Sweep.** The `sweep_leftovers` hook keeps its signature. The cutoff GC
-  passes applies only to `stage.*`, `repo.d.tmp.*`, `repo.stub.*` and the
-  root's `<name>.staging.<id>` files of other objects; dead version files go
-  whatever their age.
-- **Settings.** `stale_after` is removed. `fsync` keeps its meaning for
-  data files and the barrier; the fsyncs in the commit path, in
-  `build_repo_d`, in `write_stub`, in `freeze` and in `unfreeze` always
-  run. No compatibility obligation: no release has shipped
-  `FilesystemStorage`.
-- **Removed from the crate:** the lock, ticket, lockinfo and probe code,
-  lock sweeping, `STALE_AFTER`, the fresh-read generation fast path and
-  the fault-injection points tied to the lock steps. Kept: staged and
-  exclusive writes, directory fsync, listing filters, the sweep hook.
-- **Fault injection** (`fault-injection` feature) keeps the hook trait,
-  with points after the staging write, after the link, before the rename,
-  after the rename and before tidy-up, so the stress tool can kill or
-  pause there. The hooks also wrap the protocol's `link`, `rename` and
-  `unlink`, for lost-reply tests, and `sabotaged(Sabotage)` turns on each
-  sabotage of the self-test below.
-- **Stress tool.** Storage and repository modes and the oracle are
-  unchanged; the clean-root check expects `repo`, and `repo.d/` holding
-  one marker and one version file, and ignores `.nfs*`. The self-test
-  sabotages become one per way an implementation could break the
-  protocol, each of which the oracle must report as a lost update, a
-  false acknowledgement, or a repository it cannot read:
-  1. commit without publishing the bytes (skip the link);
-  2. rename from the listing's current marker instead of the base (no
-     compare);
-  3. acknowledge on `ENOENT` from the rename without listing again;
-  4. acknowledge in every branch of `after_failed_rename` that the listing
-     doesn't prove, `m >= N+2` included: the final `_` branch alone
-     essentially never fires on a local filesystem;
-  5. tidy-up deleting the current version;
-  6. tidy-up or sweep deleting files above the marker, with concurrent
-     writers so an in-flight attempt commits a marker without bytes;
-  7. unlink the base before the rename;
-  8. link the content after the rename, with in-window kills;
-  9. `after_failed_rename` deleting the winner's file instead of its own;
-  10. the `object_store` filesystem backend, which overwrites
-      unconditionally, as the control.
-
 ## Verification
 
 - **Model checker.** A `stateright` model of the algorithm as specified, as a
@@ -830,36 +577,6 @@ What an implementation of this section needs beyond the algorithm.
   chain with every acknowledgement in it, and progress in the fault-free
   configuration.
 
-  Configurations checked (2026-10-11, release build, 32 threads), all passing:
-
-  | Writers × attempts | Faults | Unique states |
-  | --- | --- | --- |
-  | 2 × 2 | none | 816 |
-  | 2 × 2 | lost replies | 3,466 |
-  | 2 × 2 | stale listings | 1,216 |
-  | 2 × 2 | stale listings, lost replies, one freeze | 182,175 |
-  | 2 × 1 | everything, one freeze | 58,233 |
-  | 2 × 2 | everything but stale listings, one freeze | 1,218,058 |
-  | 2 × 2 | everything, one freeze (ignored) | 10,070,673 |
-  | 3 × 1 | everything, one freeze | 1,157,560 |
-  | 3 × 2 | everything but freezing (ignored) | 240,648,054 |
-
-  `just test` runs the configurations not marked ignored, among them every
-  fault with one attempt per writer, and every fault but stale listings
-  with two. `just fs-model-check` runs the ignored ones, except three
-  writers with two attempts and a freeze: about 5 minutes and 2.4 GB in
-  release. That configuration is too large to finish; it is kept as an
-  ignored test to document it.
-
-- **NFS properties.** Every operation the protocol relies on was exercised
-  on two NFS client mounts of one export, on NFSv4.2, 3 and 4.0: exclusive
-  marker rename, content link and directory rename across clients, rename
-  of a cached name another client renamed away, no silly rename from any
-  protocol operation, listings during renames, the nudge, reads of a file
-  deleted by the other client, the migration read, directory fsync. Script
-  and findings: `icechunk-fs-nfs-verify.py` and `icechunk-fs-nfs-verify.md`
-  (kept outside the repo). Lost replies need fault injection and are
-  untested.
 - **Storage tests.** The existing `Storage` tests run against
   `FilesystemStorage`, covering the reworked read and `put_object` APIs on
   every backend.
@@ -871,52 +588,6 @@ What an implementation of this section needs beyond the algorithm.
   runs many worker processes against one repo on a real filesystem, then
   checks what they did against what they logged. Its README is the operator
   runbook.
-  - **Modes.** In storage mode every worker updates `repo` with
-    `put_object_conditional`, backing up the base to
-    `overwritten/<attempt id>` first. In repository mode workers commit to
-    their own branch, commit to `main` with rebase, and create tags, each
-    commit overwriting one chunk; optionally a GC worker runs throughout.
-  - **Faults.** Through test-only protocol hooks of the backend
-    (`fault-injection` feature), workers `SIGKILL` themselves or pause at
-    chosen protocol steps. Each host's supervisor also `SIGKILL`s a random
-    worker every few seconds and respawns it. A run fails unless enough
-    faults of each kind fired.
-  - **Oracle.** Workers log each intent before the attempt and its outcome
-    after. Storage mode rebuilds the chain of versions from the backups;
-    repository mode walks every branch's ancestry and checks the tags and
-    each worker's last chunk. Every acknowledged update must be on the chain
-    after its base, and nothing may appear that no intent explains. A
-    conflict that landed fails a run on local filesystems; on network
-    filesystems it is a warning, the lost-reply limitation above. An error
-    that landed is always a warning.
-  - **Liveness and recovery.** No gap between acknowledged updates may exceed
-    30 s (a warning on network filesystems). After the run, a fresh writer
-    must succeed within a few seconds. Then the storage root's files are
-    aged past the sweep's 24-hour floor and swept (by the storage's sweep or
-    by GC), after which only `repo`, and `repo.d/` holding one marker and
-    one version file, may remain in the storage root; `.nfs*` files are
-    ignored. Staging files in subdirectories are reported as a warning (open
-    question 3).
-  - **Multi-host runs.** Operators run it on any filesystem mounted on several
-    hosts. The hosts coordinate only through the shared run directory:
-    `control` is replaced by rename, and the participant list is decided once,
-    by the first host to hard-link its list to `go`.
-  - **Self-test.** `fs-stress selftest` runs each mode once per sabotage
-    listed under [Implementation notes](#implementation-notes). Every case
-    must be detected as a lost update, a false acknowledgement, or a repo
-    the oracle can't read. It exercises only the tidy-up half of sabotage
-    6, since no sweep runs while writers are live; a unit test covers the
-    sweep half.
-  - **Results.** Local runs on tmpfs and ZFS pass. The self-test detects all
-    20 cases (9 sabotages plus the legacy control, in both modes). On two
-    NFS client mounts of one loopback export, 5 minutes each:
-    - NFSv4.2 storage mode passes with 4,415 acknowledged updates and no
-      violation, and repository mode with 5,139;
-    - NFSv3 storage and repository modes show no protocol violation (4,561
-      and 3,673 acknowledged updates). Their cleanup failures are why the
-      stress tool ages leftovers by path and skips names that are gone, and
-      why protocol and staging files are created without `O_EXCL` (open
-      question 8).
 
 ## Follow-up: a read-only mirror at `repo`
 
@@ -1092,40 +763,6 @@ permission on the repo root.
   `object_store` backend during the run, which must always parse it or find
   it missing, never torn, and after a final `publish_mirror` the metadata of
   `repo` must name the current marker.
-
-## Open questions
-
-1. **SMB.** Not analysed: Linux cifs hard-link support, lease breaks on
-   rename, Samba vs Windows servers.
-2. **Requirement 7** is not verified on network filesystems.
-3. **Leftovers outside the repo root.** GC doesn't sweep staging files
-   outside the repo root: of backups in `overwritten/`, of the initial
-   snapshot and transaction log, and of an `EEXIST` fallback in any
-   directory. How to sweep them without a second full listing of large
-   directories such as `chunks/` is open.
-4. **Windows.** NTFS has hard links and atomic rename. Replacing a file
-   another process opened without `FILE_SHARE_DELETE` fails, which would
-   surface as a failed unlink in tidy-up, never as corruption. Windows NFS
-   clients would be unsupported. The backend is not implemented on Windows.
-5. **Non-Linux NFS clients** (macOS, FreeBSD) are not analysed or tested.
-   Safety does not depend on them, but the nudge has no equivalent there, so
-   readers lag by the client's directory attribute cache timeout.
-6. **Lost replies** on NFSv3 and v4.0 have not been exercised; provoking
-   them needs network fault injection.
-7. **Two physical clients.** All NFS verification ran on two mounts of one
-   loopback export, which share one NFSv4 client id.
-8. **Exclusive creates on NFSv3.** An `O_EXCL` create killed before the
-   client's follow-up SETATTR leaves a mode-000 file whose mtime is the
-   client's verifier, possibly far in the future. Protocol and staging files
-   therefore don't use `O_EXCL`. Data files written under their final name
-   still do, and an orphan left this way is never aged out by GC's mtime
-   cutoff.
-9. **Export, import and a continuous mirror** between the two formats are
-   tools yet to be written; the freeze is the backend's part of them.
-10. **An object-store variant** of this format would list `latest.*`
-    newest first in one request, but its commit would be a conditional
-    create of a marker object that is never deleted, a different protocol
-    from the rename used here. The marker key keeps that door open.
 
 ## Previous attempt: compare-and-swap on a single `repo` file
 

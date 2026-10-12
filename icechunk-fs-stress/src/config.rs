@@ -423,14 +423,14 @@ pub fn parse_duration(s: &str) -> anyhow::Result<Duration> {
 mod millis {
     use std::time::Duration;
 
-    use serde::{Deserialize as _, Deserializer, Serializer, ser::Error as _};
+    use serde::{Deserialize as _, Deserializer, Serializer};
 
+    /// Saturates at `u64::MAX` milliseconds, which parsed durations never reach.
     pub(super) fn serialize<S: Serializer>(
         duration: &Duration,
         serializer: S,
     ) -> Result<S::Ok, S::Error> {
-        let millis = u64::try_from(duration.as_millis())
-            .map_err(|_| S::Error::custom("duration too long"))?;
+        let millis = u64::try_from(duration.as_millis()).unwrap_or(u64::MAX);
         serializer.serialize_u64(millis)
     }
 

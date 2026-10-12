@@ -33,7 +33,7 @@ use crate::{
     FilesystemSettings,
     hooks::{NoHooks, ProtocolHooks},
     list::{delete_files, list_recursive},
-    names::{REPO, Version},
+    names::{REPO, Version, sha256_hex},
     path::{key_path, prefix_path},
     read::{last_modified, read_all, read_range, slice_range},
     repo_d::{
@@ -44,15 +44,17 @@ use crate::{
         read::{Current, Since},
         sweep::sweep,
     },
-    version::sha256_hex,
     write::{CreateOutcome, create_exclusive, sync_data_dirs, write_new, write_staged},
 };
 
-/// A [`Storage`] on a local or shared POSIX filesystem, safe for concurrent
+/// A [`Storage`] on a local or shared distributed filesystem, safe for concurrent
 /// writers, including writers on different hosts of a network filesystem, under
 /// the conditions below. See design document 020
 /// (`design-docs/020-filesystem-storage.md`).
 ///
+/// - It uses a different on-disk format from every other backend: `repo` is a
+///   stub file next to a `repo.d/` directory of versions. Other backends and
+///   older Icechunk versions can't open these repositories.
 /// - Safe only if every writer of the repository uses this backend: older
 ///   Icechunk versions, `new_local_filesystem_storage` and
 ///   `force_write_repo_info` overwrite `repo` unconditionally, so they must
@@ -67,10 +69,6 @@ use crate::{
 ///   until it is unfrozen.
 /// - The filesystem must provide hard links, atomic rename by name and
 ///   exclusive directory rename.
-/// - The routing of the `repo` key and the reserved root names are
-///   case-sensitive, so on a case-insensitive filesystem (APFS by default,
-///   SMB) keys that differ from `repo` or `repo.d` only in case must not be
-///   used through the [`Storage`] API. Icechunk never generates them.
 /// - Repositories in the Icechunk 1 format are refused.
 /// - `unsafe_use_conditional_create` and `unsafe_use_conditional_update` are
 ///   ignored, with a warning.
@@ -267,7 +265,7 @@ impl fmt::Display for FilesystemStorage {
 /// they must never write to a repository in this backend's format. Their
 /// repositories must first be converted with
 /// [`FilesystemStorage::migrate_legacy_repo`]. Requires a filesystem that
-/// meets the requirements of design document 020 (hard links, atomic rename
+/// meets the requirements (hard links, atomic rename
 /// by name and exclusive directory rename).
 pub async fn new_filesystem_storage(
     path: &Path,
@@ -283,7 +281,7 @@ pub async fn new_filesystem_storage(
 /// they must never write to a repository in this backend's format. Their
 /// repositories must first be converted with
 /// [`FilesystemStorage::migrate_legacy_repo`]. Requires a filesystem that
-/// meets the requirements of design document 020 (hard links, atomic rename
+/// meets the requirements (hard links, atomic rename
 /// by name and exclusive directory rename).
 pub async fn new_filesystem_storage_with(
     path: &Path,

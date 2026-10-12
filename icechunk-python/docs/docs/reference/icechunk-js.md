@@ -131,6 +131,7 @@ const local = await Storage.newLocalFilesystem('/path/to/repo')
 
 // Filesystem, safe for concurrent writers (experimental, Unix only)
 const fs = await Storage.newFilesystem('/path/to/repo')
+// It uses a different on-disk format, which other backends and older Icechunk versions can't open.
 // fs.migrateLegacyRepo() converts a repository written by newLocalFilesystem (needed before opening it);
 // fs.freezeRepo() and fs.unfreezeRepo() stop and resume changes to the repository
 

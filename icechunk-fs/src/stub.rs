@@ -10,6 +10,7 @@ use icechunk_format::format_constants::{
 
 /// magic | client name padded | V2 | `FilesystemStub` | no compression
 pub(crate) fn stub_bytes() -> Vec<u8> {
+    // FIXME: This is very ugly, all the details of the file format hardcoded here
     let name = format!("{:<ICECHUNK_IMPL_NAME_LEN$}", *ICECHUNK_CLIENT_NAME);
     let mut bytes = Vec::with_capacity(ICECHUNK_FILE_HEADER_LEN);
     bytes.extend_from_slice(ICECHUNK_FORMAT_MAGIC_BYTES);

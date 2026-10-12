@@ -132,9 +132,9 @@ test-integration rooted="true" *args:
   exit $rc
 
 [group('test')]
-[doc("Run the large model checks of the filesystem storage protocol (scheduled CI only; about 5 min and 2.4 GB of RAM)")]
-fs-model-check:
-  cargo test --release -p icechunk-fs --test protocol_model -- --ignored --nocapture --test-threads=1 --skip three_writers_everything
+[doc("Run the large model checks of the filesystem storage protocol, or those matching the filters (about 4 min on 32 cores, over an hour on a 4-core CI runner; 2.4 GB of RAM)")]
+fs-model-check *filters:
+  cargo test --release -p icechunk-fs --test protocol_model -- --ignored --nocapture --test-threads=1 --skip three_writers_everything {{filters}}
 
 [group('test')]
 [script]
