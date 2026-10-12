@@ -12,7 +12,8 @@ Icechunk works the same whether you store gigabytes on a laptop, terabytes in a 
 
 Reads stay fast at every size: Icechunk fetches only the chunks you need and downloads them in parallel.
 
-NASA's virtual stores feasibility report recommends adopting Icechunk ([report](https://nasa-impact.github.io/virtual-stores-feasibility-report/recommendations.html)), and NOAA's National Weather Service has adopted it for its CIRRUS cloud data platform ([blog post](https://www.earthmover.io/blog/icechunk-at-nws-cirrus)).
+Individual researchers use Icechunk, and government agencies are adopting it for national-scale projects.
+NOAA's National Weather Service has adopted it for its CIRRUS cloud data platform ([blog post](https://www.earthmover.io/blog/icechunk-at-nws-cirrus)), and a NASA feasibility report recommends it for virtual data stores ([report](https://nasa-impact.github.io/virtual-stores-feasibility-report/recommendations.html)).
 
 [:octicons-arrow-right-24: Tuning performance](guides/performance.md) ·
 [:octicons-arrow-right-24: Parallel writes](understanding/parallel.md)
