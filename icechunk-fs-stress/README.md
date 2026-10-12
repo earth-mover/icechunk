@@ -172,7 +172,10 @@ Details:
 that doesn't need the filesystem: it copies the binary, checks the hosts,
 creates the run root, starts `workers` on every host, verifies, and copies
 the results back. It can also inject network faults on one host during the
-run.
+run. `scripts/remote.sh --help` summarises its options and commands. To try it on
+Lustre, BeeGFS, CephFS, NFS and GPFS without a cluster, the
+[VM lab](vms/README.md) creates servers and client hosts on one Linux machine
+and runs `remote.sh` on them.
 
 ### What it needs
 
@@ -185,25 +188,25 @@ run.
 - For network faults, on the fault host only: passwordless `sudo`, `nft`
   (nftables), `tc` (iproute-tc) and `ss`.
 
-### Setup
+### Options
 
-| Variable | Default | Meaning |
+These come before the command:
+
+| Option | Default | Meaning |
 | --- | --- | --- |
-| `FS_STRESS_HOSTS` | required | ssh destinations, space-separated: `user@host1 user@host2` |
-| `FS_STRESS_RESULTS` | required | local directory for the fetched results |
-| `FS_STRESS_SSH_OPTS` | `-o BatchMode=yes -o ConnectTimeout=10` | options for every `ssh` and `scp` |
-| `FS_STRESS_MODES` | `storage repository` | the modes `matrix` runs |
+| `--hosts "HOST…"` | required | ssh destinations, space-separated: `"user@host1 user@host2"` |
+| `--results DIR` | required by `run`, `matrix`, `selftest` | local directory for the fetched results |
+| `--ssh-opts "OPTS"` | `-o BatchMode=yes -o ConnectTimeout=10` | options for every `ssh` and `scp` |
 
-The first host in `FS_STRESS_HOSTS` runs `init`, `verify` and `selftest`.
+The first host in `--hosts` runs `init`, `verify` and `selftest`.
 
 ```sh
-export FS_STRESS_HOSTS="rocky@10.77.0.21 rocky@10.77.0.22"
-export FS_STRESS_RESULTS=~/fs-stress-results
 just fs-stress-static
-scripts/remote.sh deploy target/x86_64-unknown-linux-musl/fs-stress-dist/fs-stress
-scripts/remote.sh preflight /mnt/nfs
-scripts/remote.sh run /mnt/nfs storage --duration 2m
-scripts/remote.sh matrix /mnt/nfs /mnt/lustre -- --duration 2m
+r() { scripts/remote.sh --hosts "user@node1 user@node2" --results ~/fs-stress-results "$@"; }
+r deploy target/x86_64-unknown-linux-musl/fs-stress-dist/fs-stress
+r preflight /mnt/nfs
+r run /mnt/nfs storage --duration 2m
+r matrix /mnt/nfs /mnt/lustre -- --duration 2m
 ```
 
 ### Commands
@@ -215,25 +218,28 @@ scripts/remote.sh matrix /mnt/nfs /mnt/lustre -- --duration 2m
   type as on the first host; `MOUNT/fs-stress/` is writable; the clock is
   within 100 ms of NTP. It prints each host's filesystem type, clock offset
   and free space. Each check gives up after 30 s, so a mount whose server is
-  down fails the preflight instead of hanging it. With network faults on, it
-  also checks the fault host's tools and removes leftover faults.
-- **`run MOUNT MODE [ARGS…]`** runs `preflight`, then `init` on the first host
+  down fails the preflight instead of hanging it. When `run` or `matrix`
+  preflights with network faults on, it also checks the fault host's tools
+  and removes leftover faults.
+- **`run [NET…] MOUNT MODE [ARGS…]`** runs `preflight`, then `init` on the first host
   with `--hosts` set to the number of hosts and `ARGS`, then `workers` on
   every host in parallel, then `verify` on the first host. It fetches the
   results, then deletes the run root if both the workers and `verify`
   succeeded, and keeps it otherwise. The run root is
   `MOUNT/fs-stress/<mount name>-<mode>-<timestamp>`. Progress goes to stderr,
   each line prefixed with its host; the summary goes to stdout. The exit code
-  is `verify`'s, or 1 if a host's `workers` failed.
-- **`matrix MOUNT… [-- ARGS…]`** runs `run` for each mount and each mode in
-  `FS_STRESS_MODES`, one at a time, and goes on after a failure. At the end
-  it prints a table of `PASS`, `FAIL` or `ERROR (exit N)` per run, and saves
-  it as `matrix-<timestamp>.txt` in `FS_STRESS_RESULTS`. It exits with 1 if
-  any run didn't pass.
+  is `verify`'s, or 1 if a host's `workers` failed. `NET` are the
+  [network fault](#network-faults) options; everything after `MODE` goes to
+  `init`.
+- **`matrix [--modes "MODE…"] [NET…] MOUNT… [-- ARGS…]`** runs `run` for each
+  mount and each mode (default: `storage repository`), one at a time, and
+  goes on after a failure. At the end it prints a table of `PASS`, `FAIL` or
+  `ERROR (exit N)` per run, and saves it as `matrix-<timestamp>.txt` in the
+  results directory. It exits with 1 if any run didn't pass.
 - **`selftest MOUNT [ARGS…]`** runs `selftest` on the first host with its root
   parent under `MOUNT/fs-stress/`, and saves its output.
-- **`net-clean`** stops a leftover fault loop on the fault host and removes its
-  rules and its netem queue.
+- **`net-clean [--net-host N]`** stops a leftover fault loop on the fault host
+  and removes its rules and its netem queue.
 
 `^C` during a `run` tells the hosts to stop (`fs-stress stop`), and `verify`
 then checks the stopped run. Nothing bounds a run itself: if a server goes
@@ -243,7 +249,7 @@ checks meaningless.
 
 ### Results
 
-Each run writes `FS_STRESS_RESULTS/<mount name>-<mode>-<timestamp>/`:
+Each run writes `<results>/<mount name>-<mode>-<timestamp>/`:
 
 | File | Content |
 | --- | --- |
@@ -260,25 +266,32 @@ They test the protocol's handling of lost replies: a client whose connection
 breaks resends its outstanding requests, and a resent `link` or `rename` that
 already happened on the server can come back as `EEXIST` or `ENOENT`. The
 faults run on one host, from just after `init` until its workers finish, so
-`verify` runs on a healthy network.
+`verify` runs on a healthy network. `run` and `matrix` take these options
+before their mounts:
 
-| Variable | Default | Meaning |
+| Option | Default | Meaning |
 | --- | --- | --- |
-| `FS_STRESS_NET_RESET_EVERY` | off | seconds between connection resets, jittered between 0.5× and 1.5× |
-| `FS_STRESS_NET_OUTAGE` | `0` | seconds after each reset in which new connections are refused |
-| `FS_STRESS_NETEM` | off | `tc netem` arguments for outgoing traffic, e.g. `delay 5ms 2ms loss 1%` |
-| `FS_STRESS_NET_HOST` | the last host | which host gets the faults, 1-based |
+| `--net-reset-every S` | off | seconds between connection resets, jittered between 0.5× and 1.5× |
+| `--net-outage S` | `0` | seconds after each reset in which new connections are refused |
+| `--netem "ARGS"` | off | `tc netem` arguments for outgoing traffic, e.g. `"delay 5ms 2ms loss 1%"` |
+| `--net-host N` | the last host | which host gets the faults, 1-based |
 
-Network faults are on when `FS_STRESS_NET_RESET_EVERY` or `FS_STRESS_NETEM`
-is set.
+Network faults are on when `--net-reset-every` or `--netem` is given:
+
+```sh
+scripts/remote.sh --hosts "…" --results … run --net-reset-every 15 /mnt/nfs storage
+```
 
 - **What they hit.** All TCP from the fault host to the control machine's
   /24, as the fault host sees the control machine's address, except the
   control machine itself, so the ssh sessions survive. The file servers must
-  be in that /24.
+  be in that /24. The faults hit every filesystem mounted on the fault host,
+  not only the one under test, and its connections to the other hosts too:
+  GPFS daemons, for example, talk to each other directly and log
+  "Connection reset by peer" on the other hosts.
 - **A reset** kills the fault host's live connections to them with `ss -K`;
   the kernel clients reconnect on their next request. With
-  `FS_STRESS_NET_OUTAGE`, an `nft` rule also refuses new connections with a
+  `--net-outage`, an `nft` rule also refuses new connections with a
   TCP reset for that long.
 - **Netem** delays, drops or reorders outgoing packets. Over TCP, loss only
   slows the client down: TCP retransmits the packets, and no RPC reply is
@@ -581,5 +594,7 @@ From the repository root, with the dev profile:
 - `just fs-stress-static`: the static binary for other hosts.
 - `scripts/remote.sh`: see
   [Driving several hosts from one machine](#driving-several-hosts-from-one-machine).
+- `vms/lab.sh`: a lab of libvirt VMs serving Lustre, BeeGFS, CephFS, NFS
+  and GPFS to client VMs; see [its README](vms/README.md).
 
 None of these run in CI.
