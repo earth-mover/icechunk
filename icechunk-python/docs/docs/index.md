@@ -31,6 +31,7 @@ NOAA's National Weather Service has adopted it for its CIRRUS cloud data platfor
 
 Reading a TIFF, HDF5, NetCDF or GRIB file from the cloud is slow.
 A reader has to fetch headers and offset tables before it finds the bytes it wants.
+Each lookup is another round trip, so it is often faster to download the entire file first.
 
 With Icechunk, you parse each file once and record where every chunk's bytes are.
 Every reader after that skips the parsing.
