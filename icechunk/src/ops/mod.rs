@@ -412,15 +412,16 @@ mod tests {
             }),
         };
         let attempts = AtomicUsize::new(0);
-        let res: Result<(), _> = retry_on_repo_info_update(Some(&retries), "test", || {
-            attempts.fetch_add(1, Ordering::SeqCst);
-            async {
-                Err(GCError::Repository(RepositoryError::capture(
-                    RepositoryErrorKind::RepoInfoUpdated,
-                )))
-            }
-        })
-        .await;
+        let res: Result<(), _> =
+            retry_on_repo_info_update(Some(&retries), "test", || {
+                attempts.fetch_add(1, Ordering::SeqCst);
+                async {
+                    Err(GCError::Repository(RepositoryError::capture(
+                        RepositoryErrorKind::RepoInfoUpdated,
+                    )))
+                }
+            })
+            .await;
         assert!(res.is_err());
         assert_eq!(attempts.load(Ordering::SeqCst), 3);
     }
