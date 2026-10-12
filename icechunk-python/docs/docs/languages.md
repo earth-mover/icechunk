@@ -4,24 +4,24 @@ title: Languages
 
 # Languages
 
-Icechunk is a format with a Rust core.
-Most libraries bind to that core, so every one of them reads and writes the same repositories.
+Icechunk is an open format with a reference implementation in Rust.
+Most libraries bind to that implementation, so every one of them reads and writes the same repositories.
 Independent readers implement the [spec](reference/spec-v2-1.md) directly.
 
 ## Official
 
-Maintained in the [icechunk repository](https://github.com/earth-mover/icechunk) and supported by Earthmover.
+Maintained and released from the main [icechunk repository](https://github.com/earth-mover/icechunk).
 
 | Language | Package | Access | Notes |
 |---|---|---|---|
-| Rust | [`icechunk`](https://crates.io/crates/icechunk) | Read and write | The core library. [Rust docs](reference/icechunk-rust.md) |
+| Rust | [`icechunk`](https://crates.io/crates/icechunk) | Read and write | The reference implementation. [Rust docs](reference/icechunk-rust.md) |
 | Python | [`icechunk`](https://pypi.org/project/icechunk) | Read and write | Works with Zarr Python, Xarray and Dask. [API reference](reference/index.md) |
 | JavaScript / TypeScript | [`@earthmover/icechunk`](https://www.npmjs.com/package/@earthmover/icechunk) | Read and write | Node.js through native bindings, the browser through WebAssembly. Use with zarrita. [JS docs](reference/icechunk-js.md) |
 
 ## Experimental
 
-Earthmover projects under the [earth-mover](https://github.com/earth-mover) GitHub organization.
-They bind to the Rust core but are not officially supported yet, and their APIs change without notice.
+Bindings that live in their own repositories, linked below.
+They bind to the Rust implementation but are not officially supported yet, and their APIs change without notice.
 
 | Language | Package | Access | Notes |
 |---|---|---|---|
@@ -30,20 +30,20 @@ They bind to the Rust core but are not officially supported yet, and their APIs 
 
 ## Community
 
-Built and maintained outside Earthmover.
+Built and maintained by the community.
 
 | Language | Project | Access | Notes |
 |---|---|---|---|
 | C++ | [GDAL Icechunk driver](https://gdal.org/en/latest/drivers/raster/icechunk.html) | Read only | Independent implementation of the spec. |
 | TypeScript | [EarthyScience/icechunk-js](https://github.com/EarthyScience/icechunk-js) | Read only | Independent implementation, designed for zarrita. |
 | JavaScript | [Neuroglancer](https://neuroglancer-docs.web.app/datasource/icechunk/index.html) | Read only | Independent implementation in Google's volumetric viewer. |
-| Rust | [zarrs_icechunk](https://github.com/zarrs/zarrs_icechunk) | Read and write | Icechunk store for the zarrs crate, built on the `icechunk` crate. |
+| Rust (zarrs) | [zarrs_icechunk](https://github.com/zarrs/zarrs_icechunk) | Read and write | Connects the [zarrs](https://zarrs.dev/) crate to Icechunk repositories through the `icechunk` crate. Reads virtual datasets built with VirtualiZarr. |
 
 Independent readers can lag behind new spec versions, so check which versions each one reads.
 
 ## R
 
-Native R bindings are in progress.
+Native R bindings are planned.
 Today, R can use the Python library through [reticulate](https://rstudio.github.io/reticulate/):
 
 ```r

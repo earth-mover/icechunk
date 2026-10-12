@@ -6,13 +6,14 @@ title: Icechunk - Open-source, high-performance array format and library for sci
 <div class="benefit-row" markdown>
 <div class="benefit-text" markdown>
 
-## Scale {#scale}
+## Scale and Speed {#scale}
 
-Store gigabytes on your laptop or terabytes in a bucket, or reference petabytes of existing files with a repository of gigabytes. The same format and library cover all three.
+Icechunk works the same whether you store gigabytes on a laptop, terabytes in a bucket, or reference petabytes of existing files from a repository of a few gigabytes.
 
-A read fetches only the chunks it touches, and opening a repository never lists the bucket.
+Reads stay fast at every size: Icechunk fetches only the chunks you need and downloads them in parallel.
 
-NASA's virtual stores feasibility report recommends adopting Icechunk ([report](https://nasa-impact.github.io/virtual-stores-feasibility-report/recommendations.html)), and NOAA's National Weather Service has adopted it for its CIRRUS cloud data platform ([blog post](https://www.earthmover.io/blog/icechunk-at-nws-cirrus)).
+Individual researchers use Icechunk, and government agencies are adopting it for national-scale projects.
+NOAA's National Weather Service has adopted it for its CIRRUS cloud data platform ([blog post](https://www.earthmover.io/blog/icechunk-at-nws-cirrus)), and a NASA feasibility report recommends it for virtual data stores ([report](https://nasa-impact.github.io/virtual-stores-feasibility-report/recommendations.html)).
 
 [:octicons-arrow-right-24: Tuning performance](guides/performance.md) ·
 [:octicons-arrow-right-24: Parallel writes](understanding/parallel.md)
@@ -26,16 +27,18 @@ NASA's virtual stores feasibility report recommends adopting Icechunk ([report](
 <div class="benefit-row" markdown>
 <div class="benefit-text" markdown>
 
-## Zero-copy ingest {#zero-copy-ingest}
+## Zero-Copy Ingest {#zero-copy-ingest}
 
 Reading a TIFF, HDF5, NetCDF or GRIB file from the cloud is slow.
 A reader has to fetch headers and offset tables before it finds the bytes it wants.
+Each lookup is another round trip, so it is often faster to download the entire file first.
 
-The writer pays that cost once, when creating the repository.
-After that, reading a virtual chunk is one range request to the original file.
-The files are not copied or changed.
+With Icechunk, you parse each file once and record where every chunk's bytes are.
+Every reader after that skips the parsing.
+Reading a virtual chunk (a pointer to bytes in the original file) is one range request instead of many round trips.
+This makes the files cloud-optimized without duplicating or changing the originals.
 
-The GOES-16 satellite archive, 115 TB in 380,000 NetCDF files, became an 80 GB Icechunk repository this way ([blog post](https://www.earthmover.io/blog/virtual-zarr)).
+This technique turned the 115 TB GOES-16 satellite archive (380,000 NetCDF files) into an Icechunk repository of about 80 GB ([blog post](https://www.earthmover.io/blog/virtual-zarr)).
 
 [:octicons-arrow-right-24: Virtual datasets](guides/virtual.md)
 
@@ -48,11 +51,12 @@ The GOES-16 satellite archive, 115 TB in 380,000 NetCDF files, became an 80 GB I
 <div class="benefit-row" markdown>
 <div class="benefit-text" markdown>
 
-### Mix virtual and native chunks {#mix-virtual-and-native}
+### Mix Virtual and Native Chunks {#mix-virtual-and-native}
 
-One array can hold both.
-Reference the archive where it sits, then append new data, fix a bad chunk, or add a downsampled level as native chunks.
-Readers see one array and never need to know which is which.
+You don't have to choose between virtual and native chunks.
+One repository, and even one array, can mix both.
+Reference an archive where it sits, then append new data, fix a bad chunk, or add downsampled levels as native chunks.
+Anyone reading the repository sees ordinary Zarr and never needs to know which kind of chunk they are reading.
 
 </div>
 <div class="benefit-figure">
@@ -65,11 +69,11 @@ Readers see one array and never need to know which is which.
 
 ## Versioning {#versioning}
 
-Every change is a commit, deletes included.
-Undo a bad write or an accidental delete by moving the branch back to an earlier commit.
+In a plain Zarr store, a bad write or an accidental delete is permanent.
+Icechunk records every change as a commit, so you can undo a mistake by moving the branch back to an earlier commit.
 Old commits stay readable until you choose to expire them.
 
-Tag a commit to cite it in a paper, or branch to try a change without affecting anyone else.
+Tag a commit to cite the exact data in a paper, or create a branch to try a change without affecting anyone else.
 
 [:octicons-arrow-right-24: Version control](understanding/version-control.md)
 
@@ -82,10 +86,10 @@ Tag a commit to cite it in a paper, or branch to try a change without affecting 
 <div class="benefit-row" markdown>
 <div class="benefit-text" markdown>
 
-### History without ballooning storage {#history-storage}
+### History Without Ballooning Storage {#history-storage}
 
-A commit writes only the chunks that changed.
-Every other chunk in the new snapshot points at data already in storage, so a long history costs a fraction of keeping full copies.
+Keeping history doesn't mean keeping full copies.
+A commit writes only the chunks that changed, and every other chunk points at data already in storage.
 
 [:octicons-arrow-right-24: Expiring old data](understanding/expiration.md)
 
@@ -98,10 +102,12 @@ Every other chunk in the new snapshot points at data already in storage, so a lo
 <div class="benefit-row" markdown>
 <div class="benefit-text" markdown>
 
-## Consistency {#consistency}
+## ACID Transactions {#consistency}
 
-Icechunk gives you ACID transactions on arrays.
-Without them, a reader can catch a write halfway and get arrays that don't match.
+Without transactions, a reader can catch a write halfway.
+The result is a Schrödinger's array, but unlike Schrödinger's cat, looking at it doesn't settle it into one state.
+You can get some chunks from before the write and some from after, an array that never existed.
+The animation shows a reader catching one.
 
 With Icechunk, a reader always sees one complete commit, even while another process is writing.
 When two writers commit at once, the second is rejected or rebased, never silently overwritten.
@@ -117,9 +123,9 @@ When two writers commit at once, the second is rejected or rebased, never silent
 <div class="benefit-row" markdown>
 <div class="benefit-text" markdown>
 
-## Format and client only {#format-and-client-only}
+## No Server Required {#format-and-client-only}
 
-The Icechunk library runs inside your program and reads and writes files directly.
+The Icechunk library runs inside your code and reads and writes files directly.
 There is no server, database or service to run.
 
 - [The format spec](reference/spec-v2-1.md)

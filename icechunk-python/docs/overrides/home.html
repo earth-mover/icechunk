@@ -1,11 +1,5 @@
 {% extends "main.html" %}
 
-<!-- Announcement bar -->
-{% block announce %}
-  <div class="banner">Announcing Icechunk 2.0: Better consistency, performance, and reliability for tensor storage. <a href="https://earthmover.io/blog/announcing-icechunk-2-better-consistency-performance-and-reliability-for-tensor-storage" target="_blank">Read more</a>.</div>
-{% endblock %}
-
-
 {% block tabs %}
   {{ super() }}
 
@@ -47,11 +41,11 @@
 <!-- Content -->
 {% block content %}
     {% set panes = [
-        ("scale", "speedometer", "Scale", "Gigabytes on a laptop to petabytes in the cloud"),
-        ("zero-copy-ingest", "file-link-outline", "Zero-copy ingest", "Use existing files where they are, without copying"),
-        ("versioning", "source-branch", "Versioning", "Never lose data to a bad write or delete"),
-        ("consistency", "check-all", "Consistency", "ACID transactions: never read a half-finished write"),
-        ("format-and-client-only", "server-off", "Format and client only", "Just files and a client library. No server."),
+        ("scale", "speedometer", "Scale and Speed", "Gigabytes to petabytes. Never the bottleneck."),
+        ("zero-copy-ingest", "file-link-outline", "Zero-Copy Ingest", "HDF5, NetCDF, h5ad, TIFF, ND2, GRIB and more"),
+        ("versioning", "source-branch", "Versioning", "Cite exact versions and collaborate on branches"),
+        ("consistency", "check-all", "ACID Transactions", "Commits are all or nothing. No partial reads."),
+        ("format-and-client-only", "server-off", "No Server Required", "Client and format only. No service to run."),
     ] %}
     <div class="mdx-container">
         <div id="home-content" class="md-grid md-typeset">
