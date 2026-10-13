@@ -38,8 +38,8 @@ use tokio::sync::RwLock;
 
 use bytes::Bytes;
 use icechunk_arrow_object_store::object_store::{
-    ObjectStore, PutMode, PutOptions, PutPayload, azure::AzureConfigKey,
-    local::LocalFileSystem,
+    ObjectStore, ObjectStoreExt as _, PutMode, PutOptions, PutPayload,
+    azure::AzureConfigKey, local::LocalFileSystem,
 };
 use pretty_assertions::assert_eq;
 
@@ -647,6 +647,87 @@ async fn test_repository_with_local_virtual_refs(
             Some(range.slice(&bytes1))
         );
     }
+    Ok(())
+}
+
+/// The `ETag` a backend reports must be usable verbatim as a checksum.
+/// `object_store`'s `LocalFileSystem` compares `If-Match` values exactly, so a
+/// stored `ETag` that gets its quotes stripped never matches and every read fails
+/// with `ObjectModified`. Regression test for the `If-Match` handling after
+/// <https://github.com/earth-mover/icechunk/pull/2289>.
+#[tokio_test]
+#[apply(spec_version_cases)]
+async fn test_repository_with_local_virtual_refs_etag_checksum(
+    #[case] spec_version: SpecVersionBin,
+) -> Result<(), Box<dyn Error>> {
+    let chunk_dir = TempDir::new()?;
+    let chunk_1 = chunk_dir.path().join("chunk-1").to_str().unwrap().to_owned();
+    let bytes1 = Bytes::copy_from_slice(b"first");
+    write_chunks_to_local_fs([(chunk_1.clone(), bytes1.clone())].into_iter()).await;
+
+    let local_store = LocalFileSystem::new_with_prefix("/")?;
+    let etag = local_store
+        .head(&chunk_1.clone().into())
+        .await?
+        .e_tag
+        .expect("LocalFileSystem reports an ETag");
+
+    let repo_dir = TempDir::new()?;
+    let repo =
+        create_local_repository(repo_dir.path(), Some(chunk_dir.path()), spec_version)
+            .await;
+    let mut ds = repo.writable_session("main").await.unwrap();
+
+    let shape = ArrayShape::new(vec![(2, 2)]).unwrap();
+    let new_array_path: Path = "/array".try_into().unwrap();
+    ds.add_array(new_array_path.clone(), shape, None, Bytes::new()).await.unwrap();
+
+    let location = VirtualChunkLocation::from_url(&format!("file://{chunk_1}"))?;
+    let matching = ChunkPayload::Virtual(VirtualChunkRef {
+        location: location.clone(),
+        offset: 0,
+        length: 5,
+        checksum: Some(Checksum::ETag(ETag(etag))),
+    });
+    let stale = ChunkPayload::Virtual(VirtualChunkRef {
+        location,
+        offset: 0,
+        length: 5,
+        checksum: Some(Checksum::ETag(ETag(String::from("\"not-the-etag\"")))),
+    });
+    ds.set_chunk_ref(new_array_path.clone(), ChunkIndices(vec![0]), Some(matching))
+        .await
+        .unwrap();
+    ds.set_chunk_ref(new_array_path.clone(), ChunkIndices(vec![1]), Some(stale))
+        .await
+        .unwrap();
+
+    // The real ETag matches, so the chunk reads back.
+    assert_eq!(
+        get_chunk(
+            ds.get_chunk_reader(&new_array_path, &ChunkIndices(vec![0]), &ByteRange::ALL)
+                .await
+                .unwrap()
+        )
+        .await
+        .unwrap(),
+        Some(bytes1),
+    );
+    // A different ETag still fails loudly.
+    assert!(matches!(
+        get_chunk(
+            ds.get_chunk_reader(&new_array_path, &ChunkIndices(vec![1]), &ByteRange::ALL)
+                .await
+                .unwrap()
+        )
+        .await,
+        Err(SessionError {
+            kind: SessionErrorKind::VirtualReferenceError(
+                VirtualReferenceErrorKind::ObjectModified(location)
+            ),
+            ..
+        }) if location.contains("chunk-1")
+    ));
     Ok(())
 }
 

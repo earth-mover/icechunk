@@ -1,5 +1,11 @@
 # Changelog
 
+## Python Icechunk Library [unreleased]
+
+### Fixes
+
+- Virtual chunks stored with their object's real ETag can be read from `local_filesystem_store` containers again. The ETag is now sent in `If-Match` unchanged instead of with its quotes stripped. This broke in 2.1.2.
+
 ## Python Icechunk Library 2.3.0
 
 ### Features
