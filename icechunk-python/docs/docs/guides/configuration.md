@@ -328,7 +328,7 @@ When using virtual chunk containers, the containers must be authorized by the re
 
     Only the first step is prefix based. Authorizing a parent path does **not** authorize containers defined below it. If the repo defines a container at `s3://mybucket/data/2020/` and you authorize `s3://mybucket/data/`, chunks in that container fail with an "unauthorized virtual chunk container" error. Keys that match no container are ignored, so the mistake only surfaces when a chunk is fetched.
 
-    To authorize everything under a path, define the container at that path (see [Authorizing a whole prefix](#authorizing-a-whole-prefix) below).
+    To authorize everything under a path, define the container at that path (e.g., a container at `s3://mybucket/data/`).
 
 ### Example
 
