@@ -1,5 +1,5 @@
 # Deepak runs this with
-# pip install ../../xarray && ICECHUNK_XARRAY_BACKENDS_TESTS=1 pytest -s --pdb -c=../../xarray/pyproject.toml -W ignore tests/run_xarray_backends_tests.py
+# pip install ../../xarray && ICECHUNK_XARRAY_BACKENDS_TESTS=1 pytest -s --pdb -p xarray.tests.conftest -c=../../xarray/pyproject.toml -W ignore tests/run_xarray_backends_tests.py
 import contextlib
 import os
 import pickle
@@ -24,17 +24,27 @@ from icechunk.xarray import to_icechunk
 from tests.conftest import Permission
 from xarray.testing import assert_identical
 
-# needed otherwise not discovered
-from xarray.tests.conftest import time_unit  # noqa: F401, RUF100
-from xarray.tests.test_backends import (
-    TestZarrRegionAuto as ZarrRegionAutoTests,
-)
-from xarray.tests.test_backends import (
-    ZarrBase,
-    # needed otherwise not discovered
-    default_zarr_format,  # noqa: F401, RUF100
-    tmp_store,  # noqa: F401, RUF100
-)
+# tmp_store is imported because pytest only uses fixtures defined in or
+# imported into the test module
+try:
+    from xarray.tests.test_backends import (
+        TestZarrRegionAuto as ZarrRegionAutoTests,
+    )
+    from xarray.tests.test_backends import (  # noqa: F401
+        ZarrBase,
+        default_zarr_format,
+        tmp_store,
+    )
+except ImportError:
+    # newer xarray splits the backend tests into xarray/tests/backends/ and
+    # moves default_zarr_format to xarray/tests/conftest.py
+    from xarray.tests.backends.test_zarr import (  # type: ignore[import-not-found,no-redef,unused-ignore]
+        TestZarrRegionAuto as ZarrRegionAutoTests,
+    )
+    from xarray.tests.backends.test_zarr import (  # type: ignore[import-not-found,no-redef,unused-ignore]  # noqa: F401
+        ZarrBase,
+        tmp_store,
+    )
 
 
 class SpecVersionMixin:
@@ -221,7 +231,7 @@ class TestIcechunkRegionAuto(SpecVersionMixin, ZarrRegionAutoTests):
             "this test requires multiple saves, and is meant to exercise Xarray logic."
         )
 
-    def test_dataset_to_zarr_align_chunks_true(self, tmp_store: IcechunkStore) -> None:  # noqa: F811
+    def test_dataset_to_zarr_align_chunks_true(self, tmp_store: IcechunkStore) -> None:
         pytest.skip(
             "this test requires multiple saves, and is meant to exercise Xarray logic."
         )

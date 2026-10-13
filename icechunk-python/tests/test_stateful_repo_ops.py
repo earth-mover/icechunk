@@ -1113,7 +1113,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         delete_expired_tags: bool,
     ) -> None:
         assert self.storage is not None
-        older_than = draw_older_than(data, self.storage)
+        older_than = draw_older_than(data, self.storage, self.repo)
         note(
             f"Expiring snapshots {older_than=!r}, {delete_expired_branches=!r}, {delete_expired_tags=!r}"
         )
@@ -1191,7 +1191,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
     @rule(data=st.data())
     def garbage_collect(self, data: st.DataObject) -> None:
         assert self.storage is not None
-        older_than = draw_older_than(data, self.storage)
+        older_than = draw_older_than(data, self.storage, self.repo)
         note(f"running garbage_collect for {older_than=!r}")
         # Capture snapshot created_at before Rust GC deletes files
         created_at_by_id = {

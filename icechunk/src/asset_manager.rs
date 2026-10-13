@@ -43,7 +43,7 @@ use crate::format::repo_info::RepoAvailability;
 use crate::storage::GetModifiedResult;
 use crate::{
     RepositoryConfig, Storage, StorageError,
-    config::CachingConfig,
+    config::{CachingConfig, RepoUpdateRetryConfig},
     format::{
         CHUNKS_FILE_PATH, CONFIG_FILE_PATH, ChunkId, ChunkOffset, IcechunkFormatError,
         IcechunkFormatErrorKind, MANIFESTS_FILE_PATH, ManifestId, OVERWRITTEN_FILES_PATH,
@@ -891,17 +891,17 @@ impl AssetManager {
         self.write_repo_info(info, &VersionInfo::for_creation(), None).await
     }
 
-    #[instrument(skip(self, retry_settings, update))]
+    #[instrument(skip(self, retries, update))]
     pub async fn update_repo_info(
         &self,
-        retry_settings: &storage::RetriesSettings,
+        retries: &RepoUpdateRetryConfig,
         update: impl FnMut(
             Arc<RepoInfo>,
             &str,
             VersionInfo,
         ) -> RepositoryResult<Arc<RepoInfo>>,
     ) -> RepositoryResult<VersionInfo> {
-        self.update_repo_info_internal(retry_settings, update, false).await
+        self.update_repo_info_internal(retries, update, false).await
     }
 
     /// # Safety
@@ -909,23 +909,23 @@ impl AssetManager {
     /// This overrides any checks on the repo status, and force
     /// an update.
     #[expect(unsafe_code)]
-    #[instrument(skip(self, retry_settings, update))]
+    #[instrument(skip(self, retries, update))]
     pub async unsafe fn update_repo_info_unchecked(
         &self,
-        retry_settings: &storage::RetriesSettings,
+        retries: &RepoUpdateRetryConfig,
         update: impl FnMut(
             Arc<RepoInfo>,
             &str,
             VersionInfo,
         ) -> RepositoryResult<Arc<RepoInfo>>,
     ) -> RepositoryResult<VersionInfo> {
-        self.update_repo_info_internal(retry_settings, update, true).await
+        self.update_repo_info_internal(retries, update, true).await
     }
 
-    #[instrument(skip(self, retry_settings, update))]
+    #[instrument(skip(self, retries, update))]
     async fn update_repo_info_internal(
         &self,
-        retry_settings: &storage::RetriesSettings,
+        retries: &RepoUpdateRetryConfig,
         mut update: impl FnMut(
             Arc<RepoInfo>,
             &str,
@@ -933,12 +933,14 @@ impl AssetManager {
         ) -> RepositoryResult<Arc<RepoInfo>>,
         skip_online_check: bool,
     ) -> RepositoryResult<VersionInfo> {
+        let retry_settings = retries.retries();
         let max_attempts = retry_settings.max_tries().get() as usize;
+        let max_retries = max_attempts - 1;
 
         // The first few retries are immediate (no delay) since brief contention
         // typically resolves within one or two attempts. After that, we switch to
         // exponential backoff with jitter.
-        let immediate_retries = 5;
+        let immediate_retries = max_retries.min(5);
         let const_backoff = ConstantBuilder::new()
             .with_delay(Duration::ZERO)
             .with_max_times(immediate_retries)
@@ -948,7 +950,7 @@ impl AssetManager {
                 retry_settings.initial_backoff_ms() as u64
             ))
             .with_max_delay(Duration::from_millis(retry_settings.max_backoff_ms() as u64))
-            .with_max_times(max_attempts.saturating_sub(immediate_retries))
+            .with_max_times(max_retries - immediate_retries)
             .with_jitter()
             .build();
         let mut backoff = const_backoff.chain(exp_backoff);
@@ -2622,6 +2624,100 @@ mod test {
         assert_eq!(Arc::clone(&repo_info), fetched_repo_info);
         assert_eq!(new_version, version);
 
+        Ok(())
+    }
+
+    /// Calls `update_repo_info` with `max_tries`, letting a rival writer update
+    /// the repo info under it during each of its first `conflicts` attempts.
+    /// Returns how many attempts it made and how it ended.
+    async fn update_with_conflicts(
+        max_tries: u16,
+        conflicts: usize,
+    ) -> Result<(usize, RepositoryResult<VersionInfo>), Box<dyn std::error::Error>> {
+        let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+        let new_manager = || {
+            AssetManager::new_no_cache(
+                Arc::clone(&backend),
+                storage::Settings::default(),
+                SpecVersionBin::default(),
+                1,
+                100,
+            )
+        };
+        let (manager, rival) = (new_manager(), new_manager());
+        let initial = Snapshot::initial(SpecVersionBin::current())?;
+        manager
+            .create_repo_info(Arc::new(RepoInfo::initial(
+                SpecVersionBin::current(),
+                SnapshotInfo::from_snapshot_file(&initial)?,
+                100,
+                None::<&()>,
+                None,
+            )))
+            .await?;
+
+        let retries = RepoUpdateRetryConfig {
+            default: Some(storage::RetriesSettings {
+                max_tries: NonZeroU16::new(max_tries),
+                initial_backoff_ms: Some(1),
+                max_backoff_ms: Some(1),
+            }),
+        };
+        // the update closure is sync, so the rival writes from its own runtime
+        let rival_update = || {
+            std::thread::scope(|s| {
+                s.spawn(|| {
+                    tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                        .expect("a runtime for the rival writer")
+                        .block_on(rival.update_repo_info(
+                            &RepoUpdateRetryConfig::default(),
+                            |repo_info, _, _| Ok(repo_info),
+                        ))
+                })
+                .join()
+                .expect("the rival writer must not panic")
+            })
+        };
+        let mut attempts = 0;
+        let res = manager
+            .update_repo_info(&retries, |repo_info, _, _| {
+                attempts += 1;
+                if attempts <= conflicts {
+                    rival_update()?;
+                }
+                Ok(repo_info)
+            })
+            .await;
+        Ok((attempts, res))
+    }
+
+    #[tokio_test]
+    async fn test_update_repo_info_makes_at_most_max_tries_attempts()
+    -> Result<(), Box<dyn std::error::Error>> {
+        // 8 goes past the immediate retries into exponential backoff
+        for max_tries in [1, 2, 6, 8] {
+            let (attempts, res) = update_with_conflicts(max_tries, usize::MAX).await?;
+            assert_eq!(attempts, max_tries as usize);
+            let err = res.expect_err("every attempt conflicted");
+            assert!(
+                matches!(err.kind, RepositoryErrorKind::RepoUpdateAttemptsLimit(n) if n == max_tries as u64),
+                "{err}"
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio_test]
+    async fn test_update_repo_info_succeeds_on_the_last_try()
+    -> Result<(), Box<dyn std::error::Error>> {
+        for max_tries in [1, 2, 8] {
+            let (attempts, res) =
+                update_with_conflicts(max_tries, max_tries as usize - 1).await?;
+            assert_eq!(attempts, max_tries as usize);
+            res?;
+        }
         Ok(())
     }
 

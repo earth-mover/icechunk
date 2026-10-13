@@ -34,7 +34,7 @@ use crate::{
     },
     config::{
         ManifestConfig, ManifestSplitDim, ManifestSplitDimCondition,
-        ManifestSplittingConfig,
+        ManifestSplittingConfig, RepoUpdateRetryConfig,
     },
     conflicts::{Conflict, ConflictResolution, ConflictSolver},
     diff::{Diff, DiffBuilder},
@@ -1662,7 +1662,7 @@ impl Session {
 
         let _ = self
             .asset_manager
-            .update_repo_info(self.config.repo_update_retries().retries(), do_update)
+            .update_repo_info(self.config.repo_update_retries(), do_update)
             .await
             .inject()?;
         Ok(())
@@ -1850,7 +1850,7 @@ impl Session {
             self.config.manifest(),
             allow_empty,
             is_rearrange,
-            self.config.repo_update_retries().retries(),
+            self.config.repo_update_retries(),
             num_updates,
         )
         .await?;
@@ -3335,7 +3335,7 @@ async fn do_commit(
     manifest_config: &ManifestConfig,
     allow_empty: bool,
     is_rearrange: bool,
-    retry_settings: &storage::RetriesSettings,
+    repo_update_retries: &RepoUpdateRetryConfig,
     num_updates_per_repo_info_file: u16,
 ) -> SessionResult<SnapshotId> {
     info!(branch_name, old_snapshot_id=%snapshot_id, "Commit started");
@@ -3387,7 +3387,7 @@ async fn do_commit(
                 new_snapshot,
                 commit_method,
                 is_rearrange,
-                retry_settings,
+                repo_update_retries,
                 num_updates_per_repo_info_file,
             )
             .await
@@ -3456,7 +3456,7 @@ async fn do_commit_v2(
     new_snapshot: Arc<Snapshot>,
     commit_method: CommitMethod,
     is_rearrange: bool,
-    retry_settings: &storage::RetriesSettings,
+    repo_update_retries: &RepoUpdateRetryConfig,
     num_updates_per_repo_info_file: u16,
 ) -> RepositoryResult<storage::VersionInfo> {
     let mut attempt = 0;
@@ -3528,7 +3528,7 @@ async fn do_commit_v2(
         ))
     };
 
-    let res = asset_manager.update_repo_info(retry_settings, do_update).await?;
+    let res = asset_manager.update_repo_info(repo_update_retries, do_update).await?;
     Ok(res)
 }
 

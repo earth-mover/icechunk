@@ -321,9 +321,12 @@ When using virtual chunk containers, the containers must be authorized by the re
 
 !!! important "Keys must match a container's `url_prefix` exactly"
 
-    Icechunk resolves a virtual chunk in two steps. First it picks the container whose `url_prefix` is the longest prefix of the chunk url. Then it looks up that container's `url_prefix`, as an exact string, in `authorize_virtual_chunk_access`.
+    Icechunk resolves a virtual chunk in two steps:
+    
+    - First, it picks the container whose `url_prefix` is the longest prefix of the chunk url.
+    - Second, it looks up that container's `url_prefix`, as an exact string, in `authorize_virtual_chunk_access`.
 
-    Only the first step is prefix based. Authorizing a parent path does **not** authorize containers defined below it: if the repo defines a container at `s3://mybucket/data/2020/` and you authorize `s3://mybucket/data/`, chunks in that container fail with an "unauthorized virtual chunk container" error. Keys that match no container are ignored, so the mistake only surfaces when a chunk is fetched.
+    Only the first step is prefix based. Authorizing a parent path does **not** authorize containers defined below it. If the repo defines a container at `s3://mybucket/data/2020/` and you authorize `s3://mybucket/data/`, chunks in that container fail with an "unauthorized virtual chunk container" error. Keys that match no container are ignored, so the mistake only surfaces when a chunk is fetched.
 
     To authorize everything under a path, define the container at that path (see [Authorizing a whole prefix](#authorizing-a-whole-prefix) below).
 

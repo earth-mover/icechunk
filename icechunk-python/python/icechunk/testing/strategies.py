@@ -133,13 +133,26 @@ def chunk_paths(draw: st.DrawFn, numblocks: tuple[int, ...]) -> str:
     return "/".join(map(str, blockidx))
 
 
-def draw_older_than(data: st.DataObject, storage: ic.Storage) -> datetime.datetime:
+def draw_older_than(
+    data: st.DataObject, storage: ic.Storage, repo: ic.Repository
+) -> datetime.datetime:
     """Draw an ``older_than`` cutoff from storage-level ``created_at`` timestamps.
 
     Uses the same timestamps that the Rust GC compares against, taking the max
     of the snapshot and transaction ``created_at`` for each key so both are
-    reliably expired together.
+    reliably expired together. Expiration compares against the snapshot's
+    ``flushed_at`` instead, which can be later than the file's ``created_at``
+    (Linux stamps file mtimes from a coarse clock), so that is included too.
     """
+    epoch = datetime.datetime(2000, 1, 1, tzinfo=datetime.UTC)
+
+    def flushed_at(snapshot_id: str) -> datetime.datetime:
+        try:
+            return repo.lookup_snapshot(snapshot_id).written_at
+        except ic.SnapshotNotFoundError:
+            # Already expired out of the repo info, so expiration can't select it.
+            return epoch
+
     created_at_snapshots: dict[str, datetime.datetime] = {
         obj.key: obj.created_at
         for obj in storage.list_objects_metadata(prefix="snapshots")
@@ -153,7 +166,8 @@ def draw_older_than(data: st.DataObject, storage: ic.Storage) -> datetime.dateti
         # created_at timestamps. Take the max so we delete both.
         max(
             created_at_snapshots[key],
-            created_at_txs.get(key, datetime.datetime(2000, 1, 1, tzinfo=datetime.UTC)),
+            created_at_txs.get(key, epoch),
+            flushed_at(key),
         )
         for key in created_at_snapshots
     )[::-1]  # reverse to maximize chances of GCing more objects
