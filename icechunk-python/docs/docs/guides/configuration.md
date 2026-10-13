@@ -349,35 +349,6 @@ repo = ic.Repository.open(
 )
 ```
 
-### Authorizing a whole prefix
-
-Container matching is already recursive: a container at `s3://mybucket/data/` serves every chunk url that starts with it. So if a repo's persisted config defines many narrow containers (for example one per year) and you want to authorize them all at once, replace them with one broader container when you open the repo. Containers passed in `config` replace the persisted ones for this process only; nothing is written back unless you call `save_config()`.
-
-```python
-PREFIX = "s3://mybucket/data/"
-
-config = ic.RepositoryConfig.default()
-config.set_virtual_chunk_container(
-    ic.VirtualChunkContainer(PREFIX, ic.s3_store(region="us-east-1", anonymous=True))
-)
-
-repo = ic.Repository.open(
-    storage=storage,
-    config=config,
-    authorize_virtual_chunk_access=ic.containers_credentials(
-        {PREFIX: ic.s3_anonymous_credentials()}
-    ),
-)
-
-# Optional, with write access: make the broader container the repo default
-# so other readers can authorize PREFIX without overriding the config.
-repo.save_config()
-```
-
-!!! note "What you are trusting"
-
-    The `url_prefix` is the only thing the reader binds credentials to. The store settings behind it (`endpoint_url`, `region`, `allow_http`, ...) come from the repo config, which is written by whoever has write access to the repo. Authorizing a prefix means trusting those settings for it. If you would rather not, build the container yourself as above instead of using `Repository.fetch_config`, so the endpoint your credentials are sent to is pinned on your side.
-
 ## Proxy configuration
 
 Icechunk supports routing its requests through a proxy. This is useful when your object storage service itself is behind a proxy.
