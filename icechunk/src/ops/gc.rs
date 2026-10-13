@@ -728,11 +728,13 @@ async fn delete_snapshots_from_repo_info(
         Ok(new_repo_info)
     };
 
-    let retry_settings = storage::RetriesSettings {
-        max_tries: Some(NonZeroU16::MIN),
-        ..Default::default()
+    let single_attempt = RepoUpdateRetryConfig {
+        default: Some(storage::RetriesSettings {
+            max_tries: Some(NonZeroU16::MIN),
+            ..Default::default()
+        }),
     };
-    let _ = asset_manager.update_repo_info(&retry_settings, do_update).await?;
+    let _ = asset_manager.update_repo_info(&single_attempt, do_update).await?;
 
     Ok(written_repo_info)
 }
