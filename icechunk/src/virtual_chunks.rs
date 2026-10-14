@@ -1103,7 +1103,8 @@ impl ChunkFetcher for S3Fetcher {
                 );
             }
             Some(Checksum::ETag(etag)) => {
-                b = b.if_match(strip_quotes(&etag.0));
+                // S3 accepts a quoted or an unquoted entity tag, so send it as stored.
+                b = b.if_match(etag.0.as_str());
             }
             None => {}
         };
@@ -1352,7 +1353,10 @@ impl ChunkFetcher for ObjectStoreFetcher {
                 options.if_unmodified_since = Some(d);
             }
             Some(Checksum::ETag(etag)) => {
-                options.if_match = Some(strip_quotes(&etag.0).to_string());
+                // object_store >= 0.14.1 compares `If-Match` by exact string
+                // equality (its `LocalFileSystem` and `InMemory` quote their
+                // ETags), so the stored value must go through unmodified.
+                options.if_match = Some(etag.0.clone());
             }
             None => {}
         }
