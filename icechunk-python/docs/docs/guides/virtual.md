@@ -186,7 +186,7 @@ You can also write to a specific region of an existing store using `to_icechunk`
 
 !!! note
 
-    Users of the repo will need to enable the virtual chunk container by passing the `authorize_virtual_chunk_access` argument to `Repository.open`. This way, the repo user flags the container as authorized. The argument must be a dict using url prefixes as keys and explicit credentials as values. If the container requires no credentials, use the `icechunk.credentials.LocalFileSystemAccess` (`file://`) or `icechunk.credentials.HttpAccess` (`http(s)://`) sentinel as the value. Failing to authorize a container will generate an error when a chunk is fetched from it.
+    Users of the repo will need to enable the virtual chunk container by passing the `authorize_virtual_chunk_access` argument to `Repository.open`. This way, the repo user flags the container as authorized. The argument must be a dict using the containers' `url_prefix` strings as keys (matched exactly, not by prefix; see [Virtual Chunk Credentials](./configuration.md#virtual-chunk-credentials)) and explicit credentials as values. If the container requires no credentials, use the `icechunk.credentials.LocalFileSystemAccess` (`file://`) or `icechunk.credentials.HttpAccess` (`http(s)://`) sentinel as the value. Failing to authorize a container will generate an error when a chunk is fetched from it.
 
     Passing `None` as the value is deprecated and will be unsupported in a future release; use an explicit credential or no-auth sentinel instead.
 
