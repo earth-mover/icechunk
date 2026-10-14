@@ -322,7 +322,7 @@ When using virtual chunk containers, the containers must be authorized by the re
 !!! important "Keys must match a container's `url_prefix` exactly"
 
     Icechunk resolves a virtual chunk in two steps:
-    
+
     - First, it picks the container whose `url_prefix` is the longest prefix of the chunk url.
     - Second, it looks up that container's `url_prefix`, as an exact string, in `authorize_virtual_chunk_access`.
 
