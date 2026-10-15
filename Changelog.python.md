@@ -1,5 +1,11 @@
 # Changelog
 
+## Python Icechunk Library [unreleased]
+
+### Fixes
+
+- `Repository.ops_log_async` and `Repository.async_ancestry` no longer block the asyncio event loop. They used to read the repo info file from storage before they returned the iterator. That read now happens on the first iteration, so storage errors are raised there instead of at the call. The same applies to `Repository.ops_log` and `Repository.ancestry`, which share the implementation.
+
 ## Python Icechunk Library 2.3.0
 
 ### Features
