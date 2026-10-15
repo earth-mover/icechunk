@@ -19,9 +19,9 @@ use std::env;
 use config::{
     PyAttribution, PyAzureCredentials, PyAzureRefreshableCredential,
     PyAzureStaticCredentials, PyCachingConfig, PyChecksumAlgorithm,
-    PyCompressionAlgorithm, PyCompressionConfig, PyCredentials, PyGcsBearerCredential,
-    PyGcsCredentials, PyGcsStaticCredentials, PyLatencyStorage, PyManifestConfig,
-    PyManifestPreloadCondition, PyManifestPreloadConfig,
+    PyCompressionAlgorithm, PyCompressionConfig, PyCredentials, PyFilesystemStorage,
+    PyGcsBearerCredential, PyGcsCredentials, PyGcsStaticCredentials, PyLatencyStorage,
+    PyManifestConfig, PyManifestPreloadCondition, PyManifestPreloadConfig,
     PyManifestVirtualChunkLocationCompressionConfig, PyObjectStoreConfig,
     PyRepoUpdateRetryConfig, PyRepositoryConfig, PyS3Credentials, PyS3Options,
     PyS3StaticCredentials, PyStorage, PyStorageConcurrencySettings, PyStorageObjectInfo,
@@ -228,6 +228,7 @@ fn _icechunk_python(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyStorageObjectInfo>()?;
     m.add_class::<PyStorage>()?;
     m.add_class::<PyLatencyStorage>()?;
+    m.add_class::<PyFilesystemStorage>()?;
     m.add_class::<PyVirtualChunkContainer>()?;
     m.add_class::<PyCompressionAlgorithm>()?;
     m.add_class::<PyCompressionConfig>()?;

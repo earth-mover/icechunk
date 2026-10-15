@@ -1,0 +1,42 @@
+[package]
+name = "icechunk-fs-stress"
+version = "0.1.0"
+description = "Stress test for icechunk's filesystem storage"
+readme = "README.md"
+repository = "https://github.com/earth-mover/icechunk"
+homepage = "https://icechunk.io"
+license = "Apache-2.0"
+keywords = ["zarr", "xarray", "database"]
+categories = ["database", "science", "science::geo"]
+authors = ["Earthmover PBC"]
+edition.workspace = true
+publish = false
+rust-version.workspace = true
+
+[[bin]]
+name = "fs-stress"
+path = "src/main.rs"
+
+[dependencies]
+icechunk.workspace = true
+icechunk-fs = { workspace = true, features = ["fault-injection"] }
+anyhow.workspace = true
+bytes.workspace = true
+chrono.workspace = true
+clap.workspace = true
+futures.workspace = true
+libc.workspace = true
+rand.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
+tracing.workspace = true
+tracing-subscriber.workspace = true
+uuid = { workspace = true, features = ["serde"] }
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

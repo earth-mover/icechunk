@@ -72,7 +72,49 @@ export declare class Storage {
    * especially useful for WASM builds where native Rust networking is unavailable.
    */
   static newCustom(backend: { canWrite: () => Promise<boolean>; getObjectRange: (args: StorageGetObjectRangeArgs) => Promise<StorageGetObjectResponse>; putObject: (args: StoragePutObjectArgs) => Promise<StorageVersionedUpdateResult>; copyObject: (args: StorageCopyObjectArgs) => Promise<StorageVersionedUpdateResult>; listObjects: (prefix: string) => Promise<Array<StorageListInfo>>; deleteBatch: (args: StorageDeleteBatchArgs) => Promise<StorageDeleteObjectsResult>; getObjectLastModified: (path: string) => Promise<Date>; getObjectConditional: (args: StorageGetObjectConditionalArgs) => Promise<StorageGetModifiedResult> }): Storage
+  /**
+   * Storage on the local filesystem. Not safe for concurrent commits: a commit
+   * can be lost. Use `newFilesystem` when several writers may commit.
+   */
   static newLocalFilesystem(path: string): Promise<Storage>
+  /**
+   * Storage on a filesystem, safe for concurrent writers on filesystems that
+   * meet the requirements in the Icechunk storage guide (hard links, atomic
+   * rename by name, exclusive directory rename).
+   * It uses a different on-disk format: `repo` is a stub file next to a
+   * `repo.d/` directory, which other backends and older Icechunk versions
+   * can't open.
+   * Safe only if every writer of the repository uses this backend: never let
+   * `newLocalFilesystem` writers, or older Icechunk versions, write to its
+   * repositories. Their repositories must first be converted, once, with
+   * `migrateLegacyRepo`. Experimental. Unix only.
+   */
+  static newFilesystem(path: string): Promise<Storage>
+  /**
+   * Stops every change to a repository of `newFilesystem` storage, leaving it
+   * readable, for example to copy it consistently. Changes fail with a
+   * "repository is frozen" error until `unfreezeRepo`. Resolves to true if
+   * this call froze it, false if it already was frozen. Only true proves
+   * that this call changed the repository: false comes from a directory
+   * listing that can lag, so an export must not rely on it.
+   */
+  freezeRepo(): Promise<boolean>
+  /**
+   * Accepts changes again after `freezeRepo`. Resolves to true if this call
+   * unfroze the repository, false if it wasn't frozen. Only true proves that
+   * this call changed the repository: false comes from a directory listing
+   * that can lag.
+   */
+  unfreezeRepo(): Promise<boolean>
+  /**
+   * Converts a repository written by `newLocalFilesystem` or an older Icechunk
+   * to the format of `newFilesystem`, which refuses to open it until then.
+   * Stop every writer first: no other process may write to the repository
+   * from when this starts until every writer uses `newFilesystem`. A rerun
+   * completes an interrupted conversion. Resolves to true if this call
+   * converted the repository, false if there was nothing to convert.
+   */
+  migrateLegacyRepo(): Promise<boolean>
   static newS3(bucket: string, prefix?: string | undefined | null, credentials?: S3Credentials | undefined | null, options?: S3Options | undefined | null): Storage
   static newR2(bucket?: string | undefined | null, prefix?: string | undefined | null, accountId?: string | undefined | null, credentials?: S3Credentials | undefined | null, options?: S3Options | undefined | null): Storage
   static newTigris(bucket: string, prefix?: string | undefined | null, credentials?: S3Credentials | undefined | null, options?: S3Options | undefined | null, useWeakConsistency?: boolean | undefined | null): Storage

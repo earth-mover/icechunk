@@ -171,6 +171,8 @@ xr.testing.assert_identical(ds, ondisk)
 
 Here is an example of uncooperative distributed writes using `multiprocessing`, based on [this discussion](https://github.com/earth-mover/icechunk/discussions/802).
 
+`local_filesystem_storage` is not safe for concurrent commits. For concurrent commits on a shared filesystem, use [`filesystem_storage`](../guides/storage.md#requirements-and-limits-of-filesystem_storage) instead.
+
 ```python
 import multiprocessing as mp
 import icechunk as ic

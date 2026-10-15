@@ -1,9 +1,17 @@
+from pathlib import Path
 from typing import Any
 
+import pytest
 from packaging.version import Version
 
 import icechunk as ic
 import zarr
+from tests.conftest import fs_storage, readable_path
+
+
+@pytest.fixture
+def split_repo(fs_backend: str, tmp_path: Path) -> str:
+    return readable_path("./tests/data/split-repo-v2", fs_backend, tmp_path)
 
 
 def check_header(header: dict[str, Any], file_type: str) -> None:
@@ -14,10 +22,8 @@ def check_header(header: dict[str, Any], file_type: str) -> None:
     assert header["compression"] in ("none", "zstd")
 
 
-async def test_inspect_snapshot() -> None:
-    repo = await ic.Repository.open_async(
-        storage=ic.local_filesystem_storage("./tests/data/split-repo-v2")
-    )
+async def test_inspect_snapshot(fs_backend: str, split_repo: str) -> None:
+    repo = await ic.Repository.open_async(storage=fs_storage(fs_backend, split_repo))
     snap = next(repo.ancestry(branch="main")).id
     sync_result = repo.inspect_snapshot(snap)
     async_result = await repo.inspect_snapshot_async(snap)
@@ -27,10 +33,8 @@ async def test_inspect_snapshot() -> None:
     check_header(sync_result["header"], "snapshot")
 
 
-async def test_inspect_repo_info() -> None:
-    repo = await ic.Repository.open_async(
-        storage=ic.local_filesystem_storage("./tests/data/split-repo-v2")
-    )
+async def test_inspect_repo_info(fs_backend: str, split_repo: str) -> None:
+    repo = await ic.Repository.open_async(storage=fs_storage(fs_backend, split_repo))
     sync_result = repo.inspect_repo_info()
     async_result = await repo.inspect_repo_info_async()
 
@@ -40,10 +44,8 @@ async def test_inspect_repo_info() -> None:
     check_header(sync_result["header"], "repo-info")
 
 
-async def test_inspect_manifest() -> None:
-    repo = await ic.Repository.open_async(
-        storage=ic.local_filesystem_storage("./tests/data/split-repo-v2")
-    )
+async def test_inspect_manifest(fs_backend: str, split_repo: str) -> None:
+    repo = await ic.Repository.open_async(storage=fs_storage(fs_backend, split_repo))
     snap = next(repo.ancestry(branch="main")).id
     manifests = repo.list_manifest_files(snap)
     assert len(manifests) > 0
@@ -71,10 +73,8 @@ async def test_inspect_manifest() -> None:
     check_header(sync_result["header"], "manifest")
 
 
-async def test_inspect_transaction_log() -> None:
-    repo = await ic.Repository.open_async(
-        storage=ic.local_filesystem_storage("./tests/data/split-repo-v2")
-    )
+async def test_inspect_transaction_log(fs_backend: str, split_repo: str) -> None:
+    repo = await ic.Repository.open_async(storage=fs_storage(fs_backend, split_repo))
     snap = next(repo.ancestry(branch="main")).id
     sync_result = repo.inspect_transaction_log(snap)
     async_result = await repo.inspect_transaction_log_async(snap)

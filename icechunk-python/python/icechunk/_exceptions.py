@@ -137,6 +137,7 @@ class ErrorKind(StrEnum):
     BAD_REDIRECT = "bad-redirect"
     SEMAPHORE_ACQUIRE = "semaphore-acquire"
     THROTTLED = "throttled"
+    REPOSITORY_FROZEN = "repository-frozen"
     STORAGE_OTHER = "storage-other"
     VIRTUAL_CHUNK_FETCH = "virtual-chunk-fetch"
     VIRTUAL_CHUNK_MODIFIED = "virtual-chunk-modified"

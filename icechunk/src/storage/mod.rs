@@ -13,9 +13,9 @@ use crate::storage::redirect::RedirectStorage;
 pub use icechunk_storage::{
     Attribution, AttributionError, AttributionLabels, ConcurrencySettings,
     DeleteObjectsResult, ETag, Generation, GetModifiedResult, ICError, ListInfo,
-    RepositoryCreation, RequestAttribution, RetriesSettings, Settings, Storage,
-    StorageContext, StorageError, StorageErrorKind, StorageInfo, StorageResult,
-    TimeoutSettings, UNATTRIBUTED_LABELS, VersionInfo, VersionedUpdateResult,
+    PutCondition, RepositoryCreation, RequestAttribution, RetriesSettings, Settings,
+    Storage, StorageContext, StorageError, StorageErrorKind, StorageInfo, StorageResult,
+    TimeoutSettings, UNATTRIBUTED_LABELS, VersionInfo, VersionedUpdateResult, WriteHint,
     s3_config::{S3Credentials, S3CredentialsFetcher, S3Options, S3StaticCredentials},
     split_in_multiple_equal_requests, split_in_multiple_requests, strip_quotes,
 };
@@ -25,6 +25,15 @@ pub use icechunk_storage::{
 pub use icechunk_s3::{
     S3Storage, mk_client, new_hf_storage, new_r2_storage, new_s3_storage,
     new_tigris_storage, r2_storage, range_to_header, s3_storage, tigris_storage,
+};
+
+#[cfg(feature = "fs")]
+pub use icechunk_fs::{
+    FilesystemSettings, new_filesystem_storage, new_filesystem_storage_with,
+};
+#[cfg(all(feature = "fs", unix))]
+pub use icechunk_fs::{
+    FilesystemStorage, FreezeOutcome, MigrateOutcome, UnfreezeOutcome,
 };
 
 // Re-export from icechunk-arrow-object-store

@@ -8,13 +8,14 @@ import pytest
 
 import icechunk as ic
 import zarr
+from tests.conftest import fs_storage
 
 
 def test_error_message_when_snapshot_deleted(
-    tmpdir: Path, any_spec_version: int | None
+    tmpdir: Path, any_spec_version: int | None, fs_backend: str
 ) -> None:
     tmpdir = Path(tmpdir)
-    storage = ic.local_filesystem_storage(str(tmpdir))
+    storage = fs_storage(fs_backend, str(tmpdir), any_spec_version)
     repo = ic.Repository.create(
         storage=storage,
         spec_version=any_spec_version,
@@ -33,10 +34,10 @@ def test_error_message_when_snapshot_deleted(
 
 
 def test_error_message_when_manifest_file_altered(
-    tmpdir: Path, any_spec_version: int | None
+    tmpdir: Path, any_spec_version: int | None, fs_backend: str
 ) -> None:
     tmpdir = Path(tmpdir)
-    storage = ic.local_filesystem_storage(str(tmpdir))
+    storage = fs_storage(fs_backend, str(tmpdir), any_spec_version)
     repo = ic.Repository.create(
         storage=storage,
         spec_version=any_spec_version,

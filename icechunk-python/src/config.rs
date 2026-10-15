@@ -2975,6 +2975,115 @@ impl PyLatencyStorage {
     }
 }
 
+/// The `Storage` returned by `filesystem_storage`, with the operations
+/// specific to its repository format.
+#[pyclass(skip_from_py_object, name = "FilesystemStorage", extends = PyStorage)]
+#[derive(Debug)]
+pub(crate) struct PyFilesystemStorage {
+    #[cfg(unix)]
+    filesystem: Arc<storage::FilesystemStorage>,
+}
+
+impl PyFilesystemStorage {
+    #[cfg(unix)]
+    fn new(path: PathBuf, fsync: bool) -> PyResult<PyClassInitializer<Self>> {
+        let filesystem = Arc::new(
+            storage::FilesystemStorage::new(&path)
+                .map_err(PyIcechunkStoreError::StorageError)?
+                .with_fsync(fsync),
+        );
+        let base = PyStorage(Arc::clone(&filesystem) as Arc<dyn Storage + Send + Sync>);
+        Ok(PyClassInitializer::from(base).add_subclass(Self { filesystem }))
+    }
+
+    /// Fails with the platform error of `new_filesystem_storage_with`.
+    #[cfg(not(unix))]
+    fn new(path: PathBuf, fsync: bool) -> PyResult<PyClassInitializer<Self>> {
+        let storage = pyo3_async_runtimes::tokio::get_runtime()
+            .block_on(storage::new_filesystem_storage_with(
+                &path,
+                storage::FilesystemSettings::default().with_fsync(fsync),
+            ))
+            .map_err(PyIcechunkStoreError::StorageError)?;
+        Ok(PyClassInitializer::from(PyStorage(storage)).add_subclass(Self {}))
+    }
+}
+
+#[cfg(unix)]
+#[pymethods]
+impl PyFilesystemStorage {
+    fn migrate_legacy_repo(&self, py: Python<'_>) -> PyResult<bool> {
+        let filesystem = Arc::clone(&self.filesystem);
+        py.detach(move || {
+            pyo3_async_runtimes::tokio::get_runtime()
+                .block_on(migrate_legacy_repo(filesystem))
+        })
+    }
+
+    fn migrate_legacy_repo_async<'py>(
+        &self,
+        py: Python<'py>,
+    ) -> PyResult<Bound<'py, pyo3::PyAny>> {
+        let filesystem = Arc::clone(&self.filesystem);
+        pyo3_async_runtimes::tokio::future_into_py(py, migrate_legacy_repo(filesystem))
+    }
+
+    fn freeze_repo(&self, py: Python<'_>) -> PyResult<bool> {
+        let filesystem = Arc::clone(&self.filesystem);
+        py.detach(move || {
+            pyo3_async_runtimes::tokio::get_runtime().block_on(freeze_repo(filesystem))
+        })
+    }
+
+    fn freeze_repo_async<'py>(
+        &self,
+        py: Python<'py>,
+    ) -> PyResult<Bound<'py, pyo3::PyAny>> {
+        let filesystem = Arc::clone(&self.filesystem);
+        pyo3_async_runtimes::tokio::future_into_py(py, freeze_repo(filesystem))
+    }
+
+    fn unfreeze_repo(&self, py: Python<'_>) -> PyResult<bool> {
+        let filesystem = Arc::clone(&self.filesystem);
+        py.detach(move || {
+            pyo3_async_runtimes::tokio::get_runtime().block_on(unfreeze_repo(filesystem))
+        })
+    }
+
+    fn unfreeze_repo_async<'py>(
+        &self,
+        py: Python<'py>,
+    ) -> PyResult<Bound<'py, pyo3::PyAny>> {
+        let filesystem = Arc::clone(&self.filesystem);
+        pyo3_async_runtimes::tokio::future_into_py(py, unfreeze_repo(filesystem))
+    }
+}
+
+#[cfg(unix)]
+async fn freeze_repo(filesystem: Arc<storage::FilesystemStorage>) -> PyResult<bool> {
+    let outcome =
+        filesystem.freeze_repo().await.map_err(PyIcechunkStoreError::StorageError)?;
+    Ok(matches!(outcome, storage::FreezeOutcome::Frozen(_)))
+}
+
+#[cfg(unix)]
+async fn unfreeze_repo(filesystem: Arc<storage::FilesystemStorage>) -> PyResult<bool> {
+    let outcome =
+        filesystem.unfreeze_repo().await.map_err(PyIcechunkStoreError::StorageError)?;
+    Ok(matches!(outcome, storage::UnfreezeOutcome::Unfrozen(_)))
+}
+
+#[cfg(unix)]
+async fn migrate_legacy_repo(
+    filesystem: Arc<storage::FilesystemStorage>,
+) -> PyResult<bool> {
+    let outcome = filesystem
+        .migrate_legacy_repo()
+        .await
+        .map_err(PyIcechunkStoreError::StorageError)?;
+    Ok(matches!(outcome, storage::MigrateOutcome::Migrated))
+}
+
 /// Effective `(read, write)` extra-header vecs.
 type RoleHeaders = (Vec<(String, String)>, Vec<(String, String)>);
 
@@ -3200,6 +3309,17 @@ impl PyStorage {
                 Ok(PyStorage(storage))
             })
         })
+    }
+
+    #[classmethod]
+    #[pyo3(signature = (path, *, fsync = true))]
+    pub(crate) fn new_filesystem<'py>(
+        _cls: &Bound<'py, PyType>,
+        py: Python<'py>,
+        path: PathBuf,
+        fsync: bool,
+    ) -> PyResult<Bound<'py, PyFilesystemStorage>> {
+        Bound::new(py, PyFilesystemStorage::new(path, fsync)?)
     }
 
     #[classmethod]

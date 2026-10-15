@@ -312,7 +312,10 @@ Icechunk can be used with [Azure Blob Storage](https://azure.microsoft.com/en-us
 
 ### Filesystem Storage
 
-Icechunk can also be used on a [local filesystem](../reference/storage.md#icechunk.storage.local_filesystem_storage) by providing a path to the location of the store
+Icechunk can also store a repository in a filesystem, given the path to the location of the store. There are two filesystem backends:
+
+- [`local_filesystem_storage`](../reference/storage.md#icechunk.storage.local_filesystem_storage). It is not safe for concurrent commits.
+- [`filesystem_storage`](../reference/storage.md#icechunk.storage.filesystem_storage), experimental. It is safe for concurrent writers on filesystems that meet [its requirements](#requirements-and-limits-of-filesystem_storage), including network filesystems such as NFS. It uses [a different on-disk format](#filesystem-format) that the other backends can't read.
 
 === "Local filesystem"
 
@@ -320,12 +323,74 @@ Icechunk can also be used on a [local filesystem](../reference/storage.md#icechu
     icechunk.local_filesystem_storage("/path/to/my/dataset")
     ```
 
+=== "Filesystem (safe for concurrent writers)"
+
+    ```python
+    icechunk.filesystem_storage("/path/to/my/dataset")
+    ```
+
+!!! warning "Experimental"
+
+    `filesystem_storage` is experimental. Feedback on how it behaves on different filesystems is welcome on the [issue tracker](https://github.com/earth-mover/icechunk/issues).
+
 #### Limitations
 
 !!! warning
-    File system Storage is not safe in the presence of concurrent commits. If two sessions are trying to commit at the same time, both operations may return successfully but one of the commits can be lost. Don't use file system storage in production if there is the possibility of concurrent commits.
+    `local_filesystem_storage` is not safe in the presence of concurrent commits. If two sessions are trying to commit at the same time, both operations may return successfully but one of the commits can be lost. Don't use `local_filesystem_storage` in production if there is the possibility of concurrent commits; use [`filesystem_storage`](#requirements-and-limits-of-filesystem_storage) instead.
 
 - Icechunk currently does not work with a local filesystem storage backend on Windows. See [this issue](https://github.com/earth-mover/icechunk/issues/665) for more discussion. To work around, try using [WSL](https://learn.microsoft.com/en-us/windows/wsl/about) or a cloud storage backend.
+
+#### Requirements and limits of `filesystem_storage`
+
+- **Filesystem.** The filesystem must provide hard links, atomic rename by name and exclusive directory rename. Icechunk doesn't check for them. Local POSIX filesystems, NFSv3 and NFSv4 with a Linux client, Lustre, GPFS, and CephFS are expected to work; others are untested.
+- <a id="filesystem-format"></a>**Repository format.** `filesystem_storage` stores the repository's `repo` file in its own format: a stub file named `repo` and a `repo.d/` directory holding its versions. Everything else is stored as with any other backend. Other tools and other storage backends can't open these repositories: `local_filesystem_storage` and the object-store backends fail with a [`FormatError`](../reference/index.md#icechunk.FormatError) saying the repository uses the filesystem format, and older Icechunk versions fail on an unknown file type.
+- **Unix only.** `filesystem_storage` is available on Unix platforms only; elsewhere it raises an error when constructed.
+- **Every writer.** Concurrent-writer safety holds only if every writer of the repository uses `filesystem_storage`. `local_filesystem_storage` and older Icechunk versions overwrite `repo` without the protocol `filesystem_storage` relies on: they must never write to its repositories. After such a write, `filesystem_storage` refuses to open the repository, which then needs manual recovery. The refusal happens at the first use of `repo` by each storage instance (opening a repository creates one), so an overwrite while an instance is already in use goes unnoticed until the next instance.
+- <a id="reads-can-lag"></a>**Commit visibility can lag.** Unlike object stores, a commit made on one machine isn't always visible on another right away. Commits are never lost, but a reader can open a branch and get its previous tip without any error. How long a reader can lag depends on the filesystem and the client, but Icechunk makes a best effort to minimize this time, and the time collapses to zero in some filesystems. To hand a commit over between machines, pass its snapshot id and open it with [`Repository.readonly_session(snapshot_id=...)`](../reference/index.md#icechunk.Repository.readonly_session).
+- **Icechunk 1 repositories** are refused. See [Switching an existing repo](#switching-an-existing-repo).
+- **Frozen repositories.** A repository can be [frozen](#freezing-a-repo), for example to copy it consistently. While it is frozen, it stays readable and every change to the repository fails with a [`StorageError`](../reference/index.md#icechunk.StorageError) of kind `repository-frozen` ([`ErrorKind.REPOSITORY_FROZEN`](../reference/index.md#icechunk.ErrorKind)), until it is unfrozen.
+- **Conditional writes.** Repositories whose config disables `unsafe_use_conditional_create` or `unsafe_use_conditional_update` log a warning; the setting is ignored and the backend always uses its own conditional writes.
+
+`filesystem_storage` takes one optional setting, `fsync` (default `True`): whether to fsync data files after writes, and their directories before each commit. Turning it off risks losing writes after an OS crash or power loss; it never affects safety between concurrent writers. The fsyncs of the commit itself always run.
+
+```python
+icechunk.filesystem_storage("/path/to/my/dataset", fsync=False)
+```
+
+#### Switching an existing repo
+
+Repositories created with `local_filesystem_storage`, or with an older Icechunk version, keep `repo` as a single file. `filesystem_storage` refuses to open them, with an error that names `migrate_legacy_repo`, until they are converted once:
+
+1. Stop every writer of the repository. No other process may write to it from when the conversion starts until every writer uses `filesystem_storage`.
+2. Convert it with [`FilesystemStorage.migrate_legacy_repo`](../reference/storage.md#icechunk.storage.FilesystemStorage.migrate_legacy_repo). It returns `True` if it converted the repository and `False` if there was nothing to convert. If it is interrupted, run it again.
+
+    ```python
+    storage = icechunk.filesystem_storage("/path/to/my/dataset")
+    storage.migrate_legacy_repo()
+    repo = icechunk.Repository.open(storage)
+    ```
+
+3. From then on, open the repository only with `filesystem_storage`.
+
+Also note:
+
+- Icechunk 1 repositories must first be migrated to Icechunk 2 with `local_filesystem_storage`. See [Migrate to 2.0](../reference/migration-2.md).
+- Converting a repository back to the single-file format, or copying it to an object store, isn't supported yet.
+- A repository config that disables conditional writes only logs a harmless warning; see **Conditional writes** in [Requirements and limits](#requirements-and-limits-of-filesystem_storage).
+- Pickled storage carries the absolute root path. With Dask or distributed, every worker must see the filesystem at the same path.
+
+#### Freezing a repo
+
+[`FilesystemStorage.freeze_repo`](../reference/storage.md#icechunk.storage.FilesystemStorage.freeze_repo) stops all changes to a `filesystem_storage` repository while keeping it readable, for example to copy the directory consistently. While it is frozen, every update of the repository (commits, creating or deleting branches and tags, saving the config) fails with an error saying the repository is frozen. [`FilesystemStorage.unfreeze_repo`](../reference/storage.md#icechunk.storage.FilesystemStorage.unfreeze_repo) accepts changes again.
+
+```python
+storage = icechunk.filesystem_storage("/path/to/my/dataset")
+assert storage.freeze_repo()
+# copy /path/to/my/dataset
+storage.unfreeze_repo()
+```
+
+Both return `True` if the call changed the repository.
 
 ### HTTP Storage
 

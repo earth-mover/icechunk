@@ -4,6 +4,7 @@ from datetime import datetime
 from icechunk._icechunk_python import (
     ChecksumAlgorithm,
     ChunkType,
+    FilesystemStorage,
     GcsBearerCredential,
     ObjectStoreConfig,
     S3Options,
@@ -24,6 +25,7 @@ __all__ = [
     "AnyObjectStoreConfig",
     "ChecksumAlgorithm",
     "ChunkType",
+    "FilesystemStorage",
     "ObjectStoreConfig",
     "S3Options",
     "Storage",
@@ -33,6 +35,7 @@ __all__ = [
     "StorageTimeoutSettings",
     "azure_storage",
     "azure_store",
+    "filesystem_storage",
     "gcs_storage",
     "gcs_store",
     "hf_storage",
@@ -70,9 +73,49 @@ def in_memory_storage() -> Storage:
 def local_filesystem_storage(path: str) -> Storage:
     """Create a Storage instance that saves data in the local file system.
 
-    This Storage instance is not recommended for production data
+    This Storage instance is not recommended for production data.
+
+    It is not safe for concurrent commits: two sessions committing at once can
+    both succeed, losing one of the commits. Use `filesystem_storage` when
+    several writers may commit to the repository.
     """
     return Storage.new_local_filesystem(path)
+
+
+def filesystem_storage(path: str, *, fsync: bool = True) -> FilesystemStorage:
+    """Create a Storage instance that saves data in a filesystem, safe for concurrent writers.
+
+    This storage is experimental. Unlike `local_filesystem_storage`, it is safe
+    for concurrent writers on filesystems that meet the requirements in the
+    storage guide: hard links, atomic rename by name and exclusive directory
+    rename.
+
+    It keeps the repository's `repo` file in its own format, a stub `repo` file
+    and a `repo.d/` directory, so other tools and other storage backends can't
+    open its repositories. Everything else is the same as in
+    `local_filesystem_storage`.
+
+    Concurrent-writer safety holds only if every writer of the repository uses
+    this storage. Writers using `local_filesystem_storage`, or an older Icechunk
+    version, must never write to its repositories. Repositories written by them
+    must first be converted, once, with no writer running, with
+    `FilesystemStorage.migrate_legacy_repo`.
+
+    It is only available on Unix platforms; elsewhere it raises an error.
+    Icechunk 1 repositories are refused: migrate them to Icechunk 2 with
+    `local_filesystem_storage` first.
+
+    Parameters
+    ----------
+    path: str
+        The path to the root of the repository.
+    fsync: bool
+        Whether to fsync data files after writes, and their directories before
+        each commit. Turning it off risks losing writes after an OS crash or
+        power loss; it never affects safety between concurrent writers. The
+        fsyncs of the commit itself always run.
+    """
+    return Storage.new_filesystem(path, fsync=fsync)
 
 
 def http_storage(

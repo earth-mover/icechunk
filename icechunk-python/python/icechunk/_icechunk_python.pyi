@@ -2070,6 +2070,14 @@ class GCSummary:
         Delete phases skipped because an earlier phase had failures, in order.
         Possible values: "transaction_logs", "manifests", "chunks".
         """
+    @property
+    def storage_leftovers_deleted(self) -> int:
+        """
+        Leftovers of the storage backend's commit protocol that it deleted:
+        superseded versions of the `repo` file, and files of crashed or
+        abandoned writes. Their bytes are included in `bytes_deleted`. Only
+        `filesystem_storage` has such leftovers.
+        """
     def _repr_html_(self) -> str: ...
 
 @final
@@ -3276,6 +3284,87 @@ class LatencyStorage(Storage):
     def read_latency_ms(self, ms: int) -> None: ...
 
 @final
+class FilesystemStorage(Storage):
+    """The `Storage` returned by `filesystem_storage`.
+
+    It adds the operations specific to the repository format of
+    `filesystem_storage`.
+    """
+
+    def migrate_legacy_repo(self) -> bool:
+        """Convert a repository written by `local_filesystem_storage` or an older
+        Icechunk to the format of `filesystem_storage`.
+
+        `filesystem_storage` refuses to open such a repository until it is
+        converted. Stop every writer of the repository first: no other process
+        may write to it from when this starts until every writer uses
+        `filesystem_storage`. Rerunning it completes an interrupted conversion.
+
+        Returns
+        -------
+        bool
+            True if this call converted the repository, False if there was
+            nothing to convert.
+        """
+    async def migrate_legacy_repo_async(self) -> bool:
+        """Convert a repository written by `local_filesystem_storage` or an older
+        Icechunk to the format of `filesystem_storage` (async version).
+
+        See `migrate_legacy_repo`.
+
+        Returns
+        -------
+        bool
+            True if this call converted the repository, False if there was
+            nothing to convert.
+        """
+    def freeze_repo(self) -> bool:
+        """Refuse changes to the repository until `unfreeze_repo`.
+
+        The repository stays readable, so a frozen repository can be copied or
+        exported consistently. Every change to it fails with an error.
+
+        Returns
+        -------
+        bool
+            True if this call froze the repository, False if it already was
+            frozen. Only True proves that the repository is frozen: False comes
+            from a directory listing that can lag, so an export must not rely
+            on it.
+        """
+    async def freeze_repo_async(self) -> bool:
+        """Refuse changes to the repository until `unfreeze_repo` (async version).
+
+        See `freeze_repo`.
+
+        Returns
+        -------
+        bool
+            True if this call froze the repository, False if it already was
+            frozen.
+        """
+    def unfreeze_repo(self) -> bool:
+        """Accept changes to a frozen repository again.
+
+        Returns
+        -------
+        bool
+            True if this call unfroze the repository, False if it wasn't
+            frozen. False comes from a directory listing that can lag.
+        """
+    async def unfreeze_repo_async(self) -> bool:
+        """Accept changes to a frozen repository again (async version).
+
+        See `unfreeze_repo`.
+
+        Returns
+        -------
+        bool
+            True if this call unfroze the repository, False if it wasn't
+            frozen.
+        """
+
+@final
 class StorageObjectInfo:
     """Metadata for an object in storage.
 
@@ -3355,6 +3444,13 @@ class Storage:
     def new_in_memory(cls) -> Storage: ...
     @classmethod
     def new_local_filesystem(cls, path: str) -> Storage: ...
+    @classmethod
+    def new_filesystem(
+        cls,
+        path: str,
+        *,
+        fsync: bool = True,
+    ) -> FilesystemStorage: ...
     @classmethod
     def new_gcs(
         cls,

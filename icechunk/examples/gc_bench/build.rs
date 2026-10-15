@@ -24,7 +24,7 @@ use icechunk::{
         },
         transaction_log::TransactionLog,
     },
-    storage::{RetriesSettings, StorageContext},
+    storage::{RetriesSettings, StorageContext, WriteHint},
 };
 use icechunk_types::error::ICResultCtxExt as _;
 use tokio::{sync::Semaphore, task::JoinSet};
@@ -227,8 +227,8 @@ async fn write_snapshot_and_log(
         Ok::<_, BoxError>((Arc::new(snapshot), Arc::new(log)))
     })
     .await??;
-    am.write_snapshot(snapshot).await?;
-    am.write_transaction_log(snap_id, log).await?;
+    am.write_snapshot(snapshot, WriteHint::NewObject).await?;
+    am.write_transaction_log(snap_id, log, WriteHint::NewObject).await?;
     Ok(())
 }
 

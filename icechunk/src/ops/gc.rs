@@ -35,7 +35,7 @@ use crate::{
         warn_on_low_fd_limit,
     },
     repository::{RepositoryError, RepositoryErrorKind, RepositoryResult},
-    storage::{self, ListInfo},
+    storage::{self, DeleteObjectsResult, ListInfo},
 };
 use icechunk_types::error::ICResultCtxExt as _;
 
@@ -70,6 +70,7 @@ pub struct GCConfig {
     dangling_attributes: Action,
     dangling_transaction_logs: Action,
     dangling_snapshots: Action,
+    storage_leftovers: Action,
 
     max_snapshots_in_memory: NonZeroU16,
     max_compressed_manifest_mem_bytes: NonZeroUsize,
@@ -92,6 +93,7 @@ impl GCConfig {
         dangling_attributes: Action,
         dangling_transaction_logs: Action,
         dangling_snapshots: Action,
+        storage_leftovers: Action,
         max_snapshots_in_memory: NonZeroU16,
         max_compressed_manifest_mem_bytes: NonZeroUsize,
         max_decoded_manifest_mem_bytes: NonZeroUsize,
@@ -108,6 +110,7 @@ impl GCConfig {
             dangling_attributes,
             dangling_transaction_logs,
             dangling_snapshots,
+            storage_leftovers,
             max_snapshots_in_memory,
             max_compressed_manifest_mem_bytes,
             max_decoded_manifest_mem_bytes,
@@ -143,6 +146,7 @@ impl GCConfig {
         Self::new(
             extra_roots.unwrap_or_default(),
             D(chunks_age),
+            D(metadata_age),
             D(metadata_age),
             D(metadata_age),
             D(metadata_age),
@@ -189,6 +193,10 @@ impl GCConfig {
     }
 
     pub fn action_needed(&self) -> bool {
+        self.deletes_objects() || self.deletes_storage_leftovers()
+    }
+
+    fn deletes_objects(&self) -> bool {
         [
             &self.dangling_chunks,
             &self.dangling_manifests,
@@ -218,6 +226,10 @@ impl GCConfig {
 
     pub fn deletes_snapshots(&self) -> bool {
         self.dangling_snapshots != Action::Keep
+    }
+
+    pub fn deletes_storage_leftovers(&self) -> bool {
+        self.storage_leftovers != Action::Keep
     }
 
     fn must_delete_chunk(&self, chunk: &ListInfo<ChunkId>) -> bool {
@@ -270,6 +282,9 @@ pub struct GCSummary {
     /// transaction logs, manifests and chunks, each kind only after the kind
     /// that references it. Values: `transaction_logs`, `manifests`, `chunks`.
     pub skipped_phases: Vec<String>,
+    /// Leftovers of crashed or abandoned writes the storage backend swept
+    /// (see `Storage::sweep_leftovers`); their bytes are in `bytes_deleted`.
+    pub storage_leftovers_deleted: u64,
 }
 
 impl GCSummary {
@@ -374,7 +389,8 @@ pub async fn garbage_collect(
 ) -> GCResult<GCSummary> {
     ensure_repo_writable(asset_manager.as_ref(), "garbage collect").await?;
     warn_on_low_fd_limit(config.peak_concurrent_requests(), "Garbage collection");
-    retry_on_repo_info_update(repo_update_retries, "GC", async || {
+    let swept = sweep_storage_leftovers(asset_manager.as_ref(), config).await?;
+    let mut summary = retry_on_repo_info_update(repo_update_retries, "GC", async || {
         garbage_collect_one_attempt(
             Arc::clone(&asset_manager),
             config,
@@ -382,7 +398,37 @@ pub async fn garbage_collect(
         )
         .await
     })
-    .await
+    .await?;
+    summary.storage_leftovers_deleted = swept.deleted_objects;
+    summary.bytes_deleted += swept.deleted_bytes;
+    Ok(summary)
+}
+
+async fn sweep_storage_leftovers(
+    asset_manager: &AssetManager,
+    config: &GCConfig,
+) -> GCResult<DeleteObjectsResult> {
+    match config.storage_leftovers {
+        Action::Keep => Ok(DeleteObjectsResult::default()),
+        Action::DeleteIfCreatedBefore(older_than) => {
+            let swept = asset_manager
+                .storage()
+                .sweep_leftovers(
+                    &asset_manager.storage_context(),
+                    older_than,
+                    config.dry_run,
+                )
+                .await?;
+            // Logged now: a later GC failure loses the summary.
+            info!(
+                objects = swept.deleted_objects,
+                bytes = swept.deleted_bytes,
+                dry_run = config.dry_run,
+                "Storage leftovers swept"
+            );
+            Ok(swept)
+        }
+    }
 }
 
 #[instrument(skip_all)]
@@ -391,7 +437,7 @@ async fn garbage_collect_one_attempt(
     config: &GCConfig,
     num_updates_per_repo_info_file: u16,
 ) -> GCResult<GCSummary> {
-    if !config.action_needed() {
+    if !config.deletes_objects() {
         info!("No action requested");
         return Ok(GCSummary::default());
     }
@@ -925,6 +971,100 @@ mod tests {
         assert!(repeated.is_empty(), "snapshots read more than once: {repeated:?}");
         // 5 commits plus the initial snapshot
         assert_eq!(reads_per_snapshot.len(), 6);
+        Ok(())
+    }
+
+    #[cfg(not(feature = "shuttle"))]
+    fn config_with(dangling_chunks: Action, storage_leftovers: Action) -> GCConfig {
+        GCConfig::new(
+            HashSet::new(),
+            dangling_chunks,
+            Action::Keep,
+            Action::Keep,
+            Action::Keep,
+            Action::Keep,
+            storage_leftovers,
+            NonZeroU16::new(10).unwrap(),
+            NonZeroUsize::new(1_000_000_000).unwrap(),
+            NonZeroUsize::new(4 * 1024 * 1024 * 1024).unwrap(),
+            NonZeroU16::new(10).unwrap(),
+            NonZeroU16::new(10).unwrap(),
+            NonZeroU16::new(50).unwrap(),
+            None,
+            true,
+        )
+    }
+
+    #[cfg(not(feature = "shuttle"))]
+    async fn gc_operations(
+        config: &GCConfig,
+    ) -> Result<Vec<(String, String)>, Box<dyn std::error::Error>> {
+        let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+        let repo = repo_with_converging_refs(&backend).await?;
+        let (logging, asset_manager) = logging_asset_manager(
+            &backend,
+            repo.storage_settings().clone(),
+            SpecVersionBin::V2,
+        );
+        garbage_collect(asset_manager, config, None, 10).await?;
+        Ok(logging.fetch_operations())
+    }
+
+    #[cfg(not(feature = "shuttle"))]
+    fn sweeps(ops: &[(String, String)]) -> usize {
+        ops.iter().filter(|(op, _)| op == "sweep_leftovers").count()
+    }
+
+    #[tokio_test]
+    async fn gc_sweeps_storage_leftovers_once() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let cutoff = Utc::now() - Duration::hours(1);
+        let config = GCConfig::clean_all(
+            cutoff,
+            cutoff,
+            None,
+            NonZeroU16::new(10).unwrap(),
+            NonZeroUsize::new(1_000_000_000).unwrap(),
+            NonZeroUsize::new(4 * 1024 * 1024 * 1024).unwrap(),
+            NonZeroU16::new(10).unwrap(),
+            NonZeroU16::new(10).unwrap(),
+            NonZeroU16::new(50).unwrap(),
+            None,
+            true,
+        );
+        let ops = gc_operations(&config).await?;
+        assert_eq!(sweeps(&ops), 1, "{ops:?}");
+        Ok(())
+    }
+
+    #[tokio_test]
+    async fn gc_keeping_leftovers_does_not_sweep()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let cutoff = Utc::now() - Duration::hours(1);
+        let config = config_with(Action::DeleteIfCreatedBefore(cutoff), Action::Keep);
+        let ops = gc_operations(&config).await?;
+        assert_eq!(sweeps(&ops), 0, "{ops:?}");
+        Ok(())
+    }
+
+    /// Sweeping alone needs no walk of the repo.
+    #[tokio_test]
+    async fn only_leftovers_is_an_action() -> Result<(), Box<dyn std::error::Error>> {
+        let cutoff = Utc::now() - Duration::hours(1);
+        let config = config_with(Action::Keep, Action::DeleteIfCreatedBefore(cutoff));
+        assert!(config.action_needed());
+        assert!(config.deletes_storage_leftovers());
+        let ops = gc_operations(&config).await?;
+        assert_eq!(sweeps(&ops), 1, "{ops:?}");
+        let walk: Vec<_> = ops
+            .iter()
+            .filter(|(op, path)| {
+                op.starts_with("list_objects")
+                    || path.starts_with(SNAPSHOTS_FILE_PATH)
+                    || path.starts_with(MANIFESTS_FILE_PATH)
+            })
+            .collect();
+        assert!(walk.is_empty(), "{walk:?}");
         Ok(())
     }
 

@@ -14,9 +14,9 @@ use futures::{Stream, stream::BoxStream};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    DeleteObjectsResult, GetModifiedResult, ListInfo, RepositoryCreation, Settings,
-    Storage, StorageContext, StorageError, StorageInfo, StorageResult, VersionInfo,
-    VersionedUpdateResult,
+    DeleteObjectsResult, GetModifiedResult, ListInfo, PutCondition, RepositoryCreation,
+    Settings, Storage, StorageContext, StorageError, StorageInfo, StorageResult,
+    VersionInfo, VersionedUpdateResult, WriteHint,
 };
 use icechunk_storage::sealed;
 
@@ -86,14 +86,30 @@ impl Storage for LoggingStorage {
         bytes: Bytes,
         content_type: Option<&str>,
         metadata: Vec<(String, String)>,
-        previous_version: Option<&VersionInfo>,
+        hint: WriteHint,
+    ) -> StorageResult<()> {
+        self.fetch_log
+            .lock()
+            .expect("poison lock")
+            .push(("put_object".to_string(), path.to_string()));
+        self.backend.put_object(ctx, path, bytes, content_type, metadata, hint).await
+    }
+
+    async fn put_object_conditional(
+        &self,
+        ctx: &StorageContext<'_>,
+        path: &str,
+        bytes: Bytes,
+        content_type: Option<&str>,
+        metadata: Vec<(String, String)>,
+        condition: PutCondition<'_>,
     ) -> StorageResult<VersionedUpdateResult> {
         self.fetch_log
             .lock()
             .expect("poison lock")
             .push(("put_object".to_string(), path.to_string()));
         self.backend
-            .put_object(ctx, path, bytes, content_type, metadata, previous_version)
+            .put_object_conditional(ctx, path, bytes, content_type, metadata, condition)
             .await
     }
 
@@ -142,6 +158,10 @@ impl Storage for LoggingStorage {
             .unwrap_or_else(|| self.backend.lists_id_prefixes_natively())
     }
 
+    fn supports_ic1_repos(&self) -> bool {
+        self.backend.supports_ic1_repos()
+    }
+
     async fn delete_batch(
         &self,
         ctx: &StorageContext<'_>,
@@ -153,6 +173,19 @@ impl Storage for LoggingStorage {
             .expect("poison lock")
             .push(("delete_batch".to_string(), prefix.to_string()));
         self.backend.delete_batch(ctx, prefix, batch).await
+    }
+
+    async fn sweep_leftovers(
+        &self,
+        ctx: &StorageContext<'_>,
+        older_than: DateTime<Utc>,
+        dry_run: bool,
+    ) -> StorageResult<DeleteObjectsResult> {
+        self.fetch_log
+            .lock()
+            .expect("poison lock")
+            .push(("sweep_leftovers".to_string(), String::new()));
+        self.backend.sweep_leftovers(ctx, older_than, dry_run).await
     }
 
     async fn get_object_last_modified(
@@ -181,10 +214,8 @@ impl Storage for LoggingStorage {
         ctx: &StorageContext<'_>,
         path: &str,
         range: Option<&Range<u64>>,
-    ) -> StorageResult<(
-        Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>,
-        VersionInfo,
-    )> {
+    ) -> StorageResult<Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>>
+    {
         self.fetch_log
             .lock()
             .expect("poison lock")

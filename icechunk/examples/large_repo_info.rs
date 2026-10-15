@@ -94,7 +94,7 @@ async fn measure_size(
     );
     am.create_repo_info(Arc::new(repo_info)).await?;
 
-    let (mut reader, _) = stor.get_object(&ctx, REPO_INFO_FILE_PATH, None).await?;
+    let mut reader = stor.get_object(&ctx, REPO_INFO_FILE_PATH, None).await?;
     let mut buf = Vec::new();
     reader.read_to_end(&mut buf).await?;
     let compressed_size = buf.len();

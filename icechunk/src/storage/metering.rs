@@ -16,9 +16,9 @@ use futures::{Stream, StreamExt as _, stream::BoxStream};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    DeleteObjectsResult, GetModifiedResult, ListInfo, RepositoryCreation, Settings,
-    Storage, StorageContext, StorageError, StorageInfo, StorageResult, VersionInfo,
-    VersionedUpdateResult,
+    DeleteObjectsResult, GetModifiedResult, ListInfo, PutCondition, RepositoryCreation,
+    Settings, Storage, StorageContext, StorageError, StorageInfo, StorageResult,
+    VersionInfo, VersionedUpdateResult, WriteHint,
 };
 use icechunk_storage::sealed;
 
@@ -28,9 +28,10 @@ pub struct OpStats {
     pub requests: u64,
     /// Only `get_object_range` counts bytes read, as they are yielded by the stream.
     pub bytes_read: u64,
-    /// Only `put_object` counts bytes written.
+    /// Only the `put_object` label counts bytes written, for both
+    /// `put_object` and `put_object_conditional`.
     pub bytes_written: u64,
-    /// Only `delete_batch` counts deleted objects.
+    /// Only `delete_batch` and `sweep_leftovers` count deleted objects.
     pub objects_deleted: u64,
     /// Only the `list_*` methods count keys, as they are yielded by the stream.
     pub keys_listed: u64,
@@ -187,13 +188,32 @@ impl Storage for MeteringStorage {
         bytes: Bytes,
         content_type: Option<&str>,
         metadata: Vec<(String, String)>,
-        previous_version: Option<&VersionInfo>,
+        hint: WriteHint,
+    ) -> StorageResult<()> {
+        self.meter.request("put_object");
+        let written = bytes.len() as u64;
+        let result =
+            self.backend.put_object(ctx, path, bytes, content_type, metadata, hint).await;
+        if result.is_ok() {
+            self.meter.written("put_object", written);
+        }
+        result
+    }
+
+    async fn put_object_conditional(
+        &self,
+        ctx: &StorageContext<'_>,
+        path: &str,
+        bytes: Bytes,
+        content_type: Option<&str>,
+        metadata: Vec<(String, String)>,
+        condition: PutCondition<'_>,
     ) -> StorageResult<VersionedUpdateResult> {
         self.meter.request("put_object");
         let written = bytes.len() as u64;
         let result = self
             .backend
-            .put_object(ctx, path, bytes, content_type, metadata, previous_version)
+            .put_object_conditional(ctx, path, bytes, content_type, metadata, condition)
             .await;
         if result.is_ok() {
             self.meter.written("put_object", written);
@@ -253,6 +273,10 @@ impl Storage for MeteringStorage {
         self.backend.lists_id_prefixes_natively()
     }
 
+    fn supports_ic1_repos(&self) -> bool {
+        self.backend.supports_ic1_repos()
+    }
+
     async fn delete_batch(
         &self,
         ctx: &StorageContext<'_>,
@@ -264,6 +288,18 @@ impl Storage for MeteringStorage {
         // delete: a batch can come back `Ok` with per-key failures inside
         let result = self.backend.delete_batch(ctx, prefix, batch).await?;
         self.meter.deleted("delete_batch", result.deleted_objects);
+        Ok(result)
+    }
+
+    async fn sweep_leftovers(
+        &self,
+        ctx: &StorageContext<'_>,
+        older_than: DateTime<Utc>,
+        dry_run: bool,
+    ) -> StorageResult<DeleteObjectsResult> {
+        self.meter.request("sweep_leftovers");
+        let result = self.backend.sweep_leftovers(ctx, older_than, dry_run).await?;
+        self.meter.deleted("sweep_leftovers", result.deleted_objects);
         Ok(result)
     }
 
@@ -291,19 +327,17 @@ impl Storage for MeteringStorage {
         ctx: &StorageContext<'_>,
         path: &str,
         range: Option<&Range<u64>>,
-    ) -> StorageResult<(
-        Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>,
-        VersionInfo,
-    )> {
+    ) -> StorageResult<Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>>
+    {
         self.meter.request("get_object_range");
-        let (stream, version) = self.backend.get_object_range(ctx, path, range).await?;
+        let stream = self.backend.get_object_range(ctx, path, range).await?;
         let meter = Arc::clone(&self.meter);
         let stream = stream.inspect(move |item| {
             if let Ok(bytes) = item {
                 meter.read("get_object_range", bytes.len() as u64);
             }
         });
-        Ok((Box::pin(stream), version))
+        Ok(Box::pin(stream))
     }
 }
 
@@ -323,10 +357,17 @@ mod tests {
         let ctx = StorageContext::unattributed(&settings);
 
         storage
-            .put_object(&ctx, "a/b", Bytes::from_static(b"hello"), None, vec![], None)
+            .put_object(
+                &ctx,
+                "a/b",
+                Bytes::from_static(b"hello"),
+                None,
+                vec![],
+                WriteHint::Atomic,
+            )
             .await
             .unwrap();
-        let (stream, _) = storage.get_object_range(&ctx, "a/b", None).await.unwrap();
+        let stream = storage.get_object_range(&ctx, "a/b", None).await.unwrap();
         let chunks: Vec<Bytes> = stream.try_collect().await.unwrap();
         assert_eq!(chunks.concat(), b"hello");
         let listed: Vec<_> =
@@ -355,5 +396,44 @@ mod tests {
         assert_eq!(started, 4);
         let keys: u64 = report.read_timeline.iter().map(|s| s.keys_listed).sum();
         assert_eq!(keys, 1);
+    }
+
+    #[cfg(all(feature = "fs", unix))]
+    #[tokio::test]
+    async fn forwards_sweep_leftovers() {
+        use std::{
+            fs::File,
+            time::{Duration, SystemTime},
+        };
+
+        use crate::storage::{logging::LoggingStorage, new_filesystem_storage};
+
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("repo.d")).unwrap();
+        let leftover = dir.path().join(format!("repo.d/stage.{}", uuid::Uuid::new_v4()));
+        std::fs::write(&leftover, b"hello").unwrap();
+        File::options()
+            .write(true)
+            .open(&leftover)
+            .unwrap()
+            .set_modified(SystemTime::now() - Duration::from_secs(2 * 24 * 60 * 60))
+            .unwrap();
+        let logging = Arc::new(LoggingStorage::new(
+            new_filesystem_storage(dir.path()).await.unwrap(),
+        ));
+        let storage = MeteringStorage::new(Arc::clone(&logging) as Arc<_>);
+        let settings = storage.default_settings().await.unwrap();
+        let ctx = StorageContext::unattributed(&settings);
+
+        let result = storage.sweep_leftovers(&ctx, Utc::now(), false).await.unwrap();
+        assert_eq!(result, DeleteObjectsResult { deleted_objects: 1, deleted_bytes: 5 });
+        assert!(!leftover.exists());
+        assert_eq!(
+            logging.fetch_operations(),
+            vec![("sweep_leftovers".to_string(), String::new())]
+        );
+        let sweep = storage.snapshot().per_op["sweep_leftovers"];
+        assert_eq!(sweep.requests, 1);
+        assert_eq!(sweep.objects_deleted, 1);
     }
 }

@@ -55,6 +55,8 @@ pub enum StorageErrorKind {
     /// The store asked us to slow down (S3 `SlowDown` / HTTP 503 / 429). Retry with backoff.
     #[error("storage throttled the request: {code}: {message}")]
     Throttled { code: String, message: String },
+    #[error("the repository is frozen: unfreeze it before writing")]
+    RepositoryFrozen,
     #[error("storage error: {0}")]
     Other(String),
 }
@@ -443,6 +445,29 @@ impl<'a> StorageContext<'a> {
     }
 }
 
+/// The condition for [`Storage::put_object_conditional`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PutCondition<'a> {
+    /// Write only if the object doesn't exist.
+    Create,
+    /// Write only if the object's current version is this one.
+    IfVersion(&'a VersionInfo),
+}
+
+/// What the caller guarantees about an unconditional write.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum WriteHint {
+    /// No guarantee: the name may exist and be read concurrently, so the
+    /// write must be all-or-nothing.
+    #[default]
+    Atomic,
+    /// The caller's promise: the name is new and written by nobody else, and
+    /// nothing reads the object before `put_object` returns. Backends may then
+    /// write in place, without staging. Backends whose PUTs are all-or-nothing
+    /// ignore it.
+    NewObject,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VersionedUpdateResult {
     Updated { new_version: VersionInfo },
@@ -570,7 +595,7 @@ pub trait Storage: fmt::Debug + Display + sealed::Sealed + Sync + Send {
         ctx: &StorageContext<'_>,
         path: &str,
         range: Option<&Range<u64>>,
-    ) -> StorageResult<(Pin<Box<dyn AsyncBufRead + Send>>, VersionInfo)> {
+    ) -> StorageResult<Pin<Box<dyn AsyncBufRead + Send>>> {
         if let Some(range) = range {
             self.get_object_concurrently(ctx, path, range).await
         } else {
@@ -583,10 +608,10 @@ pub trait Storage: fmt::Debug + Display + sealed::Sealed + Sync + Send {
         ctx: &StorageContext<'_>,
         path: &str,
         range: Option<&Range<u64>>,
-    ) -> StorageResult<(Pin<Box<dyn AsyncBufRead + Send>>, VersionInfo)> {
-        let (stream, version) = self.get_object_range(ctx, path, range).await?;
+    ) -> StorageResult<Pin<Box<dyn AsyncBufRead + Send>>> {
+        let stream = self.get_object_range(ctx, path, range).await?;
         let reader = StreamReader::new(stream.map_err(std::io::Error::other));
-        Ok((Box::pin(reader), version))
+        Ok(Box::pin(reader))
     }
 
     async fn get_object_range(
@@ -594,11 +619,12 @@ pub trait Storage: fmt::Debug + Display + sealed::Sealed + Sync + Send {
         ctx: &StorageContext<'_>,
         path: &str,
         range: Option<&Range<u64>>,
-    ) -> StorageResult<(
-        Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>,
-        VersionInfo,
-    )>;
+    ) -> StorageResult<Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>>;
 
+    /// Write `path` unconditionally, replacing any existing object.
+    ///
+    /// Never reports a version conflict and returns no version. `hint` is
+    /// advisory; see [`WriteHint`].
     async fn put_object(
         &self,
         ctx: &StorageContext<'_>,
@@ -606,9 +632,41 @@ pub trait Storage: fmt::Debug + Display + sealed::Sealed + Sync + Send {
         bytes: Bytes,
         content_type: Option<&str>,
         metadata: Vec<(String, String)>,
-        previous_version: Option<&VersionInfo>,
+        hint: WriteHint,
+    ) -> StorageResult<()>;
+
+    /// Write `path` only if `condition` holds.
+    ///
+    /// Returns [`VersionedUpdateResult::Updated`] with the new version on
+    /// success, or [`VersionedUpdateResult::NotOnLatestVersion`] without
+    /// writing when the condition fails: for [`PutCondition::Create`] the
+    /// object exists, for [`PutCondition::IfVersion`] its current version is a
+    /// different one or the object doesn't exist (on every backend; a missing
+    /// object is never an error). For `Create`, a backend may return
+    /// `Updated` when the object already holds exactly these bytes: a retried
+    /// create whose first reply was lost is indistinguishable from that.
+    /// The version in [`PutCondition::IfVersion`]
+    /// must come from [`Storage::get_object_conditional`] or an earlier
+    /// `put_object_conditional`. Backends honouring
+    /// [`Settings::unsafe_use_conditional_create()`] and
+    /// [`Settings::unsafe_use_conditional_update()`] skip the condition, and
+    /// write unconditionally, when the corresponding setting disables it.
+    async fn put_object_conditional(
+        &self,
+        ctx: &StorageContext<'_>,
+        path: &str,
+        bytes: Bytes,
+        content_type: Option<&str>,
+        metadata: Vec<(String, String)>,
+        condition: PutCondition<'_>,
     ) -> StorageResult<VersionedUpdateResult>;
 
+    /// Copy `from` to `to` only if `from`'s current version is `version`,
+    /// which must come from [`Storage::get_object_conditional`] or
+    /// [`Storage::put_object_conditional`]. On success it returns `version`
+    /// unchanged, not a version of `to`. Backends honouring
+    /// [`Settings::unsafe_use_conditional_update()`] skip the check, and copy
+    /// unconditionally, when that setting disables it.
     async fn copy_object(
         &self,
         ctx: &StorageContext<'_>,
@@ -622,6 +680,7 @@ pub trait Storage: fmt::Debug + Display + sealed::Sealed + Sync + Send {
     ///
     /// Returns a stream of [`ListInfo`] entries, each containing the object's key and size in bytes.
     /// Pass an empty prefix to list all objects in the repository's storage root.
+    /// The order is unspecified; no backend guarantees one.
     async fn list_objects<'a>(
         &'a self,
         ctx: &StorageContext<'_>,
@@ -645,6 +704,11 @@ pub trait Storage: fmt::Debug + Display + sealed::Sealed + Sync + Send {
         false
     }
 
+    /// Whether this backend can hold IC1 (spec version 1) repositories.
+    fn supports_ic1_repos(&self) -> bool {
+        true
+    }
+
     async fn delete_batch(
         &self,
         ctx: &StorageContext<'_>,
@@ -652,12 +716,38 @@ pub trait Storage: fmt::Debug + Display + sealed::Sealed + Sync + Send {
         batch: Vec<(String, u64)>,
     ) -> StorageResult<DeleteObjectsResult>;
 
+    /// Deletes files the backend's own write protocols leave behind after a
+    /// crash or an abandoned write. Only files last modified
+    /// before `older_than` are candidates; a backend may use an earlier cutoff
+    /// to protect writes still in progress. With `dry_run`, deletes nothing and
+    /// reports what it would delete.
+    async fn sweep_leftovers(
+        &self,
+        _ctx: &StorageContext<'_>,
+        _older_than: DateTime<Utc>,
+        _dry_run: bool,
+    ) -> StorageResult<DeleteObjectsResult> {
+        Ok(DeleteObjectsResult::default())
+    }
+
     async fn get_object_last_modified(
         &self,
         ctx: &StorageContext<'_>,
         path: &str,
     ) -> StorageResult<DateTime<Utc>>;
 
+    /// Read the object at `path`, skipping the download if the caller already
+    /// has its current version.
+    ///
+    /// Returns [`GetModifiedResult::OnLatestVersion`], without data, if the
+    /// object is still at `previous_version`. Otherwise returns
+    /// [`GetModifiedResult::Modified`] with the data and the new version.
+    /// With `previous_version = None` it always returns `Modified`.
+    ///
+    /// Object stores compare the object's `ETag` with `previous_version.etag`.
+    /// Other backends may define versions differently; a backend whose
+    /// listings can lag may also return `OnLatestVersion` when the version it
+    /// sees is older than `previous_version`.
     async fn get_object_conditional(
         &self,
         ctx: &StorageContext<'_>,
@@ -719,32 +809,23 @@ pub trait Storage: fmt::Debug + Display + sealed::Sealed + Sync + Send {
         ctx: &StorageContext<'_>,
         key: &str,
         parts: Vec<Range<u64>>,
-    ) -> StorageResult<(Pin<Box<dyn AsyncBufRead + Send>>, VersionInfo)> {
+    ) -> StorageResult<Pin<Box<dyn AsyncBufRead + Send>>> {
         let ctx = *ctx;
-        let results = parts
+        let all_bytes = parts
             .into_iter()
             .map(move |range| async move {
-                let (stream, version) =
-                    self.get_object_range(&ctx, key, Some(&range)).await?;
+                let stream = self.get_object_range(&ctx, key, Some(&range)).await?;
                 let all_bytes: Vec<_> = stream.try_collect().await?;
-                Ok::<_, StorageError>((all_bytes, version))
+                Ok::<_, StorageError>(all_bytes)
             })
-            .collect::<FuturesOrdered<_>>();
-
-        let results = results.peekable();
-        tokio::pin!(results);
-        let version = match results.as_mut().peek().await {
-            Some(Ok((_, version))) => version.clone(),
-            _ => VersionInfo::for_creation(),
-        };
-        let all_bytes = results
-            .map_ok(|(all_bytes, _)| stream::iter(all_bytes).map(Ok::<_, StorageError>))
+            .collect::<FuturesOrdered<_>>()
+            .map_ok(|all_bytes| stream::iter(all_bytes).map(Ok::<_, StorageError>))
             .try_flatten()
             .try_collect::<Vec<_>>()
             .await?;
 
         let res = StreamReader::new(stream::iter(all_bytes).map(Ok::<_, std::io::Error>));
-        Ok((Box::pin(res), version))
+        Ok(Box::pin(res))
     }
 
     async fn get_object_concurrently(
@@ -752,7 +833,7 @@ pub trait Storage: fmt::Debug + Display + sealed::Sealed + Sync + Send {
         ctx: &StorageContext<'_>,
         key: &str,
         range: &Range<u64>,
-    ) -> StorageResult<(Pin<Box<dyn AsyncBufRead + Send>>, VersionInfo)> {
+    ) -> StorageResult<Pin<Box<dyn AsyncBufRead + Send>>> {
         let parts = split_in_multiple_requests(
             range,
             ctx.settings.concurrency().ideal_concurrent_request_size().get(),
@@ -760,8 +841,8 @@ pub trait Storage: fmt::Debug + Display + sealed::Sealed + Sync + Send {
         )
         .collect::<Vec<_>>();
 
-        let res: (Pin<Box<dyn AsyncBufRead + Send>>, VersionInfo) = match parts.len() {
-            0 => (Box::pin(tokio::io::empty()), VersionInfo::for_creation()),
+        let res: Pin<Box<dyn AsyncBufRead + Send>> = match parts.len() {
+            0 => Box::pin(tokio::io::empty()),
             1 => self.get_object_range_read(ctx, key, Some(range)).await?,
             _ => self.get_object_concurrently_multiple(ctx, key, parts).await?,
         };

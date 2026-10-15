@@ -41,11 +41,20 @@
         # Use Python 3.12 from nixpkgs
         python = pkgs.python312;
 
-        # Rust toolchain plus the wasm32-wasip1-threads std for `just wasm-build`.
-        rustToolchain = fenix.packages.${system}.combine [
-          fenix.packages.${system}.stable.toolchain
-          fenix.packages.${system}.targets.wasm32-wasip1-threads.stable.rust-std
-        ];
+        # Rust toolchain plus the wasm32-wasip1-threads std for `just wasm-build`
+        # and, on Linux, the x86_64 musl std for `just fs-stress-static`.
+        rustToolchain = fenix.packages.${system}.combine (
+          [
+            fenix.packages.${system}.stable.toolchain
+            fenix.packages.${system}.targets.wasm32-wasip1-threads.stable.rust-std
+          ]
+          ++ lib.optionals pkgs.stdenv.hostPlatform.isLinux [
+            fenix.packages.${system}.targets.x86_64-unknown-linux-musl.stable.rust-std
+          ]
+        );
+
+        # C toolchain for the musl target's C dependencies (zstd, ring, aws-lc).
+        muslCC = pkgs.pkgsCross.musl64.stdenv.cc;
 
         # Official wasi-sdk sysroot; nixpkgs' wasilibc (single-threaded,
         # split outputs) can't serve as a --sysroot.
@@ -138,6 +147,12 @@
                 AR_wasm32_wasip1_threads = "${pkgs.llvmPackages.llvm}/bin/llvm-ar";
               }
               // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+                # `just fs-stress-static`: a fully static fs-stress for hosts
+                # with another libc (e.g. the RHEL clients of a cluster).
+                CC_x86_64_unknown_linux_musl = "${muslCC}/bin/x86_64-unknown-linux-musl-cc";
+                AR_x86_64_unknown_linux_musl = "${muslCC}/bin/x86_64-unknown-linux-musl-ar";
+                CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER = "${muslCC}/bin/x86_64-unknown-linux-musl-cc";
+
                 # Python libraries often load native shared objects using dlopen(3).
                 # Setting LD_LIBRARY_PATH makes the dynamic library loader aware of libraries without using RPATH for lookup.
                 # libpython is needed by the pyo3 lib-test binary (no build.rs, so no rpath).

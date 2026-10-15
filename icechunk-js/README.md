@@ -45,6 +45,9 @@ In-memory storage works on all platforms. The following backends are available o
 - **Tigris** — `Storage.newTigris(bucket, prefix?, credentials?, options?)`
 - **HTTP** — `Storage.newHttp(baseUrl, config?)`
 - **Local Filesystem** — `Storage.newLocalFilesystem(path)`
+- **Filesystem** (safe for concurrent writers, experimental, Unix only) — `Storage.newFilesystem(path)`
+  - It uses a different on-disk format, which other backends and older Icechunk versions can't open.
+  - Its `migrateLegacyRepo()` converts a repository written by `newLocalFilesystem` (needed before opening it), and `freezeRepo()`/`unfreezeRepo()` stop and resume changes to the repository. Each resolves to whether it changed the repository.
 
 #### Fetch Storage (read-only, works everywhere)
 

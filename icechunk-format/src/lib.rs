@@ -383,6 +383,10 @@ pub enum IcechunkFormatErrorKind {
     InvalidFileType { expected: FileTypeBin, got: u8 }, // TODO: add more info
     #[error("Icechunk encountered an unknown file type code {got}")]
     UnknownFileType { got: u8 },
+    #[error(
+        "this repository uses the filesystem format of FilesystemStorage: open it with filesystem_storage (Python), Storage.newFilesystem (JS) or icechunk_fs::new_filesystem_storage (Rust)"
+    )]
+    FilesystemFormatRepository,
     #[error("Icechunk cannot read file, invalid compression algorithm")]
     InvalidCompressionAlgorithm, // TODO: add more info
     #[error("Invalid Icechunk metadata file")]
@@ -450,6 +454,7 @@ pub mod format_constants {
         TransactionLog = 4,
         Chunk = 5,
         RepoInfo = 6,
+        FilesystemStub = 7,
     }
 
     impl TryFrom<u8> for FileTypeBin {
@@ -465,6 +470,9 @@ pub mod format_constants {
                     Ok(FileTypeBin::TransactionLog)
                 }
                 n if n == FileTypeBin::Chunk as u8 => Ok(FileTypeBin::Chunk),
+                n if n == FileTypeBin::FilesystemStub as u8 => {
+                    Ok(FileTypeBin::FilesystemStub)
+                }
                 n => Err(format!("Bad file type code: {n}")),
             }
         }
@@ -917,6 +925,41 @@ mod tests {
         assert!(matches!(
             err.kind(),
             IcechunkFormatErrorKind::UnknownFileType { got: 99 }
+        ));
+    }
+
+    #[icechunk_macros::test]
+    fn test_filesystem_stub_file_type_code() {
+        use format_constants::*;
+        assert_eq!(FileTypeBin::try_from(7), Ok(FileTypeBin::FilesystemStub));
+    }
+
+    #[icechunk_macros::test]
+    fn test_parse_file_header_filesystem_stub_file_type() {
+        use format_constants::*;
+        let buf = make_header(
+            "ic-1.0.0",
+            SpecVersionBin::V2 as u8,
+            7,
+            CompressionAlgorithmBin::None as u8,
+        );
+        let header = parse_file_header(&buf).unwrap();
+        assert_eq!(header.file_type, FileTypeBin::FilesystemStub);
+    }
+
+    #[icechunk_macros::test]
+    fn test_parse_file_header_first_unassigned_file_type() {
+        use format_constants::*;
+        let buf = make_header(
+            "ic-1.0.0",
+            SpecVersionBin::V2 as u8,
+            8,
+            CompressionAlgorithmBin::Zstd as u8,
+        );
+        let err = parse_file_header(&buf).unwrap_err();
+        assert!(matches!(
+            err.kind(),
+            IcechunkFormatErrorKind::UnknownFileType { got: 8 }
         ));
     }
 

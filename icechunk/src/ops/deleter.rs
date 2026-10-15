@@ -701,8 +701,8 @@ pub(crate) mod testing {
     #[cfg(not(feature = "shuttle"))]
     use crate::format::format_constants::SpecVersionBin;
     use crate::storage::{
-        GetModifiedResult, RepositoryCreation, Settings, StorageErrorKind, StorageInfo,
-        StorageResult, VersionInfo, VersionedUpdateResult,
+        GetModifiedResult, PutCondition, RepositoryCreation, Settings, StorageErrorKind,
+        StorageInfo, StorageResult, VersionInfo, VersionedUpdateResult, WriteHint,
     };
 
     /// How `FlakyDeletes::delete_batch` misbehaves under the failing prefix.
@@ -852,10 +852,29 @@ pub(crate) mod testing {
             bytes: Bytes,
             content_type: Option<&str>,
             metadata: Vec<(String, String)>,
-            previous_version: Option<&VersionInfo>,
+            hint: WriteHint,
+        ) -> StorageResult<()> {
+            self.backend.put_object(ctx, path, bytes, content_type, metadata, hint).await
+        }
+
+        async fn put_object_conditional(
+            &self,
+            ctx: &StorageContext<'_>,
+            path: &str,
+            bytes: Bytes,
+            content_type: Option<&str>,
+            metadata: Vec<(String, String)>,
+            condition: PutCondition<'_>,
         ) -> StorageResult<VersionedUpdateResult> {
             self.backend
-                .put_object(ctx, path, bytes, content_type, metadata, previous_version)
+                .put_object_conditional(
+                    ctx,
+                    path,
+                    bytes,
+                    content_type,
+                    metadata,
+                    condition,
+                )
                 .await
         }
 
@@ -906,6 +925,10 @@ pub(crate) mod testing {
         fn lists_id_prefixes_natively(&self) -> bool {
             self.native_id_prefixes
                 .unwrap_or_else(|| self.backend.lists_id_prefixes_natively())
+        }
+
+        fn supports_ic1_repos(&self) -> bool {
+            self.backend.supports_ic1_repos()
         }
 
         async fn delete_batch(
@@ -972,10 +995,8 @@ pub(crate) mod testing {
             ctx: &StorageContext<'_>,
             path: &str,
             range: Option<&Range<u64>>,
-        ) -> StorageResult<(
-            Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>,
-            VersionInfo,
-        )> {
+        ) -> StorageResult<Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>>
+        {
             self.backend.get_object_range(ctx, path, range).await
         }
     }
