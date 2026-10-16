@@ -1,5 +1,6 @@
 import asyncio
 from datetime import timedelta
+from pathlib import Path
 from typing import Any, cast
 
 import pytest
@@ -650,6 +651,21 @@ Arrays deleted:
         )
 
         assert all(isinstance(o, e) for (o, e) in zip(ops, expected, strict=True))
+
+
+async def test_async_iterators_read_storage_on_first_anext(tmp_path: Path) -> None:
+    repo = await ic.Repository.create_async(
+        storage=ic.local_filesystem_storage(str(tmp_path))
+    )
+    (tmp_path / "repo").unlink()
+
+    ops = repo.ops_log_async()
+    ancestry = repo.async_ancestry(branch="main")
+
+    with pytest.raises(ic.IcechunkError):
+        await anext(ops)
+    with pytest.raises(ic.IcechunkError):
+        await anext(ancestry)
 
 
 async def test_branch_reset_async(any_spec_version: int | None) -> None:
