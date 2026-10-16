@@ -81,9 +81,10 @@ makes `icechunk:@x` ambiguous, and the spec has settled on `//ref`.
 `icechunk:` is a *native* adapter: it does not call
 `PipelineContext.resolve_preceding()` (Icechunk does not sit on a zarr
 `Store`), so it owns validation of every preceding segment. Allowed: exactly
-one root URL, optionally followed by bare `zarr3:` segments. `zarr2:` and
-`zarr:path` are errors (Icechunk is Zarr v3 only), as is any other adapter;
-for example `x.zip|zip:|icechunk:` is out of scope for v1.
+one root URL. zarr reads `zarr2:`/`zarr3:` format segments itself and
+accepts them only as the last segment, so they never reach the adapter. Any
+other adapter before `icechunk:` is an error; for example
+`x.zip|zip:|icechunk:` is out of scope for v1.
 
 | Root URL | Storage |
 |---|---|
@@ -149,12 +150,11 @@ rather than being hardcoded to "from environment".
 zarr has no commit step, so the adapter cannot commit a writable session.
 
 - `"r"`: a read-only session on the selected ref.
-- `"a"` (zarr's default for `open`/`open_group`): treated as "open". The
-  adapter returns the same read-only store, and zarr's open-or-create logic
-  opens the existing node; any write then fails with Icechunk's
-  `ReadOnlyError`. Creating a missing node fails.
-- `"w"`, `"w-"`, `"r+"`: `URLPipelineError`, pointing to
-  `repo.writable_session(branch)` + `session.commit(...)`.
+- `"a"` (zarr's default for `open`/`open_group`), `"w"`, `"w-"`, `"r+"`:
+  `URLPipelineError`, pointing to `repo.writable_session(branch)` +
+  `session.commit(...)`. zarr itself rejects a read-only store in mode `"a"`,
+  so the adapter refuses it up front, before any I/O, and suggests
+  `mode="r"` or `zarr.open_url`.
 - Tags and snapshots are read-only regardless.
 
 The Rust `open_from_url` already supports `writable: true` (branch refs

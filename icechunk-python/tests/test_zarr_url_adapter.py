@@ -33,43 +33,11 @@ from zarr.abc.url_pipeline import (
     AdapterResolution,
     PipelineContext,
     PipelineSegment,
-    URLPipelineAdapter,
 )
 from zarr.core.common import AccessModeLiteral
 from zarr.errors import URLPipelineError
-from zarr.registry import get_url_adapter, list_url_adapter_schemes, register_url_adapter
-from zarr.storage import parse_pipeline, resolve_pipeline
-
-# ---------------------------------------------------------------------------
-# zarr2:/zarr3: format adapters are not part of zarr-python#4192; register a
-# minimal stand-in when the installed zarr has none, so a trailing `|zarr3:`
-# can be tested.
-
-
-class _FormatAdapter(URLPipelineAdapter):
-    zarr_format: Any = None
-
-    @classmethod
-    async def open_pipeline_segment(
-        cls, segment: PipelineSegment, context: PipelineContext
-    ) -> AdapterResolution:
-        preceding = await context.resolve_preceding()
-        path = "/".join(p for p in (preceding.path, segment.body.strip("/")) if p)
-        return dataclasses.replace(preceding, path=path, zarr_format=cls.zarr_format)
-
-
-class _Zarr3Adapter(_FormatAdapter):
-    zarr_format = 3
-
-
-class _Zarr2Adapter(_FormatAdapter):
-    zarr_format = 2
-
-
-for _scheme, _cls in (("zarr3", _Zarr3Adapter), ("zarr2", _Zarr2Adapter)):
-    if _scheme not in list_url_adapter_schemes():
-        register_url_adapter(_scheme, _cls)
-
+from zarr.registry import get_url_adapter, list_url_adapter_schemes
+from zarr.storage import URLPipeline
 
 # ---------------------------------------------------------------------------
 # fixtures
@@ -122,7 +90,7 @@ def memory_repo() -> RepoInfo:
 
 
 async def _resolve(url: str, **kwargs: Any) -> AdapterResolution:
-    return await resolve_pipeline(url, **kwargs)
+    return await URLPipeline.from_url(url).resolve(**kwargs)
 
 
 def _session_of(resolution: AdapterResolution) -> ic.Session:
@@ -183,7 +151,6 @@ async def test_spec_examples(
     url = info.root + suffix.format(snap=info.first)
     resolution = await _resolve(url, mode="r")
     assert resolution.path == path
-    assert resolution.zarr_format == 3
     assert resolution.store.read_only
     session = _session_of(resolution)
     assert session.read_only
@@ -270,7 +237,7 @@ def test_xarray_open_zarr(tmp_path: Path) -> None:
 # modes
 
 
-@pytest.mark.parametrize("mode", ["w", "w-", "r+"])
+@pytest.mark.parametrize("mode", ["a", "w", "w-", "r+"])
 async def test_write_modes_rejected(
     local_repo: RepoInfo, mode: AccessModeLiteral
 ) -> None:
@@ -281,26 +248,27 @@ async def test_write_modes_rejected(
 
 
 @pytest.mark.parametrize("ref", ["//tag.v5", "//branch.main", "//{snap}"])
-def test_mode_a_opens_existing_read_only(local_repo: RepoInfo, ref: str) -> None:
-    # "a" is zarr.open's default: it must serve the "open" half
+def test_read_only_opens(local_repo: RepoInfo, ref: str) -> None:
     url = f"{local_repo.root}|icechunk:{ref.format(snap=local_repo.first)}/path/to/array"
-    arr = zarr.open_array(url, mode="a")
+    arr = zarr.open_array(url, mode="r")
     assert arr.store.read_only
     np.testing.assert_array_equal(arr[:], np.arange(4))
     with pytest.raises(ic.IcechunkError, match=r"(?i)read.only"):
         arr[:] = 0
 
-    group = zarr.open_group(f"{local_repo.root}|icechunk:", mode="a")
+    group = zarr.open_group(f"{local_repo.root}|icechunk:", mode="r")
     assert group.store.read_only
     assert group.attrs["level"] == "root"
-    # default mode of zarr.open is "a"
-    assert isinstance(zarr.open(f"{local_repo.root}|icechunk:path/to/node"), zarr.Group)
+    # zarr.open_url opens read-only by default
+    node = zarr.open_url(f"{local_repo.root}|icechunk:path/to/node")
+    assert isinstance(node, zarr.Group)
+    assert node.store.read_only
 
 
-def test_mode_a_missing_node_fails(local_repo: RepoInfo) -> None:
-    # "a" cannot create through a read-only session
-    with pytest.raises(Exception, match=r"(?i)read.only|not found|does not exist"):
-        zarr.open_group(f"{local_repo.root}|icechunk:does/not/exist", mode="a")
+def test_default_mode_a_points_to_mode_r(local_repo: RepoInfo) -> None:
+    # "a" is the default of zarr.open/open_group; the error says what to do
+    with pytest.raises(URLPipelineError, match=r"mode='r' or use zarr\.open_url"):
+        zarr.open(f"{local_repo.root}|icechunk:path/to/node")
 
 
 # ---------------------------------------------------------------------------
@@ -310,8 +278,8 @@ def test_mode_a_missing_node_fails(local_repo: RepoInfo) -> None:
 @pytest.mark.parametrize(
     ("url", "match"),
     [
-        ("file:///x|zarr2:|icechunk:", "Zarr v3 only"),
-        ("file:///x|zarr3:sub|icechunk:", "Zarr v3 only"),
+        ("file:///x|zarr2:|icechunk:", "must be the last segment"),
+        ("file:///x|zarr3:sub|icechunk:", "must be the last segment"),
         ("file:///x.zip|zip:|icechunk:", "not supported"),
         ("file:///x|icechunk:|icechunk:", "not supported"),
         ("file:relative/repo|icechunk:", "absolute path"),
@@ -328,10 +296,16 @@ def test_mode_a_missing_node_fails(local_repo: RepoInfo) -> None:
 async def test_invalid_pipelines(url: str, match: str) -> None:
     with pytest.raises(URLPipelineError, match=match):
         await _resolve(url, mode="r")
+    # the same error through the string route, when zarr reads the string as a
+    # pipeline at all: an invalid pipeline string (a bare root, a misplaced
+    # format segment, an unregistered adapter) keeps its pre-pipeline meaning
+    if zarr.storage.is_url_pipeline(url):
+        with pytest.raises(URLPipelineError, match=match):
+            zarr.open_group(url, mode="r")
 
 
 async def test_icechunk_as_root_rejected() -> None:
-    segment = parse_pipeline("file:///x|icechunk:")[1]
+    segment = URLPipeline.from_url("file:///x|icechunk:").segments[1]
     context = PipelineContext(preceding=(), mode="r", storage_options=None)
     with pytest.raises(URLPipelineError, match="needs a root URL"):
         await IcechunkURLAdapter.open_pipeline_segment(segment, context)
@@ -347,8 +321,8 @@ async def test_missing_repo_and_refs_are_icechunk_errors(
 
 
 def test_trailing_zarr2_finds_nothing(local_repo: RepoInfo) -> None:
-    # the adapter reports zarr_format=3; a trailing zarr2: overrides it and
-    # finds no v2 metadata in a (v3-only) Icechunk repository
+    # a trailing zarr2: selects format 2, and a (v3-only) Icechunk repository
+    # has no v2 metadata
     with pytest.raises(zarr.errors.GroupNotFoundError):
         zarr.open_group(local_repo.root + "|icechunk:|zarr2:", mode="r")
 
@@ -650,7 +624,7 @@ def test_http_root(local_repo: RepoInfo, tmp_path: Path) -> None:
     with _serve(repo_dir, delay=0) as base:
         arr = zarr.open_array(f"{base}|icechunk://tag.v5/path/to/array", mode="r")
         np.testing.assert_array_equal(arr[:], np.arange(4))
-        assert zarr.open_group(f"{base}/|icechunk:", mode="a").store.read_only
+        assert zarr.open_group(f"{base}/|icechunk:", mode="r").store.read_only
 
 
 async def test_adapter_does_not_block_event_loop(local_repo: RepoInfo) -> None:
@@ -709,7 +683,6 @@ async def test_opener_dispatch(local_repo: RepoInfo) -> None:
         storage_options=options,
     )
     assert resolution.path == "path/to/node"
-    assert resolution.zarr_format == 3
     assert _session_of(resolution).snapshot_id == local_repo.first
 
     root, read_only, passed = calls[0]
@@ -719,13 +692,14 @@ async def test_opener_dispatch(local_repo: RepoInfo) -> None:
     assert passed == {"test_token": "abc"}
     assert options == {"test_token": "abc", "icechunk_config": options["icechunk_config"]}
 
-    # default mode "a" through zarr's sync API
-    group = zarr.open_group("test.vendor://org/repo|icechunk:path/to/node")
+    # through zarr's sync API
+    group = zarr.open_group("test.vendor://org/repo|icechunk:path/to/node", mode="r")
     assert group.attrs["level"] == "node"
     assert calls[-1][1] is True
-    arr = zarr.open_array(
+    arr = zarr.open_url(
         f"test.vendor://org/repo|icechunk://{local_repo.first}/path/to/array"
     )
+    assert isinstance(arr, zarr.Array)
     np.testing.assert_array_equal(arr[:], np.arange(4))
 
 

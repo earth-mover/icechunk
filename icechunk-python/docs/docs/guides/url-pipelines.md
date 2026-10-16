@@ -25,7 +25,8 @@ import zarr
 
 ds = xr.open_zarr("s3://bucket/repo|icechunk://tag.v1/path/to/group")
 group = zarr.open_group("file:///data/repo|icechunk:", mode="r")
-array = zarr.open_array("gs://bucket/repo|icechunk://branch.dev/temperature")
+array = zarr.open_array("gs://bucket/repo|icechunk://branch.dev/temperature", mode="r")
+node = zarr.open_url("s3://bucket/repo|icechunk://tag.v1/path/to/group")
 ```
 
 The same URLs work in other tools that implement the specification, such as
@@ -100,9 +101,12 @@ are rejected.
 ## Read-only access
 
 URLs always open read-only sessions, because zarr has no step at which to
-commit. Mode `"a"` (zarr's default) opens existing groups and arrays;
-modes `"w"`, `"w-"` and `"r+"` raise an error. To write, open the repository
-and use a writable session:
+commit. Pass `mode="r"` to `zarr.open`, `zarr.open_group` and
+`zarr.open_array`, or use `zarr.open_url`, which is read-only by default.
+Every other mode raises an error, including `"a"`, the default of
+`zarr.open` and `zarr.open_group`. Xarray opens stores read-only, so
+`xr.open_zarr` needs no extra argument. To write, open the repository and
+use a writable session:
 
 ```python
 repo = icechunk.Repository.open(icechunk.storage_from_url("s3://bucket/repo"))

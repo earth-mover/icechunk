@@ -63,7 +63,9 @@ OPENER_ENTRY_POINT_GROUP = "icechunk.url_repository_openers"
 #: Root schemes resolved natively by Icechunk. Openers cannot override them.
 BUILTIN_ROOT_SCHEMES: frozenset[str] = frozenset(_url_root_schemes())
 
-_WRITE_MODES = frozenset({"w", "w-", "r+"})
+# Every mode that may write. zarr rejects a read-only store in mode "a" (its
+# open-or-create default), so "a" is refused here too, before any I/O.
+_WRITE_MODES = frozenset({"a", "w", "w-", "r+"})
 
 
 class URLRepositoryOpener(Protocol):
@@ -353,18 +355,11 @@ def _validate_preceding(
             f"icechunk: the root {root.raw!r} has no URL scheme; spell local paths as "
             "'file:///absolute/path'"
         )
-    for seg in rest:
-        if seg.scheme == "zarr3" and not seg.body and seg.query is None:
-            continue
-        if seg.scheme in ("zarr2", "zarr", "zarr3"):
-            raise URLPipelineError(
-                f"icechunk: unsupported segment {seg.raw!r} before 'icechunk:'; "
-                "Icechunk repositories are Zarr v3 only and the format segment "
-                f"belongs after the icechunk: segment (in {context.preceding_url}|"
-                f"{segment.raw})"
-            )
+    # zarr consumes `zarr2:`/`zarr3:` format segments itself and only accepts
+    # them last, so anything here is a container or another adapter.
+    if rest:
         raise URLPipelineError(
-            f"icechunk: unsupported segment {seg.raw!r} before 'icechunk:'; the "
+            f"icechunk: unsupported segment {rest[0].raw!r} before 'icechunk:'; the "
             "icechunk: adapter only supports a root URL that locates the repository "
             "directly (repositories inside other containers, such as "
             "'repo.zip|zip:|icechunk:', are not supported)"
@@ -373,11 +368,17 @@ def _validate_preceding(
 
 
 def _write_mode_error(mode: str) -> URLPipelineError:
+    hint = (
+        " (it is the default mode of zarr.open and zarr.open_group; pass mode='r' "
+        "or use zarr.open_url)"
+        if mode == "a"
+        else ""
+    )
     return URLPipelineError(
-        f"icechunk: mode {mode!r} is not supported; icechunk: URLs open read-only "
-        "sessions because zarr has no way to commit a writable session. To write, "
-        "open the repository and use `repo.writable_session(branch)`, then "
-        "`session.commit(...)`"
+        f"icechunk: mode {mode!r} is not supported{hint}; icechunk: URLs open "
+        "read-only sessions because zarr has no way to commit a writable session. "
+        "To write, open the repository and use `repo.writable_session(branch)`, "
+        "then `session.commit(...)`"
     )
 
 
@@ -387,8 +388,8 @@ class IcechunkURLAdapter(URLPipelineAdapter):
 
     Registered under zarr's `zarr.url_adapters` entry-point group as
     `icechunk`. It opens a read-only session on the ref selected by the
-    segment (default `branch.main`) and returns its store, the residual path
-    and `zarr_format=3`.
+    segment (default `branch.main`) and returns its store and the residual
+    path. Only modes `"r"` and `None` are accepted.
 
     Supported `storage_options` (all other keys are rejected for built-in
     root schemes):
@@ -420,8 +421,6 @@ class IcechunkURLAdapter(URLPipelineAdapter):
         root = _validate_preceding(segment, context)
         if context.mode in _WRITE_MODES:
             raise _write_mode_error(context.mode)
-        # "r", "a" (zarr's open-or-create default) and None open read-only;
-        # for "a", zarr opens an existing node and any write fails at the store.
         opts = _parse_storage_options(context.storage_options)
         virtual_credentials = (
             containers_credentials(opts.virtual_chunk_credentials)
@@ -458,7 +457,7 @@ class IcechunkURLAdapter(URLPipelineAdapter):
                 root, segment, opts, virtual_credentials
             )
 
-        return AdapterResolution(store=session.store, path=path, zarr_format=3)
+        return AdapterResolution(store=session.store, path=path)
 
     @staticmethod
     async def _open_with_opener(
