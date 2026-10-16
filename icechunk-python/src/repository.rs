@@ -74,7 +74,7 @@ pub struct JsonValue(pub serde_json::Value);
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PySnapshotProperties(pub HashMap<String, JsonValue>);
 
-#[pyclass(skip_from_py_object, name = "SnapshotInfo", eq)]
+#[pyclass(name = "SnapshotInfo", eq)]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct PySnapshotInfo {
     #[pyo3(get)]
@@ -92,7 +92,7 @@ pub(crate) struct PySnapshotInfo {
 
 impl_pickle!(PySnapshotInfo);
 
-#[pyclass(skip_from_py_object, name = "ManifestFileInfo", eq)]
+#[pyclass(name = "ManifestFileInfo", eq)]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct PyManifestFileInfo {
     #[pyo3(get)]
@@ -663,7 +663,7 @@ impl PyRepoStatus {
     }
 }
 
-#[pyclass(skip_from_py_object, name = "UpdateType", eq)]
+#[pyclass(name = "UpdateType", eq)]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) enum PyUpdateType {
     BranchCreated { name: String },
@@ -792,7 +792,7 @@ impl PyUpdate {
     }
 }
 
-#[pyclass(skip_from_py_object, name = "FeatureFlag", eq)]
+#[pyclass(name = "FeatureFlag", eq)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PyFeatureFlag {
     #[pyo3(get)]
@@ -1045,15 +1045,7 @@ fn mk_update(
 }
 
 #[repr(u8)]
-#[pyclass(
-    eq,
-    eq_int,
-    ord,
-    rename_all = "snake_case",
-    skip_from_py_object,
-    name = "SpecVersion",
-    frozen
-)]
+#[pyclass(eq, eq_int, ord, rename_all = "snake_case", name = "SpecVersion", frozen)]
 #[derive(PartialEq, Default, Clone, PartialOrd, Debug)]
 pub enum PySpecVersion {
     V1 = 1u8,

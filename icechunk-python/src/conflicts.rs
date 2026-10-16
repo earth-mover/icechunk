@@ -282,7 +282,7 @@ impl<'a> AsRef<dyn ConflictSolver + 'a + Send + Sync> for PyConflictSolver {
     }
 }
 
-#[pyclass(skip_from_py_object, name = "BasicConflictSolver", extends=PyConflictSolver)]
+#[pyclass(name = "BasicConflictSolver", extends=PyConflictSolver)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct PyBasicConflictSolver;
 
@@ -306,7 +306,7 @@ impl PyBasicConflictSolver {
 
 impl_pickle!(PyBasicConflictSolver);
 
-#[pyclass(skip_from_py_object, name = "ConflictDetector", extends=PyConflictSolver)]
+#[pyclass(name = "ConflictDetector", extends=PyConflictSolver)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct PyConflictDetector;
 
