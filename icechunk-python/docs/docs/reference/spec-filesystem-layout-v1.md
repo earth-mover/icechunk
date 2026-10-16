@@ -77,7 +77,7 @@ Implementations that do not implement this layout read the mirror. The mirror ca
 
 ## Forks
 
-An implementation that does not implement this layout can still change the status through the mirror, as Icechunk 2.0 to 2.3 do. That write removes `filesystem-layout-v1` from `$ROOT/repo`, and forks the repository: `repo` and `repo.d` hold diverging histories. Before publishing the mirror, and before garbage collection deletes anything, implementations of this layout MUST read `$ROOT/repo`. If it does not list `filesystem-layout-v1` while `repo.d` has a `latest.*` or `frozen.*` marker, they MUST NOT publish the mirror or delete anything, and MUST report the fork. Recovery is manual, and keeps one of the two histories.
+An implementation that does not implement this layout can still change the status through the mirror, as Icechunk 2.0 to 2.3 do. That write removes `filesystem-layout-v1` from `$ROOT/repo`, and forks the repository: `repo` and `repo.d` hold diverging histories. Before every commit, before publishing the mirror, and before garbage collection deletes anything, implementations of this layout MUST read `$ROOT/repo`. If it does not list `filesystem-layout-v1` while `repo.d` has a `latest.*` or `frozen.*` marker, they MUST NOT commit, publish the mirror or delete anything, and MUST report the fork. Recovery is manual, and keeps one of the two histories.
 
 ## Conversions
 
@@ -87,11 +87,11 @@ A repository can be converted between this layout and the standard layout, in bo
 
 **To the standard layout.** The writer freezes the repository, renames the marker to `converted.<N>.<h>` so that no commit, freeze or unfreeze can move it again, renames `repo.d` to `repo.d.converting.<id>`, writes the current version without `filesystem-layout-v1` as `$ROOT/repo`, then deletes `repo.d.converting.<id>/`.
 
-While a `repo.legacy.<id>` or a `repo.d.converting.<id>/` exists, a conversion is in progress. Implementations of this layout MUST NOT open the repository, other than to resume the conversion.
+While a `repo.legacy.<id>` or a `repo.d.converting.<id>/` exists, a conversion is in progress. Implementations of this layout MUST NOT open the repository, other than to resume the conversion. A conversion to the standard layout that finds `$ROOT/repo` without `filesystem-layout-v1` resumes only if the ops log of `repo` names a backup in `overwritten/` whose SHA-256 is the `h` of the marker. Otherwise `repo` is a fork, and the conversion MUST stop and report it.
 
 ### Converting a copy to the standard layout
 
-A copy of a repository in this layout on other storage, such as an object store, can be converted to the standard layout. The marker in the copy's `repo.d` MUST be `frozen.*` or `converted.*`; otherwise the copy may be inconsistent, and the conversion fails. The writer reads the version the marker names, removes `filesystem-layout-v1`, writes the result to `$ROOT/repo` with a conditional update, then deletes `repo.d/`.
+A copy of a repository in this layout on other storage, such as an object store, can be converted to the standard layout. The marker in the copy's `repo.d` MUST be `frozen.*` or `converted.*`; otherwise the copy may be inconsistent, and the conversion fails. The writer reads the version the marker names, removes `filesystem-layout-v1`, writes the result to `$ROOT/repo` with a conditional update, then deletes `repo.d/`. A conversion that finds `$ROOT/repo` without `filesystem-layout-v1` resumes only if the ops log of `repo` names a backup in `overwritten/` whose SHA-256 is the `h` of the marker. Otherwise `repo` is a fork, and the conversion MUST stop and report it.
 
 To move a repository in this layout to other storage, convert it to the standard layout before copying it, or freeze it, copy it, and convert the copy.
 

@@ -75,7 +75,7 @@ Libraries older than 2.4.0 do not know about writer features, so a repository th
 
 - **Spec 2.1 expiration history and Icechunk 2.0.x.** The `pruned_ancestor_tx_logs` field added in spec 2.1 predates [writer features](./spec-v2-2.md#writer-features). An Icechunk 2.0.x library removes this field from every snapshot whenever it modifies a repository, and its garbage collection deletes the transaction logs the field lists, even without first rewriting the repository info. After that, `diff`, `rebase`, `amend` and `inspect` across expired commits are incomplete, and the lost history cannot be recovered. Use Icechunk 2.1.0 or later for every library that modifies a repository that has been expired.
 - **Configuration and Icechunk 2.0.x.** Icechunk 2.0.x cannot open repositories whose configuration uses settings added later, such as HTTP headers for virtual chunk containers, and drops newer configuration settings when it changes the configuration.
-- **Status changes on the filesystem layout.** On a repository in the [filesystem layout](./spec-filesystem-layout-v1.md), changing the status with Icechunk older than 2.4.0, or any other write through the read-only copy of the repository info, forks the repository. Icechunk detects the fork, reports it, and stops updating the read-only copy and collecting garbage until it is resolved.
+- **Status changes on the filesystem layout.** On a repository in the [filesystem layout](./spec-filesystem-layout-v1.md), changing the status with Icechunk older than 2.4.0, or any other write through the read-only copy of the repository info, forks the repository. Icechunk detects the fork, reports it, and stops writing to the repository until the fork is resolved.
 
 #### Storage layouts
 
