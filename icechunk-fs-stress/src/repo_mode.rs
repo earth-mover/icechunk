@@ -1,19 +1,25 @@
 //! Repository mode: workers commit through icechunk's [`Repository`] API on
 //! top of the run's storage, normally the hooked
 //! [`FilesystemStorage`](icechunk_fs::FilesystemStorage).
-//! Each worker commits to its own branch, commits with rebase to `main`, and
-//! tags its branch commits; every commit message names the intent it
-//! carries out, so the oracle can match snapshots to log records.
+//! Each worker commits to its own branch, commits with rebase to `main`, tags
+//! its branch commits, deletes its tags and deletes and recreates its branch;
+//! the GC worker expires old snapshots and collects garbage. Every commit
+//! message names the intent it carries out, so the oracle can match
+//! snapshots to log records.
 
 use std::{
+    collections::VecDeque,
     num::{NonZeroU16, NonZeroUsize},
-    sync::Arc,
+    sync::{
+        Arc, Mutex, PoisonError,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, Instant, SystemTime},
 };
 
 use anyhow::Context as _;
 use bytes::Bytes;
-use chrono::{TimeDelta, Utc};
+use chrono::{DateTime, TimeDelta, Utc};
 use icechunk::{
     Repository, RepositoryConfig,
     config::RepoUpdateRetryConfig,
@@ -22,20 +28,24 @@ use icechunk::{
         ChunkIndices, IcechunkFormatErrorKind, Path, SnapshotId,
         snapshot::{ArrayShape, Snapshot},
     },
-    ops::gc::{GCConfig, GCResult, GCSummary, garbage_collect},
+    ops::{
+        expiration::{ExpireResult, ExpiredRefAction, expire},
+        gc::{GCConfig, GCError, GCResult, GCSummary, garbage_collect},
+    },
     refs::RefErrorKind,
     repository::{RepositoryError, RepositoryErrorKind},
     session::{Session, SessionError, SessionErrorKind},
     storage::RetriesSettings,
 };
-use icechunk_fs::fault_injection::ProtocolHooks;
+use icechunk_fs::fault_injection::{Point, ProtocolHooks};
 use rand::{RngExt as _, rngs::StdRng};
 use uuid::Uuid;
 
 use crate::{
     config::{RetryConfig, RunConfig, WorkerId},
     control::StopCheck,
-    faults::FaultHooks,
+    faults::{FaultHooks, Trigger},
+    fork::{announce_backup, log_fork, write_fork},
     layout::{RunRoot, is_valid_slot, is_valid_tag},
     log::{LogWriter, Op, OpResult, Record, now_ms, start_worker_log},
     storage_mode,
@@ -133,42 +143,61 @@ pub async fn init(root: &RunRoot, config: &RunConfig) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// The outcome to log for a failed operation.
+/// The outcome to log for a failed operation. The messages leave out the
+/// error's span trace.
 pub fn classify(err: &SessionError) -> OpResult {
-    let conflict = match err.kind() {
-        SessionErrorKind::Conflict { .. } | SessionErrorKind::RebaseFailed { .. } => true,
-        SessionErrorKind::RepositoryError(kind) => is_conflict(kind),
-        _ => false,
-    };
-    outcome(conflict, err.kind())
+    match err.kind() {
+        SessionErrorKind::Conflict { .. } | SessionErrorKind::RebaseFailed { .. } => {
+            OpResult::Conflict
+        }
+        kind @ SessionErrorKind::CommitDurableButRepositoryForked { snapshot, .. } => {
+            OpResult::DurableButForked {
+                snapshot: Some(snapshot.to_string()),
+                message: kind.to_string(),
+            }
+        }
+        SessionErrorKind::RepositoryError(kind) => repository_outcome(kind),
+        SessionErrorKind::StorageError(kind) => storage_mode::classify_storage(kind),
+        kind => OpResult::Error { message: kind.to_string() },
+    }
 }
 
 /// [`classify`] for the errors of [`Repository`] operations.
 pub fn classify_repository(err: &RepositoryError) -> OpResult {
-    outcome(is_conflict(err.kind()), err.kind())
+    repository_outcome(err.kind())
 }
 
-fn is_conflict(kind: &RepositoryErrorKind) -> bool {
-    matches!(
-        kind,
+/// [`classify`] for the errors of GC and expiration.
+pub fn classify_gc(err: &GCError) -> OpResult {
+    match err {
+        GCError::Repository(err) => classify_repository(err),
+        GCError::StorageError(err) => storage_mode::classify_storage(err.kind()),
+        err => OpResult::Error { message: err.to_string() },
+    }
+}
+
+fn repository_outcome(kind: &RepositoryErrorKind) -> OpResult {
+    let message = kind.to_string();
+    match kind {
         RepositoryErrorKind::RepoUpdateAttemptsLimit(_)
-            | RepositoryErrorKind::Ref(RefErrorKind::TagAlreadyExists(_))
-    )
-}
-
-/// The message leaves out the error's span trace.
-fn outcome(conflict: bool, kind: &impl std::fmt::Display) -> OpResult {
-    if conflict {
-        OpResult::Conflict
-    } else {
-        OpResult::Error { message: kind.to_string() }
+        | RepositoryErrorKind::Ref(RefErrorKind::TagAlreadyExists(_)) => {
+            OpResult::Conflict
+        }
+        RepositoryErrorKind::ReadonlyRepository(_) => OpResult::ReadOnly { message },
+        RepositoryErrorKind::UpdateDurableButRepositoryForked { .. } => {
+            OpResult::DurableButForked { snapshot: None, message }
+        }
+        RepositoryErrorKind::StorageError(kind) => storage_mode::classify_storage(kind),
+        _ => OpResult::Error { message },
     }
 }
 
 const ERROR_BACKOFF: Duration = Duration::from_millis(100);
 const REBASE_ATTEMPTS: u16 = 100;
-const BRANCH_COMMIT_SHARE: f64 = 0.6;
+const BRANCH_COMMIT_SHARE: f64 = 0.55;
 const MAIN_COMMIT_SHARE: f64 = 0.3;
+const TAG_SHARE: f64 = 0.09;
+const DELETE_TAG_SHARE: f64 = 0.04;
 
 /// One worker incarnation in repository mode. Each step logs an intent, runs
 /// one repository operation and logs its outcome.
@@ -182,6 +211,10 @@ pub struct RepoWorker {
     shape: ArrayShape,
     chunk_len: usize,
     last_branch_snapshot: Option<SnapshotId>,
+    /// This incarnation's acknowledged tags, oldest first.
+    tags: VecDeque<String>,
+    /// Why the last commit couldn't be prepared.
+    prepare_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -207,11 +240,18 @@ impl RepoWorker {
             shape: ArrayShape::new([(1, 1)]).context("invalid array shape")?,
             chunk_len,
             last_branch_snapshot: None,
+            tags: VecDeque::new(),
+            prepare_error: None,
         })
     }
 
     pub fn branch(&self) -> &str {
         &self.branch
+    }
+
+    /// Why the last commit couldn't be prepared, if one couldn't.
+    pub fn prepare_error(&self) -> Option<&str> {
+        self.prepare_error.as_deref()
     }
 
     /// Creates the worker's branch at the initial snapshot unless it exists.
@@ -271,7 +311,7 @@ impl RepoWorker {
     }
 
     /// Tags the last acknowledged branch commit; `None` if there is none yet.
-    pub async fn tag(&self) -> anyhow::Result<Option<OpResult>> {
+    pub async fn tag(&mut self) -> anyhow::Result<Option<OpResult>> {
         let Some(snapshot) = &self.last_branch_snapshot else {
             return Ok(None);
         };
@@ -288,7 +328,80 @@ impl RepoWorker {
             id,
             result: result.clone(),
         })?;
+        if result.landed().is_some() {
+            self.tags.push_back(name);
+        }
         Ok(Some(result))
+    }
+
+    /// Deletes this incarnation's oldest acknowledged tag; `None` if there is
+    /// none.
+    pub async fn delete_tag(&mut self) -> anyhow::Result<Option<OpResult>> {
+        let Some(name) = self.tags.pop_front() else {
+            return Ok(None);
+        };
+        let id = Uuid::new_v4();
+        let op = Op::DeleteTag { name: name.clone() };
+        self.log.append(&Record::Intent { t_ms: now_ms(), id, op })?;
+        let result = match self.repo.delete_tag(&name).await {
+            Ok(()) => OpResult::Ack { snapshot: None },
+            Err(err) => classify_repository(&err),
+        };
+        self.log.append(&Record::Outcome {
+            t_ms: now_ms(),
+            id,
+            result: result.clone(),
+        })?;
+        Ok(Some(result))
+    }
+
+    /// Deletes the worker's branch, whose commits become unreachable unless
+    /// a tag holds them. The caller recreates it with
+    /// [`Self::ensure_branch`].
+    pub async fn delete_branch(&mut self) -> anyhow::Result<OpResult> {
+        let id = Uuid::new_v4();
+        let op = Op::DeleteBranch { branch: self.branch.clone() };
+        self.log.append(&Record::Intent { t_ms: now_ms(), id, op })?;
+        let result = match self.repo.delete_branch(&self.branch).await {
+            Ok(()) => OpResult::Ack { snapshot: None },
+            Err(err) => classify_repository(&err),
+        };
+        self.log.append(&Record::Outcome {
+            t_ms: now_ms(),
+            id,
+            result: result.clone(),
+        })?;
+        // Its snapshot may be gone soon: collected, if the deletion landed.
+        self.last_branch_snapshot = None;
+        Ok(result)
+    }
+
+    /// A commit to `main` whose intent is logged before its session is
+    /// prepared, so that a refused session is its outcome: a writer attempt
+    /// the conversion scenario expects to be refused.
+    pub async fn logged_main_commit(&mut self) -> anyhow::Result<OpResult> {
+        let id = Uuid::new_v4();
+        self.log.append(&Record::Intent { t_ms: now_ms(), id, op: Op::MainCommit })?;
+        let result = match self.prepare(Target::Main, id).await {
+            Ok(mut session) => {
+                let solver = BasicConflictSolver::default();
+                let commit =
+                    session.commit(commit_message(id)).rebase(&solver, REBASE_ATTEMPTS);
+                match commit.execute().await {
+                    Ok(snapshot) => {
+                        OpResult::Ack { snapshot: Some(snapshot.to_string()) }
+                    }
+                    Err(err) => classify(&err),
+                }
+            }
+            Err(err) => classify(&err),
+        };
+        self.log.append(&Record::Outcome {
+            t_ms: now_ms(),
+            id,
+            result: result.clone(),
+        })?;
+        Ok(result)
     }
 
     async fn commit(&mut self, target: Target) -> anyhow::Result<Option<OpResult>> {
@@ -302,7 +415,14 @@ impl RepoWorker {
         let mut session = match self.prepare(target, id).await {
             Ok(session) => session,
             Err(err) => {
-                tracing::warn!("preparing a commit to {branch}: {}", err.kind());
+                let message = format!("preparing a commit to {branch}: {}", err.kind());
+                // The status toggler's holds refuse every writable session.
+                if classify(&err).is_refusal() {
+                    tracing::debug!("{message}");
+                } else {
+                    tracing::warn!("{message}");
+                }
+                self.prepare_error = Some(message);
                 tokio::time::sleep(ERROR_BACKOFF).await;
                 return Ok(None);
             }
@@ -360,7 +480,7 @@ impl RepoWorker {
 }
 
 /// Opens the repository, retrying until it opens or the worker should stop.
-async fn open_until_stopped(
+pub(crate) async fn open_until_stopped(
     root: &RunRoot,
     config: &RunConfig,
     hooks: &Arc<dyn ProtocolHooks>,
@@ -379,8 +499,10 @@ async fn open_until_stopped(
 }
 
 /// Runs one repository-mode worker until `until` or a `stop` control:
-/// 60 % branch commits, 30 % `main` commits, 10 % tags. Repository errors
-/// are logged and retried; only failing to write our own log is fatal.
+/// 55 % branch commits, 30 % `main` commits, 9 % tags, 4 % tag deletions
+/// and 2 % deletions of its branch, which it then recreates. Repository
+/// errors are logged and retried; only failing to write our own log is
+/// fatal.
 pub async fn worker(
     root: &RunRoot,
     config: &RunConfig,
@@ -395,26 +517,36 @@ pub async fn worker(
         return Ok(());
     };
     let mut worker = RepoWorker::new(repo, log, who, config.chunk_bytes)?;
-    loop {
-        if stop.stopped() {
-            return Ok(());
-        }
-        if worker.ensure_branch().await? {
-            break;
-        }
-        tokio::time::sleep(ERROR_BACKOFF).await;
-    }
     let mut rng: StdRng = rand::make_rng();
+    let mut branch_exists = false;
     while !stop.stopped() {
+        if !branch_exists {
+            branch_exists = worker.ensure_branch().await?;
+            if !branch_exists {
+                tokio::time::sleep(ERROR_BACKOFF).await;
+            }
+            continue;
+        }
         let r: f64 = rng.random();
         let result = if r < BRANCH_COMMIT_SHARE {
             worker.branch_commit().await?
         } else if r < BRANCH_COMMIT_SHARE + MAIN_COMMIT_SHARE {
             worker.main_commit().await?
-        } else {
+        } else if r < BRANCH_COMMIT_SHARE + MAIN_COMMIT_SHARE + TAG_SHARE {
             worker.tag().await?
+        } else if r < BRANCH_COMMIT_SHARE
+            + MAIN_COMMIT_SHARE
+            + TAG_SHARE
+            + DELETE_TAG_SHARE
+        {
+            worker.delete_tag().await?
+        } else {
+            branch_exists = false;
+            Some(worker.delete_branch().await?)
         };
-        if matches!(result, Some(OpResult::Error { .. })) {
+        if result.is_some_and(|result| {
+            matches!(result, OpResult::Error { .. }) || result.is_refusal()
+        }) {
             tokio::time::sleep(ERROR_BACKOFF).await;
         }
     }
@@ -423,8 +555,10 @@ pub async fn worker(
 
 const GC_TICK: Duration = Duration::from_millis(100);
 
-/// The GC worker: every `gc.every`, garbage collects what is older than
-/// `gc.margin`, with fault hooks like any worker.
+/// The GC worker: every `gc.every`, expires the snapshots and garbage
+/// collects what is older than `gc.margin`, with fault hooks like any
+/// worker. With `fork.during_gc`, the first GC that starts `fork.at` after
+/// the go writes a fork once its change is published, before its hook.
 pub async fn gc_worker(
     root: &RunRoot,
     config: &RunConfig,
@@ -434,8 +568,15 @@ pub async fn gc_worker(
     let gc = config.gc.context("the run has no gc configuration")?;
     let margin = TimeDelta::from_std(gc.margin).context("gc.margin is too long")?;
     let log = Arc::new(start_worker_log(root, who)?);
-    let hooks: Arc<dyn ProtocolHooks> =
-        Arc::new(FaultHooks::new(&config.faults, config.sabotage, Arc::clone(&log)));
+    let fork = config.fork.filter(|fork| fork.during_gc).map(|fork| {
+        let go = until.checked_sub(config.duration).unwrap_or(until);
+        (go + fork.at, ForkDuringGc::new(root, Arc::clone(&log)))
+    });
+    let mut hooks = FaultHooks::new(&config.faults, config.sabotage, Arc::clone(&log));
+    if let Some((_, fork)) = &fork {
+        hooks = hooks.with_trigger(Arc::clone(&fork.trigger));
+    }
+    let hooks: Arc<dyn ProtocolHooks> = Arc::new(hooks);
     let mut stop = StopCheck::new(root, until);
     let Some(repo) = open_until_stopped(root, config, &hooks, &mut stop).await else {
         return Ok(());
@@ -449,15 +590,106 @@ pub async fn gc_worker(
         }
         next = now + gc.every;
         let cutoff = Utc::now() - margin;
+        // Milliseconds, as logged: the oracle compares commit times with it.
+        let older_than_ms = cutoff.timestamp_millis();
         let id = Uuid::new_v4();
-        log.append(&Record::Intent { t_ms: now_ms(), id, op: Op::Gc })?;
+        log.append(&Record::Intent {
+            t_ms: now_ms(),
+            id,
+            op: Op::Expire { older_than_ms },
+        })?;
+        let result = match expire_snapshots(&repo, config, older_than_ms).await {
+            Ok(_) => OpResult::Ack { snapshot: None },
+            Err(err) => classify_gc(&err),
+        };
+        log.append(&Record::Outcome { t_ms: now_ms(), id, result })?;
+
+        let id = Uuid::new_v4();
+        let op = Op::Gc { older_than_ms: Some(older_than_ms) };
+        log.append(&Record::Intent { t_ms: now_ms(), id, op })?;
+        let armed = fork
+            .as_ref()
+            .filter(|(at, _)| SystemTime::now() >= *at)
+            .map(|(_, fork)| fork);
+        if let Some(fork) = armed {
+            fork.arm(id);
+        }
         let result = match collect_garbage(&repo, config, cutoff).await {
             Ok(_) => OpResult::Ack { snapshot: None },
-            Err(err) => OpResult::Error { message: err.to_string() },
+            Err(err) => classify_gc(&err),
         };
+        if let Some(fork) = armed {
+            fork.disarm();
+        }
         log.append(&Record::Outcome { t_ms: now_ms(), id, result })?;
     }
     Ok(())
+}
+
+/// The GC worker's fork, written by the trigger at the mirror rename of the
+/// publication of a GC's change: between that publication's fork check and
+/// GC's hook before its deletes, which must find it. Written once.
+#[derive(Debug)]
+struct ForkDuringGc {
+    trigger: Arc<Trigger>,
+    gc: Arc<Mutex<Option<Uuid>>>,
+    written: Arc<AtomicBool>,
+}
+
+impl ForkDuringGc {
+    fn new(root: &RunRoot, log: Arc<LogWriter>) -> Self {
+        let gc = Arc::new(Mutex::new(None));
+        let written = Arc::new(AtomicBool::new(false));
+        let storage = root.storage();
+        let trigger = {
+            let (gc, written) = (Arc::clone(&gc), Arc::clone(&written));
+            Trigger::new(Point::MirrorRenamed, move || {
+                let fork = announce_backup(&log)
+                    .map_err(anyhow::Error::from)
+                    .and_then(|backup| write_fork(&storage, backup));
+                match fork {
+                    Ok(fork) => {
+                        written.store(true, Ordering::SeqCst);
+                        let id = *gc.lock().unwrap_or_else(PoisonError::into_inner);
+                        log_fork(&log, &fork, id);
+                    }
+                    Err(err) => tracing::warn!("writing a fork during GC: {err:#}"),
+                }
+            })
+        };
+        Self { trigger: Arc::new(trigger), gc, written }
+    }
+
+    /// Arms the trigger for the GC `id`, unless the fork was written.
+    fn arm(&self, id: Uuid) {
+        if !self.written.load(Ordering::SeqCst) {
+            *self.gc.lock().unwrap_or_else(PoisonError::into_inner) = Some(id);
+            self.trigger.arm();
+        }
+    }
+
+    fn disarm(&self) {
+        self.trigger.disarm();
+    }
+}
+
+/// Expires the snapshots flushed before `older_than_ms`, keeping every
+/// branch and tag.
+pub async fn expire_snapshots(
+    repo: &Repository,
+    config: &RunConfig,
+    older_than_ms: i64,
+) -> GCResult<ExpireResult> {
+    let older_than = DateTime::from_timestamp_millis(older_than_ms).unwrap_or_default();
+    expire(
+        Arc::clone(repo.asset_manager()),
+        older_than,
+        ExpiredRefAction::Ignore,
+        ExpiredRefAction::Ignore,
+        Some(&repo_update_retries(config)),
+        repo.config().num_updates_per_repo_info_file(),
+    )
+    .await
 }
 
 /// Garbage collects everything unreachable and older than `cutoff`, and the
@@ -465,7 +697,7 @@ pub async fn gc_worker(
 pub async fn collect_garbage(
     repo: &Repository,
     config: &RunConfig,
-    cutoff: chrono::DateTime<Utc>,
+    cutoff: DateTime<Utc>,
 ) -> GCResult<GCSummary> {
     garbage_collect(
         Arc::clone(repo.asset_manager()),
@@ -476,7 +708,7 @@ pub async fn collect_garbage(
     .await
 }
 
-fn gc_config(cutoff: chrono::DateTime<Utc>) -> GCConfig {
+fn gc_config(cutoff: DateTime<Utc>) -> GCConfig {
     let u16_limit = |n| NonZeroU16::new(n).unwrap_or(NonZeroU16::MIN);
     let bytes_limit = |n| NonZeroUsize::new(n).unwrap_or(NonZeroUsize::MIN);
     GCConfig::clean_all(
@@ -634,6 +866,80 @@ pub(crate) mod tests {
         ));
     }
 
+    #[test]
+    fn classify_maps_refusals_and_durable_forks() {
+        use icechunk::{
+            ops::gc::GCError,
+            storage::{StorageError, StorageErrorKind},
+        };
+        let session = |kind| classify(&SessionError::capture(kind));
+        let repository = |kind| classify_repository(&RepositoryError::capture(kind));
+        let snapshot = SnapshotId::random();
+        let new_version = || Box::new(icechunk::storage::VersionInfo::for_creation());
+        let read_only = || RepositoryErrorKind::ReadonlyRepository("held".to_owned());
+        let durable = || RepositoryErrorKind::UpdateDurableButRepositoryForked {
+            new_version: new_version(),
+            detail: "fork".to_owned(),
+        };
+        let converting =
+            || StorageErrorKind::LayoutConversionInProgress("rerun".to_owned());
+
+        assert!(matches!(repository(read_only()), OpResult::ReadOnly { .. }));
+        assert!(matches!(
+            session(SessionErrorKind::RepositoryError(read_only())),
+            OpResult::ReadOnly { .. }
+        ));
+        assert!(matches!(
+            repository(durable()),
+            OpResult::DurableButForked { snapshot: None, .. }
+        ));
+        let commit = session(SessionErrorKind::CommitDurableButRepositoryForked {
+            snapshot: snapshot.clone(),
+            new_version: new_version(),
+            detail: "fork".to_owned(),
+        });
+        assert_eq!(commit.landed(), Some(Some(snapshot.to_string().as_str())));
+        assert!(matches!(commit, OpResult::DurableButForked { .. }));
+        let kinds: [fn() -> StorageErrorKind; 2] = [
+            || StorageErrorKind::RepositoryForked("fork".to_owned()),
+            || StorageErrorKind::LayoutConversionInProgress("rerun".to_owned()),
+        ];
+        for kind in kinds {
+            for result in [
+                session(SessionErrorKind::StorageError(kind())),
+                repository(RepositoryErrorKind::StorageError(kind())),
+            ] {
+                assert!(
+                    matches!(
+                        (&result, kind()),
+                        (OpResult::Forked { .. }, StorageErrorKind::RepositoryForked(_))
+                            | (
+                                OpResult::ConversionInProgress { .. },
+                                StorageErrorKind::LayoutConversionInProgress(_)
+                            )
+                    ),
+                    "{:?}: {result:?}",
+                    kind()
+                );
+            }
+        }
+        let gc = |err| classify_gc(&err);
+        assert!(matches!(
+            gc(GCError::Repository(RepositoryError::capture(read_only()))),
+            OpResult::ReadOnly { .. }
+        ));
+        assert!(matches!(
+            gc(GCError::StorageError(StorageError::capture(converting()))),
+            OpResult::ConversionInProgress { .. }
+        ));
+        assert!(matches!(
+            gc(GCError::StorageError(StorageError::capture(StorageErrorKind::Other(
+                "boom".to_owned()
+            )))),
+            OpResult::Error { .. }
+        ));
+    }
+
     #[tokio::test]
     async fn names_are_accepted_by_icechunk() {
         let (_dir, root, config) = repo_root().await;
@@ -709,8 +1015,9 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn tag_needs_an_acked_branch_commit() {
         let (_dir, root, config) = repo_root().await;
-        let worker = repo_worker(&root, &config, &who("h", "0", 0)).await;
+        let mut worker = repo_worker(&root, &config, &who("h", "0", 0)).await;
         assert_eq!(worker.tag().await.unwrap(), None);
+        assert_eq!(worker.delete_tag().await.unwrap(), None);
     }
 
     #[tokio::test]
@@ -781,7 +1088,9 @@ pub(crate) mod tests {
             matches!(record, Record::Outcome { result: OpResult::Ack { .. }, .. })
         };
         let run = async {
-            while !read_log(&log).is_ok_and(|records| records.iter().any(is_ack)) {
+            while !read_log(&log).is_ok_and(|records| {
+                records.iter().filter(|record| is_ack(record)).count() >= 2
+            }) {
                 tokio::time::sleep(Duration::from_millis(20)).await;
             }
             write_control(&root, &Control::Stop).unwrap();
@@ -793,10 +1102,22 @@ pub(crate) mod tests {
             .unwrap();
         let records = read_log(&log).unwrap();
         let acks = records.iter().filter(|record| is_ack(record)).count();
-        let intents = records
-            .iter()
-            .filter(|record| matches!(record, Record::Intent { op: Op::Gc, .. }))
-            .count();
-        assert!(acks >= 1 && acks == intents, "{records:?}");
+        let intents = |expire| {
+            records
+                .iter()
+                .filter(|record| match record {
+                    Record::Intent { op: Op::Expire { .. }, .. } => expire,
+                    Record::Intent { op: Op::Gc { .. }, .. } => !expire,
+                    _ => false,
+                })
+                .count()
+        };
+        // Each round expires, then collects.
+        let (expirations, collections) = (intents(true), intents(false));
+        assert!(acks >= 2 && acks == expirations + collections, "{records:?}");
+        assert!(
+            expirations == collections || expirations == collections + 1,
+            "{records:?}"
+        );
     }
 }

@@ -14,9 +14,9 @@ use futures::{Stream, stream::BoxStream};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    DeleteObjectsResult, GetModifiedResult, ListInfo, PutCondition, RepositoryCreation,
-    Settings, Storage, StorageContext, StorageError, StorageInfo, StorageResult,
-    VersionInfo, VersionedUpdateResult, WriteHint,
+    DeleteObjectsResult, GcPhase, GetModifiedResult, ListInfo, PutCondition,
+    RepositoryCreation, Settings, Storage, StorageContext, StorageError, StorageInfo,
+    StorageResult, StorageWriterFeatures, VersionInfo, VersionedUpdateResult, WriteHint,
 };
 use icechunk_storage::sealed;
 
@@ -73,6 +73,26 @@ impl Storage for LoggingStorage {
 
     async fn can_write(&self) -> StorageResult<bool> {
         self.backend.can_write().await
+    }
+
+    async fn writer_features(&self) -> StorageResult<StorageWriterFeatures> {
+        self.backend.writer_features().await
+    }
+
+    async fn gc_hook(
+        &self,
+        ctx: &StorageContext<'_>,
+        phase: GcPhase<'_>,
+    ) -> StorageResult<()> {
+        self.backend.gc_hook(ctx, phase).await
+    }
+
+    async fn create_location_if_needed(&self) -> StorageResult<()> {
+        self.backend.create_location_if_needed().await
+    }
+
+    async fn root_is_clean(&self, ctx: &StorageContext<'_>) -> StorageResult<bool> {
+        self.backend.root_is_clean(ctx).await
     }
 
     async fn can_create_repository(&self) -> StorageResult<RepositoryCreation> {
@@ -221,5 +241,18 @@ impl Storage for LoggingStorage {
             .expect("poison lock")
             .push(("get_object_range".to_string(), path.to_string()));
         self.backend.get_object_range(ctx, path, range).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::storage::recording::{RecordingStorage, assert_forwards};
+
+    #[tokio::test]
+    async fn forwards_to_the_backend() {
+        let inner = Arc::new(RecordingStorage::default());
+        let storage = LoggingStorage::new(Arc::clone(&inner) as Arc<_>);
+        assert_forwards(&storage, &inner).await;
     }
 }

@@ -6,7 +6,8 @@ VMs, for running [fs-stress](../README.md) across hosts on real distributed
 filesystems.
 
 `lab.sh` is the entry point; `./lab.sh --help` lists its commands and
-options. Commands below run from this directory.
+options. Commands below run from this directory. For a managed Lustre on AWS
+instead, see [FSx for Lustre on AWS](#fsx-for-lustre-on-aws).
 
 ```sh
 ./lab.sh up              # create the VMs
@@ -301,6 +302,65 @@ and meta is formatted with BeeGFS's recommended
   `journalctl -b -u fs-stress-mount-retry`.
 - **Ceph back to `HEALTH_WARN POOL_NO_REDUNDANCY`:** a non-sticky mute clears
   when the alert worsens; the role script mutes with `--sticky`.
+- **A client stops answering ssh under load and its qemu process burns
+  several CPUs:** the Lustre 2.17 client livelocks; its previous boot's kernel
+  log (`journalctl -k -b -1`) floods with `Force grant RPC slot`. The guest
+  ignores an ACPI reboot: `virsh -c qemu:///system reset ic-fs-stress-clientN`.
+  If `/mnt/beegfs` then doesn't mount, delete the client's stale registration
+  on `beegfs-srv` (`beegfs node list`, then `beegfs node delete c:<id> --yes`,
+  with the options of the health check above) and run
+  `sudo systemctl restart beegfs-client` on the client.
+- **`/mnt/cephfs-fuse` is too slow for the stress matrix:** each lookup in a
+  directory of a few thousand entries, such as a run's `overwritten/`, takes
+  about 5 s, so verifying one storage run takes hours. Use `/mnt/cephfs`.
+
+## FSx for Lustre on AWS
+
+`aws-lustre.sh` builds a temporary Amazon FSx for Lustre file system and EC2
+clients that mount it at `/mnt/fsx`, for testing against a managed Lustre
+on a real network instead of the lab's. Everything is one CloudFormation
+stack, from [`aws-lustre.yaml`](aws-lustre.yaml), in a VPC of its own. The
+script uses the AWS CLI with your usual credentials and region
+(`AWS_PROFILE`, `AWS_REGION`).
+
+```sh
+./aws-lustre.sh up                  # shows account, region and sizes, asks before creating
+./aws-lustre.sh fs-stress deploy ../../target/x86_64-unknown-linux-musl/fs-stress-dist/fs-stress
+./aws-lustre.sh fs-stress preflight /mnt/fsx
+./aws-lustre.sh fs-stress run /mnt/fsx repository --duration 10m --gc
+./aws-lustre.sh status
+./aws-lustre.sh down                # deletes the stack; results stay in ~/.cache/<name>/results
+```
+
+- **File system:** Lustre 2.15 (the newest FSx offers), `PERSISTENT_2`, SSD,
+  1.2 TiB at 125 MB/s/TiB by default (`--storage-gib`, `--throughput`), no
+  backups.
+- **Clients:** an Auto Scaling group of 5 × `c7i.large` by default
+  (`--clients`, `--instance-type`), Amazon Linux 2023 with its
+  `lustre-client` package, `ec2-user` with passwordless sudo and `chronyc`
+  against Amazon Time Sync. Clients are numbered by private IP.
+  `./aws-lustre.sh ssh N` logs in to client N with the stack's key
+  (`~/.cache/<name>/id_ed25519`).
+- **Creation:** 20-40 minutes, mostly the file system. Each client signals
+  CloudFormation once it has mounted `/mnt/fsx`, so `up` returns only when
+  all of them have. If anything fails, CloudFormation deletes the whole stack
+  and `up` prints the failed events.
+- **Progress:** `up` and `down` print the stack's events as they happen, and
+  every 2 quiet minutes what is still in progress. `./aws-lustre.sh events`
+  shows them from another terminal; `events -f` follows until the stack
+  settles.
+- **Where the stack is:** `up` records the account, region and stack ID in
+  `~/.cache/<name>/stack` before creating anything. Every other command uses
+  that region and refuses other accounts, so `down` can't miss the stack by
+  looking in the wrong place. `down` deletes the file only once the stack is
+  gone.
+- **Network:** the clients have public IPs; ssh is open only to
+  `--ssh-cidr` (default: this machine's public IP). Lustre traffic (988,
+  1018-1023) is allowed only within the stack's security group.
+- **Cost:** about $0.75/hour with the defaults in us-east-1, billed until
+  `down`.
+- **Network faults** (`--net-reset-every`, `--netem`) don't apply: they target
+  the control machine's /24, which isn't where the file servers are.
 
 ## Cleanup
 

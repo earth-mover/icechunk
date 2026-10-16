@@ -4,9 +4,10 @@ use std::{collections::BTreeMap, iter};
 
 use crate::{
     config::{PointName, RunConfig},
-    log::{FaultAction, OpResult, Record},
+    log::{FaultAction, Record},
     oracle::{History, Verdict, Violation, Warning},
     supervisor::GC_SLOT,
+    toggler::TOGGLER_SLOT,
 };
 
 /// The [`Violation::FaultFloor`] kind of external kills.
@@ -18,8 +19,8 @@ const MAX_START_SKEW_MS: i64 = 2000;
 const STARVED_FACTOR: i64 = 4;
 
 /// Checks for stalls and starved hosts, that enough faults fired, and warns
-/// about start skew and stragglers. Acks of the GC
-/// worker don't count as progress.
+/// about start skew, stragglers and failed mirror samplers. Acks of the GC
+/// worker and the status toggler don't count as progress.
 pub fn check_liveness(
     history: &History,
     config: &RunConfig,
@@ -31,6 +32,32 @@ pub fn check_liveness(
     verdict.warnings.extend(history.done.iter().filter(|done| done.stragglers > 0).map(
         |done| Warning::Stragglers { tag: done.tag.clone(), count: done.stragglers },
     ));
+    verdict.warnings.extend(history.done.iter().filter_map(|done| {
+        let error = done.sampler_error.clone()?;
+        Some(Warning::SamplerFailed { tag: done.tag.clone(), error })
+    }));
+}
+
+/// At least one operation of the hosts' workers landed: a run whose workers
+/// ran but changed nothing, as when they worked on another storage root than
+/// the one checked, is a harness failure, not a pass.
+pub fn check_landed(history: &History, verdict: &mut Verdict) {
+    let workers: u32 = history.done.iter().map(|done| done.workers).sum();
+    if workers == 0 {
+        return;
+    }
+    let landed = history.worker_records().any(|(name, record)| {
+        history.done.iter().any(|done| done.tag == name.tag)
+            && matches!(record, Record::Outcome { result, .. } if result.landed().is_some())
+    });
+    if !landed {
+        verdict.violations.push(Violation::Harness {
+            detail: format!(
+                "no operation of the {workers} workers landed: check that they and verify use \
+                 the same storage root"
+            ),
+        });
+    }
 }
 
 fn check_fault_floor(history: &History, config: &RunConfig, verdict: &mut Verdict) {
@@ -38,6 +65,12 @@ fn check_fault_floor(history: &History, config: &RunConfig, verdict: &mut Verdic
     let mut at_point: BTreeMap<PointName, u64> = BTreeMap::new();
     for record in history.logs.values().flatten() {
         match record {
+            // The conversion scenario's converters, not the run's faults.
+            Record::Fault {
+                point,
+                action: FaultAction::Kill | FaultAction::Pause,
+                ..
+            } if point.is_conversion_step() => {}
             Record::Fault { action: FaultAction::Kill, point, .. } => {
                 kills += 1;
                 *at_point.entry(*point).or_default() += 1;
@@ -120,8 +153,9 @@ fn check_progress(
     let threshold = i64::try_from(config.stall_threshold.as_millis()).unwrap_or(i64::MAX);
     let mut acks: BTreeMap<&str, Vec<i64>> = BTreeMap::new();
     for (name, record) in history.worker_records() {
-        if let Record::Outcome { t_ms, result: OpResult::Ack { .. }, .. } = record
-            && name.slot != GC_SLOT
+        if let Record::Outcome { t_ms, result, .. } = record
+            && result.landed().is_some()
+            && ![GC_SLOT, TOGGLER_SLOT].contains(&name.slot.as_str())
         {
             acks.entry(&name.tag).or_default().push(*t_ms);
         }
@@ -169,6 +203,19 @@ fn point_name(point: PointName) -> &'static str {
         PointName::BeforeRename => "before_rename",
         PointName::Renamed => "renamed",
         PointName::BeforeTidyUp => "before_tidy_up",
+        PointName::BeforePublish => "before_publish",
+        PointName::MirrorStaged => "mirror_staged",
+        PointName::BeforeMirrorRename => "before_mirror_rename",
+        PointName::MirrorRenamed => "mirror_renamed",
+        PointName::FromStandardBackup => "from_standard_backup",
+        PointName::FromStandardBuild => "from_standard_build",
+        PointName::FromStandardRenameDir => "from_standard_rename_dir",
+        PointName::FromStandardPublish => "from_standard_publish",
+        PointName::ToStandardForkCheck => "to_standard_fork_check",
+        PointName::ToStandardChange => "to_standard_change",
+        PointName::ToStandardPublish => "to_standard_publish",
+        PointName::ToStandardRenameDir => "to_standard_rename_dir",
+        PointName::ToStandardDeleteDir => "to_standard_delete_dir",
     }
 }
 
@@ -185,11 +232,14 @@ mod tests {
         log::{FaultAction, LogName, OpResult, Record},
         oracle::{Violation, Warning},
         supervisor::GC_SLOT,
+        toggler::TOGGLER_SLOT,
     };
 
-    /// No faults configured, stalls above 1 s.
+    /// No faults configured, stalls above 1 s; three fault points.
     fn quiet_config() -> RunConfig {
         let mut config = RunConfig::defaults(Mode::Storage, 1);
+        config.faults.points =
+            vec![PointName::Linked, PointName::BeforeRename, PointName::BeforeTidyUp];
         config.faults.kill_probability = 0.0;
         config.faults.pause_probability = 0.0;
         config.external_kill_every = None;
@@ -214,6 +264,7 @@ mod tests {
             incarnations_spawned: 1,
             external_kills: 0,
             stragglers: 0,
+            sampler_error: None,
         }
     }
 
@@ -310,11 +361,13 @@ mod tests {
 
     #[test]
     fn stall_window_is_the_overlap_of_all_hosts() {
-        // Acks outside the window, and a GC ack inside it, don't count.
+        // Acks outside the window, and a GC or status toggler ack inside
+        // it, don't count.
         let history = History {
             logs: BTreeMap::from([
                 (worker("a", "0"), acks([0, 100, 4900, 5000])),
                 (worker("a", GC_SLOT), acks([2500])),
+                (worker("a", TOGGLER_SLOT), acks([3000])),
             ]),
             hosts: vec![],
             done: vec![done("a", 0, 5000), done("b", 1000, 4000)],
@@ -365,6 +418,23 @@ mod tests {
                 "{kind}"
             );
         }
+
+        // The conversion scenario's kills of its converters don't count.
+        let mut logs = enough();
+        logs[0].1 = faults(Kill, &[Linked, BeforeRename]);
+        logs.push((
+            worker("scenario", "to-standard"),
+            faults(Kill, &[PointName::ToStandardChange]),
+        ));
+        let verdict = check(&busy(logs), &faulty_config(), false);
+        assert_eq!(
+            verdict.violations,
+            [Violation::FaultFloor {
+                kind: "in_window_kill".to_owned(),
+                fired: 2,
+                required: 3
+            }]
+        );
     }
 
     #[test]
@@ -475,6 +545,21 @@ mod tests {
         assert_eq!(
             verdict.warnings,
             [Warning::Stragglers { tag: "h".to_owned(), count: 2 }]
+        );
+    }
+
+    #[test]
+    fn a_failed_sampler_is_a_warning() {
+        let mut history = busy(vec![]);
+        history.done[0].sampler_error = Some("No space left on device".to_owned());
+        let verdict = check(&history, &quiet_config(), false);
+        assert_eq!(verdict.violations, []);
+        assert_eq!(
+            verdict.warnings,
+            [Warning::SamplerFailed {
+                tag: "h".to_owned(),
+                error: "No space left on device".to_owned()
+            }]
         );
     }
 

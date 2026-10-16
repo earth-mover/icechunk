@@ -14,34 +14,39 @@ mod path;
 mod read;
 #[cfg(unix)]
 mod repo_d;
+#[cfg(all(test, unix))]
+#[path = "../tests/common/repo_infos.rs"]
+mod repo_infos;
 #[cfg(unix)]
 mod storage;
-#[cfg(unix)]
-mod stub;
 #[cfg(unix)]
 mod write;
 
 #[cfg(unix)]
-pub use repo_d::lifecycle::MigrateOutcome;
+pub use repo_d::{convert::ConversionOutcome, mirror::PublishOutcome};
 #[cfg(unix)]
 pub use storage::{
-    FilesystemStorage, FreezeOutcome, UnfreezeOutcome, new_filesystem_storage,
-    new_filesystem_storage_with,
+    FilesystemStorage, new_filesystem_storage, new_filesystem_storage_with,
 };
 
 #[cfg(all(unix, feature = "fault-injection"))]
 #[doc(hidden)]
 pub mod fault_injection {
-    pub use crate::hooks::{Observed, Point, ProtocolHooks, Sabotage};
+    pub use crate::hooks::{
+        ConversionStep, CreationStep, FromStandardStep, Observed, Point, ProtocolHooks,
+        Sabotage, ToStandardStep,
+    };
 }
 
 /// Settings of a filesystem storage, see [`new_filesystem_storage_with`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct FilesystemSettings {
-    /// fsync data files and their directories after writes. Turning it off
-    /// risks losing writes after an OS crash or power loss; it never affects
-    /// safety between concurrent writers. The fsyncs of `repo` always run.
+    /// fsync data files after writes, and their directories before every
+    /// change. Turning it off risks losing writes after an OS crash or power
+    /// loss; it never affects safety between concurrent writers. The fsyncs of
+    /// the change itself always run: those of `repo.d`, of `repo` and the root
+    /// directory, and of a conversion's backup.
     pub fsync: bool,
 }
 

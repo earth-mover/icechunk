@@ -416,7 +416,8 @@ jobs:
         run: just profile=ci test-integration true
 
   # The filesystem storage tests too slow for every PR: the fs-stress process tests,
-  # the two-writer protocol model check and a short stress run.
+  # the two-writer protocol model check, three layout model checks and a short stress
+  # run.
   ubuntu-fs-slow:
     name: Filesystem storage slow tests (ubuntu-latest)
     if: >-
@@ -452,10 +453,19 @@ jobs:
         run: just profile=release fs-stress-process-tests
 
       # !cancelled(): a failure in one step shouldn't hide the others.
-      # three_writers_no_freeze runs in ubuntu-fs-model-check
+      # three_writers_everything runs in ubuntu-fs-model-check
       - name: Run the two-writer protocol model check
         if: ${{ !cancelled() }}
         run: just fs-model-check two_writers_everything
+
+      # The three smallest large layout model configs (seconds on 32 cores): the old
+      # writer and its erasure windows, the ReadOnly copier, two writers and GC under
+      # every fault. The other large layout configs run only locally (fs-model-check)
+      - name: Run the small layout model checks
+        if: ${{ !cancelled() }}
+        run: >-
+          just fs-model-check --exact slow_layout_fork_detection
+          slow_layout_read_only_copy_stale_listings slow_layout_mirror_faults
 
       - name: Run a 4 minute storage stress test
         if: ${{ !cancelled() }}
@@ -514,7 +524,7 @@ jobs:
           save-if: false
 
       - name: Run the three-writer protocol model check
-        run: just fs-model-check three_writers_no_freeze
+        run: just fs-model-check three_writers_everything
 
   # Not a required check: these jobs re-run the tests instrumented for the codecov report.
   # The Rust tests, doctests and examples, split in two like ubuntu-test.

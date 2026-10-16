@@ -23,10 +23,10 @@ use config::{
     PyGcsBearerCredential, PyGcsCredentials, PyGcsStaticCredentials, PyLatencyStorage,
     PyManifestConfig, PyManifestPreloadCondition, PyManifestPreloadConfig,
     PyManifestVirtualChunkLocationCompressionConfig, PyObjectStoreConfig,
-    PyRepoUpdateRetryConfig, PyRepositoryConfig, PyS3Credentials, PyS3Options,
-    PyS3StaticCredentials, PyStorage, PyStorageConcurrencySettings, PyStorageObjectInfo,
-    PyStorageRetriesSettings, PyStorageSettings, PyStorageTimeoutSettings,
-    PyVirtualChunkContainer,
+    PyPublishOutcome, PyRepoUpdateRetryConfig, PyRepositoryConfig, PyS3Credentials,
+    PyS3Options, PyS3StaticCredentials, PyStorage, PyStorageConcurrencySettings,
+    PyStorageObjectInfo, PyStorageRetriesSettings, PyStorageSettings,
+    PyStorageTimeoutSettings, PyVirtualChunkContainer,
 };
 use config::{
     PyManifestSplitCondition, PyManifestSplitDimCondition, PyManifestSplittingConfig,
@@ -36,7 +36,11 @@ use conflicts::{
     PyConflictType, PyVersionSelection,
 };
 use display::PyAncestryGraph;
-use errors::{_all_error_kinds, IcechunkError, PyConflictError, PyRebaseFailedError};
+use errors::{
+    _all_error_kinds, IcechunkError, PyCommitDurableButRepositoryForkedError,
+    PyConflictError, PyRebaseFailedError, PyRepositoryForkedError,
+    PyUpdateDurableButRepositoryForkedError,
+};
 use icechunk::{format::format_constants::SpecVersionBin, initialize_tracing};
 use pyo3::prelude::*;
 use pyo3::types::PyMapping;
@@ -226,6 +230,7 @@ fn _icechunk_python(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyChecksumAlgorithm>()?;
     m.add_class::<PyObjectStoreConfig>()?;
     m.add_class::<PyStorageObjectInfo>()?;
+    m.add_class::<PyPublishOutcome>()?;
     m.add_class::<PyStorage>()?;
     m.add_class::<PyLatencyStorage>()?;
     m.add_class::<PyFilesystemStorage>()?;
@@ -268,6 +273,15 @@ fn _icechunk_python(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("IcechunkError", py.get_type::<IcechunkError>())?;
     m.add("ConflictError", py.get_type::<PyConflictError>())?;
     m.add("RebaseFailedError", py.get_type::<PyRebaseFailedError>())?;
+    m.add("RepositoryForkedError", py.get_type::<PyRepositoryForkedError>())?;
+    m.add(
+        "UpdateDurableButRepositoryForkedError",
+        py.get_type::<PyUpdateDurableButRepositoryForkedError>(),
+    )?;
+    m.add(
+        "CommitDurableButRepositoryForkedError",
+        py.get_type::<PyCommitDurableButRepositoryForkedError>(),
+    )?;
     m.add_function(wrap_pyfunction!(_all_error_kinds, m)?)?;
     m.add_class::<PyConflictType>()?;
     m.add_class::<PyConflict>()?;

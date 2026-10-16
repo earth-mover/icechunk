@@ -6,37 +6,21 @@
 //! a listing may return any marker that ever existed (stronger than a real
 //! client, whose listing is a mix of a few snapshots); reads of version files
 //! see the true file state, because their names are never rewritten.
+//!
+//! A superseded or unproven attempt reports a conflict here: `layout_model.rs`
+//! models the lost-reply check that can acknowledge it.
 
 use stateright::{Checker, Model, Property, report::WriteReporter};
 use std::collections::BTreeSet;
 use std::io::Write;
 
-/// (writer, attempt). Also the hash of the bytes that attempt writes.
-type AttemptId = (u8, u8);
-const INITIAL_HASH: AttemptId = (u8::MAX, 0);
+#[path = "common/model.rs"]
+mod model;
 
-/// A file in `repo.d`, other than the marker.
-#[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
-enum Name {
-    /// `<N>.<h>`: the bytes of version `N`.
-    Content(u8, AttemptId),
-    /// `stage.<id>`: an attempt's staged bytes.
-    Stage(AttemptId),
-}
-
-#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
-enum Kind {
-    Latest,
-    Frozen,
-}
-
-/// `latest.<N>.<h>` or `frozen.<N>.<h>`.
-#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
-struct Marker {
-    kind: Kind,
-    n: u8,
-    hash: AttemptId,
-}
+use model::{
+    AttemptId, ChangeAttempt, ChangeChoice, ChangeStep, Dir, INITIAL_HASH, Marker, Name,
+    Version, fresh_dir, step_change,
+};
 
 /// The writer's next step.
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
@@ -44,16 +28,8 @@ enum Phase {
     /// `read_latest`: list, take the marker, read its bytes; or finish. A
     /// writer keeps attempting after it commits.
     Start,
-    /// Write and fsync the staging file.
-    Stage,
-    /// `link(stage, <N+1>.<h'>)`, fsync the directory, unlink the staging file.
-    Link,
-    /// `rename(latest.<N>.<h>, latest.<N+1>.<h'>)`: the commit point.
-    Rename,
-    /// The rename failed with `ENOENT`, or its reply was lost: list and decide.
-    AfterFailedRename,
-    /// The rename succeeded: delete every dead version file, report success.
-    TidyUp,
+    /// A step of a change attempt.
+    Change(ChangeStep),
     /// Out of attempts.
     Done,
     /// Stopped forever, leaving its files behind.
@@ -68,57 +44,34 @@ struct Writer {
     /// The hash of this attempt's bytes.
     attempt: AttemptId,
     /// The version this attempt replaces.
-    base: (u8, AttemptId),
+    base: Version,
     /// A reply was lost in this attempt, so a spurious conflict is allowed.
     lost_reply: bool,
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 struct State {
-    files: BTreeSet<Name>,
-    marker: Marker,
-    /// Every marker name that ever existed. What a stale listing may show,
-    /// and what a new marker name must not repeat.
-    past_markers: BTreeSet<Marker>,
+    dir: Dir,
     writers: Vec<Writer>,
     /// Versions the marker named, in order, after the initial one.
-    history: Vec<(u8, AttemptId)>,
+    history: Vec<Version>,
     /// Versions whose writer reported success.
-    acked: BTreeSet<(u8, AttemptId)>,
+    acked: BTreeSet<Version>,
     /// The marker GC's last listing showed, if it is sweeping.
     gc_marker: Option<Marker>,
-    freezes: u8,
     violation: Option<String>,
-}
-
-/// The nondeterministic outcome of a writer's step, decided by the
-/// filesystem. Each phase accepts only the choices that apply to it.
-#[derive(Clone, Copy, Debug, PartialEq)]
-enum Choice {
-    /// The operation runs and its reply arrives.
-    Normal,
-    /// The operation runs on the server, but its reply is lost.
-    LostReply,
-    /// The listing's marker is this one.
-    Seen(Marker),
-    /// The listing is torn and shows no marker.
-    SeenNone,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 enum Action {
     /// Writer `.0` takes its next step, with outcome `.1`.
-    Step(usize, Choice),
+    Step(usize, ChangeChoice),
     /// Writer `.0` crashes.
     Crash(usize),
     /// GC lists the directory and sees this marker.
     GcList(Marker),
     /// GC deletes a file its listing proved dead, or a staging file.
     GcDelete(Name),
-    /// An operator freezes the repo.
-    Freeze,
-    /// An operator unfreezes the repo.
-    Unfreeze,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -128,8 +81,6 @@ struct Config {
     lost_replies: bool,
     crashes: bool,
     gc: bool,
-    /// How many times the repo may be frozen.
-    freezes: u8,
     /// Listings may show any past marker; otherwise only the current one.
     stale_listings: bool,
 }
@@ -189,7 +140,7 @@ fn rename_writers(state: &State, permutation: &[u8]) -> State {
             (permutation[usize::from(writer)], number)
         }
     };
-    let version = |(n, h): (u8, AttemptId)| (n, hash(h));
+    let version = |(n, h): Version| (n, hash(h));
     let marker = |marker: &Marker| Marker { hash: hash(marker.hash), ..*marker };
     let name = |name: &Name| match name {
         Name::Content(n, h) => Name::Content(*n, hash(*h)),
@@ -206,14 +157,15 @@ fn rename_writers(state: &State, permutation: &[u8]) -> State {
         };
     }
     State {
-        files: state.files.iter().map(name).collect(),
-        marker: marker(&state.marker),
-        past_markers: state.past_markers.iter().map(marker).collect(),
+        dir: Dir {
+            files: state.dir.files.iter().map(name).collect(),
+            marker: marker(&state.dir.marker),
+            past: state.dir.past.iter().map(marker).collect(),
+        },
         writers,
         history: state.history.iter().copied().map(version).collect(),
         acked: state.acked.iter().copied().map(version).collect(),
         gc_marker: state.gc_marker.as_ref().map(marker),
-        freezes: state.freezes,
         violation: state.violation.clone(),
     }
 }
@@ -233,16 +185,12 @@ impl Model for ProtocolModel {
                 lost_reply: false,
             })
             .collect();
-        let marker = Marker { kind: Kind::Latest, n: 0, hash: INITIAL_HASH };
         vec![State {
-            files: BTreeSet::from([Name::Content(0, INITIAL_HASH)]),
-            marker,
-            past_markers: BTreeSet::from([marker]),
+            dir: fresh_dir(0, INITIAL_HASH),
             writers,
             history: vec![],
             acked: BTreeSet::new(),
             gc_marker: None,
-            freezes: 0,
             violation: None,
         }]
     }
@@ -255,29 +203,32 @@ impl Model for ProtocolModel {
             match writer.phase {
                 Phase::Done | Phase::Crashed => continue,
                 Phase::Start => {
-                    actions.push(Action::Step(index, Choice::Normal));
+                    actions.push(Action::Step(index, ChangeChoice::Normal));
                     if writer.attempts < self.config.max_attempts {
                         for marker in self.visible_markers(state) {
-                            actions.push(Action::Step(index, Choice::Seen(marker)));
+                            actions.push(Action::Step(index, ChangeChoice::Seen(marker)));
                         }
                     }
                 }
-                Phase::Stage | Phase::TidyUp => {
-                    actions.push(Action::Step(index, Choice::Normal));
+                Phase::Change(ChangeStep::Stage | ChangeStep::TidyUp) => {
+                    actions.push(Action::Step(index, ChangeChoice::Normal));
                 }
-                Phase::Link | Phase::Rename => {
-                    actions.push(Action::Step(index, Choice::Normal));
+                Phase::Change(ChangeStep::Link | ChangeStep::Rename) => {
+                    actions.push(Action::Step(index, ChangeChoice::Normal));
                     if self.config.lost_replies {
-                        actions.push(Action::Step(index, Choice::LostReply));
+                        actions.push(Action::Step(index, ChangeChoice::LostReply));
                     }
                 }
-                Phase::AfterFailedRename => {
+                Phase::Change(ChangeStep::LostReplyCheck) => {
+                    unreachable!("the protocol model leaves the lost-reply check out")
+                }
+                Phase::Change(ChangeStep::AfterFailedRename) => {
                     for marker in self.visible_markers(state) {
-                        actions.push(Action::Step(index, Choice::Seen(marker)));
+                        actions.push(Action::Step(index, ChangeChoice::Seen(marker)));
                     }
                     // A torn listing is a form of staleness.
                     if self.config.stale_listings {
-                        actions.push(Action::Step(index, Choice::SeenNone));
+                        actions.push(Action::Step(index, ChangeChoice::SeenNone));
                     }
                 }
             }
@@ -289,7 +240,7 @@ impl Model for ProtocolModel {
             for marker in self.visible_markers(state) {
                 actions.push(Action::GcList(marker));
             }
-            for name in &state.files {
+            for name in &state.dir.files {
                 let dead = match (name, &state.gc_marker) {
                     (Name::Stage(_), _) => true,
                     (Name::Content(n, h), Some(seen)) => {
@@ -298,16 +249,9 @@ impl Model for ProtocolModel {
                     (Name::Content(..), None) => false,
                 };
                 if dead {
-                    actions.push(Action::GcDelete(name.clone()));
+                    actions.push(Action::GcDelete(*name));
                 }
             }
-        }
-        match state.marker.kind {
-            Kind::Latest if state.freezes < self.config.freezes => {
-                actions.push(Action::Freeze);
-            }
-            Kind::Frozen => actions.push(Action::Unfreeze),
-            Kind::Latest => {}
         }
     }
 
@@ -317,18 +261,7 @@ impl Model for ProtocolModel {
             Action::Crash(writer) => state.writers[writer].phase = Phase::Crashed,
             Action::GcList(marker) => state.gc_marker = Some(marker),
             Action::GcDelete(name) => {
-                state.files.remove(&name);
-            }
-            Action::Freeze => {
-                let Marker { n, hash, .. } = state.marker;
-                state.freezes += 1;
-                move_marker(&mut state, Marker { kind: Kind::Frozen, n, hash });
-            }
-            Action::Unfreeze => {
-                let Marker { n, hash, .. } = state.marker;
-                // link(<n>.<h>, <n+1>.<h>): Ok, or EEXIST after a lost reply.
-                state.files.insert(Name::Content(n + 1, hash));
-                move_marker(&mut state, Marker { kind: Kind::Latest, n: n + 1, hash });
+                state.dir.files.remove(&name);
             }
             Action::Step(writer, choice) => self.step(&mut state, writer, choice)?,
         }
@@ -342,7 +275,7 @@ impl Model for ProtocolModel {
                 state.violation.is_none()
             }),
             Property::always("the current marker has bytes", |_, state: &State| {
-                state.files.contains(&Name::Content(state.marker.n, state.marker.hash))
+                state.dir.files.contains(&state.dir.marker.file())
             }),
             Property::always(
                 "versions form a chain and acks are in it",
@@ -358,11 +291,9 @@ impl Model for ProtocolModel {
             ),
         ];
         // Stale listings can starve a writer forever, crashes can stop every
-        // writer, and GC and freezing are always enabled, which `eventually`
-        // can't handle.
+        // writer, and GC is always enabled, which `eventually` can't handle.
         let config = self.config;
-        if !config.stale_listings && !config.crashes && !config.gc && config.freezes == 0
-        {
+        if !config.stale_listings && !config.crashes && !config.gc {
             properties
                 .push(Property::eventually("some writer commits", |_, state: &State| {
                     !state.acked.is_empty()
@@ -374,146 +305,92 @@ impl Model for ProtocolModel {
 
 /// Moves the marker, recording the name. A name used twice is a violation.
 fn move_marker(state: &mut State, to: Marker) {
-    if !state.past_markers.insert(to) {
+    if !state.dir.move_marker(to) {
         state.violation = Some(format!("marker name used twice: {to:?}"));
     }
-    if to.kind == Kind::Latest {
-        state.history.push((to.n, to.hash));
-    }
-    state.marker = to;
+    state.history.push((to.n, to.hash));
 }
 
 impl ProtocolModel {
     /// The markers a listing may show.
     fn visible_markers(&self, state: &State) -> Vec<Marker> {
-        if self.config.stale_listings {
-            state.past_markers.iter().copied().collect()
-        } else {
-            vec![state.marker]
-        }
+        state.dir.listing(self.config.stale_listings, &BTreeSet::new())
     }
 
     /// One atomic step of `writer`. Returns `None` when `choice` doesn't apply.
-    fn step(&self, state: &mut State, writer: usize, choice: Choice) -> Option<()> {
+    fn step(&self, state: &mut State, writer: usize, choice: ChangeChoice) -> Option<()> {
         let before = state.writers[writer].clone();
-        let (base_n, base_hash) = before.base;
-        let content = Name::Content(base_n + 1, before.attempt);
         let me = &mut state.writers[writer];
         match (before.phase, choice) {
             // ── read_latest ─────────────────────────────────────────────────
-            (Phase::Start, Choice::Normal) => {
+            (Phase::Start, ChangeChoice::Normal) => {
                 if before.attempts < self.config.max_attempts {
                     return None;
                 }
                 me.phase = Phase::Done;
             }
-            (Phase::Start, Choice::Seen(seen)) => {
+            (Phase::Start, ChangeChoice::Seen(seen)) => {
                 if before.attempts >= self.config.max_attempts {
                     return None;
                 }
                 // A deleted version file makes read_latest list again.
-                if !state.files.contains(&Name::Content(seen.n, seen.hash)) {
+                if !state.dir.files.contains(&seen.file()) {
                     return None;
                 }
                 me.attempt = (before.id, before.attempts);
                 me.attempts += 1;
-                me.base = (seen.n, seen.hash);
+                me.base = seen.version();
                 me.lost_reply = false;
-                me.phase = Phase::Stage;
+                me.phase = Phase::Change(ChangeStep::Stage);
             }
-
-            // ── stage ───────────────────────────────────────────────────────
-            (Phase::Stage, Choice::Normal) => {
-                state.files.insert(Name::Stage(before.attempt));
-                me.phase = Phase::Link;
+            (Phase::Change(step), choice) => {
+                return step_change(&mut WriterAttempt { state, writer }, step, choice);
             }
-
-            // ── link(stage, <N+1>.<h'>) ─────────────────────────────────────
-            (Phase::Link, Choice::Normal | Choice::LostReply) => {
-                if !state.files.contains(&Name::Stage(before.attempt)) {
-                    // ENOENT: the staging file was swept.
-                    report_conflict(state, writer);
-                    return Some(());
-                }
-                // Ok, or EEXIST for our own earlier link: the name is ours.
-                state.files.insert(content);
-                if choice == Choice::LostReply {
-                    // The client retries the link from the Link phase.
-                    state.writers[writer].lost_reply = true;
-                } else {
-                    state.files.remove(&Name::Stage(before.attempt));
-                    state.writers[writer].phase = Phase::Rename;
-                }
-            }
-
-            // ── rename(latest.<N>.<h>, latest.<N+1>.<h'>) ───────────────────
-            (Phase::Rename, Choice::Normal | Choice::LostReply) => {
-                let source = Marker { kind: Kind::Latest, n: base_n, hash: base_hash };
-                if state.marker == source {
-                    let target = Marker {
-                        kind: Kind::Latest,
-                        n: base_n + 1,
-                        hash: before.attempt,
-                    };
-                    move_marker(state, target);
-                    if choice == Choice::LostReply {
-                        state.writers[writer].lost_reply = true;
-                        state.writers[writer].phase = Phase::AfterFailedRename;
-                    } else {
-                        state.writers[writer].phase = Phase::TidyUp;
-                    }
-                } else {
-                    // ENOENT. A lost reply of a failed rename is just a failure.
-                    if choice == Choice::LostReply {
-                        return None;
-                    }
-                    state.writers[writer].phase = Phase::AfterFailedRename;
-                }
-            }
-
-            // ── after_failed_rename ─────────────────────────────────────────
-            (Phase::AfterFailedRename, Choice::Seen(seen)) => {
-                if seen.n == base_n + 1 && seen.hash == before.attempt {
-                    // Our rename landed and the reply was lost.
-                    tidy_up(state, base_n + 1, before.attempt);
-                    report_success(state, writer);
-                } else if seen.n > base_n {
-                    // Lost the race for N+1, or superseded: our file is dead.
-                    state.files.remove(&content);
-                    report_conflict(state, writer);
-                } else if seen.kind == Kind::Frozen
-                    && seen.n == base_n
-                    && seen.hash == base_hash
-                {
-                    report_frozen(state, writer);
-                } else {
-                    // Ambiguous: the content file stays for the sweep.
-                    report_conflict(state, writer);
-                }
-            }
-            (Phase::AfterFailedRename, Choice::SeenNone) => {
-                report_conflict(state, writer);
-            }
-
-            // ── tidy_up ─────────────────────────────────────────────────────
-            (Phase::TidyUp, Choice::Normal) => {
-                tidy_up(state, base_n + 1, before.attempt);
-                report_success(state, writer);
-            }
-
             _ => return None,
         }
         Some(())
     }
 }
 
-/// After a successful rename proved the marker is at `(n, hash)`: delete
-/// every version file below `n`, and every other one at `n`.
-fn tidy_up(state: &mut State, n: u8, hash: AttemptId) {
-    state.files.retain(|name| match name {
-        Name::Content(i, h) => !(*i < n || (*i == n && *h != hash)),
-        Name::Stage(_) => true,
-    });
+/// Writer `writer`'s change attempt in `state`. `repo.d` never goes away.
+struct WriterAttempt<'a> {
+    state: &'a mut State,
+    writer: usize,
+}
+
+impl ChangeAttempt for WriterAttempt<'_> {
+    fn dir(&self) -> Option<&Dir> {
+        Some(&self.state.dir)
+    }
+
+    fn dir_mut(&mut self) -> Option<&mut Dir> {
+        Some(&mut self.state.dir)
+    }
+
+    fn attempt(&self) -> (AttemptId, Version) {
+        let me = &self.state.writers[self.writer];
+        (me.attempt, me.base)
+    }
+
+    fn set_lost_reply(&mut self) {
+        self.state.writers[self.writer].lost_reply = true;
+    }
+
+    fn set_step(&mut self, step: ChangeStep) {
+        self.state.writers[self.writer].phase = Phase::Change(step);
+    }
+
+    fn change(&mut self, _source: Marker, target: Marker) {
+        move_marker(self.state, target);
+    }
+
+    fn report_success(&mut self) {
+        report_success(self.state, self.writer);
+    }
+
+    fn report_conflict(&mut self) {
+        report_conflict(self.state, self.writer);
+    }
 }
 
 /// `Updated`: the attempt's version must be in the chain.
@@ -535,19 +412,6 @@ fn report_conflict(state: &mut State, writer: usize) {
     if state.history.contains(&version) && !me.lost_reply {
         state.violation = Some(format!(
             "writer {} reported a conflict for {version:?}, which landed",
-            me.id
-        ));
-    }
-    state.writers[writer].phase = Phase::Start;
-}
-
-/// `RepositoryFrozen`. Never for a commit that landed.
-fn report_frozen(state: &mut State, writer: usize) {
-    let me = &state.writers[writer];
-    let version = (me.base.0 + 1, me.attempt);
-    if state.history.contains(&version) {
-        state.violation = Some(format!(
-            "writer {} reported frozen for {version:?}, which landed",
             me.id
         ));
     }
@@ -602,7 +466,6 @@ const PLAIN: Config = Config {
     lost_replies: false,
     crashes: false,
     gc: false,
-    freezes: 0,
     stale_listings: false,
 };
 
@@ -621,11 +484,6 @@ fn two_writers_stale_listings() {
     check(Config { stale_listings: true, ..PLAIN });
 }
 
-#[test]
-fn two_writers_freeze() {
-    check(Config { freezes: 1, stale_listings: true, lost_replies: true, ..PLAIN });
-}
-
 /// Every fault with one attempt per writer: the quick form of
 /// `two_writers_everything` for `just test`.
 #[test]
@@ -635,7 +493,6 @@ fn two_writers_everything_one_attempt() {
         lost_replies: true,
         crashes: true,
         gc: true,
-        freezes: 1,
         stale_listings: true,
         ..PLAIN
     });
@@ -650,20 +507,18 @@ fn two_writers_everything_but_stale_listings() {
         lost_replies: true,
         crashes: true,
         gc: true,
-        freezes: 1,
         stale_listings: false,
         ..PLAIN
     });
 }
 
 #[test]
-#[ignore = "about 47 s; run `just fs-model-check` before merging protocol changes"]
+#[ignore = "591,476 states, about 1 s in release; run `just fs-model-check` before merging protocol changes"]
 fn two_writers_everything() {
     check(Config {
         lost_replies: true,
         crashes: true,
         gc: true,
-        freezes: 1,
         stale_listings: true,
         ..PLAIN
     });
@@ -677,30 +532,12 @@ fn three_writers_one_attempt() {
         lost_replies: true,
         crashes: true,
         gc: true,
-        freezes: 1,
         stale_listings: true,
     });
 }
 
-/// Everything but freezing, which `three_writers_one_attempt` and
-/// `two_writers_everything` cover: the full configuration below is too large
-/// to finish.
 #[test]
 #[ignore = "large state space; run `just fs-model-check` before merging protocol changes"]
-fn three_writers_no_freeze() {
-    check(Config {
-        writers: 3,
-        max_attempts: 2,
-        lost_replies: true,
-        crashes: true,
-        gc: true,
-        freezes: 0,
-        stale_listings: true,
-    });
-}
-
-#[test]
-#[ignore = "too large to finish; kept to document the full configuration"]
 fn three_writers_everything() {
     check(Config {
         writers: 3,
@@ -708,7 +545,6 @@ fn three_writers_everything() {
         lost_replies: true,
         crashes: true,
         gc: true,
-        freezes: 1,
         stale_listings: true,
     });
 }

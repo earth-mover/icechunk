@@ -180,7 +180,7 @@ Implementations SHOULD NOT create entries in `$ROOT` other than the ones listed 
 
 A repository [migrated from spec version 1](#repositories-migrated-from-spec-version-1) MAY also contain the spec 1 entries `$ROOT/refs/` and `$ROOT/config.yaml`. They are not used. If `$ROOT/repo` exists, the repository is a spec 2.x repository, whether or not spec 1 entries exist.
 
-Tools that copy, move or archive a repository MUST include every entry under `$ROOT`, including entries they do not recognize. Implementations MUST NOT delete entries they do not recognize; see [Garbage collection and expiration](#garbage-collection-and-expiration).
+Tools that copy, move or archive a repository MUST include every entry under `$ROOT`, including entries they do not recognize. Implementations MUST NOT delete entries they do not recognize, except when a layout this specification describes deletes a whole directory of its own, as a conversion of the [filesystem layout](./spec-filesystem-layout-v1.md#conversions) deletes `repo.d/`; see [Garbage collection and expiration](#garbage-collection-and-expiration).
 
 ### Common Types
 
@@ -229,7 +229,7 @@ The remainder of the file is the flatbuffers payload, compressed with the algori
 - The compression algorithm MUST be `1`. The value `0` (no compression) is reserved: writers MUST NOT write it.
 - The compressed payload MUST be a single zstd frame. Writers SHOULD record the decompressed size in the frame header.
 
-The header values, like every flatbuffers enum and union in this specification, are fixed for all of spec version 2.x. Writers MUST NOT write a value or variant this specification does not define; adding one requires a new major spec version.
+The header values, like every flatbuffers enum and union in this specification, are fixed for all of spec version 2.x. Writers MUST NOT write a value or variant this specification does not define; adding one requires a new major spec version. Readers MUST treat such a value or variant as a format error, except in `RepoAvailability`, where every value other than `Online` MUST be treated as not `Online`.
 
 ### Reserved Fields
 
@@ -241,7 +241,7 @@ With the exception of chunk files, each type of file is encoded using [flatbuffe
 
 #### Repo Info File
 
-The repo info file is the single entry point for an Icechunk repository and the only mutable object in a V2.x repo. It MUST be stored at `$ROOT/repo`, except in repositories that list the `filesystem-layout-v1` [writer feature](#writer-features). Those store the current repo info as described in the [filesystem layout](./spec-filesystem-layout-v1.md), and `$ROOT/repo` holds a copy of a recent version that MAY lag behind the current one. Every read operation starts by fetching this file. Every update to the repository (commits, tag creation, configuration changes) is a conditional write on this file.
+The repo info file is the single entry point for an Icechunk repository and the only mutable object in a V2.x repo. It MUST be stored at `$ROOT/repo`, except in repositories that list the `filesystem-layout-v1` [writer feature](#writer-features). Those store the current repo info as described in the [filesystem layout](./spec-filesystem-layout-v1.md), and `$ROOT/repo` holds a copy of a recent version that MAY lag behind the current one or be missing, and briefly holds other repo infos as the filesystem layout describes. Every read operation starts by fetching this file. Every update to the repository (commits, tag creation, configuration changes) is a conditional write on this file or, in the filesystem layout, the operation that layout describes.
 
 The repo info file MUST use the standard [binary file format](#binary-file-format) with file type `RepoInfo`.
 
@@ -272,6 +272,8 @@ Each snapshot in the repository has a `SnapshotInfo` entry in the repo info file
 ```
 
 The `flushed_at`, `message` and `metadata` fields repeat the values in the snapshot file, so that the history can be read without fetching snapshot files. Writers MUST copy them from the snapshot file when they add the snapshot to the repo info, and MUST NOT change them afterwards. Readers MAY use either copy.
+
+The initial snapshot is an exception: in a repository created by several processes at once, one of them older than Icechunk 2.4.0, the initial snapshot's `SnapshotInfo.flushed_at` can differ from its snapshot file. Readers MUST accept the difference. Writers MUST NOT change either copy.
 
 The `pruned_ancestor_tx_logs` field, added in spec version 2.1, keeps the transaction logs of ancestors that were removed from the history. Expiration and garbage collection fill it when they re-parent a snapshot, and a commit that amends a snapshot inherits the amended snapshot's list. The list is ordered by ancestry, oldest first. Implementations MUST treat the concatenation of all these transaction logs, followed by the snapshot's own transaction log, as the full transaction history for the snapshot.
 
@@ -335,14 +337,6 @@ Readers MUST NOT depend on the page size.
 --8<-- "icechunk-format/flatbuffers/repo.fbs:repo_availability"
 ```
 
-<!-- DRAFT: until repo.fbs gains the field, the 2.2 addition to RepoStatus is:
-
-    // Spec 2.2. The repository's own status, present exactly when
-    // Repo.writer_features is non-empty. The enclosing status is then
-    // the read-only gate shown to implementations that predate writer features.
-    underlying: RepoStatus;
--->
-
 The status says which operations implementations may perform on the repository:
 
 - `Online`: reads and modifications.
@@ -353,35 +347,31 @@ When `Repo.writer_features` is non-empty, `status` is a **gate** for implementat
 
 - `status.underlying` MUST be present, and MUST NOT itself have an `underlying`.
 - `status.availability` MUST be `ReadOnly`, whatever the underlying availability.
-- `status.limited_availability_reason` MUST name the writer features and the oldest Icechunk version that implements all of them, and MUST tell users not to change the status with older versions, for example "do not change the status with Icechunk older than 2.4". The underlying reason, if any, follows.
+- `status.limited_availability_reason` MUST be one line without double quotes. It MUST name the writer features and the oldest Icechunk version that implements all of them (the highest "First implemented in" among them in [Writer features](#writer-features)), and MUST tell users not to change the status with Icechunk older than 2.4.0. The underlying reason, if any, follows.
 - `status.set_at` MUST equal `status.underlying.set_at`.
 
 When `Repo.writer_features` is empty, `status.underlying` MUST be absent. Implementations of spec 2.2 or later MUST use `status.underlying`, when present, as the status of the repository, and change the status by changing `status.underlying`.
 
-A repo info with a non-empty `Repo.writer_features` and no `status.underlying`, or with a `status.underlying` and no writer features, is malformed. Implementations MUST treat it as a format error when modifying the repository, and MAY still read it.
+In a `RepoStatusChangedUpdate` entry, the status the update set is `status.underlying` when present, otherwise `status`. An entry whose status equals the status of the repo info the update replaced records a change of writer features.
+
+A repo info is malformed if `status.underlying` is present without writer features or absent with them, if `status.underlying` has an `underlying`, if the gate's `availability` is not `ReadOnly` or its `set_at` differs from `status.underlying.set_at`, or if `Repo.writer_features` is not sorted or has duplicates. The text of `limited_availability_reason` does not make a repo info malformed. An empty `writer_features` vector is not malformed: it is read as absent. Readers MAY read a malformed repo info and MUST then treat the repository as not `Online`. Implementations MUST treat it as a format error when modifying the repository, except for a status-only change by an implementation that implements every listed feature, which writes a well-formed status.
 
 !!! tip "For implementers"
-    Icechunk libraries 2.0 to 2.3 refuse to modify a repository with writer features, because they see its status as `ReadOnly`. Their error shows the reason, which names the features and the version required. They can still read the repository.
+    Icechunk libraries 2.0 to 2.3 see the status of a repository with writer features as `ReadOnly`, so they refuse to modify it, except to change its status, which is not supported (see the [version policy](./version-policy.md)). Their error shows the reason, except for garbage collection and expiration, which report only that the repository is read-only. They can still read the repository.
 
 ##### Writer features
-
-<!-- DRAFT: until repo.fbs gains the field, the 2.2 addition to Repo is:
-
-    // Spec 2.2. Names of the writer features this repository uses.
-    // MUST be sorted in ascending UTF-8 byte order, without duplicates.
-    // Null when the repository uses none; an empty vector is never written.
-    writer_features: [string];
--->
 
 A _writer feature_ is a format feature that an implementation must implement to modify a repository without damaging it. `Repo.writer_features` lists the ones a repository uses.
 
 - An implementation MUST NOT modify a repository that lists a writer feature it does not implement. It MUST report the names of the features it lacks.
-- Each feature's definition says what implementing it requires, which can depend on the storage.
+- Each feature's definition says what implementing it requires. Whether an implementation implements a feature can depend on the storage backend it uses; implementations decide it per backend.
 - Writer features never prevent reads. An implementation that does not implement a listed feature can still read the repository.
 - When rewriting the repo info, implementations MUST copy `writer_features` unchanged, except in the update that adds or removes a feature.
 - The update that first writes data requiring a feature MUST add the feature. A feature MAY be removed only by an update that leaves no data requiring it.
 - Adding the first feature turns on the [status gate](#repostatus), and removing the last one turns it off.
 - The update that adds or removes a feature writes a `RepoStatusChangedUpdate` ops log entry.
+- Implementations that predate writer features can change the status of a repository that lists writer features, which removes `writer_features` and the gate (see the [version policy](./version-policy.md)). Each feature's definition MUST be such that this write leaves either a valid repository without the feature or a state that implementations of the feature detect, at least on a best-effort basis, as the feature's definition specifies.
+- Later 2.x versions of this specification MUST define a writer feature for every addition that an implementation of an earlier 2.x version would drop or damage when it modifies the repository.
 
 Names defined by this specification use only lowercase ASCII letters, digits and `-`, and end in a version suffix `-v<n>`. Names that contain `.` are reserved for features defined outside this specification, which a later version may allow. Implementations MUST NOT write names that the specification they implement does not define, and MUST treat every name they do not recognize as a feature they do not implement.
 
@@ -395,31 +385,32 @@ This specification defines these writer features:
 
 Feature flags let users disable operations on a repository. A flag is enabled if its id is in `Repo.enabled_feature_flags`, disabled if its id is only in `Repo.disabled_feature_flags`, and at its default otherwise. An id in both lists is enabled.
 
-| Id | Name | Default | Enforced from |
-| --- | --- | --- | --- |
-| `1` | `commit` | enabled | Icechunk 2.4.0 |
-| `2` | `amend` | enabled | Icechunk 2.4.0 |
-| `3` | `move_node` | enabled | Icechunk 2.0.0 |
-| `4` | `create_tag` | enabled | Icechunk 2.0.0 |
-| `5` | `delete_tag` | enabled | Icechunk 2.0.0 |
-| `6` | `rebase` | enabled | Icechunk 2.4.0 |
-| `7` | `create_new_nodes` | enabled | Icechunk 2.4.0 |
-| `8` | `delete_nodes` | enabled | Icechunk 2.4.0 |
-| `9` | `update_chunks` | enabled | Icechunk 2.4.0 |
-| `10` | `update_array_metadata` | enabled | Icechunk 2.4.0 |
-| `11` | `update_group_metadata` | enabled | Icechunk 2.4.0 |
-| `12` | `create_branch` | enabled | Icechunk 2.4.0 |
-| `13` | `delete_branch` | enabled | Icechunk 2.4.0 |
-| `14` | `reset_branch` | enabled | Icechunk 2.4.0 |
-| `15` | `garbage_collection` | enabled | Icechunk 2.4.0 |
-| `16` | `expiration` | enabled | Icechunk 2.4.0 |
-| `17` | reserved | | |
-| `18` | `update_config` | enabled | Icechunk 2.4.0 |
-| `19` | `set_default_commit_metadata` | enabled | Icechunk 2.4.0 |
-| `20` | `update_repository_metadata` | enabled | Icechunk 2.4.0 |
-| `21` | `rewrite_manifests` | enabled | Icechunk 2.4.0 |
+| Id | Name | Default | Disables | Enforced from |
+| --- | --- | --- | --- | --- |
+| `1` | `commit` | enabled | Commits | Icechunk 2.4.0 |
+| `2` | `amend` | enabled | Amending a commit | Icechunk 2.4.0 |
+| `3` | `move_node` | enabled | Commits that move nodes | Icechunk 2.0.0 |
+| `4` | `create_tag` | enabled | Creating a tag | Icechunk 2.0.0 |
+| `5` | `delete_tag` | enabled | Deleting a tag | Icechunk 2.0.0 |
+| `6` | `rebase` | enabled | Rebasing a session onto newer commits | Icechunk 2.4.0 |
+| `7` | `create_new_nodes` | enabled | Commits that create nodes | Icechunk 2.4.0 |
+| `8` | `delete_nodes` | enabled | Commits that delete nodes | Icechunk 2.4.0 |
+| `9` | `update_chunks` | enabled | Commits that change chunks | Icechunk 2.4.0 |
+| `10` | `update_array_metadata` | enabled | Commits that change array metadata | Icechunk 2.4.0 |
+| `11` | `update_group_metadata` | enabled | Commits that change group metadata | Icechunk 2.4.0 |
+| `12` | `create_branch` | enabled | Creating a branch | Icechunk 2.4.0 |
+| `13` | `delete_branch` | enabled | Deleting a branch | Icechunk 2.4.0 |
+| `14` | `reset_branch` | enabled | Resetting a branch | Icechunk 2.4.0 |
+| `15` | `garbage_collection` | enabled | Garbage collection | Icechunk 2.4.0 |
+| `16` | `expiration` | enabled | Expiration | Icechunk 2.4.0 |
+| `17` | reserved | | | |
+| `18` | `update_config` | enabled | Changing `Repo.config` | Icechunk 2.4.0 |
+| `19` | `set_default_commit_metadata` | enabled | Commits that carry default commit metadata set on the session | Icechunk 2.4.0 |
+| `20` | `update_repository_metadata` | enabled | Changing `Repo.metadata` | Icechunk 2.4.0 |
+| `21` | `rewrite_manifests` | enabled | Commits that rewrite manifests | Icechunk 2.4.0 |
 
-- Implementations MUST NOT perform an operation whose flag is disabled. The check is made against the repo info the update replaces.
+- In the table, commits include amended commits and snapshots written without moving a branch.
+- Implementations MUST NOT perform an operation whose flag is disabled. The check is made against the repo info the update replaces. The `rebase` flag is checked when the rebase runs, against the repo info the rebase reads.
 - A flag changes only by an update with a `FeatureFlagChangedUpdate` entry. Every other update MUST copy both lists unchanged.
 - Later 2.x versions of this specification MAY define new ids. Implementations MUST ignore ids they do not recognize, and writers MUST copy them unchanged. Writers MUST NOT add ids that the specification they implement does not define.
 
@@ -430,10 +421,10 @@ Implementations that do not recognize a flag id do not enforce its flag. Icechun
 `Repo.config` holds the repository configuration as a [FlexBuffers](https://flatbuffers.dev/flexbuffers.html) map. An absent `config` means the default configuration.
 
 - Writers MUST copy `config` byte for byte, unless the update intends to change the configuration, which it records with a `ConfigChangedUpdate` entry.
-- The configuration evolves additively within spec 2.x.
+- The configuration evolves additively within spec 2.x: later versions add keys. Implementations SHOULD NOT add a variant to an existing enumerated value or change the type of an existing key's value.
 - A key that is absent or null takes its default value. Readers MUST ignore keys they do not know.
-- Readers MUST NOT fail to open a repository because of implementation-defined configuration they cannot decode.
-- Writers that change the configuration MUST keep the keys they do not recognize.
+- Readers MUST NOT fail to open a repository because of configuration they cannot decode. A key whose value a reader cannot decode is treated as absent. A virtual chunk container whose implementation-defined settings a reader cannot decode still resolves its `name` and `url_prefix`; reading its chunks MAY fail.
+- Writers that change the configuration MUST keep, unchanged in value, the top-level keys and the virtual chunk container entries they do not recognize or cannot decode, unless the change removes them.
 
 ##### Updates to the repo info file
 
@@ -643,7 +634,7 @@ The repo info of a migrated repository has spec version `2` in its header and in
 Before any modification, including commits, ref changes, configuration and metadata changes, expiration and garbage collection, an implementation MUST check, against the repo info it is about to replace:
 
 1. that it implements every feature in `Repo.writer_features`;
-1. that the repository's status is `Online`, unless the modification only changes the status, or only adds or removes writer features and keeps the status, as the [filesystem layout conversions](./spec-filesystem-layout-v1.md#conversions) do.
+1. that the repository's status is `Online`, unless the modification only changes the status, or only adds or removes writer features and keeps the status, as the [filesystem layout conversions](./spec-filesystem-layout-v1.md#conversions) do (they write an `Offline` or undefined status as `ReadOnly`).
 
 It MUST fail the modification otherwise.
 
@@ -733,7 +724,7 @@ Garbage collection deletes files that the repository no longer needs, and remove
 1. The objects to keep are the files of the snapshots that remain in the repo info, their manifests and chunks, their transaction logs, and every transaction log listed in a `pruned_ancestor_tx_logs` in the repo info.
 1. GC MAY delete a file in `snapshots/`, `manifests/`, `transactions/` or `chunks/` that is not kept, only if the creation time the storage reports for it is earlier than the cutoff.
 
-Garbage collection MUST NOT delete entries it does not recognize, in `$ROOT` or in its subdirectories, except as defined by a layout this specification describes. In `snapshots/`, `manifests/`, `transactions/` and `chunks/`, a name is recognized only if it is exactly the Crockford base 32 encoding of an object id of the right size, as defined in [Common Types](#common-types). Garbage collection MUST NOT delete anything in `overwritten/` or directly in `$ROOT`, except the leftovers that a layout defines.
+Garbage collection MUST NOT delete entries it does not recognize, in `$ROOT` or in its subdirectories, except as defined by a layout this specification describes. In `snapshots/`, `manifests/`, `transactions/` and `chunks/`, a name is recognized only if it is exactly the Crockford base 32 encoding of an object id of the right size, as defined in [Common Types](#common-types). Garbage collection MUST NOT delete anything in `overwritten/` or directly in `$ROOT`, except the leftovers that a layout defines, such as the staged files of the filesystem layout, including `$ROOT/repo.staging.<id>`, and its `repo.d.tmp.<id>/` directories, which it deletes by age.
 
 ### Create New Tag
 
@@ -756,8 +747,8 @@ A tag can be created from any snapshot.
 - Added normative rules for garbage collection and expiration.
 - Reserved the `extra` fields for this specification.
 - Froze the flatbuffers enums and unions, and the header values, for all of spec 2.x.
-- Clarified existing behavior: the header values, the repository status, the ops log and its backups, the configuration fields needed to interoperate, feature flags, relative virtual chunk locations and compressed locations, the consistency of `manifest_files_v2` and `SnapshotInfo` with the snapshot file, repository initialization, repositories migrated from spec version 1, and the cases where a transaction log is missing or lists a node more than once. These clarifications also apply to repositories written under spec versions 2 and 2.1.
-- The change is backwards compatible. Every 2.x library can read a spec 2.2 repository. Libraries before 2.4.0 cannot modify a repository that lists writer features.
+- Clarified existing behavior: the header values, the repository status, the ops log and its backups, the configuration fields needed to interoperate, feature flags, relative virtual chunk locations and compressed locations, the consistency of `manifest_files_v2` and `SnapshotInfo` with the snapshot file, repository initialization, repositories migrated from spec version 1, and the cases where a transaction log is missing or lists a node more than once. These clarifications describe repositories written under spec versions 2 and 2.1 as well; they do not claim that every older implementation followed the algorithms in [Garbage collection and expiration](#garbage-collection-and-expiration).
+- The change is backwards compatible. Every 2.x library can read a spec 2.2 repository. Libraries before 2.4.0 cannot modify a repository that lists writer features, except to change its status, which is not supported (see the [version policy](./version-policy.md)).
 - The on-disk format flags repositories as version `2` for spec 2, 2.1 and 2.2.
 
 ## Changes from spec version 2 to 2.1

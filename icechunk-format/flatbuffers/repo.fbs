@@ -58,6 +58,12 @@ table RepoStatus {
     // Non-leap microseconds since Jan 1, 1970 UTC.
     set_at: uint64;
     limited_availability_reason: string;
+
+    // Spec 2.2. The repository's own status, present exactly when
+    // Repo.writer_features is non-empty, and never with an underlying
+    // of its own. The enclosing status is then the read-only gate shown
+    // to implementations that predate writer features.
+    underlying: RepoStatus;
 }
 // --8<-- [end:repo_status]
 
@@ -214,6 +220,12 @@ table Repo {
   // Reserved for future use. Opaque bytes for future extensions.
   // Introduced in spec version 2.
   extra: [uint8];
+
+  // Spec 2.2. Names of the writer features this repository uses.
+  // MUST be sorted in ascending UTF-8 byte order, without duplicates.
+  // Null when the repository uses none; an empty vector is never
+  // written, and is read as null.
+  writer_features: [string];
 }
 // --8<-- [end:repo_table]
 

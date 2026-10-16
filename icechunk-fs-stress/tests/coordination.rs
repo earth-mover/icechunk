@@ -14,6 +14,7 @@ use icechunk_fs_stress::{
         write_control,
     },
     layout::RunRoot,
+    log::{Record, read_all_logs},
     repo_mode,
     storage_mode::REPO_KEY,
     supervisor,
@@ -116,9 +117,17 @@ async fn init_writes_the_layout() {
     let (_dir, root) = initialized().await;
     assert_eq!(read_control(&root).unwrap(), Control::Wait);
     assert_eq!(RunConfig::load(&root).unwrap(), RunConfig::defaults(Mode::Storage, 2));
-    for dir in [root.hosts_dir(), root.done_dir(), root.logs_dir()] {
+    for dir in [root.hosts_dir(), root.done_dir()] {
         assert_eq!(fs::read_dir(&dir).unwrap().count(), 0, "{}", dir.display());
     }
+    // Only `init`'s log, with the first version's number.
+    let logs = read_all_logs(&root).unwrap();
+    let records: Vec<&Record> = logs.values().flatten().collect();
+    assert!(
+        matches!(&records[..], [Record::Start { host, .. }, Record::InitVersion { .. }]
+            if host == "init"),
+        "{logs:?}"
+    );
     assert!(root.storage().join(REPO_KEY).is_file());
     let mut names: Vec<_> = fs::read_dir(root.root())
         .unwrap()

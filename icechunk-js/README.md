@@ -46,8 +46,9 @@ In-memory storage works on all platforms. The following backends are available o
 - **HTTP** — `Storage.newHttp(baseUrl, config?)`
 - **Local Filesystem** — `Storage.newLocalFilesystem(path)`
 - **Filesystem** (safe for concurrent writers, experimental, Unix only) — `Storage.newFilesystem(path)`
-  - It uses a different on-disk format, which other backends and older Icechunk versions can't open.
-  - Its `migrateLegacyRepo()` converts a repository written by `newLocalFilesystem` (needed before opening it), and `freezeRepo()`/`unfreezeRepo()` stop and resume changes to the repository. Each resolves to whether it changed the repository.
+  - It stores the repository in the filesystem layout: other backends and Icechunk before 2.4.0 read it through the mirror file `repo` and can't modify it.
+  - Its `convertToFilesystemLayout()` converts a repository written by `newLocalFilesystem` (needed before opening it), and `convertToStandardLayout()` converts back; both resolve to whether they converted the repository. Run them with nothing else using the repository, and rerun one if it is interrupted.
+  - Its `publishMirror()` repairs a lagging mirror on a best-effort basis. Setting the status to read-only (with Python or Rust) makes the mirror current once every earlier writer has finished.
 
 #### Fetch Storage (read-only, works everywhere)
 

@@ -18,7 +18,7 @@ use uuid::Uuid;
 
 use crate::{
     config::{PointName, WorkerId},
-    layout::{RunRoot, SUPERVISOR_SLOT, is_valid_slot, is_valid_tag},
+    layout::{RunRoot, SAMPLER_SLOT, SUPERVISOR_SLOT, is_valid_slot, is_valid_tag},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -72,15 +72,107 @@ pub enum Record {
         slot: String,
         incarnation: u32,
     },
+    /// A publication is about to rename its staged copy, hashing to `hash`,
+    /// over `$ROOT/repo`. A [`Record::MirrorRename`] follows if the rename
+    /// succeeded; if this is the log's last record, the process died and the
+    /// rename may have happened.
+    MirrorRenaming {
+        t_check_ms: Option<i64>,
+        /// As in [`Record::MirrorRename`].
+        t_read_ms: Option<i64>,
+        t_ms: i64,
+        hash: String,
+    },
+    /// A publication renamed its staged copy over `$ROOT/repo`: `hash` is the
+    /// sha256 of the staged bytes, `t_check_ms` the time its fork check
+    /// passed (the last `BeforeMirrorRename` point on the renaming thread),
+    /// `t_read_ms` the time that check's last read of `$ROOT/repo` began
+    /// (the last `BeforeMirrorRead` point of the same round), `None` if it
+    /// read nothing or in logs from before it was logged.
+    MirrorRename {
+        t_check_ms: Option<i64>,
+        t_read_ms: Option<i64>,
+        t_rename_ms: i64,
+        hash: String,
+    },
+    /// What a read of `$ROOT/repo` found, logged when it changes.
+    MirrorSample {
+        t_ms: i64,
+        sample: Sample,
+    },
+    /// The first version of `repo.d` that `init` created: `n` must lie in
+    /// `[t_before_ms, t_after_ms]`.
+    InitVersion {
+        n: u64,
+        t_before_ms: i64,
+        t_after_ms: i64,
+    },
+    /// The status toggler held the status `ReadOnly`: its change returned at
+    /// `t_ack_ms` having made the version `version`, `None` if the current
+    /// version read right after wasn't that change's (another change
+    /// landed); `publish_error` if the storage logged an error during the
+    /// change, as a failed publication does. At `t_end_ms`, before setting
+    /// the status `Online` again, the current version was `current` and a
+    /// read of `$ROOT/repo` found `mirror`.
+    ReadOnlyHeld {
+        t_ack_ms: i64,
+        version: Option<String>,
+        publish_error: bool,
+        t_end_ms: i64,
+        current: String,
+        mirror: Sample,
+    },
+    /// A fork's write is about to copy `$ROOT/repo` to `overwritten/<backup>`,
+    /// as the old writer it emulates backs up: if the copy is interrupted,
+    /// the backup may be partial, and no ops log names it.
+    ForkBackup {
+        t_ms: i64,
+        backup: String,
+    },
+    /// A fork was written between `t_before_ms` and `t_after_ms`: `$ROOT/repo`
+    /// held `base_hash`, was backed up to `overwritten/<backup>` and replaced
+    /// by `fork_hash`, a repo info without the writer feature. `gc` is the
+    /// GC whose change's publication wrote it, before that GC's hook.
+    ForkWritten {
+        t_before_ms: i64,
+        t_after_ms: i64,
+        base_hash: String,
+        fork_hash: String,
+        backup: String,
+        gc: Option<Uuid>,
+    },
+    /// `$ROOT/repo` no longer held the fork `fork_hash` at `t_ms`: it held
+    /// `found` instead.
+    ForkGone {
+        t_ms: i64,
+        fork_hash: String,
+        found: Sample,
+    },
+    /// The conversion scenario's converter: its conversion returned
+    /// `NothingToConvert`, logged as an `Ack` right after this.
+    NothingToConvert {
+        t_ms: i64,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Sample {
+    /// The sha256 of the bytes read.
+    Hash(String),
+    Missing,
+    Error(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Op {
-    /// Storage mode; `base` and `new` are etags.
+    /// Storage mode; `base` and `new` are etags, `backup` the path, relative
+    /// to `overwritten/`, of the attempt's backup of `base`.
     Cas {
         base: String,
         new: String,
+        backup: String,
     },
     BranchCommit {
         branch: String,
@@ -93,15 +185,103 @@ pub enum Op {
     CreateBranch {
         branch: String,
     },
-    Gc,
+    /// Collects what is unreachable and older than its cutoff `older_than_ms`,
+    /// `None` in logs from before it was logged.
+    Gc {
+        older_than_ms: Option<i64>,
+    },
+    /// Expires the snapshots flushed before `older_than_ms`, keeping every
+    /// ref.
+    Expire {
+        older_than_ms: i64,
+    },
+    DeleteTag {
+        name: String,
+    },
+    DeleteBranch {
+        branch: String,
+    },
+    SetStatus {
+        availability: Availability,
+    },
+    /// The conversion scenario's converter: an `Ack` is `Converted`, or
+    /// `NothingToConvert` after a [`Record::NothingToConvert`].
+    Convert {
+        direction: Direction,
+    },
+}
+
+/// The direction of a conversion.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Direction {
+    /// `convert_to_filesystem_layout()`.
+    FromStandard,
+    /// `convert_to_standard_layout()`.
+    ToStandard,
+}
+
+/// The repository statuses the status toggler sets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Availability {
+    Online,
+    ReadOnly,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum OpResult {
-    Ack { snapshot: Option<String> },
+    Ack {
+        snapshot: Option<String>,
+    },
     Conflict,
-    Error { message: String },
+    Error {
+        message: String,
+    },
+    /// The repository's status refused the operation.
+    ReadOnly {
+        message: String,
+    },
+    /// The storage found a fork before changing anything.
+    Forked {
+        message: String,
+    },
+    /// The change landed and is durable, but its publication found a fork;
+    /// `snapshot` is a commit's.
+    DurableButForked {
+        snapshot: Option<String>,
+        message: String,
+    },
+    /// The current version lacks the layout's writer feature: a conversion
+    /// to the standard layout was interrupted.
+    ConversionInProgress {
+        message: String,
+    },
+}
+
+impl OpResult {
+    /// `Some` with the commit's snapshot if the operation is known to have
+    /// landed: acknowledged, or durable though its publication found a fork.
+    pub fn landed(&self) -> Option<Option<&str>> {
+        match self {
+            Self::Ack { snapshot } | Self::DurableButForked { snapshot, .. } => {
+                Some(snapshot.as_deref())
+            }
+            _ => None,
+        }
+    }
+
+    /// The repository's status or layout refused the operation before it
+    /// changed anything, unless an earlier attempt's reply was lost.
+    pub fn is_refusal(&self) -> bool {
+        matches!(
+            self,
+            Self::ReadOnly { .. }
+                | Self::Forked { .. }
+                | Self::ConversionInProgress { .. }
+        )
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -220,7 +400,8 @@ fn read_log_from(path: &Path, offset: u64) -> io::Result<Vec<u8>> {
 }
 
 /// Identifies a log file: `<tag>.<slot>.<incarnation>.log` for a worker,
-/// `<tag>.supervisor.log` (with `incarnation: None`) for a supervisor.
+/// `<tag>.supervisor.log` and `<tag>.sampler.log` (with `incarnation: None`)
+/// for a supervisor and its mirror sampler.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct LogName {
     pub tag: String,
@@ -231,7 +412,8 @@ pub struct LogName {
 impl LogName {
     pub fn parse(file_name: &str) -> Option<Self> {
         let (rest, last) = file_name.strip_suffix(".log")?.rsplit_once('.')?;
-        let (tag, slot, incarnation) = if last == SUPERVISOR_SLOT {
+        let (tag, slot, incarnation) = if [SUPERVISOR_SLOT, SAMPLER_SLOT].contains(&last)
+        {
             (rest, last, None)
         } else {
             let (tag, slot) = rest.rsplit_once('.')?;
@@ -283,12 +465,17 @@ mod tests {
         let outcome = |result| Record::Outcome { t_ms: 3, id, result };
         vec![
             Record::Start { t_ms: 1, host, slot: slot.clone(), incarnation: 4, pid: 77 },
-            op(Op::Cas { base: "aa".to_owned(), new: "bb".to_owned() }),
+            op(Op::Cas {
+                base: "aa".to_owned(),
+                new: "bb".to_owned(),
+                backup: "repo.1.X".to_owned(),
+            }),
             op(Op::BranchCommit { branch: "w.h-1.3".to_owned() }),
             op(Op::MainCommit),
             op(Op::Tag { name: format!("t-{id}"), snapshot: "SNAP".to_owned() }),
             op(Op::CreateBranch { branch: "w.h-1.3".to_owned() }),
-            op(Op::Gc),
+            op(Op::Gc { older_than_ms: Some(12) }),
+            op(Op::Gc { older_than_ms: None }),
             outcome(OpResult::Ack { snapshot: Some("SNAP".to_owned()) }),
             outcome(OpResult::Ack { snapshot: None }),
             outcome(OpResult::Conflict),
@@ -310,6 +497,69 @@ mod tests {
             },
             Record::Spawn { t_ms: 5, slot: slot.clone(), incarnation: 5, pid: 78 },
             Record::ExternalKill { t_ms: 6, slot, incarnation: 5 },
+            Record::MirrorRename {
+                t_check_ms: Some(7),
+                t_read_ms: Some(6),
+                t_rename_ms: 8,
+                hash: "cc".to_owned(),
+            },
+            Record::MirrorRename {
+                t_check_ms: None,
+                t_read_ms: None,
+                t_rename_ms: 8,
+                hash: "cc".to_owned(),
+            },
+            Record::MirrorSample { t_ms: 9, sample: Sample::Hash("dd".to_owned()) },
+            Record::MirrorSample { t_ms: 9, sample: Sample::Error("ESTALE".to_owned()) },
+            Record::MirrorSample { t_ms: 9, sample: Sample::Missing },
+            Record::InitVersion { n: 10, t_before_ms: 9, t_after_ms: 11 },
+            op(Op::Expire { older_than_ms: 12 }),
+            op(Op::DeleteTag { name: format!("t-{id}") }),
+            op(Op::DeleteBranch { branch: "w.h-1.3".to_owned() }),
+            op(Op::SetStatus { availability: Availability::ReadOnly }),
+            op(Op::SetStatus { availability: Availability::Online }),
+            outcome(OpResult::ReadOnly { message: "held".to_owned() }),
+            outcome(OpResult::Forked { message: "fork".to_owned() }),
+            outcome(OpResult::DurableButForked {
+                snapshot: Some("SNAP".to_owned()),
+                message: "fork".to_owned(),
+            }),
+            outcome(OpResult::DurableButForked {
+                snapshot: None,
+                message: "fork".to_owned(),
+            }),
+            outcome(OpResult::ConversionInProgress { message: "rerun".to_owned() }),
+            Record::MirrorRenaming {
+                t_check_ms: Some(7),
+                t_read_ms: Some(6),
+                t_ms: 8,
+                hash: "cc".to_owned(),
+            },
+            Record::ReadOnlyHeld {
+                t_ack_ms: 13,
+                version: Some("ee".to_owned()),
+                publish_error: false,
+                t_end_ms: 14,
+                current: "ee".to_owned(),
+                mirror: Sample::Hash("ee".to_owned()),
+            },
+            Record::ForkBackup { t_ms: 15, backup: "repo.1.X".to_owned() },
+            Record::ForkWritten {
+                t_before_ms: 15,
+                t_after_ms: 16,
+                base_hash: "ee".to_owned(),
+                fork_hash: "ff".to_owned(),
+                backup: "repo.1.X".to_owned(),
+                gc: Some(id),
+            },
+            Record::ForkGone {
+                t_ms: 17,
+                fork_hash: "ff".to_owned(),
+                found: Sample::Missing,
+            },
+            op(Op::Convert { direction: Direction::FromStandard }),
+            op(Op::Convert { direction: Direction::ToStandard }),
+            Record::NothingToConvert { t_ms: 18 },
         ]
     }
 
@@ -324,6 +574,45 @@ mod tests {
         }
         assert_eq!(read_log(&path).unwrap(), records);
         assert!(LogWriter::create(&path).is_err());
+    }
+
+    #[test]
+    fn a_gc_intent_without_its_cutoff_parses() {
+        let id = Uuid::new_v4();
+        let line =
+            format!(r#"{{"kind":"intent","t_ms":1,"id":"{id}","op":{{"kind":"gc"}}}}"#);
+        let record: Record = serde_json::from_str(&line).unwrap();
+        assert!(
+            matches!(record, Record::Intent { op: Op::Gc { older_than_ms: None }, .. }),
+            "{record:?}"
+        );
+    }
+
+    #[test]
+    fn mirror_renames_without_their_read_time_parse() {
+        let lines = [
+            r#"{"kind":"mirror_renaming","t_check_ms":7,"t_ms":8,"hash":"cc"}"#,
+            r#"{"kind":"mirror_rename","t_check_ms":7,"t_rename_ms":9,"hash":"cc"}"#,
+        ];
+        let records: Vec<Record> =
+            lines.iter().map(|line| serde_json::from_str(line).unwrap()).collect();
+        assert_eq!(
+            records,
+            [
+                Record::MirrorRenaming {
+                    t_check_ms: Some(7),
+                    t_read_ms: None,
+                    t_ms: 8,
+                    hash: "cc".to_owned()
+                },
+                Record::MirrorRename {
+                    t_check_ms: Some(7),
+                    t_read_ms: None,
+                    t_rename_ms: 9,
+                    hash: "cc".to_owned()
+                },
+            ]
+        );
     }
 
     #[test]
@@ -430,6 +719,31 @@ mod tests {
     }
 
     #[test]
+    fn landed_and_refused_outcomes() {
+        let snapshot = Some("SNAP".to_owned());
+        let message = || "m".to_owned();
+        assert_eq!(
+            OpResult::Ack { snapshot: snapshot.clone() }.landed(),
+            Some(Some("SNAP"))
+        );
+        assert_eq!(OpResult::Ack { snapshot: None }.landed(), Some(None));
+        let durable = OpResult::DurableButForked { snapshot, message: message() };
+        assert_eq!(durable.landed(), Some(Some("SNAP")));
+        assert!(!durable.is_refusal());
+        for refused in [
+            OpResult::ReadOnly { message: message() },
+            OpResult::Forked { message: message() },
+            OpResult::ConversionInProgress { message: message() },
+        ] {
+            assert!(refused.is_refusal(), "{refused:?}");
+            assert_eq!(refused.landed(), None, "{refused:?}");
+        }
+        for failed in [OpResult::Conflict, OpResult::Error { message: message() }] {
+            assert!(!failed.is_refusal() && failed.landed().is_none(), "{failed:?}");
+        }
+    }
+
+    #[test]
     fn log_names_parse() {
         let worker = |tag: &str, slot: &str, n| LogName {
             tag: tag.to_owned(),
@@ -448,6 +762,13 @@ mod tests {
         );
         assert_eq!(LogName::parse("h-1.supervisor.log"), Some(supervisor("h-1")));
         assert_eq!(LogName::parse("a.5.supervisor.log"), Some(supervisor("a.5")));
+        let sampler = |tag: &str| LogName {
+            tag: tag.to_owned(),
+            slot: SAMPLER_SLOT.to_owned(),
+            incarnation: None,
+        };
+        assert_eq!(LogName::parse("h-1.sampler.log"), Some(sampler("h-1")));
+        assert_eq!(LogName::parse("a.5.sampler.log"), Some(sampler("a.5")));
         for bad in [
             "h.3.0",
             "h.3.log",
@@ -458,6 +779,8 @@ mod tests {
             "h.3.01.log",
             "h.3.+1.log",
             "h.supervisor.0.log",
+            "h.sampler.0.log",
+            "sampler.log",
             "h space.3.0.log",
             "supervisor.log",
             "h.3.0.log.tmp",

@@ -20,7 +20,7 @@ use crate::{
 };
 
 enum Leftover {
-    /// `stage.*`, `repo.stub.*` or `<name>.staging.<id>`.
+    /// `stage.*`, `mirror.*` or `<name>.staging.<id>`.
     Staging(PathBuf),
     /// A version file the marker proves dead.
     Version(PathBuf),
@@ -33,13 +33,18 @@ enum Leftover {
 ///   dead, whatever their age: `<i>.<x>` with `i < N`, and `<N>.<x>` with
 ///   `x != h`. Files above `N` belong to attempts in flight.
 /// - staging files and creation directories last modified before `cutoff`:
-///   `repo.d/stage.*`, and in the root `repo.stub.*`, `repo.d.tmp.*` and
-///   `<name>.staging.<id>`. Deleting them affects liveness only.
+///   `repo.d/stage.*` and `repo.d/mirror.*`, and in the root `repo.d.tmp.*`
+///   and `<name>.staging.<id>`, `repo.staging.<id>` included.
+///   Deleting them affects liveness only.
 ///
 /// Everything else is kept, and other subdirectories aren't visited. A
 /// missing root or `repo.d` sweeps what exists. With `dry_run`, deletes
 /// nothing and reports what it would delete. Failures to delete a file are
 /// logged and left out of the result.
+// TODO: collect the staging files that crashes leave in `snapshots/`,
+// `overwritten/` and the other object directories. Nothing deletes them yet:
+// GC's object walk ignores non-canonical names and never visits
+// `overwritten/`, and this sweep visits only the root and `repo.d`.
 pub(crate) fn sweep(
     root: &Path,
     cutoff: SystemTime,
@@ -59,12 +64,7 @@ pub(crate) fn sweep(
                     leftovers.push((Leftover::TmpDir(path), size));
                 }
             }
-            Some(RootName::StubStaging) => {
-                if let Some(metadata) = old_metadata(&entry, cutoff, Metadata::is_file) {
-                    leftovers.push((Leftover::Staging(entry.path()), metadata.len()));
-                }
-            }
-            Some(RootName::RepoD | RootName::Legacy) => {}
+            Some(RootName::RepoD) => {}
             None if is_staging_name(&file_name) => {
                 if let Some(metadata) = old_metadata(&entry, cutoff, Metadata::is_file) {
                     leftovers.push((Leftover::Staging(entry.path()), metadata.len()));
@@ -86,7 +86,7 @@ pub(crate) fn sweep(
                     versions.push((version, entry.path(), metadata.len()));
                 }
             }
-            Some(RepoDName::Stage(_)) => {
+            Some(RepoDName::Stage(_) | RepoDName::Mirror(_)) => {
                 if let Some(metadata) = old_metadata(&entry, cutoff, Metadata::is_file) {
                     leftovers.push((Leftover::Staging(entry.path()), metadata.len()));
                 }
@@ -206,9 +206,8 @@ mod tests {
     use super::{super::testing::*, *};
     use crate::{
         hooks::{NoHooks, Sabotage},
-        names::{legacy_name, stage_name, stub_staging_name, tmp_dir_name},
+        names::{mirror_name, stage_name, tmp_dir_name},
         path::staging_path,
-        stub::stub_bytes,
     };
 
     const HOUR: Duration = Duration::from_secs(3600);
@@ -266,36 +265,36 @@ mod tests {
     fn layout(root: &Path) -> Layout {
         let dir = root.join("repo.d");
         fs::create_dir_all(&dir).unwrap();
-        let v3 = version(3, b"v3");
+        let v3 = version(3, &repo_info(3));
         let marker = old(dir.join(latest(&v3)), b"");
-        let current = old(dir.join(v3.file_name()), b"v3");
+        let current = old(dir.join(v3.file_name()), &repo_info(3));
         // Dead whatever their age.
         let dead = [
-            write(dir.join(version(0, b"a").file_name()), b"a"),
-            write(dir.join(version(2, b"bb").file_name()), b"bb"),
-            write(dir.join(version(3, b"other").file_name()), b"other"),
+            write(dir.join(version(0, &repo_info(10)).file_name()), &repo_info(10)),
+            write(dir.join(version(2, &repo_info(11)).file_name()), &repo_info(11)),
+            write(dir.join(version(3, &repo_info(13)).file_name()), &repo_info(13)),
         ];
         // In flight: above the marker.
         let above = [
-            old(dir.join(version(4, b"x").file_name()), b"x"),
-            old(dir.join(version(8, b"y").file_name()), b"y"),
+            old(dir.join(version(4, &repo_info(14)).file_name()), &repo_info(14)),
+            old(dir.join(version(8, &repo_info(15)).file_name()), &repo_info(15)),
         ];
         let old_stage = old(dir.join(stage_name(Uuid::new_v4())), b"staged");
         let young_stage = write(dir.join(stage_name(Uuid::new_v4())), b"staged");
+        let old_mirror = old(dir.join(mirror_name(Uuid::new_v4())), b"mirror");
+        let young_mirror = write(dir.join(mirror_name(Uuid::new_v4())), b"mirror");
         let nfs = old(dir.join(".nfs0002"), b"n");
         let unknown = old(dir.join("unknown"), b"u");
 
-        let stub = old(root.join("repo"), &stub_bytes());
-        let legacy = old(root.join(legacy_name(Uuid::new_v4())), b"legacy");
-        let old_stub_staging =
-            old(root.join(stub_staging_name(Uuid::new_v4())), &stub_bytes());
-        let young_stub_staging =
-            write(root.join(stub_staging_name(Uuid::new_v4())), &stub_bytes());
-        let old_tmp = tmp_dir(root, b"created");
+        let mirror = old(root.join("repo"), &repo_info(3));
+        // Unknown names, whatever they once meant.
+        let legacy = old(root.join(format!("repo.legacy.{}", Uuid::new_v4())), b"legacy");
+        let stub = old(root.join(format!("repo.stub.{}", Uuid::new_v4())), b"stub");
+        let old_tmp = tmp_dir(root, &repo_info(16));
         age(&old_tmp);
         let old_tmp_files: Vec<PathBuf> =
             fs::read_dir(&old_tmp).unwrap().map(|e| e.unwrap().path()).collect();
-        let young_tmp = tmp_dir(root, b"young");
+        let young_tmp = tmp_dir(root, &repo_info(17));
         let config = old(root.join("config.yaml"), b"config");
         let old_staging = old(staging_path(&config), b"staged config");
         let young_staging = write(staging_path(&config), b"staged config");
@@ -307,7 +306,7 @@ mod tests {
         let nested = old(staging_path(&chunks.join("ABC")), b"nested");
 
         let mut deleted: Vec<&PathBuf> = dead.iter().collect();
-        deleted.extend([&old_stage, &old_stub_staging, &old_staging]);
+        deleted.extend([&old_stage, &old_mirror, &old_staging]);
         let tmp_files: Vec<&PathBuf> = old_tmp_files.iter().collect();
         let deleted = DeleteObjectsResult {
             // The tmp directory is one object.
@@ -323,11 +322,12 @@ mod tests {
             &above[0],
             &above[1],
             &young_stage,
+            &young_mirror,
             &nfs,
             &unknown,
-            &stub,
+            &mirror,
             &legacy,
-            &young_stub_staging,
+            &stub,
             &young_tmp,
             &config,
             &young_staging,
@@ -370,32 +370,15 @@ mod tests {
         let dir = root.path().join("repo.d");
         fs::create_dir_all(&dir).unwrap();
         let versions = [
-            old(dir.join(version(0, b"a").file_name()), b"a"),
-            old(dir.join(version(1, b"b").file_name()), b"b"),
+            old(dir.join(version(0, &repo_info(10)).file_name()), &repo_info(10)),
+            old(dir.join(version(1, &repo_info(12)).file_name()), &repo_info(12)),
         ];
         let stage = old(dir.join(stage_name(Uuid::new_v4())), b"staged");
-        let stub_staging = old(root.path().join(stub_staging_name(Uuid::new_v4())), b"s");
+        let staging = old(staging_path(&root.path().join("repo")), b"s");
         let res = sweep(root.path(), cutoff(), false, &NoHooks).unwrap();
         assert!(versions.iter().all(|path| path.exists()));
-        assert!(!stage.exists() && !stub_staging.exists());
+        assert!(!stage.exists() && !staging.exists());
         assert_eq!(res.deleted_objects, 2);
-    }
-
-    #[test]
-    fn frozen_marker_is_the_marker() {
-        let root = tempfile::tempdir().unwrap();
-        let v0 = seed(root.path());
-        let dir = root.path().join("repo.d");
-        fs::rename(dir.join(latest(&v0)), dir.join(frozen(&v0))).unwrap();
-        let dead = write(dir.join(version(0, b"other").file_name()), b"other");
-        let in_flight = write(dir.join(version(1, b"v1").file_name()), b"v1");
-        let res = sweep(root.path(), cutoff(), false, &NoHooks).unwrap();
-        assert!(!dead.exists() && in_flight.exists());
-        assert_eq!(res.deleted_objects, 1);
-        assert_eq!(
-            names(&dir),
-            set([v0.file_name(), frozen(&v0), version(1, b"v1").file_name()])
-        );
     }
 
     #[test]
@@ -403,8 +386,8 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let v0 = seed(root.path());
         let dir = root.path().join("repo.d");
-        let v1 = version(1, b"v1");
-        write(dir.join(v1.file_name()), b"v1");
+        let v1 = version(1, &repo_info(1));
+        write(dir.join(v1.file_name()), &repo_info(1));
         write(dir.join(latest(&v1)), b"");
         sweep(root.path(), cutoff(), false, &NoHooks).unwrap();
         assert_eq!(names(&dir), set([latest(&v0), v1.file_name(), latest(&v1)]));
@@ -418,7 +401,7 @@ mod tests {
             sweep(&missing, cutoff(), false, &NoHooks).unwrap(),
             DeleteObjectsResult::default()
         );
-        let staging = old(root.path().join(stub_staging_name(Uuid::new_v4())), b"s");
+        let staging = old(staging_path(&root.path().join("repo")), b"s");
         let res = sweep(root.path(), cutoff(), false, &NoHooks).unwrap();
         assert!(!staging.exists());
         assert_eq!(res, DeleteObjectsResult { deleted_objects: 1, deleted_bytes: 1 });
@@ -428,7 +411,7 @@ mod tests {
     fn repo_d_that_is_not_a_directory_is_kept() {
         let root = tempfile::tempdir().unwrap();
         fs::write(root.path().join("repo.d"), b"").unwrap();
-        let staging = old(root.path().join(stub_staging_name(Uuid::new_v4())), b"s");
+        let staging = old(staging_path(&root.path().join("repo")), b"s");
         let res = sweep(root.path(), cutoff(), false, &NoHooks).unwrap();
         assert_eq!(res.deleted_objects, 1);
         assert!(!staging.exists());
@@ -440,7 +423,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let v0 = seed(root.path());
         let dir = root.path().join("repo.d");
-        let above = write(dir.join(version(1, b"v1").file_name()), b"v1");
+        let above = write(dir.join(version(1, &repo_info(1)).file_name()), &repo_info(1));
         let hooks = TestHooks::default().sabotage(Sabotage::DeleteAboveMarker);
         let res = sweep(root.path(), cutoff(), false, &hooks).unwrap();
         assert!(!above.exists());
@@ -453,7 +436,10 @@ mod tests {
     fn non_utf8_names_are_kept() {
         use std::{ffi::OsStr, os::unix::ffi::OsStrExt as _};
         let root = tempfile::tempdir().unwrap();
-        let file = old(root.path().join(OsStr::from_bytes(b"repo.stub.\xff")), b"x");
+        let file = old(
+            root.path().join(OsStr::from_bytes(b"repo.staging.\xff")),
+            &repo_info(14),
+        );
         let res = sweep(root.path(), cutoff(), false, &NoHooks).unwrap();
         assert!(file.exists());
         assert_eq!(res, DeleteObjectsResult::default());

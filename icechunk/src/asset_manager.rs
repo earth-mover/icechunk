@@ -11,11 +11,11 @@ use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use futures::{Stream, StreamExt as _, TryStreamExt as _, stream::BoxStream};
 use icechunk_types::{ICResultExt as _, error::ICResultCtxExt as _};
+use itertools::Itertools as _;
 use quick_cache::{Weighter, sync::Cache};
 use serde::{Deserialize, Serialize};
 use std::sync::{LazyLock, RwLock};
 use std::{
-    io::Write as _,
     num::NonZeroU16,
     ops::Range,
     pin::Pin,
@@ -49,25 +49,26 @@ use crate::{
         IcechunkFormatErrorKind, MANIFESTS_FILE_PATH, ManifestId, OVERWRITTEN_FILES_PATH,
         Path, REPO_INFO_FILE_PATH, SNAPSHOTS_FILE_PATH, SnapshotId,
         TRANSACTION_LOGS_FILE_PATH,
+        envelope::{compress_with_header, decompress_frame},
         format_constants::{
-            self, CompressionAlgorithmBin, FileHeader, FileTypeBin, SpecVersionBin,
-            parse_file_header,
+            self, FileHeader, FileTypeBin, SpecVersionBin, parse_file_header,
         },
         manifest::Manifest,
-        repo_info::RepoInfo,
+        repo_info::{RepoInfo, WritableShapeMode},
+        repo_info_file,
         serializers::{
-            VERIFY_THRESHOLD_BYTES, deserialize_manifest, deserialize_repo_info,
-            deserialize_snapshot, deserialize_transaction_log, verify_buffer,
+            deserialize_manifest, deserialize_snapshot, deserialize_transaction_log,
         },
         snapshot::{Snapshot, SnapshotInfo},
         transaction_log::TransactionLog,
+        writer_features::{FeatureName, min_version, missing_features},
     },
     private,
     repository::{RepositoryError, RepositoryErrorKind, RepositoryResult},
     storage::{
         self, Attribution, AttributionLabels, ListInfo, PutCondition, RequestAttribution,
-        StorageContext, StorageErrorKind, VersionInfo, VersionedUpdateResult, WriteHint,
-        listing,
+        StorageContext, StorageErrorKind, StorageWriterFeatures, VersionInfo,
+        VersionedUpdateResult, WriteHint, listing,
     },
 };
 
@@ -530,23 +531,48 @@ impl AssetManager {
         snapshot: Arc<Snapshot>,
         hint: WriteHint,
     ) -> RepositoryResult<()> {
-        let snapshot_c = Arc::clone(&snapshot);
-        write_new_snapshot(
-            snapshot_c,
+        self.put_snapshot(snapshot, PutMode::Overwrite(hint)).await?;
+        Ok(())
+    }
+
+    /// Writes `snapshot` only if no snapshot file has its id, and returns the
+    /// snapshot stored under that id: `snapshot`, or the existing one read
+    /// back.
+    #[instrument(skip(self, snapshot))]
+    pub async fn create_snapshot(
+        &self,
+        snapshot: Arc<Snapshot>,
+    ) -> RepositoryResult<Arc<Snapshot>> {
+        let id = snapshot.id();
+        match self.put_snapshot(Arc::clone(&snapshot), PutMode::Create).await? {
+            PutOutcome::Written => Ok(snapshot),
+            PutOutcome::Exists => self.fetch_snapshot(&id).await,
+        }
+    }
+
+    async fn put_snapshot(
+        &self,
+        snapshot: Arc<Snapshot>,
+        mode: PutMode,
+    ) -> RepositoryResult<PutOutcome> {
+        let outcome = write_new_snapshot(
+            Arc::clone(&snapshot),
             self.spec_version(),
             self.compression_level,
             self.storage.as_ref(),
             &self.storage_context(),
             &self.request_semaphore,
-            hint,
+            mode,
         )
         .await?;
-        let snapshot_id = snapshot.id().clone();
-        self.warn_if_snapshot_cache_small(snapshot.as_ref());
-        // This line is critical for expiration:
-        // When we edit snapshots in place, we need the cache to return the new version
-        self.snapshot_cache.insert(snapshot_id, snapshot);
-        Ok(())
+        if outcome == PutOutcome::Written {
+            let snapshot_id = snapshot.id().clone();
+            self.warn_if_snapshot_cache_small(snapshot.as_ref());
+            // This line is critical for expiration:
+            // When we edit snapshots in place, we need the cache to return the new version
+            self.snapshot_cache.insert(snapshot_id, snapshot);
+        }
+        Ok(outcome)
     }
 
     pub async fn fetch_snapshot(
@@ -578,20 +604,43 @@ impl AssetManager {
         log: Arc<TransactionLog>,
         hint: WriteHint,
     ) -> RepositoryResult<()> {
-        let log_c = Arc::clone(&log);
-        write_new_tx_log(
+        self.put_transaction_log(transaction_id, log, PutMode::Overwrite(hint)).await?;
+        Ok(())
+    }
+
+    /// Writes `log` only if no transaction log file has this id; an existing
+    /// one is kept.
+    #[instrument(skip(self, log))]
+    pub async fn create_transaction_log(
+        &self,
+        transaction_id: SnapshotId,
+        log: Arc<TransactionLog>,
+    ) -> RepositoryResult<()> {
+        self.put_transaction_log(transaction_id, log, PutMode::Create).await?;
+        Ok(())
+    }
+
+    async fn put_transaction_log(
+        &self,
+        transaction_id: SnapshotId,
+        log: Arc<TransactionLog>,
+        mode: PutMode,
+    ) -> RepositoryResult<PutOutcome> {
+        let outcome = write_new_tx_log(
             transaction_id.clone(),
-            log_c,
+            Arc::clone(&log),
             self.spec_version(),
             self.compression_level,
             self.storage.as_ref(),
             &self.storage_context(),
             &self.request_semaphore,
-            hint,
+            mode,
         )
         .await?;
-        self.transactions_cache.insert(transaction_id, log);
-        Ok(())
+        if outcome == PutOutcome::Written {
+            self.transactions_cache.insert(transaction_id, log);
+        }
+        Ok(outcome)
     }
 
     pub async fn fetch_transaction_log(
@@ -685,6 +734,11 @@ impl AssetManager {
             }
             Err(e) => return Err(e),
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn cached_repo_info(&self) -> Option<(Arc<RepoInfo>, VersionInfo)> {
+        self.repo_cache.read().ok()?.clone()
     }
 
     pub fn fail_unless_spec_at_least(
@@ -901,6 +955,21 @@ impl AssetManager {
         Ok(new_version)
     }
 
+    /// The checks before a modification, against the repo info it replaces:
+    /// the storage implements every listed writer feature, every feature the
+    /// storage requires is listed, the shape is well formed and, unless the
+    /// modification only changes the status, the status is `Online`. `op`
+    /// prefixes the error of a status that isn't `Online`.
+    pub async fn ensure_modifiable(
+        &self,
+        repo_info: &RepoInfo,
+        modification: Modification,
+        op: Option<&str>,
+    ) -> RepositoryResult<()> {
+        let features = self.storage.writer_features().await.inject()?;
+        check_modifiable(repo_info, &features, modification, op)
+    }
+
     #[instrument(skip(self, info))]
     pub async fn create_repo_info(
         &self,
@@ -919,13 +988,16 @@ impl AssetManager {
             VersionInfo,
         ) -> RepositoryResult<Arc<RepoInfo>>,
     ) -> RepositoryResult<VersionInfo> {
-        self.update_repo_info_internal(retry_settings, update, false).await
+        self.update_repo_info_internal(retry_settings, update, Modification::Any).await
     }
 
+    /// For changes of the status alone: skips the check that the status is
+    /// `Online`, and accepts a malformed shape (the change writes a well-formed
+    /// status). The writer-feature checks still apply.
+    ///
     /// # Safety
     ///
-    /// This overrides any checks on the repo status, and force
-    /// an update.
+    /// `update` must change only the status.
     #[expect(unsafe_code)]
     #[instrument(skip(self, retry_settings, update))]
     pub async unsafe fn update_repo_info_unchecked(
@@ -937,7 +1009,8 @@ impl AssetManager {
             VersionInfo,
         ) -> RepositoryResult<Arc<RepoInfo>>,
     ) -> RepositoryResult<VersionInfo> {
-        self.update_repo_info_internal(retry_settings, update, true).await
+        self.update_repo_info_internal(retry_settings, update, Modification::StatusOnly)
+            .await
     }
 
     #[instrument(skip(self, retry_settings, update))]
@@ -949,8 +1022,9 @@ impl AssetManager {
             &str,
             VersionInfo,
         ) -> RepositoryResult<Arc<RepoInfo>>,
-        skip_online_check: bool,
+        modification: Modification,
     ) -> RepositoryResult<VersionInfo> {
+        let storage_features = self.storage.writer_features().await.inject()?;
         let max_attempts = retry_settings.max_tries().get() as usize;
 
         // The first few retries are immediate (no delay) since brief contention
@@ -974,11 +1048,7 @@ impl AssetManager {
         let mut attempts: u64 = 1;
         loop {
             let (repo_info, repo_version) = self.fetch_repo_info().await?;
-            let status = repo_info.status().inject()?;
-            if !skip_online_check && status.availability != RepoAvailability::Online {
-                return Err(RepositoryErrorKind::ReadonlyRepository(status.error_msg()))
-                    .capture();
-            }
+            check_modifiable(&repo_info, &storage_features, modification, None)?;
             let backup_path = self.backup_path_for_repo_info();
             let new_repo = update(repo_info, backup_path.as_str(), repo_version.clone())?;
             trace!(attempts, "Attempting to update repo object");
@@ -1033,8 +1103,30 @@ impl AssetManager {
                     tokio::time::sleep(delay).await;
                     attempts += 1;
                 }
-                // `StorageErrorKind::RepositoryFrozen` must stay final: retries cannot
-                // unfreeze.
+                Err(RepositoryError {
+                    kind:
+                        RepositoryErrorKind::UpdateDurableButRepositoryForked {
+                            new_version,
+                            detail,
+                        },
+                    context,
+                }) => {
+                    // The change landed: cache it, and never retry it.
+                    if self.use_repo_info_cache {
+                        *self
+                            .repo_cache
+                            .write()
+                            .map_err(|_| RepositoryErrorKind::PoisonLock)
+                            .capture()? = Some((new_repo, (*new_version).clone()));
+                    }
+                    return Err(RepositoryError {
+                        kind: RepositoryErrorKind::UpdateDurableButRepositoryForked {
+                            new_version,
+                            detail,
+                        },
+                        context,
+                    });
+                }
                 err @ Err(_) => {
                     return err;
                 }
@@ -1230,7 +1322,7 @@ impl AssetManager {
         concurrency: NonZeroU16,
     ) -> RepositoryResult<BoxStream<'a, RepositoryResult<ListInfo<Id>>>>
     where
-        Id: for<'b> TryFrom<&'b str> + Send + std::fmt::Debug + 'static,
+        Id: listing::ListedId + Send + std::fmt::Debug + 'static,
     {
         listing::list_object_ids(
             &self.storage,
@@ -1260,11 +1352,11 @@ impl AssetManager {
     }
 
     pub fn backup_path_for_config(&self) -> String {
-        backup_destination(CONFIG_FILE_PATH)
+        repo_info_file::new_backup_path_of(CONFIG_FILE_PATH)
     }
 
     pub fn backup_path_for_repo_info(&self) -> String {
-        backup_destination(REPO_INFO_FILE_PATH)
+        repo_info_file::new_backup_path()
     }
 
     pub fn storage(&self) -> &Arc<dyn Storage + Send + Sync> {
@@ -1324,42 +1416,12 @@ pub(crate) fn array_label(path: &Path) -> &str {
     path.as_str().trim_start_matches('/')
 }
 
-fn binary_file_header(
-    spec_version: SpecVersionBin,
-    file_type: FileTypeBin,
-    compression_algorithm: CompressionAlgorithmBin,
-) -> Vec<u8> {
-    use format_constants::*;
-    // TODO: initialize capacity
-    let mut buffer = Vec::with_capacity(1024);
-    // magic numbers
-    buffer.extend_from_slice(ICECHUNK_FORMAT_MAGIC_BYTES);
-    // implementation name
-    let implementation =
-        format!("{:<width$}", *ICECHUNK_CLIENT_NAME, width = ICECHUNK_IMPL_NAME_LEN);
-    buffer.extend_from_slice(&implementation.as_bytes()[..ICECHUNK_IMPL_NAME_LEN]);
-    // spec version
-    buffer.push(spec_version as u8);
-    buffer.push(file_type as u8);
-    // compression
-    buffer.push(compression_algorithm as u8);
-    buffer
-}
-
 /// Starting buffer capacity for objects without a known size, to avoid a few
 /// initial reallocations while `read_to_end` grows the buffer.
 const DEFAULT_PREALLOC_HINT: usize = 8192;
 
 /// Validates that `header.file_type` matches the expected `file_type`.
 fn check_file_type(header: &FileHeader, file_type: FileTypeBin) -> RepositoryResult<()> {
-    if file_type == FileTypeBin::RepoInfo
-        && header.file_type == FileTypeBin::FilesystemStub
-    {
-        return Err(RepositoryErrorKind::FormatError(
-            IcechunkFormatErrorKind::FilesystemFormatRepository,
-        ))
-        .capture();
-    }
     if header.file_type != file_type {
         return Err(RepositoryErrorKind::FormatError(
             IcechunkFormatErrorKind::InvalidFileType {
@@ -1412,7 +1474,8 @@ async fn write_new_manifest(
         spec_version,
         FileTypeBin::Manifest,
         compression_level,
-    )?;
+    )
+    .inject()?;
 
     let len = buffer.len() as u64;
     debug!(%id, size_bytes=len, "Writing manifest");
@@ -1475,77 +1538,15 @@ async fn read_all(
     Ok(bytes)
 }
 
-/// Parse the icechunk file header and check that it announces `file_type`
-/// and a compression the decode path knows how to undo (only Zstd).
+/// Parse the icechunk file header and check that it announces `file_type`.
+/// Parsing rejects every compression but Zstd.
 fn checked_header(
     compressed: &[u8],
     file_type: FileTypeBin,
 ) -> RepositoryResult<FileHeader> {
     let header = parse_file_header(compressed).inject()?;
     check_file_type(&header, file_type)?;
-    if header.compression != CompressionAlgorithmBin::Zstd {
-        return Err(RepositoryErrorKind::FormatError(
-            IcechunkFormatErrorKind::InvalidCompressionAlgorithm,
-        ))
-        .capture();
-    }
     Ok(header)
-}
-
-/// Decoded size a zstd frame declares in its header, if the writer recorded one.
-/// Older from do not carry it.
-pub(crate) fn frame_content_size(frame: &[u8]) -> Option<u64> {
-    zstd::zstd_safe::get_frame_content_size(frame).ok().flatten()
-}
-
-/// Largest size we preallocate for: a frame declaring more than this falls
-/// back to the growing decoder, and a caller's hint is capped at it, so
-/// neither a corrupt header nor a wild estimate drives a huge allocation.
-const MAX_PREALLOCATED_DECODE_BYTES: u64 = 16 * 1024 * 1024 * 1024;
-
-/// Buffer capacity to allocate up front for `bytes` decoded bytes, capped at
-/// [`MAX_PREALLOCATED_DECODE_BYTES`]: both the size a frame declares and the
-/// caller's estimate are untrusted.
-fn prealloc_capacity(bytes: u64) -> usize {
-    usize::try_from(bytes.min(MAX_PREALLOCATED_DECODE_BYTES)).unwrap_or(usize::MAX)
-}
-
-/// Decompress one zstd frame. With a declared content size the output is
-/// allocated exactly; otherwise `size_hint` (an estimate from the caller)
-/// sizes the buffer and the decoder grows it only if the estimate was low.
-///
-/// The zstd frame format makes a declared size exact, so a frame that decodes
-/// to a different length is corrupt and is rejected.
-pub(crate) fn decompress_frame(
-    frame: &[u8],
-    size_hint: Option<usize>,
-) -> std::io::Result<Vec<u8>> {
-    let declared = frame_content_size(frame);
-    let out = match declared {
-        Some(size) if size <= MAX_PREALLOCATED_DECODE_BYTES => {
-            zstd::bulk::decompress(frame, prealloc_capacity(size))?
-        }
-        _ => {
-            let mut out =
-                Vec::with_capacity(prealloc_capacity(size_hint.unwrap_or(0) as u64));
-            zstd::stream::copy_decode(frame, &mut out)?;
-            // only trim real waste: a hint that was far too high
-            if out.capacity() > out.len() + out.len() / 4 {
-                out.shrink_to_fit();
-            }
-            out
-        }
-    };
-    match declared {
-        Some(size) if size != out.len() as u64 => Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            format!(
-                "zstd frame declares {size} decoded bytes but decoded to {}",
-                out.len()
-            ),
-        )),
-        _ => Ok(out),
-    }
 }
 
 /// Decompress the body that follows a [`checked_header`] and deserialize it.
@@ -1586,7 +1587,7 @@ async fn fetch_and_decode<T, F>(
     read: Pin<Box<dyn AsyncBufRead + Send>>,
     compressed_size_hint: u64,
     file_type: FileTypeBin,
-    #[cfg_attr(feature = "shuttle", expect(unused))] decode_semaphore: Arc<Semaphore>,
+    decode_semaphore: Arc<Semaphore>,
     deserialize: F,
 ) -> RepositoryResult<(T, FileHeader)>
 where
@@ -1600,55 +1601,35 @@ where
     // on the async task: fail fast (no permit) and keep span ancestry on header errors
     let header = checked_header(&compressed, file_type)?;
 
+    decode_blocking(decode_semaphore, move || {
+        let value = decode_body(&header, &compressed, None, deserialize)?;
+        Ok((value, header))
+    })
+    .await
+}
+
+/// Run the CPU bound `decode` on a blocking thread, gated by `decode_semaphore`.
+async fn decode_blocking<T, F>(
+    #[cfg_attr(feature = "shuttle", expect(unused))] decode_semaphore: Arc<Semaphore>,
+    decode: F,
+) -> RepositoryResult<T>
+where
+    T: Send + 'static,
+    F: FnOnce() -> RepositoryResult<T> + Send + 'static,
+{
     // keep error span ancestry on the blocking thread
     let span = tracing::Span::current();
-    tokio::task::spawn_blocking(move || -> RepositoryResult<(T, FileHeader)> {
+    tokio::task::spawn_blocking(move || -> RepositoryResult<T> {
         let _entered = span.entered();
         // Acquired here, not on the async task: an unpolled async waiter never takes the permit it is handed.
         // release on decode completion, not on cancelled-future drop
         #[cfg(not(feature = "shuttle"))]
         let _decode_permit =
             futures::executor::block_on(decode_semaphore.acquire()).capture()?;
-        let value = decode_body(&header, &compressed, None, deserialize)?;
-        Ok((value, header))
+        decode()
     })
     .await
     .capture()?
-}
-
-/// Fail the write if `data` is large enough to be at risk and cannot be read back.
-///
-/// Serializers don't verify what they build, so without this a file that trips a
-/// limit is written happily and only fails when someone reads it back.
-fn verify_before_write(
-    data: &[u8],
-    file_type: FileTypeBin,
-    threshold: usize,
-) -> RepositoryResult<()> {
-    if data.len() >= threshold {
-        verify_buffer(file_type, data).inject()?;
-    }
-    Ok(())
-}
-
-fn compress_with_header(
-    data: &[u8],
-    spec_version: SpecVersionBin,
-    file_type: FileTypeBin,
-    compression_level: u8,
-) -> RepositoryResult<Vec<u8>> {
-    verify_before_write(data, file_type, VERIFY_THRESHOLD_BYTES)?;
-    let mut buffer =
-        binary_file_header(spec_version, file_type, CompressionAlgorithmBin::Zstd);
-    let mut encoder =
-        zstd::stream::write::Encoder::new(&mut buffer, i32::from(compression_level))
-            .capture()?;
-    // pledging the length records it in the frame header, so readers can size
-    // the decoded buffer exactly; the frame is written straight into `buffer`
-    encoder.set_pledged_src_size(Some(data.len() as u64)).capture()?;
-    encoder.write_all(data).capture()?;
-    encoder.finish().capture()?;
-    Ok(buffer)
 }
 
 /// The same object layout, with a frame that does not declare its decoded
@@ -1661,6 +1642,10 @@ pub(crate) fn compress_without_content_size(
     file_type: FileTypeBin,
     compression_level: u8,
 ) -> RepositoryResult<Vec<u8>> {
+    use crate::format::{
+        envelope::binary_file_header, format_constants::CompressionAlgorithmBin,
+    };
+    use std::io::Write as _;
     let mut buffer =
         binary_file_header(spec_version, file_type, CompressionAlgorithmBin::Zstd);
     let mut encoder =
@@ -1678,8 +1663,8 @@ async fn write_new_snapshot(
     storage: &(dyn Storage + Send + Sync),
     ctx: &StorageContext<'_>,
     semaphore: &Semaphore,
-    hint: WriteHint,
-) -> RepositoryResult<SnapshotId> {
+    mode: PutMode,
+) -> RepositoryResult<PutOutcome> {
     if !storage.can_write().await.inject()? {
         return Err(RepositoryErrorKind::ReadonlyStorage(
             "Cannot write snapshot".to_string(),
@@ -1709,7 +1694,8 @@ async fn write_new_snapshot(
         spec_version,
         FileTypeBin::Snapshot,
         compression_level,
-    )?;
+    )
+    .inject()?;
 
     debug!(%id, size_bytes=buffer.len(), "Writing snapshot");
     let path = format!("{SNAPSHOTS_FILE_PATH}/{id}");
@@ -1719,12 +1705,7 @@ async fn write_new_snapshot(
     };
     let ctx = StorageContext::new(&settings, ctx.attribution);
     let _permit = semaphore.acquire().await.capture()?;
-    storage
-        .put_object(&ctx, path.as_str(), buffer.into(), None, metadata, hint)
-        .await
-        .inject()?;
-
-    Ok(id)
+    put_metadata_file(storage, &ctx, path.as_str(), buffer, metadata, mode).await
 }
 
 #[instrument(skip(storage, ctx, semaphore, decode_semaphore))]
@@ -1759,8 +1740,8 @@ async fn write_new_tx_log(
     storage: &(dyn Storage + Send + Sync),
     ctx: &StorageContext<'_>,
     semaphore: &Semaphore,
-    hint: WriteHint,
-) -> RepositoryResult<()> {
+    mode: PutMode,
+) -> RepositoryResult<PutOutcome> {
     if !storage.can_write().await.inject()? {
         return Err(RepositoryErrorKind::ReadonlyStorage(
             "Cannot write transaction log".to_string(),
@@ -1789,7 +1770,8 @@ async fn write_new_tx_log(
         spec_version,
         FileTypeBin::TransactionLog,
         compression_level,
-    )?;
+    )
+    .inject()?;
 
     debug!(%transaction_id, size_bytes=buffer.len(), "Writing transaction log");
     let path = format!("{TRANSACTION_LOGS_FILE_PATH}/{transaction_id}");
@@ -1800,12 +1782,59 @@ async fn write_new_tx_log(
     let ctx = StorageContext::new(&settings, ctx.attribution);
 
     let _permit = semaphore.acquire().await.capture()?;
-    storage
-        .put_object(&ctx, path.as_str(), buffer.into(), None, metadata, hint)
-        .await
-        .inject()?;
+    put_metadata_file(storage, &ctx, path.as_str(), buffer, metadata, mode).await
+}
 
-    Ok(())
+/// How a snapshot or transaction log file is written.
+#[derive(Debug, Clone, Copy)]
+enum PutMode {
+    Overwrite(WriteHint),
+    /// Only if no object has the name. Storages whose settings disable
+    /// conditional creates write unconditionally.
+    Create,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PutOutcome {
+    Written,
+    /// Another writer created the name first (only with [`PutMode::Create`]).
+    Exists,
+}
+
+async fn put_metadata_file(
+    storage: &(dyn Storage + Send + Sync),
+    ctx: &StorageContext<'_>,
+    path: &str,
+    buffer: Vec<u8>,
+    metadata: Vec<(String, String)>,
+    mode: PutMode,
+) -> RepositoryResult<PutOutcome> {
+    match mode {
+        PutMode::Overwrite(hint) => {
+            storage
+                .put_object(ctx, path, buffer.into(), None, metadata, hint)
+                .await
+                .inject()?;
+            Ok(PutOutcome::Written)
+        }
+        PutMode::Create => {
+            match storage
+                .put_object_conditional(
+                    ctx,
+                    path,
+                    buffer.into(),
+                    None,
+                    metadata,
+                    PutCondition::Create,
+                )
+                .await
+                .inject()?
+            {
+                VersionedUpdateResult::Updated { .. } => Ok(PutOutcome::Written),
+                VersionedUpdateResult::NotOnLatestVersion => Ok(PutOutcome::Exists),
+            }
+        }
+    }
 }
 
 #[instrument(skip(storage, ctx, semaphore, decode_semaphore))]
@@ -1861,14 +1890,70 @@ async fn prepare_repo_info(
         ),
     ];
 
-    let buffer = compress_with_header(
-        info.bytes(),
-        spec_version,
-        FileTypeBin::RepoInfo,
-        compression_level,
-    )?;
+    let buffer =
+        repo_info_file::encode(&info, spec_version, compression_level).inject()?;
 
     Ok((buffer, metadata))
+}
+
+/// What a modification changes, for the checks before it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Modification {
+    /// Anything other than the status alone.
+    Any,
+    /// The status alone.
+    StatusOnly,
+}
+
+/// See [`AssetManager::ensure_modifiable`].
+pub fn check_modifiable(
+    repo_info: &RepoInfo,
+    storage_features: &StorageWriterFeatures,
+    modification: Modification,
+    op: Option<&str>,
+) -> RepositoryResult<()> {
+    let listed = repo_info.writer_features().inject()?;
+    let missing =
+        missing_features(&listed, storage_features.implemented().iter().copied());
+    if let Some(min_version) = min_version(&missing) {
+        return Err(RepositoryError::capture(
+            RepositoryErrorKind::MissingWriterFeatures { missing, min_version },
+        ));
+    }
+
+    let unlisted: Vec<_> = storage_features
+        .required()
+        .iter()
+        .filter(|feature| !listed.contains(&FeatureName::from(**feature)))
+        .collect();
+    if !unlisted.is_empty() {
+        return Err(RepositoryError::capture(RepositoryErrorKind::StorageError(
+            StorageErrorKind::LayoutConversionInProgress(format!(
+                "the repo info doesn't list {}, which this storage requires",
+                unlisted.iter().join(", ")
+            )),
+        )));
+    }
+
+    let shape_mode = match modification {
+        Modification::Any => WritableShapeMode::AnyChange,
+        Modification::StatusOnly => WritableShapeMode::StatusOnlyChange,
+    };
+    repo_info.check_writable_shape(shape_mode).inject()?;
+
+    if modification == Modification::Any {
+        let status = repo_info.status().inject()?;
+        if status.availability != RepoAvailability::Online {
+            let reason = match op {
+                Some(op) => format!("{op}; {}", status.error_msg()),
+                None => status.error_msg(),
+            };
+            return Err(RepositoryError::capture(
+                RepositoryErrorKind::ReadonlyRepository(reason),
+            ));
+        }
+    }
+    Ok(())
 }
 
 #[expect(clippy::too_many_arguments)]
@@ -2006,17 +2091,15 @@ pub async fn fetch_repo_info_from_path(
     debug!("Downloading repo info");
     match storage.get_object_conditional(ctx, path, previous_version).await {
         Ok(GetModifiedResult::Modified { data, new_version }) => {
-            let (repo_info, header) = fetch_and_decode(
-                data,
-                DEFAULT_PREALLOC_HINT as u64,
-                FileTypeBin::RepoInfo,
-                Arc::clone(decode_semaphore),
-                |spec_version, buffer| {
-                    deserialize_repo_info(spec_version, buffer).map(Arc::new)
-                },
-            )
+            let bytes = read_all(data, DEFAULT_PREALLOC_HINT as u64).await?;
+            debug!(size_bytes = bytes.len(), "Downloaded repo info");
+            // on the async task: fail fast (no permit), and name the filesystem format
+            let header = checked_header(&bytes, FileTypeBin::RepoInfo)?;
+            let repo_info = decode_blocking(Arc::clone(decode_semaphore), move || {
+                repo_info_file::decode(&bytes).inject()
+            })
             .await?;
-            Ok(Some((repo_info, new_version, header)))
+            Ok(Some((Arc::new(repo_info), new_version, header)))
         }
         Ok(GetModifiedResult::OnLatestVersion) => Ok(None),
         Err(StorageError { kind: StorageErrorKind::ObjectNotFound, .. }) => {
@@ -2063,19 +2146,11 @@ pub async fn async_reader_to_bytes(
     Ok(buffer.into())
 }
 
-fn backup_destination(source_path: &str) -> String {
-    let last: u64 = 32503680000000;
-    let now = Utc::now().timestamp_millis() as u64;
-    let time_index = last - now;
-    let random = ChunkId::random().to_string();
-    format!("{source_path}.{time_index:014}.{random}")
-}
-
 #[cfg(test)]
 mod test {
 
     use icechunk_macros::tokio_test;
-    use itertools::{Itertools as _, assert_equal};
+    use itertools::assert_equal;
 
     use super::*;
     use crate::{
@@ -2083,217 +2158,54 @@ mod test {
         config::ManifestVirtualChunkLocationCompressionConfig,
         format::{
             ChunkIndices, NodeId, Path,
+            envelope::{binary_file_header, frame_content_size},
+            format_constants::CompressionAlgorithmBin,
             manifest::{ChunkInfo, ChunkPayload, LocationCompressionConfig},
             snapshot::ArrayShape,
         },
         storage::{Storage, logging::LoggingStorage, new_in_memory_storage},
     };
 
-    /// A buffer no serializer of ours would ever produce.
-    fn unreadable_buffer(size: usize) -> Vec<u8> {
-        vec![0u8; size]
-    }
-
-    #[tokio_test]
-    async fn write_verification_skips_buffers_below_the_threshold() {
-        let data = unreadable_buffer(1024);
-        verify_before_write(data.as_slice(), FileTypeBin::Manifest, data.len() + 1)
-            .expect("small buffers must not be verified");
-    }
-
-    fn filesystem_stub_header() -> FileHeader {
-        FileHeader {
-            impl_name: "ic-2.0.0".to_string(),
-            app_name: "ic".to_string(),
-            app_version: Some("2.0.0".to_string()),
-            spec_version: SpecVersionBin::V2,
-            file_type: FileTypeBin::FilesystemStub,
-            compression: CompressionAlgorithmBin::None,
-        }
-    }
-
-    #[icechunk_macros::test]
-    fn check_file_type_reports_filesystem_format_for_repo_info() {
-        let err = check_file_type(&filesystem_stub_header(), FileTypeBin::RepoInfo)
-            .expect_err("a stub is not a repo info file");
-        assert!(
-            matches!(
-                err.kind,
-                RepositoryErrorKind::FormatError(
-                    IcechunkFormatErrorKind::FilesystemFormatRepository
-                )
-            ),
-            "{err}"
+    /// A repo info file header with its file type and compression bytes replaced.
+    fn repo_info_header_with(file_type: u8, compression: u8) -> Vec<u8> {
+        let mut bytes = binary_file_header(
+            SpecVersionBin::current(),
+            FileTypeBin::RepoInfo,
+            CompressionAlgorithmBin::Zstd,
         );
-        assert!(err.to_string().contains("filesystem_storage"), "{err}");
+        bytes[format_constants::ICECHUNK_FILE_TYPE_OFFSET] = file_type;
+        bytes[format_constants::ICECHUNK_COMPRESSION_OFFSET] = compression;
+        bytes
     }
 
     #[icechunk_macros::test]
-    fn check_file_type_rejects_filesystem_stub_for_other_types() {
-        let err = check_file_type(&filesystem_stub_header(), FileTypeBin::Snapshot)
-            .expect_err("a stub is not a snapshot file");
+    fn checked_header_rejects_file_type_7() {
+        let err = checked_header(&repo_info_header_with(7, 1), FileTypeBin::RepoInfo)
+            .expect_err("7 is not a file type");
         assert!(
             matches!(
                 err.kind,
                 RepositoryErrorKind::FormatError(
-                    IcechunkFormatErrorKind::InvalidFileType {
-                        expected: FileTypeBin::Snapshot,
-                        got: 7
-                    }
+                    IcechunkFormatErrorKind::UnknownFileType { got: 7 }
                 )
             ),
             "{err}"
         );
     }
 
-    #[tokio_test]
-    async fn write_verification_rejects_buffers_that_cannot_be_read_back() {
-        let data = unreadable_buffer(1024);
-        let err = verify_before_write(data.as_slice(), FileTypeBin::Manifest, data.len())
-            .expect_err("a buffer we could not read back must not be written");
-        assert!(matches!(err.kind, RepositoryErrorKind::FormatError(_)));
-    }
-
-    #[tokio_test]
-    async fn write_verification_accepts_buffers_we_serialize()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let manifest = Manifest::from_iter(
-            &ManifestId::random(),
-            vec![ChunkInfo {
-                node: NodeId::random(),
-                coord: ChunkIndices(vec![0]),
-                payload: ChunkPayload::Inline("hello".into()),
-            }],
-            None,
-        )
-        .await?
-        .expect("manifest is empty");
-        // threshold 0: always verify
-        verify_before_write(manifest.bytes(), FileTypeBin::Manifest, 0)?;
-        Ok(())
-    }
-
-    #[tokio_test]
-    async fn compress_with_header_verifies_files_at_the_threshold()
-    -> Result<(), Box<dyn std::error::Error>> {
-        // below the threshold nothing is checked, even for a buffer we could not read back
-        compress_with_header(
-            unreadable_buffer(1024).as_slice(),
-            SpecVersionBin::current(),
-            FileTypeBin::Manifest,
-            1,
-        )?;
-
-        let err = compress_with_header(
-            unreadable_buffer(VERIFY_THRESHOLD_BYTES).as_slice(),
-            SpecVersionBin::current(),
-            FileTypeBin::Manifest,
-            1,
-        )
-        .map(|compressed| compressed.len())
-        .expect_err("a file at the threshold must be verified before writing");
-        assert!(matches!(err.kind, RepositoryErrorKind::FormatError(_)));
-        Ok(())
-    }
-
-    #[test]
-    fn decompress_frame_sizes_the_buffer_exactly_when_the_frame_says_so()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let data: Vec<u8> = (0..3_000_000u32).map(|i| (i % 251) as u8).collect();
-        let with_size = zstd::bulk::compress(&data, 3)?;
-        assert_eq!(frame_content_size(&with_size), Some(data.len() as u64));
-        let out = decompress_frame(&with_size, None)?;
-        assert_eq!(out, data);
-        assert_eq!(out.capacity(), out.len(), "no slack when the size is declared");
-
-        // a streamed frame has no declared size; a hint sizes the buffer instead
-        let without_size = {
-            let mut enc = zstd::stream::write::Encoder::new(Vec::new(), 3)?;
-            std::io::Write::write_all(&mut enc, &data)?;
-            enc.finish()?
-        };
-        assert_eq!(frame_content_size(&without_size), None);
-        let out = decompress_frame(&without_size, Some(data.len()))?;
-        assert_eq!(out, data);
-        assert!(out.capacity() <= data.len() + data.len() / 4, "hint prevented doubling");
-        let out = decompress_frame(&without_size, None)?;
-        assert_eq!(out, data);
-        Ok(())
-    }
-
-    /// Rebuild a streamed frame's header so it declares `declared` decoded
-    /// bytes, keeping its compressed blocks: a frame no honest writer produces.
-    /// Only frames from [`compress_without_content_size`] fit: no declared
-    /// size, not single segment, no dictionary id.
-    fn with_declared_size(frame: &[u8], declared: u64) -> Vec<u8> {
-        let descriptor = frame[4];
-        assert_eq!(descriptor >> 6, 0, "the frame already declares a size");
-        assert_eq!(descriptor & 0x20, 0, "single segment frames carry no window byte");
-        assert_eq!(descriptor & 0x03, 0, "a dictionary id would shift the size field");
-        let mut out = Vec::with_capacity(frame.len() + 8);
-        out.extend_from_slice(&frame[..4]);
-        // top two bits of the descriptor: an 8 byte Frame_Content_Size field
-        out.push(descriptor | 0xC0);
-        out.push(frame[5]);
-        out.extend_from_slice(&declared.to_le_bytes());
-        out.extend_from_slice(&frame[6..]);
-        out
-    }
-
-    fn streamed_frame(data: &[u8]) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
-        let header_len = format_constants::ICECHUNK_FILE_HEADER_LEN;
-        let with_header = compress_without_content_size(
-            data,
-            SpecVersionBin::current(),
-            FileTypeBin::Manifest,
-            3,
-        )?;
-        Ok(with_header[header_len..].to_vec())
-    }
-
-    #[test]
-    fn a_frame_that_lies_about_its_decoded_size_is_an_error()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let data: Vec<u8> = (0..300_000u32).map(|i| (i % 251) as u8).collect();
-        let frame = streamed_frame(&data)?;
-        assert_eq!(frame_content_size(&frame), None);
-        let actual = data.len() as u64;
-        // below the preallocation cap the buffer is sized from the header, above
-        // it the decoder grows its own; both must reject the mismatch
-        for declared in [
-            actual + 1,
-            actual - 1,
-            actual * 10,
-            MAX_PREALLOCATED_DECODE_BYTES + 1,
-            u64::MAX / 2,
-        ] {
-            let forged = with_declared_size(&frame, declared);
-            assert_eq!(frame_content_size(&forged), Some(declared));
-            decompress_frame(&forged, None).err().ok_or(format!(
-                "a frame declaring {declared} of {actual} bytes must not decode"
-            ))?;
-        }
-        Ok(())
-    }
-
-    #[test]
-    fn a_truncated_frame_is_an_error() -> Result<(), Box<dyn std::error::Error>> {
-        let data: Vec<u8> = (0..300_000u32).map(|i| (i % 251) as u8).collect();
-        let declared = zstd::bulk::compress(&data, 3)?;
-        assert!(decompress_frame(&declared[..declared.len() / 2], None).is_err());
-        let streamed = streamed_frame(&data)?;
-        assert!(decompress_frame(&streamed[..streamed.len() / 2], None).is_err());
-        Ok(())
-    }
-
-    #[test]
-    fn the_preallocation_is_clamped() {
-        assert_eq!(prealloc_capacity(0), 0);
-        assert_eq!(prealloc_capacity(1024), 1024);
-        let cap = MAX_PREALLOCATED_DECODE_BYTES;
-        assert_eq!(prealloc_capacity(cap), cap as usize);
-        assert_eq!(prealloc_capacity(cap + 1), cap as usize);
-        assert_eq!(prealloc_capacity(u64::MAX), cap as usize);
+    #[icechunk_macros::test]
+    fn checked_header_rejects_compression_0() {
+        let err = checked_header(&repo_info_header_with(6, 0), FileTypeBin::RepoInfo)
+            .expect_err("0 is not a compression");
+        assert!(
+            matches!(
+                err.kind,
+                RepositoryErrorKind::FormatError(
+                    IcechunkFormatErrorKind::InvalidCompressionAlgorithm
+                )
+            ),
+            "{err}"
+        );
     }
 
     /// A manifest of one inline chunk ref.
@@ -2665,6 +2577,7 @@ mod test {
             100,
             None::<&()>,
             None,
+            &[],
         ));
         manager.create_repo_info(Arc::clone(&repo_info)).await?;
 
@@ -2702,6 +2615,7 @@ mod test {
             100,
             None::<&()>,
             None,
+            &[],
         ));
         let new_version = manager.create_repo_info(Arc::clone(&repo_info)).await?;
 
@@ -2871,6 +2785,55 @@ mod test {
         Ok((repo, snap_id))
     }
 
+    /// The raw bytes of the current repo info file of `repo`.
+    async fn raw_repo_info_bytes(
+        repo: &Repository,
+    ) -> Result<Bytes, Box<dyn std::error::Error>> {
+        let am = repo.asset_manager();
+        let read = am
+            .storage()
+            .get_object(&am.storage_context(), REPO_INFO_FILE_PATH, None)
+            .await?;
+        Ok(async_reader_to_bytes(read, 0).await?)
+    }
+
+    #[tokio_test]
+    async fn repo_info_files_core_writes_round_trip_through_repo_info_file()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (repo, snap_id) = repo_with_one_manifest().await?;
+        repo.create_branch("dev", &snap_id).await?;
+        repo.create_tag("t", &snap_id).await?;
+        let bytes = raw_repo_info_bytes(&repo).await?;
+        let info = repo_info_file::decode(&bytes)?;
+        let (fetched, _) = repo.asset_manager().fetch_repo_info().await?;
+        assert_eq!(info.bytes(), fetched.bytes());
+        let level = repo.config().compression().level();
+        let encoded = repo_info_file::encode(&info, repo.spec_version(), level)?;
+        assert_eq!(encoded.as_slice(), bytes.as_ref());
+        Ok(())
+    }
+
+    #[tokio_test]
+    async fn num_updates_per_repo_info_file_reads_the_stored_configuration()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+        let repo = Repository::create(storage)
+            .config(RepositoryConfig {
+                num_updates_per_repo_info_file: Some(7),
+                ..Default::default()
+            })
+            .execute()
+            .await?;
+        let (info, _) = repo.asset_manager().fetch_repo_info().await?;
+        assert_eq!(info.num_updates_per_repo_info_file()?, Some(7));
+
+        let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+        let repo = Repository::create(storage).execute().await?;
+        let (info, _) = repo.asset_manager().fetch_repo_info().await?;
+        assert_eq!(info.num_updates_per_repo_info_file()?, None);
+        Ok(())
+    }
+
     #[tokio_test]
     async fn raw_manifest_bytes_decode_to_the_cached_manifest()
     -> Result<(), Box<dyn std::error::Error>> {
@@ -2918,6 +2881,37 @@ mod test {
 
         async fn can_write(&self) -> storage::StorageResult<bool> {
             self.backend.can_write().await
+        }
+
+        async fn writer_features(&self) -> storage::StorageResult<StorageWriterFeatures> {
+            self.backend.writer_features().await
+        }
+
+        async fn gc_hook(
+            &self,
+            ctx: &StorageContext<'_>,
+            phase: storage::GcPhase<'_>,
+        ) -> storage::StorageResult<()> {
+            self.backend.gc_hook(ctx, phase).await
+        }
+
+        async fn create_location_if_needed(&self) -> storage::StorageResult<()> {
+            self.backend.create_location_if_needed().await
+        }
+
+        async fn root_is_clean(
+            &self,
+            ctx: &StorageContext<'_>,
+        ) -> storage::StorageResult<bool> {
+            self.backend.root_is_clean(ctx).await
+        }
+
+        fn supports_ic1_repos(&self) -> bool {
+            self.backend.supports_ic1_repos()
+        }
+
+        fn lists_id_prefixes_natively(&self) -> bool {
+            self.backend.lists_id_prefixes_natively()
         }
 
         async fn get_object_range(
@@ -3015,6 +3009,14 @@ mod test {
     }
 
     #[tokio_test]
+    async fn false_hit_storage_forwards_to_the_backend() {
+        use crate::storage::recording::{RecordingStorage, assert_forwards};
+        let inner = Arc::new(RecordingStorage::default());
+        let storage = FalseHitStorage { backend: Arc::clone(&inner) as Arc<_> };
+        assert_forwards(&storage, &inner).await;
+    }
+
+    #[tokio_test]
     async fn conflict_drops_the_cached_repo_info()
     -> Result<(), Box<dyn std::error::Error>> {
         let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
@@ -3046,6 +3048,7 @@ mod test {
                 100,
                 None::<&()>,
                 None,
+                &[],
             )))
             .await?;
 

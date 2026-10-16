@@ -13,13 +13,21 @@ use std::{
 };
 
 use futures::{StreamExt as _, TryStreamExt as _};
+use icechunk_format::writer_features::WriterFeature;
 use icechunk_fs::{FilesystemStorage, new_filesystem_storage};
 use icechunk_macros::tokio_test;
 use icechunk_storage::{
-    GetModifiedResult, ListInfo, PutCondition, Settings, Storage, StorageContext,
-    StorageErrorKind, StorageResult, VersionInfo, VersionedUpdateResult, WriteHint,
+    GcPhase, GetModifiedResult, ListInfo, PutCondition, Settings, Storage,
+    StorageContext, StorageErrorKind, StorageResult, VersionInfo, VersionedUpdateResult,
+    WriteHint,
 };
 use tokio::io::AsyncReadExt as _;
+
+#[path = "common/repo_infos.rs"]
+#[expect(dead_code, reason = "shared with tests that use every helper")]
+mod repo_infos;
+
+use repo_infos::repo_info;
 
 const CONTENT: &[u8] = b"hello world";
 const CONTENT_SHA256: &str =
@@ -456,7 +464,7 @@ async fn concurrent_creates_have_one_winner() {
         .map(|i| {
             let st = Arc::clone(&st);
             tokio::spawn(async move {
-                let content = [i; 64];
+                let content = repo_info(u32::from(i));
                 let settings = Settings::default();
                 let result = put_conditional(
                     &st,
@@ -486,8 +494,9 @@ async fn concurrent_creates_have_one_winner() {
     let (content, version) = winners[0];
     assert_eq!(
         get_conditional(&st, "repo", None).await.unwrap(),
-        (content.to_vec(), version.clone())
+        (content.clone(), version.clone())
     );
+    assert_eq!(std::fs::read(dir.path().join("repo")).unwrap(), *content);
     assert_eq!(staging_leftovers(dir.path()), Vec::<std::path::PathBuf>::new());
     let root: BTreeSet<_> = std::fs::read_dir(dir.path())
         .unwrap()
@@ -518,6 +527,30 @@ async fn list_missing_root_is_empty() {
     let dir = tempfile::tempdir().unwrap();
     let st = storage(&dir.path().join("missing"));
     assert_eq!(list(&st, "").await, Vec::new());
+}
+
+#[tokio_test]
+async fn implements_and_requires_the_filesystem_layout() {
+    let dir = tempfile::tempdir().unwrap();
+    let features = storage(dir.path()).writer_features().await.unwrap();
+    let layout = BTreeSet::from([WriterFeature::FilesystemLayoutV1]);
+    assert_eq!(features.implemented(), &layout);
+    assert_eq!(features.required(), &layout);
+}
+
+#[tokio_test]
+async fn gc_hook_without_a_repository_changes_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let st = storage(dir.path());
+    let settings = Settings::default();
+    let ctx = StorageContext::unattributed(&settings);
+    for phase in [
+        GcPhase::BeforeDeletes { changed: None },
+        GcPhase::AfterDeletes { changed: None },
+    ] {
+        st.gc_hook(&ctx, phase).await.unwrap();
+    }
+    assert!(std::fs::read_dir(dir.path()).unwrap().next().is_none());
 }
 
 #[tokio_test]
@@ -629,13 +662,13 @@ async fn list_objects_hides_protocol_files() {
         format!("repo.d/0.{CONTENT_SHA256}"),
         format!("repo.d/stage.{id}"),
         format!("repo.d.tmp.{id}/0.{CONTENT_SHA256}"),
-        format!("repo.legacy.{id}"),
-        format!("repo.stub.{id}"),
         format!("repo.staging.{id}"),
         format!("chunks/ABC.staging.{id}"),
         // Root protocol names are only hidden at the root.
         "chunks/repo.d/x".to_string(),
-        format!("chunks/repo.legacy.{id}"),
+        // Names that are no longer protocol names are ordinary names.
+        format!("repo.legacy.{id}"),
+        format!("repo.stub.{id}"),
     ] {
         write(dir.path(), &key, CONTENT);
     }
@@ -646,16 +679,14 @@ async fn list_objects_hides_protocol_files() {
         vec![
             "chunks/ABC".to_string(),
             "chunks/repo.d/x".to_string(),
-            format!("chunks/repo.legacy.{id}"),
-            "repo".to_string()
+            "repo".to_string(),
+            format!("repo.legacy.{id}"),
+            format!("repo.stub.{id}"),
         ]
     );
     let listed: Vec<String> =
         list(&st, "chunks").await.into_iter().map(|(id, _)| id).collect();
-    assert_eq!(
-        listed,
-        vec!["ABC".to_string(), "repo.d/x".to_string(), format!("repo.legacy.{id}")]
-    );
+    assert_eq!(listed, vec!["ABC".to_string(), "repo.d/x".to_string()]);
 }
 
 #[tokio_test]
@@ -667,11 +698,13 @@ async fn root_with_only_leftovers_is_clean() {
     let id = uuid::Uuid::new_v4();
     write(dir.path(), &format!("repo.d/stage.{id}"), b"");
     write(dir.path(), &format!("repo.d.tmp.{id}/0.{CONTENT_SHA256}"), b"");
-    write(dir.path(), &format!("repo.legacy.{id}"), b"");
-    write(dir.path(), &format!("repo.stub.{id}"), b"");
     write(dir.path(), &format!("repo.staging.{id}"), b"");
 
     assert!(st.root_is_clean(&ctx).await.unwrap());
+
+    // Names that are no longer protocol names are objects.
+    write(dir.path(), &format!("repo.stub.{id}"), b"");
+    assert!(!st.root_is_clean(&ctx).await.unwrap());
 }
 
 // APFS rejects non-UTF-8 names

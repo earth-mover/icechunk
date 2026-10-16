@@ -23,12 +23,15 @@ mod cli {
     use clap::{Args, Parser, Subcommand, ValueEnum};
     use icechunk_fs_stress::{
         config::{
-            Backend, FaultConfig, GcConfig, Mode, PointName, RunConfig, WorkerId,
-            parse_duration,
+            Backend, DEFAULT_READONLY_HOLD, FaultConfig, ForkConfig, GcConfig, Mode,
+            PointName, ReadOnlyConfig, RunConfig, WorkerId, parse_duration,
         },
         control,
+        convert::{self, Converter, ScenarioConfig},
         env_info::default_tag,
-        layout::{RunRoot, is_valid_slot, is_valid_tag},
+        fork::{self, FORK_SLOT},
+        layout::{RunRoot, ScenarioRoot, is_valid_slot, is_valid_tag},
+        log::Direction,
         repo_mode,
         report::Report,
         selftest::{self, SelftestOptions},
@@ -37,9 +40,15 @@ mod cli {
             self, ASSUMED_OPS_PER_SECOND_PER_WORKER, GC_SLOT, LateHost,
             data_volume_estimate,
         },
+        toggler::{self, TOGGLER_SLOT, storage_error_counter},
         verify,
     };
-    use tracing_subscriber::filter::{EnvFilter, LevelFilter};
+    use tracing_subscriber::{
+        Layer as _,
+        filter::{EnvFilter, LevelFilter},
+        layer::SubscriberExt as _,
+        util::SubscriberInitExt as _,
+    };
 
     /// Stress test for icechunk's filesystem storage.
     #[derive(Debug, Parser)]
@@ -67,13 +76,27 @@ mod cli {
         /// Run with sabotaged protocol steps, and on the unsafe legacy local
         /// backend, and expect verify to fail.
         Selftest(SelftestArgs),
+        /// Convert a repository between the standard and the filesystem
+        /// layout in rounds, killing and rerunning the conversions, with a
+        /// stress phase in the filesystem layout and commits in the standard
+        /// one in every round, and check every conversion.
+        ConvertScenario(ScenarioArgs),
+        /// Run one conversion of the scenario; spawned by `convert-scenario`.
+        #[command(hide = true)]
+        Conversion(ConversionArgs),
     }
 
     impl Command {
         /// Whether an error is a harness or setup error (exit code 3) rather
         /// than a plain failure.
         fn exits_3_on_error(&self) -> bool {
-            matches!(self, Self::Verify(_) | Self::Run(_) | Self::Selftest(_))
+            matches!(
+                self,
+                Self::Verify(_)
+                    | Self::Run(_)
+                    | Self::Selftest(_)
+                    | Self::ConvertScenario(_)
+            )
         }
     }
 
@@ -116,11 +139,14 @@ mod cli {
         /// Length of a pause [default: 2s]
         #[arg(long, value_parser = parse_duration)]
         pause: Option<Duration>,
-        /// Where kills and pauses happen [default: Linked,BeforeRename,BeforeTidyUp]
-        /// [possible values: Staged,Linked,BeforeRename,Renamed,BeforeTidyUp]
+        /// Where kills and pauses happen [default: Linked,BeforeRename,BeforeTidyUp,
+        /// BeforePublish,BeforeMirrorRename]
+        /// [possible values: Staged,Linked,BeforeRename,Renamed,BeforeTidyUp,
+        /// BeforePublish,MirrorStaged,BeforeMirrorRename,MirrorRenamed]
         #[arg(long, value_delimiter = ',', value_parser = parse_point)]
         fault_points: Option<Vec<PointName>>,
-        /// How often each host SIGKILLs one of its workers, or "off" [default: 3s]
+        /// How often each host SIGKILLs one of its workers, never the status
+        /// toggler, or "off" [default: 3s]
         #[arg(long, value_parser = parse_kill_every)]
         external_kill_every: Option<KillEvery>,
         /// Storage mode: padding per payload [default: 1024]
@@ -135,7 +161,8 @@ mod cli {
         /// [default: 5s]
         #[arg(long, value_parser = parse_duration, requires = "gc")]
         gc_every: Option<Duration>,
-        /// GC deletes what is older than this [default: 3 × pause + 30s]
+        /// GC deletes what is older than this; shorter than --duration
+        /// [default: 3 × pause + 3m]
         #[arg(long, value_parser = parse_duration, requires = "gc")]
         gc_margin: Option<Duration>,
         /// Repository mode: first retry back-off of a conflicting `repo`
@@ -146,6 +173,24 @@ mod cli {
         /// update [default: 100ms]
         #[arg(long = "max-backoff", value_parser = parse_millis)]
         max_backoff_ms: Option<u32>,
+        /// Repository mode: how often the status toggler sets the status
+        /// ReadOnly, holds it, then sets it Online [default: off]
+        #[arg(long, value_parser = parse_duration)]
+        readonly_every: Option<Duration>,
+        /// How long the status toggler holds ReadOnly [default: 3s]
+        #[arg(long, value_parser = parse_duration, requires = "readonly_every")]
+        readonly_hold: Option<Duration>,
+        /// How often every host reads repo and logs what changed, e.g. 25ms
+        /// [default: off]
+        #[arg(long, value_parser = parse_duration)]
+        mirror_sample_every: Option<Duration>,
+        /// When, after the go, the fork actor replaces repo as Icechunk 2.3
+        /// does when it sets the status [default: off]
+        #[arg(long, value_parser = parse_duration)]
+        fork_at: Option<Duration>,
+        /// Fork again 500ms after each erasure of the fork.
+        #[arg(long, requires = "fork_at")]
+        fork_repeat: bool,
     }
 
     #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -230,6 +275,48 @@ mod cli {
     }
 
     #[derive(Debug, Args)]
+    struct ScenarioArgs {
+        /// The scenario's root, which must be missing or empty.
+        #[arg(long)]
+        root: PathBuf,
+        #[arg(long, default_value_t = 2)]
+        rounds: u32,
+        /// Duration of each round's stress phase, which runs repository mode
+        /// with GC; 0s for none.
+        #[arg(long, value_parser = parse_progress_every, default_value = "60s")]
+        duration: Duration,
+        /// Workers of each stress phase.
+        #[arg(long, default_value_t = 8)]
+        workers: u32,
+        /// Probability that a run of a conversion is killed at one of its
+        /// steps, chosen at random.
+        #[arg(long, default_value_t = 0.3)]
+        conversion_kill_p: f64,
+        /// Commits in the standard layout in each round.
+        #[arg(long, default_value_t = 3)]
+        standard_commits: u32,
+        /// Don't fsync storage writes.
+        #[arg(long)]
+        no_fsync: bool,
+        #[command(flatten)]
+        progress: ProgressArgs,
+    }
+
+    #[derive(Debug, Args)]
+    struct ConversionArgs {
+        #[arg(long)]
+        root: PathBuf,
+        #[arg(long)]
+        round: u32,
+        #[arg(long, value_parser = parse_serde::<Direction>)]
+        direction: Direction,
+        #[arg(long)]
+        attempt: u32,
+        #[arg(long, value_parser = parse_serde::<PointName>)]
+        kill_at: Option<PointName>,
+    }
+
+    #[derive(Debug, Args)]
     struct StopArgs {
         #[arg(long)]
         root: PathBuf,
@@ -274,15 +361,21 @@ mod cli {
         }
     }
 
+    /// Logs to stderr, filtered by `FS_STRESS_LOG`, and counts the storage's
+    /// errors for the status toggler, whatever the filter.
     fn init_tracing() -> anyhow::Result<()> {
         let filter = EnvFilter::builder()
             .with_default_directive(LevelFilter::WARN.into())
             .with_env_var("FS_STRESS_LOG")
             .from_env()
             .context("invalid FS_STRESS_LOG")?;
-        tracing_subscriber::fmt()
-            .with_env_filter(filter)
-            .with_writer(std::io::stderr)
+        tracing_subscriber::registry()
+            .with(
+                tracing_subscriber::fmt::layer()
+                    .with_writer(std::io::stderr)
+                    .with_filter(filter),
+            )
+            .with(storage_error_counter())
             .init();
         Ok(())
     }
@@ -302,7 +395,69 @@ mod cli {
             }
             Command::Run(args) => run_one_host(args),
             Command::Selftest(args) => selftest(args),
+            Command::ConvertScenario(args) => {
+                let root = ScenarioRoot::new(args.root.clone());
+                let exe =
+                    std::env::current_exe().context("locating the fs-stress binary")?;
+                let report = runtime()?.block_on(convert::convert_scenario(
+                    &root,
+                    &scenario_config(args),
+                    &Converter::Process(exe),
+                    args.progress.progress_every,
+                ))?;
+                report_scenario(&root, &report)
+            }
+            Command::Conversion(args) => {
+                let root = ScenarioRoot::new(args.root.clone());
+                runtime()?
+                    .block_on(convert::converter(
+                        &root,
+                        args.round,
+                        args.direction,
+                        args.attempt,
+                        args.kill_at,
+                    ))
+                    .map(success)
+            }
         }
+    }
+
+    fn report_scenario(root: &ScenarioRoot, report: &Report) -> anyhow::Result<ExitCode> {
+        print!("{}", report.summary());
+        println!(
+            "reports: {}/report.json and phase-*/report.json",
+            root.root().display()
+        );
+        Ok(ExitCode::from(report.exit_code()))
+    }
+
+    fn scenario_config(args: &ScenarioArgs) -> ScenarioConfig {
+        let stress = (!args.duration.is_zero()).then(|| {
+            let mut config = RunConfig::defaults(Mode::Repository, 1);
+            config.duration = args.duration;
+            config.fsync = !args.no_fsync;
+            config.workers_per_host_default = args.workers;
+            config.gc = Some(GcConfig::defaults(config.faults.pause));
+            config
+        });
+        ScenarioConfig {
+            rounds: args.rounds,
+            stress,
+            workers: args.workers,
+            kill_probability: args.conversion_kill_p,
+            standard_commits: args.standard_commits,
+            fsync: !args.no_fsync,
+            sabotage: None,
+            plant_standard_write: false,
+            late_commit: false,
+            guaranteed_kills: true,
+        }
+    }
+
+    /// A value as `serde` names it, e.g. `to_standard` or `to_standard_change`.
+    fn parse_serde<T: serde::de::DeserializeOwned>(s: &str) -> anyhow::Result<T> {
+        serde_json::from_value(serde_json::Value::String(s.to_owned()))
+            .with_context(|| format!("unknown value {s:?}"))
     }
 
     fn report(report: &Report) -> anyhow::Result<ExitCode> {
@@ -395,8 +550,18 @@ mod cli {
             pause_probability: args.pause_p.unwrap_or(defaults.pause_probability),
             pause: args.pause.unwrap_or(defaults.pause),
         };
+        config.readonly = args.readonly_every.map(|every| ReadOnlyConfig {
+            every,
+            hold: args.readonly_hold.unwrap_or(DEFAULT_READONLY_HOLD),
+        });
+        config.mirror_sample_every = args.mirror_sample_every;
+        config.fork = args.fork_at.map(|at| ForkConfig {
+            at,
+            repeat: args.fork_repeat,
+            during_gc: false,
+        });
         config.gc = args.gc.then(|| {
-            let defaults = GcConfig::defaults(faults.pause);
+            let defaults = GcConfig::run_defaults(faults.pause);
             GcConfig {
                 every: args.gc_every.unwrap_or(defaults.every),
                 margin: args.gc_margin.unwrap_or(defaults.margin),
@@ -404,6 +569,15 @@ mod cli {
         });
         config.faults = faults;
         config.duration = args.duration.unwrap_or(config.duration);
+        if let Some(gc) = &config.gc {
+            ensure!(
+                config.duration > gc.margin,
+                "--gc deletes only what is older than --gc-margin ({}s), so a run of {}s \
+                 deletes nothing: raise --duration or lower --gc-margin",
+                gc.margin.as_secs(),
+                config.duration.as_secs(),
+            );
+        }
         config.fsync = !args.no_fsync;
         config.workers_per_host_default =
             args.workers.unwrap_or(config.workers_per_host_default);
@@ -426,6 +600,10 @@ mod cli {
             ("BeforeRename", PointName::BeforeRename),
             ("Renamed", PointName::Renamed),
             ("BeforeTidyUp", PointName::BeforeTidyUp),
+            ("BeforePublish", PointName::BeforePublish),
+            ("MirrorStaged", PointName::MirrorStaged),
+            ("BeforeMirrorRename", PointName::BeforeMirrorRename),
+            ("MirrorRenamed", PointName::MirrorRenamed),
         ];
         let key = |name: &str| name.replace('_', "").to_ascii_lowercase();
         points
@@ -493,8 +671,7 @@ mod cli {
     fn worker(args: &WorkerArgs) -> anyhow::Result<()> {
         ensure!(is_valid_tag(&args.tag), "invalid tag {:?}", args.tag);
         ensure!(is_valid_slot(&args.slot), "invalid slot {:?}", args.slot);
-        let root = RunRoot::new(args.root.clone());
-        let config = RunConfig::load(&root)?;
+        let (root, config) = RunConfig::load_resolved(&RunRoot::new(args.root.clone()))?;
         let who = WorkerId {
             tag: args.tag.clone(),
             slot: args.slot.clone(),
@@ -502,6 +679,17 @@ mod cli {
         };
         let until = SystemTime::UNIX_EPOCH + Duration::from_millis(args.until_ms);
         let runtime = runtime()?;
+        if who.slot == TOGGLER_SLOT {
+            ensure!(
+                config.readonly.is_some(),
+                "slot {TOGGLER_SLOT} needs a run with --readonly-every"
+            );
+            return runtime.block_on(toggler::toggler(&root, &config, &who, until));
+        }
+        if who.slot == FORK_SLOT {
+            ensure!(config.fork.is_some(), "slot {FORK_SLOT} needs a run with --fork-at");
+            return runtime.block_on(fork::fork_actor(&root, &config, &who, until));
+        }
         if who.slot == GC_SLOT {
             ensure!(
                 config.mode == Mode::Repository && config.gc.is_some(),
@@ -551,7 +739,7 @@ mod cli {
                 "--hosts",
                 "2",
                 "--duration",
-                "90s",
+                "10m",
                 "--no-fsync",
                 "--workers",
                 "4",
@@ -576,11 +764,20 @@ mod cli {
                 "5ms",
                 "--max-backoff",
                 "1s",
+                "--readonly-every",
+                "10s",
+                "--readonly-hold",
+                "4s",
+                "--mirror-sample-every",
+                "25ms",
+                "--fork-at",
+                "30s",
+                "--fork-repeat",
             ]);
             let config = config(&args).unwrap();
             let pause = Duration::from_secs(3);
             let mut expected = RunConfig::defaults(Mode::Repository, 2);
-            expected.duration = Duration::from_secs(90);
+            expected.duration = Duration::from_secs(600);
             expected.fsync = false;
             expected.workers_per_host_default = 4;
             expected.faults = FaultConfig {
@@ -598,12 +795,35 @@ mod cli {
             expected.chunk_bytes = 2048;
             expected.gc = Some(GcConfig {
                 every: Duration::from_secs(2),
-                margin: 3 * pause + Duration::from_secs(30),
+                margin: 3 * pause + Duration::from_secs(180),
             });
             expected.repo_update_retries.initial_backoff_ms = 5;
             expected.repo_update_retries.max_backoff_ms = 1000;
+            expected.readonly = Some(ReadOnlyConfig {
+                every: Duration::from_secs(10),
+                hold: Duration::from_secs(4),
+            });
+            expected.mirror_sample_every = Some(Duration::from_millis(25));
+            expected.fork = Some(ForkConfig {
+                at: Duration::from_secs(30),
+                repeat: true,
+                during_gc: false,
+            });
             assert_eq!(config, expected);
             config.validate().unwrap();
+        }
+
+        #[test]
+        fn init_rejects_gc_that_deletes_nothing() {
+            let gc = |flags: &[&str]| {
+                let base = ["--mode", "repository", "--hosts", "1", "--gc"];
+                config(&init_args(&[&base[..], flags].concat()))
+            };
+            assert!(gc(&[]).is_err());
+            assert!(gc(&["--duration", "186s"]).is_err());
+            assert!(gc(&["--duration", "187s"]).is_ok());
+            assert!(gc(&["--gc-margin", "30s"]).is_ok());
+            assert!(gc(&["--gc-margin", "1m"]).is_err());
         }
 
         #[test]
@@ -639,6 +859,10 @@ mod cli {
                 &["--mode", "storage", "--external-kill-every", "never"],
                 &["--mode", "storage", "--duration", "5"],
                 &["--mode", "repository", "--gc-every", "5s"],
+                &["--mode", "repository", "--readonly-hold", "5s"],
+                &["--mode", "repository", "--mirror-sample-every", "25"],
+                &["--mode", "repository", "--fork-repeat"],
+                &["--mode", "repository", "--fork-at", "5"],
                 &["--mode", "repository", "--max-backoff", "5"],
                 &["--mode", "repository", "--initial-backoff", "2000h"],
             ] {
@@ -647,6 +871,30 @@ mod cli {
             }
             let args = init_args(&["--mode", "storage", "--hosts", "1", "--gc"]);
             assert!(config(&args).is_err());
+            let args = init_args(&[
+                "--mode",
+                "repository",
+                "--hosts",
+                "1",
+                "--readonly-every",
+                "5s",
+            ]);
+            assert_eq!(
+                config(&args).unwrap().readonly,
+                Some(ReadOnlyConfig {
+                    every: Duration::from_secs(5),
+                    hold: DEFAULT_READONLY_HOLD
+                })
+            );
+            let args = init_args(&[
+                "--mode",
+                "storage",
+                "--hosts",
+                "1",
+                "--readonly-every",
+                "5s",
+            ]);
+            assert!(config(&args).unwrap().validate().is_err());
             for invalid in [
                 &["--initial-backoff", "0ms"][..],
                 &["--initial-backoff", "1s", "--max-backoff", "500ms"],
@@ -727,6 +975,8 @@ mod cli {
                 "--mode",
                 "repository",
                 "--gc",
+                "--duration",
+                "10m",
                 "--workers",
                 "3",
                 "--progress-every",
@@ -780,6 +1030,68 @@ mod cli {
                     "5"
                 ])
                 .is_err()
+            );
+        }
+
+        #[test]
+        fn convert_scenario_has_defaults_and_conversion_takes_serde_names() {
+            let Command::ConvertScenario(args) =
+                command(&["convert-scenario", "--root", "r"])
+            else {
+                panic!("not convert-scenario");
+            };
+            let config = scenario_config(&args);
+            config.validate().unwrap();
+            assert_eq!((config.rounds, config.standard_commits), (2, 3));
+            assert_eq!(config.kill_probability, 0.3);
+            assert!(config.guaranteed_kills);
+            let stress = config.stress.unwrap();
+            assert_eq!(stress.duration, Duration::from_secs(60));
+            assert_eq!(stress.mode, Mode::Repository);
+            assert!(stress.gc.is_some());
+            let Command::ConvertScenario(args) =
+                command(&["convert-scenario", "--root", "r", "--duration", "0s"])
+            else {
+                panic!("not convert-scenario");
+            };
+            assert_eq!(scenario_config(&args).stress, None);
+
+            let Command::Conversion(args) = command(&[
+                "conversion",
+                "--root",
+                "r",
+                "--round",
+                "2",
+                "--direction",
+                "to_standard",
+                "--attempt",
+                "3",
+                "--kill-at",
+                "to_standard_change",
+            ]) else {
+                panic!("not conversion");
+            };
+            assert_eq!(args.direction, Direction::ToStandard);
+            assert_eq!(args.kill_at, Some(PointName::ToStandardChange));
+            let bad = [
+                "fs-stress",
+                "conversion",
+                "--root",
+                "r",
+                "--round",
+                "1",
+                "--attempt",
+                "0",
+            ];
+            assert!(
+                Cli::try_parse_from(bad.iter().chain(&["--direction", "sideways"]))
+                    .is_err()
+            );
+            let mut cli = <Cli as clap::CommandFactory>::command();
+            let help = cli.render_long_help().to_string();
+            assert!(
+                help.contains("convert-scenario") && !help.contains("conversion "),
+                "{help}"
             );
         }
 

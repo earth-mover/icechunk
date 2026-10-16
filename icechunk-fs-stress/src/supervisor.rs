@@ -11,38 +11,81 @@ use std::{
     time::{Duration, Instant, SystemTime},
 };
 
-use anyhow::{Context as _, ensure};
+use anyhow::{Context as _, bail, ensure};
 use chrono::{DateTime, Utc};
+use icechunk::storage::{GetModifiedResult, StorageContext};
 use rand::{RngExt as _, rngs::StdRng};
 
 use crate::{
-    config::{Mode, RunConfig, write_synced},
+    config::{Backend, Mode, RunConfig, WorkerId, write_synced},
     control::{
         BARRIER_POLL, Control, WaitOutcome, read_control, wait_for_go_reporting,
         write_control,
     },
     env_info::HostDone,
-    layout::{RunRoot, VERIFY_TAG, is_valid_tag},
-    log::{FaultAction, LogWriter, OpResult, Record, now_ms, read_appended},
-    repo_mode, storage_mode,
+    fork::FORK_SLOT,
+    layout::{INIT_TAG, RunRoot, SCENARIO_TAG, VERIFY_TAG, is_valid_tag},
+    log::{
+        FaultAction, LogWriter, OpResult, Record, now_ms, read_appended, start_worker_log,
+    },
+    repo_mode,
+    sampler::Sampler,
+    storage_mode,
+    toggler::TOGGLER_SLOT,
 };
 
 /// Creates the run root: the layout, `run.json`, the mode's initial state,
-/// and finally `control`, so no host can join a half-initialized run.
+/// and finally `control`, so no host can join a half-initialized run. On the
+/// filesystem backend it logs the first version's `N` to `init`'s log.
 pub async fn init(root: &RunRoot, config: &RunConfig) -> anyhow::Result<()> {
     config.validate()?;
     root.create_dirs()?;
     config.write_new(root)?;
+    let t_before_ms = now_ms();
     match config.mode {
         Mode::Storage => storage_mode::init(root, config).await?,
         Mode::Repository => repo_mode::init(root, config).await?,
     }
+    let t_after_ms = now_ms();
+    if config.backend == Backend::Filesystem {
+        log_init_version(root, config, t_before_ms, t_after_ms).await?;
+    }
     write_control(root, &Control::Wait).context("writing control")
 }
 
+/// The slot of `init`'s log.
+const INIT_SLOT: &str = "init";
+
+/// Logs [`Record::InitVersion`] with the `N` of the current version, which
+/// no worker has changed yet, to `logs/init.init.0.log`.
+pub async fn log_init_version(
+    root: &RunRoot,
+    config: &RunConfig,
+    t_before_ms: i64,
+    t_after_ms: i64,
+) -> anyhow::Result<()> {
+    let storage = storage_mode::storage(root, config, None).await?;
+    let settings = storage.default_settings().await?;
+    let ctx = StorageContext::unattributed(&settings);
+    let GetModifiedResult::Modified { new_version, .. } =
+        storage.get_object_conditional(&ctx, storage_mode::REPO_KEY, None).await?
+    else {
+        bail!("reading the first version returned no version");
+    };
+    let n = new_version
+        .generation()
+        .and_then(|generation| generation.parse().ok())
+        .with_context(|| format!("the first version {new_version:?} has no number"))?;
+    let who =
+        WorkerId { tag: INIT_TAG.to_owned(), slot: INIT_SLOT.to_owned(), incarnation: 0 };
+    start_worker_log(root, &who)?
+        .append(&Record::InitVersion { n, t_before_ms, t_after_ms })
+        .context("logging the first version")
+}
+
 pub const ASSUMED_OPS_PER_SECOND_PER_WORKER: u64 = 1000;
-/// The JSON around a payload's padding.
-const PAYLOAD_OVERHEAD_BYTES: u64 = 256;
+/// A repo info file around a payload's padding, its ops log full.
+const PAYLOAD_OVERHEAD_BYTES: u64 = 4 * 1024;
 /// Snapshot, manifest, transaction log and `repo` rewrite.
 const COMMIT_OVERHEAD_BYTES: u64 = 8 * 1024;
 
@@ -90,8 +133,9 @@ const CONTROL_EVERY: Duration = Duration::from_secs(1);
 const WIND_DOWN_SLACK: Duration = Duration::from_secs(30);
 
 /// Registers this host, waits for the go, and runs `workers` worker processes
-/// (plus the GC worker on the first participant, if configured) until the
-/// run's deadline or a stop. Writes and returns `done/<tag>.json`. A host that
+/// (plus the GC worker, the status toggler and the fork actor on the first
+/// participant, if configured, and the mirror sampler thread) until the run's deadline or a
+/// stop. Writes and returns `done/<tag>.json`. A host that
 /// missed the go fails with [`LateHost`]. Every `progress_every` (never if
 /// zero) it prints a status line to stderr.
 pub async fn workers(
@@ -101,9 +145,12 @@ pub async fn workers(
     progress_every: Duration,
 ) -> anyhow::Result<HostDone> {
     ensure!(is_valid_tag(&tag), "invalid tag {tag:?}");
-    ensure!(tag != VERIFY_TAG, "the tag {VERIFY_TAG:?} is reserved");
+    for reserved in [VERIFY_TAG, INIT_TAG, SCENARIO_TAG] {
+        ensure!(tag != reserved, "the tag {reserved:?} is reserved");
+    }
     ensure!(workers >= 1, "a host needs at least 1 worker");
-    let config = RunConfig::load(root)?;
+    let (root, config) = &RunConfig::load_resolved(root)?;
+    let config = config.clone();
     let exe = std::env::current_exe().context("locating the fs-stress binary")?;
 
     let hosts = config.hosts;
@@ -118,12 +165,21 @@ pub async fn workers(
 
     let until = go_seen_at + config.duration;
     let mut slots: Vec<String> = (0..workers).map(|i| i.to_string()).collect();
-    if config.mode == Mode::Repository
-        && config.gc.is_some()
-        && participants.first() == Some(&tag)
-    {
-        slots.push(GC_SLOT.to_owned());
+    if participants.first() == Some(&tag) {
+        if config.mode == Mode::Repository && config.gc.is_some() {
+            slots.push(GC_SLOT.to_owned());
+        }
+        if config.readonly.is_some() {
+            slots.push(TOGGLER_SLOT.to_owned());
+        }
+        if config.fork.is_some_and(|fork| !fork.during_gc) {
+            slots.push(FORK_SLOT.to_owned());
+        }
     }
+    let sampler = config
+        .mirror_sample_every
+        .map(|every| Sampler::start(root, &tag, every))
+        .transpose()?;
 
     let log_path = root.supervisor_log(&tag);
     let log = LogWriter::create(&log_path)
@@ -194,6 +250,12 @@ pub async fn workers(
         }
         tokio::time::sleep(TICK).await;
     };
+    // After every worker, so it sees their last publications. A sampler
+    // that couldn't log is reported, and the host still finishes.
+    let sampler_error = sampler.and_then(|sampler| sampler.stop().err()).map(|err| {
+        tracing::warn!("the mirror sampler stopped logging: {err:#}");
+        format!("{err:#}")
+    });
 
     let done = HostDone {
         tag: tag.clone(),
@@ -203,6 +265,7 @@ pub async fn workers(
         incarnations_spawned: pool.incarnations_spawned,
         external_kills: pool.external_kills,
         stragglers,
+        sampler_error,
     };
     let path = root.host_done(&tag);
     write_synced(&path, &serde_json::to_vec_pretty(&done)?)
@@ -326,12 +389,15 @@ impl Pool<'_> {
         Ok(())
     }
 
-    /// SIGKILLs a random running worker and respawns it.
+    /// SIGKILLs a random running worker, never the status toggler, and
+    /// respawns it.
     fn kill_one(&mut self, rng: &mut StdRng) -> anyhow::Result<()> {
-        if self.children.is_empty() {
+        let candidates =
+            external_kill_candidates(self.children.iter().map(|w| w.slot.as_str()));
+        if candidates.is_empty() {
             return Ok(());
         }
-        let i = rng.random_range(0..self.children.len());
+        let i = candidates[rng.random_range(0..candidates.len())];
         let child = &mut self.children[i].child;
         // One that exited on its own since the last check isn't ours to count.
         let running = child.try_wait()?.is_none();
@@ -383,6 +449,16 @@ impl Drop for Pool<'_> {
     }
 }
 
+/// The indices of the slots an external kill may pick: all but the status
+/// toggler's, which must finish its holds to judge their publications.
+fn external_kill_candidates<'a>(slots: impl IntoIterator<Item = &'a str>) -> Vec<usize> {
+    slots
+        .into_iter()
+        .enumerate()
+        .filter_map(|(i, slot)| (slot != TOGGLER_SLOT).then_some(i))
+        .collect()
+}
+
 /// What this host's worker logs record so far, for the progress lines.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ProgressCounts {
@@ -399,9 +475,9 @@ impl ProgressCounts {
     fn add(&mut self, record: &Record) {
         match record {
             Record::Intent { .. } => self.intents += 1,
-            Record::Outcome { result: OpResult::Ack { .. }, .. } => self.acks += 1,
+            Record::Outcome { result, .. } if result.landed().is_some() => self.acks += 1,
             Record::Outcome { result: OpResult::Conflict, .. } => self.conflicts += 1,
-            Record::Outcome { result: OpResult::Error { .. }, .. } => self.errors += 1,
+            Record::Outcome { .. } => self.errors += 1,
             Record::Failure { .. } => self.failures += 1,
             Record::Fault { action: FaultAction::Kill, .. } => self.kills += 1,
             Record::Fault { action: FaultAction::Pause, .. } => self.pauses += 1,
@@ -483,7 +559,7 @@ mod tests {
         config.duration = Duration::from_secs(10);
         config.payload_bytes = 1000;
         let ops = 1000 * 2 * 3 * 10;
-        assert_eq!(data_volume_estimate(&config), 1256 * (ops + 1));
+        assert_eq!(data_volume_estimate(&config), (1000 + 4096) * (ops + 1));
 
         config.mode = Mode::Repository;
         config.chunk_bytes = 1024;
@@ -503,7 +579,8 @@ mod tests {
 
         let log = LogWriter::create(&path).unwrap();
         let id = uuid::Uuid::new_v4();
-        let intent = Record::Intent { t_ms: 1, id, op: crate::log::Op::Gc };
+        let op = crate::log::Op::Gc { older_than_ms: None };
+        let intent = Record::Intent { t_ms: 1, id, op };
         let outcome = |result| Record::Outcome { t_ms: 2, id, result };
         log.append(&intent).unwrap();
         log.append(&outcome(OpResult::Ack { snapshot: None })).unwrap();
@@ -541,6 +618,14 @@ mod tests {
         assert!(progress.tails.is_empty());
         log.append(&intent).unwrap();
         assert_eq!(*progress.poll(), expected);
+    }
+
+    #[test]
+    fn external_kills_spare_the_status_toggler() {
+        let slots = ["0", "1", GC_SLOT, TOGGLER_SLOT, FORK_SLOT];
+        assert_eq!(external_kill_candidates(slots), [0, 1, 2, 4]);
+        assert!(external_kill_candidates([TOGGLER_SLOT]).is_empty());
+        assert!(external_kill_candidates([]).is_empty());
     }
 
     #[test]

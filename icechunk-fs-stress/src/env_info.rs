@@ -37,6 +37,9 @@ pub struct HostDone {
     pub external_kills: u64,
     /// Workers still running at the supervisor's deadline, then killed.
     pub stragglers: u32,
+    /// Why the mirror sampler stopped logging, if it did: its samples end
+    /// there.
+    pub sampler_error: Option<String>,
 }
 
 const UNKNOWN: &str = "unknown";

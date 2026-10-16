@@ -886,7 +886,7 @@ fn mk_update(
                 py,
                 PyUpdate {
                     kind: PyUpdateType::RepoStatusChanged {
-                        status: status.clone().into(),
+                        status: status.repo_status().into(),
                     },
                     updated_at,
                     backup_path,

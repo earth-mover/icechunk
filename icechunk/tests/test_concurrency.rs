@@ -21,7 +21,10 @@ use tokio::{
 
 use futures::TryStreamExt as _;
 
-use crate::common;
+use crate::common::{
+    self,
+    creation_race::{RepoInfoWinner, race_creators},
+};
 
 const N: usize = 20;
 
@@ -64,6 +67,18 @@ async fn test_concurrency_in_tigris() -> Result<(), Box<dyn std::error::Error>> 
     let storage: Arc<dyn Storage + Send + Sync> =
         common::make_tigris_integration_storage(prefix)?;
     do_test_concurrency(storage).await
+}
+
+/// Whichever creator's repo info lands, its initial `flushed_at` is the
+/// stored snapshot file's, although the other creator wrote that file.
+#[tokio_test]
+async fn concurrent_creators_agree_on_the_initial_snapshot_in_memory()
+-> Result<(), Box<dyn std::error::Error>> {
+    for winner in [RepoInfoWinner::A, RepoInfoWinner::B] {
+        let storage = new_in_memory_storage().await?;
+        race_creators(Arc::clone(&storage), storage, winner).await?;
+    }
+    Ok(())
 }
 
 /// This test starts concurrent tasks to read, write and list a repository.

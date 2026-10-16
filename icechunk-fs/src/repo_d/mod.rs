@@ -3,25 +3,26 @@
 //! is current, moved only by `rename`.
 
 pub(crate) mod commit;
-pub(crate) mod freeze;
+pub(crate) mod convert;
 pub(crate) mod lifecycle;
+pub(crate) mod mirror;
 pub(crate) mod read;
 pub(crate) mod sweep;
 
 use std::{
+    collections::BTreeSet,
     fs, io, iter,
     path::{Path, PathBuf},
     thread,
     time::Duration,
 };
 
+use icechunk_format::writer_features::{FeatureName, MinVersion};
 use uuid::Uuid;
 
 use crate::{
     hooks::ProtocolHooks,
-    names::{
-        Marker, MarkerKind, REPO_D, RepoDName, Version, parse_repo_d_name, tmp_dir_name,
-    },
+    names::{Marker, REPO_D, RepoDName, Version, parse_repo_d_name, tmp_dir_name},
     nudge::nudge,
     storage::is_missing,
 };
@@ -35,23 +36,55 @@ pub(crate) struct RepoD<'a> {
 
 #[derive(Debug)]
 pub(crate) enum ProtocolError {
-    /// The marker is `frozen.*`: no commit can succeed.
-    Frozen,
-    /// A single-file repo: run `migrate_legacy_repo`.
-    LegacyFormat,
-    /// `repo.legacy.*` without `repo`: rerun `migrate_legacy_repo`.
-    MigrationInterrupted,
-    /// `repo.d` and a `repo` that isn't the stub: a legacy writer ran, manual
-    /// recovery.
-    MixedFormats,
-    /// Migration found several legacy files, or `repo.d` with other content.
+    /// The bytes of a creation don't list `filesystem-layout-v1`, or the
+    /// bytes of a creation or a change don't decode.
+    NotInLayout(String),
+    /// `$ROOT/repo` doesn't list `filesystem-layout-v1` and `repo.d` doesn't
+    /// exist: a repository in the standard layout, to convert.
+    StandardLayout,
+    /// `$ROOT/repo` lists `filesystem-layout-v1` with a longer history than
+    /// a creation's and `repo.d` doesn't exist: manual recovery.
+    OrphanMirror,
+    /// `$ROOT/repo` can't be read or decoded and `repo.d` doesn't exist; why.
+    RepoUnreadable(String),
+    /// A rerun of the conversion from the standard layout can't attribute the
+    /// `repo.d` it found to its own earlier run; what it found and the
+    /// remedy.
     ManualRecovery(String),
+    /// The repo info lists writer features this storage doesn't implement.
+    MissingFeatures {
+        missing: BTreeSet<FeatureName>,
+        min_version: MinVersion,
+    },
+    /// A repo info that decodes but can't be changed: its shape is malformed,
+    /// or it can't be converted; why.
+    Malformed(String),
+    /// An operation stopped before it finished; what happened and that
+    /// rerunning it completes it.
+    Incomplete(String),
     /// A version without both an etag and a generation.
     InvalidVersion(String),
     /// Ran out of tries; why the last one failed.
     NoConsistentView(String),
-    /// A version file whose bytes don't hash to its name.
+    /// A version file whose bytes don't hash to its name, or don't decode.
     Corrupt(String),
+    /// The fork check found a fork; what it found.
+    Forked(String),
+    /// A change landed as `new`, and its publication found a fork; what it
+    /// found.
+    ForkedAfterUpdate {
+        new: Version,
+        detail: String,
+    },
+    /// GC's hook was called without the version of GC's change on a
+    /// repository in the filesystem layout whose current version lists
+    /// `filesystem-layout-v1`.
+    GcWithoutChange(String),
+    /// `$ROOT/repo` couldn't be read or decoded, so a fork can't be ruled out.
+    MirrorUnreadable(String),
+    /// The current version doesn't list `filesystem-layout-v1`: a conversion
+    /// to the standard layout was interrupted.
+    ConversionInProgress(String),
     Io(io::Error),
 }
 
@@ -84,7 +117,9 @@ impl RepoD<'_> {
                     .into_iter()
                     .filter_map(|name| match name {
                         RepoDName::Marker(marker) => Some(marker),
-                        RepoDName::Content(_) | RepoDName::Stage(_) => None,
+                        RepoDName::Content(_)
+                        | RepoDName::Stage(_)
+                        | RepoDName::Mirror(_) => None,
                     })
                     .collect(),
             )
@@ -104,12 +139,9 @@ impl RepoD<'_> {
         }
     }
 
-    /// The marker of a listing: the newest state it witnessed. At equal `N`
-    /// a `frozen` marker is newer than the `latest` one it was renamed from.
+    /// The marker of a listing: the newest state it witnessed.
     pub(crate) fn highest(markers: &[Marker]) -> Option<&Marker> {
-        markers
-            .iter()
-            .max_by_key(|marker| (marker.version.n(), marker.kind == MarkerKind::Frozen))
+        markers.iter().max_by_key(|marker| marker.version.n())
     }
 }
 
@@ -125,6 +157,9 @@ fn list_names(dir: &Path) -> io::Result<Vec<RepoDName>> {
 }
 
 const TRIES: usize = 8;
+/// The ops-log files the lost-reply check and the provenance check read at
+/// most.
+const OPS_LOG_FILES: usize = 3;
 const FIRST_BACKOFF: Duration = Duration::from_millis(10);
 const MAX_BACKOFF: Duration = Duration::from_millis(500);
 /// Unit tests sleep this many times less.
@@ -155,15 +190,6 @@ enum Step<T> {
     Done(T),
     /// List again; why.
     Retry(String),
-}
-
-impl<T> Step<T> {
-    fn map<U>(self, f: impl FnOnce(T) -> U) -> Step<U> {
-        match self {
-            Step::Done(done) => Step::Done(f(done)),
-            Step::Retry(why) => Step::Retry(why),
-        }
-    }
 }
 
 impl RepoD<'_> {
@@ -230,37 +256,52 @@ pub(super) mod testing {
 
     use std::{
         collections::{BTreeSet, HashSet},
-        fmt, fs, io,
+        fmt::{self, Write as _},
+        fs, io,
         path::Path,
-        sync::{Mutex, mpsc},
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicBool, Ordering},
+            mpsc,
+        },
         thread,
+        time::{SystemTime, UNIX_EPOCH},
     };
 
+    use tracing::{
+        Event, Level, Metadata, Subscriber,
+        field::{Field, Visit},
+        span,
+    };
+
+    use super::{RepoD, lifecycle::CreateOutcome::Created};
+    pub(crate) use crate::repo_infos::{
+        changed_repo_info, committed_repo_info, featureless_repo_info, repo_info,
+    };
     use crate::{
         hooks::{Observed, Point, ProtocolHooks, Sabotage},
-        names::{Hash, Marker, MarkerKind, Version},
+        names::{Hash, Marker, Version},
     };
 
-    pub(crate) const V0: &[u8] = b"v0";
+    /// The bytes of the first version [`seed`] writes.
+    pub(crate) fn v0_bytes() -> Vec<u8> {
+        repo_info(0)
+    }
 
     pub(crate) fn version(n: u64, bytes: &[u8]) -> Version {
         Version::new(n, Hash::of(bytes)).unwrap()
     }
 
     pub(crate) fn latest(version: &Version) -> String {
-        Marker { kind: MarkerKind::Latest, version: version.clone() }.file_name()
+        Marker { version: version.clone() }.file_name()
     }
 
-    pub(crate) fn frozen(version: &Version) -> String {
-        Marker { kind: MarkerKind::Frozen, version: version.clone() }.file_name()
-    }
-
-    /// Writes `repo.d/0.<h0>` and its marker for the bytes [`V0`].
+    /// Writes `repo.d/0.<h0>` and its marker for the bytes [`v0_bytes`].
     pub(crate) fn seed(root: &Path) -> Version {
-        let v0 = version(0, V0);
+        let v0 = version(0, &v0_bytes());
         let dir = root.join("repo.d");
         fs::create_dir_all(&dir).unwrap();
-        fs::write(dir.join(v0.file_name()), V0).unwrap();
+        fs::write(dir.join(v0.file_name()), v0_bytes()).unwrap();
         fs::write(dir.join(latest(&v0)), b"").unwrap();
         v0
     }
@@ -276,8 +317,74 @@ pub(super) mod testing {
         names.into_iter().collect()
     }
 
+    pub(crate) const UNDECODABLE: &[u8] = b"not a repo info";
+
+    pub(crate) fn strings<const N: usize>(names: [&str; N]) -> BTreeSet<String> {
+        names.into_iter().map(str::to_string).collect()
+    }
+
+    pub(crate) fn now_ms() -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis()
+            .try_into()
+            .unwrap()
+    }
+
+    /// Creates the repository with `bytes`, checking that its first `N` is a
+    /// Unix time in milliseconds within the call.
+    pub(crate) fn create(
+        root: &Path,
+        hooks: &dyn ProtocolHooks,
+        bytes: &[u8],
+    ) -> Version {
+        let before = now_ms();
+        let outcome = RepoD { root, hooks }.create(bytes).unwrap();
+        let after = now_ms();
+        let Created(v0) = outcome else { panic!("{outcome:?}") };
+        assert!(
+            (before..=after).contains(&v0.n()),
+            "{} not in {before}..={after}",
+            v0.n()
+        );
+        assert_eq!(v0.hash(), &Hash::of(bytes));
+        v0
+    }
+
+    /// Writes `repo.d` holding version 0 with `bytes`, without `$ROOT/repo`.
+    pub(crate) fn repo_d_with(root: &Path, bytes: &[u8]) -> Version {
+        let v0 = version(0, bytes);
+        let dir = root.join("repo.d");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join(v0.file_name()), bytes).unwrap();
+        fs::write(dir.join(latest(&v0)), b"").unwrap();
+        v0
+    }
+
+    pub(crate) fn plant(root: &Path, bytes: &[u8]) {
+        fs::write(root.join("repo"), bytes).unwrap();
+    }
+
+    /// A rename of `from` to `to` that lands, then reports `ENOENT`, as after
+    /// a lost reply, the first time its target is `name`.
+    pub(crate) fn lose_rename_reply_onto(name: &'static str) -> TestHooks {
+        let lost = AtomicBool::new(false);
+        TestHooks::default().rename(move |from, to| {
+            fs::rename(from, to)?;
+            if to.file_name().is_some_and(|n| n == name)
+                && !lost.swap(true, Ordering::SeqCst)
+            {
+                Err(io::ErrorKind::NotFound.into())
+            } else {
+                Ok(())
+            }
+        })
+    }
+
     type AtFn = Box<dyn Fn(Point) + Send + Sync>;
     type PathFn = Box<dyn Fn(&Path, &Path) -> io::Result<()> + Send + Sync>;
+    type ObservedFn = Box<dyn Fn(Observed) + Send + Sync>;
 
     /// Records every point reached; each operation defaults to the real one.
     #[derive(Default)]
@@ -287,6 +394,7 @@ pub(super) mod testing {
         at: Option<AtFn>,
         link: Option<PathFn>,
         rename: Option<PathFn>,
+        when_observed: Option<ObservedFn>,
         sabotages: HashSet<Sabotage>,
     }
 
@@ -324,6 +432,9 @@ pub(super) mod testing {
 
         fn observed(&self, what: Observed) {
             self.observed.lock().unwrap().push(what);
+            if let Some(when_observed) = &self.when_observed {
+                when_observed(what);
+            }
         }
     }
 
@@ -356,6 +467,14 @@ pub(super) mod testing {
             Self { rename: Some(Box::new(rename)), ..self }
         }
 
+        /// Runs `f` after recording each observation.
+        pub(crate) fn when_observed(
+            self,
+            f: impl Fn(Observed) + Send + Sync + 'static,
+        ) -> Self {
+            Self { when_observed: Some(Box::new(f)), ..self }
+        }
+
         pub(crate) fn sabotage(mut self, sabotage: Sabotage) -> Self {
             self.sabotages.insert(sabotage);
             self
@@ -368,6 +487,42 @@ pub(super) mod testing {
         pub(crate) fn observed(&self) -> Vec<Observed> {
             self.observed.lock().unwrap().clone()
         }
+    }
+
+    /// The fields of the events at `level` logged while `f` runs on this
+    /// thread.
+    pub(crate) fn logged<T>(level: Level, f: impl FnOnce() -> T) -> (T, Vec<String>) {
+        #[derive(Clone)]
+        struct Collector(Level, Arc<Mutex<Vec<String>>>);
+        struct Fields(String);
+        impl Visit for Fields {
+            fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
+                write!(self.0, "{}={value:?} ", field.name()).unwrap();
+            }
+        }
+        impl Subscriber for Collector {
+            fn enabled(&self, _: &Metadata<'_>) -> bool {
+                true
+            }
+            fn new_span(&self, _: &span::Attributes<'_>) -> span::Id {
+                span::Id::from_u64(1)
+            }
+            fn record(&self, _: &span::Id, _: &span::Record<'_>) {}
+            fn record_follows_from(&self, _: &span::Id, _: &span::Id) {}
+            fn event(&self, event: &Event<'_>) {
+                if *event.metadata().level() == self.0 {
+                    let mut fields = Fields(String::new());
+                    event.record(&mut fields);
+                    self.1.lock().unwrap().push(fields.0);
+                }
+            }
+            fn enter(&self, _: &span::Id) {}
+            fn exit(&self, _: &span::Id) {}
+        }
+        let collector = Collector(level, Arc::default());
+        let result = tracing::subscriber::with_default(collector.clone(), f);
+        let events = collector.1.lock().unwrap().clone();
+        (result, events)
     }
 
     /// Runs `writer` with `hooks` on its own thread, pauses it at `pause`,
@@ -414,8 +569,8 @@ mod tests {
         RepoD { root, hooks: &NoHooks }
     }
 
-    fn marker(kind: MarkerKind, version: Version) -> Marker {
-        Marker { kind, version }
+    fn marker(version: Version) -> Marker {
+        Marker { version }
     }
 
     #[test]
@@ -443,24 +598,21 @@ mod tests {
     }
 
     #[test]
-    fn list_markers_parses_both_kinds_and_ignores_the_rest() {
+    fn list_markers_parses_markers_and_ignores_the_rest() {
         let root = tempfile::tempdir().unwrap();
         let v0 = seed(root.path());
         let v1 = version(1, b"v1");
         let dir = root.path().join("repo.d");
-        for name in [frozen(&v1), v1.file_name(), ".nfs123".to_string(), "x".to_string()]
+        let unknown_marker = latest(&v1).replacen("latest.", "frozen.", 1);
+        for name in
+            [unknown_marker, v1.file_name(), ".nfs123".to_string(), "x".to_string()]
         {
             fs::write(dir.join(name), b"").unwrap();
         }
-        let Listed::Markers(mut markers) = repo(root.path()).list_markers().unwrap()
-        else {
+        let Listed::Markers(markers) = repo(root.path()).list_markers().unwrap() else {
             panic!("repo.d exists")
         };
-        markers.sort_by_key(|marker| marker.version.n());
-        assert_eq!(
-            markers,
-            [marker(MarkerKind::Latest, v0), marker(MarkerKind::Frozen, v1)]
-        );
+        assert_eq!(markers, [marker(v0)]);
     }
 
     #[test]
@@ -501,18 +653,16 @@ mod tests {
     }
 
     #[test]
-    fn highest_takes_the_highest_n_and_frozen_over_latest() {
-        let v1 = version(1, b"v1");
-        let v2 = version(2, b"v2");
-        let latest1 = marker(MarkerKind::Latest, v1.clone());
-        let frozen1 = marker(MarkerKind::Frozen, v1);
-        let latest2 = marker(MarkerKind::Latest, v2);
+    fn highest_takes_the_highest_n() {
+        let latest1 = marker(version(1, b"v1"));
+        let latest2 = marker(version(2, b"v2"));
+        let latest3 = marker(version(3, b"v3"));
         assert_eq!(RepoD::highest(&[]), None);
+        assert_eq!(RepoD::highest(std::slice::from_ref(&latest1)), Some(&latest1));
         assert_eq!(
-            RepoD::highest(&[latest2.clone(), frozen1.clone(), latest1.clone()]),
-            Some(&latest2)
+            RepoD::highest(&[latest2.clone(), latest3.clone(), latest1.clone()]),
+            Some(&latest3)
         );
-        assert_eq!(RepoD::highest(&[latest1.clone(), frozen1.clone()]), Some(&frozen1));
-        assert_eq!(RepoD::highest(&[frozen1.clone(), latest1]), Some(&frozen1));
+        assert_eq!(RepoD::highest(&[latest3.clone(), latest1, latest2]), Some(&latest3));
     }
 }

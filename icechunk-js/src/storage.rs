@@ -8,9 +8,9 @@ use bytes::Bytes;
 use futures::stream::BoxStream;
 use futures::{Stream, StreamExt};
 use icechunk::storage::{
-    DeleteObjectsResult, ETag, Generation, GetModifiedResult, ListInfo, PutCondition,
-    Storage, StorageContext, StorageError, StorageInfo, StorageResult, VersionInfo,
-    VersionedUpdateResult, WriteHint,
+    DeleteObjectsResult, ETag, GcPhase, Generation, GetModifiedResult, ListInfo,
+    PutCondition, Storage, StorageContext, StorageError, StorageInfo, StorageResult,
+    VersionInfo, VersionedUpdateResult, WriteHint,
 };
 use napi::bindgen_prelude::{Buffer, Promise};
 use napi::threadsafe_function::ThreadsafeFunction;
@@ -311,6 +311,14 @@ impl Storage for JsCallbackStorage {
             .map_err(|e| js_storage_error("JS canWrite call failed", e))?
             .await
             .map_err(|e| js_storage_error("JS canWrite failed", e))
+    }
+
+    async fn gc_hook(
+        &self,
+        _ctx: &StorageContext<'_>,
+        _phase: GcPhase<'_>,
+    ) -> StorageResult<()> {
+        Ok(())
     }
 
     async fn get_object_range(
@@ -1012,6 +1020,28 @@ impl JsStorage {
     }
 }
 
+/// What `publishMirror` did.
+#[cfg(not(target_family = "wasm"))]
+#[napi(object, js_name = "PublishOutcome")]
+#[derive(Clone, Debug)]
+pub struct JsPublishOutcome {
+    /// True if `repo` holds the version current in the last listing of
+    /// `repo.d/`, or a newer one; false if the marker kept moving and the
+    /// publication gave up.
+    pub current: bool,
+    /// When the publication gave up, the version it left `repo` holding, as
+    /// its file name in `repo.d/` (`<N>.<hash>`); absent if it installed none,
+    /// and when `current` is true.
+    pub left: Option<String>,
+}
+
+/// A version of `repo.d` by its file name, `<N>.<h>`.
+#[cfg(all(unix, not(target_family = "wasm")))]
+fn version_name(version: &icechunk::storage::VersionInfo) -> Option<String> {
+    let icechunk::storage::Generation(n) = version.generation.as_ref()?;
+    Some(format!("{n}.{}", version.etag()?))
+}
+
 #[cfg(not(target_family = "wasm"))]
 fn default_s3_options() -> icechunk::config::S3Options {
     icechunk::config::S3Options::default()
@@ -1034,13 +1064,15 @@ impl JsStorage {
     /// Storage on a filesystem, safe for concurrent writers on filesystems that
     /// meet the requirements in the Icechunk storage guide (hard links, atomic
     /// rename by name, exclusive directory rename).
-    /// It uses a different on-disk format: `repo` is a stub file next to a
-    /// `repo.d/` directory, which other backends and older Icechunk versions
-    /// can't open.
-    /// Safe only if every writer of the repository uses this backend: never let
-    /// `newLocalFilesystem` writers, or older Icechunk versions, write to its
-    /// repositories. Their repositories must first be converted, once, with
-    /// `migrateLegacyRepo`. Experimental. Unix only.
+    /// It stores the repository info in the filesystem layout: `repo.d/` holds
+    /// its versions and `repo` is the mirror, a copy of a version that was
+    /// current, published by every change. Other backends and Icechunk before
+    /// 2.4.0 read its repositories through the mirror and can't modify them.
+    /// Never let anything else write `repo`: Icechunk before 2.4.0 changing the
+    /// status, or other tools, fork the repository.
+    /// Repositories in the standard layout, as `newLocalFilesystem` and Icechunk
+    /// before 2.4.0 write them, are refused until converted, once, with
+    /// `convertToFilesystemLayout`. Experimental. Unix only.
     #[napi(factory)]
     pub async fn new_filesystem(path: String) -> napi::Result<JsStorage> {
         #[cfg(unix)]
@@ -1064,59 +1096,102 @@ impl JsStorage {
         }
     }
 
-    /// Stops every change to a repository of `newFilesystem` storage, leaving it
-    /// readable, for example to copy it consistently. Changes fail with a
-    /// "repository is frozen" error until `unfreezeRepo`. Resolves to true if
-    /// this call froze it, false if it already was frozen. Only true proves
-    /// that this call changed the repository: false comes from a directory
-    /// listing that can lag, so an export must not rely on it.
+    /// Converts a repository in the standard layout, as `newLocalFilesystem` and
+    /// Icechunk before 2.4.0 write it, to the filesystem layout of
+    /// `newFilesystem`, which refuses to open it until then. It changes only the
+    /// writer features and the update log, and keeps the repository's status.
+    /// Administrative: run it with nothing else using the repository, no writer
+    /// in any process, no process still publishing the mirror and no other
+    /// administrative operation; anything else is undefined behavior. If it is
+    /// interrupted, run it again under the same condition: the rerun completes
+    /// the conversion. Resolves to true if this call converted the repository,
+    /// including when it completed an interrupted conversion; false if it was
+    /// in the filesystem layout already, including when this call only
+    /// published a missing mirror. Rejects if there is no repository.
     #[napi]
-    pub async fn freeze_repo(&self) -> napi::Result<bool> {
-        #[cfg(unix)]
-        {
-            let outcome =
-                self.filesystem("freezeRepo")?.freeze_repo().await.map_napi_err()?;
-            Ok(matches!(outcome, icechunk::storage::FreezeOutcome::Frozen(_)))
-        }
-        #[cfg(not(unix))]
-        Err(only_filesystem("freezeRepo"))
-    }
-
-    /// Accepts changes again after `freezeRepo`. Resolves to true if this call
-    /// unfroze the repository, false if it wasn't frozen. Only true proves that
-    /// this call changed the repository: false comes from a directory listing
-    /// that can lag.
-    #[napi]
-    pub async fn unfreeze_repo(&self) -> napi::Result<bool> {
-        #[cfg(unix)]
-        {
-            let outcome =
-                self.filesystem("unfreezeRepo")?.unfreeze_repo().await.map_napi_err()?;
-            Ok(matches!(outcome, icechunk::storage::UnfreezeOutcome::Unfrozen(_)))
-        }
-        #[cfg(not(unix))]
-        Err(only_filesystem("unfreezeRepo"))
-    }
-
-    /// Converts a repository written by `newLocalFilesystem` or an older Icechunk
-    /// to the format of `newFilesystem`, which refuses to open it until then.
-    /// Stop every writer first: no other process may write to the repository
-    /// from when this starts until every writer uses `newFilesystem`. A rerun
-    /// completes an interrupted conversion. Resolves to true if this call
-    /// converted the repository, false if there was nothing to convert.
-    #[napi]
-    pub async fn migrate_legacy_repo(&self) -> napi::Result<bool> {
+    pub async fn convert_to_filesystem_layout(&self) -> napi::Result<bool> {
         #[cfg(unix)]
         {
             let outcome = self
-                .filesystem("migrateLegacyRepo")?
-                .migrate_legacy_repo()
+                .filesystem("convertToFilesystemLayout")?
+                .convert_to_filesystem_layout()
                 .await
                 .map_napi_err()?;
-            Ok(matches!(outcome, icechunk::storage::MigrateOutcome::Migrated))
+            Ok(matches!(outcome, icechunk::storage::ConversionOutcome::Converted))
         }
         #[cfg(not(unix))]
-        Err(only_filesystem("migrateLegacyRepo"))
+        Err(only_filesystem("convertToFilesystemLayout"))
+    }
+
+    /// Converts a repository in the filesystem layout of `newFilesystem` back to
+    /// the standard layout that `newLocalFilesystem`, other backends and
+    /// Icechunk before 2.4.0 write. It changes only the writer features and the
+    /// update log, and keeps the repository's status.
+    /// Administrative: run it with nothing else using the repository, no writer
+    /// in any process, no process still publishing the mirror and no other
+    /// administrative operation; anything else is undefined behavior. If it is
+    /// interrupted, run it again under the same condition: the rerun completes
+    /// the conversion. Until then, every write and garbage collection through
+    /// `newFilesystem` fails, saying that a conversion to the standard layout is
+    /// in progress and to rerun it.
+    /// A copy of a filesystem-layout repository on other storage is read-only.
+    /// To get a copy that can be written elsewhere: set the status of the source
+    /// to read-only (with Python or Rust), convert it to the standard layout,
+    /// copy it, convert the source back with `convertToFilesystemLayout` if it
+    /// should stay in this layout, and set the statuses to online (with Python
+    /// or Rust).
+    /// Resolves to true if this call converted the repository, false if it was
+    /// in the standard layout already; rejects if there is no repository.
+    #[napi]
+    pub async fn convert_to_standard_layout(&self) -> napi::Result<bool> {
+        #[cfg(unix)]
+        {
+            let outcome = self
+                .filesystem("convertToStandardLayout")?
+                .convert_to_standard_layout()
+                .await
+                .map_napi_err()?;
+            Ok(matches!(outcome, icechunk::storage::ConversionOutcome::Converted))
+        }
+        #[cfg(not(unix))]
+        Err(only_filesystem("convertToStandardLayout"))
+    }
+
+    /// Publishes the current version of the repository as the mirror `repo`,
+    /// repairing a mirror left behind by a process that died between its change
+    /// and its publication, or by a publication that gave up under contention.
+    /// It never changes the repository and is safe while writers run.
+    /// Best effort: it publishes the version it lists, which a change landing
+    /// meanwhile or a lagging listing can make older than the current one. A
+    /// change, such as setting the status to read-only (with Python or Rust),
+    /// makes the mirror current once every process that changed the repository
+    /// earlier has finished; do that before serving a finished repository
+    /// read-only or copying it.
+    /// Resolves to whether `repo` holds the version current in the last
+    /// listing and, if the publication gave up, the version it left `repo`
+    /// holding. Rejects on a fork, an unreadable `repo` or an interrupted
+    /// conversion to the standard layout.
+    #[napi]
+    pub async fn publish_mirror(&self) -> napi::Result<JsPublishOutcome> {
+        #[cfg(unix)]
+        {
+            let outcome = self
+                .filesystem("publishMirror")?
+                .publish_mirror()
+                .await
+                .map_napi_err()?;
+            Ok(match outcome {
+                icechunk::storage::PublishOutcome::Current => {
+                    JsPublishOutcome { current: true, left: None }
+                }
+                icechunk::storage::PublishOutcome::GaveUp { left } => JsPublishOutcome {
+                    current: false,
+                    left: left.as_ref().and_then(version_name),
+                },
+            })
+        }
+        #[cfg(not(unix))]
+        Err(only_filesystem("publishMirror"))
     }
 
     #[napi(factory)]

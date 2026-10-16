@@ -7,7 +7,9 @@ use icechunk::{
     format::{
         IcechunkFormatError, REPO_INFO_FILE_PATH, SnapshotId,
         format_constants::SpecVersionBin,
-        repo_info::{RepoAvailability, RepoInfo, RepoStatus, UpdateInfo, UpdateType},
+        repo_info::{
+            RepoAvailability, RepoHeader, RepoInfo, RepoStatus, UpdateInfo, UpdateType,
+        },
         snapshot::SnapshotInfo,
     },
     new_in_memory_storage,
@@ -78,7 +80,7 @@ async fn measure_size(
         None,
         None::<std::iter::Empty<u16>>,
         None::<std::iter::Empty<u16>>,
-        status,
+        &RepoHeader::new(&[], status),
     )?;
     let raw_size = repo_info.bytes().len();
 

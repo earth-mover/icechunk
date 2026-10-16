@@ -232,6 +232,8 @@ pub enum VirtualReferenceErrorKind {
     InvalidCredentials(String),
     #[error("{}", format_unauthorized_vcc(.url_prefix, .name))]
     UnauthorizedVirtualChunkContainer { url_prefix: String, name: Option<String> },
+    #[error("{}", format_undecodable_vcc(.url_prefix, .name))]
+    UndecodableVirtualChunkContainer { url_prefix: String, name: Option<String> },
     #[error("virtual reference has no path segments {0}")]
     NoPathSegments(String),
     #[error("unsupported scheme for virtual chunk refs: {0}")]
@@ -271,6 +273,19 @@ fn format_unauthorized_vcc(url_prefix: &str, name: &Option<String>) -> String {
         "a virtual chunk in this repository resolves to the url prefix {url_prefix}{container}, \
          to be able to fetch the chunk you need to authorize the virtual chunk container \
          when you open/create the repository, see https://icechunk.io/en/stable/virtual/"
+    )
+}
+
+fn format_undecodable_vcc(url_prefix: &str, name: &Option<String>) -> String {
+    let container = match name {
+        Some(n) => format!(" (container: {n})"),
+        None => String::new(),
+    };
+    format!(
+        "a virtual chunk in this repository resolves to the url prefix {url_prefix}{container}, \
+         whose store settings this Icechunk library can't decode: a kind of storage added by \
+         a later Icechunk version, or one this build doesn't include (the JavaScript/WASM \
+         build has no GCS, Azure or local filesystem support). Its chunks can't be read"
     )
 }
 

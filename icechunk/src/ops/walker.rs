@@ -30,9 +30,11 @@ use tokio::{
 use tracing::{info, instrument};
 
 use crate::{
-    asset_manager::{AssetManager, decode_manifest, frame_content_size},
+    asset_manager::{AssetManager, decode_manifest},
     format::{
-        ManifestId, SnapshotId, format_constants,
+        ManifestId, SnapshotId,
+        envelope::frame_content_size,
+        format_constants,
         manifest::Manifest,
         snapshot::{ManifestFileInfo, Snapshot},
     },

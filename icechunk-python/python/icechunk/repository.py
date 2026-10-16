@@ -862,7 +862,9 @@ class Repository:
         Returns
         -------
         RepoStatus
-            The current status of the repository.
+            The current status of the repository. For a repository that lists
+            writer features, this is its own status, not the read-only status
+            that Icechunk versions which don't implement those features read.
         """
         return self._repository.get_status()
 
@@ -874,7 +876,9 @@ class Repository:
         Returns
         -------
         RepoStatus
-            The current status of the repository.
+            The current status of the repository. For a repository that lists
+            writer features, this is its own status, not the read-only status
+            that Icechunk versions which don't implement those features read.
         """
         return self._repository.get_status()
 
@@ -885,13 +889,23 @@ class Repository:
         Returns
         -------
         RepoStatus
-            The current status of the repository.
+            The current status of the repository. For a repository that lists
+            writer features, this is its own status, not the read-only status
+            that Icechunk versions which don't implement those features read.
         """
         return await self._repository.get_status_async()
 
     def set_status(self, status: RepoStatus) -> None:
         """
         Set the repository status.
+
+        While the status is `RepoAvailability.read_only`, every modification of
+        the repository is refused, garbage collection and expiration included,
+        except status changes and the layout conversions of
+        `filesystem_storage`. Setting it is the way to stop every writer, for
+        example before copying a repository. On `filesystem_storage` it also
+        makes the mirror `repo` current once every process that changed the
+        repository earlier has finished.
 
         Parameters
         ----------
@@ -903,6 +917,14 @@ class Repository:
     async def set_status_async(self, status: RepoStatus) -> None:
         """
         Set the repository status (async version).
+
+        While the status is `RepoAvailability.read_only`, every modification of
+        the repository is refused, garbage collection and expiration included,
+        except status changes and the layout conversions of
+        `filesystem_storage`. Setting it is the way to stop every writer, for
+        example before copying a repository. On `filesystem_storage` it also
+        makes the mirror `repo` current once every process that changed the
+        repository earlier has finished.
 
         Parameters
         ----------
@@ -981,6 +1003,11 @@ class Repository:
         """
         Set a feature flag.
 
+        Icechunk before 2.4.0 ignores every flag except `move_node`,
+        `create_tag` and `delete_tag`, so disabling another flag doesn't stop
+        writers using an older Icechunk. To stop every writer, set the status
+        to `RepoAvailability.read_only` instead.
+
         Parameters
         ----------
         name : str
@@ -993,6 +1020,11 @@ class Repository:
     async def set_feature_flag_async(self, name: str, setting: bool | None) -> None:
         """
         Set a feature flag (async version).
+
+        Icechunk before 2.4.0 ignores every flag except `move_node`,
+        `create_tag` and `delete_tag`, so disabling another flag doesn't stop
+        writers using an older Icechunk. To stop every writer, set the status
+        to `RepoAvailability.read_only` instead.
 
         Parameters
         ----------
@@ -1988,9 +2020,10 @@ class Repository:
             Delete objects older than this time. The bound is exclusive. An
             object is deleted only if it is also not referenced by any surviving
             (non-expired) snapshot. With `filesystem_storage`, the leftovers
-            of its commit protocol are also deleted: superseded versions of the
-            `repo` file whatever their age, and files of crashed or abandoned
-            writes older than this, but never ones younger than 24 hours.
+            of its filesystem layout are also deleted: superseded versions of
+            the repo info in `repo.d/` whatever their age, and staged files in
+            the repository root and in `repo.d/` and abandoned `repo.d.tmp.*`
+            directories older than this, but never ones younger than 24 hours.
         dry_run: bool : bool
             Report results but don't delete any objects
         max_snapshots_in_memory : int
@@ -2076,9 +2109,10 @@ class Repository:
             Delete objects older than this time. The bound is exclusive. An
             object is deleted only if it is also not referenced by any surviving
             (non-expired) snapshot. With `filesystem_storage`, the leftovers
-            of its commit protocol are also deleted: superseded versions of the
-            `repo` file whatever their age, and files of crashed or abandoned
-            writes older than this, but never ones younger than 24 hours.
+            of its filesystem layout are also deleted: superseded versions of
+            the repo info in `repo.d/` whatever their age, and staged files in
+            the repository root and in `repo.d/` and abandoned `repo.d.tmp.*`
+            directories older than this, but never ones younger than 24 hours.
         dry_run: bool : bool
             Report results but don't delete any objects
         max_snapshots_in_memory : int
@@ -2408,7 +2442,12 @@ class Repository:
         -------
         dict[str, Any]
             Keys: ``header``, ``spec_version``, ``branches``, ``tags``,
-            ``deleted_tags``, ``snapshots``, ``metadata``, ``latest_updates``.
+            ``deleted_tags``, ``snapshots``, ``metadata``, ``latest_updates``,
+            ``status`` and, when present, ``repo_before_updates`` and
+            ``writer_features``. ``status`` is the status as stored: for a
+            repository with writer features, the read-only status that
+            Icechunk versions which don't implement them read, with the
+            repository's own status under ``underlying``.
 
             Every ``inspect_*`` method reports a ``header`` describing the
             binary header of the file it read. Keys: ``written_by`` (the
@@ -2436,7 +2475,12 @@ class Repository:
         -------
         dict[str, Any]
             Keys: ``header``, ``spec_version``, ``branches``, ``tags``,
-            ``deleted_tags``, ``snapshots``, ``metadata``, ``latest_updates``.
+            ``deleted_tags``, ``snapshots``, ``metadata``, ``latest_updates``,
+            ``status`` and, when present, ``repo_before_updates`` and
+            ``writer_features``. ``status`` is the status as stored: for a
+            repository with writer features, the read-only status that
+            Icechunk versions which don't implement them read, with the
+            repository's own status under ``underlying``.
 
             Every ``inspect_*`` method reports a ``header`` describing the
             binary header of the file it read. Keys: ``written_by`` (the

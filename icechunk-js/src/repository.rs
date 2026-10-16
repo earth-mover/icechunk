@@ -569,6 +569,10 @@ impl JsRepository {
         Ok(flags.map(JsFeatureFlag::from).collect())
     }
 
+    /// Icechunk before 2.4.0 ignores every flag except `move_node`, `create_tag`
+    /// and `delete_tag`, so disabling another flag doesn't stop writers using an
+    /// older Icechunk. To stop every writer, set the status to read-only (with
+    /// Python or Rust) instead.
     #[napi]
     pub async fn set_feature_flag(
         &self,

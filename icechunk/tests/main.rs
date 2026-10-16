@@ -7,13 +7,17 @@
 
 mod common;
 mod test_attribution;
+mod test_can_read_old_fixtures;
 mod test_concurrency;
+mod test_config_compliance;
 mod test_distributed_writes;
 #[cfg(all(feature = "fs", unix))]
 mod test_filesystem_storage;
 mod test_flaky_connections;
 mod test_gc;
 mod test_key_layout;
+#[cfg(feature = "object-store-fs")]
+mod test_local_filesystem_guard;
 #[cfg(feature = "shuttle")]
 mod test_shuttle;
 mod test_stats;

@@ -88,6 +88,8 @@ rlimit.workspace = true
 icechunk-macros.workspace = true
 # test-util exposes write-id injection for the lost-response regression tests.
 icechunk-s3 = { workspace = true, features = ["test-util"] }
+# fault-injection writes test-only writer features.
+icechunk-format = { workspace = true, features = ["fault-injection"] }
 
 assert_fs.workspace = true
 clap.workspace = true

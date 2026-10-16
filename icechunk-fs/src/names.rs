@@ -18,11 +18,9 @@ const HASH_LEN: usize = 64;
 pub(crate) const REPO: &str = "repo";
 pub(crate) const REPO_D: &str = "repo.d";
 const TMP_DIR_PREFIX: &str = "repo.d.tmp.";
-const LEGACY_PREFIX: &str = "repo.legacy.";
-const STUB_STAGING_PREFIX: &str = "repo.stub.";
 const STAGE_PREFIX: &str = "stage.";
+const MIRROR_PREFIX: &str = "mirror.";
 const LATEST_PREFIX: &str = "latest.";
-const FROZEN_PREFIX: &str = "frozen.";
 
 /// Lowercase hex sha256 of `bytes`.
 pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
@@ -61,9 +59,12 @@ impl Version {
         (n <= MAX_N).then_some(Version { n, hash })
     }
 
-    /// Version 0, of a new repository.
-    pub(crate) fn initial(hash: Hash) -> Version {
-        Version { n: 0, hash }
+    /// The first version of a new `repo.d`; `n` is the creating host's Unix
+    /// time in milliseconds.
+    pub(crate) fn initial(n: u64, hash: Hash) -> io::Result<Version> {
+        Version::new(n, hash).ok_or_else(|| {
+            io::Error::other(format!("the first version number {n} is above {MAX_N}"))
+        })
     }
 
     pub(crate) fn n(&self) -> u64 {
@@ -109,32 +110,16 @@ impl Version {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub(crate) enum MarkerKind {
-    Latest,
-    Frozen,
-}
-
-impl MarkerKind {
-    fn prefix(self) -> &'static str {
-        match self {
-            MarkerKind::Latest => LATEST_PREFIX,
-            MarkerKind::Frozen => FROZEN_PREFIX,
-        }
-    }
-}
-
 /// The empty file whose name says which version is current.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub(crate) struct Marker {
-    pub(crate) kind: MarkerKind,
     pub(crate) version: Version,
 }
 
 impl Marker {
-    /// `latest.<K>.<N>.<h>` or `frozen.<K>.<N>.<h>`
+    /// `latest.<K>.<N>.<h>`
     pub(crate) fn file_name(&self) -> String {
-        format!("{}{}.{}", self.kind.prefix(), self.version.k(), self.version.file_name())
+        format!("{LATEST_PREFIX}{}.{}", self.version.k(), self.version.file_name())
     }
 }
 
@@ -144,20 +129,21 @@ pub(crate) enum RepoDName {
     Content(Version),
     Marker(Marker),
     Stage(Uuid),
+    Mirror(Uuid),
 }
 
 pub(crate) fn parse_repo_d_name(name: &str) -> Option<RepoDName> {
     if let Some(id) = name.strip_prefix(STAGE_PREFIX) {
         return parse_hyphenated_uuid(id).map(RepoDName::Stage);
     }
-    let marker = [MarkerKind::Latest, MarkerKind::Frozen]
-        .into_iter()
-        .find_map(|kind| Some((kind, name.strip_prefix(kind.prefix())?)));
-    match marker {
-        Some((kind, rest)) => {
+    if let Some(id) = name.strip_prefix(MIRROR_PREFIX) {
+        return parse_hyphenated_uuid(id).map(RepoDName::Mirror);
+    }
+    match name.strip_prefix(LATEST_PREFIX) {
+        Some(rest) => {
             let (k, rest) = rest.split_once('.')?;
             let version = parse_version(rest)?;
-            (k == version.k()).then_some(RepoDName::Marker(Marker { kind, version }))
+            (k == version.k()).then_some(RepoDName::Marker(Marker { version }))
         }
         None => parse_version(name).map(RepoDName::Content),
     }
@@ -168,19 +154,14 @@ pub(crate) fn stage_name(id: Uuid) -> String {
     format!("{STAGE_PREFIX}{id}")
 }
 
+/// `mirror.<id>`
+pub(crate) fn mirror_name(id: Uuid) -> String {
+    format!("{MIRROR_PREFIX}{id}")
+}
+
 /// `repo.d.tmp.<id>`
 pub(crate) fn tmp_dir_name(id: Uuid) -> String {
     format!("{TMP_DIR_PREFIX}{id}")
-}
-
-/// `repo.legacy.<id>`
-pub(crate) fn legacy_name(id: Uuid) -> String {
-    format!("{LEGACY_PREFIX}{id}")
-}
-
-/// `repo.stub.<id>`
-pub(crate) fn stub_staging_name(id: Uuid) -> String {
-    format!("{STUB_STAGING_PREFIX}{id}")
 }
 
 /// A protocol name in the root, other than `repo`.
@@ -188,23 +169,13 @@ pub(crate) fn stub_staging_name(id: Uuid) -> String {
 pub(crate) enum RootName {
     RepoD,
     TmpDir,
-    Legacy,
-    StubStaging,
 }
 
 pub(crate) fn parse_root_name(name: &str) -> Option<RootName> {
     if name == REPO_D {
         return Some(RootName::RepoD);
     }
-    [
-        (TMP_DIR_PREFIX, RootName::TmpDir),
-        (LEGACY_PREFIX, RootName::Legacy),
-        (STUB_STAGING_PREFIX, RootName::StubStaging),
-    ]
-    .into_iter()
-    .find_map(|(prefix, root_name)| {
-        parse_hyphenated_uuid(name.strip_prefix(prefix)?).map(|_| root_name)
-    })
+    parse_hyphenated_uuid(name.strip_prefix(TMP_DIR_PREFIX)?).map(|_| RootName::TmpDir)
 }
 
 /// A decimal `N <= MAX_N` without leading zeros.
@@ -256,12 +227,10 @@ mod tests {
 
     #[test]
     fn marker_names_round_trip() {
-        for kind in [MarkerKind::Latest, MarkerKind::Frozen] {
-            for n in NS {
-                let marker = Marker { kind, version: version(n) };
-                let name = marker.file_name();
-                assert_eq!(parse_repo_d_name(&name), Some(RepoDName::Marker(marker)));
-            }
+        for n in NS {
+            let marker = Marker { version: version(n) };
+            let name = marker.file_name();
+            assert_eq!(parse_repo_d_name(&name), Some(RepoDName::Marker(marker)));
         }
     }
 
@@ -274,12 +243,28 @@ mod tests {
     }
 
     #[test]
+    fn mirror_names_round_trip() {
+        let id = Uuid::new_v4();
+        let name = mirror_name(id);
+        assert_eq!(name, format!("mirror.{id}"));
+        assert_eq!(parse_repo_d_name(&name), Some(RepoDName::Mirror(id)));
+    }
+
+    #[test]
+    fn initial_versions_start_at_n() {
+        for n in NS {
+            assert_eq!(Version::initial(n, hash()).unwrap(), version(n));
+        }
+        assert!(Version::initial(MAX_N + 1, hash()).is_err());
+    }
+
+    #[test]
     fn k_is_the_nines_complement_in_15_digits() {
-        let latest = Marker { kind: MarkerKind::Latest, version: version(1000) };
+        let latest = Marker { version: version(1000) };
         assert_eq!(latest.file_name(), format!("latest.999999999998999.1000.{H}"));
-        let frozen = Marker { kind: MarkerKind::Frozen, version: version(0) };
-        assert_eq!(frozen.file_name(), format!("frozen.999999999999999.0.{H}"));
-        let last = Marker { kind: MarkerKind::Latest, version: version(MAX_N) };
+        let first = Marker { version: version(0) };
+        assert_eq!(first.file_name(), format!("latest.999999999999999.0.{H}"));
+        let last = Marker { version: version(MAX_N) };
         assert_eq!(last.file_name(), format!("latest.000000000000000.{MAX_N}.{H}"));
     }
 
@@ -291,7 +276,6 @@ mod tests {
         for name in [
             // K disagrees with N
             format!("latest.999999999998998.1000.{H}"),
-            format!("frozen.999999999999999.1.{H}"),
             // leading zeros in N, K of the wrong width
             format!("01.{H}"),
             format!("00.{H}"),
@@ -316,6 +300,7 @@ mod tests {
             "latest".to_string(),
             "latest.999999999998999.1000".to_string(),
             format!("other.999999999998999.1000.{H}"),
+            format!("frozen.999999999998999.1000.{H}"),
             format!("+1.{H}"),
             format!("-1.{H}"),
             String::new(),
@@ -324,6 +309,24 @@ mod tests {
             format!("1.{H}x"),
             format!("latest.999999999998999.1000.{H}.x"),
             format!("stage.{id}.x"),
+            // bad mirror ids
+            format!("mirror.{}", id.simple()),
+            format!("mirror.{}", id.hyphenated().to_string().to_uppercase()),
+            format!("mirror.{}", id.braced()),
+            "mirror.".to_string(),
+            "mirror".to_string(),
+            format!("mirror.{id}.x"),
+            format!("mirror{id}"),
+            format!("mirrors.{id}"),
+            // removed names
+            format!("frozen.999999999998999.1000.{H}"),
+            format!("frozen.{id}"),
+            format!("converted.999999999998999.1000.{H}"),
+            format!("converted.{id}"),
+            format!("converted.1000.{H}"),
+            format!("repo.d.converting.{id}"),
+            format!("repo.legacy.{id}"),
+            format!("repo.stub.{id}"),
         ] {
             assert_eq!(parse_repo_d_name(&name), None, "{name}");
         }
@@ -336,21 +339,27 @@ mod tests {
         assert_eq!(parse_root_name(REPO_D), Some(RootName::RepoD));
         assert_eq!(tmp_dir_name(id), format!("repo.d.tmp.{id}"));
         assert_eq!(parse_root_name(&tmp_dir_name(id)), Some(RootName::TmpDir));
-        assert_eq!(legacy_name(id), format!("repo.legacy.{id}"));
-        assert_eq!(parse_root_name(&legacy_name(id)), Some(RootName::Legacy));
-        assert_eq!(stub_staging_name(id), format!("repo.stub.{id}"));
-        assert_eq!(parse_root_name(&stub_staging_name(id)), Some(RootName::StubStaging));
         for name in [
             "repo".to_string(),
             "repo.d.tmp.x".to_string(),
-            "repo.legacy.".to_string(),
-            "repo.stubx".to_string(),
             "repo.d.tmp.".to_string(),
             "repo.d/".to_string(),
             "repo.dx".to_string(),
-            format!("repo.stub.{}", id.simple()),
-            format!("repo.legacy.{id}.x"),
+            format!("repo.d.tmp.{}", id.simple()),
             format!("repo.d.tmp.{id}/x"),
+            // removed names
+            format!("repo.legacy.{id}"),
+            format!("repo.stub.{id}"),
+            format!("repo.d.converting.{id}"),
+            "repo.d.converting.".to_string(),
+            format!("converted.{id}"),
+            format!("converted.999999999998999.1000.{H}"),
+            format!("frozen.{id}"),
+            format!("frozen.999999999998999.1000.{H}"),
+            // names inside repo.d aren't root names
+            format!("mirror.{id}"),
+            format!("stage.{id}"),
+            format!("repo.mirror.{id}"),
         ] {
             assert_eq!(parse_root_name(&name), None, "{name}");
         }

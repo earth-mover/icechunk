@@ -1,20 +1,31 @@
 //! Storage mode: workers race conditional updates of `repo` directly through
-//! the [`Storage`] API. Before each attempt a worker backs up the base it read
-//! to `overwritten/<attempt id>`, so the oracle can rebuild the chain of
-//! committed payloads from the backups.
+//! the [`Storage`] API. Each update is a real repo info: its base with a
+//! `MetadataChangedUpdate` whose stress metadata names the writer and the
+//! base, made as icechunk makes a change. Before each attempt a worker backs
+//! up the base it read to a spec-named file in `overwritten/`, which the new
+//! repo info's ops log names, so the oracle can rebuild the chain of repo
+//! infos from the backups.
 
 use std::{
     sync::Arc,
     time::{Duration, SystemTime},
 };
 
-use anyhow::{Context as _, bail};
+use anyhow::{Context as _, bail, ensure};
 use bytes::Bytes;
 use icechunk::{
     asset_manager::async_reader_to_bytes,
+    format::{
+        IcechunkFormatError, OVERWRITTEN_FILES_PATH,
+        format_constants::SpecVersionBin,
+        repo_info::{RepoInfo, UpdateType},
+        repo_info_file,
+        snapshot::{Snapshot, SnapshotInfo, SnapshotProperties},
+        writer_features::WriterFeature,
+    },
     storage::{
         GetModifiedResult, PutCondition, Settings, Storage, StorageContext,
-        StorageResult, VersionInfo, VersionedUpdateResult, WriteHint,
+        StorageErrorKind, StorageResult, VersionInfo, VersionedUpdateResult, WriteHint,
         new_local_filesystem_storage,
     },
 };
@@ -35,19 +46,30 @@ use crate::{
 pub const REPO_KEY: &str = "repo";
 
 /// Where workers back up the base of each attempt.
-pub const BACKUP_DIR: &str = "overwritten";
+pub const BACKUP_DIR: &str = OVERWRITTEN_FILES_PATH;
 
-pub fn backup_key(attempt: Uuid) -> String {
-    format!("{BACKUP_DIR}/{attempt}")
+/// The key of a backup whose spec name, relative to [`BACKUP_DIR`], is
+/// `backup_path`.
+pub fn backup_key(backup_path: &str) -> String {
+    format!("{BACKUP_DIR}/{backup_path}")
 }
 
-/// The full content of `repo` and of every backup.
+/// The metadata key of a [`Payload`].
+pub const METADATA_KEY: &str = "stress";
+
+/// Ops-log entries per repo info file: few, so that paging the ops log out to
+/// `repo_before_updates` is exercised.
+pub const NUM_UPDATES_PER_FILE: u16 = 50;
+
+const COMPRESSION_LEVEL: u8 = 3;
+
+/// The stress metadata of every repo info a worker writes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Payload {
     pub id: Uuid,
-    /// The etag of the payload this one replaced; `None` only initially.
-    pub parent: Option<String>,
+    /// The etag of the repo info this one replaced.
+    pub parent: String,
     pub host: String,
     pub slot: String,
     pub incarnation: u32,
@@ -55,14 +77,149 @@ pub struct Payload {
     pub padding: String,
 }
 
-/// The etag of a payload: the lowercase sha256 hex of its bytes, which is
+/// The etag of a repo info: the lowercase sha256 hex of its bytes, which is
 /// also the etag `FilesystemStorage` gives them: the `h` of `repo.d/<N>.<h>`.
 pub fn payload_etag(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
 
-pub fn parse_payload(bytes: &[u8]) -> anyhow::Result<Payload> {
-    serde_json::from_slice(bytes).context("parsing payload")
+/// A repo info file a storage-mode run wrote.
+#[derive(Debug)]
+pub struct Decoded {
+    pub info: RepoInfo,
+    /// `None` for the initial repo info, whose ops log is only its
+    /// `RepoInitializedUpdate`.
+    pub payload: Option<Payload>,
+    /// The backup path the update that made this repo info named on its
+    /// predecessor entry, as the filesystem storage's lost-reply check reads
+    /// it; `None` for the initial repo info.
+    pub attempt: Option<String>,
+}
+
+/// Decodes a repo info file a storage-mode run wrote.
+pub fn decode(bytes: &[u8]) -> anyhow::Result<Decoded> {
+    let info = repo_info_file::decode(bytes).map_err(format_error("decoding"))?;
+    let payload = match info
+        .metadata()
+        .map_err(format_error("reading metadata"))?
+        .remove(METADATA_KEY)
+    {
+        Some(value) => {
+            Some(serde_json::from_value(value).context("parsing the stress metadata")?)
+        }
+        None => {
+            ensure!(
+                is_initial(&info)?,
+                "no {METADATA_KEY:?} metadata in a repo info after the initial one"
+            );
+            None
+        }
+    };
+    let attempt = attempt(&info)?;
+    ensure!(
+        payload.is_some() == attempt.is_some(),
+        "a repo info with{} stress metadata names {} predecessor backup",
+        if payload.is_some() { "" } else { "out" },
+        if attempt.is_some() { "a" } else { "no" },
+    );
+    Ok(Decoded { info, payload, attempt })
+}
+
+/// The backup path the update that made `info` wrote on its predecessor
+/// entry, read as `layout_v1::attempt_id` reads it from the file, without
+/// decoding the file again: when paging moved the predecessor out of this
+/// file, the file's `repo_before_updates`.
+fn attempt(info: &RepoInfo) -> anyhow::Result<Option<String>> {
+    let read = || format_error("reading the attempt");
+    let mut entries = info.latest_updates().map_err(read())?;
+    // The newest entry is this update's own.
+    entries.next().transpose().map_err(read())?;
+    Ok(match entries.next().transpose().map_err(read())? {
+        Some((_, _, backup_path)) => backup_path.map(str::to_owned),
+        None => info.repo_before_updates().map_err(read())?.map(str::to_owned),
+    })
+}
+
+/// Whether the ops log is only a `RepoInitializedUpdate`.
+fn is_initial(info: &RepoInfo) -> anyhow::Result<bool> {
+    let mut updates =
+        info.latest_updates().map_err(format_error("reading the ops log"))?;
+    let first =
+        updates.next().transpose().map_err(format_error("reading the ops log"))?;
+    let only = matches!(first, Some((UpdateType::RepoInitializedUpdate, ..)))
+        && updates.next().is_none()
+        && info
+            .repo_before_updates()
+            .map_err(format_error("reading the ops log"))?
+            .is_none();
+    Ok(only)
+}
+
+/// The initial repo info, listing `writer_features`, as icechunk creates it.
+pub fn initial_repo_info(writer_features: &[WriterFeature]) -> anyhow::Result<Bytes> {
+    let spec_version = SpecVersionBin::current();
+    let snapshot = Snapshot::initial(spec_version)
+        .map_err(format_error("building the initial snapshot"))?;
+    let snapshot = SnapshotInfo::from_snapshot_file(&snapshot)
+        .map_err(format_error("building the initial snapshot"))?;
+    let info = RepoInfo::initial(
+        spec_version,
+        snapshot,
+        NUM_UPDATES_PER_FILE,
+        None::<&()>,
+        None,
+        writer_features,
+    );
+    encode(&info)
+}
+
+/// `base` with `payload` as its metadata and its newest ops-log entry naming
+/// `backup_path`, as icechunk changes the metadata.
+pub fn next_repo_info(
+    base: &RepoInfo,
+    payload: &Payload,
+    backup_path: &str,
+) -> anyhow::Result<Bytes> {
+    let spec_version =
+        base.spec_version().map_err(format_error("reading the spec version"))?;
+    let metadata = SnapshotProperties::from([(
+        METADATA_KEY.to_owned(),
+        serde_json::to_value(payload)?,
+    )]);
+    let info = base
+        .set_metadata(spec_version, &metadata, backup_path, NUM_UPDATES_PER_FILE)
+        .map_err(format_error("setting the metadata"))?;
+    encode(&info)
+}
+
+fn encode(info: &RepoInfo) -> anyhow::Result<Bytes> {
+    let spec_version =
+        info.spec_version().map_err(format_error("reading the spec version"))?;
+    let bytes = repo_info_file::encode(info, spec_version, COMPRESSION_LEVEL)
+        .map_err(format_error("encoding"))?;
+    Ok(bytes.into())
+}
+
+/// Leaves out the error's span trace.
+fn format_error(what: &str) -> impl FnOnce(IcechunkFormatError) -> anyhow::Error {
+    let what = what.to_owned();
+    move |err| anyhow::anyhow!("{what}: {}", err.kind())
+}
+
+/// The outcome of a failed storage operation: the layout's refusals and a
+/// durable change whose publication found a fork, or an error.
+pub fn classify_storage(kind: &StorageErrorKind) -> OpResult {
+    let message = kind.to_string();
+    match kind {
+        StorageErrorKind::RepositoryForked(_) => OpResult::Forked { message },
+        StorageErrorKind::RepositoryForkedAfterUpdate { .. } => {
+            OpResult::DurableButForked { snapshot: None, message }
+        }
+        StorageErrorKind::LayoutConversionInProgress(_) => {
+            OpResult::ConversionInProgress { message }
+        }
+        _ => OpResult::Error { message },
+    }
 }
 
 /// The run's storage. `hooks` are installed on the filesystem backend only;
@@ -87,7 +244,7 @@ pub async fn storage(
 }
 
 /// The current content of `repo`, read through `storage`: with
-/// `FilesystemStorage` the file `repo` is only a stub.
+/// `FilesystemStorage` the file `repo` is the mirror, which can lag.
 pub async fn read_repo(storage: &(dyn Storage + Send + Sync)) -> anyhow::Result<Bytes> {
     let settings = storage.default_settings().await?;
     let ctx = StorageContext::unattributed(&settings);
@@ -95,27 +252,21 @@ pub async fn read_repo(storage: &(dyn Storage + Send + Sync)) -> anyhow::Result<
     Ok(async_reader_to_bytes(reader, 0).await?)
 }
 
-/// Creates `repo` with the initial payload, the root of every chain.
+/// Creates `repo` with the initial repo info, the root of every chain,
+/// listing the writer features the storage requires, as icechunk does.
 pub async fn init(root: &RunRoot, config: &RunConfig) -> anyhow::Result<()> {
     let storage = storage(root, config, None).await?;
     let settings = storage.default_settings().await?;
     let ctx = StorageContext::unattributed(&settings);
     storage.create_location_if_needed().await?;
-    let initial = Payload {
-        id: Uuid::nil(),
-        parent: None,
-        host: String::new(),
-        slot: String::new(),
-        incarnation: 0,
-        seq: 0,
-        padding: padding(config),
-    };
-    let bytes = serde_json::to_vec(&initial)?;
+    let required: Vec<WriterFeature> =
+        storage.writer_features().await?.required().iter().copied().collect();
+    let bytes = initial_repo_info(&required)?;
     match storage
         .put_object_conditional(
             &ctx,
             REPO_KEY,
-            bytes.into(),
+            bytes,
             None,
             Vec::new(),
             PutCondition::Create,
@@ -129,8 +280,14 @@ pub async fn init(root: &RunRoot, config: &RunConfig) -> anyhow::Result<()> {
     }
 }
 
+/// Random characters, which compression can't shrink much: repo info files
+/// are compressed, and the padding is there to make them bigger.
 fn padding(config: &RunConfig) -> String {
-    "x".repeat(config.payload_bytes)
+    let rng: StdRng = rand::make_rng();
+    rng.sample_iter(rand::distr::Alphanumeric)
+        .take(config.payload_bytes)
+        .map(char::from)
+        .collect()
 }
 
 const ERROR_BACKOFF: Duration = Duration::from_millis(100);
@@ -168,8 +325,8 @@ pub async fn worker(
                 log.append(&Record::Failure { t_ms: now_ms(), message: err })?;
                 ERROR_BACKOFF
             }
-            Attempt::Logged(OpResult::Error { .. }) => ERROR_BACKOFF,
-            Attempt::Logged(OpResult::Ack { .. }) => continue,
+            Attempt::Logged(result) if result.landed().is_some() => continue,
+            Attempt::Logged(_) => ERROR_BACKOFF,
         };
         tokio::time::sleep(backoff).await;
     }
@@ -228,7 +385,7 @@ impl Updater {
     }
 
     /// Backs up the current `repo`, logs an intent and tries to replace
-    /// `repo` with a new payload. `Err` only if `log` can't be written.
+    /// `repo` with a new repo info. `Err` only if `log` can't be written.
     pub async fn attempt(&mut self, log: &LogWriter) -> anyhow::Result<Attempt> {
         let ctx = StorageContext::unattributed(&self.settings);
         let storage = &*self.storage;
@@ -241,17 +398,26 @@ impl Updater {
         let id = Uuid::new_v4();
         let payload = Payload {
             id,
-            parent: Some(base.etag.clone()),
+            parent: base.etag.clone(),
             host: self.who.tag.clone(),
             slot: self.who.slot.clone(),
             incarnation: self.who.incarnation,
             seq: self.seq,
             padding: self.padding.clone(),
         };
-        let bytes = Bytes::from(serde_json::to_vec(&payload)?);
+        let backup = repo_info_file::new_backup_path();
+        let bytes = match repo_info_file::decode(&base.bytes)
+            .map_err(format_error("decoding"))
+            .and_then(|info| next_repo_info(&info, &payload, &backup))
+        {
+            Ok(bytes) => bytes,
+            Err(err) => {
+                return Ok(Attempt::Failed(format!("updating {REPO_KEY}: {err:#}")));
+            }
+        };
         let new = payload_etag(&bytes);
 
-        match back_up(storage, &ctx, self.backend, id, &base).await {
+        match back_up(storage, &ctx, self.backend, &backup, &base).await {
             Ok(true) => {}
             Ok(false) => return Ok(Attempt::Raced),
             Err(err) => {
@@ -262,7 +428,7 @@ impl Updater {
         log.append(&Record::Intent {
             t_ms: now_ms(),
             id,
-            op: Op::Cas { base: base.etag, new: new.clone() },
+            op: Op::Cas { base: base.etag, new: new.clone(), backup },
         })?;
         let put = storage
             .put_object_conditional(
@@ -280,7 +446,7 @@ impl Updater {
                 OpResult::Ack { snapshot: None }
             }
             Ok(VersionedUpdateResult::NotOnLatestVersion) => OpResult::Conflict,
-            Err(err) => OpResult::Error { message: err.to_string() },
+            Err(err) => classify_storage(err.kind()),
         };
         log.append(&Record::Outcome { t_ms: now_ms(), id, result: result.clone() })?;
         self.seq += 1;
@@ -316,16 +482,16 @@ async fn latest(
     }
 }
 
-/// Backs up `base` as the base of attempt `id`; `false` if `repo` changed
+/// Backs up `base` to `overwritten/<backup_path>`; `false` if `repo` changed
 /// first.
 async fn back_up(
     storage: &(dyn Storage + Send + Sync),
     ctx: &StorageContext<'_>,
     backend: Backend,
-    id: Uuid,
+    backup_path: &str,
     base: &Base,
 ) -> StorageResult<bool> {
-    let key = backup_key(id);
+    let key = backup_key(backup_path);
     match backend {
         Backend::Filesystem => {
             let copied =
@@ -350,6 +516,8 @@ mod tests {
         collections::{HashMap, HashSet},
         fs,
     };
+
+    use icechunk::format::layout_v1;
 
     use super::*;
     use crate::{
@@ -376,7 +544,8 @@ mod tests {
     }
 
     /// Checks the log is `Start`, then intents each followed by its outcome
-    /// (ignoring `Observed` records), and returns the `new` etag of every acknowledged update.
+    /// (ignoring `Observed` and mirror rename records), and returns the
+    /// `new` etag of every acknowledged update.
     fn acked(root: &RunRoot, who: &WorkerId) -> Vec<String> {
         let records =
             read_log(&root.worker_log(&who.tag, &who.slot, who.incarnation)).unwrap();
@@ -388,14 +557,21 @@ mod tests {
         );
         let ops: Vec<_> = ops
             .iter()
-            .filter(|record| !matches!(record, Record::Observed { .. }))
+            .filter(|record| {
+                !matches!(
+                    record,
+                    Record::Observed { .. }
+                        | Record::MirrorRenaming { .. }
+                        | Record::MirrorRename { .. }
+                )
+            })
             .cloned()
             .collect();
         assert_eq!(ops.len() % 2, 0, "{ops:?}");
         ops.chunks(2)
             .filter_map(|pair| match pair {
                 [
-                    Record::Intent { id, op: Op::Cas { base, new }, .. },
+                    Record::Intent { id, op: Op::Cas { base, new, .. }, .. },
                     Record::Outcome { id: outcome_id, result, .. },
                 ] => {
                     assert_eq!(id, outcome_id);
@@ -415,28 +591,33 @@ mod tests {
         read_repo(&*storage(root, config, None).await.unwrap()).await.unwrap()
     }
 
-    /// Follows `repo`'s parents through the backups down to the initial
-    /// payload and returns the etags of the whole chain.
+    /// Follows `repo`'s parents through the backups down to the initial repo
+    /// info and returns the etags of the whole chain. Each repo info's
+    /// attempt names the backup of its parent.
     async fn chain(root: &RunRoot, config: &RunConfig) -> HashSet<String> {
-        let storage = root.storage();
-        let backups: HashMap<String, Payload> = fs::read_dir(storage.join("overwritten"))
+        let overwritten = root.storage().join(BACKUP_DIR);
+        // The etag of every backup by name: attempts on the same base back
+        // it up under different names.
+        let backups: HashMap<String, String> = fs::read_dir(&overwritten)
             .unwrap()
             .map(|entry| {
-                let bytes = fs::read(entry.unwrap().path()).unwrap();
-                (payload_etag(&bytes), parse_payload(&bytes).unwrap())
+                let entry = entry.unwrap();
+                let bytes = fs::read(entry.path()).unwrap();
+                (entry.file_name().into_string().unwrap(), payload_etag(&bytes))
             })
             .collect();
+        let backed_up = |attempt: &str| backups.get(attempt);
         let bytes = repo_bytes(root, config).await;
         let mut etags = HashSet::from([payload_etag(&bytes)]);
-        let mut payload = parse_payload(&bytes).unwrap();
-        while let Some(parent) = &payload.parent {
+        let mut decoded = decode(&bytes).unwrap();
+        while let Some(payload) = &decoded.payload {
+            let parent = payload.parent.clone();
             assert!(etags.insert(parent.clone()), "cycle at {parent}");
-            payload = backups
-                .get(parent)
-                .unwrap_or_else(|| panic!("no backup of {parent}"))
-                .clone();
+            let attempt = decoded.attempt.as_deref().unwrap();
+            assert_eq!(backed_up(attempt), Some(&parent), "{attempt}");
+            decoded = decode(&fs::read(overwritten.join(attempt)).unwrap()).unwrap();
         }
-        assert_eq!(payload.id, Uuid::nil());
+        assert_eq!(decoded.attempt, None);
         etags
     }
 
@@ -523,13 +704,104 @@ mod tests {
     async fn init_refuses_an_existing_repo() {
         let (_dir, root, config) = run_root();
         init(&root, &config).await.unwrap();
-        let other =
-            RunConfig { payload_bytes: config.payload_bytes + 1, ..config.clone() };
-        assert!(init(&root, &other).await.is_err());
-        let payload = parse_payload(&repo_bytes(&root, &config).await).unwrap();
-        assert_eq!(payload.id, Uuid::nil());
-        assert_eq!(payload.parent, None);
-        assert_eq!(payload.padding, "x".repeat(config.payload_bytes));
+        let initial = repo_bytes(&root, &config).await;
+        assert!(init(&root, &config).await.is_err());
+        assert_eq!(repo_bytes(&root, &config).await, initial);
+        let decoded = decode(&initial).unwrap();
+        assert_eq!((decoded.payload, decoded.attempt), (None, None));
+    }
+
+    /// The initial repo info lists the storage's required writer features,
+    /// as icechunk's creation does: `filesystem-layout-v1` and its gate on
+    /// the filesystem backend, nothing on the legacy one.
+    #[tokio::test]
+    async fn init_lists_the_writer_features_the_storage_requires() {
+        use icechunk::format::repo_info::RepoAvailability;
+        for (backend, features) in [
+            (Backend::Filesystem, vec![layout_v1::FEATURE]),
+            (Backend::LegacyLocal, vec![]),
+        ] {
+            let (_dir, root, mut config) = run_root();
+            config.backend = backend;
+            init(&root, &config).await.unwrap();
+            let info = decode(&repo_bytes(&root, &config).await).unwrap().info;
+            let listed = info.raw_writer_features().unwrap();
+            let listed: Vec<&str> = listed.iter().map(|name| name.as_str()).collect();
+            assert_eq!(listed, features, "{backend:?}");
+            assert_eq!(info.status().unwrap().availability, RepoAvailability::Online);
+            info.check_writable_shape(
+                icechunk::format::repo_info::WritableShapeMode::AnyChange,
+            )
+            .unwrap();
+        }
+    }
+
+    #[test]
+    fn next_repo_info_names_the_backup_and_carries_the_payload() {
+        let initial = initial_repo_info(&[WriterFeature::FilesystemLayoutV1]).unwrap();
+        let mut bytes = initial.clone();
+        let mut backups = Vec::new();
+        // Past one ops-log file, so the predecessor entry is paged out.
+        for seq in 0..u64::from(NUM_UPDATES_PER_FILE) + 2 {
+            let payload = Payload {
+                id: Uuid::new_v4(),
+                parent: payload_etag(&bytes),
+                host: "h".to_owned(),
+                slot: "0".to_owned(),
+                incarnation: 0,
+                seq,
+                padding: "xx".to_owned(),
+            };
+            let backup = repo_info_file::new_backup_path();
+            let base = repo_info_file::decode(&bytes).unwrap();
+            bytes = next_repo_info(&base, &payload, &backup).unwrap();
+            let decoded = decode(&bytes).unwrap();
+            assert_eq!(decoded.payload, Some(payload));
+            assert_eq!(decoded.attempt.as_ref(), Some(&backup));
+            // The filesystem storage's lost-reply check reads the same.
+            assert_eq!(decoded.attempt, layout_v1::attempt_id(&bytes).unwrap());
+            assert!(layout_v1::lists_feature(&bytes).unwrap());
+            backups.push(backup);
+        }
+        let info = decode(&bytes).unwrap().info;
+        assert!(info.repo_before_updates().unwrap().is_some());
+        assert!(backups.iter().all(|backup| backup.starts_with("repo.")), "{backups:?}");
+    }
+
+    /// With one entry per file the predecessor entry is paged out at once,
+    /// and the attempt is the file's `repo_before_updates`.
+    #[test]
+    fn the_attempt_of_a_paged_out_predecessor_is_repo_before_updates() {
+        let initial = initial_repo_info(&[WriterFeature::FilesystemLayoutV1]).unwrap();
+        let mut info = repo_info_file::decode(&initial).unwrap();
+        let spec_version = info.spec_version().unwrap();
+        for backup in ["repo.1.A", "repo.2.B"] {
+            info = info
+                .set_metadata(spec_version, &SnapshotProperties::new(), backup, 1)
+                .unwrap();
+            let bytes = repo_info_file::encode(&info, spec_version, 3).unwrap();
+            assert_eq!(info.latest_updates().unwrap().count(), 1);
+            assert_eq!(attempt(&info).unwrap().as_deref(), Some(backup));
+            assert_eq!(attempt(&info).unwrap(), layout_v1::attempt_id(&bytes).unwrap());
+        }
+    }
+
+    #[test]
+    fn decode_rejects_repo_infos_a_run_never_writes() {
+        let initial = initial_repo_info(&[]).unwrap();
+        let base = repo_info_file::decode(&initial).unwrap();
+        let spec_version = base.spec_version().unwrap();
+        let foreign = SnapshotProperties::from([("other".to_owned(), 1.into())]);
+        let foreign = base.set_metadata(spec_version, &foreign, "repo.1.X", 10).unwrap();
+        let foreign = repo_info_file::encode(&foreign, spec_version, 3).unwrap();
+        let err = format!("{:#}", decode(&foreign).unwrap_err());
+        assert!(err.contains("no \"stress\" metadata"), "{err}");
+
+        let odd = SnapshotProperties::from([(METADATA_KEY.to_owned(), 1.into())]);
+        let odd = base.set_metadata(spec_version, &odd, "repo.1.X", 10).unwrap();
+        let odd = repo_info_file::encode(&odd, spec_version, 3).unwrap();
+        assert!(decode(&odd).is_err());
+        assert!(decode(b"garbage").is_err());
     }
 
     #[test]

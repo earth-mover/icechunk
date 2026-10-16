@@ -99,18 +99,20 @@ mod tests {
     fn root_protocol_names_are_rejected_only_at_the_root() {
         let root = Path::new("/data/repo");
         let id = Uuid::new_v4();
-        for name in [
-            "repo.d".to_string(),
-            format!("repo.d.tmp.{id}"),
-            format!("repo.legacy.{id}"),
-            format!("repo.stub.{id}"),
-        ] {
+        for name in ["repo.d".to_string(), format!("repo.d.tmp.{id}")] {
             assert!(key_path(root, &name).is_err(), "{name}");
             assert!(key_path(root, &format!("{name}/x")).is_err(), "{name}");
             assert!(prefix_path(root, &name).is_err(), "{name}");
             assert!(key_path(root, &format!("a/{name}")).is_ok(), "{name}");
         }
-        for key in ["repo", "repo.dx", "repo.legacy.x", &format!("repo.staging.{id}")] {
+        // Removed names are unknown names, ordinary keys.
+        for key in [
+            "repo",
+            "repo.dx",
+            &format!("repo.staging.{id}"),
+            &format!("repo.legacy.{id}"),
+            &format!("repo.stub.{id}"),
+        ] {
             assert!(key_path(root, key).is_ok(), "{key}");
         }
     }

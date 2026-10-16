@@ -124,17 +124,17 @@ test-integration rooted="true" *args:
   rc=0
   # exclude icechunk-python: no Rust tests, but its PyO3 lib-test binary aborts loading libpython
   # exclude icechunk-fs-stress: its ignored tests spawn stress processes, see fs-stress-process-tests
-  # skip the protocol model checks: they need a release build, see fs-model-check
-  cargo test --profile {{profile}} --workspace --exclude icechunk-python --exclude icechunk-fs-stress --tests "$@" -- --ignored --skip rooted_roundtrip --skip two_writers_everything --skip three_writers_everything --skip three_writers_no_freeze || rc=1
+  # skip the protocol and layout model checks: they need a release build, see fs-model-check
+  cargo test --profile {{profile}} --workspace --exclude icechunk-python --exclude icechunk-fs-stress --tests "$@" -- --ignored --skip rooted_roundtrip --skip two_writers_everything --skip three_writers_everything --skip slow_layout_ || rc=1
   if [ "{{rooted}}" = "true" ]; then
     cargo test --profile {{profile}} -p icechunk --test main rooted_roundtrip -- --ignored || rc=1
   fi
   exit $rc
 
 [group('test')]
-[doc("Run the large model checks of the filesystem storage protocol, or those matching the filters (about 4 min on 32 cores, over an hour on a 4-core CI runner; 2.4 GB of RAM)")]
+[doc("Run the large model checks of the filesystem storage protocol and layout, or those matching the filters (about 10.5 min on 32 cores, over an hour on a 4-core CI runner; 5.6 GiB of RAM)")]
 fs-model-check *filters:
-  cargo test --release -p icechunk-fs --test protocol_model -- --ignored --nocapture --test-threads=1 --skip three_writers_everything {{filters}}
+  cargo test --release -p icechunk-fs --test protocol_model --test layout_model -- --ignored --nocapture --test-threads=1 {{filters}}
 
 [group('test')]
 [script]

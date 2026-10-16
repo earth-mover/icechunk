@@ -104,6 +104,14 @@ results = repo.garbage_collect(expiry_time)
 print(results)
 ```
 
+!!! note "Busy repositories"
+    Expiration and garbage collection read the repository, then update it once,
+    and give up if another change landed in between: a `ConflictError` with
+    `kind == ErrorKind.UPDATE_ATTEMPTS_EXHAUSTED`. They can't simply retry,
+    because their result depends on the repository they read. Under continuous
+    commits from many writers they can keep losing this race; run them when the
+    commit rate is lower.
+
 ### Reading the summary
 
 The returned [`GCSummary`](../reference/ops.md#icechunk.ops.GCSummary) counts

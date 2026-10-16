@@ -1,13 +1,15 @@
 //! Reads of `repo`: `read_latest` and the version files themselves.
 
-use std::path::Path;
+use std::{fs, path::Path, time::SystemTime};
 
 use bytes::Bytes;
 
-use super::{ProtocolError, RepoD, Step};
+use super::{Listed, ProtocolError, RepoD, Step};
 use crate::{
     names::{Hash, Version},
+    nudge::nudge,
     read::read_all,
+    storage::is_missing,
 };
 
 /// The current version of `repo` and its bytes.
@@ -57,6 +59,11 @@ impl RepoD<'_> {
         read: impl Fn(Current) -> T,
     ) -> Result<Option<T>, ProtocolError> {
         let dir = self.dir();
+        // Every read found the same listed version missing: a copy taken
+        // without the recipe can name a version it doesn't hold, while a
+        // live repository's marker moves on.
+        let mut missing_version: Option<Version> = None;
+        let mut never_appeared = true;
         self.with_listing(|marker| {
             let Some(marker) = marker else {
                 return Ok(Step::Done(None));
@@ -71,8 +78,19 @@ impl RepoD<'_> {
                 }
                 Err(err) => {
                     tracing::debug!(?err, "could not read the listed version of repo");
+                    never_appeared &=
+                        matches!(&err, ProtocolError::Io(err) if is_missing(err))
+                            && *missing_version.get_or_insert_with(|| version.clone())
+                                == *version;
                     Step::Retry(match err {
                         ProtocolError::Corrupt(msg) => msg,
+                        ProtocolError::Io(err) if never_appeared => format!(
+                            "could not read {}: {err}; if the repository at {} is a copy, \
+                             it may not have been taken as \"Copying a repository\" in \
+                             the filesystem layout specification says",
+                            version.file_name(),
+                            self.root.display()
+                        ),
                         ProtocolError::Io(err) => {
                             format!("could not read {}: {err}", version.file_name())
                         }
@@ -83,8 +101,55 @@ impl RepoD<'_> {
         })
     }
 
-    /// For `copy_object`: `None` when the file is missing or unreadable (the
-    /// base is gone).
+    /// The modification time of the current version's file, `None` if
+    /// `repo.d` doesn't exist. Lists again while the file is gone.
+    pub(crate) fn current_modified(&self) -> Result<Option<SystemTime>, ProtocolError> {
+        let dir = self.dir();
+        self.with_listing(|marker| {
+            let Some(marker) = marker else {
+                return Ok(Step::Done(None));
+            };
+            let name = marker.version.file_name();
+            match fs::metadata(dir.join(&name)).and_then(|metadata| metadata.modified()) {
+                Ok(modified) => Ok(Step::Done(Some(modified))),
+                Err(err) if is_missing(&err) => {
+                    Ok(Step::Retry(format!("{name} is gone")))
+                }
+                Err(err) => Err(err.into()),
+            }
+        })
+    }
+
+    /// For `copy_object`, which backs up `base` before a change from it:
+    /// `None` when a listing of `repo.d` shows a marker above `base`, as a
+    /// copy-if-match of a stale version fails, or when
+    /// [`RepoD::read_version`] finds no bytes. Only a marker above `base`
+    /// counts: a listing without `base`'s marker may be stale.
+    pub(crate) fn read_backup_source(
+        &self,
+        base: &Version,
+    ) -> Result<Option<Bytes>, ProtocolError> {
+        if self.listed_past(base) {
+            return Ok(None);
+        }
+        self.read_version(base)
+    }
+
+    /// Whether one listing of `repo.d` shows a marker above `base`.
+    fn listed_past(&self, base: &Version) -> bool {
+        nudge(&self.dir());
+        match self.list_markers() {
+            Ok(Listed::Markers(markers)) => Self::highest(&markers)
+                .is_some_and(|marker| marker.version.n() > base.n()),
+            Ok(Listed::NotFound) => false,
+            Err(err) => {
+                tracing::debug!(?err, "could not list repo.d before a backup");
+                false
+            }
+        }
+    }
+
+    /// `None` when the file is missing or unreadable (the base is gone).
     pub(crate) fn read_version(
         &self,
         version: &Version,
@@ -101,7 +166,10 @@ impl RepoD<'_> {
 }
 
 /// `<N>.<h>`, checked against `h`.
-fn read_version_file(dir: &Path, version: &Version) -> Result<Bytes, ProtocolError> {
+pub(super) fn read_version_file(
+    dir: &Path,
+    version: &Version,
+) -> Result<Bytes, ProtocolError> {
     let name = version.file_name();
     let bytes = read_all(&dir.join(&name))?;
     let read = Hash::of(&bytes);
@@ -143,7 +211,7 @@ mod tests {
     fn reads_the_current_version() {
         let root = tempfile::tempdir().unwrap();
         let v0 = seed(root.path());
-        assert_eq!(repo(root.path()).read_latest().unwrap(), current(V0, &v0));
+        assert_eq!(repo(root.path()).read_latest().unwrap(), current(&v0_bytes(), &v0));
     }
 
     #[test]
@@ -153,17 +221,17 @@ mod tests {
         let repo = repo(root.path());
         assert_eq!(repo.read_since(&v0).unwrap(), Some(Since::NotModified));
         // A listing that lags behind what the caller already read.
-        let v3 = version(3, b"v3");
+        let v3 = version(3, &repo_info(3));
         assert_eq!(repo.read_since(&v3).unwrap(), Some(Since::NotModified));
         // Same N, other hash: a version this repo never had.
-        let other = version(0, b"other");
-        assert_eq!(repo.read_since(&other).unwrap(), modified(V0, &v0));
-        let older = version(0, b"older");
-        let v1 = version(1, b"v1");
+        let other = version(0, &repo_info(10));
+        assert_eq!(repo.read_since(&other).unwrap(), modified(&v0_bytes(), &v0));
+        let older = version(0, &repo_info(11));
+        let v1 = version(1, &repo_info(1));
         let dir = root.path().join("repo.d");
-        fs::write(dir.join(v1.file_name()), b"v1").unwrap();
+        fs::write(dir.join(v1.file_name()), &repo_info(1)).unwrap();
         fs::rename(dir.join(latest(&v0)), dir.join(latest(&v1))).unwrap();
-        assert_eq!(repo.read_since(&older).unwrap(), modified(b"v1", &v1));
+        assert_eq!(repo.read_since(&older).unwrap(), modified(&repo_info(1), &v1));
     }
 
     #[test]
@@ -171,7 +239,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let repo = repo(root.path());
         assert_eq!(repo.read_latest().unwrap(), None);
-        assert_eq!(repo.read_since(&version(0, V0)).unwrap(), None);
+        assert_eq!(repo.read_since(&version(0, &v0_bytes())).unwrap(), None);
     }
 
     #[test]
@@ -193,7 +261,8 @@ mod tests {
         let err = repo(root.path()).read_latest().unwrap_err();
         assert!(
             matches!(&err, ProtocolError::NoConsistentView(cause)
-                if cause.contains(&v0.file_name()) && cause.contains("doesn't hash to its name")),
+                if cause.contains(&v0.file_name()) && cause.contains("doesn't hash to its name")
+                    && !cause.contains("is a copy")),
             "{err:?}"
         );
     }
@@ -204,9 +273,44 @@ mod tests {
         let v0 = seed(root.path());
         fs::remove_file(root.path().join("repo.d").join(v0.file_name())).unwrap();
         let err = repo(root.path()).read_latest().unwrap_err();
+        let copy = format!(
+            "; if the repository at {} is a copy, it may not have been taken as \
+             \"Copying a repository\" in the filesystem layout specification says",
+            root.path().display()
+        );
         assert!(
             matches!(&err, ProtocolError::NoConsistentView(cause)
-                if cause.starts_with(&format!("could not read {}: ", v0.file_name()))),
+                if cause.starts_with(&format!("could not read {}: ", v0.file_name()))
+                    && cause.ends_with(&copy)),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn missing_files_of_a_moving_marker_are_not_blamed_on_a_copy() {
+        let root = tempfile::tempdir().unwrap();
+        let v0 = seed(root.path());
+        let v1 = version(1, &repo_info(1));
+        let dir = root.path().join("repo.d");
+        fs::remove_file(dir.join(v0.file_name())).unwrap();
+        let moved = std::cell::Cell::new(false);
+        // Between the first listing and its read, a change moves the marker
+        // to `v1`, whose file is gone too by the next read.
+        let err = repo(root.path())
+            .read_listed(
+                |_| {
+                    if !moved.replace(true) {
+                        fs::rename(dir.join(latest(&v0)), dir.join(latest(&v1))).unwrap();
+                    }
+                    None::<()>
+                },
+                |_| (),
+            )
+            .unwrap_err();
+        assert!(
+            matches!(&err, ProtocolError::NoConsistentView(cause)
+                if cause.starts_with(&format!("could not read {}: ", v1.file_name()))
+                    && !cause.contains("is a copy")),
             "{err:?}"
         );
     }
@@ -215,18 +319,18 @@ mod tests {
     fn torn_listing_takes_the_highest_marker() {
         let root = tempfile::tempdir().unwrap();
         seed(root.path());
-        let v1 = version(1, b"v1");
+        let v1 = version(1, &repo_info(1));
         let dir = root.path().join("repo.d");
-        fs::write(dir.join(v1.file_name()), b"v1").unwrap();
+        fs::write(dir.join(v1.file_name()), &repo_info(1)).unwrap();
         fs::write(dir.join(latest(&v1)), b"").unwrap();
-        assert_eq!(repo(root.path()).read_latest().unwrap(), current(b"v1", &v1));
+        assert_eq!(repo(root.path()).read_latest().unwrap(), current(&repo_info(1), &v1));
     }
 
     #[test]
     fn other_names_are_ignored() {
         let root = tempfile::tempdir().unwrap();
         let v0 = seed(root.path());
-        let v9 = version(9, b"v9");
+        let v9 = version(9, &repo_info(9));
         let dir = root.path().join("repo.d");
         for name in [
             ".nfs123".to_string(),
@@ -236,18 +340,33 @@ mod tests {
             format!("{}.x", latest(&v9)),
             v9.file_name(),
         ] {
-            fs::write(dir.join(name), b"v9").unwrap();
+            fs::write(dir.join(name), &repo_info(9)).unwrap();
         }
-        assert_eq!(repo(root.path()).read_latest().unwrap(), current(V0, &v0));
+        assert_eq!(repo(root.path()).read_latest().unwrap(), current(&v0_bytes(), &v0));
     }
 
+    /// Only a listed marker above the version stops the backup.
     #[test]
-    fn frozen_marker_is_read() {
+    fn read_backup_source_needs_a_marker_above_to_refuse() {
         let root = tempfile::tempdir().unwrap();
         let v0 = seed(root.path());
+        let repo = repo(root.path());
         let dir = root.path().join("repo.d");
-        fs::rename(dir.join(latest(&v0)), dir.join(frozen(&v0))).unwrap();
-        assert_eq!(repo(root.path()).read_latest().unwrap(), current(V0, &v0));
+        let v0_read = Some(Bytes::from(v0_bytes()));
+        assert_eq!(repo.read_backup_source(&v0).unwrap(), v0_read);
+
+        let v1 = version(1, &repo_info(1));
+        fs::write(dir.join(v1.file_name()), repo_info(1)).unwrap();
+        fs::rename(dir.join(latest(&v0)), dir.join(latest(&v1))).unwrap();
+        assert_eq!(repo.read_backup_source(&v0).unwrap(), None);
+        assert_eq!(repo.read_version(&v0).unwrap(), v0_read);
+
+        // A listing that lags behind the version, or shows no marker.
+        fs::rename(dir.join(latest(&v1)), dir.join(latest(&v0))).unwrap();
+        let v1_read = Some(Bytes::from(repo_info(1)));
+        assert_eq!(repo.read_backup_source(&v1).unwrap(), v1_read);
+        fs::remove_file(dir.join(latest(&v0))).unwrap();
+        assert_eq!(repo.read_backup_source(&v1).unwrap(), v1_read);
     }
 
     #[test]
@@ -255,10 +374,10 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let v0 = seed(root.path());
         let repo = repo(root.path());
-        assert_eq!(repo.read_version(&v0).unwrap(), Some(Bytes::from_static(V0)));
-        assert_eq!(repo.read_version(&version(1, b"v1")).unwrap(), None);
+        assert_eq!(repo.read_version(&v0).unwrap(), Some(Bytes::from(v0_bytes())));
+        assert_eq!(repo.read_version(&version(1, &repo_info(1))).unwrap(), None);
 
-        let v2 = version(2, b"v2");
+        let v2 = version(2, &repo_info(2));
         fs::write(root.path().join("repo.d").join(v2.file_name()), b"not v2").unwrap();
         let err = repo.read_version(&v2).unwrap_err();
         assert!(

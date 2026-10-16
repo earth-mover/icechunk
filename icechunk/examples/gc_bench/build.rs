@@ -518,7 +518,7 @@ pub(crate) async fn build(args: BuildArgs) -> Result<(), BoxError> {
                 config_bytes.as_deref(),
                 repo_info.enabled_feature_flags().inject()?,
                 repo_info.disabled_feature_flags().inject()?,
-                &repo_info.status().inject()?,
+                &repo_info.header().inject()?,
             )
             .inject()?;
             Ok(Arc::new(new_info))

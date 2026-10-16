@@ -1,8 +1,10 @@
 import test from 'ava'
 import assert from 'node:assert/strict'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
+import { cp, mkdtemp, readFile, readdir, rename, rm, stat, unlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, relative } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import * as zarr from 'zarrita'
 
 import { Storage, Repository, RepositoryConfig } from '../index'
@@ -436,38 +438,16 @@ nativeUnixOnly('filesystem storage lifecycle', async (t) => {
   t.pass()
 })
 
-nativeUnixOnly('filesystem storage freeze, unfreeze and migrate', async (t) => {
+nativeUnixOnly('filesystem storage conversion changes nothing on its own repositories', async (t) => {
   const dir = await mkdtemp(join(tmpdir(), 'icechunk-js-fs-'))
   try {
     const storage = await Storage.newFilesystem(dir)
-    assert.equal(await storage.migrateLegacyRepo(), false)
-    const repo = await Repository.create(storage)
-    assert.equal(await storage.migrateLegacyRepo(), false)
-
-    assert.equal(await storage.freezeRepo(), true)
-    assert.equal(await storage.freezeRepo(), false)
     await t.throwsAsync(
-      async () => { await repo.createBranch('frozen-branch', await repo.lookupBranch('main')) },
-      { message: /the repository is frozen/ },
+      async () => { await storage.convertToFilesystemLayout() },
+      { message: /object not found/ },
     )
-    const session = await repo.writableSession('main')
-    await session.store.set('zarr.json', new TextEncoder().encode(JSON.stringify({
-      zarr_format: 3,
-      node_type: 'group',
-    })))
-    await t.throwsAsync(
-      async () => { await session.commit('while frozen') },
-      { message: /the repository is frozen/ },
-    )
-
-    assert.equal(await storage.unfreezeRepo(), true)
-    assert.equal(await storage.unfreezeRepo(), false)
-    const retry = await repo.writableSession('main')
-    await retry.store.set('zarr.json', new TextEncoder().encode(JSON.stringify({
-      zarr_format: 3,
-      node_type: 'group',
-    })))
-    await retry.commit('after unfreeze')
+    await Repository.create(storage)
+    assert.equal(await storage.convertToFilesystemLayout(), false)
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
@@ -475,7 +455,7 @@ nativeUnixOnly('filesystem storage freeze, unfreeze and migrate', async (t) => {
   t.pass()
 })
 
-nativeUnixOnly('filesystem storage migrates a local filesystem repository', async (t) => {
+nativeUnixOnly('filesystem storage converts between the standard and filesystem layouts', async (t) => {
   const dir = await mkdtemp(join(tmpdir(), 'icechunk-js-fs-'))
   try {
     const legacy = await Repository.create(await Storage.newLocalFilesystem(dir))
@@ -484,12 +464,113 @@ nativeUnixOnly('filesystem storage migrates a local filesystem repository', asyn
     const storage = await Storage.newFilesystem(dir)
     await t.throwsAsync(
       async () => { await Repository.open(storage) },
-      { message: /migrate_legacy_repo/ },
+      { message: /convert_to_filesystem_layout/ },
     )
-    assert.equal(await storage.migrateLegacyRepo(), true)
-    assert.equal(await storage.migrateLegacyRepo(), false)
+    assert.equal(await storage.convertToFilesystemLayout(), true)
+    assert.equal(await storage.convertToFilesystemLayout(), false)
     const repo = await Repository.open(storage)
     assert.equal(await repo.lookupBranch('main'), main)
+
+    assert.equal(await storage.convertToStandardLayout(), true)
+    assert.equal(await storage.convertToStandardLayout(), false)
+    await t.throwsAsync(stat(join(dir, 'repo.d')))
+    const standard = await Repository.open(await Storage.newLocalFilesystem(dir))
+    await standard.createBranch('dev', main)
+    assert.deepEqual((await standard.listBranches()).sort(), ['dev', 'main'])
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+// The version file the marker of repo.d names.
+async function currentVersion(dir: string): Promise<string> {
+  const [marker] = (await readdir(join(dir, 'repo.d'))).filter((name) => name.startsWith('latest.'))
+  const [, , n, h] = marker.split('.')
+  return join(dir, 'repo.d', `${n}.${h}`)
+}
+
+nativeUnixOnly('filesystem storage publishes a missing mirror', async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), 'icechunk-js-fs-'))
+  try {
+    const storage = await Storage.newFilesystem(dir)
+    await Repository.create(storage)
+    await unlink(join(dir, 'repo'))
+    const outcome = await storage.publishMirror()
+    assert.equal(outcome.current, true)
+    assert.equal(outcome.left ?? null, null)
+    assert.deepEqual(await readFile(join(dir, 'repo')), await readFile(await currentVersion(dir)))
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+
+  t.pass()
+})
+
+nativeUnixOnly('filesystem storage reports forks, unreadable mirrors and durable commits', async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), 'icechunk-js-fs-'))
+  try {
+    const root = join(dir, 'root')
+    const other = join(dir, 'other')
+    const storage = await Storage.newFilesystem(root)
+    const repo = await Repository.create(storage)
+
+    await writeFile(join(root, 'repo'), 'not a repo info')
+    await t.throwsAsync(
+      async () => { await storage.publishMirror() },
+      { message: /couldn't be read or decoded/ },
+    )
+
+    await Repository.create(await Storage.newLocalFilesystem(other))
+    await writeFile(join(root, 'repo'), await readFile(join(other, 'repo')))
+    await t.throwsAsync(
+      async () => { await storage.publishMirror() },
+      { message: /repository forked/ },
+    )
+
+    const session = await repo.writableSession('main')
+    await session.store.set('zarr.json', new TextEncoder().encode(JSON.stringify({
+      zarr_format: 3,
+      node_type: 'group',
+    })))
+    const err = await t.throwsAsync(async () => { await session.commit('lands, then finds the fork') })
+    assert(err)
+    const snapshot = await repo.lookupBranch('main')
+    assert.match(err.message, new RegExp(`snapshot ${snapshot} is durable`))
+    assert.match(err.message, /must not be retried/)
+    assert.match(err.message, /repository is forked/)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+nativeUnixOnly('filesystem storage refuses writes during an interrupted conversion to the standard layout', async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), 'icechunk-js-fs-'))
+  try {
+    const root = join(dir, 'root')
+    const copy = join(dir, 'copy')
+    const storage = await Storage.newFilesystem(root)
+    await Repository.create(storage)
+    await cp(root, copy, { recursive: true })
+    assert.equal(await (await Storage.newFilesystem(copy)).convertToStandardLayout(), true)
+
+    // What a conversion to the standard layout interrupted after its change leaves.
+    const featureless = await readFile(join(copy, 'repo'))
+    const [marker] = (await readdir(join(root, 'repo.d'))).filter((name) => name.startsWith('latest.'))
+    const n = BigInt(marker.split('.')[2]) + 1n
+    const h = createHash('sha256').update(featureless).digest('hex')
+    await writeFile(join(root, 'repo.d', `${n}.${h}`), featureless)
+    const k = (999_999_999_999_999n - n).toString().padStart(15, '0')
+    await rename(join(root, 'repo.d', marker), join(root, 'repo.d', `latest.${k}.${n}.${h}`))
+
+    const repo = await Repository.open(await Storage.newFilesystem(root))
+    await t.throwsAsync(
+      async () => { await repo.createBranch('dev', await repo.lookupBranch('main')) },
+      { message: /conversion to the standard layout was interrupted, rerun convert_to_standard_layout/ },
+    )
+    await t.throwsAsync(
+      async () => { await storage.publishMirror() },
+      { message: /rerun convert_to_standard_layout/ },
+    )
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
@@ -497,18 +578,12 @@ nativeUnixOnly('filesystem storage migrates a local filesystem repository', asyn
 
 nativeOnly('repository operations of filesystem storage fail on other storage', async (t) => {
   const storage = await Storage.newInMemory()
-  await t.throwsAsync(
-    async () => { await storage.freezeRepo() },
-    { message: 'freezeRepo is only available on storage created with Storage.newFilesystem' },
-  )
-  await t.throwsAsync(
-    async () => { await storage.unfreezeRepo() },
-    { message: 'unfreezeRepo is only available on storage created with Storage.newFilesystem' },
-  )
-  await t.throwsAsync(
-    async () => { await storage.migrateLegacyRepo() },
-    { message: 'migrateLegacyRepo is only available on storage created with Storage.newFilesystem' },
-  )
+  for (const method of ['convertToFilesystemLayout', 'convertToStandardLayout', 'publishMirror'] as const) {
+    await t.throwsAsync(
+      async () => { await storage[method]() },
+      { message: `${method} is only available on storage created with Storage.newFilesystem` },
+    )
+  }
 })
 
 test('invalid manifest config gives error', async (t) => {
@@ -527,4 +602,86 @@ test('invalid manifest config gives error', async (t) => {
     async () => { await Repository.create(storage, config) },
     { message: /.*/ },
   )
+})
+
+/** Read-only storage over a repository directory, through JS callbacks so it works under WASI. */
+function directoryStorage(dir: string): Storage {
+  const notFound = (err: unknown, path: string) => {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') throw new Error(`ObjectNotFound: ${path}`)
+    throw err
+  }
+  const read = async (path: string) => {
+    try {
+      return await readFile(join(dir, path))
+    } catch (err) {
+      return notFound(err, path)
+    }
+  }
+  const readOnly = async () => {
+    throw new Error('read-only storage')
+  }
+  const version = { etag: 'fixture' }
+  return Storage.newCustom({
+    canWrite: async () => false,
+    getObjectRange: async (_err, { path, rangeStart, rangeEnd }) => {
+      const data = await read(path)
+      return { data: data.subarray(rangeStart ?? 0, rangeEnd ?? data.length), version }
+    },
+    putObject: readOnly,
+    copyObject: readOnly,
+    listObjects: async (_err, prefix) => {
+      const base = join(dir, prefix)
+      let entries
+      try {
+        entries = await readdir(base, { recursive: true, withFileTypes: true })
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === 'ENOENT') return []
+        throw err
+      }
+      return Promise.all(
+        entries
+          .filter((entry) => entry.isFile())
+          .map(async (entry) => {
+            const full = join(entry.parentPath, entry.name)
+            const info = await stat(full)
+            return { id: relative(base, full), createdAt: info.mtime, sizeBytes: info.size }
+          }),
+      )
+    },
+    deleteBatch: readOnly,
+    getObjectLastModified: async (_err, path) => {
+      try {
+        return (await stat(join(dir, path))).mtime
+      } catch (err) {
+        return notFound(err, path)
+      }
+    },
+    getObjectConditional: async (_err, { path }) => ({
+      kind: 'modified',
+      data: await read(path),
+      newVersion: version,
+    }),
+  })
+}
+
+// Written by `generate_js_gcs_vcc_fixture` in icechunk/tests/test_config_compliance.rs.
+// The WASM build has no GCS support, so it can't decode the container's store settings.
+test('repository with a GCS virtual chunk container opens and reads non-virtual data', async (t) => {
+  const dir = fileURLToPath(new URL('./data/gcs-vcc-repo', import.meta.url))
+  const repo = await Repository.open(directoryStorage(dir))
+  const session = await repo.readonlySession({ branch: 'main' })
+  const root = zarr.root(session.store)
+
+  const temperature = await zarr.open(root.resolve('/temperature'), { kind: 'array' })
+  const data = await zarr.get(temperature)
+  assert.deepEqual(Array.from(data.data as Float32Array), [1.5, 2.5, 3.5, 4.5])
+
+  const virtual = await zarr.open(root.resolve('/virtual'), { kind: 'array' })
+  // WASM: the store settings don't decode; native: the container isn't authorized
+  await assert.rejects(
+    async () => { await zarr.get(virtual) },
+    /gs:\/\/some-bucket\/data\/ \(container: gcs-data\), (whose store settings this Icechunk library can't decode|to be able to fetch the chunk you need to authorize)/,
+  )
+
+  t.pass()
 })

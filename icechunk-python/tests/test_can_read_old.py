@@ -310,28 +310,19 @@ async def write_a_test_repo(path: str, *, backend: str) -> None:
     store.close()
 
 
-async def write_a_frozen_repo(path: str, *, unfreeze: bool) -> None:
-    """Write the test repository in the filesystem format and freeze it.
-
-    With ``unfreeze`` it is unfrozen right after, and nothing commits after that,
-    so the current version is the one unfreeze linked from the frozen one.
-    """
-    await write_a_test_repo(path, backend="filesystem")
-    storage = ic.filesystem_storage(path)
-    assert storage.freeze_repo()
-    if unfreeze:
-        assert storage.unfreeze_repo()
-
-
 # What a GC sweeps from leftovers-repo-v2-fs: the stage, the version below the
-# marker, the creation directory and the stub staging file.
-LEFTOVERS_SWEPT = 4
+# marker and the creation directory. `repo.stub.*` is an unknown name: GC never
+# deletes it.
+LEFTOVERS_SWEPT = 3
+# A real GC first makes a change to `repo`, whose tidy-up deletes the version
+# below the marker before the sweep runs; a dry run makes no change.
+LEFTOVERS_SWEPT_AFTER_TIDY_UP = LEFTOVERS_SWEPT - 1
 
 
 def repo_d_versions(path: str | Path) -> tuple[int, set[int]]:
     """The current version of `repo`, and the versions of every file in repo.d."""
     names = [p.name for p in (Path(path) / "repo.d").iterdir()]
-    (marker,) = [n for n in names if n.startswith(("latest.", "frozen."))]
+    (marker,) = [n for n in names if n.startswith("latest.")]
     current = int(marker.split(".")[2])
     versions = {int(n.split(".")[0]) for n in names if n.split(".")[0].isdigit()}
     return current, versions
@@ -393,7 +384,8 @@ async def write_a_leftovers_repo(path: str) -> None:
     tmp.mkdir()
     h = plant_version(tmp, 0, infos[3])
     (tmp / f"latest.{999_999_999_999_999:015d}.0.{h}").touch()
-    # A creation that crashed while staging the stub.
+    # An unknown name, which GC keeps: the stub staging file of earlier
+    # development versions.
     (root / f"repo.stub.{uuid.uuid4()}").write_bytes((root / "repo").read_bytes())
     # A write of a backup of `repo` that crashed before its rename.
     backup = next((root / "overwritten").iterdir())
@@ -408,7 +400,14 @@ async def write_a_leftovers_repo(path: str) -> None:
         assert sweep_count(copy, dry_run=True) == LEFTOVERS_SWEPT
 
 
-async def do_icechunk_can_read_old_repo(path: str, *, backend: str) -> None:
+async def do_icechunk_can_read_old_repo(
+    path: str, *, backend: str, writable: bool = True
+) -> None:
+    """Check the content of a repository written by write_a_test_repo.
+
+    ``writable=False`` lists the hierarchy through a read-only session, for a
+    repository this library can't modify.
+    """
     try:
         from tests.conftest import write_chunks_to_minio
     except ImportError:
@@ -447,7 +446,11 @@ async def do_icechunk_can_read_old_repo(path: str, *, backend: str) -> None:
     with pytest.raises(ic.IcechunkError, match="ref not found"):
         repo.readonly_session(tag="deleted")
 
-    session = repo.writable_session("my-branch")
+    session = (
+        repo.writable_session("my-branch")
+        if writable
+        else repo.readonly_session(branch="my-branch")
+    )
     store = session.store
     assert sorted([p async for p in store.list_dir("")]) == [
         "group1",
@@ -476,7 +479,7 @@ async def do_icechunk_can_read_old_repo(path: str, *, backend: str) -> None:
         [p async for p in store.list_dir("group2/group3/group4/group5/inner")]
     ) == ["c", "zarr.json"]
 
-    root = zarr.group(store=store)
+    root = zarr.open_group(store=store, mode="r")
     # inner is not initialized, so it's all fill values
     inner = cast("zarr.Array[Any]", root["group2/group3/group4/group5/inner"])
     assert_array_equal(inner[:], float("nan"))
@@ -590,12 +593,28 @@ async def test_icechunk_can_read_old_repo_with_manifest_splitting_v2_fs() -> Non
     )
 
 
+@unix_only
 @pytest.mark.parametrize(
     "path", ["./tests/data/test-repo-v2-fs", "./tests/data/split-repo-v2-fs"]
 )
-def test_local_filesystem_refuses_v2_fs_repo(path: str) -> None:
-    with pytest.raises(ic.IcechunkError, match="uses the filesystem format"):
-        ic.Repository.open(storage=ic.local_filesystem_storage(path))
+def test_local_filesystem_refuses_v2_fs_repo(path: str, tmp_path: Path) -> None:
+    """`local_filesystem_storage` reads the repository through the mirror
+    `repo`, and refuses to write it: it doesn't implement the writer feature
+    `filesystem-layout-v1`."""
+    copy = tmp_path / "repo"
+    shutil.copytree(path, copy)
+    mirror = ic.Repository.open(storage=ic.local_filesystem_storage(str(copy)))
+    layout = ic.Repository.open(storage=ic.filesystem_storage(path))
+    assert mirror.list_branches() == layout.list_branches()
+    assert [s.id for s in mirror.ancestry(branch="main")] == [
+        s.id for s in layout.ancestry(branch="main")
+    ]
+    refused = r"filesystem-layout-v1.*first implemented in Icechunk 2\.4\.0"
+    with pytest.raises(ic.IcechunkError, match=refused):
+        mirror.writable_session("main")
+    with pytest.raises(ic.IcechunkError, match="filesystem-layout-v1"):
+        mirror.create_branch("refused", mirror.lookup_branch("main"))
+    assert mirror.list_branches() == layout.list_branches()
 
 
 def commit_to_copy(path: str, tmp_path: Path) -> None:
@@ -608,29 +627,6 @@ def commit_to_copy(path: str, tmp_path: Path) -> None:
     small_chunks = zarr.open_array(session.store, path="group1/small_chunks", mode="a")
     small_chunks[:] = 7
     session.commit("commit to a copy")
-
-
-@unix_only
-@pytest.mark.filterwarnings("ignore:datetime.datetime.utcnow")
-async def test_icechunk_can_read_old_frozen_repo_v2_fs(tmp_path: Path) -> None:
-    path = "./tests/data/frozen-repo-v2-fs"
-    await do_icechunk_can_read_old_repo(path, backend="filesystem")
-
-    with pytest.raises(ic.IcechunkError, match="frozen"):
-        commit_to_copy(path, tmp_path / "frozen")
-
-    copy = tmp_path / "unfrozen"
-    shutil.copytree(path, copy)
-    assert ic.filesystem_storage(str(copy)).unfreeze_repo()
-    commit_to_copy(str(copy), tmp_path)
-
-
-@unix_only
-@pytest.mark.filterwarnings("ignore:datetime.datetime.utcnow")
-async def test_icechunk_can_read_old_unfrozen_repo_v2_fs(tmp_path: Path) -> None:
-    path = "./tests/data/unfrozen-repo-v2-fs"
-    await do_icechunk_can_read_old_repo(path, backend="filesystem")
-    commit_to_copy(path, tmp_path)
 
 
 @unix_only
@@ -648,14 +644,79 @@ async def test_icechunk_can_read_old_leftovers_repo_v2_fs(tmp_path: Path) -> Non
     age_tree(copy)
     # Not the version above the marker, which may be a commit in flight.
     assert sweep_count(copy, dry_run=True) == LEFTOVERS_SWEPT
-    assert sweep_count(copy, dry_run=False) == LEFTOVERS_SWEPT
+    assert sweep_count(copy, dry_run=False) == LEFTOVERS_SWEPT_AFTER_TIDY_UP
     # GC commits too, so the version above the marker ends up dead or current.
     new_current, versions = repo_d_versions(copy)
     assert versions == {new_current}
-    # Nested staging files are never swept.
-    assert leftover_counts(copy) == {"stage": 0, "tmp": 0, "stub": 0, "staging": 1}
+    # Nested staging files and unknown names are never swept.
+    assert leftover_counts(copy) == {"stage": 0, "tmp": 0, "stub": 1, "staging": 1}
     await do_icechunk_can_read_old_repo(str(copy), backend="filesystem")
     commit_to_copy(str(copy), tmp_path / "commit")
+
+
+# test-repo-v2 with the writer feature `test-feature-v1`, which no Icechunk
+# implements. Written by the ignored Rust test `generate_unknown_feature_fixture`
+# (icechunk/tests/test_can_read_old_fixtures.rs), not by FIXTURE_SETS.
+UNKNOWN_FEATURE_REPO = "./tests/data/test-repo-v2-unknown-feature"
+
+
+def file_digests(root: Path) -> dict[str, str]:
+    return {
+        str(p.relative_to(root)): hashlib.sha256(p.read_bytes()).hexdigest()
+        for p in root.rglob("*")
+        if p.is_file()
+    }
+
+
+@pytest.mark.filterwarnings("ignore:datetime.datetime.utcnow")
+async def test_icechunk_can_read_old_repo_with_unknown_writer_feature(
+    tmp_path: Path,
+) -> None:
+    """Reads work, and every modification is refused naming the feature,
+    before anything is written."""
+    copy = tmp_path / "repo"
+    shutil.copytree(UNKNOWN_FEATURE_REPO, copy)
+    await do_icechunk_can_read_old_repo(
+        str(copy), backend="local_filesystem", writable=False
+    )
+    repo = mk_repo(create=False, store_path=str(copy), backend="local_filesystem")
+    info = repo.inspect_repo_info()
+    assert info["writer_features"] == ["test-feature-v1"]
+    assert info["status"]["availability"] == "ReadOnly"
+    assert "test-feature-v1" in info["status"]["limited_availability_reason"]
+    assert info["latest_updates"][0]["update_type"]["type"] == "RepoStatusChangedUpdate"
+    assert repo.get_status().availability == ic.RepoAvailability.online
+
+    main = repo.lookup_branch("main")
+    parent = list(repo.ancestry(branch="main"))[1].id
+    modifications: dict[str, Callable[[], object]] = {
+        "writable_session": lambda: repo.writable_session("main"),
+        "create_branch": lambda: repo.create_branch("refused", main),
+        "delete_branch": lambda: repo.delete_branch("my-branch"),
+        "reset_branch": lambda: repo.reset_branch("main", parent),
+        "create_tag": lambda: repo.create_tag("refused", main),
+        "delete_tag": lambda: repo.delete_tag("it works!"),
+        "set_metadata": lambda: repo.set_metadata({"refused": True}),
+        "save_config": lambda: repo.save_config(),
+        "set_feature_flag": lambda: repo.set_feature_flag("move_node", False),
+        "set_status": lambda: repo.set_status(
+            ic.RepoStatus(ic.RepoAvailability.read_only)
+        ),
+        "garbage_collect": lambda: repo.garbage_collect(datetime.now(UTC)),
+        "expire_snapshots": lambda: repo.expire_snapshots(datetime.now(UTC)),
+        "convert_to_filesystem_layout": lambda: ic.filesystem_storage(
+            str(copy)
+        ).convert_to_filesystem_layout(),
+    }
+    before = file_digests(copy)
+    for name, modify in modifications.items():
+        with pytest.raises(
+            ic.ReadOnlyError,
+            match=r"\(test-feature-v1\), first implemented in a newer Icechunk",
+        ) as exc_info:
+            modify()
+        assert exc_info.value.kind == ic.ErrorKind.MISSING_WRITER_FEATURES, name
+    assert file_digests(copy) == before
 
 
 # ---------------------------------------------------------------------------
@@ -820,8 +881,6 @@ FIXTURE_SETS: dict[str, dict[str, Writer]] = {
     "v2-fs": {
         "test-repo-v2-fs": lambda path: write_a_test_repo(path, backend="filesystem"),
         "split-repo-v2-fs": lambda path: write_a_split_repo(path, backend="filesystem"),
-        "frozen-repo-v2-fs": lambda path: write_a_frozen_repo(path, unfreeze=False),
-        "unfrozen-repo-v2-fs": lambda path: write_a_frozen_repo(path, unfreeze=True),
         "leftovers-repo-v2-fs": write_a_leftovers_repo,
     },
 }

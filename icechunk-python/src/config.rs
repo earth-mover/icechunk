@@ -2571,6 +2571,7 @@ impl TryFrom<&PyRepositoryConfig> for RepositoryConfig {
                     .as_ref()
                     .map(|r| (&*r.borrow(py)).into()),
                 num_updates_per_repo_info_file: value.num_updates_per_repo_info_file,
+                undecodable: Default::default(),
             })
         })
     }
@@ -3012,76 +3013,126 @@ impl PyFilesystemStorage {
 #[cfg(unix)]
 #[pymethods]
 impl PyFilesystemStorage {
-    fn migrate_legacy_repo(&self, py: Python<'_>) -> PyResult<bool> {
+    fn convert_to_filesystem_layout(&self, py: Python<'_>) -> PyResult<bool> {
+        let filesystem = Arc::clone(&self.filesystem);
+        py.detach(move || {
+            pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+                converted(filesystem.convert_to_filesystem_layout().await)
+            })
+        })
+    }
+
+    fn convert_to_filesystem_layout_async<'py>(
+        &self,
+        py: Python<'py>,
+    ) -> PyResult<Bound<'py, pyo3::PyAny>> {
+        let filesystem = Arc::clone(&self.filesystem);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            converted(filesystem.convert_to_filesystem_layout().await)
+        })
+    }
+
+    fn convert_to_standard_layout(&self, py: Python<'_>) -> PyResult<bool> {
+        let filesystem = Arc::clone(&self.filesystem);
+        py.detach(move || {
+            pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+                converted(filesystem.convert_to_standard_layout().await)
+            })
+        })
+    }
+
+    fn convert_to_standard_layout_async<'py>(
+        &self,
+        py: Python<'py>,
+    ) -> PyResult<Bound<'py, pyo3::PyAny>> {
+        let filesystem = Arc::clone(&self.filesystem);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            converted(filesystem.convert_to_standard_layout().await)
+        })
+    }
+
+    fn publish_mirror(&self, py: Python<'_>) -> PyResult<PyPublishOutcome> {
         let filesystem = Arc::clone(&self.filesystem);
         py.detach(move || {
             pyo3_async_runtimes::tokio::get_runtime()
-                .block_on(migrate_legacy_repo(filesystem))
+                .block_on(async move { published(filesystem.publish_mirror().await) })
         })
     }
 
-    fn migrate_legacy_repo_async<'py>(
+    fn publish_mirror_async<'py>(
         &self,
         py: Python<'py>,
     ) -> PyResult<Bound<'py, pyo3::PyAny>> {
         let filesystem = Arc::clone(&self.filesystem);
-        pyo3_async_runtimes::tokio::future_into_py(py, migrate_legacy_repo(filesystem))
-    }
-
-    fn freeze_repo(&self, py: Python<'_>) -> PyResult<bool> {
-        let filesystem = Arc::clone(&self.filesystem);
-        py.detach(move || {
-            pyo3_async_runtimes::tokio::get_runtime().block_on(freeze_repo(filesystem))
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            published(filesystem.publish_mirror().await)
         })
     }
-
-    fn freeze_repo_async<'py>(
-        &self,
-        py: Python<'py>,
-    ) -> PyResult<Bound<'py, pyo3::PyAny>> {
-        let filesystem = Arc::clone(&self.filesystem);
-        pyo3_async_runtimes::tokio::future_into_py(py, freeze_repo(filesystem))
-    }
-
-    fn unfreeze_repo(&self, py: Python<'_>) -> PyResult<bool> {
-        let filesystem = Arc::clone(&self.filesystem);
-        py.detach(move || {
-            pyo3_async_runtimes::tokio::get_runtime().block_on(unfreeze_repo(filesystem))
-        })
-    }
-
-    fn unfreeze_repo_async<'py>(
-        &self,
-        py: Python<'py>,
-    ) -> PyResult<Bound<'py, pyo3::PyAny>> {
-        let filesystem = Arc::clone(&self.filesystem);
-        pyo3_async_runtimes::tokio::future_into_py(py, unfreeze_repo(filesystem))
-    }
 }
 
+/// Whether the call converted the repository.
 #[cfg(unix)]
-async fn freeze_repo(filesystem: Arc<storage::FilesystemStorage>) -> PyResult<bool> {
-    let outcome =
-        filesystem.freeze_repo().await.map_err(PyIcechunkStoreError::StorageError)?;
-    Ok(matches!(outcome, storage::FreezeOutcome::Frozen(_)))
-}
-
-#[cfg(unix)]
-async fn unfreeze_repo(filesystem: Arc<storage::FilesystemStorage>) -> PyResult<bool> {
-    let outcome =
-        filesystem.unfreeze_repo().await.map_err(PyIcechunkStoreError::StorageError)?;
-    Ok(matches!(outcome, storage::UnfreezeOutcome::Unfrozen(_)))
-}
-
-#[cfg(unix)]
-async fn migrate_legacy_repo(
-    filesystem: Arc<storage::FilesystemStorage>,
+fn converted(
+    outcome: storage::StorageResult<storage::ConversionOutcome>,
 ) -> PyResult<bool> {
-    let outcome = filesystem
-        .migrate_legacy_repo()
-        .await
-        .map_err(PyIcechunkStoreError::StorageError)?;
-    Ok(matches!(outcome, storage::MigrateOutcome::Migrated))
+    let outcome = outcome.map_err(PyIcechunkStoreError::StorageError)?;
+    Ok(matches!(outcome, storage::ConversionOutcome::Converted))
+}
+
+#[cfg(unix)]
+fn published(
+    outcome: storage::StorageResult<storage::PublishOutcome>,
+) -> PyResult<PyPublishOutcome> {
+    let outcome = outcome.map_err(PyIcechunkStoreError::StorageError)?;
+    Ok(match outcome {
+        storage::PublishOutcome::Current => {
+            PyPublishOutcome { current: true, left: None }
+        }
+        storage::PublishOutcome::GaveUp { left } => PyPublishOutcome {
+            current: false,
+            left: left.as_ref().and_then(version_name),
+        },
+    })
+}
+
+/// A version of `repo.d` by its file name, `<N>.<h>`.
+#[cfg(unix)]
+fn version_name(version: &storage::VersionInfo) -> Option<String> {
+    let storage::Generation(n) = version.generation.as_ref()?;
+    Some(format!("{n}.{}", version.etag()?))
+}
+
+/// What `FilesystemStorage.publish_mirror` did.
+#[pyclass(skip_from_py_object, name = "PublishOutcome", frozen, eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PyPublishOutcome {
+    #[pyo3(get)]
+    current: bool,
+    #[pyo3(get)]
+    left: Option<String>,
+}
+
+impl PyRepr for PyPublishOutcome {
+    const EXECUTABLE: bool = false;
+    fn cls_name() -> &'static str {
+        "icechunk.storage.PublishOutcome"
+    }
+    fn fields(&self, _mode: ReprMode) -> Vec<(&str, String)> {
+        vec![("current", py_bool(self.current)), ("left", py_option_str(&self.left))]
+    }
+}
+
+#[pymethods]
+impl PyPublishOutcome {
+    fn __repr__(&self) -> String {
+        <Self as PyRepr>::__repr__(self)
+    }
+    fn __str__(&self) -> String {
+        <Self as PyRepr>::__str__(self)
+    }
+    fn _repr_html_(&self) -> String {
+        <Self as PyRepr>::_repr_html_(self)
+    }
 }
 
 /// Effective `(read, write)` extra-header vecs.

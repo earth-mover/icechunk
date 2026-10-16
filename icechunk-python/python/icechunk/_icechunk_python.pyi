@@ -1927,7 +1927,12 @@ class RepositoryConfig:
         """
     def clear_virtual_chunk_containers(self) -> None:
         """
-        Clear all virtual chunk containers from the repository.
+        Clear the virtual chunk containers this library can decode.
+
+        Containers whose store settings this library can't decode, such as
+        ones written by a newer Icechunk, stay: a library never removes them,
+        it can only replace one with a container of the same name or
+        `url_prefix`.
         """
     @property
     def repo_update_retries(self) -> RepoUpdateRetryConfig | None:
@@ -3291,78 +3296,183 @@ class FilesystemStorage(Storage):
     `filesystem_storage`.
     """
 
-    def migrate_legacy_repo(self) -> bool:
-        """Convert a repository written by `local_filesystem_storage` or an older
-        Icechunk to the format of `filesystem_storage`.
+    def convert_to_filesystem_layout(self) -> bool:
+        """Convert a repository in the standard layout, as
+        `local_filesystem_storage` and Icechunk before 2.4.0 write it, to the
+        filesystem layout of `filesystem_storage`.
 
         `filesystem_storage` refuses to open such a repository until it is
-        converted. Stop every writer of the repository first: no other process
-        may write to it from when this starts until every writer uses
-        `filesystem_storage`. Rerunning it completes an interrupted conversion.
+        converted. The conversion backs `repo` up to `overwritten/`, builds
+        `repo.d/`, whose first version is the same repo info with the writer
+        feature `filesystem-layout-v1` added, and publishes it as the mirror
+        `repo`. It changes only the writer features and the update log, and
+        keeps the repository's status, whatever it is.
+
+        This is an administrative operation: run it with nothing else using
+        the repository, no writer in any process, no process still publishing
+        the mirror and no other administrative operation. Anything else is
+        undefined behavior. If it is interrupted, run it again under the same
+        condition: the rerun completes the conversion.
 
         Returns
         -------
         bool
-            True if this call converted the repository, False if there was
-            nothing to convert.
-        """
-    async def migrate_legacy_repo_async(self) -> bool:
-        """Convert a repository written by `local_filesystem_storage` or an older
-        Icechunk to the format of `filesystem_storage` (async version).
+            True if this call converted the repository, including when it
+            completed an interrupted conversion. False if it was in the
+            filesystem layout already, including when this call only
+            published a missing mirror.
 
-        See `migrate_legacy_repo`.
+        Raises
+        ------
+        StorageError
+            With kind `object-not-found` if there is no repository, kind
+            `mirror-unreadable` if `repo` can't be read or decoded, or kind
+            `storage-other` if a rerun finds `repo.d/` next to a `repo` it
+            can't attribute to its earlier run; that message names the manual
+            recovery.
+        ReadOnlyError
+            With kind `missing-writer-features` if the repository lists writer
+            features this library doesn't implement.
+        RepositoryForkedError
+            If publishing the mirror finds the repository forked. The
+            conversion's change has already landed then: after recovering the
+            fork, run `convert_to_filesystem_layout` again.
+        SessionStateError
+            With kind `layout-conversion-in-progress` if a conversion to the
+            standard layout was interrupted: rerun `convert_to_standard_layout`.
+        """
+    async def convert_to_filesystem_layout_async(self) -> bool:
+        """Convert a repository in the standard layout to the filesystem layout
+        of `filesystem_storage` (async version).
+
+        See `convert_to_filesystem_layout`.
 
         Returns
         -------
         bool
-            True if this call converted the repository, False if there was
-            nothing to convert.
+            True if this call converted the repository, False if it was in the
+            filesystem layout already.
         """
-    def freeze_repo(self) -> bool:
-        """Refuse changes to the repository until `unfreeze_repo`.
+    def convert_to_standard_layout(self) -> bool:
+        """Convert a repository in the filesystem layout of `filesystem_storage`
+        back to the standard layout that `local_filesystem_storage`, other
+        storage backends and Icechunk before 2.4.0 write.
 
-        The repository stays readable, so a frozen repository can be copied or
-        exported consistently. Every change to it fails with an error.
+        The conversion backs the current version up to `overwritten/`, changes
+        the repository to that version with the writer feature
+        `filesystem-layout-v1` removed, publishes it as `repo`, then deletes
+        `repo.d/`. It changes only the writer features and the update log, and
+        keeps the repository's status, whatever it is.
+
+        This is an administrative operation: run it with nothing else using
+        the repository, no writer in any process, no process still publishing
+        the mirror and no other administrative operation. Anything else is
+        undefined behavior. If it is interrupted, run it again under the same
+        condition: the rerun completes the conversion. Until then, every write
+        and garbage collection through `filesystem_storage` fails with a
+        `SessionStateError` of kind `layout-conversion-in-progress` saying
+        that a conversion to the standard layout is in progress and to rerun
+        it.
+
+        A copy of a repository in the filesystem layout on other storage is
+        read-only. To get a copy that can be written elsewhere: set the
+        status of the source to `RepoAvailability.read_only`, convert it to the
+        standard layout, copy it, convert the source back with
+        `convert_to_filesystem_layout` if it should stay in this layout, and
+        set the statuses to `RepoAvailability.online`.
 
         Returns
         -------
         bool
-            True if this call froze the repository, False if it already was
-            frozen. Only True proves that the repository is frozen: False comes
-            from a directory listing that can lag, so an export must not rely
-            on it.
-        """
-    async def freeze_repo_async(self) -> bool:
-        """Refuse changes to the repository until `unfreeze_repo` (async version).
+            True if this call converted the repository, False if it was in the
+            standard layout already, including when this call only cleaned up
+            after an interrupted conversion.
 
-        See `freeze_repo`.
+        Raises
+        ------
+        StorageError
+            With kind `object-not-found` if there is no repository, or kind
+            `mirror-unreadable` if `repo` can't be read or decoded.
+        ReadOnlyError
+            With kind `missing-writer-features` if the repository lists writer
+            features this library doesn't implement.
+        RepositoryForkedError
+            If a conversion from the standard layout was interrupted: rerun
+            `convert_to_filesystem_layout`. If the repository is forked, this
+            conversion's change may already have landed: after recovering the
+            fork, run `convert_to_standard_layout` again.
+        """
+    async def convert_to_standard_layout_async(self) -> bool:
+        """Convert a repository in the filesystem layout of `filesystem_storage`
+        back to the standard layout (async version).
+
+        See `convert_to_standard_layout`.
 
         Returns
         -------
         bool
-            True if this call froze the repository, False if it already was
-            frozen.
+            True if this call converted the repository, False if it was in the
+            standard layout already.
         """
-    def unfreeze_repo(self) -> bool:
-        """Accept changes to a frozen repository again.
+    def publish_mirror(self) -> PublishOutcome:
+        """Publish the current version of the repository as the mirror `repo`.
+
+        Every change publishes the mirror before returning, but a process that
+        dies between its change and its publication, or a publication that
+        gives up under contention, leaves it behind. This repairs it without
+        changing the repository, and is safe while writers run.
+
+        It is best effort: it publishes the version it lists, which a change
+        landing meanwhile or a lagging listing can make older than the current
+        one. A change, such as `Repository.set_status` with
+        `RepoAvailability.read_only`, makes the mirror current once every process
+        that changed the repository earlier has finished. Do that before
+        serving a finished repository read-only or copying it.
 
         Returns
         -------
-        bool
-            True if this call unfroze the repository, False if it wasn't
-            frozen. False comes from a directory listing that can lag.
-        """
-    async def unfreeze_repo_async(self) -> bool:
-        """Accept changes to a frozen repository again (async version).
+        PublishOutcome
+            Whether `repo` holds the version current in the last listing, and
+            if the publication gave up, the version it left `repo` holding.
 
-        See `unfreeze_repo`.
+        Raises
+        ------
+        StorageError
+            With kind `object-not-found` if there is no repository, or kind
+            `mirror-unreadable` if `repo` can't be read or decoded.
+        RepositoryForkedError
+            If `repo` holds a repo info that is no version of the repository.
+        SessionStateError
+            With kind `layout-conversion-in-progress` if a conversion to the
+            standard layout was interrupted: rerun `convert_to_standard_layout`.
+        """
+    async def publish_mirror_async(self) -> PublishOutcome:
+        """Publish the current version of the repository as the mirror `repo`
+        (async version).
+
+        See `publish_mirror`.
 
         Returns
         -------
-        bool
-            True if this call unfroze the repository, False if it wasn't
-            frozen.
+        PublishOutcome
+            Whether `repo` holds the version current in the last listing, and
+            if the publication gave up, the version it left `repo` holding.
         """
+
+@final
+class PublishOutcome:
+    """What `FilesystemStorage.publish_mirror` did."""
+
+    @property
+    def current(self) -> bool:
+        """True if `repo` holds the version current in the last listing of
+        `repo.d/`, or a newer one. False if the marker kept moving and the
+        publication gave up."""
+    @property
+    def left(self) -> str | None:
+        """When the publication gave up, the version it left `repo` holding,
+        as its file name in `repo.d/` (`<N>.<hash>`); None if it installed
+        none, and when `current` is True."""
 
 @final
 class StorageObjectInfo:
@@ -3780,6 +3890,40 @@ class RebaseFailedError(ConflictError):
         Returns:
             list[Conflict]: The conflicts that occurred during the rebase operation
         """
+
+class RepositoryForkedError(IcechunkError):
+    """The repository is forked: its mirror `repo` holds a repo info that is
+    no version of the repository's `repo.d/`.
+
+    Nothing was published or deleted. Recovery is manual: see the filesystem
+    storage guide.
+    """
+
+    def __new__(cls, message: str, kind: str | None = None) -> Self: ...
+
+class UpdateDurableButRepositoryForkedError(RepositoryForkedError):
+    """A change to the repository landed and is durable, but the repository
+    is forked.
+
+    The change, such as a branch, tag, configuration or status change, must
+    not be retried: a retry would make it twice.
+    """
+
+    def __new__(cls, message: str, kind: str | None = None) -> Self: ...
+
+@final
+class CommitDurableButRepositoryForkedError(UpdateDurableButRepositoryForkedError):
+    """A commit or flush landed and is durable, but the repository is forked.
+
+    The commit or flush must not be retried: a retry would write the same
+    changes twice. The session is read-only afterwards, like after any commit
+    or flush.
+    """
+
+    def __new__(cls, message: str, snapshot_id: str, kind: str | None = None) -> Self: ...
+    @property
+    def snapshot_id(self) -> str:
+        """The ID of the snapshot the durable commit or flush made"""
 
 def initialize_logs() -> None:
     """

@@ -23,15 +23,38 @@ your own filesystem, run it there and [send us the report](#what-to-send-us).
   steps, so the remaining writers must keep making progress whatever the dead
   and paused ones left behind. After the run, a fresh writer must succeed
   within 10 s.
-- **Modes**. Support storage and repository mode. The former uses the filesystem
-  storage directly to do high concurrency validation; the later uses the full
-  Icechunk API and it provides a higher level check, at the price of reduced
-  concurrency.
-- **Sweeping.** After the run, `verify` sets the modification time of the
-  protocol's leftovers 25 hours into the past and sweeps them: with the
-  storage's own sweep in storage mode, with garbage collection in repository
-  mode. Only `repo`, and `repo.d/` holding the marker and the one version it
-  names, may be left.
+- **Modes**. Storage mode uses the filesystem storage directly, for high
+  concurrency; repository mode uses the full Icechunk API, a higher level
+  check at the price of less concurrency. See [Modes](#modes).
+- **The mirror `repo`.** Every change publishes the version it made as
+  `repo` (in the storage root, next to `repo.d/`), a byte-identical copy that
+  Icechunk versions without the filesystem layout read. Every copy a
+  publication installs, and every read of `repo`, must be a version that was
+  current; after `verify`'s own publication, with no other writer, it must
+  be the current version; after a change that sets the status `ReadOnly` it
+  must hold that change's version; and every object it references must
+  exist.
+- **The writer feature.** Every version that was current lists
+  `filesystem-layout-v1` with its gate, the `ReadOnly` status that keeps
+  older Icechunk versions from writing, over the run's own status. The first
+  version's number is its creation time in milliseconds.
+- **Forks**, with `--fork-at`: a `repo` replaced as Icechunk 2.0 to 2.3 replace
+  it when they set the status. Every change that landed afterwards must
+  report the fork, no GC may delete while it is there, only a publication
+  whose fork check came before it may erase it, and both histories must
+  survive for a manual recovery.
+- **Conversions**, with `convert-scenario`: both conversions between the
+  standard and the filesystem layout, killed at every step and rerun, keep
+  every acknowledged change and leave only the target layout. See
+  [Conversion scenario](#conversion-scenario).
+- **Sweeping.** After the run, `verify` plants entries the sweep and GC must
+  never delete (canaries), sets the modification time of the protocol's
+  leftovers 25 hours into the past and sweeps them: with the storage's own
+  sweep in storage mode, with garbage collection in repository mode. Then
+  only `repo`, `repo.d/` holding the marker and the one version it names,
+  and the data directories (`overwritten/`, `snapshots/`, `manifests/`,
+  `transactions/`, `chunks/`) may be left, and every canary must still be
+  there.
 
 Even with a passing run, remember the backend is experimental.
 
@@ -146,11 +169,13 @@ Details:
 - **Waiting for hosts.** `verify` takes the participants from `go` and waits
   up to `--done-timeout` (default `10m`) for each one's `done/` entry. If
   hosts are still missing, it runs only the read-only checks, skips the
-  recovery write, aging and sweep, and says so in the report. Run it again
+  publication of `repo`, the recovery write, aging and sweep, and says so in
+  the report. Run it again
   once they finished. A host whose `workers` process died never writes its
   `done/` entry; send us that partial report.
 - **One full check per run.** The recovery write and the sweep change the
-  repository, so `verify` refuses a run root it already verified fully.
+  repository, so `verify` refuses a run root it already verified fully. A
+  `verify` interrupted before its recovery write can run again.
 - **Exit codes.** `workers`: 0, 2 for a late host, 1 for other errors.
   `verify`: 0 for a pass, 1 for violations, 3 for errors of the tool or its
   setup. A report whose only violations are `Harness` ones exits with 3. With
@@ -319,35 +344,47 @@ or `1h`.
 | `--kill-p` | `0.005` | probability of a kill at each fault point an attempt passes |
 | `--pause-p` | `0.005` | probability of a pause at each fault point |
 | `--pause` | `2s` | length of a pause |
-| `--fault-points` | `Linked,BeforeRename,BeforeTidyUp` | where kills and pauses happen; also `Staged`, `Renamed` |
-| `--external-kill-every` | `3s` | how often each host kills one of its workers, or `off` |
-| `--payload-bytes` | `1024` | storage mode: padding per update |
+| `--fault-points` | `Linked,BeforeRename,BeforeTidyUp,BeforePublish,BeforeMirrorRename` | where kills and pauses happen; also `Staged`, `Renamed`, `MirrorStaged`, `MirrorRenamed` |
+| `--external-kill-every` | `3s` | how often each host kills one of its workers (never the status toggler), or `off` |
+| `--payload-bytes` | `1024` | storage mode: random padding per update |
 | `--chunk-bytes` | `1024` | repository mode: chunk size |
-| `--gc` | off | repository mode: run garbage collection during the run |
-| `--gc-every` | `5s` | how often GC runs |
-| `--gc-margin` | `3 × pause + 30s` | GC deletes what is older than this |
+| `--gc` | off | repository mode: run expiration and garbage collection during the run |
+| `--gc-every` | `5s` | how often expiration and GC run |
+| `--gc-margin` | `3 × pause + 3m` | expiration and GC remove what is older than this; must be shorter than `--duration` |
 | `--initial-backoff` | `10ms` | repository mode: first wait before retrying a conflicting update |
 | `--max-backoff` | `100ms` | repository mode: longest wait before retrying a conflicting update |
+| `--readonly-every` | off | repository mode: how often the status toggler sets the status `ReadOnly` |
+| `--readonly-hold` | `3s` | how long the status toggler holds `ReadOnly`; shorter than `--readonly-every` and the 30 s stall threshold |
+| `--mirror-sample-every` | off | how often every host reads `repo` and logs what changed, e.g. `25ms` |
+| `--fork-at` | off | when, after the go, the fork actor replaces `repo` with a fork |
+| `--fork-repeat` | off | fork again 500 ms after each erasure of the fork |
 
-The fault points are steps of a commit of `repo`, described in
-[design doc 020](../design-docs/020-filesystem-storage.md#algorithm). A
-commit writes the new version to a staging file in `repo.d/` (`Staged`),
+The fault points are steps of a change of the repository, described in
+[design doc 020](../design-docs/020-filesystem-storage.md#algorithm-overview).
+A change writes the new version to a staging file in `repo.d/` (`Staged`),
 links it as the next version (`Linked`), renames the marker that names the
 current version to name the new one (`BeforeRename`, then `Renamed` once it
-succeeded), and deletes the versions it made obsolete (`BeforeTidyUp`).
-Only the rename decides whether the commit lands.
+succeeded), and deletes the versions it made obsolete (`BeforeTidyUp`). Only
+the rename decides whether the change lands. Then it publishes the new
+version as `repo` (`BeforePublish`): it copies it to `repo.d/mirror.<id>`
+(`MirrorStaged`), checks `repo` for a fork, renames the copy over `repo`
+(`BeforeMirrorRename`, then `MirrorRenamed`) and lists `repo.d/` to see
+whether a newer version needs publishing.
 
 **`--pause`.** A paused writer holds nothing, so the others keep committing
 and the paused one comes back on a stale base: that is the race the pauses
 are for. A worker killed at `Linked` or `BeforeRename` leaves its next
-version in `repo.d/` until a later commit or the sweep deletes it. The stall
-threshold is 30 s.
+version in `repo.d/` until a later commit or the sweep deletes it; one killed
+at `BeforePublish` or `BeforeMirrorRename` leaves `repo` behind until the next
+publication. The stall threshold is 30 s.
 
 **`--duration`.** Each kind of fault must fire a minimum number of times,
 otherwise the run fails with `FaultFloor`: 3 in-window kills, 3 pauses, 10
 external kills, and 1 kill or pause at each fault point. A kind you turn off
 (`--kill-p 0`, `--pause-p 0`, `--external-kill-every off`) has no minimum.
-With the defaults the external kills alone need about 35 seconds. Kills and
+With the defaults the external kills alone need about 35 seconds, and a
+point that fires only on some attempts, such as `BeforeMirrorRename`, needs
+enough publications. Kills and
 pauses inside the protocol depend on how many updates the filesystem
 sustains, which is lower on network filesystems. Keep the default minute or
 longer, and raise it when `FaultFloor` says so. Runs of an hour or more find
@@ -365,20 +402,51 @@ that lost a race waits a random 1 to 10 ms before its next attempt.
 ## Modes
 
 - **`storage`** exercises the backend's conditional update directly. Every
-  worker updates the same key, `repo`, with a payload that names the version
-  it replaces. Before each attempt it copies the current version to
-  `storage/overwritten/<attempt id>`, so `verify` can rebuild the whole chain
-  of versions from these backups.
+  worker updates the same key, `repo`, with a real repo info whose metadata
+  holds the worker's payload, naming the version it replaces, and random
+  padding. Before each attempt it copies the current version to
+  `storage/overwritten/repo.<14 digits>.<id>`, the name the attempt's new
+  repo info gives its predecessor, as Icechunk does, so `verify` can rebuild
+  the whole chain of versions from these backups.
 - **`repository`** goes through Icechunk's repository API. Workers commit to
-  their own branch (60 %), commit to `main` with rebase (30 %), or tag a
-  snapshot (10 %); every commit overwrites one chunk. `verify` checks the
-  ancestry of every branch and of `main`, every tag, and reads back the
-  chunk of every acknowledged commit.
+  their own branch (55 %), commit to `main` with rebase (30 %), tag a
+  snapshot of their branch (9 %), delete one of their tags (4 %), or delete
+  their branch and create it again (2 %); every commit overwrites one chunk.
+  `verify` checks the ancestry of every branch and of `main`, every tag, and
+  reads back the chunk of every acknowledged commit that is still reachable.
 
-**`--gc`** (repository mode) adds a garbage-collection worker on one host, the
-first participant in sorted order. It runs every `--gc-every` and deletes what
-is older than `--gc-margin`, while the other workers commit. It is killed and
-restarted like any other worker.
+The first participant, in sorted order, also runs these, killed and
+restarted like any other worker, except that external kills spare the
+status toggler:
+
+- **`--gc`** (repository mode): a worker that, every `--gc-every`, expires
+  the snapshots older than `--gc-margin` and then collects garbage, while
+  the other workers commit. Expired and deleted commits are excused only
+  where the expiration or deletion explains them. A commit that started
+  before GC's cutoff and lands after it can reference what GC deleted, so the
+  margin must exceed the longest commit: on a shared filesystem under load,
+  over a minute. `init` refuses a `--duration` not longer than the margin,
+  since GC would delete nothing.
+- **`--readonly-every`** (repository mode only: storage-mode workers write
+  repo infos below Icechunk's status check): the status toggler, which sets
+  the status `ReadOnly`, holds it for `--readonly-hold`, checks `repo` and
+  sets it `Online` again. Writers are refused meanwhile. If it dies during a
+  hold, `verify` sets the status `Online` and notes it.
+- **`--fork-at`**: the fork actor. At that time after the go it copies
+  `repo` to `overwritten/`, logging the backup's name first, and replaces
+  `repo` with a repo info without the writer feature and the gate, through a
+  temporary file and a rename, as Icechunk 2.3's local backend writes a
+  status change. It then watches
+  `repo` and logs when the fork is erased; with `--fork-repeat` it forks again
+  500 ms later.
+
+`--mirror-sample-every` starts a sampler thread on every host that reads
+`repo` at that interval and logs every change. On NFS, keeping `repo` open
+that often makes the client's silly renames of a replaced open file more
+likely, so a few `MirrorMissing` warnings may be the sampler's own doing.
+
+`scripts/remote.sh matrix` turns on the sampler (`25ms`) and, in repository
+mode, the status toggler (`10s`).
 
 ## Reading the report
 
@@ -389,10 +457,18 @@ counts and faults fired; violations; warnings; how long the recovery write
 took; and notes.
 
 Conflicts are normal: all workers race for the same key or branch, and most
-attempts lose. The counts are in the stats. An attempt without an outcome
-("unresolved") belongs to a killed worker. "Failed before intent" counts
-storage-mode attempts that couldn't read or back up `repo`, so they never
-tried to update it; see `AttemptFailures` below.
+attempts lose. The counts are in the stats. "Refused" counts operations the
+repository's status or layout refused: writers during a `ReadOnly` hold, and
+the refusals of a fork run. An attempt without an outcome ("unresolved")
+belongs to a killed worker. "Failed before intent" counts storage-mode
+attempts that couldn't read or back up `repo`, so they never tried to update
+it; see `AttemptFailures` below.
+
+The `mirror:` line counts the publications' renames of `repo`, the changes the
+samplers saw, the status toggler's holds, the holds that ended with an older
+version renamed over `repo` by a publication still in flight (mirror lag, not
+a failure), and the holds not judged because the storage logged an error
+during the `ReadOnly` change.
 
 The `observed:` line counts how commits of `repo` resolved a step whose
 outcome was in doubt:
@@ -407,7 +483,6 @@ outcome was in doubt:
 - `link_existed`: linking our new version found the name taken. The name is
   the hash of the content, so it holds our bytes: our own link, resent after a
   lost reply.
-- `rename_enoent.frozen`: the repository was frozen under the commit.
 
 `landed` and `link_existed` only happen after lost replies. They show that a
 run exercised that path; they aren't failures.
@@ -420,8 +495,8 @@ any host is on a network filesystem, the whole run is judged as one.
 ### Violations: the run failed
 
 - **`LostUpdate`**: an acknowledged update is missing from the final history
-  or follows a version other than its base. This is what the tool exists to
-  find.
+  or follows a version other than its base, or an acknowledged deletion
+  didn't remove what it deleted. This is what the tool exists to find.
 - **`Phantom`**: the history contains a version, snapshot or tag that no
   worker attempted.
 - **`FalseConflict`**: on a local filesystem, an update that reported a
@@ -429,22 +504,67 @@ any host is on a network filesystem, the whole run is judged as one.
   rebase ran into its own first landing.
 - **`BrokenHistory`**: the history can't be rebuilt: a missing backup, a
   cycle, an unparsable payload or commit message, a `repo` that can't be
-  read, or a `repo.d/` without exactly one marker and its version.
+  read or is missing, or a `repo.d/` without exactly one marker and its
+  version.
 - **`Stall`**: on a local filesystem, no worker got an update acknowledged for
   longer than the stall threshold.
 - **`FaultFloor`**: a kind of fault fired fewer times than required, so the
   run didn't exercise recovery enough. The message says which flag to raise.
 - **`Recovery`**: after the run, a fresh writer couldn't update within its
-  deadline, or aging or sweeping the repository failed.
-- **`Leftovers`**: after aging and sweeping, the repository's top-level
-  directory holds files other than `repo` or a `repo.d.tmp.*` directory, or
-  `repo.d/` holds anything but the marker and its version. `.nfs*` files,
+  deadline, setting the status `Online` failed, or aging or sweeping the
+  repository failed.
+- **`Leftovers`**: after aging and sweeping, the storage root holds a
+  staging file (`<name>.staging.<id>`), `object_store`'s `repo#<n>` or a
+  `repo.d.tmp.<id>/` directory, or `repo.d/` holds a version other than the
+  marker's, a `stage.<id>`, a `mirror.<id>` or a staging file. `.nfs*` files,
   which an NFS client keeps for a while after a deletion, are ignored.
 - **`DataMismatch`**: repository mode: the chunk of an acknowledged commit,
   on a worker branch or on `main`, reads back with the wrong content or can't
   be read.
+- **`DeletedUnrecognized`**: the sweep or GC deleted a canary: an entry it
+  doesn't recognize, such as an unknown name or an object id that isn't
+  canonical.
+- **`MirrorNotAVersion`**: a publication installed, or a sample read, a
+  `repo` that was never a current version.
+- **`MirrorStale`**: on a local filesystem, `repo` isn't the current version
+  after `verify`'s own publication or its recovery write, with no other
+  writer.
+- **`ReadOnlyMirrorMismatch`**: at the end of a `ReadOnly` hold, on a local
+  filesystem, `repo` wasn't the `ReadOnly` change's version, and no
+  publication that started before it explains the difference; or, on any
+  filesystem, a change landed during the hold.
+- **`MirrorDangling`**: repository mode: `repo` references a snapshot,
+  manifest or transaction log that doesn't exist. Expiration, deletions and
+  GC make this possible, which is why GC publishes before it deletes. See
+  `GcCutoffAfterSessionStart` for the one exception.
+- **`FeatureMissing`**: a version that was current, or `repo`, doesn't list
+  exactly `filesystem-layout-v1` with its gate over a status the run set.
+- **`InitialVersion`**: the first version's number isn't within the
+  milliseconds of its creation.
+- **`UnreportedFork`**: on a local filesystem, an operation that started after
+  a fork, and ended before the fork was erased, was acknowledged: its change
+  landed and didn't report the fork. After a fork every change lands in
+  `repo.d/` and reports the fork as a durable error.
+- **`GcAfterFork`**: on a local filesystem, a GC that started after a fork, or
+  with a fork written before its hook, was acknowledged: it deleted while the
+  fork was in `repo`.
+- **`SilentForkLoss`**: a fork was erased by something other than a
+  publication whose fork check read `repo` before the fork was written: its
+  last read of `repo` began by the time the fork's write returned (in logs
+  without the read's time, the check passed by then). The check's listing of
+  `repo.d/` after the read can take long on a network filesystem. On a
+  network filesystem, see also `ForkErasedAfterKilledPublisher`.
+- **`ForkDamaged`**: after a run whose fork persisted, the fork, its backup
+  or (repository mode) the objects it references are gone, so a recovery
+  that keeps `repo` is no longer possible.
+- **`ConversionMismatch`**, **`ConversionEndState`**, **`OverwroteStandard`**,
+  **`DeletedHistory`**, **`WriterDuringConversion`**, **`ConversionRetried`**:
+  the conversion scenario's, see [Conversion scenario](#conversion-scenario).
 - **`Harness`**: the tool itself failed: malformed logs, a missing `done/`
-  entry, a run that never started. It says nothing about the filesystem.
+  entry, a run that never started, a storage root that doesn't exist or holds
+  no repository, or a run in which no operation of the workers landed (they
+  worked on another storage root, or none). It says nothing about the
+  filesystem.
 
 ### Warnings: worth a look, not a failure
 
@@ -454,7 +574,7 @@ any host is on a network filesystem, the whole run is judged as one.
   report a conflict; see "Spurious conflicts" in the
   [storage guide](../icechunk-python/docs/docs/guides/storage.md#requirements-and-limits-of-filesystem_storage)
   and the
-  [design doc](../design-docs/020-filesystem-storage.md#known-limitation-spurious-conflict-after-a-lost-commit-reply).
+  [design doc](../design-docs/020-filesystem-storage.md#accepted-limits).
   Nothing is lost. On a local filesystem the same thing is a `FalseConflict`.
 - **`AmbiguousErrorLanded`**: an update that reported an error, rather than a
   conflict, landed anyway. An error doesn't say whether the update happened,
@@ -476,6 +596,76 @@ any host is on a network filesystem, the whole run is judged as one.
   They change nothing, so no other check sees them. A version whose bytes
   don't hash to its name means a reader saw other bytes than the writer
   wrote; send us the report.
+- **`UnknownEntries`**: names in the storage root or `repo.d/` that the layout
+  never creates and GC never deletes: someone else's, leftovers of removed
+  designs, or a bug.
+- **`MirrorStale`**, **`ReadOnlyMirrorMismatch`** (the mirror mismatch only),
+  **`UnreportedFork`**, **`GcAfterFork`**: the violations of the same name on a
+  network filesystem, where reads of `repo` may be stale and `publish_mirror()`
+  is best effort.
+- **`MirrorMissing`**, **`MirrorUnreadable`**: samples that found no `repo`, or
+  couldn't read it. The layout never removes `repo`, so on a local filesystem
+  a replacement wasn't atomic.
+- **`SamplerFailed`**: a host's sampler couldn't log; its samples end there.
+- **`ForkErasedInWindow`**: a fork erased by a publication whose fork check
+  read `repo` before the fork (see `SilentForkLoss`) and whose rename came
+  after it: the accepted limit, with the milliseconds from the check passing
+  until the rename returned, unknown if the rename was announced but never
+  recorded done. A rename counts at any time from its announcement until it
+  returned; one never recorded done, until its log's next record (a failed
+  rename, as `ENOENT` after a lost reply, may hide one that landed) or, if
+  that was the last, its process's death.
+- **`ForkErasedAfterKilledPublisher`**: on a network filesystem only, a fork
+  erased by bytes that a publication whose fork check read `repo` before the
+  fork (see `SilentForkLoss`) announced renaming, its process seen dead
+  before the fork was written, and that no publication whose fork check came
+  after the fork, or that had none, may have renamed since. The kill cancels
+  the wait for the rename RPC, not the RPC: the server may apply it after the
+  process died. On a local
+  filesystem this is a `SilentForkLoss`.
+- **`ForkActorPartialBackup`**: a backup in `overwritten/` that doesn't
+  decode, which a fork's write named in its log before copying `repo` and
+  which no fork it wrote names: the emulated old writer's copy was
+  interrupted (on NFS, `repo` renamed over during the copy fails it with
+  `ESTALE`), and no ops log references the partial file. Any other backup
+  that doesn't decode is a `BrokenHistory`.
+- **`ConversionRetried`**: the conversion scenario's, on a network
+  filesystem.
+- **`GcCutoffAfterSessionStart`**: repository mode with `--gc`: a commit
+  started before a GC's cutoff and was still running when that GC began, by
+  more than the clock allowance on both counts, and the GC may have landed
+  (its outcome isn't a conflict or a refusal). The run broke GC's
+  precondition: the spec requires the cutoff to be earlier than the start of
+  every session that may still commit. A storage stall longer than
+  `--gc-margin` does this. That GC may have deleted the commit's objects, so
+  the warning lists, and excuses, the missing snapshot file and transaction
+  log of the commit's acknowledged snapshot, which would otherwise be
+  `MirrorDangling`, `BrokenHistory` or `ForkDamaged` violations. It also
+  lists the manifest or chunk, both written by the commit, that the
+  read-back of its chunk found missing, and excuses only that read-back's
+  `DataMismatch`: a missing manifest is still `MirrorDangling`, the commit's
+  own as well as one a later commit inherited. Any other missing object, and
+  wrong bytes, are still violations. A larger `--gc-margin` avoids this
+  warning.
+- **`StaleRootListing`**: the conversion scenario's, on a network filesystem
+  only: a rerun of `convert_to_standard_layout()` returned `NothingToConvert`
+  and left `repo.d/`, with `repo` its current version without the feature,
+  because its listing of the storage root missed `repo.d/`. That is an
+  accepted limit (see "Rerun misses `repo.d`" in the
+  [design doc](../design-docs/020-filesystem-storage.md#accepted-limits));
+  the scenario runs the conversion again after the delay it names.
+
+### Fork runs
+
+With `--fork-at`, before `verify` checks anything, it logs a fork that
+`repo` no longer holds although the fork actor didn't see it erased (a
+publication of a worker winding down). If the last fork is still in `repo`,
+`verify` checks both sides instead of cleaning up: the fork, its backup and,
+in repository mode, every object it references must exist; its publication
+must refuse the fork; its one recovery write must land in `repo.d/` and
+report the fork. It skips the canaries, the aging, the sweep and the
+clean-root check, since the storage refuses GC while the fork is there, and
+says so in a note.
 
 ## Selftest
 
@@ -489,37 +679,157 @@ fs-stress selftest --root-parent /path/on/fs/selftest
 On this host only, it runs one case per broken protocol step and one on the
 old `local_filesystem_storage` backend, which overwrites `repo`
 unconditionally, in each mode (`--mode storage|repository|both`, default
-both). The broken steps:
+both) that can detect it. Each case names the violations that detect it:
 
-- `skip-link`: commit without linking the new version's bytes;
-- `rename-from-listed-marker`: rename the marker from wherever a listing
-  shows it, not from the base, so there is no compare;
-- `trust-rename-enoent`: treat a failed rename as a success without listing
-  again;
-- `ack-unproven`: treat a failed rename as a success whenever the listing
-  after it doesn't prove the outcome;
-- `tidy-up-deletes-current`: the tidy-up also deletes the version just
-  committed;
-- `delete-above-marker`: the tidy-up and the sweep also delete versions
-  newer than the marker, which other writers are about to commit;
-- `unlink-base-before-rename`: delete the base's version before the rename,
-  with kills in between;
-- `link-after-rename`: rename first and link the bytes after, with kills in
-  between;
-- `delete-winner-file`: a writer that lost a race deletes the winner's
-  version instead of its own.
+| Case | Modes | Detected by |
+| --- | --- | --- |
+| `skip-link`: commit without linking the new version's bytes | both | `LostUpdate`, `BrokenHistory` |
+| `rename-from-listed-marker`: rename the marker from wherever a listing shows it, not from the base, so there is no compare | both | `LostUpdate`, `BrokenHistory` |
+| `trust-rename-enoent`: treat a failed rename as a success without listing again | both | `LostUpdate`, `BrokenHistory` |
+| `ack-unproven`: treat a failed rename as a success whenever the listing after it doesn't prove the outcome | both | `LostUpdate`, `BrokenHistory` |
+| `tidy-up-deletes-current`: the tidy-up also deletes the version just committed | both | `LostUpdate`, `BrokenHistory` |
+| `delete-above-marker`: the tidy-up and the sweep also delete versions newer than the marker, which other writers are about to commit | both | `LostUpdate`, `BrokenHistory` |
+| `unlink-base-before-rename`: delete the base's version before the rename, with kills in between | both | `LostUpdate`, `BrokenHistory` |
+| `link-after-rename`: rename first and link the bytes after, with kills in between | both | `LostUpdate`, `BrokenHistory` |
+| `delete-winner-file`: a writer that lost a race deletes the winner's version instead of its own | both | `LostUpdate`, `BrokenHistory` |
+| `ack-superseded-without-proof`: acknowledge an attempt whose listing shows a marker past its own without the lost-reply check | both | `LostUpdate` |
+| `publish-without-fork-check`: publish without reading `repo`, with the fork actor forking 30 % of the way in and again after each erasure | both | `SilentForkLoss` |
+| `publish-non-current`: publish the version with the highest number in a listing, with frequent kills after linking, so that versions above the marker exist, and short frequent pauses before publications | both | `MirrorNotAVersion`, `MirrorStale` |
+| `commit-without-publish`: a change returns without publishing, the status toggler's `ReadOnly` change included, every 3 s for 1 s | repository | `ReadOnlyMirrorMismatch` |
+| `gc-without-fork-check`: GC's hook before its deletes doesn't check for a fork, with a fork written by the GC worker once GC's change is published, before the hook | repository | `GcAfterFork` |
+| `gc-publishes-listed`: GC's hook publishes the version its listing shows, not the one GC's change made | repository | `MirrorStale`, `MirrorDangling` |
+| `from-standard-without-provenance`: the rerun of an interrupted conversion from the standard layout publishes without the provenance check | repository | `ConversionEndState`, `SilentForkLoss` |
+| `to-standard-without-change`: the conversion to the standard layout publishes the version it read, converted, without its change | repository | `LostUpdate` |
+| `delete-dir-before-publish`: the conversion to the standard layout deletes `repo.d` before publishing | repository | `ConversionEndState`, `DeletedHistory`, `LostUpdate` |
 
 Writers pause before the rename, so that others commit in between, and the
-supervisor restarts killed workers. Every case must be *detected*: a
-broken-protocol case after the sabotage fired, with a `LostUpdate`, a
-`BrokenHistory` or a repository too damaged to read; a legacy-backend case
-with a `LostUpdate`. The self-test exercises only the tidy-up half of
-`delete-above-marker`, since no sweep runs while writers are live; a unit
-test in icechunk-fs `repo_d/sweep.rs` covers the sweep half. Cases run for
-`--duration` (default `20s`); the legacy-backend cases run at most 10 s, with
-64-byte payloads. The run roots of detected cases are deleted; the others are
-kept and printed. The exit code is 0 if every case was detected, 1 if one was
-missed, 3 if a case couldn't be run.
+supervisor restarts killed workers. A broken-protocol case is *detected* when
+the sabotage fired and the run failed with one of its violations, or the
+repository is too damaged to read; a legacy-backend case when it lost an
+update. Notes on some cases:
+
+- `delete-above-marker`: the self-test exercises only the tidy-up half, since
+  no sweep runs while writers are live; a unit test in icechunk-fs
+  `repo_d/sweep.rs` covers the sweep half.
+- `publish-non-current`: a version above the marker that never becomes
+  current is one a writer killed after linking leaves, until the next commit's
+  tidy-up deletes it. A publication right after its commit lists `repo.d/`
+  just after that tidy-up and finds nothing above the marker, so the sabotage
+  publishes the right version. The case therefore pauses publications before
+  they start (`BeforePublish`, probability 0.15, 500 ms) and kills writers
+  after linking and before the rename with probability 0.15, so that a paused
+  publication lists while a killed writer's version waits.
+- `commit-without-publish`: the status toggler's storage carries the
+  sabotage like every worker's, so its own `ReadOnly` change returns without
+  publishing, and `repo` at the end of the hold is whatever an earlier
+  publication left. That is the failure M4 states. Without the sabotage on
+  the toggler's storage, its change would publish and no hold could show it.
+- `gc-without-fork-check`: GC's own change publishes first, and its fork check
+  would find any fork written before it, so the case writes the fork between
+  that publication and GC's hook, where only the hook's check can find it.
+  The GC cases run one writer: GC updates the repo info once per attempt and
+  rarely gets through under eight.
+- `gc-publishes-listed` is **undetectable on a local filesystem**, and the
+  case says so (`undetectable here`) instead of failing: a listing of
+  `repo.d/` never lags there, so the version GC's hook lists is never older
+  than the one GC's change made. On a network filesystem it is detected only
+  if a listing lags in that window.
+- The three conversion cases run the [conversion scenario](#conversion-scenario)
+  for one round without a stress phase or kills, with what makes their
+  sabotage matter: `from-standard-without-provenance` kills the first run
+  after its directory rename and replaces `repo` as Icechunk 2.3 writes a
+  status change before the rerun, which must then stop; `to-standard-without-change`
+  lands a commit right after the conversion read the current version, a
+  commit that publishes nothing, as a stale listing would hide it from the
+  conversion on a network filesystem.
+
+Cases run for `--duration` (default `20s`); the legacy-backend cases run at
+most 10 s, with 64-byte payloads, and the conversion cases a few seconds. The
+run roots of detected and undetectable cases are deleted; the others are kept
+and printed. The exit code is 0 if every case was detected or is
+undetectable here, 1 if one was missed, 3 if a case couldn't be run.
+
+## Conversion scenario
+
+```sh
+fs-stress convert-scenario --root /path/on/fs/convert-1
+```
+
+On this host only, on one repository, in rounds (`--rounds`, default 2):
+
+1. In round 1, it creates a repository in the standard layout through
+   `local_filesystem_storage` and commits to it (`--standard-commits`, default
+   3).
+2. It converts it to the filesystem layout with
+   `convert_to_filesystem_layout()`.
+3. A stress phase in repository mode with GC, `--workers` (default 8) for
+   `--duration` (default `1m`; `0s` for none), checked by `verify` as any
+   run, with every earlier round's operations.
+4. It converts it to the standard layout with `convert_to_standard_layout()`.
+5. It commits to it in the standard layout again.
+
+Each run of a conversion is a child process (`fs-stress conversion`), run
+again after a kill until it finishes. In every round each conversion has one
+guaranteed kill with `SIGKILL`: from the standard layout at one of its steps,
+chosen at random; to the standard layout right after its change or its
+publication, chosen at random, so that C7 runs. Once that kill landed, every
+later run is killed at a random step with probability `--conversion-kill-p`
+(default `0.3`). The
+summary's notes list the steps runs were killed at and how many writers C7
+tried. A run can end before its guaranteed step (a rerun that fails as under
+stale listings); the next run of that conversion then gets the same step. A
+scenario that finished in which no conversion from the standard layout was
+killed or C7 never ran fails with a `Harness` violation; one that ended early
+on a violation says so in a note instead. Only the conversions run
+during a conversion, as they require. A stress phase's `run.json` names the
+shared `storage/`, so its workers and `verify`, which get only the phase's
+run root, use it. It checks:
+
+- **C1**: no acknowledged change is lost: the stress phase's `verify`, and the
+  repository oracle through `local_filesystem_storage` after each conversion
+  to the standard layout, over the logs of every round so far.
+- **C2** (`ConversionMismatch`): a conversion changes only the writer feature,
+  the gate and the ops log: the repo info it wrote is the one it backed up,
+  named on its new ops-log entry, with the feature added or removed and one
+  status change on top.
+- **C3** (`ConversionEndState`): a finished conversion leaves the target
+  layout and nothing else: to the standard layout, a `repo` without writer
+  features or gate, no `repo.d/` and no `repo.d.tmp.*`; from it, `repo.d/`
+  with one marker whose version `repo` copies, and no `repo.d.tmp.*`. A
+  conversion that can't finish is a `ConversionEndState` too, and ends the
+  scenario.
+- **C4** (`InitialVersion`): the first version a conversion from the standard
+  layout builds is numbered by the time of the conversion.
+- **C5** (`OverwroteStandard`): after the commits in the standard layout,
+  nothing has made `repo` list the feature again or created `repo.d/`.
+- **C6** (`DeletedHistory`): after every run of a conversion to the standard
+  layout, killed or not, `repo.d/` is gone only if `repo` holds that
+  conversion's version without the feature.
+- **C7** (`WriterDuringConversion`): after a run of the conversion to the
+  standard layout killed right after its change or its publication, while the
+  current version lacks the feature, a writer through `filesystem_storage`
+  must fail with the error that says to rerun `convert_to_standard_layout()`.
+  Runs killed at later steps, once `repo.d/` is renamed aside, try no writer.
+- **Reruns** (`ConversionRetried`): a rerun that fails as only stale listings
+  make it fail (relisting ran out, or a fork reported while `repo` holds the
+  bytes of a version of `repo.d/`) is retried; that is a warning on a network
+  filesystem and a violation on a local one.
+- **Reruns that miss `repo.d/`** (`StaleRootListing`): on a network
+  filesystem, a rerun of the conversion to the standard layout whose listing
+  of the storage root misses `repo.d/` returns `NothingToConvert` and leaves
+  it, with `repo` the conversion's version without the feature. That is an
+  accepted limit, cured by running the conversion again once the listing
+  refreshes, so the scenario warns and runs it again, up to 9 times, after
+  0.5, 1, 2, 4 and 8 s, then 16 s each: 79.5 s in all, chosen to exceed the
+  longest time NFS caches directory attributes (`acdirmax`, 60 s by default).
+  These reruns don't count toward the conversion's 12 runs. If `repo.d/` is
+  still missed after the last, that is a `ConversionEndState` saying so. On a
+  local filesystem the same end state is a `ConversionEndState` (`repo.d
+  exists`) right away.
+
+It prints a summary and writes `report.json` in its root, with every
+violation of the stress phases too; each phase's `verify` report is in
+`phase-<k>/report.json`. The exit codes are `verify`'s.
 
 ## What to send us
 
@@ -551,8 +861,11 @@ only processes it started itself.
 - **Never point it at a real repository.** `init` and `run` refuse a run root
   that isn't empty, and create a new repository under `storage/`.
 - **Disk.** `init` prints an upper bound on the data volume, assuming 1000
-  operations per second per worker. In storage mode every update attempt
-  first writes a backup to `storage/overwritten/`.
+  operations per second per worker: per operation, in storage mode the
+  padding plus 4 KiB for the rest of a repo info, in repository mode the
+  chunk plus 8 KiB. In storage mode every update attempt first writes a
+  backup to `storage/overwritten/`. Repo info files are compressed, so the
+  random padding takes about three quarters of `--payload-bytes` on disk.
 - **Memory.** In storage mode, `verify` reads the backups one at a time and
   keeps a few hundred bytes for each distinct backed-up version, never their
   padding. It does hold every worker's log records in memory.
@@ -565,9 +878,36 @@ R/control           wait, go with the participants, or stop
 R/go                participant list, decided by one host at the go
 R/hosts/<tag>.json  each registered host: hostname, kernel, mount line, fs type
 R/done/<tag>.json   each finished host
-R/logs/             worker and supervisor logs, one JSON record per line
+R/logs/             logs, one JSON record per line:
+  <tag>.<slot>.<n>.log   worker <slot>'s incarnation n: 0, 1, … for writers,
+                         gc, toggler and fork for the GC worker, the status
+                         toggler and the fork actor
+  <tag>.supervisor.log   the host's supervisor: spawns and external kills
+  <tag>.sampler.log      the host's mirror sampler
+  init.init.0.log        init: the first version's number
+  verify.recovery.0.log  verify's recovery write
+  verify.publish.<k>.log verify's publications of repo, one per verify
+  verify.fork.<k>.log    a fork erasure verify found
 R/storage/          the repository
 R/report.json       written by verify
+```
+
+The host tags `init`, `verify` and `scenario` are reserved, and so are the
+slots `supervisor` and `sampler`.
+
+The conversion scenario's root:
+
+```
+R/scenario.json     its configuration, which its converters read
+R/storage/          the repository, shared by every round
+R/phase-<k>/        round k: a run root on R/storage/ (run.json, control, go,
+                    hosts/, done/, report.json for its stress phase) whose
+                    logs/ also hold scenario.<slot>.<n>.log: the converters
+                    (from-standard, to-standard, n counting runs), the
+                    commits in the standard layout (standard), the writers
+                    during an interrupted conversion (writer) and a planted
+                    standard write (plant)
+R/report.json       the scenario's report
 ```
 
 Nothing in the run root records where the filesystem is mounted on each host,
@@ -582,6 +922,9 @@ From the repository root, with the dev profile:
   The run root is deleted if the run passes and kept, with its path printed,
   if it fails.
 - `just fs-stress-selftest [parent] [args…]`: `selftest` under `parent`.
+- `cargo run --release -p icechunk-fs-stress -- convert-scenario --root R`:
+  the conversion scenario (there is no `just` target); any `fs-stress` binary
+  runs it as `fs-stress convert-scenario --root R`.
 - `just fs-stress-process-tests`: the ignored tests that spawn stress
   processes. `just test` runs the others.
 - `just fs-stress-static`: the static binary for other hosts.

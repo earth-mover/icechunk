@@ -19,11 +19,12 @@ use futures::{
     future::ready,
     stream::{self, BoxStream},
 };
+use icechunk_format::layout_v1;
 use icechunk_storage::{
-    DeleteObjectsResult, ETag, GetModifiedResult, ListInfo, PutCondition, Settings,
-    Storage, StorageContext, StorageError, StorageErrorKind, StorageInfo, StorageResult,
-    VersionInfo, VersionedUpdateResult, WriteHint, other_error, sealed,
-    split_in_multiple_requests,
+    DeleteObjectsResult, ETag, GcPhase, GetModifiedResult, ListInfo, PutCondition,
+    Settings, Storage, StorageContext, StorageError, StorageErrorKind, StorageInfo,
+    StorageResult, StorageWriterFeatures, VersionInfo, VersionedUpdateResult, WriteHint,
+    other_error, sealed, split_in_multiple_requests,
 };
 use icechunk_types::ICResultExt as _;
 use serde::{Deserialize, Serialize};
@@ -38,9 +39,10 @@ use crate::{
     read::{last_modified, read_all, read_range, slice_range},
     repo_d::{
         ProtocolError, RepoD,
-        commit::UpdateOutcome,
-        freeze::{FreezeResult, UnfreezeResult},
-        lifecycle::{CreateOutcome as RepoCreateOutcome, MigrateOutcome},
+        commit::{UpdateOutcome, check_change_bytes},
+        convert::ConversionOutcome,
+        lifecycle::{CreateOutcome as RepoCreateOutcome, FEATURES, check_in_layout},
+        mirror::PublishOutcome,
         read::{Current, Since},
         sweep::sweep,
     },
@@ -50,23 +52,30 @@ use crate::{
 /// A [`Storage`] on a local or shared distributed filesystem, safe for concurrent
 /// writers, including writers on different hosts of a network filesystem, under
 /// the conditions below. See design document 020
-/// (`design-docs/020-filesystem-storage.md`).
+/// (`design-docs/020-filesystem-storage.md`) and the filesystem layout v1 page
+/// of the specification.
 ///
-/// - It uses a different on-disk format from every other backend: `repo` is a
-///   stub file next to a `repo.d/` directory of versions. Other backends and
-///   older Icechunk versions can't open these repositories.
-/// - Safe only if every writer of the repository uses this backend: older
-///   Icechunk versions, `new_local_filesystem_storage` and
-///   `force_write_repo_info` overwrite `repo` unconditionally, so they must
-///   never write to a repository in this backend's format. Each instance
-///   refuses such an overwritten repository at its first use of `repo`
-///   (opening a repository creates one), so an overwrite while an instance
-///   is already in use goes unnoticed until the next instance.
-/// - Repositories in the single-file format of `new_local_filesystem_storage`
-///   and older Icechunk versions are refused until converted, once, with
-///   [`FilesystemStorage::migrate_legacy_repo`].
-/// - A frozen repository ([`FilesystemStorage::freeze_repo`]) refuses changes
-///   until it is unfrozen.
+/// - The repo info is stored in the filesystem layout v1: `repo.d/` holds its
+///   versions and a marker naming the current one, and `repo` is the mirror,
+///   a byte-identical copy of a version that was current. Every change
+///   publishes the mirror before returning. Other backends and older Icechunk
+///   versions read the repository through the mirror, read-only: the repo
+///   info lists the writer feature `filesystem-layout-v1`, which they don't
+///   implement.
+/// - The mirror can lag behind the current version after a crash or under
+///   contention. [`FilesystemStorage::publish_mirror`] repairs it on a
+///   best-effort basis; a change, such as setting the status `ReadOnly`,
+///   makes it current once every process that changed the repository
+///   earlier has finished.
+/// - Writing `repo` with anything that doesn't implement the layout (Icechunk
+///   2.0 to 2.3 changing the status, `force_write_repo_info` through another
+///   backend, other tools) forks the repository, which is unsupported. The
+///   fork check before every publication finds forks on a best-effort basis
+///   and never overwrites one it finds; recovery is manual.
+/// - Repositories in the standard layout, as `new_local_filesystem_storage`
+///   and older Icechunk versions write them, are refused until converted,
+///   once, with [`FilesystemStorage::convert_to_filesystem_layout`].
+///   [`FilesystemStorage::convert_to_standard_layout`] converts back.
 /// - The filesystem must provide hard links, atomic rename by name and
 ///   exclusive directory rename.
 /// - Repositories in the Icechunk 1 format are refused.
@@ -87,25 +96,6 @@ pub struct FilesystemStorage {
 
 fn no_hooks() -> Arc<dyn ProtocolHooks> {
     Arc::new(NoHooks)
-}
-
-/// What [`FilesystemStorage::freeze_repo`] did.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum FreezeOutcome {
-    /// The repository is now frozen at this version.
-    Frozen(VersionInfo),
-    /// It already was frozen.
-    AlreadyFrozen,
-}
-
-/// What [`FilesystemStorage::unfreeze_repo`] did.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum UnfreezeOutcome {
-    /// The repository accepts changes again, on top of this new version
-    /// holding the frozen version's bytes.
-    Unfrozen(VersionInfo),
-    /// It wasn't frozen.
-    NotFrozen,
 }
 
 impl FilesystemStorage {
@@ -131,8 +121,10 @@ impl FilesystemStorage {
     }
 
     /// Whether data files are fsynced, and their directories before every
-    /// commit. On by default; without it, a power loss can leave `repo`
-    /// pointing at empty or missing files. The fsyncs of `repo` always run.
+    /// change. On by default; without it, a power loss can leave `repo`
+    /// pointing at empty or missing files. The fsyncs of the change itself
+    /// always run: those of `repo.d`, of `repo` and the root directory, and of
+    /// a conversion's backup.
     pub fn with_fsync(self, fsync: bool) -> Self {
         Self { fsync, ..self }
     }
@@ -149,60 +141,90 @@ impl FilesystemStorage {
         &self.root
     }
 
-    /// Stops every change: renames the marker of the current version to a
-    /// name no commit renames from. The current version stays readable, so a
-    /// frozen repository can be copied or exported consistently. Writers get
-    /// a [`StorageErrorKind::RepositoryFrozen`] error.
+    /// Converts a repository in the standard layout, as
+    /// `new_local_filesystem_storage` and older Icechunk versions write it, to
+    /// the filesystem layout v1. It backs `repo` up to `overwritten/`, builds
+    /// `repo.d` whose first version is that repo info with the writer feature
+    /// `filesystem-layout-v1` added, and publishes it as the mirror `repo`.
+    /// Only the writer features, the status gate and the ops log change; the
+    /// repository's own status is kept, whatever it is.
     ///
-    /// Only [`FreezeOutcome::Frozen`] proves that this call froze the
-    /// repository. [`FreezeOutcome::AlreadyFrozen`] comes from a directory
-    /// listing that can lag, so an export must not rely on it.
-    pub async fn freeze_repo(&self) -> StorageResult<FreezeOutcome> {
-        self.check_repo_once().await?;
-        self.on_repo(|repo| {
-            Ok(match repo.freeze()? {
-                FreezeResult::Frozen(version) => {
-                    FreezeOutcome::Frozen(version.to_version_info())
-                }
-                FreezeResult::AlreadyFrozen => FreezeOutcome::AlreadyFrozen,
-            })
-        })
-        .await
-    }
-
-    /// Accepts changes again, on top of a new version holding the frozen
-    /// version's bytes: writers based on the frozen version get one conflict.
+    /// Administrative: run it with nothing else using the repository, no
+    /// writer in any process and no other administrative operation; anything
+    /// else is undefined behaviour. If it is interrupted, run it again under
+    /// the same condition: the rerun completes the conversion. It returns
+    /// [`ConversionOutcome::NothingToConvert`] for a repository in the
+    /// filesystem layout, and [`StorageErrorKind::ObjectNotFound`] if there is
+    /// no repository.
     ///
-    /// Only [`UnfreezeOutcome::Unfrozen`] proves that this call unfroze the
-    /// repository. [`UnfreezeOutcome::NotFrozen`] comes from a directory
-    /// listing that can lag.
-    pub async fn unfreeze_repo(&self) -> StorageResult<UnfreezeOutcome> {
-        self.check_repo_once().await?;
-        self.on_repo(|repo| {
-            Ok(match repo.unfreeze()? {
-                UnfreezeResult::Unfrozen(version) => {
-                    UnfreezeOutcome::Unfrozen(version.to_version_info())
-                }
-                UnfreezeResult::NotFrozen => UnfreezeOutcome::NotFrozen,
-            })
-        })
-        .await
-    }
-
-    /// Converts a repository in the single-file format of
-    /// `new_local_filesystem_storage` and older Icechunk versions to this
-    /// backend's format. Offline only: no other process may write to the
-    /// repository from when this starts until every writer uses this backend.
-    /// A rerun completes an interrupted migration.
-    pub async fn migrate_legacy_repo(&self) -> StorageResult<MigrateOutcome> {
+    /// Refuses, writing nothing, a repository that lists writer features this
+    /// storage doesn't implement ([`StorageErrorKind::MissingWriterFeatures`]),
+    /// a malformed repo info, and an interrupted conversion to the standard
+    /// layout ([`StorageErrorKind::LayoutConversionInProgress`]). A rerun that
+    /// finds `repo.d` next to a `repo` it can't attribute to its earlier run
+    /// stops and names the manual recovery.
+    pub async fn convert_to_filesystem_layout(&self) -> StorageResult<ConversionOutcome> {
         self.sync_data_dirs().await?;
-        self.on_repo(|repo| repo.migrate()).await
+        self.on_repo(|repo| repo.convert_from_standard())
+            .await?
+            .ok_or_else(repo_not_found)
+    }
+
+    /// Converts a repository in the filesystem layout v1 back to the standard
+    /// layout that `new_local_filesystem_storage` and older Icechunk versions
+    /// write. It backs the current version up to `overwritten/`, changes the
+    /// repo info to that version with the writer feature
+    /// `filesystem-layout-v1` removed, publishes it as `repo`, then renames
+    /// `repo.d` aside and deletes it. Only the writer features, the status
+    /// gate and the ops log change; the repository's own status is kept,
+    /// whatever it is.
+    ///
+    /// Administrative: run it with nothing else using the repository, no
+    /// writer in any process, no process still publishing the mirror and no
+    /// other administrative operation; anything else is undefined behaviour.
+    /// If it is interrupted, run it again under the same condition: the rerun
+    /// completes the conversion. Until then, every write and GC through this
+    /// storage refuses with [`StorageErrorKind::LayoutConversionInProgress`].
+    /// It returns [`ConversionOutcome::NothingToConvert`] for a repository in
+    /// the standard layout, and [`StorageErrorKind::ObjectNotFound`] if there
+    /// is no repository.
+    ///
+    /// Refuses, changing nothing, a repository that lists writer features this
+    /// storage doesn't implement ([`StorageErrorKind::MissingWriterFeatures`]),
+    /// a malformed repo info, a fork ([`StorageErrorKind::RepositoryForked`]),
+    /// which includes a conversion from the standard layout interrupted after
+    /// its directory rename, and a `repo` that can't be read or decoded
+    /// ([`StorageErrorKind::MirrorUnreadable`]).
+    pub async fn convert_to_standard_layout(&self) -> StorageResult<ConversionOutcome> {
+        self.sync_data_dirs().await?;
+        self.on_repo(|repo| repo.convert_to_standard()).await?.ok_or_else(repo_not_found)
+    }
+
+    /// Publishes the current version of the repository as the mirror `repo`,
+    /// repairing a mirror left behind by a process that died between its
+    /// change and its publication, or by a publication that gave up. It never
+    /// changes the repo info and is safe while writers run.
+    ///
+    /// Best effort: it publishes the version its listing shows, which a change
+    /// landing meanwhile, or a lagging listing, can make an older version than
+    /// the current one, and it gives up after four rounds while the marker
+    /// keeps moving. The way to a current mirror is a change, such as
+    /// `set_status(ReadOnly)`, made once every process that changed the
+    /// repository earlier has finished.
+    ///
+    /// Refuses a current version without `filesystem-layout-v1`
+    /// ([`StorageErrorKind::LayoutConversionInProgress`]), a fork
+    /// ([`StorageErrorKind::RepositoryForked`]) and a `repo` that can't be read
+    /// or decoded ([`StorageErrorKind::MirrorUnreadable`]), writing nothing.
+    pub async fn publish_mirror(&self) -> StorageResult<PublishOutcome> {
+        self.on_repo(|repo| classified(repo, repo.publish_mirror()?))
+            .await?
+            .ok_or_else(repo_not_found)
     }
 
     /// The `open` classification, the first time this instance touches
-    /// `repo`: a `repo` overwritten by a writer that doesn't use this backend
-    /// is refused even though `repo.d` still reads fine. Only success is
-    /// cached; a root without a repository is checked again.
+    /// `repo`. With `repo.d` it doesn't read the mirror `repo`. Only success
+    /// is cached; a root without a repository is checked again.
     async fn check_repo_once(&self) -> StorageResult<()> {
         if self.repo_checked.initialized() {
             return Ok(());
@@ -264,7 +286,7 @@ impl fmt::Display for FilesystemStorage {
 /// and `new_local_filesystem_storage` overwrite `repo` unconditionally, so
 /// they must never write to a repository in this backend's format. Their
 /// repositories must first be converted with
-/// [`FilesystemStorage::migrate_legacy_repo`]. Requires a filesystem that
+/// [`FilesystemStorage::convert_to_filesystem_layout`]. Requires a filesystem that
 /// meets the requirements (hard links, atomic rename
 /// by name and exclusive directory rename).
 pub async fn new_filesystem_storage(
@@ -280,7 +302,7 @@ pub async fn new_filesystem_storage(
 /// and `new_local_filesystem_storage` overwrite `repo` unconditionally, so
 /// they must never write to a repository in this backend's format. Their
 /// repositories must first be converted with
-/// [`FilesystemStorage::migrate_legacy_repo`]. Requires a filesystem that
+/// [`FilesystemStorage::convert_to_filesystem_layout`]. Requires a filesystem that
 /// meets the requirements (hard links, atomic rename
 /// by name and exclusive directory rename).
 pub async fn new_filesystem_storage_with(
@@ -323,27 +345,43 @@ fn write_error(err: io::Error) -> StorageError {
 fn protocol_error(root: &Path, err: ProtocolError) -> StorageError {
     let root = root.display();
     match err {
-        ProtocolError::Frozen => {
-            StorageError::capture(StorageErrorKind::RepositoryFrozen)
-        }
         ProtocolError::Io(err) => write_error(err),
-        ProtocolError::LegacyFormat => other_error(format!(
-            "FilesystemStorage: the repository in {root} uses the single-file format of \
-             local_filesystem_storage or an older Icechunk: stop every writer, then run \
-             migrate_legacy_repo once"
+        ProtocolError::NotInLayout(msg) => {
+            other_error(format!("FilesystemStorage: {msg}"))
+        }
+        ProtocolError::StandardLayout => other_error(format!(
+            "FilesystemStorage: the repository in {root} is in the standard layout: \
+             {root}/repo doesn't list the writer feature {feature} and {root}/repo.d \
+             doesn't exist. Stop every writer, then run convert_to_filesystem_layout() \
+             once",
+            feature = layout_v1::FEATURE
         )),
-        ProtocolError::MigrationInterrupted => other_error(format!(
-            "FilesystemStorage: a migration of the repository in {root} was interrupted: \
-             rerun migrate_legacy_repo"
+        ProtocolError::OrphanMirror => other_error(format!(
+            "FilesystemStorage: {root}/repo lists the writer feature {feature} but \
+             {root}/repo.d doesn't exist: an orphan mirror, repo.d was deleted or not \
+             copied. Restore repo.d if a copy exists. Otherwise create repo.d/ holding \
+             <N>.<h> with the bytes of {root}/repo, where N is the current Unix time in \
+             milliseconds and h their SHA-256, and an empty latest.<K>.<N>.<h>, \
+             K = 999999999999999 - N in 15 digits; changes after the version the \
+             mirror holds are lost",
+            feature = layout_v1::FEATURE
         )),
-        ProtocolError::MixedFormats => other_error(format!(
-            "FilesystemStorage: {root}/repo was overwritten by a writer that doesn't use \
-             FilesystemStorage (an older Icechunk, local_filesystem_storage or \
-             force_write_repo_info): manual recovery needed"
+        ProtocolError::RepoUnreadable(why) => other_error(format!(
+            "FilesystemStorage: {root}/repo can't be read or decoded and {root}/repo.d \
+             doesn't exist ({why}); nothing overwrites it"
         )),
         ProtocolError::ManualRecovery(msg) => other_error(format!(
             "FilesystemStorage: the repository in {root} needs manual recovery: {msg}"
         )),
+        ProtocolError::MissingFeatures { missing, min_version } => {
+            StorageError::capture(StorageErrorKind::MissingWriterFeatures {
+                missing,
+                min_version,
+            })
+        }
+        ProtocolError::Malformed(msg) | ProtocolError::Incomplete(msg) => {
+            other_error(format!("FilesystemStorage: {msg}"))
+        }
         ProtocolError::InvalidVersion(msg) => {
             other_error(format!("FilesystemStorage: {msg}"))
         }
@@ -351,6 +389,24 @@ fn protocol_error(root: &Path, err: ProtocolError) -> StorageError {
             "FilesystemStorage: no consistent view of {root}/repo.d: {cause}"
         )),
         ProtocolError::Corrupt(msg) => other_error(format!("FilesystemStorage: {msg}")),
+        ProtocolError::Forked(detail) => {
+            StorageError::capture(StorageErrorKind::RepositoryForked(detail))
+        }
+        ProtocolError::ForkedAfterUpdate { new, detail } => {
+            StorageError::capture(StorageErrorKind::RepositoryForkedAfterUpdate {
+                new_version: Box::new(new.to_version_info()),
+                detail,
+            })
+        }
+        ProtocolError::GcWithoutChange(msg) => {
+            other_error(format!("FilesystemStorage: {msg}"))
+        }
+        ProtocolError::MirrorUnreadable(detail) => {
+            StorageError::capture(StorageErrorKind::MirrorUnreadable(detail))
+        }
+        ProtocolError::ConversionInProgress(detail) => {
+            StorageError::capture(StorageErrorKind::LayoutConversionInProgress(detail))
+        }
     }
 }
 
@@ -391,14 +447,61 @@ impl Storage for FilesystemStorage {
         Ok(true)
     }
 
+    /// Before the deletes, publishes the version GC's change made, and
+    /// refuses unless the mirror then holds it or a later version: a fork, a
+    /// mirror that can't be read or decoded, or a publication that installed
+    /// nothing. After the deletes, publishes once more from the listed
+    /// version, never one below GC's; failures are logged. Without the
+    /// version of GC's change it refuses while `repo.d` exists.
+    async fn gc_hook(
+        &self,
+        _ctx: &StorageContext<'_>,
+        phase: GcPhase<'_>,
+    ) -> StorageResult<()> {
+        let (changed, before_deletes) = match phase {
+            GcPhase::BeforeDeletes { changed } => (changed, true),
+            GcPhase::AfterDeletes { changed } => (changed, false),
+        };
+        let Some(changed) = changed else {
+            return self.on_repo(|repo| repo.refuse_gc_without_change()).await;
+        };
+        let changed = match parse_version(changed) {
+            Ok(changed) => changed,
+            Err(err) if before_deletes => return Err(protocol_error(&self.root, err)),
+            // GC has deleted already: failures after the deletes are logged.
+            Err(err) => {
+                tracing::error!(
+                    root = %self.root.display(),
+                    "Publishing the mirror after GC's deletes failed: the version of GC's \
+                     change is invalid: {err:?}. FilesystemStorage::publish_mirror() \
+                     repairs a mirror left behind"
+                );
+                return Ok(());
+            }
+        };
+        self.on_repo(move |repo| {
+            if before_deletes {
+                repo.publish_before_gc_deletes(&changed)
+            } else {
+                repo.publish_after_gc_deletes(&changed);
+                Ok(())
+            }
+        })
+        .await
+    }
+
+    async fn writer_features(&self) -> StorageResult<StorageWriterFeatures> {
+        Ok(StorageWriterFeatures::new(FEATURES, []))
+    }
+
     async fn create_location_if_needed(&self) -> StorageResult<()> {
         let root = self.root.clone();
         blocking(move || std::fs::create_dir_all(&root).capture()).await
     }
 
     /// `repo` is the current version of the repository, read whole and then
-    /// sliced. A single-file or half-migrated repository is an error naming
-    /// the remedy.
+    /// sliced. A repository in the standard layout is an error naming the
+    /// remedy.
     async fn get_object_range(
         &self,
         _ctx: &StorageContext<'_>,
@@ -481,12 +584,21 @@ impl Storage for FilesystemStorage {
         .await
     }
 
-    /// On `repo`, `Create` creates the repository with version 0 and
-    /// `IfVersion` commits a new version on top of the given one, which needs
-    /// both its etag and its generation; a frozen repository is a
-    /// [`StorageErrorKind::RepositoryFrozen`] error. Creating it again with
-    /// the same bytes returns `Updated`: a retried create whose first reply
-    /// was lost looks the same.
+    /// On `repo`, `Create` creates the repository, whose repo info must list
+    /// `filesystem-layout-v1`: its first version, numbered with the Unix time
+    /// in milliseconds, and the mirror `repo`. It is `NotOnLatestVersion` if
+    /// the repository exists or `repo` holds anything but an interrupted
+    /// creation, and an error naming the remedy if `repo` is a repository in
+    /// the standard layout. `IfVersion` changes the repo info to a new
+    /// version on top of the given one, which needs both its etag and its
+    /// generation, and publishes it as the mirror `repo` before returning.
+    /// Its bytes must list `filesystem-layout-v1`, otherwise it is
+    /// [`StorageErrorKind::LayoutConversionInProgress`] and nothing is
+    /// written. A change that landed is `Updated` even when its publication
+    /// failed, which is logged and repaired by the next change, except when
+    /// the publication found a fork:
+    /// [`StorageErrorKind::RepositoryForkedAfterUpdate`], the change is
+    /// durable.
     ///
     /// On other keys only `Create` is supported. It stages the content and
     /// hard-links it into place, so the object appears complete or not at
@@ -507,6 +619,7 @@ impl Storage for FilesystemStorage {
         self.warn_if_unsafe_settings(ctx.settings);
         match condition {
             PutCondition::Create if path == REPO => {
+                check_in_layout(&bytes).map_err(|err| protocol_error(&self.root, err))?;
                 self.sync_data_dirs().await?;
                 self.on_repo(move |repo| {
                     Ok(match repo.create(&bytes)? {
@@ -524,11 +637,12 @@ impl Storage for FilesystemStorage {
             }
             PutCondition::IfVersion(version) if path == REPO => {
                 let base = parse_version(version)
+                    .and_then(|base| check_change_bytes(&bytes).map(|()| base))
                     .map_err(|err| protocol_error(&self.root, err))?;
                 self.check_repo_once().await?;
                 self.sync_data_dirs().await?;
                 self.on_repo(move |repo| {
-                    Ok(match repo.conditional_update(&bytes, &base)? {
+                    Ok(match repo.change(&bytes, &base)? {
                         UpdateOutcome::Updated(version) => {
                             VersionedUpdateResult::Updated {
                                 new_version: version.to_version_info(),
@@ -568,8 +682,9 @@ impl Storage for FilesystemStorage {
     }
 
     /// From `repo`, copies the bytes of `version`, which needs both its etag
-    /// and its generation, or returns `NotOnLatestVersion` once a later commit
-    /// has deleted them. From other keys, copies the content if it hashes to
+    /// and its generation, or returns `NotOnLatestVersion` once a listing of
+    /// `repo.d` shows a later version or a later commit has deleted them. From
+    /// other keys, copies the content if it hashes to
     /// `version`'s etag, which is required; a missing `from` is
     /// `ObjectNotFound`. The copy is staged and renamed into place, and
     /// returns `version` unchanged. `to` can't be `repo`. The check always
@@ -596,7 +711,7 @@ impl Storage for FilesystemStorage {
             self.check_repo_once().await?;
             return self
                 .on_repo(move |repo| {
-                    let Some(bytes) = repo.read_version(&base)? else {
+                    let Some(bytes) = repo.read_backup_source(&base)? else {
                         return Ok(VersionedUpdateResult::NotOnLatestVersion);
                     };
                     write_staged(&to, &bytes, fsync)?;
@@ -622,9 +737,12 @@ impl Storage for FilesystemStorage {
         .await
     }
 
-    /// The order is unspecified: it is the directory walk order. Staging and
-    /// protocol files are not listed, the `repo` stub is, and non-UTF-8 names
-    /// are skipped with a warning; `created_at` is the file's mtime.
+    /// The order is unspecified: it is the directory walk order. At the root,
+    /// `repo` is the mirror, with its own size and modification time, which
+    /// can differ from the current version's (see
+    /// [`Storage::get_object_last_modified`]); `repo.d`, `repo.d.tmp.*` and
+    /// staging files are not listed. Non-UTF-8 names are skipped with a
+    /// warning; `created_at` is the file's mtime.
     async fn list_objects<'a>(
         &'a self,
         _ctx: &StorageContext<'_>,
@@ -678,8 +796,9 @@ impl Storage for FilesystemStorage {
     /// Sweeps the version files of `repo` that its current version proves
     /// dead, whatever their age, and staging files and abandoned creation
     /// directories last modified before the cutoff, which is never later than
-    /// [`FilesystemStorage::SWEEP_MIN_AGE`] ago: `repo.d/stage.*`, and in the
-    /// root `repo.stub.*`, `repo.d.tmp.*` and staging files of other objects.
+    /// [`FilesystemStorage::SWEEP_MIN_AGE`] ago: `repo.d/stage.*` and
+    /// `repo.d/mirror.*`, and in the root `repo.d.tmp.*` and staging files,
+    /// `repo.staging.*` included.
     /// Subdirectories other than `repo.d` aren't visited. Per-file failures
     /// are logged and left out of the result. See design document 020,
     /// "Sweep".
@@ -699,12 +818,21 @@ impl Storage for FilesystemStorage {
             .await
     }
 
-    /// For `repo`, the modification time of its stub.
+    /// For `repo`, the modification time of the current version's file: it
+    /// describes the object `get_object` returns, not the mirror.
     async fn get_object_last_modified(
         &self,
         _ctx: &StorageContext<'_>,
         path: &str,
     ) -> StorageResult<DateTime<Utc>> {
+        if path == REPO {
+            self.check_repo_once().await?;
+            let modified = self
+                .on_repo(|repo| classified(repo, repo.current_modified()?))
+                .await?
+                .ok_or_else(repo_not_found)?;
+            return Ok(modified.into());
+        }
         let path = key_path(&self.root, path)?;
         blocking(move || last_modified(&path).map_err(io_error)).await
     }
@@ -713,8 +841,7 @@ impl Storage for FilesystemStorage {
     /// its number as the generation, and `OnLatestVersion` means the current
     /// version is `previous_version` or an older one than it: a listing can
     /// lag. A `previous_version` without both is never on the latest version.
-    /// A single-file or half-migrated repository is an error naming the
-    /// remedy.
+    /// A repository in the standard layout is an error naming the remedy.
     ///
     /// On other keys, the version's etag is the sha256 of the content, and
     /// `OnLatestVersion` means the content is `previous_version`'s.

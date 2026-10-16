@@ -25,7 +25,9 @@ use tracing::debug;
 
 use crate::{
     Storage,
-    format::{OBJECT_ID_ONE_CHAR_PREFIXES, OBJECT_ID_TWO_CHAR_PREFIXES},
+    format::{
+        FileTypeTag, OBJECT_ID_ONE_CHAR_PREFIXES, OBJECT_ID_TWO_CHAR_PREFIXES, ObjectId,
+    },
     repository::RepositoryResult,
     storage::{self, AttributionLabels, ListInfo, StorageContext},
 };
@@ -62,7 +64,7 @@ pub(crate) async fn list_object_ids<'a, Id>(
     concurrency: NonZeroU16,
 ) -> RepositoryResult<BoxStream<'a, RepositoryResult<ListInfo<Id>>>>
 where
-    Id: for<'b> TryFrom<&'b str> + Send + std::fmt::Debug + 'static,
+    Id: ListedId + Send + std::fmt::Debug + 'static,
 {
     if !storage.lists_id_prefixes_natively() {
         // one pass over the prefix; fanning out would repeat the full listing
@@ -142,29 +144,42 @@ where
     Ok(stream.boxed())
 }
 
-pub(crate) fn convert_list_item<Id>(item: &ListInfo<String>) -> Option<ListInfo<Id>>
-where
-    Id: for<'b> TryFrom<&'b str>,
-{
-    let id = Id::try_from(item.id.as_str()).ok()?;
-    let created_at = item.created_at;
-    Some(ListInfo { created_at, id, size_bytes: item.size_bytes })
+/// An id read from a listed object name.
+pub(crate) trait ListedId: Sized {
+    /// `None` unless `name` is exactly the id's canonical encoding: every
+    /// listed id is a GC deletion candidate, and GC deletes by the canonical
+    /// name, so a lenient parse could delete another object than the one
+    /// listed.
+    fn from_listed_name(name: &str) -> Option<Self>;
+}
+
+impl<const SIZE: usize, T: FileTypeTag> ListedId for ObjectId<SIZE, T> {
+    fn from_listed_name(name: &str) -> Option<Self> {
+        Self::from_canonical_str(name)
+    }
+}
+
+pub(crate) fn convert_list_item<Id: ListedId>(
+    item: &ListInfo<String>,
+) -> Option<ListInfo<Id>> {
+    let converted = Id::from_listed_name(item.id.as_str()).map(|id| ListInfo {
+        id,
+        created_at: item.created_at,
+        size_bytes: item.size_bytes,
+    });
+    if converted.is_none() {
+        debug!(list_info = ?item, "Ignoring a listed name that isn't a canonical object id");
+    }
+    converted
 }
 
 pub(crate) fn translate_list_infos<'a, Id>(
     s: impl Stream<Item = RepositoryResult<ListInfo<String>>> + Send + 'a,
 ) -> BoxStream<'a, RepositoryResult<ListInfo<Id>>>
 where
-    Id: for<'b> TryFrom<&'b str> + Send + std::fmt::Debug + 'a,
+    Id: ListedId + Send + std::fmt::Debug + 'a,
 {
-    s.try_filter_map(|info| async move {
-        let converted = convert_list_item(&info);
-        if converted.is_none() {
-            tracing::error!(list_info = ?info, "Error processing list item metadata");
-        }
-        Ok(converted)
-    })
-    .boxed()
+    s.try_filter_map(|info| async move { Ok(convert_list_item(&info)) }).boxed()
 }
 
 /// One step of the listing fan-out loop. `select!` arms cannot `yield`, so
@@ -187,7 +202,7 @@ async fn list_prefixes_worker<Id>(
     tx: mpsc::Sender<Vec<ListInfo<Id>>>,
 ) -> RepositoryResult<()>
 where
-    Id: for<'b> TryFrom<&'b str> + Send + std::fmt::Debug + 'static,
+    Id: ListedId + Send + std::fmt::Debug + 'static,
 {
     let ctx = StorageContext::without_node(&settings, &labels);
     loop {
@@ -203,12 +218,7 @@ where
             let mut page = Vec::with_capacity(items.len());
             for item in items {
                 let item = item.inject()?;
-                match convert_list_item(&item) {
-                    Some(info) => page.push(info),
-                    None => {
-                        tracing::error!(list_info = ?item, "Error processing list item metadata");
-                    }
-                }
+                page.extend(convert_list_item(&item));
             }
             if tx.send(page).await.is_err() {
                 return Ok(());

@@ -31,6 +31,9 @@ def test_tree_shape() -> None:
         ic.InvalidInputError,
         ic.SessionStateError,
         ic.StorageError,
+        ic.RepositoryForkedError,
+        ic.UpdateDurableButRepositoryForkedError,
+        ic.CommitDurableButRepositoryForkedError,
         ic.FormatError,
         ic.InternalError,
     ):
@@ -38,6 +41,11 @@ def test_tree_shape() -> None:
 
     # a rebase failure is a kind of conflict
     assert issubclass(ic.RebaseFailedError, ic.ConflictError)
+    assert issubclass(ic.UpdateDurableButRepositoryForkedError, ic.RepositoryForkedError)
+    assert issubclass(
+        ic.CommitDurableButRepositoryForkedError,
+        ic.UpdateDurableButRepositoryForkedError,
+    )
 
     # builtin compatibility contracts
     assert issubclass(ic.NotFoundError, KeyError)
@@ -230,6 +238,9 @@ def test_invalid_snapshot_id(repo: ic.Repository) -> None:
         ic.InvalidInputError("bad input", "invalid-key"),
         ic.SessionStateError("bad state", "no-changes-to-commit"),
         ic.StorageError("storage failed", "object-store"),
+        ic.RepositoryForkedError("forked"),
+        ic.UpdateDurableButRepositoryForkedError("durable, forked"),
+        ic.CommitDurableButRepositoryForkedError("durable, forked", "SNAP1"),
         ic.FormatError("bad bytes", "deserialization"),
         ic.InternalError("bug", "unknown"),
     ],
@@ -248,6 +259,9 @@ def test_pickle_roundtrip(err: ic.IcechunkError) -> None:
         assert isinstance(unpickled, ic.RebaseFailedError)
         assert unpickled.snapshot == err.snapshot
         assert len(unpickled.conflicts) == len(err.conflicts)
+    if isinstance(err, ic.CommitDurableButRepositoryForkedError):
+        assert isinstance(unpickled, ic.CommitDurableButRepositoryForkedError)
+        assert unpickled.snapshot_id == err.snapshot_id
 
 
 def test_pickle_roundtrip_of_raised_error(conflicted_session: ic.Session) -> None:

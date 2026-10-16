@@ -18,11 +18,12 @@ use http::header::{HeaderName, HeaderValue};
 #[cfg(feature = "s3")]
 use icechunk_storage::s3_config::{S3Credentials, S3Options};
 use icechunk_storage::{
-    ConcurrencySettings, DeleteObjectsResult, ETag, Generation, GetModifiedResult,
-    ListInfo, PutCondition, RepositoryCreation, RetriesSettings, Settings, Storage,
-    StorageContext, StorageError, StorageErrorKind, StorageInfo, StorageResult,
-    VersionInfo, VersionedUpdateResult, WriteHint, filter_ids_by_id_prefix,
-    obj_not_found_res, obj_store_error, obj_store_error_res, other_error,
+    ConcurrencySettings, DeleteObjectsResult, ETag, GcPhase, Generation,
+    GetModifiedResult, ListInfo, PutCondition, RepositoryCreation, RetriesSettings,
+    Settings, Storage, StorageContext, StorageError, StorageErrorKind, StorageInfo,
+    StorageResult, VersionInfo, VersionedUpdateResult, WriteHint,
+    filter_ids_by_id_prefix, obj_not_found_res, obj_store_error, obj_store_error_res,
+    other_error,
     readback::{
         ReadbackOutcome, WRITE_ID_METADATA_KEY, resolve_lost_response,
         resolve_precondition, write_id_for,
@@ -488,6 +489,14 @@ impl ObjectStorage {
         ObjectPath::from(path)
     }
 
+    fn check_write_of(&self, path: &str) -> StorageResult<()> {
+        if self.prefixed_path(path) == self.prefixed_path(REPO_FILE) {
+            self.backend.check_not_filesystem_layout()
+        } else {
+            Ok(())
+        }
+    }
+
     fn metadata_to_attributes(
         &self,
         settings: &Settings,
@@ -549,6 +558,7 @@ impl ObjectStorage {
         metadata: Vec<(String, String)>,
         condition: Option<PutCondition<'_>>,
     ) -> StorageResult<VersionedUpdateResult> {
+        self.check_write_of(path)?;
         let path = self.prefixed_path(path);
         let mut attributes = Attributes::new();
         if ctx.settings.unsafe_use_metadata() {
@@ -646,6 +656,14 @@ impl Storage for ObjectStorage {
         Ok(self.backend.can_write())
     }
 
+    async fn gc_hook(
+        &self,
+        _ctx: &StorageContext<'_>,
+        _phase: GcPhase<'_>,
+    ) -> StorageResult<()> {
+        self.backend.check_not_filesystem_layout()
+    }
+
     async fn can_create_repository(&self) -> StorageResult<RepositoryCreation> {
         if self.backend.prefix().is_empty()
             && !self.allow_empty_prefix_creation
@@ -702,6 +720,7 @@ impl Storage for ObjectStorage {
         _content_type: Option<&str>,
         version: &VersionInfo,
     ) -> StorageResult<VersionedUpdateResult> {
+        self.check_write_of(to)?;
         let from = self.prefixed_path(from);
         let to = self.prefixed_path(to);
 
@@ -1077,6 +1096,12 @@ pub trait ObjectStoreBackend: Debug + Display + Sync + Send {
     fn create_location_if_needed(&self) -> Result<(), StorageError> {
         Ok(())
     }
+
+    /// Fails while the repository uses the filesystem layout, which this
+    /// backend must neither write `repo` of nor collect garbage in.
+    fn check_not_filesystem_layout(&self) -> Result<(), StorageError> {
+        Ok(())
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -1127,6 +1152,11 @@ impl ObjectStoreBackend for InMemoryObjectStoreBackend {
         }
     }
 }
+
+const REPO_FILE: &str = "repo";
+
+#[cfg(feature = "fs")]
+const FILESYSTEM_LAYOUT_DIR: &str = "repo.d";
 
 #[cfg(feature = "fs")]
 #[derive(Debug, Serialize, Deserialize)]
@@ -1203,6 +1233,20 @@ impl ObjectStoreBackend for LocalFileSystemObjectStoreBackend {
     fn create_location_if_needed(&self) -> Result<(), StorageError> {
         std::fs::create_dir_all(&self.path).capture()?;
         Ok(())
+    }
+
+    /// One `stat` of `repo.d` per call, never cached: the layout can appear
+    /// while this storage is in use.
+    fn check_not_filesystem_layout(&self) -> Result<(), StorageError> {
+        let repo_d = self.path.join(FILESYSTEM_LAYOUT_DIR);
+        match std::fs::symlink_metadata(&repo_d) {
+            Ok(_) => Err(other_error(format!(
+                "{} exists, so this repository uses the filesystem layout: local_filesystem_storage refuses to write its repo file and to collect its garbage. Use filesystem_storage instead. If the repo file holds a fork, recover as described under Forks in https://icechunk.io/en/stable/guides/storage/#filesystem-storage",
+                repo_d.display()
+            ))),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(err) => Err(StorageError::capture(StorageErrorKind::IOError(err))),
+        }
     }
 }
 
@@ -1875,10 +1919,10 @@ mod tests {
     use tempfile::TempDir;
 
     use super::{
-        Attribute, Attributes, Bytes, GetOptions, ObjectPath, ObjectStorage,
+        Attribute, Attributes, Bytes, GcPhase, GetOptions, ObjectPath, ObjectStorage,
         PutCondition, PutMode, ReadbackOutcome, Role, Settings, Storage as _,
-        StorageContext, UpdateVersion, VersionInfo, VersionedUpdateResult, WriteHint,
-        is_update_of_missing_object,
+        StorageContext, StorageError, StorageErrorKind, UpdateVersion, VersionInfo,
+        VersionedUpdateResult, WriteHint, is_update_of_missing_object,
     };
     #[cfg(feature = "http")]
     use super::{NonZeroU16, RetriesSettings, Url};
@@ -1918,6 +1962,52 @@ mod tests {
             source: "changed".into(),
         };
         assert!(!is_update_of_missing_object(&update, &precondition));
+    }
+
+    /// The guard stats `repo.d` on every call: it applies as soon as `repo.d`
+    /// appears and lifts when it goes, to every spelling of `repo`, and leaves
+    /// other paths and other backends alone.
+    #[tokio_test]
+    async fn local_filesystem_guard_checks_repo_d_on_every_call() {
+        let tmp_dir = TempDir::new().unwrap();
+        let storage = ObjectStorage::new_local_filesystem(tmp_dir.path()).await.unwrap();
+        let settings = storage.default_settings().await.unwrap();
+        let ctx = StorageContext::unattributed(&settings);
+        let put = |path: &'static str| {
+            storage.put_object(
+                &ctx,
+                path,
+                Bytes::from_static(b"x"),
+                None,
+                Vec::new(),
+                WriteHint::Atomic,
+            )
+        };
+        let gc = || storage.gc_hook(&ctx, GcPhase::BeforeDeletes { changed: None });
+        let is_guard = |err: StorageError| match &err.kind {
+            StorageErrorKind::Other(msg) => msg.contains("filesystem layout"),
+            _ => false,
+        };
+
+        put("repo").await.unwrap();
+        gc().await.unwrap();
+        std::fs::create_dir_all(tmp_dir.path().join("repo.d")).unwrap();
+        for path in ["repo", "/repo", "repo/"] {
+            assert!(is_guard(put(path).await.unwrap_err()), "{path}");
+        }
+        let version = VersionInfo::for_creation();
+        let copy = storage.copy_object(&ctx, "other", "repo", None, &version);
+        assert!(is_guard(copy.await.unwrap_err()));
+        assert!(is_guard(gc().await.unwrap_err()));
+        put("other").await.unwrap();
+        storage.copy_object(&ctx, "repo", "copied", None, &version).await.unwrap();
+
+        std::fs::remove_dir(tmp_dir.path().join("repo.d")).unwrap();
+        put("repo").await.unwrap();
+        gc().await.unwrap();
+
+        let memory = ObjectStorage::new_in_memory().await.unwrap();
+        memory.gc_hook(&ctx, GcPhase::AfterDeletes { changed: None }).await.unwrap();
     }
 
     /// GC fans listings out per id prefix only where the store lists a prefix
@@ -2228,10 +2318,13 @@ pub async fn new_in_memory_storage() -> StorageResult<Arc<dyn Storage + Send + S
 ///
 /// Not safe for concurrent writers: when several writers commit at once, a
 /// commit can be lost. Use `new_filesystem_storage` (`icechunk-fs`) when
-/// several writers may commit at the same time. `new_filesystem_storage` is
-/// safe only if every writer of the repository uses it; never let writers of
-/// both backends run on one repository at the same time, since this one
-/// overwrites `repo` unconditionally.
+/// several writers may commit at the same time.
+///
+/// While `path/repo.d` exists, the repository uses the filesystem layout of
+/// `new_filesystem_storage`: this storage then refuses garbage collection and
+/// every write of `repo`, whatever `repo` holds, so it can neither fork such a
+/// repository nor make a fork diverge further. It checks with one `stat` per
+/// call, without caching. Reads and deletes are unaffected.
 #[cfg(feature = "fs")]
 pub async fn new_local_filesystem_storage(
     path: &StdPath,

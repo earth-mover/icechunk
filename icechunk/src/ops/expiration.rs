@@ -345,7 +345,7 @@ async fn expire_v2_one_attempt(
             config_bytes.as_deref(),
             repo_info.enabled_feature_flags().inject()?,
             repo_info.disabled_feature_flags().inject()?,
-            &repo_info.status().inject()?,
+            &repo_info.header().inject()?,
         )
         .inject()?;
 

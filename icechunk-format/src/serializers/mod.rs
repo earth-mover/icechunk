@@ -183,9 +183,7 @@ pub fn verify_buffer(
         FileTypeBin::Manifest => Manifest::verify_buffer(buffer),
         FileTypeBin::TransactionLog => TransactionLog::verify_buffer(buffer),
         FileTypeBin::RepoInfo => RepoInfo::verify_buffer(buffer),
-        FileTypeBin::Attributes | FileTypeBin::Chunk | FileTypeBin::FilesystemStub => {
-            Ok(())
-        }
+        FileTypeBin::Attributes | FileTypeBin::Chunk => Ok(()),
     }
 }
 
@@ -313,7 +311,9 @@ mod tests {
     }
 
     fn many_snapshots_repo_info(n: usize) -> Vec<u8> {
-        use crate::repo_info::{RepoAvailability, RepoStatus, UpdateInfo, UpdateType};
+        use crate::repo_info::{
+            RepoAvailability, RepoHeader, RepoStatus, UpdateInfo, UpdateType,
+        };
         let snapshots: Vec<_> = (0..n)
             .map(|i| crate::snapshot::SnapshotInfo {
                 id: SnapshotId::random(),
@@ -344,11 +344,14 @@ mod tests {
             None,
             None::<std::iter::Empty<u16>>,
             None::<std::iter::Empty<u16>>,
-            &RepoStatus {
-                availability: RepoAvailability::Online,
-                set_at: chrono::Utc::now(),
-                limited_availability_reason: None,
-            },
+            &RepoHeader::new(
+                &[],
+                &RepoStatus {
+                    availability: RepoAvailability::Online,
+                    set_at: chrono::Utc::now(),
+                    limited_availability_reason: None,
+                },
+            ),
         )
         .expect("cannot build repo info")
         .bytes()
@@ -403,6 +406,7 @@ mod tests {
             10,
             None::<&()>,
             None,
+            &[],
         )
     }
 

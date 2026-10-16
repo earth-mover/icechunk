@@ -7,10 +7,12 @@ use futures::{
     future::ready,
     stream::{self, BoxStream, FuturesOrdered},
 };
+use icechunk_format::writer_features::{FeatureName, MinVersion, WriterFeature};
 use itertools::Itertools as _;
 use serde::{Deserialize, Serialize};
 use std::{
     cmp::{max, min},
+    collections::BTreeSet,
     ffi::OsString,
     fmt::Display,
     iter,
@@ -55,11 +57,35 @@ pub enum StorageErrorKind {
     /// The store asked us to slow down (S3 `SlowDown` / HTTP 503 / 429). Retry with backoff.
     #[error("storage throttled the request: {code}: {message}")]
     Throttled { code: String, message: String },
-    #[error("the repository is frozen: unfreeze it before writing")]
-    RepositoryFrozen,
+    /// The current version doesn't list `filesystem-layout-v1`.
+    #[error(
+        "a conversion to the standard layout was interrupted, rerun convert_to_standard_layout(): {0}"
+    )]
+    LayoutConversionInProgress(String),
+    /// The fork check found a fork; nothing was published or deleted.
+    #[error("repository forked: {0}. {FORK_EXPLANATION}")]
+    RepositoryForked(String),
+    /// The update landed and is durable; its publication found a fork.
+    #[error(
+        "the update is durable (version {new_version}) but its publication found a fork: {detail}. {FORK_EXPLANATION}"
+    )]
+    RepositoryForkedAfterUpdate { new_version: Box<VersionInfo>, detail: String },
+    /// `$ROOT/repo` couldn't be read or decoded, so a fork can't be ruled out.
+    #[error(
+        "the repo file couldn't be read or decoded, so a fork can't be ruled out: {0}"
+    )]
+    MirrorUnreadable(String),
+    /// The repository lists writer features this storage doesn't implement.
+    #[error(
+        "the repository lists writer features this storage doesn't implement ({}), first implemented in {min_version}",
+        .missing.iter().join(", ")
+    )]
+    MissingWriterFeatures { missing: BTreeSet<FeatureName>, min_version: MinVersion },
     #[error("storage error: {0}")]
     Other(String),
 }
+
+pub const FORK_EXPLANATION: &str = "The repo file holds a repo info without the filesystem-layout-v1 writer feature whose bytes are no version file of repo.d: a fork; or the standard repo info of an interrupted conversion from the standard layout, which rerunning convert_to_filesystem_layout() completes; or a copy of a version that a stale listing didn't show, in which case running the operation again once listings refresh succeeds";
 
 impl StorageErrorKind {
     pub fn is_throttled(&self) -> bool {
@@ -548,6 +574,43 @@ pub enum RepositoryCreation {
     RefusedEmptyPrefix,
 }
 
+/// The writer features a storage implements, and those a repository it
+/// creates must list. Every required feature is implemented.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct StorageWriterFeatures {
+    implemented: BTreeSet<WriterFeature>,
+    required: BTreeSet<WriterFeature>,
+}
+
+impl StorageWriterFeatures {
+    /// Implements `required` and `also_implemented`, and requires `required`.
+    pub fn new(
+        required: impl IntoIterator<Item = WriterFeature>,
+        also_implemented: impl IntoIterator<Item = WriterFeature>,
+    ) -> Self {
+        let required: BTreeSet<_> = required.into_iter().collect();
+        let implemented = required.iter().copied().chain(also_implemented).collect();
+        Self { implemented, required }
+    }
+
+    pub fn implemented(&self) -> &BTreeSet<WriterFeature> {
+        &self.implemented
+    }
+
+    pub fn required(&self) -> &BTreeSet<WriterFeature> {
+        &self.required
+    }
+}
+
+/// When garbage collection calls [`Storage::gc_hook`]. On a repository that
+/// lists `filesystem-layout-v1`, GC always makes a change and `changed` is the
+/// version it wrote; on other repositories `changed` is `None`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GcPhase<'a> {
+    BeforeDeletes { changed: Option<&'a VersionInfo> },
+    AfterDeletes { changed: Option<&'a VersionInfo> },
+}
+
 /// Keeps the listed objects whose id starts with one of `id_prefixes`.
 pub fn filter_ids_by_id_prefix<'a>(
     listing: BoxStream<'a, StorageResult<ListInfo<String>>>,
@@ -573,6 +636,21 @@ pub trait Storage: fmt::Debug + Display + sealed::Sealed + Sync + Send {
     }
 
     async fn can_write(&self) -> StorageResult<bool>;
+
+    /// The writer features this storage implements and requires. The default
+    /// is none, so a wrapper that doesn't forward this refuses every
+    /// repository that lists a writer feature.
+    async fn writer_features(&self) -> StorageResult<StorageWriterFeatures> {
+        Ok(StorageWriterFeatures::default())
+    }
+
+    /// Called by garbage collection before its deletes and after them, never
+    /// by a dry run.
+    async fn gc_hook(
+        &self,
+        ctx: &StorageContext<'_>,
+        phase: GcPhase<'_>,
+    ) -> StorageResult<()>;
 
     /// Whether a repository may be created at this storage location.
     async fn can_create_repository(&self) -> StorageResult<RepositoryCreation> {
@@ -949,6 +1027,34 @@ mod tests {
         block_on(filter_ids_by_id_prefix(listing(ids), &id_prefixes).try_collect())
             .map(|infos: Vec<ListInfo<String>>| infos.into_iter().map(|i| i.id).collect())
             .expect("listing cannot fail")
+    }
+
+    #[test]
+    fn required_writer_features_are_implemented() {
+        let layout = BTreeSet::from([WriterFeature::FilesystemLayoutV1]);
+        let required =
+            StorageWriterFeatures::new([WriterFeature::FilesystemLayoutV1], []);
+        assert_eq!(required.implemented(), &layout);
+        assert_eq!(required.required(), &layout);
+        let implemented =
+            StorageWriterFeatures::new([], [WriterFeature::FilesystemLayoutV1]);
+        assert_eq!(implemented.implemented(), &layout);
+        assert!(implemented.required().is_empty());
+    }
+
+    #[test]
+    fn missing_writer_features_name_the_features_and_the_version() {
+        let kind = StorageErrorKind::MissingWriterFeatures {
+            missing: BTreeSet::from([
+                FeatureName::new("test-feature-v1"),
+                FeatureName::new("other-v2"),
+            ]),
+            min_version: MinVersion::Newer,
+        };
+        assert_eq!(
+            kind.to_string(),
+            "the repository lists writer features this storage doesn't implement (other-v2, test-feature-v1), first implemented in a newer Icechunk"
+        );
     }
 
     /// Only a throttle is back-pressure; every other error is a real failure.

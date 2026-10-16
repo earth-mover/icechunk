@@ -123,14 +123,13 @@ def fs_storage(
 
 
 def readable_path(path: str, backend: str, tmp_path: Path) -> str:
-    """The filesystem backend refuses single-file repos: open a migrated copy."""
+    """The filesystem backend refuses standard-layout repos: open a converted copy."""
     if backend != "filesystem":
         return path
     copy = tmp_path / "repo"
     shutil.copytree(path, copy)
     storage = filesystem_storage(str(copy))
-    migrated = storage.migrate_legacy_repo()
-    assert migrated
+    assert storage.convert_to_filesystem_layout()
     return str(copy)
 
 

@@ -70,7 +70,8 @@ fn fill_or_remove(
     };
     // A concurrent retry of the same write may have renamed a complete object
     // over `path`, which must survive. If our identity is unknown, the file
-    // stays behind as an orphan or staging file for GC to sweep.
+    // stays behind: GC collects an orphan object as unreachable, and sweeps a
+    // staging file only in `$ROOT` and `repo.d/`.
     if result.is_err()
         && let Some(identity) = identity
         && fs::symlink_metadata(path)
@@ -114,7 +115,8 @@ pub(crate) fn create_exclusive(
     ensure_parent(target)?;
     let staging = stage(target, bytes, fsync)?;
     let linked = fs::hard_link(&staging, target);
-    // The link alone decides the outcome; GC sweeps a staging file left behind.
+    // The link alone decides the outcome; GC sweeps a staging file left behind
+    // only in `$ROOT` and `repo.d/`.
     let _ = fs::remove_file(&staging);
     match linked {
         Ok(()) => {

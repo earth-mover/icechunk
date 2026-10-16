@@ -169,7 +169,8 @@ async fn repository_run_with_gc_passes_the_oracle() {
     let init = fs_stress()
         .args(["init", "--root"])
         .arg(root.root())
-        .args(["--mode", "repository", "--gc", "--duration", "5s", "--hosts", "1"])
+        .args(["--mode", "repository", "--gc", "--gc-margin", "4s", "--duration", "5s"])
+        .args(["--hosts", "1"])
         .args(["--kill-p", "0", "--pause-p", "0", "--external-kill-every", "off"])
         .spawn()
         .unwrap();
@@ -200,7 +201,7 @@ async fn repository_run_with_gc_passes_the_oracle() {
     let gc_intents = history
         .worker_records()
         .filter(|(name, _)| name.slot == GC_SLOT)
-        .filter(|(_, record)| matches!(record, Record::Intent { op: Op::Gc, .. }))
+        .filter(|(_, record)| matches!(record, Record::Intent { op: Op::Gc { .. }, .. }))
         .count();
     assert!(gc_intents >= 1, "{:?}", history.logs.keys().collect::<Vec<_>>());
     let ops = |matches: fn(&Op) -> bool| {
@@ -293,11 +294,11 @@ fn selftest_detects_every_case_in_both_modes() {
             "--mode",
             "both",
         ],
-        Duration::from_secs(900),
+        Duration::from_secs(1500),
     );
     assert_eq!(status.code(), Some(0), "{stdout}\n{stderr}");
     let lines: Vec<_> = stdout.lines().collect();
-    let cases = [
+    let both = [
         "skip-link",
         "rename-from-listed-marker",
         "trust-rename-enoent",
@@ -307,15 +308,34 @@ fn selftest_detects_every_case_in_both_modes() {
         "unlink-base-before-rename",
         "link-after-rename",
         "delete-winner-file",
-        "legacy-local",
+        "ack-superseded-without-proof",
+        "publish-without-fork-check",
+        "publish-non-current",
     ];
-    let expected: Vec<_> = ["storage", "repository"]
+    let repository_only = [
+        "commit-without-publish",
+        "gc-without-fork-check",
+        "gc-publishes-listed",
+        "from-standard-without-provenance",
+        "to-standard-without-change",
+        "delete-dir-before-publish",
+    ];
+    let storage = both.iter().chain(&["legacy-local"]).map(|case| ("storage", *case));
+    let repository = both
         .iter()
-        .flat_map(|mode| cases.iter().map(move |case| format!("{mode} {case}: detected")))
-        .collect();
+        .chain(&repository_only)
+        .chain(&["legacy-local"])
+        .map(|case| ("repository", *case));
+    let expected: Vec<_> = storage.chain(repository).collect();
     assert_eq!(lines.len(), expected.len() + 1, "{stdout}");
-    for (line, prefix) in lines.iter().zip(&expected) {
-        assert!(line.starts_with(prefix), "{prefix:?} expected in {stdout}");
+    for (line, (mode, case)) in lines.iter().zip(&expected) {
+        let detected = format!("{mode} {case}: detected");
+        // No oracle catches it on a local filesystem, and the case says so.
+        let undetectable =
+            format!("{mode} {case}: undetectable here: no oracle can catch it");
+        let ok = line.starts_with(&detected)
+            || (*case == "gc-publishes-listed" && line.starts_with(&undetectable));
+        assert!(ok, "{detected:?} expected in {stdout}");
     }
     assert_eq!(lines[expected.len()], "PASS");
     for mode in ["storage", "repository"] {

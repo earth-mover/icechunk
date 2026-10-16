@@ -4,15 +4,19 @@
 
 pub mod config;
 pub mod control;
+pub mod convert;
 pub mod env_info;
 pub mod faults;
+pub mod fork;
 pub mod layout;
 pub mod log;
 pub mod oracle;
 pub mod recovery;
 pub mod repo_mode;
 pub mod report;
+pub mod sampler;
 pub mod selftest;
 pub mod storage_mode;
 pub mod supervisor;
+pub mod toggler;
 pub mod verify;

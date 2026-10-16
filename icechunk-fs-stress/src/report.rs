@@ -10,7 +10,12 @@ use crate::{
     config::{Backend, Mode, RunConfig},
     env_info::{HostDone, HostInfo},
     layout::RunRoot,
-    oracle::{Verdict, Violation, Warning, liveness::EXTERNAL_KILL_FLOOR},
+    log::Direction,
+    oracle::{
+        Verdict, Violation, Warning,
+        liveness::EXTERNAL_KILL_FLOOR,
+        mirror::{MirrorCheckpoint, MirrorFound, MirrorSource},
+    },
 };
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -149,17 +154,30 @@ impl Report {
         let stats = &self.verdict.stats;
         writeln!(
             out,
-            "stats: {} intents, {} acks, {} conflicts, {} errors, {} unresolved, \
-             {} failed before intent; chain length {}; {} external kills",
+            "stats: {} intents, {} acks, {} conflicts, {} errors, {} refused, \
+             {} unresolved, {} failed before intent; chain length {}; {} external kills",
             stats.intents,
             stats.acks,
             stats.conflicts,
             stats.errors,
+            stats.refused,
             stats.unresolved,
             stats.failures,
             stats.chain_len,
             stats.external_kills
         )?;
+        if stats.mirror_renames + stats.mirror_samples + stats.readonly_holds > 0 {
+            writeln!(
+                out,
+                "mirror: {} renames, {} sample changes; {} ReadOnly holds, {} ended with \
+                 mirror lag, {} not judged after a storage error",
+                stats.mirror_renames,
+                stats.mirror_samples,
+                stats.readonly_holds,
+                stats.readonly_mirror_lags,
+                stats.readonly_publish_errors
+            )?;
+        }
         if !stats.faults.is_empty() {
             let faults: Vec<_> =
                 stats.faults.iter().map(|(kind, n)| format!("{kind} {n}")).collect();
@@ -263,7 +281,77 @@ fn violation(v: &Violation) -> String {
         }
         Violation::DataMismatch { detail } => format!("DataMismatch: {detail}"),
         Violation::Harness { detail } => format!("Harness: {detail}"),
+        Violation::MirrorNotAVersion { hash, source, t_ms } => format!(
+            "MirrorNotAVersion: {} at {} UTC installed {hash}, never a current version",
+            match source {
+                MirrorSource::Rename => "a mirror rename",
+                MirrorSource::Sample => "a sample of repo",
+            },
+            time(*t_ms)
+        ),
+        Violation::MirrorStale { expected, found, after } => {
+            mirror_stale(expected, found, *after)
+        }
+        Violation::MirrorDangling { detail } => format!("MirrorDangling: {detail}"),
+        Violation::FeatureMissing { what, detail } => {
+            format!("FeatureMissing: {what}: {detail}")
+        }
+        Violation::ReadOnlyMirrorMismatch { version, detail } => {
+            readonly_mirror_mismatch(version.as_deref(), detail)
+        }
+        Violation::DeletedUnrecognized { name } => format!(
+            "DeletedUnrecognized: the sweep or GC deleted {name}, which it doesn't recognize"
+        ),
+        Violation::InitialVersion { n, t_before_ms, t_after_ms } => format!(
+            "InitialVersion: the first version's N {n} isn't within its creation's \
+             [{t_before_ms}, {t_after_ms}] ms"
+        ),
+        Violation::UnreportedFork { id, op } => unreported_fork(*id, op),
+        Violation::GcAfterFork { id } => gc_after_fork(*id),
+        Violation::SilentForkLoss { fork_hash, erased_by } => format!(
+            "SilentForkLoss: the fork {fork_hash} was erased outside the accepted window, \
+             by {erased_by}"
+        ),
+        Violation::ForkDamaged { detail } => format!("ForkDamaged: {detail}"),
+        Violation::ConversionMismatch { direction, detail } => {
+            format!("ConversionMismatch: {}: {detail}", conversion(*direction))
+        }
+        Violation::ConversionEndState { direction, detail } => {
+            format!("ConversionEndState: {}: {detail}", conversion(*direction))
+        }
+        Violation::OverwroteStandard { detail } => format!("OverwroteStandard: {detail}"),
+        Violation::DeletedHistory { detail } => format!("DeletedHistory: {detail}"),
+        Violation::WriterDuringConversion { id, detail } => format!(
+            "WriterDuringConversion: {id}, during an interrupted conversion to the standard \
+             layout: {detail}"
+        ),
+        Violation::ConversionRetried { direction, detail } => {
+            conversion_retried(*direction, detail)
+        }
     }
+}
+
+fn unreported_fork(id: uuid::Uuid, op: &str) -> String {
+    format!("UnreportedFork: {op} {id} landed after a fork and was acknowledged")
+}
+
+fn gc_after_fork(id: uuid::Uuid) -> String {
+    format!("GcAfterFork: GC {id} deleted with a fork in repo and was acknowledged")
+}
+
+fn conversion(direction: Direction) -> &'static str {
+    match direction {
+        Direction::FromStandard => "convert_to_filesystem_layout()",
+        Direction::ToStandard => "convert_to_standard_layout()",
+    }
+}
+
+fn conversion_retried(direction: Direction, detail: &str) -> String {
+    format!(
+        "ConversionRetried: a rerun of {} failed as under stale listings and was \
+         retried: {detail}",
+        conversion(direction)
+    )
 }
 
 fn warning(w: &Warning) -> String {
@@ -297,7 +385,130 @@ fn warning(w: &Warning) -> String {
              before their intent; first: {}",
             samples.join("; ")
         ),
+        Warning::MirrorStale { expected, found, after } => {
+            mirror_stale(expected, found, *after)
+        }
+        Warning::ReadOnlyMirrorMismatch { version, detail } => {
+            readonly_mirror_mismatch(version.as_deref(), detail)
+        }
+        Warning::UnknownEntries { names: unknown } => format!(
+            "UnknownEntries: {} the layout never creates: {}",
+            unknown.len(),
+            names(unknown)
+        ),
+        Warning::SamplerFailed { tag, error } => {
+            format!("SamplerFailed: {tag}'s mirror sampler stopped logging: {error}")
+        }
+        Warning::MirrorMissing { count } => {
+            format!("MirrorMissing: {count} samples found no repo")
+        }
+        Warning::MirrorUnreadable { count, samples } => format!(
+            "MirrorUnreadable: {count} samples couldn't read repo; first: {}",
+            samples.join("; ")
+        ),
+        Warning::UnreportedFork { id, op } => unreported_fork(*id, op),
+        Warning::GcAfterFork { id } => gc_after_fork(*id),
+        Warning::ForkErasedInWindow { fork_hash, landed_ms_after_check } => {
+            let landed = match landed_ms_after_check {
+                Some(ms) => {
+                    format!("its rename returning {ms} ms after the check passed")
+                }
+                None => "whose rename was announced but never recorded done".to_owned(),
+            };
+            format!(
+                "ForkErasedInWindow: the fork {fork_hash} was erased by a publication whose \
+                 fork check read repo before it (its last read began by the end of the \
+                 fork's write, or, in logs without the read's time, it passed by then), \
+                 {landed}"
+            )
+        }
+        Warning::ForkErasedAfterKilledPublisher { fork_hash, replaced_by } => format!(
+            "ForkErasedAfterKilledPublisher: the fork {fork_hash} was erased by \
+             {replaced_by}, which a publication whose fork check read repo before it \
+             announced renaming, its process seen dead before the fork, and which no \
+             publication checked after the fork, or unchecked, may have renamed since: \
+             the server may apply a killed process's rename after its death"
+        ),
+        Warning::ConversionRetried { direction, detail } => {
+            conversion_retried(*direction, detail)
+        }
+        Warning::StaleRootListing { attempt, rerun_after_ms } => format!(
+            "StaleRootListing: run {attempt} of convert_to_standard_layout() returned \
+             NothingToConvert and left repo.d, with repo its current version without the \
+             feature: its listing of the storage root missed repo.d (an accepted limit); \
+             running it again after {rerun_after_ms} ms"
+        ),
+        Warning::ForkActorPartialBackup { backup, detail } => format!(
+            "ForkActorPartialBackup: overwritten/{backup}, announced by a fork's write \
+             that wrote no fork naming it, doesn't decode: an interrupted copy no ops log \
+             references: {detail}"
+        ),
+        Warning::GcCutoffAfterSessionStart {
+            id,
+            snapshot,
+            intent_ms,
+            outcome_ms,
+            gc,
+            gc_intent_ms,
+            cutoff_ms,
+            missing,
+        } => gc_cutoff_after_session_start(
+            *id,
+            snapshot.as_deref(),
+            (*intent_ms, *outcome_ms),
+            (*gc, *gc_intent_ms, *cutoff_ms),
+            missing,
+        ),
     }
+}
+
+fn gc_cutoff_after_session_start(
+    id: uuid::Uuid,
+    snapshot: Option<&str>,
+    (intent_ms, outcome_ms): (i64, Option<i64>),
+    (gc, gc_intent_ms, cutoff_ms): (uuid::Uuid, i64, i64),
+    missing: &[String],
+) -> String {
+    let ended = outcome_ms.map_or_else(
+        || "logged no outcome".to_owned(),
+        |t_ms| format!("ended {} ms after the GC began", t_ms - gc_intent_ms),
+    );
+    let snapshot = snapshot
+        .map_or_else(|| "no acked snapshot".to_owned(), |s| format!("acked as {s}"));
+    let missing = if missing.is_empty() { "none".to_owned() } else { names(missing) };
+    format!(
+        "GcCutoffAfterSessionStart: commit {id} started at {} UTC, {} ms before the cutoff \
+         of GC {gc}, which began at {} UTC; the commit {ended}, {snapshot}. GC's \
+         precondition was broken (the cutoff must be earlier than the start of every \
+         session that may still commit), so GC may have deleted the commit's objects; its \
+         missing snapshot file and transaction log, and the read-back of its chunk \
+         finding the manifest or chunk it wrote missing, are excused: {missing} (a \
+         missing manifest is still MirrorDangling)",
+        time(intent_ms),
+        cutoff_ms - intent_ms,
+        time(gc_intent_ms),
+    )
+}
+
+fn readonly_mirror_mismatch(version: Option<&str>, detail: &str) -> String {
+    let version = version.unwrap_or("an unknown version");
+    format!(
+        "ReadOnlyMirrorMismatch: at the end of the ReadOnly hold of {version}, {detail}"
+    )
+}
+
+fn mirror_stale(expected: &str, found: &MirrorFound, after: MirrorCheckpoint) -> String {
+    let after = match after {
+        MirrorCheckpoint::FinalPublish => "verify's publish_mirror()",
+        MirrorCheckpoint::RecoveryWrite => "the recovery write",
+    };
+    let found = match found {
+        MirrorFound::Hash(hash) => format!("repo is {hash}"),
+        MirrorFound::Missing => "repo is missing".to_owned(),
+        MirrorFound::Unreadable(err) => format!("repo is unreadable ({err})"),
+        MirrorFound::PublishFailed(err) => format!("publish_mirror() failed ({err})"),
+    };
+    format!("MirrorStale: after {after}, {found}, not the current version {expected}")
 }
 
 #[cfg(test)]
@@ -325,6 +536,29 @@ mod tests {
             Violation::Leftovers { names: vec!["repo.d/stage.x".to_owned()] },
             Violation::DataMismatch { detail: detail() },
             Violation::Harness { detail: detail() },
+            Violation::MirrorNotAVersion {
+                hash: "h".to_owned(),
+                source: MirrorSource::Rename,
+                t_ms: 5,
+            },
+            Violation::MirrorNotAVersion {
+                hash: "h".to_owned(),
+                source: MirrorSource::Sample,
+                t_ms: 5,
+            },
+            Violation::MirrorStale {
+                expected: "a".to_owned(),
+                found: MirrorFound::Hash("b".to_owned()),
+                after: MirrorCheckpoint::FinalPublish,
+            },
+            Violation::MirrorDangling { detail: detail() },
+            Violation::FeatureMissing { what: "the mirror".to_owned(), detail: detail() },
+            Violation::InitialVersion { n: 1, t_before_ms: 2, t_after_ms: 3 },
+            Violation::ReadOnlyMirrorMismatch {
+                version: Some("v".to_owned()),
+                detail: detail(),
+            },
+            Violation::DeletedUnrecognized { name: "chunks/x".to_owned() },
         ]
     }
 
@@ -339,6 +573,31 @@ mod tests {
             Warning::SubdirStaging { count: 4 },
             Warning::Stragglers { tag: "h".to_owned(), count: 1 },
             Warning::AttemptFailures { count: 2, samples: vec!["boom".to_owned()] },
+            Warning::MirrorStale {
+                expected: "a".to_owned(),
+                found: MirrorFound::Missing,
+                after: MirrorCheckpoint::RecoveryWrite,
+            },
+            Warning::ReadOnlyMirrorMismatch { version: None, detail: "d".to_owned() },
+            Warning::UnknownEntries { names: vec!["repo.legacy.x".to_owned()] },
+            Warning::MirrorMissing { count: 1 },
+            Warning::SamplerFailed { tag: "h".to_owned(), error: "e".to_owned() },
+            Warning::MirrorUnreadable { count: 1, samples: vec!["ESTALE".to_owned()] },
+            Warning::StaleRootListing { attempt: 1, rerun_after_ms: 500 },
+            Warning::ForkActorPartialBackup {
+                backup: "repo.1.X".to_owned(),
+                detail: "d".to_owned(),
+            },
+            Warning::GcCutoffAfterSessionStart {
+                id,
+                snapshot: Some("S".to_owned()),
+                intent_ms: 1,
+                outcome_ms: Some(9),
+                gc: id,
+                gc_intent_ms: 5,
+                cutoff_ms: 3,
+                missing: vec!["transactions/S".to_owned()],
+            },
         ]
     }
 
@@ -352,6 +611,11 @@ mod tests {
                 acks: 7,
                 faults: [("pause".to_owned(), 2)].into(),
                 observed: [("rename_enoent.landed".to_owned(), 3)].into(),
+                refused: 4,
+                mirror_renames: 5,
+                mirror_samples: 6,
+                readonly_holds: 2,
+                readonly_mirror_lags: 1,
                 ..Stats::default()
             },
         };
@@ -363,6 +627,7 @@ mod tests {
             incarnations_spawned: 9,
             external_kills: 1,
             stragglers: 0,
+            sampler_error: None,
         };
         Report::new(
             verdict,
@@ -412,6 +677,20 @@ mod tests {
             "SubdirStaging",
             "Stragglers",
             "AttemptFailures",
+            "MirrorNotAVersion",
+            "MirrorStale",
+            "MirrorDangling",
+            "FeatureMissing",
+            "InitialVersion",
+            "ReadOnlyMirrorMismatch",
+            "DeletedUnrecognized",
+            "UnknownEntries",
+            "MirrorMissing",
+            "MirrorUnreadable",
+            "SamplerFailed",
+            "StaleRootListing",
+            "ForkActorPartialBackup",
+            "GcCutoffAfterSessionStart",
         ] {
             assert!(failed.contains(kind), "{kind} missing from {failed}");
         }
@@ -420,9 +699,15 @@ mod tests {
             "1234 ms",
             "60s",
             "10 intents",
+            "4 refused",
+            "mirror: 5 renames, 6 sample changes; 2 ReadOnly holds, 1 ended with mirror lag, \
+             0 not judged after a storage error",
             "pause 2",
             "rename_enoent.landed 3",
             "a note",
+            "2 ms before the cutoff",
+            "ended 4 ms after the GC began, acked as S",
+            "excused: transactions/S",
         ] {
             assert!(failed.contains(expected), "{expected} missing from {failed}");
         }

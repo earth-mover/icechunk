@@ -1732,11 +1732,13 @@ async fn test_conditional_write_contract() -> Result<(), Box<dyn std::error::Err
         let empty_root = tempdir()?;
         let (key, missing, missing_storage) =
             conditional_write_contract_keys(name, &storage, empty_root.path()).await?;
-        let put = |bytes: &'static [u8], condition| {
+        let [first, second, third, fourth, never] =
+            conditional_write_contract_contents(name)?;
+        let put = |bytes: &Bytes, condition| {
             storage.put_object_conditional(
                 &ctx,
                 key,
-                Bytes::from_static(bytes),
+                bytes.clone(),
                 None,
                 Default::default(),
                 condition,
@@ -1747,7 +1749,7 @@ async fn test_conditional_write_contract() -> Result<(), Box<dyn std::error::Err
         let honours_if_none_match = !name.starts_with("HF");
 
         let VersionedUpdateResult::Updated { new_version: v1 } =
-            put(b"first", PutCondition::Create).await?
+            put(&first, PutCondition::Create).await?
         else {
             panic!("{name}: create on a new key failed");
         };
@@ -1757,7 +1759,7 @@ async fn test_conditional_write_contract() -> Result<(), Box<dyn std::error::Err
         else {
             panic!("{name}: unconditional get returned no data");
         };
-        assert_eq!(async_read_to_bytes(data).await?, b"first", "{name}");
+        assert_eq!(async_read_to_bytes(data).await?, first, "{name}");
         if honours_if_none_match {
             for version in [&g1, &v1] {
                 let res = get(Some(version)).await?;
@@ -1768,7 +1770,7 @@ async fn test_conditional_write_contract() -> Result<(), Box<dyn std::error::Err
             }
         }
 
-        let res = put(b"second", PutCondition::Create).await?;
+        let res = put(&second, PutCondition::Create).await?;
         assert!(
             matches!(res, VersionedUpdateResult::NotOnLatestVersion),
             "{name}: create on an existing key: {res:?}"
@@ -1776,7 +1778,7 @@ async fn test_conditional_write_contract() -> Result<(), Box<dyn std::error::Err
         let storage::GetModifiedResult::Modified { data, .. } = get(None).await? else {
             panic!("{name}: unconditional get returned no data");
         };
-        assert_eq!(async_read_to_bytes(data).await?, b"first", "{name}");
+        assert_eq!(async_read_to_bytes(data).await?, first, "{name}");
 
         // local_filesystem defaults to unsafe_use_conditional_update: Some(false)
         if name == "local_filesystem" {
@@ -1787,7 +1789,7 @@ async fn test_conditional_write_contract() -> Result<(), Box<dyn std::error::Err
             .put_object_conditional(
                 &ctx,
                 missing,
-                Bytes::from_static(b"never"),
+                never,
                 None,
                 Default::default(),
                 PutCondition::IfVersion(&g1),
@@ -1804,11 +1806,11 @@ async fn test_conditional_write_contract() -> Result<(), Box<dyn std::error::Err
         );
 
         let VersionedUpdateResult::Updated { new_version: v2 } =
-            put(b"third", PutCondition::IfVersion(&g1)).await?
+            put(&third, PutCondition::IfVersion(&g1)).await?
         else {
             panic!("{name}: update on the latest version failed");
         };
-        let res = put(b"fourth", PutCondition::IfVersion(&g1)).await?;
+        let res = put(&fourth, PutCondition::IfVersion(&g1)).await?;
         assert!(
             matches!(res, VersionedUpdateResult::NotOnLatestVersion),
             "{name}: update on a stale version: {res:?}"
@@ -1817,7 +1819,7 @@ async fn test_conditional_write_contract() -> Result<(), Box<dyn std::error::Err
         else {
             panic!("{name}: get on a stale version returned no data");
         };
-        assert_eq!(async_read_to_bytes(data).await?, b"third", "{name}");
+        assert_eq!(async_read_to_bytes(data).await?, third, "{name}");
         if honours_if_none_match {
             let res = get(Some(&v2)).await?;
             assert!(
@@ -1829,6 +1831,55 @@ async fn test_conditional_write_contract() -> Result<(), Box<dyn std::error::Err
         Ok(())
     })
     .await
+}
+
+/// The contents `test_conditional_write_contract` writes, all different.
+/// `FilesystemStorage` writes only repo infos that list `filesystem-layout-v1`
+/// to `repo`.
+fn conditional_write_contract_contents(
+    name: &str,
+) -> Result<[Bytes; 5], Box<dyn std::error::Error>> {
+    #[cfg(all(feature = "fs", unix))]
+    if name == "filesystem" {
+        use icechunk::format::{
+            repo_info::{DEFAULT_NUM_UPDATES_PER_REPO_INFO_FILE, RepoInfo},
+            repo_info_file,
+            snapshot::SnapshotInfo,
+            writer_features::WriterFeature,
+        };
+        let repo_info = |seq: i64| -> Result<Bytes, Box<dyn std::error::Error>> {
+            let time = chrono::DateTime::from_timestamp(1_700_000_000 + seq, 0)
+                .ok_or("bad time")?;
+            let info = RepoInfo::initial(
+                SpecVersionBin::current(),
+                SnapshotInfo {
+                    id: SnapshotId::random(),
+                    parent_id: None,
+                    flushed_at: time,
+                    message: "initial".to_string(),
+                    metadata: Default::default(),
+                    pruned_ancestor_tx_logs: vec![],
+                },
+                DEFAULT_NUM_UPDATES_PER_REPO_INFO_FILE,
+                None::<&()>,
+                Some(time),
+                &[WriterFeature::FilesystemLayoutV1],
+            );
+            Ok(repo_info_file::encode(&info, SpecVersionBin::current(), 3)?.into())
+        };
+        return Ok([
+            repo_info(1)?,
+            repo_info(2)?,
+            repo_info(3)?,
+            repo_info(4)?,
+            repo_info(5)?,
+        ]);
+    }
+    #[cfg(not(all(feature = "fs", unix)))]
+    let _ = name;
+    let contents: [&'static [u8]; 5] =
+        [b"first", b"second", b"third", b"fourth", b"never"];
+    Ok(contents.map(Bytes::from_static))
 }
 
 /// The key `test_conditional_write_contract` updates, and its missing key with
@@ -2156,8 +2207,9 @@ async fn filesystem_storage_creates_and_reopens_v2()
     Ok(())
 }
 
-/// A repository created by `new_local_filesystem_storage` must be migrated
-/// first; then its unsafe settings are ignored: writes stay conditional.
+/// A repository created by `new_local_filesystem_storage` must be converted
+/// first; then its unsafe settings are ignored: writes stay conditional, and
+/// the repository takes changes.
 #[cfg(all(feature = "fs", unix))]
 #[tokio_test]
 async fn filesystem_storage_ignores_unsafe_settings_of_local_filesystem_repos()
@@ -2175,11 +2227,12 @@ async fn filesystem_storage_ignores_unsafe_settings_of_local_filesystem_repos()
         .execute()
         .await;
     assert!(
-        res.as_ref().is_err_and(|err| err.to_string().contains("migrate_legacy_repo")),
+        res.as_ref()
+            .is_err_and(|err| err.to_string().contains("convert_to_filesystem_layout()")),
         "{:?}",
         res.err()
     );
-    storage::FilesystemStorage::new(dir.path())?.migrate_legacy_repo().await?;
+    storage::FilesystemStorage::new(dir.path())?.convert_to_filesystem_layout().await?;
 
     let repo = Repository::open(storage::new_filesystem_storage(dir.path()).await?)
         .execute()
@@ -2204,8 +2257,8 @@ async fn filesystem_storage_ignores_unsafe_settings_of_local_filesystem_repos()
     assert!(matches!(res, VersionedUpdateResult::NotOnLatestVersion), "{res:?}");
 
     let mut session = repo.writable_session("main").await?;
-    session.add_group(Path::root(), Bytes::new()).await?;
-    session.commit("after migration").execute().await?;
+    session.add_group(Path::from_trusted("/converted"), Bytes::new()).await?;
+    session.commit("after the conversion").execute().await?;
     Ok(())
 }
 

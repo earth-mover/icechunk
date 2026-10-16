@@ -1,15 +1,22 @@
 //! The run configuration, `run.json`, written once by `init` and read by every
 //! other command.
 
-use std::{fs, num::NonZeroU16, path::Path, time::Duration};
+use std::{
+    fs,
+    num::NonZeroU16,
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 use anyhow::{Context as _, bail, ensure};
-use icechunk_fs::fault_injection::{Point, Sabotage as ProtocolSabotage};
+use icechunk_fs::fault_injection::{
+    ConversionStep, FromStandardStep, Point, Sabotage as ProtocolSabotage, ToStandardStep,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::layout::RunRoot;
 
-pub const RUN_CONFIG_VERSION: u32 = 2;
+pub const RUN_CONFIG_VERSION: u32 = 6;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -40,6 +47,19 @@ pub struct RunConfig {
     /// Set only by `selftest`.
     #[serde(deserialize_with = "Option::deserialize")]
     pub sabotage: Option<Sabotage>,
+    /// Repository mode on the filesystem backend: the status toggler.
+    #[serde(deserialize_with = "Option::deserialize")]
+    pub readonly: Option<ReadOnlyConfig>,
+    /// Filesystem backend: how often each host's sampler reads `$ROOT/repo`.
+    #[serde(with = "option_millis")]
+    pub mirror_sample_every: Option<Duration>,
+    /// Filesystem backend: the fork actor.
+    #[serde(deserialize_with = "Option::deserialize")]
+    pub fork: Option<ForkConfig>,
+    /// The storage root when it isn't the run root's `storage/`: a phase of
+    /// the conversion scenario names the scenario's shared one. Absolute.
+    #[serde(deserialize_with = "Option::deserialize")]
+    pub storage: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -92,6 +112,27 @@ pub enum PointName {
     BeforeRename,
     Renamed,
     BeforeTidyUp,
+    BeforePublish,
+    MirrorStaged,
+    BeforeMirrorRename,
+    MirrorRenamed,
+    /// The conversions' steps, where the conversion scenario kills its
+    /// converter; never in a run's fault points.
+    FromStandardBackup,
+    FromStandardBuild,
+    FromStandardRenameDir,
+    FromStandardPublish,
+    ToStandardForkCheck,
+    ToStandardChange,
+    ToStandardPublish,
+    ToStandardRenameDir,
+    ToStandardDeleteDir,
+}
+
+impl PointName {
+    pub fn is_conversion_step(self) -> bool {
+        Point::try_from(self).is_ok_and(|point| matches!(point, Point::Conversion(_)))
+    }
 }
 
 /// Minimum fired-fault counts for a run to count as exercised. Counts are per
@@ -113,6 +154,32 @@ pub struct GcConfig {
     /// GC cutoff is `now - margin`.
     #[serde(with = "millis")]
     pub margin: Duration,
+}
+
+/// Every `every`, the status toggler sets the status `ReadOnly`, holds it for
+/// `hold`, then sets it `Online`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReadOnlyConfig {
+    #[serde(with = "millis")]
+    pub every: Duration,
+    #[serde(with = "millis")]
+    pub hold: Duration,
+}
+
+/// `at` after the go, the fork actor writes a fork: `$ROOT/repo` replaced, as
+/// Icechunk 2.0 to 2.3 replace it, by a repo info without the writer feature.
+/// With `repeat` it forks again 500 ms after each erasure. With `during_gc`
+/// (repository mode with GC, selftest only) the GC worker writes it instead,
+/// once, during the first GC that starts after `at`: right after its change's
+/// publication, before its hook, which must find it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ForkConfig {
+    #[serde(with = "millis")]
+    pub at: Duration,
+    pub repeat: bool,
+    pub during_gc: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -144,6 +211,15 @@ pub enum Sabotage {
     UnlinkBaseBeforeRename,
     LinkAfterRename,
     DeleteWinnerFile,
+    AckSupersededWithoutProof,
+    PublishWithoutForkCheck,
+    PublishNonCurrent,
+    CommitWithoutPublish,
+    GcWithoutForkCheck,
+    GcPublishesListed,
+    FromStandardWithoutProvenance,
+    ToStandardWithoutChange,
+    DeleteDirBeforePublish,
 }
 
 const DEFAULT_DURATION: Duration = Duration::from_secs(60);
@@ -156,7 +232,13 @@ const DEFAULT_EXTERNAL_KILL_EVERY: Duration = Duration::from_secs(3);
 const DEFAULT_PAYLOAD_BYTES: usize = 1024;
 const DEFAULT_CHUNK_BYTES: usize = 1024;
 const DEFAULT_GC_EVERY: Duration = Duration::from_secs(5);
+/// Longer than the default pause, so that publications paused before the
+/// hold end within it.
+pub const DEFAULT_READONLY_HOLD: Duration = Duration::from_secs(3);
 const GC_MARGIN_SLACK: Duration = Duration::from_secs(30);
+/// `init`'s: a commit on a shared filesystem under load can take over a
+/// minute, and GC deletes the objects of one that started before its cutoff.
+const RUN_GC_MARGIN_SLACK: Duration = Duration::from_secs(180);
 
 impl RunConfig {
     pub fn defaults(mode: Mode, hosts: u32) -> Self {
@@ -177,6 +259,10 @@ impl RunConfig {
             gc: None,
             repo_update_retries: RetryConfig::default(),
             sabotage: None,
+            readonly: None,
+            mirror_sample_every: None,
+            fork: None,
+            storage: None,
         }
     }
 
@@ -190,11 +276,43 @@ impl RunConfig {
         self
     }
 
+    /// `run.json` of the run root at `root`, and the run root with the
+    /// storage root it names: what every process that only has the run
+    /// root's path works with.
+    pub fn load_resolved(root: &RunRoot) -> anyhow::Result<(RunRoot, Self)> {
+        let config = Self::load(root)?;
+        let resolved = match &config.storage {
+            None => root.clone(),
+            Some(storage) => {
+                ensure!(
+                    root.storage_override().is_none_or(|ours| ours == storage),
+                    "{} names the storage root {}, not {}",
+                    root.run_json().display(),
+                    storage.display(),
+                    root.storage().display()
+                );
+                RunRoot::with_storage(root.root().to_path_buf(), storage.clone())
+            }
+        };
+        Ok((resolved, config))
+    }
+
     pub fn load(root: &RunRoot) -> anyhow::Result<Self> {
         let path = root.run_json();
         let bytes =
             fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
-        let config: Self = serde_json::from_slice(&bytes)
+        // Before the fields: another version's fields differ.
+        let value: serde_json::Value = serde_json::from_slice(&bytes)
+            .with_context(|| format!("parsing {}", path.display()))?;
+        let version = value.get("version").and_then(serde_json::Value::as_u64);
+        ensure!(
+            version == Some(u64::from(RUN_CONFIG_VERSION)),
+            "{}: unsupported version {}, expected {RUN_CONFIG_VERSION}: written by another \
+             fs-stress build",
+            path.display(),
+            version.map_or_else(|| "none".to_owned(), |v| v.to_string())
+        );
+        let config: Self = serde_json::from_value(value)
             .with_context(|| format!("parsing {}", path.display()))?;
         config.validate().with_context(|| format!("invalid {}", path.display()))?;
         Ok(config)
@@ -242,6 +360,45 @@ impl RunConfig {
             );
         }
         self.faults.validate()?;
+        if let Some(fork) = &self.fork {
+            ensure!(
+                self.backend == Backend::Filesystem,
+                "the fork actor needs the filesystem backend"
+            );
+            ensure!(fork.at < self.duration, "fork.at must be shorter than duration");
+            ensure!(
+                !fork.during_gc || (self.mode == Mode::Repository && self.gc.is_some()),
+                "fork.during_gc needs a repository-mode run with GC"
+            );
+        }
+        if let Some(readonly) = &self.readonly {
+            ensure!(
+                self.mode == Mode::Repository && self.backend == Backend::Filesystem,
+                "the status toggler needs repository mode on the filesystem backend"
+            );
+            check_period("readonly.every", readonly.every)?;
+            check_period("readonly.hold", readonly.hold)?;
+            // A hold is no stall.
+            ensure!(
+                readonly.hold < self.stall_threshold,
+                "readonly.hold must be shorter than stall_threshold"
+            );
+            // Otherwise the holds run back to back.
+            ensure!(
+                readonly.hold < readonly.every,
+                "readonly.hold must be shorter than readonly.every"
+            );
+        }
+        if let Some(storage) = &self.storage {
+            ensure!(storage.is_absolute(), "storage must be an absolute path");
+        }
+        if let Some(every) = self.mirror_sample_every {
+            ensure!(
+                self.backend == Backend::Filesystem,
+                "the mirror sampler needs the filesystem backend"
+            );
+            check_period("mirror_sample_every", every)?;
+        }
         if self.backend == Backend::LegacyLocal {
             ensure!(
                 self.faults.kill_probability == 0.0
@@ -297,6 +454,8 @@ impl Default for FaultConfig {
                 PointName::Linked,
                 PointName::BeforeRename,
                 PointName::BeforeTidyUp,
+                PointName::BeforePublish,
+                PointName::BeforeMirrorRename,
             ],
             kill_probability: 0.005,
             pause_probability: 0.005,
@@ -321,6 +480,9 @@ impl FaultConfig {
         if let Some(dup) = self.points.iter().find(|&&point| !seen.insert(point)) {
             bail!("faults.points lists {dup:?} twice");
         }
+        if let Some(step) = self.points.iter().find(|point| point.is_conversion_step()) {
+            bail!("faults.points lists the conversion step {step:?}: no run converts");
+        }
         Ok(())
     }
 }
@@ -337,8 +499,14 @@ impl Default for FaultFloor {
 }
 
 impl GcConfig {
+    /// For the selftest and the conversion scenario: short runs on one host.
     pub fn defaults(pause: Duration) -> Self {
         Self { every: DEFAULT_GC_EVERY, margin: 3 * pause + GC_MARGIN_SLACK }
+    }
+
+    /// For `init`.
+    pub fn run_defaults(pause: Duration) -> Self {
+        Self { margin: 3 * pause + RUN_GC_MARGIN_SLACK, ..Self::defaults(pause) }
     }
 }
 
@@ -352,15 +520,60 @@ impl Default for RetryConfig {
     }
 }
 
-impl From<Point> for PointName {
-    fn from(point: Point) -> Self {
+/// The creation's points and the fork check's reads aren't fault points: the
+/// error.
+impl TryFrom<Point> for PointName {
+    type Error = Point;
+
+    fn try_from(point: Point) -> Result<Self, Point> {
+        use ConversionStep::{FromStandard, ToStandard};
         match point {
-            Point::Staged => Self::Staged,
-            Point::Linked => Self::Linked,
-            Point::BeforeRename => Self::BeforeRename,
-            Point::Renamed => Self::Renamed,
-            Point::BeforeTidyUp => Self::BeforeTidyUp,
+            Point::Staged => Ok(Self::Staged),
+            Point::Linked => Ok(Self::Linked),
+            Point::BeforeRename => Ok(Self::BeforeRename),
+            Point::Renamed => Ok(Self::Renamed),
+            Point::BeforeTidyUp => Ok(Self::BeforeTidyUp),
+            Point::BeforePublish => Ok(Self::BeforePublish),
+            Point::MirrorStaged => Ok(Self::MirrorStaged),
+            Point::BeforeMirrorRename => Ok(Self::BeforeMirrorRename),
+            Point::MirrorRenamed => Ok(Self::MirrorRenamed),
+            Point::Conversion(step) => Ok(match step {
+                FromStandard(FromStandardStep::Backup) => Self::FromStandardBackup,
+                FromStandard(FromStandardStep::Build) => Self::FromStandardBuild,
+                FromStandard(FromStandardStep::RenameDir) => Self::FromStandardRenameDir,
+                FromStandard(FromStandardStep::Publish) => Self::FromStandardPublish,
+                ToStandard(ToStandardStep::ForkCheck) => Self::ToStandardForkCheck,
+                ToStandard(ToStandardStep::Change) => Self::ToStandardChange,
+                ToStandard(ToStandardStep::Publish) => Self::ToStandardPublish,
+                ToStandard(ToStandardStep::RenameDir) => Self::ToStandardRenameDir,
+                ToStandard(ToStandardStep::DeleteDir) => Self::ToStandardDeleteDir,
+            }),
+            Point::Creation(_) | Point::BeforeMirrorRead => Err(point),
         }
+    }
+}
+
+/// The protocol point a [`PointName`] names; the error for those that aren't
+/// a conversion's step, which [`FaultHooks`](crate::faults::FaultHooks)
+/// matches by name.
+impl TryFrom<PointName> for Point {
+    type Error = PointName;
+
+    fn try_from(name: PointName) -> Result<Self, PointName> {
+        use ConversionStep::{FromStandard, ToStandard};
+        let step = match name {
+            PointName::FromStandardBackup => FromStandard(FromStandardStep::Backup),
+            PointName::FromStandardBuild => FromStandard(FromStandardStep::Build),
+            PointName::FromStandardRenameDir => FromStandard(FromStandardStep::RenameDir),
+            PointName::FromStandardPublish => FromStandard(FromStandardStep::Publish),
+            PointName::ToStandardForkCheck => ToStandard(ToStandardStep::ForkCheck),
+            PointName::ToStandardChange => ToStandard(ToStandardStep::Change),
+            PointName::ToStandardPublish => ToStandard(ToStandardStep::Publish),
+            PointName::ToStandardRenameDir => ToStandard(ToStandardStep::RenameDir),
+            PointName::ToStandardDeleteDir => ToStandard(ToStandardStep::DeleteDir),
+            _ => return Err(name),
+        };
+        Ok(Self::Conversion(step))
     }
 }
 
@@ -376,6 +589,19 @@ impl From<ProtocolSabotage> for Sabotage {
             ProtocolSabotage::UnlinkBaseBeforeRename => Self::UnlinkBaseBeforeRename,
             ProtocolSabotage::LinkAfterRename => Self::LinkAfterRename,
             ProtocolSabotage::DeleteWinnerFile => Self::DeleteWinnerFile,
+            ProtocolSabotage::AckSupersededWithoutProof => {
+                Self::AckSupersededWithoutProof
+            }
+            ProtocolSabotage::PublishWithoutForkCheck => Self::PublishWithoutForkCheck,
+            ProtocolSabotage::PublishNonCurrent => Self::PublishNonCurrent,
+            ProtocolSabotage::CommitWithoutPublish => Self::CommitWithoutPublish,
+            ProtocolSabotage::GcWithoutForkCheck => Self::GcWithoutForkCheck,
+            ProtocolSabotage::GcPublishesListed => Self::GcPublishesListed,
+            ProtocolSabotage::FromStandardWithoutProvenance => {
+                Self::FromStandardWithoutProvenance
+            }
+            ProtocolSabotage::ToStandardWithoutChange => Self::ToStandardWithoutChange,
+            ProtocolSabotage::DeleteDirBeforePublish => Self::DeleteDirBeforePublish,
         }
     }
 }
@@ -396,7 +622,27 @@ impl Sabotage {
             Self::TidyUpDeletesCurrent | Self::DeleteAboveMarker => {
                 PointName::BeforeTidyUp
             }
+            Self::AckSupersededWithoutProof => PointName::Renamed,
+            Self::PublishWithoutForkCheck => PointName::MirrorStaged,
+            Self::PublishNonCurrent
+            | Self::CommitWithoutPublish
+            | Self::GcWithoutForkCheck
+            | Self::GcPublishesListed => PointName::BeforePublish,
+            Self::FromStandardWithoutProvenance => PointName::FromStandardRenameDir,
+            Self::ToStandardWithoutChange => PointName::ToStandardChange,
+            Self::DeleteDirBeforePublish => PointName::ToStandardRenameDir,
         }
+    }
+
+    /// Whether the sabotage breaks a conversion: the conversion scenario
+    /// detects it, not a run.
+    pub fn is_conversion(self) -> bool {
+        matches!(
+            self,
+            Self::FromStandardWithoutProvenance
+                | Self::ToStandardWithoutChange
+                | Self::DeleteDirBeforePublish
+        )
     }
 }
 
@@ -480,6 +726,16 @@ mod tests {
         repo.gc = Some(GcConfig::defaults(repo.faults.pause));
         repo.sabotage = Some(Sabotage::DeleteAboveMarker);
         repo.external_kill_every = None;
+        repo.readonly = Some(ReadOnlyConfig {
+            every: Duration::from_secs(10),
+            hold: DEFAULT_READONLY_HOLD,
+        });
+        repo.mirror_sample_every = Some(Duration::from_millis(25));
+        repo.fork = Some(ForkConfig {
+            at: Duration::from_secs(20),
+            repeat: true,
+            during_gc: true,
+        });
         repo.write_new(&root).unwrap();
         assert_eq!(RunConfig::load(&root).unwrap(), repo);
 
@@ -487,6 +743,42 @@ mod tests {
         let storage = RunConfig::defaults(Mode::Storage, 1);
         storage.write_new(&root).unwrap();
         assert_eq!(RunConfig::load(&root).unwrap(), storage);
+    }
+
+    #[test]
+    fn a_run_json_naming_a_storage_root_resolves_to_it() {
+        let (dir, root) = run_root();
+        let shared = dir.path().join("shared");
+        let mut config = RunConfig::defaults(Mode::Repository, 1);
+        config.storage = Some(shared.clone());
+        config.write_new(&root).unwrap();
+        // As a process that has only the run root's path.
+        let (resolved, loaded) =
+            RunConfig::load_resolved(&RunRoot::new(root.root().to_path_buf())).unwrap();
+        assert_eq!(loaded, config);
+        assert_eq!(resolved.storage(), shared);
+        assert_eq!(resolved.logs_dir(), root.logs_dir());
+        let other =
+            RunRoot::with_storage(root.root().to_path_buf(), dir.path().join("other"));
+        assert!(RunConfig::load_resolved(&other).is_err());
+
+        let (_dir, root) = run_root();
+        RunConfig::defaults(Mode::Storage, 1).write_new(&root).unwrap();
+        assert_eq!(RunConfig::load_resolved(&root).unwrap().0, root);
+    }
+
+    /// A `run.json` of version 5, from before `storage`, is another
+    /// version, not a malformed file.
+    #[test]
+    fn an_older_run_json_is_an_unsupported_version() {
+        let (_dir, root) = run_root();
+        let mut json =
+            serde_json::to_value(RunConfig::defaults(Mode::Storage, 1)).unwrap();
+        json.as_object_mut().unwrap().remove("storage");
+        json["version"] = 5.into();
+        fs::write(root.run_json(), serde_json::to_vec(&json).unwrap()).unwrap();
+        let err = format!("{:#}", RunConfig::load(&root).unwrap_err());
+        assert!(err.contains("unsupported version 5, expected 6"), "{err}");
     }
 
     #[test]
@@ -506,11 +798,14 @@ mod tests {
     fn durations_are_milliseconds_and_every_field_is_required() {
         let config = RunConfig::defaults(Mode::Storage, 2);
         let json = serde_json::to_value(&config).unwrap();
-        assert_eq!(json["version"], 2);
+        assert_eq!(json["version"], 6);
         assert_eq!(json["faults"]["pause"], 2000);
         assert_eq!(json["stall_threshold"], 30_000);
         assert_eq!(json["external_kill_every"], 3000);
         assert_eq!(json["gc"], serde_json::Value::Null);
+        assert_eq!(json["readonly"], serde_json::Value::Null);
+        assert_eq!(json["mirror_sample_every"], serde_json::Value::Null);
+        assert_eq!(json["fork"], serde_json::Value::Null);
 
         assert_eq!(json["backend"], "filesystem");
         assert_eq!(
@@ -521,7 +816,17 @@ mod tests {
                 "max_backoff_ms": 100,
             })
         );
-        for field in ["gc", "sabotage", "external_kill_every", "fsync", "backend"] {
+        for field in [
+            "gc",
+            "sabotage",
+            "external_kill_every",
+            "fsync",
+            "backend",
+            "readonly",
+            "mirror_sample_every",
+            "fork",
+            "storage",
+        ] {
             let mut json = json.clone();
             json.as_object_mut().unwrap().remove(field);
             assert!(serde_json::from_value::<RunConfig>(json).is_err(), "{field}");
@@ -549,7 +854,7 @@ mod tests {
 
         let mut config =
             serde_json::to_value(RunConfig::defaults(Mode::Storage, 1)).unwrap();
-        config["version"] = 3.into();
+        config["version"] = (RUN_CONFIG_VERSION + 1).into();
         fs::write(root.run_json(), serde_json::to_vec(&config).unwrap()).unwrap();
         assert!(RunConfig::load(&root).is_err());
     }
@@ -561,8 +866,20 @@ mod tests {
             config.validate().unwrap();
             config.gc = Some(GcConfig::defaults(config.faults.pause));
             config.sabotage = Some(Sabotage::SkipLink);
+            config.mirror_sample_every = Some(Duration::from_millis(25));
+            config.fork = Some(ForkConfig {
+                at: Duration::from_secs(5),
+                repeat: true,
+                during_gc: false,
+            });
             config.validate().unwrap();
         }
+        let mut config = RunConfig::defaults(Mode::Repository, 1);
+        config.readonly = Some(ReadOnlyConfig {
+            every: Duration::from_secs(10),
+            hold: DEFAULT_READONLY_HOLD,
+        });
+        config.validate().unwrap();
     }
 
     #[test]
@@ -606,6 +923,62 @@ mod tests {
                 c.repo_update_retries.initial_backoff_ms = 2000;
                 c.repo_update_retries.max_backoff_ms = 1000;
             }),
+            ("zero readonly every", |c| {
+                c.readonly = Some(ReadOnlyConfig {
+                    every: Duration::ZERO,
+                    hold: DEFAULT_READONLY_HOLD,
+                });
+            }),
+            ("zero readonly hold", |c| {
+                c.readonly = Some(ReadOnlyConfig {
+                    every: Duration::from_secs(5),
+                    hold: Duration::ZERO,
+                });
+            }),
+            ("hold as long as the period", |c| {
+                c.readonly = Some(ReadOnlyConfig {
+                    every: DEFAULT_READONLY_HOLD,
+                    hold: DEFAULT_READONLY_HOLD,
+                });
+            }),
+            ("hold as long as a stall", |c| {
+                c.readonly = Some(ReadOnlyConfig {
+                    every: Duration::from_secs(5),
+                    hold: c.stall_threshold,
+                });
+            }),
+            ("readonly in storage mode", |c| {
+                c.mode = Mode::Storage;
+                c.readonly = Some(ReadOnlyConfig {
+                    every: Duration::from_secs(5),
+                    hold: DEFAULT_READONLY_HOLD,
+                });
+            }),
+            ("zero sample every", |c| c.mirror_sample_every = Some(Duration::ZERO)),
+            ("fork at the end", |c| {
+                c.fork =
+                    Some(ForkConfig { at: c.duration, repeat: false, during_gc: false });
+            }),
+            ("fork during GC without GC", |c| {
+                c.fork = Some(ForkConfig {
+                    at: Duration::from_secs(1),
+                    repeat: false,
+                    during_gc: true,
+                });
+            }),
+            ("fork during GC in storage mode", |c| {
+                c.mode = Mode::Storage;
+                c.gc = Some(GcConfig::defaults(c.faults.pause));
+                c.fork = Some(ForkConfig {
+                    at: Duration::from_secs(1),
+                    repeat: false,
+                    during_gc: true,
+                });
+            }),
+            ("relative storage", |c| c.storage = Some(PathBuf::from("storage"))),
+            ("conversion step in the fault points", |c| {
+                c.faults.points = vec![PointName::Linked, PointName::ToStandardChange];
+            }),
         ];
         for (name, mutate) in cases {
             let mut config = RunConfig::defaults(Mode::Repository, 1);
@@ -648,6 +1021,27 @@ mod tests {
             ("pause", |c| c.faults.pause_probability = 0.1),
             ("sabotage", |c| c.sabotage = Some(Sabotage::AckUnproven)),
         ];
+        let sampler_or_toggler: &[(&str, Mutate)] = &[
+            ("sampler", |c| c.mirror_sample_every = Some(Duration::from_millis(25))),
+            ("fork actor", |c| {
+                c.fork = Some(ForkConfig {
+                    at: Duration::from_secs(1),
+                    repeat: false,
+                    during_gc: false,
+                });
+            }),
+            ("toggler", |c| {
+                c.readonly = Some(ReadOnlyConfig {
+                    every: Duration::from_secs(5),
+                    hold: DEFAULT_READONLY_HOLD,
+                });
+            }),
+        ];
+        for (name, mutate) in sampler_or_toggler {
+            let mut config = legacy(Mode::Repository);
+            mutate(&mut config);
+            assert!(config.validate().is_err(), "{name}");
+        }
         for (name, mutate) in cases {
             for mode in [Mode::Storage, Mode::Repository] {
                 let mut config = legacy(mode);
@@ -676,8 +1070,16 @@ mod tests {
         assert_eq!(config.stall_threshold, Duration::from_secs(30));
         assert_eq!(
             config.faults.points,
-            [PointName::Linked, PointName::BeforeRename, PointName::BeforeTidyUp]
+            [
+                PointName::Linked,
+                PointName::BeforeRename,
+                PointName::BeforeTidyUp,
+                PointName::BeforePublish,
+                PointName::BeforeMirrorRename,
+            ]
         );
+        assert_eq!((config.readonly, config.mirror_sample_every), (None, None));
+        assert_eq!(config.fork, None);
     }
 
     #[test]
@@ -715,66 +1117,161 @@ mod tests {
             (Point::BeforeRename, PointName::BeforeRename, "before_rename"),
             (Point::Renamed, PointName::Renamed, "renamed"),
             (Point::BeforeTidyUp, PointName::BeforeTidyUp, "before_tidy_up"),
+            (Point::BeforePublish, PointName::BeforePublish, "before_publish"),
+            (Point::MirrorStaged, PointName::MirrorStaged, "mirror_staged"),
+            (
+                Point::BeforeMirrorRename,
+                PointName::BeforeMirrorRename,
+                "before_mirror_rename",
+            ),
+            (Point::MirrorRenamed, PointName::MirrorRenamed, "mirror_renamed"),
         ];
         for (point, name, json) in points {
-            assert_eq!(PointName::from(point), name);
+            assert_eq!(PointName::try_from(point), Ok(name));
+            assert_eq!(Point::try_from(name), Err(name));
+            assert!(!name.is_conversion_step(), "{name:?}");
             assert_eq!(serde_json::to_value(name).unwrap(), json);
         }
+        use ConversionStep::{FromStandard, ToStandard};
+        let steps = [
+            (FromStandard(FromStandardStep::Backup), PointName::FromStandardBackup),
+            (FromStandard(FromStandardStep::Build), PointName::FromStandardBuild),
+            (FromStandard(FromStandardStep::RenameDir), PointName::FromStandardRenameDir),
+            (FromStandard(FromStandardStep::Publish), PointName::FromStandardPublish),
+            (ToStandard(ToStandardStep::ForkCheck), PointName::ToStandardForkCheck),
+            (ToStandard(ToStandardStep::Change), PointName::ToStandardChange),
+            (ToStandard(ToStandardStep::Publish), PointName::ToStandardPublish),
+            (ToStandard(ToStandardStep::RenameDir), PointName::ToStandardRenameDir),
+            (ToStandard(ToStandardStep::DeleteDir), PointName::ToStandardDeleteDir),
+        ];
+        for (step, name) in steps {
+            assert_eq!(PointName::try_from(Point::Conversion(step)), Ok(name));
+            assert_eq!(Point::try_from(name), Ok(Point::Conversion(step)));
+            assert!(name.is_conversion_step(), "{name:?}");
+        }
+        assert_eq!(
+            serde_json::to_value(PointName::ToStandardDeleteDir).unwrap(),
+            "to_standard_delete_dir"
+        );
+        let creation = Point::Creation(icechunk_fs::fault_injection::CreationStep::Built);
+        assert_eq!(PointName::try_from(creation), Err(creation));
+        let read = Point::BeforeMirrorRead;
+        assert_eq!(PointName::try_from(read), Err(read));
     }
 
     #[test]
     fn sabotages_mirror_the_protocol_sabotages() {
         use ProtocolSabotage as P;
+        use Sabotage as S;
         let sabotages = [
-            (P::SkipLink, Sabotage::SkipLink, "skip_link", PointName::Linked),
+            (P::SkipLink, S::SkipLink, "skip_link", PointName::Linked),
             (
                 P::RenameFromListedMarker,
-                Sabotage::RenameFromListedMarker,
+                S::RenameFromListedMarker,
                 "rename_from_listed_marker",
                 PointName::BeforeRename,
             ),
             (
                 P::TrustRenameEnoent,
-                Sabotage::TrustRenameEnoent,
+                S::TrustRenameEnoent,
                 "trust_rename_enoent",
                 PointName::Renamed,
             ),
-            (P::AckUnproven, Sabotage::AckUnproven, "ack_unproven", PointName::Renamed),
+            (P::AckUnproven, S::AckUnproven, "ack_unproven", PointName::Renamed),
             (
                 P::TidyUpDeletesCurrent,
-                Sabotage::TidyUpDeletesCurrent,
+                S::TidyUpDeletesCurrent,
                 "tidy_up_deletes_current",
                 PointName::BeforeTidyUp,
             ),
             (
                 P::DeleteAboveMarker,
-                Sabotage::DeleteAboveMarker,
+                S::DeleteAboveMarker,
                 "delete_above_marker",
                 PointName::BeforeTidyUp,
             ),
             (
                 P::UnlinkBaseBeforeRename,
-                Sabotage::UnlinkBaseBeforeRename,
+                S::UnlinkBaseBeforeRename,
                 "unlink_base_before_rename",
                 PointName::BeforeRename,
             ),
             (
                 P::LinkAfterRename,
-                Sabotage::LinkAfterRename,
+                S::LinkAfterRename,
                 "link_after_rename",
                 PointName::Renamed,
             ),
             (
                 P::DeleteWinnerFile,
-                Sabotage::DeleteWinnerFile,
+                S::DeleteWinnerFile,
                 "delete_winner_file",
                 PointName::Renamed,
+            ),
+            (
+                P::AckSupersededWithoutProof,
+                S::AckSupersededWithoutProof,
+                "ack_superseded_without_proof",
+                PointName::Renamed,
+            ),
+            (
+                P::PublishWithoutForkCheck,
+                S::PublishWithoutForkCheck,
+                "publish_without_fork_check",
+                PointName::MirrorStaged,
+            ),
+            (
+                P::PublishNonCurrent,
+                S::PublishNonCurrent,
+                "publish_non_current",
+                PointName::BeforePublish,
+            ),
+            (
+                P::CommitWithoutPublish,
+                S::CommitWithoutPublish,
+                "commit_without_publish",
+                PointName::BeforePublish,
+            ),
+            (
+                P::GcWithoutForkCheck,
+                S::GcWithoutForkCheck,
+                "gc_without_fork_check",
+                PointName::BeforePublish,
+            ),
+            (
+                P::GcPublishesListed,
+                S::GcPublishesListed,
+                "gc_publishes_listed",
+                PointName::BeforePublish,
+            ),
+            (
+                P::FromStandardWithoutProvenance,
+                S::FromStandardWithoutProvenance,
+                "from_standard_without_provenance",
+                PointName::FromStandardRenameDir,
+            ),
+            (
+                P::ToStandardWithoutChange,
+                S::ToStandardWithoutChange,
+                "to_standard_without_change",
+                PointName::ToStandardChange,
+            ),
+            (
+                P::DeleteDirBeforePublish,
+                S::DeleteDirBeforePublish,
+                "delete_dir_before_publish",
+                PointName::ToStandardRenameDir,
             ),
         ];
         for (protocol, sabotage, json, point) in sabotages {
             assert_eq!(Sabotage::from(protocol), sabotage);
             assert_eq!(serde_json::to_value(sabotage).unwrap(), json);
             assert_eq!(sabotage.point(), point, "{sabotage:?}");
+            assert_eq!(
+                sabotage.is_conversion(),
+                point.is_conversion_step(),
+                "{sabotage:?}"
+            );
         }
     }
 }
