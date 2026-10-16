@@ -93,6 +93,37 @@ session.shift_array("/arr", (2,))
 print("After: ", arr[:])
 ```
 
+### Example: Prepending to an Array
+
+Zarr has no native way to prepend data, because it would mean rewriting every existing chunk. With Icechunk you can do it in three steps within one session: resize to make room, shift the existing chunks right, and write the new data into the vacated region at the front.
+
+```python exec="on" session="chunks" source="material-block" result="code"
+repo = ic.Repository.create(ic.in_memory_storage())
+session = repo.writable_session("main")
+arr = zarr.create(
+    store=session.store,
+    path="arr",
+    shape=(10,),
+    chunks=(2,),
+    dtype="i4",
+    fill_value=-1,
+)
+arr[:] = np.arange(10, 20)
+print("Before:", arr[:])
+
+new_data = np.arange(0, 6, dtype="i4")  # must be a whole number of chunks
+n_chunks = len(new_data) // arr.chunks[0]
+
+arr.resize((arr.shape[0] + len(new_data),))  # 1. make room at the end
+session.shift_array("/arr", (n_chunks,))     # 2. move existing chunks right
+arr[: len(new_data)] = new_data              # 3. write into the vacated front
+print("After: ", arr[:])
+
+session.commit("Prepend 3 chunks")
+```
+
+The existing data is never copied; only the new chunks are written. Because the shift is measured in chunks, the amount you prepend must be a multiple of the chunk size.
+
 ### Multi-dimensional Arrays
 
 For N-dimensional arrays, provide an offset for each dimension:
