@@ -54,11 +54,11 @@
           hash = "sha256-EAvyfHyT+mcyHilyqrjg3I1eih5dZyfXynDafTP4p3g=";
         };
 
-        # Free-threaded CPython for the py314t wheel build.
-        # link only python3.14t so the package's bin/python3 doesn't shadow python312.
-        python314t = pkgs.runCommand "python314t-bin" {} ''
+        # Free-threaded CPython for the py315t wheel build.
+        # link only python3.15t so the package's bin/python3 doesn't shadow python312.
+        python315t = pkgs.runCommand "python315t-bin" {} ''
           mkdir -p $out/bin
-          ln -s ${pkgs.python314FreeThreading}/bin/python3.14t $out/bin/python3.14t
+          ln -s ${pkgs.python315FreeThreading}/bin/python3.15t $out/bin/python3.15t
         '';
       in rec {
         # Without this, a bare `nix develop` falls through to `packages.default`
@@ -105,7 +105,7 @@
                 pkgs.cairo # mkdocs-material social plugin dlopens libcairo
                 pkgs.nodejs_22 # icechunk-js
                 pkgs.corepack_22 # provisions yarn per package.json packageManager
-                python314t
+                python315t
 
                 # necessary for reqwest
                 pkgs.openssl
