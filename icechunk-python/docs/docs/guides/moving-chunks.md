@@ -95,7 +95,7 @@ print("After: ", arr[:])
 
 ### Example: Prepending to an Array
 
-Zarr has no native way to prepend data, because it would mean rewriting every existing chunk. With Icechunk you can do it in three steps within one session: resize to make room, shift the existing chunks right, and write the new data into the vacated region at the front.
+Zarr has no native way to prepend data, because it would mean rewriting every existing chunk. With Icechunk you can do it in three steps within one session: resize to make room, shift the existing chunks right, and write the new data into the vacated region at the front. The first two steps are metadata-only operations, so you can prepend efficiently to arbitrarily large arrays.
 
 ```python exec="on" session="chunks" source="material-block" result="code"
 repo = ic.Repository.create(ic.in_memory_storage())
