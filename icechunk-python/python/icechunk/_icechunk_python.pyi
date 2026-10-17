@@ -2633,6 +2633,16 @@ class SessionMode(Enum):
     writable = 1
     rearrange = 2
 
+class ChunkReference:
+    """Opaque, immutable, process-local chunk reference returned by a Session.
+
+    Preserves the complete payload, including inline bytes or native/virtual
+    offsets, lengths and validation metadata. Cannot be constructed or pickled.
+    Equality compares payloads and their repository storage handles.
+    """
+
+    def __eq__(self, value: object, /) -> bool: ...
+
 class PySession:
     def _repr_html_(self) -> str: ...
     @classmethod
@@ -2695,6 +2705,22 @@ class PySession:
         self, array_path: str, batch_size: int
     ) -> AsyncCloseableIterator[list[list[int]]]: ...
     def chunk_type(self, array_path: str, coords: Sequence[int]) -> ChunkType: ...
+    def get_chunk_refs(
+        self, array_path: str, coordinates: Sequence[Sequence[int]]
+    ) -> list[ChunkReference | None]: ...
+    async def get_chunk_refs_async(
+        self, array_path: str, coordinates: Sequence[Sequence[int]]
+    ) -> list[ChunkReference | None]: ...
+    def set_chunk_refs(
+        self,
+        array_path: str,
+        updates: Sequence[tuple[Sequence[int], ChunkReference | None]],
+    ) -> None: ...
+    async def set_chunk_refs_async(
+        self,
+        array_path: str,
+        updates: Sequence[tuple[Sequence[int], ChunkReference | None]],
+    ) -> None: ...
     async def chunk_type_async(
         self, array_path: str, coords: Sequence[int]
     ) -> ChunkType: ...
