@@ -1629,9 +1629,9 @@ class RepoUpdateRetryConfig:
         Parameters
         ----------
         default: StorageRetriesSettings | None
-            Default retry settings for all repo update operations. When None,
-            the effective defaults are `max_tries`=100, `initial_backoff_ms`=50,
-            `max_backoff_ms`=30,000.
+            Default retry settings for all repo update operations. Any field
+            left unset, or all of them when None, takes the repo update default:
+            `max_tries`=100, `initial_backoff_ms`=50, `max_backoff_ms`=30,000.
             Default: None
         """
     @property

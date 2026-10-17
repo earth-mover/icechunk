@@ -74,7 +74,7 @@ pub struct JsonValue(pub serde_json::Value);
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PySnapshotProperties(pub HashMap<String, JsonValue>);
 
-#[pyclass(skip_from_py_object, name = "SnapshotInfo", eq)]
+#[pyclass(name = "SnapshotInfo", eq)]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct PySnapshotInfo {
     #[pyo3(get)]
@@ -92,7 +92,7 @@ pub(crate) struct PySnapshotInfo {
 
 impl_pickle!(PySnapshotInfo);
 
-#[pyclass(skip_from_py_object, name = "ManifestFileInfo", eq)]
+#[pyclass(name = "ManifestFileInfo", eq)]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct PyManifestFileInfo {
     #[pyo3(get)]
@@ -663,7 +663,7 @@ impl PyRepoStatus {
     }
 }
 
-#[pyclass(skip_from_py_object, name = "UpdateType", eq)]
+#[pyclass(name = "UpdateType", eq)]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) enum PyUpdateType {
     BranchCreated { name: String },
@@ -792,7 +792,7 @@ impl PyUpdate {
     }
 }
 
-#[pyclass(skip_from_py_object, name = "FeatureFlag", eq)]
+#[pyclass(name = "FeatureFlag", eq)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PyFeatureFlag {
     #[pyo3(get)]
@@ -1045,15 +1045,7 @@ fn mk_update(
 }
 
 #[repr(u8)]
-#[pyclass(
-    eq,
-    eq_int,
-    ord,
-    rename_all = "snake_case",
-    skip_from_py_object,
-    name = "SpecVersion",
-    frozen
-)]
+#[pyclass(eq, eq_int, ord, rename_all = "snake_case", name = "SpecVersion", frozen)]
 #[derive(PartialEq, Default, Clone, PartialOrd, Debug)]
 pub enum PySpecVersion {
     V1 = 1u8,
@@ -1107,13 +1099,6 @@ impl From<SpecVersionBin> for PySpecVersion {
 
 #[pymethods]
 impl PySpecVersion {
-    pub(crate) fn __repr__(&self) -> String {
-        match self {
-            Self::V2 => "SpecVersion.v2 (current)".into(),
-            Self::V1 => "SpecVersion.v1".into(),
-        }
-    }
-
     #[staticmethod]
     pub(crate) fn current() -> Self {
         Default::default()
@@ -2012,32 +1997,30 @@ impl PyRepository {
     #[pyo3(signature = (*, branch = None, tag = None, snapshot_id = None))]
     pub(crate) fn async_ancestry(
         &self,
-        py: Python<'_>,
         branch: Option<String>,
         tag: Option<String>,
         snapshot_id: Option<String>,
     ) -> PyResult<PyAsyncCloseableIterator> {
-        // This function calls block_on, so we need to allow other thread python to make progress
-        py.detach(move || {
-            let version = args_to_version_info(branch, tag, snapshot_id, None)?;
-            let ancestry = pyo3_async_runtimes::tokio::get_runtime()
-                .block_on(async move {
-                    let repo = self.0.read().await;
-                    repo.ancestry(&version).await
-                })
-                .map_err(PyIcechunkStoreError::RepositoryError)?
-                .map_err(PyIcechunkStoreError::RepositoryError);
-
-            let parents = ancestry.and_then(|info| async move {
-                Python::attach(|py| {
-                    let info = PySnapshotInfo::from(info);
-                    Ok(Bound::new(py, info)?.into_any().unbind())
-                })
-            });
-
-            let prepared_list = Arc::new(Mutex::new(parents.err_into().boxed()));
-            Ok(PyAsyncCloseableIterator::new(prepared_list))
+        let version = args_to_version_info(branch, tag, snapshot_id, None)?;
+        let repo = Arc::clone(&self.0);
+        // Do the storage reads in the first `__anext__`, not here.
+        // A blocking call here stalls the caller's asyncio event loop.
+        let ancestry = futures::stream::once(async move {
+            let repo = repo.read().await;
+            repo.ancestry(&version).await
         })
+        .try_flatten()
+        .map_err(PyIcechunkStoreError::RepositoryError);
+
+        let parents = ancestry.and_then(|info| async move {
+            Python::attach(|py| {
+                let info = PySnapshotInfo::from(info);
+                Ok(Bound::new(py, info)?.into_any().unbind())
+            })
+        });
+
+        let prepared_list = Arc::new(Mutex::new(parents.err_into().boxed()));
+        Ok(PyAsyncCloseableIterator::new(prepared_list))
     }
 
     #[pyo3(signature = (*, branch = None, tag = None, snapshot_id = None, plain = false))]
@@ -2085,26 +2068,22 @@ impl PyRepository {
         })
     }
 
-    pub(crate) fn async_ops_log(
-        &self,
-        py: Python<'_>,
-    ) -> PyResult<PyAsyncCloseableIterator> {
-        // This function calls block_on, so we need to allow other thread python to make progress
-        py.detach(move || {
-            let ops = pyo3_async_runtimes::tokio::get_runtime()
-                .block_on(async move {
-                    let repo = self.0.read().await;
-                    repo.ops_log().await.map(|(stream, _, _)| stream)
-                })
-                .map_err(PyIcechunkStoreError::RepositoryError)?
-                .map_err(PyIcechunkStoreError::RepositoryError)
-                .and_then(|(ts, update, repo_path)| async move {
-                    mk_update(&update, ts, repo_path).map_err(PyIcechunkStoreError::from)
-                });
-
-            let prepared_list = Arc::new(Mutex::new(ops.err_into().boxed()));
-            Ok(PyAsyncCloseableIterator::new(prepared_list))
+    pub(crate) fn async_ops_log(&self) -> PyResult<PyAsyncCloseableIterator> {
+        let repo = Arc::clone(&self.0);
+        // Do the repo info fetch in the first `__anext__`, not here.
+        // A blocking call here stalls the caller's asyncio event loop.
+        let ops = futures::stream::once(async move {
+            let repo = repo.read().await;
+            repo.ops_log().await.map(|(stream, _, _)| stream)
         })
+        .try_flatten()
+        .map_err(PyIcechunkStoreError::RepositoryError)
+        .and_then(|(ts, update, repo_path)| async move {
+            mk_update(&update, ts, repo_path).map_err(PyIcechunkStoreError::from)
+        });
+
+        let prepared_list = Arc::new(Mutex::new(ops.err_into().boxed()));
+        Ok(PyAsyncCloseableIterator::new(prepared_list))
     }
 
     pub(crate) fn create_branch(

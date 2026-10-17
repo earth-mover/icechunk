@@ -42,7 +42,9 @@ def _disable_rectilinear_chunks() -> Any:
 
 
 # Suppress LocalFileSystem warnings for these tests (which use filesystem storage).
-log_filter = "warn,icechunk::storage::object_store=error"
+log_filter = (
+    "warn,icechunk::storage::object_store=error,icechunk_arrow_object_store=error"
+)
 ic.set_logs_filter(log_filter)
 ic_v1.set_logs_filter(log_filter)
 
