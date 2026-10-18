@@ -445,7 +445,7 @@ impl Repository {
             };
             let version = self
                 .asset_manager
-                .update_repo_info(self.config.repo_update_retries().retries(), do_update)
+                .update_repo_info(self.config.repo_update_retries(), do_update)
                 .await?;
 
             Ok(version)
@@ -504,7 +504,7 @@ impl Repository {
 
         let _ = self
             .asset_manager
-            .update_repo_info(self.config.repo_update_retries().retries(), do_update)
+            .update_repo_info(self.config.repo_update_retries(), do_update)
             .await?;
         Ok(final_metadata)
     }
@@ -527,7 +527,7 @@ impl Repository {
 
         let _ = self
             .asset_manager
-            .update_repo_info(self.config.repo_update_retries().retries(), do_update)
+            .update_repo_info(self.config.repo_update_retries(), do_update)
             .await?;
         Ok(())
     }
@@ -564,10 +564,7 @@ impl Repository {
         unsafe {
             let _ = self
                 .asset_manager
-                .update_repo_info_unchecked(
-                    self.config.repo_update_retries().retries(),
-                    do_update,
-                )
+                .update_repo_info_unchecked(self.config.repo_update_retries(), do_update)
                 .await?;
         }
         Ok(())
@@ -645,7 +642,7 @@ impl Repository {
         };
         let _ = self
             .asset_manager
-            .update_repo_info(self.config.repo_update_retries().retries(), do_update)
+            .update_repo_info(self.config.repo_update_retries(), do_update)
             .await?;
         Ok(())
     }
@@ -935,7 +932,7 @@ impl Repository {
 
         let _ = self
             .asset_manager
-            .update_repo_info(self.config.repo_update_retries().retries(), do_update)
+            .update_repo_info(self.config.repo_update_retries(), do_update)
             .await?;
         Ok(())
     }
@@ -1170,7 +1167,7 @@ impl Repository {
 
         let _ = self
             .asset_manager
-            .update_repo_info(self.config.repo_update_retries().retries(), do_update)
+            .update_repo_info(self.config.repo_update_retries(), do_update)
             .await?;
         Ok(())
     }
@@ -1222,7 +1219,7 @@ impl Repository {
 
         let _ = self
             .asset_manager
-            .update_repo_info(self.config.repo_update_retries().retries(), do_update)
+            .update_repo_info(self.config.repo_update_retries(), do_update)
             .await?;
         Ok(())
     }
@@ -1275,7 +1272,7 @@ impl Repository {
 
         let _ = self
             .asset_manager
-            .update_repo_info(self.config.repo_update_retries().retries(), do_update)
+            .update_repo_info(self.config.repo_update_retries(), do_update)
             .await?;
         Ok(())
     }
@@ -1353,7 +1350,7 @@ impl Repository {
 
         let _ = self
             .asset_manager
-            .update_repo_info(self.config.repo_update_retries().retries(), do_update)
+            .update_repo_info(self.config.repo_update_retries(), do_update)
             .await?;
         Ok(())
     }

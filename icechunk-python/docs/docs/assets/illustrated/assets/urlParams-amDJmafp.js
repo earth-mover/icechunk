@@ -1,0 +1,1 @@
+function i(n,a,o,t){if(n===null)return t;const e=Number.parseInt(n,10);return Number.isFinite(e)?Math.max(a,Math.min(o,e)):t}function s(n,a,o){const t=new URLSearchParams(location.search);for(const r of o)n[r]===a[r]?t.delete(r):t.set(r,String(n[r]));const e=t.toString();history.replaceState(null,"",e?`${location.pathname}?${e}`:location.pathname)}export{i as c,s};

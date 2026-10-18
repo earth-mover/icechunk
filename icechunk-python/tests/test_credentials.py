@@ -221,7 +221,7 @@ def test_s3_refreshable_credentials_pickle_with_optimization(
 
     # now we pickle it, use the copy, and check get_credentials is not called again
     repo = pickle.loads(pickle.dumps(repo))
-    repo.ancestry(branch="main")
+    list(repo.ancestry(branch="main"))
 
     called_only_once = path.read_text() == "."
     assert called_only_once == scatter_initial_credentials

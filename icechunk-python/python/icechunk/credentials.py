@@ -473,10 +473,12 @@ def containers_credentials(
     Parameters
     ----------
     m: Mapping[str, AnyS3Credential | AnyGcsCredential | AnyAzureCredential | Credentials.LocalFileSystemAccess | Credentials.HttpAccess | None]
-        A mapping from container url prefixes to credentials. For backends that need
-        no authentication, use the explicit ``LocalFileSystemAccess`` (``file://``) or
-        ``HttpAccess`` (``http(s)://``) sentinels. Passing ``None`` is deprecated and
-        will be unsupported in a future release.
+        A mapping from container url prefixes to credentials. Each key must equal a
+        configured container's ``url_prefix`` exactly (trailing slash included).
+        For backends that need no authentication, use the explicit
+        ``LocalFileSystemAccess`` (``file://``) or ``HttpAccess`` (``http(s)://``)
+        sentinels. Passing ``None`` is deprecated and will be unsupported in a
+        future release.
 
     Examples
     --------

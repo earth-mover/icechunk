@@ -352,11 +352,13 @@ async fn expire_v2_one_attempt(
         Ok(Arc::new(new_repo_info))
     };
 
-    let retry_settings = storage::RetriesSettings {
-        max_tries: Some(NonZeroU16::MIN),
-        ..Default::default()
+    let single_attempt = RepoUpdateRetryConfig {
+        default: Some(storage::RetriesSettings {
+            max_tries: Some(NonZeroU16::MIN),
+            ..Default::default()
+        }),
     };
-    let _ = asset_manager.update_repo_info(&retry_settings, do_update).await?;
+    let _ = asset_manager.update_repo_info(&single_attempt, do_update).await?;
 
     deleted_tags.extend(deleted_branches);
 
