@@ -239,6 +239,7 @@ def test_azure_refreshable_credentials_accept_variant_factory(
     scatter_initial_credentials: bool,
 ) -> None:
     """Regression for #2137: mypy rejected a factory returning a concrete variant."""
+    assert isinstance(get_azure_bearer(), AzureRefreshableCredential)
     creds = azure_refreshable_credentials(
         get_azure_bearer, scatter_initial_credentials=scatter_initial_credentials
     )

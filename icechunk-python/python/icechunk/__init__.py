@@ -59,7 +59,6 @@ from icechunk.conflicts import (
 )
 from icechunk.credentials import (
     AnyAzureCredential,
-    AnyAzureRefreshableCredential,
     AnyAzureStaticCredential,
     AnyCredential,
     AnyGcsCredential,
@@ -134,7 +133,6 @@ __all__ = [
     "AlreadyExistsError",
     "AncestryGraph",
     "AnyAzureCredential",
-    "AnyAzureRefreshableCredential",
     "AnyAzureStaticCredential",
     "AnyCredential",
     "AnyGcsCredential",
