@@ -257,7 +257,7 @@ mod tests {
     async fn new_repo() -> Repository {
         let storage: Arc<dyn Storage + Send + Sync> =
             new_in_memory_storage().await.unwrap();
-        Repository::create(None, storage, HashMap::new(), None, true).await.unwrap()
+        Repository::create(storage).execute().await.unwrap()
     }
 
     /// Commits a root group and an array at `/array`. Returns the snapshot id.
@@ -1095,6 +1095,40 @@ mod tests {
         repo.set_feature_flag("rebase", None).await.unwrap();
         session_b.rebase(&ConflictDetector).await.unwrap();
         session_b.commit("b").execute().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn try_rebase_on_deleted_branch_without_feature_flag() {
+        use crate::conflicts::detector::ConflictDetector;
+
+        let repo = new_repo().await;
+        let snap = commit_root_and_array(&repo).await;
+        repo.create_branch("other", &snap).await.unwrap();
+
+        let mut session = repo.writable_session("other").await.unwrap();
+        repo.delete_branch("other").await.unwrap();
+
+        repo.set_feature_flag("rebase", Some(false)).await.unwrap();
+        assert_flag_disabled_session(
+            session.rebase(&ConflictDetector).await,
+            "rebase",
+            "rebase session",
+        );
+
+        repo.set_feature_flag("rebase", None).await.unwrap();
+        session.rebase(&ConflictDetector).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn try_create_tag_on_missing_snapshot_without_feature_flag() {
+        let repo = new_repo().await;
+
+        repo.set_feature_flag("create_tag", Some(false)).await.unwrap();
+        assert_flag_disabled_repo(
+            repo.create_tag("foo", &SnapshotId::random()).await,
+            "create_tag",
+            "tag creation",
+        );
     }
 
     #[tokio::test]

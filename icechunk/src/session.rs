@@ -2066,11 +2066,6 @@ impl Session {
             }
         };
 
-        if let Some(ri) = &repo_info {
-            raise_if_feature_flag_disabled(ri.as_ref(), REBASE_FLAG, "rebase session")
-                .inject()?;
-        }
-
         trace!("Found {} commits to rebase over", new_commits.len());
 
         let am = Arc::clone(&self.asset_manager);
@@ -2199,6 +2194,12 @@ impl Session {
     ) -> SessionResult<(Vec<SnapshotId>, Arc<RepoInfo>)> {
         let (latest_repo_info, _) =
             self.asset_manager.fetch_repo_info().await.inject()?;
+        raise_if_feature_flag_disabled(
+            latest_repo_info.as_ref(),
+            REBASE_FLAG,
+            "rebase session",
+        )
+        .inject()?;
 
         let commits = match latest_repo_info.resolve_branch(branch_name) {
             Err(IcechunkFormatError {

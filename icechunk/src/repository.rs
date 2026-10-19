@@ -1356,13 +1356,13 @@ impl Repository {
     ) -> RepositoryResult<()> {
         let num_updates = self.config.num_updates_per_repo_info_file();
         let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str, _| {
-            raise_if_invalid_snapshot_id_v2(repo_info.as_ref(), snapshot_id)?;
             raise_if_feature_flag_disabled(
                 repo_info.as_ref(),
                 CREATE_TAG_FLAG,
                 "tag creation",
             )
             .inject()?;
+            raise_if_invalid_snapshot_id_v2(repo_info.as_ref(), snapshot_id)?;
             let new_repo = repo_info
                 .add_tag(
                     self.spec_version(),
