@@ -1,7 +1,6 @@
 import pickle
 from collections.abc import Callable, Mapping
 from datetime import datetime
-from typing import cast
 
 from icechunk._icechunk_python import (
     AzureCredentials,
@@ -517,7 +516,7 @@ def containers_credentials(
             | GcsCredentials.Refreshable
             | GcsCredentials.Anonymous,
         ):
-            res[name] = Credentials.Gcs(cast(GcsCredentials, cred))
+            res[name] = Credentials.Gcs(cred)
         elif isinstance(
             cred,
             AzureCredentials.FromEnv
@@ -525,7 +524,7 @@ def containers_credentials(
             | AzureCredentials.Static
             | AzureCredentials.Refreshable,
         ):
-            res[name] = Credentials.Azure(cast(AzureCredentials, cred))
+            res[name] = Credentials.Azure(cred)
         else:
             raise ValueError(f"Unknown credential type {type(cred)}")
     return res
