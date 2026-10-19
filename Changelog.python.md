@@ -2,6 +2,10 @@
 
 ## Python Icechunk Library [unreleased]
 
+### Features
+
+- Add feature flags for `commit`, `amend`, `rebase`, `create_new_nodes`, `delete_nodes`, `update_chunks`, `update_array_metadata`, `update_group_metadata`, `create_branch`, `delete_branch`, `reset_branch`, `garbage_collection`, `expiration`, `update_config`, `set_default_commit_metadata`, `update_repository_metadata` and `rewrite_manifests`. `Repository.set_feature_flag(name, False)` makes the library refuse that operation on the repository. The session-content flags are checked when a session commits or flushes. All flags default to enabled ([#2432](https://github.com/earth-mover/icechunk/pull/2432)).
+
 ### Fixes
 
 - `Repository.ops_log_async` and `Repository.async_ancestry` no longer block the asyncio event loop. They used to read the repo info file from storage before they returned the iterator. That read now happens on the first iteration, so storage errors are raised there instead of at the call. The same applies to `Repository.ops_log` and `Repository.ancestry`, which share the implementation.
@@ -18,10 +22,6 @@ chunk requests add `array=<path>; chunk=<coords>` and manifest requests add `arr
   ```
   aws-sdk-rust/1.3.14 os/linux lang/rust/1.98.0 weatherlib/0.9 icechunk/2.3.0 (workload=nightly-ingest; principal=u_123; array=g/temperature; chunk=0/1/2)
   ```
-
-### Features
-
-- Add feature flags for `commit`, `amend`, `rebase`, `create_new_nodes`, `delete_nodes`, `update_chunks`, `update_array_metadata`, `update_group_metadata`, `create_branch`, `delete_branch`, `reset_branch`, `garbage_collection`, `expiration`, `update_config`, `set_default_commit_metadata`, `update_repository_metadata` and `rewrite_manifests`. `Repository.set_feature_flag(name, False)` makes the library refuse that operation on the repository. The session-content flags are checked when a session commits or flushes. All flags default to enabled.
 
 ### Fixes
 
