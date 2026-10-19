@@ -20,8 +20,10 @@ from icechunk import (
     S3Options,
     S3StaticCredentials,
     Storage,
+    VirtualChunkContainer,
     azure_credentials,
     azure_refreshable_credentials,
+    containers_credentials,
     gcs_credentials,
     s3_refreshable_credentials,
     s3_storage,
@@ -268,6 +270,26 @@ def test_credentials_accept_gcs_and_azure_variants() -> None:
     azure = Credentials.Azure(azure_credentials(anonymous=True))
     assert isinstance(gcs, Credentials)
     assert isinstance(azure, Credentials)
+
+
+def test_parameters_accept_enum_base_types() -> None:
+    """mypy rejected a value typed as the enum base where a variant union is expected."""
+    s3: S3Credentials = S3Credentials.Anonymous()
+    gcs: GcsCredentials = gcs_credentials(anonymous=True)
+    azure: AzureCredentials = azure_credentials(anonymous=True)
+    store: ObjectStoreConfig = ObjectStoreConfig.InMemory()
+
+    assert isinstance(Credentials.S3(s3), Credentials)
+    assert isinstance(Storage.new_gcs("bucket", None, credentials=gcs), Storage)
+    assert isinstance(
+        Storage.new_azure_blob("account", "container", "prefix", credentials=azure),
+        Storage,
+    )
+    res = containers_credentials({"s3://a/": s3, "gs://b/": gcs, "az://c/": azure})
+    assert isinstance(res["s3://a/"], Credentials.S3)
+    assert isinstance(res["gs://b/"], Credentials.Gcs)
+    assert isinstance(res["az://c/"], Credentials.Azure)
+    assert VirtualChunkContainer("memory://", store).url_prefix == "memory://"
 
 
 @pytest.mark.parametrize(
