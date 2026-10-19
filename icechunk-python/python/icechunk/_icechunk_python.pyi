@@ -3,7 +3,6 @@ from collections.abc import (
     AsyncIterator,
     Callable,
     Iterable,
-    Mapping,
     Sequence,
 )
 from enum import Enum, IntEnum
@@ -266,13 +265,11 @@ class ObjectStoreConfig:
         def _repr_html_(self) -> str: ...
 
     class Gcs(ObjectStoreConfig):
-        def __new__(cls, opts: Mapping[str, str] | None, /) -> ObjectStoreConfig.Gcs: ...
+        def __new__(cls, opts: dict[str, str] | None, /) -> ObjectStoreConfig.Gcs: ...
         def _repr_html_(self) -> str: ...
 
     class Azure(ObjectStoreConfig):
-        def __new__(
-            cls, opts: Mapping[str, str] | None, /
-        ) -> ObjectStoreConfig.Azure: ...
+        def __new__(cls, opts: dict[str, str] | None, /) -> ObjectStoreConfig.Azure: ...
         def _repr_html_(self) -> str: ...
 
     class Tigris(ObjectStoreConfig):
@@ -282,8 +279,8 @@ class ObjectStoreConfig:
     class Http(ObjectStoreConfig):
         def __new__(
             cls,
-            opts: Mapping[str, str] | None,
-            headers: Mapping[str, str] | None,
+            opts: dict[str, str] | None,
+            headers: dict[str, str] | None,
             /,
         ) -> ObjectStoreConfig.Http: ...
         def _repr_html_(self) -> str: ...
