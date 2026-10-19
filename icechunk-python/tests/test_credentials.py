@@ -8,13 +8,21 @@ import pytest
 from icechunk import (
     AzureCredentials,
     AzureRefreshableCredential,
+    AzureStaticCredentials,
+    Credentials,
+    GcsCredentials,
+    GcsStaticCredentials,
     IcechunkError,
+    ManifestSplitDimCondition,
+    ObjectStoreConfig,
     Repository,
+    S3Credentials,
     S3Options,
     S3StaticCredentials,
     Storage,
     azure_credentials,
     azure_refreshable_credentials,
+    gcs_credentials,
     s3_refreshable_credentials,
     s3_storage,
 )
@@ -252,3 +260,32 @@ def test_azure_refreshable_credentials_accept_variant_factory(
         AzureCredentials.Refreshable(pickle.dumps(get_azure_bearer), get_azure_bearer()),
         AzureCredentials.Refreshable,
     )
+
+
+def test_credentials_accept_gcs_and_azure_variants() -> None:
+    """mypy rejected a GCS or Azure variant where the base type is expected."""
+    gcs = Credentials.Gcs(gcs_credentials(anonymous=True))
+    azure = Credentials.Azure(azure_credentials(anonymous=True))
+    assert isinstance(gcs, Credentials)
+    assert isinstance(azure, Credentials)
+
+
+@pytest.mark.parametrize(
+    "enum",
+    [
+        ObjectStoreConfig,
+        ManifestSplitDimCondition,
+        S3Credentials,
+        GcsStaticCredentials,
+        GcsCredentials,
+        AzureStaticCredentials,
+        AzureRefreshableCredential,
+        AzureCredentials,
+        Credentials,
+    ],
+)
+def test_enum_variants_subclass_their_enum(enum: type) -> None:
+    """The stub declares each variant as a subclass of its enum; pyo3 must agree."""
+    variants = [v for v in vars(enum).values() if isinstance(v, type)]
+    assert variants
+    assert all(issubclass(v, enum) for v in variants)
