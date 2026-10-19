@@ -3099,31 +3099,23 @@ type _AnyGcsCredential = (
 class AzureRefreshableCredential:
     """A refreshable credential for Azure storage with optional expiration."""
 
-    class AccessKey:
+    class AccessKey(AzureRefreshableCredential):
         """Refreshable access key credential."""
         def __new__(
             cls, key: str, *, expires_after: datetime.datetime | None = None
         ) -> AzureRefreshableCredential.AccessKey: ...
 
-    class SasToken:
+    class SasToken(AzureRefreshableCredential):
         """Refreshable SAS token credential."""
         def __new__(
             cls, token: str, *, expires_after: datetime.datetime | None = None
         ) -> AzureRefreshableCredential.SasToken: ...
 
-    class BearerToken:
+    class BearerToken(AzureRefreshableCredential):
         """Refreshable bearer token credential."""
         def __new__(
             cls, bearer: str, *, expires_after: datetime.datetime | None = None
         ) -> AzureRefreshableCredential.BearerToken: ...
-
-# The annotation of azure_refreshable_credentials needs this union: see
-# https://github.com/earth-mover/icechunk/issues/2137.
-type _AnyAzureRefreshableCredential = (  # noqa: PYI047
-    AzureRefreshableCredential.AccessKey
-    | AzureRefreshableCredential.SasToken
-    | AzureRefreshableCredential.BearerToken
-)
 
 class AzureStaticCredentials:
     """Credentials for an azure storage backend"""
