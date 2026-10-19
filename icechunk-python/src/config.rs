@@ -919,7 +919,7 @@ impl From<PyCompressionAlgorithm> for CompressionAlgorithm {
     }
 }
 
-#[pyclass(skip_from_py_object, name = "CompressionConfig", eq)]
+#[pyclass(name = "CompressionConfig", eq)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PyCompressionConfig {
     #[pyo3(get, set)]
@@ -1063,7 +1063,7 @@ impl PyAttribution {
     }
 }
 
-#[pyclass(skip_from_py_object, name = "CachingConfig", eq)]
+#[pyclass(name = "CachingConfig", eq)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PyCachingConfig {
     #[pyo3(get, set)]
@@ -1195,7 +1195,7 @@ impl From<CachingConfig> for PyCachingConfig {
     }
 }
 
-#[pyclass(skip_from_py_object, name = "StorageRetriesSettings", eq)]
+#[pyclass(name = "StorageRetriesSettings", eq)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PyStorageRetriesSettings {
     #[pyo3(get, set)]
@@ -1281,7 +1281,7 @@ impl PyStorageRetriesSettings {
     }
 }
 
-#[pyclass(skip_from_py_object, name = "StorageTimeoutSettings", eq)]
+#[pyclass(name = "StorageTimeoutSettings", eq)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PyStorageTimeoutSettings {
     #[pyo3(get, set)]
@@ -1407,7 +1407,7 @@ impl PyRepr for PyRepoUpdateRetryConfig {
         vec![(
             "default",
             py_option_nested_repr_or_default(&self.default, mode, || {
-                (*RepoUpdateRetryConfig::default().retries()).into()
+                RepoUpdateRetryConfig::default().retries().into()
             }),
         )]
     }
@@ -1432,7 +1432,7 @@ impl PyRepoUpdateRetryConfig {
     }
 }
 
-#[pyclass(skip_from_py_object, name = "StorageConcurrencySettings", eq)]
+#[pyclass(name = "StorageConcurrencySettings", eq)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PyStorageConcurrencySettings {
     #[pyo3(get, set)]
@@ -2844,7 +2844,7 @@ impl PyRepositoryConfig {
 }
 
 /// Metadata for an object in storage.
-#[pyclass(skip_from_py_object, name = "StorageObjectInfo", frozen, eq)]
+#[pyclass(name = "StorageObjectInfo", frozen, eq)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PyStorageObjectInfo {
     #[pyo3(get)]
@@ -2922,7 +2922,7 @@ impl PyRepr for PyStorage {
 /// >>> storage = LatencyStorage(ic.in_memory_storage(), write_latency_ms=15)
 /// >>> repo = ic.Repository.create(storage=storage, ...)
 /// >>> storage.write_latency_ms = 50  # adjust at runtime
-#[pyclass(skip_from_py_object, name = "LatencyStorage", extends = PyStorage)]
+#[pyclass(name = "LatencyStorage", extends = PyStorage)]
 #[derive(Clone, Debug)]
 pub(crate) struct PyLatencyStorage {
     latency: Arc<storage::latency::LatencyStorage>,

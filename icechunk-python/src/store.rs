@@ -116,7 +116,7 @@ impl VirtualChunkSpec {
 
 impl_pickle!(VirtualChunkSpec);
 
-#[pyclass(skip_from_py_object, name = "PyStore")]
+#[pyclass(name = "PyStore")]
 #[derive(Clone, Debug)]
 pub struct PyStore(pub Arc<Store>);
 

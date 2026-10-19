@@ -11,6 +11,7 @@ use futures::{
 use icechunk::{
     Repository, Storage,
     asset_manager::AssetManager,
+    config::RepoUpdateRetryConfig,
     format::{
         ChunkId, ChunkIndices, ManifestId, Move, NodeId, Path, SnapshotId,
         format_constants::SpecVersionBin,
@@ -479,8 +480,12 @@ pub(crate) async fn build(args: BuildArgs) -> Result<(), BoxError> {
     // ---- register the chain in repo info
     println!("Updating repo info");
     let tip = snap_ids.last().cloned().ok_or("no reachable snapshots")?;
-    let retries =
-        RetriesSettings { max_tries: Some(NonZeroU16::MIN), ..Default::default() };
+    let retries = RepoUpdateRetryConfig {
+        default: Some(RetriesSettings {
+            max_tries: Some(NonZeroU16::MIN),
+            ..Default::default()
+        }),
+    };
     am.update_repo_info(
         &retries,
         |repo_info: Arc<RepoInfo>, backup_path: &str, _version| {

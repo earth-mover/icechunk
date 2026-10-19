@@ -319,14 +319,26 @@ When using virtual chunk containers, the containers must be authorized by the re
 
     Passing `None` as a credential is deprecated and will be unsupported in a future release. For S3 it silently reads credentials from the process environment (or uses anonymous access if the container allows it), which can expose private credentials. Pass an explicit credential or no-auth sentinel instead.
 
+!!! important "Keys must match a container's `url_prefix` exactly"
+
+    Icechunk resolves a virtual chunk in two steps:
+
+    - First, it picks the container whose `url_prefix` is the longest prefix of the chunk url.
+    - Second, it looks up that container's `url_prefix`, as an exact string, in `authorize_virtual_chunk_access`.
+
+    Only the first step is prefix based. Authorizing a parent path does **not** authorize containers defined below it. If the repo defines a container at `s3://mybucket/data/2020/` and you authorize `s3://mybucket/data/`, chunks in that container fail with an "unauthorized virtual chunk container" error. Keys that match no container are ignored, so the mistake only surfaces when a chunk is fetched.
+
+    To authorize everything under a path, define the container at that path (e.g., a container at `s3://mybucket/data/`).
+
 ### Example
 
-Expanding on the example from the [Virtual Chunk Containers](#virtual_chunk_containers) section, we can configure the repo to use the credentials for the `my-s3-bucket` and `my-other-s3-bucket` containers.
+Expanding on the example from the [Virtual Chunk Containers](#virtual_chunk_containers) section, we can configure the repo to use the credentials for the `my-s3-bucket` and `my-other-s3-bucket` containers. The keys are the same strings as the containers' `url_prefix`, trailing slash included.
 
 ```python
 credentials = ic.credentials.containers_credentials(
-    { "s3://my_s3_bucket": ic.credentials.s3_credentials(bucket="my-s3-bucket", region="us-east-1"),
-      "s3://my_other_s3_bucket": ic.credentials.s3_credentials(bucket="my-other-s3-bucket", region="us-west-2"),
+    {
+        "s3://my-s3-bucket/": ic.credentials.s3_credentials(from_env=True),
+        "s3://my-other-s3-bucket/": ic.credentials.s3_credentials(from_env=True),
     }
 )
 
