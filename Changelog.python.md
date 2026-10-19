@@ -5,6 +5,10 @@
 ### Fixes
 
 - `Repository.ops_log_async` and `Repository.async_ancestry` no longer block the asyncio event loop. They used to read the repo info file from storage before they returned the iterator. That read now happens on the first iteration, so storage errors are raised there instead of at the call. The same applies to `Repository.ops_log` and `Repository.ancestry`, which share the implementation.
+- The type stubs now declare each enum variant as a subclass of its enum, as the runtime does. This applies to `S3Credentials`, `GcsCredentials`, `GcsStaticCredentials`, `AzureCredentials`, `AzureStaticCredentials`, `AzureRefreshableCredential`, `Credentials`, `ObjectStoreConfig` and `ManifestSplitDimCondition`. Type checkers now accept a variant where a parameter takes the enum. An example is a factory that returns `AzureRefreshableCredential.BearerToken` ([#2137](https://github.com/earth-mover/icechunk/issues/2137)). Parameters that took a union of the variants now take the enum, for example `Credentials.Gcs`, `Storage.new_s3` and `VirtualChunkContainer`.
+- The type stubs for the `ObjectStoreConfig` variant constructors now match the runtime. The arguments are required and positional-only, and the option arguments are `dict[str, str] | None`.
+- `AnyObjectStoreConfig` now includes `ObjectStoreConfig.Http`.
+- `repr` of `ObjectStoreConfig.Gcs`, `ObjectStoreConfig.Azure` and `ObjectStoreConfig.Http` now gives valid Python. It used to contain the Rust syntax `Some(...)`, so `eval(repr(x))` failed.
 
 ## Python Icechunk Library 2.3.0
 
