@@ -20,8 +20,8 @@ third-party packages register a `URLPipelineAdapter` under the
 so that
 
 ```python
-xr.open_zarr("s3://bucket/repo|icechunk://tag.v1/path/to/group")
-zarr.open_group("file:///data/repo|icechunk:", mode="r")
+zarr.open_url("s3://bucket/repo|icechunk://tag.v1/path/to/group")
+xr.open_zarr(URLPipeline.from_url("file:///data/repo|icechunk:"))
 ```
 
 open a read-only session on the selected ref and path. The same syntax is

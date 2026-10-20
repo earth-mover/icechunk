@@ -26,13 +26,9 @@ from importlib.metadata import entry_points
 from typing import Any, Protocol
 
 try:
-    from zarr.abc.url_pipeline import (
-        AdapterResolution,
-        PipelineContext,
-        PipelineSegment,
-        URLPipelineAdapter,
-    )
+    from zarr.abc.url_pipeline import URLPipelineAdapter
     from zarr.errors import URLPipelineError
+    from zarr.storage import PipelineContext, PipelineSegment, StorePath
 except ImportError as exc:  # pragma: no cover - exercised only with older zarr
     raise ImportError(
         "icechunk.zarr_url_adapter requires a zarr version with URL pipeline "
@@ -413,7 +409,7 @@ class IcechunkURLAdapter(URLPipelineAdapter):
     @classmethod
     async def open_pipeline_segment(
         cls, segment: PipelineSegment, context: PipelineContext
-    ) -> AdapterResolution:
+    ) -> StorePath:
         if segment.query is not None:
             raise URLPipelineError(
                 f"icechunk: segments do not accept a query string: {segment.raw!r}"
@@ -457,7 +453,7 @@ class IcechunkURLAdapter(URLPipelineAdapter):
                 root, segment, opts, virtual_credentials
             )
 
-        return AdapterResolution(store=session.store, path=path)
+        return StorePath(session.store, path)
 
     @staticmethod
     async def _open_with_opener(

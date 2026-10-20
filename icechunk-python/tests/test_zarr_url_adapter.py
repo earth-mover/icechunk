@@ -14,6 +14,7 @@ from collections.abc import Iterator
 from contextlib import closing, contextmanager
 from functools import partial
 from http.server import HTTPServer, SimpleHTTPRequestHandler
+from importlib.metadata import entry_points
 from pathlib import Path
 from typing import Any, cast
 
@@ -29,15 +30,9 @@ import xarray as xr
 from icechunk import zarr_url_adapter
 from icechunk.credentials import LocalFileSystemAccess
 from icechunk.zarr_url_adapter import IcechunkURLAdapter, register_url_repository_opener
-from zarr.abc.url_pipeline import (
-    AdapterResolution,
-    PipelineContext,
-    PipelineSegment,
-)
 from zarr.core.common import AccessModeLiteral
 from zarr.errors import URLPipelineError
-from zarr.registry import get_url_adapter, list_url_adapter_schemes
-from zarr.storage import URLPipeline
+from zarr.storage import PipelineContext, PipelineSegment, StorePath, URLPipeline
 
 # ---------------------------------------------------------------------------
 # fixtures
@@ -89,11 +84,33 @@ def memory_repo() -> RepoInfo:
     return info
 
 
-async def _resolve(url: str, **kwargs: Any) -> AdapterResolution:
-    return await URLPipeline.from_url(url).resolve(**kwargs)
+def _p(url: str) -> URLPipeline:
+    """A pipeline string, as zarr's explicit pipeline object."""
+    return URLPipeline.from_url(url)
 
 
-def _session_of(resolution: AdapterResolution) -> ic.Session:
+async def _resolve(
+    url: str,
+    *,
+    mode: AccessModeLiteral | None = None,
+    storage_options: dict[str, Any] | None = None,
+) -> StorePath:
+    """Resolve a `...|icechunk:...[|zarr3:path]` pipeline with the adapter itself."""
+    *preceding, last = _p(url).segments
+    node_path = ""
+    if last.scheme in ("zarr2", "zarr3"):
+        # zarr reads format segments itself; their body is a path to a node
+        node_path = last.body.strip("/")
+        *preceding, last = preceding
+    assert last.scheme == "icechunk"
+    context = PipelineContext(
+        preceding=tuple(preceding), mode=mode, storage_options=storage_options
+    )
+    resolved = await IcechunkURLAdapter.open_pipeline_segment(last, context)
+    return StorePath(resolved.store, "/".join(p for p in (resolved.path, node_path) if p))
+
+
+def _session_of(resolution: StorePath) -> ic.Session:
     store = resolution.store
     assert isinstance(store, ic.IcechunkStore)
     return store.session
@@ -104,10 +121,10 @@ def _session_of(resolution: AdapterResolution) -> ic.Session:
 
 
 def test_entry_point_registered() -> None:
-    assert "icechunk" in list_url_adapter_schemes()
-    assert get_url_adapter("icechunk") is IcechunkURLAdapter
+    eps = entry_points(group="zarr.url_adapters")
+    assert [ep.load() for ep in eps if ep.name == "icechunk"] == [IcechunkURLAdapter]
     # the spec requires vendor prefixes for nonstandard names; no alias
-    assert "ic" not in list_url_adapter_schemes()
+    assert "ic" not in eps.names
 
 
 # ---------------------------------------------------------------------------
@@ -195,20 +212,22 @@ async def test_spec_example_chunk_key(local_repo: RepoInfo) -> None:
 def test_open_group_and_array(repo_kind: str, request: pytest.FixtureRequest) -> None:
     info: RepoInfo = request.getfixturevalue(f"{repo_kind}_repo")
 
-    root = zarr.open_group(f"{info.root}|icechunk:", mode="r")
+    root = zarr.open_group(_p(f"{info.root}|icechunk:"), mode="r")
     assert root.attrs["level"] == "root"
     assert "extra" in root  # main tip
 
-    node = zarr.open_group(f"{info.root}|icechunk://tag.v5/path/to/node", mode="r")
+    node = zarr.open_group(_p(f"{info.root}|icechunk://tag.v5/path/to/node"), mode="r")
     assert node.attrs["level"] == "node"
 
-    arr = zarr.open_array(f"{info.root}|icechunk://branch.other/path/to/array", mode="r")
+    arr = zarr.open_array(
+        _p(f"{info.root}|icechunk://branch.other/path/to/array"), mode="r"
+    )
     np.testing.assert_array_equal(arr[:], np.arange(4))
 
-    arr = zarr.open_array(f"{info.root}|icechunk://{info.first}/|zarr3:path/to/array")
+    arr = zarr.open_array(_p(f"{info.root}|icechunk://{info.first}/|zarr3:path/to/array"))
     np.testing.assert_array_equal(arr[:], np.arange(4))
 
-    old = zarr.open_group(f"{info.root}|icechunk://{info.first}", mode="r")
+    old = zarr.open_group(_p(f"{info.root}|icechunk://{info.first}"), mode="r")
     assert "extra" not in old
 
 
@@ -229,7 +248,7 @@ def test_xarray_open_zarr(tmp_path: Path) -> None:
         f"file://{path}|icechunk:nested/group|zarr3:",
         f"file://{path}|icechunk://{snap}/|zarr3:nested/group",
     ):
-        actual = xr.open_zarr(url, consolidated=False)
+        actual = xr.open_zarr(_p(url), consolidated=False)
         xr.testing.assert_identical(actual.load(), ds)
 
 
@@ -244,19 +263,19 @@ async def test_write_modes_rejected(
     with pytest.raises(URLPipelineError, match="writable_session"):
         await _resolve(local_repo.root + "|icechunk:", mode=mode)
     with pytest.raises(URLPipelineError, match="writable_session"):
-        zarr.open_group(local_repo.root + "|icechunk:", mode=mode)
+        zarr.open_group(_p(local_repo.root + "|icechunk:"), mode=mode)
 
 
 @pytest.mark.parametrize("ref", ["//tag.v5", "//branch.main", "//{snap}"])
 def test_read_only_opens(local_repo: RepoInfo, ref: str) -> None:
     url = f"{local_repo.root}|icechunk:{ref.format(snap=local_repo.first)}/path/to/array"
-    arr = zarr.open_array(url, mode="r")
+    arr = zarr.open_array(_p(url), mode="r")
     assert arr.store.read_only
     np.testing.assert_array_equal(arr[:], np.arange(4))
     with pytest.raises(ic.IcechunkError, match=r"(?i)read.only"):
         arr[:] = 0
 
-    group = zarr.open_group(f"{local_repo.root}|icechunk:", mode="r")
+    group = zarr.open_group(_p(f"{local_repo.root}|icechunk:"), mode="r")
     assert group.store.read_only
     assert group.attrs["level"] == "root"
     # zarr.open_url opens read-only by default
@@ -268,7 +287,7 @@ def test_read_only_opens(local_repo: RepoInfo, ref: str) -> None:
 def test_default_mode_a_points_to_mode_r(local_repo: RepoInfo) -> None:
     # "a" is the default of zarr.open/open_group; the error says what to do
     with pytest.raises(URLPipelineError, match=r"mode='r' or use zarr\.open_url"):
-        zarr.open(f"{local_repo.root}|icechunk:path/to/node")
+        zarr.open(_p(f"{local_repo.root}|icechunk:path/to/node"))
 
 
 # ---------------------------------------------------------------------------
@@ -296,12 +315,9 @@ def test_default_mode_a_points_to_mode_r(local_repo: RepoInfo) -> None:
 async def test_invalid_pipelines(url: str, match: str) -> None:
     with pytest.raises(URLPipelineError, match=match):
         await _resolve(url, mode="r")
-    # the same error through the string route, when zarr reads the string as a
-    # pipeline at all: an invalid pipeline string (a bare root, a misplaced
-    # format segment, an unregistered adapter) keeps its pre-pipeline meaning
-    if zarr.storage.is_url_pipeline(url):
-        with pytest.raises(URLPipelineError, match=match):
-            zarr.open_group(url, mode="r")
+    # the same error through zarr.open_url
+    with pytest.raises(URLPipelineError, match=match):
+        zarr.open_url(url)
 
 
 async def test_icechunk_as_root_rejected() -> None:
@@ -324,7 +340,7 @@ def test_trailing_zarr2_finds_nothing(local_repo: RepoInfo) -> None:
     # a trailing zarr2: selects format 2, and a (v3-only) Icechunk repository
     # has no v2 metadata
     with pytest.raises(zarr.errors.GroupNotFoundError):
-        zarr.open_group(local_repo.root + "|icechunk:|zarr2:", mode="r")
+        zarr.open_group(_p(local_repo.root + "|icechunk:|zarr2:"), mode="r")
 
 
 # ---------------------------------------------------------------------------
@@ -501,7 +517,7 @@ def test_s3_credentials_plumbing(spelling: str) -> None:
     else:
         url = f"s3+http://localhost:4200/testbucket/{prefix}|icechunk://tag.v5/path/to/array"
         options = {"key": "test123", "secret": "test123"}
-    arr = zarr.open_array(url, mode="r", storage_options=options)
+    arr = zarr.open_array(_p(url), mode="r", storage_options=options)
     np.testing.assert_array_equal(arr[:], np.arange(4))
     assert cast(ic.IcechunkStore, arr.store).session.snapshot_id == info.first
 
@@ -515,7 +531,7 @@ def test_s3_credentials_plumbing(spelling: str) -> None:
     else:
         bad.update(key="nope", secret="nope")
     with pytest.raises(ic.IcechunkError):
-        zarr.open_array(url, mode="r", storage_options=bad)
+        zarr.open_array(_p(url), mode="r", storage_options=bad)
 
 
 # ---------------------------------------------------------------------------
@@ -556,11 +572,11 @@ def test_config_and_virtual_chunk_credentials(tmp_path: Path) -> None:
 
     url = f"file://{path}|icechunk:v"
     # not authorized: virtual chunks are blocked
-    unauthorized = zarr.open_array(url, mode="r")
+    unauthorized = zarr.open_array(_p(url), mode="r")
     with pytest.raises(ic.IcechunkError):
         unauthorized[:]
     authorized = zarr.open_array(
-        url,
+        _p(url),
         mode="r",
         storage_options={
             "icechunk_virtual_chunk_credentials": {
@@ -622,9 +638,9 @@ def _serve(directory: Path, delay: float) -> Iterator[str]:
 def test_http_root(local_repo: RepoInfo, tmp_path: Path) -> None:
     repo_dir = Path(local_repo.root.removeprefix("file://"))
     with _serve(repo_dir, delay=0) as base:
-        arr = zarr.open_array(f"{base}|icechunk://tag.v5/path/to/array", mode="r")
+        arr = zarr.open_array(_p(f"{base}|icechunk://tag.v5/path/to/array"), mode="r")
         np.testing.assert_array_equal(arr[:], np.arange(4))
-        assert zarr.open_group(f"{base}/|icechunk:", mode="r").store.read_only
+        assert zarr.open_group(_p(f"{base}/|icechunk:"), mode="r").store.read_only
 
 
 async def test_adapter_does_not_block_event_loop(local_repo: RepoInfo) -> None:
@@ -693,7 +709,7 @@ async def test_opener_dispatch(local_repo: RepoInfo) -> None:
     assert options == {"test_token": "abc", "icechunk_config": options["icechunk_config"]}
 
     # through zarr's sync API
-    group = zarr.open_group("test.vendor://org/repo|icechunk:path/to/node", mode="r")
+    group = zarr.open_group(_p("test.vendor://org/repo|icechunk:path/to/node"), mode="r")
     assert group.attrs["level"] == "node"
     assert calls[-1][1] is True
     arr = zarr.open_url(

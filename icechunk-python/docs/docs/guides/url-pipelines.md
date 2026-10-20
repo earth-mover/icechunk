@@ -17,16 +17,18 @@ inside the repository, separated by `|`:
 s3://bucket/repo|icechunk://tag.v1/path/to/group|zarr3:
 ```
 
-With Icechunk installed, zarr and Xarray accept these URLs directly:
+With Icechunk installed, `zarr.open_url` opens these URLs, and a parsed
+`zarr.storage.URLPipeline` works anywhere zarr or Xarray accept a store:
 
 ```python
 import xarray as xr
 import zarr
+from zarr.storage import URLPipeline
 
-ds = xr.open_zarr("s3://bucket/repo|icechunk://tag.v1/path/to/group")
-group = zarr.open_group("file:///data/repo|icechunk:", mode="r")
-array = zarr.open_array("gs://bucket/repo|icechunk://branch.dev/temperature", mode="r")
 node = zarr.open_url("s3://bucket/repo|icechunk://tag.v1/path/to/group")
+array = zarr.open_url("gs://bucket/repo|icechunk://branch.dev/temperature")
+ds = xr.open_zarr(URLPipeline.from_url("s3://bucket/repo|icechunk://tag.v1/path/to/group"))
+group = zarr.open_group(URLPipeline.from_url("file:///data/repo|icechunk:"), mode="r")
 ```
 
 The same URLs work in other tools that implement the specification, such as
@@ -62,7 +64,7 @@ import icechunk
 
 repo = icechunk.Repository.create(icechunk.storage_from_url("memory:scratch"))
 # ... write and commit ...
-zarr.open_group("memory:scratch|icechunk:", mode="r")
+zarr.open_url("memory:scratch|icechunk:")
 ```
 
 ## Credentials and configuration
@@ -71,7 +73,7 @@ Pass credentials and configuration through `storage_options`:
 
 ```python
 xr.open_zarr(
-    "s3://bucket/repo|icechunk://tag.v1/",
+    URLPipeline.from_url("s3://bucket/repo|icechunk://tag.v1/"),
     storage_options={
         "icechunk_credentials": icechunk.s3_static_credentials(
             access_key_id="...", secret_access_key="..."
@@ -101,10 +103,10 @@ are rejected.
 ## Read-only access
 
 URLs always open read-only sessions, because zarr has no step at which to
-commit. Pass `mode="r"` to `zarr.open`, `zarr.open_group` and
-`zarr.open_array`, or use `zarr.open_url`, which is read-only by default.
-Every other mode raises an error, including `"a"`, the default of
-`zarr.open` and `zarr.open_group`. Xarray opens stores read-only, so
+commit. `zarr.open_url` is read-only by default; when passing a
+`URLPipeline` to `zarr.open`, `zarr.open_group` or `zarr.open_array`, pass
+`mode="r"`. Every other mode raises an error, including `"a"`, the default
+of `zarr.open` and `zarr.open_group`. Xarray opens stores read-only, so
 `xr.open_zarr` needs no extra argument. To write, open the repository and
 use a writable session:
 
