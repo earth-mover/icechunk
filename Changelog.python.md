@@ -2,6 +2,10 @@
 
 ## Python Icechunk Library [unreleased]
 
+### Features
+
+- `set_logs_destination("python")` sends Icechunk logs to the Python `logging` module instead of the console. Each event goes to the logger for its Rust module, for example `icechunk.repository.builder`. `set_logs_filter` and `ICECHUNK_LOG` apply to the active destination. To set the destination at import, use `ICECHUNK_LOG_DESTINATION`. `ICECHUNK_PYTHON_LOG_QUEUE_SIZE` sets how many records can wait for slow handlers.
+
 ### Fixes
 
 - `Repository.ops_log_async` and `Repository.async_ancestry` no longer block the asyncio event loop. They used to read the repo info file from storage before they returned the iterator. That read now happens on the first iteration, so storage errors are raised there instead of at the call. The same applies to `Repository.ops_log` and `Repository.ancestry`, which share the implementation.
