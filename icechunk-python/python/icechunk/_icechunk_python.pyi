@@ -3,7 +3,6 @@ from collections.abc import (
     AsyncIterator,
     Callable,
     Iterable,
-    Mapping,
     Sequence,
 )
 from enum import Enum, IntEnum
@@ -249,58 +248,44 @@ class S3Options:
         """
 
 class ObjectStoreConfig:
-    class InMemory:
+    class InMemory(ObjectStoreConfig):
         def __new__(cls) -> ObjectStoreConfig.InMemory: ...
         def _repr_html_(self) -> str: ...
 
-    class LocalFileSystem:
-        def __new__(cls, path: str) -> ObjectStoreConfig.LocalFileSystem: ...
+    class LocalFileSystem(ObjectStoreConfig):
+        def __new__(cls, path: str, /) -> ObjectStoreConfig.LocalFileSystem: ...
         def _repr_html_(self) -> str: ...
 
-    class S3Compatible:
-        def __new__(cls, options: S3Options) -> ObjectStoreConfig.S3Compatible: ...
+    class S3Compatible(ObjectStoreConfig):
+        def __new__(cls, options: S3Options, /) -> ObjectStoreConfig.S3Compatible: ...
         def _repr_html_(self) -> str: ...
 
-    class S3:
-        def __new__(cls, options: S3Options) -> ObjectStoreConfig.S3: ...
+    class S3(ObjectStoreConfig):
+        def __new__(cls, options: S3Options, /) -> ObjectStoreConfig.S3: ...
         def _repr_html_(self) -> str: ...
 
-    class Gcs:
-        def __new__(
-            cls, opts: Mapping[str, str] | None = None
-        ) -> ObjectStoreConfig.Gcs: ...
+    class Gcs(ObjectStoreConfig):
+        def __new__(cls, opts: dict[str, str] | None, /) -> ObjectStoreConfig.Gcs: ...
         def _repr_html_(self) -> str: ...
 
-    class Azure:
-        def __new__(
-            cls, opts: Mapping[str, str] | None = None
-        ) -> ObjectStoreConfig.Azure: ...
+    class Azure(ObjectStoreConfig):
+        def __new__(cls, opts: dict[str, str] | None, /) -> ObjectStoreConfig.Azure: ...
         def _repr_html_(self) -> str: ...
 
-    class Tigris:
-        def __new__(cls, opts: S3Options) -> ObjectStoreConfig.Tigris: ...
+    class Tigris(ObjectStoreConfig):
+        def __new__(cls, opts: S3Options, /) -> ObjectStoreConfig.Tigris: ...
         def _repr_html_(self) -> str: ...
 
-    class Http:
+    class Http(ObjectStoreConfig):
         def __new__(
             cls,
-            opts: Mapping[str, str] | None = None,
-            headers: Mapping[str, str] | None = None,
+            opts: dict[str, str] | None,
+            headers: dict[str, str] | None,
+            /,
         ) -> ObjectStoreConfig.Http: ...
         def _repr_html_(self) -> str: ...
 
     def _repr_html_(self) -> str: ...
-
-type _AnyObjectStoreConfig = (
-    ObjectStoreConfig.InMemory
-    | ObjectStoreConfig.LocalFileSystem
-    | ObjectStoreConfig.S3
-    | ObjectStoreConfig.S3Compatible
-    | ObjectStoreConfig.Gcs
-    | ObjectStoreConfig.Azure
-    | ObjectStoreConfig.Tigris
-    | ObjectStoreConfig.Http
-)
 
 class VirtualChunkContainer:
     """A virtual chunk container is a configuration that allows Icechunk to read virtual references from a storage backend.
@@ -323,7 +308,7 @@ class VirtualChunkContainer:
     def __new__(
         cls,
         url_prefix: str,
-        store: _AnyObjectStoreConfig,
+        store: ObjectStoreConfig,
         name: str | None = None,
     ) -> Self:
         """
@@ -859,15 +844,15 @@ class ManifestSplitCondition:
 
 class ManifestSplitDimCondition:
     """Conditions for specifying dimensions along which to shard manifests."""
-    class Axis:
+    class Axis(ManifestSplitDimCondition):
         """Split along specified integer axis."""
         def __new__(cls, axis: int) -> ManifestSplitDimCondition.Axis: ...
 
-    class DimensionName:
+    class DimensionName(ManifestSplitDimCondition):
         """Split along specified named dimension."""
         def __new__(cls, regex: str) -> ManifestSplitDimCondition.DimensionName: ...
 
-    class Any:
+    class Any(ManifestSplitDimCondition):
         """Split along any other unspecified dimension."""
         def __new__(cls) -> ManifestSplitDimCondition.Any: ...
 
@@ -2939,15 +2924,15 @@ class S3StaticCredentials:
 
 class S3Credentials:
     """Credentials for an S3 storage backend"""
-    class FromEnv:
+    class FromEnv(S3Credentials):
         """Uses credentials from environment variables"""
         def __new__(cls) -> S3Credentials.FromEnv: ...
 
-    class Anonymous:
+    class Anonymous(S3Credentials):
         """Does not sign requests, useful for public buckets"""
         def __new__(cls) -> S3Credentials.Anonymous: ...
 
-    class Static:
+    class Static(S3Credentials):
         """Uses s3 credentials without expiration"""
         def __new__(cls, credentials: S3StaticCredentials) -> S3Credentials.Static:
             """Create static S3 credentials.
@@ -2958,7 +2943,7 @@ class S3Credentials:
                 The credentials to use for authentication.
             """
 
-    class Refreshable:
+    class Refreshable(S3Credentials):
         """Allows for an outside authority to pass in a function that can be used to provide credentials.
 
         This is useful for credentials that have an expiration time, or are otherwise not known ahead of time.
@@ -2976,13 +2961,6 @@ class S3Credentials:
                 The initial credentials. They will be returned the first time credentials
                 are requested and then deleted.
             """
-
-type _AnyS3Credential = (
-    S3Credentials.Static
-    | S3Credentials.Anonymous
-    | S3Credentials.FromEnv
-    | S3Credentials.Refreshable
-)
 
 class GcsBearerCredential:
     """Credentials for a google cloud storage backend
@@ -3010,7 +2988,7 @@ class GcsBearerCredential:
 
 class GcsStaticCredentials:
     """Credentials for a google cloud storage backend"""
-    class ServiceAccount:
+    class ServiceAccount(GcsStaticCredentials):
         """Credentials for a google cloud storage backend using a service account json file"""
         def __new__(cls, path: str) -> GcsStaticCredentials.ServiceAccount:
             """Create service account credentials.
@@ -3021,7 +2999,7 @@ class GcsStaticCredentials:
                 The path to the service account json file.
             """
 
-    class ServiceAccountKey:
+    class ServiceAccountKey(GcsStaticCredentials):
         """Credentials for a google cloud storage backend using a serialized service account key"""
         def __new__(cls, key: str) -> GcsStaticCredentials.ServiceAccountKey:
             """Create service account key credentials.
@@ -3032,7 +3010,7 @@ class GcsStaticCredentials:
                 The serialized service account key.
             """
 
-    class ApplicationCredentials:
+    class ApplicationCredentials(GcsStaticCredentials):
         """Credentials for a google cloud storage backend using application default credentials"""
         def __new__(cls, path: str) -> GcsStaticCredentials.ApplicationCredentials:
             """Create application default credentials.
@@ -3043,7 +3021,7 @@ class GcsStaticCredentials:
                 The path to the application default credentials (ADC) file.
             """
 
-    class BearerToken:
+    class BearerToken(GcsStaticCredentials):
         """Credentials for a google cloud storage backend using a bearer token"""
         def __new__(cls, token: str) -> GcsStaticCredentials.BearerToken:
             """Create bearer token credentials.
@@ -3054,33 +3032,24 @@ class GcsStaticCredentials:
                 The bearer token to use for authentication.
             """
 
-type _AnyGcsStaticCredential = (
-    GcsStaticCredentials.ServiceAccount
-    | GcsStaticCredentials.ServiceAccountKey
-    | GcsStaticCredentials.ApplicationCredentials
-    | GcsStaticCredentials.BearerToken
-)
-
 class GcsCredentials:
     """Credentials for a google cloud storage backend
 
     This can be used to authenticate with a google cloud storage backend.
     """
-    class Anonymous:
+    class Anonymous(GcsCredentials):
         """Uses anonymous credentials"""
         def __new__(cls) -> GcsCredentials.Anonymous: ...
 
-    class FromEnv:
+    class FromEnv(GcsCredentials):
         """Uses credentials from environment variables"""
         def __new__(cls) -> GcsCredentials.FromEnv: ...
 
-    class Static:
+    class Static(GcsCredentials):
         """Uses gcs credentials without expiration"""
-        def __new__(
-            cls, credentials: _AnyGcsStaticCredential
-        ) -> GcsCredentials.Static: ...
+        def __new__(cls, credentials: GcsStaticCredentials) -> GcsCredentials.Static: ...
 
-    class Refreshable:
+    class Refreshable(GcsCredentials):
         """Allows for an outside authority to pass in a function that can be used to provide credentials.
 
         This is useful for credentials that have an expiration time, or are otherwise not known ahead of time.
@@ -3088,13 +3057,6 @@ class GcsCredentials:
         def __new__(
             cls, pickled_function: bytes, current: GcsBearerCredential | None = None
         ) -> GcsCredentials.Refreshable: ...
-
-type _AnyGcsCredential = (
-    GcsCredentials.Anonymous
-    | GcsCredentials.FromEnv
-    | GcsCredentials.Static
-    | GcsCredentials.Refreshable
-)
 
 class AzureRefreshableCredential:
     """A refreshable credential for Azure storage with optional expiration."""
@@ -3119,7 +3081,7 @@ class AzureRefreshableCredential:
 
 class AzureStaticCredentials:
     """Credentials for an azure storage backend"""
-    class AccessKey:
+    class AccessKey(AzureStaticCredentials):
         """Credentials for an azure storage backend using an access key"""
         def __new__(cls, key: str) -> AzureStaticCredentials.AccessKey:
             """Create access key credentials.
@@ -3130,7 +3092,7 @@ class AzureStaticCredentials:
                 The access key to use for authentication.
             """
 
-    class SasToken:
+    class SasToken(AzureStaticCredentials):
         """Credentials for an azure storage backend using a shared access signature token"""
         def __new__(cls, token: str) -> AzureStaticCredentials.SasToken:
             """Create SAS token credentials.
@@ -3141,7 +3103,7 @@ class AzureStaticCredentials:
                 The shared access signature token to use for authentication.
             """
 
-    class BearerToken:
+    class BearerToken(AzureStaticCredentials):
         """Credentials for an azure storage backend using a bearer token"""
         def __new__(cls, token: str) -> AzureStaticCredentials.BearerToken:
             """Create bearer token credentials.
@@ -3152,32 +3114,26 @@ class AzureStaticCredentials:
                 The bearer token to use for authentication.
             """
 
-type _AnyAzureStaticCredential = (
-    AzureStaticCredentials.AccessKey
-    | AzureStaticCredentials.SasToken
-    | AzureStaticCredentials.BearerToken
-)
-
 class AzureCredentials:
     """Credentials for an azure storage backend
 
     This can be used to authenticate with an azure storage backend.
     """
-    class Anonymous:
+    class Anonymous(AzureCredentials):
         """Uses anonymous credentials"""
         def __new__(cls) -> AzureCredentials.Anonymous: ...
 
-    class FromEnv:
+    class FromEnv(AzureCredentials):
         """Uses credentials from environment variables"""
         def __new__(cls) -> AzureCredentials.FromEnv: ...
 
-    class Static:
+    class Static(AzureCredentials):
         """Uses azure credentials without expiration"""
         def __new__(
-            cls, credentials: _AnyAzureStaticCredential
+            cls, credentials: AzureStaticCredentials
         ) -> AzureCredentials.Static: ...
 
-    class Refreshable:
+    class Refreshable(AzureCredentials):
         """Allows for an outside authority to pass in a function that can be used to provide credentials.
 
         This is useful for credentials that have an expiration time, or are otherwise not known ahead of time.
@@ -3188,31 +3144,24 @@ class AzureCredentials:
             current: AzureRefreshableCredential | None = None,
         ) -> AzureCredentials.Refreshable: ...
 
-type _AnyAzureCredential = (
-    AzureCredentials.Anonymous
-    | AzureCredentials.FromEnv
-    | AzureCredentials.Static
-    | AzureCredentials.Refreshable
-)
-
 class Credentials:
-    class S3:
-        def __new__(cls, credentials: _AnyS3Credential) -> Credentials.S3: ...
+    class S3(Credentials):
+        def __new__(cls, credentials: S3Credentials) -> Credentials.S3: ...
 
-    class Gcs:
+    class Gcs(Credentials):
         def __new__(cls, credentials: GcsCredentials) -> Credentials.Gcs: ...
 
-    class Azure:
+    class Azure(Credentials):
         def __new__(cls, credentials: AzureCredentials) -> Credentials.Azure: ...
 
-    class LocalFileSystemAccess:
+    class LocalFileSystemAccess(Credentials):
         """Sentinel authorizing access to a local-filesystem (``file://``) virtual
         chunk container, which requires no credentials. Surfaced as
         ``LocalFileSystemAccess``."""
 
         def __new__(cls) -> Credentials.LocalFileSystemAccess: ...
 
-    class HttpAccess:
+    class HttpAccess(Credentials):
         """Sentinel authorizing access to an HTTP(S) virtual chunk container, which
         requires no credentials."""
 
@@ -3310,7 +3259,7 @@ class Storage:
         config: S3Options,
         bucket: str,
         prefix: str | None,
-        credentials: _AnyS3Credential | None = None,
+        credentials: S3Credentials | None = None,
         legacy_rooted_keys: bool | None = None,
         *,
         read_headers: dict[str, str] | None = None,
@@ -3323,7 +3272,7 @@ class Storage:
         config: S3Options,
         bucket: str,
         prefix: str | None,
-        credentials: _AnyS3Credential | None = None,
+        credentials: S3Credentials | None = None,
         *,
         read_headers: dict[str, str] | None = None,
         write_headers: dict[str, str] | None = None,
@@ -3336,7 +3285,7 @@ class Storage:
         bucket: str,
         prefix: str | None,
         use_weak_consistency: bool,
-        credentials: _AnyS3Credential | None = None,
+        credentials: S3Credentials | None = None,
         legacy_rooted_keys: bool | None = None,
         *,
         read_headers: dict[str, str] | None = None,
@@ -3352,7 +3301,7 @@ class Storage:
         cls,
         bucket: str,
         prefix: str | None,
-        credentials: _AnyGcsCredential | None = None,
+        credentials: GcsCredentials | None = None,
         *,
         config: dict[str, str] | None = None,
         read_headers: dict[str, str] | None = None,
@@ -3366,7 +3315,7 @@ class Storage:
         bucket: str | None = None,
         prefix: str | None = None,
         account_id: str | None = None,
-        credentials: _AnyS3Credential | None = None,
+        credentials: S3Credentials | None = None,
         legacy_rooted_keys: bool | None = None,
         *,
         read_headers: dict[str, str] | None = None,
@@ -3380,7 +3329,7 @@ class Storage:
         bucket: str,
         prefix: str | None,
         namespace: str,
-        credentials: _AnyS3Credential | None = None,
+        credentials: S3Credentials | None = None,
         legacy_rooted_keys: bool | None = None,
         *,
         read_headers: dict[str, str] | None = None,
@@ -3393,7 +3342,7 @@ class Storage:
         account: str,
         container: str,
         prefix: str,
-        credentials: _AnyAzureCredential | None = None,
+        credentials: AzureCredentials | None = None,
         *,
         config: dict[str, str] | None = None,
     ) -> Storage: ...

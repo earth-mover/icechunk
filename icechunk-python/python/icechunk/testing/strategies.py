@@ -58,10 +58,14 @@ def splitting_configs(
             )
         )
         for size, axis, dimname in dimsize_axis_names:
+            key: (
+                ic.ManifestSplitDimCondition.Axis
+                | ic.ManifestSplitDimCondition.DimensionName
+            )
             if dimname is None or draw(st.booleans()):
                 key = ic.ManifestSplitDimCondition.Axis(axis)
             else:
-                key = ic.ManifestSplitDimCondition.DimensionName(dimname)  # type: ignore[assignment]
+                key = ic.ManifestSplitDimCondition.DimensionName(dimname)
             config_dict[array_condition] = {
                 key: draw(st.integers(min_value=1, max_value=size + 10))
             }
