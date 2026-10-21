@@ -194,12 +194,24 @@ def test_branch_ops_blocked_by_feature_flags() -> None:
     repo.create_branch("exists", snap_id)
 
     repo.set_feature_flag("create_branch", False)
+    repo.set_feature_flag("delete_branch", False)
+    repo.set_feature_flag("reset_branch", False)
 
     with pytest.raises(ic.IcechunkError):
         repo.create_branch("should_fail", snap_id)
 
+    with pytest.raises(ic.IcechunkError):
+        repo.reset_branch("exists", snap_id)
+
+    with pytest.raises(ic.IcechunkError):
+        repo.delete_branch("exists")
+
     repo.set_feature_flag("create_branch", None)
+    repo.set_feature_flag("delete_branch", None)
+    repo.set_feature_flag("reset_branch", None)
     repo.create_branch("allowed", snap_id)
+    repo.reset_branch("exists", snap_id)
+    repo.delete_branch("exists")
 
 
 async def test_branch_ops_blocked_by_feature_flags_async() -> None:
@@ -212,9 +224,21 @@ async def test_branch_ops_blocked_by_feature_flags_async() -> None:
     await repo.create_branch_async("exists", snap_id)
 
     await repo.set_feature_flag_async("create_branch", False)
+    await repo.set_feature_flag_async("delete_branch", False)
+    await repo.set_feature_flag_async("reset_branch", False)
 
     with pytest.raises(ic.IcechunkError):
         await repo.create_branch_async("should_fail", snap_id)
 
+    with pytest.raises(ic.IcechunkError):
+        await repo.reset_branch_async("exists", snap_id)
+
+    with pytest.raises(ic.IcechunkError):
+        await repo.delete_branch_async("exists")
+
     await repo.set_feature_flag_async("create_branch", None)
+    await repo.set_feature_flag_async("delete_branch", None)
+    await repo.set_feature_flag_async("reset_branch", None)
     await repo.create_branch_async("allowed", snap_id)
+    await repo.reset_branch_async("exists", snap_id)
+    await repo.delete_branch_async("exists")

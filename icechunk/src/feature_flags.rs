@@ -5,11 +5,7 @@ use std::{
 
 use icechunk_types::ICResultExt as _;
 
-use crate::{
-    change_set::ChangeSet,
-    format::{IcechunkFormatErrorKind, IcechunkResult, repo_info::RepoInfo},
-    session::CommitMethod,
-};
+use crate::format::{IcechunkFormatErrorKind, IcechunkResult, repo_info::RepoInfo};
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct FeatureFlag {
@@ -116,60 +112,26 @@ pub fn raise_if_feature_flag_disabled(
     }
 }
 
-/// Flags a commit or flush must honor, in check order. Each entry pairs the
-/// flag id with the noun for the error description.
-pub(crate) fn commit_required_flags(
-    change_set: &ChangeSet,
-    commit_method: CommitMethod,
-    rewrite_manifests: bool,
-    has_default_commit_metadata: bool,
-) -> Vec<(u16, &'static str)> {
-    let mut flags = vec![(COMMIT_FLAG, "")];
-    if commit_method == CommitMethod::Amend {
-        flags.push((AMEND_FLAG, "amend"));
-    }
-    if rewrite_manifests {
-        flags.push((REWRITE_MANIFESTS_FLAG, "manifest rewrite"));
-    }
-    if matches!(change_set, ChangeSet::Rearrange(_)) {
-        flags.push((MOVE_NODE_FLAG, "rearrange session"));
-    }
-    if has_default_commit_metadata {
-        flags.push((SET_DEFAULT_COMMIT_METADATA_FLAG, "default commit metadata"));
-    }
-    if change_set.new_nodes().next().is_some() {
-        flags.push((CREATE_NEW_NODES_FLAG, "new nodes"));
-    }
-    if change_set.deleted_groups().next().is_some()
-        || change_set.deleted_arrays().next().is_some()
-    {
-        flags.push((DELETE_NODES_FLAG, "node delete"));
-    }
-    if change_set
-        .arrays_with_chunk_changes()
-        .any(|node| change_set.has_chunk_changes(node))
-    {
-        flags.push((UPDATE_CHUNKS_FLAG, "chunk update"));
-    }
-    if change_set.updated_arrays().next().is_some() {
-        flags.push((UPDATE_ARRAY_METADATA_FLAG, "array metadata update"));
-    }
-    if change_set.updated_groups().next().is_some() {
-        flags.push((UPDATE_GROUP_METADATA_FLAG, "group metadata update"));
-    }
-    flags
+/// A flag a commit or flush must honor. `noun` extends the verb in the error
+/// description.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct CommitFlag {
+    pub(crate) id: u16,
+    pub(crate) noun: Option<&'static str>,
 }
 
 /// Checks every entry of `required_flags`. `verb` is `commit` or `flush`.
 pub(crate) fn raise_if_commit_flags_disabled(
     repo_info: &RepoInfo,
     verb: &str,
-    required_flags: &[(u16, &'static str)],
+    required_flags: &[CommitFlag],
 ) -> IcechunkResult<()> {
-    for (flag_id, noun) in required_flags {
-        let description =
-            if noun.is_empty() { verb.to_string() } else { format!("{verb} {noun}") };
-        raise_if_feature_flag_disabled(repo_info, *flag_id, &description)?;
+    for CommitFlag { id, noun } in required_flags {
+        let description = match noun {
+            Some(noun) => format!("{verb} {noun}"),
+            None => verb.to_string(),
+        };
+        raise_if_feature_flag_disabled(repo_info, *id, &description)?;
     }
     Ok(())
 }
@@ -274,6 +236,30 @@ mod tests {
             .await
             .unwrap();
         session.commit("root and array").execute().await.unwrap()
+    }
+
+    async fn count_snapshots(repo: &Repository) -> usize {
+        repo.storage()
+            .list_objects(&repo.storage_context(), crate::format::SNAPSHOTS_FILE_PATH)
+            .await
+            .unwrap()
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap()
+            .len()
+    }
+
+    fn assert_flag_disabled_gc<T: std::fmt::Debug>(
+        res: Result<T, crate::ops::gc::GCError>,
+        flag: &str,
+        description: &str,
+    ) {
+        match res {
+            Err(crate::ops::gc::GCError::Repository(err)) => {
+                assert_flag_disabled_repo(Err::<T, _>(err), flag, description);
+            }
+            other => panic!("expected FeatureFlagDisabled({flag}), got {other:?}"),
+        }
     }
 
     fn assert_flag_disabled_repo<T: std::fmt::Debug>(
@@ -603,20 +589,11 @@ mod tests {
         repo.set_feature_flag("move_node", Some(false)).await.unwrap();
 
         // commit should fail
-        assert!(matches!(
+        assert_flag_disabled_session(
             session.commit("should fail").max_concurrent_nodes(8).execute().await,
-            Err(SessionError {
-                kind: SessionErrorKind::RepositoryError(
-                    RepositoryErrorKind::FormatError(
-                        IcechunkFormatErrorKind::FeatureFlagDisabled {
-                            feature_description,
-                            feature_flag,
-                        },
-                    ),
-                ),
-                ..
-            }) if feature_flag == "move_node" && feature_description == "commit rearrange session"
-        ));
+            "move_node",
+            "commit rearrange session",
+        );
     }
 
     #[tokio::test]
@@ -646,20 +623,16 @@ mod tests {
         repo.set_feature_flag("move_node", Some(false)).await.unwrap();
 
         // flush should fail
-        assert!(matches!(
-            session.commit("should fail").max_concurrent_nodes(8).anonymous().execute().await,
-            Err(SessionError {
-                kind: SessionErrorKind::RepositoryError(
-                    RepositoryErrorKind::FormatError(
-                        IcechunkFormatErrorKind::FeatureFlagDisabled {
-                            feature_description,
-                            feature_flag,
-                        },
-                    ),
-                ),
-                ..
-            }) if feature_flag == "move_node" && feature_description == "flush rearrange session"
-        ));
+        assert_flag_disabled_session(
+            session
+                .commit("should fail")
+                .max_concurrent_nodes(8)
+                .anonymous()
+                .execute()
+                .await,
+            "move_node",
+            "flush rearrange session",
+        );
     }
 
     #[tokio::test]
@@ -671,11 +644,13 @@ mod tests {
 
         // forking a session with changes flushes an unregistered snapshot
         repo.set_feature_flag("create_new_nodes", Some(false)).await.unwrap();
+        let snapshots = count_snapshots(&repo).await;
         assert_flag_disabled_session(
             session.fork().await,
             "create_new_nodes",
             "flush new nodes",
         );
+        assert_eq!(count_snapshots(&repo).await, snapshots);
 
         repo.set_feature_flag("create_new_nodes", None).await.unwrap();
         session.fork().await.unwrap();
@@ -689,11 +664,13 @@ mod tests {
         session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await.unwrap();
 
         repo.set_feature_flag("commit", Some(false)).await.unwrap();
+        let snapshots = count_snapshots(&repo).await;
         assert_flag_disabled_session(
             session.commit("blocked").execute().await,
             "commit",
             "commit",
         );
+        assert_eq!(count_snapshots(&repo).await, snapshots);
 
         repo.set_feature_flag("commit", None).await.unwrap();
         session.commit("allowed").execute().await.unwrap();
@@ -707,11 +684,13 @@ mod tests {
         session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await.unwrap();
 
         repo.set_feature_flag("commit", Some(false)).await.unwrap();
+        let snapshots = count_snapshots(&repo).await;
         assert_flag_disabled_session(
             session.commit("blocked").anonymous().execute().await,
             "commit",
             "flush",
         );
+        assert_eq!(count_snapshots(&repo).await, snapshots);
 
         repo.set_feature_flag("commit", None).await.unwrap();
         session.commit("allowed").anonymous().execute().await.unwrap();
@@ -721,8 +700,10 @@ mod tests {
     fn commit_required_flags_by_change_set() {
         use crate::format::NodeId;
 
-        let ids = |flags: Vec<(u16, &'static str)>| {
-            flags.into_iter().map(|(id, _)| id).collect::<Vec<_>>()
+        use crate::session::commit_required_flags;
+
+        let ids = |flags: Vec<CommitFlag>| {
+            flags.into_iter().map(|flag| flag.id).collect::<Vec<_>>()
         };
 
         // empty edit change set: only the commit flag
@@ -1213,22 +1194,7 @@ mod tests {
 
         use chrono::Utc;
 
-        use crate::ops::gc::{
-            ExpiredRefAction, GCConfig, GCError, expire, garbage_collect,
-        };
-
-        fn assert_flag_disabled_gc<T: std::fmt::Debug>(
-            res: Result<T, GCError>,
-            flag: &str,
-            description: &str,
-        ) {
-            match res {
-                Err(GCError::Repository(err)) => {
-                    assert_flag_disabled_repo(Err::<T, _>(err), flag, description);
-                }
-                other => panic!("expected FeatureFlagDisabled({flag}), got {other:?}"),
-            }
-        }
+        use crate::ops::gc::{ExpiredRefAction, GCConfig, expire, garbage_collect};
 
         let repo = new_repo().await;
         commit_root_and_array(&repo).await;
@@ -1277,5 +1243,46 @@ mod tests {
 
         run_gc().await.unwrap();
         run_expire().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn try_expire_deleting_refs_without_delete_flags() {
+        use chrono::Utc;
+
+        use crate::ops::gc::{ExpiredRefAction, expire};
+
+        let repo = new_repo().await;
+        let snap = commit_root_and_array(&repo).await;
+        repo.create_branch("expired", &snap).await.unwrap();
+        repo.create_tag("expired", &snap).await.unwrap();
+
+        let run_expire = |branches, tags| {
+            expire(
+                Arc::clone(repo.asset_manager()),
+                Utc::now(),
+                branches,
+                tags,
+                None,
+                100,
+            )
+        };
+
+        repo.set_feature_flag("delete_branch", Some(false)).await.unwrap();
+        repo.set_feature_flag("delete_tag", Some(false)).await.unwrap();
+
+        assert_flag_disabled_gc(
+            run_expire(ExpiredRefAction::Delete, ExpiredRefAction::Ignore).await,
+            "delete_branch",
+            "branch delete",
+        );
+        assert_flag_disabled_gc(
+            run_expire(ExpiredRefAction::Ignore, ExpiredRefAction::Delete).await,
+            "delete_tag",
+            "tag delete",
+        );
+        run_expire(ExpiredRefAction::Ignore, ExpiredRefAction::Ignore).await.unwrap();
+
+        assert!(repo.list_branches().await.unwrap().contains("expired"));
+        assert!(repo.list_tags().await.unwrap().contains("expired"));
     }
 }

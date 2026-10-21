@@ -13,7 +13,10 @@ use tracing::{debug, info, instrument};
 use crate::{
     asset_manager::AssetManager,
     config::RepoUpdateRetryConfig,
-    feature_flags::{EXPIRATION_FLAG, raise_if_feature_flag_disabled},
+    feature_flags::{
+        DELETE_BRANCH_FLAG, DELETE_TAG_FLAG, EXPIRATION_FLAG,
+        raise_if_feature_flag_disabled,
+    },
     format::{
         SnapshotId,
         format_constants::SpecVersionBin,
@@ -310,6 +313,22 @@ async fn expire_v2_one_attempt(
     let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str, version| {
         raise_if_feature_flag_disabled(repo_info.as_ref(), EXPIRATION_FLAG, "expiration")
             .inject()?;
+        if !deleted_branches.is_empty() {
+            raise_if_feature_flag_disabled(
+                repo_info.as_ref(),
+                DELETE_BRANCH_FLAG,
+                "branch delete",
+            )
+            .inject()?;
+        }
+        if !deleted_tags.is_empty() {
+            raise_if_feature_flag_disabled(
+                repo_info.as_ref(),
+                DELETE_TAG_FLAG,
+                "tag delete",
+            )
+            .inject()?;
+        }
         // we retry if the repo info object was modified since we started
         if version != repo_info_version_at_start {
             return Err(RepositoryError::capture(RepositoryErrorKind::RepoInfoUpdated));

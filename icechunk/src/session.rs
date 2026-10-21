@@ -40,7 +40,10 @@ use crate::{
     diff::{Diff, DiffBuilder},
     error::ICError,
     feature_flags::{
-        REBASE_FLAG, commit_required_flags, raise_if_commit_flags_disabled,
+        AMEND_FLAG, COMMIT_FLAG, CREATE_NEW_NODES_FLAG, CommitFlag, DELETE_NODES_FLAG,
+        MOVE_NODE_FLAG, REBASE_FLAG, REWRITE_MANIFESTS_FLAG,
+        SET_DEFAULT_COMMIT_METADATA_FLAG, UPDATE_ARRAY_METADATA_FLAG, UPDATE_CHUNKS_FLAG,
+        UPDATE_GROUP_METADATA_FLAG, raise_if_commit_flags_disabled,
         raise_if_feature_flag_disabled,
     },
     format::{
@@ -1633,7 +1636,7 @@ impl Session {
     async fn flush_v2(
         &mut self,
         new_snap: Arc<Snapshot>,
-        required_flags: &[(u16, &'static str)],
+        required_flags: &[CommitFlag],
     ) -> SessionResult<()> {
         let update_type =
             UpdateType::NewDetachedSnapshotUpdate { new_snap_id: new_snap.id().clone() };
@@ -1670,17 +1673,6 @@ impl Session {
 
     async fn flush_v1(&mut self, _: Arc<Snapshot>) -> SessionResult<()> {
         // In IC1 there is nothing to do here, the snapshot is already saved
-        Ok(())
-    }
-
-    /// The feature flag check `flush_v2` runs, for flushes that skip the repo info update.
-    async fn raise_if_flush_flags_disabled(
-        &self,
-        required_flags: &[(u16, &'static str)],
-    ) -> SessionResult<()> {
-        let (repo_info, _) = self.asset_manager.fetch_repo_info().await.inject()?;
-        raise_if_commit_flags_disabled(repo_info.as_ref(), "flush", required_flags)
-            .inject()?;
         Ok(())
     }
 
@@ -1721,6 +1713,12 @@ impl Session {
             false,
             !self.default_commit_metadata.is_empty(),
         );
+        raise_if_flags_disabled_before_upload(
+            &self.asset_manager,
+            "flush",
+            &required_flags,
+        )
+        .await?;
 
         let flush_data = FlushProcess::new(
             Arc::clone(&self.asset_manager),
@@ -1744,11 +1742,8 @@ impl Session {
             (SpecVersionBin::V2, true) => {
                 self.flush_v2(Arc::clone(&new_snap), &required_flags).await
             }
-            // unregistered snapshots don't touch the repo info, but the feature flag
-            // guard `flush_v2` applies still has to run
-            (SpecVersionBin::V2, false) => {
-                self.raise_if_flush_flags_disabled(&required_flags).await
-            }
+            // unregistered snapshots don't touch the repo info
+            (SpecVersionBin::V2, false) => Ok(()),
         }?;
 
         info!(
@@ -3342,6 +3337,76 @@ async fn do_flush(
     Ok(new_snapshot)
 }
 
+/// Flags a commit or flush must honor, in check order.
+pub(crate) fn commit_required_flags(
+    change_set: &ChangeSet,
+    commit_method: CommitMethod,
+    rewrite_manifests: bool,
+    has_default_commit_metadata: bool,
+) -> Vec<CommitFlag> {
+    let mut flags = vec![CommitFlag { id: COMMIT_FLAG, noun: None }];
+    if commit_method == CommitMethod::Amend {
+        flags.push(CommitFlag { id: AMEND_FLAG, noun: Some("amend") });
+    }
+    if rewrite_manifests {
+        flags.push(CommitFlag {
+            id: REWRITE_MANIFESTS_FLAG,
+            noun: Some("manifest rewrite"),
+        });
+    }
+    if matches!(change_set, ChangeSet::Rearrange(_)) {
+        flags.push(CommitFlag { id: MOVE_NODE_FLAG, noun: Some("rearrange session") });
+    }
+    if has_default_commit_metadata {
+        flags.push(CommitFlag {
+            id: SET_DEFAULT_COMMIT_METADATA_FLAG,
+            noun: Some("default commit metadata"),
+        });
+    }
+    if change_set.new_nodes().next().is_some() {
+        flags.push(CommitFlag { id: CREATE_NEW_NODES_FLAG, noun: Some("new nodes") });
+    }
+    if change_set.deleted_groups().next().is_some()
+        || change_set.deleted_arrays().next().is_some()
+    {
+        flags.push(CommitFlag { id: DELETE_NODES_FLAG, noun: Some("node delete") });
+    }
+    if change_set
+        .arrays_with_chunk_changes()
+        .any(|node| change_set.has_chunk_changes(node))
+    {
+        flags.push(CommitFlag { id: UPDATE_CHUNKS_FLAG, noun: Some("chunk update") });
+    }
+    if change_set.updated_arrays().next().is_some() {
+        flags.push(CommitFlag {
+            id: UPDATE_ARRAY_METADATA_FLAG,
+            noun: Some("array metadata update"),
+        });
+    }
+    if change_set.updated_groups().next().is_some() {
+        flags.push(CommitFlag {
+            id: UPDATE_GROUP_METADATA_FLAG,
+            noun: Some("group metadata update"),
+        });
+    }
+    flags
+}
+
+/// Checks `required_flags` against the latest repo info, so a disabled flag fails
+/// before the flush uploads anything. The repo info update checks them again.
+async fn raise_if_flags_disabled_before_upload(
+    asset_manager: &AssetManager,
+    verb: &str,
+    required_flags: &[CommitFlag],
+) -> SessionResult<()> {
+    if asset_manager.spec_version() >= SpecVersionBin::V2 {
+        let (repo_info, _) = asset_manager.fetch_repo_info().await.inject()?;
+        raise_if_commit_flags_disabled(repo_info.as_ref(), verb, required_flags)
+            .inject()?;
+    }
+    Ok(())
+}
+
 #[expect(clippy::too_many_arguments)]
 async fn do_commit(
     asset_manager: Arc<AssetManager>,
@@ -3355,7 +3420,7 @@ async fn do_commit(
     commit_method: CommitMethod,
     manifest_config: &ManifestConfig,
     allow_empty: bool,
-    required_flags: &[(u16, &'static str)],
+    required_flags: &[CommitFlag],
     repo_update_retries: &RepoUpdateRetryConfig,
     num_updates_per_repo_info_file: u16,
 ) -> SessionResult<SnapshotId> {
@@ -3369,6 +3434,9 @@ async fn do_commit(
     if commit_method == CommitMethod::Amend && snapshot_id.is_initial() {
         return Err(SessionError::capture(SessionErrorKind::NoAmendForInitialCommit));
     }
+
+    raise_if_flags_disabled_before_upload(&asset_manager, "commit", required_flags)
+        .await?;
 
     let properties = properties.unwrap_or_default();
     let flush_data = FlushProcess::new(
@@ -3476,7 +3544,7 @@ async fn do_commit_v2(
     parent_snapshot_id: &SnapshotId,
     new_snapshot: Arc<Snapshot>,
     commit_method: CommitMethod,
-    required_flags: &[(u16, &'static str)],
+    required_flags: &[CommitFlag],
     repo_update_retries: &RepoUpdateRetryConfig,
     num_updates_per_repo_info_file: u16,
 ) -> RepositoryResult<storage::VersionInfo> {

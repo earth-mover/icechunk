@@ -4,7 +4,11 @@
 
 ### Features
 
-- Add feature flags for `commit`, `amend`, `rebase`, `create_new_nodes`, `delete_nodes`, `update_chunks`, `update_array_metadata`, `update_group_metadata`, `create_branch`, `delete_branch`, `reset_branch`, `garbage_collection`, `expiration`, `update_config`, `set_default_commit_metadata`, `update_repository_metadata` and `rewrite_manifests`. `Repository.set_feature_flag(name, False)` makes the library refuse that operation on the repository. The session-content flags are checked when a session commits or flushes. All flags default to enabled ([#2432](https://github.com/earth-mover/icechunk/pull/2432)).
+- Add feature flags. A disabled flag makes the library refuse that operation on the repository. All flags default to enabled. Call `Repository.set_feature_flag(name, False)` to disable a flag ([#2432](https://github.com/earth-mover/icechunk/pull/2432)).
+  - New flags: `commit`, `amend`, `rebase`, `create_new_nodes`, `delete_nodes`, `update_chunks`, `update_array_metadata`, `update_group_metadata`, `create_branch`, `delete_branch`, `reset_branch`, `garbage_collection`, `expiration`, `update_config`, `set_default_commit_metadata`, `update_repository_metadata`, `rewrite_manifests`.
+  - A commit or flush checks the flags for its session content before it uploads data.
+  - With `commit` disabled, `Repository.writable_session` and `Repository.rearrange_session` raise `IcechunkError`.
+  - An expiration that deletes expired branches or tags also needs the `delete_branch` or `delete_tag` flag.
 
 ### Fixes
 
