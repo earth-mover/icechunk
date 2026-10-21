@@ -9,6 +9,8 @@
   - A commit or flush checks the flags for its session content before it uploads data.
   - With `commit` disabled, `Repository.writable_session` and `Repository.rearrange_session` raise `IcechunkError`.
   - An expiration that deletes expired branches or tags also needs the `delete_branch` or `delete_tag` flag.
+  - An array resize that removes chunks needs `update_chunks`. Chunk writes to a new array need only `create_new_nodes`.
+  - Each flag guards one operation. To freeze a branch, also disable `reset_branch`, `delete_branch`, `create_branch` and `move_node`. The design doc 013 lists the flag interactions.
 
 ### Fixes
 

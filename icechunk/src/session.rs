@@ -1680,6 +1680,27 @@ impl Session {
         self.asset_manager.spec_version()
     }
 
+    /// Whether an update to an existing array drops chunk coordinates: a dimension
+    /// loses chunks, or the number of dimensions changes.
+    async fn shrinks_existing_array(&self) -> SessionResult<bool> {
+        if self.change_set.updated_arrays().next().is_none() {
+            return Ok(false);
+        }
+        let snapshot =
+            self.asset_manager.fetch_snapshot(&self.snapshot_id).await.inject()?;
+        for node in snapshot.iter() {
+            let node = node.inject()?;
+            if let NodeData::Array { shape: old, .. } = &node.node_data
+                && let Some(new) = self.change_set.get_updated_array(&node.id)
+                && (old.len() != new.shape.len()
+                    || old.num_chunks().zip(new.shape.num_chunks()).any(|(o, n)| n < o))
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     fn resolve_properties(
         &self,
         overrides: Option<SnapshotProperties>,
@@ -1712,6 +1733,7 @@ impl Session {
             CommitMethod::NewCommit,
             false,
             !self.default_commit_metadata.is_empty(),
+            self.shrinks_existing_array().await?,
         );
         raise_if_flags_disabled_before_upload(
             &self.asset_manager,
@@ -1839,12 +1861,14 @@ impl Session {
             let _ = self.change_set_mut()?;
         }
         let has_default_commit_metadata = !self.default_commit_metadata.is_empty();
+        let shrinks_array = self.shrinks_existing_array().await?;
         let change_set = &mut self.change_set;
         let required_flags = commit_required_flags(
             change_set,
             commit_method,
             rewrite_manifests,
             has_default_commit_metadata,
+            shrinks_array,
         );
 
         let id = do_commit(
@@ -3343,12 +3367,16 @@ pub(crate) fn commit_required_flags(
     commit_method: CommitMethod,
     rewrite_manifests: bool,
     has_default_commit_metadata: bool,
+    shrinks_array: bool,
 ) -> Vec<CommitFlag> {
     let has_deleted_nodes = change_set.deleted_groups().next().is_some()
         || change_set.deleted_arrays().next().is_some();
-    let has_chunk_changes = change_set
-        .arrays_with_chunk_changes()
-        .any(|node| change_set.has_chunk_changes(node));
+    // chunks written to a new array are part of creating it
+    let new_arrays: HashSet<_> = change_set.new_arrays().map(|(_, id, _)| id).collect();
+    let has_chunk_changes = shrinks_array
+        || change_set
+            .arrays_with_chunk_changes()
+            .any(|node| !new_arrays.contains(node) && change_set.has_chunk_changes(node));
     [
         (true, COMMIT_FLAG, None),
         (commit_method == CommitMethod::Amend, AMEND_FLAG, Some("amend")),

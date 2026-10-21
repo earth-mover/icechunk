@@ -87,6 +87,34 @@ All flags default to enabled. IDs are fixed; the code holds them in
 | 20 | update_repository_metadata  | implemented                                        |
 | 21 | rewrite_manifests           | implemented                                        |
 
+## Flag interactions
+
+Each flag guards one operation. A flag does not guard a result that a different
+operation can also produce.
+
+- The content flags (7 to 11) apply to the change set of a commit or a flush.
+  They do not apply to ref operations or to moves.
+- `reset_branch` can move a branch to any snapshot. This can remove nodes,
+  chunks and metadata changes. To freeze the content of a branch, also disable
+  `reset_branch`.
+- `delete_branch` followed by `create_branch` gives the same result as
+  `reset_branch`. To block resets, disable all three flags.
+- `move_node` moves a node to a new path. It does not need `create_new_nodes` or
+  `delete_nodes`.
+- An expiration that deletes expired branches or tags also needs `delete_branch`
+  or `delete_tag`.
+- `set_feature_flag` has no flag. Any writer can change any flag.
+
+Rules for `update_chunks`:
+
+- A chunk write to an array that the same session creates needs only
+  `create_new_nodes`.
+- An array update that removes chunk coordinates needs `update_chunks`. This
+  applies when a dimension has fewer chunks, or when the number of dimensions
+  changes. An update that adds chunks needs only `update_array_metadata`.
+- A chunk delete needs `update_chunks`, also when the chunk was never written.
+  The commit does not read the manifests to find deletes that change nothing.
+
 ## Other format changes
 
 See [more format changes](./012-some-more-IC2-format-changes.md) in the

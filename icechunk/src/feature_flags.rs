@@ -722,12 +722,18 @@ mod tests {
         // empty edit change set: only the commit flag
         let empty = ChangeSet::for_edits();
         assert_eq!(
-            ids(commit_required_flags(&empty, CommitMethod::NewCommit, false, false)),
+            ids(commit_required_flags(
+                &empty,
+                CommitMethod::NewCommit,
+                false,
+                false,
+                false
+            )),
             vec![COMMIT_FLAG]
         );
         // amend, rewrite and default metadata add their flags in order
         assert_eq!(
-            ids(commit_required_flags(&empty, CommitMethod::Amend, true, true)),
+            ids(commit_required_flags(&empty, CommitMethod::Amend, true, true, false)),
             vec![
                 COMMIT_FLAG,
                 AMEND_FLAG,
@@ -845,6 +851,65 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn try_shrink_array_without_update_chunks() {
+        async fn resize(repo: &Repository, num_chunks: u32) -> crate::session::Session {
+            let mut session = repo.writable_session("main").await.unwrap();
+            session
+                .update_array(
+                    &"/array".try_into().unwrap(),
+                    ArrayShape::new(vec![(num_chunks.into(), num_chunks)]).unwrap(),
+                    Some(vec!["t".into()]),
+                    Bytes::from_static(br#"{"this":"array"}"#),
+                )
+                .await
+                .unwrap();
+            session
+        }
+
+        let repo = new_repo().await;
+        commit_root_and_array(&repo).await;
+
+        repo.set_feature_flag("update_chunks", Some(false)).await.unwrap();
+        // growing keeps every chunk
+        resize(&repo, 8).await.commit("grow").execute().await.unwrap();
+        // shrinking drops the chunks outside the new shape
+        assert_commit_gated(
+            &repo,
+            resize(&repo, 2).await,
+            "update_chunks",
+            "commit chunk update",
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn try_new_array_chunks_without_update_chunks() {
+        let repo = new_repo().await;
+        repo.set_feature_flag("update_chunks", Some(false)).await.unwrap();
+
+        let mut session = repo.writable_session("main").await.unwrap();
+        session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await.unwrap();
+        session
+            .add_array(
+                "/array".try_into().unwrap(),
+                ArrayShape::new(vec![(4, 4)]).unwrap(),
+                None,
+                Bytes::from_static(br#"{"this":"array"}"#),
+            )
+            .await
+            .unwrap();
+        session
+            .set_chunk_ref(
+                "/array".try_into().unwrap(),
+                ChunkIndices(vec![0]),
+                Some(ChunkPayload::Inline(Bytes::from_static(b"1234"))),
+            )
+            .await
+            .unwrap();
+        session.commit("new array with data").execute().await.unwrap();
+    }
+
+    #[tokio::test]
     async fn try_update_array_metadata_without_feature_flag() {
         let repo = new_repo().await;
         commit_root_and_array(&repo).await;
@@ -894,8 +959,8 @@ mod tests {
         let repo = new_repo().await;
         commit_root_and_array(&repo).await;
 
-        // new array plus a chunk write: create_new_nodes comes before
-        // update_chunks in the required flag list
+        // new array plus a chunk write to an existing array: create_new_nodes
+        // comes before update_chunks in the required flag list
         let mut session = repo.writable_session("main").await.unwrap();
         session
             .add_array(
@@ -908,7 +973,7 @@ mod tests {
             .unwrap();
         session
             .set_chunk_ref(
-                "/array2".try_into().unwrap(),
+                "/array".try_into().unwrap(),
                 ChunkIndices(vec![0]),
                 Some(ChunkPayload::Inline(Bytes::from_static(b"1234"))),
             )
