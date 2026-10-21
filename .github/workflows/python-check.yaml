@@ -20,7 +20,7 @@ permissions:
 
 env:
   PYTHON_VERSION: "3.12"
-  PIXI_VERSION: "v0.72.0"
+  PIXI_VERSION: "v0.82.1"
 
 jobs:
   build-wheels:
