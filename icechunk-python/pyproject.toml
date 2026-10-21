@@ -247,7 +247,7 @@ rust = "~=1.98.0"
 # CI jobs that only test a prebuilt wheel install just this and python.
 [tool.pixi.feature.runner.dependencies]
 just = ">=1.58.0,<2"
-uv = ">=0.12.5,<0.13"
+uv = ">=0.13.4,<0.14"
 flatbuffers = ">=25.12.19,<26"
 
 [tool.pixi.feature.build.dependencies]

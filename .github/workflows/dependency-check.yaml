@@ -23,7 +23,7 @@ env:
   CI: 1
   RUST_BACKTRACE: short
   RUSTUP_MAX_RETRIES: 10
-  PIXI_VERSION: "v0.72.0"
+  PIXI_VERSION: "v0.82.1"
 
 permissions:
   contents: read

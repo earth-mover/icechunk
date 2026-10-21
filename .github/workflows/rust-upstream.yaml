@@ -24,7 +24,7 @@ env:
   CARGO_NET_RETRY: 10
   RUST_BACKTRACE: short
   RUSTFLAGS: "-D warnings"
-  PIXI_VERSION: "v0.72.0"
+  PIXI_VERSION: "v0.82.1"
   # Title of the issue the report job keeps up to date. Pinned here so the
   # comment step below can find that issue.
   ZARRS_ISSUE_TITLE: "Nightly zarrs upstream test failed"

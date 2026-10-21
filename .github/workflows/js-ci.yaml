@@ -5,7 +5,7 @@ env:
   APP_NAME: icechunk
   MACOSX_DEPLOYMENT_TARGET: "10.13"
   CARGO_INCREMENTAL: "1"
-  PIXI_VERSION: "v0.72.0"
+  PIXI_VERSION: "v0.82.1"
 
 on:
   push:
