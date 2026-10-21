@@ -3344,52 +3344,47 @@ pub(crate) fn commit_required_flags(
     rewrite_manifests: bool,
     has_default_commit_metadata: bool,
 ) -> Vec<CommitFlag> {
-    let mut flags = vec![CommitFlag { id: COMMIT_FLAG, noun: None }];
-    if commit_method == CommitMethod::Amend {
-        flags.push(CommitFlag { id: AMEND_FLAG, noun: Some("amend") });
-    }
-    if rewrite_manifests {
-        flags.push(CommitFlag {
-            id: REWRITE_MANIFESTS_FLAG,
-            noun: Some("manifest rewrite"),
-        });
-    }
-    if matches!(change_set, ChangeSet::Rearrange(_)) {
-        flags.push(CommitFlag { id: MOVE_NODE_FLAG, noun: Some("rearrange session") });
-    }
-    if has_default_commit_metadata {
-        flags.push(CommitFlag {
-            id: SET_DEFAULT_COMMIT_METADATA_FLAG,
-            noun: Some("default commit metadata"),
-        });
-    }
-    if change_set.new_nodes().next().is_some() {
-        flags.push(CommitFlag { id: CREATE_NEW_NODES_FLAG, noun: Some("new nodes") });
-    }
-    if change_set.deleted_groups().next().is_some()
-        || change_set.deleted_arrays().next().is_some()
-    {
-        flags.push(CommitFlag { id: DELETE_NODES_FLAG, noun: Some("node delete") });
-    }
-    if change_set
+    let has_deleted_nodes = change_set.deleted_groups().next().is_some()
+        || change_set.deleted_arrays().next().is_some();
+    let has_chunk_changes = change_set
         .arrays_with_chunk_changes()
-        .any(|node| change_set.has_chunk_changes(node))
-    {
-        flags.push(CommitFlag { id: UPDATE_CHUNKS_FLAG, noun: Some("chunk update") });
-    }
-    if change_set.updated_arrays().next().is_some() {
-        flags.push(CommitFlag {
-            id: UPDATE_ARRAY_METADATA_FLAG,
-            noun: Some("array metadata update"),
-        });
-    }
-    if change_set.updated_groups().next().is_some() {
-        flags.push(CommitFlag {
-            id: UPDATE_GROUP_METADATA_FLAG,
-            noun: Some("group metadata update"),
-        });
-    }
-    flags
+        .any(|node| change_set.has_chunk_changes(node));
+    [
+        (true, COMMIT_FLAG, None),
+        (commit_method == CommitMethod::Amend, AMEND_FLAG, Some("amend")),
+        (rewrite_manifests, REWRITE_MANIFESTS_FLAG, Some("manifest rewrite")),
+        (
+            matches!(change_set, ChangeSet::Rearrange(_)),
+            MOVE_NODE_FLAG,
+            Some("rearrange session"),
+        ),
+        (
+            has_default_commit_metadata,
+            SET_DEFAULT_COMMIT_METADATA_FLAG,
+            Some("default commit metadata"),
+        ),
+        (
+            change_set.new_nodes().next().is_some(),
+            CREATE_NEW_NODES_FLAG,
+            Some("new nodes"),
+        ),
+        (has_deleted_nodes, DELETE_NODES_FLAG, Some("node delete")),
+        (has_chunk_changes, UPDATE_CHUNKS_FLAG, Some("chunk update")),
+        (
+            change_set.updated_arrays().next().is_some(),
+            UPDATE_ARRAY_METADATA_FLAG,
+            Some("array metadata update"),
+        ),
+        (
+            change_set.updated_groups().next().is_some(),
+            UPDATE_GROUP_METADATA_FLAG,
+            Some("group metadata update"),
+        ),
+    ]
+    .into_iter()
+    .filter(|(required, ..)| *required)
+    .map(|(_, id, noun)| CommitFlag { id, noun })
+    .collect()
 }
 
 /// Checks `required_flags` against the latest repo info, so a disabled flag fails

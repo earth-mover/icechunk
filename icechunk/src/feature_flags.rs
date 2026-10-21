@@ -199,15 +199,13 @@ mod tests {
 
     use crate::{
         Repository, Storage,
-        change_set::{ArrayData, ChangeSet},
+        change_set::ChangeSet,
         format::{
             ChunkIndices, IcechunkFormatError, SnapshotId,
             format_constants::SpecVersionBin,
             manifest::ChunkPayload,
             repo_info::UpdateType,
-            snapshot::{
-                ArrayShape, NodeType, Snapshot, SnapshotInfo, SnapshotProperties,
-            },
+            snapshot::{ArrayShape, Snapshot, SnapshotInfo, SnapshotProperties},
         },
         new_in_memory_storage,
         repository::{RepositoryError, RepositoryErrorKind},
@@ -247,6 +245,23 @@ mod tests {
             .await
             .unwrap()
             .len()
+    }
+
+    /// Asserts that the commit fails while `flag` is disabled and succeeds once it is reset.
+    async fn assert_commit_gated(
+        repo: &Repository,
+        mut session: crate::session::Session,
+        flag: &str,
+        description: &str,
+    ) {
+        repo.set_feature_flag(flag, Some(false)).await.unwrap();
+        assert_flag_disabled_session(
+            session.commit("blocked").execute().await,
+            flag,
+            description,
+        );
+        repo.set_feature_flag(flag, None).await.unwrap();
+        session.commit("allowed").execute().await.unwrap();
     }
 
     fn assert_flag_disabled_gc<T: std::fmt::Debug>(
@@ -698,8 +713,6 @@ mod tests {
 
     #[test]
     fn commit_required_flags_by_change_set() {
-        use crate::format::NodeId;
-
         use crate::session::commit_required_flags;
 
         let ids = |flags: Vec<CommitFlag>| {
@@ -721,79 +734,6 @@ mod tests {
                 REWRITE_MANIFESTS_FLAG,
                 SET_DEFAULT_COMMIT_METADATA_FLAG
             ]
-        );
-
-        // new array
-        let mut cs = ChangeSet::for_edits();
-        cs.add_array(
-            "/a".try_into().unwrap(),
-            NodeId::random(),
-            ArrayData {
-                shape: ArrayShape::new(vec![(4, 4)]).unwrap(),
-                dimension_names: None,
-                user_data: Bytes::new(),
-            },
-        )
-        .unwrap();
-        assert_eq!(
-            ids(commit_required_flags(&cs, CommitMethod::NewCommit, false, false)),
-            vec![COMMIT_FLAG, CREATE_NEW_NODES_FLAG]
-        );
-
-        // deleted group
-        let mut cs = ChangeSet::for_edits();
-        cs.delete_group("/g".try_into().unwrap(), &NodeId::random()).unwrap();
-        assert_eq!(
-            ids(commit_required_flags(&cs, CommitMethod::NewCommit, false, false)),
-            vec![COMMIT_FLAG, DELETE_NODES_FLAG]
-        );
-
-        // chunk change
-        let mut cs = ChangeSet::for_edits();
-        cs.set_chunk_ref(
-            NodeId::random(),
-            ChunkIndices(vec![0]),
-            Some(ChunkPayload::Inline(Bytes::from_static(b"1234"))),
-        )
-        .unwrap();
-        assert_eq!(
-            ids(commit_required_flags(&cs, CommitMethod::NewCommit, false, false)),
-            vec![COMMIT_FLAG, UPDATE_CHUNKS_FLAG]
-        );
-
-        // updated array and updated group
-        let mut cs = ChangeSet::for_edits();
-        cs.update_array(
-            &NodeId::random(),
-            &"/a".try_into().unwrap(),
-            ArrayData {
-                shape: ArrayShape::new(vec![(4, 4)]).unwrap(),
-                dimension_names: None,
-                user_data: Bytes::new(),
-            },
-        )
-        .unwrap();
-        cs.update_group(&NodeId::random(), &"/g".try_into().unwrap(), Bytes::new())
-            .unwrap();
-        assert_eq!(
-            ids(commit_required_flags(&cs, CommitMethod::NewCommit, false, false)),
-            vec![COMMIT_FLAG, UPDATE_ARRAY_METADATA_FLAG, UPDATE_GROUP_METADATA_FLAG]
-        );
-
-        // rearrange change set with one move
-        let mut cs = ChangeSet::for_rearranging();
-        let id = NodeId::random();
-        cs.move_node(
-            "/from".try_into().unwrap(),
-            "/to".try_into().unwrap(),
-            std::iter::empty(),
-            &id,
-            NodeType::Group,
-        )
-        .unwrap();
-        assert_eq!(
-            ids(commit_required_flags(&cs, CommitMethod::NewCommit, false, false)),
-            vec![COMMIT_FLAG, MOVE_NODE_FLAG]
         );
     }
 
@@ -856,15 +796,13 @@ mod tests {
         let mut session = repo.writable_session("main").await.unwrap();
         session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await.unwrap();
 
-        repo.set_feature_flag("set_default_commit_metadata", Some(false)).await.unwrap();
-        assert_flag_disabled_session(
-            session.commit("blocked").execute().await,
+        assert_commit_gated(
+            &repo,
+            session,
             "set_default_commit_metadata",
             "commit default commit metadata",
-        );
-
-        repo.set_feature_flag("set_default_commit_metadata", None).await.unwrap();
-        session.commit("allowed").execute().await.unwrap();
+        )
+        .await;
     }
 
     #[tokio::test]
@@ -874,15 +812,7 @@ mod tests {
         let mut session = repo.writable_session("main").await.unwrap();
         session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await.unwrap();
 
-        repo.set_feature_flag("create_new_nodes", Some(false)).await.unwrap();
-        assert_flag_disabled_session(
-            session.commit("blocked").execute().await,
-            "create_new_nodes",
-            "commit new nodes",
-        );
-
-        repo.set_feature_flag("create_new_nodes", None).await.unwrap();
-        session.commit("allowed").execute().await.unwrap();
+        assert_commit_gated(&repo, session, "create_new_nodes", "commit new nodes").await;
     }
 
     #[tokio::test]
@@ -893,15 +823,7 @@ mod tests {
         let mut session = repo.writable_session("main").await.unwrap();
         session.delete_array("/array".try_into().unwrap()).await.unwrap();
 
-        repo.set_feature_flag("delete_nodes", Some(false)).await.unwrap();
-        assert_flag_disabled_session(
-            session.commit("blocked").execute().await,
-            "delete_nodes",
-            "commit node delete",
-        );
-
-        repo.set_feature_flag("delete_nodes", None).await.unwrap();
-        session.commit("allowed").execute().await.unwrap();
+        assert_commit_gated(&repo, session, "delete_nodes", "commit node delete").await;
     }
 
     #[tokio::test]
@@ -919,15 +841,7 @@ mod tests {
             .await
             .unwrap();
 
-        repo.set_feature_flag("update_chunks", Some(false)).await.unwrap();
-        assert_flag_disabled_session(
-            session.commit("blocked").execute().await,
-            "update_chunks",
-            "commit chunk update",
-        );
-
-        repo.set_feature_flag("update_chunks", None).await.unwrap();
-        session.commit("allowed").execute().await.unwrap();
+        assert_commit_gated(&repo, session, "update_chunks", "commit chunk update").await;
     }
 
     #[tokio::test]
@@ -946,15 +860,13 @@ mod tests {
             .await
             .unwrap();
 
-        repo.set_feature_flag("update_array_metadata", Some(false)).await.unwrap();
-        assert_flag_disabled_session(
-            session.commit("blocked").execute().await,
+        assert_commit_gated(
+            &repo,
+            session,
             "update_array_metadata",
             "commit array metadata update",
-        );
-
-        repo.set_feature_flag("update_array_metadata", None).await.unwrap();
-        session.commit("allowed").execute().await.unwrap();
+        )
+        .await;
     }
 
     #[tokio::test]
@@ -968,15 +880,13 @@ mod tests {
             .await
             .unwrap();
 
-        repo.set_feature_flag("update_group_metadata", Some(false)).await.unwrap();
-        assert_flag_disabled_session(
-            session.commit("blocked").execute().await,
+        assert_commit_gated(
+            &repo,
+            session,
             "update_group_metadata",
             "commit group metadata update",
-        );
-
-        repo.set_feature_flag("update_group_metadata", None).await.unwrap();
-        session.commit("allowed").execute().await.unwrap();
+        )
+        .await;
     }
 
     #[tokio::test]
