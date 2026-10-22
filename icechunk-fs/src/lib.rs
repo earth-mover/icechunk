@@ -16,6 +16,7 @@ mod read;
 mod repo_d;
 #[cfg(all(test, unix))]
 #[path = "../tests/common/repo_infos.rs"]
+#[expect(clippy::unwrap_used, reason = "test helpers")]
 mod repo_infos;
 #[cfg(unix)]
 mod storage;

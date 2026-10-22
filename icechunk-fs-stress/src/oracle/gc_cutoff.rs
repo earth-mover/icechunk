@@ -58,7 +58,7 @@ pub fn check_gc_cutoffs(history: &History, verdict: &mut Verdict) {
                     }
                 }
                 Op::BranchCommit { .. } | Op::MainCommit => {
-                    commits.push((name, *id, *t_ms))
+                    commits.push((name, *id, *t_ms));
                 }
                 _ => {}
             }

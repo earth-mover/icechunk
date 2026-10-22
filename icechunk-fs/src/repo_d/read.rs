@@ -229,7 +229,7 @@ mod tests {
         let older = version(0, &repo_info(11));
         let v1 = version(1, &repo_info(1));
         let dir = root.path().join("repo.d");
-        fs::write(dir.join(v1.file_name()), &repo_info(1)).unwrap();
+        fs::write(dir.join(v1.file_name()), repo_info(1)).unwrap();
         fs::rename(dir.join(latest(&v0)), dir.join(latest(&v1))).unwrap();
         assert_eq!(repo.read_since(&older).unwrap(), modified(&repo_info(1), &v1));
     }
@@ -321,7 +321,7 @@ mod tests {
         seed(root.path());
         let v1 = version(1, &repo_info(1));
         let dir = root.path().join("repo.d");
-        fs::write(dir.join(v1.file_name()), &repo_info(1)).unwrap();
+        fs::write(dir.join(v1.file_name()), repo_info(1)).unwrap();
         fs::write(dir.join(latest(&v1)), b"").unwrap();
         assert_eq!(repo(root.path()).read_latest().unwrap(), current(&repo_info(1), &v1));
     }
@@ -340,7 +340,7 @@ mod tests {
             format!("{}.x", latest(&v9)),
             v9.file_name(),
         ] {
-            fs::write(dir.join(name), &repo_info(9)).unwrap();
+            fs::write(dir.join(name), repo_info(9)).unwrap();
         }
         assert_eq!(repo(root.path()).read_latest().unwrap(), current(&v0_bytes(), &v0));
     }

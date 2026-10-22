@@ -322,6 +322,9 @@ impl<'a> BranchAcks<'a> {
     }
 }
 
+/// Deletions by name, in log order, with their positions.
+type Deletions<'a> = HashMap<&'a str, Vec<(usize, Uuid, Option<&'a OpResult>)>>;
+
 /// What expirations and ref deletions may have removed. Every logged intent
 /// counts, whatever its outcome: a failed one may have landed.
 #[derive(Debug)]
@@ -329,8 +332,8 @@ struct Removals<'a> {
     /// Some expiration was logged.
     expired: bool,
     /// Each branch's deletions in log order, with their positions.
-    branch_deletions: HashMap<&'a str, Vec<(usize, Uuid, Option<&'a OpResult>)>>,
-    tag_deletions: HashMap<&'a str, Vec<(usize, Uuid, Option<&'a OpResult>)>>,
+    branch_deletions: Deletions<'a>,
+    tag_deletions: Deletions<'a>,
     /// Each branch's commits in the final repository, by log position.
     landed_positions: HashMap<&'a str, Vec<(usize, Uuid)>>,
     /// The log positions of the commits each slot (host tag and slot) made
@@ -1146,7 +1149,7 @@ mod tests {
         (dir, root, config, snapshot, [manifest, chunk])
     }
 
-    /// The FSx run: GC deleted the chunk of a commit its cutoff came after
+    /// The `FSx` run: GC deleted the chunk of a commit its cutoff came after
     /// and kept the snapshot file. A read-back that finds the commit's own
     /// manifest or chunk missing is part of the commit's warning; one that
     /// finds wrong bytes, or of a commit that started after the cutoff, is a
@@ -1164,7 +1167,7 @@ mod tests {
             assert!(
                 matches!(&verdict.warnings[..], [Warning::GcCutoffAfterSessionStart {
                     snapshot: Some(warned), missing, ..
-                }] if *warned == snapshot && missing == &[key.clone()]),
+                }] if *warned == snapshot && missing == std::slice::from_ref(key)),
                 "{key}: {verdict:?}"
             );
         }
@@ -1576,7 +1579,7 @@ mod tests {
             .unwrap()
     }
 
-    fn is_ack(result: Option<OpResult>) -> bool {
+    fn is_ack(result: Option<&OpResult>) -> bool {
         matches!(result, Some(OpResult::Ack { .. }))
     }
 
@@ -1600,8 +1603,8 @@ mod tests {
     async fn deletions_excuse_what_they_removed() {
         let (_dir, root, config) = repo_root().await;
         let (mut zero, _) = clean_run(&root, &config).await;
-        assert!(is_ack(zero.delete_tag().await.unwrap()));
-        assert!(is_ack(Some(zero.delete_branch().await.unwrap())));
+        assert!(is_ack(zero.delete_tag().await.unwrap().as_ref()));
+        assert!(is_ack(Some(&zero.delete_branch().await.unwrap())));
         assert!(zero.ensure_branch().await.unwrap());
         step(zero.branch_commit().await);
         let verdict = check(&root, &config, false).await;

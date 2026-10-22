@@ -37,6 +37,7 @@ fn generate_unknown_feature_fixture() -> Result<(), Box<dyn Error>> {
     if dir.exists() {
         return Err(format!("{} exists, delete it first", dir.display()).into());
     }
+    #[expect(clippy::create_dir, reason = "never generates into an existing directory")]
     std::fs::create_dir(&dir)?;
     let options = fs_extra::dir::CopyOptions::new().content_only(true);
     fs_extra::dir::copy(data.join("test-repo-v2"), &dir, &options)?;
@@ -121,6 +122,7 @@ async fn generate_deep_ops_log_fixture() -> Result<(), Box<dyn Error>> {
     if let Some(parent) = dir.parent() {
         std::fs::create_dir_all(parent)?;
     }
+    #[expect(clippy::create_dir, reason = "never generates into an existing directory")]
     std::fs::create_dir(dir)?;
 
     let status = |availability, limited_availability_reason| RepoStatus {

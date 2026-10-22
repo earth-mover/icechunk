@@ -286,7 +286,7 @@ async fn copy_of_a_version_a_listing_shows_stale_writes_nothing() {
 
     // A newer commit whose tidy-up hasn't deleted its base yet.
     let base = dir.path().join("repo.d").join(version_file(&v0));
-    std::fs::write(&base, &v0_bytes()).unwrap();
+    std::fs::write(&base, v0_bytes()).unwrap();
     assert_not_on_latest(&copy(&st, &v0).await);
     assert!(!dir.path().join("overwritten").exists());
 
@@ -1085,10 +1085,10 @@ async fn listing_the_root_shows_the_mirror_as_repo() {
     .unwrap();
     let id = Uuid::new_v4();
     std::fs::create_dir_all(dir.path().join(format!("repo.d.tmp.{id}"))).unwrap();
-    std::fs::write(dir.path().join(format!("repo.d.tmp.{id}/0.x")), &v0_bytes()).unwrap();
-    std::fs::write(dir.path().join(format!("repo.legacy.{id}")), &v0_bytes()).unwrap();
-    std::fs::write(dir.path().join(format!("repo.stub.{id}")), &v0_bytes()).unwrap();
-    std::fs::write(dir.path().join(format!("repo.staging.{id}")), &v0_bytes()).unwrap();
+    std::fs::write(dir.path().join(format!("repo.d.tmp.{id}/0.x")), v0_bytes()).unwrap();
+    std::fs::write(dir.path().join(format!("repo.legacy.{id}")), v0_bytes()).unwrap();
+    std::fs::write(dir.path().join(format!("repo.stub.{id}")), v0_bytes()).unwrap();
+    std::fs::write(dir.path().join(format!("repo.staging.{id}")), v0_bytes()).unwrap();
 
     let mut listed: Vec<_> = st
         .list_objects(&ctx, "")

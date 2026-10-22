@@ -268,11 +268,12 @@ nav:
   - Reference:
     - Spec:
       - v2.2 (current): reference/spec-v2-2.md
-      - "Filesystem layout v1": reference/spec-filesystem-layout-v1.md
+      - "Filesystem layout v1 (experimental)": reference/spec-filesystem-layout-v1.md
       - v2.1: reference/spec-v2-1.md
       - v2: reference/spec-v2.md
       - v1: reference/spec-v1.md
     - Version Policy: reference/version-policy.md
+    - Library Compatibility Notes: reference/library-compatibility.md
     - Python API Reference:
       - reference/index.md
       - icechunk.config: reference/config.md

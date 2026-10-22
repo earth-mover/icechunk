@@ -338,7 +338,7 @@ fn late_commit(
         match committed {
             Ok(Ok(OpResult::Ack { .. })) => {}
             Ok(Ok(other)) => {
-                tracing::warn!("the late commit wasn't acknowledged: {other:?}")
+                tracing::warn!("the late commit wasn't acknowledged: {other:?}");
             }
             Ok(Err(err)) => tracing::warn!("the late commit failed: {err:#}"),
             Err(_) => tracing::warn!("the late commit panicked"),
@@ -482,7 +482,7 @@ impl Converter {
             }
             #[cfg(test)]
             Self::InProcess | Self::MissingRepoD { .. } => {
-                tests::in_process_workers(phase, &tag, workers).await?
+                tests::in_process_workers(phase, &tag, workers).await?;
             }
         }
         Ok(())
@@ -619,7 +619,7 @@ fn create_root(root: &ScenarioRoot, config: &ScenarioConfig) -> anyhow::Result<(
     let path = root.root();
     match fs::read_dir(path) {
         Ok(mut entries) => {
-            ensure!(entries.next().is_none(), "{} is not empty", path.display())
+            ensure!(entries.next().is_none(), "{} is not empty", path.display());
         }
         Err(err) if err.kind() == io::ErrorKind::NotFound => {
             fs::create_dir_all(path)

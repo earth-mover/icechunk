@@ -343,10 +343,11 @@ pub fn check_forks(history: &History, network_fs: bool, verdict: &mut Verdict) {
     }
 }
 
+/// An intent: its log, id, op and time, and its outcome with the outcome's time.
+type Operation<'a> = (&'a LogName, Uuid, &'a Op, i64, Option<(&'a OpResult, i64)>);
+
 /// Every intent of every worker log, with its time and its outcome's.
-fn operations(
-    history: &History,
-) -> Vec<(&LogName, Uuid, &Op, i64, Option<(&OpResult, i64)>)> {
+fn operations(history: &History) -> Vec<Operation<'_>> {
     let mut outcomes: BTreeMap<Uuid, (&OpResult, i64)> = BTreeMap::new();
     for (_, record) in history.worker_records() {
         if let Record::Outcome { t_ms, id, result } = record {
@@ -1081,7 +1082,7 @@ mod tests {
         for _ in 0..2 {
             match worker.branch_commit().await.unwrap() {
                 Some(OpResult::Ack { snapshot: Some(snapshot) }) => {
-                    snapshots.push(snapshot)
+                    snapshots.push(snapshot);
                 }
                 other => panic!("expected an ack, got {other:?}"),
             }

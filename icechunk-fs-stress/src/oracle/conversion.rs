@@ -524,6 +524,10 @@ mod tests {
             .convert_to_filesystem_layout()
             .await
             .unwrap();
+        #[expect(
+            clippy::create_dir,
+            reason = "plants a new directory in an existing parent"
+        )]
         fs::create_dir(root.join(format!("{TMP_PREFIX}{}", uuid::Uuid::new_v4())))
             .unwrap();
         let defect = end_state_defect(Direction::FromStandard, root).unwrap();

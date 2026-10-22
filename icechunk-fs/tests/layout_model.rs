@@ -13,7 +13,9 @@
 //! The filesystem follows the rules of `protocol_model.rs`: name operations happen
 //! on the server against the true state, and a stale listing of `repo.d` may show
 //! any marker that directory ever had. Listings of `$ROOT` are fresh (callers nudge
-//! first) unless `stale_root_listings` is set.
+//! first) unless `stale_root_listings` is set. Reads of `$ROOT/repo` are fresh too,
+//! though a client may serve them from its cache: doc 020 lists the false fork
+//! reports and mirror regressions this hides as accepted limits.
 //!
 //! Bounds and abstractions: the conversion to the standard layout attempts its
 //! change twice per run, the code up to nine times (see
@@ -2057,9 +2059,7 @@ impl LayoutModel {
                 // No repository yet: the code fails with `ObjectNotFound`,
                 // changing nothing. The model runs the conversion once one
                 // exists.
-                if state.truth().is_none() {
-                    return None;
-                }
+                state.truth()?;
                 // Finished, but for deleting leftover tmp directories, if `repo`
                 // is the converted standard repo info. Otherwise an orphan
                 // mirror, or `NotFound` for an interrupted creation: an error.
@@ -2112,7 +2112,9 @@ impl LayoutModel {
         if read_only {
             state.readonly.insert(target.hash);
         }
-        let dir = state.dir.as_mut().expect("the rename landed in repo.d");
+        let Some(dir) = state.dir.as_mut() else {
+            unreachable!("the rename landed in repo.d");
+        };
         if !dir.move_marker(target) {
             violate(
                 state,
@@ -2192,12 +2194,12 @@ impl LayoutModel {
             Role::Explicit => Phase::Done,
             // GC's change published its version: now its hook before deleting.
             Role::Gc { changed, .. } if me.phase == Phase::Publish => {
-                let changed = changed.expect("GC's change landed");
+                let Some(changed) = changed else { unreachable!("GC's change landed") };
                 state.writers[index].publish = publish_of(changed, None, None);
                 Phase::PublishBefore
             }
             Role::Gc { changed, mirror, .. } if me.phase == Phase::PublishBefore => {
-                let changed = changed.expect("GC's change landed");
+                let Some(changed) = changed else { unreachable!("GC's change landed") };
                 let left = me.publish.left;
                 state.writers[index].role =
                     Role::Gc { changed: Some(changed), left, mirror };
@@ -2454,7 +2456,8 @@ impl LayoutModel {
                 next.hash = (FROM_STANDARD, conv.serial);
                 next.serial += 1;
                 state.tmps.insert(Tmp::Build(next.hash));
-                state.parents.insert(next.hash, conv.backup.expect("backed up"));
+                let Some(backup) = conv.backup else { unreachable!("backed up") };
+                state.parents.insert(next.hash, backup);
                 next.phase = P::RenameDir;
             }
             (P::RenameDir, Choice::Normal | Choice::LostReply) => {

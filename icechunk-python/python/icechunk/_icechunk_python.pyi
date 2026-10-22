@@ -1632,12 +1632,16 @@ class RepoUpdateRetryConfig:
             Default retry settings for all repo update operations. Any field
             left unset, or all of them when None, takes the repo update default:
             `max_tries`=100, `initial_backoff_ms`=50, `max_backoff_ms`=30,000.
+            Garbage collection and expiration write their update in a single
+            attempt; these settings bound how often they start over.
             Default: None
         """
     @property
     def default(self) -> StorageRetriesSettings | None:
         """
-        Default retry settings for all repo update operations.
+        Default retry settings for all repo update operations. Garbage
+        collection and expiration write their update in a single attempt;
+        these settings bound how often they start over.
 
         Default: None (effective defaults: `max_tries`=100, `initial_backoff_ms`=50, `max_backoff_ms`=30,000)
 
@@ -2078,7 +2082,7 @@ class GCSummary:
     @property
     def storage_leftovers_deleted(self) -> int:
         """
-        Leftovers of the storage backend's commit protocol that it deleted:
+        Leftovers of the storage backend's change protocol that it deleted:
         superseded versions of the `repo` file, and files of crashed or
         abandoned writes. Their bytes are included in `bytes_deleted`. Only
         `filesystem_storage` has such leftovers.
@@ -3383,8 +3387,10 @@ class FilesystemStorage(Storage):
         Raises
         ------
         StorageError
-            With kind `object-not-found` if there is no repository, or kind
-            `mirror-unreadable` if `repo` can't be read or decoded.
+            With kind `object-not-found` if there is no repository, kind
+            `mirror-unreadable` if `repo` can't be read or decoded, or kind
+            `storage-other` if directory listings are stale: nothing was
+            changed, run it again once they refresh.
         ReadOnlyError
             With kind `missing-writer-features` if the repository lists writer
             features this library doesn't implement.

@@ -520,6 +520,10 @@ mod tests {
         let (toggler, log) = toggler_of(&root, &config).await;
         let mirror = root.storage().join(REPO_KEY);
         std::fs::remove_file(&mirror).unwrap();
+        #[expect(
+            clippy::create_dir,
+            reason = "plants a new directory in an existing parent"
+        )]
         std::fs::create_dir(&mirror).unwrap();
         std::fs::write(mirror.join("x"), b"x").unwrap();
         assert!(toggler.hold(Duration::from_millis(10)).await.unwrap());

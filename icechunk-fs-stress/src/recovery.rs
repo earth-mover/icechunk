@@ -410,6 +410,10 @@ pub fn plant_canaries(root: &RunRoot, config: &RunConfig) -> anyhow::Result<Vec<
     {
         let canary = Canary { storage: storage.clone(), name };
         let path = canary.path();
+        #[expect(
+            clippy::create_dir,
+            reason = "a canary must be new: an existing directory would be aged and judged"
+        )]
         let planted = if dir {
             fs::create_dir(&path)
         } else {
@@ -467,7 +471,7 @@ pub fn remove_canaries(canaries: &[Canary]) -> anyhow::Result<()> {
 }
 
 /// The storage root after the sweep: `repo` must exist (or it is broken
-/// history); `*.staging.<id>` files, object_store's `repo#<n>` and
+/// history); `*.staging.<id>` files, `object_store`'s `repo#<n>` and
 /// `repo.d.tmp.<id>/` directories are leftovers the sweep should have
 /// deleted; the data directories are allowed, and staging files inside them
 /// are a warning, as no sweep covers them; any other name is unknown, a

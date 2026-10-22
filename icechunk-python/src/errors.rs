@@ -500,8 +500,9 @@ fn classify_format(kind: &IcechunkFormatErrorKind) -> Classified {
         | K::InvalidFlatBuffer(_)
         | K::InvalidTimestamp
         | K::MissingLocationCompressionDictionary
-        | K::MissingRequiredField(_) => class("FormatError", codes::INVALID_FILE_FORMAT),
-        K::InvalidSpecVersion { .. } => {
+        | K::MissingRequiredField(_)
+        | K::MalformedRepoInfo(_) => class("FormatError", codes::INVALID_FILE_FORMAT),
+        K::InvalidSpecVersion { .. } | K::InvalidRepoInfoSpecVersion { .. } => {
             class("FormatError", codes::UNSUPPORTED_SPEC_VERSION)
         }
         K::UnsupportedOperationForVersion { .. } => {
@@ -526,6 +527,10 @@ fn classify_format(kind: &IcechunkFormatErrorKind) -> Classified {
         }
         K::InvalidArrayMetadata(_) => {
             class("InvalidInputError", codes::INVALID_ARRAY_METADATA)
+        }
+        // A caller's bug: they check what is about to be written, not stored data.
+        K::InvalidWriterFeatureName { .. } | K::InvalidWriterFeatureChange(_) => {
+            class("InternalError", codes::UNKNOWN)
         }
         _ => general(codes::UNKNOWN),
     }

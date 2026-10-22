@@ -72,8 +72,7 @@ Even with a passing run, remember the backend is experimental.
   build machine with the same architecture and C library.
 - **Disk and memory.** See [Safety notes](#safety-notes).
 
-Expected to qualify: local POSIX filesystems, NFSv3 and NFSv4 with a Linux
-client, Lustre, GPFS, CephFS. The [storage guide](../icechunk-python/docs/docs/guides/storage.md#requirements-and-limits-of-filesystem_storage)
+The [storage guide](../icechunk-python/docs/docs/guides/storage.md#requirements-and-limits-of-filesystem_storage)
 lists the backend's requirements and limits.
 
 ## Building

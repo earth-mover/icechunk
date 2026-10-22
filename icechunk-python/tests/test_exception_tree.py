@@ -6,9 +6,13 @@ ErrorKind sync contract, and pickling (tblib compatibility).
 
 import asyncio
 import pickle
+import struct
+from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 import pytest
+import zstandard
 
 import icechunk as ic
 import zarr
@@ -218,6 +222,74 @@ def test_invalid_snapshot_id(repo: ic.Repository) -> None:
     err = excinfo.value
     assert isinstance(err, ValueError)
     assert err.kind == ic.ErrorKind.INVALID_SNAPSHOT_ID
+
+
+# The binary file header: magic, implementation name, spec version, file
+# type, compression.
+HEADER_SIZE = 39
+
+
+def edit_repo_info(path: Path, edit: Callable[[bytearray], None]) -> None:
+    """Applies `edit` to the flatbuffer of the repo info file at `path`."""
+    data = path.read_bytes()
+    payload = bytearray(
+        zstandard.ZstdDecompressor().decompress(
+            data[HEADER_SIZE:], max_output_size=64 * 1024 * 1024
+        )
+    )
+    edit(payload)
+    path.write_bytes(data[:HEADER_SIZE] + zstandard.ZstdCompressor().compress(payload))
+
+
+def uoffset(buf: bytearray, pos: int) -> int:
+    """The position the flatbuffer offset at `pos` points to."""
+    (offset,) = struct.unpack_from("<I", buf, pos)
+    return int(pos + offset)
+
+
+def field_position(buf: bytearray, table: int, field_index: int) -> int:
+    """The position of field `field_index` of the flatbuffer table at `table`."""
+    (vtable_back,) = struct.unpack_from("<i", buf, table)
+    (field_offset,) = struct.unpack_from(
+        "<H", buf, table - vtable_back + 4 + 2 * field_index
+    )
+    assert field_offset, "the field is absent"
+    return int(table + field_offset)
+
+
+# Field indexes in repo.fbs.
+REPO_SPEC_VERSION = 0
+REPO_SNAPSHOTS = 4
+SNAPSHOT_INFO_PARENT_OFFSET = 1
+
+
+def set_spec_version(buf: bytearray, version: int) -> None:
+    buf[field_position(buf, uoffset(buf, 0), REPO_SPEC_VERSION)] = version
+
+
+def set_first_parent_offset(buf: bytearray, parent_offset: int) -> None:
+    snapshots = uoffset(buf, field_position(buf, uoffset(buf, 0), REPO_SNAPSHOTS))
+    first = uoffset(buf, snapshots + 4)
+    pos = field_position(buf, first, SNAPSHOT_INFO_PARENT_OFFSET)
+    struct.pack_into("<i", buf, pos, parent_offset)
+
+
+def test_repo_info_with_an_old_spec_version_is_a_format_error(tmp_path: Path) -> None:
+    ic.Repository.create(ic.local_filesystem_storage(str(tmp_path)))
+    edit_repo_info(tmp_path / "repo", lambda buf: set_spec_version(buf, 1))
+    with pytest.raises(ic.FormatError) as excinfo:
+        ic.Repository.open(ic.local_filesystem_storage(str(tmp_path)))
+    assert excinfo.value.kind == ic.ErrorKind.UNSUPPORTED_SPEC_VERSION
+
+
+def test_malformed_repo_info_is_a_format_error(tmp_path: Path) -> None:
+    ic.Repository.create(ic.local_filesystem_storage(str(tmp_path)))
+    # the only snapshot's parent is out of range
+    edit_repo_info(tmp_path / "repo", lambda buf: set_first_parent_offset(buf, 7))
+    repo = ic.Repository.open(ic.local_filesystem_storage(str(tmp_path)))
+    with pytest.raises(ic.FormatError, match="malformed repo info") as excinfo:
+        list(repo.ancestry(branch="main"))
+    assert excinfo.value.kind == ic.ErrorKind.INVALID_FILE_FORMAT
 
 
 @pytest.mark.parametrize(

@@ -102,7 +102,7 @@ Parent links can change: expiration and garbage collection re-parent snapshots w
   After creation, branches MAY be updated to point to a different snapshot.
 - **Tags** are _immutable_ references to a snapshot.
   A repository MAY contain zero or more tags.
-  After creation, tags MUST NOT be updated. Tag deletion is allowed, but a new tag with the name of a deleted one MUST NOT be created.
+  After creation, tags MUST NOT be updated. Tag deletion is allowed, but a new tag with the name of a deleted one MUST NOT be created. Deleting a tag MUST add its name to `Repo.deleted_tags`.
 
 ## Specification
 
@@ -176,11 +176,11 @@ All data and metadata files MUST be stored within a root directory using the fol
 - `$ROOT/overwritten/` old versions of the repo info object, used as backup and to maintain the ops log
 - `$ROOT/repo.d/` versions of the repo info, only in repositories that use the [filesystem layout](./spec-filesystem-layout-v1.md)
 
-Implementations SHOULD NOT create entries in `$ROOT` other than the ones listed above and those defined by the filesystem layout. [Garbage collection](#garbage-collection) never deletes entries it does not recognize.
+Implementations SHOULD NOT create entries in `$ROOT` other than the ones listed above and those defined by the filesystem layout. [Garbage collection](#garbage-collection-and-expiration) never deletes entries it does not recognize.
 
 A repository [migrated from spec version 1](#repositories-migrated-from-spec-version-1) MAY also contain the spec 1 entries `$ROOT/refs/` and `$ROOT/config.yaml`. They are not used. If `$ROOT/repo` exists, the repository is a spec 2.x repository, whether or not spec 1 entries exist.
 
-Tools that copy, move or archive a repository MUST include every entry under `$ROOT`, including entries they do not recognize. Implementations MUST NOT delete entries they do not recognize, except when a layout this specification describes deletes a whole directory of its own, as a conversion of the [filesystem layout](./spec-filesystem-layout-v1.md#conversions) deletes `repo.d/`; see [Garbage collection and expiration](#garbage-collection-and-expiration).
+Tools that copy, move or archive a repository MUST include every entry under `$ROOT`, including entries they do not recognize.
 
 ### Common Types
 
@@ -273,8 +273,6 @@ Each snapshot in the repository has a `SnapshotInfo` entry in the repo info file
 
 The `flushed_at`, `message` and `metadata` fields repeat the values in the snapshot file, so that the history can be read without fetching snapshot files. Writers MUST copy them from the snapshot file when they add the snapshot to the repo info, and MUST NOT change them afterwards. Readers MAY use either copy.
 
-The initial snapshot is an exception: in a repository created by several processes at once, one of them older than Icechunk 2.4.0, the initial snapshot's `SnapshotInfo.flushed_at` can differ from its snapshot file. Readers MUST accept the difference. Writers MUST NOT change either copy.
-
 The `pruned_ancestor_tx_logs` field, added in spec version 2.1, keeps the transaction logs of ancestors that were removed from the history. Expiration and garbage collection fill it when they re-parent a snapshot, and a commit that amends a snapshot inherits the amended snapshot's list. The list is ordered by ancestry, oldest first. Implementations MUST treat the concatenation of all these transaction logs, followed by the snapshot's own transaction log, as the full transaction history for the snapshot.
 
 Some implementations MAY compact these transaction logs to shorten the list, so readers MUST NOT assume that each entry corresponds to a real commit.
@@ -340,8 +338,8 @@ Readers MUST NOT depend on the page size.
 The status says which operations implementations may perform on the repository:
 
 - `Online`: reads and modifications.
-- `ReadOnly`: reads only. Implementations MUST NOT modify the repository, except to change its status.
-- `Offline`: reserved. Implementations MUST NOT write it. Implementations of spec 2.2 that find it MUST treat it as not `Online`: no modifications, except to change the status. Icechunk libraries up to 2.3 read it as `Online`.
+- `ReadOnly`: reads only. Implementations MUST NOT modify the repository, except to change its status, or to add or remove writer features keeping the status (see [Modify a Repository](#modify-a-repository)).
+- `Offline`: reserved. Implementations MUST NOT write it. Implementations of spec 2.2 that find it MUST treat it as not `Online`: no modifications, except to change the status, or to add or remove writer features keeping the status (see [Modify a Repository](#modify-a-repository)). Icechunk libraries up to 2.3 read it as `Online`.
 
 When `Repo.writer_features` is non-empty, `status` is a **gate** for implementations that predate writer features, and the repository's own status is in `status.underlying`:
 
@@ -352,12 +350,12 @@ When `Repo.writer_features` is non-empty, `status` is a **gate** for implementat
 
 When `Repo.writer_features` is empty, `status.underlying` MUST be absent. Implementations of spec 2.2 or later MUST use `status.underlying`, when present, as the status of the repository, and change the status by changing `status.underlying`.
 
-In a `RepoStatusChangedUpdate` entry, the status the update set is `status.underlying` when present, otherwise `status`. An entry whose status equals the status of the repo info the update replaced records a change of writer features.
+In a `RepoStatusChangedUpdate` entry, the status the update set is `status.underlying` when present, otherwise `status`. A change of writer features also appends a `RepoStatusChangedUpdate` entry, with the status it kept, or `ReadOnly` where it rewrites an `Offline` or undefined status, as the [filesystem layout conversions](./spec-filesystem-layout-v1.md#conversions) do. The entry alone doesn't tell such a change from a change of the status.
 
 A repo info is malformed if `status.underlying` is present without writer features or absent with them, if `status.underlying` has an `underlying`, if the gate's `availability` is not `ReadOnly` or its `set_at` differs from `status.underlying.set_at`, or if `Repo.writer_features` is not sorted or has duplicates. The text of `limited_availability_reason` does not make a repo info malformed. An empty `writer_features` vector is not malformed: it is read as absent. Readers MAY read a malformed repo info and MUST then treat the repository as not `Online`. Implementations MUST treat it as a format error when modifying the repository, except for a status-only change by an implementation that implements every listed feature, which writes a well-formed status.
 
 !!! tip "For implementers"
-    Icechunk libraries 2.0 to 2.3 see the status of a repository with writer features as `ReadOnly`, so they refuse to modify it, except to change its status, which is not supported (see the [version policy](./version-policy.md)). Their error shows the reason, except for garbage collection and expiration, which report only that the repository is read-only. They can still read the repository.
+    Icechunk libraries 2.0 to 2.3 see the status of a repository with writer features as `ReadOnly`: they read the repository and refuse to modify it.
 
 ##### Writer features
 
@@ -379,7 +377,9 @@ This specification defines these writer features:
 
 | Name | Meaning | First implemented in |
 | --- | --- | --- |
-| `filesystem-layout-v1` | The repo info is stored as described in the [filesystem layout, version 1](./spec-filesystem-layout-v1.md). | Icechunk 2.4.0 |
+| `filesystem-layout-v1` | The repo info is stored as described in the [filesystem layout, version 1](./spec-filesystem-layout-v1.md). Experimental. | Icechunk 2.4.0 |
+
+An _experimental_ writer feature may be superseded by a later version under a new name, such as `filesystem-layout-v2`. Implementations that don't implement the new version refuse to modify repositories that list it, as for any writer feature. The definition of an existing version doesn't change. Which versions the Icechunk libraries keep writing is set by the [version policy](./version-policy.md#experimental-writer-features).
 
 ##### Feature flags
 
@@ -634,7 +634,7 @@ The repo info of a migrated repository has spec version `2` in its header and in
 Before any modification, including commits, ref changes, configuration and metadata changes, expiration and garbage collection, an implementation MUST check, against the repo info it is about to replace:
 
 1. that it implements every feature in `Repo.writer_features`;
-1. that the repository's status is `Online`, unless the modification only changes the status, or only adds or removes writer features and keeps the status, as the [filesystem layout conversions](./spec-filesystem-layout-v1.md#conversions) do (they write an `Offline` or undefined status as `ReadOnly`).
+1. that the repository's status is `Online`, unless the modification only changes the status, or only adds or removes writer features and keeps the status.
 
 It MUST fail the modification otherwise.
 
@@ -690,7 +690,9 @@ Usually, a client will want to read from the latest branch (e.g. `main`).
 
 ### Garbage Collection and Expiration
 
-Implementations MAY remove snapshots from the repo info (expiration) and delete objects that the repo info no longer references (garbage collection). Both modify the repository, so the checks in [Modify a repository](#modify-a-repository) apply.
+Expiration removes snapshots from the history. It only rewrites the repo info, with an `ExpirationRanUpdate` entry, and never deletes files. It MAY also delete branches other than `main`, and tags; these deletions have no ops log entries of their own.
+
+Garbage collection deletes files that the repository no longer needs. It MAY also remove from `Repo.snapshots` the snapshots that are not in the ancestry of any ref, with a `GCRanUpdate` entry.
 
 At every point during and after these operations, every object referenced from the current repo info MUST exist. For every `SnapshotInfo` in `Repo.snapshots`, that is:
 
@@ -699,32 +701,13 @@ At every point during and after these operations, every object referenced from t
 - every transaction log file listed in its `pruned_ancestor_tx_logs`;
 - every manifest file its snapshot file references, and every chunk file those manifests reference.
 
+Expiration and garbage collection MUST NOT remove the initial snapshot from `Repo.snapshots`.
+
 Both operations update the repo info with a conditional update, like any other update. If the repo info changed since the operation read it, the operation MUST either recompute its decisions from the new repo info, or fail with an error that says the repository changed during the operation.
 
-#### Removing snapshots from the history
+Garbage collection decides by a cutoff time, which MUST be earlier than the start of every session that may still commit, so that the objects those sessions use are kept. It MAY remove a snapshot from `Repo.snapshots`, or delete a file in `snapshots/`, `manifests/`, `transactions/` or `chunks/`, only if the creation time the storage reports for the file is earlier than the cutoff.
 
-Expiration and garbage collection remove `SnapshotInfo` entries from `Repo.snapshots`.
-
-An operation MUST NOT remove the initial snapshot, or a snapshot that a ref in the resulting repo info points to. So `Repo.snapshots` can shrink, and the parent links in the repo info change.
-
-#### Expiration
-
-Expiration removes from the history the snapshots committed before a cutoff time. It only rewrites the repo info, with an `ExpirationRanUpdate` entry, and never deletes files.
-
-- It removes snapshots whose `flushed_at` is earlier than the cutoff, except snapshots without a parent and snapshots a remaining ref points to.
-- It MAY also delete branches other than `main`, and tags, that point to such snapshots, and then remove those snapshots too. Deleted tags MUST be added to `Repo.deleted_tags`. These deletions have no ops log entries of their own.
-- Surviving snapshots MUST be re-parented as needed.
-
-#### Garbage collection
-
-Garbage collection deletes files that the repository no longer needs, and removes from the repo info the snapshots that are no longer reachable. It decides by a cutoff time, which MUST be earlier than the start of every session that may still commit, so that the objects those sessions write are kept.
-
-1. The _roots_ are the snapshots that refs point to, plus any snapshots the user names. Every snapshot in the ancestry of a root is reachable, and MUST be kept.
-1. A snapshot in `Repo.snapshots` that is not reachable MAY be removed, only if the creation time the storage reports for its snapshot file is earlier than the cutoff. The removal rewrites the repo info with a `GCRanUpdate` entry and re-parents surviving snapshots as needed.
-1. The objects to keep are the files of the snapshots that remain in the repo info, their manifests and chunks, their transaction logs, and every transaction log listed in a `pruned_ancestor_tx_logs` in the repo info.
-1. GC MAY delete a file in `snapshots/`, `manifests/`, `transactions/` or `chunks/` that is not kept, only if the creation time the storage reports for it is earlier than the cutoff.
-
-Garbage collection MUST NOT delete entries it does not recognize, in `$ROOT` or in its subdirectories, except as defined by a layout this specification describes. In `snapshots/`, `manifests/`, `transactions/` and `chunks/`, a name is recognized only if it is exactly the Crockford base 32 encoding of an object id of the right size, as defined in [Common Types](#common-types). Garbage collection MUST NOT delete anything in `overwritten/` or directly in `$ROOT`, except the leftovers that a layout defines, such as the staged files of the filesystem layout, including `$ROOT/repo.staging.<id>`, and its `repo.d.tmp.<id>/` directories, which it deletes by age.
+Garbage collection MUST NOT delete entries it does not recognize, in `$ROOT` or in its subdirectories. In `snapshots/`, `manifests/`, `transactions/` and `chunks/`, a name is recognized only if it is exactly the Crockford base 32 encoding of an object id of the right size, as defined in [Common Types](#common-types). Garbage collection MUST NOT delete anything in `overwritten/` or directly in `$ROOT`, except the leftovers that a layout defines, such as those of the [filesystem layout](./spec-filesystem-layout-v1.md#operations).
 
 ### Create New Tag
 
@@ -739,8 +722,8 @@ A tag can be created from any snapshot.
 ## Changes from spec version 2.1 to 2.2
 
 - Added writer features.
-- Added the status gate.
-- Defined the `filesystem-layout-v1` writer feature and the [filesystem layout, version 1](./spec-filesystem-layout-v1.md).
+- Added the [status gate](#repostatus): a repository that lists writer features stores `ReadOnly` as its status, with a reason naming the features, so that Icechunk libraries before 2.4.0 read it but refuse to modify it. Its own status moves to `status.underlying`.
+- Defined the `filesystem-layout-v1` writer feature (experimental) and the [filesystem layout, version 1](./spec-filesystem-layout-v1.md).
 - Defined what modifying a repository means, and the checks required before it.
 - Reserved the `Offline` status.
 - Defined the feature flag ids `1` to `21`, with `17` reserved. Ids `3` to `5` were already used by Icechunk 2.0.0; the others are new.
@@ -748,8 +731,7 @@ A tag can be created from any snapshot.
 - Reserved the `extra` fields for this specification.
 - Froze the flatbuffers enums and unions, and the header values, for all of spec 2.x.
 - Clarified existing behavior: the header values, the repository status, the ops log and its backups, the configuration fields needed to interoperate, feature flags, relative virtual chunk locations and compressed locations, the consistency of `manifest_files_v2` and `SnapshotInfo` with the snapshot file, repository initialization, repositories migrated from spec version 1, and the cases where a transaction log is missing or lists a node more than once. These clarifications describe repositories written under spec versions 2 and 2.1 as well; they do not claim that every older implementation followed the algorithms in [Garbage collection and expiration](#garbage-collection-and-expiration).
-- The change is backwards compatible. Every 2.x library can read a spec 2.2 repository. Libraries before 2.4.0 cannot modify a repository that lists writer features, except to change its status, which is not supported (see the [version policy](./version-policy.md)).
-- The on-disk format flags repositories as version `2` for spec 2, 2.1 and 2.2.
+- The change is backwards compatible. Every 2.x library can read a spec 2.2 repository. Libraries before 2.4.0 cannot modify a repository that lists writer features.
 
 ## Changes from spec version 2 to 2.1
 

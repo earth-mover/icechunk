@@ -150,9 +150,10 @@ impl FilesystemStorage {
     /// repository's own status is kept, whatever it is.
     ///
     /// Administrative: run it with nothing else using the repository, no
-    /// writer in any process and no other administrative operation; anything
-    /// else is undefined behaviour. If it is interrupted, run it again under
-    /// the same condition: the rerun completes the conversion. It returns
+    /// writer in any process, no process still publishing the mirror and no
+    /// other administrative operation; anything else is undefined behaviour.
+    /// If it is interrupted, run it again under the same condition: the rerun
+    /// completes the conversion. It returns
     /// [`ConversionOutcome::NothingToConvert`] for a repository in the
     /// filesystem layout, and [`StorageErrorKind::ObjectNotFound`] if there is
     /// no repository.
@@ -194,7 +195,9 @@ impl FilesystemStorage {
     /// a malformed repo info, a fork ([`StorageErrorKind::RepositoryForked`]),
     /// which includes a conversion from the standard layout interrupted after
     /// its directory rename, and a `repo` that can't be read or decoded
-    /// ([`StorageErrorKind::MirrorUnreadable`]).
+    /// ([`StorageErrorKind::MirrorUnreadable`]). A fork its publication finds
+    /// after its change landed is also [`StorageErrorKind::RepositoryForked`],
+    /// with the change landed: after recovering the fork, run it again.
     pub async fn convert_to_standard_layout(&self) -> StorageResult<ConversionOutcome> {
         self.sync_data_dirs().await?;
         self.on_repo(|repo| repo.convert_to_standard()).await?.ok_or_else(repo_not_found)

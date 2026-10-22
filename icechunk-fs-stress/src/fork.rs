@@ -258,7 +258,7 @@ fn predecessors(root: &RunRoot, who: &WorkerId) -> anyhow::Result<Earlier> {
         for record in records {
             match record {
                 Record::ForkWritten { fork_hash, .. } => {
-                    earlier = Earlier::Watching(fork_hash)
+                    earlier = Earlier::Watching(fork_hash);
                 }
                 Record::ForkGone { .. } => earlier = Earlier::Erased,
                 _ => {}

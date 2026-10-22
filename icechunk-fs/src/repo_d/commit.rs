@@ -631,7 +631,7 @@ mod tests {
             |hooks| update(root.path(), hooks, &v1_bytes(), &v0),
             || {
                 // Another writer's commit, without its tidy-up.
-                fs::write(dir.join(theirs.file_name()), &other_bytes()).unwrap();
+                fs::write(dir.join(theirs.file_name()), other_bytes()).unwrap();
                 fs::rename(dir.join(latest(&v0)), dir.join(latest(&theirs))).unwrap();
                 assert!(dir.join(ours.file_name()).exists());
             },
@@ -656,7 +656,7 @@ mod tests {
                 assert_eq!(
                     update_plain(root.path(), &other_bytes(), &v0),
                     Updated(theirs.clone())
-                )
+                );
             },
         );
         assert_eq!(result.unwrap(), NotOnLatestVersion);
@@ -704,7 +704,7 @@ mod tests {
         let v0 = seed(root.path());
         let dir = repo_d(root.path());
         let stale = version(0, &other_bytes());
-        fs::write(dir.join(stale.file_name()), &other_bytes()).unwrap();
+        fs::write(dir.join(stale.file_name()), other_bytes()).unwrap();
         let hooks = TestHooks::default().rename(lose_rename_reply);
         let v1 = version(1, &v1_bytes());
         assert_eq!(
@@ -727,7 +727,7 @@ mod tests {
             Point::BeforeRename,
             |hooks| update(root.path(), hooks, &v1_bytes(), &v0),
             || {
-                fs::write(dir.join(v2.file_name()), &other_bytes()).unwrap();
+                fs::write(dir.join(v2.file_name()), other_bytes()).unwrap();
                 fs::rename(dir.join(latest(&v0)), dir.join(latest(&v2))).unwrap();
             },
         );
@@ -1448,7 +1448,7 @@ mod tests {
             Point::BeforeRename,
             |hooks| update(root.path(), hooks, &v1_bytes(), &v0),
             || {
-                fs::write(dir.join(v2.file_name()), &other_bytes()).unwrap();
+                fs::write(dir.join(v2.file_name()), other_bytes()).unwrap();
                 fs::rename(dir.join(latest(&v0)), dir.join(latest(&v2))).unwrap();
             },
         );
@@ -1474,7 +1474,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let v0 = seed(root.path());
         let dir = repo_d(root.path());
-        fs::write(dir.join(version(2, &other_bytes()).file_name()), &other_bytes())
+        fs::write(dir.join(version(2, &other_bytes()).file_name()), other_bytes())
             .unwrap();
         let hooks = TestHooks::default().sabotage(Sabotage::DeleteAboveMarker);
         let v1 = version(1, &v1_bytes());
@@ -1535,7 +1535,7 @@ mod tests {
                 assert_eq!(
                     update_plain(root.path(), &other_bytes(), &v0),
                     Updated(theirs.clone())
-                )
+                );
             },
         );
         assert_eq!(result.unwrap(), NotOnLatestVersion);

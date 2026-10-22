@@ -1085,7 +1085,8 @@ mod tests {
         let forked = |err: &ProtocolError| matches!(err, ProtocolError::Forked(detail) if detail.contains(&mirror_path));
         let unreadable =
             |err: &ProtocolError| matches!(err, ProtocolError::MirrorUnreadable(_));
-        let cases: [(Vec<u8>, &dyn Fn(&ProtocolError) -> bool); 2] =
+        type Refused<'a> = &'a dyn Fn(&ProtocolError) -> bool;
+        let cases: [(Vec<u8>, Refused<'_>); 2] =
             [(featureless_repo_info(9), &forked), (Vec::new(), &unreadable)];
         for (planted, refused) in cases {
             fs::write(mirror(root.path()), &planted).unwrap();

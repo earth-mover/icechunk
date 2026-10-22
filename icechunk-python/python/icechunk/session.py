@@ -449,8 +449,9 @@ class Session:
         icechunk.CommitDurableButRepositoryForkedError
             If the commit landed but the repository is forked. The commit is
             durable and must not be retried; the error carries its snapshot ID.
-        icechunk.NoChangesToCommitError
-            If there are no changes to commit and allow_empty is False.
+        icechunk.SessionStateError
+            With kind `no-changes-to-commit` if there are no changes to commit
+            and allow_empty is False.
         """
         return self._session.commit(
             message,
@@ -501,8 +502,9 @@ class Session:
         icechunk.CommitDurableButRepositoryForkedError
             If the commit landed but the repository is forked. The commit is
             durable and must not be retried; the error carries its snapshot ID.
-        icechunk.NoChangesToCommitError
-            If there are no changes to commit and allow_empty is False.
+        icechunk.SessionStateError
+            With kind `no-changes-to-commit` if there are no changes to commit
+            and allow_empty is False.
         """
         return await self._session.commit_async(
             message,

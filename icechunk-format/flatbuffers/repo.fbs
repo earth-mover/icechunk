@@ -28,7 +28,8 @@ table SnapshotInfo {
     parent_offset: int32;
 
     // Non-leap microseconds since Jan 1, 1970 UTC.
-    // MUST equal Snapshot.flushed_at in the snapshot file.
+    // MUST equal Snapshot.flushed_at in the snapshot file, except for the
+    // initial snapshot (see the specification).
     flushed_at: uint64;
 
     // Commit message. MUST equal Snapshot.message in the snapshot file.
@@ -168,7 +169,8 @@ table Update {
 
 // --8<-- [start:repo_table]
 // The repo info file — the single entry point and only mutable object
-// in an Icechunk V2 repository. Stored at `$ROOT/repo`.
+// in an Icechunk V2 repository. Stored at `$ROOT/repo`, except in the
+// filesystem layout (see the specification).
 table Repo {
 
   // The major spec version of this repository: 2 for every spec 2.x.
@@ -187,7 +189,8 @@ table Repo {
   // MUST be sorted in ascending byte order of SnapshotInfo.id.
   snapshots: [SnapshotInfo] (required);
 
-  // Current repository availability status.
+  // The repository status, or the status gate when writer_features is
+  // non-empty.
   status: RepoStatus (required);
 
   // Repository-level metadata (user attributes).

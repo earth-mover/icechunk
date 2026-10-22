@@ -304,8 +304,11 @@ async fn other_backends_read_the_mirror_and_cannot_write() -> Result<(), Box<dyn
     Ok(())
 }
 
+/// Files with their `/`-separated paths.
+type Files = Vec<(String, Vec<u8>)>;
+
 /// Every file under `root`, keyed by its `/`-separated path.
-fn files(root: &std::path::Path) -> Result<Vec<(String, Vec<u8>)>, Box<dyn Error>> {
+fn files(root: &std::path::Path) -> Result<Files, Box<dyn Error>> {
     let mut files = Vec::new();
     let mut pending = vec![root.to_path_buf()];
     while let Some(dir) = pending.pop() {
@@ -376,9 +379,7 @@ fn rewrite_repo(
     Ok(())
 }
 
-fn sorted_files(
-    root: &std::path::Path,
-) -> Result<Vec<(String, Vec<u8>)>, Box<dyn Error>> {
+fn sorted_files(root: &std::path::Path) -> Result<Files, Box<dyn Error>> {
     let mut files = files(root)?;
     files.sort();
     Ok(files)

@@ -391,6 +391,7 @@ fn deletes(prefixes: &[&str]) -> Vec<Event> {
 }
 
 /// The version of the one repo-info write among `events`.
+#[expect(clippy::panic, reason = "test helper")]
 fn only_change(events: &[Event]) -> VersionInfo {
     let written: Vec<_> = events
         .iter()

@@ -100,6 +100,10 @@ mod tests {
         fs::write(&mirror, b"v1").unwrap();
         assert_eq!(sample(&mirror), Sample::Hash(payload_etag(b"v1")));
         let not_a_file = dir.path().join("dir");
+        #[expect(
+            clippy::create_dir,
+            reason = "plants a new directory in an existing parent"
+        )]
         fs::create_dir(&not_a_file).unwrap();
         assert!(matches!(sample(&not_a_file), Sample::Error(_)));
     }

@@ -174,10 +174,10 @@ mod cli {
         #[arg(long = "max-backoff", value_parser = parse_millis)]
         max_backoff_ms: Option<u32>,
         /// Repository mode: how often the status toggler sets the status
-        /// ReadOnly, holds it, then sets it Online [default: off]
+        /// `ReadOnly`, holds it, then sets it `Online` [default: off]
         #[arg(long, value_parser = parse_duration)]
         readonly_every: Option<Duration>,
-        /// How long the status toggler holds ReadOnly [default: 3s]
+        /// How long the status toggler holds `ReadOnly` [default: 3s]
         #[arg(long, value_parser = parse_duration, requires = "readonly_every")]
         readonly_hold: Option<Duration>,
         /// How often every host reads repo and logs what changed, e.g. 25ms

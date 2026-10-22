@@ -190,7 +190,7 @@ pub enum RepositoryErrorKind {
     )]
     NoAmendForInitialCommit,
     #[error(
-        "repository cannot be updated after {0} attempts, too many concurrent changes"
+        "the repository changed during this update in each of its {0} attempt(s): too many concurrent changes"
     )]
     RepoUpdateAttemptsLimit(u64),
     #[error(

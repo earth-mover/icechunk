@@ -244,7 +244,8 @@ A publication copies a version proved current into `repo.d/mirror.<id>`, checks
 `$ROOT/repo` for a fork (see [Forks](#forks)), and renames the copy over
 `$ROOT/repo`. It then lists `repo.d`, and if the marker has moved on it
 publishes the newer version, for up to four rounds; after that it gives up with
-a warning naming the version it left, the same as a crash at that point. Within
+a warning naming the version it left, the same as a crash at that point, or
+fails, if its last round's rename was refused as busy. Within
 one publication the target never goes backwards: it never publishes a version
 older than one it already published, and when its fork check finds a newer
 version already in `$ROOT/repo` it adopts that version instead of replacing it.
@@ -447,7 +448,8 @@ Converting a repository once every other writer has stopped is safe.
 | Wrong conversion instead of a rerun | The conversion to the standard layout runs while one from it is interrupted | It refuses and names the conversion to rerun | The rerun |
 | Delayed NFSv3 duplicate request | A retransmitted rename of `repo.d` executes after a full round trip of conversions | `repo.d` moves aside | Manual recovery; theoretical |
 | Old creation while the mirror is missing | Icechunk 2.0 to 2.3 creates a repository over a root whose mirror is missing | A fork | Manual recovery |
-| False fork report | The fork check's own listing of `repo.d` is stale (NFS, FUSE) | A fork report without a fork; nothing changes | Running the operation again |
+| False fork report | The fork check's own listing of `repo.d` is stale, or its read of `$ROOT/repo` comes from the client's cache (NFS, FUSE) | A fork report without a fork; nothing changes | Running the operation again |
+| Mirror steps back | The fork check reads an older `$ROOT/repo` from the client's cache (NFS, FUSE) | The publication installs its version over a newer one | The next publication |
 | Rerun misses `repo.d` | The rerun of an interrupted conversion to the standard layout lists `$ROOT` stale (NFS, FUSE) and misses `repo.d` | It reports nothing to convert and leaves `repo.d`, whose current version lacks the feature | Running it again once listings refresh |
 | Spurious conflict | Many changes land, or listings stay stale, after a change's lost reply | A conflict although the change landed | Never a false acknowledgement |
 

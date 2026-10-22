@@ -1294,6 +1294,10 @@ mod tests {
             plant(root.path(), &standard);
             crash_at(root.path(), FromStandardStep::RenameDir);
             let page = num_updates.unwrap_or(DEFAULT_NUM_UPDATES_PER_REPO_INFO_FILE);
+            #[expect(
+                clippy::double_ended_iterator_last,
+                reason = "every change must run, not only the last"
+            )]
             let last =
                 (0..changes).map(|_| writer_change(root.path(), page)).last().unwrap();
             assert_eq!(fs::read(root.path().join("repo")).unwrap(), standard);

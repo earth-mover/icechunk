@@ -611,13 +611,11 @@ async fn verify_reports_its_own_publication_erasing_a_fork() {
     );
 }
 
+type Actors = Vec<tokio::task::JoinHandle<anyhow::Result<()>>>;
+
 /// Runs `actors` (each a worker slot's future) on a one-host run until they
 /// end, writes `done/` and verifies.
-async fn run_in_process(
-    root: &RunRoot,
-    actors: Vec<tokio::task::JoinHandle<anyhow::Result<()>>>,
-    go: SystemTime,
-) -> Report {
+async fn run_in_process(root: &RunRoot, actors: Actors, go: SystemTime) -> Report {
     for actor in actors {
         actor.await.unwrap().unwrap();
     }
@@ -634,11 +632,7 @@ fn worker_id(slot: &str) -> WorkerId {
 async fn judged(
     config: &RunConfig,
     sabotage: icechunk_fs_stress::config::Sabotage,
-    actors: fn(
-        &RunRoot,
-        &RunConfig,
-        SystemTime,
-    ) -> Vec<tokio::task::JoinHandle<anyhow::Result<()>>>,
+    actors: fn(&RunRoot, &RunConfig, SystemTime) -> Actors,
 ) -> (icechunk_fs_stress::selftest::CaseOutcome, Report) {
     use icechunk_fs_stress::{config::FaultFloor, selftest::judge};
 
@@ -836,6 +830,10 @@ async fn a_run_without_a_repository_is_a_harness_failure() {
         ),
         ("holds no repository", |storage: &Path| {
             fs::remove_dir_all(storage).unwrap();
+            #[expect(
+                clippy::create_dir,
+                reason = "plants a new directory in an existing parent"
+            )]
             fs::create_dir(storage).unwrap();
         }),
     ] {

@@ -431,6 +431,7 @@ pub fn logged_renames(history: &History) -> Vec<LoggedRename<'_>> {
     let mut renames = Vec::new();
     for (name, records) in &history.logs {
         // Index, hash, fork check, read, time.
+        #[expect(clippy::type_complexity, reason = "the comment names the fields")]
         let mut announced: Vec<(usize, &str, Option<i64>, Option<i64>, i64)> = Vec::new();
         for (i, record) in records.iter().enumerate() {
             match record {
@@ -1817,7 +1818,7 @@ mod tests {
         for _ in 0..2 {
             match worker.branch_commit().await.unwrap() {
                 Some(OpResult::Ack { snapshot: Some(snapshot) }) => {
-                    snapshots.push(snapshot)
+                    snapshots.push(snapshot);
                 }
                 other => panic!("expected an ack, got {other:?}"),
             }
