@@ -11,7 +11,7 @@
   --il-5ea0d1ff: #2f6fa8;
   --il-6b7785ff: #9aa5b1;
   --il-8b97a6ff: #5c6773;
-  --il-9775faff: #a653ff;
+  --il-9775faff: #1f2933;
   --il-d8a05aff: #b7791f;
   --il-e57a77ff: #d64545;
   --il-e7edf3ff: #1f2933;
@@ -29,6 +29,14 @@
 }
 :root[data-theme="dark"] {
   --il-0d1117ff: #272a35;
+  --il-9775faff: #e7edf3;
+}
+/* Match the padding of the docs' own figure panels. */
+:root:root main {
+  padding: 24px;
+}
+:root:root main > section:first-of-type {
+  margin-top: 0;
 }
 /* The back link to the illustrated index has no place in the docs. */
 .crumb {

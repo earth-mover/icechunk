@@ -101,12 +101,9 @@ async fn repo_with_later_configuration(
 async fn write_stored_config(repo: &Repository, config: &Value) -> TestResult {
     let spec_version = repo.spec_version();
     repo.asset_manager()
-        .update_repo_info(
-            repo.config().repo_update_retries().retries(),
-            |info, backup, _| {
-                Ok(Arc::new(info.set_config(spec_version, config, backup, 100).inject()?))
-            },
-        )
+        .update_repo_info(repo.config().repo_update_retries(), |info, backup, _| {
+            Ok(Arc::new(info.set_config(spec_version, config, backup, 100).inject()?))
+        })
         .await?;
     Ok(())
 }

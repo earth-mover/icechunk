@@ -1,6 +1,6 @@
 # Changelog
 
-## Python Icechunk Library (unreleased)
+## Python Icechunk Library [unreleased]
 
 ### Features
 
@@ -10,6 +10,7 @@
 
 ### Fixes
 
+- `Repository.ops_log_async` and `Repository.async_ancestry` no longer block the asyncio event loop. They used to read the repo info file from storage before they returned the iterator. That read now happens on the first iteration, so storage errors are raised there instead of at the call. The same applies to `Repository.ops_log` and `Repository.ancestry`, which share the implementation.
 - Icechunk opens repositories whose configuration holds settings it doesn't know or can't decode, such as keys added by later versions or virtual chunk containers for storage it doesn't support (including in the JavaScript/WASM build), ignores them, and keeps them unchanged when it changes the configuration. Reading chunks from a virtual chunk container it can't decode fails.
 - Several processes creating the same repository at once no longer record an initial snapshot time that differs from the snapshot file: the initial snapshot and transaction log are written only if they don't exist, and every creator records the snapshot file that stays. As a consequence, `Repository.create(..., check_clean_root=False)` over an existing initial snapshot file adopts that file.
 - Garbage collection deletes only files whose names are exactly the encoding of an object id of the right size; other files in `snapshots/`, `manifests/`, `transactions/` and `chunks/` are kept.

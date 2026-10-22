@@ -38,7 +38,7 @@
 #hero-container {
   position: relative;
   text-align: center;
-  background: linear-gradient(180deg, var(--md-primary-fg-color) 0%, var(--md-primary-fg-color--dark) 100%);
+  background: linear-gradient(180deg, var(--ic-hero-top) 0%, var(--ic-hero-bottom) 100%);
 }
 
 .mdx-hero {
@@ -124,7 +124,7 @@ h3.hero-subtitle {
   display: grid;
   grid-template-columns: repeat(5, 1fr);
   gap: 0.75rem;
-  margin: -4.5rem 0 2rem;
+  margin: -4.5rem 0 1rem;
 }
 
 a.pane {
@@ -136,7 +136,7 @@ a.pane {
   padding: 1.25rem 0.75rem 1rem;
   border-radius: 12px;
   border: 1px solid #d6e6f2;
-  background: #f3f8fc;
+  background: var(--md-default-bg-color);
   color: var(--md-default-fg-color);
   box-shadow: 0 4px 16px rgba(29, 70, 127, 0.08);
   transition: box-shadow 0.15s;
@@ -154,19 +154,21 @@ a.pane:hover {
 }
 
 .pane-icon svg {
-  width: 2.25rem;
-  height: 2.25rem;
-  fill: var(--md-accent-fg-color);
+  width: 2rem;
+  height: 2rem;
+  fill: var(--ic-blue);
 }
 
+/* Smaller than the section headings, which the cards only point to. */
 .pane-title {
-  font-size: 1.15rem;
+  font-size: 0.9rem;
   font-weight: 700;
-  margin: 0.5rem 0 0.4rem;
+  margin: 0.5rem 0 0.3rem;
 }
 
 .pane-line {
-  font-size: 0.85rem;
+  font-size: 0.7rem;
+  color: var(--md-default-fg-color--light);
 }
 
 .pane-more {
@@ -193,9 +195,37 @@ a.pane:hover .pane-more {
   }
 }
 
+/* Five full cards fill more than a phone screen, so they become a list. */
 @media screen and (max-width: 45em) {
   .panes {
     grid-template-columns: 1fr;
+    gap: 0.5rem;
+  }
+
+  a.pane {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    column-gap: 0.9rem;
+    align-items: center;
+    text-align: left;
+    padding: 0.75rem 1rem;
+  }
+
+  .pane-icon {
+    grid-row: span 2;
+  }
+
+  .pane-icon svg {
+    width: 1.6rem;
+    height: 1.6rem;
+  }
+
+  .pane-title {
+    margin: 0;
+  }
+
+  .pane-more {
+    display: none;
   }
 }
 
@@ -208,20 +238,41 @@ a.pane:hover .pane-more {
   display: grid;
   grid-template-columns: 2fr 3fr;
   gap: 2rem;
-  align-items: center;
-  margin: 3rem 0;
+  align-items: start;
+  margin: 4rem 0 0;
   scroll-margin-top: 1rem;
 }
 
 .benefit-row h2,
 .benefit-row h3 {
   margin-top: 0;
+  font-weight: 700;
+  color: var(--md-default-fg-color);
+}
+
+.benefit-row h2 {
+  letter-spacing: -0.01em;
+}
+
+.benefit-row h3 {
+  font-size: 1.15em;
+}
+
+/* A subsection sits close under its section, with a rule to show the link. */
+.benefit-row--sub {
+  margin-top: 2rem;
+}
+
+.benefit-row--sub .benefit-text {
+  padding-left: 1rem;
+  border-left: 3px solid color-mix(in srgb, var(--ic-blue) 35%, transparent);
 }
 
 .benefit-figure {
-  padding: 1rem;
+  padding: 1.25rem;
   border-radius: 12px;
   background: var(--md-code-bg-color);
+  container-type: inline-size;
 }
 
 /* Diagrams pad themselves; extra padding here would push them under their
@@ -241,18 +292,19 @@ a.pane:hover .pane-more {
 @media screen and (max-width: 60em) {
   .benefit-row {
     grid-template-columns: 1fr;
+    gap: 1.25rem;
   }
 }
 
 /* mkdocs-breadcrumbs-plugin prepends a "Home" breadcrumb to every page, the
    home page included, and its exclude_paths does not stop that. */
-#home-content > .by-line-wrapper + p {
+#home-content > .panes + p {
   display: none;
 }
 
 /* By-line */
 .by-line-wrapper {
-  margin: 16px auto 0;
+  margin: 4rem auto 1rem;
   width: 50%;
 }
 
@@ -395,6 +447,9 @@ a.pane:hover .pane-more {
   width: 100%;
   height: auto;
   font-family: var(--md-text-font-family);
+  --fmt-tiff: #2a9d8f;
+  --fmt-netcdf: #b7791f;
+  --fmt-hdf5: #cc79a7;
 }
 
 .fig text {
@@ -406,29 +461,9 @@ a.pane:hover .pane-more {
   font-size: 15px;
 }
 
-.fig .sub {
-  fill: var(--md-default-fg-color--light);
-  font-size: 13px;
-}
-
-.fig .title {
-  font-size: 16px;
-  font-weight: 700;
-}
-
-.fig .start {
-  text-anchor: start;
-}
-
 .fig .box {
   fill: var(--md-default-bg-color);
-  stroke: var(--md-accent-fg-color);
-  stroke-width: 2;
-}
-
-.fig .frame {
-  fill: none;
-  stroke: var(--md-default-fg-color--lighter);
+  stroke: var(--ic-blue);
   stroke-width: 2;
 }
 
@@ -444,53 +479,118 @@ a.pane:hover .pane-more {
   stroke-dasharray: 3 3;
 }
 
-.fig .icon,
-.fig .head {
-  fill: var(--md-default-fg-color--light);
-}
-
-.fig .arrow {
-  stroke: var(--md-default-fg-color--light);
-  stroke-width: 2.5;
-}
-
-.fig .accent {
-  fill: var(--md-accent-fg-color);
-}
-
 .fig text.on-color {
-  fill: #fff;
+  fill: var(--ic-on-blue);
   font-weight: 700;
 }
 
 /* Versioning: branch and tag labels */
 .fig .branch {
-  fill: var(--md-primary-fg-color--dark);
+  fill: var(--ic-blue-strong);
 }
 
 .fig .tag {
   fill: #b7791f;
 }
 
+.fig .tag + text.on-color {
+  fill: #2b1d05;
+}
+
 .fig .pill {
   font-size: 14px;
 }
 
-/* Format and client: language chips */
-.fig .chip {
-  fill: none;
-  stroke: var(--md-accent-fg-color);
-  stroke-width: 1.5;
+/* Below this width the horizontal commit graph shrinks its labels too far. */
+.fig-narrow {
+  display: none;
+  max-width: 24rem;
+  margin: 0 auto;
 }
 
-.fig .chip-text {
-  font-size: 12.5px;
+@container (max-width: 640px) {
+  .fig-wide {
+    display: none;
+  }
+
+  .fig-narrow {
+    display: block;
+  }
 }
 
-.fig .or {
+/* HTML figure text matches the SVG label sizes at 1:1 scale. */
+.fig-title {
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--md-default-fg-color);
+}
+
+.fig-label {
+  font-size: 0.75rem;
+}
+
+.fig-sub {
+  font-size: 0.65rem;
+  line-height: 1.35;
+  color: var(--md-default-fg-color--light);
+}
+
+.fig-mono {
+  font-family: var(--md-code-font-family);
+  font-size: 0.6rem;
+  color: var(--md-default-fg-color--light);
+  text-align: center;
+}
+
+.fig-icon {
+  width: 1.8rem;
+  height: 1.8rem;
+  flex: none;
   fill: var(--md-default-fg-color--light);
-  font-size: 14px;
-  font-style: italic;
+}
+
+/* Scale: one column per size, on a shared axis */
+.scale {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.scale-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.15rem;
+  padding-inline: 0.5rem;
+  text-align: center;
+}
+
+.scale-grid {
+  width: 100%;
+  height: auto;
+  margin: 0.6rem 0 0.4rem;
+}
+
+.scale-grid + .fig-sub {
+  margin-bottom: 0.6rem;
+}
+
+.scale-unit {
+  position: relative;
+  align-self: stretch;
+  margin: auto -0.5rem 0;
+  padding-top: 0.6rem;
+  border-top: 2px solid var(--md-default-fg-color--lighter);
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.scale-unit::before {
+  content: "";
+  position: absolute;
+  top: -5px;
+  left: 50%;
+  height: 8px;
+  border-left: 2px solid var(--md-default-fg-color--lighter);
 }
 
 /* Mixed chunks: colors match the zero-copy diagram (archive orange, Icechunk
@@ -505,24 +605,9 @@ a.pane:hover .pane-more {
   stroke-dasharray: 3 2;
 }
 
-.fig .tiff {
-  fill: color-mix(in srgb, #2a9d8f 18%, transparent);
-  stroke: #2a9d8f;
-}
-
 .fig .netcdf {
   fill: color-mix(in srgb, #d8a05a 25%, transparent);
-  stroke: #b7791f;
-}
-
-.fig .hdf5 {
-  fill: color-mix(in srgb, #a653ff 18%, transparent);
-  stroke: #a653ff;
-}
-
-.fig .legend {
-  fill: none;
-  stroke: var(--md-default-fg-color--light);
+  stroke: var(--fmt-netcdf);
 }
 
 .fig .native {
@@ -531,12 +616,251 @@ a.pane:hover .pane-more {
   stroke-width: 2;
 }
 
-.fig text.on-native {
-  fill: #0b1f33;
+.ck {
+  border: 2px solid #2f6fa8;
+  border-radius: 6px;
 }
 
-.fig .mono {
+.ck--virtual {
+  border-style: dashed;
+}
+
+.ck--tiff {
+  border-color: var(--fmt-tiff);
+  background: color-mix(in srgb, var(--fmt-tiff) 18%, transparent);
+}
+
+.ck--netcdf {
+  border-color: var(--fmt-netcdf);
+  background: color-mix(in srgb, #d8a05a 25%, transparent);
+}
+
+.ck--hdf5 {
+  border-color: var(--fmt-hdf5);
+  background: color-mix(in srgb, var(--fmt-hdf5) 22%, transparent);
+}
+
+.ck--native {
+  background: #5ea0d1;
+}
+
+.ck--native .fig-title,
+.ck--native .fig-sub {
+  color: #0b1f33;
+}
+
+.ck--legend {
+  border-color: var(--md-default-fg-color--light);
+}
+
+.mix {
+  display: grid;
+  grid-template-columns: minmax(9rem, 1fr) 2fr;
+  gap: 1.75rem;
+  align-items: center;
+}
+
+.mix-sources {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.mix-sources .ck {
+  display: flex;
+  flex-direction: column;
+  padding: 0.4rem 0.75rem;
+}
+
+.mix-array {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.mix-cells,
+.mix-ticks {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 0.3rem;
+  width: 100%;
+  padding: 0 0.45rem;
+}
+
+.mix-cells {
+  padding: 0.35rem;
+  border: 2px solid var(--md-default-fg-color--lighter);
+  border-radius: 8px;
+}
+
+.mix-cells .ck {
+  aspect-ratio: 34 / 52;
+  border-radius: 4px;
+}
+
+.mix-ticks {
+  margin-top: -0.3rem;
+}
+
+.fig-legend {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  align-self: flex-start;
+  margin-top: 0.5rem;
+  font-size: 0.65rem;
+  color: var(--md-default-fg-color--light);
+}
+
+.fig-legend .ck {
+  display: inline-block;
+  width: 0.9rem;
+  height: 0.9rem;
+  margin-right: 0.5rem;
+  vertical-align: -0.15rem;
+  border-radius: 3px;
+}
+
+@container (max-width: 560px) {
+  .mix {
+    grid-template-columns: 1fr;
+    gap: 1.25rem;
+  }
+
+  .mix-sources {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .mix-ticks .fig-mono {
+    font-size: 0.5rem;
+    white-space: nowrap;
+    letter-spacing: -0.04em;
+  }
+}
+
+/* Format and client: language chips */
+.fig-chip {
+  padding: 0.1rem 0.55rem;
+  border: 1.5px solid var(--ic-blue);
+  border-radius: 999px;
+  font-size: 0.62rem;
+}
+
+.ns {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) 5.5rem minmax(0, 1fr);
+  gap: 1rem;
+  align-items: center;
+}
+
+.ns-computer {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  padding: 1rem;
+  border: 2px solid var(--md-default-fg-color--lighter);
+  border-radius: 14px;
+}
+
+.ns-head {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.ns-code {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 0.55rem;
+  border: 2px solid var(--ic-blue);
+  border-radius: 8px;
+  background: var(--md-default-bg-color);
+}
+
+.ns-code::after {
+  content: "";
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  height: 1rem;
+  border-left: 2px solid var(--md-default-fg-color--lighter);
+}
+
+.ns-lib {
+  padding: 0.8rem;
+  border-radius: 8px;
+  background: var(--ic-blue);
+  color: var(--ic-on-blue);
+  font-size: 0.8rem;
+  font-weight: 700;
+  text-align: center;
+}
+
+.ns-langs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.ns-io {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.3rem;
+  text-align: center;
+}
+
+.ns-arrow {
+  width: 100%;
+  height: auto;
   fill: var(--md-default-fg-color--light);
-  font-family: var(--md-code-font-family);
-  font-size: 12px;
+  stroke: var(--md-default-fg-color--light);
+  stroke-width: 2.5;
+}
+
+.ns-stores {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.ns-store {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  column-gap: 0.75rem;
+  align-items: center;
+}
+
+.ns-store .fig-icon {
+  grid-row: span 2;
+  width: 2.6rem;
+  height: 2.6rem;
+}
+
+.ns-or {
+  padding-left: 3.35rem;
+  font-size: 0.7rem;
+  font-style: italic;
+  color: var(--md-default-fg-color--light);
+}
+
+@container (max-width: 560px) {
+  .ns {
+    grid-template-columns: 1fr;
+  }
+
+  .ns-io {
+    flex-direction: row;
+    justify-content: center;
+  }
+
+  .ns-arrow {
+    width: 2.5rem;
+    transform: rotate(90deg);
+  }
 }

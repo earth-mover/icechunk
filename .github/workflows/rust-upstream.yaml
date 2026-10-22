@@ -24,7 +24,7 @@ env:
   CARGO_NET_RETRY: 10
   RUST_BACKTRACE: short
   RUSTFLAGS: "-D warnings"
-  PIXI_VERSION: "v0.72.0"
+  PIXI_VERSION: "v0.82.1"
   # Title of the issue the report job keeps up to date. Pinned here so the
   # comment step below can find that issue.
   ZARRS_ISSUE_TITLE: "Nightly zarrs upstream test failed"
@@ -51,7 +51,7 @@ jobs:
 
       # No cargo cache: the build is dominated by icechunk itself, which is a path
       # dependency and never cached, so the 800 MB entry saved no measurable time.
-      - uses: prefix-dev/setup-pixi@d3f436a425481402e6a95a1d1fc10331c708cd9e # v0.10.2
+      - uses: prefix-dev/setup-pixi@9dabb60412d3d2d967a8d682f7ce01317af40514 # v0.11.0
         with:
           pixi-version: ${{ env.PIXI_VERSION }}
           cache: false

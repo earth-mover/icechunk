@@ -16,17 +16,9 @@ unmaintained = "workspace"
 ignore = [
   # generator crate: transitive dev-dependency via noxious-client, only used in tests
   "RUSTSEC-2020-0151",
-  # rustls-webpki 0.101.7 name constraint bugs: transitive dep via aws-smithy-http-client
-  # -> rustls 0.21. No upgrade path until AWS SDK drops rustls 0.21. Low impact: reachable
-  # only after signature verification and requires CA misissuance to exploit.
-  "RUSTSEC-2026-0098",
-  "RUSTSEC-2026-0099",
-  # rustls-webpki v0.101.7 has a panic related to certificate list revocation.
-  # we don't enable the `clr` feature that would trigger it.
-  "RUSTSEC-2026-0104",
   # h2 unbounded empty DATA frames (low severity): patched only in h2 >= 0.4.16.
-  # The h2 0.3 line is a transitive dep via aws-smithy-http-client -> hyper 0.14
-  # with no patched release. No upgrade path until the AWS SDK drops that stack.
+  # The h2 0.3 line has no patched release. It is a transitive dev-dependency via
+  # noxious-client -> reqwest 0.11 -> hyper 0.14, only used in tests.
   "RUSTSEC-2026-0258",
 ]
 

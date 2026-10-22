@@ -1,16 +1,20 @@
 import pickle
-import time
+import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
 from icechunk import (
+    AzureCredentials,
+    AzureRefreshableCredential,
     IcechunkError,
     Repository,
     S3Options,
     S3StaticCredentials,
     Storage,
+    azure_credentials,
+    azure_refreshable_credentials,
     s3_refreshable_credentials,
     s3_storage,
 )
@@ -202,8 +206,7 @@ def test_s3_refreshable_credentials_pickle_with_optimization(
         allow_http=True,
         force_path_style=True,
         bucket="testbucket",
-        prefix="test_refreshable_credentials_pickle_optimization-"
-        + str(int(time.time() * 1000)),
+        prefix=f"test_refreshable_credentials_pickle_optimization-{uuid.uuid4()}",
         get_credentials=creds_obj,
         scatter_initial_credentials=scatter_initial_credentials,
     )
@@ -217,7 +220,35 @@ def test_s3_refreshable_credentials_pickle_with_optimization(
 
     # now we pickle it, use the copy, and check get_credentials is not called again
     repo = pickle.loads(pickle.dumps(repo))
-    repo.ancestry(branch="main")
+    list(repo.ancestry(branch="main"))
 
     called_only_once = path.read_text() == "."
     assert called_only_once == scatter_initial_credentials
+
+
+def get_azure_bearer() -> AzureRefreshableCredential.BearerToken:
+    return AzureRefreshableCredential.BearerToken("token", expires_after=None)
+
+
+@pytest.mark.parametrize(
+    "scatter_initial_credentials",
+    [False, True],
+)
+def test_azure_refreshable_credentials_accept_variant_factory(
+    scatter_initial_credentials: bool,
+) -> None:
+    """Regression for #2137: mypy rejected a factory returning a concrete variant."""
+    assert isinstance(get_azure_bearer(), AzureRefreshableCredential)
+    creds = azure_refreshable_credentials(
+        get_azure_bearer, scatter_initial_credentials=scatter_initial_credentials
+    )
+    assert isinstance(creds, AzureCredentials.Refreshable)
+    any_creds = azure_credentials(
+        get_credentials=get_azure_bearer,
+        scatter_initial_credentials=scatter_initial_credentials,
+    )
+    assert isinstance(any_creds, AzureCredentials.Refreshable)
+    assert isinstance(
+        AzureCredentials.Refreshable(pickle.dumps(get_azure_bearer), get_azure_bearer()),
+        AzureCredentials.Refreshable,
+    )

@@ -506,8 +506,10 @@ impl RepoUpdateRetryConfig {
         })
     }
 
-    pub fn retries(&self) -> &RetriesSettings {
-        self.default.as_ref().unwrap_or(Self::default_retries())
+    /// The configured settings, with each unset field taken from the repo
+    /// update defaults rather than the generic storage ones.
+    pub fn retries(&self) -> RetriesSettings {
+        Self::default_retries().merge(self.default.unwrap_or_default())
     }
 
     pub fn merge(&self, other: Self) -> Self {
@@ -1209,6 +1211,38 @@ mod tests {
             set.merge(other).max_concurrent_manifest_fetches_during_commit,
             Some(4)
         );
+    }
+
+    #[icechunk_macros::test]
+    fn test_repo_update_retries_unset_fields_use_repo_update_defaults() {
+        use crate::{config::RepoUpdateRetryConfig, storage::RetriesSettings};
+        use std::num::NonZeroU16;
+
+        let repo_defaults = RetriesSettings {
+            max_tries: NonZeroU16::new(100),
+            initial_backoff_ms: Some(50),
+            max_backoff_ms: Some(30_000),
+        };
+        assert_eq!(RepoUpdateRetryConfig::default().retries(), repo_defaults);
+
+        // setting one field must not drop the others to the storage defaults
+        let partial = RepoUpdateRetryConfig {
+            default: Some(RetriesSettings {
+                initial_backoff_ms: Some(10),
+                ..Default::default()
+            }),
+        };
+        assert_eq!(
+            partial.retries(),
+            RetriesSettings { initial_backoff_ms: Some(10), ..repo_defaults }
+        );
+
+        let full = RetriesSettings {
+            max_tries: NonZeroU16::new(3),
+            initial_backoff_ms: Some(1),
+            max_backoff_ms: Some(2),
+        };
+        assert_eq!(RepoUpdateRetryConfig { default: Some(full) }.retries(), full);
     }
 
     #[icechunk_macros::test]

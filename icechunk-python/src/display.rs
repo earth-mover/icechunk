@@ -323,7 +323,7 @@ pub(crate) fn dataclass_html_repr(cls_name: &str, fields: &[(&str, &str)]) -> St
     out
 }
 
-#[pyclass(skip_from_py_object, name = "AncestryGraph")]
+#[pyclass(name = "AncestryGraph")]
 #[derive(Debug, Clone)]
 pub(crate) struct PyAncestryGraph {
     inner: AncestryGraph,

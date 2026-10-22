@@ -127,7 +127,7 @@ where
     let backoff = ExponentialBuilder::new()
         .with_min_delay(Duration::from_millis(retry_config.initial_backoff_ms() as u64))
         .with_max_delay(Duration::from_millis(retry_config.max_backoff_ms() as u64))
-        .with_max_times(retry_config.max_tries().get() as usize)
+        .with_max_times(retry_config.max_tries().get() as usize - 1)
         .with_jitter()
         .build();
 
@@ -395,6 +395,39 @@ mod tests {
         ops::pointed_snapshots,
         test_utils::{logging_asset_manager, repo_with_converging_refs},
     };
+
+    #[tokio::test]
+    async fn test_retry_on_repo_info_update_makes_at_most_max_tries_attempts() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        use crate::{
+            config::RepoUpdateRetryConfig,
+            ops::{GCError, retry_on_repo_info_update},
+            repository::{RepositoryError, RepositoryErrorKind},
+            storage::RetriesSettings,
+        };
+
+        let retries = RepoUpdateRetryConfig {
+            default: Some(RetriesSettings {
+                max_tries: NonZeroU16::new(3),
+                initial_backoff_ms: Some(1),
+                max_backoff_ms: Some(1),
+            }),
+        };
+        let attempts = AtomicUsize::new(0);
+        let res: Result<(), _> =
+            retry_on_repo_info_update(Some(&retries), "test", || {
+                attempts.fetch_add(1, Ordering::SeqCst);
+                async {
+                    Err(GCError::Repository(RepositoryError::capture(
+                        RepositoryErrorKind::RepoInfoUpdated,
+                    )))
+                }
+            })
+            .await;
+        assert!(res.is_err());
+        assert_eq!(attempts.load(Ordering::SeqCst), 3);
+    }
 
     #[tokio::test]
     async fn test_pointed_snapshots_duplicate() -> Result<(), Box<dyn std::error::Error>>
