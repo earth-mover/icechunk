@@ -12,6 +12,9 @@ repository recovers and cleans up.
 We use it to qualify filesystems. If you want to run `filesystem_storage` on
 your own filesystem, run it there and [send us the report](#what-to-send-us).
 
+If you only want to test your filesystem and send us the results, follow the
+shorter [testing guide](TESTING.md) instead of this README.
+
 ## What it tests
 
 - **No lost updates, across processes and hosts.** Every acknowledged update
@@ -89,11 +92,17 @@ The binary is `target/release/fs-stress`. Build every host from the same
 commit: the tool doesn't check that all hosts run the same build.
 
 Alternatively, build one fully static binary and copy it to every x86_64
-Linux host, whatever its C library. In the repository's Nix dev shell:
+Linux host, whatever its C library. It needs the
+[development environment](https://icechunk.io/en/latest/reference/contributing/#setting-up-your-development-environment),
+Rust's `x86_64-unknown-linux-musl` target and a musl C compiler (with rustup on
+Debian or Ubuntu: `rustup target add x86_64-unknown-linux-musl` and
+`apt install musl-tools`; the repository's Nix dev shell has both):
 
 ```sh
-just fs-stress-static
+CC_x86_64_unknown_linux_musl=musl-gcc just fs-stress-static
 ```
+
+In the Nix dev shell, run `just fs-stress-static` without the variable.
 
 It prints the binary's path and its sha256.
 
@@ -109,9 +118,9 @@ the same [knobs](#knobs) as `init`, without `--hosts`.
 
 Progress goes to stderr: the estimated data volume, a status line every
 `--progress-every` (default `5s`, `0` turns it off), the wind-down, and the
-phases of the check. Stdout
-gets only the final summary. The exit code is 0 for a pass, 1 for a failure,
-3 for an error of the tool itself or its setup.
+phases of the check. Stdout gets only the final summary and what to do next.
+The exit code is 0 for a pass, 1 for a failure, 3 for an error of the tool
+itself or its setup.
 
 ## Several hosts
 
@@ -156,25 +165,12 @@ gets only the final summary. The exit code is 0 for a pass, 1 for a failure,
 
 Details:
 
-- **Late hosts are refused.** The run starts with the hosts registered when
-  the `--hosts`-th one arrives. A host that registers after that exits with
-  code 2, and the run goes on without it.
 - **Host names.** A host's tag defaults to `<hostname>-<pid>`; `--tag`
   overrides it. `workers --workers` overrides the run's workers per host for
   this host.
 - **Stopping early.** `fs-stress stop --root R` tells every host to stop; they
   notice within a second. Hosts still waiting for the go exit with code 2.
   `verify` still checks a stopped run.
-- **Waiting for hosts.** `verify` takes the participants from `go` and waits
-  up to `--done-timeout` (default `10m`) for each one's `done/` entry. If
-  hosts are still missing, it runs only the read-only checks, skips the
-  publication of `repo`, the recovery write, aging and sweep, and says so in
-  the report. Run it again
-  once they finished. A host whose `workers` process died never writes its
-  `done/` entry; send us that partial report.
-- **One full check per run.** The recovery write and the sweep change the
-  repository, so `verify` refuses a run root it already verified fully. A
-  `verify` interrupted before its recovery write can run again.
 - **Exit codes.** `workers`: 0, 2 for a late host, 1 for other errors.
   `verify`: 0 for a pass, 1 for violations, 3 for errors of the tool or its
   setup. A report whose only violations are `Harness` ones exits with 3. With
@@ -182,6 +178,67 @@ Details:
   writing can make the others look wrong. The summary then says
   "provisional: hosts still missing (…)" and `verify` exits with 3; verify
   again once they finished.
+
+## Qualification
+
+`fs-stress qualify` runs the fixed test we use to qualify a filesystem: a
+storage-mode run, then a repository-mode run, checked together into one
+result. Please run it unchanged.
+
+On one host:
+
+```sh
+fs-stress qualify run --root /path/on/fs/qualify-1
+```
+
+On several hosts, as in [Several hosts](#several-hosts):
+
+```sh
+fs-stress qualify init --root /path/on/fs/qualify-1 --hosts 3   # on one host
+fs-stress qualify workers --root /path/on/fs/qualify-1          # on every host
+fs-stress qualify verify --root /path/on/fs/qualify-1           # on one host, at the end
+```
+
+`qualify workers` takes part in the storage-mode run, then in the
+repository-mode run, even if the first went wrong, with the same tag in both.
+The repository-mode run starts once every host registered for it, or 10
+minutes after a host registered, with the hosts registered by then; the
+summary names the hosts missing from it. `qualify stop --root R` stops both
+runs.
+
+| | Storage mode | Repository mode |
+|---|---|---|
+| Duration | 5m | 10m |
+| GC | | on, default margin and interval |
+| `--external-kill-every` | 10s | 10s |
+| `--mirror-sample-every` | 25ms | 25ms |
+| `--readonly-every` | | 10s |
+
+Every other setting keeps its default. Only `--hosts` (`init`), `--workers`
+(workers per host, default 8) and `--max-backoff` (default 100ms) can change.
+
+The whole qualification needs up to about 10 GB of free space on the
+filesystem under test, whatever the number of hosts and workers; usually
+under 1 GB on network filesystems. Most of it is the backup of the repo info
+that Icechunk keeps in `storage/overwritten/` for every change.
+
+`qualify verify` (and `qualify run`) verifies each run as `verify` does, then
+prints the combined summary: the overall result and the build, each run's
+summary, the hosts missing from the second run, and what to do next. A run
+that hasn't started yet makes the result provisional: run `qualify verify`
+again once every host finished. A second `qualify verify` refuses a run
+already verified fully, as `verify` does, and shows its earlier report.
+
+Exit codes. `qualify workers`: 1 if either run hit an error, else 2 if this
+host was too late for either run, else 0. `qualify verify` and `qualify run`:
+1 if either run failed, else 3 if either is an error or provisional, else 0.
+
+```
+R/qualify.json      the preset, hosts, workers, max back-off, the build
+R/storage-mode/     the storage-mode run's run root
+R/repository-mode/  the repository-mode run's run root
+R/summary.txt       what qualify verify printed
+```
 
 ## Driving several hosts from one machine
 
@@ -450,10 +507,13 @@ mode, the status toggler (`10s`).
 ## Reading the report
 
 `verify` and `run` print a summary and write the full report to
-`report.json` in the run root. The first line says `PASS` or `FAIL`. Then
-come the hosts with their filesystem type, local or network; the operation
-counts and faults fired; violations; warnings; how long the recovery write
-took; and notes.
+`report.json` in the run root, and what they printed to `summary.txt`. The
+first line says `PASS` or `FAIL`. Then come the build (the Icechunk version
+and the commit fs-stress was built from, as `fs-stress --version` shows it),
+with a note if some hosts ran a different build; the hosts with their
+filesystem type, local or network; the operation counts and faults fired;
+violations; warnings; how long the recovery write took; and notes. Last comes
+what to do next.
 
 Conflicts are normal: all workers race for the same key or branch, and most
 attempts lose. The counts are in the stats. "Refused" counts operations the
@@ -565,7 +625,7 @@ any host is on a network filesystem, the whole run is judged as one.
   worked on another storage root, or none). It says nothing about the
   filesystem.
 
-### Warnings: worth a look, not a failure
+### Warnings
 
 - **`LostReplyConflict`**: on a network filesystem, an update that reported a
   conflict landed anyway. This is the documented limitation of NFSv3 and
@@ -826,25 +886,43 @@ run root, use it. It checks:
   local filesystem the same end state is a `ConversionEndState` (`repo.d
   exists`) right away.
 
-It prints a summary and writes `report.json` in its root, with every
-violation of the stress phases too; each phase's `verify` report is in
-`phase-<k>/report.json`. The exit codes are `verify`'s.
+It prints a summary and writes `report.json` and `summary.txt` in its root,
+with every violation of the stress phases too; each phase's `verify` report
+is in `phase-<k>/report.json`. The exit codes are `verify`'s.
 
 ## What to send us
 
-From the run root:
+```sh
+fs-stress bundle --root /path/on/fs/stress-1
+```
 
-- `report.json`;
-- the summary that `verify` or `run` printed;
-- `hosts/*.json`;
-- if the run failed, `logs/` as well (compressed);
-- the commit you built, and anything unusual about the setup (mount options,
-  server, load).
+This packs the results into one file,
+`fs-stress-<pass|fail>-<UTC time>.tar.gz` in the current directory, and
+prints its path and size. `--output FILE` names another file; `bundle` never
+overwrites one. It takes a run root, a qualification's root or a conversion
+scenario's root. Send the file in the #icechunk channel of the
+[Earthmover community Slack](https://join.slack.com/t/earthmover-community/shared_invite/zt-2cwje92ir-xU3CfdG8BI~4CJOJy~sceQ)
+or in a direct message to an Icechunk developer there, or open an
+[issue](https://github.com/earth-mover/icechunk/issues) without attaching it,
+and we'll contact you with a private way to send it. Tell us anything unusual
+about the setup (mount options, server, load).
 
-**These files identify your systems.** They contain hostnames, the
-filesystem's mount line (which includes the file server's name and the export
-path), kernel versions and the filesystem type. Remove what you can't share,
-and don't attach them to a public issue unless that's fine with you.
+The file holds every file under the root (`run.json`, `control`, `go`,
+`hosts/`, `done/`, `logs/`, `report.json`, `summary.txt`, `qualify.json`,
+`scenario.json`), but none of the repository's data under `storage/`, and no
+earlier bundles. If any run didn't pass or has no report, the file also holds
+every repository's `repo`, `repo.d/` and a listing, `storage-listing.txt`:
+every entry under `storage/` with its size and modification time. `bundle.json` gives the fs-stress build, when and
+with which command the file was made, and the files left out: symbolic
+links, other files that aren't regular files, and files that vanished or
+failed to read.
+
+**The file identifies your systems.** It contains hostnames, the
+filesystem's mount line (which includes the file server's name and the
+export path), kernel versions, the filesystem type and the path of the run
+root. `bundle` removes none of it. If you'd rather not share these details
+publicly, send the file privately: in a direct message to an Icechunk
+developer on Slack, or open an issue without it and we'll contact you.
 
 ## Cleanup
 
@@ -875,7 +953,8 @@ only processes it started itself.
 R/run.json          configuration, written by init
 R/control           wait, go with the participants, or stop
 R/go                participant list, decided by one host at the go
-R/hosts/<tag>.json  each registered host: hostname, kernel, mount line, fs type
+R/hosts/<tag>.json  each registered host: hostname, kernel, mount line, fs type,
+                    the fs-stress build
 R/done/<tag>.json   each finished host
 R/logs/             logs, one JSON record per line:
   <tag>.<slot>.<n>.log   worker <slot>'s incarnation n: 0, 1, … for writers,
@@ -889,6 +968,7 @@ R/logs/             logs, one JSON record per line:
   verify.fork.<k>.log    a fork erasure verify found
 R/storage/          the repository
 R/report.json       written by verify
+R/summary.txt       what verify printed
 ```
 
 The host tags `init`, `verify` and `scenario` are reserved, and so are the
@@ -900,13 +980,15 @@ The conversion scenario's root:
 R/scenario.json     its configuration, which its converters read
 R/storage/          the repository, shared by every round
 R/phase-<k>/        round k: a run root on R/storage/ (run.json, control, go,
-                    hosts/, done/, report.json for its stress phase) whose
-                    logs/ also hold scenario.<slot>.<n>.log: the converters
+                    hosts/, done/, report.json and summary.txt for its
+                    stress phase) whose logs/ also hold
+                    scenario.<slot>.<n>.log: the converters
                     (from-standard, to-standard, n counting runs), the
                     commits in the standard layout (standard), the writers
                     during an interrupted conversion (writer) and a planted
                     standard write (plant)
 R/report.json       the scenario's report
+R/summary.txt       what the scenario printed
 ```
 
 Nothing in the run root records where the filesystem is mounted on each host,

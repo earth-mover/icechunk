@@ -160,9 +160,8 @@ fs-stress-selftest parent=env("TMPDIR", "/tmp") *args:
 
 [group('test')]
 [script]
-[doc("Build a fully static (musl) fs-stress binary to copy to other Linux hosts; prints its path and sha256")]
-fs-stress-static:
-  target=x86_64-unknown-linux-musl
+[doc("Build a fully static (musl) fs-stress binary for target to copy to other Linux hosts; prints its path and sha256")]
+fs-stress-static $target="x86_64-unknown-linux-musl":
   cargo build --profile fs-stress-dist --target "$target" -p icechunk-fs-stress
   bin="${CARGO_TARGET_DIR:-target}/$target/fs-stress-dist/fs-stress"
   if ! file "$bin" | grep -q 'static.*linked'; then

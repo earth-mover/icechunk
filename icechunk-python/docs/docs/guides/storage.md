@@ -331,7 +331,7 @@ Icechunk can also store a repository in a filesystem, given the path to the loca
 
 !!! warning "Experimental"
 
-    `filesystem_storage` is experimental. Feedback on how it behaves on different filesystems is welcome on the [issue tracker](https://github.com/earth-mover/icechunk/issues).
+    `filesystem_storage` is experimental. Feedback on how it behaves on different filesystems is welcome on the [issue tracker](https://github.com/earth-mover/icechunk/issues). To test it on your filesystem and send us the results, see the [testing guide](https://github.com/earth-mover/icechunk/blob/main/icechunk-fs-stress/TESTING.md).
 
 #### Limitations
 

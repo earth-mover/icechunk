@@ -51,6 +51,7 @@ clap = { version = "4.6", features = ["derive"] }
 criterion = { version = "0.8.2", features = ["async_tokio"] }
 dialoguer = "0.12.0"
 dirs = "7.0.0"
+flate2 = "1.1.10"
 flatbuffers = "25.12.19"
 flexbuffers = "25.12.19"
 fs_extra = "1.3.0"
@@ -92,6 +93,7 @@ shuttle = "0.9.1"
 shuttle-tokio = { version = "1.0.0", features = ["rt-multi-thread", "macros"] }
 strsim = "0.11"
 syn = { version = "3.0", features = ["full"] }
+tar = "0.4.46"
 tempfile = "3.27.0"
 test-log = { version = "0.2.21", default-features = false, features = ["trace", "color", "unstable"] }
 test-strategy = "0.4.5"

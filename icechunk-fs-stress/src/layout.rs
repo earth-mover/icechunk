@@ -7,6 +7,8 @@ use std::{
 
 use anyhow::{Context as _, ensure};
 
+use crate::config::Mode;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunRoot {
     root: PathBuf,
@@ -31,19 +33,7 @@ impl RunRoot {
 
     /// Creates the root, which must be missing or empty, and its directories.
     pub fn create_dirs(&self) -> anyhow::Result<()> {
-        let root = &self.root;
-        match fs::read_dir(root) {
-            Ok(mut entries) => {
-                ensure!(entries.next().is_none(), "{} is not empty", root.display());
-            }
-            Err(err) if err.kind() == io::ErrorKind::NotFound => {
-                fs::create_dir_all(root)
-                    .with_context(|| format!("creating {}", root.display()))?;
-            }
-            Err(err) => {
-                return Err(err).with_context(|| format!("reading {}", root.display()));
-            }
-        }
+        create_empty_dir(&self.root)?;
         [self.hosts_dir(), self.done_dir(), self.logs_dir(), self.storage()]
             .iter()
             .try_for_each(|dir| {
@@ -109,12 +99,76 @@ impl RunRoot {
     pub fn report_json(&self) -> PathBuf {
         self.root.join("report.json")
     }
+
+    /// The summary printed with the report, next to `report.json`.
+    pub fn summary(&self) -> PathBuf {
+        self.root.join("summary.txt")
+    }
+}
+
+/// Creates `dir`, which must be missing or empty.
+fn create_empty_dir(dir: &Path) -> anyhow::Result<()> {
+    match fs::read_dir(dir) {
+        Ok(mut entries) => {
+            ensure!(entries.next().is_none(), "{} is not empty", dir.display());
+            Ok(())
+        }
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {
+            fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))
+        }
+        Err(err) => Err(err).with_context(|| format!("reading {}", dir.display())),
+    }
+}
+
+/// The root of `qualify`: `qualify.json`, a run root for each mode,
+/// `storage-mode/` and `repository-mode/`, and `summary.txt`, the combined
+/// summary.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QualifyRoot {
+    root: PathBuf,
+}
+
+impl QualifyRoot {
+    pub fn new(root: PathBuf) -> Self {
+        Self { root }
+    }
+
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
+    /// Creates the root, which must be missing or empty.
+    pub fn create_dir(&self) -> anyhow::Result<()> {
+        create_empty_dir(&self.root)
+    }
+
+    pub fn qualify_json(&self) -> PathBuf {
+        self.root.join("qualify.json")
+    }
+
+    /// The run root of `mode`'s run.
+    pub fn run(&self, mode: Mode) -> RunRoot {
+        RunRoot::new(self.root.join(qualify_run_dir(mode)))
+    }
+
+    pub fn summary(&self) -> PathBuf {
+        self.root.join("summary.txt")
+    }
+}
+
+/// The directory of `mode`'s run under a [`QualifyRoot`].
+pub fn qualify_run_dir(mode: Mode) -> &'static str {
+    match mode {
+        Mode::Storage => "storage-mode",
+        Mode::Repository => "repository-mode",
+    }
 }
 
 /// The conversion scenario's root: one `storage/` that every phase shares,
-/// `scenario.json`, `report.json`, and a run root `phase-<k>/` for each round
-/// `k`, from 1, holding that round's logs, its stress phase's `run.json`,
-/// `control`, `go`, `hosts/`, `done/` and `report.json`.
+/// `scenario.json`, `report.json`, `summary.txt`, and a run root `phase-<k>/`
+/// for each round `k`, from 1, holding that round's logs, its stress phase's
+/// `run.json`, `control`, `go`, `hosts/`, `done/`, `report.json` and
+/// `summary.txt`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScenarioRoot {
     root: PathBuf,
@@ -138,7 +192,7 @@ impl ScenarioRoot {
         self.root.join("scenario.json")
     }
 
-    /// The scenario's own run root, for its `report.json`.
+    /// The scenario's own run root, for its `report.json` and `summary.txt`.
     pub fn top(&self) -> RunRoot {
         RunRoot::with_storage(self.root.clone(), self.storage())
     }

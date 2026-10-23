@@ -9,6 +9,7 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+use icechunk::format::format_constants::ICECHUNK_LIB_VERSION;
 use icechunk_fs_stress::{
     config::{Mode, PointName, RunConfig},
     control::{Control, read_control},
@@ -276,6 +277,11 @@ fn storage_run_with_default_faults_passes() {
     let report: serde_json::Value =
         serde_json::from_slice(&fs::read(root.join("report.json")).unwrap()).unwrap();
     assert_eq!(report["passed"], true);
+    assert_eq!(report["build"]["icechunk_version"], ICECHUNK_LIB_VERSION);
+    assert!(stdout.contains(&format!("build: Icechunk {ICECHUNK_LIB_VERSION}, commit ")));
+    let next = format!("run `fs-stress bundle --root {}`", root.display());
+    assert!(stdout.contains(&next), "{next} missing from {stdout}");
+    assert_eq!(fs::read_to_string(root.join("summary.txt")).unwrap(), stdout);
 }
 
 #[test]
@@ -343,4 +349,112 @@ fn selftest_detects_every_case_in_both_modes() {
         let line = lines.iter().find(|line| line.starts_with(&legacy)).unwrap();
         assert!(line.contains("LostUpdate"), "{line}");
     }
+}
+
+/// The hidden changes to the preset that make `qualify` short enough for a
+/// test.
+const QUALIFY_SHORT: [&str; 5] =
+    ["--duration", "15s", "--gc-margin", "5s", "--no-fault-floor"];
+
+#[test]
+#[ignore = "spawns stress processes; run with just fs-stress-process-tests"]
+fn qualify_run_passes_and_a_second_verify_reads_both_reports_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("q");
+    let root_arg = root.to_str().unwrap();
+    let args =
+        [&["qualify", "run", "--root", root_arg, "--workers", "4"][..], &QUALIFY_SHORT]
+            .concat();
+    let (status, stdout, stderr) =
+        run_logged(dir.path(), &args, Duration::from_secs(600));
+    assert_eq!(status.code(), Some(0), "{stdout}\n{stderr}");
+    assert!(stdout.starts_with("PASS: fs-stress qualification, Icechunk "), "{stdout}");
+    assert!(stdout.contains("so this result is not a qualification"), "{stdout}");
+    for phase in [
+        "needs up to about 10 GB of free space",
+        "starting the storage-mode run",
+        "starting the repository-mode run",
+        "verifying the storage-mode run",
+        "verifying the repository-mode run",
+    ] {
+        assert!(stderr.contains(phase), "{phase:?} missing from {stderr}");
+    }
+    for (run, mode) in [("storage-mode", "storage"), ("repository-mode", "repository")] {
+        let run = root.join(run);
+        let report: serde_json::Value =
+            serde_json::from_slice(&fs::read(run.join("report.json")).unwrap()).unwrap();
+        assert_eq!(report["passed"], true, "{report}");
+        let summary = fs::read_to_string(run.join("summary.txt")).unwrap();
+        assert!(summary.starts_with(&format!("PASS: {mode} mode, 1 host(s), 15s")));
+        assert!(!summary.contains("bundle"), "{summary}");
+        assert!(stdout.contains(&summary), "{summary} missing from {stdout}");
+    }
+    let qualify: serde_json::Value =
+        serde_json::from_slice(&fs::read(root.join("qualify.json")).unwrap()).unwrap();
+    assert_eq!(qualify["hosts"], 1);
+    assert_eq!(qualify["workers_per_host"], 4);
+    assert_eq!(qualify["overrides"]["duration"], 15_000);
+    let next = format!("run `fs-stress bundle --root {root_arg}`");
+    assert!(stdout.contains(&next), "{next} missing from {stdout}");
+    assert_eq!(fs::read_to_string(root.join("summary.txt")).unwrap(), stdout);
+
+    let (status, again, stderr) = run_logged(
+        dir.path(),
+        &["qualify", "verify", "--root", root_arg],
+        Duration::from_secs(120),
+    );
+    assert_eq!(status.code(), Some(0), "{again}\n{stderr}");
+    assert_eq!(stderr.matches("this run was already verified").count(), 2, "{stderr}");
+    assert_eq!(again, stdout);
+}
+
+#[test]
+#[ignore = "spawns stress processes; run with just fs-stress-process-tests"]
+fn qualify_second_run_starts_without_a_host_that_missed_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("q");
+    let root_arg = root.to_str().unwrap();
+    let init = [
+        &["qualify", "init", "--root", root_arg, "--hosts", "2", "--workers", "2"][..],
+        &QUALIFY_SHORT,
+    ]
+    .concat();
+    let (status, stdout, stderr) = run_logged(dir.path(), &init, TIMEOUT);
+    assert!(status.success(), "{stdout}\n{stderr}");
+    assert!(stdout.contains("(2 hosts expected)"), "{stdout}");
+    assert!(stdout.contains("needs up to about 10 GB of free space"), "{stdout}");
+
+    let a_stderr = dir.path().join("a.stderr");
+    let a = fs_stress()
+        .args(["qualify", "workers", "--root", root_arg, "--tag", "a"])
+        .args(["--second-run-go-after", "3s"])
+        .stdin(Stdio::null())
+        .stderr(fs::File::create(&a_stderr).unwrap())
+        .spawn()
+        .unwrap();
+    // Takes part in the first run only.
+    let b = fs_stress()
+        .args(["workers", "--root"])
+        .arg(root.join("storage-mode"))
+        .args(["--tag", "b"])
+        .stdin(Stdio::null())
+        .spawn()
+        .unwrap();
+    let statuses = wait_all(vec![a, b], Duration::from_secs(300));
+    let a_stderr = fs::read_to_string(a_stderr).unwrap();
+    assert!(statuses.iter().all(ExitStatus::success), "{statuses:?}\n{a_stderr}");
+    assert!(a_stderr.contains("starting with 1/2 hosts"), "{a_stderr}");
+
+    let (status, stdout, stderr) = run_logged(
+        dir.path(),
+        &["qualify", "verify", "--root", root_arg],
+        Duration::from_secs(300),
+    );
+    assert_eq!(status.code(), Some(0), "{stdout}\n{stderr}");
+    assert!(stdout.contains("PASS: storage mode, 2 host(s)"), "{stdout}");
+    assert!(stdout.contains("PASS: repository mode, 1 host(s)"), "{stdout}");
+    assert!(
+        stdout.contains("hosts in the first run but not in the second: b\n"),
+        "{stdout}"
+    );
 }

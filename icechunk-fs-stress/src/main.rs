@@ -16,24 +16,31 @@ mod cli {
     use std::{
         path::PathBuf,
         process::ExitCode,
+        sync::LazyLock,
         time::{Duration, SystemTime},
     };
 
     use anyhow::{Context as _, ensure};
     use clap::{Args, Parser, Subcommand, ValueEnum};
     use icechunk_fs_stress::{
+        bundle::Bundle,
         config::{
             Backend, DEFAULT_READONLY_HOLD, FaultConfig, ForkConfig, GcConfig, Mode,
             PointName, ReadOnlyConfig, RunConfig, WorkerId, parse_duration,
         },
         control,
         convert::{self, Converter, ScenarioConfig},
-        env_info::default_tag,
+        env_info::{Build, HostDone, default_tag},
         fork::{self, FORK_SLOT},
-        layout::{RunRoot, ScenarioRoot, is_valid_slot, is_valid_tag},
+        layout::{
+            QualifyRoot, RunRoot, ScenarioRoot, is_valid_slot, is_valid_tag,
+            qualify_run_dir,
+        },
         log::Direction,
+        next_steps::next_steps,
+        qualify::{self, Combined, Overrides, Qualify, human_duration},
         repo_mode,
-        report::Report,
+        report::{self, Report},
         selftest::{self, SelftestOptions},
         storage_mode,
         supervisor::{
@@ -50,9 +57,12 @@ mod cli {
         util::SubscriberInitExt as _,
     };
 
+    static VERSION: LazyLock<String> =
+        LazyLock::new(|| format!("({})", Build::current()));
+
     /// Stress test for icechunk's filesystem storage.
     #[derive(Debug, Parser)]
-    #[command(name = "fs-stress", version, args_override_self = true)]
+    #[command(name = "fs-stress", version = VERSION.as_str(), args_override_self = true)]
     struct Cli {
         #[command(subcommand)]
         command: Command,
@@ -84,6 +94,47 @@ mod cli {
         /// Run one conversion of the scenario; spawned by `convert-scenario`.
         #[command(hide = true)]
         Conversion(ConversionArgs),
+        /// The fixed qualification of a filesystem: a storage-mode run of
+        /// 5m, then a repository-mode run of 10m, verified together.
+        Qualify {
+            #[command(subcommand)]
+            command: QualifyCommand,
+        },
+        /// Pack a run's results into a .tar.gz file to send us.
+        ///
+        /// It takes every file under the root apart from the repository's
+        /// data. If the run didn't pass, it adds the repository's `repo`,
+        /// `repo.d/` and a list of its files.
+        ///
+        /// Exit code: 0; 3 on an error.
+        Bundle(BundleArgs),
+    }
+
+    #[derive(Debug, Subcommand)]
+    enum QualifyCommand {
+        /// Create the qualification's root and both runs in it.
+        Init(QualifyInitArgs),
+        /// Run this host's workers in both runs, one after the other.
+        ///
+        /// The storage-mode run comes first, then the repository-mode run,
+        /// even if the first went wrong. The repository-mode run starts once
+        /// every host registered for it, or 10m after this host did, with the
+        /// hosts registered by then.
+        ///
+        /// Exit code: 0; 2 if this host was too late for either run; 1 if
+        /// either run hit an error.
+        Workers(QualifyWorkersArgs),
+        /// Check both runs and write the combined summary.
+        ///
+        /// Exit code: 0 for a pass; 1 if either run failed; else 3 if either
+        /// is an error or provisional.
+        Verify(VerifyArgs),
+        /// Init, run workers on this host and verify, in one command.
+        ///
+        /// Exit code: as for `qualify verify`.
+        Run(QualifyRunArgs),
+        /// Tell every host to stop, in both runs.
+        Stop(StopArgs),
     }
 
     impl Command {
@@ -96,6 +147,10 @@ mod cli {
                     | Self::Run(_)
                     | Self::Selftest(_)
                     | Self::ConvertScenario(_)
+                    | Self::Bundle(_)
+                    | Self::Qualify {
+                        command: QualifyCommand::Verify(_) | QualifyCommand::Run(_)
+                    }
             )
         }
     }
@@ -191,6 +246,61 @@ mod cli {
         /// Fork again 500ms after each erasure of the fork.
         #[arg(long, requires = "fork_at")]
         fork_repeat: bool,
+    }
+
+    #[derive(Debug, Args)]
+    struct QualifyInitArgs {
+        /// The qualification's root, which must be missing or empty.
+        #[arg(long)]
+        root: PathBuf,
+        /// How many hosts run `qualify workers`.
+        #[arg(long)]
+        hosts: u32,
+        #[command(flatten)]
+        config: QualifyConfigArgs,
+    }
+
+    #[derive(Debug, Args)]
+    struct QualifyRunArgs {
+        /// The qualification's root, which must be missing or empty.
+        #[arg(long)]
+        root: PathBuf,
+        #[command(flatten)]
+        config: QualifyConfigArgs,
+    }
+
+    /// What `qualify` lets the user change, and the hidden changes to its
+    /// preset that tests make for short runs.
+    #[derive(Debug, Args)]
+    struct QualifyConfigArgs {
+        /// Workers per host [default: 8]
+        #[arg(long)]
+        workers: Option<u32>,
+        /// Longest retry back-off of a conflicting repository update
+        /// [default: 100ms]
+        #[arg(long = "max-backoff", value_parser = parse_millis)]
+        max_backoff_ms: Option<u32>,
+        #[arg(long, hide = true, value_parser = parse_duration)]
+        duration: Option<Duration>,
+        #[arg(long, hide = true, value_parser = parse_duration)]
+        gc_margin: Option<Duration>,
+        #[arg(long, hide = true)]
+        no_fault_floor: bool,
+    }
+
+    #[derive(Debug, Args)]
+    struct QualifyWorkersArgs {
+        #[arg(long)]
+        root: PathBuf,
+        /// This host's name in both runs [default: <hostname>-<pid>]
+        #[arg(long)]
+        tag: Option<String>,
+        /// [default: the runs' workers per host]
+        #[arg(long)]
+        workers: Option<u32>,
+        /// For tests: how long to wait for the other hosts in the second run.
+        #[arg(long, hide = true, value_parser = parse_duration, default_value = "10m")]
+        second_run_go_after: Duration,
     }
 
     #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -317,6 +427,18 @@ mod cli {
     }
 
     #[derive(Debug, Args)]
+    struct BundleArgs {
+        /// A run root, a qualification's root or a conversion scenario's
+        /// root.
+        #[arg(long)]
+        root: PathBuf,
+        /// The file to write, which must not exist [default:
+        /// fs-stress-<pass|fail>-<UTC time>.tar.gz in the current directory]
+        #[arg(long)]
+        output: Option<PathBuf>,
+    }
+
+    #[derive(Debug, Args)]
     struct StopArgs {
         #[arg(long)]
         root: PathBuf,
@@ -391,7 +513,9 @@ mod cli {
             }
             Command::Verify(args) => {
                 let root = RunRoot::new(args.root.clone());
-                report(&runtime()?.block_on(verify::verify(&root, args.done_timeout))?)
+                let report =
+                    runtime()?.block_on(verify::verify(&root, args.done_timeout))?;
+                print_report(&root, &report)
             }
             Command::Run(args) => run_one_host(args),
             Command::Selftest(args) => selftest(args),
@@ -419,15 +543,150 @@ mod cli {
                     ))
                     .map(success)
             }
+            Command::Qualify { command } => run_qualify(command),
+            Command::Bundle(args) => bundle(args).map(success),
         }
     }
 
-    fn report_scenario(root: &ScenarioRoot, report: &Report) -> anyhow::Result<ExitCode> {
-        print!("{}", report.summary());
+    fn bundle(args: &BundleArgs) -> anyhow::Result<()> {
+        let command_line: Vec<String> =
+            std::env::args_os().map(|arg| arg.to_string_lossy().into_owned()).collect();
+        let bundled = Bundle::collect(&args.root)?.write(
+            args.output.as_deref(),
+            &command_line,
+            chrono::Utc::now(),
+        )?;
+        println!("wrote {} ({})", bundled.path.display(), human_bytes(bundled.size));
+        if bundled.skipped > 0 {
+            println!(
+                "{} files were left out or cut short; bundle.json lists them.",
+                bundled.skipped
+            );
+        }
         println!(
-            "reports: {}/report.json and phase-*/report.json",
+            "The file contains this run's host names and mount details. If you'd \
+             rather not share them publicly, send it in a direct message to an \
+             Icechunk developer on Slack, or ask in an issue for a private way."
+        );
+        Ok(())
+    }
+
+    /// How often `qualify` prints a status line to stderr.
+    const QUALIFY_PROGRESS_EVERY: Duration = Duration::from_secs(5);
+
+    fn run_qualify(command: &QualifyCommand) -> anyhow::Result<ExitCode> {
+        match command {
+            QualifyCommand::Init(args) => {
+                let root = QualifyRoot::new(args.root.clone());
+                let qualify = qualify_config(args.hosts, &args.config);
+                runtime()?.block_on(qualify::init(&root, &qualify))?;
+                println!(
+                    "initialized {} ({} hosts expected); {}",
+                    root.root().display(),
+                    qualify.hosts,
+                    qualify_plan(&qualify)?
+                );
+                Ok(ExitCode::SUCCESS)
+            }
+            QualifyCommand::Workers(args) => {
+                let root = QualifyRoot::new(args.root.clone());
+                let tag = args.tag.clone().unwrap_or_else(default_tag);
+                let runs = runtime()?.block_on(qualify::workers(
+                    &root,
+                    &tag,
+                    args.workers,
+                    QUALIFY_PROGRESS_EVERY,
+                    args.second_run_go_after,
+                ))?;
+                for (mode, done) in &runs {
+                    let run = qualify_run_dir(*mode);
+                    match done {
+                        Ok(done) => println!("{run} run: {}", done_line(done)),
+                        Err(err) => eprintln!("fs-stress: {run} run: {err:#}"),
+                    }
+                }
+                Ok(ExitCode::from(qualify::workers_exit_code(
+                    runs.iter().map(|(_, r)| r),
+                )))
+            }
+            QualifyCommand::Verify(args) => {
+                let root = QualifyRoot::new(args.root.clone());
+                let combined =
+                    runtime()?.block_on(qualify::verify(&root, args.done_timeout))?;
+                print_combined(&root, &combined)
+            }
+            QualifyCommand::Run(args) => {
+                let root = QualifyRoot::new(args.root.clone());
+                let qualify = qualify_config(1, &args.config);
+                eprintln!("{}: {}", root.root().display(), qualify_plan(&qualify)?);
+                let combined = runtime()?.block_on(qualify::run(
+                    &root,
+                    &qualify,
+                    QUALIFY_PROGRESS_EVERY,
+                ))?;
+                print_combined(&root, &combined)
+            }
+            QualifyCommand::Stop(args) => {
+                qualify::stop(&QualifyRoot::new(args.root.clone()))?;
+                Ok(ExitCode::SUCCESS)
+            }
+        }
+    }
+
+    fn qualify_config(hosts: u32, args: &QualifyConfigArgs) -> Qualify {
+        let overrides = Overrides {
+            duration: args.duration,
+            gc_margin: args.gc_margin,
+            no_fault_floor: args.no_fault_floor,
+        };
+        Qualify::new(hosts, args.workers, args.max_backoff_ms, overrides)
+    }
+
+    /// How long the runs take and how much space they need.
+    fn qualify_plan(qualify: &Qualify) -> anyhow::Result<String> {
+        let configs = qualify::MODES
+            .map(|mode| qualify.run_config(mode))
+            .into_iter()
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        let runs: Vec<_> = configs
+            .iter()
+            .map(|config| {
+                format!(
+                    "a {} run of {}",
+                    qualify_run_dir(config.mode),
+                    human_duration(config.duration)
+                )
+            })
+            .collect();
+        let total = configs.iter().map(|config| config.duration).sum();
+        Ok(format!(
+            "{}: {} in all, plus a few minutes to start and check them; {}",
+            runs.join(", then "),
+            human_duration(total),
+            qualify::DISK_NEEDED
+        ))
+    }
+
+    /// Writes the combined summary and what to do next to `summary.txt` in
+    /// the root, then prints them.
+    fn print_combined(
+        root: &QualifyRoot,
+        combined: &Combined,
+    ) -> anyhow::Result<ExitCode> {
+        let text = combined.summary(root.root());
+        qualify::write_summary_file(root, &text)?;
+        print!("{text}");
+        Ok(ExitCode::from(combined.outcome().exit_code()))
+    }
+
+    fn report_scenario(root: &ScenarioRoot, report: &Report) -> anyhow::Result<ExitCode> {
+        let text = format!(
+            "{}reports: {}/report.json and phase-*/report.json\n",
+            report.summary(),
             root.root().display()
         );
+        report::write_summary(&root.top(), &text)?;
+        print!("{text}");
         Ok(ExitCode::from(report.exit_code()))
     }
 
@@ -460,9 +719,14 @@ mod cli {
             .with_context(|| format!("unknown value {s:?}"))
     }
 
-    fn report(report: &Report) -> anyhow::Result<ExitCode> {
-        print!("{}", report.summary());
-        Ok(ExitCode::from(report.exit_code()))
+    /// Writes the summary and what to do next to `summary.txt`, then prints
+    /// them. `root` is the run root as the user gave it.
+    fn print_report(root: &RunRoot, report: &Report) -> anyhow::Result<ExitCode> {
+        let outcome = report.outcome();
+        let text = format!("{}\n{}", report.summary(), next_steps(outcome, root.root()));
+        report::write_summary(root, &text)?;
+        print!("{text}");
+        Ok(ExitCode::from(outcome.exit_code()))
     }
 
     fn run_one_host(args: &RunArgs) -> anyhow::Result<ExitCode> {
@@ -471,12 +735,9 @@ mod cli {
         let workers = config.workers_per_host_default;
         let progress_every = args.progress.progress_every;
         eprintln!("{}: {}", root.root().display(), volume_estimate(&config));
-        report(&runtime()?.block_on(verify::run(
-            &root,
-            &config,
-            workers,
-            progress_every,
-        ))?)
+        let report =
+            runtime()?.block_on(verify::run(&root, &config, workers, progress_every))?;
+        print_report(&root, &report)
     }
 
     fn selftest(args: &SelftestArgs) -> anyhow::Result<ExitCode> {
@@ -569,15 +830,7 @@ mod cli {
         });
         config.faults = faults;
         config.duration = args.duration.unwrap_or(config.duration);
-        if let Some(gc) = &config.gc {
-            ensure!(
-                config.duration > gc.margin,
-                "--gc deletes only what is older than --gc-margin ({}s), so a run of {}s \
-                 deletes nothing: raise --duration or lower --gc-margin",
-                gc.margin.as_secs(),
-                config.duration.as_secs(),
-            );
-        }
+        config.check_gc_margin()?;
         config.fsync = !args.no_fsync;
         config.workers_per_host_default =
             args.workers.unwrap_or(config.workers_per_host_default);
@@ -661,11 +914,15 @@ mod cli {
             workers,
             progress_every,
         ))?;
-        println!(
+        println!("{}", done_line(&done));
+        Ok(())
+    }
+
+    fn done_line(done: &HostDone) -> String {
+        format!(
             "{}: {} worker incarnations, {} external kills, {} stragglers",
             done.tag, done.incarnations_spawned, done.external_kills, done.stragglers
-        );
-        Ok(())
+        )
     }
 
     fn worker(args: &WorkerArgs) -> anyhow::Result<()> {
@@ -1001,6 +1258,16 @@ mod cli {
         }
 
         #[test]
+        fn version_is_the_build() {
+            use clap::CommandFactory as _;
+
+            let version = Cli::command().render_version();
+            assert_eq!(version, format!("fs-stress ({})\n", Build::current()));
+            assert!(version.starts_with("fs-stress (Icechunk "), "{version}");
+            assert!(version.contains(", commit "), "{version}");
+        }
+
+        #[test]
         fn verify_selftest_and_workers_have_defaults() {
             let Command::Verify(verify) = command(&["verify", "--root", "r"]) else {
                 panic!("not verify");
@@ -1093,6 +1360,152 @@ mod cli {
                 help.contains("convert-scenario") && !help.contains("conversion "),
                 "{help}"
             );
+        }
+
+        fn help(path: &[&str]) -> String {
+            let mut cli = <Cli as clap::CommandFactory>::command();
+            let mut command = &mut cli;
+            for name in path {
+                command = command.find_subcommand_mut(name).unwrap();
+            }
+            command.render_long_help().to_string()
+        }
+
+        /// The `--long` flags a help text lists.
+        fn flags(help: &str) -> Vec<String> {
+            let mut flags: Vec<_> = help
+                .lines()
+                .filter_map(|line| line.trim_start().strip_prefix("--"))
+                .map(|rest| rest.split([' ', '=', '<']).next().unwrap_or("").to_owned())
+                .collect();
+            flags.sort();
+            flags
+        }
+
+        #[test]
+        fn qualify_offers_only_hosts_workers_and_max_backoff() {
+            for (sub, expected) in [
+                ("init", &["hosts", "max-backoff", "root", "workers"][..]),
+                ("run", &["max-backoff", "root", "workers"]),
+                ("workers", &["root", "tag", "workers"]),
+                ("verify", &["done-timeout", "root"]),
+                ("stop", &["root"]),
+            ] {
+                assert_eq!(flags(&help(&["qualify", sub])), expected, "{sub}");
+            }
+            let help = help(&["qualify"]);
+            for sub in ["init", "workers", "verify", "run", "stop"] {
+                assert!(help.contains(sub), "{sub} missing from {help}");
+            }
+        }
+
+        #[test]
+        fn qualify_parses_its_flags_and_the_hidden_test_overrides() {
+            let Command::Qualify { command: QualifyCommand::Init(args) } =
+                command(&["qualify", "init", "--root", "r", "--hosts", "3"])
+            else {
+                panic!("not qualify init");
+            };
+            let qualify = qualify_config(args.hosts, &args.config);
+            assert_eq!(qualify, Qualify::new(3, None, None, Overrides::default()));
+            assert_eq!((qualify.workers_per_host, qualify.max_backoff_ms), (8, 100));
+
+            let Command::Qualify { command: QualifyCommand::Run(args) } = command(&[
+                "qualify",
+                "run",
+                "--root",
+                "r",
+                "--workers",
+                "4",
+                "--max-backoff",
+                "1s",
+                "--duration",
+                "20s",
+                "--gc-margin",
+                "5s",
+                "--no-fault-floor",
+            ]) else {
+                panic!("not qualify run");
+            };
+            let overrides = Overrides {
+                duration: Some(Duration::from_secs(20)),
+                gc_margin: Some(Duration::from_secs(5)),
+                no_fault_floor: true,
+            };
+            assert_eq!(
+                qualify_config(1, &args.config),
+                Qualify::new(1, Some(4), Some(1000), overrides)
+            );
+
+            let Command::Qualify { command: QualifyCommand::Workers(args) } =
+                command(&["qualify", "workers", "--root", "r"])
+            else {
+                panic!("not qualify workers");
+            };
+            assert_eq!(args.second_run_go_after, qualify::SECOND_RUN_GO_AFTER);
+            assert_eq!((args.tag, args.workers), (None, None));
+            let Command::Qualify { command: QualifyCommand::Workers(args) } = command(&[
+                "qualify",
+                "workers",
+                "--root",
+                "r",
+                "--tag",
+                "a",
+                "--second-run-go-after",
+                "3s",
+            ]) else {
+                panic!("not qualify workers");
+            };
+            assert_eq!(args.second_run_go_after, Duration::from_secs(3));
+            let Command::Qualify { command: QualifyCommand::Verify(args) } =
+                command(&["qualify", "verify", "--root", "r"])
+            else {
+                panic!("not qualify verify");
+            };
+            assert_eq!(args.done_timeout, DEFAULT_DONE_TIMEOUT);
+
+            for bad in [
+                &["qualify", "init", "--root", "r"][..],
+                &["qualify", "init", "--root", "r", "--hosts", "1", "--mode", "storage"],
+                &["qualify", "run", "--root", "r", "--hosts", "1"],
+                &["qualify", "run", "--root", "r", "--gc"],
+                &["qualify", "run", "--root", "r", "--kill-p", "0"],
+                &["qualify", "run", "--root", "r", "--fork-at", "1m"],
+                &["qualify", "workers", "--root", "r", "--duration", "1m"],
+                &["qualify", "verify", "--root", "r", "--workers", "2"],
+            ] {
+                let argv = ["fs-stress"].iter().chain(bad);
+                assert!(Cli::try_parse_from(argv).is_err(), "{bad:?}");
+            }
+        }
+
+        #[test]
+        fn bundle_takes_a_root_and_an_optional_output_and_exits_3_on_an_error() {
+            let Command::Bundle(args) = command(&["bundle", "--root", "r"]) else {
+                panic!("not bundle");
+            };
+            assert_eq!(args.root, PathBuf::from("r"));
+            assert_eq!(args.output, None);
+            let bundle = command(&["bundle", "--root", "r", "--output", "o.tar.gz"]);
+            assert!(bundle.exits_3_on_error());
+            let Command::Bundle(args) = bundle else {
+                panic!("not bundle");
+            };
+            assert_eq!(args.output, Some(PathBuf::from("o.tar.gz")));
+            assert!(Cli::try_parse_from(["fs-stress", "bundle"]).is_err());
+        }
+
+        #[test]
+        fn qualify_verify_and_run_exit_3_on_an_error() {
+            for (args, exits_3) in [
+                (&["qualify", "verify", "--root", "r"][..], true),
+                (&["qualify", "run", "--root", "r"], true),
+                (&["qualify", "init", "--root", "r", "--hosts", "1"], false),
+                (&["qualify", "workers", "--root", "r"], false),
+                (&["qualify", "stop", "--root", "r"], false),
+            ] {
+                assert_eq!(command(args).exits_3_on_error(), exits_3, "{args:?}");
+            }
         }
 
         #[test]

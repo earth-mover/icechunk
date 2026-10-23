@@ -1,7 +1,8 @@
 //! What each supervisor records about its host and the filesystem under test.
 
-use std::{ffi::CStr, path::Path};
+use std::{ffi::CStr, fmt, path::Path};
 
+use icechunk::format::format_constants::ICECHUNK_LIB_VERSION;
 use serde::{Deserialize, Serialize};
 
 use crate::{layout::is_tag_char, log::now_ms};
@@ -21,8 +22,39 @@ pub struct HostInfo {
     #[serde(deserialize_with = "Option::deserialize")]
     pub mount_line: Option<String>,
     pub network_fs: bool,
-    pub binary_version: String,
+    pub build: Build,
     pub registered_at_ms: i64,
+}
+
+/// The fs-stress binary that ran: the Icechunk version it was built from and
+/// the commit, `"unknown"` if the build didn't set `FS_STRESS_COMMIT`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Build {
+    pub icechunk_version: String,
+    pub commit: String,
+}
+
+const COMMIT: &str = match option_env!("FS_STRESS_COMMIT") {
+    Some(commit) if !commit.is_empty() => commit,
+    _ => UNKNOWN,
+};
+
+impl Build {
+    /// This binary.
+    pub fn current() -> Self {
+        Self {
+            icechunk_version: ICECHUNK_LIB_VERSION.to_owned(),
+            commit: COMMIT.to_owned(),
+        }
+    }
+}
+
+/// `Icechunk 2.3.0, commit 0123abc`.
+impl fmt::Display for Build {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Icechunk {}, commit {}", self.icechunk_version, self.commit)
+    }
 }
 
 /// `done/<tag>.json`, written when a supervisor finishes.
@@ -74,7 +106,7 @@ pub fn host_info(tag: &str, root: &Path) -> HostInfo {
         network_fs: is_network_fs(&fs_type),
         fs_type,
         mount_line,
-        binary_version: env!("CARGO_PKG_VERSION").to_owned(),
+        build: Build::current(),
         registered_at_ms: now_ms(),
     }
 }
@@ -333,6 +365,19 @@ mod tests {
     }
 
     #[test]
+    fn build_is_the_icechunk_version_and_the_commit() {
+        let build = Build::current();
+        assert_eq!(build.icechunk_version, ICECHUNK_LIB_VERSION);
+        assert_eq!(build.commit, COMMIT);
+        assert!(!COMMIT.is_empty());
+        assert_eq!(
+            Build { icechunk_version: "2.3.0".to_owned(), commit: "0123abc".to_owned() }
+                .to_string(),
+            "Icechunk 2.3.0, commit 0123abc"
+        );
+    }
+
+    #[test]
     fn host_info_describes_this_host() {
         let dir = tempfile::tempdir().unwrap();
         let info = host_info("t", dir.path());
@@ -341,6 +386,7 @@ mod tests {
         assert_ne!(info.hostname, UNKNOWN);
         assert_ne!(info.kernel, UNKNOWN);
         assert!(info.registered_at_ms > 0);
+        assert_eq!(info.build, Build::current());
         assert_eq!(info.network_fs, is_network_fs(&info.fs_type));
         #[cfg(target_os = "linux")]
         assert_ne!(info.fs_type, UNKNOWN);

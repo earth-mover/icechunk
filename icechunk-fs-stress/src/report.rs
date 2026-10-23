@@ -1,6 +1,6 @@
 //! `report.json`, written by `verify`, and its human summary.
 
-use std::{collections::BTreeSet, fmt::Write as _, fs, time::Duration};
+use std::{collections::BTreeSet, fmt::Write as _, fs, path::Path, time::Duration};
 
 use anyhow::Context as _;
 use chrono::DateTime;
@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     config::{Backend, Mode, RunConfig},
-    env_info::{HostDone, HostInfo},
+    env_info::{Build, HostDone, HostInfo},
     layout::RunRoot,
     log::Direction,
     oracle::{
@@ -22,6 +22,8 @@ use crate::{
 #[serde(deny_unknown_fields)]
 pub struct Report {
     pub passed: bool,
+    /// The binary that ran verify.
+    pub build: Build,
     pub verdict: Verdict,
     pub config: RunConfig,
     pub participants: Participants,
@@ -41,6 +43,31 @@ pub struct Participants {
     pub missing: Vec<String>,
 }
 
+/// What a report says about the filesystem.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Outcome {
+    Passed,
+    /// Violations: the filesystem may be unsafe.
+    Failed,
+    /// Violations while hosts were still missing: they may still have been
+    /// writing.
+    Provisional,
+    /// Only the harness failed: the run says nothing about the filesystem.
+    Error,
+}
+
+impl Outcome {
+    /// 0 for a pass, 1 for a failure, 3 for an error or a provisional
+    /// verdict.
+    pub fn exit_code(self) -> u8 {
+        match self {
+            Self::Passed => 0,
+            Self::Failed => 1,
+            Self::Provisional | Self::Error => 3,
+        }
+    }
+}
+
 /// Violations and warnings shown in full in the summary.
 const SHOWN: usize = 20;
 const SHOWN_NAMES: usize = 10;
@@ -58,6 +85,7 @@ impl Report {
     ) -> Self {
         Self {
             passed: verdict.violations.is_empty(),
+            build: Build::current(),
             verdict,
             config,
             participants,
@@ -68,18 +96,11 @@ impl Report {
         }
     }
 
-    /// Writes `report.json`, replacing any earlier one by a rename.
+    /// Writes `report.json`, then `summary.txt` with the summary, replacing
+    /// any earlier ones by a rename.
     pub fn write(&self, root: &RunRoot) -> anyhow::Result<()> {
-        let path = root.report_json();
-        let staging =
-            root.root().join(format!("report.json.{}.tmp", uuid::Uuid::new_v4()));
-        let written = fs::write(&staging, serde_json::to_vec_pretty(self)?)
-            .and_then(|()| fs::rename(&staging, &path));
-        if written.is_err() {
-            // Best effort: the error being reported is the write's.
-            let _ = fs::remove_file(&staging);
-        }
-        written.with_context(|| format!("writing {}", path.display()))
+        replace_file(&root.report_json(), &serde_json::to_vec_pretty(self)?)?;
+        write_summary(root, &self.summary())
     }
 
     pub fn load(root: &RunRoot) -> anyhow::Result<Self> {
@@ -90,19 +111,21 @@ impl Report {
             .with_context(|| format!("parsing {}", path.display()))
     }
 
-    /// 0 if the run passed, 3 if only the harness failed or the verdict is
-    /// provisional, 1 otherwise.
-    pub fn exit_code(&self) -> u8 {
+    pub fn outcome(&self) -> Outcome {
         let violations = &self.verdict.violations;
         if violations.is_empty() {
-            0
-        } else if self.is_provisional()
-            || violations.iter().all(|v| matches!(v, Violation::Harness { .. }))
-        {
-            3
+            Outcome::Passed
+        } else if self.is_provisional() {
+            Outcome::Provisional
+        } else if violations.iter().all(|v| matches!(v, Violation::Harness { .. })) {
+            Outcome::Error
         } else {
-            1
+            Outcome::Failed
         }
+    }
+
+    pub fn exit_code(&self) -> u8 {
+        self.outcome().exit_code()
     }
 
     fn is_provisional(&self) -> bool {
@@ -138,6 +161,20 @@ impl Report {
                 out,
                 "provisional: hosts still missing ({}); verify again once they finished",
                 self.participants.missing.join(", ")
+            )?;
+        }
+        writeln!(out, "build: {}", self.build)?;
+        let other_builds: Vec<_> = self
+            .hosts
+            .iter()
+            .filter(|host| host.build != self.build)
+            .map(|host| format!("{} ran {}", host.tag, host.build))
+            .collect();
+        if !other_builds.is_empty() {
+            writeln!(
+                out,
+                "note: some hosts ran a different build than verify: {}",
+                other_builds.join("; ")
             )?;
         }
         for host in &self.hosts {
@@ -204,6 +241,24 @@ impl Report {
         }
         Ok(())
     }
+}
+
+/// Writes `summary.txt`, replacing any earlier one by a rename: for a
+/// command that prints more than [`Report::summary`].
+pub fn write_summary(root: &RunRoot, text: &str) -> anyhow::Result<()> {
+    replace_file(&root.summary(), text.as_bytes())
+}
+
+/// Writes `path` through a staging file next to it, renamed over it.
+pub fn replace_file(path: &Path, contents: &[u8]) -> anyhow::Result<()> {
+    let name = path.file_name().unwrap_or_default().to_string_lossy();
+    let staging = path.with_file_name(format!("{name}.{}.tmp", uuid::Uuid::new_v4()));
+    let written = fs::write(&staging, contents).and_then(|()| fs::rename(&staging, path));
+    if written.is_err() {
+        // Best effort: the error being reported is the write's.
+        let _ = fs::remove_file(&staging);
+    }
+    written.with_context(|| format!("writing {}", path.display()))
 }
 
 fn list(out: &mut String, what: &str, items: &[String]) -> std::fmt::Result {
@@ -641,18 +696,49 @@ mod tests {
     }
 
     #[test]
-    fn report_round_trips_through_report_json() {
+    fn report_round_trips_through_report_json_next_to_its_summary() {
         let dir = tempfile::tempdir().unwrap();
         let root = RunRoot::new(dir.path().to_path_buf());
         let report = report(every_violation());
         assert!(!report.passed);
         report.write(&root).unwrap();
         assert_eq!(Report::load(&root).unwrap(), report);
-        let names: Vec<_> = fs::read_dir(dir.path())
+        assert_eq!(fs::read_to_string(root.summary()).unwrap(), report.summary());
+        let mut names: Vec<_> = fs::read_dir(dir.path())
             .unwrap()
             .map(|e| e.unwrap().file_name().into_string().unwrap())
             .collect();
-        assert_eq!(names, ["report.json"]);
+        names.sort();
+        assert_eq!(names, ["report.json", "summary.txt"]);
+
+        write_summary(&root, "printed\n").unwrap();
+        assert_eq!(fs::read_to_string(root.summary()).unwrap(), "printed\n");
+    }
+
+    #[test]
+    fn summary_shows_the_build_after_the_result() {
+        let report = report(vec![]);
+        let summary = report.summary();
+        let second = summary.lines().nth(1).unwrap();
+        assert_eq!(second, format!("build: {}", Build::current()), "{summary}");
+        assert!(!summary.contains("different build"), "{summary}");
+    }
+
+    #[test]
+    fn hosts_on_another_build_than_verify_are_noted() {
+        let mut report = report(vec![]);
+        let mut other = report.hosts[0].clone();
+        other.tag = "g".to_owned();
+        other.build.commit = "0123abc".to_owned();
+        report.hosts.push(other);
+        let summary = report.summary();
+        assert!(summary.starts_with("PASS"), "{summary}");
+        let expected = format!(
+            "note: some hosts ran a different build than verify: g ran {}",
+            report.hosts[1].build
+        );
+        assert!(summary.contains(&expected), "{expected} missing from {summary}");
+        assert!(!summary.contains("h ran"), "{summary}");
     }
 
     #[test]
@@ -768,6 +854,7 @@ mod tests {
         assert_eq!(report.exit_code(), 1);
         assert!(!report.summary().contains("provisional"));
         report.participants.missing = vec!["b".to_owned(), "c".to_owned()];
+        assert_eq!(report.outcome(), Outcome::Provisional);
         assert_eq!(report.exit_code(), 3);
         let summary = report.summary();
         assert!(
@@ -793,9 +880,12 @@ mod tests {
 
     #[test]
     fn exit_codes_separate_failures_from_harness_errors() {
+        assert_eq!(report(vec![]).outcome(), Outcome::Passed);
         assert_eq!(report(vec![]).exit_code(), 0);
+        assert_eq!(report(every_violation()).outcome(), Outcome::Failed);
         assert_eq!(report(every_violation()).exit_code(), 1);
         let harness = Violation::Harness { detail: "missing done/".to_owned() };
+        assert_eq!(report(vec![harness.clone()]).outcome(), Outcome::Error);
         assert_eq!(report(vec![harness]).exit_code(), 3);
     }
 }

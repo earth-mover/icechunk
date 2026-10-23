@@ -333,6 +333,20 @@ impl RunConfig {
         linked.and(removed)
     }
 
+    /// `init`'s check that GC, if on, can delete anything during the run.
+    pub fn check_gc_margin(&self) -> anyhow::Result<()> {
+        if let Some(gc) = &self.gc {
+            ensure!(
+                self.duration > gc.margin,
+                "--gc deletes only what is older than --gc-margin ({}s), so a run of {}s \
+                 deletes nothing: raise --duration or lower --gc-margin",
+                gc.margin.as_secs(),
+                self.duration.as_secs(),
+            );
+        }
+        Ok(())
+    }
+
     /// Rejects every value later code could not use, so that a bad
     /// `run.json` is an error here rather than a panic in a worker.
     pub fn validate(&self) -> anyhow::Result<()> {
@@ -666,13 +680,13 @@ pub fn parse_duration(s: &str) -> anyhow::Result<Duration> {
     Ok(Duration::from_millis(millis))
 }
 
-mod millis {
+pub(crate) mod millis {
     use std::time::Duration;
 
     use serde::{Deserialize as _, Deserializer, Serializer};
 
     /// Saturates at `u64::MAX` milliseconds, which parsed durations never reach.
-    pub(super) fn serialize<S: Serializer>(
+    pub(crate) fn serialize<S: Serializer>(
         duration: &Duration,
         serializer: S,
     ) -> Result<S::Ok, S::Error> {
@@ -680,19 +694,19 @@ mod millis {
         serializer.serialize_u64(millis)
     }
 
-    pub(super) fn deserialize<'de, D: Deserializer<'de>>(
+    pub(crate) fn deserialize<'de, D: Deserializer<'de>>(
         deserializer: D,
     ) -> Result<Duration, D::Error> {
         u64::deserialize(deserializer).map(Duration::from_millis)
     }
 }
 
-mod option_millis {
+pub(crate) mod option_millis {
     use std::time::Duration;
 
     use serde::{Deserialize as _, Deserializer, Serializer};
 
-    pub(super) fn serialize<S: Serializer>(
+    pub(crate) fn serialize<S: Serializer>(
         duration: &Option<Duration>,
         serializer: S,
     ) -> Result<S::Ok, S::Error> {
@@ -702,7 +716,7 @@ mod option_millis {
         }
     }
 
-    pub(super) fn deserialize<'de, D: Deserializer<'de>>(
+    pub(crate) fn deserialize<'de, D: Deserializer<'de>>(
         deserializer: D,
     ) -> Result<Option<Duration>, D::Error> {
         Option::<u64>::deserialize(deserializer).map(|ms| ms.map(Duration::from_millis))

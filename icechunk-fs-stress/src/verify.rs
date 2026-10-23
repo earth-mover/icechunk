@@ -6,8 +6,8 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet, HashSet},
-    fs, io,
-    path::Path,
+    fmt, fs, io,
+    path::{Path, PathBuf},
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -67,6 +67,26 @@ pub async fn verify(root: &RunRoot, done_timeout: Duration) -> anyhow::Result<Re
     verify_phase(root, done_timeout, &EarlierPhases::default()).await
 }
 
+/// `verify` refuses a run it already verified fully: its recovery write
+/// and sweep changed the repository.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AlreadyVerified {
+    /// The recovery write's log, which shows it.
+    pub log: PathBuf,
+}
+
+impl fmt::Display for AlreadyVerified {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{} exists: this run was already verified, and verify changes the repository",
+            self.log.display()
+        )
+    }
+}
+
+impl std::error::Error for AlreadyVerified {}
+
 /// What a phase of the conversion scenario adds to its verify: the
 /// repository's history began before the phase.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -90,11 +110,9 @@ pub async fn verify_phase(
     let config = config.clone();
     let who = recovery_worker();
     let log = root.worker_log(&who.tag, &who.slot, who.incarnation);
-    ensure!(
-        !exists(&log)?,
-        "{} exists: this run was already verified, and verify changes the repository",
-        log.display()
-    );
+    if exists(&log)? {
+        return Err(AlreadyVerified { log }.into());
+    }
     let mut verdict = Verdict::default();
     let mut notes = Vec::new();
     let Some(participants) = participants(root, &mut verdict, &mut notes)? else {

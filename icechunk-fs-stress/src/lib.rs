@@ -2,6 +2,7 @@
 
 #![cfg(unix)]
 
+pub mod bundle;
 pub mod config;
 pub mod control;
 pub mod convert;
@@ -10,7 +11,9 @@ pub mod faults;
 pub mod fork;
 pub mod layout;
 pub mod log;
+pub mod next_steps;
 pub mod oracle;
+pub mod qualify;
 pub mod recovery;
 pub mod repo_mode;
 pub mod report;

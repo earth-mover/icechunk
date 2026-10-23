@@ -144,6 +144,19 @@ pub async fn workers(
     workers: u32,
     progress_every: Duration,
 ) -> anyhow::Result<HostDone> {
+    workers_with_go_after(root, tag, workers, progress_every, None).await
+}
+
+/// [`workers`], whose barrier starts the run with the hosts registered by
+/// then once `go_after` passed since this host registered (see
+/// [`wait_for_go_reporting`]).
+pub async fn workers_with_go_after(
+    root: &RunRoot,
+    tag: String,
+    workers: u32,
+    progress_every: Duration,
+    go_after: Option<Duration>,
+) -> anyhow::Result<HostDone> {
     ensure!(is_valid_tag(&tag), "invalid tag {tag:?}");
     for reserved in [VERIFY_TAG, INIT_TAG, SCENARIO_TAG] {
         ensure!(tag != reserved, "the tag {reserved:?} is reserved");
@@ -156,7 +169,16 @@ pub async fn workers(
     let hosts = config.hosts;
     let outcome = tokio::task::spawn_blocking({
         let (root, tag) = (root.clone(), tag.clone());
-        move || wait_for_go_reporting(&root, &tag, hosts, BARRIER_POLL, progress_every)
+        move || {
+            wait_for_go_reporting(
+                &root,
+                &tag,
+                hosts,
+                BARRIER_POLL,
+                progress_every,
+                go_after,
+            )
+        }
     })
     .await??;
     let WaitOutcome::Participant { go_seen_at, participants } = outcome else {

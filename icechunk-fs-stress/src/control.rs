@@ -204,25 +204,29 @@ pub fn wait_for_go(
     expected: u32,
     poll: Duration,
 ) -> anyhow::Result<WaitOutcome> {
-    wait_for_go_reporting(root, tag, expected, poll, Duration::ZERO)
+    wait_for_go_reporting(root, tag, expected, poll, Duration::ZERO, None)
 }
 
 /// [`wait_for_go`], printing how many hosts registered to stderr every
-/// `report_every` (never if zero). Once registered, a poll that fails is
-/// retried; after [`BARRIER_ATTEMPTS`] failures in a row the host unregisters
-/// and gives up.
+/// `report_every` (never if zero). With `go_after`, once that long passed
+/// since this host registered, it tries to decide the go with the hosts
+/// registered by then, even if fewer than `expected`. Once registered, a poll
+/// that fails is retried; after [`BARRIER_ATTEMPTS`] failures in a row the
+/// host unregisters and gives up.
 pub fn wait_for_go_reporting(
     root: &RunRoot,
     tag: &str,
     expected: u32,
     poll: Duration,
     report_every: Duration,
+    go_after: Option<Duration>,
 ) -> anyhow::Result<WaitOutcome> {
     let expected = usize::try_from(expected)?;
     if read_control(root)? != Control::Wait {
         return Ok(WaitOutcome::Late);
     }
     register(root, &host_info(tag, &root.storage()))?;
+    let registered_at = Instant::now();
     let mut lost_go = false;
     let mut go_seen_at: Option<Instant> = None;
     let mut next_report = Instant::now();
@@ -249,8 +253,16 @@ pub fn wait_for_go_reporting(
             );
             next_report = now + report_every;
         }
-        if !lost_go && participants.len() >= expected {
+        let timed_out = go_after.is_some_and(|after| registered_at.elapsed() >= after);
+        if !lost_go && (participants.len() >= expected || timed_out) {
             if try_go(root, &participants)? {
+                if participants.len() < expected {
+                    eprintln!(
+                        "not every host registered in time; starting with {}/{expected} \
+                         hosts",
+                        participants.len()
+                    );
+                }
                 return Ok(None);
             }
             lost_go = true;
@@ -514,6 +526,72 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Waits until `go` exists or `patience` passed, then stops the run so
+    /// that every waiter returns.
+    fn stop_unless_go_within(root: &RunRoot, patience: Duration) {
+        let deadline = Instant::now() + patience;
+        while !root.go().exists() && Instant::now() < deadline {
+            std::thread::sleep(POLL);
+        }
+        if !root.go().exists() {
+            write_control(root, &Control::Stop).unwrap();
+        }
+    }
+
+    #[test]
+    fn after_the_go_timeout_the_registered_hosts_start_without_the_missing_one() {
+        let (_dir, root) = barrier_root();
+        let root = &root;
+        let go_after = Duration::from_millis(300);
+        let started = Instant::now();
+        let outcomes: Vec<_> = std::thread::scope(|s| {
+            let waiters: Vec<_> = ["a", "b"]
+                .into_iter()
+                .map(|tag| {
+                    s.spawn(move || {
+                        wait_for_go_reporting(
+                            root,
+                            tag,
+                            3,
+                            POLL,
+                            Duration::ZERO,
+                            Some(go_after),
+                        )
+                    })
+                })
+                .collect();
+            stop_unless_go_within(root, Duration::from_secs(10));
+            waiters.into_iter().map(|w| w.join().unwrap().unwrap()).collect()
+        });
+        assert!(started.elapsed() >= go_after, "{:?}", started.elapsed());
+        let go = tags(["a", "b"]);
+        for outcome in outcomes {
+            assert!(
+                matches!(&outcome, WaitOutcome::Participant { participants, .. } if *participants == go),
+                "{outcome:?}"
+            );
+        }
+        assert_eq!(read_go(root).unwrap(), go);
+        assert_eq!(read_control(root).unwrap(), Control::Go { participants: go });
+        let late =
+            wait_for_go_reporting(root, "c", 3, POLL, Duration::ZERO, Some(go_after));
+        assert_eq!(late.unwrap(), WaitOutcome::Late);
+        assert!(!root.host_info("c").exists());
+    }
+
+    #[test]
+    fn without_a_go_timeout_a_barrier_short_of_hosts_keeps_waiting() {
+        let (_dir, root) = barrier_root();
+        let root = &root;
+        let outcome = std::thread::scope(|s| {
+            let waiter = s.spawn(|| wait_for_go(root, "a", 2, POLL));
+            stop_unless_go_within(root, Duration::from_millis(500));
+            waiter.join().unwrap().unwrap()
+        });
+        assert_eq!(outcome, WaitOutcome::Late);
+        assert!(!root.go().exists());
     }
 
     #[test]
