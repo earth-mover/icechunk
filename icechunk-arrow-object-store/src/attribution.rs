@@ -190,28 +190,13 @@ mod tests {
     const TEST_CA: &[u8] = include_bytes!("../../icechunk-python/tests/data/tls/ca.pem");
 
     #[test]
-    fn roots_disable_system_certificates() {
-        let opts = client_options_with_roots(&ClientOptions::new(), TEST_CA).unwrap();
-        assert_eq!(
-            opts.get_config_value(&ClientConfigKey::NoSystemCertificates).as_deref(),
-            Some("true")
-        );
-    }
-
-    #[test]
-    fn roots_keep_existing_options() {
+    fn roots_replace_system_certificates() {
         let options =
             ClientOptions::new().with_config(ClientConfigKey::UserAgent, "myapp/2");
         let opts = client_options_with_roots(&options, TEST_CA).unwrap();
-        assert_eq!(
-            opts.get_config_value(&ClientConfigKey::UserAgent).as_deref(),
-            Some("myapp/2")
-        );
-    }
-
-    #[test]
-    fn connector_builds_with_roots() {
-        let opts = client_options_with_roots(&ClientOptions::new(), TEST_CA).unwrap();
+        let value = |key| opts.get_config_value(&key);
+        assert_eq!(value(ClientConfigKey::NoSystemCertificates).as_deref(), Some("true"));
+        assert_eq!(value(ClientConfigKey::UserAgent).as_deref(), Some("myapp/2"));
         assert!(AttributedHttpConnector::default().connect(&opts).is_ok());
     }
 }
