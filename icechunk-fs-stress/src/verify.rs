@@ -38,6 +38,7 @@ use crate::{
             check_mirror_objects,
         },
     },
+    progress::{BRIEF_EVERY, Progress},
     recovery::{
         RECOVERY_DEADLINE, RecoveryOutcome, age_storage_root, check_canaries,
         check_clean_root, describe, plant_canaries, recovery_worker, recovery_write,
@@ -64,7 +65,16 @@ const PHASE_REPORT_EVERY: Duration = Duration::from_secs(5);
 /// before its recovery write can run again: each publishes under its own
 /// log.
 pub async fn verify(root: &RunRoot, done_timeout: Duration) -> anyhow::Result<Report> {
-    verify_phase(root, done_timeout, &EarlierPhases::default()).await
+    verify_with_progress(root, done_timeout, &Progress::Stderr).await
+}
+
+/// [`verify`], with its progress going to `progress`.
+pub async fn verify_with_progress(
+    root: &RunRoot,
+    done_timeout: Duration,
+    progress: &Progress,
+) -> anyhow::Result<Report> {
+    verify_phase(root, done_timeout, &EarlierPhases::default(), progress).await
 }
 
 /// `verify` refuses a run it already verified fully: its recovery write
@@ -105,6 +115,7 @@ pub async fn verify_phase(
     root: &RunRoot,
     done_timeout: Duration,
     earlier: &EarlierPhases,
+    progress: &Progress,
 ) -> anyhow::Result<Report> {
     let (root, config) = &RunConfig::load_resolved(root)?;
     let config = config.clone();
@@ -129,7 +140,7 @@ pub async fn verify_phase(
     };
     let hosts = host_infos(root, &participants, &mut verdict);
     let (done, missing) =
-        wait_for_done(root, &participants, done_timeout, &mut verdict).await?;
+        wait_for_done(root, &participants, done_timeout, &mut verdict, progress).await?;
     if let Some(detail) = no_repository(root)? {
         // A run that worked on another storage root, or none: nothing here
         // can be checked, and that must not pass.
@@ -148,7 +159,7 @@ pub async fn verify_phase(
         );
     }
 
-    eprintln!("reading logs");
+    progress.detail("reading logs");
     // The versions that were current, on the filesystem backend, and the
     // fork still in place.
     let (was_current, fork) = match read_all_logs(root) {
@@ -157,10 +168,10 @@ pub async fn verify_phase(
                 observe_fork(root, &mut logs)?;
             }
             let records: usize = logs.values().map(Vec::len).sum();
-            eprintln!(
+            progress.detail(&format!(
                 "read {records} records from {} logs; running the oracle",
                 logs.len()
-            );
+            ));
             let own = History { logs, hosts: hosts.clone(), done: done.clone() };
             let history = own.clone().after_earlier_phases(&earlier.logs);
             let was_current = check_mode(
@@ -194,15 +205,16 @@ pub async fn verify_phase(
             "{RECOVERY_SKIPPED}: {}; verify again once they finished",
             missing.join(", ")
         );
-        eprintln!("{note}");
+        progress.detail(&note);
         notes.push(note);
         None
     } else if let Some(fork) = fork {
-        recover_forked(root, &config, &fork, &mut verdict, &mut notes).await?;
+        recover_forked(root, &config, &fork, &mut verdict, &mut notes, progress).await?;
         None
     } else {
         let checked = Checked { was_current: was_current.as_ref(), network_fs };
-        recover_and_clean(root, &config, checked, &mut verdict, &mut notes).await?
+        recover_and_clean(root, &config, checked, &mut verdict, &mut notes, progress)
+            .await?
     };
     let missing = missing.into_iter().map(str::to_owned).collect();
     let participants = Participants { tags: participants, missing };
@@ -246,13 +258,14 @@ async fn recover_forked(
     fork: &LoggedFork,
     verdict: &mut Verdict,
     notes: &mut Vec<String>,
+    progress: &Progress,
 ) -> anyhow::Result<()> {
     notes.push(format!(
         "the fork {} persisted: verify checks that both sides survive, that its \
          publication and its recovery write report the fork, and doesn't sweep",
         fork.fork_hash
     ));
-    eprintln!("checking both sides of the fork");
+    progress.detail("checking both sides of the fork");
     let checked = async {
         let repo = match config.mode {
             Mode::Repository => Some(repo_mode::open_repo(root, config, None).await?),
@@ -266,7 +279,7 @@ async fn recover_forked(
         });
     }
 
-    eprintln!("publishing the mirror over the fork");
+    progress.detail("publishing the mirror over the fork");
     let who = publisher(root)?;
     match publish_mirror(root, config, &who).await? {
         Err(OpResult::Forked { .. }) => {}
@@ -279,7 +292,7 @@ async fn recover_forked(
         }),
     }
 
-    eprintln!("recovery write over the fork");
+    progress.detail("recovery write over the fork");
     match recovery_write_once(root, config).await? {
         Ok((_, OpResult::DurableButForked { .. })) => {}
         Ok((id, OpResult::Ack { .. })) => {
@@ -353,6 +366,7 @@ async fn recover_and_clean(
     checked: Checked<'_>,
     verdict: &mut Verdict,
     notes: &mut Vec<String>,
+    progress: &Progress,
 ) -> anyhow::Result<Option<u64>> {
     let Checked { was_current, network_fs } = checked;
     if config.mode == Mode::Repository {
@@ -361,7 +375,7 @@ async fn recover_and_clean(
     let layout = config.backend == Backend::Filesystem;
     if layout {
         if config.mode == Mode::Repository {
-            eprintln!("checking the mirror's objects");
+            progress.detail("checking the mirror's objects");
             let checked = async {
                 let repo = repo_mode::open_repo(root, config, None).await?;
                 check_mirror_objects(&repo, &root.storage(), verdict).await
@@ -372,15 +386,15 @@ async fn recover_and_clean(
                 });
             }
         }
-        eprintln!("publishing the mirror");
+        progress.detail("publishing the mirror");
         publish_and_check(root, config, was_current, network_fs, verdict).await?;
     }
 
-    eprintln!("recovery write");
+    progress.detail("recovery write");
     let recovery_ms = match recovery_write(root, config, RECOVERY_DEADLINE).await? {
         RecoveryOutcome::Succeeded { elapsed } => {
             let ms = millis(elapsed);
-            eprintln!("recovery write took {ms} ms");
+            progress.detail(&format!("recovery write took {ms} ms"));
             if layout {
                 let after = MirrorCheckpoint::RecoveryWrite;
                 check_mirror(root, config, after, Ok(()), network_fs, verdict).await;
@@ -389,7 +403,7 @@ async fn recover_and_clean(
         }
         RecoveryOutcome::Failed { elapsed, last_error } => {
             let ms = millis(elapsed);
-            eprintln!("recovery write failed after {ms} ms");
+            progress.detail(&format!("recovery write failed after {ms} ms"));
             verdict.violations.push(Violation::Recovery {
                 detail: format!(
                     "no write succeeded within {ms} ms; last error: {last_error}"
@@ -400,7 +414,7 @@ async fn recover_and_clean(
     };
 
     // From here on a failure is recorded, so the report is still written.
-    eprintln!("planting canaries, aging and sweeping the storage root");
+    progress.detail("planting canaries, aging and sweeping the storage root");
     let canaries = plant_canaries(root, config).unwrap_or_else(|err| {
         verdict.violations.push(Violation::Harness { detail: format!("{err:#}") });
         Vec::new()
@@ -626,9 +640,11 @@ async fn wait_for_done<'a>(
     participants: &'a BTreeSet<String>,
     timeout: Duration,
     verdict: &mut Verdict,
+    progress: &Progress,
 ) -> anyhow::Result<(Vec<HostDone>, Vec<&'a str>)> {
     let deadline = Instant::now() + timeout;
     let mut next_report = Instant::now();
+    let mut next_brief = Instant::now();
     let missing = loop {
         let mut missing = Vec::new();
         for tag in participants {
@@ -639,8 +655,21 @@ async fn wait_for_done<'a>(
         let now = Instant::now();
         if now >= next_report || missing.is_empty() {
             let finished = participants.len() - missing.len();
-            eprintln!("waiting for done/ ({finished}/{})", participants.len());
+            progress.detail(&format!(
+                "waiting for done/ ({finished}/{})",
+                participants.len()
+            ));
             next_report = now + PHASE_REPORT_EVERY;
+        }
+        if !missing.is_empty() && now >= next_brief {
+            let finished = participants.len() - missing.len();
+            progress.brief_line(|run| {
+                format!(
+                    "{run}: waiting for the hosts to finish ({finished} of {} done)",
+                    participants.len()
+                )
+            });
+            next_brief = now + BRIEF_EVERY;
         }
         if missing.is_empty() || now >= deadline {
             break missing;

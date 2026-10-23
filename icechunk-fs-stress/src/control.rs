@@ -21,6 +21,7 @@ use crate::{
     config::write_synced,
     env_info::{HostInfo, host_info},
     layout::{RunRoot, is_valid_tag},
+    progress::{BRIEF_EVERY, Progress},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -204,11 +205,20 @@ pub fn wait_for_go(
     expected: u32,
     poll: Duration,
 ) -> anyhow::Result<WaitOutcome> {
-    wait_for_go_reporting(root, tag, expected, poll, Duration::ZERO, None)
+    wait_for_go_reporting(
+        root,
+        tag,
+        expected,
+        poll,
+        Duration::ZERO,
+        &Progress::Stderr,
+        None,
+    )
 }
 
-/// [`wait_for_go`], printing how many hosts registered to stderr every
-/// `report_every` (never if zero). With `go_after`, once that long passed
+/// [`wait_for_go`], reporting to `progress` how many hosts registered every
+/// `report_every` (never if zero), and in a short line every
+/// [`BRIEF_EVERY`] while hosts are missing. With `go_after`, once that long passed
 /// since this host registered, it tries to decide the go with the hosts
 /// registered by then, even if fewer than `expected`. Once registered, a poll
 /// that fails is retried; after [`BARRIER_ATTEMPTS`] failures in a row the
@@ -219,6 +229,7 @@ pub fn wait_for_go_reporting(
     expected: u32,
     poll: Duration,
     report_every: Duration,
+    progress: &Progress,
     go_after: Option<Duration>,
 ) -> anyhow::Result<WaitOutcome> {
     let expected = usize::try_from(expected)?;
@@ -230,6 +241,7 @@ pub fn wait_for_go_reporting(
     let mut lost_go = false;
     let mut go_seen_at: Option<Instant> = None;
     let mut next_report = Instant::now();
+    let mut next_brief = Instant::now();
     let mut step = || -> anyhow::Result<Option<WaitOutcome>> {
         match read_control(root)? {
             Control::Go { participants } if participants.contains(tag) => {
@@ -247,21 +259,30 @@ pub fn wait_for_go_reporting(
         let participants = registered(root)?;
         let now = Instant::now();
         if !report_every.is_zero() && now >= next_report {
-            eprintln!(
+            progress.detail(&format!(
                 "registered as {tag}; waiting for go ({}/{expected} hosts registered)",
                 participants.len()
-            );
+            ));
             next_report = now + report_every;
+        }
+        if participants.len() < expected && now >= next_brief {
+            progress.brief_line(|run| {
+                format!(
+                    "{run}: waiting for the other hosts ({} of {expected} have started)",
+                    participants.len()
+                )
+            });
+            next_brief = now + BRIEF_EVERY;
         }
         let timed_out = go_after.is_some_and(|after| registered_at.elapsed() >= after);
         if !lost_go && (participants.len() >= expected || timed_out) {
             if try_go(root, &participants)? {
                 if participants.len() < expected {
-                    eprintln!(
+                    progress.detail(&format!(
                         "not every host registered in time; starting with {}/{expected} \
                          hosts",
                         participants.len()
-                    );
+                    ));
                 }
                 return Ok(None);
             }
@@ -557,6 +578,7 @@ mod tests {
                             3,
                             POLL,
                             Duration::ZERO,
+                            &Progress::Stderr,
                             Some(go_after),
                         )
                     })
@@ -575,8 +597,15 @@ mod tests {
         }
         assert_eq!(read_go(root).unwrap(), go);
         assert_eq!(read_control(root).unwrap(), Control::Go { participants: go });
-        let late =
-            wait_for_go_reporting(root, "c", 3, POLL, Duration::ZERO, Some(go_after));
+        let late = wait_for_go_reporting(
+            root,
+            "c",
+            3,
+            POLL,
+            Duration::ZERO,
+            &Progress::Stderr,
+            Some(go_after),
+        );
         assert_eq!(late.unwrap(), WaitOutcome::Late);
         assert!(!root.host_info("c").exists());
     }

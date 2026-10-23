@@ -97,9 +97,20 @@ an empty directory:
 fs-stress qualify run --root /path/on/your/fs/fs-stress-1
 ```
 
-We call this path `R` below. The test prints its progress to stderr, every
-5 seconds, and the result to stdout at the end. The exit code is 0 for a
-pass, 1 for a failure, and 3 for an error or a provisional result.
+We call this path `R` below. Every 10 seconds the test prints how far it
+got and about how long is left. At the end it prints the result. The exit
+code is 0 for a pass, 1 for a failure, and 3 for an error or a provisional
+result.
+
+Then, whether it passed or failed, send us the results. In a directory
+outside `R`, run:
+
+```sh
+fs-stress bundle --root /path/on/your/fs/fs-stress-1
+```
+
+and send the file it writes as described in
+[Send us the results](#send-us-the-results).
 
 ## Run it on several hosts
 
@@ -111,10 +122,11 @@ examples use 5. You need:
   each command takes `R` as that host sees it);
 - the `fs-stress` binary on every host;
 - clocks roughly in sync, as NTP or chrony keeps them. A few seconds of
-  difference is fine, and the result reports it. If you aren't sure, run the
+  difference is fine, and the result notes it. If you aren't sure, run the
   test anyway and tell us when you send the results.
 
-1. **On one host**, create the root, saying how many hosts take part:
+1. **On one host**, create the root, saying how many hosts take part. It
+   returns at once and prints the next steps:
 
    ```sh
    fs-stress qualify init --root /path/on/your/fs/fs-stress-1 --hosts 5
@@ -131,16 +143,27 @@ examples use 5. You need:
 
    ```sh
    for h in host1 host2 host3 host4 host5; do
-     ssh $h /path/to/fs-stress qualify workers --root /path/on/your/fs/fs-stress-1 &
+     {
+       ssh -n $h /path/to/fs-stress qualify workers --root /path/on/your/fs/fs-stress-1 ||
+         echo "[$h] failed with exit code $?"
+     } &
    done
    wait
    ```
 
+   Every line starts with the name of the host that printed it. `wait`
+   returns once every host has stopped. Each host that ran prints `This host
+   is done` at the end, and a host that failed prints `[host] failed with
+   exit code N`. 255 means ssh itself failed; the other codes are below.
+
    With Slurm, one task per node:
 
    ```sh
-   srun -N 5 --ntasks-per-node=1 /path/to/fs-stress qualify workers --root /path/on/your/fs/fs-stress-1
+   srun -N 5 --ntasks-per-node=1 --time=1:00:00 /path/to/fs-stress qualify workers --root /path/on/your/fs/fs-stress-1
    ```
+
+   Add your cluster's partition and account options if it needs them, and a
+   time limit of at least an hour.
 
 3. **On one host**, once every host's `qualify workers` has exited, check the
    result:
@@ -148,6 +171,16 @@ examples use 5. You need:
    ```sh
    fs-stress qualify verify --root /path/on/your/fs/fs-stress-1
    ```
+
+4. **On that host**, whether the test passed or failed, send us the results.
+   In a directory outside `R`, run:
+
+   ```sh
+   fs-stress bundle --root /path/on/your/fs/fs-stress-1
+   ```
+
+   and send the file it writes as described in
+   [Send us the results](#send-us-the-results).
 
 The test has two runs, one after the other, and the hosts wait for each other
 before each. The first run starts once every host has registered. The second
@@ -183,8 +216,8 @@ The first line of the result is one of:
 - **`ERROR`**: the test itself hit an error, so the result says nothing about
   your filesystem. Please send us the results.
 
-Then come each run's own summary and, at the end, what to do next. The
-result is also saved in `R/summary.txt`.
+Then come a line for each run, any notes, and what to do next. The full
+report, with each run's details, is in `R/summary.txt`.
 
 ## Send us the results
 

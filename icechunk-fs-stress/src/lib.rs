@@ -13,6 +13,7 @@ pub mod layout;
 pub mod log;
 pub mod next_steps;
 pub mod oracle;
+pub mod progress;
 pub mod qualify;
 pub mod recovery;
 pub mod repo_mode;

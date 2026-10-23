@@ -30,15 +30,13 @@ mod cli {
         },
         control,
         convert::{self, Converter, ScenarioConfig},
-        env_info::{Build, HostDone, default_tag},
+        env_info::{Build, default_tag, host_name},
         fork::{self, FORK_SLOT},
-        layout::{
-            QualifyRoot, RunRoot, ScenarioRoot, is_valid_slot, is_valid_tag,
-            qualify_run_dir,
-        },
+        layout::{QualifyRoot, RunRoot, ScenarioRoot, is_valid_slot, is_valid_tag},
         log::Direction,
-        next_steps::next_steps,
-        qualify::{self, Combined, Overrides, Qualify, human_duration},
+        next_steps::{next_steps, qualify_init_next, qualify_workers_done},
+        progress::host_line,
+        qualify::{self, Combined, Overrides, Qualify},
         repo_mode,
         report::{self, Report},
         selftest::{self, SelftestOptions},
@@ -571,7 +569,7 @@ mod cli {
         Ok(())
     }
 
-    /// How often `qualify` prints a status line to stderr.
+    /// How often `qualify` writes a status line to its progress files.
     const QUALIFY_PROGRESS_EVERY: Duration = Duration::from_secs(5);
 
     fn run_qualify(command: &QualifyCommand) -> anyhow::Result<ExitCode> {
@@ -580,31 +578,40 @@ mod cli {
                 let root = QualifyRoot::new(args.root.clone());
                 let qualify = qualify_config(args.hosts, &args.config);
                 runtime()?.block_on(qualify::init(&root, &qualify))?;
+                let hosts = if qualify.hosts == 1 { "host" } else { "hosts" };
                 println!(
-                    "initialized {} ({} hosts expected); {}",
+                    "Initialized {} for {} {hosts}.\n{}\n{}",
                     root.root().display(),
                     qualify.hosts,
-                    qualify_plan(&qualify)?
+                    qualify_init_next(root.root(), qualify.hosts),
+                    qualify.plan()?
                 );
                 Ok(ExitCode::SUCCESS)
             }
             QualifyCommand::Workers(args) => {
                 let root = QualifyRoot::new(args.root.clone());
                 let tag = args.tag.clone().unwrap_or_else(default_tag);
+                // Several hosts' lines often share one terminal.
+                let host = host_name();
                 let runs = runtime()?.block_on(qualify::workers(
                     &root,
                     &tag,
                     args.workers,
                     QUALIFY_PROGRESS_EVERY,
                     args.second_run_go_after,
+                    Some(&host),
                 ))?;
                 for (mode, done) in &runs {
-                    let run = qualify_run_dir(*mode);
-                    match done {
-                        Ok(done) => println!("{run} run: {}", done_line(done)),
-                        Err(err) => eprintln!("fs-stress: {run} run: {err:#}"),
+                    if let Err(err) = done {
+                        let line =
+                            format!("fs-stress: {}: {err:#}", qualify::run_label(*mode));
+                        eprintln!("{}", host_line(Some(&host), &line));
                     }
                 }
+                println!(
+                    "{}",
+                    host_line(Some(&host), &qualify_workers_done(root.root()))
+                );
                 Ok(ExitCode::from(qualify::workers_exit_code(
                     runs.iter().map(|(_, r)| r),
                 )))
@@ -618,7 +625,11 @@ mod cli {
             QualifyCommand::Run(args) => {
                 let root = QualifyRoot::new(args.root.clone());
                 let qualify = qualify_config(1, &args.config);
-                eprintln!("{}: {}", root.root().display(), qualify_plan(&qualify)?);
+                eprintln!(
+                    "Testing filesystem_storage in {}\n{}\n",
+                    root.root().display(),
+                    qualify.plan()?
+                );
                 let combined = runtime()?.block_on(qualify::run(
                     &root,
                     &qualify,
@@ -643,39 +654,14 @@ mod cli {
     }
 
     /// How long the runs take and how much space they need.
-    fn qualify_plan(qualify: &Qualify) -> anyhow::Result<String> {
-        let configs = qualify::MODES
-            .map(|mode| qualify.run_config(mode))
-            .into_iter()
-            .collect::<anyhow::Result<Vec<_>>>()?;
-        let runs: Vec<_> = configs
-            .iter()
-            .map(|config| {
-                format!(
-                    "a {} run of {}",
-                    qualify_run_dir(config.mode),
-                    human_duration(config.duration)
-                )
-            })
-            .collect();
-        let total = configs.iter().map(|config| config.duration).sum();
-        Ok(format!(
-            "{}: {} in all, plus a few minutes to start and check them; {}",
-            runs.join(", then "),
-            human_duration(total),
-            qualify::DISK_NEEDED
-        ))
-    }
-
     /// Writes the combined summary and what to do next to `summary.txt` in
-    /// the root, then prints them.
+    /// the root, then prints the result in short.
     fn print_combined(
         root: &QualifyRoot,
         combined: &Combined,
     ) -> anyhow::Result<ExitCode> {
-        let text = combined.summary(root.root());
-        qualify::write_summary_file(root, &text)?;
-        print!("{text}");
+        qualify::write_summary_file(root, &combined.summary(root.root()))?;
+        print!("{}", combined.brief(root.root()));
         Ok(ExitCode::from(combined.outcome().exit_code()))
     }
 
@@ -914,15 +900,8 @@ mod cli {
             workers,
             progress_every,
         ))?;
-        println!("{}", done_line(&done));
+        println!("{}", done.line());
         Ok(())
-    }
-
-    fn done_line(done: &HostDone) -> String {
-        format!(
-            "{}: {} worker incarnations, {} external kills, {} stragglers",
-            done.tag, done.incarnations_spawned, done.external_kills, done.stragglers
-        )
     }
 
     fn worker(args: &WorkerArgs) -> anyhow::Result<()> {

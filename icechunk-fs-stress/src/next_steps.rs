@@ -18,6 +18,34 @@ pub fn qualify_next_steps(outcome: Outcome, root: &Path) -> String {
     steps(outcome, root, "fs-stress qualify verify")
 }
 
+/// What `qualify init` prints about the next steps, for the root `root` as
+/// the user gave it and `hosts` hosts.
+pub fn qualify_init_next(root: &Path, hosts: u32) -> String {
+    let each = match hosts {
+        1 => "on the host".to_owned(),
+        hosts => format!("on each of the {hosts} hosts"),
+    };
+    format!(
+        "Next, run `fs-stress qualify workers --root {}` {each}.\n{}",
+        shell_quoted(&root.display().to_string()),
+        verify_on_one(root)
+    )
+}
+
+/// What `qualify workers` prints when this host is done, for the root `root`
+/// as the user gave it.
+pub fn qualify_workers_done(root: &Path) -> String {
+    format!("This host is done. {}", verify_on_one(root))
+}
+
+fn verify_on_one(root: &Path) -> String {
+    format!(
+        "Once every host is done, run `fs-stress qualify verify --root {}` on one of \
+         them.",
+        shell_quoted(&root.display().to_string())
+    )
+}
+
 /// `verify` is the command that verifies `root`.
 fn steps(outcome: Outcome, root: &Path, verify: &str) -> String {
     let root = shell_quoted(&root.display().to_string());
@@ -106,6 +134,29 @@ mod tests {
         }
         assert!(steps(Outcome::Failed).contains("need our review"));
         assert!(steps(Outcome::Error).contains("says nothing about the filesystem"));
+    }
+
+    #[test]
+    fn qualify_init_says_what_to_run_on_every_host_and_then_on_one() {
+        assert_eq!(
+            qualify_init_next(Path::new("/mnt/my share/q"), 3),
+            "Next, run `fs-stress qualify workers --root '/mnt/my share/q'` on each of \
+             the 3 hosts.\n\
+             Once every host is done, run `fs-stress qualify verify --root \
+             '/mnt/my share/q'` on one of them."
+        );
+        let one = qualify_init_next(Path::new(ROOT), 1);
+        assert!(one.starts_with("Next, run `fs-stress qualify workers --root "), "{one}");
+        assert!(one.contains("` on the host.\n"), "{one}");
+    }
+
+    #[test]
+    fn a_host_done_with_qualify_workers_is_told_to_verify_on_one_host() {
+        assert_eq!(
+            qualify_workers_done(Path::new("/mnt/my share/q")),
+            "This host is done. Once every host is done, run `fs-stress qualify verify \
+             --root '/mnt/my share/q'` on one of them."
+        );
     }
 
     #[test]

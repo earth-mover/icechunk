@@ -5,6 +5,7 @@ use std::{
     fs,
     io::Read as _,
     os::unix::process::ExitStatusExt as _,
+    path::Path,
     process::{Child, Command, ExitStatus, Stdio},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -221,7 +222,7 @@ async fn repository_run_with_gc_passes_the_oracle() {
 /// Runs `fs-stress` with `args`, its output in files under `dir`, and returns
 /// its exit status, stdout and stderr.
 fn run_logged(
-    dir: &std::path::Path,
+    dir: &Path,
     args: &[&str],
     timeout: Duration,
 ) -> (ExitStatus, String, String) {
@@ -368,17 +369,29 @@ fn qualify_run_passes_and_a_second_verify_reads_both_reports_again() {
     let (status, stdout, stderr) =
         run_logged(dir.path(), &args, Duration::from_secs(600));
     assert_eq!(status.code(), Some(0), "{stdout}\n{stderr}");
-    assert!(stdout.starts_with("PASS: fs-stress qualification, Icechunk "), "{stdout}");
+    assert!(stdout.starts_with("PASS: the test found no problems.\n"), "{stdout}");
     assert!(stdout.contains("so this result is not a qualification"), "{stdout}");
-    for phase in [
-        "needs up to about 10 GB of free space",
-        "starting the storage-mode run",
-        "starting the repository-mode run",
-        "verifying the storage-mode run",
-        "verifying the repository-mode run",
-    ] {
-        assert!(stderr.contains(phase), "{phase:?} missing from {stderr}");
+    for line in ["  Run 1 of 2: passed\n", "  Run 2 of 2: passed\n"] {
+        assert!(stdout.contains(line), "{line:?} missing from {stdout}");
     }
+    let full_report = format!("The full report is in {root_arg}/summary.txt.");
+    assert!(stdout.contains(&full_report), "{stdout}");
+    for brief in [
+        "needs up to about 10 GB of free space",
+        "Run 1 of 2 started.",
+        "Run 2 of 2 started.",
+        "of 15s done",
+        "Checking the results",
+    ] {
+        assert!(stderr.contains(brief), "{brief:?} missing from {stderr}");
+    }
+    assert!(!stderr.contains("intents"), "{stderr}");
+    assert!(
+        stderr.contains("\nRun 1 of 2 started.\n"),
+        "no host prefix on one host: {stderr}"
+    );
+    let full = fs::read_to_string(root.join("summary.txt")).unwrap();
+    assert!(full.starts_with("PASS: fs-stress qualification, Icechunk "), "{full}");
     for (run, mode) in [("storage-mode", "storage"), ("repository-mode", "repository")] {
         let run = root.join(run);
         let report: serde_json::Value =
@@ -387,7 +400,13 @@ fn qualify_run_passes_and_a_second_verify_reads_both_reports_again() {
         let summary = fs::read_to_string(run.join("summary.txt")).unwrap();
         assert!(summary.starts_with(&format!("PASS: {mode} mode, 1 host(s), 15s")));
         assert!(!summary.contains("bundle"), "{summary}");
-        assert!(stdout.contains(&summary), "{summary} missing from {stdout}");
+        assert!(full.contains(&summary), "{summary} missing from {full}");
+        let progress = progress_files(&run);
+        let host = progress.iter().find(|(name, _)| name != "verify.txt").unwrap();
+        assert!(host.1.contains("intents"), "{progress:?}");
+        assert!(host.1.contains("registered as"), "{progress:?}");
+        let verify = progress.iter().find(|(name, _)| name == "verify.txt").unwrap();
+        assert!(verify.1.contains("verifying the "), "{progress:?}");
     }
     let qualify: serde_json::Value =
         serde_json::from_slice(&fs::read(root.join("qualify.json")).unwrap()).unwrap();
@@ -396,7 +415,7 @@ fn qualify_run_passes_and_a_second_verify_reads_both_reports_again() {
     assert_eq!(qualify["overrides"]["duration"], 15_000);
     let next = format!("run `fs-stress bundle --root {root_arg}`");
     assert!(stdout.contains(&next), "{next} missing from {stdout}");
-    assert_eq!(fs::read_to_string(root.join("summary.txt")).unwrap(), stdout);
+    assert!(full.ends_with(&stdout[stdout.find("\nTo share").unwrap()..]), "{full}");
 
     let (status, again, stderr) = run_logged(
         dir.path(),
@@ -404,8 +423,25 @@ fn qualify_run_passes_and_a_second_verify_reads_both_reports_again() {
         Duration::from_secs(120),
     );
     assert_eq!(status.code(), Some(0), "{again}\n{stderr}");
-    assert_eq!(stderr.matches("this run was already verified").count(), 2, "{stderr}");
+    for run in ["storage-mode", "repository-mode"] {
+        let verify =
+            fs::read_to_string(root.join(run).join("progress/verify.txt")).unwrap();
+        assert!(verify.contains("this run was already verified"), "{verify}");
+    }
     assert_eq!(again, stdout);
+    assert_eq!(fs::read_to_string(root.join("summary.txt")).unwrap(), full);
+}
+
+/// The names and contents of the files in a run's `progress/`.
+fn progress_files(run: &Path) -> Vec<(String, String)> {
+    fs::read_dir(run.join("progress"))
+        .unwrap()
+        .map(|entry| {
+            let entry = entry.unwrap();
+            let name = entry.file_name().into_string().unwrap();
+            (name, fs::read_to_string(entry.path()).unwrap())
+        })
+        .collect()
 }
 
 #[test]
@@ -421,7 +457,11 @@ fn qualify_second_run_starts_without_a_host_that_missed_it() {
     .concat();
     let (status, stdout, stderr) = run_logged(dir.path(), &init, TIMEOUT);
     assert!(status.success(), "{stdout}\n{stderr}");
-    assert!(stdout.contains("(2 hosts expected)"), "{stdout}");
+    assert!(stdout.starts_with(&format!("Initialized {root_arg} for 2 hosts.\n")));
+    let next = format!("Next, run `fs-stress qualify workers --root {root_arg}` on each");
+    assert!(stdout.contains(&next), "{stdout}");
+    let verify = format!("run `fs-stress qualify verify --root {root_arg}` on one");
+    assert!(stdout.contains(&verify), "{stdout}");
     assert!(stdout.contains("needs up to about 10 GB of free space"), "{stdout}");
 
     let a_stderr = dir.path().join("a.stderr");
@@ -443,7 +483,10 @@ fn qualify_second_run_starts_without_a_host_that_missed_it() {
     let statuses = wait_all(vec![a, b], Duration::from_secs(300));
     let a_stderr = fs::read_to_string(a_stderr).unwrap();
     assert!(statuses.iter().all(ExitStatus::success), "{statuses:?}\n{a_stderr}");
-    assert!(a_stderr.contains("starting with 1/2 hosts"), "{a_stderr}");
+    // `qualify workers` puts the host name in front of its lines.
+    let started = "] Run 2 of 2 started with 1 of 2 hosts; the others came too late.";
+    assert!(a_stderr.contains(started), "{a_stderr}");
+    assert!(a_stderr.contains("] Run 1 of 2 started with 2 hosts."), "{a_stderr}");
 
     let (status, stdout, stderr) = run_logged(
         dir.path(),
@@ -451,10 +494,11 @@ fn qualify_second_run_starts_without_a_host_that_missed_it() {
         Duration::from_secs(300),
     );
     assert_eq!(status.code(), Some(0), "{stdout}\n{stderr}");
-    assert!(stdout.contains("PASS: storage mode, 2 host(s)"), "{stdout}");
-    assert!(stdout.contains("PASS: repository mode, 1 host(s)"), "{stdout}");
-    assert!(
-        stdout.contains("hosts in the first run but not in the second: b\n"),
-        "{stdout}"
-    );
+    assert!(stdout.contains("note: hosts in run 1 but not in run 2: b\n"), "{stdout}");
+    let full = fs::read_to_string(root.join("summary.txt")).unwrap();
+    assert!(full.contains("PASS: storage mode, 2 host(s)"), "{full}");
+    assert!(full.contains("PASS: repository mode, 1 host(s)"), "{full}");
+    assert!(full.contains("hosts in the first run but not in the second: b\n"), "{full}");
+    let a = fs::read_to_string(root.join("repository-mode/progress/a.txt")).unwrap();
+    assert!(a.contains("starting with 1/2 hosts"), "{a}");
 }

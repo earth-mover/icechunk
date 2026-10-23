@@ -3,7 +3,13 @@
 //! repository-mode run, each an ordinary run root under one root, verified
 //! together into one result.
 
-use std::{fmt, fmt::Write as _, fs, path::Path, time::Duration};
+use std::{
+    fmt,
+    fmt::Write as _,
+    fs,
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 use anyhow::{Context as _, ensure};
 use serde::{Deserialize, Serialize};
@@ -15,8 +21,9 @@ use crate::{
     },
     control::{self, read_go},
     env_info::{Build, HostDone, default_tag},
-    layout::{QualifyRoot, qualify_run_dir},
+    layout::{QualifyRoot, VERIFY_TAG, qualify_run_dir},
     next_steps::qualify_next_steps,
+    progress::{Progress, RunLabel, about_minutes},
     report::{Outcome, Report, replace_file},
     supervisor::{self, LateHost},
     verify::{self, AlreadyVerified, DEFAULT_DONE_TIMEOUT},
@@ -33,8 +40,8 @@ pub const SECOND_RUN_GO_AFTER: Duration = Duration::from_secs(10 * 60);
 /// The free space a qualification needs, whatever the hosts and workers:
 /// mostly the backups of the repo info that every change keeps in
 /// `storage/overwritten/`.
-pub const DISK_NEEDED: &str = "needs up to about 10 GB of free space on the filesystem \
-     under test for the whole qualification; usually under 1 GB on network filesystems";
+pub const DISK_NEEDED: &str = "It needs up to about 10 GB of free space on the filesystem \
+     under test, usually under 1 GB on network filesystems.";
 
 /// The fixed settings of the runs; every other setting keeps its default.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -162,6 +169,37 @@ impl Qualify {
             .with_context(|| format!("parsing {}", path.display()))
     }
 
+    /// How long the test takes and the disk space it needs, in two lines.
+    pub fn plan(&self) -> anyhow::Result<String> {
+        let total = MODES
+            .into_iter()
+            .map(|mode| self.run_config(mode).map(|config| config.duration))
+            .sum::<anyhow::Result<Duration>>()?;
+        Ok(format!(
+            "The test takes {}, plus a few minutes to start and to check the results.\n\
+             {DISK_NEEDED}",
+            about_minutes(total)
+        ))
+    }
+
+    /// The progress of `mode`'s run that goes to `detail`, counting the runs
+    /// after it in the time left, its short lines after `[host] ` if there is
+    /// a `host`.
+    fn progress(
+        &self,
+        mode: Mode,
+        detail: PathBuf,
+        host: Option<&str>,
+    ) -> anyhow::Result<Progress> {
+        let later = MODES
+            .into_iter()
+            .skip_while(|m| *m != mode)
+            .skip(1)
+            .map(|m| self.run_config(m).map(|config| config.duration))
+            .sum::<anyhow::Result<Duration>>()?;
+        Ok(Progress::brief(detail, run_label(mode), later, host.map(str::to_owned)))
+    }
+
     fn write_new(&self, root: &QualifyRoot) -> anyhow::Result<()> {
         let path = root.qualify_json();
         write_synced(&path, &serde_json::to_vec_pretty(self)?)
@@ -187,37 +225,44 @@ pub async fn init(root: &QualifyRoot, qualify: &Qualify) -> anyhow::Result<()> {
 /// This host's part of each run, in order: `workers` on the storage-mode run,
 /// then on the repository-mode run, whatever happened in the first. The
 /// second run's barrier starts without the missing hosts after `go_after`.
-/// `workers` overrides the runs' workers per host.
+/// `workers` overrides the runs' workers per host. The short progress lines
+/// start with `[host] ` if there is a `host`.
 pub async fn workers(
     root: &QualifyRoot,
     tag: &str,
     workers: Option<u32>,
     progress_every: Duration,
     go_after: Duration,
+    host: Option<&str>,
 ) -> anyhow::Result<Vec<(Mode, anyhow::Result<HostDone>)>> {
-    Qualify::load(root)?;
+    let qualify = Qualify::load(root)?;
+    supervisor::check_tag(tag)?;
     let mut results = Vec::new();
     for (i, mode) in MODES.into_iter().enumerate() {
         let run = root.run(mode);
-        eprintln!(
-            "starting the {} run in {}",
-            qualify_run_dir(mode),
-            run.root().display()
-        );
         let go_after = (i > 0).then_some(go_after);
         let done = async {
+            let progress = qualify.progress(mode, run.progress(tag), host)?;
+            progress.detail(&format!(
+                "starting the {} run in {}",
+                qualify_run_dir(mode),
+                run.root().display()
+            ));
             let workers = match workers {
                 Some(workers) => workers,
                 None => RunConfig::load(&run)?.workers_per_host_default,
             };
-            supervisor::workers_with_go_after(
+            let done = supervisor::workers_with_go_after(
                 &run,
                 tag.to_owned(),
                 workers,
                 progress_every,
+                &progress,
                 go_after,
             )
-            .await
+            .await?;
+            progress.detail(&done.line());
+            anyhow::Ok(done)
         }
         .await;
         let done = match (go_after, done) {
@@ -248,9 +293,8 @@ impl fmt::Display for LateForSecondRun {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "the other hosts started the {} run without this host, because it didn't \
-             register within {} of them; the qualification goes on without it",
-            qualify_run_dir(MODES[1]),
+            "the other hosts started it without this host, because it didn't register \
+             within {} of them; the qualification goes on without it",
             human_duration(self.go_after)
         )
     }
@@ -319,6 +363,86 @@ impl Combined {
             .unwrap_or(Outcome::Passed)
     }
 
+    /// The result in short, where the full summary is and what to do next,
+    /// for the root `root` as the user gave it: what `qualify` prints.
+    pub fn brief(&self, root: &Path) -> String {
+        let mut out = String::new();
+        // Writing to a `String` can't fail.
+        let _ = self.write_brief(root, &mut out);
+        out
+    }
+
+    fn write_brief(&self, root: &Path, out: &mut String) -> fmt::Result {
+        let outcome = self.outcome();
+        let result = match outcome {
+            Outcome::Passed => "PASS: the test found no problems.",
+            Outcome::Failed => "FAIL: the test found problems that we need to look at.",
+            Outcome::Provisional => {
+                "PROVISIONAL: the test hasn't finished on every host."
+            }
+            Outcome::Error => {
+                "ERROR: the test itself hit an error, so the result says nothing about \
+                 your filesystem."
+            }
+        };
+        writeln!(out, "{result}")?;
+        writeln!(out, "build: {}", Build::current())?;
+        self.write_notes(out)?;
+        for (mode, run) in &self.runs {
+            let label = run_label(*mode);
+            let line = match run {
+                RunResult::Report(report) => match report.outcome() {
+                    Outcome::Passed => "passed".to_owned(),
+                    Outcome::Failed => match report.problems() {
+                        1 => "found 1 problem".to_owned(),
+                        n => format!("found {n} problems"),
+                    },
+                    Outcome::Provisional => format!(
+                        "not finished: hosts still missing ({})",
+                        report.participants.missing.join(", ")
+                    ),
+                    Outcome::Error => "the test hit an error".to_owned(),
+                },
+                RunResult::NotStarted => "not started yet".to_owned(),
+                RunResult::Error(why) => format!("error: {why}"),
+            };
+            writeln!(out, "  {label}: {line}")?;
+        }
+        for (mode, run) in &self.runs {
+            if let RunResult::Report(report) = run {
+                for note in report.brief_notes() {
+                    writeln!(out, "note: {}: {note}", run_label(*mode))?;
+                }
+            }
+        }
+        if !self.missing.is_empty() {
+            writeln!(
+                out,
+                "note: hosts in run 1 but not in run 2: {}",
+                self.missing.join(", ")
+            )?;
+        }
+        let summary = QualifyRoot::new(root.to_path_buf()).summary();
+        writeln!(out, "The full report is in {}.", summary.display())?;
+        write!(out, "\n{}", qualify_next_steps(outcome, root))
+    }
+
+    /// Notes about another build that ran `init` and a changed preset.
+    fn write_notes(&self, out: &mut String) -> fmt::Result {
+        if self.init_build != Build::current() {
+            writeln!(out, "note: another build initialized it: {}", self.init_build)?;
+        }
+        if !self.overrides.is_empty() {
+            writeln!(
+                out,
+                "note: the preset was changed for a test ({}), so this result is not a \
+                 qualification",
+                self.overrides.describe()
+            )?;
+        }
+        Ok(())
+    }
+
     /// The combined summary and what to do next, for the root `root` as the
     /// user gave it.
     pub fn summary(&self, root: &Path) -> String {
@@ -336,19 +460,8 @@ impl Combined {
             Outcome::Provisional => "PROVISIONAL",
             Outcome::Error => "ERROR",
         };
-        let build = Build::current();
-        writeln!(out, "{result}: fs-stress qualification, {build}")?;
-        if self.init_build != build {
-            writeln!(out, "note: another build initialized it: {}", self.init_build)?;
-        }
-        if !self.overrides.is_empty() {
-            writeln!(
-                out,
-                "note: the preset was changed for a test ({}), so this result is not a \
-                 qualification",
-                self.overrides.describe()
-            )?;
-        }
+        writeln!(out, "{result}: fs-stress qualification, {}", Build::current())?;
+        self.write_notes(out)?;
         for (mode, run) in &self.runs {
             let dir = root.join(qualify_run_dir(*mode));
             writeln!(out, "\n{} run, in {}:", qualify_run_dir(*mode), dir.display())?;
@@ -385,12 +498,15 @@ pub async fn verify(
     done_timeout: Duration,
 ) -> anyhow::Result<Combined> {
     let qualify = Qualify::load(root)?;
+    eprintln!("{CHECKING}");
     let mut runs = Vec::new();
     for mode in MODES {
-        runs.push((mode, verify_run(root, mode, done_timeout).await));
+        runs.push((mode, verify_run(root, &qualify, mode, done_timeout).await));
     }
     Ok(combined(root, &qualify, runs))
 }
+
+const CHECKING: &str = "Checking the results; this can take a few minutes.";
 
 /// `init` for one host, this host's workers on both runs, then `verify`. A
 /// run whose workers failed isn't verified.
@@ -403,13 +519,14 @@ pub async fn run(
     init(root, qualify).await?;
     let tag = default_tag();
     let host_runs =
-        workers(root, &tag, None, progress_every, SECOND_RUN_GO_AFTER).await?;
+        workers(root, &tag, None, progress_every, SECOND_RUN_GO_AFTER, None).await?;
+    eprintln!("{CHECKING}");
     let mut runs = Vec::new();
     for (mode, done) in host_runs {
         let result = match done {
-            Ok(_) => verify_run(root, mode, DEFAULT_DONE_TIMEOUT).await,
+            Ok(_) => verify_run(root, qualify, mode, DEFAULT_DONE_TIMEOUT).await,
             Err(err) => {
-                eprintln!("the {} run failed: {err:#}", qualify_run_dir(mode));
+                eprintln!("{} failed: {err:#}", run_label(mode));
                 RunResult::Error(format!("this host's workers failed: {err:#}"))
             }
         };
@@ -431,18 +548,31 @@ fn combined(
     }
 }
 
-async fn verify_run(root: &QualifyRoot, mode: Mode, done_timeout: Duration) -> RunResult {
+async fn verify_run(
+    root: &QualifyRoot,
+    qualify: &Qualify,
+    mode: Mode,
+    done_timeout: Duration,
+) -> RunResult {
     let run = root.run(mode);
+    let progress = match qualify.progress(mode, run.progress(VERIFY_TAG), None) {
+        Ok(progress) => progress,
+        Err(err) => return RunResult::Error(format!("{err:#}")),
+    };
     // Verify would report it as never started, an error.
     if matches!(control::read_control(&run), Ok(control::Control::Wait)) {
-        eprintln!("the {} run hasn't started yet", qualify_run_dir(mode));
+        progress.detail(&format!("the {} run hasn't started yet", qualify_run_dir(mode)));
         return RunResult::NotStarted;
     }
-    eprintln!("verifying the {} run in {}", qualify_run_dir(mode), run.root().display());
-    match verify::verify(&run, done_timeout).await {
+    progress.detail(&format!(
+        "verifying the {} run in {}",
+        qualify_run_dir(mode),
+        run.root().display()
+    ));
+    match verify::verify_with_progress(&run, done_timeout, &progress).await {
         Ok(report) => RunResult::Report(Box::new(report)),
         Err(err) if err.downcast_ref::<AlreadyVerified>().is_some() => {
-            eprintln!("{err:#}; reading its report.json");
+            progress.detail(&format!("{err:#}; reading its report.json"));
             match Report::load(&run) {
                 Ok(report) => RunResult::Report(Box::new(report)),
                 Err(load) => RunResult::Error(format!("{err:#}; {load:#}")),
@@ -474,6 +604,15 @@ pub fn stop(root: &QualifyRoot) -> anyhow::Result<()> {
         .collect();
     ensure!(errors.is_empty(), "{}", errors.join("; "));
     Ok(())
+}
+
+/// `Run 1 of 2` for the first of [`MODES`].
+pub fn run_label(mode: Mode) -> RunLabel {
+    let number = match mode {
+        Mode::Storage => 1,
+        Mode::Repository => 2,
+    };
+    RunLabel { number, of: MODES.len() }
 }
 
 /// `5m`, `90s` or `1500ms`.
@@ -598,10 +737,25 @@ mod tests {
     async fn workers_needs_qualify_json() {
         let dir = tempfile::tempdir().unwrap();
         let root = QualifyRoot::new(dir.path().to_path_buf());
-        let err = workers(&root, "a", None, Duration::ZERO, SECOND_RUN_GO_AFTER)
+        let err = workers(&root, "a", None, Duration::ZERO, SECOND_RUN_GO_AFTER, None)
             .await
             .unwrap_err();
         assert!(format!("{err:#}").contains("qualify.json"), "{err:#}");
+    }
+
+    #[tokio::test]
+    async fn workers_refuses_a_reserved_tag_before_writing_any_progress() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = QualifyRoot::new(dir.path().join("q"));
+        init(&root, &Qualify::new(1, None, None, short())).await.unwrap();
+        let err =
+            workers(&root, VERIFY_TAG, None, Duration::ZERO, SECOND_RUN_GO_AFTER, None)
+                .await
+                .unwrap_err();
+        assert!(format!("{err:#}").contains("reserved"), "{err:#}");
+        for mode in MODES {
+            assert!(!root.run(mode).progress(VERIFY_TAG).parent().unwrap().exists());
+        }
     }
 
     #[test]
@@ -636,8 +790,8 @@ mod tests {
         let text = LateForSecondRun { go_after }.to_string();
         assert_eq!(
             text,
-            "the other hosts started the repository-mode run without this host, because \
-             it didn't register within 10m of them; the qualification goes on without it"
+            "the other hosts started it without this host, because it didn't register \
+             within 10m of them; the qualification goes on without it"
         );
     }
 
@@ -767,7 +921,8 @@ mod tests {
     async fn a_run_verified_before_is_refused_and_its_report_read_again() {
         let dir = tempfile::tempdir().unwrap();
         let root = QualifyRoot::new(dir.path().join("q"));
-        init(&root, &Qualify::new(1, None, None, short())).await.unwrap();
+        let qualify = Qualify::new(1, None, None, short());
+        init(&root, &qualify).await.unwrap();
         let run: RunRoot = root.run(Mode::Storage);
         let RunResult::Report(earlier) = report(Mode::Storage, Outcome::Failed) else {
             panic!("not a report");
@@ -780,8 +935,10 @@ mod tests {
         let err = verify::verify(&run, Duration::ZERO).await.unwrap_err();
         assert!(err.downcast_ref::<AlreadyVerified>().is_some(), "{err:#}");
 
-        let result = verify_run(&root, Mode::Storage, Duration::ZERO).await;
+        let result = verify_run(&root, &qualify, Mode::Storage, Duration::ZERO).await;
         assert_eq!(result, RunResult::Report(earlier));
+        let detail = fs::read_to_string(run.progress(VERIFY_TAG)).unwrap();
+        assert!(detail.contains("this run was already verified"), "{detail}");
         assert_eq!(missing_from_second_run(&root), Vec::<String>::new());
     }
 
@@ -789,9 +946,11 @@ mod tests {
     async fn a_run_not_started_yet_is_provisional_and_can_be_verified_later() {
         let dir = tempfile::tempdir().unwrap();
         let root = QualifyRoot::new(dir.path().join("q"));
-        init(&root, &Qualify::new(2, None, None, short())).await.unwrap();
+        let qualify = Qualify::new(2, None, None, short());
+        init(&root, &qualify).await.unwrap();
         let run = root.run(Mode::Repository);
-        let not_started = verify_run(&root, Mode::Repository, Duration::ZERO).await;
+        let not_started =
+            verify_run(&root, &qualify, Mode::Repository, Duration::ZERO).await;
         assert_eq!(not_started, RunResult::NotStarted);
         assert!(!run.report_json().exists());
         assert!(!run.summary().exists());
@@ -846,6 +1005,121 @@ mod tests {
             fs::write(run.go(), go).unwrap();
         }
         assert_eq!(missing_from_second_run(&root), ["b", "c"]);
+    }
+
+    #[test]
+    fn the_brief_result_shows_each_run_in_a_line_and_where_the_full_report_is() {
+        let mut both = combined(
+            report(Mode::Storage, Outcome::Passed),
+            report(Mode::Repository, Outcome::Failed),
+        );
+        both.missing = vec!["b".to_owned()];
+        let text = both.brief(Path::new(ROOT));
+        let next = qualify_next_steps(Outcome::Failed, Path::new(ROOT));
+        assert_eq!(
+            text,
+            format!(
+                "FAIL: the test found problems that we need to look at.\n\
+                 build: {}\n\
+                 \x20 Run 1 of 2: passed\n\
+                 \x20 Run 2 of 2: found 1 problem\n\
+                 note: hosts in run 1 but not in run 2: b\n\
+                 The full report is in {ROOT}/summary.txt.\n\
+                 \n{next}",
+                Build::current()
+            )
+        );
+        let full = both.summary(Path::new(ROOT));
+        assert!(full.contains("Phantom: x"), "{full}");
+        assert!(!text.contains("Phantom"), "{text}");
+
+        let RunResult::Report(mut mixed) = report(Mode::Repository, Outcome::Failed)
+        else {
+            panic!("not a report");
+        };
+        mixed.verdict.violations.push(Violation::Harness { detail: "y".to_owned() });
+        both.runs[1].1 = RunResult::Report(mixed);
+        let text = both.brief(Path::new(ROOT));
+        assert!(text.contains("  Run 2 of 2: found 1 problem\n"), "{text}");
+
+        let passed = combined(
+            report(Mode::Storage, Outcome::Passed),
+            report(Mode::Repository, Outcome::Passed),
+        );
+        let text = passed.brief(Path::new(ROOT));
+        assert!(text.starts_with("PASS: the test found no problems.\n"), "{text}");
+        assert!(!text.contains("note:"), "{text}");
+    }
+
+    #[test]
+    fn the_brief_result_names_unfinished_runs_errors_and_notes() {
+        let mut both = combined(
+            RunResult::Error("verify hit an error: no run.json".to_owned()),
+            report(Mode::Repository, Outcome::Provisional),
+        );
+        both.overrides = short();
+        both.init_build =
+            Build { icechunk_version: "2.2.0".to_owned(), commit: "abc".to_owned() };
+        let text = both.brief(Path::new(ROOT));
+        let lines: Vec<_> = text.lines().collect();
+        assert_eq!(lines[0], "PROVISIONAL: the test hasn't finished on every host.");
+        assert_eq!(
+            lines[2],
+            "note: another build initialized it: Icechunk 2.2.0, commit abc"
+        );
+        assert!(
+            lines[3].starts_with("note: the preset was changed for a test"),
+            "{text}"
+        );
+        assert_eq!(lines[4], "  Run 1 of 2: error: verify hit an error: no run.json");
+        assert_eq!(lines[5], "  Run 2 of 2: not finished: hosts still missing (b)");
+
+        let not_started =
+            combined(report(Mode::Storage, Outcome::Error), RunResult::NotStarted);
+        let text = not_started.brief(Path::new(ROOT));
+        assert!(text.contains("  Run 1 of 2: the test hit an error\n"), "{text}");
+        assert!(text.contains("  Run 2 of 2: not started yet\n"), "{text}");
+
+        let quoted = "/mnt/my share/q";
+        let text = not_started.brief(Path::new(quoted));
+        assert!(text.contains(&format!("The full report is in {quoted}/summary.txt.")));
+    }
+
+    #[test]
+    fn the_plan_says_how_long_it_takes_and_the_space_it_needs() {
+        let qualify = Qualify::new(1, None, None, Overrides::default());
+        assert_eq!(
+            qualify.plan().unwrap(),
+            format!(
+                "The test takes about 15 minutes, plus a few minutes to start and to \
+                 check the results.\n{DISK_NEEDED}"
+            )
+        );
+        assert_eq!((run_label(MODES[0]).number, run_label(MODES[1]).number), (1, 2));
+    }
+
+    #[tokio::test]
+    async fn each_run_reports_progress_in_its_own_files_counting_the_later_runs() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = QualifyRoot::new(dir.path().join("q"));
+        let qualify = Qualify::new(1, None, None, Overrides::default());
+        init(&root, &qualify).await.unwrap();
+        for (mode, later) in [(Mode::Storage, 600), (Mode::Repository, 0)] {
+            let detail = root.run(mode).progress("a");
+            let progress = qualify.progress(mode, detail.clone(), Some("h")).unwrap();
+            let expected = Progress::Brief {
+                detail: detail.clone(),
+                run: run_label(mode),
+                later: Duration::from_secs(later),
+                host: Some("h".to_owned()),
+            };
+            assert_eq!(progress, expected);
+            assert!(detail.parent().unwrap().is_dir());
+            assert_eq!(
+                detail,
+                root.root().join(qualify_run_dir(mode)).join("progress").join("a.txt")
+            );
+        }
     }
 
     #[test]

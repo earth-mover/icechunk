@@ -74,6 +74,16 @@ pub struct HostDone {
     pub sampler_error: Option<String>,
 }
 
+impl HostDone {
+    /// `a: 12 worker incarnations, 3 external kills, 0 stragglers`.
+    pub fn line(&self) -> String {
+        format!(
+            "{}: {} worker incarnations, {} external kills, {} stragglers",
+            self.tag, self.incarnations_spawned, self.external_kills, self.stragglers
+        )
+    }
+}
+
 const UNKNOWN: &str = "unknown";
 
 const LOCAL_FILESYSTEMS: &[&str] = &[
@@ -214,6 +224,11 @@ fn statfs_fs_type(root: &Path) -> Option<String> {
 #[cfg(not(any(target_os = "linux", target_vendor = "apple", target_os = "freebsd")))]
 fn statfs_fs_type(_root: &Path) -> Option<String> {
     None
+}
+
+/// This host's name, or `unknown`.
+pub fn host_name() -> String {
+    hostname().unwrap_or_else(|| UNKNOWN.to_owned())
 }
 
 fn hostname() -> Option<String> {

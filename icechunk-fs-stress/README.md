@@ -206,6 +206,13 @@ minutes after a host registered, with the hosts registered by then; the
 summary names the hosts missing from it. `qualify stop --root R` stops both
 runs.
 
+`qualify` keeps its output short, for people who don't know the test: on
+stderr, a line every 10 seconds with the time left (`Run 1 of 2: 2m 30s of 5m
+done, about 13 min left`) and the hosts it is waiting for, each line after
+the host name for `qualify workers` (`[host2] Run 1 of 2: …`). The status lines
+that `workers` and `verify` print go to `R/<run>/progress/<tag>.txt`, one
+file per host, and `R/<run>/progress/verify.txt`, each line with its time.
+
 | | Storage mode | Repository mode |
 |---|---|---|
 | Duration | 5m | 10m |
@@ -223,8 +230,13 @@ under 1 GB on network filesystems. Most of it is the backup of the repo info
 that Icechunk keeps in `storage/overwritten/` for every change.
 
 `qualify verify` (and `qualify run`) verifies each run as `verify` does, then
-prints the combined summary: the overall result and the build, each run's
-summary, the hosts missing from the second run, and what to do next. A run
+writes the combined summary to `R/summary.txt`: the overall result and the
+build, each run's summary, the hosts missing from the second run, and what to
+do next. It prints the result in short: the overall result, the build, a
+line per run (passed, how many problems it found, or why it has no result),
+the notes that matter to whoever runs it (a changed preset, other builds,
+hosts that started seconds apart by their clocks), where the full summary is,
+and what to do next. A run
 that hasn't started yet makes the result provisional: run `qualify verify`
 again once every host finished. A second `qualify verify` refuses a run
 already verified fully, as `verify` does, and shows its earlier report.
@@ -235,9 +247,9 @@ host was too late for either run, else 0. `qualify verify` and `qualify run`:
 
 ```
 R/qualify.json      the preset, hosts, workers, max back-off, the build
-R/storage-mode/     the storage-mode run's run root
-R/repository-mode/  the repository-mode run's run root
-R/summary.txt       what qualify verify printed
+R/storage-mode/     the storage-mode run's run root, with progress/
+R/repository-mode/  the repository-mode run's run root, with progress/
+R/summary.txt       the combined summary
 ```
 
 ## Driving several hosts from one machine
@@ -908,7 +920,7 @@ and we'll contact you with a private way to send it. Tell us anything unusual
 about the setup (mount options, server, load).
 
 The file holds every file under the root (`run.json`, `control`, `go`,
-`hosts/`, `done/`, `logs/`, `report.json`, `summary.txt`, `qualify.json`,
+`hosts/`, `done/`, `logs/`, `progress/`, `report.json`, `summary.txt`, `qualify.json`,
 `scenario.json`), but none of the repository's data under `storage/`, and no
 earlier bundles. If any run didn't pass or has no report, the file also holds
 every repository's `repo`, `repo.d/` and a listing, `storage-listing.txt`:

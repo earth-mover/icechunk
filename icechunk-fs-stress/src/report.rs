@@ -128,6 +128,12 @@ impl Report {
         self.outcome().exit_code()
     }
 
+    /// The violations that aren't the harness's.
+    pub fn problems(&self) -> usize {
+        let harness = |v: &&Violation| matches!(v, Violation::Harness { .. });
+        self.verdict.violations.iter().filter(|v| !harness(v)).count()
+    }
+
     fn is_provisional(&self) -> bool {
         !self.participants.missing.is_empty()
     }
@@ -164,18 +170,8 @@ impl Report {
             )?;
         }
         writeln!(out, "build: {}", self.build)?;
-        let other_builds: Vec<_> = self
-            .hosts
-            .iter()
-            .filter(|host| host.build != self.build)
-            .map(|host| format!("{} ran {}", host.tag, host.build))
-            .collect();
-        if !other_builds.is_empty() {
-            writeln!(
-                out,
-                "note: some hosts ran a different build than verify: {}",
-                other_builds.join("; ")
-            )?;
+        if let Some(note) = self.other_builds() {
+            writeln!(out, "note: {note}")?;
         }
         for host in &self.hosts {
             writeln!(
@@ -240,6 +236,32 @@ impl Report {
             }
         }
         Ok(())
+    }
+
+    /// What someone who reads only the outcome should still know: hosts on
+    /// another build, and hosts whose clocks may be out of sync.
+    pub fn brief_notes(&self) -> Vec<String> {
+        let skew = self.verdict.warnings.iter().filter_map(|w| match w {
+            Warning::StartSkew { ms } => Some(format!(
+                "the hosts started about {} s apart by their clocks; check that the \
+                 clocks are in sync",
+                (ms.unsigned_abs() + 500) / 1000
+            )),
+            _ => None,
+        });
+        self.other_builds().into_iter().chain(skew).collect()
+    }
+
+    fn other_builds(&self) -> Option<String> {
+        let other: Vec<_> = self
+            .hosts
+            .iter()
+            .filter(|host| host.build != self.build)
+            .map(|host| format!("{} ran {}", host.tag, host.build))
+            .collect();
+        (!other.is_empty()).then(|| {
+            format!("some hosts ran a different build than verify: {}", other.join("; "))
+        })
     }
 }
 
@@ -739,6 +761,21 @@ mod tests {
         );
         assert!(summary.contains(&expected), "{expected} missing from {summary}");
         assert!(!summary.contains("h ran"), "{summary}");
+        report.verdict.warnings.clear();
+        assert_eq!(report.brief_notes(), [expected["note: ".len()..].to_owned()]);
+    }
+
+    #[test]
+    fn brief_notes_name_a_start_skew_and_no_other_warning() {
+        let mut report = report(vec![]);
+        report.verdict.warnings.retain(|w| !matches!(w, Warning::StartSkew { .. }));
+        assert_eq!(report.brief_notes(), Vec::<String>::new());
+        report.verdict.warnings = every_warning();
+        assert_eq!(
+            report.brief_notes(),
+            ["the hosts started about 3 s apart by their clocks; check that the clocks \
+              are in sync"]
+        );
     }
 
     #[test]

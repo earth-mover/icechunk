@@ -57,6 +57,7 @@ use crate::{
         mirror::check_init_version,
         repo::{check_repo, count_operations},
     },
+    progress::Progress,
     repo_mode::RepoWorker,
     report::{Participants, Report},
     storage_mode::{REPO_KEY, classify_storage, payload_etag},
@@ -680,7 +681,9 @@ impl Scenario<'_> {
                 .stress_phase(&phase, tag, self.config.workers, progress_every)
                 .await?;
             let earlier = EarlierPhases { logs: self.earlier.clone(), backups };
-            let report = verify_phase(&phase, DEFAULT_DONE_TIMEOUT, &earlier).await?;
+            let report =
+                verify_phase(&phase, DEFAULT_DONE_TIMEOUT, &earlier, &Progress::Stderr)
+                    .await?;
             if !report.passed {
                 self.notes.push(format!(
                     "round {round}: the stress phase failed, see {}",

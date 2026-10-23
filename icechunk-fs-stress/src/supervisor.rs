@@ -28,6 +28,7 @@ use crate::{
     log::{
         FaultAction, LogWriter, OpResult, Record, now_ms, read_appended, start_worker_log,
     },
+    progress::{BRIEF_EVERY, Progress, RunLabel},
     repo_mode,
     sampler::Sampler,
     storage_mode,
@@ -107,6 +108,30 @@ pub fn data_volume_estimate(config: &RunConfig) -> u64 {
     per_op.saturating_mul(ops.saturating_add(1))
 }
 
+/// A host's tag must be valid and not one of verify's, init's or the
+/// scenario's.
+pub fn check_tag(tag: &str) -> anyhow::Result<()> {
+    ensure!(is_valid_tag(tag), "invalid tag {tag:?}");
+    for reserved in [VERIFY_TAG, INIT_TAG, SCENARIO_TAG] {
+        ensure!(tag != reserved, "the tag {reserved:?} is reserved");
+    }
+    Ok(())
+}
+
+/// `Run 1 of 2 started.`, with how many of the `hosts` took part if there are
+/// several.
+fn started_line(run: &RunLabel, participants: usize, hosts: u32) -> String {
+    match usize::try_from(hosts) {
+        Ok(1) => format!("{run} started."),
+        Ok(hosts) if participants >= hosts => {
+            format!("{run} started with {participants} hosts.")
+        }
+        _ => format!(
+            "{run} started with {participants} of {hosts} hosts; the others came too late."
+        ),
+    }
+}
+
 /// `workers` registered after the go (or a stop): the run went on without it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LateHost {
@@ -144,23 +169,22 @@ pub async fn workers(
     workers: u32,
     progress_every: Duration,
 ) -> anyhow::Result<HostDone> {
-    workers_with_go_after(root, tag, workers, progress_every, None).await
+    workers_with_go_after(root, tag, workers, progress_every, &Progress::Stderr, None)
+        .await
 }
 
-/// [`workers`], whose barrier starts the run with the hosts registered by
-/// then once `go_after` passed since this host registered (see
-/// [`wait_for_go_reporting`]).
+/// [`workers`], with its status lines going to `progress`, whose barrier
+/// starts the run with the hosts registered by then once `go_after` passed
+/// since this host registered (see [`wait_for_go_reporting`]).
 pub async fn workers_with_go_after(
     root: &RunRoot,
     tag: String,
     workers: u32,
     progress_every: Duration,
+    progress: &Progress,
     go_after: Option<Duration>,
 ) -> anyhow::Result<HostDone> {
-    ensure!(is_valid_tag(&tag), "invalid tag {tag:?}");
-    for reserved in [VERIFY_TAG, INIT_TAG, SCENARIO_TAG] {
-        ensure!(tag != reserved, "the tag {reserved:?} is reserved");
-    }
+    check_tag(&tag)?;
     ensure!(workers >= 1, "a host needs at least 1 worker");
     let (root, config) = &RunConfig::load_resolved(root)?;
     let config = config.clone();
@@ -168,7 +192,7 @@ pub async fn workers_with_go_after(
 
     let hosts = config.hosts;
     let outcome = tokio::task::spawn_blocking({
-        let (root, tag) = (root.clone(), tag.clone());
+        let (root, tag, progress) = (root.clone(), tag.clone(), progress.clone());
         move || {
             wait_for_go_reporting(
                 &root,
@@ -176,6 +200,7 @@ pub async fn workers_with_go_after(
                 hosts,
                 BARRIER_POLL,
                 progress_every,
+                &progress,
                 go_after,
             )
         }
@@ -184,6 +209,7 @@ pub async fn workers_with_go_after(
     let WaitOutcome::Participant { go_seen_at, participants } = outcome else {
         return Err(LateHost { hosts }.into());
     };
+    progress.brief_line(|run| started_line(run, participants.len(), hosts));
 
     let until = go_seen_at + config.duration;
     let mut slots: Vec<String> = (0..workers).map(|i| i.to_string()).collect();
@@ -225,6 +251,7 @@ pub async fn workers_with_go_after(
     let mut next_kill = Instant::now() + config.external_kill_every.unwrap_or_default();
     let mut next_control = Instant::now() + CONTROL_EVERY;
     let mut next_progress = Instant::now() + progress_every;
+    let mut next_brief = Instant::now() + BRIEF_EVERY;
     let mut stopped = false;
     while SystemTime::now() < until {
         pool.respawn_exited()?;
@@ -232,8 +259,13 @@ pub async fn workers_with_go_after(
         if now >= next_progress
             && let Some(line) = pool.progress_line(go_seen_at, config.duration)
         {
-            eprintln!("{line}");
+            progress.detail(&line);
             next_progress = now + progress_every;
+        }
+        if now >= next_brief {
+            let elapsed = go_seen_at.elapsed().unwrap_or_default();
+            progress.time_left(elapsed, config.duration);
+            next_brief = now + BRIEF_EVERY;
         }
         if let Some(every) = config.external_kill_every
             && now >= next_kill
@@ -258,7 +290,10 @@ pub async fn workers_with_go_after(
     let stopped_at = SystemTime::now();
     if pool.progress.is_some() {
         let why = if stopped { "stop received" } else { "deadline reached" };
-        eprintln!("{why}, waiting for {} workers to exit…", pool.children.len());
+        progress.detail(&format!(
+            "{why}, waiting for {} workers to exit…",
+            pool.children.len()
+        ));
     }
     // A worker finishes its attempt first, which may include a pause.
     let deadline = stopped_at + config.faults.pause + WIND_DOWN_SLACK;
@@ -573,6 +608,18 @@ mod tests {
     use std::{fs, io::Write as _};
 
     use super::*;
+
+    #[test]
+    fn the_started_line_counts_the_hosts_only_if_there_are_several() {
+        let run = RunLabel { number: 2, of: 2 };
+        assert_eq!(started_line(&run, 1, 1), "Run 2 of 2 started.");
+        assert_eq!(started_line(&run, 5, 5), "Run 2 of 2 started with 5 hosts.");
+        assert_eq!(started_line(&run, 6, 5), "Run 2 of 2 started with 6 hosts.");
+        assert_eq!(
+            started_line(&run, 3, 5),
+            "Run 2 of 2 started with 3 of 5 hosts; the others came too late."
+        );
+    }
 
     #[test]
     fn data_volume_estimate_is_per_op_times_ops() {

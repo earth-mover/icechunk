@@ -87,6 +87,11 @@ impl RunRoot {
         self.logs_dir().join(format!("{tag}.{SAMPLER_SLOT}.log"))
     }
 
+    /// `qualify`'s detailed progress of the host `tag`, or of verify.
+    pub fn progress(&self, tag: &str) -> PathBuf {
+        self.root.join("progress").join(format!("{tag}.txt"))
+    }
+
     pub fn storage(&self) -> PathBuf {
         self.storage.clone().unwrap_or_else(|| self.root.join("storage"))
     }
