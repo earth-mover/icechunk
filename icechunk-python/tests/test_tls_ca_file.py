@@ -1,8 +1,6 @@
 import functools
 import pickle
-import shutil
 import ssl
-import subprocess
 import threading
 from collections.abc import Iterator
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -20,34 +18,17 @@ CONFIG = ic.RepositoryConfig(
 )
 
 
-def openssl(*args: str, cwd: Path) -> None:
-    subprocess.run(["openssl", *args], cwd=cwd, check=True, capture_output=True)
+TLS_DIR = Path(__file__).parent / "data" / "tls"
 
 
 @pytest.fixture(scope="module")
-def tls_files(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Path]:
-    """A test CA and a localhost server certificate that it signs."""
-    if shutil.which("openssl") is None:
-        pytest.fail("the openssl CLI is required for TLS tests")
-    d = tmp_path_factory.mktemp("tls")
-    ec = ["-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:prime256v1", "-nodes"]
-    # fmt: off
-    openssl("req", "-x509", *ec, "-keyout", "ca.key", "-out", "ca.pem", "-days", "2",
-            "-subj", "/CN=icechunk test CA",
-            "-addext", "basicConstraints=critical,CA:TRUE",
-            "-addext", "keyUsage=critical,keyCertSign", cwd=d)
-    openssl("req", *ec, "-keyout", "server.key", "-out", "server.csr",
-            "-subj", "/CN=localhost", cwd=d)
-    (d / "server.ext").write_text(
-        "subjectAltName=DNS:localhost,IP:127.0.0.1\n"
-        "basicConstraints=CA:FALSE\n"
-        "extendedKeyUsage=serverAuth\n"
-    )
-    openssl("x509", "-req", "-in", "server.csr", "-CA", "ca.pem", "-CAkey", "ca.key",
-            "-CAcreateserial", "-out", "server.pem", "-days", "2",
-            "-extfile", "server.ext", cwd=d)
-    # fmt: on
-    return {"ca": d / "ca.pem", "cert": d / "server.pem", "key": d / "server.key"}
+def tls_files() -> dict[str, Path]:
+    """A test CA and a localhost server certificate that it signs, valid until 2126."""
+    return {
+        "ca": TLS_DIR / "ca.pem",
+        "cert": TLS_DIR / "server.pem",
+        "key": TLS_DIR / "server.key",
+    }
 
 
 class QuietHandler(SimpleHTTPRequestHandler):

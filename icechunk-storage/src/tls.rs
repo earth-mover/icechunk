@@ -79,7 +79,7 @@ mod tests {
 
     use super::*;
 
-    const TEST_CA: &str = include_str!("../tests/data/test-ca.pem");
+    const TEST_CA: &str = include_str!("../../icechunk-python/tests/data/tls/ca.pem");
 
     fn pem_file(contents: &str) -> tempfile::NamedTempFile {
         let mut file = tempfile::NamedTempFile::new().unwrap();
