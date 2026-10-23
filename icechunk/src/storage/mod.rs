@@ -17,7 +17,7 @@ pub use icechunk_storage::{
     StorageContext, StorageError, StorageErrorKind, StorageInfo, StorageResult,
     TimeoutSettings, UNATTRIBUTED_LABELS, VersionInfo, VersionedUpdateResult,
     s3_config::{S3Credentials, S3CredentialsFetcher, S3Options, S3StaticCredentials},
-    split_in_multiple_equal_requests, split_in_multiple_requests, strip_quotes,
+    split_in_multiple_equal_requests, split_in_multiple_requests, strip_quotes, tls,
 };
 
 // Re-export from icechunk-s3

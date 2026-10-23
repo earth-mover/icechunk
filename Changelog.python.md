@@ -18,6 +18,10 @@
   - An array resize that removes chunks needs `update_chunks`. Chunk writes to a new array need only `create_new_nodes`.
   - Each flag guards one operation. To freeze a branch, also disable `reset_branch`, `delete_branch`, `create_branch` and `move_node`. The design doc 013 lists the flag interactions.
 
+### Features
+
+- New environment variable `ICECHUNK_TLS_CA_FILE`: when it names a PEM file of CA certificates, Icechunk trusts only those certificates for all storage types. Use it in processes that cannot use the system trust store, such as a sandboxed macOS process, for example with `os.environ["ICECHUNK_TLS_CA_FILE"] = certifi.where()`. TLS certificate errors now include a hint that names the variable.
+
 ### Fixes
 
 - `Repository.ops_log_async` and `Repository.async_ancestry` no longer block the asyncio event loop. They used to read the repo info file from storage before they returned the iterator. That read now happens on the first iteration, so storage errors are raised there instead of at the call. The same applies to `Repository.ops_log` and `Repository.ancestry`, which share the implementation.
