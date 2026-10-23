@@ -31,14 +31,15 @@ update was lost and that the repository recovers and cleans up.
 ### Download it
 
 Linux x86_64 and aarch64 binaries are attached to every
-[Icechunk release](https://github.com/earth-mover/icechunk/releases), from
-Icechunk 2.4.0 on. They are static, so they run on any Linux distribution.
-Set `version` to the tag of the Icechunk release you plan to use:
+[Icechunk release](https://github.com/earth-mover/icechunk/releases) from
+Icechunk 2.4.0 on, and to the test builds we publish as pre-releases tagged
+`fs-stress-…`. They are static, so they run on any Linux distribution. Set
+`tag` to the release we asked you to test:
 
 ```sh
-version=v2.4.0
-asset=fs-stress-$version-$(uname -m)-linux-musl
-base=https://github.com/earth-mover/icechunk/releases/download/$version
+tag=fs-stress-2.4.0-rc1
+asset=fs-stress-${tag#fs-stress-}-$(uname -m)-linux-musl
+base=https://github.com/earth-mover/icechunk/releases/download/$tag
 curl -fL -o fs-stress "$base/$asset"
 curl -fLO "$base/SHA256SUMS"
 awk -v a="$asset" '$2 == a { print $1 "  fs-stress" }' SHA256SUMS | sha256sum --check
@@ -58,10 +59,6 @@ gh attestation verify fs-stress --repo earth-mover/icechunk
 for example `fs-stress (Icechunk 2.4.0, commit 0123abc…)`. The commands
 below, and the ones the test prints, write `fs-stress`: put it in a directory
 on your `PATH`, or type its path instead.
-
-We sometimes publish test builds as pre-releases tagged `fs-stress-…`, for
-example `fs-stress-2.4.0-rc1` with the binary
-`fs-stress-2.4.0-rc1-x86_64-linux-musl`. Use one only if we ask you to.
 
 ### Or build it yourself
 
