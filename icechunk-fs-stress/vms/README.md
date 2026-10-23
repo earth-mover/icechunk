@@ -3,7 +3,8 @@
 A set of throwaway Rocky Linux 9.7 VMs on libvirt that serves Lustre, BeeGFS,
 CephFS, NFS and, optionally, IBM Storage Scale (GPFS) to any number of client
 VMs, for running [fs-stress](../README.md) across hosts on real distributed
-filesystems.
+filesystems. The clients also form a [Slurm cluster](#slurm), for running
+fs-stress the way users of HPC clusters do.
 
 `lab.sh` is the entry point; `./lab.sh --help` lists its commands and
 options. Commands below run from this directory. For a managed Lustre on AWS
@@ -40,8 +41,8 @@ clients to a provisioned lab takes 5 to 7. `stop` takes 15 seconds, `start`
   `edk2-ovmf` on Fedora). The VMs boot UEFI with Secure Boot off.
 - **An ssh key.** `up` puts every key from `ssh-add -L` and `~/.ssh/*.pub`
   into the VMs' `rocky` user. Keys are baked in when a VM is created.
-- **Memory:** about 15G for the servers (19G with GPFS) plus 4G per client
-  by default, so 23G for the default lab.
+- **Memory:** about 16.5G for the servers (20.5G with GPFS) plus 4G per
+  client by default, so 24.5G for the default lab.
 - **Disk:** sparse qcow2 files in `/var/lib/libvirt/<lab>`; each OS disk is a
   copy-on-write overlay of one base image.
 
@@ -56,7 +57,8 @@ clients to a provisioned lab takes 5 to 7. `stop` takes 15 seconds, `start`
 | beegfs-srv | .12 | 2 / 3G | os 20G, data1 8G (meta, ext4), data2 25G (storage, xfs) | BeeGFS 8.4.1 mgmtd, meta and storage |
 | nfs-srv | .13 | 2 / 2G | os 20G, data1 25G (xfs) | Linux knfsd, NFSv3, 4.0, 4.1 and 4.2, one `sync` export per version |
 | gpfs-srv (optional) | .14 | 2 / 4G | os 25G, data1 25G (NSD) | Storage Scale 6.0.1.2 Developer Edition, cluster `fs-stress-gpfs`, filesystem `fs1` |
-| client*K* | .(20+*K*) | 4 / 4G by default | os 20G | clients of all of the above |
+| slurm-srv | .15 | 1 / 1.5G | os 20G | Slurm 25.11.8 controller (slurmctld) and login node, cluster `fs-stress`; mounts nothing |
+| client*K* | .(20+*K*) | 4 / 4G by default | os 20G | clients of all of the above, and Slurm compute nodes |
 
 IPs are in the lab's /24, `10.77.0.0/24` by default. The libvirt domains are
 named `<lab>-<vm>`, for example `ic-fs-stress-client1`. Inside the lab, the
@@ -113,6 +115,53 @@ How GPFS differs from the other filesystems:
 - `pagepool` is 256M on the clients and 512M on the server, instead of 1G.
 - At boot, GPFS starts on its own and mounts `fs1` once the server is
   reachable.
+
+## Slurm
+
+Slurm is on when the lab has a slurm-srv VM, which `up` creates along with a
+new lab unless you pass `--no-slurm`; `./lab.sh up slurm-srv` and `provision`
+add it later. Every client is a compute node (slurmd) in partition `lab`, and
+slurm-srv is the controller and the login node. With 5 clients:
+
+```sh
+./lab.sh fs-stress deploy ../../target/x86_64-unknown-linux-musl/fs-stress-dist/fs-stress
+./lab.sh ssh slurm-srv sinfo -N
+./lab.sh ssh client1 ./fs-stress qualify init --root /mnt/nfs41/q1 --hosts 5
+./lab.sh ssh slurm-srv srun -N 5 --ntasks-per-node=1 --time=1:00:00 \
+  ./fs-stress qualify workers --root /mnt/nfs41/q1
+```
+
+srun and sbatch work on the clients too. Jobs run as `rocky` in its home
+directory, which isn't shared: `./fs-stress` is the copy that `deploy` put on
+each client, and slurm-srv has none. Point sbatch's `--output` into a shared
+filesystem to read it from anywhere.
+
+The configuration is that of a typical site:
+
+- Jobs get cores and memory, not whole nodes (`select/cons_tres`,
+  `CR_Core_Memory`), and cgroups enforce both (`task/cgroup` with
+  `ConstrainCores` and `ConstrainRAMSpace`). A job without `--mem` gets
+  `DefMemPerCPU` per core: the smallest client's memory per core.
+- Each node's `RealMemory` is below what slurmd detects: the VM's RAM
+  without the crash kernel (192M below 4G of RAM), less a 16th and 64M more
+  for the kernel. A 2048M client has 1664M; it sees 1766M.
+- `KillWait=30`, Slurm's default: when a job's time runs out, its tasks get
+  SIGTERM, then SIGKILL 30 s later.
+- `ReturnToService=2`: a node that was down, after `stop` and `start` for
+  example, is back in service once its slurmd registers.
+- One partition, `lab`, with every client and no time limit.
+- No accounting (slurmdbd), so `sacct` doesn't work; `sstat` and
+  `scontrol show job` do.
+
+The clients run configless: slurmd fetches `slurm.conf` and `cgroup.conf`
+from slurm-srv (`/etc/slurm/`). To try another setting, edit them there and
+run `sudo scontrol reconfigure`, which also updates the nodes. `provision`
+writes them anew, with every existing client as a node, and runs
+`scontrol reconfigure`; slurmctld runs only once there are clients.
+Provisioning new clients adds them to slurm-srv first, so slurm-srv has to be
+running. slurmd waits for slurm-srv: a client that starts first retries until
+it's up. Logs are in the journal (`journalctl -u slurmctld`,
+`journalctl -u slurmd`).
 
 ## More clients
 
@@ -209,6 +258,7 @@ Rebuilding a server invalidates what the clients hold.
 | Ceph admin | ceph-srv: `/etc/ceph/ceph.client.admin.keyring` | `sudo /usr/local/sbin/cephadm shell -- ceph ...` |
 | BeeGFS shared secret | `/etc/beegfs/conn.auth` on all BeeGFS nodes | generated on beegfs-srv |
 | GPFS admin key | gpfs-srv: `/root/.ssh/id_ed25519`, trusted by root on every GPFS node | `mm*` commands that touch other nodes only work on gpfs-srv |
+| munge key | `/etc/munge/munge.key` on slurm-srv and the clients | generated on slurm-srv; authenticates every Slurm message |
 | Copies on the host | `~/.cache/<lab>/artifacts/` | `provision` passes the server credentials to the clients through the host |
 
 The Ceph client key is a legacy AES key. Ceph 20 creates keys of a newer
@@ -240,6 +290,9 @@ Pinned at the top of `lab.sh`:
   at its first start or after a kernel change.
 - **Ceph:** cephadm with `quay.io/ceph/ceph:v20.2.4`; clients use the
   `download.ceph.com/rpm-20.2.4/el9` repository.
+- **Slurm 25.11.8 from OpenHPC 3** (the `slurm-*-ohpc` packages from
+  `repos.openhpc.community`), with munge from Rocky. EPEL's Slurm is 22.05,
+  which is out of support.
 - **NFS:** knfsd from the 9.7 kernel, versions 3, 4.0, 4.1 and 4.2 enabled
   in `/etc/nfs.conf`. Exports are `rw,sync,no_subtree_check` for the lab's
   /24, root squashed.
@@ -261,6 +314,7 @@ Pinned at the top of `lab.sh`:
 ./lab.sh ssh client1 'nfsstat -m'
 ./lab.sh ssh beegfs-srv 'sudo BEEGFS_TLS_DISABLE=true beegfs --mgmtd-addr 10.77.0.12:8010 health check'
 ./lab.sh ssh gpfs-srv 'sudo /usr/lpp/mmfs/bin/mmgetstate -a; sudo /usr/lpp/mmfs/bin/mmlsmount fs1 -L'
+./lab.sh ssh slurm-srv 'sinfo -N; srun -N 2 hostname'                       # nodes idle
 ```
 
 Ceph mutes `POOL_NO_REDUNDANCY`, `TOO_FEW_OSDS`,

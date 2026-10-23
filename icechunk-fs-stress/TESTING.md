@@ -165,6 +165,18 @@ examples use 5. You need:
    Add your cluster's partition and account options if it needs them, and a
    time limit of at least an hour.
 
+   srun stops if you log out. To let the test run without you, submit it
+   with sbatch, which writes the output to a file in the directory you
+   submit from:
+
+   ```sh
+   sbatch -N 5 --ntasks-per-node=1 --time=1:00:00 --output=fs-stress-%j.out \
+     --wrap "srun /path/to/fs-stress qualify workers --root /path/on/your/fs/fs-stress-1"
+   ```
+
+   The file fills as the test runs, and `squeue --me` lists the job until
+   it has finished.
+
 3. **On one host**, once every host's `qualify workers` has exited, check the
    result:
 

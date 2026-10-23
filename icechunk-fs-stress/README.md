@@ -119,8 +119,9 @@ the same [knobs](#knobs) as `init`, without `--hosts`.
 Progress goes to stderr: the estimated data volume, a status line every
 `--progress-every` (default `5s`, `0` turns it off), the wind-down, and the
 phases of the check. Stdout gets only the final summary and what to do next.
-The exit code is 0 for a pass, 1 for a failure, 3 for an error of the tool
-itself or its setup.
+The workers' own stderr, with Icechunk's warnings and any panic, goes to
+`R/stderr/<tag>.txt`. The exit code is 0 for a pass, 1 for a failure, 3 for
+an error of the tool itself or its setup.
 
 ## Several hosts
 
@@ -212,6 +213,7 @@ done, about 13 min left`) and the hosts it is waiting for, each line after
 the host name for `qualify workers` (`[host2] Run 1 of 2: …`). The status lines
 that `workers` and `verify` print go to `R/<run>/progress/<tag>.txt`, one
 file per host, and `R/<run>/progress/verify.txt`, each line with its time.
+The workers' warnings go to `R/<run>/stderr/<tag>.txt`.
 
 | | Storage mode | Repository mode |
 |---|---|---|
@@ -247,8 +249,8 @@ host was too late for either run, else 0. `qualify verify` and `qualify run`:
 
 ```
 R/qualify.json      the preset, hosts, workers, max back-off, the build
-R/storage-mode/     the storage-mode run's run root, with progress/
-R/repository-mode/  the repository-mode run's run root, with progress/
+R/storage-mode/     the storage-mode run's run root, with progress/ and stderr/
+R/repository-mode/  the repository-mode run's run root, with progress/ and stderr/
 R/summary.txt       the combined summary
 ```
 
@@ -341,9 +343,9 @@ Each run writes `<results>/<mount name>-<mode>-<timestamp>/`:
 | --- | --- |
 | `meta.txt` | mount, mode, arguments, hosts, run root, binary sha256, network faults, exit codes |
 | `summary.txt` | the summary `verify` printed |
-| `report.json`, `run.json`, `control`, `go`, `hosts/`, `done/` | copied from the run root |
+| `report.json`, `run.json`, `control`, `go`, `hosts/`, `done/`, `stderr/` | copied from the run root |
 | `logs.tar.gz` | the run root's `logs/`, for every run |
-| `init.log`, `workers-<i>.log`, `verify.log` | output of each step; `workers-<i>.log` is host `i` (0-based) |
+| `init.log`, `workers-<i>.log`, `verify.log` | output of each step; `workers-<i>.log` is host `i` (0-based), whose workers' stderr is in `stderr/` |
 | `net-faults.log`, `net-before.txt`, `net-after.txt` | with network faults: the loop's output and the fault host's TCP and NFS client counters before and after |
 
 ### Network faults
@@ -920,7 +922,7 @@ and we'll contact you with a private way to send it. Tell us anything unusual
 about the setup (mount options, server, load).
 
 The file holds every file under the root (`run.json`, `control`, `go`,
-`hosts/`, `done/`, `logs/`, `progress/`, `report.json`, `summary.txt`, `qualify.json`,
+`hosts/`, `done/`, `logs/`, `progress/`, `stderr/`, `report.json`, `summary.txt`, `qualify.json`,
 `scenario.json`), but none of the repository's data under `storage/`, and no
 earlier bundles. If any run didn't pass or has no report, the file also holds
 every repository's `repo`, `repo.d/` and a listing, `storage-listing.txt`:
@@ -978,6 +980,7 @@ R/logs/             logs, one JSON record per line:
   verify.recovery.0.log  verify's recovery write
   verify.publish.<k>.log verify's publications of repo, one per verify
   verify.fork.<k>.log    a fork erasure verify found
+R/stderr/<tag>.txt  the stderr of the host's workers: warnings and panics
 R/storage/          the repository
 R/report.json       written by verify
 R/summary.txt       what verify printed

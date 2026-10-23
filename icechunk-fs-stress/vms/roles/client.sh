@@ -8,6 +8,7 @@
 #   /gpfs/fs1                         GPFS (Storage Scale) if $GPFS is 1; one mount per node.
 #                                     Mounted by gpfs-srv's join phase, which adds this node
 #                                     to the cluster
+# With $SLURM 1, also a Slurm compute node (slurmd) of slurm-srv's cluster.
 # configure expects lab.sh provision to have copied the server artifacts into /tmp/fs-stress/artifacts.
 # shellcheck source=common.sh
 source /tmp/fs-stress/common.sh
@@ -46,6 +47,7 @@ EOF
     python3.12 python3.12-pip git \
     nftables # just the nft tool: nftables.service stays disabled (no ruleset loaded at boot)
   [[ $GPFS == 0 ]] || install_gpfs
+  [[ $SLURM == 0 ]] || install_slurm slurm-slurmd-ohpc
 }
 
 open_up() { # make a filesystem root writable by everyone (sticky, like /tmp)
@@ -110,6 +112,27 @@ setup_gpfs() {
   grep -qF "$key" /root/.ssh/authorized_keys 2>/dev/null || echo "$key" >>/root/.ssh/authorized_keys
 }
 
+# Configless: slurmd fetches slurm.conf and cgroup.conf from slurm-srv.
+setup_slurm() {
+  if [[ $SLURM == 0 ]]; then
+    systemctl disable --now slurmd munge 2>/dev/null || true
+    return
+  fi
+  install -m 400 -o munge -g munge /tmp/fs-stress/artifacts/munge.key /etc/munge/munge.key
+  echo 'SLURMD_OPTIONS="--conf-server slurm-srv"' >/etc/sysconfig/slurmd
+  # slurmd waits for slurm-srv without end and isn't ready until it has its config, so
+  # systemd times it out when slurm-srv is down, at boot for example; then try again.
+  mkdir -p /etc/systemd/system/slurmd.service.d
+  cat >/etc/systemd/system/slurmd.service.d/fs-stress.conf <<'EOF'
+[Service]
+Restart=on-failure
+RestartSec=10
+EOF
+  systemctl daemon-reload
+  systemctl enable munge slurmd
+  systemctl restart munge slurmd
+}
+
 # Clients often boot before their servers (cephadm's containers and BeeGFS mgmtd are slow),
 # and fstab mounts and beegfs-client don't retry. This oneshot does, for up to 10 minutes.
 setup_mount_retry() {
@@ -160,6 +183,7 @@ phase_configure() {
   setup_ceph
   setup_nfs
   [[ $GPFS == 0 ]] || setup_gpfs
+  setup_slurm
   setup_mount_retry
   findmnt -t lustre,beegfs,ceph,fuse.ceph-fuse,nfs,nfs4,gpfs
 }

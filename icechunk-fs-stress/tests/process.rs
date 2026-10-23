@@ -386,6 +386,7 @@ fn qualify_run_passes_and_a_second_verify_reads_both_reports_again() {
         assert!(stderr.contains(brief), "{brief:?} missing from {stderr}");
     }
     assert!(!stderr.contains("intents"), "{stderr}");
+    assert!(!stderr.contains('\x1b'), "color outside a terminal: {stderr}");
     assert!(
         stderr.contains("\nRun 1 of 2 started.\n"),
         "no host prefix on one host: {stderr}"
@@ -407,6 +408,8 @@ fn qualify_run_passes_and_a_second_verify_reads_both_reports_again() {
         assert!(host.1.contains("registered as"), "{progress:?}");
         let verify = progress.iter().find(|(name, _)| name == "verify.txt").unwrap();
         assert!(verify.1.contains("verifying the "), "{progress:?}");
+        let workers_stderr: Vec<_> = fs::read_dir(run.join("stderr")).unwrap().collect();
+        assert_eq!(workers_stderr.len(), 1, "{workers_stderr:?}");
     }
     let qualify: serde_json::Value =
         serde_json::from_slice(&fs::read(root.join("qualify.json")).unwrap()).unwrap();

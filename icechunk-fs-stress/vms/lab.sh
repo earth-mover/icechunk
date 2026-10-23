@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # A lab of libvirt VMs serving Lustre, BeeGFS, CephFS, NFS and optionally GPFS to a number
-# of client VMs, for running fs-stress across hosts. See README.md.
+# of client VMs, which also form a Slurm cluster, for running fs-stress across hosts. See
+# README.md.
 set -euo pipefail
 
 usage() {
@@ -9,17 +10,21 @@ Usage: lab.sh [--lab NAME] COMMAND [ARGS...]
        lab.sh --help
 
 A lab of libvirt VMs (qemu:///system) serving Lustre, BeeGFS, CephFS, NFS and optionally
-GPFS to client VMs, for fs-stress. See README.md next to this script.
+GPFS to client VMs, which also form a Slurm cluster, for fs-stress. See README.md next to
+this script.
 
 Options:
   --lab NAME   which lab (default: ic-fs-stress). Names the libvirt domains (NAME-<vm>),
                network, storage pool (/var/lib/libvirt/NAME) and cache directory.
 
 Commands:
-  up [--gpfs] [--subnet A.B.C] [--clients N] [--client-memory MIB] [--client-vcpus N] [VM...]
+  up [--gpfs] [--no-slurm] [--subnet A.B.C] [--clients N] [--client-memory MIB]
+     [--client-vcpus N] [VM...]
       Create the network, storage pools and VMs, and wait for ssh. Existing pieces are kept.
-      Without VMs: the servers except gpfs-srv, and clients up to --clients (default 2).
+      Without VMs: the servers except gpfs-srv, and clients up to --clients (default 2);
+      slurm-srv only when the lab is created.
       --gpfs           also create gpfs-srv, which turns GPFS on for the lab
+      --no-slurm       don't create slurm-srv; Slurm is on for the lab while slurm-srv exists
       --subnet A.B.C   the lab's /24, only when its network is created (default 10.77.0)
       --clients N      create client1..clientN (at most 79)
       --client-memory  RAM of clients created now, in MiB (default 4096)
@@ -28,7 +33,8 @@ Commands:
   provision [--scale-installer ZIP] [VM...]
       Install and configure VMs (default: all of them). Install runs in parallel; then
       servers are configured, their credentials copied to the clients, and the clients
-      configured and, with GPFS on, added to the GPFS cluster. Re-runnable.
+      configured: with Slurm on, after slurm-srv has added them as nodes, and with GPFS
+      on, then added to the GPFS cluster. Re-runnable.
       --scale-installer ZIP   IBM Storage Scale Developer Edition zip; needed while a GPFS
                               node (gpfs-srv, clients with GPFS on) doesn't have it installed
 
@@ -44,7 +50,7 @@ Commands:
       lab's ssh options. Results go to DIR (default: the lab's cache directory, results/).
       Run `lab.sh fs-stress --help` for remote.sh's commands.
 
-VMs: ceph-srv lustre-srv beegfs-srv nfs-srv gpfs-srv client1 ... client79
+VMs: ceph-srv lustre-srv beegfs-srv nfs-srv slurm-srv gpfs-srv client1 ... client79
 EOF
 }
 
@@ -65,6 +71,10 @@ LUSTRE_URL=https://downloads.whamcloud.com/public/lustre/lustre-2.17.0/el9.7
 LUSTRE_E2FSPROGS_URL=https://downloads.whamcloud.com/public/e2fsprogs/latest/el9
 BEEGFS_REPO_URL=https://www.beegfs.io/release/beegfs_8.4/dists/beegfs-rhel9.repo
 CEPH_RELEASE=20.2.4
+OHPC_RELEASE_URL=https://repos.openhpc.community/OpenHPC/3/EL_9/x86_64/ohpc-release-3-1.el9.x86_64.rpm
+# OpenHPC's updates repo keeps only the latest Slurm: once it's gone, provisioning fails and
+# this needs bumping, for every VM (slurmctld mustn't be older than any slurmd).
+SLURM_VERSION=25.11.8
 BASE_VOL=rocky9-base.qcow2
 
 VM_USER=rocky
@@ -82,8 +92,9 @@ declare -A SERVER_SPECS=(
   [beegfs-srv]="12 3072 2 20 8 25"
   [nfs-srv]="13 2048 2 20 25"
   [gpfs-srv]="14 4096 2 25 25"
+  [slurm-srv]="15 1536 1 20"
 )
-SERVERS=(ceph-srv lustre-srv beegfs-srv nfs-srv gpfs-srv)
+SERVERS=(ceph-srv lustre-srv beegfs-srv nfs-srv slurm-srv gpfs-srv)
 # clientK has last octet CLIENT_OCTET_BASE+K; DHCP's dynamic range starts at .100.
 CLIENT_OCTET_BASE=20
 MAX_CLIENTS=79
@@ -159,6 +170,7 @@ vm_mac() {
 vm_exists() { virsh dominfo "$(dom "$1")" &>/dev/null; }
 vm_state() { virsh domstate "$(dom "$1")" 2>/dev/null || echo missing; }
 gpfs_on() { vm_exists gpfs-srv; }
+slurm_on() { vm_exists slurm-srv; }
 
 # Existing VMs of the lab: servers in order, then clients by index.
 existing_vms() {
@@ -380,10 +392,11 @@ EOF
 }
 
 cmd_up() {
-  local gpfs=false want_subnet="" nclients="" ram=4096 vcpus=4 vms=() vm k
+  local gpfs=false slurm=true want_subnet="" nclients="" ram=4096 vcpus=4 vms=() vm k
   while [[ $# -gt 0 ]]; do
     case $1 in
       --gpfs) gpfs=true ;;
+      --no-slurm) slurm=false ;;
       --subnet) want_subnet=${2:?--subnet needs a value}; shift ;;
       --clients) nclients=${2:?--clients needs a value}; shift ;;
       --client-memory) ram=${2:?--client-memory needs a value}; shift ;;
@@ -398,9 +411,11 @@ cmd_up() {
   [[ $ram =~ ^[0-9]+$ && $vcpus =~ ^[0-9]+$ ]] || die "--client-memory and --client-vcpus take numbers"
   need_tools virsh virt-install xorriso curl ssh scp
 
+  # Slurm is on by default only for a new lab, so that adding clients doesn't turn it on.
+  if virsh net-info "$NET" &>/dev/null; then slurm=false; fi
   if [[ ${#vms[@]} -eq 0 ]]; then
     for vm in "${SERVERS[@]}"; do
-      [[ $vm == gpfs-srv ]] || vms+=("$vm")
+      [[ $vm == gpfs-srv || ($vm == slurm-srv && $slurm == false) ]] || vms+=("$vm")
     done
     nclients=${nclients:-2}
   fi
@@ -437,11 +452,37 @@ cmd_up() {
 
 role_of() { if is_client "$1"; then echo client; else echo "$1"; fi; }
 
+slurm_node() { # slurm_node <client>: name:CPUs:RealMemory (MiB)
+  local info cpus kib mib crash
+  info=$(virsh dominfo "$(dom "$1")")
+  cpus=$(awk '/^CPU\(s\):/ { print $2 }' <<<"$info")
+  kib=$(awk '/^Max memory:/ { print $3 }' <<<"$info")
+  [[ $cpus =~ ^[1-9][0-9]*$ && $kib =~ ^[1-9][0-9]*$ ]] || die "can't read $1's CPUs and memory"
+  mib=$((kib / 1024))
+  # Below what slurmd detects: the RAM without the crash kernel (Rocky's crashkernel=
+  # 1G-4G:192M,4G-64G:256M,64G-:512M), with margin for what the kernel takes; a 2048 MiB
+  # client has 1766 MiB.
+  if ((mib < 1024)); then
+    crash=0
+  elif ((mib < 4096)); then
+    crash=192
+  elif ((mib < 65536)); then
+    crash=256
+  else
+    crash=512
+  fi
+  echo "$1:$cpus:$((mib - crash - mib / 16 - 64))"
+}
+
 write_role_env() { # write_role_env <vm> <file>
-  local vm=$1 gpfs=0 nodes c
+  local vm=$1 gpfs=0 slurm=0 nodes snodes="" c
   if gpfs_on; then gpfs=1; fi
   nodes="gpfs-srv:$(vm_ip gpfs-srv)"
   for c in $(existing_clients); do nodes+=" $c:$(vm_ip "$c")"; done
+  if slurm_on; then slurm=1; fi
+  if [[ $vm == slurm-srv ]]; then
+    for c in $(existing_clients); do snodes+="${snodes:+ }$(slurm_node "$c")"; done
+  fi
   cat >"$2" <<EOF
 KERNEL=$KERNEL
 LUSTRE_SRV_KERNEL=$LUSTRE_SRV_KERNEL
@@ -449,6 +490,8 @@ LUSTRE_URL=$LUSTRE_URL
 LUSTRE_E2FSPROGS_URL=$LUSTRE_E2FSPROGS_URL
 BEEGFS_REPO_URL=$BEEGFS_REPO_URL
 CEPH_RELEASE=$CEPH_RELEASE
+OHPC_RELEASE_URL=$OHPC_RELEASE_URL
+SLURM_VERSION=$SLURM_VERSION
 CEPH_SRV_IP=$(vm_ip ceph-srv)
 LUSTRE_SRV_IP=$(vm_ip lustre-srv)
 BEEGFS_SRV_IP=$(vm_ip beegfs-srv)
@@ -457,6 +500,8 @@ GPFS_SRV_IP=$(vm_ip gpfs-srv)
 GPFS_NODES="$nodes"
 SUBNET_CIDR=$subnet.0/24
 GPFS=$gpfs
+SLURM_NODES="$snodes"
+SLURM=$slurm
 EOF
   if is_client "$vm"; then
     if has_beegfs "$vm"; then echo BEEGFS=1; else echo BEEGFS=0; fi >>"$2"
@@ -537,6 +582,12 @@ fetch_artifacts() {
   if gpfs_on; then
     vm_ssh gpfs-srv sudo cat /root/.ssh/id_ed25519.pub >"$ART_DIR/gpfs-admin.pub"
   fi
+  rm -f "$ART_DIR/munge.key"
+  if slurm_on; then
+    vm_ssh slurm-srv sudo test -f /etc/munge/munge.key ||
+      die "Slurm is on but slurm-srv isn't provisioned: run lab.sh provision slurm-srv"
+    (umask 077 && vm_ssh slurm-srv sudo cat /etc/munge/munge.key >"$ART_DIR/munge.key")
+  fi
 }
 
 cmd_provision() {
@@ -577,6 +628,12 @@ cmd_provision() {
   [[ ${#servers[@]} -eq 0 ]] || parallel_phase configure "${servers[@]}"
   if [[ ${#clients[@]} -gt 0 ]]; then
     fetch_artifacts
+    if slurm_on; then
+      # A node has to be in slurm.conf before its slurmd starts.
+      echo "slurm-srv: nodes (log: $LOG_DIR/slurm-srv.log)"
+      run_phase slurm-srv nodes >>"$LOG_DIR/slurm-srv.log" 2>&1 &
+      wait $! || die "updating slurm-srv's nodes failed (see $LOG_DIR/slurm-srv.log)"
+    fi
     parallel_phase configure "${clients[@]}"
     if gpfs_on; then
       # GPFS clients are added to the cluster from gpfs-srv, the admin node.
@@ -713,7 +770,8 @@ cmd_status() {
   fi
   load_subnet
   [[ $(virsh net-info "$NET") =~ Active:\ +yes ]] && active=yes
-  echo "lab $lab: subnet $subnet.0/24, network active: $active, GPFS: $(gpfs_on && echo on || echo off)"
+  echo "lab $lab: subnet $subnet.0/24, network active: $active," \
+    "GPFS: $(gpfs_on && echo on || echo off), Slurm: $(slurm_on && echo on || echo off)"
   mapfile -t vms < <(existing_vms)
   printf '%-12s %-10s %-15s %-4s %s\n' VM STATE IP SSH MOUNTS
   for vm in "${vms[@]}"; do

@@ -14,6 +14,7 @@ fn main() -> ExitCode {
 #[cfg(unix)]
 mod cli {
     use std::{
+        io::IsTerminal as _,
         path::PathBuf,
         process::ExitCode,
         sync::LazyLock,
@@ -481,8 +482,9 @@ mod cli {
         }
     }
 
-    /// Logs to stderr, filtered by `FS_STRESS_LOG`, and counts the storage's
-    /// errors for the status toggler, whatever the filter.
+    /// Logs to stderr, filtered by `FS_STRESS_LOG` and in color only on a
+    /// terminal without `NO_COLOR`, and counts the storage's errors for the
+    /// status toggler, whatever the filter.
     fn init_tracing() -> anyhow::Result<()> {
         let filter = EnvFilter::builder()
             .with_default_directive(LevelFilter::WARN.into())
@@ -493,6 +495,10 @@ mod cli {
             .with(
                 tracing_subscriber::fmt::layer()
                     .with_writer(std::io::stderr)
+                    .with_ansi(
+                        std::io::stderr().is_terminal()
+                            && std::env::var_os("NO_COLOR").is_none_or(|v| v.is_empty()),
+                    )
                     .with_filter(filter),
             )
             .with(storage_error_counter())

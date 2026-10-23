@@ -87,6 +87,11 @@ impl RunRoot {
         self.logs_dir().join(format!("{tag}.{SAMPLER_SLOT}.log"))
     }
 
+    /// The stderr of the host `tag`'s workers: their warnings and panics.
+    pub fn workers_stderr(&self, tag: &str) -> PathBuf {
+        self.root.join("stderr").join(format!("{tag}.txt"))
+    }
+
     /// `qualify`'s detailed progress of the host `tag`, or of verify.
     pub fn progress(&self, tag: &str) -> PathBuf {
         self.root.join("progress").join(format!("{tag}.txt"))

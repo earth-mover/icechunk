@@ -356,7 +356,7 @@ cmd_run() {
 
   on_stoppable "$first" "$remote_bin verify --root $q" >"$out/summary.txt" 2> >(tee "$out/verify.log" >&2) || verify_rc=$?
   cat "$out/summary.txt"
-  on "$first" "cd $q && tar -czf - run.json control go hosts done report.json 2>/dev/null" | tar -xzf - -C "$out" || true
+  on "$first" "cd $q && tar -czf - run.json control go hosts done report.json stderr 2>/dev/null" | tar -xzf - -C "$out" || true
   on "$first" "tar -C $q -czf - logs" >"$out/logs.tar.gz" || true
 
   if [ $verify_rc -eq 0 ] && [ $workers_rc -eq 0 ]; then

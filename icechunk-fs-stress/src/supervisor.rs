@@ -5,6 +5,7 @@
 use std::{
     collections::BTreeMap,
     fmt,
+    fs::{self, File},
     os::unix::process::ExitStatusExt as _,
     path::{Path, PathBuf},
     process::{Child, Command, ExitStatus, Stdio},
@@ -224,20 +225,22 @@ pub async fn workers_with_go_after(
             slots.push(FORK_SLOT.to_owned());
         }
     }
+    let log_path = root.supervisor_log(&tag);
+    let log = LogWriter::create(&log_path)
+        .with_context(|| format!("creating {}", log_path.display()))?;
+    let stderr = open_workers_stderr(root, &tag)?;
     let sampler = config
         .mirror_sample_every
         .map(|every| Sampler::start(root, &tag, every))
         .transpose()?;
 
-    let log_path = root.supervisor_log(&tag);
-    let log = LogWriter::create(&log_path)
-        .with_context(|| format!("creating {}", log_path.display()))?;
     let mut pool = Pool {
         root,
         tag: &tag,
         exe,
         until_ms: u64::try_from(unix_ms(until))?,
         log,
+        stderr,
         children: Vec::new(),
         incarnations_spawned: 0,
         external_kills: 0,
@@ -350,6 +353,8 @@ struct Pool<'a> {
     exe: PathBuf,
     until_ms: u64,
     log: LogWriter,
+    /// Every worker's stderr.
+    stderr: File,
     children: Vec<Worker>,
     incarnations_spawned: u64,
     external_kills: u64,
@@ -367,6 +372,7 @@ impl Pool<'_> {
             .args(["--incarnation", &incarnation.to_string()])
             .args(["--until-ms", &self.until_ms.to_string()])
             .stdin(Stdio::null())
+            .stderr(self.stderr.try_clone().context("cloning the workers' stderr")?)
             .spawn()
             .with_context(|| format!("spawning worker {slot}.{incarnation}"))?;
         let pid = child.id();
@@ -433,7 +439,7 @@ impl Pool<'_> {
 
     fn respawn_exited(&mut self) -> anyhow::Result<()> {
         for (worker, status) in self.take_exited()? {
-            warn_on_failure(&worker, status);
+            warn_on_failure(&worker, status, &self.root.workers_stderr(self.tag));
             self.spawn(worker.slot, worker.incarnation + 1)?;
         }
         Ok(())
@@ -441,7 +447,7 @@ impl Pool<'_> {
 
     fn reap_exited(&mut self) -> anyhow::Result<()> {
         for (worker, status) in self.take_exited()? {
-            warn_on_failure(&worker, status);
+            warn_on_failure(&worker, status, &self.root.workers_stderr(self.tag));
         }
         Ok(())
     }
@@ -498,6 +504,16 @@ impl Pool<'_> {
             let _ = worker.child.wait();
         }
     }
+}
+
+/// The host's file for its workers' stderr, not the terminal, where their
+/// warnings would bury the progress lines.
+fn open_workers_stderr(root: &RunRoot, tag: &str) -> anyhow::Result<File> {
+    let path = root.workers_stderr(tag);
+    path.parent()
+        .map_or(Ok(()), fs::create_dir_all)
+        .and_then(|()| File::options().create_new(true).append(true).open(&path))
+        .with_context(|| format!("creating {}", path.display()))
 }
 
 impl Drop for Pool<'_> {
@@ -593,12 +609,13 @@ impl LogProgress {
 }
 
 /// Fault kills are SIGKILLs, so only other signals and error exits are news.
-fn warn_on_failure(worker: &Worker, status: ExitStatus) {
+fn warn_on_failure(worker: &Worker, status: ExitStatus, stderr: &Path) {
     if !status.success() && status.signal() != Some(libc::SIGKILL) {
         tracing::warn!(
-            "worker {}.{} exited with {status}",
+            "worker {}.{} exited with {status}; its stderr is in {}",
             worker.slot,
-            worker.incarnation
+            worker.incarnation,
+            stderr.display()
         );
     }
 }
@@ -687,6 +704,37 @@ mod tests {
         assert!(progress.tails.is_empty());
         log.append(&intent).unwrap();
         assert_eq!(*progress.poll(), expected);
+    }
+
+    #[test]
+    fn workers_write_their_stderr_to_the_hosts_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = RunRoot::new(dir.path().to_owned());
+        let mut pool = Pool {
+            root: &root,
+            tag: "h",
+            // sh takes the first argument, "worker", for a script, and says on
+            // stderr that there is none.
+            exe: PathBuf::from("/bin/sh"),
+            until_ms: 0,
+            log: LogWriter::create(&dir.path().join("supervisor.log")).unwrap(),
+            stderr: open_workers_stderr(&root, "h").unwrap(),
+            children: Vec::new(),
+            incarnations_spawned: 0,
+            external_kills: 0,
+            progress: None,
+        };
+        pool.spawn("0".to_owned(), 0).unwrap();
+        pool.spawn("1".to_owned(), 0).unwrap();
+        for worker in &mut pool.children {
+            assert!(!worker.child.wait().unwrap().success());
+        }
+        let stderr = fs::read_to_string(root.workers_stderr("h")).unwrap();
+        assert_eq!(
+            stderr.lines().filter(|l| l.contains("worker")).count(),
+            2,
+            "{stderr}"
+        );
     }
 
     #[test]

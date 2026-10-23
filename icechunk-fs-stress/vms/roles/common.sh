@@ -105,3 +105,10 @@ gpfs_hosts() {
 }
 
 gpfs_state() { mmgetstate -Y | awk -F: 'NR > 1 { print $9 }'; }
+
+# Slurm from OpenHPC, shared by slurm-srv and the clients.
+install_slurm() { # install_slurm <daemon package...>: munge, the Slurm commands and the daemons
+  enable_epel
+  rpm -q ohpc-release &>/dev/null || dnf install -y "$OHPC_RELEASE_URL"
+  dnf install -y munge "slurm-ohpc-$SLURM_VERSION" "${@/%/-$SLURM_VERSION}"
+}
