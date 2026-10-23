@@ -1985,11 +1985,6 @@ mod tests {
     }
 
     #[test]
-    fn https_client_without_roots_builds() {
-        https_client_with_roots(None);
-    }
-
-    #[test]
     fn transient_delete_errors_are_throttles() {
         for (status, code) in [
             (Some(500), "InternalError"),

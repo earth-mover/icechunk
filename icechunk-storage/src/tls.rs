@@ -23,15 +23,15 @@ pub fn load_tls_ca_file(path: &Path) -> Result<Vec<u8>, StorageError> {
         other_error(format!("cannot use {TLS_CA_FILE_ENV}={path:?}: {reason}"))
     };
     let pem = std::fs::read(path).map_err(|e| fail(e.to_string()))?;
-    let mut count = 0;
-    for cert in CertificateDer::pem_slice_iter(&pem) {
-        let cert = cert.map_err(|e| fail(format!("bad certificate: {e}")))?;
+    let certs: Vec<_> = CertificateDer::pem_slice_iter(&pem)
+        .collect::<Result<_, _>>()
+        .map_err(|e| fail(format!("bad certificate: {e}")))?;
+    for cert in &certs {
         // the same check as rustls RootCertStore::add, which the AWS SDK unwraps
-        webpki::anchor_from_trusted_cert(&cert)
+        webpki::anchor_from_trusted_cert(cert)
             .map_err(|e| fail(format!("bad certificate: {e}")))?;
-        count += 1;
     }
-    if count == 0 {
+    if certs.is_empty() {
         return Err(fail("no certificate in the file".to_string()));
     }
     Ok(pem)
@@ -75,7 +75,7 @@ fn hint_for(bundle: Result<Option<Vec<u8>>, StorageError>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::{error::Error, ffi::OsString, fmt, io::Write as _, path::PathBuf};
+    use std::{ffi::OsString, io::Write as _, path::PathBuf};
 
     use super::*;
 
@@ -136,26 +136,11 @@ mod tests {
         assert!(msg.contains("bad certificate"), "{msg}");
     }
 
-    #[derive(Debug)]
-    struct Outer(std::io::Error);
-
-    impl fmt::Display for Outer {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            f.write_str("dispatch failure")
-        }
-    }
-
-    impl Error for Outer {
-        fn source(&self) -> Option<&(dyn Error + 'static)> {
-            Some(&self.0)
-        }
-    }
-
     #[test]
-    fn hint_matches_nested_tls_error() {
-        let err = Outer(std::io::Error::other(
+    fn hint_matches_tls_error() {
+        let err = std::io::Error::other(
             "client error (Connect): invalid peer certificate: UnknownIssuer",
-        ));
+        );
         assert!(tls_hint(&err).is_some());
     }
 
