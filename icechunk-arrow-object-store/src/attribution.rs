@@ -187,8 +187,7 @@ mod tests {
         );
     }
 
-    const TEST_CA: &[u8] =
-        include_bytes!("../../icechunk-storage/tests/data/test-ca.pem");
+    const TEST_CA: &[u8] = include_bytes!("../../icechunk-python/tests/data/tls/ca.pem");
 
     #[test]
     fn roots_disable_system_certificates() {

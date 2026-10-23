@@ -1977,8 +1977,7 @@ mod tests {
 
     // Readback classification is unit-tested in `icechunk_storage::readback`.
 
-    const TEST_CA: &[u8] =
-        include_bytes!("../../icechunk-storage/tests/data/test-ca.pem");
+    const TEST_CA: &[u8] = include_bytes!("../../icechunk-python/tests/data/tls/ca.pem");
 
     #[test]
     fn https_client_with_roots_builds() {
