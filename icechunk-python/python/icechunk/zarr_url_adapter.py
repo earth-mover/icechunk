@@ -43,7 +43,12 @@ from icechunk.config import RepositoryConfig
 from icechunk.credentials import containers_credentials, s3_static_credentials
 from icechunk.repository import Repository
 from icechunk.session import Session
-from icechunk.url_pipeline import _to_storage_credentials, parse_url_ref
+from icechunk.url_pipeline import (
+    _check_root_query,
+    _redact_query,
+    _to_storage_credentials,
+    parse_url_ref,
+)
 
 __all__ = [
     "OPENER_ENTRY_POINT_GROUP",
@@ -348,16 +353,16 @@ def _validate_preceding(
     root, *rest = context.preceding
     if not root.scheme:
         raise URLPipelineError(
-            f"icechunk: the root {root.raw!r} has no URL scheme; spell local paths as "
-            "'file:///absolute/path'"
+            f"icechunk: the root {_redact_query(root.raw)!r} has no URL scheme; spell "
+            "local paths as 'file:///absolute/path'"
         )
-    # zarr consumes `zarr2:`/`zarr3:` format segments itself and only accepts
-    # them last, so anything here is a container or another adapter.
+    # zarr consumes `zarr:`/`zarr2:`/`zarr3:` format segments itself and only
+    # accepts them last, so anything here is a container or another adapter.
     if rest:
         raise URLPipelineError(
-            f"icechunk: unsupported segment {rest[0].raw!r} before 'icechunk:'; the "
-            "icechunk: adapter only supports a root URL that locates the repository "
-            "directly (repositories inside other containers, such as "
+            f"icechunk: unsupported segment {_redact_query(rest[0].raw)!r} before "
+            "'icechunk:'; the icechunk: adapter only supports a root URL that locates "
+            "the repository directly (repositories inside other containers, such as "
             "'repo.zip|zip:|icechunk:', are not supported)"
         )
     return root
@@ -365,8 +370,7 @@ def _validate_preceding(
 
 def _write_mode_error(mode: str) -> URLPipelineError:
     hint = (
-        " (it is the default mode of zarr.open and zarr.open_group; pass mode='r' "
-        "or use zarr.open_url)"
+        " (it is the default mode of zarr.open and zarr.open_group; pass mode='r')"
         if mode == "a"
         else ""
     )
@@ -412,7 +416,8 @@ class IcechunkURLAdapter(URLPipelineAdapter):
     ) -> StorePath:
         if segment.query is not None:
             raise URLPipelineError(
-                f"icechunk: segments do not accept a query string: {segment.raw!r}"
+                "icechunk: segments do not accept a query string: "
+                f"{_redact_query(segment.raw)!r}"
             )
         root = _validate_preceding(segment, context)
         if context.mode in _WRITE_MODES:
@@ -433,6 +438,8 @@ class IcechunkURLAdapter(URLPipelineAdapter):
                     f"fsspec-style aliases {sorted(FSSPEC_STORAGE_OPTIONS)}"
                 )
             try:
+                # Rust would echo the whole root, query included, in its error
+                _check_root_query(root.raw)
                 pending = _open_session_from_url_async(
                     root.raw,
                     segment.body,
@@ -465,7 +472,8 @@ class IcechunkURLAdapter(URLPipelineAdapter):
         opener = _get_opener(root.scheme)
         if opener is None:
             raise URLPipelineError(
-                f"icechunk: unsupported root scheme {root.scheme!r} in {root.raw!r}; "
+                f"icechunk: unsupported root scheme {root.scheme!r} in "
+                f"{_redact_query(root.raw)!r}; "
                 f"supported schemes are {sorted(BUILTIN_ROOT_SCHEMES)}, plus any "
                 f"registered through the {OPENER_ENTRY_POINT_GROUP!r} entry-point group"
             )

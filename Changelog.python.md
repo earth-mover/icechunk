@@ -5,7 +5,8 @@
 ### Features
 
 - Experimental: zarr and Xarray can open Icechunk repositories by [URL pipeline](https://github.com/jbms/url-pipeline) (ZEP 8), e.g.
-`zarr.open_url("s3://bucket/repo|icechunk://tag.v1/path/to/group")`. Requires a zarr with URL pipeline support
+`zarr.open_group(URLPipeline.from_url("s3://bucket/repo|icechunk://tag.v1/path/to/group"), mode="r")` or
+`xr.open_zarr(URLPipeline.from_url(...))`. Requires a zarr with URL pipeline support
 ([zarr-python#4192](https://github.com/zarr-developers/zarr-python/pull/4192)). URLs open read-only sessions; credentials and
 configuration come from `icechunk_*` `storage_options`. Adds `icechunk.storage_from_url`, `icechunk.parse_url_ref`, and the
 `icechunk.url_repository_openers` entry-point group for other root schemes ([#576](https://github.com/earth-mover/icechunk/issues/576)).

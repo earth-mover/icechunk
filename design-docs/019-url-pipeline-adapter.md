@@ -20,7 +20,7 @@ third-party packages register a `URLPipelineAdapter` under the
 so that
 
 ```python
-zarr.open_url("s3://bucket/repo|icechunk://tag.v1/path/to/group")
+zarr.open_group(URLPipeline.from_url("s3://bucket/repo|icechunk://tag.v1/path/to/group"), mode="r")
 xr.open_zarr(URLPipeline.from_url("file:///data/repo|icechunk:"))
 ```
 
@@ -81,8 +81,10 @@ makes `icechunk:@x` ambiguous, and the spec has settled on `//ref`.
 `icechunk:` is a *native* adapter: it does not call
 `PipelineContext.resolve_preceding()` (Icechunk does not sit on a zarr
 `Store`), so it owns validation of every preceding segment. Allowed: exactly
-one root URL. zarr reads `zarr2:`/`zarr3:` format segments itself and
-accepts them only as the last segment, so they never reach the adapter. Any
+one root URL. zarr reads `zarr:`/`zarr2:`/`zarr3:` format segments itself and
+accepts them only as the last segment, so they never reach the adapter.
+zarr's parser also rejects schemeless and single-letter (Windows drive) roots
+before any adapter runs. Any
 other adapter before `icechunk:` is an error; for example
 `x.zip|zip:|icechunk:` is out of scope for v1.
 
@@ -105,7 +107,12 @@ is registered for the scheme (see "Repository openers").
 - `memory:` storages are kept in a process-wide map keyed by name, so a
   repository created with `icechunk.storage_from_url("memory:x")` can be
   reopened by `memory:x|icechunk:`. Entries live for the life of the process.
-  This namespace is separate from zarr's `memory:` stores.
+  This namespace is separate from zarr's `memory:` root, and the semantics
+  differ: zarr has one process-wide store and reads the body as a key prefix
+  (`memory:a/b` is the prefix `a/b`), while Icechunk reads the whole body as
+  the name (`memory:a/b` is a storage named `a/b`, unrelated to `memory:a`).
+  Icechunk parses `context.preceding_url` itself, so zarr's rules for its own
+  `file:` and `memory:` roots do not apply here.
 - `s3+http(s):` is ambiguous in the spec: the endpoint may serve one bucket
   (`https://bucket.example.com/path`) or many (`https://example.com/bucket/path`),
   and implementations are asked to disambiguate, e.g. by trying a LIST both
@@ -141,6 +148,16 @@ Giving both an alias and its `icechunk_*` key is an error. The mapping is
 deliberately small: `token` means different things in s3fs and gcsfs, so it
 is only accepted next to `key`/`secret`.
 
+Following zarr's adapter guidance, the adapter consumes only these keys (and,
+for built-in roots, which it resolves itself, the aliases), passes repository
+openers a copy with every `icechunk_*` key removed, and never logs the options
+or puts their values in error messages; errors name keys only.
+
+Root URLs for built-in schemes take no query. Errors that quote a URL show
+its query as `?…`, as zarr's do, since a query may carry a token (for example
+a signed `https:` URL). The query check happens in Python, before Rust, whose
+error would otherwise echo the whole root.
+
 This follows the review of #1161, which asked for credentials, including
 virtual chunk container credentials, to come through `storage_options`
 rather than being hardcoded to "from environment".
@@ -154,7 +171,7 @@ zarr has no commit step, so the adapter cannot commit a writable session.
   `URLPipelineError`, pointing to `repo.writable_session(branch)` +
   `session.commit(...)`. zarr itself rejects a read-only store in mode `"a"`,
   so the adapter refuses it up front, before any I/O, and suggests
-  `mode="r"` or `zarr.open_url`.
+  `mode="r"`.
 - Tags and snapshots are read-only regardless.
 
 The Rust `open_from_url` already supports `writable: true` (branch refs
@@ -207,6 +224,8 @@ the session.
 ## zarr version dependency
 
 The adapter needs `zarr.abc.url_pipeline` (zarr-python#4192, unreleased).
+#4192 reads only `URLPipeline` objects as pipelines; plain pipeline strings
+are left to a follow-on zarr PR.
 
 - `icechunk/zarr_url_adapter.py` is the only module that imports it; it is
   not imported by `import icechunk`, and zarr only imports it when a pipeline

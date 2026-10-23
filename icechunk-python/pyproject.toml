@@ -156,9 +156,11 @@ enable_error_code = ["ignore-without-code", "redundant-expr", "truthy-bool"]
 # Any-typed API, so it can't be meaningfully type-checked.
 exclude = [
   "tests/data_generation/generate_expired_repos.py",
-  # The URL pipeline adapter needs zarr.abc.url_pipeline (zarr-developers/zarr-python#4192),
-  # which the pinned dev zarr lacks. The python-url-pipeline CI job type-checks
-  # these files explicitly; drop them from here once the dev pin includes it.
+  # The URL pipeline adapter needs zarr-developers/zarr-python#4192 (unreleased):
+  # zarr.abc.url_pipeline, zarr.storage.URLPipeline/PipelineSegment/PipelineContext
+  # and the zarr.url_adapters entry-point group. The pinned dev zarr lacks it. The
+  # python-url-pipeline CI job installs #4192's branch and type-checks these files
+  # explicitly; drop them from here once the dev pin includes it.
   "python/icechunk/zarr_url_adapter.py",
   "tests/test_zarr_url_adapter.py",
 ]
@@ -214,7 +216,8 @@ icechunk = "icechunk._icechunk_python:cli_entrypoint"
 
 # The `icechunk:` URL pipeline adapter (ZEP 8). zarr loads it lazily, only when a
 # URL pipeline names the scheme, and only zarr versions with URL pipeline support
-# read this group.
+# (zarr-developers/zarr-python#4192, unreleased) read this group. #4192 opens
+# pipelines passed as `zarr.storage.URLPipeline` objects, not plain strings.
 [project.entry-points."zarr.url_adapters"]
 icechunk = "icechunk.zarr_url_adapter:IcechunkURLAdapter"
 

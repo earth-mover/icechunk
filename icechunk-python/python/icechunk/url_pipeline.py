@@ -8,6 +8,7 @@ which requires a zarr release with URL pipeline support.
 
 from __future__ import annotations
 
+import re
 from typing import Literal, NamedTuple, cast
 
 from icechunk._icechunk_python import (
@@ -73,6 +74,20 @@ def parse_url_ref(body: str) -> UrlRef:
     return UrlRef(cast(Literal["branch", "tag", "snapshot"], kind), name, path)
 
 
+def _redact_query(text: str) -> str:
+    """Replace each sub-URL's query with `?…`, as zarr does in its messages."""
+    return re.sub(r"\?[^|]*", "?\u2026", text)
+
+
+def _check_root_query(url: str) -> None:
+    """Reject a root query here, so the error does not echo it (it may hold a token)."""
+    if "?" in url:
+        raise ValueError(
+            f"invalid root URL `{_redact_query(url)}`: query strings and fragments "
+            "are not supported"
+        )
+
+
 def _to_storage_credentials(
     credentials: AnyS3Credential
     | AnyGcsCredential
@@ -128,6 +143,10 @@ def storage_from_url(
     | `gs://bucket/prefix` | Google Cloud Storage |
     | `http(s)://host/path` | HTTP, read-only |
 
+    Icechunk's `memory:` root differs from zarr's: the whole body is the name,
+    so `memory:a/b` is a storage named `a/b`, not the path `a/b` inside one
+    shared store.
+
     Parameters
     ----------
     url : str
@@ -148,6 +167,7 @@ def storage_from_url(
     ValueError
         If the URL or the options are invalid.
     """
+    _check_root_query(url)
     return _storage_from_url(
         url,
         credentials=_to_storage_credentials(credentials),
